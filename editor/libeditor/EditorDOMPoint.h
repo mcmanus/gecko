@@ -14,6 +14,7 @@
 #include "mozilla/dom/Text.h"
 #include "nsAtom.h"
 #include "nsCOMPtr.h"
+#include "nsGkAtoms.h"
 #include "nsIContent.h"
 #include "nsIDOMNode.h"
 #include "nsINode.h"
@@ -351,7 +352,7 @@ public:
       const_cast<SelfType*>(this)->mOffset = mozilla::Some(0);
     } else {
       const_cast<SelfType*>(this)->mOffset =
-        mozilla::Some(mParent->IndexOf(mChild));
+        mozilla::Some(mParent->ComputeIndexOf(mChild));
     }
     return mOffset.value();
   }
@@ -368,7 +369,7 @@ public:
     mChild = nullptr;
     mOffset = mozilla::Some(aOffset);
     mIsChildInitialized = false;
-    NS_WARNING_ASSERTION(!mParent || mOffset.value() <= mParent->Length(),
+    NS_ASSERTION(!mParent || mOffset.value() <= mParent->Length(),
       "The offset is out of bounds");
   }
   void
@@ -397,6 +398,26 @@ public:
     mChild = nullptr;
     mOffset = mozilla::Some(mParent->Length());
     mIsChildInitialized = true;
+  }
+
+  /**
+   * SetAfter() sets mChild to next sibling of aChild.
+   */
+  void
+  SetAfter(const nsINode* aChild)
+  {
+    MOZ_ASSERT(aChild);
+    nsIContent* nextSibling = aChild->GetNextSibling();
+    if (nextSibling) {
+      Set(nextSibling);
+      return;
+    }
+    nsINode* parentNode = aChild->GetParentNode();
+    if (NS_WARN_IF(!parentNode)) {
+      Clear();
+      return;
+    }
+    SetToEndOf(parentNode);
   }
 
   /**
@@ -476,8 +497,10 @@ public:
       MOZ_ASSERT(mOffset.isSome());
       MOZ_ASSERT(!mChild);
       if (NS_WARN_IF(!mOffset.value()) ||
-          NS_WARN_IF(mOffset.value() >= mParent->Length())) {
-        // We're already referring the start of the container.
+          NS_WARN_IF(mOffset.value() > mParent->Length())) {
+        // We're already referring the start of the container or
+        // the offset is invalid since perhaps, the offset was set before
+        // the last DOM tree change.
         return false;
       }
       mOffset = mozilla::Some(mOffset.value() - 1);
@@ -584,6 +607,23 @@ public:
     }
     MOZ_ASSERT(mOffset.isSome());
     return mOffset.value() == mParent->Length();
+  }
+
+  bool
+  IsBRElementAtEndOfContainer() const
+  {
+    if (NS_WARN_IF(!mParent)) {
+      return false;
+    }
+    if (!mParent->IsContainerNode()) {
+      return false;
+    }
+    const_cast<SelfType*>(this)->EnsureChild();
+    if (!mChild ||
+        mChild->GetNextSibling()) {
+      return false;
+    }
+    return mChild->IsHTMLElement(nsGkAtoms::br);
   }
 
   // Convenience methods for switching between the two types
@@ -790,6 +830,7 @@ class MOZ_STACK_CLASS AutoEditorDOMPointOffsetInvalidator final
 public:
   explicit AutoEditorDOMPointOffsetInvalidator(EditorDOMPoint& aPoint)
     : mPoint(aPoint)
+    , mCanceled(false)
   {
     MOZ_ASSERT(aPoint.IsSetAndValid());
     MOZ_ASSERT(mPoint.CanContainerHaveChildren());
@@ -798,7 +839,9 @@ public:
 
   ~AutoEditorDOMPointOffsetInvalidator()
   {
-    InvalidateOffset();
+    if (!mCanceled) {
+      InvalidateOffset();
+    }
   }
 
   /**
@@ -815,12 +858,22 @@ public:
     }
   }
 
+  /**
+   * After calling Cancel(), mPoint won't be modified by the destructor.
+   */
+  void Cancel()
+  {
+    mCanceled = true;
+  }
+
 private:
   EditorDOMPoint& mPoint;
   // Needs to store child node by ourselves because EditorDOMPoint stores
   // child node with mRef which is previous sibling of current child node.
   // Therefore, we cannot keep referring it if it's first child.
   nsCOMPtr<nsIContent> mChild;
+
+  bool mCanceled;
 
   AutoEditorDOMPointOffsetInvalidator() = delete;
   AutoEditorDOMPointOffsetInvalidator(
@@ -844,6 +897,7 @@ class MOZ_STACK_CLASS AutoEditorDOMPointChildInvalidator final
 public:
   explicit AutoEditorDOMPointChildInvalidator(EditorDOMPoint& aPoint)
     : mPoint(aPoint)
+    , mCanceled(false)
   {
     MOZ_ASSERT(aPoint.IsSetAndValid());
     Unused << mPoint.Offset();
@@ -851,7 +905,9 @@ public:
 
   ~AutoEditorDOMPointChildInvalidator()
   {
-    InvalidateChild();
+    if (!mCanceled) {
+      InvalidateChild();
+    }
   }
 
   /**
@@ -862,8 +918,18 @@ public:
     mPoint.Set(mPoint.GetContainer(), mPoint.Offset());
   }
 
+  /**
+   * After calling Cancel(), mPoint won't be modified by the destructor.
+   */
+  void Cancel()
+  {
+    mCanceled = true;
+  }
+
 private:
   EditorDOMPoint& mPoint;
+
+  bool mCanceled;
 
   AutoEditorDOMPointChildInvalidator() = delete;
   AutoEditorDOMPointChildInvalidator(

@@ -132,9 +132,24 @@ public:
   bool HasStyleSheets() const;
   void AppendStyleSheetsTo(nsTArray<mozilla::StyleSheet*>& aResult) const;
 
+#ifdef MOZ_OLD_STYLE
   nsIStyleRuleProcessor* GetRuleProcessor();
-  void ComputeServoStyleSet(nsPresContext* aPresContext);
-  mozilla::ServoStyleSet* GetServoStyleSet() const;
+#endif
+  const RawServoAuthorStyles* GetServoStyles() const
+  {
+    return mResources ? mResources->GetServoStyles() : nullptr;
+  }
+  RawServoAuthorStyles* GetServoStyles()
+  {
+    return mResources
+      ? const_cast<RawServoAuthorStyles*>(mResources->GetServoStyles())
+      : nullptr;
+  }
+
+  mozilla::ServoStyleRuleMap* GetServoStyleRuleMap()
+  {
+    return mResources ? mResources->GetServoStyleRuleMap() : nullptr;
+  }
 
   nsresult FlushSkinSheets();
 

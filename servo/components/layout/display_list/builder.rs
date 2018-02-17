@@ -17,8 +17,7 @@ use context::LayoutContext;
 use display_list::ToLayout;
 use display_list::background::{compute_background_image_size, tile_image_axis};
 use display_list::background::{convert_linear_gradient, convert_radial_gradient};
-use display_list::webrender_helpers::ToBorderRadius;
-use euclid::{Point2D, Rect, SideOffsets2D, Size2D, Transform3D, TypedRect, TypedSize2D, Vector2D};
+use euclid::{Point2D, Rect, SideOffsets2D, Size2D, Transform3D, TypedSize2D, Vector2D, rect};
 use flex::FlexFlow;
 use flow::{BaseFlow, Flow, FlowFlags};
 use flow_ref::FlowRef;
@@ -27,15 +26,17 @@ use fragment::{CanvasFragmentSource, CoordinateSystem, Fragment, ScannedTextFrag
 use fragment::SpecificFragmentInfo;
 use gfx::display_list;
 use gfx::display_list::{BaseDisplayItem, BorderDetails, BorderDisplayItem, BLUR_INFLATION_FACTOR};
-use gfx::display_list::{BorderRadii, BoxShadowDisplayItem, ClipScrollNode};
+use gfx::display_list::{BoxShadowDisplayItem, ClipScrollNode};
 use gfx::display_list::{ClipScrollNodeIndex, ClipScrollNodeType, ClippingAndScrolling};
 use gfx::display_list::{ClippingRegion, DisplayItem, DisplayItemMetadata, DisplayList};
-use gfx::display_list::{DisplayListSection, GradientDisplayItem, IframeDisplayItem, ImageBorder};
+use gfx::display_list::{DisplayListSection, GradientDisplayItem, IframeDisplayItem};
 use gfx::display_list::{ImageDisplayItem, LineDisplayItem, OpaqueNode};
 use gfx::display_list::{PopAllTextShadowsDisplayItem, PushTextShadowDisplayItem};
 use gfx::display_list::{RadialGradientDisplayItem, SolidColorDisplayItem, StackingContext};
 use gfx::display_list::{StackingContextType, StickyFrameData, TextDisplayItem, TextOrientation};
 use gfx::display_list::WebRenderImageInfo;
+use gfx::text::TextRun;
+use gfx::text::glyph::ByteIndex;
 use gfx_traits::{combine_id_with_fragment_type, FragmentType, StackingContextId};
 use inline::{InlineFlow, InlineFragmentNodeFlags};
 use ipc_channel::ipc;
@@ -47,15 +48,14 @@ use net_traits::image_cache::UsePlaceholder;
 use range::Range;
 use servo_config::opts;
 use servo_geometry::MaxRect;
-use std::{cmp, f32};
 use std::default::Default;
+use std::f32;
 use std::mem;
 use std::sync::Arc;
 use style::computed_values::background_attachment::single_value::T as BackgroundAttachment;
 use style::computed_values::background_clip::single_value::T as BackgroundClip;
 use style::computed_values::background_origin::single_value::T as BackgroundOrigin;
 use style::computed_values::border_style::T as BorderStyle;
-use style::computed_values::cursor;
 use style::computed_values::overflow_x::T as StyleOverflow;
 use style::computed_values::pointer_events::T as PointerEvents;
 use style::computed_values::position::T as StylePosition;
@@ -67,16 +67,18 @@ use style::servo::restyle_damage::ServoRestyleDamage;
 use style::values::{Either, RGBA};
 use style::values::computed::{Gradient, NumberOrPercentage};
 use style::values::computed::effects::SimpleShadow;
+use style::values::computed::pointing::Cursor;
 use style::values::generics::background::BackgroundSize;
-use style::values::generics::effects::Filter;
 use style::values::generics::image::{GradientKind, Image, PaintWorklet};
 use style_traits::CSSPixel;
 use style_traits::ToCss;
-use style_traits::cursor::Cursor;
+use style_traits::cursor::CursorKind;
 use table_cell::CollapsedBordersForCell;
-use webrender_api::{self, BoxShadowClipMode, ClipId, ClipMode, ColorF, ComplexClipRegion};
-use webrender_api::{ImageRendering, LayoutSize, LayoutVector2D, LineStyle};
-use webrender_api::{LocalClip, NormalBorder, ScrollPolicy, ScrollSensitivity, StickyOffsetBounds};
+use webrender_api::{self, BorderRadius, BorderSide, BoxShadowClipMode, ClipMode, ColorF};
+use webrender_api::{ComplexClipRegion, ExternalScrollId, FilterOp, GlyphInstance, ImageBorder};
+use webrender_api::{ImageRendering, LayoutRect, LayoutSize, LayoutVector2D, LineStyle, LocalClip};
+use webrender_api::{NinePatchDescriptor, NormalBorder, ScrollPolicy, ScrollSensitivity};
+use webrender_api::StickyOffsetBounds;
 
 trait ResolvePercentage {
     fn resolve(&self, length: u32) -> u32;
@@ -243,11 +245,13 @@ impl StackingContextCollectionState {
         // This is just a dummy node to take up a slot in the array. WebRender
         // takes care of adding this root node and it can be ignored during DL conversion.
         let root_node = ClipScrollNode {
-            id: Some(ClipId::root_scroll_node(pipeline_id.to_webrender())),
             parent_index: ClipScrollNodeIndex(0),
-            clip: ClippingRegion::from_rect(&TypedRect::zero()),
-            content_rect: Rect::zero(),
-            node_type: ClipScrollNodeType::ScrollFrame(ScrollSensitivity::ScriptAndInputEvents),
+            clip: ClippingRegion::from_rect(LayoutRect::zero()),
+            content_rect: LayoutRect::zero(),
+            node_type: ClipScrollNodeType::ScrollFrame(
+                ScrollSensitivity::ScriptAndInputEvents,
+                pipeline_id.root_scroll_id(),
+            ),
         };
 
         StackingContextCollectionState {
@@ -375,7 +379,7 @@ impl<'a> DisplayListBuildState<'a> {
         bounds: &Rect<Au>,
         clip: LocalClip,
         node: OpaqueNode,
-        cursor: Option<Cursor>,
+        cursor: Option<CursorKind>,
         section: DisplayListSection,
     ) -> BaseDisplayItem {
         let clipping_and_scrolling = if self.is_background_or_border_of_clip_scroll_node(section) {
@@ -387,10 +391,11 @@ impl<'a> DisplayListBuildState<'a> {
         };
 
         BaseDisplayItem::new(
-            &bounds,
+            bounds.to_layout(),
             DisplayItemMetadata {
-                node: node,
-                pointing: cursor,
+                node,
+                // Store cursor id in display list.
+                pointing: cursor.map(|x| x as u16),
             },
             clip,
             section,
@@ -705,16 +710,25 @@ pub trait FragmentDisplayListBuilding {
     fn fragment_type(&self) -> FragmentType;
 }
 
-fn handle_overlapping_radii(size: &Size2D<Au>, radii: &BorderRadii<Au>) -> BorderRadii<Au> {
+fn scale_border_radii(radii: BorderRadius, factor: f32) -> BorderRadius {
+    BorderRadius {
+        top_left: radii.top_left * factor,
+        top_right: radii.top_right * factor,
+        bottom_left: radii.bottom_left * factor,
+        bottom_right: radii.bottom_right * factor,
+    }
+}
+
+fn handle_overlapping_radii(size: LayoutSize, radii: BorderRadius) -> BorderRadius {
     // No two corners' border radii may add up to more than the length of the edge
     // between them. To prevent that, all radii are scaled down uniformly.
-    fn scale_factor(radius_a: Au, radius_b: Au, edge_length: Au) -> f32 {
+    fn scale_factor(radius_a: f32, radius_b: f32, edge_length: f32) -> f32 {
         let required = radius_a + radius_b;
 
         if required <= edge_length {
             1.0
         } else {
-            edge_length.to_f32_px() / required.to_f32_px()
+            edge_length / required
         }
     }
 
@@ -735,39 +749,39 @@ fn handle_overlapping_radii(size: &Size2D<Au>, radii: &BorderRadii<Au>) -> Borde
         .min(left_factor)
         .min(right_factor);
     if min_factor < 1.0 {
-        radii.scale_by(min_factor)
+        scale_border_radii(radii, min_factor)
     } else {
-        *radii
+        radii
     }
 }
 
 fn build_border_radius(
     abs_bounds: &Rect<Au>,
     border_style: &style_structs::Border,
-) -> BorderRadii<Au> {
+) -> BorderRadius {
     // TODO(cgaebel): Support border radii even in the case of multiple border widths.
     // This is an extension of supporting elliptical radii. For now, all percentage
     // radii will be relative to the width.
 
     handle_overlapping_radii(
-        &abs_bounds.size,
-        &BorderRadii {
+        abs_bounds.size.to_layout(),
+        BorderRadius {
             top_left: model::specified_border_radius(
                 border_style.border_top_left_radius,
                 abs_bounds.size,
-            ),
+            ).to_layout(),
             top_right: model::specified_border_radius(
                 border_style.border_top_right_radius,
                 abs_bounds.size,
-            ),
+            ).to_layout(),
             bottom_right: model::specified_border_radius(
                 border_style.border_bottom_right_radius,
                 abs_bounds.size,
-            ),
+            ).to_layout(),
             bottom_left: model::specified_border_radius(
                 border_style.border_bottom_left_radius,
                 abs_bounds.size,
-            ),
+            ).to_layout(),
         },
     )
 }
@@ -777,9 +791,9 @@ fn build_border_radius(
 fn build_border_radius_for_inner_rect(
     outer_rect: &Rect<Au>,
     style: &ComputedValues,
-) -> BorderRadii<Au> {
+) -> BorderRadius {
     let radii = build_border_radius(&outer_rect, style.get_border());
-    if radii.is_square() {
+    if radii.is_zero() {
         return radii;
     }
 
@@ -790,33 +804,8 @@ fn build_border_radius_for_inner_rect(
     calculate_inner_border_radii(radii, border_widths)
 }
 
-fn build_inner_border_box_for_border_rect(
-    border_box: &Rect<Au>,
-    style: &ComputedValues,
-) -> Rect<Au> {
-    let border_widths = style.logical_border_width().to_physical(style.writing_mode);
-    let mut inner_border_box = *border_box;
-    inner_border_box.origin.x += border_widths.left;
-    inner_border_box.origin.y += border_widths.top;
-    inner_border_box.size.width -= border_widths.right + border_widths.left;
-    inner_border_box.size.height -= border_widths.bottom + border_widths.top;
-    inner_border_box
-}
-
-/// Subtract offsets from a bounding box.
-///
-/// As an example if the bounds are the border-box and the border
-/// is provided as offsets the result will be the padding-box.
-fn calculate_inner_bounds(mut bounds: Rect<Au>, offsets: SideOffsets2D<Au>) -> Rect<Au> {
-    bounds.origin.x += offsets.left;
-    bounds.origin.y += offsets.top;
-    bounds.size.width -= offsets.horizontal();
-    bounds.size.height -= offsets.vertical();
-    bounds
-}
-
 fn simple_normal_border(color: ColorF, style: webrender_api::BorderStyle) -> NormalBorder {
-    let side = webrender_api::BorderSide { color, style };
+    let side = BorderSide { color, style };
     NormalBorder {
         left: side,
         right: side,
@@ -827,21 +816,83 @@ fn simple_normal_border(color: ColorF, style: webrender_api::BorderStyle) -> Nor
 }
 
 fn calculate_inner_border_radii(
-    mut radii: BorderRadii<Au>,
+    mut radii: BorderRadius,
     offsets: SideOffsets2D<Au>,
-) -> BorderRadii<Au> {
-    radii.top_left.width = cmp::max(Au(0), radii.top_left.width - offsets.left);
-    radii.bottom_left.width = cmp::max(Au(0), radii.bottom_left.width - offsets.left);
+) -> BorderRadius {
+    fn inner_length(x: f32, offset: Au) -> f32 {
+        0.0_f32.max(x - offset.to_f32_px())
+    }
+    radii.top_left.width = inner_length(radii.top_left.width, offsets.left);
+    radii.bottom_left.width = inner_length(radii.bottom_left.width, offsets.left);
 
-    radii.top_right.width = cmp::max(Au(0), radii.top_right.width - offsets.right);
-    radii.bottom_right.width = cmp::max(Au(0), radii.bottom_right.width - offsets.right);
+    radii.top_right.width = inner_length(radii.top_right.width, offsets.right);
+    radii.bottom_right.width = inner_length(radii.bottom_right.width, offsets.right);
 
-    radii.top_left.height = cmp::max(Au(0), radii.top_left.height - offsets.top);
-    radii.top_right.height = cmp::max(Au(0), radii.top_right.height - offsets.top);
+    radii.top_left.height = inner_length(radii.top_left.height, offsets.top);
+    radii.top_right.height = inner_length(radii.top_right.height, offsets.top);
 
-    radii.bottom_left.height = cmp::max(Au(0), radii.bottom_left.height - offsets.bottom);
-    radii.bottom_right.height = cmp::max(Au(0), radii.bottom_right.height - offsets.bottom);
+    radii.bottom_left.height = inner_length(radii.bottom_left.height, offsets.bottom);
+    radii.bottom_right.height = inner_length(radii.bottom_right.height, offsets.bottom);
     radii
+}
+
+fn build_image_border_details(
+    webrender_image: WebRenderImageInfo,
+    border_style_struct: &style_structs::Border,
+) -> Option<BorderDetails> {
+    let corners = &border_style_struct.border_image_slice.offsets;
+    let border_image_repeat = &border_style_struct.border_image_repeat;
+    if let Some(image_key) = webrender_image.key {
+        Some(BorderDetails::Image(ImageBorder {
+            image_key: image_key,
+            patch: NinePatchDescriptor {
+                width: webrender_image.width,
+                height: webrender_image.height,
+                slice: SideOffsets2D::new(
+                    corners.0.resolve(webrender_image.height),
+                    corners.1.resolve(webrender_image.width),
+                    corners.2.resolve(webrender_image.height),
+                    corners.3.resolve(webrender_image.width),
+                ),
+            },
+            fill: border_style_struct.border_image_slice.fill,
+            // TODO(gw): Support border-image-outset
+            outset: SideOffsets2D::zero(),
+            repeat_horizontal: border_image_repeat.0.to_layout(),
+            repeat_vertical: border_image_repeat.1.to_layout(),
+        }))
+    } else {
+        None
+    }
+}
+
+fn convert_text_run_to_glyphs(
+    text_run: Arc<TextRun>,
+    range: Range<ByteIndex>,
+    mut origin: Point2D<Au>,
+) -> Vec<GlyphInstance> {
+    let mut glyphs = vec![];
+
+    for slice in text_run.natural_word_slices_in_visual_order(&range) {
+        for glyph in slice.glyphs.iter_glyphs_for_byte_range(&slice.range) {
+            let glyph_advance = if glyph.char_is_space() {
+                glyph.advance() + text_run.extra_word_spacing
+            } else {
+                glyph.advance()
+            };
+            if !slice.glyphs.is_whitespace() {
+                let glyph_offset = glyph.offset().unwrap_or(Point2D::zero());
+                let point = origin + glyph_offset.to_vector();
+                let glyph = GlyphInstance {
+                    index: glyph.id(),
+                    point: point.to_layout(),
+                };
+                glyphs.push(glyph);
+            }
+            origin.x += glyph_advance;
+        }
+    }
+    return glyphs;
 }
 
 impl FragmentDisplayListBuilding for Fragment {
@@ -903,24 +954,20 @@ impl FragmentDisplayListBuilding for Fragment {
             BackgroundClip::BorderBox => {},
             BackgroundClip::PaddingBox => {
                 let border = style.logical_border_width().to_physical(style.writing_mode);
-                bounds = calculate_inner_bounds(bounds, border);
+                bounds = bounds.inner_rect(border);
                 border_radii = calculate_inner_border_radii(border_radii, border);
             },
             BackgroundClip::ContentBox => {
                 let border_padding = self.border_padding.to_physical(style.writing_mode);
-                bounds = calculate_inner_bounds(bounds, border_padding);
+                bounds = bounds.inner_rect(border_padding);
                 border_radii = calculate_inner_border_radii(border_radii, border_padding);
             },
         }
 
-        let clip = if !border_radii.is_square() {
+        let clip = if !border_radii.is_zero() {
             LocalClip::RoundedRect(
                 bounds.to_layout(),
-                ComplexClipRegion::new(
-                    bounds.to_layout(),
-                    border_radii.to_border_radius(),
-                    ClipMode::Clip,
-                ),
+                ComplexClipRegion::new(bounds.to_layout(), border_radii, ClipMode::Clip),
             )
         } else {
             LocalClip::Rect(bounds.to_layout())
@@ -930,7 +977,7 @@ impl FragmentDisplayListBuilding for Fragment {
             &bounds,
             clip,
             self.node,
-            style.get_cursor(Cursor::Default),
+            style.get_cursor(CursorKind::Default),
             display_list_section,
         );
         state.add_display_item(DisplayItem::SolidColor(Box::new(SolidColorDisplayItem {
@@ -1034,27 +1081,21 @@ impl FragmentDisplayListBuilding for Fragment {
 
         let css_clip = match bg_clip {
             BackgroundClip::BorderBox => absolute_bounds,
-            BackgroundClip::PaddingBox => calculate_inner_bounds(
-                absolute_bounds,
-                style.logical_border_width().to_physical(style.writing_mode),
-            ),
-            BackgroundClip::ContentBox => calculate_inner_bounds(
-                absolute_bounds,
-                self.border_padding.to_physical(style.writing_mode),
-            ),
+            BackgroundClip::PaddingBox => absolute_bounds
+                .inner_rect(style.logical_border_width().to_physical(style.writing_mode)),
+            BackgroundClip::ContentBox => {
+                absolute_bounds.inner_rect(self.border_padding.to_physical(style.writing_mode))
+            },
         };
 
         let mut bounds = match bg_attachment {
             BackgroundAttachment::Scroll => match bg_origin {
                 BackgroundOrigin::BorderBox => absolute_bounds,
-                BackgroundOrigin::PaddingBox => calculate_inner_bounds(
-                    absolute_bounds,
-                    style.logical_border_width().to_physical(style.writing_mode),
-                ),
-                BackgroundOrigin::ContentBox => calculate_inner_bounds(
-                    absolute_bounds,
-                    self.border_padding.to_physical(style.writing_mode),
-                ),
+                BackgroundOrigin::PaddingBox => absolute_bounds
+                    .inner_rect(style.logical_border_width().to_physical(style.writing_mode)),
+                BackgroundOrigin::ContentBox => {
+                    absolute_bounds.inner_rect(self.border_padding.to_physical(style.writing_mode))
+                },
             },
             BackgroundAttachment::Fixed => Rect::new(
                 Point2D::origin(),
@@ -1121,7 +1162,7 @@ impl FragmentDisplayListBuilding for Fragment {
             &placement.bounds,
             LocalClip::Rect(placement.css_clip.to_layout()),
             self.node,
-            style.get_cursor(Cursor::Default),
+            style.get_cursor(CursorKind::Default),
             display_list_section,
         );
 
@@ -1213,7 +1254,7 @@ impl FragmentDisplayListBuilding for Fragment {
             &placement.bounds,
             LocalClip::Rect(placement.css_clip.to_layout()),
             self.node,
-            style.get_cursor(Cursor::Default),
+            style.get_cursor(CursorKind::Default),
             display_list_section,
         );
 
@@ -1274,7 +1315,7 @@ impl FragmentDisplayListBuilding for Fragment {
                 &bounds,
                 LocalClip::from(clip.to_layout()),
                 self.node,
-                style.get_cursor(Cursor::Default),
+                style.get_cursor(CursorKind::Default),
                 display_list_section,
             );
             let border_radius = build_border_radius(absolute_bounds, style.get_border());
@@ -1292,7 +1333,7 @@ impl FragmentDisplayListBuilding for Fragment {
                 ),
                 blur_radius: box_shadow.base.blur.px(),
                 spread_radius: box_shadow.spread.px(),
-                border_radius,
+                border_radius: border_radius,
                 clip_mode: if box_shadow.inset {
                     BoxShadowClipMode::Inset
                 } else {
@@ -1352,13 +1393,6 @@ impl FragmentDisplayListBuilding for Fragment {
             );
         }
 
-        let colors = SideOffsets2D::new(
-            style.resolve_color(colors.top),
-            style.resolve_color(colors.right),
-            style.resolve_color(colors.bottom),
-            style.resolve_color(colors.left),
-        );
-
         // If this border collapses, then we draw outside the boundaries we were given.
         let mut bounds = *bounds;
         if let BorderPaintingMode::Collapse(collapsed_borders) = border_painting_mode {
@@ -1370,41 +1404,34 @@ impl FragmentDisplayListBuilding for Fragment {
             &bounds,
             LocalClip::from(clip.to_layout()),
             self.node,
-            style.get_cursor(Cursor::Default),
+            style.get_cursor(CursorKind::Default),
             display_list_section,
         );
 
         let border_radius = build_border_radius(&bounds, border_style_struct);
 
-        match border_style_struct.border_image_source {
-            Either::First(_) => {
-                state.add_display_item(DisplayItem::Border(Box::new(BorderDisplayItem {
-                    base: base,
-                    border_widths: border.to_physical(style.writing_mode),
-                    details: BorderDetails::Normal(NormalBorder {
-                        left: webrender_api::BorderSide {
-                            color: colors.left.to_layout(),
-                            style: border_style.left.to_layout(),
-                        },
-                        right: webrender_api::BorderSide {
-                            color: colors.right.to_layout(),
-                            style: border_style.right.to_layout(),
-                        },
-                        top: webrender_api::BorderSide {
-                            color: colors.top.to_layout(),
-                            style: border_style.top.to_layout(),
-                        },
-                        bottom: webrender_api::BorderSide {
-                            color: colors.bottom.to_layout(),
-                            style: border_style.bottom.to_layout(),
-                        },
-                        radius: border_radius.to_border_radius(),
-                    }),
-                })));
-            },
+        let details = match border_style_struct.border_image_source {
+            Either::First(_) => Some(BorderDetails::Normal(NormalBorder {
+                left: BorderSide {
+                    color: style.resolve_color(colors.left).to_layout(),
+                    style: border_style.left.to_layout(),
+                },
+                right: BorderSide {
+                    color: style.resolve_color(colors.right).to_layout(),
+                    style: border_style.right.to_layout(),
+                },
+                top: BorderSide {
+                    color: style.resolve_color(colors.top).to_layout(),
+                    style: border_style.top.to_layout(),
+                },
+                bottom: BorderSide {
+                    color: style.resolve_color(colors.bottom).to_layout(),
+                    style: border_style.bottom.to_layout(),
+                },
+                radius: border_radius,
+            })),
             Either::Second(Image::Gradient(ref gradient)) => {
-                let border_widths = border.to_physical(style.writing_mode);
-                let details = match gradient.kind {
+                Some(match gradient.kind {
                     GradientKind::Linear(angle_or_corner) => {
                         BorderDetails::Gradient(display_list::GradientBorder {
                             gradient: convert_linear_gradient(
@@ -1430,80 +1457,39 @@ impl FragmentDisplayListBuilding for Fragment {
                             outset: SideOffsets2D::zero(),
                         })
                     },
-                };
-                state.add_display_item(DisplayItem::Border(Box::new(BorderDisplayItem {
-                    base,
-                    border_widths,
-                    details,
-                })));
+                })
             },
             Either::Second(Image::PaintWorklet(ref paint_worklet)) => {
                 // TODO: this size should be increased by border-image-outset
                 let size = self.border_box.size.to_physical(style.writing_mode);
-                let webrender_image =
-                    self.get_webrender_image_for_paint_worklet(state, style, paint_worklet, size);
-                if let Some(webrender_image) = webrender_image {
-                    let corners = &border_style_struct.border_image_slice.offsets;
-                    let border_image_repeat = &border_style_struct.border_image_repeat;
-
-                    state.add_display_item(DisplayItem::Border(Box::new(BorderDisplayItem {
-                        base: base,
-                        border_widths: border.to_physical(style.writing_mode),
-                        details: BorderDetails::Image(ImageBorder {
-                            image: webrender_image,
-                            fill: border_style_struct.border_image_slice.fill,
-                            slice: SideOffsets2D::new(
-                                corners.0.resolve(webrender_image.height),
-                                corners.1.resolve(webrender_image.width),
-                                corners.2.resolve(webrender_image.height),
-                                corners.3.resolve(webrender_image.width),
-                            ),
-                            // TODO(gw): Support border-image-outset
-                            outset: SideOffsets2D::zero(),
-                            repeat_horizontal: border_image_repeat.0.to_layout(),
-                            repeat_vertical: border_image_repeat.1.to_layout(),
-                        }),
-                    })));
-                }
+                self.get_webrender_image_for_paint_worklet(state, style, paint_worklet, size)
+                    .and_then(|image| build_image_border_details(image, border_style_struct))
             },
             Either::Second(Image::Rect(..)) => {
                 // TODO: Handle border-image with `-moz-image-rect`.
+                None
             },
             Either::Second(Image::Element(..)) => {
                 // TODO: Handle border-image with `-moz-element`.
+                None
             },
-            Either::Second(Image::Url(ref image_url)) => {
-                if let Some(url) = image_url.url() {
-                    let webrender_image = state.layout_context.get_webrender_image_for_url(
+            Either::Second(Image::Url(ref image_url)) => image_url
+                .url()
+                .and_then(|url| {
+                    state.layout_context.get_webrender_image_for_url(
                         self.node,
                         url.clone(),
                         UsePlaceholder::No,
-                    );
-                    if let Some(webrender_image) = webrender_image {
-                        let corners = &border_style_struct.border_image_slice.offsets;
-                        let border_image_repeat = &border_style_struct.border_image_repeat;
-
-                        state.add_display_item(DisplayItem::Border(Box::new(BorderDisplayItem {
-                            base: base,
-                            border_widths: border.to_physical(style.writing_mode),
-                            details: BorderDetails::Image(ImageBorder {
-                                image: webrender_image,
-                                fill: border_style_struct.border_image_slice.fill,
-                                slice: SideOffsets2D::new(
-                                    corners.0.resolve(webrender_image.height),
-                                    corners.1.resolve(webrender_image.width),
-                                    corners.2.resolve(webrender_image.height),
-                                    corners.3.resolve(webrender_image.width),
-                                ),
-                                // TODO(gw): Support border-image-outset
-                                outset: SideOffsets2D::zero(),
-                                repeat_horizontal: border_image_repeat.0.to_layout(),
-                                repeat_vertical: border_image_repeat.1.to_layout(),
-                            }),
-                        })));
-                    }
-                }
-            },
+                    )
+                })
+                .and_then(|image| build_image_border_details(image, border_style_struct)),
+        };
+        if let Some(details) = details {
+            state.add_display_item(DisplayItem::Border(Box::new(BorderDisplayItem {
+                base,
+                border_widths: border.to_physical(style.writing_mode).to_layout(),
+                details,
+            })));
         }
     }
 
@@ -1531,10 +1517,7 @@ impl FragmentDisplayListBuilding for Fragment {
         // absolute bounds.
         let mut bounds = *bounds;
         let offset = width + Au::from(style.get_outline().outline_offset);
-        bounds.origin.x = bounds.origin.x - offset;
-        bounds.origin.y = bounds.origin.y - offset;
-        bounds.size.width = bounds.size.width + offset + offset;
-        bounds.size.height = bounds.size.height + offset + offset;
+        bounds = bounds.inflate(offset, offset);
 
         // Append the outline to the display list.
         let color = style
@@ -1544,12 +1527,12 @@ impl FragmentDisplayListBuilding for Fragment {
             &bounds,
             LocalClip::from(clip.to_layout()),
             self.node,
-            style.get_cursor(Cursor::Default),
+            style.get_cursor(CursorKind::Default),
             DisplayListSection::Outlines,
         );
         state.add_display_item(DisplayItem::Border(Box::new(BorderDisplayItem {
             base: base,
-            border_widths: SideOffsets2D::new_all_same(width),
+            border_widths: SideOffsets2D::new_all_same(width).to_layout(),
             details: BorderDetails::Normal(simple_normal_border(color, outline_style.to_layout())),
         })));
     }
@@ -1571,12 +1554,12 @@ impl FragmentDisplayListBuilding for Fragment {
             stacking_relative_border_box,
             LocalClip::from(clip.to_layout()),
             self.node,
-            style.get_cursor(Cursor::Default),
+            style.get_cursor(CursorKind::Default),
             DisplayListSection::Content,
         );
         state.add_display_item(DisplayItem::Border(Box::new(BorderDisplayItem {
             base: base,
-            border_widths: SideOffsets2D::new_all_same(Au::from_px(1)),
+            border_widths: SideOffsets2D::new_all_same(Au::from_px(1)).to_layout(),
             details: BorderDetails::Normal(simple_normal_border(
                 ColorF::rgb(0, 0, 200),
                 webrender_api::BorderStyle::Solid,
@@ -1597,7 +1580,7 @@ impl FragmentDisplayListBuilding for Fragment {
             &baseline,
             LocalClip::from(clip.to_layout()),
             self.node,
-            style.get_cursor(Cursor::Default),
+            style.get_cursor(CursorKind::Default),
             DisplayListSection::Content,
         );
         state.add_display_item(DisplayItem::Line(Box::new(LineDisplayItem {
@@ -1618,12 +1601,12 @@ impl FragmentDisplayListBuilding for Fragment {
             stacking_relative_border_box,
             LocalClip::from(clip.to_layout()),
             self.node,
-            self.style.get_cursor(Cursor::Default),
+            self.style.get_cursor(CursorKind::Default),
             DisplayListSection::Content,
         );
         state.add_display_item(DisplayItem::Border(Box::new(BorderDisplayItem {
             base: base,
-            border_widths: SideOffsets2D::new_all_same(Au::from_px(1)),
+            border_widths: SideOffsets2D::new_all_same(Au::from_px(1)).to_layout(),
             details: BorderDetails::Normal(simple_normal_border(
                 ColorF::rgb(0, 0, 200),
                 webrender_api::BorderStyle::Solid,
@@ -1655,7 +1638,7 @@ impl FragmentDisplayListBuilding for Fragment {
                 stacking_relative_border_box,
                 LocalClip::from(clip.to_layout()),
                 self.node,
-                self.style.get_cursor(Cursor::Default),
+                self.style.get_cursor(CursorKind::Default),
                 display_list_section,
             );
             state.add_display_item(DisplayItem::SolidColor(Box::new(SolidColorDisplayItem {
@@ -1678,29 +1661,21 @@ impl FragmentDisplayListBuilding for Fragment {
         let insertion_point_bounds;
         let cursor;
         if !self.style.writing_mode.is_vertical() {
-            insertion_point_bounds = Rect::new(
-                Point2D::new(
-                    stacking_relative_border_box.origin.x + advance,
-                    stacking_relative_border_box.origin.y,
-                ),
-                Size2D::new(
-                    INSERTION_POINT_LOGICAL_WIDTH,
-                    stacking_relative_border_box.size.height,
-                ),
+            insertion_point_bounds = rect(
+                stacking_relative_border_box.origin.x + advance,
+                stacking_relative_border_box.origin.y,
+                INSERTION_POINT_LOGICAL_WIDTH,
+                stacking_relative_border_box.size.height,
             );
-            cursor = Cursor::Text;
+            cursor = CursorKind::Text;
         } else {
-            insertion_point_bounds = Rect::new(
-                Point2D::new(
-                    stacking_relative_border_box.origin.x,
-                    stacking_relative_border_box.origin.y + advance,
-                ),
-                Size2D::new(
-                    stacking_relative_border_box.size.width,
-                    INSERTION_POINT_LOGICAL_WIDTH,
-                ),
+            insertion_point_bounds = rect(
+                stacking_relative_border_box.origin.x,
+                stacking_relative_border_box.origin.y + advance,
+                stacking_relative_border_box.size.width,
+                INSERTION_POINT_LOGICAL_WIDTH,
             );
-            cursor = Cursor::VerticalText;
+            cursor = CursorKind::VerticalText;
         };
 
         let base = state.create_base_display_item(
@@ -1867,12 +1842,12 @@ impl FragmentDisplayListBuilding for Fragment {
         // Adjust the clipping region as necessary to account for `border-radius`.
         let build_local_clip = |style: &ComputedValues| {
             let radii = build_border_radius_for_inner_rect(&stacking_relative_border_box, style);
-            if !radii.is_square() {
+            if !radii.is_zero() {
                 LocalClip::RoundedRect(
                     stacking_relative_border_box.to_layout(),
                     ComplexClipRegion::new(
                         stacking_relative_content_box.to_layout(),
-                        radii.to_border_radius(),
+                        radii,
                         ClipMode::Clip,
                     ),
                 )
@@ -1963,7 +1938,7 @@ impl FragmentDisplayListBuilding for Fragment {
                         &stacking_relative_content_box,
                         build_local_clip(&self.style),
                         self.node,
-                        self.style.get_cursor(Cursor::Default),
+                        self.style.get_cursor(CursorKind::Default),
                         DisplayListSection::Content,
                     );
                     let item = DisplayItem::Iframe(Box::new(IframeDisplayItem {
@@ -1971,10 +1946,7 @@ impl FragmentDisplayListBuilding for Fragment {
                         iframe: pipeline_id,
                     }));
 
-                    let size = Size2D::new(
-                        item.bounds().size.width.to_f32_px(),
-                        item.bounds().size.height.to_f32_px(),
-                    );
+                    let size = Size2D::new(item.bounds().size.width, item.bounds().size.height);
                     state
                         .iframe_sizes
                         .push((browsing_context_id, TypedSize2D::from_untyped(&size)));
@@ -1989,7 +1961,7 @@ impl FragmentDisplayListBuilding for Fragment {
                         &stacking_relative_content_box,
                         build_local_clip(&self.style),
                         self.node,
-                        self.style.get_cursor(Cursor::Default),
+                        self.style.get_cursor(CursorKind::Default),
                         DisplayListSection::Content,
                     );
                     state.add_display_item(DisplayItem::Image(Box::new(ImageDisplayItem {
@@ -2025,7 +1997,7 @@ impl FragmentDisplayListBuilding for Fragment {
                     &stacking_relative_content_box,
                     build_local_clip(&self.style),
                     self.node,
-                    self.style.get_cursor(Cursor::Default),
+                    self.style.get_cursor(CursorKind::Default),
                     DisplayListSection::Content,
                 );
                 let display_item = DisplayItem::Image(Box::new(ImageDisplayItem {
@@ -2084,18 +2056,18 @@ impl FragmentDisplayListBuilding for Fragment {
 
         // Create the filter pipeline.
         let effects = self.style().get_effects();
-        let mut filters = effects.filter.0.clone();
+        let mut filters: Vec<FilterOp> = effects.filter.0.iter().map(ToLayout::to_layout).collect();
         if effects.opacity != 1.0 {
-            filters.push(Filter::Opacity(effects.opacity.into()))
+            filters.push(FilterOp::Opacity(effects.opacity.into(), effects.opacity));
         }
 
         StackingContext::new(
             id,
             context_type,
-            &border_box,
-            &overflow,
+            border_box.to_layout(),
+            overflow.to_layout(),
             self.effective_z_index(),
-            filters.into(),
+            filters,
             self.style().get_effects().mix_blend_mode.to_layout(),
             self.transform_matrix(&border_box),
             self.style().get_used_transform_style().to_layout(),
@@ -2125,12 +2097,12 @@ impl FragmentDisplayListBuilding for Fragment {
         };
 
         // Determine the orientation and cursor to use.
-        let (orientation, cursor) = if self.style.writing_mode.is_vertical() {
+        let (_orientation, cursor) = if self.style.writing_mode.is_vertical() {
             // TODO: Distinguish between 'sideways-lr' and 'sideways-rl' writing modes in CSS
             // Writing Modes Level 4.
-            (TextOrientation::SidewaysRight, Cursor::VerticalText)
+            (TextOrientation::SidewaysRight, CursorKind::VerticalText)
         } else {
-            (TextOrientation::Upright, Cursor::Text)
+            (TextOrientation::Upright, CursorKind::Text)
         };
 
         // Compute location of the baseline.
@@ -2171,8 +2143,7 @@ impl FragmentDisplayListBuilding for Fragment {
         }
 
         // Create display items for text decorations.
-        let text_decorations =
-            self.style().get_inheritedtext().text_decorations_in_effect;
+        let text_decorations = self.style().get_inheritedtext().text_decorations_in_effect;
 
         let stacking_relative_content_box = LogicalRect::from_physical(
             self.style.writing_mode,
@@ -2207,14 +2178,22 @@ impl FragmentDisplayListBuilding for Fragment {
         }
 
         // Text
-        state.add_display_item(DisplayItem::Text(Box::new(TextDisplayItem {
-            base: base.clone(),
-            text_run: text_fragment.run.clone(),
-            range: text_fragment.range,
-            text_color: text_color.to_layout(),
-            orientation: orientation,
-            baseline_origin: baseline_origin,
-        })));
+        let glyphs = convert_text_run_to_glyphs(
+            text_fragment.run.clone(),
+            text_fragment.range,
+            baseline_origin,
+        );
+        if !glyphs.is_empty() {
+            state.add_display_item(DisplayItem::Text(Box::new(TextDisplayItem {
+                base: base.clone(),
+                text_run: text_fragment.run.clone(),
+                range: text_fragment.range,
+                baseline_origin: baseline_origin.to_layout(),
+                glyphs: glyphs,
+                font_key: text_fragment.run.font_key,
+                text_color: text_color.to_layout(),
+            })));
+        }
 
         // TODO(#17715): emit text-emphasis marks here.
         // (just push another TextDisplayItem?)
@@ -2256,7 +2235,7 @@ impl FragmentDisplayListBuilding for Fragment {
             &stacking_relative_box,
             LocalClip::from(clip.to_layout()),
             self.node,
-            self.style.get_cursor(Cursor::Default),
+            self.style.get_cursor(CursorKind::Default),
             DisplayListSection::Content,
         );
 
@@ -2461,25 +2440,20 @@ impl BlockFlowDisplayListBuilding for BlockFlow {
                     Rect::max_rect()
                 },
                 Some(transform) => {
-                    let clip = Rect::new(
-                        Point2D::new(
-                            (clip.origin.x - origin.x).to_f32_px(),
-                            (clip.origin.y - origin.y).to_f32_px(),
-                        ),
-                        Size2D::new(clip.size.width.to_f32_px(), clip.size.height.to_f32_px()),
+                    let clip = rect(
+                        (clip.origin.x - origin.x).to_f32_px(),
+                        (clip.origin.y - origin.y).to_f32_px(),
+                        clip.size.width.to_f32_px(),
+                        clip.size.height.to_f32_px(),
                     );
 
                     let clip = transform.transform_rect(&clip);
 
-                    Rect::new(
-                        Point2D::new(
-                            Au::from_f32_px(clip.origin.x),
-                            Au::from_f32_px(clip.origin.y),
-                        ),
-                        Size2D::new(
-                            Au::from_f32_px(clip.size.width),
-                            Au::from_f32_px(clip.size.height),
-                        ),
+                    rect(
+                        Au::from_f32_px(clip.origin.x),
+                        Au::from_f32_px(clip.origin.y),
+                        Au::from_f32_px(clip.size.width),
+                        Au::from_f32_px(clip.size.height),
                     )
                 },
                 None => Rect::zero(),
@@ -2694,10 +2668,9 @@ impl BlockFlowDisplayListBuilding for BlockFlow {
         };
 
         let new_clip_scroll_index = state.add_clip_scroll_node(ClipScrollNode {
-            id: None,
             parent_index: self.clipping_and_scrolling().scrolling,
-            clip: ClippingRegion::from_rect(border_box),
-            content_rect: Rect::zero(),
+            clip: ClippingRegion::from_rect(border_box.to_layout()),
+            content_rect: LayoutRect::zero(),
             node_type: ClipScrollNodeType::StickyFrame(sticky_frame_data),
         });
 
@@ -2727,12 +2700,6 @@ impl BlockFlowDisplayListBuilding for BlockFlow {
             return;
         }
 
-        // If we already have a scroll root for this flow, just return. This can happen
-        // when fragments map to more than one flow, such as in the case of table
-        // wrappers. We just accept the first scroll root in that case.
-        let new_clip_scroll_node_id =
-            ClipId::new(self.fragment.unique_id(), state.pipeline_id.to_webrender());
-
         let sensitivity = if StyleOverflow::Hidden == self.fragment.style.get_box().overflow_x &&
             StyleOverflow::Hidden == self.fragment.style.get_box().overflow_y
         {
@@ -2741,22 +2708,30 @@ impl BlockFlowDisplayListBuilding for BlockFlow {
             ScrollSensitivity::ScriptAndInputEvents
         };
 
-        let clip_rect = build_inner_border_box_for_border_rect(&border_box, &self.fragment.style);
-        let mut clip = ClippingRegion::from_rect(&clip_rect);
+        let border_widths = self.fragment
+            .style
+            .logical_border_width()
+            .to_physical(self.fragment.style.writing_mode);
+        let clip_rect = border_box.inner_rect(border_widths);
+
+        let mut clip = ClippingRegion::from_rect(clip_rect.to_layout());
         let radii = build_border_radius_for_inner_rect(&border_box, &self.fragment.style);
-        if !radii.is_square() {
-            clip.intersect_with_rounded_rect(&clip_rect, &radii)
+        if !radii.is_zero() {
+            clip.intersect_with_rounded_rect(clip_rect.to_layout(), radii)
         }
 
         let content_size = self.base.overflow.scroll.origin + self.base.overflow.scroll.size;
         let content_size = Size2D::new(content_size.x, content_size.y);
 
+        let external_id = ExternalScrollId(
+            self.fragment.unique_id(),
+            state.pipeline_id.to_webrender()
+        );
         let new_clip_scroll_index = state.add_clip_scroll_node(ClipScrollNode {
-            id: Some(new_clip_scroll_node_id),
             parent_index: self.clipping_and_scrolling().scrolling,
             clip: clip,
-            content_rect: Rect::new(content_box.origin, content_size),
-            node_type: ClipScrollNodeType::ScrollFrame(sensitivity),
+            content_rect: Rect::new(content_box.origin, content_size).to_layout(),
+            node_type: ClipScrollNodeType::ScrollFrame(sensitivity, external_id),
         });
 
         let new_clipping_and_scrolling = ClippingAndScrolling::simple(new_clip_scroll_index);
@@ -2805,10 +2780,9 @@ impl BlockFlowDisplayListBuilding for BlockFlow {
         preserved_state.push_clip(state, &clip_rect, self.positioning());
 
         let new_index = state.add_clip_scroll_node(ClipScrollNode {
-            id: None,
             parent_index: self.clipping_and_scrolling().scrolling,
-            clip: ClippingRegion::from_rect(&clip_rect),
-            content_rect: Rect::zero(), // content_rect isn't important for clips.
+            clip: ClippingRegion::from_rect(clip_rect.to_layout()),
+            content_rect: LayoutRect::zero(), // content_rect isn't important for clips.
             node_type: ClipScrollNodeType::Clip,
         });
 
@@ -3148,7 +3122,7 @@ impl BaseFlowDisplayListBuilding for BaseFlow {
         );
         state.add_display_item(DisplayItem::Border(Box::new(BorderDisplayItem {
             base: base,
-            border_widths: SideOffsets2D::new_all_same(Au::from_px(2)),
+            border_widths: SideOffsets2D::new_all_same(Au::from_px(2)).to_layout(),
             details: BorderDetails::Normal(simple_normal_border(
                 color,
                 webrender_api::BorderStyle::Solid,
@@ -3158,7 +3132,7 @@ impl BaseFlowDisplayListBuilding for BaseFlow {
 }
 
 trait ComputedValuesCursorUtility {
-    fn get_cursor(&self, default_cursor: Cursor) -> Option<Cursor>;
+    fn get_cursor(&self, default_cursor: CursorKind) -> Option<CursorKind>;
 }
 
 impl ComputedValuesCursorUtility for ComputedValues {
@@ -3166,14 +3140,14 @@ impl ComputedValuesCursorUtility for ComputedValues {
     /// the cursor to use if `cursor` is `auto`. Typically, this will be `PointerCursor`, but for
     /// text display items it may be `TextCursor` or `VerticalTextCursor`.
     #[inline]
-    fn get_cursor(&self, default_cursor: Cursor) -> Option<Cursor> {
+    fn get_cursor(&self, default_cursor: CursorKind) -> Option<CursorKind> {
         match (
             self.get_pointing().pointer_events,
             self.get_pointing().cursor,
         ) {
             (PointerEvents::None, _) => None,
-            (PointerEvents::Auto, cursor::Keyword::Auto) => Some(default_cursor),
-            (PointerEvents::Auto, cursor::Keyword::Cursor(cursor)) => Some(cursor),
+            (PointerEvents::Auto, Cursor(CursorKind::Auto)) => Some(default_cursor),
+            (PointerEvents::Auto, Cursor(cursor)) => Some(cursor),
         }
     }
 }

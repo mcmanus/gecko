@@ -8,13 +8,15 @@ publish = false
 [lib]
 name = "layout"
 path = "lib.rs"
+test = false
+doctest = false
 
 [dependencies]
 app_units = "0.6.1"
 atomic_refcell = "0.1"
 bitflags = "1.0"
 canvas_traits = {path = "../canvas_traits"}
-euclid = "0.16"
+euclid = "0.16.4"
 fnv = "1.0"
 gfx = {path = "../gfx"}
 gfx_traits = {path = "../gfx_traits"}
@@ -46,3 +48,8 @@ style_traits = {path = "../style_traits"}
 unicode-bidi = {version = "0.3", features = ["with_serde"]}
 unicode-script = {version = "0.1", features = ["harfbuzz"]}
 webrender_api = {git = "https://github.com/servo/webrender", features = ["ipc"]}
+xi-unicode = "0.1.0"
+
+[dev-dependencies]
+size_of_test = {path = "../size_of_test"}
+

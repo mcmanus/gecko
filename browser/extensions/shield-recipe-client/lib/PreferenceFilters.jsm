@@ -4,9 +4,7 @@
 
 "use strict";
 
-const {utils: Cu} = Components;
-
-Cu.import("resource://gre/modules/Preferences.jsm");
+ChromeUtils.import("resource://gre/modules/Preferences.jsm");
 
 this.EXPORTED_SYMBOLS = ["PreferenceFilters"];
 

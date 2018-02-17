@@ -59,21 +59,19 @@
 
 this.EXPORTED_SYMBOLS = [ "Bookmarks" ];
 
-const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
-
 Cu.importGlobalProperties(["URL"]);
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
-                                  "resource://gre/modules/Services.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
-                                  "resource://gre/modules/NetUtil.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Sqlite",
-                                  "resource://gre/modules/Sqlite.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
-                                  "resource://gre/modules/PlacesUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesSyncUtils",
-                                  "resource://gre/modules/PlacesSyncUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "Services",
+                               "resource://gre/modules/Services.jsm");
+ChromeUtils.defineModuleGetter(this, "NetUtil",
+                               "resource://gre/modules/NetUtil.jsm");
+ChromeUtils.defineModuleGetter(this, "Sqlite",
+                               "resource://gre/modules/Sqlite.jsm");
+ChromeUtils.defineModuleGetter(this, "PlacesUtils",
+                               "resource://gre/modules/PlacesUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "PlacesSyncUtils",
+                               "resource://gre/modules/PlacesSyncUtils.jsm");
 
 // This is an helper to temporarily cover the need to know the tags folder
 // itemId until bug 424160 is fixed.  This exists so that startup paths won't
@@ -137,22 +135,74 @@ var Bookmarks = Object.freeze({
    * Special GUIDs associated with bookmark roots.
    * It's guaranteed that the roots will always have these guids.
    */
+  rootGuid:    "root________",
+  menuGuid:    "menu________",
+  toolbarGuid: "toolbar_____",
+  unfiledGuid: "unfiled_____",
+  mobileGuid:  "mobile______",
 
-   rootGuid:    "root________",
-   menuGuid:    "menu________",
-   toolbarGuid: "toolbar_____",
-   unfiledGuid: "unfiled_____",
-   mobileGuid:  "mobile______",
+  // With bug 424160, tags will stop being bookmarks, thus this root will
+  // be removed.  Do not rely on this, rather use the tagging service API.
+  tagsGuid:    "tags________",
 
-   // With bug 424160, tags will stop being bookmarks, thus this root will
-   // be removed.  Do not rely on this, rather use the tagging service API.
-   tagsGuid:    "tags________",
+  /**
+   * The GUIDs of the user content root folders that we support, for easy access
+   * as a set.
+   */
+  userContentRoots: ["toolbar_____", "menu________", "unfiled_____", "mobile______"],
 
-   /**
-    * The GUIDs of the user content root folders that we support, for easy access
-    * as a set.
-    */
-   userContentRoots: ["toolbar_____", "menu________", "unfiled_____", "mobile______"],
+  /**
+   * GUIDs associated with virtual queries that are used for display in the left
+   * pane.
+   */
+  virtualMenuGuid: "menu_______v",
+  virtualToolbarGuid: "toolbar____v",
+  virtualUnfiledGuid: "unfiled___v",
+  virtualMobileGuid: "mobile____v",
+
+  /**
+   * Checks if a guid is a virtual root.
+   *
+   * @param {String} guid The guid of the item to look for.
+   * @returns {Boolean} true if guid is a virtual root, false otherwise.
+   */
+  isVirtualRootItem(guid) {
+    return guid == PlacesUtils.bookmarks.virtualMenuGuid ||
+           guid == PlacesUtils.bookmarks.virtualToolbarGuid ||
+           guid == PlacesUtils.bookmarks.virtualUnfiledGuid;
+  },
+
+  /**
+   * Returns the title to use on the UI for a bookmark item. Root folders
+   * in the database don't store fully localised versions of the title. To
+   * get those this function should be called.
+   *
+   * Hence, this function should only be called if a root folder object is
+   * likely to be displayed to the user.
+   *
+   * @param {Object} info An object representing a bookmark-item.
+   * @returns {String} The correct string.
+   * @throws {Error} If the guid in PlacesUtils.bookmarks.userContentRoots is
+   *                 not supported.
+   */
+  getLocalizedTitle(info) {
+    if (!PlacesUtils.bookmarks.userContentRoots.includes(info.guid)) {
+      return info.title;
+    }
+
+    switch (info.guid) {
+      case PlacesUtils.bookmarks.toolbarGuid:
+        return PlacesUtils.getString("BookmarksToolbarFolderTitle");
+      case PlacesUtils.bookmarks.menuGuid:
+        return PlacesUtils.getString("BookmarksMenuFolderTitle");
+      case PlacesUtils.bookmarks.unfiledGuid:
+        return PlacesUtils.getString("OtherBookmarksFolderTitle");
+      case PlacesUtils.bookmarks.mobileGuid:
+        return PlacesUtils.getString("MobileBookmarksFolderTitle");
+      default:
+        throw new Error(`Unsupported guid ${info.guid} passed to getLocalizedTitle!`);
+    }
+  },
 
   /**
    * Inserts a bookmark-item into the bookmarks tree.

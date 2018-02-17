@@ -4,12 +4,10 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, results: Cr, utils: Cu} = Components;
-
 this.EXPORTED_SYMBOLS = [ "ContentWebRTC" ];
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "MediaManagerService",
                                    "@mozilla.org/mediaManagerService;1",
                                    "nsIMediaManagerService");
@@ -135,6 +133,7 @@ function handleGUMStop(aSubject, aTopic, aData) {
 function handleGUMRequest(aSubject, aTopic, aData) {
   let constraints = aSubject.getConstraints();
   let secure = aSubject.isSecure;
+  let isHandlingUserInput = aSubject.isHandlingUserInput;
   let contentWindow = Services.wm.getOuterWindowWithId(aSubject.windowID);
 
   contentWindow.navigator.mozGetUserMediaDevices(
@@ -146,7 +145,7 @@ function handleGUMRequest(aSubject, aTopic, aData) {
         return;
 
       prompt(contentWindow, aSubject.windowID, aSubject.callID,
-             constraints, devices, secure);
+             constraints, devices, secure, isHandlingUserInput);
     },
     function(error) {
       // bug 827146 -- In the future, the UI should catch NotFoundError
@@ -157,7 +156,7 @@ function handleGUMRequest(aSubject, aTopic, aData) {
     aSubject.callID);
 }
 
-function prompt(aContentWindow, aWindowID, aCallID, aConstraints, aDevices, aSecure) {
+function prompt(aContentWindow, aWindowID, aCallID, aConstraints, aDevices, aSecure, aIsHandlingUserInput) {
   let audioDevices = [];
   let videoDevices = [];
   let devices = [];
@@ -213,12 +212,18 @@ function prompt(aContentWindow, aWindowID, aCallID, aConstraints, aDevices, aSec
   }
   aContentWindow.pendingGetUserMediaRequests.set(aCallID, devices);
 
+  // Record third party origins for telemetry.
+  let isThirdPartyOrigin =
+    aContentWindow.document.location.origin != aContentWindow.top.document.location.origin;
+
   let request = {
     callID: aCallID,
     windowID: aWindowID,
     origin: aContentWindow.origin,
     documentURI: aContentWindow.document.documentURI,
     secure: aSecure,
+    isHandlingUserInput: aIsHandlingUserInput,
+    isThirdPartyOrigin,
     requestTypes,
     sharingScreen,
     sharingAudio,
@@ -308,9 +313,13 @@ function updateIndicators(aSubject, aTopic, aData) {
     }
 
     let tabState = getTabStateForContentWindow(contentWindow);
-    if (tabState.camera)
+    if (tabState.camera == MediaManagerService.STATE_CAPTURE_ENABLED)
       state.showCameraIndicator = true;
-    if (tabState.microphone)
+    if (tabState.camera == MediaManagerService.STATE_CAPTURE_DISABLED)
+      state.showCameraIndicator = true;
+    if (tabState.microphone == MediaManagerService.STATE_CAPTURE_ENABLED)
+      state.showMicrophoneIndicator = true;
+    if (tabState.microphone == MediaManagerService.STATE_CAPTURE_DISABLED)
       state.showMicrophoneIndicator = true;
     if (tabState.screen) {
       if (tabState.screen == "Screen") {
@@ -341,7 +350,9 @@ function removeBrowserSpecificIndicator(aSubject, aTopic, aData) {
   }
 
   let tabState = getTabStateForContentWindow(contentWindow);
-  if (!tabState.camera && !tabState.microphone && !tabState.screen)
+  if (tabState.camera == MediaManagerService.STATE_NOCAPTURE &&
+      tabState.microphone == MediaManagerService.STATE_NOCAPTURE &&
+      !tabState.screen)
     tabState = {windowId: tabState.windowId};
 
   let mm = getMessageManagerForWindow(contentWindow);
@@ -351,16 +362,17 @@ function removeBrowserSpecificIndicator(aSubject, aTopic, aData) {
 
 function getTabStateForContentWindow(aContentWindow) {
   let camera = {}, microphone = {}, screen = {}, window = {}, app = {}, browser = {};
-  MediaManagerService.mediaCaptureWindowState(aContentWindow, camera, microphone,
+  MediaManagerService.mediaCaptureWindowState(aContentWindow,
+                                              camera, microphone,
                                               screen, window, app, browser);
   let tabState = {camera: camera.value, microphone: microphone.value};
-  if (screen.value)
+  if (screen.value != MediaManagerService.STATE_NOCAPTURE)
     tabState.screen = "Screen";
-  else if (window.value)
+  else if (window.value != MediaManagerService.STATE_NOCAPTURE)
     tabState.screen = "Window";
-  else if (app.value)
+  else if (app.value != MediaManagerService.STATE_NOCAPTURE)
     tabState.screen = "Application";
-  else if (browser.value)
+  else if (browser.value != MediaManagerService.STATE_NOCAPTURE)
     tabState.screen = "Browser";
 
   tabState.windowId = getInnerWindowIDForWindow(aContentWindow);

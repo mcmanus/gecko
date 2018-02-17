@@ -4,19 +4,17 @@
 
 "use strict";
 
-const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/AppConstants.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "EventDispatcher",
+ChromeUtils.defineModuleGetter(this, "EventDispatcher",
   "resource://gre/modules/Messaging.jsm");
 XPCOMUtils.defineLazyGetter(this, "WindowEventDispatcher",
   () => EventDispatcher.for(window));
 
 XPCOMUtils.defineLazyGetter(this, "dump", () =>
-    Cu.import("resource://gre/modules/AndroidLog.jsm",
-              {}).AndroidLog.d.bind(null, "View"));
+    ChromeUtils.import("resource://gre/modules/AndroidLog.jsm",
+                       {}).AndroidLog.d.bind(null, "View"));
 
 // Creates and manages GeckoView modules.
 // A module must extend GeckoViewModule.
@@ -33,7 +31,7 @@ var ModuleManager = {
   add: function(aResource, aType, ...aArgs) {
     this.remove(aType);
     let scope = {};
-    Cu.import(aResource, scope);
+    ChromeUtils.import(aResource, scope);
     this.modules[aType] = new scope[aType](
       aType, window, this.browser, WindowEventDispatcher, ...aArgs
     );
@@ -66,6 +64,8 @@ function startup() {
                     "GeckoViewTab");
   ModuleManager.add("resource://gre/modules/GeckoViewRemoteDebugger.jsm",
                     "GeckoViewRemoteDebugger");
+  ModuleManager.add("resource://gre/modules/GeckoViewTrackingProtection.jsm",
+                    "GeckoViewTrackingProtection");
 
   // Move focus to the content window at the end of startup,
   // so things like text selection can work properly.

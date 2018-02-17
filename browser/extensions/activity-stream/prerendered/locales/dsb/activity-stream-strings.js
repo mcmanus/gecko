@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Wót {provider} dopórucony",
   "header_bookmarks_placeholder": "Hyšći cytańske znamjenja njamaśo.",
   "header_stories_from": "wót",
+  "context_menu_button_sr": "Kontekstowy meni za {title} wócyniś",
   "type_label_visited": "Woglědany",
   "type_label_bookmarked": "Ako cytańske znamje skłaźony",
   "type_label_synced": "Z drugego rěda synchronizěrowany",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Toś to sedło wobźěłaś",
   "edit_topsites_dismiss_button": "Sedło zachyśiś",
   "edit_topsites_add_button": "Pśidaś",
+  "edit_topsites_add_button_tooltip": "Woblubowane sedło pśidaś",
   "topsites_form_add_header": "Nowe nejcesćej woglědane sedło",
   "topsites_form_edit_header": "Nejcesćej woglědane sedło wobźěłaś",
   "topsites_form_title_placeholder": "Titel zapódaś",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "To jo nachylu wšykno. Wrośćo se pózdźej wjelicnych tšojeńkow dla wót {provider}. Njamóžośo cakaś? Wubjeŕśo woblubowanu temu, aby dalšne wjelicne tšojeńka we webje namakał.",
   "manual_migration_explanation2": "Wopytajśo Firefox z cytanskimi znamjenjami, historiju a gronidłami z drugego wobglědowaka.",
   "manual_migration_cancel_button": "Ně, źěkujom se",
-  "manual_migration_import_button": "Něnto importěrowaś"
+  "manual_migration_import_button": "Něnto importěrowaś",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

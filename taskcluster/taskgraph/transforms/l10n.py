@@ -67,7 +67,7 @@ l10n_description_schema = Schema({
 
         # Additional paths to look for mozharness configs in. These should be
         # relative to the base of the source checkout
-        Optional('config-paths'): _by_platform([basestring]),
+        Optional('config-paths'): [basestring],
 
         # Options to pass to the mozharness script
         Required('options'): _by_platform([basestring]),
@@ -158,9 +158,6 @@ l10n_description_schema = Schema({
     # Shipping product and phase
     Optional('shipping-product'): task_description_schema['shipping-product'],
     Optional('shipping-phase'): task_description_schema['shipping-phase'],
-
-    # Notifications
-    Optional('notifications'): task_description_schema['notifications'],
 })
 
 transforms = TransformSequence()
@@ -458,8 +455,5 @@ def make_job_description(config, jobs):
 
         if 'shipping-product' in job:
             job_description['shipping-product'] = job['shipping-product']
-
-        if 'notifications' in job:
-            job_description['notifications'] = job['notifications']
 
         yield job_description

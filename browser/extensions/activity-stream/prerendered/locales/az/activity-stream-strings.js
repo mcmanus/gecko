@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "{provider} məsləhət görür",
   "header_bookmarks_placeholder": "Hələlik heç əlfəcininiz yoxdur.",
   "header_stories_from": "qaynaq:",
+  "context_menu_button_sr": "{title} üçün kontekst menyusunu aç",
   "type_label_visited": "Ziyarət edilib",
   "type_label_bookmarked": "Əlfəcinlənib",
   "type_label_synced": "Digər cihazdan sync edilib",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Bu saytı düzəlt",
   "edit_topsites_dismiss_button": "Bu saytı çıxart",
   "edit_topsites_add_button": "Əlavə et",
+  "edit_topsites_add_button_tooltip": "Qabaqcıl sayt əlavə et",
   "topsites_form_add_header": "Yeni Qabaqcıl Saytlar",
   "topsites_form_edit_header": "Qabaqcıl Saytları Dəyişdir",
   "topsites_form_title_placeholder": "Başlıq daxil et",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Hamısını oxudunuz. Yeni {provider} məqalələri üçün daha sonra təkrar yoxlayın. Gözləyə bilmirsiz? Məşhur mövzu seçərək internetdən daha çox gözəl məqalələr tapın.",
   "manual_migration_explanation2": "Firefox səyyahını digər səyyahlardan olan əlfəcin, tarixçə və parollar ilə yoxlayın.",
   "manual_migration_cancel_button": "Xeyr, Təşəkkürlər",
-  "manual_migration_import_button": "İndi idxal et"
+  "manual_migration_import_button": "İndi idxal et",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

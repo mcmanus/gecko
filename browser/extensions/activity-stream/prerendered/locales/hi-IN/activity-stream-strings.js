@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "{provider} द्वारा अनुशंसित",
   "header_bookmarks_placeholder": "आपके पास अभी तक कोई भी पुस्तचिन्ह नहीं है.",
   "header_stories_from": "के द्वारा",
+  "context_menu_button_sr": "{title} के लिए कॉन्टेक्स्ट मेनू खोलें",
   "type_label_visited": "देखी गई",
   "type_label_bookmarked": "पुस्तचिह्न लगाया हुआ",
   "type_label_synced": "किसी अन्य उपकरण से समकालीन किया गया",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "इस साइट को संपादित करें",
   "edit_topsites_dismiss_button": "इस साइट को ख़ारिज करें",
   "edit_topsites_add_button": "जोड़ें",
+  "edit_topsites_add_button_tooltip": "शीर्ष साइट जोड़ें",
   "topsites_form_add_header": "नई शीर्ष साइट",
   "topsites_form_edit_header": "शीर्ष साइट संपादित करें",
   "topsites_form_title_placeholder": "एक शीर्षक दर्ज करें",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "आप अंत तक आ गए हैं. {provider} से और शीर्ष घटनाओं के लिए कुछ समय में पुनः आइए. इंतज़ार नहीं कर सकते? वेब से और प्रमुख घटनाएं ढूंढने के लिए एक लोकप्रिय विषय चुनें.",
   "manual_migration_explanation2": "Firefox को किसी अन्य ब्राउज़र के पुस्तचिह्नों, इतिहास और पासवर्डों के साथ आज़माएं.",
   "manual_migration_cancel_button": "नहीं शुक्रिया",
-  "manual_migration_import_button": "अब आयात करें"
+  "manual_migration_import_button": "अब आयात करें",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

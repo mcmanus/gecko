@@ -8,13 +8,12 @@
 
 #include "mozilla/PodOperations.h"
 
-#include "jscntxt.h"
-
 #include "gc/Marking.h"
 #include "jit/BaselineFrame.h"
 #include "jit/JitcodeMap.h"
 #include "jit/JitCompartment.h"
 #include "vm/Debugger.h"
+#include "vm/JSContext.h"
 #include "vm/Opcodes.h"
 
 #include "jit/JSJitFrameIter-inl.h"
@@ -566,6 +565,33 @@ JitFrameIter::settle()
         iter_.destroy();
         iter_.construct<wasm::WasmFrameIter>(act_, prevFP);
         MOZ_ASSERT(!asWasm().done());
+        return;
+    }
+
+    if (isWasm()) {
+        const wasm::WasmFrameIter& wasmFrame = asWasm();
+        if (!wasmFrame.unwoundIonCallerFP())
+            return;
+
+        // Transition from wasm frames to jit frames: we're on the
+        // jit-to-wasm fast path. The current stack layout is as follows:
+        // (stack grows downward)
+        //
+        // [--------------------]
+        // [JIT FRAME           ]
+        // [WASM JIT ENTRY FRAME] <-- we're here
+        //
+        // The wasm iterator has saved the previous jit frame pointer for us.
+
+        MOZ_ASSERT(wasmFrame.done());
+        uint8_t* prevFP = wasmFrame.unwoundIonCallerFP();
+
+        if (mustUnwindActivation_)
+            act_->setJSExitFP(prevFP);
+
+        iter_.destroy();
+        iter_.construct<jit::JSJitFrameIter>(act_, prevFP);
+        MOZ_ASSERT(!asJSJit().done());
         return;
     }
 }
@@ -1719,28 +1745,41 @@ jit::JitActivation::traceIonRecovery(JSTracer* trc)
         it->trace(trc);
 }
 
-void
+bool
 jit::JitActivation::startWasmInterrupt(const JS::ProfilingFrameIterator::RegisterState& state)
 {
+    // fp may be null when first entering wasm code from an interpreter entry
+    // stub.
+    if (!state.fp)
+        return false;
+
     MOZ_ASSERT(state.pc);
-    MOZ_ASSERT(state.fp);
 
     // Execution can only be interrupted in function code. Afterwards, control
     // flow does not reenter function code and thus there can be no
     // interrupt-during-interrupt.
 
-    bool ignoredUnwound;
+    bool unwound;
     wasm::UnwindState unwindState;
-    MOZ_ALWAYS_TRUE(wasm::StartUnwinding(state, &unwindState, &ignoredUnwound));
+    MOZ_ALWAYS_TRUE(wasm::StartUnwinding(state, &unwindState, &unwound));
 
     void* pc = unwindState.pc;
-    MOZ_ASSERT(wasm::LookupCode(pc)->lookupRange(pc)->isFunction());
+
+    if (unwound) {
+        // In the prologue/epilogue, FP might have been fixed up to the
+        // caller's FP, and the caller could be the jit entry. Ignore this
+        // interrupt, in this case, because FP points to a jit frame and not a
+        // wasm one.
+        if (!wasm::LookupCode(pc)->lookupFuncRange(pc))
+            return false;
+    }
 
     cx_->runtime()->wasmUnwindData.ref().construct<wasm::InterruptData>(pc, state.pc);
     setWasmExitFP(unwindState.fp);
 
     MOZ_ASSERT(compartment() == unwindState.fp->tls->instance->compartment());
     MOZ_ASSERT(isWasmInterrupted());
+    return true;
 }
 
 void
@@ -1901,9 +1940,9 @@ ActivationIterator::operator++()
 }
 
 JS::ProfilingFrameIterator::ProfilingFrameIterator(JSContext* cx, const RegisterState& state,
-                                                   uint32_t sampleBufferGen)
+                                                   const Maybe<uint64_t>& samplePositionInProfilerBuffer)
   : cx_(cx),
-    sampleBufferGen_(sampleBufferGen),
+    samplePositionInProfilerBuffer_(samplePositionInProfilerBuffer),
     activation_(nullptr)
 {
     if (!cx->runtime()->geckoProfiler().enabled())
@@ -1961,6 +2000,19 @@ JS::ProfilingFrameIterator::settleFrames()
         new (storage()) wasm::ProfilingFrameIterator(*activation_->asJit(), fp);
         kind_ = Kind::Wasm;
         MOZ_ASSERT(!wasmIter().done());
+        return;
+    }
+
+    if (isWasm() && wasmIter().done() && wasmIter().unwoundIonCallerFP()) {
+        uint8_t* fp = wasmIter().unwoundIonCallerFP();
+        iteratorDestroy();
+        // Using this ctor will skip the first ion->wasm frame, which is
+        // needed because the profiling iterator doesn't know how to unwind
+        // when the callee has no script.
+        new (storage()) jit::JSJitProfilingFrameIterator((jit::CommonFrameLayout*)fp);
+        kind_ = Kind::JSJit;
+        MOZ_ASSERT(!jsJitIter().done());
+        return;
     }
 }
 
@@ -1999,7 +2051,7 @@ JS::ProfilingFrameIterator::iteratorConstruct(const RegisterState& state)
         return;
     }
 
-    new (storage()) jit::JSJitProfilingFrameIterator(cx_, state);
+    new (storage()) jit::JSJitProfilingFrameIterator(cx_, state.pc);
     kind_ = Kind::JSJit;
 }
 
@@ -2020,7 +2072,8 @@ JS::ProfilingFrameIterator::iteratorConstruct()
         return;
     }
 
-    new (storage()) jit::JSJitProfilingFrameIterator(activation->jsExitFP());
+    auto* fp = (jit::ExitFrameLayout*) activation->jsExitFP();
+    new (storage()) jit::JSJitProfilingFrameIterator(fp);
     kind_ = Kind::JSJit;
 }
 
@@ -2082,8 +2135,9 @@ JS::ProfilingFrameIterator::getPhysicalFrameAndEntry(jit::JitcodeGlobalEntry* en
     // Look up an entry for the return address.
     void* returnAddr = jsJitIter().returnAddressToFp();
     jit::JitcodeGlobalTable* table = cx_->runtime()->jitRuntime()->getJitcodeGlobalTable();
-    if (hasSampleBufferGen())
-        *entry = table->lookupForSamplerInfallible(returnAddr, cx_->runtime(), sampleBufferGen_);
+    if (samplePositionInProfilerBuffer_)
+        *entry = table->lookupForSamplerInfallible(returnAddr, cx_->runtime(),
+                                                   *samplePositionInProfilerBuffer_);
     else
         *entry = table->lookupInfallible(returnAddr);
 

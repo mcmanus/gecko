@@ -29,7 +29,10 @@ struct cubeb {
 };
 
 struct cubeb_stream {
+  /* Note: Must match cubeb_stream layout in cubeb.c. */
   cubeb * context;
+  void * arg;                     /* user arg to {data,state}_cb */
+  /**/
   pthread_t th;                   /* to run real-time audio i/o */
   pthread_mutex_t mtx;            /* protects hdl and pos */
   struct sio_hdl *hdl;            /* link us to sndio */
@@ -48,7 +51,6 @@ struct cubeb_stream {
   uint64_t swpos;                 /* number of frames produced/consumed */
   cubeb_data_callback data_cb;    /* cb to preapare data */
   cubeb_state_callback state_cb;  /* cb to notify about state changes */
-  void *arg;                      /* user arg to {data,state}_cb */
 };
 
 static void
@@ -279,11 +281,19 @@ sndio_stream_init(cubeb * context,
   memset(s, 0, sizeof(cubeb_stream));
   s->mode = 0;
   if (input_stream_params) {
+    if (input_stream_params->prefs & CUBEB_STREAM_PREF_LOOPBACK) {
+      DPR("sndio_stream_init(), loopback not supported\n");
+      goto err;
+    }
     s->mode |= SIO_REC;
     format = input_stream_params->format;
     rate = input_stream_params->rate;
   }
   if (output_stream_params) {
+    if (output_stream_params->prefs & CUBEB_STREAM_PREF_LOOPBACK) {
+      DPR("sndio_stream_init(), loopback not supported\n");
+      goto err;
+    }
     s->mode |= SIO_PLAY;
     format = output_stream_params->format;
     rate = output_stream_params->rate;

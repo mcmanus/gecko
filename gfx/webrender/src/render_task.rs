@@ -12,7 +12,7 @@ use gpu_cache::GpuCache;
 use gpu_types::{ClipScrollNodeIndex, PictureType};
 use internal_types::{FastHashMap, RenderPassIndex, SourceTexture};
 use picture::ContentOrigin;
-use prim_store::{PrimitiveIndex};
+use prim_store::{PrimitiveIndex, ImageCacheKey};
 #[cfg(feature = "debugger")]
 use print_tree::{PrintTreePrinter};
 use resource_cache::CacheItem;
@@ -27,16 +27,19 @@ pub const MAX_BLUR_STD_DEVIATION: f32 = 4.0;
 pub const MIN_DOWNSCALING_RT_SIZE: i32 = 128;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-#[cfg_attr(feature = "capture", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct RenderTaskId(pub u32); // TODO(gw): Make private when using GPU cache!
 
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
-#[cfg_attr(feature = "capture", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct RenderTaskAddress(pub u32);
 
 #[derive(Debug)]
-#[cfg_attr(feature = "capture", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct RenderTaskTree {
     pub tasks: Vec<RenderTask>,
     pub task_data: Vec<RenderTaskData>,
@@ -164,7 +167,7 @@ impl RenderTaskTree {
 
         // Sanity check - can be relaxed if needed
         match task.location {
-            RenderTaskLocation::Fixed => {
+            RenderTaskLocation::Fixed(..) => {
                 debug_assert!(pass_index == passes.len() - 1);
             }
             RenderTaskLocation::Dynamic(..) |
@@ -212,15 +215,17 @@ impl ops::IndexMut<RenderTaskId> for RenderTaskTree {
 }
 
 #[derive(Debug)]
-#[cfg_attr(feature = "capture", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub enum RenderTaskLocation {
-    Fixed,
+    Fixed(DeviceIntRect),
     Dynamic(Option<(DeviceIntPoint, RenderTargetIndex)>, DeviceIntSize),
     TextureCache(SourceTexture, i32, DeviceIntRect),
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "capture", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct ClipWorkItem {
     pub scroll_node_data_index: ClipScrollNodeIndex,
     pub clip_sources: ClipSourcesWeakHandle,
@@ -228,7 +233,8 @@ pub struct ClipWorkItem {
 }
 
 #[derive(Debug)]
-#[cfg_attr(feature = "capture", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct CacheMaskTask {
     actual_rect: DeviceIntRect,
     pub clips: Vec<ClipWorkItem>,
@@ -236,7 +242,8 @@ pub struct CacheMaskTask {
 }
 
 #[derive(Debug)]
-#[cfg_attr(feature = "capture", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct PictureTask {
     pub prim_index: PrimitiveIndex,
     pub target_kind: RenderTargetKind,
@@ -246,7 +253,8 @@ pub struct PictureTask {
 }
 
 #[derive(Debug)]
-#[cfg_attr(feature = "capture", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct BlurTask {
     pub blur_std_deviation: f32,
     pub target_kind: RenderTargetKind,
@@ -263,14 +271,36 @@ impl BlurTask {
     }
 }
 
+// Where the source data for a blit task can be found.
 #[derive(Debug)]
-#[cfg_attr(feature = "capture", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
+pub enum BlitSource {
+    Image {
+        key: ImageCacheKey,
+    },
+    RenderTask {
+        task_id: RenderTaskId,
+    },
+}
+
+#[derive(Debug)]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
+pub struct BlitTask {
+    pub source: BlitSource,
+}
+
+#[derive(Debug)]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct RenderTaskData {
     pub data: [f32; FLOATS_PER_RENDER_TASK_INFO],
 }
 
 #[derive(Debug)]
-#[cfg_attr(feature = "capture", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub enum RenderTaskKind {
     Picture(PictureTask),
     CacheMask(CacheMaskTask),
@@ -278,10 +308,12 @@ pub enum RenderTaskKind {
     HorizontalBlur(BlurTask),
     Readback(DeviceIntRect),
     Scaling(RenderTargetKind),
+    Blit(BlitTask),
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-#[cfg_attr(feature = "capture", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub enum ClearMode {
     // Applicable to color and alpha targets.
     Zero,
@@ -292,7 +324,8 @@ pub enum ClearMode {
 }
 
 #[derive(Debug)]
-#[cfg_attr(feature = "capture", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct RenderTask {
     pub location: RenderTaskLocation,
     pub children: Vec<RenderTaskId>,
@@ -303,7 +336,7 @@ pub struct RenderTask {
 
 impl RenderTask {
     pub fn new_picture(
-        size: Option<DeviceIntSize>,
+        location: RenderTaskLocation,
         prim_index: PrimitiveIndex,
         target_kind: RenderTargetKind,
         content_origin: ContentOrigin,
@@ -312,11 +345,6 @@ impl RenderTask {
         children: Vec<RenderTaskId>,
         pic_type: PictureType,
     ) -> Self {
-        let location = match size {
-            Some(size) => RenderTaskLocation::Dynamic(None, size),
-            None => RenderTaskLocation::Fixed,
-        };
-
         RenderTask {
             children,
             location,
@@ -337,6 +365,32 @@ impl RenderTask {
             children: Vec::new(),
             location: RenderTaskLocation::Dynamic(None, screen_rect.size),
             kind: RenderTaskKind::Readback(screen_rect),
+            clear_mode: ClearMode::Transparent,
+            pass_index: None,
+        }
+    }
+
+    pub fn new_blit(
+        size: DeviceIntSize,
+        source: BlitSource,
+    ) -> Self {
+        let mut children = Vec::new();
+
+        // If this blit uses a render task as a source,
+        // ensure it's added as a child task. This will
+        // ensure it gets allocated in the correct pass
+        // and made available as an input when this task
+        // executes.
+        if let BlitSource::RenderTask { task_id } = source {
+            children.push(task_id);
+        }
+
+        RenderTask {
+            children,
+            location: RenderTaskLocation::Dynamic(None, size),
+            kind: RenderTaskKind::Blit(BlitTask {
+                source,
+            }),
             clear_mode: ClearMode::Transparent,
             pass_index: None,
         }
@@ -511,7 +565,8 @@ impl RenderTask {
                 )
             }
             RenderTaskKind::Readback(..) |
-            RenderTaskKind::Scaling(..) => {
+            RenderTaskKind::Scaling(..) |
+            RenderTaskKind::Blit(..) => {
                 (
                     [0.0; 3],
                     [0.0; 4],
@@ -541,7 +596,7 @@ impl RenderTask {
 
     pub fn get_dynamic_size(&self) -> DeviceIntSize {
         match self.location {
-            RenderTaskLocation::Fixed => DeviceIntSize::zero(),
+            RenderTaskLocation::Fixed(..) => DeviceIntSize::zero(),
             RenderTaskLocation::Dynamic(_, size) => size,
             RenderTaskLocation::TextureCache(_, _, rect) => rect.size,
         }
@@ -549,8 +604,8 @@ impl RenderTask {
 
     pub fn get_target_rect(&self) -> (DeviceIntRect, RenderTargetIndex) {
         match self.location {
-            RenderTaskLocation::Fixed => {
-                (DeviceIntRect::zero(), RenderTargetIndex(0))
+            RenderTaskLocation::Fixed(rect) => {
+                (rect, RenderTargetIndex(0))
             }
             // Previously, we only added render tasks after the entire
             // primitive chain was determined visible. This meant that
@@ -598,6 +653,10 @@ impl RenderTask {
             RenderTaskKind::Picture(ref task_info) => {
                 task_info.target_kind
             }
+
+            RenderTaskKind::Blit(..) => {
+                RenderTargetKind::Color
+            }
         }
     }
 
@@ -613,7 +672,8 @@ impl RenderTask {
             RenderTaskKind::VerticalBlur(..) |
             RenderTaskKind::Readback(..) |
             RenderTaskKind::HorizontalBlur(..) |
-            RenderTaskKind::Scaling(..) => false,
+            RenderTaskKind::Scaling(..) |
+            RenderTaskKind::Blit(..) => false,
 
             RenderTaskKind::CacheMask(..) => true,
         }
@@ -646,6 +706,10 @@ impl RenderTask {
                 pt.new_level("Scaling".to_owned());
                 pt.add_item(format!("kind: {:?}", kind));
             }
+            RenderTaskKind::Blit(ref task) => {
+                pt.new_level("Blit".to_owned());
+                pt.add_item(format!("source: {:?}", task.source));
+            }
         }
 
         pt.add_item(format!("clear to: {:?}", self.clear_mode));
@@ -662,28 +726,37 @@ impl RenderTask {
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub enum RenderTaskCacheKeyKind {
     BoxShadow(BoxShadowCacheKey),
+    Image(ImageCacheKey),
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct RenderTaskCacheKey {
     pub size: DeviceIntSize,
     pub kind: RenderTaskCacheKeyKind,
 }
 
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 struct RenderTaskCacheEntry {
     handle: TextureCacheHandle,
 }
 
 // A cache of render tasks that are stored in the texture
 // cache for usage across frames.
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct RenderTaskCache {
     entries: FastHashMap<RenderTaskCacheKey, RenderTaskCacheEntry>,
 }
 
 impl RenderTaskCache {
-    pub fn new() -> RenderTaskCache {
+    pub fn new() -> Self {
         RenderTaskCache {
             entries: FastHashMap::default(),
         }
@@ -722,7 +795,7 @@ impl RenderTaskCache {
         gpu_cache: &mut GpuCache,
         render_tasks: &mut RenderTaskTree,
         mut f: F,
-    ) -> CacheItem where F: FnMut(&mut RenderTaskTree) -> (RenderTaskId, [f32; 3]) {
+    ) -> CacheItem where F: FnMut(&mut RenderTaskTree) -> (RenderTaskId, [f32; 3], bool) {
         // Get the texture cache handle for this cache key,
         // or create one.
         let cache_entry = self.entries
@@ -735,12 +808,18 @@ impl RenderTaskCache {
         if texture_cache.request(&mut cache_entry.handle, gpu_cache) {
             // Invoke user closure to get render task chain
             // to draw this into the texture cache.
-            let (render_task_id, user_data) = f(render_tasks);
+            let (render_task_id, user_data, is_opaque) = f(render_tasks);
             let render_task = &mut render_tasks[render_task_id];
+
+            // Select the right texture page to allocate from.
+            let image_format = match render_task.target_kind() {
+                RenderTargetKind::Color => ImageFormat::BGRA8,
+                RenderTargetKind::Alpha => ImageFormat::R8,
+            };
 
             // Find out what size to alloc in the texture cache.
             let size = match render_task.location {
-                RenderTaskLocation::Fixed |
+                RenderTaskLocation::Fixed(..) |
                 RenderTaskLocation::TextureCache(..) => {
                     panic!("BUG: dynamic task was expected");
                 }
@@ -753,8 +832,8 @@ impl RenderTaskCache {
             let descriptor = ImageDescriptor::new(
                 size.width as u32,
                 size.height as u32,
-                ImageFormat::R8,
-                false,
+                image_format,
+                is_opaque,
             );
 
             // Allocate space in the texture cache, but don't supply

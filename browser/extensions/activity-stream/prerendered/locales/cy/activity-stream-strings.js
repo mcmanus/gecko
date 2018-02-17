@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Argymhellwyd gan {provider}",
   "header_bookmarks_placeholder": "Nid oes gennych unrhyw nodau tudalen eto.",
   "header_stories_from": "oddi wrth",
+  "context_menu_button_sr": "Agor dewislen cynnwys {title}",
   "type_label_visited": "Ymwelwyd",
   "type_label_bookmarked": "Nod Tudalen",
   "type_label_synced": "Cydweddwyd o ddyfais arall",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Golygu'r wefan",
   "edit_topsites_dismiss_button": "Dileu'r wefan",
   "edit_topsites_add_button": "Ychwanegu",
+  "edit_topsites_add_button_tooltip": "Ychwanegu Prif Wefan",
   "topsites_form_add_header": "Hoff Wefan Newydd",
   "topsites_form_edit_header": "Golygu'r Hoff Wefan",
   "topsites_form_title_placeholder": "Rhoi teitl",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Rydych wedi dal i fynDewch nôl rhywbryd eto am fwy o'r straeon pwysicaf gan {provider}. Methu aros? Dewiswch bwnc poblogaidd i ganfod straeon da o ar draws y we. ",
   "manual_migration_explanation2": "Profwch Firefox gyda nodau tudalen, hanes a chyfrineiriau o borwr arall.",
   "manual_migration_cancel_button": "Dim Diolch",
-  "manual_migration_import_button": "Mewnforio Nawr"
+  "manual_migration_import_button": "Mewnforio Nawr",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

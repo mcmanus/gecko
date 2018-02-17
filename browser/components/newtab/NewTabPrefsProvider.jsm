@@ -2,18 +2,16 @@
 
 this.EXPORTED_SYMBOLS = ["NewTabPrefsProvider"];
 
-const {interfaces: Ci, utils: Cu} = Components;
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "EventEmitter", function() {
-  const {EventEmitter} = Cu.import("resource://gre/modules/EventEmitter.jsm", {});
+  const {EventEmitter} = ChromeUtils.import("resource://gre/modules/EventEmitter.jsm", {});
   return EventEmitter;
 });
 
 // Supported prefs and data type
 const gPrefsMap = new Map([
-  ["browser.newtabpage.activity-stream.enabled", "bool"],
   ["browser.newtabpage.enabled", "bool"],
   ["browser.newtabpage.enhanced", "bool"],
   ["browser.newtabpage.introShown", "bool"],

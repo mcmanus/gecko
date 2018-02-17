@@ -57,7 +57,6 @@
 #include "mozilla/dom/PPresentationParent.h"
 #include "mozilla/dom/PushNotifier.h"
 #include "mozilla/dom/quota/QuotaManagerService.h"
-#include "mozilla/dom/time/DateCacheCleaner.h"
 #include "mozilla/dom/URLClassifierParent.h"
 #include "mozilla/embedding/printingui/PrintingParent.h"
 #include "mozilla/extensions/StreamFilterParent.h"
@@ -590,8 +589,7 @@ static const char* sObserverTopics[] = {
   "cacheservice:empty-cache",
   "intl:app-locales-changed",
   "intl:requested-locales-changed",
-  "cookie-changed",
-  "private-cookie-changed",
+  "non-js-cookie-changed",
 };
 
 // PreallocateProcess is called by the PreallocatedProcessManager.
@@ -627,8 +625,6 @@ ContentParent::StartUp()
 
   // Note: This reporter measures all ContentParents.
   RegisterStrongMemoryReporter(new ContentParentsMemoryReporter());
-
-  mozilla::dom::time::InitializeDateCacheCleaner();
 
   BackgroundChild::Startup();
   ClientManager::Startup();
@@ -1989,6 +1985,11 @@ ContentParent::LaunchSubprocess(ProcessPriority aInitialPriority /* = PROCESS_PR
 {
   AUTO_PROFILER_LABEL("ContentParent::LaunchSubprocess", OTHER);
 
+  if (!ContentProcessManager::GetSingleton()) {
+    // Shutdown has begun, we shouldn't spawn any more child processes.
+    return false;
+  }
+
   std::vector<std::string> extraArgs;
   extraArgs.push_back("-childID");
   char idStr[21];
@@ -2004,36 +2005,50 @@ ContentParent::LaunchSubprocess(ProcessPriority aInitialPriority /* = PROCESS_PR
   ContentPrefs::GetEarlyPrefs(&prefsLen);
 
   for (unsigned int i = 0; i < prefsLen; i++) {
-    MOZ_ASSERT(i == 0 || strcmp(ContentPrefs::GetEarlyPref(i), ContentPrefs::GetEarlyPref(i - 1)) > 0);
-    switch (Preferences::GetType(ContentPrefs::GetEarlyPref(i))) {
+    const char* prefName = ContentPrefs::GetEarlyPref(i);
+    MOZ_ASSERT_IF(i > 0,
+                  strcmp(prefName, ContentPrefs::GetEarlyPref(i - 1)) > 0);
+
+    if (!Preferences::MustSendToContentProcesses(prefName)) {
+      continue;
+    }
+
+    switch (Preferences::GetType(prefName)) {
     case nsIPrefBranch::PREF_INT:
-      intPrefs.Append(nsPrintfCString("%u:%d|", i, Preferences::GetInt(ContentPrefs::GetEarlyPref(i))));
+      intPrefs.Append(nsPrintfCString("%u:%d|", i, Preferences::GetInt(prefName)));
       break;
     case nsIPrefBranch::PREF_BOOL:
-      boolPrefs.Append(nsPrintfCString("%u:%d|", i, Preferences::GetBool(ContentPrefs::GetEarlyPref(i))));
+      boolPrefs.Append(nsPrintfCString("%u:%d|", i, Preferences::GetBool(prefName)));
       break;
     case nsIPrefBranch::PREF_STRING: {
       nsAutoCString value;
-      Preferences::GetCString(ContentPrefs::GetEarlyPref(i), value);
+      Preferences::GetCString(prefName, value);
       stringPrefs.Append(nsPrintfCString("%u:%d;%s|", i, value.Length(), value.get()));
       }
       break;
     case nsIPrefBranch::PREF_INVALID:
       break;
     default:
-      printf("preference type: %x\n", Preferences::GetType(ContentPrefs::GetEarlyPref(i)));
+      printf("preference type: %x\n", Preferences::GetType(prefName));
       MOZ_CRASH();
     }
   }
 
   nsCString schedulerPrefs = Scheduler::GetPrefs();
 
-  extraArgs.push_back("-intPrefs");
-  extraArgs.push_back(intPrefs.get());
-  extraArgs.push_back("-boolPrefs");
-  extraArgs.push_back(boolPrefs.get());
-  extraArgs.push_back("-stringPrefs");
-  extraArgs.push_back(stringPrefs.get());
+  // Only do these ones if they're non-empty.
+  if (!intPrefs.IsEmpty()) {
+    extraArgs.push_back("-intPrefs");
+    extraArgs.push_back(intPrefs.get());
+  }
+  if (!boolPrefs.IsEmpty()) {
+    extraArgs.push_back("-boolPrefs");
+    extraArgs.push_back(boolPrefs.get());
+  }
+  if (!stringPrefs.IsEmpty()) {
+    extraArgs.push_back("-stringPrefs");
+    extraArgs.push_back(stringPrefs.get());
+  }
 
   // Scheduler prefs need to be handled differently because the scheduler needs
   // to start up in the content process before the normal preferences service.
@@ -2237,7 +2252,13 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority,
 
   // Content processes have no permission to access profile directory, so we
   // send the file URL instead.
-  StyleSheet* ucs = nsLayoutStylesheetCache::For(StyleBackendType::Gecko)->UserContentSheet();
+  StyleBackendType backendType =
+#ifdef MOZ_OLD_STYLE
+    StyleBackendType::Gecko;
+#else
+    StyleBackendType::Servo;
+#endif
+  StyleSheet* ucs = nsLayoutStylesheetCache::For(backendType)->UserContentSheet();
   if (ucs) {
     SerializeURI(ucs->GetSheetURI(), xpcomInit.userContentSheetURL());
   } else {
@@ -2357,30 +2378,37 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority,
     // send two loads.
     //
     // The URIs of the Gecko and Servo sheets should be the same, so it
-    // shouldn't matter which we look at.  (The Servo sheets don't exist
-    // in non-MOZ-STYLO builds, though, so look at the Gecko ones.)
+    // shouldn't matter which we look at.
 
-    for (StyleSheet* sheet :
-           *sheetService->AgentStyleSheets(StyleBackendType::Gecko)) {
+    for (StyleSheet* sheet : *sheetService->AgentStyleSheets(backendType)) {
       URIParams uri;
       SerializeURI(sheet->GetSheetURI(), uri);
       Unused << SendLoadAndRegisterSheet(uri, nsIStyleSheetService::AGENT_SHEET);
     }
 
-    for (StyleSheet* sheet :
-           *sheetService->UserStyleSheets(StyleBackendType::Gecko)) {
+    for (StyleSheet* sheet : *sheetService->UserStyleSheets(backendType)) {
       URIParams uri;
       SerializeURI(sheet->GetSheetURI(), uri);
       Unused << SendLoadAndRegisterSheet(uri, nsIStyleSheetService::USER_SHEET);
     }
 
-    for (StyleSheet* sheet :
-           *sheetService->AuthorStyleSheets(StyleBackendType::Gecko)) {
+    for (StyleSheet* sheet : *sheetService->AuthorStyleSheets(backendType)) {
       URIParams uri;
       SerializeURI(sheet->GetSheetURI(), uri);
       Unused << SendLoadAndRegisterSheet(uri, nsIStyleSheetService::AUTHOR_SHEET);
     }
   }
+
+#if defined(XP_WIN)
+  // Send the info needed to join the browser process's audio session.
+  nsID id;
+  nsString sessionName;
+  nsString iconPath;
+  if (NS_SUCCEEDED(mozilla::widget::GetAudioSessionData(id, sessionName,
+                                                        iconPath))) {
+    Unused << SendSetAudioSessionData(id, sessionName, iconPath);
+  }
+#endif
 
 #ifdef MOZ_CONTENT_SANDBOX
   bool shouldSandbox = true;
@@ -2411,16 +2439,6 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority,
 #endif
   if (shouldSandbox && !SendSetProcessSandbox(brokerFd)) {
     KillHard("SandboxInitFailed");
-  }
-#endif
-#if defined(XP_WIN)
-  // Send the info needed to join the browser process's audio session.
-  nsID id;
-  nsString sessionName;
-  nsString iconPath;
-  if (NS_SUCCEEDED(mozilla::widget::GetAudioSessionData(id, sessionName,
-                                                        iconPath))) {
-    Unused << SendSetAudioSessionData(id, sessionName, iconPath);
   }
 #endif
 
@@ -2940,8 +2958,7 @@ ContentParent::Observe(nsISupports* aSubject,
     LocaleService::GetInstance()->GetRequestedLocales(requestedLocales);
     Unused << SendUpdateRequestedLocales(requestedLocales);
   }
-  else if (!strcmp(aTopic, "cookie-changed") ||
-           !strcmp(aTopic, "private-cookie-changed")) {
+  else if (!strcmp(aTopic, "non-js-cookie-changed")) {
     if (!aData) {
       return NS_ERROR_UNEXPECTED;
     }

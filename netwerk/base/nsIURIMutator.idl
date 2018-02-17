@@ -49,7 +49,7 @@ protected:
     if (NS_FAILED(rv)) {
       return rv;
     }
-    mURI = uri;
+    mURI = uri.forget();
     return NS_OK;
   }
 
@@ -60,7 +60,7 @@ protected:
     if (!ret) {
       return NS_ERROR_FAILURE;
     }
-    mURI = uri;
+    mURI = uri.forget();
     return NS_OK;
   }
 
@@ -79,7 +79,7 @@ protected:
     if (NS_FAILED(rv)) {
       return rv;
     }
-    mURI = uri;
+    mURI = uri.forget();
     return NS_OK;
   }
 
@@ -366,6 +366,32 @@ public:
   {
     NS_ENSURE_SUCCESS(mStatus, *this);
     mStatus = mMutator->SetQueryWithEncoding(query, encoding, nullptr);
+    return *this;
+  }
+
+  /**
+   * This method allows consumers to call the methods declared in other
+   * interfaces implemented by the mutator object.
+   *
+   * Example:
+   * nsCOMPtr<nsIURI> uri;
+   * nsresult rv = NS_MutateURI(new URIClass::Mutator())
+   *                 .SetSpec(aSpec)
+   *                 .Apply<SomeInterface>(&SomeInterface::Method, arg1, arg2)
+   *                 .Finalize(uri);
+   *
+   * If mMutator does not implement SomeInterface, do_QueryInterface will fail
+   * and the method will not be called.
+   * If aMethod does not exist, or if there is a mismatch between argument
+   * types, or the number of arguments, then there will be a compile error.
+   */
+  template <typename Interface, typename Method, typename... Args>
+  NS_MutateURI& Apply(Method aMethod, Args ...aArgs)
+  {
+    NS_ENSURE_SUCCESS(mStatus, *this);
+    nsCOMPtr<Interface> target = do_QueryInterface(mMutator, &mStatus);
+    NS_ENSURE_SUCCESS(mStatus, *this);
+    mStatus = (target->*aMethod)(aArgs...);
     return *this;
   }
 

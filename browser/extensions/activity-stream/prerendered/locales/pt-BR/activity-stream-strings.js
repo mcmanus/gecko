@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Recomendado por {provider}",
   "header_bookmarks_placeholder": "Você ainda não tem nenhum favorito.",
   "header_stories_from": "de",
+  "context_menu_button_sr": "Abrir menu de contexto para {title}",
   "type_label_visited": "Visitado",
   "type_label_bookmarked": "Adicionado aos favoritos",
   "type_label_synced": "Sincronizado a partir de outro dispositivo",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Editar este site",
   "edit_topsites_dismiss_button": "Descartar este site",
   "edit_topsites_add_button": "Adicionar",
+  "edit_topsites_add_button_tooltip": "Adicionar site preferido",
   "topsites_form_add_header": "Novo site popular",
   "topsites_form_edit_header": "Editar site popular",
   "topsites_form_title_placeholder": "Digite um título",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Você já viu tudo. Volte mais tarde para mais histórias do {provider}. Não consegue esperar? Escolha um assunto popular para encontrar mais grandes histórias através da web.",
   "manual_migration_explanation2": "Experimente o Firefox com os favoritos, histórico e senhas salvas em outro navegador.",
   "manual_migration_cancel_button": "Não, obrigado",
-  "manual_migration_import_button": "Importar agora"
+  "manual_migration_import_button": "Importar agora",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

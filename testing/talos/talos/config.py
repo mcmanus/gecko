@@ -4,10 +4,12 @@
 from __future__ import absolute_import, print_function
 
 import copy
+import json
 import os
 import sys
 import time
 
+import mozinfo
 from mozlog.commandline import setup_logging
 from talos import utils, test
 from talos.cmdline import parse_args
@@ -17,7 +19,11 @@ class ConfigurationError(Exception):
     pass
 
 
-FAR_IN_FUTURE = 7258114800
+# Set places maintenance far in the future (the maximum time possible in an
+# int32_t) to avoid it kicking in during tests. The maintenance can take a
+# relatively long time which may cause unnecessary intermittents and slow
+# things down. This, like many things, will stop working correctly in 2038.
+FAR_IN_FUTURE = 2147483647
 
 DEFAULTS = dict(
     # args to pass to browser
@@ -336,11 +342,39 @@ def build_manifest(config, manifestName):
     with open(manifestName, 'r') as fHandle:
         manifestLines = fHandle.readlines()
 
+    # look for configuration data - right now just MotionMark
+    tuning_data = {}
+    if os.path.isfile(manifestName + '.json'):
+        with open(manifestName + '.json', 'r') as f:
+            tuning_data = json.load(f)
+
     # write modified manifest lines
     with open(manifestName + '.develop', 'w') as newHandle:
         for line in manifestLines:
             newline = line.replace('localhost', config['webserver'])
             newline = newline.replace('page_load_test', 'tests')
+
+            if tuning_data:
+                suite = ''
+                test = ''
+                # parse suite/test from: suite-name=HTMLsuite&test-name=CompositedTransforms
+                parts = newline.split('&')
+                for part in parts:
+                    key_val = part.split('=')
+                    if len(key_val) != 2:
+                        continue
+
+                    if key_val[0] == 'suite-name':
+                        suite = key_val[1]
+                    if key_val[0] == 'test-name':
+                        test = key_val[1]
+
+                if suite and test and tuning_data:
+                    osver = mozinfo.os
+                    if osver not in ['linux', 'win']:
+                        osver = 'osx'
+                    complexity = tuning_data[suite]['complexity'][test][osver]
+                    newline = newline.replace('complexity=300', 'complexity=%s' % complexity)
             newHandle.write(newline)
 
     newManifestName = manifestName + '.develop'
@@ -432,8 +466,7 @@ def get_browser_config(config):
                 'xperf_path': None,
                 'error_filename': None,
                 'no_upload_results': False,
-                'enable_stylo': False,
-                'disable_stylo': False,
+                'enable_stylo': True,
                 'stylothreads': 0,
                 'subtests': None,
                 }

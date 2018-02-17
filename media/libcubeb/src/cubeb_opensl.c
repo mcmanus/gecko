@@ -87,7 +87,10 @@ struct cubeb {
 #define AUDIO_STREAM_TYPE_MUSIC 3
 
 struct cubeb_stream {
+  /* Note: Must match cubeb_stream layout in cubeb.c. */
   cubeb * context;
+  void * user_ptr;
+  /**/
   pthread_mutex_t mutex;
   SLObjectItf playerObj;
   SLPlayItf play;
@@ -148,8 +151,6 @@ struct cubeb_stream {
   cubeb_data_callback data_callback;
   /* Store state callback. */
   cubeb_state_callback state_callback;
-  /* User pointer for data & state callbacks*/
-  void * user_ptr;
 
   cubeb_resampler * resampler;
   unsigned int inputrate;
@@ -1290,6 +1291,11 @@ opensl_validate_stream_param(cubeb_stream_params * stream_params)
   if ((stream_params &&
        (stream_params->channels < 1 || stream_params->channels > 32))) {
     return CUBEB_ERROR_INVALID_FORMAT;
+  }
+  if ((stream_params &&
+       (stream_params->prefs & CUBEB_STREAM_PREF_LOOPBACK))) {
+    LOG("Loopback is not supported");
+    return CUBEB_ERROR_NOT_SUPPORTED;
   }
   return CUBEB_OK;
 }

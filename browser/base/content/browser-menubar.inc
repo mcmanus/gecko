@@ -263,7 +263,14 @@
                     <menuseparator/>
                   </menupopup>
                 </menu>
-#include browser-charsetmenu.inc
+                <menu id="charsetMenu"
+                    label="&charsetMenu2.label;"
+                    accesskey="&charsetMenu2.accesskey;"
+                    oncommand="BrowserSetForcedCharacterSet(event.target.getAttribute('charset'));"
+                    onpopupshowing="CharsetMenu.build(event.target); UpdateCurrentCharset(this);">
+                  <menupopup>
+                  </menupopup>
+                </menu>
                 <menuseparator/>
 #ifdef XP_MACOSX
                 <menuitem id="enterFullScreenItem"
@@ -521,6 +528,12 @@
                         label="&preferencesCmd2.label;"
                         accesskey="&preferencesCmd2.accesskey;"
                         oncommand="openPreferences(undefined, {origin: 'menubar'});"/>
+#endif
+#ifdef MOZ_DEBUG
+              <menuitem label="&ldbCmd.label;"
+                        accesskey="&ldbCmd.accesskey;"
+                        oncommand="toOpenWindowByType('mozapp:layoutdebug',
+                                          'chrome://layoutdebug/content/');"/>
 #endif
               </menupopup>
             </menu>

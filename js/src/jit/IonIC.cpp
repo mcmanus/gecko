@@ -58,9 +58,15 @@ IonIC::scratchRegisterForEntryJump()
         return asHasOwnIC()->output();
       case CacheKind::GetIterator:
         return asGetIteratorIC()->temp1();
+      case CacheKind::InstanceOf:
+        return asInstanceOfIC()->output();
+      case CacheKind::UnaryArith:
+        return asUnaryArithIC()->output().scratchReg();
       case CacheKind::Call:
       case CacheKind::Compare:
       case CacheKind::TypeOf:
+      case CacheKind::ToBool:
+      case CacheKind::GetIntrinsic:
         MOZ_CRASH("Unsupported IC");
     }
 
@@ -316,7 +322,7 @@ IonSetPropertyIC::update(JSContext* cx, HandleScript outerScript, IonSetProperty
             ic->attachCacheIRStub(cx, gen.writerRef(), gen.cacheKind(), ionScript, &attached,
                                   gen.typeCheckInfo());
         } else {
-            gen.trackNotAttached();
+            gen.trackAttached(nullptr);
         }
 
         if (!attached && !isTemporarilyUnoptimizable)
@@ -473,6 +479,74 @@ IonInIC::update(JSContext* cx, HandleScript outerScript, IonInIC* ic,
     }
 
     return OperatorIn(cx, key, obj, res);
+}
+/* static */ bool
+IonInstanceOfIC::update(JSContext* cx, HandleScript outerScript, IonInstanceOfIC* ic,
+                        HandleValue lhs, HandleObject rhs, bool* res)
+{
+    IonScript* ionScript = outerScript->ionScript();
+
+    if (ic->state().maybeTransition())
+        ic->discardStubs(cx->zone());
+
+    if (ic->state().canAttachStub()) {
+        bool attached = false;
+        RootedScript script(cx, ic->script());
+        jsbytecode* pc = ic->pc();
+
+        InstanceOfIRGenerator gen(cx, script, pc, ic->state().mode(),
+                                  lhs, rhs);
+
+        if (gen.tryAttachStub())
+            ic->attachCacheIRStub(cx, gen.writerRef(), gen.cacheKind(), ionScript, &attached);
+
+        if (!attached)
+            ic->state().trackNotAttached();
+    }
+
+    return HasInstance(cx, rhs, lhs, res);
+}
+
+/*  static */  bool
+IonUnaryArithIC::update(JSContext* cx, HandleScript outerScript, IonUnaryArithIC* ic,
+                        HandleValue val, MutableHandleValue res)
+{
+    IonScript* ionScript = outerScript->ionScript();
+    RootedScript script(cx, ic->script());
+    jsbytecode* pc = ic->pc();
+    JSOp op = JSOp(*pc);
+
+    switch (op) {
+      case JSOP_BITNOT: {
+        int32_t result;
+        if (!BitNot(cx, val, &result))
+            return false;
+        res.setInt32(result);
+        break;
+      }
+      case JSOP_NEG:
+        if (!NegOperation(cx, val, res))
+            return false;
+        break;
+      default:
+        MOZ_CRASH("Unexpected op");
+    }
+
+    if (ic->state().maybeTransition())
+        ic->discardStubs(cx->zone());
+
+    if (ic->state().canAttachStub()) {
+        bool attached = false;
+        UnaryArithIRGenerator gen(cx, script, pc, ic->state().mode(), op, val, res);
+
+        if (gen.tryAttachStub())
+             ic->attachCacheIRStub(cx, gen.writerRef(), gen.cacheKind(), ionScript, &attached);
+
+        if (!attached)
+            ic->state().trackNotAttached();
+    }
+
+    return true;
 }
 
 uint8_t*

@@ -222,7 +222,7 @@
     </implementation>
   </binding>
 
-  <binding id="tabs" role="xul:tabs"
+  <binding id="tabs"
            extends="chrome://global/content/bindings/general.xml#basecontrol">
     <resources>
       <stylesheet src="chrome://global/skin/tabbox.css"/>
@@ -237,12 +237,6 @@
     <implementation implements="nsIDOMXULSelectControlElement, nsIDOMXULRelatedElement">
       <constructor>
       <![CDATA[
-        // first and last tabs need to be able to have unique styles
-        // and also need to select first tab on startup.
-        if (this.firstChild)
-          this.firstChild.setAttribute("first-tab", "true");
-        if (this.lastChild)
-          this.lastChild.setAttribute("last-tab", "true");
 
         if (!this.hasAttribute("orient"))
           this.setAttribute("orient", "horizontal");
@@ -587,7 +581,7 @@
 #endif
   </binding>
 
-  <binding id="tabpanels" role="xul:tabpanels"
+  <binding id="tabpanels"
            extends="chrome://global/content/bindings/tabbox.xml#tab-base">
     <implementation implements="nsIDOMXULRelatedElement">
       <!-- nsIDOMXULRelatedElement -->
@@ -698,7 +692,7 @@
     </implementation>
   </binding>
 
-  <binding id="tab" display="xul:button" role="xul:tab"
+  <binding id="tab" display="xul:button"
            extends="chrome://global/content/bindings/general.xml#basetext">
     <resources>
       <stylesheet src="chrome://global/skin/tabbox.css"/>
@@ -743,36 +737,9 @@
             this.removeAttribute("visuallyselected");
           }
 
-          this._setPositionAttributes(val);
-
           return val;
         ]]></setter>
       </property>
-
-      <method name="_setPositionAttributes">
-        <parameter name="aSelected"/>
-        <body><![CDATA[
-          if (this.previousSibling && this.previousSibling.localName == "tab") {
-            if (aSelected)
-              this.previousSibling.setAttribute("beforeselected", "true");
-            else
-              this.previousSibling.removeAttribute("beforeselected");
-            this.removeAttribute("first-tab");
-          } else {
-            this.setAttribute("first-tab", "true");
-          }
-
-          if (this.nextSibling && this.nextSibling.localName == "tab") {
-            if (aSelected)
-              this.nextSibling.setAttribute("afterselected", "true");
-            else
-              this.nextSibling.removeAttribute("afterselected");
-            this.removeAttribute("last-tab");
-          } else {
-            this.setAttribute("last-tab", "true");
-          }
-        ]]></body>
-      </method>
 
       <property name="linkedPanel" onget="return this.getAttribute('linkedpanel')"
                                    onset="this.setAttribute('linkedpanel', val); return val;"/>
@@ -783,7 +750,7 @@
       <property name="TelemetryStopwatch" readonly="true">
         <getter><![CDATA[
           let module = {};
-          Cu.import("resource://gre/modules/TelemetryStopwatch.jsm", module);
+          ChromeUtils.import("resource://gre/modules/TelemetryStopwatch.jsm", module);
           Object.defineProperty(this, "TelemetryStopwatch", {
             configurable: true,
             enumerable: true,

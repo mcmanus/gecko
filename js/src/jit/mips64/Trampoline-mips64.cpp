@@ -6,8 +6,6 @@
 
 #include "mozilla/DebugOnly.h"
 
-#include "jscompartment.h"
-
 #include "jit/Bailouts.h"
 #include "jit/JitCompartment.h"
 #include "jit/JitFrames.h"
@@ -19,8 +17,10 @@
 # include "jit/PerfSpewer.h"
 #endif
 #include "jit/VMFunctions.h"
+#include "vm/JSCompartment.h"
 
 #include "jit/MacroAssembler-inl.h"
+#include "jit/SharedICHelpers-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -64,8 +64,6 @@ struct EnterJITRegs
 static void
 GenerateReturn(MacroAssembler& masm, int returnCode)
 {
-    MOZ_ASSERT(masm.framePushed() == sizeof(EnterJITRegs));
-
     if (isLoongson()) {
         // Restore non-volatile registers
         masm.as_ld(s0, StackPointer, offsetof(EnterJITRegs, s0));
@@ -931,7 +929,7 @@ JitRuntime::generateDebugTrapHandler(JSContext* cx)
 
     Linker linker(masm);
     AutoFlushICache afc("DebugTrapHandler");
-    JitCode* codeDbg = linker.newCode<NoGC>(cx, OTHER_CODE);
+    JitCode* codeDbg = linker.newCode<NoGC>(cx, CodeKind::Other);
 
 #ifdef JS_ION_PERF
     writePerfSpewerJitCodeProfile(codeDbg, "DebugTrapHandler");

@@ -376,9 +376,17 @@ add_task(async function addFavicons() {
   Assert.equal(nonHttps[0].faviconLength, links[0].faviconLength, "Got the same favicon length");
   Assert.equal(nonHttps[0].faviconSize, links[0].faviconSize, "Got the same favicon size");
   Assert.equal(nonHttps[0].mimeType, links[0].mimeType, "Got the same mime type");
+
+  // Check that we do not collect favicons for pocket items
+  const pocketItems = [{url: links[0].url}, {url: "https://mozilla1.com", type: "pocket"}];
+  await provider._addFavicons(pocketItems);
+  Assert.equal(provider._faviconBytesToDataURI(pocketItems)[0].favicon, base64URL, "Added favicon data only to the non-pocket item");
+  Assert.equal(pocketItems[1].favicon, null, "Did not add a favicon to the pocket item");
+  Assert.equal(pocketItems[1].mimeType, null, "Did not add mimeType to the pocket item");
+  Assert.equal(pocketItems[1].faviconSize, null, "Did not add a faviconSize to the pocket item");
 });
 
-add_task(async function getHighlights() {
+add_task(async function getHighlightsWithoutPocket() {
   const addMetadata = url => PlacesUtils.history.update({
     description: "desc",
     previewImageURL: "https://image/",
@@ -497,6 +505,96 @@ add_task(async function getHighlights() {
   Assert.equal(links[0].favicon, image1x1, "Link 1 should contain a favicon");
   Assert.equal(links[1].favicon, null, "Link 2 has no favicon data");
   Assert.equal(links[2].favicon, null, "Link 3 has no favicon data");
+});
+
+add_task(async function getHighlightsWithPocketSuccess() {
+  await setUpActivityStreamTest();
+
+  // Add a bookmark
+  let bookmark = {
+      parentGuid: PlacesUtils.bookmarks.unfiledGuid,
+      title: "foo",
+      description: "desc",
+      preview_image_url: "foo.com/img.png",
+      url: "https://mozilla1.com/"
+  };
+
+  const fakeResponse = {
+    list: {
+      "123": {
+        image: {src: "foo.com/img.png"},
+        excerpt: "A description for foo",
+        resolved_title: "A title for foo",
+        resolved_url: "http://www.foo.com",
+        item_id: "123",
+        status: "0"
+      },
+      "456": {
+        item_id: "456",
+        status: "2",
+      },
+      "789": {
+        resolved_url: bookmark.url,
+        excerpt: bookmark.description,
+        resolved_title: bookmark.title,
+        image: {src: bookmark.preview_image_url},
+        status: "0",
+        item_id: "789"
+      }
+    }
+  };
+
+  await PlacesUtils.bookmarks.insert(bookmark);
+  await PlacesTestUtils.addVisits(bookmark.url);
+
+  NewTabUtils.activityStreamProvider.fetchSavedPocketItems = () => fakeResponse;
+  let provider = NewTabUtils.activityStreamLinks;
+  let links = await provider.getHighlights();
+
+  // We should have 1 bookmark followed by 2 pocket stories in highlights
+  // We should not have stored the second pocket item since it was deleted
+  Assert.equal(links.length, 3, "Should have 3 links in highlights");
+
+  // First highlight should be a bookmark
+  Assert.equal(links[0].url, bookmark.url, "The first link is the bookmark");
+
+  // Second highlight should be a Pocket item with the correct fields to display
+  let pocketItem = fakeResponse.list["123"];
+  let currentLink = links[1];
+  Assert.equal(currentLink.url, pocketItem.resolved_url, "Correct Pocket item");
+  Assert.equal(currentLink.type, "pocket", "Attached the correct type");
+  Assert.equal(currentLink.preview_image_url, pocketItem.image.src, "Correct preview image was added");
+  Assert.equal(currentLink.title, pocketItem.resolved_title, "Correct title was added");
+  Assert.equal(currentLink.description, pocketItem.excerpt, "Correct description was added");
+  Assert.equal(currentLink.pocket_id, pocketItem.item_id, "item_id was preserved");
+  Assert.equal(currentLink.bookmarkGuid, undefined, "Should not have a bookmarkGuid");
+
+  // Third highlight should still be a Pocket item but since it was bookmarked, it has a bookmarkGuid
+  pocketItem = fakeResponse.list["789"];
+  currentLink = links[2];
+  Assert.equal(currentLink.url, pocketItem.resolved_url, "Correct Pocket item");
+  Assert.ok(currentLink.bookmarkGuid, "Attached a bookmarkGuid for this Pocket item");
+});
+
+add_task(async function getHighlightsWithPocketFailure() {
+  await setUpActivityStreamTest();
+
+  NewTabUtils.activityStreamProvider.fetchSavedPocketItems = function() {
+    throw new Error();
+  };
+  let provider = NewTabUtils.activityStreamLinks;
+  let links = await provider.getHighlights();
+  Assert.equal(links.length, 0, "Return empty links if we reject the promise");
+});
+
+add_task(async function getHighlightsWithPocketNoData() {
+  await setUpActivityStreamTest();
+
+  NewTabUtils.activityStreamProvider.fetchSavedPocketItems = () => {};
+
+  let provider = NewTabUtils.activityStreamLinks;
+  let links = await provider.getHighlights();
+  Assert.equal(links.length, 0, "Return empty links if we got no data back from the response");
 });
 
 add_task(async function getTopFrecentSites() {

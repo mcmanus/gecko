@@ -6,8 +6,8 @@
 //  HTTP Server-Timing header test
 //
 
-Cu.import("resource://testing-common/httpd.js");
-Cu.import("resource://gre/modules/NetUtil.jsm");
+ChromeUtils.import("resource://testing-common/httpd.js");
+ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "URL", function() {
   return "http://localhost:" + httpServer.identity.primaryPort + "/content";
@@ -54,6 +54,11 @@ function contentHandler(metadata, response)
 
 function run_test()
 {
+  Services.prefs.setBoolPref("network.http.allow-plaintext-server-timing", true);
+  registerCleanupFunction(() => {
+    Services.prefs.clearUserPref("network.http.allow-plaintext-server-timing");
+  });
+
   httpServer = new HttpServer();
   httpServer.registerPathHandler("/content", contentHandler);
   httpServer.start(-1);

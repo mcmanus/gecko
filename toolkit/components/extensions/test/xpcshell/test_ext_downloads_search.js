@@ -2,7 +2,7 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-Cu.import("resource://gre/modules/Downloads.jsm");
+ChromeUtils.import("resource://gre/modules/Downloads.jsm");
 
 const server = createHttpServer();
 server.registerDirectory("/data/", do_get_file("data"));
@@ -86,10 +86,12 @@ add_task(async function test_search() {
 
   Services.prefs.setIntPref("browser.download.folderList", 2);
   Services.prefs.setComplexValue("browser.download.dir", nsIFile, downloadDir);
+  Services.prefs.setBoolPref("privacy.reduceTimerPrecision", false);
 
   registerCleanupFunction(async () => {
     Services.prefs.clearUserPref("browser.download.folderList");
     Services.prefs.clearUserPref("browser.download.dir");
+    Services.prefs.clearUserPref("privacy.reduceTimerPrecision");
     await cleanupDir(downloadDir);
     await clearDownloads();
   });

@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Recomendáu por {provider}",
   "header_bookmarks_placeholder": "Entá nun tienes dengún marcador.",
   "header_stories_from": "de",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "Visitóse",
   "type_label_bookmarked": "Amestóse a marcadores",
   "type_label_synced": "Sincronizóse dende otru preséu",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Editar esti sitiu",
   "edit_topsites_dismiss_button": "Escartar esti sitiu",
   "edit_topsites_add_button": "Amestar",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "Nuevu Sitiu más visitáu",
   "topsites_form_edit_header": "Editar Sitiu más visitáu",
   "topsites_form_title_placeholder": "Introducir títulu",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "You’ve caught up. Check back later for more top stories from {provider}. Can’t wait? Select a popular topic to find more great stories from around the web.",
   "manual_migration_explanation2": "Prueba Firefox colos marcadores, hestorial y contraseñes d'otru restolador.",
   "manual_migration_cancel_button": "Non, gracies",
-  "manual_migration_import_button": "Importar agora"
+  "manual_migration_import_button": "Importar agora",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

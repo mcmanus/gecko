@@ -4,14 +4,12 @@
 
 "use strict";
 
-const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
-
 /**
   * This module consolidates various code and data update requests, so flags
   * can be set, Telemetry collected, etc. in a central place.
   */
 
-Cu.import("resource://gre/modules/Log.jsm");
+ChromeUtils.import("resource://gre/modules/Log.jsm");
 Cu.importGlobalProperties(["XMLHttpRequest"]);
 
 this.EXPORTED_SYMBOLS = [ "ServiceRequest" ];

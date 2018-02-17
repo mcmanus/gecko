@@ -616,12 +616,6 @@ nsCSSProps::LookupFontDesc(const nsACString& aFontDesc)
 
   if (which == eCSSFontDesc_Display && !StylePrefs::sFontDisplayEnabled) {
     which = eCSSFontDesc_UNKNOWN;
-  } else if (which == eCSSFontDesc_UNKNOWN) {
-    // check for unprefixed font-feature-settings/font-language-override
-    nsAutoCString prefixedProp;
-    prefixedProp.AppendLiteral("-moz-");
-    prefixedProp.Append(aFontDesc);
-    which = nsCSSFontDesc(gFontDescTable->Lookup(prefixedProp));
   }
   return which;
 }
@@ -634,12 +628,6 @@ nsCSSProps::LookupFontDesc(const nsAString& aFontDesc)
 
   if (which == eCSSFontDesc_Display && !StylePrefs::sFontDisplayEnabled) {
     which = eCSSFontDesc_UNKNOWN;
-  } else if (which == eCSSFontDesc_UNKNOWN) {
-    // check for unprefixed font-feature-settings/font-language-override
-    nsAutoString prefixedProp;
-    prefixedProp.AppendLiteral("-moz-");
-    prefixedProp.Append(aFontDesc);
-    which = nsCSSFontDesc(gFontDescTable->Lookup(prefixedProp));
   }
   return which;
 }
@@ -710,6 +698,13 @@ nsCSSProps::GetStringValue(nsCSSCounterDesc aCounterDesc)
     static nsDependentCString sNullStr("");
     return sNullStr;
   }
+}
+
+const char* const*
+nsCSSProps::GetListStyleTypes(int32_t *aLength)
+{
+  *aLength = ArrayLength(kCSSRawPredefinedCounterStyles);
+  return kCSSRawPredefinedCounterStyles;
 }
 
 /***************************************************************************/
@@ -2140,8 +2135,6 @@ const KTableEntry nsCSSProps::kUserFocusKTable[] = {
 
 const KTableEntry nsCSSProps::kUserInputKTable[] = {
   { eCSSKeyword_none,     StyleUserInput::None },
-  { eCSSKeyword_enabled,  StyleUserInput::Enabled },
-  { eCSSKeyword_disabled, StyleUserInput::Disabled },
   { eCSSKeyword_auto,     StyleUserInput::Auto },
   { eCSSKeyword_UNKNOWN,  -1 }
 };

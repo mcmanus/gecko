@@ -47,8 +47,6 @@ using mozilla::Unused;
 #include "nsContentUtils.h"
 #include "WidgetUtils.h"
 
-#include "nsIDOMSimpleGestureEvent.h"
-
 #include "nsGkAtoms.h"
 #include "nsWidgetsCID.h"
 #include "nsGfxCIID.h"
@@ -93,8 +91,6 @@ using namespace mozilla::layers;
 using namespace mozilla::java;
 using namespace mozilla::widget;
 using namespace mozilla::ipc;
-
-NS_IMPL_ISUPPORTS_INHERITED0(nsWindow, nsBaseWidget)
 
 #include "mozilla/layers/CompositorBridgeChild.h"
 #include "mozilla/layers/CompositorSession.h"
@@ -1139,6 +1135,7 @@ public:
 template<> const char
 nsWindow::NativePtr<nsWindow::LayerViewSupport>::sName[] = "LayerViewSupport";
 
+#ifdef MOZ_NATIVE_DEVICES
 /* PresentationMediaPlayerManager native calls access inner nsWindow functionality so PMPMSupport is a child class of nsWindow */
 class nsWindow::PMPMSupport final
     : public PresentationMediaPlayerManager::Natives<PMPMSupport>
@@ -1223,6 +1220,7 @@ public:
 
 ANativeWindow* nsWindow::PMPMSupport::sWindow;
 EGLSurface nsWindow::PMPMSupport::sSurface;
+#endif
 
 
 nsWindow::GeckoViewSupport::~GeckoViewSupport()
@@ -1390,9 +1388,11 @@ nsWindow::InitNatives()
     nsWindow::GeckoViewSupport::Base::Init();
     nsWindow::LayerViewSupport::Init();
     nsWindow::NPZCSupport::Init();
+#ifdef MOZ_NATIVE_DEVICES
     if (jni::IsFennec()) {
         nsWindow::PMPMSupport::Init();
     }
+#endif
 
     GeckoEditableSupport::Init();
 }
@@ -2074,11 +2074,13 @@ nsWindow::GetNativeData(uint32_t aDataType)
             }
             return nullptr;
 
+#ifdef MOZ_NATIVE_DEVICES
         case NS_PRESENTATION_WINDOW:
             return PMPMSupport::sWindow;
 
         case NS_PRESENTATION_SURFACE:
             return PMPMSupport::sSurface;
+#endif
     }
 
     return nullptr;
@@ -2088,9 +2090,11 @@ void
 nsWindow::SetNativeData(uint32_t aDataType, uintptr_t aVal)
 {
     switch (aDataType) {
+#ifdef MOZ_NATIVE_DEVICES
         case NS_PRESENTATION_SURFACE:
             PMPMSupport::sSurface = reinterpret_cast<EGLSurface>(aVal);
             break;
+#endif
     }
 }
 

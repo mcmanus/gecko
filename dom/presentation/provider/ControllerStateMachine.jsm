@@ -10,10 +10,8 @@
 
 this.EXPORTED_SYMBOLS = ["ControllerStateMachine"]; // jshint ignore:line
 
-const { utils: Cu } = Components;
-
 /* globals State, CommandType */
-Cu.import("resource://gre/modules/presentation/StateMachineHelper.jsm");
+ChromeUtils.import("resource://gre/modules/presentation/StateMachineHelper.jsm");
 
 const DEBUG = false;
 function debug(str) {

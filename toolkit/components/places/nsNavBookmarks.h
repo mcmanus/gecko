@@ -69,8 +69,7 @@ namespace places {
   typedef void (nsNavBookmarks::*ItemChangeMethod)(const ItemChangeData&);
 
   enum BookmarkDate {
-    DATE_ADDED = 0
-  , LAST_MODIFIED
+    LAST_MODIFIED
   };
 
 } // namespace places
@@ -140,7 +139,8 @@ public:
    *        A Storage statement (in the case of synchronous execution) or row of
    *        a result set (in the case of asynchronous execution).
    * @param aOptions
-   *        The options of the parent folder node.
+   *        The options of the parent folder node. These are the options used
+   *        to fill the parent node.
    * @param aChildren
    *        The children of the parent folder node.
    * @param aCurrentIndex
@@ -162,7 +162,6 @@ public:
    *        execution.
    */
   nsresult QueryFolderChildrenAsync(nsNavHistoryFolderResultNode* aNode,
-                                    int64_t aFolderId,
                                     mozIStoragePendingStatement** _pendingStmt);
 
   /**
@@ -279,8 +278,6 @@ private:
                            int32_t* _folderCount,
                            nsACString& _guid,
                            int64_t* _parentId);
-
-  nsresult GetLastChildId(int64_t aFolder, int64_t* aItemId);
 
   nsresult AddSyncChangesForBookmarksWithURL(const nsACString& aURL,
                                              int64_t aSyncChangeDelta);
@@ -400,19 +397,6 @@ private:
                               int64_t* _itemId,
                               nsACString& _guid);
 
-  /**
-   * TArray version of getBookmarksIdForURI for ease of use in C++ code.
-   * Pass in a reference to a TArray; it will get filled with the
-   * resulting list of bookmark IDs.
-   *
-   * @param aURI
-   *        URI to get bookmarks for.
-   * @param aResult
-   *        Array of bookmark ids.
-   */
-  nsresult GetBookmarkIdsForURITArray(nsIURI* aURI,
-                                      nsTArray<int64_t>& aResult);
-
   nsresult GetBookmarksForURI(nsIURI* aURI,
                               nsTArray<BookmarkData>& _bookmarks);
 
@@ -475,7 +459,6 @@ private:
 
   // Used to enable and disable the observer notifications.
   bool mCanNotify;
-  nsCategoryCache<nsINavBookmarkObserver> mCacheObservers;
 
   // Tracks whether we are in batch mode.
   // Note: this is only tracking bookmarks batches, not history ones.

@@ -10,20 +10,19 @@
 #include "mozilla/Atomics.h"
 #include "mozilla/TimeStamp.h"
 
-#include "jscntxt.h"
 #include "jsexn.h"
 #include "jsfriendapi.h"
-#include "jsiter.h"
 
 #include "gc/Heap.h"
 #include "js/Debug.h"
 #include "vm/AsyncFunction.h"
 #include "vm/AsyncIteration.h"
 #include "vm/Debugger.h"
-
-#include "jsobjinlines.h"
+#include "vm/Iteration.h"
+#include "vm/JSContext.h"
 
 #include "vm/Debugger-inl.h"
+#include "vm/JSObject-inl.h"
 #include "vm/NativeObject-inl.h"
 
 using namespace js;
@@ -1569,8 +1568,9 @@ PromiseConstructor(JSContext* cx, unsigned argc, Value* vp)
         newTarget = unwrappedNewTarget;
         {
             AutoCompartment ac(cx, newTarget);
-            RootedObject promiseCtor(cx);
-            if (!GetBuiltinConstructor(cx, JSProto_Promise, &promiseCtor))
+            Handle<GlobalObject*> global = cx->global();
+            RootedObject promiseCtor(cx, GlobalObject::getOrCreatePromiseConstructor(cx, global));
+            if (!promiseCtor)
                 return false;
 
             // Promise subclasses don't get the special Xray treatment, so
@@ -1578,7 +1578,8 @@ PromiseConstructor(JSContext* cx, unsigned argc, Value* vp)
             // described above for instances of Promise itself.
             if (newTarget == promiseCtor) {
                 needsWrapping = true;
-                if (!GetBuiltinPrototype(cx, JSProto_Promise, &proto))
+                proto = GlobalObject::getOrCreatePromisePrototype(cx, cx->global());
+                if (!proto)
                     return false;
             }
         }
@@ -2632,6 +2633,11 @@ js::AsyncFromSyncIteratorMethod(JSContext* cx, CallArgs& args, CompletionKind co
 
     // Step 3.
     if (!thisVal.isObject() || !thisVal.toObject().is<AsyncFromSyncIteratorObject>()) {
+        // NB: See https://github.com/tc39/proposal-async-iteration/issues/105
+        // for why this check shouldn't be necessary as long as we can ensure
+        // the Async-from-Sync iterator can't be accessed directly by user
+        // code.
+
         // Step 3.a.
         RootedValue badGeneratorError(cx);
         if (!GetTypeError(cx, JSMSG_NOT_AN_ASYNC_ITERATOR, &badGeneratorError))
@@ -2656,8 +2662,7 @@ js::AsyncFromSyncIteratorMethod(JSContext* cx, CallArgs& args, CompletionKind co
     RootedValue func(cx);
     if (completionKind == CompletionKind::Normal) {
         // 11.1.3.2.1 steps 5-6 (partially).
-        if (!GetProperty(cx, iter, iter, cx->names().next, &func))
-            return AbruptRejectPromise(cx, args, resultPromise, nullptr);
+        func.set(asyncIter->nextMethod());
     } else if (completionKind == CompletionKind::Return) {
         // 11.1.3.2.2 steps 5-6.
         if (!GetProperty(cx, iter, iter, cx->names().return_, &func))
@@ -3169,8 +3174,9 @@ BlockOnPromise(JSContext* cx, HandleValue promiseVal, HandleObject blockedPromis
         // |promise| is an unwrapped Promise, and |then| is the original
         // |Promise.prototype.then|, inline it here.
         // 25.4.5.3., step 3.
-        RootedObject PromiseCtor(cx);
-        if (!GetBuiltinConstructor(cx, JSProto_Promise, &PromiseCtor))
+        RootedObject PromiseCtor(cx,
+                                 GlobalObject::getOrCreatePromiseConstructor(cx, cx->global()));
+        if (!PromiseCtor)
             return false;
 
         RootedObject C(cx, SpeciesConstructor(cx, promiseObj, JSProto_Promise, IsPromiseSpecies));

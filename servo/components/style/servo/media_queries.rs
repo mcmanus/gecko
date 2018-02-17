@@ -12,13 +12,13 @@ use media_queries::MediaType;
 use parser::ParserContext;
 use properties::ComputedValues;
 use selectors::parser::SelectorParseErrorKind;
-use std::fmt;
+use std::fmt::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
-use style_traits::{CSSPixel, DevicePixel, ToCss, ParseError};
+use style_traits::{CSSPixel, CssWriter, DevicePixel, ToCss, ParseError};
 use style_traits::viewport::ViewportConstraints;
+use values::{specified, KeyframesName};
 use values::computed::{self, ToComputedValue};
 use values::computed::font::FontSize;
-use values::specified;
 
 /// A device is a structure that represents the current media a given document
 /// is displayed in.
@@ -94,6 +94,12 @@ impl Device {
     /// <https://quirks.spec.whatwg.org/#the-tables-inherit-color-from-body-quirk>
     pub fn set_body_text_color(&self, _color: RGBA) {
         // Servo doesn't implement this quirk (yet)
+    }
+
+    /// Whether a given animation name may be referenced from style.
+    pub fn animation_name_may_be_referenced(&self, _: &KeyframesName) -> bool {
+        // Assume it is, since we don't have any good way to prove it's not.
+        true
     }
 
     /// Returns whether we ever looked up the root font size of the Device.
@@ -218,8 +224,9 @@ impl Expression {
 }
 
 impl ToCss for Expression {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result
-        where W: fmt::Write,
+    fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
+    where
+        W: Write,
     {
         let (s, l) = match self.0 {
             ExpressionKind::Width(Range::Min(ref l)) => ("(min-width: ", l),

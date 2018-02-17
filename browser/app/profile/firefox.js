@@ -52,11 +52,6 @@ pref("extensions.getAddons.themes.browseURL", "https://addons.mozilla.org/%LOCAL
 
 pref("extensions.update.autoUpdateDefault", true);
 
-pref("extensions.hotfix.id", "firefox-hotfix@mozilla.org");
-pref("extensions.hotfix.cert.checkAttributes", true);
-pref("extensions.hotfix.certs.1.sha1Fingerprint", "91:53:98:0C:C1:86:DF:47:8F:35:22:9E:11:C9:A7:31:04:49:A1:AA");
-pref("extensions.hotfix.certs.2.sha1Fingerprint", "39:E7:2B:7A:5B:CF:37:78:F9:5D:4A:E0:53:2D:2F:3D:68:53:C5:60");
-
 // Check AUS for system add-on updates.
 pref("extensions.systemAddon.update.url", "https://aus5.mozilla.org/update/3/SystemAddons/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml");
 
@@ -262,6 +257,9 @@ pref("browser.startup.homepage",            "chrome://branding/locale/browsercon
 // Whether we should skip the homepage when opening the first-run page
 pref("browser.startup.firstrunSkipsHomepage", true);
 
+// Show an about:blank window as early as possible for quick startup feedback.
+pref("browser.startup.blankWindow", false);
+
 pref("browser.slowStartup.notificationDisabled", false);
 pref("browser.slowStartup.timeThreshold", 20000);
 pref("browser.slowStartup.maxSamples", 5);
@@ -348,6 +346,10 @@ pref("browser.urlbar.decodeURLsOnCopy", false);
 // Tab" feature of the awesomebar.
 pref("browser.urlbar.switchTabs.adoptIntoActiveWindow", false);
 
+// Whether addresses and search results typed into the address bar
+// should be opened in new tabs by default.
+pref("browser.urlbar.openintab", false);
+
 pref("browser.altClickSave", false);
 
 // Enable logging downloads operations to the Console.
@@ -391,9 +393,7 @@ pref("browser.search.order.2",                "chrome://browser-region/locale/re
 pref("browser.search.order.3",                "chrome://browser-region/locale/region.properties");
 
 // Market-specific search defaults
-// This is disabled globally, and then enabled for individual locales
-// in firefox-l10n.js (eg. it's enabled for en-US).
-pref("browser.search.geoSpecificDefaults", false);
+pref("browser.search.geoSpecificDefaults", true);
 pref("browser.search.geoSpecificDefaults.url", "https://search.services.mozilla.com/1/%APP%/%VERSION%/%CHANNEL%/%LOCALE%/%REGION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%");
 
 // US specific default (used as a fallback if the geoSpecificDefaults request fails).
@@ -915,9 +915,6 @@ pref("browser.sessionstore.max_write_failures", 5);
 // allow META refresh by default
 pref("accessibility.blockautorefresh", false);
 
-// Whether useAsyncTransactions is enabled or not.
-pref("browser.places.useAsyncTransactions", true);
-
 // Whether history is enabled or not.
 pref("places.history.enabled", true);
 
@@ -1089,6 +1086,10 @@ pref("security.sandbox.gpu.level", 0);
 pref("security.sandbox.content.level", 3);
 #endif
 
+#if defined(NIGHTLY_BUILD) && defined(XP_MACOSX) && defined(MOZ_SANDBOX)
+pref("security.sandbox.mac.flash.enabled", false);
+#endif
+
 #if defined(XP_LINUX) && defined(MOZ_SANDBOX) && defined(MOZ_CONTENT_SANDBOX)
 // This pref is introduced as part of bug 742434, the naming is inspired from
 // its Windows/Mac counterpart, but on Linux it's an integer which means:
@@ -1096,6 +1097,7 @@ pref("security.sandbox.content.level", 3);
 // 1 -> "content sandbox using seccomp-bpf when available"
 // 2 -> "seccomp-bpf + write file broker"
 // 3 -> "seccomp-bpf + read/write file brokering"
+// 4 -> all of the above + network/socket restrictions
 // Content sandboxing on Linux is currently in the stage of
 // 'just getting it enabled', which includes a very permissive whitelist. We
 // enable seccomp-bpf on nightly to see if everything is running, or if we need
@@ -1107,19 +1109,17 @@ pref("security.sandbox.content.level", 3);
 //
 // This setting may not be required anymore once we decide to permanently
 // enable the content sandbox.
-pref("security.sandbox.content.level", 3);
+pref("security.sandbox.content.level", 4);
 pref("security.sandbox.content.write_path_whitelist", "");
 pref("security.sandbox.content.read_path_whitelist", "");
 pref("security.sandbox.content.syscall_whitelist", "");
 #endif
 
-#if defined(XP_MACOSX) || defined(XP_WIN)
 #if defined(MOZ_SANDBOX) && defined(MOZ_CONTENT_SANDBOX)
 // ID (a UUID when set by gecko) that is used to form the name of a
 // sandbox-writable temporary directory to be used by content processes
 // when a temporary writable file is required in a level 1 sandbox.
 pref("security.sandbox.content.tempDirSuffix", "");
-#endif
 #endif
 
 #if defined(MOZ_SANDBOX)
@@ -1186,6 +1186,7 @@ pref("services.sync.prefs.sync.browser.tabs.loadInBackground", true);
 pref("services.sync.prefs.sync.browser.tabs.warnOnClose", true);
 pref("services.sync.prefs.sync.browser.tabs.warnOnOpen", true);
 pref("services.sync.prefs.sync.browser.urlbar.autocomplete.enabled", true);
+pref("services.sync.prefs.sync.browser.urlbar.matchBuckets", true);
 pref("services.sync.prefs.sync.browser.urlbar.maxRichResults", true);
 pref("services.sync.prefs.sync.browser.urlbar.suggest.bookmark", true);
 pref("services.sync.prefs.sync.browser.urlbar.suggest.history", true);
@@ -1285,10 +1286,8 @@ pref("browser.newtabpage.columns", 5);
 // directory tiles download URL
 pref("browser.newtabpage.directory.source", "https://tiles.services.mozilla.com/v3/links/fetch/%LOCALE%/%CHANNEL%");
 
-// activates Activity Stream
-pref("browser.newtabpage.activity-stream.enabled", true);
+// Activity Stream prefs that control to which page to redirect
 pref("browser.newtabpage.activity-stream.prerender", true);
-pref("browser.newtabpage.activity-stream.aboutHome.enabled", true);
 #ifndef RELEASE_OR_BETA
 pref("browser.newtabpage.activity-stream.debug", false);
 #endif
@@ -1339,7 +1338,16 @@ pref("security.insecure_field_warning.contextual.enabled", true);
 
 // Show degraded UI for http pages; disabled for now
 pref("security.insecure_connection_icon.enabled", false);
+// Show degraded UI for http pages in private mode only for Nightly: Bug 1434626
+#if defined(NIGHTLY_BUILD)
+pref("security.insecure_connection_icon.pbmode.enabled", true);
+#else
 pref("security.insecure_connection_icon.pbmode.enabled", false);
+#endif
+
+// Show "Not Secure" text for http pages; disabled for now
+pref("security.insecure_connection_text.enabled", false);
+pref("security.insecure_connection_text.pbmode.enabled", false);
 
 // 1 = allow MITM for certificate pinning checks.
 pref("security.cert_pinning.enforcement_level", 1);
@@ -1404,33 +1412,11 @@ pref("browser.uiCustomization.debug", false);
 // CustomizableUI state of the browser's user interface
 pref("browser.uiCustomization.state", "");
 
-// The remote content URL shown for FxA signup. Must use HTTPS.
-pref("identity.fxaccounts.remote.signup.uri", "https://accounts.firefox.com/signup?service=sync&context=fx_desktop_v3");
+// The remote FxA root content URL. Must use HTTPS.
+pref("identity.fxaccounts.remote.root", "https://accounts.firefox.com/");
 
-// The URL where remote content that forces re-authentication for Firefox Accounts
-// should be fetched.  Must use HTTPS.
-pref("identity.fxaccounts.remote.force_auth.uri", "https://accounts.firefox.com/force_auth?service=sync&context=fx_desktop_v3");
-
-// The remote content URL shown for signin in. Must use HTTPS.
-pref("identity.fxaccounts.remote.signin.uri", "https://accounts.firefox.com/signin?service=sync&context=fx_desktop_v3");
-
-// The remote content URL shown for the email (FxA determines if we show sign-in or sign-up) endpoint. Must use HTTPS.
-pref("identity.fxaccounts.remote.email.uri", "https://accounts.firefox.com/?service=sync&context=fx_desktop_v3&action=email");
-
-// The remote content URL where FxAccountsWebChannel messages originate.
-pref("identity.fxaccounts.remote.webchannel.uri", "https://accounts.firefox.com/");
-
-// The value of the context query parameter passed in some fxa requests when config
-// discovery is enabled.
+// The value of the context query parameter passed in fxa requests.
 pref("identity.fxaccounts.contextParam", "fx_desktop_v3");
-
-// The URL we take the user to when they opt to "manage" their Firefox Account.
-// Note that this will always need to be in the same TLD as the
-// "identity.fxaccounts.remote.signup.uri" pref.
-pref("identity.fxaccounts.settings.uri", "https://accounts.firefox.com/settings?service=sync&context=fx_desktop_v3");
-
-// The URL of the FxA device manager page
-pref("identity.fxaccounts.settings.devices.uri", "https://accounts.firefox.com/settings/clients?service=sync&context=fx_desktop_v3");
 
 // The remote URL of the FxA Profile Server
 pref("identity.fxaccounts.remote.profile.uri", "https://profile.accounts.firefox.com/v1");
@@ -1441,8 +1427,6 @@ pref("identity.fxaccounts.remote.oauth.uri", "https://oauth.accounts.firefox.com
 // Token server used by the FxA Sync identity.
 pref("identity.sync.tokenserver.uri", "https://token.services.mozilla.com/1.0/sync/1.5");
 
-// The URL to a page that explains how to connect another device to Sync.
-pref("identity.fxaccounts.remote.connectdevice.uri", "https://accounts.firefox.com/connect_another_device?service=sync&context=fx_desktop_v3");
 // URLs for promo links to mobile browsers. Note that consumers are expected to
 // append a value for utm_campaign.
 pref("identity.mobilepromo.android", "https://www.mozilla.org/firefox/android/?utm_source=firefox-browser&utm_medium=firefox-browser&utm_campaign=");
@@ -1629,8 +1613,6 @@ pref("reader.parse-node-limit", 0);
 // and because (normally) these errors are not persisted anywhere.
 pref("reader.errors.includeURLs", true);
 
-pref("view_source.tab", true);
-
 pref("dom.serviceWorkers.enabled", true);
 
 // Enable Push API.
@@ -1708,12 +1690,9 @@ pref("browser.crashReports.unsubmittedCheck.autoSubmit2", false);
 #ifdef NIGHTLY_BUILD
 pref("extensions.formautofill.available", "on");
 pref("extensions.formautofill.creditCards.available", true);
-#elif MOZ_UPDATE_CHANNEL == release
-pref("extensions.formautofill.available", "detect");
-pref("extensions.formautofill.creditCards.available", false);
 #else
 pref("extensions.formautofill.available", "detect");
-pref("extensions.formautofill.creditCards.available", true);
+pref("extensions.formautofill.creditCards.available", false);
 #endif
 pref("extensions.formautofill.addresses.enabled", true);
 pref("extensions.formautofill.creditCards.enabled", true);
@@ -1729,13 +1708,15 @@ pref("extensions.formautofill.firstTimeUse", true);
 pref("extensions.formautofill.heuristics.enabled", true);
 pref("extensions.formautofill.section.enabled", true);
 pref("extensions.formautofill.loglevel", "Warn");
-// Comma separated list of countries Form Autofill supports
-#ifdef MOZ_UPDATE_CHANNEL == release
-pref("extensions.formautofill.supportedCountries", "US");
-pref("extensions.formautofill.supportRTL", false);
-#else
+
+#ifdef NIGHTLY_BUILD
+// Comma separated list of countries Form Autofill supports.
+// This affects feature availability and the address edit form country picker.
 pref("extensions.formautofill.supportedCountries", "US,CA,DE");
 pref("extensions.formautofill.supportRTL", true);
+#else
+pref("extensions.formautofill.supportedCountries", "US");
+pref("extensions.formautofill.supportRTL", false);
 #endif
 
 // Whether or not to restore a session with lazy-browser tabs.
@@ -1761,3 +1742,23 @@ pref("browser.onboarding.updatetour", "performance,library,screenshots,singlesea
 
 // Preference that allows individual users to disable Screenshots.
 pref("extensions.screenshots.disabled", false);
+// Preference that allows individual users to leave Screenshots enabled, but
+// disable uploading to the server.
+pref("extensions.screenshots.upload-disabled", false);
+
+// Preferences for BrowserErrorReporter.jsm
+// Only collect errors on Nightly, and specifically not local builds
+#if defined(NIGHTLY_BUILD) && MOZ_UPDATE_CHANNEL != default
+pref("browser.chrome.errorReporter.enabled", true);
+#else
+pref("browser.chrome.errorReporter.enabled", false);
+#endif
+pref("browser.chrome.errorReporter.sampleRate", "0.001");
+pref("browser.chrome.errorReporter.publicKey", "c709cb7a2c0b4f0882fcc84a5af161ec");
+pref("browser.chrome.errorReporter.projectId", "339");
+pref("browser.chrome.errorReporter.submitUrl", "https://sentry.prod.mozaws.net/api/339/store/");
+pref("browser.chrome.errorReporter.logLevel", "Error");
+
+// URL for Learn More link for browser error logging in preferences
+pref("browser.chrome.errorReporter.infoURL",
+     "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/nightly-error-collection");

@@ -14,7 +14,7 @@ const EXPECTED_APPMENU_OPEN_REFLOWS = [
   {
     stack: [
       "openPopup@chrome://global/content/bindings/popup.xml",
-      "show/</<@chrome://browser/content/customizableui/panelUI.js",
+      "openPopup/this._openPopupPromise<@resource:///modules/PanelMultiView.jsm",
     ],
   },
 
@@ -58,6 +58,7 @@ const EXPECTED_APPMENU_SUBVIEW_REFLOWS = [
   {
     stack: [
       "descriptionHeightWorkaround@resource:///modules/PanelMultiView.jsm",
+      "set current@resource:///modules/PanelMultiView.jsm",
       "hideAllViewsExcept@resource:///modules/PanelMultiView.jsm",
     ],
 

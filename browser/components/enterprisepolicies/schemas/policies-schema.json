@@ -1,0 +1,182 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "type": "object",
+  "properties": {
+    "BlockAboutConfig": {
+      "description": "Blocks access to the about:config page.",
+      "first_available": "60.0",
+
+      "type": "boolean",
+      "enum": [true]
+    },
+
+    "BlockAboutProfiles": {
+      "description": "Blocks access to the about:profiles page.",
+      "first_available": "60.0",
+
+      "type": "boolean",
+      "enum": [true]
+    },
+
+    "BlockAboutSupport": {
+      "description": "Blocks access to the about:support page.",
+      "first_available": "60.0",
+
+      "type": "boolean",
+      "enum": [true]
+    },
+
+    "DisableAppUpdate": {
+      "description": "Prevent the browser from updating.",
+      "first_available": "60.0",
+      "enterprise_only": true,
+
+      "type": "boolean",
+      "enum": [true]
+    },
+
+    "display_menu_bar": {
+      "description": "Causes the menu bar to be displayed by default.",
+      "first_available": "60.0",
+
+      "type": "boolean",
+      "enum": [true]
+    },
+
+    "display_bookmarks_toolbar": {
+      "description": "Causes the bookmarks toolbar to be displayed by default.",
+      "first_available": "60.0",
+
+      "type": "boolean",
+      "enum": [true]
+    },
+
+    "block_set_desktop_background": {
+      "description": "Prevents usage of the \"Set Image as Desktop Background\" feature.",
+      "first_available": "60.0",
+
+      "type": "boolean",
+      "enum": [true]
+    },
+
+    "DisableFirefoxScreenshots": {
+      "description": "Prevents usage of the Firefox Screenshots feature.",
+      "first_available": "60.0",
+
+      "type": "boolean",
+      "enum": [true]
+    },
+
+    "DisableFirefoxStudies": {
+      "description": "Prevents Firefox from running studies.",
+      "first_available": "60.0",
+
+      "type": "boolean",
+      "enum": [true]
+    },
+
+    "DisableFormHistory": {
+      "description": "Don't remember search and form history.",
+      "first_available": "60.0",
+
+      "type": "boolean",
+      "enum": [true]
+    },
+
+    "dont_check_default_browser": {
+      "description": "Don't check for the default browser on startup.",
+      "first_available": "60.0",
+
+      "type": "boolean",
+      "enum": [true]
+    },
+
+    "flash_plugin": {
+      "description": "Allow or deny flash plugin usage.",
+      "first_available": "60.0",
+
+      "type": "object",
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": {
+            "type": "origin"
+          }
+        },
+
+        "block": {
+          "type": "array",
+          "items": {
+            "type": "origin"
+          }
+        }
+      }
+    },
+
+    "popups": {
+      "description": "Allow or deny popup usage.",
+      "first_available": "60.0",
+
+      "type": "object",
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": {
+            "type": "origin"
+          }
+        },
+
+        "block": {
+          "type": "array",
+          "items": {
+            "type": "origin"
+          }
+        }
+      }
+    },
+
+    "install_addons": {
+      "description": "Allow or deny popup websites to install webextensions.",
+      "first_available": "60.0",
+
+      "type": "object",
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": {
+            "type": "origin"
+          }
+        },
+
+        "block": {
+          "type": "array",
+          "items": {
+            "type": "origin"
+          }
+        }
+      }
+    },
+
+    "cookies": {
+      "description": "Allow or deny websites to set cookies.",
+      "first_available": "60.0",
+
+      "type": "object",
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": {
+            "type": "origin"
+          }
+        },
+
+        "block": {
+          "type": "array",
+          "items": {
+            "type": "origin"
+          }
+        }
+      }
+    }
+  }
+}

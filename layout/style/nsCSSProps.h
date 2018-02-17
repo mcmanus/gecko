@@ -284,6 +284,11 @@ static_assert((CSS_PROPERTY_PARSE_PROPERTY_MASK &
 // CSS_PROPERTY_FIXPOS_CB set.
 #define CSS_PROPERTY_ABSPOS_CB                    (1<<30)
 
+// This property should add Cross Origin Request headers to any loads
+// that it triggers. Currently this is only used for properties that
+// also use CSS_PROPERTY_START_IMAGE_LOADS.
+#define CSS_PROPERTY_LOAD_USE_CORS                (1U<<31)
+
 /**
  * Types of animatable values.
  */
@@ -679,6 +684,10 @@ public:
   }
 
 public:
+
+  // Return an array of possible list style types, and the length of
+  // the array.
+  static const char* const* GetListStyleTypes(int32_t *aLength);
 
 // Storing the enabledstate_ value in an nsCSSPropertyID variable is a small hack
 // to avoid needing a separate variable declaration for its real type

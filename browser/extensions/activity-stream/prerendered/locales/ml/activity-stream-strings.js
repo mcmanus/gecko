@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "{provider} ശുപാർശ ചെയ്തത്",
   "header_bookmarks_placeholder": "നിങ്ങൾക്ക് ഇതുവരെ ബുക്ക്മാർക്കുകൾ ഇല്ല.",
   "header_stories_from": "എവിടെ നിന്നും",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "സന്ദർശിച്ചത്‌",
   "type_label_bookmarked": "അടയാളപ്പെടുത്തിയത്",
   "type_label_synced": "മറ്റു ഉപകരണങ്ങളുമായി സാമ്യപ്പെടുക",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "ഈ സൈറ്റ് തിരുത്തുക",
   "edit_topsites_dismiss_button": "ഈ സൈറ്റ് പുറത്താക്കുക",
   "edit_topsites_add_button": "ചേര്‍ക്കുക",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "പുതിയ മികച്ച സൈറ്റുകൾ",
   "topsites_form_edit_header": "മികച്ച സൈറ്റ് ലിസ്റ്റ് തിരുത്തൂ",
   "topsites_form_title_placeholder": "തലക്കെട്ട് നൽകൂ",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "നിങ്ങൾ ഇവിടെ വരെ എത്തി. {Provider}ൽ നിന്നുള്ള കൂടുതൽ പ്രധാന വാർത്തകൾക്കായി പിന്നീട് വീണ്ടും പരിശോധിക്കുക. കാത്തിരിക്കാൻ പറ്റില്ലേ? വെബിൽ നിന്ന് കൂടുതൽ മികച്ച കഥകൾ കണ്ടെത്തുന്നതിന് ഒരു ജനപ്രിയ വിഷയം തിരഞ്ഞെടുക്കുക.",
   "manual_migration_explanation2": "മറ്റൊരു ബ്രൗസറിൽ നിന്നുള്ള ബുക്ക്മാർക്കുകൾ, ചരിത്രം, പാസ്വേഡുകൾ എന്നിവ ഉപയോഗിച്ച് ഫയർഫോക്സ് പരീക്ഷിക്കുക.",
   "manual_migration_cancel_button": "വേണ്ട, നന്ദി",
-  "manual_migration_import_button": "ഇപ്പോൾ ഇറക്കുമതി ചെയ്യുക"
+  "manual_migration_import_button": "ഇപ്പോൾ ഇറക്കുമതി ചെയ്യുക",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

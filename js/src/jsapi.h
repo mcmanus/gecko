@@ -1117,6 +1117,8 @@ class JS_PUBLIC_API(ContextOptions) {
 #ifdef FUZZING
         , fuzzing_(false)
 #endif
+        , expressionClosures_(false)
+        , arrayProtoValues_(true)
     {
     }
 
@@ -1272,6 +1274,18 @@ class JS_PUBLIC_API(ContextOptions) {
     }
 #endif
 
+    bool expressionClosures() const { return expressionClosures_; }
+    ContextOptions& setExpressionClosures(bool flag) {
+        expressionClosures_ = flag;
+        return *this;
+    }
+
+    bool arrayProtoValues() const { return arrayProtoValues_; }
+    ContextOptions& setArrayProtoValues(bool flag) {
+        arrayProtoValues_ = flag;
+        return *this;
+    }
+
     void disableOptionsForSafeMode() {
         setBaseline(false);
         setIon(false);
@@ -1302,6 +1316,8 @@ class JS_PUBLIC_API(ContextOptions) {
 #ifdef FUZZING
     bool fuzzing_ : 1;
 #endif
+    bool expressionClosures_ : 1;
+    bool arrayProtoValues_ : 1;
 
 };
 
@@ -3668,6 +3684,7 @@ class JS_FRIEND_API(TransitiveCompileOptions)
         canLazilyParse(true),
         strictOption(false),
         extraWarningsOption(false),
+        expressionClosuresOption(false),
         werrorOption(false),
         asmJSOption(AsmJSOption::Disabled),
         throwOnAsmJSValidationFailureOption(false),
@@ -3702,6 +3719,7 @@ class JS_FRIEND_API(TransitiveCompileOptions)
     bool canLazilyParse;
     bool strictOption;
     bool extraWarningsOption;
+    bool expressionClosuresOption;
     bool werrorOption;
     AsmJSOption asmJSOption;
     bool throwOnAsmJSValidationFailureOption;
@@ -3740,6 +3758,7 @@ class JS_FRIEND_API(ReadOnlyCompileOptions) : public TransitiveCompileOptions
         column(0),
         scriptSourceOffset(0),
         isRunOnce(false),
+        nonSyntacticScope(false),
         noScriptRval(false)
     { }
 
@@ -3775,6 +3794,7 @@ class JS_FRIEND_API(ReadOnlyCompileOptions) : public TransitiveCompileOptions
     unsigned scriptSourceOffset;
     // isRunOnce only applies to non-function scripts.
     bool isRunOnce;
+    bool nonSyntacticScope;
     bool noScriptRval;
 
   private:
@@ -3844,6 +3864,7 @@ class JS_FRIEND_API(OwningCompileOptions) : public ReadOnlyCompileOptions
     OwningCompileOptions& setSelfHostingMode(bool shm) { selfHostingMode = shm; return *this; }
     OwningCompileOptions& setCanLazilyParse(bool clp) { canLazilyParse = clp; return *this; }
     OwningCompileOptions& setSourceIsLazy(bool l) { sourceIsLazy = l; return *this; }
+    OwningCompileOptions& setNonSyntacticScope(bool n) { nonSyntacticScope = n; return *this; }
     OwningCompileOptions& setIntroductionType(const char* t) { introductionType = t; return *this; }
     bool setIntroductionInfo(JSContext* cx, const char* introducerFn, const char* intro,
                              unsigned line, JSScript* script, uint32_t offset)
@@ -3936,6 +3957,7 @@ class MOZ_STACK_CLASS JS_FRIEND_API(CompileOptions) final : public ReadOnlyCompi
     CompileOptions& setSelfHostingMode(bool shm) { selfHostingMode = shm; return *this; }
     CompileOptions& setCanLazilyParse(bool clp) { canLazilyParse = clp; return *this; }
     CompileOptions& setSourceIsLazy(bool l) { sourceIsLazy = l; return *this; }
+    CompileOptions& setNonSyntacticScope(bool n) { nonSyntacticScope = n; return *this; }
     CompileOptions& setIntroductionType(const char* t) { introductionType = t; return *this; }
     CompileOptions& setIntroductionInfo(const char* introducerFn, const char* intro,
                                         unsigned line, JSScript* script, uint32_t offset)
@@ -4102,6 +4124,15 @@ CompileFunction(JSContext* cx, AutoObjectVector& envChain,
                 const ReadOnlyCompileOptions& options,
                 const char* name, unsigned nargs, const char* const* argnames,
                 const char* bytes, size_t length, JS::MutableHandleFunction fun);
+
+/*
+ * Associate an element wrapper and attribute name with a previously compiled
+ * script, for debugging purposes. Calling this function is optional, but should
+ * be done before script execution if it is required.
+ */
+extern JS_PUBLIC_API(bool)
+InitScriptSourceElement(JSContext* cx, HandleScript script,
+                        HandleObject element, HandleString elementAttrName = nullptr);
 
 } /* namespace JS */
 
@@ -4300,6 +4331,9 @@ GetRequestedModuleSpecifier(JSContext* cx, JS::HandleValue requestedModuleObject
 extern JS_PUBLIC_API(void)
 GetRequestedModuleSourcePos(JSContext* cx, JS::HandleValue requestedModuleObject,
                             uint32_t* lineNumber, uint32_t* columnNumber);
+
+extern JS_PUBLIC_API(JSScript*)
+GetModuleScript(JS::HandleObject moduleRecord);
 
 } /* namespace JS */
 
@@ -4591,6 +4625,11 @@ class JS_PUBLIC_API(StreamConsumer)
     // contract described above.
     enum CloseReason { EndOfFile, Error };
     virtual void streamClosed(CloseReason reason) = 0;
+
+    // Provides optional stream attributes such as base or source mapping URLs.
+    // Necessarily called before consumeChunk() or streamClosed(). The caller
+    // retains ownership of the given strings.
+    virtual void noteResponseURLs(const char* maybeUrl, const char* maybeSourceMapUrl) = 0;
 };
 
 enum class MimeType { Wasm };
@@ -4702,6 +4741,9 @@ JS_AtomizeAndPinStringN(JSContext* cx, const char* s, size_t length);
 
 extern JS_PUBLIC_API(JSString*)
 JS_AtomizeAndPinString(JSContext* cx, const char* s);
+
+extern JS_PUBLIC_API(JSString*)
+JS_NewLatin1String(JSContext* cx, JS::Latin1Char* chars, size_t length);
 
 extern JS_PUBLIC_API(JSString*)
 JS_NewUCString(JSContext* cx, char16_t* chars, size_t length);
@@ -5882,6 +5924,8 @@ JS_SetOffthreadIonCompilationEnabled(JSContext* cx, bool enabled);
     Register(JUMP_THRESHOLD, "jump-threshold")                              \
     Register(SIMULATOR_ALWAYS_INTERRUPT, "simulator.always-interrupt")      \
     Register(SPECTRE_INDEX_MASKING, "spectre.index-masking")                \
+    Register(SPECTRE_STRING_MITIGATIONS, "spectre.string-mitigations")      \
+    Register(SPECTRE_VALUE_MASKING, "spectre.value-masking")                \
     Register(ASMJS_ATOMICS_ENABLE, "asmjs.atomics.enable")                  \
     Register(WASM_FOLD_OFFSETS, "wasm.fold-offsets")
 
@@ -6297,15 +6341,18 @@ class MOZ_STACK_CLASS JS_PUBLIC_API(ForOfIterator) {
      *
      *  Case 1: Regular Iteration
      *      iterator - pointer to the iterator object.
+     *      nextMethod - value of |iterator|.next.
      *      index - fixed to NOT_ARRAY (== UINT32_MAX)
      *
      *  Case 2: Optimized Array Iteration
      *      iterator - pointer to the array object.
+     *      nextMethod - the undefined value.
      *      index - current position in array.
      *
      * The cases are distinguished by whether or not |index| is equal to NOT_ARRAY.
      */
     JS::RootedObject iterator;
+    JS::RootedValue nextMethod;
     uint32_t index;
 
     static const uint32_t NOT_ARRAY = UINT32_MAX;
@@ -6314,7 +6361,9 @@ class MOZ_STACK_CLASS JS_PUBLIC_API(ForOfIterator) {
     ForOfIterator& operator=(const ForOfIterator&) = delete;
 
   public:
-    explicit ForOfIterator(JSContext* cx) : cx_(cx), iterator(cx_), index(NOT_ARRAY) { }
+    explicit ForOfIterator(JSContext* cx)
+      : cx_(cx), iterator(cx_), nextMethod(cx), index(NOT_ARRAY)
+    { }
 
     enum NonIterableBehavior {
         ThrowOnNonIterable,
@@ -6352,7 +6401,6 @@ class MOZ_STACK_CLASS JS_PUBLIC_API(ForOfIterator) {
 
   private:
     inline bool nextFromOptimizedArray(MutableHandleValue val, bool* done);
-    bool materializeArrayIterator();
 };
 
 

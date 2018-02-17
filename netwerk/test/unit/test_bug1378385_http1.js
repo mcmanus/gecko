@@ -25,11 +25,9 @@
 //    Second, we check if the request id of the rest requests is equal to focused
 //    window id.
 
-Cu.import("resource://testing-common/httpd.js");
-Cu.import("resource://gre/modules/NetUtil.jsm");
+ChromeUtils.import("resource://testing-common/httpd.js");
+ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
 
-var Cc = Components.classes;
-var Ci = Components.interfaces;
 var server = new HttpServer();
 server.start(-1);
 var baseURL = "http://localhost:" + server.identity.primaryPort + "/";

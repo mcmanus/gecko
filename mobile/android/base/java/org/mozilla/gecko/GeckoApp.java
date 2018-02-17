@@ -657,6 +657,12 @@ public abstract class GeckoApp extends GeckoActivity
                 }
             }, STARTUP_PHASE_DURATION_MS);
 
+        } else if (event.equals("Gecko:CorruptAPK")) {
+            showCorruptAPKError();
+            if (!isFinishing()) {
+                finish();
+            }
+
         } else if ("Accessibility:Ready".equals(event)) {
             GeckoAccessibility.updateAccessibilitySettings(this);
 
@@ -845,6 +851,10 @@ public abstract class GeckoApp extends GeckoActivity
     }
 
     @Override // GeckoSession.ContentListener
+    public void onFocusRequest(final GeckoSession session) {
+    }
+
+    @Override // GeckoSession.ContentListener
     public void onFullScreen(final GeckoSession session, final boolean fullScreen) {
         if (fullScreen) {
             SnackbarBuilder.builder(this)
@@ -900,16 +910,22 @@ public abstract class GeckoApp extends GeckoActivity
             enableStrictMode();
         }
 
+        final boolean corruptAPK = GeckoThread.isState(GeckoThread.State.CORRUPT_APK);
         boolean supported = HardwareUtils.isSupportedSystem();
         if (supported) {
             GeckoLoader.loadMozGlue(getApplicationContext());
             supported = GeckoLoader.neonCompatible();
         }
-        if (!supported) {
-            // This build does not support the Android version of the device: Show an error and finish the app.
+        if (corruptAPK || !supported) {
+            // This build is corrupt or does not support the Android version of the device.
+            // Show an error and finish the app.
             mIsAbortingAppLaunch = true;
             super.onCreate(savedInstanceState);
-            showSDKVersionError();
+            if (corruptAPK) {
+                showCorruptAPKError();
+            } else {
+                showSDKVersionError();
+            }
             finish();
             return;
         }
@@ -958,7 +974,7 @@ public abstract class GeckoApp extends GeckoActivity
         if (sAlreadyLoaded) {
             // This happens when the GeckoApp activity is destroyed by Android
             // without killing the entire application (see Bug 769269).
-            // Now that we've got multiple GeckoApp-based activities, this can
+            // In case we have multiple GeckoApp-based activities, this can
             // also happen if we're not the first activity to run within a session.
             mIsRestoringActivity = true;
             Telemetry.addToHistogram("FENNEC_RESTORING_ACTIVITY", 1);
@@ -994,6 +1010,7 @@ public abstract class GeckoApp extends GeckoActivity
             null);
 
         EventDispatcher.getInstance().registerUiThreadListener(this,
+            "Gecko:CorruptAPK",
             "Update:Check",
             "Update:Download",
             "Update:Install",
@@ -2040,6 +2057,7 @@ public abstract class GeckoApp extends GeckoActivity
             null);
 
         EventDispatcher.getInstance().unregisterUiThreadListener(this,
+            "Gecko:CorruptAPK",
             "Update:Check",
             "Update:Download",
             "Update:Install",
@@ -2098,6 +2116,10 @@ public abstract class GeckoApp extends GeckoActivity
         final String message = getString(R.string.unsupported_sdk_version,
                 HardwareUtils.getRealAbi(), Integer.toString(Build.VERSION.SDK_INT));
         Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+    }
+
+    private void showCorruptAPKError() {
+        Toast.makeText(this, getString(R.string.corrupt_apk), Toast.LENGTH_LONG).show();
     }
 
     // Get a temporary directory, may return null

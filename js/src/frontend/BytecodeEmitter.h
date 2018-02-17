@@ -11,16 +11,15 @@
 
 #include "mozilla/Attributes.h"
 
-#include "jscntxt.h"
-#include "jsiter.h"
-#include "jsopcode.h"
-#include "jsscript.h"
-
 #include "ds/InlineTable.h"
 #include "frontend/EitherParser.h"
 #include "frontend/SharedContext.h"
 #include "frontend/SourceNotes.h"
+#include "vm/BytecodeUtil.h"
 #include "vm/Interpreter.h"
+#include "vm/Iteration.h"
+#include "vm/JSContext.h"
+#include "vm/JSScript.h"
 
 namespace js {
 namespace frontend {
@@ -165,8 +164,15 @@ struct JumpList {
     void patchAll(jsbytecode* code, JumpTarget target);
 };
 
+// Used to control whether JSOP_CALL_IGNORES_RV is emitted for function calls.
 enum class ValueUsage {
+    // Assume the value of the current expression may be used. This is always
+    // correct but prohibits JSOP_CALL_IGNORES_RV.
     WantValue,
+
+    // Pass this when emitting an expression if the expression's value is
+    // definitely unused by later instructions. You must make sure the next
+    // instruction is JSOP_POP, a jump to a JSOP_POP, or something similar.
     IgnoreValue
 };
 
@@ -760,7 +766,7 @@ struct MOZ_STACK_CLASS BytecodeEmitter
     MOZ_MUST_USE bool emitAssignment(ParseNode* lhs, ParseNodeKind pnk, ParseNode* rhs);
 
     MOZ_MUST_USE bool emitReturn(ParseNode* pn);
-    MOZ_MUST_USE bool emitStatement(ParseNode* pn);
+    MOZ_MUST_USE bool emitExpressionStatement(ParseNode* pn);
     MOZ_MUST_USE bool emitStatementList(ParseNode* pn);
 
     MOZ_MUST_USE bool emitDeleteName(ParseNode* pn);

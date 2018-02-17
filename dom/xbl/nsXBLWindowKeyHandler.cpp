@@ -9,7 +9,6 @@
 #include "nsXBLWindowKeyHandler.h"
 #include "nsIContent.h"
 #include "nsAtom.h"
-#include "nsIDOMKeyEvent.h"
 #include "nsXBLService.h"
 #include "nsIServiceManager.h"
 #include "nsGkAtoms.h"
@@ -34,6 +33,7 @@
 #include "mozilla/TextEvents.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Event.h"
+#include "mozilla/dom/KeyboardEvent.h"
 #include "mozilla/layers/KeyboardMap.h"
 
 using namespace mozilla;
@@ -267,19 +267,16 @@ nsXBLWindowKeyHandler::EnsureHandlers()
 }
 
 nsresult
-nsXBLWindowKeyHandler::WalkHandlers(nsIDOMKeyEvent* aKeyEvent, nsAtom* aEventType)
+nsXBLWindowKeyHandler::WalkHandlers(KeyboardEvent* aKeyEvent, nsAtom* aEventType)
 {
-  bool prevent;
-  aKeyEvent->AsEvent()->GetDefaultPrevented(&prevent);
-  if (prevent)
+  if (aKeyEvent->DefaultPrevented()) {
     return NS_OK;
+  }
 
-  bool trustedEvent = false;
   // Don't process the event if it was not dispatched from a trusted source
-  aKeyEvent->AsEvent()->GetIsTrusted(&trustedEvent);
-
-  if (!trustedEvent)
+  if (!aKeyEvent->IsTrusted()) {
     return NS_OK;
+  }
 
   nsresult rv = EnsureHandlers();
   NS_ENSURE_SUCCESS(rv, rv);
@@ -289,9 +286,9 @@ nsXBLWindowKeyHandler::WalkHandlers(nsIDOMKeyEvent* aKeyEvent, nsAtom* aEventTyp
   if (!el) {
     if (mUserHandler) {
       WalkHandlersInternal(aKeyEvent, aEventType, mUserHandler, true);
-      aKeyEvent->AsEvent()->GetDefaultPrevented(&prevent);
-      if (prevent)
+      if (aKeyEvent->DefaultPrevented()) {
         return NS_OK; // Handled by the user bindings. Our work here is done.
+      }
     }
   }
 
@@ -356,6 +353,12 @@ nsXBLWindowKeyHandler::InstallKeyboardEventListenersTo(
   aEventListenerManager->AddEventListenerByType(
                            this, NS_LITERAL_STRING("keypress"),
                            TrustedEventsAtSystemGroupBubble());
+  // mozaccesskeynotfound event is fired when modifiers of keypress event
+  // matches with modifier of content access key but it's not consumed by
+  // remote content.
+  aEventListenerManager->AddEventListenerByType(
+                           this, NS_LITERAL_STRING("mozaccesskeynotfound"),
+                           TrustedEventsAtSystemGroupBubble());
   aEventListenerManager->AddEventListenerByType(
                            this, NS_LITERAL_STRING("mozkeydownonplugin"),
                            TrustedEventsAtSystemGroupBubble());
@@ -408,6 +411,9 @@ nsXBLWindowKeyHandler::RemoveKeyboardEventListenersFrom(
                            TrustedEventsAtSystemGroupBubble());
   aEventListenerManager->RemoveEventListenerByType(
                            this, NS_LITERAL_STRING("keypress"),
+                           TrustedEventsAtSystemGroupBubble());
+  aEventListenerManager->RemoveEventListenerByType(
+                           this, NS_LITERAL_STRING("mozaccesskeynotfound"),
                            TrustedEventsAtSystemGroupBubble());
   aEventListenerManager->RemoveEventListenerByType(
                            this, NS_LITERAL_STRING("mozkeydownonplugin"),
@@ -465,7 +471,13 @@ nsXBLWindowKeyHandler::ConvertEventToDOMEventType(
   if (aWidgetKeyboardEvent.IsKeyUpOrKeyUpOnPlugin()) {
     return nsGkAtoms::keyup;
   }
-  if (aWidgetKeyboardEvent.mMessage == eKeyPress) {
+  // eAccessKeyNotFound event is always created from eKeyPress event and
+  // the original eKeyPress event has stopped its propagation before dispatched
+  // into the DOM tree in this process and not matched with remote content's
+  // access keys.  So, we should treat it as an eKeyPress event and execute
+  // a command if it's registered as a shortcut key.
+  if (aWidgetKeyboardEvent.mMessage == eKeyPress ||
+      aWidgetKeyboardEvent.mMessage == eAccessKeyNotFound) {
     return nsGkAtoms::keypress;
   }
   MOZ_ASSERT_UNREACHABLE(
@@ -476,7 +488,8 @@ nsXBLWindowKeyHandler::ConvertEventToDOMEventType(
 NS_IMETHODIMP
 nsXBLWindowKeyHandler::HandleEvent(nsIDOMEvent* aEvent)
 {
-  nsCOMPtr<nsIDOMKeyEvent> keyEvent(do_QueryInterface(aEvent));
+  RefPtr<KeyboardEvent> keyEvent =
+    aEvent->InternalDOMEvent()->AsKeyboardEvent();
   NS_ENSURE_TRUE(keyEvent, NS_ERROR_INVALID_ARG);
 
   uint16_t eventPhase;
@@ -529,10 +542,10 @@ nsXBLWindowKeyHandler::HandleEvent(nsIDOMEvent* aEvent)
 
 void
 nsXBLWindowKeyHandler::HandleEventOnCaptureInDefaultEventGroup(
-                         nsIDOMKeyEvent* aEvent)
+                         KeyboardEvent* aEvent)
 {
   WidgetKeyboardEvent* widgetKeyboardEvent =
-    aEvent->AsEvent()->WidgetEventPtr()->AsKeyboardEvent();
+    aEvent->WidgetEventPtr()->AsKeyboardEvent();
 
   if (widgetKeyboardEvent->IsReservedByChrome()) {
     return;
@@ -546,15 +559,18 @@ nsXBLWindowKeyHandler::HandleEventOnCaptureInDefaultEventGroup(
 
 void
 nsXBLWindowKeyHandler::HandleEventOnCaptureInSystemEventGroup(
-                         nsIDOMKeyEvent* aEvent)
+                         KeyboardEvent* aEvent)
 {
   WidgetKeyboardEvent* widgetEvent =
-    aEvent->AsEvent()->WidgetEventPtr()->AsKeyboardEvent();
+    aEvent->WidgetEventPtr()->AsKeyboardEvent();
 
   // If the event won't be sent to remote process, this listener needs to do
-  // nothing.
-  if (widgetEvent->mFlags.mOnlySystemGroupDispatchInContent ||
-      !widgetEvent->WillBeSentToRemoteProcess()) {
+  // nothing.  Note that even if mOnlySystemGroupDispatchInContent is true,
+  // we need to send the event to remote process and check reply event
+  // before matching it with registered shortcut keys because event listeners
+  // in the system event group may want to handle the event before registered
+  // shortcut key handlers.
+  if (!widgetEvent->WillBeSentToRemoteProcess()) {
     return;
   }
 
@@ -630,14 +646,14 @@ nsXBLWindowKeyHandler::IsHTMLEditableFieldFocused()
 // for that event was found.
 //
 bool
-nsXBLWindowKeyHandler::WalkHandlersInternal(nsIDOMKeyEvent* aKeyEvent,
+nsXBLWindowKeyHandler::WalkHandlersInternal(KeyboardEvent* aKeyEvent,
                                             nsAtom* aEventType,
                                             nsXBLPrototypeHandler* aHandler,
                                             bool aExecute,
                                             bool* aOutReservedForChrome)
 {
   WidgetKeyboardEvent* nativeKeyboardEvent =
-    aKeyEvent->AsEvent()->WidgetEventPtr()->AsKeyboardEvent();
+    aKeyEvent->WidgetEventPtr()->AsKeyboardEvent();
   MOZ_ASSERT(nativeKeyboardEvent);
 
   AutoShortcutKeyCandidateArray shortcutKeys;
@@ -664,7 +680,7 @@ nsXBLWindowKeyHandler::WalkHandlersInternal(nsIDOMKeyEvent* aKeyEvent,
 
 bool
 nsXBLWindowKeyHandler::WalkHandlersAndExecute(
-                         nsIDOMKeyEvent* aKeyEvent,
+                         KeyboardEvent* aKeyEvent,
                          nsAtom* aEventType,
                          nsXBLPrototypeHandler* aFirstHandler,
                          uint32_t aCharCode,
@@ -677,7 +693,7 @@ nsXBLWindowKeyHandler::WalkHandlersAndExecute(
   }
 
   WidgetKeyboardEvent* widgetKeyboardEvent =
-    aKeyEvent->AsEvent()->WidgetEventPtr()->AsKeyboardEvent();
+    aKeyEvent->WidgetEventPtr()->AsKeyboardEvent();
   if (NS_WARN_IF(!widgetKeyboardEvent)) {
     return false;
   }
@@ -686,7 +702,7 @@ nsXBLWindowKeyHandler::WalkHandlersAndExecute(
   for (nsXBLPrototypeHandler* handler = aFirstHandler;
        handler;
        handler = handler->GetNextHandler()) {
-    bool stopped = aKeyEvent->AsEvent()->IsDispatchStopped();
+    bool stopped = aKeyEvent->IsDispatchStopped();
     if (stopped) {
       // The event is finished, don't execute any more handlers
       return false;
@@ -790,7 +806,7 @@ nsXBLWindowKeyHandler::WalkHandlersAndExecute(
 
     // XXX Do we execute only one handler even if the handler neither stops
     //     propagation nor prevents default of the event?
-    nsresult rv = handler->ExecuteHandler(target, aKeyEvent->AsEvent());
+    nsresult rv = handler->ExecuteHandler(target, aKeyEvent);
     if (NS_SUCCEEDED(rv)) {
       return true;
     }
@@ -832,11 +848,11 @@ nsXBLWindowKeyHandler::IsReservedKey(WidgetKeyboardEvent* aKeyEvent,
 }
 
 bool
-nsXBLWindowKeyHandler::HasHandlerForEvent(nsIDOMKeyEvent* aEvent,
+nsXBLWindowKeyHandler::HasHandlerForEvent(KeyboardEvent* aEvent,
                                           bool* aOutReservedForChrome)
 {
   WidgetKeyboardEvent* widgetKeyboardEvent =
-    aEvent->AsEvent()->WidgetEventPtr()->AsKeyboardEvent();
+    aEvent->WidgetEventPtr()->AsKeyboardEvent();
   if (NS_WARN_IF(!widgetKeyboardEvent) || !widgetKeyboardEvent->IsTrusted()) {
     return false;
   }

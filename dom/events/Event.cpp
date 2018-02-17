@@ -14,6 +14,7 @@
 #include "mozilla/EventStateManager.h"
 #include "mozilla/InternalMutationEvent.h"
 #include "mozilla/dom/Performance.h"
+#include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/MiscEvents.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/Preferences.h"
@@ -33,7 +34,6 @@
 #include "nsLayoutUtils.h"
 #include "nsPIWindowRoot.h"
 #include "nsRFPService.h"
-#include "WorkerPrivate.h"
 
 namespace mozilla {
 namespace dom {
@@ -154,6 +154,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(Event)
     tmp->mEvent->mCurrentTarget = nullptr;
     tmp->mEvent->mOriginalTarget = nullptr;
     tmp->mEvent->mRelatedTarget = nullptr;
+    tmp->mEvent->mOriginalRelatedTarget = nullptr;
     switch (tmp->mEvent->mClass) {
       case eDragEventClass: {
         WidgetDragEvent* dragEvent = tmp->mEvent->AsDragEvent();
@@ -182,6 +183,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Event)
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mEvent->mCurrentTarget)
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mEvent->mOriginalTarget)
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mEvent->mRelatedTarget)
+    NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mEvent->mOriginalRelatedTarget);
     switch (tmp->mEvent->mClass) {
       case eDragEventClass: {
         WidgetDragEvent* dragEvent = tmp->mEvent->AsDragEvent();
@@ -334,7 +336,7 @@ bool
 Event::Init(mozilla::dom::EventTarget* aGlobal)
 {
   if (!mIsMainThreadEvent) {
-    return workers::IsCurrentThreadRunningChromeWorker();
+    return IsCurrentThreadRunningChromeWorker();
   }
   bool trusted = false;
   nsCOMPtr<nsPIDOMWindowInner> w = do_QueryInterface(aGlobal);
@@ -543,19 +545,11 @@ Event::EnsureWebAccessibleRelatedTarget(EventTarget* aRelatedTarget)
   nsCOMPtr<EventTarget> relatedTarget = aRelatedTarget;
   if (relatedTarget) {
     nsCOMPtr<nsIContent> content = do_QueryInterface(relatedTarget);
-    nsCOMPtr<nsIContent> currentTarget =
-      do_QueryInterface(mEvent->mCurrentTarget);
 
     if (content && content->ChromeOnlyAccess() &&
         !nsContentUtils::CanAccessNativeAnon()) {
       content = content->FindFirstNonChromeOnlyAccessContent();
       relatedTarget = do_QueryInterface(content);
-    }
-
-    nsIContent* shadowRelatedTarget =
-      GetShadowRelatedTarget(currentTarget, content);
-    if (shadowRelatedTarget) {
-      relatedTarget = shadowRelatedTarget;
     }
 
     if (relatedTarget) {
@@ -1118,8 +1112,7 @@ Event::TimeStampImpl() const
     return perf->GetDOMTiming()->TimeStampToDOMHighRes(mEvent->mTimeStamp);
   }
 
-  workers::WorkerPrivate* workerPrivate =
-    workers::GetCurrentThreadWorkerPrivate();
+  WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
   MOZ_ASSERT(workerPrivate);
 
   return workerPrivate->TimeStampToDOMHighRes(mEvent->mTimeStamp);
@@ -1217,44 +1210,6 @@ Event::SetOwner(EventTarget* aOwner)
   nsCOMPtr<nsPIWindowRoot> root = do_QueryInterface(aOwner);
   MOZ_ASSERT(root, "Unexpected EventTarget!");
 #endif
-}
-
-// static
-nsIContent*
-Event::GetShadowRelatedTarget(nsIContent* aCurrentTarget,
-                              nsIContent* aRelatedTarget)
-{
-  if (!aCurrentTarget || !aRelatedTarget) {
-    return nullptr;
-  }
-
-  // Walk up the ancestor node trees of the related target until
-  // we encounter the node tree of the current target in order
-  // to find the adjusted related target. Walking up the tree may
-  // not find a common ancestor node tree if the related target is in
-  // an ancestor tree, but in that case it does not need to be adjusted.
-  ShadowRoot* currentTargetShadow = aCurrentTarget->GetContainingShadow();
-  if (!currentTargetShadow) {
-    return nullptr;
-  }
-
-  nsIContent* relatedTarget = aCurrentTarget;
-  while (relatedTarget) {
-    ShadowRoot* ancestorShadow = relatedTarget->GetContainingShadow();
-    if (currentTargetShadow == ancestorShadow) {
-      return relatedTarget;
-    }
-
-    // Didn't find the ancestor tree, thus related target does not have to
-    // adjusted.
-    if (!ancestorShadow) {
-      return nullptr;
-    }
-
-    relatedTarget = ancestorShadow->GetHost();
-  }
-
-  return nullptr;
 }
 
 void

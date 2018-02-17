@@ -4,9 +4,12 @@ import platform
 import re
 import shutil
 import stat
+import subprocess
+import sys
 from abc import ABCMeta, abstractmethod
 from ConfigParser import RawConfigParser
 from distutils.spawn import find_executable
+from io import BytesIO
 
 from utils import call, get, untar, unzip
 
@@ -277,6 +280,29 @@ class Chrome(Browser):
             else:
                 logger.critical("dbus not running and can't be started")
                 sys.exit(1)
+
+
+class ChromeAndroid(Browser):
+    """Chrome-specific interface for android.
+
+    Includes installation, webdriver installation, and wptrunner setup methods.
+    """
+
+    product = "chrome_android"
+    requirements = "requirements_chrome_android.txt"
+
+    def install(self, dest=None):
+        raise NotImplementedError
+
+    def find_webdriver(self):
+        return find_executable("chromedriver")
+
+    def install_webdriver(self, dest=None):
+        chrome = Chrome()
+        return chrome.install_webdriver(dest)
+
+    def version(self, root):
+        raise NotImplementedError
 
 
 class Opera(Browser):

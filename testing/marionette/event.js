@@ -8,9 +8,7 @@ this.event = {};
 "use strict";
 /* global content, is */
 
-const {interfaces: Ci, utils: Cu, classes: Cc} = Components;
-
-Cu.import("chrome://marionette/content/element.js");
+ChromeUtils.import("chrome://marionette/content/element.js");
 
 const dblclickTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
 
@@ -76,6 +74,7 @@ event.DoubleClickTracker = {
   },
   resetClick() {
     event.DoubleClickTracker.firstClick = false;
+    event.DoubleClickTracker.cancelTimer();
   },
   startTimer() {
     dblclickTimer.initWithCallback(event.DoubleClickTracker.resetClick,
@@ -191,7 +190,7 @@ event.sendString = function(string, window = undefined) {
  * Send the non-character key to the focused element.
  *
  * The name of the key should be the part that comes after "DOM_VK_"
- * in the nsIDOMKeyEvent constant name for this key.  No modifiers are
+ * in the KeyboardEvent constant name for this key.  No modifiers are
  * handled at this point.
  */
 event.sendKey = function(key, window = undefined) {
@@ -216,7 +215,7 @@ event.parseModifiers_ = function(modifiers) {
     mval |= Ci.nsIDOMNSEvent.META_MASK;
   }
   if (modifiers.accelKey) {
-    if (navigator.platform.indexOf("Mac") >= 0) {
+    if (navigator.platform.includes("Mac")) {
       mval |= Ci.nsIDOMNSEvent.META_MASK;
     } else {
       mval |= Ci.nsIDOMNSEvent.CONTROL_MASK;
@@ -357,103 +356,105 @@ event.synthesizeMouseAtCenter = function(element, event, window) {
 };
 
 /* eslint-disable */
-function computeKeyCodeFromChar_(char) {
+function computeKeyCodeFromChar_(char, win = window) {
   if (char.length != 1) {
     return 0;
   }
 
+  let KeyboardEvent = getKeyboardEvent_(win);
+
   if (char in VIRTUAL_KEYCODE_LOOKUP) {
-    return Ci.nsIDOMKeyEvent["DOM_" + VIRTUAL_KEYCODE_LOOKUP[char]];
+    return KeyboardEvent["DOM_" + VIRTUAL_KEYCODE_LOOKUP[char]];
   }
 
   if (char >= "a" && char <= "z") {
-    return Ci.nsIDOMKeyEvent.DOM_VK_A + char.charCodeAt(0) - "a".charCodeAt(0);
+    return KeyboardEvent.DOM_VK_A + char.charCodeAt(0) - "a".charCodeAt(0);
   }
   if (char >= "A" && char <= "Z") {
-    return Ci.nsIDOMKeyEvent.DOM_VK_A + char.charCodeAt(0) - "A".charCodeAt(0);
+    return KeyboardEvent.DOM_VK_A + char.charCodeAt(0) - "A".charCodeAt(0);
   }
   if (char >= "0" && char <= "9") {
-    return Ci.nsIDOMKeyEvent.DOM_VK_0 + char.charCodeAt(0) - "0".charCodeAt(0);
+    return KeyboardEvent.DOM_VK_0 + char.charCodeAt(0) - "0".charCodeAt(0);
   }
 
   // returns US keyboard layout's keycode
   switch (char) {
     case "~":
     case "`":
-      return Ci.nsIDOMKeyEvent.DOM_VK_BACK_QUOTE;
+      return KeyboardEvent.DOM_VK_BACK_QUOTE;
 
     case "!":
-      return Ci.nsIDOMKeyEvent.DOM_VK_1;
+      return KeyboardEvent.DOM_VK_1;
 
     case "@":
-      return Ci.nsIDOMKeyEvent.DOM_VK_2;
+      return KeyboardEvent.DOM_VK_2;
 
     case "#":
-      return Ci.nsIDOMKeyEvent.DOM_VK_3;
+      return KeyboardEvent.DOM_VK_3;
 
     case "$":
-      return Ci.nsIDOMKeyEvent.DOM_VK_4;
+      return KeyboardEvent.DOM_VK_4;
 
     case "%":
-      return Ci.nsIDOMKeyEvent.DOM_VK_5;
+      return KeyboardEvent.DOM_VK_5;
 
     case "^":
-      return Ci.nsIDOMKeyEvent.DOM_VK_6;
+      return KeyboardEvent.DOM_VK_6;
 
     case "&":
-      return Ci.nsIDOMKeyEvent.DOM_VK_7;
+      return KeyboardEvent.DOM_VK_7;
 
     case "*":
-      return Ci.nsIDOMKeyEvent.DOM_VK_8;
+      return KeyboardEvent.DOM_VK_8;
 
     case "(":
-      return Ci.nsIDOMKeyEvent.DOM_VK_9;
+      return KeyboardEvent.DOM_VK_9;
 
     case ")":
-      return Ci.nsIDOMKeyEvent.DOM_VK_0;
+      return KeyboardEvent.DOM_VK_0;
 
     case "-":
     case "_":
-      return Ci.nsIDOMKeyEvent.DOM_VK_SUBTRACT;
+      return KeyboardEvent.DOM_VK_SUBTRACT;
 
     case "+":
     case "=":
-      return Ci.nsIDOMKeyEvent.DOM_VK_EQUALS;
+      return KeyboardEvent.DOM_VK_EQUALS;
 
     case "{":
     case "[":
-      return Ci.nsIDOMKeyEvent.DOM_VK_OPEN_BRACKET;
+      return KeyboardEvent.DOM_VK_OPEN_BRACKET;
 
     case "}":
     case "]":
-      return Ci.nsIDOMKeyEvent.DOM_VK_CLOSE_BRACKET;
+      return KeyboardEvent.DOM_VK_CLOSE_BRACKET;
 
     case "|":
     case "\\":
-      return Ci.nsIDOMKeyEvent.DOM_VK_BACK_SLASH;
+      return KeyboardEvent.DOM_VK_BACK_SLASH;
 
     case ":":
     case ";":
-      return Ci.nsIDOMKeyEvent.DOM_VK_SEMICOLON;
+      return KeyboardEvent.DOM_VK_SEMICOLON;
 
     case "'":
     case "\"":
-      return Ci.nsIDOMKeyEvent.DOM_VK_QUOTE;
+      return KeyboardEvent.DOM_VK_QUOTE;
 
     case "<":
     case ",":
-      return Ci.nsIDOMKeyEvent.DOM_VK_COMMA;
+      return KeyboardEvent.DOM_VK_COMMA;
 
     case ">":
     case ".":
-      return Ci.nsIDOMKeyEvent.DOM_VK_PERIOD;
+      return KeyboardEvent.DOM_VK_PERIOD;
 
     case "?":
     case "/":
-      return Ci.nsIDOMKeyEvent.DOM_VK_SLASH;
+      return KeyboardEvent.DOM_VK_SLASH;
 
     case "\n":
-      return Ci.nsIDOMKeyEvent.DOM_VK_RETURN;
+      return KeyboardEvent.DOM_VK_RETURN;
 
     default:
       return 0;
@@ -465,13 +466,15 @@ function computeKeyCodeFromChar_(char) {
  * Returns true if the given key should cause keypress event when widget
  * handles the native key event.  Otherwise, false.
  *
- * The key code should be one of consts of nsIDOMKeyEvent.DOM_VK_*,
+ * The key code should be one of consts of KeyboardEvent.DOM_VK_*,
  * or a key name begins with "VK_", or a character.
  */
 event.isKeypressFiredKey = function(key) {
+  let KeyboardEvent = getKeyboardEvent_();
+
   if (typeof key == "string") {
     if (key.indexOf("VK_") === 0) {
-      key = Ci.nsIDOMKeyEvent["DOM_" + key];
+      key = KeyboardEvent["DOM_" + key];
       if (!key) {
         throw new TypeError("Unknown key: " + key);
       }
@@ -483,13 +486,13 @@ event.isKeypressFiredKey = function(key) {
   }
 
   switch (key) {
-    case Ci.nsIDOMKeyEvent.DOM_VK_SHIFT:
-    case Ci.nsIDOMKeyEvent.DOM_VK_CONTROL:
-    case Ci.nsIDOMKeyEvent.DOM_VK_ALT:
-    case Ci.nsIDOMKeyEvent.DOM_VK_CAPS_LOCK:
-    case Ci.nsIDOMKeyEvent.DOM_VK_NUM_LOCK:
-    case Ci.nsIDOMKeyEvent.DOM_VK_SCROLL_LOCK:
-    case Ci.nsIDOMKeyEvent.DOM_VK_META:
+    case KeyboardEvent.DOM_VK_SHIFT:
+    case KeyboardEvent.DOM_VK_CONTROL:
+    case KeyboardEvent.DOM_VK_ALT:
+    case KeyboardEvent.DOM_VK_CAPS_LOCK:
+    case KeyboardEvent.DOM_VK_NUM_LOCK:
+    case KeyboardEvent.DOM_VK_SCROLL_LOCK:
+    case KeyboardEvent.DOM_VK_META:
       return false;
 
     default:
@@ -599,7 +602,7 @@ function createKeyboardEventDictionary_(key, keyEvent, win = window) {
     keyName = key.substr("KEY_".length);
     result.flags |= Ci.nsITextInputProcessor.KEY_NON_PRINTABLE_KEY;
   } else if (key.indexOf("VK_") == 0) {
-    keyCode = Ci.nsIDOMKeyEvent["DOM_" + key];
+    keyCode = getKeyboardEvent_(win)["DOM_" + key];
     if (!keyCode) {
       throw "Unknown key: " + key;
     }
@@ -610,7 +613,7 @@ function createKeyboardEventDictionary_(key, keyEvent, win = window) {
   } else if (key != "") {
     keyName = key;
     if (!keyCodeIsDefined) {
-      keyCode = computeKeyCodeFromChar_(key.charAt(0));
+      keyCode = computeKeyCodeFromChar_(key.charAt(0), win);
     }
     if (!keyCode) {
       result.flags |= Ci.nsITextInputProcessor.KEY_KEEP_KEYCODE_ZERO;
@@ -1305,8 +1308,8 @@ event.sendKeyDown = function(keyToSend, modifiers, document) {
   // TODO: This doesn't do anything since |synthesizeKeyEvent| ignores
   // explicit keypress request, and instead figures out itself when to
   // send keypress.
-  if (["VK_SHIFT", "VK_CONTROL", "VK_ALT", "VK_META"]
-      .indexOf(getKeyCode(keyToSend)) < 0) {
+  if (!["VK_SHIFT", "VK_CONTROL", "VK_ALT", "VK_META"]
+      .includes(getKeyCode(keyToSend))) {
     modifiers.type = "keypress";
     event.sendSingleKey(keyToSend, modifiers, document);
   }
@@ -1376,25 +1379,6 @@ event.sendEvent = function(eventType, el, modifiers = {}, opts = {}) {
   ev.ctrlKey = modifiers.ctrl;
 
   ev.initEvent(eventType, opts.canBubble, true);
-  el.dispatchEvent(ev);
-};
-
-event.focus = function(el, opts = {}) {
-  opts.canBubble = opts.canBubble || true;
-  let doc = el.ownerDocument || el.document;
-  let win = doc.defaultView;
-
-  let ev = new win.FocusEvent(el);
-  ev.initEvent("focus", opts.canBubble, true);
-  el.dispatchEvent(ev);
-};
-
-event.blur = function(el, {canBubble = true} = {}) {
-  let doc = el.ownerDocument || el.document;
-  let win = doc.defaultView;
-
-  let ev = new win.FocusEvent(el);
-  ev.initEvent("blur", canBubble, true);
   el.dispatchEvent(ev);
 };
 

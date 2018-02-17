@@ -261,33 +261,6 @@
   </label>
 </groupbox>
 
-<!-- Cache -->
-<groupbox id="cacheGroup" data-category="panePrivacy" hidden="true">
-  <caption><label>&httpCache.label;</label></caption>
-
-  <hbox align="center">
-    <label id="actualDiskCacheSize" flex="1"/>
-    <button id="clearCacheButton"
-            class="accessory-button"
-            icon="clear"
-            label="&clearCacheNow.label;" accesskey="&clearCacheNow.accesskey;"/>
-  </hbox>
-  <checkbox preference="browser.cache.disk.smart_size.enabled"
-            id="allowSmartSize"
-            onsyncfrompreference="return gPrivacyPane.readSmartSizeEnabled();"
-            label="&overrideSmartCacheSize.label;"
-            accesskey="&overrideSmartCacheSize.accesskey;"/>
-  <hbox align="center" class="indent">
-    <label id="useCacheBefore" control="cacheSize"
-            accesskey="&limitCacheSizeBefore.accesskey;">
-      &limitCacheSizeBefore.label;
-    </label>
-    <textbox id="cacheSize" type="number" size="4" max="1024"
-              aria-labelledby="useCacheBefore cacheSize useCacheAfter"/>
-    <label id="useCacheAfter" flex="1">&limitCacheSizeAfter.label;</label>
-  </hbox>
-</groupbox>
-
 <!-- Site Data -->
 <groupbox id="siteDataGroup" hidden="true" data-category="panePrivacy" data-hidden-from-search="true">
   <caption><label>&siteData.label;</label></caption>
@@ -559,6 +532,8 @@
   </vbox>
 </groupbox>
 
+<!-- Firefox Data Collection and Use -->
+#ifdef MOZ_DATA_REPORTING
 <hbox id="dataCollectionCategory"
       class="subcategory"
       hidden="true"
@@ -566,8 +541,6 @@
   <label class="header-name" flex="1">&dataCollection.label;</label>
 </hbox>
 
-<!-- Firefox Data Collection and Use -->
-#ifdef MOZ_DATA_REPORTING
 <groupbox id="dataCollectionGroup" data-category="panePrivacy" hidden="true">
   <caption class="search-header" hidden="true"><label>&dataCollection.label;</label></caption>
 
@@ -584,6 +557,18 @@
     </description>
 #ifndef MOZ_TELEMETRY_REPORTING
     <description id="TelemetryDisabledDesc" class="indent tip-caption" control="telemetryGroup">&healthReportingDisabled.label;</description>
+#endif
+
+#ifdef NIGHTLY_BUILD
+    <hbox align="center">
+      <checkbox id="collectBrowserErrorsBox"
+                class="tail-with-learn-more"
+                preference="browser.chrome.errorReporter.enabled"
+                label="&collectBrowserErrors.label;"
+                accesskey="&collectBrowserErrors.accesskey;"/>
+      <label id="collectBrowserErrorsLearnMore"
+             class="learnMore text-link">&collectBrowserErrorsLearnMore.label;</label>
+    </hbox>
 #endif
 
 #ifdef MOZ_CRASHREPORTER
@@ -620,11 +605,9 @@
            class="learnMore text-link">&enableSafeBrowsingLearnMore.label;</label>
   </hbox>
   <vbox class="indent">
-#ifdef MOZILLA_OFFICIAL
     <checkbox id="blockDownloads"
               label="&blockDownloads.label;"
               accesskey="&blockDownloads.accesskey;" />
-#endif
     <checkbox id="blockUncommonUnwanted"
               label="&blockUncommonAndUnwanted.label;"
               accesskey="&blockUncommonAndUnwanted.accesskey;" />
@@ -672,12 +655,10 @@
                                 &certmgr.tab.others2;
                                 &certmgr.tab.websites3;
                                 &certmgr.tab.ca;
-                                &certmgr.tab.orphan2;
                                 &certmgr.mine2;
                                 &certmgr.others2;
                                 &certmgr.websites3;
                                 &certmgr.cas2;
-                                &certmgr.orphans2;
                                 &certmgr.certname;
                                 &certmgr.tokenname;
                                 &certmgr.view2.label;

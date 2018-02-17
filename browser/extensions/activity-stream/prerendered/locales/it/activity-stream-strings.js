@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Consigliati da {provider}",
   "header_bookmarks_placeholder": "Non è ancora disponibile alcun segnalibro.",
   "header_stories_from": "da",
+  "context_menu_button_sr": "Apri menu contestuale per {title}",
   "type_label_visited": "Visitato",
   "type_label_bookmarked": "Nei segnalibri",
   "type_label_synced": "Sincronizzato da un altro dispositivo",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Modifica questo sito",
   "edit_topsites_dismiss_button": "Ignora questo sito",
   "edit_topsites_add_button": "Aggiungi",
+  "edit_topsites_add_button_tooltip": "Aggiungi sito principale",
   "topsites_form_add_header": "Nuovi sito principale",
   "topsites_form_edit_header": "Modifica sito principale",
   "topsites_form_title_placeholder": "Inserire un titolo",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Non c'è altro. Controlla più tardi per altre storie da {provider}. Non vuoi aspettare? Seleziona un argomento tra quelli più popolari per scoprire altre notizie interessanti dal Web.",
   "manual_migration_explanation2": "Prova Firefox con i segnalibri, la cronologia e le password di un altro browser.",
   "manual_migration_cancel_button": "No grazie",
-  "manual_migration_import_button": "Importa adesso"
+  "manual_migration_import_button": "Importa adesso",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

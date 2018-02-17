@@ -2,10 +2,10 @@
 
 /* global windowTracker, EventManager, EventEmitter */
 
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "LightweightThemeManager",
-                                  "resource://gre/modules/LightweightThemeManager.jsm");
+ChromeUtils.defineModuleGetter(this, "LightweightThemeManager",
+                               "resource://gre/modules/LightweightThemeManager.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "gThemesEnabled", () => {
   return Services.prefs.getBoolPref("extensions.webextensions.themes.enabled");
@@ -84,9 +84,8 @@ class Theme {
       this.loadProperties(details.properties);
     }
 
-    // Lightweight themes require all properties to be defined.
-    if (this.lwtStyles.headerURL &&
-        this.lwtStyles.accentcolor &&
+    // Lightweight themes require accentcolor and textcolor to be defined.
+    if (this.lwtStyles.accentcolor &&
         this.lwtStyles.textcolor) {
       if (this.windowId) {
         windowOverrides.set(this.windowId, this);
@@ -129,6 +128,9 @@ class Theme {
         case "frame":
           this.lwtStyles.accentcolor = cssColor;
           break;
+        case "frame_inactive":
+          this.lwtStyles.accentcolorInactive = cssColor;
+          break;
         case "textcolor":
         case "background_tab_text":
           this.lwtStyles.textcolor = cssColor;
@@ -140,13 +142,23 @@ class Theme {
         case "bookmark_text":
           this.lwtStyles.toolbar_text = cssColor;
           break;
+        case "icons":
+          this.lwtStyles.icon_color = cssColor;
+          break;
+        case "icons_attention":
+          this.lwtStyles.icon_attention_color = cssColor;
+          break;
+        case "tab_loading":
         case "tab_text":
         case "toolbar_field":
         case "toolbar_field_text":
         case "toolbar_field_border":
+        case "toolbar_field_separator":
         case "toolbar_top_separator":
         case "toolbar_bottom_separator":
         case "toolbar_vertical_separator":
+        case "button_background_hover":
+        case "button_background_active":
           this.lwtStyles[color] = cssColor;
           break;
       }
@@ -274,6 +286,7 @@ class Theme {
     let lwtStyles = {
       headerURL: "",
       accentcolor: "",
+      accentcolorInactive: "",
       additionalBackgrounds: "",
       backgroundsAlignment: "",
       backgroundsTiling: "",

@@ -24,7 +24,7 @@
 #include "nsISupportsImpl.h"
 #include "nsStyledElement.h"
 #include "nsSVGClass.h"
-#include "nsIDOMSVGElement.h"
+#include "nsIDOMElement.h"
 #include "SVGContentUtils.h"
 #include "gfxMatrix.h"
 
@@ -70,7 +70,7 @@ struct nsSVGEnumMapping;
 typedef nsStyledElement nsSVGElementBase;
 
 class nsSVGElement : public nsSVGElementBase    // nsIContent
-                   , public nsIDOMSVGElement
+                   , public nsIDOMElement
 {
 protected:
   explicit nsSVGElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
@@ -116,8 +116,10 @@ public:
    */
   virtual void NodeInfoChanged(nsIDocument* aOldDoc) override;
 
+#ifdef MOZ_OLD_STYLE
   NS_IMETHOD WalkContentStyleRules(nsRuleWalker* aRuleWalker) override;
   void WalkAnimatedContentStyleRules(nsRuleWalker* aRuleWalker);
+#endif
 
   NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* aAttribute) const override;
 
@@ -134,9 +136,7 @@ public:
   static const MappedAttributeEntry sLightingEffectsMap[];
   static const MappedAttributeEntry sMaskMap[];
 
-  NS_FORWARD_NSIDOMNODE_TO_NSINODE
-  NS_FORWARD_NSIDOMELEMENT_TO_GENERIC
-  NS_DECL_NSIDOMSVGELEMENT
+  NS_DECL_NSIDOMELEMENT
 
   NS_IMPL_FROMCONTENT(nsSVGElement, kNameSpaceID_SVG)
 

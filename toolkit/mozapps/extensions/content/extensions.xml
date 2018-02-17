@@ -292,7 +292,7 @@
           if (aSort == this.sortBy)
             this.ascending = !this.ascending;
           else
-            this.setSort(aSort, ASCENDING_SORT_FIELDS.indexOf(aSort) >= 0);
+            this.setSort(aSort, ASCENDING_SORT_FIELDS.includes(aSort));
         ]]></body>
       </method>
 
@@ -436,7 +436,6 @@
     <content>
       <xul:label anonid="message"/>
       <xul:progressmeter anonid="progress" class="download-progress"/>
->
       <xul:button anonid="install-remote-btn" hidden="true"
                   class="addon-control install" label="&addon.install.label;"
                   tooltiptext="&addon.install.tooltip;"
@@ -1406,9 +1405,8 @@
 
             this._relNotesLoading.hidden = true;
 
-            var processor = Components.classes["@mozilla.org/document-transformer;1?type=xslt"]
-                                      .createInstance(Components.interfaces.nsIXSLTProcessor);
-            processor.flags |= Components.interfaces.nsIXSLTProcessorPrivate.DISABLE_ALL_LOADS;
+            var processor = new XSLTProcessor();
+            processor.flags |= XSLTProcessor.DISABLE_ALL_LOADS;
 
             processor.importStylesheet(transformData);
             var fragment = processor.transformToFragment(relNotesData, document);
@@ -1432,7 +1430,7 @@
           function handleResponse(aEvent) {
             var req = aEvent.target;
             var ct = req.getResponseHeader("content-type");
-            if ((!ct || ct.indexOf("text/html") < 0) &&
+            if ((!ct || !ct.includes("text/html")) &&
                 req.responseXML &&
                 req.responseXML.documentElement.namespaceURI != XMLURI_PARSE_ERROR) {
               if (req == dataReq)
@@ -1445,16 +1443,14 @@
             }
           }
 
-          var dataReq = Components.classes["@mozilla.org/xmlextras/xmlhttprequest;1"]
-                              .createInstance(Components.interfaces.nsIXMLHttpRequest);
+          var dataReq = new XMLHttpRequest();
           dataReq.open("GET", aURI.spec, true);
           dataReq.responseType = "document";
           dataReq.addEventListener("load", handleResponse);
           dataReq.addEventListener("error", handleError);
           dataReq.send(null);
 
-          var styleReq = Components.classes["@mozilla.org/xmlextras/xmlhttprequest;1"]
-                              .createInstance(Components.interfaces.nsIXMLHttpRequest);
+          var styleReq = new XMLHttpRequest();
           styleReq.open("GET", UPDATES_RELEASENOTES_TRANSFORMFILE, true);
           styleReq.responseType = "document";
           styleReq.addEventListener("load", handleResponse);
@@ -1622,9 +1618,9 @@
       <method name="onPropertyChanged">
         <parameter name="aProperties"/>
         <body><![CDATA[
-          if (aProperties.indexOf("appDisabled") != -1 ||
-              aProperties.indexOf("signedState") != -1 ||
-              aProperties.indexOf("userDisabled") != -1)
+          if (aProperties.includes("appDisabled") ||
+              aProperties.includes("signedState") ||
+              aProperties.includes("userDisabled"))
             this._updateState();
         ]]></body>
       </method>
@@ -1931,11 +1927,13 @@
             if (this.mInstall.name) {
               this._name.value = this.mInstall.name;
             } else if (this.mInstall.sourceURI) {
-              var url = Components.classes["@mozilla.org/network/standard-url;1"]
-                                  .createInstance(Components.interfaces.nsIStandardURL);
-              url.init(url.URLTYPE_STANDARD, 80, this.mInstall.sourceURI.spec,
-                       null, null);
-              url.QueryInterface(Components.interfaces.nsIURL);
+              var url = Components.classes["@mozilla.org/network/standard-url-mutator;1"]
+                                  .createInstance(Components.interfaces.nsIStandardURLMutator)
+                                  .init(Components.interfaces.nsIStandardURL.URLTYPE_STANDARD,
+                                        80, this.mInstall.sourceURI.spec,
+                                        null, null)
+                                  .finalize()
+                                  .QueryInterface(Components.interfaces.nsIURL);
               this._name.value = url.fileName;
             }
           }

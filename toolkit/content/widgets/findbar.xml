@@ -153,8 +153,7 @@
     </handlers>
   </binding>
 
-  <binding id="findbar"
-           extends="chrome://global/content/bindings/toolbar.xml#toolbar">
+  <binding id="findbar">
     <resources>
       <stylesheet src="chrome://global/skin/findBar.css"/>
     </resources>
@@ -483,7 +482,7 @@
       <property name="pluralForm">
         <getter><![CDATA[
           if (!this._pluralForm) {
-            this._pluralForm = Components.utils.import(
+            this._pluralForm = ChromeUtils.import(
                                "resource://gre/modules/PluralForm.jsm", {}).PluralForm;
           }
           return this._pluralForm;
@@ -1131,7 +1130,7 @@
           }
 
           let {PromiseUtils} =
-            Components.utils.import("resource://gre/modules/PromiseUtils.jsm", {});
+            ChromeUtils.import("resource://gre/modules/PromiseUtils.jsm", {});
           this._startFindDeferred = PromiseUtils.defer();
           let startFindPromise = this._startFindDeferred.promise;
 

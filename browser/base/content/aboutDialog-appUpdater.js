@@ -7,11 +7,11 @@
 
 /* import-globals-from aboutDialog.js */
 
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
-Components.utils.import("resource://gre/modules/DownloadUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/DownloadUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
-                                  "resource://gre/modules/UpdateUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "UpdateUtils",
+                               "resource://gre/modules/UpdateUtils.jsm");
 
 const PREF_APP_UPDATE_CANCELATIONS_OSX = "app.update.cancelations.osx";
 const PREF_APP_UPDATE_ELEVATE_NEVER    = "app.update.elevate.never";
@@ -137,8 +137,10 @@ appUpdater.prototype =
 
   // true when updating is disabled by an administrator.
   get updateDisabledAndLocked() {
-    return !this.updateEnabled &&
-           Services.prefs.prefIsLocked("app.update.enabled");
+    return (!this.updateEnabled &&
+           Services.prefs.prefIsLocked("app.update.enabled")) ||
+           (Services.policies &&
+           !Services.policies.isAllowed("appUpdate"));
   },
 
   // true when updating is enabled.

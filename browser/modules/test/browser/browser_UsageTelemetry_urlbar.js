@@ -8,11 +8,11 @@ const SUGGEST_URLBAR_PREF = "browser.urlbar.suggest.searches";
 const SUGGESTION_ENGINE_NAME = "browser_UsageTelemetry usageTelemetrySearchSuggestions.xml";
 const ONEOFF_URLBAR_PREF = "browser.urlbar.oneOffSearches";
 
-XPCOMUtils.defineLazyModuleGetter(this, "URLBAR_SELECTED_RESULT_TYPES",
-                                  "resource:///modules/BrowserUsageTelemetry.jsm");
+ChromeUtils.defineModuleGetter(this, "URLBAR_SELECTED_RESULT_TYPES",
+                               "resource:///modules/BrowserUsageTelemetry.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "URLBAR_SELECTED_RESULT_METHODS",
-                                  "resource:///modules/BrowserUsageTelemetry.jsm");
+ChromeUtils.defineModuleGetter(this, "URLBAR_SELECTED_RESULT_METHODS",
+                               "resource:///modules/BrowserUsageTelemetry.jsm");
 
 function checkHistogramResults(resultIndexes, expected, histogram) {
   for (let i = 0; i < resultIndexes.counts.length; i++) {
@@ -98,7 +98,7 @@ add_task(async function setup() {
 
   // Clear history so that history added by previous tests doesn't mess up this
   // test when it selects results in the urlbar.
-  await PlacesTestUtils.clearHistory();
+  await PlacesUtils.history.clear();
 
   // Clear historical search suggestions to avoid interference from previous
   // tests.
@@ -114,7 +114,7 @@ add_task(async function setup() {
     Services.search.removeEngine(engine);
     Services.prefs.setBoolPref(SUGGEST_URLBAR_PREF, suggestionsEnabled);
     Services.prefs.clearUserPref(ONEOFF_URLBAR_PREF);
-    await PlacesTestUtils.clearHistory();
+    await PlacesUtils.history.clear();
     Services.telemetry.setEventRecordingEnabled("navigation", false);
   });
 });

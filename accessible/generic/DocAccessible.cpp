@@ -23,11 +23,8 @@
 #include "nsICommandManager.h"
 #include "nsIDocShell.h"
 #include "nsIDocument.h"
-#include "nsIDOMAttr.h"
 #include "nsIDOMCharacterData.h"
 #include "nsIDOMDocument.h"
-#include "nsIDOMXULDocument.h"
-#include "nsIDOMMutationEvent.h"
 #include "nsPIDOMWindow.h"
 #include "nsIEditingSession.h"
 #include "nsIFrame.h"
@@ -50,10 +47,7 @@
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/DocumentType.h"
 #include "mozilla/dom/Element.h"
-
-#ifdef MOZ_XUL
-#include "nsIXULDocument.h"
-#endif
+#include "mozilla/dom/MutationEventBinding.h"
 
 using namespace mozilla;
 using namespace mozilla::a11y;
@@ -214,8 +208,7 @@ DocAccessible::NativeRole()
 
       if (itemType == nsIDocShellTreeItem::typeContent) {
 #ifdef MOZ_XUL
-        nsCOMPtr<nsIXULDocument> xulDoc(do_QueryInterface(mDocumentNode));
-        if (xulDoc)
+        if (mDocumentNode && mDocumentNode->IsXULDocument())
           return roles::APPLICATION;
 #endif
         return roles::DOCUMENT;
@@ -393,8 +386,7 @@ void
 DocAccessible::DocType(nsAString& aType) const
 {
 #ifdef MOZ_XUL
-  nsCOMPtr<nsIXULDocument> xulDoc(do_QueryInterface(mDocumentNode));
-  if (xulDoc) {
+  if (mDocumentNode->IsXULDocument()) {
     aType.AssignLiteral("window"); // doctype not implemented for XUL at time of writing - causes assertion
     return;
   }
@@ -727,7 +719,7 @@ DocAccessible::AttributeWillChange(nsIDocument* aDocument,
   // Update dependent IDs cache. Take care of elements that are accessible
   // because dependent IDs cache doesn't contain IDs from non accessible
   // elements.
-  if (aModType != nsIDOMMutationEvent::ADDITION)
+  if (aModType != dom::MutationEventBinding::ADDITION)
     RemoveDependentIDsFor(accessible, aAttribute);
 
   if (aAttribute == nsGkAtoms::id) {
@@ -745,7 +737,7 @@ DocAccessible::AttributeWillChange(nsIDocument* aDocument,
   // need to newly expose it as a toggle button) etc.
   if (aAttribute == nsGkAtoms::aria_checked ||
       aAttribute == nsGkAtoms::aria_pressed) {
-    mARIAAttrOldValue = (aModType != nsIDOMMutationEvent::ADDITION) ?
+    mARIAAttrOldValue = (aModType != dom::MutationEventBinding::ADDITION) ?
       nsAccUtils::GetARIAToken(aElement, aAttribute) : nullptr;
     return;
   }
@@ -802,8 +794,8 @@ DocAccessible::AttributeChanged(nsIDocument* aDocument,
   // its accessible will be created later. It doesn't make sense to keep
   // dependent IDs for non accessible elements. For the second case we'll update
   // dependent IDs cache when its accessible is created.
-  if (aModType == nsIDOMMutationEvent::MODIFICATION ||
-      aModType == nsIDOMMutationEvent::ADDITION) {
+  if (aModType == dom::MutationEventBinding::MODIFICATION ||
+      aModType == dom::MutationEventBinding::ADDITION) {
     AddDependentIDsFor(accessible, aAttribute);
   }
 }
@@ -2359,7 +2351,7 @@ DocAccessible::CacheChildrenInSubtree(Accessible* aRoot,
   // XXX: we should delay document load complete event if the ARIA document
   // has aria-busy.
   roles::Role role = aRoot->ARIARole();
-  if (!aRoot->IsDoc() && (role == roles::DIALOG || role == roles::DOCUMENT)) {
+  if (!aRoot->IsDoc() && (role == roles::DIALOG || role == roles::NON_NATIVE_DOCUMENT)) {
     FireDelayedEvent(nsIAccessibleEvent::EVENT_DOCUMENT_LOAD_COMPLETE, aRoot);
   }
 }

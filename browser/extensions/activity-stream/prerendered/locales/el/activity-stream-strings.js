@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Προτεινόμενο από τον πάροχο {provider}",
   "header_bookmarks_placeholder": "Δεν έχετε κανένα σελιδοδείκτη ακόμα.",
   "header_stories_from": "από",
+  "context_menu_button_sr": "Άνοιγμα μενού επιλογών για το {title}",
   "type_label_visited": "Από ιστορικό",
   "type_label_bookmarked": "Από σελιδοδείκτες",
   "type_label_synced": "Συγχρονισμένα από άλλη συσκευή",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Επεξεργασία ιστοσελίδας",
   "edit_topsites_dismiss_button": "Απόρριψη ιστοσελίδας",
   "edit_topsites_add_button": "Προσθήκη",
+  "edit_topsites_add_button_tooltip": "Προσθήκη κορυφαίας ιστοσελίδας",
   "topsites_form_add_header": "Νέα κορυφαία ιστοσελίδα",
   "topsites_form_edit_header": "Επεξεργασία κορυφαίας ιστοσελίδας",
   "topsites_form_title_placeholder": "Εισάγετε έναν τίτλο",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Δεν υπάρχει κάτι νεότερο. Ελέγξτε αργότερα για περισσότερες ιστορίες από τον πάροχο {provider}. Δεν μπορείτε να περιμένετε; Διαλέξτε κάποιο από τα δημοφιλή θέματα και ανακαλύψτε ενδιαφέρουσες ιστορίες από όλο τον Ιστό.",
   "manual_migration_explanation2": "Δοκιμάστε το Firefox με τους σελιδοδείκτες, το ιστορικό και τους κωδικούς πρόσβασης από ένα άλλο πρόγραμμα περιήγησης.",
   "manual_migration_cancel_button": "Όχι ευχαριστώ",
-  "manual_migration_import_button": "Εισαγωγή τώρα"
+  "manual_migration_import_button": "Εισαγωγή τώρα",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

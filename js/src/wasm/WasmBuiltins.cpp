@@ -24,6 +24,7 @@
 #include "fdlibm.h"
 #include "jslibmath.h"
 
+#include "jit/AtomicOperations.h"
 #include "jit/InlinableNatives.h"
 #include "jit/MacroAssembler.h"
 #include "threading/Mutex.h"
@@ -176,10 +177,6 @@ wasm::HandleThrow(JSContext* cx, WasmFrameIter& iter)
     // is necessary to prevent a DebugFrame from being observed again after we
     // just called onLeaveFrame (which would lead to the frame being re-added
     // to the map of live frames, right as it becomes trash).
-    //
-    // TODO(bug 1360211): when JitActivation and WasmActivation get merged,
-    // we'll be able to switch to ion / other wasm state from here, and we'll
-    // need to do things differently.
 
     MOZ_ASSERT(CallingActivation() == iter.activation());
     MOZ_ASSERT(!iter.done());
@@ -310,6 +307,13 @@ WasmReportUnalignedAccess()
     JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr, JSMSG_WASM_UNALIGNED_ACCESS);
 }
 
+static void
+WasmReportInt64JSCall()
+{
+    JSContext* cx = TlsContext.get();
+    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr, JSMSG_WASM_BAD_I64_TYPE);
+}
+
 static int32_t
 CoerceInPlace_ToInt32(Value* rawVal)
 {
@@ -339,6 +343,43 @@ CoerceInPlace_ToNumber(Value* rawVal)
     }
 
     *rawVal = DoubleValue(dbl);
+    return true;
+}
+
+static int32_t
+CoerceInPlace_JitEntry(int funcExportIndex, TlsData* tlsData, Value* argv)
+{
+    JSContext* cx = CallingActivation()->cx();
+
+    const Code& code = tlsData->instance->code();
+    const FuncExport& fe = code.metadata(code.stableTier()).funcExports[funcExportIndex];
+
+    for (size_t i = 0; i < fe.sig().args().length(); i++) {
+        HandleValue arg = HandleValue::fromMarkedLocation(&argv[i]);
+        switch (fe.sig().args()[i]) {
+          case ValType::I32: {
+            int32_t i32;
+            if (!ToInt32(cx, arg, &i32))
+                return false;
+            argv[i] = Int32Value(i32);
+            break;
+          }
+          case ValType::F32:
+          case ValType::F64: {
+            double dbl;
+            if (!ToNumber(cx, arg, &dbl))
+                return false;
+            // No need to convert double-to-float for f32, it's done inline
+            // in the wasm stub later.
+            argv[i] = DoubleValue(dbl);
+            break;
+          }
+          default: {
+            MOZ_CRASH("unexpected input argument in CoerceInPlace_JitEntry");
+          }
+        }
+    }
+
     return true;
 }
 
@@ -398,6 +439,35 @@ TruncateDoubleToUint64(double input)
     if (input >= double(UINT64_MAX) || input <= -1.0 || IsNaN(input))
         return 0x8000000000000000;
     return uint64_t(input);
+}
+
+static int64_t
+SaturatingTruncateDoubleToInt64(double input)
+{
+    // Handle in-range values (except INT64_MIN).
+    if (fabs(input) < -double(INT64_MIN))
+        return int64_t(input);
+    // Handle NaN.
+    if (IsNaN(input))
+        return 0;
+    // Handle positive overflow.
+    if (input > 0)
+        return INT64_MAX;
+    // Handle negative overflow.
+    return INT64_MIN;
+}
+
+static uint64_t
+SaturatingTruncateDoubleToUint64(double input)
+{
+    // Handle positive overflow.
+    if (input >= -double(INT64_MIN) * 2.0)
+        return UINT64_MAX;
+    // Handle in-range values.
+    if (input >= -1.0)
+        return uint64_t(input);
+    // Handle NaN and negative overflow.
+    return 0;
 }
 
 static double
@@ -464,6 +534,9 @@ AddressOf(SymbolicAddress imm, ABIFunctionType* abiType)
       case SymbolicAddress::ReportUnalignedAccess:
         *abiType = Args_General0;
         return FuncCast(WasmReportUnalignedAccess, *abiType);
+      case SymbolicAddress::ReportInt64JSCall:
+        *abiType = Args_General0;
+        return FuncCast(WasmReportInt64JSCall, *abiType);
       case SymbolicAddress::CallImport_Void:
         *abiType = Args_General4;
         return FuncCast(Instance::callImport_void, *abiType);
@@ -482,6 +555,9 @@ AddressOf(SymbolicAddress imm, ABIFunctionType* abiType)
       case SymbolicAddress::CoerceInPlace_ToNumber:
         *abiType = Args_General1;
         return FuncCast(CoerceInPlace_ToNumber, *abiType);
+      case SymbolicAddress::CoerceInPlace_JitEntry:
+        *abiType = Args_General3;
+        return FuncCast(CoerceInPlace_JitEntry, *abiType);
       case SymbolicAddress::ToInt32:
         *abiType = Args_Int_Double;
         return FuncCast<int32_t (double)>(JS::ToInt32, *abiType);
@@ -503,6 +579,12 @@ AddressOf(SymbolicAddress imm, ABIFunctionType* abiType)
       case SymbolicAddress::TruncateDoubleToInt64:
         *abiType = Args_Int64_Double;
         return FuncCast(TruncateDoubleToInt64, *abiType);
+      case SymbolicAddress::SaturatingTruncateDoubleToUint64:
+        *abiType = Args_Int64_Double;
+        return FuncCast(SaturatingTruncateDoubleToUint64, *abiType);
+      case SymbolicAddress::SaturatingTruncateDoubleToInt64:
+        *abiType = Args_Int64_Double;
+        return FuncCast(SaturatingTruncateDoubleToInt64, *abiType);
       case SymbolicAddress::Uint64ToDouble:
         *abiType = Args_Double_IntInt;
         return FuncCast(Uint64ToDouble, *abiType);
@@ -593,8 +675,12 @@ AddressOf(SymbolicAddress imm, ABIFunctionType* abiType)
         *abiType = Args_Int_GeneralGeneralInt64Int64;
         return FuncCast(Instance::wait_i64, *abiType);
       case SymbolicAddress::Wake:
-        *abiType = Args_General2;
+        *abiType = Args_General3;
         return FuncCast(Instance::wake, *abiType);
+#if defined(JS_CODEGEN_MIPS32)
+      case SymbolicAddress::js_jit_gAtomic64Lock:
+        return &js::jit::gAtomic64Lock;
+#endif
       case SymbolicAddress::Limit:
         break;
     }
@@ -614,13 +700,16 @@ wasm::NeedsBuiltinThunk(SymbolicAddress sym)
       case SymbolicAddress::ReportTrap:               // GenerateTrapExit
       case SymbolicAddress::OldReportTrap:            // GenerateOldTrapExit
       case SymbolicAddress::ReportOutOfBounds:        // GenerateOutOfBoundsExit
-      case SymbolicAddress::ReportUnalignedAccess:    // GeneratesUnalignedExit
+      case SymbolicAddress::ReportUnalignedAccess:    // GenerateUnalignedExit
       case SymbolicAddress::CallImport_Void:          // GenerateImportInterpExit
       case SymbolicAddress::CallImport_I32:
       case SymbolicAddress::CallImport_I64:
       case SymbolicAddress::CallImport_F64:
       case SymbolicAddress::CoerceInPlace_ToInt32:    // GenerateImportJitExit
       case SymbolicAddress::CoerceInPlace_ToNumber:
+#if defined(JS_CODEGEN_MIPS32)
+      case SymbolicAddress::js_jit_gAtomic64Lock:
+#endif
         return false;
       case SymbolicAddress::ToInt32:
       case SymbolicAddress::DivI64:
@@ -629,6 +718,8 @@ wasm::NeedsBuiltinThunk(SymbolicAddress sym)
       case SymbolicAddress::UModI64:
       case SymbolicAddress::TruncateDoubleToUint64:
       case SymbolicAddress::TruncateDoubleToInt64:
+      case SymbolicAddress::SaturatingTruncateDoubleToUint64:
+      case SymbolicAddress::SaturatingTruncateDoubleToInt64:
       case SymbolicAddress::Uint64ToDouble:
       case SymbolicAddress::Uint64ToFloat32:
       case SymbolicAddress::Int64ToDouble:
@@ -661,6 +752,8 @@ wasm::NeedsBuiltinThunk(SymbolicAddress sym)
       case SymbolicAddress::WaitI32:
       case SymbolicAddress::WaitI64:
       case SymbolicAddress::Wake:
+      case SymbolicAddress::CoerceInPlace_JitEntry:
+      case SymbolicAddress::ReportInt64JSCall:
         return true;
       case SymbolicAddress::Limit:
         break;

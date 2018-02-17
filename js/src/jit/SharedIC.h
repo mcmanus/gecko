@@ -7,16 +7,15 @@
 #ifndef jit_SharedIC_h
 #define jit_SharedIC_h
 
-#include "jscntxt.h"
-#include "jscompartment.h"
-#include "jsgc.h"
-
+#include "gc/GC.h"
 #include "jit/BaselineICList.h"
 #include "jit/BaselineJIT.h"
 #include "jit/ICState.h"
 #include "jit/MacroAssembler.h"
 #include "jit/SharedICList.h"
 #include "jit/SharedICRegisters.h"
+#include "vm/JSCompartment.h"
+#include "vm/JSContext.h"
 #include "vm/ReceiverGuard.h"
 #include "vm/TypedArrayObject.h"
 
@@ -845,6 +844,9 @@ class ICCacheIR_Regular : public ICStub
       : ICStub(ICStub::CacheIR_Regular, stubCode),
         stubInfo_(stubInfo)
     {}
+
+    static ICCacheIR_Regular* Clone(JSContext* cx, ICStubSpace* space, ICStub* firstMonitorStub,
+                                    ICCacheIR_Regular& other);
 
     void notePreliminaryObject() {
         extra_ = 1;
@@ -1908,94 +1910,6 @@ class ICBinaryArith_DoubleWithInt32 : public ICStub
         ICStub* getStub(ICStubSpace* space) override {
             return newStub<ICBinaryArith_DoubleWithInt32>(space, getStubCode(),
                                                               lhsIsDouble_);
-        }
-    };
-};
-
-// UnaryArith
-//     JSOP_BITNOT
-//     JSOP_NEG
-
-class ICUnaryArith_Fallback : public ICFallbackStub
-{
-    friend class ICStubSpace;
-
-    explicit ICUnaryArith_Fallback(JitCode* stubCode)
-      : ICFallbackStub(UnaryArith_Fallback, stubCode)
-    {
-        extra_ = 0;
-    }
-
-  public:
-    static const uint32_t MAX_OPTIMIZED_STUBS = 8;
-
-    bool sawDoubleResult() {
-        return extra_;
-    }
-    void setSawDoubleResult() {
-        extra_ = 1;
-    }
-
-    // Compiler for this stub kind.
-    class Compiler : public ICStubCompiler {
-      protected:
-        MOZ_MUST_USE bool generateStubCode(MacroAssembler& masm) override;
-
-      public:
-        explicit Compiler(JSContext* cx, Engine engine)
-          : ICStubCompiler(cx, ICStub::UnaryArith_Fallback, engine)
-        {}
-
-        ICStub* getStub(ICStubSpace* space) override {
-            return newStub<ICUnaryArith_Fallback>(space, getStubCode());
-        }
-    };
-};
-
-class ICUnaryArith_Int32 : public ICStub
-{
-    friend class ICStubSpace;
-
-    explicit ICUnaryArith_Int32(JitCode* stubCode)
-      : ICStub(UnaryArith_Int32, stubCode)
-    {}
-
-  public:
-    class Compiler : public ICMultiStubCompiler {
-      protected:
-        MOZ_MUST_USE bool generateStubCode(MacroAssembler& masm) override;
-
-      public:
-        Compiler(JSContext* cx, JSOp op, Engine engine)
-          : ICMultiStubCompiler(cx, ICStub::UnaryArith_Int32, op, engine)
-        {}
-
-        ICStub* getStub(ICStubSpace* space) override {
-            return newStub<ICUnaryArith_Int32>(space, getStubCode());
-        }
-    };
-};
-
-class ICUnaryArith_Double : public ICStub
-{
-    friend class ICStubSpace;
-
-    explicit ICUnaryArith_Double(JitCode* stubCode)
-      : ICStub(UnaryArith_Double, stubCode)
-    {}
-
-  public:
-    class Compiler : public ICMultiStubCompiler {
-      protected:
-        MOZ_MUST_USE bool generateStubCode(MacroAssembler& masm) override;
-
-      public:
-        Compiler(JSContext* cx, JSOp op, Engine engine)
-          : ICMultiStubCompiler(cx, ICStub::UnaryArith_Double, op, engine)
-        {}
-
-        ICStub* getStub(ICStubSpace* space) override {
-            return newStub<ICUnaryArith_Double>(space, getStubCode());
         }
     };
 };

@@ -7,16 +7,16 @@ this.EXPORTED_SYMBOLS = [
   "ContentSearch",
 ];
 
-const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.importGlobalProperties(["XMLHttpRequest"]);
 
-XPCOMUtils.defineLazyModuleGetter(this, "FormHistory",
+ChromeUtils.defineModuleGetter(this, "FormHistory",
   "resource://gre/modules/FormHistory.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
+ChromeUtils.defineModuleGetter(this, "PrivateBrowsingUtils",
   "resource://gre/modules/PrivateBrowsingUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "SearchSuggestionController",
+ChromeUtils.defineModuleGetter(this, "SearchSuggestionController",
   "resource://gre/modules/SearchSuggestionController.jsm");
 
 const INBOUND_MESSAGE = "ContentSearch";
@@ -338,7 +338,7 @@ this.ContentSearch = {
       state.engines.push({
         name: engine.name,
         iconBuffer,
-        hidden: hiddenList.indexOf(engine.name) !== -1,
+        hidden: hiddenList.includes(engine.name),
       });
     }
     return state;
@@ -519,8 +519,7 @@ this.ContentSearch = {
       return Promise.resolve(null);
     }
     return new Promise(resolve => {
-      let xhr = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"].
-                createInstance(Ci.nsIXMLHttpRequest);
+      let xhr = new XMLHttpRequest();
       xhr.open("GET", uri, true);
       xhr.responseType = "arraybuffer";
       xhr.onload = () => {

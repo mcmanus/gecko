@@ -48,14 +48,14 @@ extern crate lazy_static;
 extern crate log;
 #[macro_use]
 extern crate thread_profiler;
-#[cfg(any(feature = "debugger", feature = "capture"))]
+#[cfg(any(feature = "debugger", feature = "capture", feature = "replay"))]
 #[macro_use]
 extern crate serde;
 
 mod batch;
 mod border;
 mod box_shadow;
-#[cfg(feature = "capture")]
+#[cfg(any(feature = "capture", feature = "replay"))]
 mod capture;
 mod clip;
 mod clip_scroll_node;
@@ -77,6 +77,7 @@ mod glyph_cache;
 mod glyph_rasterizer;
 mod gpu_cache;
 mod gpu_types;
+mod hit_test;
 mod internal_types;
 mod picture;
 mod prim_store;
@@ -146,7 +147,7 @@ extern crate gleam;
 extern crate num_traits;
 extern crate plane_split;
 extern crate rayon;
-#[cfg(feature = "capture")]
+#[cfg(feature = "ron")]
 extern crate ron;
 #[cfg(feature = "debugger")]
 extern crate serde_json;
@@ -158,6 +159,8 @@ extern crate ws;
 extern crate image;
 #[cfg(feature = "debugger")]
 extern crate base64;
+#[cfg(all(feature = "capture", feature = "png"))]
+extern crate png;
 
 pub extern crate webrender_api;
 

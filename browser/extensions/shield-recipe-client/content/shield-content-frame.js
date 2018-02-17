@@ -15,12 +15,11 @@
 
 /* global content addMessageListener removeMessageListener sendAsyncMessage */
 
-const { utils: Cu } = Components;
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 const frameGlobal = {};
-XPCOMUtils.defineLazyModuleGetter(
+ChromeUtils.defineModuleGetter(
   frameGlobal, "AboutPages", "resource://shield-recipe-client-content/AboutPages.jsm",
 );
 
@@ -54,6 +53,12 @@ class ShieldFrameListener {
         this.triggerPageCallback(
           "ReceiveRemoteValue:ShieldLearnMoreHref",
           frameGlobal.AboutPages.aboutStudies.getShieldLearnMoreHref()
+        );
+        break;
+      case "GetRemoteValue:StudiesEnabled":
+        this.triggerPageCallback(
+          "ReceiveRemoteValue:StudiesEnabled",
+          frameGlobal.AboutPages.aboutStudies.getStudiesEnabled()
         );
         break;
       case "NavigateToDataPreferences":

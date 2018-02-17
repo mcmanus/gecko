@@ -624,7 +624,7 @@ ParentOffset(nsINode *aNode, int32_t *aChildOffset)
   nsIContent* parent = aNode->GetParent();
   if (parent)
   {
-    *aChildOffset = parent->IndexOf(aNode);
+    *aChildOffset = parent->ComputeIndexOf(aNode);
 
     return parent;
   }
@@ -1403,6 +1403,7 @@ nsFrameSelection::TakeFocus(nsIContent*        aNewFocus,
 
     NS_ENSURE_STATE(mShell);
     bool editableCell = false;
+    mCellParent = nullptr;
     RefPtr<nsPresContext> context = mShell->GetPresContext();
     if (context) {
       RefPtr<HTMLEditor> htmlEditor = nsContentUtils::GetHTMLEditor(context);
@@ -2791,7 +2792,7 @@ nsFrameSelection::SelectCellElement(nsIContent *aCellElement)
   nsIContent *parent = aCellElement->GetParent();
 
   // Get child offset
-  int32_t offset = parent->IndexOf(aCellElement);
+  int32_t offset = parent->ComputeIndexOf(aCellElement);
 
   return CreateAndAddRange(parent, offset);
 }

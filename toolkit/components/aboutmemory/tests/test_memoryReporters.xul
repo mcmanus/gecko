@@ -26,10 +26,6 @@
 
   "use strict";
 
-  const Cc = Components.classes;
-  const Ci = Components.interfaces;
-  const Cr = Components.results;
-
   const NONHEAP = Ci.nsIMemoryReporter.KIND_NONHEAP;
   const HEAP    = Ci.nsIMemoryReporter.KIND_HEAP;
   const OTHER   = Ci.nsIMemoryReporter.KIND_OTHER;
@@ -72,6 +68,10 @@
     let str = (Math.random() > 0.5 ? "!" : "@") + ")(*&";
     shortStrings.push(str);
   }
+
+  // Strings in the nursery are not reported, so make sure the above test
+  // strings are tenured.
+  Components.utils.forceGC();
 
   let mySandbox = Components.utils.Sandbox(document.nodePrincipal,
                     { sandboxName: "this-is-a-sandbox-name" });
@@ -409,7 +409,7 @@
       ok(false, "Shouldn't be allowed to register a JS component (WrappedJS)");
     }
     catch (ex) {
-      ok(ex.message.indexOf("NS_ERROR_") >= 0,
+      ok(ex.message.includes("NS_ERROR_"),
          "WrappedJS reporter got rejected: " + ex);
     }
 

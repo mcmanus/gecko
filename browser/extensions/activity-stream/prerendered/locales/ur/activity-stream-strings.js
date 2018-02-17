@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "{provider} کی جانب سے تجویز کردہ",
   "header_bookmarks_placeholder": "آپ کے پاس اب تک کوئی نشانی نہیں ہے۔",
   "header_stories_from": "من جانب",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "دورہ شدہ",
   "type_label_bookmarked": "نشان شدہ",
   "type_label_synced": "کسی دوسرے آلے سے ہمہ وقت ساز کیا گیا ہے",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "اس سائٹ کی تدوین کریں",
   "edit_topsites_dismiss_button": "اس سائٹ کو برخاست کریں",
   "edit_topsites_add_button": "آظافہ کریں",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "نئی بہترین سائٹ",
   "topsites_form_edit_header": "بہترین سائٹٹ کیی تدوین کریں",
   "topsites_form_title_placeholder": "ایک عنوان داخل کریں",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "You’ve caught up. Check back later for more top stories from {provider}. Can’t wait? Select a popular topic to find more great stories from around the web.",
   "manual_migration_explanation2": "Try Firefox with the bookmarks, history and passwords from another browser.",
   "manual_migration_cancel_button": "نہیں شکریہ",
-  "manual_migration_import_button": "ابھی درآمد کری"
+  "manual_migration_import_button": "ابھی درآمد کری",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

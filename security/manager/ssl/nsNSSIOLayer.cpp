@@ -359,11 +359,6 @@ nsNSSSocketInfo::GetAlpnEarlySelection(nsACString& aAlpnSelected)
 {
   aAlpnSelected.Truncate();
 
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown()) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
-
   SSLPreliminaryChannelInfo info;
   SECStatus rv = SSL_GetPreliminaryChannelInfo(mFd, &info, sizeof(info));
   if (rv != SECSuccess || !info.canSendEarlyData) {
@@ -418,10 +413,6 @@ nsNSSSocketInfo::SetDenyClientCert(bool aDenyClientCert)
 NS_IMETHODIMP
 nsNSSSocketInfo::DriveHandshake()
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown()) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
   if (!mFd) {
     return NS_ERROR_FAILURE;
   }
@@ -601,9 +592,6 @@ nsNSSSocketInfo::StartTLS()
 NS_IMETHODIMP
 nsNSSSocketInfo::SetNPNList(nsTArray<nsCString>& protocolArray)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown())
-    return NS_ERROR_NOT_AVAILABLE;
   if (!mFd)
     return NS_ERROR_FAILURE;
 
@@ -631,10 +619,6 @@ nsNSSSocketInfo::SetNPNList(nsTArray<nsCString>& protocolArray)
 nsresult
 nsNSSSocketInfo::ActivateSSL()
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown())
-    return NS_ERROR_NOT_AVAILABLE;
-
   if (SECSuccess != SSL_OptionSet(mFd, SSL_SECURITY, true))
     return NS_ERROR_FAILURE;
   if (SECSuccess != SSL_ResetHandshake(mFd, false))
@@ -765,8 +749,7 @@ int32_t checkHandshake(int32_t bytesTransfered, bool wasReading,
                        nsNSSSocketInfo* socketInfo);
 
 nsNSSSocketInfo*
-getSocketInfoIfRunning(PRFileDesc* fd, Operation op,
-                       const nsNSSShutDownPreventionLock& /*proofOfLock*/)
+getSocketInfoIfRunning(PRFileDesc* fd, Operation op)
 {
   if (!fd || !fd->lower || !fd->secret ||
       fd->identity != nsSSLIOLayerHelpers::nsSSLIOLayerIdentity) {
@@ -776,11 +759,6 @@ getSocketInfoIfRunning(PRFileDesc* fd, Operation op,
   }
 
   nsNSSSocketInfo* socketInfo = (nsNSSSocketInfo*) fd->secret;
-
-  if (socketInfo->isAlreadyShutDown()) {
-    PR_SetError(PR_SOCKET_SHUTDOWN_ERROR, 0);
-    return nullptr;
-  }
 
   if (socketInfo->GetErrorCode()) {
     PRErrorCode err = socketInfo->GetErrorCode();
@@ -807,8 +785,7 @@ nsSSLIOLayerConnect(PRFileDesc* fd, const PRNetAddr* addr,
 {
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("[%p] connecting SSL socket\n",
          (void*) fd));
-  nsNSSShutDownPreventionLock locker;
-  if (!getSocketInfoIfRunning(fd, not_reading_or_writing, locker))
+  if (!getSocketInfoIfRunning(fd, not_reading_or_writing))
     return PR_FAILURE;
 
   PRStatus status = fd->lower->methods->connect(fd->lower, addr, timeout);
@@ -980,7 +957,6 @@ PRIOMethods nsSSLIOLayerHelpers::nsSSLPlaintextLayerMethods;
 static PRStatus
 nsSSLIOLayerClose(PRFileDesc* fd)
 {
-  nsNSSShutDownPreventionLock locker;
   if (!fd)
     return PR_FAILURE;
 
@@ -990,12 +966,11 @@ nsSSLIOLayerClose(PRFileDesc* fd)
   nsNSSSocketInfo* socketInfo = (nsNSSSocketInfo*) fd->secret;
   MOZ_ASSERT(socketInfo, "nsNSSSocketInfo was null for an fd");
 
-  return socketInfo->CloseSocketAndDestroy(locker);
+  return socketInfo->CloseSocketAndDestroy();
 }
 
 PRStatus
-nsNSSSocketInfo::CloseSocketAndDestroy(
-    const nsNSSShutDownPreventionLock& /*proofOfLock*/)
+nsNSSSocketInfo::CloseSocketAndDestroy()
 {
   PRFileDesc* popped = PR_PopIOLayer(mFd, PR_TOP_IO_LAYER);
   MOZ_ASSERT(popped &&
@@ -1371,8 +1346,6 @@ checkHandshake(int32_t bytesTransfered, bool wasReading,
 static int16_t
 nsSSLIOLayerPoll(PRFileDesc* fd, int16_t in_flags, int16_t* out_flags)
 {
-  nsNSSShutDownPreventionLock locker;
-
   if (!out_flags) {
     NS_WARNING("nsSSLIOLayerPoll called with null out_flags");
     return 0;
@@ -1381,7 +1354,7 @@ nsSSLIOLayerPoll(PRFileDesc* fd, int16_t in_flags, int16_t* out_flags)
   *out_flags = 0;
 
   nsNSSSocketInfo* socketInfo =
-    getSocketInfoIfRunning(fd, not_reading_or_writing, locker);
+    getSocketInfoIfRunning(fd, not_reading_or_writing);
 
   if (!socketInfo) {
     // If we get here, it is probably because certificate validation failed
@@ -1460,8 +1433,7 @@ _PSM_InvalidDesc(void)
 static PRStatus
 PSMGetsockname(PRFileDesc* fd, PRNetAddr* addr)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (!getSocketInfoIfRunning(fd, not_reading_or_writing, locker))
+  if (!getSocketInfoIfRunning(fd, not_reading_or_writing))
     return PR_FAILURE;
 
   return fd->lower->methods->getsockname(fd->lower, addr);
@@ -1470,8 +1442,7 @@ PSMGetsockname(PRFileDesc* fd, PRNetAddr* addr)
 static PRStatus
 PSMGetpeername(PRFileDesc* fd, PRNetAddr* addr)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (!getSocketInfoIfRunning(fd, not_reading_or_writing, locker))
+  if (!getSocketInfoIfRunning(fd, not_reading_or_writing))
     return PR_FAILURE;
 
   return fd->lower->methods->getpeername(fd->lower, addr);
@@ -1480,8 +1451,7 @@ PSMGetpeername(PRFileDesc* fd, PRNetAddr* addr)
 static PRStatus
 PSMGetsocketoption(PRFileDesc* fd, PRSocketOptionData* data)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (!getSocketInfoIfRunning(fd, not_reading_or_writing, locker))
+  if (!getSocketInfoIfRunning(fd, not_reading_or_writing))
     return PR_FAILURE;
 
   return fd->lower->methods->getsocketoption(fd, data);
@@ -1490,8 +1460,7 @@ PSMGetsocketoption(PRFileDesc* fd, PRSocketOptionData* data)
 static PRStatus
 PSMSetsocketoption(PRFileDesc* fd, const PRSocketOptionData* data)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (!getSocketInfoIfRunning(fd, not_reading_or_writing, locker))
+  if (!getSocketInfoIfRunning(fd, not_reading_or_writing))
     return PR_FAILURE;
 
   return fd->lower->methods->setsocketoption(fd, data);
@@ -1501,8 +1470,7 @@ static int32_t
 PSMRecv(PRFileDesc* fd, void* buf, int32_t amount, int flags,
         PRIntervalTime timeout)
 {
-  nsNSSShutDownPreventionLock locker;
-  nsNSSSocketInfo* socketInfo = getSocketInfoIfRunning(fd, reading, locker);
+  nsNSSSocketInfo* socketInfo = getSocketInfoIfRunning(fd, reading);
   if (!socketInfo)
     return -1;
 
@@ -1528,8 +1496,7 @@ static int32_t
 PSMSend(PRFileDesc* fd, const void* buf, int32_t amount, int flags,
         PRIntervalTime timeout)
 {
-  nsNSSShutDownPreventionLock locker;
-  nsNSSSocketInfo* socketInfo = getSocketInfoIfRunning(fd, writing, locker);
+  nsNSSSocketInfo* socketInfo = getSocketInfoIfRunning(fd, writing);
   if (!socketInfo)
     return -1;
 
@@ -1614,8 +1581,7 @@ PSMSend(PRFileDesc* fd, const void* buf, int32_t amount, int flags,
 static PRStatus
 PSMBind(PRFileDesc* fd, const PRNetAddr *addr)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (!getSocketInfoIfRunning(fd, not_reading_or_writing, locker))
+  if (!getSocketInfoIfRunning(fd, not_reading_or_writing))
     return PR_FAILURE;
 
   return fd->lower->methods->bind(fd->lower, addr);
@@ -1636,8 +1602,7 @@ nsSSLIOLayerWrite(PRFileDesc* fd, const void* buf, int32_t amount)
 static PRStatus
 PSMConnectcontinue(PRFileDesc* fd, int16_t out_flags)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (!getSocketInfoIfRunning(fd, not_reading_or_writing, locker)) {
+  if (!getSocketInfoIfRunning(fd, not_reading_or_writing)) {
     return PR_FAILURE;
   }
 
@@ -2180,8 +2145,6 @@ nsNSS_SSLGetClientAuthData(void* arg, PRFileDesc* socket,
                            CERTDistNames* caNames, CERTCertificate** pRetCert,
                            SECKEYPrivateKey** pRetKey)
 {
-  nsNSSShutDownPreventionLock locker;
-
   if (!socket || !caNames || !pRetCert || !pRetKey) {
     PR_SetError(PR_INVALID_ARGUMENT_ERROR, 0);
     return SECFailure;
@@ -2521,7 +2484,6 @@ nsSSLIOLayerImportFD(PRFileDesc* fd,
                      nsNSSSocketInfo* infoObject,
                      const char* host)
 {
-  nsNSSShutDownPreventionLock locker;
   PRFileDesc* sslSock = SSL_ImportFD(nullptr, fd);
   if (!sslSock) {
     MOZ_ASSERT_UNREACHABLE("NSS: Error importing socket");
@@ -2586,7 +2548,6 @@ nsSSLIOLayerSetOptions(PRFileDesc* fd, bool forSTARTTLS,
                        bool haveProxy, const char* host, int32_t port,
                        nsNSSSocketInfo* infoObject)
 {
-  nsNSSShutDownPreventionLock locker;
   if (forSTARTTLS || haveProxy) {
     if (SECSuccess != SSL_OptionSet(fd, SSL_SECURITY, false)) {
       return NS_ERROR_FAILURE;
@@ -2761,7 +2722,6 @@ nsSSLIOLayerAddToSocket(int32_t family,
                         uint32_t providerFlags,
                         uint32_t providerTlsFlags)
 {
-  nsNSSShutDownPreventionLock locker;
   PRFileDesc* layer = nullptr;
   PRFileDesc* plaintextLayer = nullptr;
   nsresult rv;

@@ -25,6 +25,7 @@ pref("services.sync.errorhandler.networkFailureReportTimeout", 1209600); // 2 we
 pref("services.sync.engine.addons", true);
 pref("services.sync.engine.addresses", false);
 pref("services.sync.engine.bookmarks", true);
+pref("services.sync.engine.bookmarks.buffer", false);
 pref("services.sync.engine.creditcards", false);
 pref("services.sync.engine.history", true);
 pref("services.sync.engine.passwords", true);
@@ -77,6 +78,7 @@ pref("services.sync.telemetry.maxPayloadCount", 500);
 // Enable the (fairly costly) client/server validation through early Beta, but
 // not release candidates or Release.
 pref("services.sync.engine.bookmarks.validation.enabled", true);
+pref("services.sync.engine.passwords.validation.enabled", true);
 #endif
 
 #if defined(NIGHTLY_BUILD)
@@ -88,14 +90,17 @@ pref("services.sync.engine.bookmarks.repair.enabled", true);
 // We consider validation this frequently. After considering validation, even
 // if we don't end up validating, we won't try again unless this much time has passed.
 pref("services.sync.engine.bookmarks.validation.interval", 86400); // 24 hours in seconds
+pref("services.sync.engine.passwords.validation.interval", 86400); // 24 hours in seconds
 
 // We only run validation `services.sync.validation.percentageChance` percent of
 // the time, even if it's been the right amount of time since the last validation,
 // and you meet the maxRecord checks.
 pref("services.sync.engine.bookmarks.validation.percentageChance", 10);
+pref("services.sync.engine.passwords.validation.percentageChance", 10);
 
 // We won't validate an engine if it has more than this many records on the server.
 pref("services.sync.engine.bookmarks.validation.maxRecords", 1000);
+pref("services.sync.engine.passwords.validation.maxRecords", 1000);
 
 // The maximum number of immediate resyncs to trigger for changes made during
 // a sync.

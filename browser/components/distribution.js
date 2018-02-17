@@ -4,24 +4,19 @@
 
 this.EXPORTED_SYMBOLS = [ "DistributionCustomizer" ];
 
-var Ci = Components.interfaces;
-var Cc = Components.classes;
-var Cr = Components.results;
-var Cu = Components.utils;
-
 const DISTRIBUTION_CUSTOMIZATION_COMPLETE_TOPIC =
   "distribution-customization-complete";
 
 const PREF_CACHED_FILE_EXISTENCE  = "distribution.iniFile.exists.value";
 const PREF_CACHED_FILE_APPVERSION = "distribution.iniFile.exists.appversion";
 
-Cu.import("resource://gre/modules/AppConstants.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
-                                  "resource://gre/modules/Preferences.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
-                                  "resource://gre/modules/PlacesUtils.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.defineModuleGetter(this, "Preferences",
+                               "resource://gre/modules/Preferences.jsm");
+ChromeUtils.defineModuleGetter(this, "PlacesUtils",
+                               "resource://gre/modules/PlacesUtils.jsm");
 
 this.DistributionCustomizer = function DistributionCustomizer() {
 };
@@ -114,9 +109,9 @@ DistributionCustomizer.prototype = {
         if (ilocale)
           continue;
 
-        if (keys.indexOf(key + "." + this._locale) >= 0) {
+        if (keys.includes(key + "." + this._locale)) {
           key += "." + this._locale;
-        } else if (keys.indexOf(key + "." + this._language) >= 0) {
+        } else if (keys.includes(key + "." + this._language)) {
           key += "." + this._language;
         }
 

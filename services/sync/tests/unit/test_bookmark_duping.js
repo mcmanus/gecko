@@ -1,13 +1,14 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-Cu.import("resource://services-common/async.js");
-Cu.import("resource://services-sync/engines.js");
-Cu.import("resource://services-sync/engines/bookmarks.js");
-Cu.import("resource://services-sync/service.js");
-Cu.import("resource://services-sync/util.js");
-Cu.import("resource://services-sync/bookmark_validator.js");
+ChromeUtils.import("resource://services-common/async.js");
+ChromeUtils.import("resource://services-sync/engines.js");
+ChromeUtils.import("resource://services-sync/engines/bookmarks.js");
+ChromeUtils.import("resource://services-sync/service.js");
+ChromeUtils.import("resource://services-sync/util.js");
+ChromeUtils.import("resource://services-sync/bookmark_validator.js");
 
+const BookmarksToolbarTitle = "toolbar";
 const bms = PlacesUtils.bookmarks;
 
 add_task(async function setup() {
@@ -23,13 +24,13 @@ async function sharedSetup() {
 
   let collection = server.user("foo").collection("bookmarks");
 
-  Svc.Obs.notify("weave:engine:start-tracking"); // We skip usual startup...
+  engine._tracker.start(); // We skip usual startup...
 
   return { engine, store, server, collection };
 }
 
 async function cleanup(engine, server) {
-  Svc.Obs.notify("weave:engine:stop-tracking");
+  await engine._tracker.stop();
   let promiseStartOver = promiseOneObserver("weave:service:start-over:finish");
   await Service.startOver();
   await promiseStartOver;
@@ -631,7 +632,7 @@ add_task(async function test_dupe_empty_folder() {
       id: newFolderGUID,
       type: "folder",
       title: "Folder 1",
-      parentName: "Bookmarks Toolbar",
+      parentName: BookmarksToolbarTitle,
       parentid: "toolbar",
       children: [],
     }), Date.now() / 1000 + 500);

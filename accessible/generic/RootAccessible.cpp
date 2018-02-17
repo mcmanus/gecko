@@ -42,7 +42,6 @@
 #include "nsGlobalWindow.h"
 
 #ifdef MOZ_XUL
-#include "nsIXULDocument.h"
 #include "nsIXULWindow.h"
 #endif
 
@@ -53,7 +52,7 @@ using namespace mozilla::dom;
 ////////////////////////////////////////////////////////////////////////////////
 // nsISupports
 
-NS_IMPL_ISUPPORTS_INHERITED0(RootAccessible, DocAccessible)
+NS_IMPL_ISUPPORTS_INHERITED(RootAccessible, DocAccessible, nsIDOMEventListener)
 
 ////////////////////////////////////////////////////////////////////////////////
 // Constructor/destructor

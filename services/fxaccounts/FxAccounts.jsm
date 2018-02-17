@@ -5,42 +5,41 @@
 
 this.EXPORTED_SYMBOLS = ["fxAccounts", "FxAccounts"];
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
-
 Cu.importGlobalProperties(["URL"]);
 
-Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://gre/modules/PromiseUtils.jsm");
-Cu.import("resource://services-common/utils.js");
-Cu.import("resource://services-common/rest.js");
-Cu.import("resource://services-crypto/utils.js");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Timer.jsm");
-Cu.import("resource://gre/modules/FxAccountsStorage.jsm");
-Cu.import("resource://gre/modules/FxAccountsCommon.js");
+ChromeUtils.import("resource://gre/modules/Log.jsm");
+ChromeUtils.import("resource://gre/modules/PromiseUtils.jsm");
+ChromeUtils.import("resource://services-common/utils.js");
+ChromeUtils.import("resource://services-common/rest.js");
+ChromeUtils.import("resource://services-crypto/utils.js");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Timer.jsm");
+ChromeUtils.import("resource://gre/modules/FxAccountsStorage.jsm");
+ChromeUtils.import("resource://gre/modules/FxAccountsCommon.js");
 
-XPCOMUtils.defineLazyModuleGetter(this, "FxAccountsClient",
+ChromeUtils.defineModuleGetter(this, "FxAccountsClient",
   "resource://gre/modules/FxAccountsClient.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "FxAccountsConfig",
+ChromeUtils.defineModuleGetter(this, "FxAccountsConfig",
   "resource://gre/modules/FxAccountsConfig.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "jwcrypto",
+ChromeUtils.defineModuleGetter(this, "jwcrypto",
   "resource://services-crypto/jwcrypto.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "FxAccountsOAuthGrantClient",
+ChromeUtils.defineModuleGetter(this, "FxAccountsOAuthGrantClient",
   "resource://gre/modules/FxAccountsOAuthGrantClient.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "FxAccountsProfile",
+ChromeUtils.defineModuleGetter(this, "FxAccountsProfile",
   "resource://gre/modules/FxAccountsProfile.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "Utils",
+ChromeUtils.defineModuleGetter(this, "Utils",
   "resource://services-sync/util.js");
 
 // All properties exposed by the public FxAccounts API.
 var publicProperties = [
   "accountStatus",
+  "canGetKeys",
   "checkVerificationStatus",
   "getAccountsClient",
   "getAssertion",
@@ -60,15 +59,7 @@ var publicProperties = [
   "localtimeOffsetMsec",
   "notifyDevices",
   "now",
-  "promiseAccountsChangeProfileURI",
-  "promiseAccountsEmailURI",
-  "promiseAccountsForceSigninURI",
-  "promiseAccountsManageURI",
-  "promiseAccountsManageDevicesURI",
-  "promiseAccountsSignUpURI",
-  "promiseAccountsSignInURI",
   "removeCachedOAuthToken",
-  "requiresHttps",
   "resendVerificationEmail",
   "resetCredentials",
   "sessionStatus",
@@ -89,7 +80,7 @@ const OBSERVER_PRELOADS = [
   // Sync
   () => {
     let scope = {};
-    Cu.import("resource://services-sync/main.js", scope);
+    ChromeUtils.import("resource://services-sync/main.js", scope);
     return scope.Weave.Service.promiseInitialized;
   },
 
@@ -363,6 +354,7 @@ this.FxAccounts = function(mockInternal) {
 
   return Object.freeze(external);
 };
+this.FxAccounts.config = FxAccountsConfig;
 
 /**
  * The internal API's constructor.
@@ -519,8 +511,10 @@ FxAccountsInternal.prototype = {
    *          email: The user's email address
    *          uid: The user's unique id
    *          sessionToken: Session for the FxA server
-   *          kA: An encryption key from the FxA server
-   *          kB: An encryption key derived from the user's FxA password
+   *          kSync: An encryption key for Sync
+   *          kXCS: A key hash of kB for the X-Client-State header
+   *          kExtSync: An encryption key for WebExtensions syncing
+   *          kExtKbHash: A key hash of kB for WebExtensions syncing
    *          verified: email verification status
    *          authAt: The time (seconds since epoch) that this record was
    *                  authenticated
@@ -898,6 +892,24 @@ FxAccountsInternal.prototype = {
   },
 
   /**
+   * Checks if we currently have encryption keys or if we have enough to
+   * be able to successfully fetch them for the signed-in-user.
+   */
+  async canGetKeys() {
+    let currentState = this.currentAccountState;
+    let userData = await currentState.getUserAccountData();
+    if (!userData) {
+      throw new Error("Can't possibly get keys; User is not signed in");
+    }
+    // - keyFetchToken means we can almost certainly grab them.
+    // - kSync, kXCS, kExtSync and kExtKbHash means we already have them.
+    // - kB is deprecated but |getKeys| will help us migrate to kSync and friends.
+    return userData && (userData.keyFetchToken ||
+                        DERIVED_KEYS_NAMES.every(k => userData[k]) ||
+                        userData.kB);
+  },
+
+  /**
    * Fetch encryption keys for the signed-in-user from the FxA API server.
    *
    * Not for user consumption.  Exists to cause the keys to be fetch.
@@ -910,29 +922,44 @@ FxAccountsInternal.prototype = {
    *          email: The user's email address
    *          uid: The user's unique id
    *          sessionToken: Session for the FxA server
-   *          kA: An encryption key from the FxA server
-   *          kB: An encryption key derived from the user's FxA password
+   *          kSync: An encryption key for Sync
+   *          kXCS: A key hash of kB for the X-Client-State header
+   *          kExtSync: An encryption key for WebExtensions syncing
+   *          kExtKbHash: A key hash of kB for WebExtensions syncing
    *          verified: email verification status
    *        }
    *        or null if no user is signed in
    */
-  getKeys() {
+  async getKeys() {
     let currentState = this.currentAccountState;
-    return currentState.getUserAccountData().then((userData) => {
+    try {
+      let userData = await currentState.getUserAccountData();
       if (!userData) {
         throw new Error("Can't get keys; User is not signed in");
       }
-      if (userData.kA && userData.kB) {
-        return userData;
+      if (userData.kB) { // Bug 1426306 - Migrate from kB to derived keys.
+        log.info("Migrating kB to derived keys.");
+        const {uid, kB} = userData;
+        await this.updateUserAccountData({
+          uid,
+          ...this._deriveKeys(uid, CommonUtils.hexToBytes(kB)),
+          kA: null, // Remove kA and kB from storage.
+          kB: null
+        });
+        userData = await this.getUserAccountData();
+      }
+      if (DERIVED_KEYS_NAMES.every(k => userData[k])) {
+        return currentState.resolve(userData);
       }
       if (!currentState.whenKeysReadyDeferred) {
         currentState.whenKeysReadyDeferred = PromiseUtils.defer();
         if (userData.keyFetchToken) {
           this.fetchAndUnwrapKeys(userData.keyFetchToken).then(
             (dataWithKeys) => {
-              if (!dataWithKeys.kA || !dataWithKeys.kB) {
+              if (DERIVED_KEYS_NAMES.some(k => !dataWithKeys[k])) {
+                const missing = DERIVED_KEYS_NAMES.filter(k => !dataWithKeys[k]);
                 currentState.whenKeysReadyDeferred.reject(
-                  new Error("user data missing kA or kB")
+                  new Error(`user data missing: ${missing.join(", ")}`)
                 );
                 return;
               }
@@ -946,11 +973,11 @@ FxAccountsInternal.prototype = {
           currentState.whenKeysReadyDeferred.reject("No keyFetchToken");
         }
       }
-      return currentState.whenKeysReadyDeferred.promise;
-    }).catch(err =>
-      this._handleTokenError(err)
-    ).then(result => currentState.resolve(result));
-   },
+      return await currentState.resolve(currentState.whenKeysReadyDeferred.promise);
+    } catch (err) {
+      return currentState.resolve(this._handleTokenError(err));
+    }
+  },
 
   async fetchAndUnwrapKeys(keyFetchToken) {
     if (logPII) {
@@ -964,7 +991,7 @@ FxAccountsInternal.prototype = {
       return currentState.resolve(null);
     }
 
-    let {kA, wrapKB} = await this.fetchKeys(keyFetchToken);
+    let {wrapKB} = await this.fetchKeys(keyFetchToken);
 
     let data = await currentState.getUserAccountData();
 
@@ -975,22 +1002,23 @@ FxAccountsInternal.prototype = {
 
     // Next statements must be synchronous until we setUserAccountData
     // so that we don't risk getting into a weird state.
-    let kB_hex = CryptoUtils.xor(CommonUtils.hexToBytes(data.unwrapBKey),
-                                 wrapKB);
+    let kBbytes = CryptoUtils.xor(CommonUtils.hexToBytes(data.unwrapBKey),
+                                  wrapKB);
 
     if (logPII) {
-      log.debug("kB_hex: " + kB_hex);
+      log.debug("kBbytes: " + kBbytes);
     }
     let updateData = {
-      kA: CommonUtils.bytesAsHex(kA),
-      kB: CommonUtils.bytesAsHex(kB_hex),
+      ...this._deriveKeys(data.uid, kBbytes),
       keyFetchToken: null, // null values cause the item to be removed.
       unwrapBKey: null,
     };
 
-    log.debug("Keys Obtained: kA=" + !!updateData.kA + ", kB=" + !!updateData.kB);
+    log.debug("Keys Obtained:" +
+              DERIVED_KEYS_NAMES.map(k => `${k}=${!!updateData[k]}`).join(", "));
     if (logPII) {
-      log.debug("Keys Obtained: kA=" + updateData.kA + ", kB=" + updateData.kB);
+      log.debug("Keys Obtained:" +
+                DERIVED_KEYS_NAMES.map(k => `${k}=${updateData[k]}`).join(", "));
     }
 
     await currentState.updateUserAccountData(updateData);
@@ -1000,6 +1028,61 @@ FxAccountsInternal.prototype = {
     await this.notifyObservers(ONVERIFIED_NOTIFICATION);
     data = await currentState.getUserAccountData();
     return currentState.resolve(data);
+  },
+
+  _deriveKeys(uid, kBbytes) {
+    return {
+      kSync: CommonUtils.bytesAsHex(this._deriveSyncKey(kBbytes)),
+      kXCS: CommonUtils.bytesAsHex(this._deriveXClientState(kBbytes)),
+      kExtSync: CommonUtils.bytesAsHex(this._deriveWebExtSyncStoreKey(kBbytes)),
+      kExtKbHash: CommonUtils.bytesAsHex(this._deriveWebExtKbHash(uid, kBbytes)),
+    };
+  },
+
+  /**
+   * Derive the Sync Key given the byte string kB.
+   *
+   * @returns HKDF(kB, undefined, "identity.mozilla.com/picl/v1/oldsync", 64)
+   */
+  _deriveSyncKey(kBbytes) {
+    return CryptoUtils.hkdf(kBbytes, undefined,
+                            "identity.mozilla.com/picl/v1/oldsync", 2 * 32);
+  },
+
+  /**
+   * Derive the WebExtensions Sync Storage Key given the byte string kB.
+   *
+   * @returns HKDF(kB, undefined, "identity.mozilla.com/picl/v1/chrome.storage.sync", 64)
+   */
+  _deriveWebExtSyncStoreKey(kBbytes) {
+    return CryptoUtils.hkdf(kBbytes, undefined,
+                            "identity.mozilla.com/picl/v1/chrome.storage.sync",
+                            2 * 32);
+  },
+
+  /**
+   * Derive the WebExtensions kbHash given the byte string kB.
+   *
+   * @returns SHA256(uid + kB)
+   */
+  _deriveWebExtKbHash(uid, kBbytes) {
+    return this._sha256(uid + kBbytes);
+  },
+
+  /**
+   * Derive the X-Client-State header given the byte string kB.
+   *
+   * @returns SHA256(kB)[:16]
+   */
+  _deriveXClientState(kBbytes) {
+    return this._sha256(kBbytes).slice(0, 16);
+  },
+
+  _sha256(bytes) {
+    let hasher = Cc["@mozilla.org/security/hash;1"]
+                    .createInstance(Ci.nsICryptoHash);
+    hasher.init(hasher.SHA256);
+    return CryptoUtils.digestBytes(bytes, hasher);
   },
 
   async getAssertionFromCert(data, keyPair, cert, audience) {
@@ -1160,8 +1243,8 @@ FxAccountsInternal.prototype = {
     // that will fire when we are completely ready.
     //
     // Login is truly complete once keys have been fetched, so once getKeys()
-    // obtains and stores kA and kB, it will fire the onverified observer
-    // notification.
+    // obtains and stores kSync kXCS kExtSync and kExtKbHash, it will fire the
+    // onverified observer notification.
 
     // The callers of startVerifiedCheck never consume a returned promise (ie,
     // this is simply kicking off a background fetch) so we must add a rejection
@@ -1298,99 +1381,6 @@ FxAccountsInternal.prototype = {
   _rejectWhenVerified(currentState, error) {
     currentState.whenVerifiedDeferred.reject(error);
     delete currentState.whenVerifiedDeferred;
-  },
-
-  requiresHttps() {
-    // Also used in FxAccountsOAuthGrantClient.jsm.
-    let allowHttp = Services.prefs.getBoolPref("identity.fxaccounts.allowHttp", false);
-    return allowHttp !== true;
-  },
-
-  async promiseAccountsSignUpURI(entrypoint) {
-    const url = new URL((await FxAccountsConfig.promiseAccountsSignUpURI()));
-    if (entrypoint) {
-      url.searchParams.append("entrypoint", entrypoint);
-    }
-    return url.href;
-  },
-
-  async promiseAccountsSignInURI(entrypoint) {
-    const url = new URL((await FxAccountsConfig.promiseAccountsSignInURI()));
-    if (entrypoint) {
-      url.searchParams.append("entrypoint", entrypoint);
-    }
-    return url.href;
-  },
-
-  async promiseAccountsEmailURI(email, entrypoint) {
-    const url = new URL((await FxAccountsConfig.promiseAccountsEmailURI()));
-    url.searchParams.append("email", email);
-    if (entrypoint) {
-      url.searchParams.append("entrypoint", entrypoint);
-    }
-    return url.href;
-  },
-
-  /**
-   * Pull an URL defined in the user preferences, add the current UID and email
-   * to the query string, add entrypoint and extra params to the query string if
-   * requested.
-   * @param {string} prefName The preference name from where to pull the URL to format.
-   * @param {string} [entrypoint] "entrypoint" searchParam value.
-   * @param {Object.<string, string>} [extraParams] Additionnal searchParam key and values.
-   * @returns {Promise.<string>} A promise that resolves to the formatted URL
-   */
-  async _formatPrefURL(prefName, entrypoint, extraParams) {
-    let url = new URL(Services.urlFormatter.formatURLPref(prefName));
-    if (this.requiresHttps() && url.protocol != "https:") {
-      throw new Error("Firefox Accounts server must use HTTPS");
-    }
-    let accountData = await this.getSignedInUser();
-    if (!accountData) {
-      return Promise.resolve(null);
-    }
-    url.searchParams.append("uid", accountData.uid);
-    url.searchParams.append("email", accountData.email);
-    if (entrypoint) {
-      url.searchParams.append("entrypoint", entrypoint);
-    }
-    if (extraParams) {
-      for (let [k, v] of Object.entries(extraParams)) {
-        url.searchParams.append(k, v);
-      }
-    }
-    return this.currentAccountState.resolve(url.href);
-  },
-
-  // Returns a promise that resolves with the URL to use to force a re-signin
-  // of the current account.
-  async promiseAccountsForceSigninURI(entrypoint) {
-    await FxAccountsConfig.ensureConfigured();
-    return this._formatPrefURL("identity.fxaccounts.remote.force_auth.uri", entrypoint);
-  },
-
-  // Returns a promise that resolves with the URL to use to change
-  // the current account's profile image.
-  // if settingToEdit is set, the profile page should hightlight that setting
-  // for the user to edit.
-  async promiseAccountsChangeProfileURI(entrypoint, settingToEdit = null) {
-    let extraParams;
-    if (settingToEdit) {
-      extraParams = { setting: settingToEdit };
-    }
-    return this._formatPrefURL("identity.fxaccounts.settings.uri", entrypoint, extraParams);
-  },
-
-  // Returns a promise that resolves with the URL to use to manage the current
-  // user's FxA acct.
-  async promiseAccountsManageURI(entrypoint) {
-    return this._formatPrefURL("identity.fxaccounts.settings.uri", entrypoint);
-  },
-
-  // Returns a promise that resolves with the URL to use to manage the devices in
-  // the current user's FxA acct.
-  async promiseAccountsManageDevicesURI(entrypoint) {
-    return this._formatPrefURL("identity.fxaccounts.settings.devices.uri", entrypoint);
   },
 
   /**
@@ -1556,14 +1546,6 @@ FxAccountsInternal.prototype = {
    * in the background, after which a ON_PROFILE_CHANGE_NOTIFICATION
    * observer notification will be sent, at which time this can be called
    * again to obtain the most recent profile info.
-   *
-   * @param options
-   *        {
-   *          contentUrl: (string) Used by the FxAccountsWebChannel.
-   *            Defaults to pref identity.fxaccounts.settings.uri
-   *          profileServerUrl: (string) Used by the FxAccountsWebChannel.
-   *            Defaults to pref identity.fxaccounts.remote.profile.uri
-   *        }
    *
    * @return Promise.<object | Error>
    *        The promise resolves to an accountData object with extra profile

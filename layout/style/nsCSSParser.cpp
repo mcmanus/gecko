@@ -789,7 +789,6 @@ protected:
   bool ParseImageLayerSize(nsCSSPropertyID aPropID);
   bool ParseImageLayerSizeValues(nsCSSValuePair& aOut);
   bool ParseBorderColor();
-  bool ParseBorderColors(nsCSSPropertyID aProperty);
   void SetBorderImageInitialValues();
   bool ParseBorderImageRepeat(bool aAcceptsInherit);
   // If ParseBorderImageSlice returns false, aConsumedTokens indicates
@@ -3627,6 +3626,9 @@ CSSParserImpl::ParseMediaQueryExpression(nsMediaQuery* aQuery)
       break;
     case nsMediaFeature::eIdent:
       rv = ParseSingleTokenVariant(expr->mValue, VARIANT_IDENTIFIER, nullptr);
+      if (rv) {
+        expr->mValue.AtomizeIdentValue();
+      }
       break;
   }
   if (!rv || !ExpectSymbol(')', true)) {
@@ -11661,11 +11663,6 @@ CSSParserImpl::ParsePropertyByFunction(nsCSSPropertyID aPropID)
     return ParseBorderSide(kBorderRightIDs, false);
   case eCSSProperty_border_top:
     return ParseBorderSide(kBorderTopIDs, false);
-  case eCSSProperty__moz_border_bottom_colors:
-  case eCSSProperty__moz_border_left_colors:
-  case eCSSProperty__moz_border_right_colors:
-  case eCSSProperty__moz_border_top_colors:
-    return ParseBorderColors(aPropID);
   case eCSSProperty_border_image_slice:
     return ParseBorderImageSlice(true, nullptr);
   case eCSSProperty_border_image_width:
@@ -11831,6 +11828,11 @@ CSSParserImpl::ParsePropertyByFunction(nsCSSPropertyID aPropID)
     return ParseWebkitTextStroke();
   case eCSSProperty_all:
     return ParseAll();
+  case eCSSProperty_translate:
+  case eCSSProperty_rotate:
+  case eCSSProperty_scale:
+    // These properties aren't implemented in the old style system.
+    return false;
   default:
     MOZ_ASSERT(false, "should not be called");
     return false;
@@ -12053,6 +12055,12 @@ CSSParserImpl::ParseFontDescriptorValue(nsCSSFontDesc aDescID,
 
   case eCSSFontDesc_FontFeatureSettings:
     return ParseFontFeatureSettings(aValue);
+
+  case eCSSFontDesc_FontVariationSettings:
+    if (StylePrefs::sFontVariationsEnabled) {
+      return ParseFontVariationSettings(aValue);
+    }
+    return false;
 
   case eCSSFontDesc_FontLanguageOverride:
     return ParseSingleTokenVariant(aValue, VARIANT_NORMAL | VARIANT_STRING,
@@ -13491,30 +13499,6 @@ bool
 CSSParserImpl::ParseBorderWidth()
 {
   return ParseBoxProperties(kBorderWidthIDs);
-}
-
-bool
-CSSParserImpl::ParseBorderColors(nsCSSPropertyID aProperty)
-{
-  nsCSSValue value;
-  // 'inherit', 'initial', 'unset' and 'none' are only allowed on their own
-  if (!ParseSingleTokenVariant(value, VARIANT_INHERIT | VARIANT_NONE,
-                               nullptr)) {
-    nsCSSValueList *cur = value.SetListValue();
-    for (;;) {
-      if (ParseVariant(cur->mValue, VARIANT_COLOR, nullptr) !=
-          CSSParseResult::Ok) {
-        return false;
-      }
-      if (CheckEndProperty()) {
-        break;
-      }
-      cur->mNext = new nsCSSValueList;
-      cur = cur->mNext;
-    }
-  }
-  AppendValue(aProperty, value);
-  return true;
 }
 
 // Parse the top level of a calc() expression.

@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Oanrekommandearre troch {provider}",
   "header_bookmarks_placeholder": "Jo hawwe noch gjin inkelde blêdwizer.",
   "header_stories_from": "fan",
+  "context_menu_button_sr": "Kontekstmenu foar {title} iepenje",
   "type_label_visited": "Besocht",
   "type_label_bookmarked": "Blêdwizer makke",
   "type_label_synced": "Syngronisearre fan oar apparaat ôf",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Dizze side bewurkje",
   "edit_topsites_dismiss_button": "Dizze side fuortsmite",
   "edit_topsites_add_button": "Tafoegje",
+  "edit_topsites_add_button_tooltip": "Topwebsite tafoegje",
   "topsites_form_add_header": "Nije topwebsite",
   "topsites_form_edit_header": "Topwebsite tafoegje",
   "topsites_form_title_placeholder": "Titel ynfiere",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Jo binne by. Kom letter werom foar mear ferhalen fan {provider}. Kin jo net wachtsje? Selektearje in populêr ûnderwerp om mear ferhalen fan it ynternet te finen.",
   "manual_migration_explanation2": "Probearje Firefox en ymportearje de blêdwizers, skiednis en wachtwurden fan oare browsers.",
   "manual_migration_cancel_button": "Nee tankewol",
-  "manual_migration_import_button": "No ymportearje"
+  "manual_migration_import_button": "No ymportearje",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

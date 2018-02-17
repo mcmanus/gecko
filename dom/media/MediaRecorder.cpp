@@ -220,6 +220,8 @@ class MediaRecorder::Session: public PrincipalChangeObserver<MediaStreamTrack>,
                          , public MutableBlobStorageCallback
   {
   public:
+    // We need to always declare refcounting because
+    // MutableBlobStorageCallback has pure-virtual refcounting.
     NS_DECL_ISUPPORTS_INHERITED
 
     // aDestroyRunnable can be null. If it's not, it will be dispatched after
@@ -980,6 +982,10 @@ private:
     for (auto& track : mMediaStreamTracks) {
       mEncoder->ConnectMediaStreamTrack(track);
     }
+
+    // If user defines timeslice interval for video blobs we have to set
+    // appropriate video keyframe interval defined in milliseconds.
+    mEncoder->SetVideoKeyFrameInterval(mTimeSlice);
 
     // Set mRunningState to Running so that ExtractRunnable/DestroyRunnable will
     // take the responsibility to end the session.

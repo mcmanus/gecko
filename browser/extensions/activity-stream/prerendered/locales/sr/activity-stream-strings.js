@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Предложио {provider}",
   "header_bookmarks_placeholder": "Још увек немате забелешке.",
   "header_stories_from": "од",
+  "context_menu_button_sr": "Отвори мени поља за {title}",
   "type_label_visited": "Посећено",
   "type_label_bookmarked": "Забележено",
   "type_label_synced": "Синхронизовано са другог уређаја",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Уреди овај сајт",
   "edit_topsites_dismiss_button": "Уклони овај сајт",
   "edit_topsites_add_button": "Додај",
+  "edit_topsites_add_button_tooltip": "Додај омиљени сајт",
   "topsites_form_add_header": "Нови омиљени сајт",
   "topsites_form_edit_header": "Уреди популарне сајтове",
   "topsites_form_title_placeholder": "Унесите наслов",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Вратите се касније за нове вести {provider}. Не можете дочекати? Изаберите популарну тему да пронађете још занимљивих вести из света.",
   "manual_migration_explanation2": "Пробајте FIrefox са коришћењем забелешки, историјата и лозинки из другог прегледача.",
   "manual_migration_cancel_button": "Не, хвала",
-  "manual_migration_import_button": "Увези сада"
+  "manual_migration_import_button": "Увези сада",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

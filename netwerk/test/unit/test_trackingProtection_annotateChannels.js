@@ -1,7 +1,7 @@
-Cu.import("resource://gre/modules/NetUtil.jsm");
-Cu.import("resource://testing-common/UrlClassifierTestUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://testing-common/httpd.js");
+ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
+ChromeUtils.import("resource://testing-common/UrlClassifierTestUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://testing-common/httpd.js");
 
 // This test supports both e10s and non-e10s mode. In non-e10s mode, this test
 // drives itself by creating a profile directory, setting up the URL classifier
@@ -25,8 +25,6 @@ if (runtime.processType == runtime.PROCESS_TYPE_DEFAULT) {
 }
 
 const topWindowURI = NetUtil.newURI("http://www.itisatrap.org/");
-
-var Ci = Components.interfaces;
 
 function listener(tracking, priority, nextTest) {
   this._tracking = tracking;

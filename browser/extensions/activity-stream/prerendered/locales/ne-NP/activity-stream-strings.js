@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "{provider} द्वारा सिफारिस गरिएको",
   "header_bookmarks_placeholder": "तपाइँसँग अहिले सम्म कुनै पुस्तकचिनोहरु छैन ।",
   "header_stories_from": "बाट",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "भ्रमण गरिएको",
   "type_label_bookmarked": "पुस्तकचिनो लागाइएको",
   "type_label_synced": "अर्को यण्त्रबाट समक्रमण गरिएको",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "यस साइटलाई सम्पादन गर्नुहोस्",
   "edit_topsites_dismiss_button": "यस साइटलाई खारेज गर्नुहोस्",
   "edit_topsites_add_button": "थप्नुहोस्",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "नयाँ शीर्ष साइट",
   "topsites_form_edit_header": "शीर्ष साइट सम्पादन गर्नुहोस्",
   "topsites_form_title_placeholder": "शीर्षक प्रविष्ट गर्नुहोस्",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "You’ve caught up. Check back later for more top stories from {provider}. Can’t wait? Select a popular topic to find more great stories from around the web.",
   "manual_migration_explanation2": "Try Firefox with the bookmarks, history and passwords from another browser.",
   "manual_migration_cancel_button": "पर्दैन, धन्यबाद",
-  "manual_migration_import_button": "अहिले आयात गर्नुहोस्"
+  "manual_migration_import_button": "अहिले आयात गर्नुहोस्",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

@@ -119,13 +119,19 @@ nsHTTPDownloadEvent::Run()
   chan->SetLoadFlags(nsIRequest::LOAD_ANONYMOUS |
                      nsIChannel::LOAD_BYPASS_SERVICE_WORKER);
 
-  // For OCSP requests, only the first party domain aspect of origin attributes
-  // is used. This means that OCSP requests are shared across different
-  // containers.
+  // For OCSP requests, only the first party domain and private browsing id
+  // aspects of origin attributes are used. This means that:
+  // a) if first party isolation is enabled, OCSP requests will be isolated
+  // according to the first party domain of the original https request
+  // b) OCSP requests are shared across different containers as long as first
+  // party isolation is not enabled and none of the containers are in private
+  // browsing mode.
   if (mRequestSession->mOriginAttributes != OriginAttributes()) {
     OriginAttributes attrs;
     attrs.mFirstPartyDomain =
       mRequestSession->mOriginAttributes.mFirstPartyDomain;
+    attrs.mPrivateBrowsingId =
+      mRequestSession->mOriginAttributes.mPrivateBrowsingId;
 
     nsCOMPtr<nsILoadInfo> loadInfo = chan->GetLoadInfo();
     if (loadInfo) {
@@ -729,7 +735,6 @@ ShowProtectedAuthPrompt(PK11SlotInfo* slot, nsIInterfaceRequestor *ir)
 }
 
 class PK11PasswordPromptRunnable : public SyncRunnableBase
-                                 , public nsNSSShutDownObject
 {
 public:
   PK11PasswordPromptRunnable(PK11SlotInfo* slot,
@@ -739,11 +744,8 @@ public:
       mIR(ir)
   {
   }
-  virtual ~PK11PasswordPromptRunnable();
+  virtual ~PK11PasswordPromptRunnable() = default;
 
-  // This doesn't own the PK11SlotInfo or any other NSS objects, so there's
-  // nothing to release.
-  virtual void virtualDestroyNSSReference() override {}
   char * mResult; // out
   virtual void RunOnTargetThread() override;
 private:
@@ -751,24 +753,9 @@ private:
   nsIInterfaceRequestor* const mIR; // in
 };
 
-PK11PasswordPromptRunnable::~PK11PasswordPromptRunnable()
-{
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown()) {
-    return;
-  }
-
-  shutdown(ShutdownCalledFrom::Object);
-}
-
 void
 PK11PasswordPromptRunnable::RunOnTargetThread()
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown()) {
-    return;
-  }
-
   nsresult rv;
   nsCOMPtr<nsIPrompt> prompt;
   if (!mIR) {
@@ -992,8 +979,6 @@ CanFalseStartCallback(PRFileDesc* fd, void* client_data, PRBool *canFalseStart)
 {
   *canFalseStart = false;
 
-  nsNSSShutDownPreventionLock locker;
-
   nsNSSSocketInfo* infoObject = (nsNSSSocketInfo*) fd->higher->secret;
   if (!infoObject) {
     PR_SetError(PR_INVALID_STATE_ERROR, 0);
@@ -1001,12 +986,6 @@ CanFalseStartCallback(PRFileDesc* fd, void* client_data, PRBool *canFalseStart)
   }
 
   infoObject->SetFalseStartCallbackCalled();
-
-  if (infoObject->isAlreadyShutDown()) {
-    MOZ_CRASH("SSL socket used after NSS shut down");
-    PR_SetError(PR_INVALID_STATE_ERROR, 0);
-    return SECFailure;
-  }
 
   PreliminaryHandshakeDone(fd);
 
@@ -1330,7 +1309,6 @@ IsCertificateDistrustImminent(nsIX509CertList* aCertList,
 }
 
 void HandshakeCallback(PRFileDesc* fd, void* client_data) {
-  nsNSSShutDownPreventionLock locker;
   SECStatus rv;
 
   nsNSSSocketInfo* infoObject = (nsNSSSocketInfo*) fd->higher->secret;

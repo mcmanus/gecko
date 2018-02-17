@@ -28,7 +28,6 @@
 #include "jsprf.h"
 #include "jsstr.h"
 #include "jsutil.h"
-
 #include "jswrapper.h"
 
 #include "builtin/SIMD.h"
@@ -48,10 +47,9 @@
 #include "wasm/WasmSerialize.h"
 #include "wasm/WasmValidate.h"
 
-#include "jsobjinlines.h"
-
 #include "frontend/ParseNode-inl.h"
 #include "vm/ArrayBufferObject-inl.h"
+#include "vm/JSObject-inl.h"
 
 using namespace js;
 using namespace js::frontend;
@@ -337,8 +335,8 @@ struct js::AsmJSMetadata : Metadata, AsmJSMetadataCacheablePod
         return srcStart + srcLengthWithRightBrace;
     }
 
-    explicit AsmJSMetadata(UniqueMetadataTier tier)
-      : Metadata(Move(tier), ModuleKind::AsmJS),
+    AsmJSMetadata()
+      : Metadata(ModuleKind::AsmJS),
         cacheResult(CacheResult::Miss),
         srcStart(0),
         strict(false)
@@ -586,13 +584,13 @@ ComparisonRight(ParseNode* pn)
 static inline bool
 IsExpressionStatement(ParseNode* pn)
 {
-    return pn->isKind(ParseNodeKind::Semi);
+    return pn->isKind(ParseNodeKind::ExpressionStatement);
 }
 
 static inline ParseNode*
 ExpressionStatementExpr(ParseNode* pn)
 {
-    MOZ_ASSERT(pn->isKind(ParseNodeKind::Semi));
+    MOZ_ASSERT(pn->isKind(ParseNodeKind::ExpressionStatement));
     return UnaryKid(pn);
 }
 
@@ -732,8 +730,7 @@ IsIgnoredDirectiveName(JSContext* cx, JSAtom* atom)
 static inline bool
 IsIgnoredDirective(JSContext* cx, ParseNode* pn)
 {
-    return pn->isKind(ParseNodeKind::Semi) &&
-           UnaryKid(pn) &&
+    return pn->isKind(ParseNodeKind::ExpressionStatement) &&
            UnaryKid(pn)->isKind(ParseNodeKind::String) &&
            IsIgnoredDirectiveName(cx, UnaryKid(pn)->pn_atom);
 }
@@ -741,7 +738,7 @@ IsIgnoredDirective(JSContext* cx, ParseNode* pn)
 static inline bool
 IsEmptyStatement(ParseNode* pn)
 {
-    return pn->isKind(ParseNodeKind::Semi) && !UnaryKid(pn);
+    return pn->isKind(ParseNodeKind::EmptyStatement);
 }
 
 static inline ParseNode*
@@ -766,7 +763,7 @@ GetToken(AsmJSParser& parser, TokenKind* tkp)
     while (true) {
         if (!ts.getToken(&tk, TokenStreamShared::Operand))
             return false;
-        if (tk != TokenKind::TOK_SEMI)
+        if (tk != TokenKind::Semi)
             break;
     }
     *tkp = tk;
@@ -781,9 +778,9 @@ PeekToken(AsmJSParser& parser, TokenKind* tkp)
     while (true) {
         if (!ts.peekToken(&tk, TokenStream::Operand))
             return false;
-        if (tk != TokenKind::TOK_SEMI)
+        if (tk != TokenKind::Semi)
             break;
-        ts.consumeKnownToken(TokenKind::TOK_SEMI, TokenStreamShared::Operand);
+        ts.consumeKnownToken(TokenKind::Semi, TokenStreamShared::Operand);
     }
     *tkp = tk;
     return true;
@@ -795,7 +792,7 @@ ParseVarOrConstStatement(AsmJSParser& parser, ParseNode** var)
     TokenKind tk;
     if (!PeekToken(parser, &tk))
         return false;
-    if (tk != TokenKind::TOK_VAR && tk != TokenKind::TOK_CONST) {
+    if (tk != TokenKind::Var && tk != TokenKind::Const) {
         *var = nullptr;
         return true;
     }
@@ -1815,11 +1812,7 @@ class MOZ_STACK_CLASS ModuleValidator
 
   public:
     bool init() {
-        auto tierMetadata = js::MakeUnique<MetadataTier>(Tier::Ion);
-        if (!tierMetadata)
-            return false;
-
-        asmJSMetadata_ = cx_->new_<AsmJSMetadata>(Move(tierMetadata));
+        asmJSMetadata_ = cx_->new_<AsmJSMetadata>();
         if (!asmJSMetadata_)
             return false;
 
@@ -3848,7 +3841,7 @@ CheckModuleProcessingDirectives(ModuleValidator& m)
     auto& ts = m.parser().tokenStream;
     while (true) {
         bool matched;
-        if (!ts.matchToken(&matched, TokenKind::TOK_STRING, TokenStreamShared::Operand))
+        if (!ts.matchToken(&matched, TokenKind::String, TokenStreamShared::Operand))
             return false;
         if (!matched)
             return true;
@@ -3859,7 +3852,7 @@ CheckModuleProcessingDirectives(ModuleValidator& m)
         TokenKind tt;
         if (!ts.getToken(&tt))
             return false;
-        if (tt != TokenKind::TOK_SEMI)
+        if (tt != TokenKind::Semi)
             return m.failCurrentOffset("expected semicolon after string literal");
     }
 }
@@ -3896,7 +3889,7 @@ CheckArgumentType(FunctionValidator& f, ParseNode* stmt, PropertyName* name, Typ
         return ArgFail(f, name, stmt ? stmt : f.fn());
 
     ParseNode* initNode = ExpressionStatementExpr(stmt);
-    if (!initNode || !initNode->isKind(ParseNodeKind::Assign))
+    if (!initNode->isKind(ParseNodeKind::Assign))
         return ArgFail(f, name, stmt);
 
     ParseNode* argNode = BinaryLeft(initNode);
@@ -4855,6 +4848,9 @@ static bool
 CheckFunctionSignature(ModuleValidator& m, ParseNode* usepn, Sig&& sig, PropertyName* name,
                        ModuleValidator::Func** func)
 {
+    if (sig.args().length() > MaxParams)
+        return m.failf(usepn, "too many parameters");
+
     ModuleValidator::Func* existing = m.lookupFuncDef(name);
     if (!existing) {
         if (!CheckModuleLevelName(m, usepn, name))
@@ -6570,11 +6566,8 @@ CheckAsExprStatement(FunctionValidator& f, ParseNode* expr)
 static bool
 CheckExprStatement(FunctionValidator& f, ParseNode* exprStmt)
 {
-    MOZ_ASSERT(exprStmt->isKind(ParseNodeKind::Semi));
-    ParseNode* expr = UnaryKid(exprStmt);
-    if (!expr)
-        return true;
-    return CheckAsExprStatement(f, expr);
+    MOZ_ASSERT(exprStmt->isKind(ParseNodeKind::ExpressionStatement));
+    return CheckAsExprStatement(f, UnaryKid(exprStmt));
 }
 
 static bool
@@ -7155,18 +7148,19 @@ CheckStatement(FunctionValidator& f, ParseNode* stmt)
         return f.m().failOverRecursed();
 
     switch (stmt->getKind()) {
-      case ParseNodeKind::Semi:          return CheckExprStatement(f, stmt);
-      case ParseNodeKind::While:         return CheckWhile(f, stmt);
-      case ParseNodeKind::For:           return CheckFor(f, stmt);
-      case ParseNodeKind::DoWhile:       return CheckDoWhile(f, stmt);
-      case ParseNodeKind::Label:         return CheckLabel(f, stmt);
-      case ParseNodeKind::If:            return CheckIf(f, stmt);
-      case ParseNodeKind::Switch:        return CheckSwitch(f, stmt);
-      case ParseNodeKind::Return:        return CheckReturn(f, stmt);
-      case ParseNodeKind::StatementList: return CheckStatementList(f, stmt);
-      case ParseNodeKind::Break:         return CheckBreakOrContinue(f, true, stmt);
-      case ParseNodeKind::Continue:      return CheckBreakOrContinue(f, false, stmt);
-      case ParseNodeKind::LexicalScope:  return CheckLexicalScope(f, stmt);
+      case ParseNodeKind::EmptyStatement:       return true;
+      case ParseNodeKind::ExpressionStatement:  return CheckExprStatement(f, stmt);
+      case ParseNodeKind::While:                return CheckWhile(f, stmt);
+      case ParseNodeKind::For:                  return CheckFor(f, stmt);
+      case ParseNodeKind::DoWhile:              return CheckDoWhile(f, stmt);
+      case ParseNodeKind::Label:                return CheckLabel(f, stmt);
+      case ParseNodeKind::If:                   return CheckIf(f, stmt);
+      case ParseNodeKind::Switch:               return CheckSwitch(f, stmt);
+      case ParseNodeKind::Return:               return CheckReturn(f, stmt);
+      case ParseNodeKind::StatementList:        return CheckStatementList(f, stmt);
+      case ParseNodeKind::Break:                return CheckBreakOrContinue(f, true, stmt);
+      case ParseNodeKind::Continue:             return CheckBreakOrContinue(f, false, stmt);
+      case ParseNodeKind::LexicalScope:         return CheckLexicalScope(f, stmt);
       default:;
     }
 
@@ -7178,7 +7172,7 @@ ParseFunction(ModuleValidator& m, ParseNode** fnOut, unsigned* line)
 {
     auto& tokenStream = m.tokenStream();
 
-    tokenStream.consumeKnownToken(TokenKind::TOK_FUNCTION, TokenStreamShared::Operand);
+    tokenStream.consumeKnownToken(TokenKind::Function, TokenStreamShared::Operand);
 
     auto& anyChars = tokenStream.anyCharsAccess();
     uint32_t toStringStart = anyChars.currentToken().pos.begin;
@@ -7187,7 +7181,7 @@ ParseFunction(ModuleValidator& m, ParseNode** fnOut, unsigned* line)
     TokenKind tk;
     if (!tokenStream.getToken(&tk, TokenStreamShared::Operand))
         return false;
-    if (tk == TokenKind::TOK_MUL)
+    if (tk == TokenKind::Mul)
         return m.failCurrentOffset("unexpected generator function");
     if (!TokenKindIsPossibleIdentifier(tk))
         return false;  // The regular parser will throw a SyntaxError, no need to m.fail.
@@ -7307,7 +7301,7 @@ CheckFunctions(ModuleValidator& m)
         if (!PeekToken(m.parser(), &tk))
             return false;
 
-        if (tk != TokenKind::TOK_FUNCTION)
+        if (tk != TokenKind::Function)
             break;
 
         if (!CheckFunction(m))
@@ -7441,8 +7435,8 @@ CheckModuleReturn(ModuleValidator& m)
     if (!GetToken(m.parser(), &tk))
         return false;
     auto& ts = m.parser().tokenStream;
-    if (tk != TokenKind::TOK_RETURN) {
-        return m.failCurrentOffset((tk == TokenKind::TOK_RC || tk == TokenKind::TOK_EOF)
+    if (tk != TokenKind::Return) {
+        return m.failCurrentOffset((tk == TokenKind::Rc || tk == TokenKind::Eof)
                                    ? "expecting return statement"
                                    : "invalid asm.js. statement");
     }
@@ -7474,7 +7468,7 @@ CheckModuleEnd(ModuleValidator &m)
     if (!GetToken(m.parser(), &tk))
         return false;
 
-    if (tk != TokenKind::TOK_EOF && tk != TokenKind::TOK_RC)
+    if (tk != TokenKind::Eof && tk != TokenKind::Rc)
         return m.failCurrentOffset("top-level export (return) must be the last statement");
 
     m.parser().tokenStream.anyCharsAccess().ungetToken();
@@ -8656,11 +8650,7 @@ LookupAsmJSModuleInCache(JSContext* cx, AsmJSParser& parser, bool* loadedFromCac
     if (!Module::assumptionsMatch(assumptions, cursor, remain))
         return true;
 
-    auto tierMetadata = js::MakeUnique<MetadataTier>(Tier::Ion);
-    if (!tierMetadata)
-        return false;
-
-    MutableAsmJSMetadata asmJSMetadata = cx->new_<AsmJSMetadata>(Move(tierMetadata));
+    MutableAsmJSMetadata asmJSMetadata = cx->new_<AsmJSMetadata>();
     if (!asmJSMetadata)
         return false;
 

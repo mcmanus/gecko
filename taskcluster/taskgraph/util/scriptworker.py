@@ -22,10 +22,6 @@ import os
 
 
 # constants {{{1
-GECKO = os.path.realpath(os.path.join(__file__, '..', '..', '..', '..'))
-VERSION_PATH = os.path.join(GECKO, "browser", "config", "version_display.txt")
-APP_VERSION_PATH = os.path.join(GECKO, "browser", "config", "version.txt")
-
 """Map signing scope aliases to sets of projects.
 
 Currently m-c and DevEdition on m-b use nightly signing; Beta on m-b and m-r
@@ -258,6 +254,11 @@ PUSH_APK_SCOPES = {
 }
 
 
+""" The list of the release promotion phases which we send notifications for
+"""
+RELEASE_NOTIFICATION_PHASES = ('promote', 'push', 'ship')
+
+
 def add_scope_prefix(config, scope):
     """
     Prepends the scriptworker scope prefix from the :ref:`graph config
@@ -454,7 +455,7 @@ def get_release_config(config):
 
     partial_updates = os.environ.get("PARTIAL_UPDATES", "")
     if partial_updates != "" and config.kind in ('release-bouncer-sub',
-                                                 'release-uptake-monitoring',
+                                                 'release-bouncer-check',
                                                  'release-updates-builder',
                                                  ):
         partial_updates = json.loads(partial_updates)
@@ -465,20 +466,8 @@ def get_release_config(config):
         if release_config['partial_versions'] == "{}":
             del release_config['partial_versions']
 
-    uptake_monitoring_platforms = os.environ.get("UPTAKE_MONITORING_PLATFORMS", "[]")
-    if uptake_monitoring_platforms != "[]" and \
-            config.kind in ('release-uptake-monitoring',):
-        uptake_monitoring_platforms = json.loads(uptake_monitoring_platforms)
-        release_config['platforms'] = ', '.join(uptake_monitoring_platforms)
-        if release_config['platforms'] == "[]":
-            del release_config['platforms']
-
-    with open(VERSION_PATH, "r") as fh:
-        version = fh.readline().rstrip()
-    release_config['version'] = version
-    with open(APP_VERSION_PATH, "r") as fh:
-        appVersion = fh.readline().rstrip()
-    release_config['appVersion'] = appVersion
+    release_config['version'] = str(config.params['version'])
+    release_config['appVersion'] = str(config.params['app_version'])
 
     release_config['next_version'] = str(config.params['next_version'])
     release_config['build_number'] = config.params['build_number']
@@ -488,7 +477,7 @@ def get_release_config(config):
 def get_signing_cert_scope_per_platform(build_platform, is_nightly, config):
     if 'devedition' in build_platform:
         return get_devedition_signing_cert_scope(config)
-    elif is_nightly:
+    elif is_nightly or build_platform in ('linux64-source', 'linux64-fennec-source'):
         return get_signing_cert_scope(config)
     else:
         return add_scope_prefix(config, 'signing:cert:dep-signing')

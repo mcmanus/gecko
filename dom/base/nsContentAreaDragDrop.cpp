@@ -39,6 +39,7 @@
 #include "nsITextControlElement.h"
 #include "nsUnicharUtils.h"
 #include "nsIURL.h"
+#include "nsIURIMutator.h"
 #include "nsIDocument.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsIPrincipal.h"
@@ -59,6 +60,7 @@
 #include "nsVariant.h"
 
 using namespace mozilla::dom;
+using mozilla::IgnoreErrors;
 
 class MOZ_STACK_CLASS DragDataProducer
 {
@@ -70,7 +72,8 @@ public:
   nsresult Produce(DataTransfer* aDataTransfer,
                    bool* aCanDrag,
                    nsISelection** aSelection,
-                   nsIContent** aDragNode);
+                   nsIContent** aDragNode,
+                   nsACString& aPrincipalURISpec);
 
 private:
   void AddString(DataTransfer* aDataTransfer,
@@ -117,7 +120,8 @@ nsContentAreaDragDrop::GetDragData(nsPIDOMWindowOuter* aWindow,
                                    DataTransfer* aDataTransfer,
                                    bool* aCanDrag,
                                    nsISelection** aSelection,
-                                   nsIContent** aDragNode)
+                                   nsIContent** aDragNode,
+                                   nsACString& aPrincipalURISpec)
 {
   NS_ENSURE_TRUE(aSelectionTargetNode, NS_ERROR_INVALID_ARG);
 
@@ -125,7 +129,8 @@ nsContentAreaDragDrop::GetDragData(nsPIDOMWindowOuter* aWindow,
 
   DragDataProducer
     provider(aWindow, aTarget, aSelectionTargetNode, aIsAltKeyPressed);
-  return provider.Produce(aDataTransfer, aCanDrag, aSelection, aDragNode);
+  return provider.Produce(aDataTransfer, aCanDrag, aSelection, aDragNode,
+                          aPrincipalURISpec);
 }
 
 
@@ -352,10 +357,9 @@ DragDataProducer::GetNodeString(nsIContent* inNode,
 
   // use a range to get the text-equivalent of the node
   nsCOMPtr<nsIDocument> doc = node->OwnerDoc();
-  mozilla::IgnoredErrorResult rv;
-  RefPtr<nsRange> range = doc->CreateRange(rv);
+  RefPtr<nsRange> range = doc->CreateRange(IgnoreErrors());
   if (range) {
-    range->SelectNode(*node, rv);
+    range->SelectNode(*node, IgnoreErrors());
     range->ToString(outNodeString);
   }
 }
@@ -364,7 +368,8 @@ nsresult
 DragDataProducer::Produce(DataTransfer* aDataTransfer,
                           bool* aCanDrag,
                           nsISelection** aSelection,
-                          nsIContent** aDragNode)
+                          nsIContent** aDragNode,
+                          nsACString& aPrincipalURISpec)
 {
   NS_PRECONDITION(aCanDrag && aSelection && aDataTransfer && aDragNode,
                   "null pointer passed to Produce");
@@ -429,7 +434,7 @@ DragDataProducer::Produce(DataTransfer* aDataTransfer,
         if (tp) {
           // We have a TabParent, so it may have data for dnd in case the child
           // process started a dnd session.
-          tp->AddInitialDnDDataTo(aDataTransfer);
+          tp->AddInitialDnDDataTo(aDataTransfer, aPrincipalURISpec);
         }
       }
     }
@@ -542,9 +547,11 @@ DragDataProducer::Produce(DataTransfer* aDataTransfer,
           CopyUTF8toUTF16(spec, mUrlString);
         }
 
-        nsCOMPtr<nsIDOMElement> imageElement(do_QueryInterface(image));
+        nsCOMPtr<Element> imageElement(do_QueryInterface(image));
         // XXXbz Shouldn't we use the "title" attr for title?  Using
         // "alt" seems very wrong....
+        // XXXbz Also, what if this is an nsIImageLoadingContent
+        // that's not an <html:img>?
         if (imageElement) {
           imageElement->GetAttribute(NS_LITERAL_STRING("alt"), mTitleString);
         }
@@ -595,15 +602,15 @@ DragDataProducer::Produce(DataTransfer* aDataTransfer,
                                                       &validExtension)) ||
                   !validExtension) {
                 // Fix the file extension in the URL
-                nsresult rv = imgUrl->Clone(getter_AddRefs(imgUri));
-                NS_ENSURE_SUCCESS(rv, rv);
-
-                imgUrl = do_QueryInterface(imgUri);
-
                 nsAutoCString primaryExtension;
                 mimeInfo->GetPrimaryExtension(primaryExtension);
 
-                imgUrl->SetFileExtension(primaryExtension);
+                rv = NS_MutateURI(imgUrl)
+                       .Apply<nsIURLMutator>(&nsIURLMutator::SetFileExtension,
+                                             primaryExtension,
+                                             nullptr)
+                       .Finalize(imgUrl);
+                NS_ENSURE_SUCCESS(rv, rv);
               }
 
               nsAutoCString fileName;
@@ -853,28 +860,22 @@ DragDataProducer::GetDraggableSelectionData(nsISelection* inSelection,
       // in this case, drag the image, rather than a serialization of the HTML
       // XXX generalize this to other draggable element types?
       if (selectionStart == selectionEnd) {
-        bool hasChildren;
-        selectionStart->HasChildNodes(&hasChildren);
-        if (hasChildren) {
+        nsCOMPtr<nsIContent> selStartContent = do_QueryInterface(selectionStart);
+        if (selStartContent && selStartContent->HasChildNodes()) {
           // see if just one node is selected
           int32_t anchorOffset, focusOffset;
           inSelection->GetAnchorOffset(&anchorOffset);
           inSelection->GetFocusOffset(&focusOffset);
           if (abs(anchorOffset - focusOffset) == 1) {
-            nsCOMPtr<nsIContent> selStartContent =
-              do_QueryInterface(selectionStart);
-
-            if (selStartContent) {
-              int32_t childOffset =
-                (anchorOffset < focusOffset) ? anchorOffset : focusOffset;
-              nsIContent *childContent =
-                selStartContent->GetChildAt_Deprecated(childOffset);
-              // if we find an image, we'll fall into the node-dragging code,
-              // rather the the selection-dragging code
-              if (nsContentUtils::IsDraggableImage(childContent)) {
-                NS_ADDREF(*outImageOrLinkNode = childContent);
-                return NS_OK;
-              }
+            int32_t childOffset =
+              (anchorOffset < focusOffset) ? anchorOffset : focusOffset;
+            nsIContent *childContent =
+              selStartContent->GetChildAt_Deprecated(childOffset);
+            // if we find an image, we'll fall into the node-dragging code,
+            // rather the the selection-dragging code
+            if (nsContentUtils::IsDraggableImage(childContent)) {
+              NS_ADDREF(*outImageOrLinkNode = childContent);
+              return NS_OK;
             }
           }
         }

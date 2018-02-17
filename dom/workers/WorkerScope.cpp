@@ -10,6 +10,7 @@
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/Clients.h"
+#include "mozilla/dom/ClientState.h"
 #include "mozilla/dom/Console.h"
 #include "mozilla/dom/DedicatedWorkerGlobalScopeBinding.h"
 #include "mozilla/dom/DOMPrefs.h"
@@ -34,6 +35,7 @@
 
 #include "nsIDocument.h"
 #include "nsIServiceWorkerManager.h"
+#include "nsIScriptError.h"
 #include "nsIScriptTimeoutHandler.h"
 
 #ifdef ANDROID
@@ -46,8 +48,8 @@
 #include "ScriptLoader.h"
 #include "WorkerPrivate.h"
 #include "WorkerRunnable.h"
-#include "ServiceWorkerManager.h"
-#include "ServiceWorkerRegistration.h"
+#include "mozilla/dom/ServiceWorkerManager.h"
+#include "mozilla/dom/ServiceWorkerRegistration.h"
 
 #ifdef XP_WIN
 #undef PostMessage
@@ -55,19 +57,18 @@
 
 extern already_AddRefed<nsIScriptTimeoutHandler>
 NS_CreateJSTimeoutHandler(JSContext* aCx,
-                          mozilla::dom::workers::WorkerPrivate* aWorkerPrivate,
+                          mozilla::dom::WorkerPrivate* aWorkerPrivate,
                           mozilla::dom::Function& aFunction,
                           const mozilla::dom::Sequence<JS::Value>& aArguments,
                           mozilla::ErrorResult& aError);
 
 extern already_AddRefed<nsIScriptTimeoutHandler>
 NS_CreateJSTimeoutHandler(JSContext* aCx,
-                          mozilla::dom::workers::WorkerPrivate* aWorkerPrivate,
+                          mozilla::dom::WorkerPrivate* aWorkerPrivate,
                           const nsAString& aExpression);
 
-using namespace mozilla;
-using namespace mozilla::dom;
-USING_WORKERS_NAMESPACE
+namespace mozilla {
+namespace dom {
 
 using mozilla::dom::cache::CacheStorage;
 using mozilla::ipc::PrincipalInfo;
@@ -159,8 +160,7 @@ WorkerGlobalScope::GetCrypto(ErrorResult& aError)
   mWorkerPrivate->AssertIsOnWorkerThread();
 
   if (!mCrypto) {
-    mCrypto = new Crypto();
-    mCrypto->Init(this);
+    mCrypto = new Crypto(this);
   }
 
   return mCrypto;
@@ -252,7 +252,7 @@ WorkerGlobalScope::ImportScripts(const Sequence<nsString>& aScriptURLs,
                                  ErrorResult& aRv)
 {
   mWorkerPrivate->AssertIsOnWorkerThread();
-  scriptloader::Load(mWorkerPrivate, aScriptURLs, WorkerScript, aRv);
+  workerinternals::Load(mWorkerPrivate, aScriptURLs, WorkerScript, aRv);
 }
 
 int32_t
@@ -633,9 +633,15 @@ NS_IMPL_ADDREF_INHERITED(ServiceWorkerGlobalScope, WorkerGlobalScope)
 NS_IMPL_RELEASE_INHERITED(ServiceWorkerGlobalScope, WorkerGlobalScope)
 
 ServiceWorkerGlobalScope::ServiceWorkerGlobalScope(WorkerPrivate* aWorkerPrivate,
-                                                   const nsACString& aScope)
-  : WorkerGlobalScope(aWorkerPrivate),
-    mScope(NS_ConvertUTF8toUTF16(aScope))
+                                                   const ServiceWorkerRegistrationDescriptor& aRegistrationDescriptor)
+  : WorkerGlobalScope(aWorkerPrivate)
+  , mScope(NS_ConvertUTF8toUTF16(aRegistrationDescriptor.Scope()))
+
+  // Eagerly create the registration because we will need to receive updates
+  // about the state of the registration.  We can't wait until first access
+  // to start receiving these.
+  , mRegistration(ServiceWorkerRegistration::CreateForWorker(aWorkerPrivate,
+                                                             aRegistrationDescriptor))
 {
 }
 
@@ -672,11 +678,6 @@ ServiceWorkerGlobalScope::GetClients()
 ServiceWorkerRegistration*
 ServiceWorkerGlobalScope::Registration()
 {
-  if (!mRegistration) {
-    mRegistration =
-      ServiceWorkerRegistration::CreateForWorker(mWorkerPrivate, mScope);
-  }
-
   return mRegistration;
 }
 
@@ -983,7 +984,7 @@ WorkerDebuggerGlobalScope::LoadSubScript(JSContext* aCx,
   Maybe<JSAutoCompartment> ac;
   if (aSandbox.WasPassed()) {
     JS::Rooted<JSObject*> sandbox(aCx, js::CheckedUnwrap(aSandbox.Value()));
-    if (!IsDebuggerSandbox(sandbox)) {
+    if (!IsWorkerDebuggerSandbox(sandbox)) {
       aRv.Throw(NS_ERROR_INVALID_ARG);
       return;
     }
@@ -993,7 +994,7 @@ WorkerDebuggerGlobalScope::LoadSubScript(JSContext* aCx,
 
   nsTArray<nsString> urls;
   urls.AppendElement(aURL);
-  scriptloader::Load(mWorkerPrivate, urls, DebuggerScript, aRv);
+  workerinternals::Load(mWorkerPrivate, urls, DebuggerScript, aRv);
 }
 
 void
@@ -1116,8 +1117,6 @@ WorkerDebuggerGlobalScope::AbstractMainThreadFor(TaskCategory aCategory)
   MOZ_CRASH("AbstractMainThreadFor not supported for workers.");
 }
 
-BEGIN_WORKERS_NAMESPACE
-
 bool
 IsWorkerGlobal(JSObject* object)
 {
@@ -1125,16 +1124,17 @@ IsWorkerGlobal(JSObject* object)
 }
 
 bool
-IsDebuggerGlobal(JSObject* object)
+IsWorkerDebuggerGlobal(JSObject* object)
 {
   return IS_INSTANCE_OF(WorkerDebuggerGlobalScope, object);
 }
 
 bool
-IsDebuggerSandbox(JSObject* object)
+IsWorkerDebuggerSandbox(JSObject* object)
 {
   return SimpleGlobalObject::SimpleGlobalType(object) ==
     SimpleGlobalObject::GlobalType::WorkerDebuggerSandbox;
 }
 
-END_WORKERS_NAMESPACE
+} // dom namespace
+} // mozilla namespace

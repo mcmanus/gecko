@@ -71,6 +71,7 @@ public:
 
 protected:
     virtual ~nsJARURI();
+    nsresult SetJAREntry(const nsACString &entryPath);
 
     // enum used in a few places to specify how .ref attribute should be handled
     enum RefHandlingEnum {
@@ -78,6 +79,10 @@ protected:
         eHonorRef,
         eReplaceRef
     };
+
+    nsresult SetFileNameInternal(const nsACString& fileName);
+    nsresult SetFileBaseNameInternal(const nsACString& fileBaseName);
+    nsresult SetFileExtensionInternal(const nsACString& fileExtension);
 
     // Helper to share code between Equals methods.
     virtual nsresult EqualsInternal(nsIURI* other,
@@ -102,10 +107,12 @@ public:
     class Mutator
         : public nsIURIMutator
         , public BaseURIMutator<nsJARURI>
+        , public nsIURLMutator
     {
         NS_DECL_ISUPPORTS
         NS_FORWARD_SAFE_NSIURISETTERS_RET(mURI)
         NS_DEFINE_NSIMUTATOR_COMMON
+        NS_DECL_NSIURLMUTATOR
 
         explicit Mutator() { }
     private:

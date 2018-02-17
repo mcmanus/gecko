@@ -5,6 +5,7 @@
 from abc import ABCMeta, abstractmethod, abstractproperty
 from argparse import ArgumentParser, SUPPRESS
 from distutils.util import strtobool
+from distutils import spawn
 from itertools import chain
 from urlparse import urlparse
 import logging
@@ -96,10 +97,10 @@ def get_default_valgrind_suppression_files():
     rv = []
     if mozinfo.os == "linux":
         if mozinfo.processor == "x86_64":
-            rv.append(os.path.join(supps_path, "x86_64-redhat-linux-gnu.sup"))
+            rv.append(os.path.join(supps_path, "x86_64-pc-linux-gnu.sup"))
             rv.append(os.path.join(supps_path, "cross-architecture.sup"))
         elif mozinfo.processor == "x86":
-            rv.append(os.path.join(supps_path, "i386-redhat-linux-gnu.sup"))
+            rv.append(os.path.join(supps_path, "i386-pc-linux-gnu.sup"))
             rv.append(os.path.join(supps_path, "cross-architecture.sup"))
 
     return rv
@@ -804,11 +805,20 @@ class MochitestArguments(ArgumentContainer):
             if not mozinfo.isLinux:
                 parser.error(
                     '--use-test-media-devices is only supported on Linux currently')
-            for f in ['/usr/bin/gst-launch-0.10', '/usr/bin/pactl']:
-                if not os.path.isfile(f):
-                    parser.error(
-                        'Missing binary %s required for '
-                        '--use-test-media-devices' % f)
+
+            gst01 = spawn.find_executable("gst-launch-0.1")
+            gst10 = spawn.find_executable("gst-launch-1.0")
+            pactl = spawn.find_executable("pactl")
+
+            if not (gst01 or gst10):
+                parser.error(
+                    'Missing gst-launch-{0.1,1.0}, required for '
+                    '--use-test-media-devices')
+
+            if not pactl:
+                parser.error(
+                    'Missing binary pactl required for '
+                    '--use-test-media-devices')
 
         if options.nested_oop:
             options.e10s = True

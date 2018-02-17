@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Odporúča {provider}",
   "header_bookmarks_placeholder": "Zatiaľ nemáte žiadne záložky.",
   "header_stories_from": "zo služby",
+  "context_menu_button_sr": "Otvorí kontextovú ponuku pre {title}",
   "type_label_visited": "Navštívené",
   "type_label_bookmarked": "V záložkách",
   "type_label_synced": "Synchronizované z ďalšieho zariadenia",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Upraviť túto stránku",
   "edit_topsites_dismiss_button": "Odstrániť túto stránku",
   "edit_topsites_add_button": "Pridať",
+  "edit_topsites_add_button_tooltip": "Pridať top stránku",
   "topsites_form_add_header": "Nová top stránka",
   "topsites_form_edit_header": "Upraviť top stránku",
   "topsites_form_title_placeholder": "Zadajte názov",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Už ste prečítali všetko. Ďalšie príbehy zo služby {provider} tu nájdete opäť neskôr. Nemôžete sa dočkať? Vyberte si populárnu tému a pozrite sa na ďalšie skvelé príbehy z celého webu.",
   "manual_migration_explanation2": "Vyskúšajte Firefox so záložkami, históriou prehliadania a heslami s iných prehliadačov.",
   "manual_migration_cancel_button": "Nie, ďakujem",
-  "manual_migration_import_button": "Importovať teraz"
+  "manual_migration_import_button": "Importovať teraz",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

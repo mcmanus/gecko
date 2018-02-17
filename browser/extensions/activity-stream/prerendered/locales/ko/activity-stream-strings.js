@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "{provider} 추천",
   "header_bookmarks_placeholder": "북마크가 없습니다.",
   "header_stories_from": "출처",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "방문한 사이트",
   "type_label_bookmarked": "즐겨찾기",
   "type_label_synced": "다른 기기에서 동기화",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "이 사이트 수정",
   "edit_topsites_dismiss_button": "이 사이트 제거",
   "edit_topsites_add_button": "추가",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "새로운 인기 사이트",
   "topsites_form_edit_header": "인기 사이트 편집",
   "topsites_form_title_placeholder": "제목 입력",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "다 왔습니다. {provider}에서 제공하는 주요 기사를 다시 확인해 보세요. 기다릴 수가 없나요? 주제를 선택하면 웹에서 볼 수 있는 가장 재미있는 글을 볼 수 있습니다.",
   "manual_migration_explanation2": "다른 브라우저에 있는 북마크, 기록, 비밀번호를 사용해 Firefox를 이용해 보세요.",
   "manual_migration_cancel_button": "괜찮습니다",
-  "manual_migration_import_button": "지금 가져오기"
+  "manual_migration_import_button": "지금 가져오기",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

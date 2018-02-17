@@ -3,15 +3,18 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const { interfaces: Ci, results: Cr, manager: Cm, utils: Cu } = Components;
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+const Cm = Components.manager;
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(
+ChromeUtils.defineModuleGetter(
   this, "CleanupManager", "resource://shield-recipe-client/lib/CleanupManager.jsm",
 );
-XPCOMUtils.defineLazyModuleGetter(
+ChromeUtils.defineModuleGetter(
   this, "AddonStudies", "resource://shield-recipe-client/lib/AddonStudies.jsm",
+);
+ChromeUtils.defineModuleGetter(
+  this, "RecipeRunner", "resource://shield-recipe-client/lib/RecipeRunner.jsm",
 );
 
 this.EXPORTED_SYMBOLS = ["AboutPages"];
@@ -165,7 +168,7 @@ XPCOMUtils.defineLazyGetter(this.AboutPages, "aboutStudies", () => {
           this.sendStudyList(message.target);
           break;
         case "Shield:RemoveStudy":
-          this.removeStudy(message.data);
+          this.removeStudy(message.data.recipeId, message.data.reason);
           break;
         case "Shield:OpenDataPreferences":
           this.openDataPreferences();
@@ -195,8 +198,8 @@ XPCOMUtils.defineLazyGetter(this.AboutPages, "aboutStudies", () => {
      * Disable an active study and remove its add-on.
      * @param {String} studyName
      */
-    async removeStudy(recipeId) {
-      await AddonStudies.stop(recipeId);
+    async removeStudy(recipeId, reason) {
+      await AddonStudies.stop(recipeId, reason);
 
       // Update any open tabs with the new study list now that it has changed.
       Services.mm.broadcastAsyncMessage("Shield:ReceiveStudyList", {
@@ -212,6 +215,11 @@ XPCOMUtils.defineLazyGetter(this.AboutPages, "aboutStudies", () => {
     getShieldLearnMoreHref() {
       return Services.urlFormatter.formatURLPref(SHIELD_LEARN_MORE_URL_PREF);
     },
+
+    getStudiesEnabled() {
+      RecipeRunner.checkPrefs();
+      return RecipeRunner.enabled;
+    }
   });
 
   return aboutStudies;

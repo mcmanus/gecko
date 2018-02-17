@@ -77,7 +77,7 @@ function NetworkEventMessage({
 
   if (httpVersion && status && statusText !== undefined && totalTime !== undefined) {
     let statusCodeDocURL = getHTTPStatusCodeURL(status.toString(), "webconsole");
-    statusCode = dom.a({
+    statusCode = dom.span({
       className: "status-code",
       "data-code": status,
       title: LEARN_MORE,
@@ -107,7 +107,7 @@ function NetworkEventMessage({
     ? dom.span({ className: "xhr" }, l10n.getStr("webConsoleXhrIndicator"))
     : null;
   const requestUrl = dom.a({ className: "url", title: request.url, onClick: toggle },
-    request.url.replace(/\?.+/, ""));
+    request.url);
   const statusBody = statusInfo
     ? dom.a({ className: "status", onClick: toggle }, statusInfo)
     : null;

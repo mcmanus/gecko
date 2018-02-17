@@ -2,11 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cr = Components.results;
-const Cu = Components.utils;
-
 // COMPLETE_LENGTH and PARTIAL_LENGTH copied from nsUrlClassifierDBService.h,
 // they correspond to the length, in bytes, of a hash prefix and the total
 // hash.
@@ -17,9 +12,9 @@ const PARTIAL_LENGTH = 4;
 const MIN_WAIT_DURATION_MAX_VALUE = 24 * 60 * 60 * 1000;
 const PREF_DEBUG_ENABLED = "browser.safebrowsing.debug";
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/NetUtil.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "gDbService",
                                    "@mozilla.org/url-classifier/dbservice;1",
@@ -522,7 +517,7 @@ HashCompleterRequest.prototype = {
 
     for (let i = 0; i < this._requests.length; i++) {
       let request = this._requests[i];
-      if (prefixes.indexOf(request.partialHash) == -1) {
+      if (!prefixes.includes(request.partialHash)) {
         prefixes.push(request.partialHash);
       }
     }

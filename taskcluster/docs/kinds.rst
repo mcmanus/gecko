@@ -255,6 +255,10 @@ release-notify-ship
 ----------------------
 Notify when a release has been shipped.
 
+release-secondary-notify-ship
+----------------------
+Notify when an RC release has been shipped to the beta channel.
+
 release-notify-promote
 ----------------------
 Notify when a release has been promoted.
@@ -269,7 +273,11 @@ Marks releases as shipped in Ship-It.
 
 release-bouncer-aliases
 ------------------------------
-Update Bouncers (download.mozilla.org) "latest" aliases.
+Update Bouncer's (download.mozilla.org) "latest" aliases.
+
+release-bouncer-check
+------------------------------
+Checks Bouncer (download.mozilla.org) uptake.
 
 release-generate-checksums
 --------------------------
@@ -281,19 +289,23 @@ Verifies the contents and package of release update MARs.
 
 release-secondary-final-verify
 ---------------------
-Verifies the contents and package of release update MARs.
+Verifies the contents and package of release update MARs for RC releases.
+
+release-secondary-balrog-publishing
+---------------------
+Schedule an RC release to go live in Balrog. Usually this will happen on the beta channel, to a smaller audience, before the RC goes live on the release channel.
 
 release-update-verify
+---------------------
+Verifies the contents and package of release update MARs.
+
+release-secondary-update-verify
 ---------------------
 Verifies the contents and package of release update MARs.
 
 release-updates-builder
 -----------------------
 Top level Balrog blob submission & patcher/update verify config updates.
-
-release-uptake-monitoring
--------------------------
-Run uptake monitoring for releases.
 
 release-version-bump
 --------------------

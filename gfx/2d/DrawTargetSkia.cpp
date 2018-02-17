@@ -2059,6 +2059,7 @@ void
 DrawTargetSkia::PopClip()
 {
   mCanvas->restore();
+  SetTransform(GetTransform());
 }
 
 void
@@ -2161,6 +2162,8 @@ DrawTargetSkia::PopLayer()
         paint.setColor(SK_ColorTRANSPARENT);
       }
 
+      maskMat.postTranslate(layer.mMask->GetRect().X(), layer.mMask->GetRect().Y());
+
       sk_sp<SkImage> alphaMask = ExtractAlphaForSurface(layer.mMask);
       if (!alphaMask) {
         gfxDebug() << *this << ": PopLayer() failed to extract alpha for mask";
@@ -2182,6 +2185,7 @@ DrawTargetSkia::PopLayer()
     mCanvas->restore();
   }
 
+  SetTransform(GetTransform());
   SetPermitSubpixelAA(layer.mOldPermitSubpixelAA);
 
   mPushedLayers.pop_back();

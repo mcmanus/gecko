@@ -13,14 +13,9 @@
 
 var EXPORTED_SYMBOLS = ["SpecialPowersObserver", "SpecialPowersObserverFactory"];
 
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
-Components.utils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 Components.utils.importGlobalProperties(["File"]);
-
-if (typeof(Cc) == "undefined") {
-  const Cc = Components.classes;
-  const Ci = Components.interfaces;
-}
 
 const CHILD_SCRIPT = "chrome://specialpowers/content/specialpowers.js";
 const CHILD_SCRIPT_API = "chrome://specialpowers/content/specialpowersAPI.js";
@@ -200,7 +195,7 @@ SpecialPowersObserver.prototype._registerObservers = {
   _self: null,
   _topics: [],
   _add(topic) {
-    if (this._topics.indexOf(topic) < 0) {
+    if (!this._topics.includes(topic)) {
       this._topics.push(topic);
       Services.obs.addObserver(this, topic);
     }

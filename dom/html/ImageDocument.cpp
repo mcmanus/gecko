@@ -15,7 +15,6 @@
 #include "nsIDocumentInlines.h"
 #include "nsDOMTokenList.h"
 #include "nsIDOMEvent.h"
-#include "nsIDOMKeyEvent.h"
 #include "nsIDOMMouseEvent.h"
 #include "nsIDOMEventListener.h"
 #include "nsIFrame.h"
@@ -32,7 +31,6 @@
 #include "nsContentPolicyUtils.h"
 #include "nsPIDOMWindow.h"
 #include "nsIDOMElement.h"
-#include "nsIDOMHTMLElement.h"
 #include "nsError.h"
 #include "nsURILoader.h"
 #include "nsIDocShell.h"
@@ -367,18 +365,20 @@ ImageDocument::ShrinkToFit()
     return;
   }
 
+  uint32_t newWidth = std::max(1, NSToCoordFloor(GetRatio() * mImageWidth));
+  uint32_t newHeight = std::max(1, NSToCoordFloor(GetRatio() * mImageHeight));
+
   // Keep image content alive while changing the attributes.
   RefPtr<HTMLImageElement> image = HTMLImageElement::FromContent(mImageContent);
-  {
-    IgnoredErrorResult ignored;
-    image->SetWidth(std::max(1, NSToCoordFloor(GetRatio() * mImageWidth)),
-                    ignored);
+
+  if (mImageIsResized &&
+      newWidth == image->Width() && newHeight == image->Height()) {
+    // Image has already been resized.
+    return;
   }
-  {
-    IgnoredErrorResult ignored;
-    image->SetHeight(std::max(1, NSToCoordFloor(GetRatio() * mImageHeight)),
-                     ignored);
-  }
+
+  image->SetWidth(newWidth, IgnoreErrors());
+  image->SetHeight(newHeight, IgnoreErrors());
 
   // The view might have been scrolled when zooming in, scroll back to the
   // origin now that we're showing a shrunk-to-window version.
@@ -698,7 +698,7 @@ ImageDocument::CreateSyntheticDocument()
   RefPtr<mozilla::dom::NodeInfo> nodeInfo;
   nodeInfo = mNodeInfoManager->GetNodeInfo(nsGkAtoms::img, nullptr,
                                            kNameSpaceID_XHTML,
-                                           nsIDOMNode::ELEMENT_NODE);
+                                           nsINode::ELEMENT_NODE);
 
   mImageContent = NS_NewHTMLImageElement(nodeInfo.forget());
   if (!mImageContent) {

@@ -160,7 +160,7 @@
 #ifdef XP_WIN
 #include <process.h>
 #include <shlobj.h>
-#include "mozilla/WindowsDllServices.h"
+#include "mozilla/WinDllServices.h"
 #include "nsThreadUtils.h"
 #include <comdef.h>
 #include <wbemidl.h>
@@ -222,8 +222,8 @@
 #if defined(XP_LINUX) && !defined(ANDROID)
 #include "mozilla/SandboxInfo.h"
 #elif defined(XP_WIN)
-#include "SandboxBroker.h"
-#include "SandboxPermissions.h"
+#include "sandboxBroker.h"
+#include "sandboxPermissions.h"
 #endif
 #endif
 
@@ -281,17 +281,19 @@ nsString gAbsoluteArgv0Path;
 extern "C" MFBT_API bool IsSignalHandlingBroken();
 #endif
 
-#ifdef LIBFUZZER
-#include "LibFuzzerRunner.h"
+#ifdef FUZZING
+#include "FuzzerRunner.h"
 
 namespace mozilla {
-LibFuzzerRunner* libFuzzerRunner = 0;
+FuzzerRunner* fuzzerRunner = 0;
 } // namespace mozilla
 
+#ifdef LIBFUZZER
 void XRE_LibFuzzerSetDriver(LibFuzzerDriver aDriver) {
-  mozilla::libFuzzerRunner->setParams(aDriver);
+  mozilla::fuzzerRunner->setParams(aDriver);
 }
 #endif
+#endif // FUZZING
 
 namespace mozilla {
 int (*RunGTest)(int*, char**) = 0;
@@ -1662,40 +1664,6 @@ ScopedXPCOMStartup::CreateAppSupport(nsISupports* aOuter, REFNSIID aIID, void** 
 }
 
 nsINativeAppSupport* ScopedXPCOMStartup::gNativeAppSupport;
-
-#if defined(XP_WIN)
-
-class DllNotifications : public mozilla::DllServices
-{
-public:
-  DllNotifications()
-  {
-    Enable();
-  }
-
-private:
-  ~DllNotifications() = default;
-
-  void NotifyDllLoad(const bool aIsMainThread, const nsString& aDllName) override;
-};
-
-void
-DllNotifications::NotifyDllLoad(const bool aIsMainThread,
-                                const nsString& aDllName)
-{
-  const char* topic;
-
-  if (aIsMainThread) {
-    topic = "dll-loaded-main-thread";
-  } else {
-    topic = "dll-loaded-non-main-thread";
-  }
-
-  nsCOMPtr<nsIObserverService> obsServ(mozilla::services::GetObserverService());
-  obsServ->NotifyObservers(nullptr, topic, aDllName.get());
-}
-
-#endif // defined(XP_WIN)
 
 static void DumpArbitraryHelp()
 {
@@ -3875,7 +3843,10 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
   // Initialize GTK here for splash.
 
 #if defined(MOZ_WIDGET_GTK) && defined(MOZ_X11)
-  // Disable XInput2 support due to focus bugginess. See bugs 1182700, 1170342.
+  // Disable XInput2 multidevice support due to focus bugginess.
+  // See bugs 1182700, 1170342.
+  // gdk_disable_multidevice() affects Gdk X11 backend only,
+  // the multidevice support is always enabled on Wayland backend.
   const char* useXI2 = PR_GetEnv("MOZ_USE_XINPUT2");
   if (!useXI2 || (*useXI2 == '0'))
     gdk_disable_multidevice();
@@ -3888,10 +3859,10 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
     return 1;
 #endif /* MOZ_WIDGET_GTK */
 
-#ifdef LIBFUZZER
-  if (PR_GetEnv("LIBFUZZER")) {
+#ifdef FUZZING
+  if (PR_GetEnv("FUZZER")) {
     *aExitFlag = true;
-    return mozilla::libFuzzerRunner->Run(&gArgc, &gArgv);
+    return mozilla::fuzzerRunner->Run(&gArgc, &gArgv);
   }
 #endif
 
@@ -4339,9 +4310,9 @@ XREMain::XRE_mainRun()
   NS_ASSERTION(mScopedXPCOM, "Scoped xpcom not initialized.");
 
 #if defined(XP_WIN)
-  RefPtr<DllNotifications> dllNotifications(new DllNotifications());
-  auto dllNotificationsDisable = MakeScopeExit([&dllNotifications]() {
-    dllNotifications->Disable();
+  RefPtr<mozilla::DllServices> dllServices(mozilla::DllServices::Get());
+  auto dllServicesDisable = MakeScopeExit([&dllServices]() {
+    dllServices->Disable();
   });
 #endif // defined(XP_WIN)
 
@@ -4721,10 +4692,6 @@ XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig)
 
   mozilla::LogModule::Init();
 
-#if defined(MOZ_SANDBOX) && defined(XP_LINUX) && !defined(ANDROID)
-  SandboxInfo::ThreadingCheck();
-#endif
-
 #ifdef MOZ_CODE_COVERAGE
   CodeCoverageHandler::Init();
 #endif
@@ -5052,6 +5019,12 @@ bool
 XRE_IsContentProcess()
 {
   return XRE_GetProcessType() == GeckoProcessType_Content;
+}
+
+bool
+XRE_IsPluginProcess()
+{
+  return XRE_GetProcessType() == GeckoProcessType_Plugin;
 }
 
 bool

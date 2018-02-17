@@ -50,7 +50,7 @@ NS_IMPL_ISUPPORTS(WebAuthnManager, nsIDOMEventListener);
 
 static nsresult
 AssembleClientData(const nsAString& aOrigin, const CryptoBuffer& aChallenge,
-                   /* out */ nsACString& aJsonOut)
+                   const nsAString& aType, /* out */ nsACString& aJsonOut)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -61,6 +61,7 @@ AssembleClientData(const nsAString& aOrigin, const CryptoBuffer& aChallenge,
   }
 
   CollectedClientData clientDataObject;
+  clientDataObject.mType.Assign(aType);
   clientDataObject.mChallenge.Assign(challengeBase64);
   clientDataObject.mOrigin.Assign(aOrigin);
   clientDataObject.mHashAlgorithm.AssignLiteral(u"SHA-256");
@@ -194,7 +195,7 @@ WebAuthnManager::~WebAuthnManager()
 }
 
 already_AddRefed<Promise>
-WebAuthnManager::MakeCredential(const MakePublicKeyCredentialOptions& aOptions,
+WebAuthnManager::MakeCredential(const PublicKeyCredentialCreationOptions& aOptions,
                                 const Optional<OwningNonNull<AbortSignal>>& aSignal)
 {
   MOZ_ASSERT(NS_IsMainThread());
@@ -343,7 +344,8 @@ WebAuthnManager::MakeCredential(const MakePublicKeyCredentialOptions& aOptions,
   }
 
   nsAutoCString clientDataJSON;
-  srv = AssembleClientData(origin, challenge, clientDataJSON);
+  srv = AssembleClientData(origin, challenge,
+                           NS_LITERAL_STRING("webauthn.create"), clientDataJSON);
   if (NS_WARN_IF(NS_FAILED(srv))) {
     promise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
     return promise.forget();
@@ -380,6 +382,7 @@ WebAuthnManager::MakeCredential(const MakePublicKeyCredentialOptions& aOptions,
 
   const auto& selection = aOptions.mAuthenticatorSelection;
   const auto& attachment = selection.mAuthenticatorAttachment;
+  const AttestationConveyancePreference& attestation = aOptions.mAttestation;
 
   // Does the RP require attachment == "platform"?
   bool requirePlatformAttachment =
@@ -388,6 +391,30 @@ WebAuthnManager::MakeCredential(const MakePublicKeyCredentialOptions& aOptions,
   // Does the RP require user verification?
   bool requireUserVerification =
     selection.mUserVerification == UserVerificationRequirement::Required;
+
+  // Does the RP desire direct attestation? Indirect attestation is not
+  // implemented, and thus is equivilent to None.
+  bool requestDirectAttestation =
+    attestation == AttestationConveyancePreference::Direct;
+
+  // XXX Bug 1430150. Need something that allows direct attestation
+  // for tests until we implement a permission dialog we can click.
+  if (requestDirectAttestation) {
+    nsresult rv;
+    nsCOMPtr<nsIPrefService> prefService = do_GetService(NS_PREFSERVICE_CONTRACTID, &rv);
+
+    if (NS_SUCCEEDED(rv)) {
+      nsCOMPtr<nsIPrefBranch> branch;
+      rv = prefService->GetBranch("security.webauth.", getter_AddRefs(branch));
+
+      if (NS_SUCCEEDED(rv)) {
+        rv = branch->GetBoolPref("webauthn_testing_allow_direct_attestation",
+                                 &requestDirectAttestation);
+      }
+    }
+
+    requestDirectAttestation &= NS_SUCCEEDED(rv);
+  }
 
   // Create and forward authenticator selection criteria.
   WebAuthnAuthenticatorSelection authSelection(selection.mRequireResidentKey,
@@ -413,6 +440,7 @@ WebAuthnManager::MakeCredential(const MakePublicKeyCredentialOptions& aOptions,
   mTransaction = Some(WebAuthnTransaction(promise,
                                           rpIdHash,
                                           clientDataJSON,
+                                          requestDirectAttestation,
                                           signal));
 
   mChild->SendRequestRegister(mTransaction.ref().mId, info);
@@ -508,7 +536,8 @@ WebAuthnManager::GetAssertion(const PublicKeyCredentialRequestOptions& aOptions,
   }
 
   nsAutoCString clientDataJSON;
-  srv = AssembleClientData(origin, challenge, clientDataJSON);
+  srv = AssembleClientData(origin, challenge, NS_LITERAL_STRING("webauthn.get"),
+                           clientDataJSON);
   if (NS_WARN_IF(NS_FAILED(srv))) {
     promise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
     return promise.forget();
@@ -523,13 +552,6 @@ WebAuthnManager::GetAssertion(const PublicKeyCredentialRequestOptions& aOptions,
   srv = HashCString(hashService, clientDataJSON, clientDataHash);
   if (NS_WARN_IF(NS_FAILED(srv))) {
     promise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
-    return promise.forget();
-  }
-
-  // Note: we only support U2F-style authentication for now, so we effectively
-  // require an AllowList.
-  if (aOptions.mAllowCredentials.Length() < 1) {
-    promise->MaybeReject(NS_ERROR_DOM_NOT_ALLOWED_ERR);
     return promise.forget();
   }
 
@@ -598,6 +620,7 @@ WebAuthnManager::GetAssertion(const PublicKeyCredentialRequestOptions& aOptions,
   mTransaction = Some(WebAuthnTransaction(promise,
                                           rpIdHash,
                                           clientDataJSON,
+                                          false /* aDirectAttestation */,
                                           signal));
 
   mChild->SendRequestSign(mTransaction.ref().mId, info);
@@ -627,7 +650,7 @@ WebAuthnManager::Store(const Credential& aCredential)
 
 void
 WebAuthnManager::FinishMakeCredential(const uint64_t& aTransactionId,
-                                      nsTArray<uint8_t>& aRegBuffer)
+                                      const WebAuthnMakeCredentialResult& aResult)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -637,7 +660,8 @@ WebAuthnManager::FinishMakeCredential(const uint64_t& aTransactionId,
   }
 
   CryptoBuffer regData;
-  if (NS_WARN_IF(!regData.Assign(aRegBuffer.Elements(), aRegBuffer.Length()))) {
+  if (NS_WARN_IF(!regData.Assign(aResult.RegBuffer().Elements(),
+                                 aResult.RegBuffer().Length()))) {
     RejectTransaction(NS_ERROR_OUT_OF_MEMORY);
     return;
   }
@@ -647,8 +671,8 @@ WebAuthnManager::FinishMakeCredential(const uint64_t& aTransactionId,
     RejectTransaction(NS_ERROR_OUT_OF_MEMORY);
     return;
   }
-  // TODO: Adjust the AAGUID from all zeroes in Bug 1381575 (if needed)
-  // See https://github.com/w3c/webauthn/issues/506
+  // FIDO U2F devices have no AAGUIDs, so they'll be all zeros until we add
+  // support for CTAP2 devices.
   for (int i=0; i<16; i++) {
     aaguidBuf.AppendElement(0x00, mozilla::fallible);
   }
@@ -724,11 +748,16 @@ WebAuthnManager::FinishMakeCredential(const uint64_t& aTransactionId,
     return;
   }
 
-  // The Authentication Data buffer gets CBOR-encoded with the Cert and
-  // Signature to build the Attestation Object.
+  // Direct attestation might have been requested by the RP. mDirectAttestation
+  // will be true only if the user consented via the permission UI.
   CryptoBuffer attObj;
-  rv = CBOREncodeAttestationObj(authDataBuf, attestationCertBuf, signatureBuf,
-                                attObj);
+  if (mTransaction.ref().mDirectAttestation) {
+    rv = CBOREncodeFidoU2FAttestationObj(authDataBuf, attestationCertBuf,
+                                         signatureBuf, attObj);
+  } else {
+    rv = CBOREncodeNoneAttestationObj(authDataBuf, attObj);
+  }
+
   if (NS_FAILED(rv)) {
     RejectTransaction(rv);
     return;
@@ -755,8 +784,7 @@ WebAuthnManager::FinishMakeCredential(const uint64_t& aTransactionId,
 
 void
 WebAuthnManager::FinishGetAssertion(const uint64_t& aTransactionId,
-                                    nsTArray<uint8_t>& aCredentialId,
-                                    nsTArray<uint8_t>& aSigBuffer)
+                                    const WebAuthnGetAssertionResult& aResult)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -766,8 +794,8 @@ WebAuthnManager::FinishGetAssertion(const uint64_t& aTransactionId,
   }
 
   CryptoBuffer tokenSignatureData;
-  if (NS_WARN_IF(!tokenSignatureData.Assign(aSigBuffer.Elements(),
-                                            aSigBuffer.Length()))) {
+  if (NS_WARN_IF(!tokenSignatureData.Assign(aResult.SigBuffer().Elements(),
+                                            aResult.SigBuffer().Length()))) {
     RejectTransaction(NS_ERROR_OUT_OF_MEMORY);
     return;
   }
@@ -805,7 +833,7 @@ WebAuthnManager::FinishGetAssertion(const uint64_t& aTransactionId,
   }
 
   CryptoBuffer credentialBuf;
-  if (!credentialBuf.Assign(aCredentialId)) {
+  if (!credentialBuf.Assign(aResult.CredentialID())) {
     RejectTransaction(NS_ERROR_OUT_OF_MEMORY);
     return;
   }

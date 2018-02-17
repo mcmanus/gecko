@@ -21,7 +21,6 @@
 #include "nsTArray.h"
 #include "nsIdentifierMapEntry.h"
 #include "nsIDOMDocument.h"
-#include "nsIDOMDocumentXBL.h"
 #include "nsStubDocumentObserver.h"
 #include "nsIScriptGlobalObject.h"
 #include "nsIContent.h"
@@ -66,7 +65,6 @@
 #include "nsDataHashtable.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Attributes.h"
-#include "nsIDOMXPathEvaluator.h"
 #include "jsfriendapi.h"
 #include "mozilla/LinkedList.h"
 #include "CustomElementRegistry.h"
@@ -323,13 +321,11 @@ class PrincipalFlashClassifier;
 // Base class for our document implementations.
 class nsDocument : public nsIDocument,
                    public nsIDOMDocument,
-                   public nsIDOMDocumentXBL,
                    public nsSupportsWeakReference,
                    public nsIScriptObjectPrincipal,
                    public nsIRadioGroupContainer,
                    public nsIApplicationCacheContainer,
-                   public nsStubMutationObserver,
-                   public nsIDOMXPathEvaluator
+                   public nsStubMutationObserver
 {
   friend class nsIDocument;
 
@@ -376,12 +372,6 @@ public:
    * Set the principal responsible for this document.
    */
   virtual void SetPrincipal(nsIPrincipal *aPrincipal) override;
-
-  /**
-   * Get the Content-Type of this document.
-   */
-  // NS_IMETHOD GetContentType(nsAString& aContentType);
-  // Already declared in nsIDOMDocument
 
   /**
    * Set the Content-Type of this document.
@@ -555,10 +545,12 @@ public:
   // nsINode
   virtual bool IsNodeOfType(uint32_t aFlags) const override;
   virtual nsIContent *GetChildAt_Deprecated(uint32_t aIndex) const override;
-  virtual int32_t IndexOf(const nsINode* aPossibleChild) const override;
+  virtual int32_t ComputeIndexOf(const nsINode* aPossibleChild) const override;
   virtual uint32_t GetChildCount() const override;
-  virtual nsresult InsertChildAt(nsIContent* aKid, uint32_t aIndex,
-                                 bool aNotify) override;
+  virtual nsresult InsertChildBefore(nsIContent* aKid, nsIContent* aBeforeThis,
+                                     bool aNotify) override;
+  virtual nsresult InsertChildAt_Deprecated(nsIContent* aKid, uint32_t aIndex,
+                                            bool aNotify) override;
   virtual void RemoveChildAt_Deprecated(uint32_t aIndex, bool aNotify) override;
   virtual void RemoveChildNode(nsIContent* aKid, bool aNotify) override;
   virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
@@ -618,6 +610,10 @@ public:
   virtual void UpdateIntersectionObservations() override;
   virtual void ScheduleIntersectionObserverNotification() override;
   virtual void NotifyIntersectionObservers() override;
+  virtual bool HasIntersectionObservers() const override
+  {
+    return !mIntersectionObservers.IsEmpty();
+  }
 
   virtual void NotifyLayerManagerRecreated() override;
 
@@ -635,14 +631,8 @@ private:
   void SendToConsole(nsCOMArray<nsISecurityConsoleMessage>& aMessages);
 
 public:
-  // nsIDOMNode
-  NS_FORWARD_NSIDOMNODE_TO_NSINODE_OVERRIDABLE
-
   // nsIDOMDocument
   NS_DECL_NSIDOMDOCUMENT
-
-  // nsIDOMDocumentXBL
-  NS_DECL_NSIDOMDOCUMENTXBL
 
   using mozilla::dom::DocumentOrShadowRoot::GetElementById;
   using mozilla::dom::DocumentOrShadowRoot::GetElementsByTagName;
@@ -663,8 +653,6 @@ public:
   // nsIApplicationCacheContainer
   NS_DECL_NSIAPPLICATIONCACHECONTAINER
 
-  NS_DECL_NSIDOMXPATHEVALUATOR
-
   virtual nsresult Init();
 
   virtual already_AddRefed<Element> CreateElem(const nsAString& aName,
@@ -676,6 +664,9 @@ public:
 
   virtual void EnumerateSubDocuments(nsSubDocEnumFunc aCallback,
                                                  void *aData) override;
+  virtual void CollectDescendantDocuments(
+    nsTArray<nsCOMPtr<nsIDocument>>& aDescendants,
+    nsDocTestFunc aCallback) const override;
 
   virtual bool CanSavePresentation(nsIRequest *aNewRequest) override;
   virtual void Destroy() override;
@@ -698,14 +689,6 @@ public:
     GetAnonymousElementByAttribute(nsIContent* aElement,
                                    nsAtom* aAttrName,
                                    const nsAString& aAttrValue) const override;
-
-  virtual Element* ElementFromPointHelper(float aX, float aY,
-                                          bool aIgnoreRootScrollFrame,
-                                          bool aFlushLayout) override;
-
-  virtual void ElementsFromPointHelper(float aX, float aY,
-                                       uint32_t aFlags,
-                                       nsTArray<RefPtr<mozilla::dom::Element>>& aElements) override;
 
   virtual nsresult NodesFromRectHelper(float aX, float aY,
                                                    float aTopSize, float aRightSize,
@@ -813,6 +796,9 @@ public:
   // Only BlockOnload should call this!
   void AsyncBlockOnload();
 
+  virtual void SetAutoFocusElement(Element* aAutoFocusElement) override;
+  virtual void TriggerAutoFocus() override;
+
   virtual void SetScrollToRef(nsIURI *aDocumentURI) override;
   virtual void ScrollToRef() override;
   virtual void ResetScrolledToRefAlready() override;
@@ -887,8 +873,6 @@ public:
   //
   already_AddRefed<nsSimpleContentList> BlockedTrackingNodes() const;
 
-  static bool IsUnprefixedFullscreenEnabled(JSContext* aCx, JSObject* aObject);
-
   // Do the "fullscreen element ready check" from the fullscreen spec.
   // It returns true if the given element is allowed to go into fullscreen.
   bool FullscreenElementReadyCheck(Element* aElement, bool aWasCallerChrome);
@@ -912,11 +896,10 @@ public:
   void FullScreenStackPop();
 
   // Returns the top element from the full-screen stack.
-  Element* FullScreenStackTop();
+  Element* FullScreenStackTop() override;
 
   // DOM-exposed fullscreen API
   bool FullscreenEnabled(mozilla::dom::CallerType aCallerType) override;
-  Element* GetFullscreenElement() override;
 
   virtual bool AllowPaymentRequest() const override;
   virtual void SetAllowPaymentRequest(bool aIsAllowPaymentRequest) override;
@@ -953,7 +936,7 @@ public:
     GetImplementation(mozilla::ErrorResult& rv) override;
 
   virtual void SetSelectedStyleSheetSet(const nsAString& aSheetSet) override;
-  virtual void GetLastStyleSheetSet(nsString& aSheetSet) override;
+  virtual void GetLastStyleSheetSet(nsAString& aSheetSet) override;
   virtual mozilla::dom::DOMStringList* StyleSheetSets() override;
   virtual void EnableStyleSheetsForSet(const nsAString& aSheetSet) override;
   virtual already_AddRefed<Element> CreateElement(const nsAString& aTagName,
@@ -1029,7 +1012,7 @@ protected:
 
 public:
   // Get our title
-  virtual void GetTitle(nsString& aTitle) override;
+  virtual void GetTitle(nsAString& aTitle) override;
   // Set our title
   virtual void SetTitle(const nsAString& aTitle, mozilla::ErrorResult& rv) override;
 
@@ -1234,16 +1217,6 @@ private:
 
   nsresult InitCSP(nsIChannel* aChannel);
 
-  /**
-   * Find the (non-anonymous) content in this document for aFrame. It will
-   * be aFrame's content node if that content is in this document and not
-   * anonymous. Otherwise, when aFrame is in a subdocument, we use the frame
-   * element containing the subdocument containing aFrame, and/or find the
-   * nearest non-anonymous ancestor in this document.
-   * Returns null if there is no such element.
-   */
-  nsIContent* GetContentInThisDocument(nsIFrame* aFrame) const;
-
   // Just like EnableStyleSheetsForSet, but doesn't check whether
   // aSheetSet is null and allows the caller to control whether to set
   // aSheetSet as the preferred set in the CSSLoader.
@@ -1318,6 +1291,8 @@ private:
 
   RefPtr<nsContentList> mImageMaps;
 
+  nsWeakPtr mAutoFocusElement;
+
   nsCString mScrollToRef;
   uint8_t mScrolledToRefAlready : 1;
   uint8_t mChangeScrollPosWhenScrollingToRef : 1;
@@ -1368,6 +1343,7 @@ private:
   bool mDOMLoadingSet : 1;
   bool mDOMInteractiveSet : 1;
   bool mDOMCompleteSet : 1;
+  bool mAutoFocusFired : 1;
 };
 
 class nsDocumentOnStack

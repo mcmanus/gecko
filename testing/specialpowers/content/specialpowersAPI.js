@@ -12,17 +12,13 @@
 
 var global = this;
 
-var Ci = Components.interfaces;
-var Cc = Components.classes;
-var Cu = Components.utils;
-
-Cu.import("chrome://specialpowers/content/MockFilePicker.jsm");
-Cu.import("chrome://specialpowers/content/MockColorPicker.jsm");
-Cu.import("chrome://specialpowers/content/MockPermissionPrompt.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/PrivateBrowsingUtils.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/NetUtil.jsm");
+ChromeUtils.import("chrome://specialpowers/content/MockFilePicker.jsm");
+ChromeUtils.import("chrome://specialpowers/content/MockColorPicker.jsm");
+ChromeUtils.import("chrome://specialpowers/content/MockPermissionPrompt.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/PrivateBrowsingUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
 
 // We're loaded with "this" not set to the global in some cases, so we
 // have to play some games to get at the global object here.  Normally
@@ -30,7 +26,7 @@ Cu.import("resource://gre/modules/NetUtil.jsm");
 // but this whole file is in strict mode.  So instead fall back on
 // returning "this" from indirect eval, which returns the global.
 if (!(function() { var e = eval; return e("this"); })().File) { // eslint-disable-line no-eval
-    Cu.importGlobalProperties(["File", "InspectorUtils"]);
+    Cu.importGlobalProperties(["File", "InspectorUtils", "NodeFilter"]);
 }
 
 // Allow stuff from this scope to be accessed from non-privileged scopes. This
@@ -100,7 +96,7 @@ function isObjectOrArray(obj) {
                       "Uint32Array", "Float32Array", "Float64Array",
                       "Uint8ClampedArray"];
   let className = Cu.getClassName(obj, true);
-  return arrayClasses.indexOf(className) != -1;
+  return arrayClasses.includes(className);
 }
 
 // In general, we want Xray wrappers for content DOM objects, because waiving
@@ -823,7 +819,7 @@ SpecialPowersAPI.prototype = {
                              : Ci.nsIPermissionManager.DENY_ACTION;
         }
 
-        if (permission.remove == true)
+        if (permission.remove)
           perm = Ci.nsIPermissionManager.UNKNOWN_ACTION;
 
         if (originalValue == perm) {
@@ -842,7 +838,7 @@ SpecialPowersAPI.prototype = {
 
         var cleanupTodo = Object.assign({}, todo);
 
-        if (permission.remove == true)
+        if (permission.remove)
           todo.op = "remove";
 
         pendingPermissions.push(todo);
@@ -1447,7 +1443,7 @@ SpecialPowersAPI.prototype = {
   },
   get formHistory() {
     let tmp = {};
-    Cu.import("resource://gre/modules/FormHistory.jsm", tmp);
+    ChromeUtils.import("resource://gre/modules/FormHistory.jsm", tmp);
     return wrapPrivileged(tmp.FormHistory);
   },
   getFormFillController(window) {
@@ -2195,7 +2191,7 @@ SpecialPowersAPI.prototype = {
     let walker = Cc["@mozilla.org/inspector/deep-tree-walker;1"].
                  createInstance(Ci.inIDeepTreeWalker);
     walker.showAnonymousContent = showAnonymousContent;
-    walker.init(node.ownerDocument, Ci.nsIDOMNodeFilter.SHOW_ALL);
+    walker.init(node.ownerDocument, NodeFilter.SHOW_ALL);
     walker.currentNode = node;
     return {
       get firstChild() {

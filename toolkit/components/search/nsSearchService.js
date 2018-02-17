@@ -2,16 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const Ci = Components.interfaces;
-const Cc = Components.classes;
-const Cr = Components.results;
-const Cu = Components.utils;
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/PromiseUtils.jsm");
-Cu.import("resource://gre/modules/debug.js");
-Cu.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/PromiseUtils.jsm");
+ChromeUtils.import("resource://gre/modules/debug.js");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
@@ -27,7 +22,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
 });
 
 XPCOMUtils.defineLazyServiceGetters(this, {
-  gTextToSubURI: ["@mozilla.org/intl/texttosuburi;1", "nsITextToSubURI"],
   gEnvironment: ["@mozilla.org/process/environment;1", "nsIEnvironment"],
   gChromeReg: ["@mozilla.org/chrome/chrome-registry;1", "nsIChromeRegistry"],
 });
@@ -1131,7 +1125,7 @@ EngineURL.prototype = {
     if (this.method == "GET") {
       // GET method requests have no post data, and append the encoded
       // query string to the url...
-      if (url.indexOf("?") == -1 && dataString)
+      if (!url.includes("?") && dataString)
         url += "?";
       url += dataString;
     } else if (this.method == "POST") {
@@ -1430,8 +1424,7 @@ Engine.prototype = {
    */
   _retrieveSearchXMLData: function SRCH_ENG__retrieveSearchXMLData(aURL) {
     return new Promise(resolve => {
-      let request = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"].
-                      createInstance(Ci.nsIXMLHttpRequest);
+      let request = new XMLHttpRequest();
       request.overrideMimeType("text/xml");
       request.onload = (aEvent) => {
         let responseXML = aEvent.target.responseXML;
@@ -1813,7 +1806,7 @@ Engine.prototype = {
     if ((element.localName == MOZSEARCH_LOCALNAME &&
          element.namespaceURI == MOZSEARCH_NS_10) ||
         (element.localName == OPENSEARCH_LOCALNAME &&
-         OPENSEARCH_NAMESPACES.indexOf(element.namespaceURI) != -1)) {
+         OPENSEARCH_NAMESPACES.includes(element.namespaceURI))) {
       LOG("_init: Initing search plugin from " + this._location);
 
       this._parse();
@@ -2263,21 +2256,6 @@ Engine.prototype = {
     if (/^(?:jar:)?(?:\[app\]|\[distribution\])/.test(this._loadPath))
       return true;
 
-    // If we are using a non-default locale or in the xpcshell test case,
-    // we'll accept as a 'default' engine anything that has been registered at
-    // resource://search-plugins/ even if the file doesn't come from the
-    // application folder.  If not, skip costly additional checks.
-    if (Services.locale.defaultLocale == Services.locale.getRequestedLocale() &&
-        !gEnvironment.get("XPCSHELL_TEST_PROFILE_DIR"))
-      return false;
-
-    // Some xpcshell tests use the search service without registering
-    // resource://search-plugins/.
-    if (!Services.io.getProtocolHandler("resource")
-                 .QueryInterface(Ci.nsIResProtocolHandler)
-                 .hasSubstitution("search-plugins"))
-      return false;
-
     let uri = makeURI(APP_SEARCH_PREFIX + this._shortName + ".xml");
     if (this.getAnonymizedLoadPath(null, uri) == this._loadPath) {
       // This isn't a real default engine, but it's very close.
@@ -2425,10 +2403,10 @@ Engine.prototype = {
     LOG("getSubmission: In data: \"" + aData + "\"; Purpose: \"" + aPurpose + "\"");
     var data = "";
     try {
-      data = gTextToSubURI.ConvertAndEscape(this.queryCharset, aData);
+      data = Services.textToSubURI.ConvertAndEscape(this.queryCharset, aData);
     } catch (ex) {
       LOG("getSubmission: Falling back to default queryCharset!");
-      data = gTextToSubURI.ConvertAndEscape(DEFAULT_QUERY_CHARSET, aData);
+      data = Services.textToSubURI.ConvertAndEscape(DEFAULT_QUERY_CHARSET, aData);
     }
     LOG("getSubmission: Out data: \"" + data + "\"");
     return url.getSubmission(data, this, aPurpose);
@@ -2912,7 +2890,7 @@ SearchService.prototype = {
     }
 
     function notInCacheVisibleEngines(aEngineName) {
-      return cache.visibleDefaultEngines.indexOf(aEngineName) == -1;
+      return !cache.visibleDefaultEngines.includes(aEngineName);
     }
 
     let buildID = Services.appinfo.platformBuildID;
@@ -2982,7 +2960,7 @@ SearchService.prototype = {
     }
 
     function notInCacheVisibleEngines(aEngineName) {
-      return cache.visibleDefaultEngines.indexOf(aEngineName) == -1;
+      return !cache.visibleDefaultEngines.includes(aEngineName);
     }
 
     let buildID = Services.appinfo.platformBuildID;
@@ -3439,8 +3417,7 @@ SearchService.prototype = {
     let uris = [];
 
     // Read list.json to find the engines we need to load.
-    let request = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"].
-                    createInstance(Ci.nsIXMLHttpRequest);
+    let request = new XMLHttpRequest();
     request.overrideMimeType("text/plain");
     let list = await new Promise(resolve => {
       request.onload = function(aEvent) {
@@ -4446,9 +4423,9 @@ SearchService.prototype = {
     // Decode the terms using the charset defined in the search engine.
     let terms;
     try {
-      terms = gTextToSubURI.UnEscapeAndConvert(
-                                       mapEntry.engine.queryCharset,
-                                       encodedTerms.replace(/\+/g, " "));
+      terms = Services.textToSubURI.UnEscapeAndConvert(
+        mapEntry.engine.queryCharset,
+        encodedTerms.replace(/\+/g, " "));
     } catch (ex) {
       // Decoding errors will cause this match to be ignored.
       LOG("Parameter decoding failed. Charset: " +

@@ -12,9 +12,9 @@ use itoa;
 use parser::{ParserContext, Parse};
 #[cfg(feature = "gecko")]
 use properties::longhands::system_colors::SystemColor;
-use std::fmt;
-use std::io::Write;
-use style_traits::{ToCss, ParseError, StyleParseErrorKind, ValueParseErrorKind};
+use std::fmt::{self, Write};
+use std::io::Write as IoWrite;
+use style_traits::{CssWriter, ParseError, StyleParseErrorKind, ToCss, ValueParseErrorKind};
 use super::AllowQuirks;
 use values::computed::{Color as ComputedColor, Context, ToComputedValue};
 use values::specified::calc::CalcNode;
@@ -47,12 +47,13 @@ pub enum Color {
 
 #[cfg(feature = "gecko")]
 mod gecko {
-    define_css_keyword_enum! { SpecialColorKeyword:
-        "-moz-default-color" => MozDefaultColor,
-        "-moz-default-background-color" => MozDefaultBackgroundColor,
-        "-moz-hyperlinktext" => MozHyperlinktext,
-        "-moz-activehyperlinktext" => MozActiveHyperlinktext,
-        "-moz-visitedhyperlinktext" => MozVisitedHyperlinktext,
+    #[derive(Clone, Copy, Debug, Eq, Hash, MallocSizeOf, Parse, PartialEq, ToCss)]
+    pub enum SpecialColorKeyword {
+        MozDefaultColor,
+        MozDefaultBackgroundColor,
+        MozHyperlinktext,
+        MozActiveHyperlinktext,
+        MozVisitedHyperlinktext,
     }
 }
 
@@ -187,7 +188,10 @@ impl Parse for Color {
 }
 
 impl ToCss for Color {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+    fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
+    where
+        W: Write,
+    {
         match *self {
             Color::CurrentColor => CSSParserColor::CurrentColor.to_css(dest),
             Color::Numeric { authored: Some(ref authored), .. } => dest.write_str(authored),
@@ -311,7 +315,7 @@ impl Color {
         if let Some(unit) = unit {
             written += (&mut serialization[written..]).write(unit.as_bytes()).unwrap();
         }
-        debug_assert!(written == 6);
+        debug_assert_eq!(written, 6);
         parse_hash_color(&serialization).map_err(|()| {
             location.new_custom_error(StyleParseErrorKind::UnspecifiedError)
         })

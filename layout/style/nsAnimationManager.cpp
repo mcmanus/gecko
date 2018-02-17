@@ -8,21 +8,27 @@
 #include "nsTransitionManager.h"
 #include "mozilla/dom/CSSAnimationBinding.h"
 
+#include "mozilla/AnimationEventDispatcher.h"
 #include "mozilla/AnimationTarget.h"
 #include "mozilla/EffectCompositor.h"
 #include "mozilla/EffectSet.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/ServoStyleSet.h"
 #include "mozilla/StyleAnimationValue.h"
+#include "mozilla/dom/AnimationEffectReadOnly.h"
 #include "mozilla/dom/DocumentTimeline.h"
 #include "mozilla/dom/KeyframeEffectReadOnly.h"
 
 #include "nsPresContext.h"
+#ifdef MOZ_OLD_STYLE
 #include "nsStyleSet.h"
+#endif
 #include "nsStyleChangeList.h"
 #include "nsContentUtils.h"
+#ifdef MOZ_OLD_STYLE
 #include "nsCSSRules.h"
 #include "mozilla/GeckoRestyleManager.h"
+#endif
 #include "nsLayoutUtils.h"
 #include "nsIFrame.h"
 #include "nsIDocument.h"
@@ -242,9 +248,9 @@ CSSAnimation::QueueEvents(const StickyTimeDuration& aActiveTime)
     if (aMessage == eAnimationCancel) {
       elapsedTime = nsRFPService::ReduceTimePrecisionAsSecs(elapsedTime);
     }
-    events.AppendElement(AnimationEventInfo(mOwningElement.Target(),
+    events.AppendElement(AnimationEventInfo(mAnimationName,
+                                            mOwningElement.Target(),
                                             aMessage,
-                                            mAnimationName,
                                             elapsedTime,
                                             aTimeStamp,
                                             this));
@@ -299,7 +305,7 @@ CSSAnimation::QueueEvents(const StickyTimeDuration& aActiveTime)
   mPreviousIteration = currentIteration;
 
   if (!events.IsEmpty()) {
-    presContext->AnimationManager()->QueueEvents(Move(events));
+    presContext->AnimationEventDispatcher()->QueueEvents(Move(events));
   }
 }
 
@@ -316,11 +322,6 @@ CSSAnimation::UpdateTiming(SeekFlag aSeekFlag, SyncNotifyFlag aSyncNotifyFlag)
 }
 
 ////////////////////////// nsAnimationManager ////////////////////////////
-
-NS_IMPL_CYCLE_COLLECTION(nsAnimationManager, mEventDispatcher)
-
-NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(nsAnimationManager, AddRef)
-NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(nsAnimationManager, Release)
 
 // Find the matching animation by |aName| in the old list
 // of animations and remove the matched animation from the list.
@@ -349,6 +350,7 @@ PopExistingAnimation(const nsAtom* aName,
   return nullptr;
 }
 
+#ifdef MOZ_OLD_STYLE
 class ResolvedStyleCache {
 public:
   ResolvedStyleCache() : mCache() {}
@@ -393,6 +395,7 @@ ResolvedStyleCache::Get(nsPresContext* aPresContext,
   }
   return result;
 }
+#endif
 
 class MOZ_STACK_CLASS ServoCSSAnimationBuilder final {
 public:
@@ -445,7 +448,7 @@ public:
   // post the required restyles.
   void NotifyNewOrRemovedAnimation(const Animation& aAnimation)
   {
-    AnimationEffectReadOnly* effect = aAnimation.GetEffect();
+    dom::AnimationEffectReadOnly* effect = aAnimation.GetEffect();
     if (!effect) {
       return;
     }
@@ -462,6 +465,7 @@ private:
   const ServoStyleContext* mStyleContext;
 };
 
+#ifdef MOZ_OLD_STYLE
 class MOZ_STACK_CLASS GeckoCSSAnimationBuilder final {
 public:
   GeckoCSSAnimationBuilder(GeckoStyleContext* aStyleContext,
@@ -512,6 +516,7 @@ private:
 
 static Maybe<ComputedTimingFunction>
 ConvertTimingFunction(const nsTimingFunction& aTimingFunction);
+#endif
 
 template<class BuilderType>
 static void
@@ -649,6 +654,7 @@ BuildAnimation(nsPresContext* aPresContext,
   return animation.forget();
 }
 
+#ifdef MOZ_OLD_STYLE
 bool
 GeckoCSSAnimationBuilder::BuildKeyframes(nsPresContext* aPresContext,
                                          nsAtom* aName,
@@ -994,6 +1000,7 @@ GeckoCSSAnimationBuilder::FillInMissingKeyframeValues(
     }
   }
 }
+#endif
 
 template<class BuilderType>
 static nsAnimationManager::OwningCSSAnimationPtrArray
@@ -1001,20 +1008,23 @@ BuildAnimations(nsPresContext* aPresContext,
                 const NonOwningAnimationTarget& aTarget,
                 const nsStyleDisplay& aStyleDisplay,
                 BuilderType& aBuilder,
-                nsAnimationManager::CSSAnimationCollection* aCollection)
+                nsAnimationManager::CSSAnimationCollection* aCollection,
+                nsTHashtable<nsRefPtrHashKey<nsAtom>>& aReferencedAnimations)
 {
   nsAnimationManager::OwningCSSAnimationPtrArray result;
 
   for (size_t animIdx = aStyleDisplay.mAnimationNameCount; animIdx-- != 0;) {
+    nsAtom* name = aStyleDisplay.GetAnimationName(animIdx);
     // CSS Animations whose animation-name does not match a @keyframes rule do
     // not generate animation events. This includes when the animation-name is
     // "none" which is represented by an empty name in the StyleAnimation.
     // Since such animations neither affect style nor dispatch events, we do
     // not generate a corresponding CSSAnimation for them.
-    if (aStyleDisplay.GetAnimationName(animIdx) == nsGkAtoms::_empty) {
+    if (name == nsGkAtoms::_empty) {
       continue;
     }
 
+    aReferencedAnimations.PutEntry(name);
     RefPtr<CSSAnimation> dest = BuildAnimation(aPresContext,
                                                aTarget,
                                                aStyleDisplay,
@@ -1031,6 +1041,7 @@ BuildAnimations(nsPresContext* aPresContext,
   return result;
 }
 
+#ifdef MOZ_OLD_STYLE
 void
 nsAnimationManager::UpdateAnimations(GeckoStyleContext* aStyleContext,
                                      mozilla::dom::Element* aElement)
@@ -1052,6 +1063,7 @@ nsAnimationManager::UpdateAnimations(GeckoStyleContext* aStyleContext,
   const nsStyleDisplay* disp = aStyleContext->StyleDisplay();
   DoUpdateAnimations(target, *disp, builder);
 }
+#endif
 
 void
 nsAnimationManager::UpdateAnimations(
@@ -1116,7 +1128,8 @@ nsAnimationManager::DoUpdateAnimations(
                                   aTarget,
                                   aStyleDisplay,
                                   aBuilder,
-                                  collection);
+                                  collection,
+                                  mMaybeReferencedAnimations);
 
   if (newAnimations.IsEmpty()) {
     if (collection) {

@@ -133,7 +133,7 @@ static constexpr Register RegExpTesterRegExpReg = CallTempReg0;
 static constexpr Register RegExpTesterStringReg = CallTempReg1;
 static constexpr Register RegExpTesterLastIndexReg = CallTempReg2;
 
-static constexpr uint32_t CodeAlignment = 4;
+static constexpr uint32_t CodeAlignment = 8;
 
 // This boolean indicates whether we support SIMD instructions flavoured for
 // this architecture or not. Rather than a method in the LIRGenerator, it is
@@ -211,6 +211,7 @@ static const uint32_t RegMask = Registers::Total - 1;
 
 static const uint32_t BREAK_STACK_UNALIGNED = 1;
 static const uint32_t MAX_BREAK_CODE = 1024 - 1;
+static const uint32_t WASM_TRAP = 6; // BRK_OVERFLOW
 
 class Instruction;
 class InstReg;
@@ -290,6 +291,7 @@ enum Opcode {
     op_ll       = 48 << OpcodeShift,
     op_lwc1     = 49 << OpcodeShift,
     op_lwc2     = 50 << OpcodeShift,
+    op_lld      = 52 << OpcodeShift,
     op_ldc1     = 53 << OpcodeShift,
     op_ldc2     = 54 << OpcodeShift,
     op_ld       = 55 << OpcodeShift,
@@ -297,6 +299,7 @@ enum Opcode {
     op_sc       = 56 << OpcodeShift,
     op_swc1     = 57 << OpcodeShift,
     op_swc2     = 58 << OpcodeShift,
+    op_scd      = 60 << OpcodeShift,
     op_sdc1     = 61 << OpcodeShift,
     op_sdc2     = 62 << OpcodeShift,
     op_sd       = 63 << OpcodeShift,
@@ -1063,6 +1066,7 @@ class AssemblerMIPSShared : public AssemblerShared
     BufferOffset as_lwl(Register rd, Register rs, int16_t off);
     BufferOffset as_lwr(Register rd, Register rs, int16_t off);
     BufferOffset as_ll(Register rd, Register rs, int16_t off);
+    BufferOffset as_lld(Register rd, Register rs, int16_t off);
     BufferOffset as_ld(Register rd, Register rs, int16_t off);
     BufferOffset as_ldl(Register rd, Register rs, int16_t off);
     BufferOffset as_ldr(Register rd, Register rs, int16_t off);
@@ -1072,6 +1076,7 @@ class AssemblerMIPSShared : public AssemblerShared
     BufferOffset as_swl(Register rd, Register rs, int16_t off);
     BufferOffset as_swr(Register rd, Register rs, int16_t off);
     BufferOffset as_sc(Register rd, Register rs, int16_t off);
+    BufferOffset as_scd(Register rd, Register rs, int16_t off);
     BufferOffset as_sd(Register rd, Register rs, int16_t off);
     BufferOffset as_sdl(Register rd, Register rs, int16_t off);
     BufferOffset as_sdr(Register rd, Register rs, int16_t off);
@@ -1228,6 +1233,14 @@ class AssemblerMIPSShared : public AssemblerShared
                          FPConditionBit fcc = FCC0);
     BufferOffset as_movz(FloatFormat fmt, FloatRegister fd, FloatRegister fs, Register rt);
     BufferOffset as_movn(FloatFormat fmt, FloatRegister fd, FloatRegister fs, Register rt);
+
+    // Conditional trap operations
+    BufferOffset as_tge(Register rs, Register rt, uint32_t code = 0);
+    BufferOffset as_tgeu(Register rs, Register rt, uint32_t code = 0);
+    BufferOffset as_tlt(Register rs, Register rt, uint32_t code = 0);
+    BufferOffset as_tltu(Register rs, Register rt, uint32_t code = 0);
+    BufferOffset as_teq(Register rs, Register rt, uint32_t code = 0);
+    BufferOffset as_tne(Register rs, Register rt, uint32_t code = 0);
 
     // label operations
     void bind(Label* label, BufferOffset boff = BufferOffset());

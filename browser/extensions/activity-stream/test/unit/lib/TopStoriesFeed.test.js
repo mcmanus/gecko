@@ -121,14 +121,14 @@ describe("Top Stories Feed", () => {
       assert.notCalled(fetchStub);
     });
     it("should report error for invalid configuration", () => {
-      globals.sandbox.spy(global.Components.utils, "reportError");
+      globals.sandbox.spy(global.Cu, "reportError");
       sectionsManagerStub.sections.set("topstories", {options: {api_key_pref: "invalid"}});
       instance.init();
 
-      assert.called(Components.utils.reportError);
+      assert.called(Cu.reportError);
     });
     it("should report error for missing api key", () => {
-      globals.sandbox.spy(global.Components.utils, "reportError");
+      globals.sandbox.spy(global.Cu, "reportError");
       sectionsManagerStub.sections.set("topstories", {
         options: {
           "stories_endpoint": "https://somedomain.org/stories?key=$apiKey",
@@ -137,7 +137,7 @@ describe("Top Stories Feed", () => {
       });
       instance.init();
 
-      assert.called(Components.utils.reportError);
+      assert.called(Cu.reportError);
     });
     it("should load data from cache on init", () => {
       instance.loadCachedData = sinon.spy();
@@ -200,6 +200,50 @@ describe("Top Stories Feed", () => {
       assert.calledOnce(instance.cache.set);
       assert.calledWith(instance.cache.set, "stories", Object.assign({}, response, {_timestamp: 0}));
     });
+    it("should use domain as hostname, if present", async () => {
+      let fetchStub = globals.sandbox.stub();
+      globals.set("fetch", fetchStub);
+      globals.set("NewTabUtils", {blockedLinks: {isBlocked: globals.sandbox.spy()}});
+
+      const response = {
+        "recommendations": [{
+          "id": "1",
+          "title": "title",
+          "excerpt": "description",
+          "image_src": "image-url",
+          "url": "rec-url",
+          "domain": "domain",
+          "published_timestamp": "123",
+          "context": "trending",
+          "icon": "icon"
+        }]
+      };
+      const stories = [{
+        "guid": "1",
+        "type": "now",
+        "title": "title",
+        "context": "trending",
+        "icon": "icon",
+        "description": "description",
+        "image": "image-url",
+        "referrer": "referrer",
+        "url": "rec-url",
+        "hostname": "domain",
+        "min_score": 0,
+        "score": 1,
+        "spoc_meta": {}
+      }];
+
+      instance.stories_endpoint = "stories-endpoint";
+      instance.stories_referrer = "referrer";
+      instance.cache.set = sinon.spy();
+      fetchStub.resolves({ok: true, status: 200, json: () => Promise.resolve(response)});
+      await instance.fetchStories();
+
+      assert.calledOnce(fetchStub);
+      assert.notCalled(shortURLStub);
+      assert.calledWith(sectionsManagerStub.updateSection, SECTION_ID, {rows: stories});
+    });
     it("should call SectionsManager.updateSection", () => {
       instance.dispatchUpdateEvent(123, {});
       assert.calledOnce(sectionsManagerStub.updateSection);
@@ -207,7 +251,7 @@ describe("Top Stories Feed", () => {
     it("should report error for unexpected stories response", async () => {
       let fetchStub = globals.sandbox.stub();
       globals.set("fetch", fetchStub);
-      globals.sandbox.spy(global.Components.utils, "reportError");
+      globals.sandbox.spy(global.Cu, "reportError");
 
       instance.stories_endpoint = "stories-endpoint";
       fetchStub.resolves({ok: false, status: 400});
@@ -216,7 +260,7 @@ describe("Top Stories Feed", () => {
       assert.calledOnce(fetchStub);
       assert.calledWithExactly(fetchStub, instance.stories_endpoint);
       assert.notCalled(sectionsManagerStub.updateSection);
-      assert.called(Components.utils.reportError);
+      assert.called(Cu.reportError);
     });
     it("should exclude blocked (dismissed) URLs", async () => {
       let fetchStub = globals.sandbox.stub();
@@ -283,7 +327,7 @@ describe("Top Stories Feed", () => {
     it("should report error for unexpected topics response", async () => {
       let fetchStub = globals.sandbox.stub();
       globals.set("fetch", fetchStub);
-      globals.sandbox.spy(global.Components.utils, "reportError");
+      globals.sandbox.spy(global.Cu, "reportError");
 
       instance.topics_endpoint = "topics-endpoint";
       fetchStub.resolves({ok: false, status: 400});
@@ -292,7 +336,7 @@ describe("Top Stories Feed", () => {
       assert.calledOnce(fetchStub);
       assert.calledWithExactly(fetchStub, instance.topics_endpoint);
       assert.notCalled(instance.store.dispatch);
-      assert.called(Components.utils.reportError);
+      assert.called(Cu.reportError);
     });
   });
   describe("#personalization", () => {
@@ -443,7 +487,7 @@ describe("Top Stories Feed", () => {
 
       instance.onAction({type: at.NEW_TAB_REHYDRATED, meta: {fromTarget: {}}});
       assert.calledOnce(instance.store.dispatch);
-      let action = instance.store.dispatch.firstCall.args[0];
+      let [action] = instance.store.dispatch.firstCall.args;
 
       assert.equal(at.SECTION_UPDATE, action.type);
       assert.equal(true, action.meta.skipMain);
@@ -457,7 +501,7 @@ describe("Top Stories Feed", () => {
 
       instance.onAction({type: at.NEW_TAB_REHYDRATED, meta: {fromTarget: {}}});
       assert.calledTwice(instance.store.dispatch);
-      action = instance.store.dispatch.secondCall.args[0];
+      [action] = instance.store.dispatch.secondCall.args;
       assert.equal(at.SECTION_UPDATE, action.type);
       assert.equal(true, action.meta.skipMain);
       assert.equal(action.data.rows[0].guid, "rec1");
@@ -490,7 +534,7 @@ describe("Top Stories Feed", () => {
       await instance.fetchStories();
       assert.equal(instance.contentUpdateQueue.length, 0);
       assert.calledOnce(instance.store.dispatch);
-      let action = instance.store.dispatch.firstCall.args[0];
+      let [action] = instance.store.dispatch.firstCall.args;
       assert.equal(action.type, at.SECTION_UPDATE);
     });
     it("should not insert spoc if preffed off", async () => {
@@ -665,7 +709,7 @@ describe("Top Stories Feed", () => {
 
       clock.tick();
       instance.onAction({type: at.NEW_TAB_REHYDRATED, meta: {fromTarget: {}}});
-      let action = instance.store.dispatch.firstCall.args[0];
+      let [action] = instance.store.dispatch.firstCall.args;
       assert.equal(action.data.rows[0].guid, "rec1");
       assert.equal(action.data.rows[1].guid, "rec2");
       assert.equal(action.data.rows[2].guid, "spoc1");
@@ -673,7 +717,7 @@ describe("Top Stories Feed", () => {
 
       clock.tick();
       instance.onAction({type: at.NEW_TAB_REHYDRATED, meta: {fromTarget: {}}});
-      action = instance.store.dispatch.secondCall.args[0];
+      [action] = instance.store.dispatch.secondCall.args;
       assert.equal(action.data.rows[0].guid, "rec1");
       assert.equal(action.data.rows[1].guid, "rec2");
       assert.equal(action.data.rows[2].guid, "spoc1");
@@ -682,7 +726,7 @@ describe("Top Stories Feed", () => {
       // campaign 1 period frequency cap now reached (spoc 2 should be shown)
       clock.tick();
       instance.onAction({type: at.NEW_TAB_REHYDRATED, meta: {fromTarget: {}}});
-      action = instance.store.dispatch.thirdCall.args[0];
+      [action] = instance.store.dispatch.thirdCall.args;
       assert.equal(action.data.rows[0].guid, "rec1");
       assert.equal(action.data.rows[1].guid, "rec2");
       assert.equal(action.data.rows[2].guid, "spoc2");
@@ -691,7 +735,7 @@ describe("Top Stories Feed", () => {
       // new campaign 1 period starting (spoc 1 sohuld be shown again)
       clock.tick(2 * 60 * 60 * 1000);
       instance.onAction({type: at.NEW_TAB_REHYDRATED, meta: {fromTarget: {}}});
-      action = instance.store.dispatch.lastCall.args[0];
+      [action] = instance.store.dispatch.lastCall.args;
       assert.equal(action.data.rows[0].guid, "rec1");
       assert.equal(action.data.rows[1].guid, "rec2");
       assert.equal(action.data.rows[2].guid, "spoc1");
@@ -784,7 +828,7 @@ describe("Top Stories Feed", () => {
       instance.observe("", "idle-daily");
 
       assert.calledOnce(instance.store.dispatch);
-      let action = instance.store.dispatch.firstCall.args[0];
+      let [action] = instance.store.dispatch.firstCall.args;
       assert.equal(action.type, at.TELEMETRY_PERFORMANCE_EVENT);
       assert.equal(action.data.event, "topstories.domain.affinity.calculation.ms");
     });

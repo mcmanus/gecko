@@ -2,24 +2,24 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
-Components.utils.import("resource://gre/modules/Services.jsm");
-Components.utils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "HeadlessShell",
-                                  "resource:///modules/HeadlessShell.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "LaterRun",
-                                  "resource:///modules/LaterRun.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
-                                  "resource://gre/modules/PrivateBrowsingUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
-                                  "resource:///modules/RecentWindow.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ShellService",
-                                  "resource:///modules/ShellService.jsm");
+ChromeUtils.defineModuleGetter(this, "HeadlessShell",
+                               "resource:///modules/HeadlessShell.jsm");
+ChromeUtils.defineModuleGetter(this, "LaterRun",
+                               "resource:///modules/LaterRun.jsm");
+ChromeUtils.defineModuleGetter(this, "PrivateBrowsingUtils",
+                               "resource://gre/modules/PrivateBrowsingUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "RecentWindow",
+                               "resource:///modules/RecentWindow.jsm");
+ChromeUtils.defineModuleGetter(this, "ShellService",
+                               "resource:///modules/ShellService.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "WindowsUIUtils",
                                    "@mozilla.org/windows-ui-utils;1", "nsIWindowsUIUtils");
-XPCOMUtils.defineLazyModuleGetter(this, "UpdatePing",
-                                  "resource://gre/modules/UpdatePing.jsm");
+ChromeUtils.defineModuleGetter(this, "UpdatePing",
+                               "resource://gre/modules/UpdatePing.jsm");
 
 const nsISupports            = Components.interfaces.nsISupports;
 
@@ -167,7 +167,7 @@ function getPostUpdateOverridePage(defaultOverridePage) {
 
   // The existence of silent or the non-existence of showURL in the actions both
   // mean that an override page should not be displayed.
-  if (actions.indexOf("silent") != -1 || actions.indexOf("showURL") == -1)
+  if (actions.includes("silent") || !actions.includes("showURL"))
     return "";
 
   return update.getProperty("openURL") || defaultOverridePage;
@@ -797,10 +797,27 @@ nsDefaultCommandLineHandler.prototype = {
           return;
         }
       }
+      if (cmdLine.state == nsICommandLine.STATE_INITIAL_LAUNCH) {
+        let win = Services.wm.getMostRecentWindow("navigator:blank");
+        if (win) {
+          win.location = gBrowserContentHandler.chromeURL;
+          win.arguments = [gBrowserContentHandler.defaultArgs];
+          return;
+        }
+      }
+
       // Passing defaultArgs, so use NO_EXTERNAL_URIS
       openWindow(null, gBrowserContentHandler.chromeURL, "_blank",
                  "chrome,dialog=no,all" + gBrowserContentHandler.getFeatures(cmdLine),
                  gBrowserContentHandler.defaultArgs, NO_EXTERNAL_URIS);
+    } else {
+      // Need a better solution in the future to avoid opening the blank window
+      // when command line parameters say we are not going to show a browser
+      // window, but for now the blank window getting closed quickly (and
+      // causing only a slight flicker) is better than leaving it open.
+      let win = Services.wm.getMostRecentWindow("navigator:blank");
+      if (win)
+        win.close();
     }
   },
 

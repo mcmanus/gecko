@@ -77,11 +77,19 @@
                 "$ref": "ThemeColor",
                 "optional": true
               },
+              "frame_inactive": {
+                "$ref": "ThemeColor",
+                "optional": true
+              },
               "textcolor": {
                 "$ref": "ThemeColor",
                 "optional": true
               },
               "background_tab_text": {
+                "$ref": "ThemeColor",
+                "optional": true
+              },
+              "tab_loading": {
                 "$ref": "ThemeColor",
                 "optional": true
               },
@@ -113,6 +121,10 @@
                 "$ref": "ThemeColor",
                 "optional": true
               },
+              "toolbar_field_separator": {
+                "$ref": "ThemeColor",
+                "optional": true
+              },
               "toolbar_top_separator": {
                 "$ref": "ThemeColor",
                 "optional": true
@@ -122,6 +134,22 @@
                 "optional": true
               },
               "toolbar_vertical_separator": {
+                "$ref": "ThemeColor",
+                "optional": true
+              },
+              "icons": {
+                "$ref": "ThemeColor",
+                "optional": true
+              },
+              "icons_attention": {
+                "$ref": "ThemeColor",
+                "optional": true
+              },
+              "button_background_hover": {
+               "$ref": "ThemeColor",
+               "optional": true
+              },
+              "button_background_active": {
                 "$ref": "ThemeColor",
                 "optional": true
               }

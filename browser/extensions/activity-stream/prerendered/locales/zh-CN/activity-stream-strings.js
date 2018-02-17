@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "{provider} 推荐",
   "header_bookmarks_placeholder": "您还没有最近的书签。",
   "header_stories_from": "出自",
+  "context_menu_button_sr": "打开 {title} 的上下文菜单",
   "type_label_visited": "曾经访问",
   "type_label_bookmarked": "已加书签",
   "type_label_synced": "从其他设备同步而来",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "编辑此网站",
   "edit_topsites_dismiss_button": "隐藏此网站",
   "edit_topsites_add_button": "添加",
+  "edit_topsites_add_button_tooltip": "添加常用网站",
   "topsites_form_add_header": "新建常用网站",
   "topsites_form_edit_header": "编辑常用网站",
   "topsites_form_title_placeholder": "输入标题",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "所有文章都读完啦！晚点再来，{provider} 将推荐更多热门文章。等不及了？选择一个热门话题，找到更多网上的好文章。",
   "manual_migration_explanation2": "把在其他浏览器中保存的书签、历史记录和密码带到 Firefox 吧。",
   "manual_migration_cancel_button": "不用了",
-  "manual_migration_import_button": "立即导入"
+  "manual_migration_import_button": "立即导入",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

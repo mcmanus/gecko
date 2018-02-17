@@ -4,16 +4,14 @@
 
 "use strict";
 
-const {interfaces: Ci, utils: Cu, results: Cr} = Components;
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-Cu.import("resource://gre/modules/Services.jsm");
-
-Cu.import("chrome://marionette/content/assert.js");
+ChromeUtils.import("chrome://marionette/content/assert.js");
 const {
   InvalidCookieDomainError,
   UnableToSetCookieError,
-} = Cu.import("chrome://marionette/content/error.js", {});
-const {pprint} = Cu.import("chrome://marionette/content/format.js", {});
+} = ChromeUtils.import("chrome://marionette/content/error.js", {});
+const {pprint} = ChromeUtils.import("chrome://marionette/content/format.js", {});
 
 this.EXPORTED_SYMBOLS = ["cookie"];
 
@@ -210,7 +208,7 @@ cookie.iter = function* (host, currentPath = "/") {
   assert.string(host, "host must be string");
   assert.string(currentPath, "currentPath must be string");
 
-  const isForCurrentPath = path => currentPath.indexOf(path) != -1;
+  const isForCurrentPath = path => currentPath.includes(path);
 
   let en = cookie.manager.getCookiesFromHost(host, {});
   while (en.hasMoreElements()) {
@@ -236,6 +234,6 @@ cookie.iter = function* (host, currentPath = "/") {
         yield data;
       }
       hostname = hostname.replace(/^.*?\./, "");
-    } while (hostname.indexOf(".") != -1);
+    } while (hostname.includes("."));
   }
 };

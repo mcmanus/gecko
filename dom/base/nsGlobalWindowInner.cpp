@@ -82,7 +82,7 @@
 #include "nsContentCID.h"
 #include "nsLayoutStatics.h"
 #include "nsCCUncollectableMarker.h"
-#include "mozilla/dom/workers/Workers.h"
+#include "mozilla/dom/WorkerCommon.h"
 #include "mozilla/dom/ToJSValue.h"
 #include "nsJSPrincipals.h"
 #include "mozilla/Attributes.h"
@@ -108,7 +108,6 @@
 #include "nsIDeviceSensors.h"
 #include "nsIContent.h"
 #include "nsIDocShell.h"
-#include "nsIDocCharset.h"
 #include "nsIDocument.h"
 #include "Crypto.h"
 #include "nsIDOMDocument.h"
@@ -182,10 +181,6 @@
 #include "nsNetCID.h"
 #include "nsIArray.h"
 
-// XXX An unfortunate dependency exists here (two XUL files).
-#include "nsIDOMXULDocument.h"
-#include "nsIDOMXULCommandDispatcher.h"
-
 #include "nsBindingManager.h"
 #include "nsXBLService.h"
 
@@ -228,7 +223,6 @@
 #include "mozilla/DOMEventTargetHelper.h"
 #include "prrng.h"
 #include "nsSandboxFlags.h"
-#include "TimeChangeObserver.h"
 #include "mozilla/dom/AudioContext.h"
 #include "mozilla/dom/BrowserElementDictionariesBinding.h"
 #include "mozilla/dom/cache/CacheStorage.h"
@@ -247,7 +241,9 @@
 #include "mozilla/dom/NavigatorBinding.h"
 #include "mozilla/dom/ImageBitmap.h"
 #include "mozilla/dom/ImageBitmapBinding.h"
+#include "mozilla/dom/ServiceWorker.h"
 #include "mozilla/dom/ServiceWorkerRegistration.h"
+#include "mozilla/dom/ServiceWorkerRegistrationDescriptor.h"
 #include "mozilla/dom/U2F.h"
 #include "mozilla/dom/WebIDLGlobalNameHash.h"
 #include "mozilla/dom/Worklet.h"
@@ -1272,7 +1268,7 @@ nsGlobalWindowInner::FreeInnerObjects()
   mInnerObjectsFreed = true;
 
   // Kill all of the workers for this window.
-  mozilla::dom::workers::CancelWorkersForWindow(this);
+  CancelWorkersForWindow(this);
 
   if (mTimeoutManager) {
     mTimeoutManager->ClearAllTimeouts();
@@ -1750,11 +1746,14 @@ nsGlobalWindowInner::EnsureClientSource()
 
   bool newClientSource = false;
 
-  // Get the load info for the document if we performed a load.  Be careful
-  // not to look at about:blank or about:srcdoc loads, though. They will have
-  // a channel and loadinfo, but their loadinfo will never be controlled.  This
-  // would in turn inadvertantly trigger the logic below to clear the inherited
-  // controller.
+  // Get the load info for the document if we performed a load.  Be careful not
+  // to look at local URLs, though. Local URLs are those that have a scheme of:
+  //  * about:
+  //  * data:
+  //  * blob:
+  // We also do an additional check here so that we only treat about:blank
+  // and about:srcdoc as local URLs.  Other internal firefox about: URLs should
+  // not be treated this way.
   nsCOMPtr<nsILoadInfo> loadInfo;
   nsCOMPtr<nsIChannel> channel = mDoc->GetChannel();
   if (channel) {
@@ -1770,6 +1769,12 @@ nsGlobalWindowInner::EnsureClientSource()
       nsCString spec = uri->GetSpecOrDefault();
       ignoreLoadInfo = spec.EqualsLiteral("about:blank") ||
                        spec.EqualsLiteral("about:srcdoc");
+    } else {
+      // Its not an about: URL, so now check for our other URL types.
+      bool isData = false;
+      bool isBlob = false;
+      ignoreLoadInfo = (NS_SUCCEEDED(uri->SchemeIs("data", &isData)) && isData) ||
+                       (NS_SUCCEEDED(uri->SchemeIs("blob", &isBlob)) && isBlob);
     }
 
     if (!ignoreLoadInfo) {
@@ -2255,19 +2260,13 @@ nsGlobalWindowInner::Self()
 }
 
 Navigator*
-nsGlobalWindowInner::Navigator()
+nsPIDOMWindowInner::Navigator()
 {
   if (!mNavigator) {
     mNavigator = new mozilla::dom::Navigator(this);
   }
 
   return mNavigator;
-}
-
-nsIDOMNavigator*
-nsGlobalWindowInner::GetNavigator()
-{
-  return Navigator();
 }
 
 nsScreen*
@@ -2391,6 +2390,12 @@ Maybe<ServiceWorkerDescriptor>
 nsPIDOMWindowInner::GetController() const
 {
   return Move(nsGlobalWindowInner::Cast(this)->GetController());
+}
+
+RefPtr<mozilla::dom::ServiceWorker>
+nsPIDOMWindowInner::GetOrCreateServiceWorker(const mozilla::dom::ServiceWorkerDescriptor& aDescriptor)
+{
+  return Move(nsGlobalWindowInner::Cast(this)->GetOrCreateServiceWorker(aDescriptor));
 }
 
 void
@@ -2969,6 +2974,13 @@ nsGlobalWindowInner::IsPrivilegedChromeWindow(JSContext* aCx, JSObject* aObj)
 }
 
 /* static */ bool
+nsGlobalWindowInner::OfflineCacheAllowedForContext(JSContext* aCx, JSObject* aObj)
+{
+  return IsSecureContextOrObjectIsFromSecureContext(aCx, aObj) ||
+         Preferences::GetBool("browser.cache.offline.insecure.enable");
+}
+
+/* static */ bool
 nsGlobalWindowInner::IsRequestIdleCallbackEnabled(JSContext* aCx, JSObject* aObj)
 {
   // The requestIdleCallback should always be enabled for system code.
@@ -3021,8 +3033,7 @@ Crypto*
 nsGlobalWindowInner::GetCrypto(ErrorResult& aError)
 {
   if (!mCrypto) {
-    mCrypto = new Crypto();
-    mCrypto->Init(this);
+    mCrypto = new Crypto(this);
   }
   return mCrypto;
 }
@@ -4295,15 +4306,14 @@ nsGlobalWindowInner::ConvertDialogOptions(const nsAString& aOptions,
   }
 }
 
-nsresult
+void
 nsGlobalWindowInner::UpdateCommands(const nsAString& anAction,
                                     nsISelection* aSel,
                                     int16_t aReason)
 {
   if (GetOuterWindowInternal()) {
-    return GetOuterWindowInternal()->UpdateCommands(anAction, aSel, aReason);
+    GetOuterWindowInternal()->UpdateCommands(anAction, aSel, aReason);
   }
-  return NS_OK;
 }
 
 Selection*
@@ -5164,14 +5174,15 @@ nsGlobalWindowInner::GetCaches(ErrorResult& aRv)
 }
 
 already_AddRefed<ServiceWorkerRegistration>
-nsPIDOMWindowInner::GetServiceWorkerRegistration(const nsAString& aScope)
+nsPIDOMWindowInner::GetServiceWorkerRegistration(const ServiceWorkerRegistrationDescriptor& aDescriptor)
 {
+  NS_ConvertUTF8toUTF16 scope(aDescriptor.Scope());
   RefPtr<ServiceWorkerRegistration> registration;
-  if (!mServiceWorkerRegistrationTable.Get(aScope,
+  if (!mServiceWorkerRegistrationTable.Get(scope,
                                            getter_AddRefs(registration))) {
     registration =
-      ServiceWorkerRegistration::CreateForMainThread(this, aScope);
-    mServiceWorkerRegistrationTable.Put(aScope, registration);
+      ServiceWorkerRegistration::CreateForMainThread(this, aDescriptor);
+    mServiceWorkerRegistrationTable.Put(scope, registration);
   }
   return registration.forget();
 }
@@ -6089,7 +6100,7 @@ nsGlobalWindowInner::Suspend()
   DisableGamepadUpdates();
   DisableVRUpdates();
 
-  mozilla::dom::workers::SuspendWorkersForWindow(this);
+  SuspendWorkersForWindow(this);
 
   SuspendIdleRequests();
 
@@ -6151,7 +6162,7 @@ nsGlobalWindowInner::Resume()
   // Resume all of the workers for this window.  We must do this
   // after timeouts since workers may have queued events that can trigger
   // a setTimeout().
-  mozilla::dom::workers::ResumeWorkersForWindow(this);
+  ResumeWorkersForWindow(this);
 }
 
 bool
@@ -6184,7 +6195,7 @@ nsGlobalWindowInner::FreezeInternal()
     return;
   }
 
-  mozilla::dom::workers::FreezeWorkersForWindow(this);
+  FreezeWorkersForWindow(this);
 
   mTimeoutManager->Freeze();
   if (mClientSource) {
@@ -6223,7 +6234,7 @@ nsGlobalWindowInner::ThawInternal()
   }
   mTimeoutManager->Thaw();
 
-  mozilla::dom::workers::ThawWorkersForWindow(this);
+  ThawWorkersForWindow(this);
 
   NotifyDOMWindowThawed(this);
 }
@@ -6368,6 +6379,39 @@ nsGlobalWindowInner::GetController() const
     controller = mClientSource->GetController();
   }
   return Move(controller);
+}
+
+RefPtr<ServiceWorker>
+nsGlobalWindowInner::GetOrCreateServiceWorker(const ServiceWorkerDescriptor& aDescriptor)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  RefPtr<ServiceWorker> ref;
+  for (auto sw : mServiceWorkerList) {
+    if (sw->MatchesDescriptor(aDescriptor)) {
+      ref = sw;
+      return ref.forget();
+    }
+  }
+  ref = ServiceWorker::Create(this, aDescriptor);
+  return ref.forget();
+}
+
+void
+nsGlobalWindowInner::AddServiceWorker(ServiceWorker* aServiceWorker)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_DIAGNOSTIC_ASSERT(aServiceWorker);
+  MOZ_ASSERT(!mServiceWorkerList.Contains(aServiceWorker));
+  mServiceWorkerList.AppendElement(aServiceWorker);
+}
+
+void
+nsGlobalWindowInner::RemoveServiceWorker(ServiceWorker* aServiceWorker)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_DIAGNOSTIC_ASSERT(aServiceWorker);
+  MOZ_ASSERT(mServiceWorkerList.Contains(aServiceWorker));
+  mServiceWorkerList.RemoveElement(aServiceWorker);
 }
 
 nsresult
@@ -6868,18 +6912,6 @@ nsGlobalWindowInner::IsVRContentPresenting() const
     }
   }
   return false;
-}
-
-void
-nsGlobalWindowInner::EnableTimeChangeNotifications()
-{
-  mozilla::time::AddWindowListener(this);
-}
-
-void
-nsGlobalWindowInner::DisableTimeChangeNotifications()
-{
-  mozilla::time::RemoveWindowListener(this);
 }
 
 void

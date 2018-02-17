@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "{provider} என்பவரால் பரிந்துரைக்கப்பட்டது",
   "header_bookmarks_placeholder": "நீங்கள் புத்தகக்குறிகளைக் கொண்டிருக்கவில்லை .",
   "header_stories_from": "அனுப்பியவர்",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "பார்த்தவை",
   "type_label_bookmarked": "புத்தகக்குறியிடப்பட்டது",
   "type_label_synced": "இன்னொரு சாதனத்திலிருந்து ஒத்திசைக்கப்பட்டது",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "இத்தளத்தை தொகு",
   "edit_topsites_dismiss_button": "இந்த தளத்தை வெளியேற்று",
   "edit_topsites_add_button": "சேர்",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "புதிய முக்கிய தளம்",
   "topsites_form_edit_header": "முக்கிய தளத்தை தொகு",
   "topsites_form_title_placeholder": "தலைப்பை இடு",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "You’ve caught up. Check back later for more top stories from {provider}. Can’t wait? Select a popular topic to find more great stories from around the web.",
   "manual_migration_explanation2": "Try Firefox with the bookmarks, history and passwords from another browser.",
   "manual_migration_cancel_button": "பரவாயில்லை",
-  "manual_migration_import_button": "இப்போது இறக்கு"
+  "manual_migration_import_button": "இப்போது இறக்கு",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

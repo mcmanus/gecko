@@ -120,6 +120,7 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitFunctionDispatch(MFunctionDispatch* ins) override;
     void visitObjectGroupDispatch(MObjectGroupDispatch* ins) override;
     void visitCompare(MCompare* comp) override;
+    void visitSameValue(MSameValue* comp) override;
     void visitTypeOf(MTypeOf* ins) override;
     void visitToAsync(MToAsync* ins) override;
     void visitToAsyncGen(MToAsyncGen* ins) override;
@@ -170,7 +171,7 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitOsrArgumentsObject(MOsrArgumentsObject* object) override;
     void visitToDouble(MToDouble* convert) override;
     void visitToFloat32(MToFloat32* convert) override;
-    void visitToInt32(MToInt32* convert) override;
+    void visitToNumberInt32(MToNumberInt32* convert) override;
     void visitTruncateToInt32(MTruncateToInt32* truncate) override;
     void visitWasmTruncateToInt32(MWasmTruncateToInt32* truncate) override;
     void visitWrapInt64ToInt32(MWrapInt64ToInt32* ins) override;
@@ -186,7 +187,7 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitGetFirstDollarIndex(MGetFirstDollarIndex* ins) override;
     void visitStringReplace(MStringReplace* ins) override;
     void visitBinarySharedStub(MBinarySharedStub* ins) override;
-    void visitUnarySharedStub(MUnarySharedStub* ins) override;
+    void visitUnaryCache(MUnaryCache* ins) override;
     void visitNullarySharedStub(MNullarySharedStub* ins) override;
     void visitClassConstructor(MClassConstructor* ins) override;
     void visitLambda(MLambda* ins) override;
@@ -294,7 +295,7 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitInArray(MInArray* ins) override;
     void visitHasOwnCache(MHasOwnCache* ins) override;
     void visitInstanceOf(MInstanceOf* ins) override;
-    void visitCallInstanceOf(MCallInstanceOf* ins) override;
+    void visitInstanceOfCache(MInstanceOfCache* ins) override;
     void visitIsCallable(MIsCallable* ins) override;
     void visitIsConstructor(MIsConstructor* ins) override;
     void visitIsArray(MIsArray* ins) override;

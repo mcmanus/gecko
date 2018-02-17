@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -10,23 +11,29 @@
 #include "mozilla/PodOperations.h"
 #include <vector>
 
+#include "DrawCommand.h"
+#include "Logging.h"
+
 namespace mozilla {
 namespace gfx {
-
-class DrawingCommand;
 
 class CaptureCommandList
 {
 public:
   CaptureCommandList()
+    : mLastCommand(nullptr)
   {}
   CaptureCommandList(CaptureCommandList&& aOther)
-   : mStorage(Move(aOther.mStorage))
-  {}
+   : mStorage(Move(aOther.mStorage)), mLastCommand(aOther.mLastCommand)
+  {
+    aOther.mLastCommand = nullptr;
+  }
   ~CaptureCommandList();
 
   CaptureCommandList& operator =(CaptureCommandList&& aOther) {
     mStorage = Move(aOther.mStorage);
+    mLastCommand = aOther.mLastCommand;
+    aOther.mLastCommand = nullptr;
     return *this;
   }
 
@@ -36,7 +43,18 @@ public:
     mStorage.resize(mStorage.size() + sizeof(T) + sizeof(uint32_t));
     uint8_t* nextDrawLocation = &mStorage.front() + oldSize;
     *(uint32_t*)(nextDrawLocation) = sizeof(T) + sizeof(uint32_t);
-    return reinterpret_cast<T*>(nextDrawLocation + sizeof(uint32_t));
+    T* newCommand = reinterpret_cast<T*>(nextDrawLocation + sizeof(uint32_t));
+    mLastCommand = newCommand;
+    return newCommand;
+  }
+
+  template <typename T>
+  T* ReuseOrAppend() {
+    if (mLastCommand != nullptr &&
+      mLastCommand->GetType() == T::Type) {
+      return reinterpret_cast<T*>(mLastCommand);
+    }
+    return Append<T>();
   }
 
   class iterator
@@ -70,12 +88,22 @@ public:
     uint8_t* mEnd;
   };
 
+  void Log(TreeLog& aStream)
+  {
+    for (iterator iter(*this); !iter.Done(); iter.Next()) {
+      DrawingCommand* cmd = iter.Get();
+      cmd->Log(aStream);
+      aStream << "\n";
+    }
+  }
+
 private:
   CaptureCommandList(const CaptureCommandList& aOther) = delete;
   void operator =(const CaptureCommandList& aOther) = delete;
 
 private:
   std::vector<uint8_t> mStorage;
+  DrawingCommand* mLastCommand;
 };
 
 } // namespace gfx

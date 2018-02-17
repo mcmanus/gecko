@@ -11,8 +11,10 @@ const {Cc, Ci, Cu} = require("chrome");
 const {Utils: WebConsoleUtils, CONSOLE_WORKER_IDS} =
   require("devtools/client/webconsole/utils");
 const { getSourceNames } = require("devtools/client/shared/source-utils");
-const BrowserLoaderModule = {};
-Cu.import("resource://devtools/client/shared/browser-loader.js", BrowserLoaderModule);
+const ChromeUtils = require("ChromeUtils");
+// browser-loader.js is a JSM without .jsm file extension, so it has to be loaded
+// via ChromeUtils.import and not require() which would consider it as a CommonJS module
+const { BrowserLoader } = ChromeUtils.import("resource://devtools/client/shared/browser-loader.js", {});
 
 const promise = require("promise");
 const defer = require("devtools/shared/defer");
@@ -225,7 +227,7 @@ function WebConsoleFrame(webConsoleOwner) {
   this._outputTimerInitialized = false;
 
   let toolbox = gDevTools.getToolbox(this.owner.target);
-  let {require} = BrowserLoaderModule.BrowserLoader({
+  let {require} = BrowserLoader({
     window: this.window,
     useOnlyShared: true,
     // The toolbox isn't available for the browser console.
@@ -956,7 +958,7 @@ WebConsoleFrame.prototype = {
     let searchStr = str.toLowerCase();
     let filterStrings = filter.toLowerCase().split(/\s+/);
     return !filterStrings.some(function (f) {
-      return searchStr.indexOf(f) == -1;
+      return !searchStr.includes(f);
     });
   },
 
@@ -980,15 +982,12 @@ WebConsoleFrame.prototype = {
     // (filter="error", filter="cssparser", etc.) and add or remove the
     // "filtered-by-type" class, which turns on or off the display.
 
-    let attribute = WORKERTYPES_PREFKEYS.indexOf(prefKey) == -1
+    let attribute = !WORKERTYPES_PREFKEYS.includes(prefKey)
                       ? "filter" : "workerType";
 
-    let xpath = ".//*[contains(@class, 'message') and " +
-      "@" + attribute + "='" + prefKey + "']";
-    let result = doc.evaluate(xpath, outputNode, null,
-      Ci.nsIDOMXPathResult.UNORDERED_NODE_SNAPSHOT_TYPE, null);
-    for (let i = 0; i < result.snapshotLength; i++) {
-      let node = result.snapshotItem(i);
+    let selector = "[" + attribute + "='" + prefKey + "'].message";
+    let result = outputNode.querySelectorAll(selector);
+    for (let node of result) {
       if (state) {
         node.classList.remove("filtered-by-type");
       } else {
@@ -2436,7 +2435,7 @@ WebConsoleFrame.prototype = {
     // Create the source location (e.g. www.example.com:6) that sits on the
     // right side of the message, if applicable.
     let locationNode;
-    if (sourceURL && IGNORED_SOURCE_URLS.indexOf(sourceURL) == -1) {
+    if (sourceURL && !IGNORED_SOURCE_URLS.includes(sourceURL)) {
       locationNode = this.createLocationNode({url: sourceURL,
                                               line: sourceLine});
     }
@@ -3045,7 +3044,7 @@ ConsoleContextMenu.prototype = {
     let itemData = selection.split("|");
     for (let type of metadata.selection) {
       // check whether this menu item should show or not.
-      if (itemData.indexOf(type) !== -1) {
+      if (itemData.includes(type)) {
         shouldHide = false;
         break;
       }

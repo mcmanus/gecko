@@ -3,11 +3,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-var Cc = Components.classes;
-var Ci = Components.interfaces;
-var Cu = Components.utils;
+ChromeUtils.import("resource://gre/modules/PrivateBrowsingUtils.jsm");
 
-Cu.import("resource://gre/modules/PrivateBrowsingUtils.jsm");
+Cu.importGlobalProperties(["XMLHttpRequest"]);
 
 this.EXPORTED_SYMBOLS = ["SSLExceptions"];
 
@@ -52,7 +50,7 @@ SSLExceptions.prototype = {
   _checkCert: function SSLE_checkCert(aURI) {
     this._sslStatus = null;
 
-    let req = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"].createInstance(Ci.nsIXMLHttpRequest);
+    let req = new XMLHttpRequest();
     try {
       if (aURI) {
         req.open("GET", aURI.prePath, false);

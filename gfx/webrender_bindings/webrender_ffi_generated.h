@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* Generated with cbindgen:0.3.3 */
+/* Generated with cbindgen:0.4.0 */
 
 /* DO NOT MODIFY THIS MANUALLY! This file was generated using cbindgen.
  * To generate this file:
@@ -49,16 +49,6 @@ enum class ClipMode {
 enum class ExtendMode : uint32_t {
   Clamp = 0,
   Repeat = 1,
-
-  Sentinel /* this must be last for serialization purposes. */
-};
-
-enum class ExternalImageType : uint32_t {
-  Texture2DHandle = 0,
-  Texture2DArrayHandle = 1,
-  TextureRectHandle = 2,
-  TextureExternalHandle = 3,
-  ExternalBuffer = 4,
 
   Sentinel /* this must be last for serialization purposes. */
 };
@@ -111,31 +101,15 @@ enum class ImageRendering : uint32_t {
   Sentinel /* this must be last for serialization purposes. */
 };
 
-enum class LineOrientation : uint8_t {
-  Vertical = 0,
-  Horizontal = 1,
-
-  Sentinel /* this must be last for serialization purposes. */
-};
-
-enum class LineStyle : uint8_t {
-  Solid = 0,
-  Dotted = 1,
-  Dashed = 2,
-  Wavy = 3,
-
-  Sentinel /* this must be last for serialization purposes. */
-};
-
-// An enum representing the available verbosity level filters of the logging
-// framework.
+// An enum representing the available verbosity level filters of the logger.
 //
-// A `LogLevelFilter` may be compared directly to a [`LogLevel`](enum.LogLevel.html).
-// Use this type to [`get()`](struct.MaxLogLevelFilter.html#method.get) and
-// [`set()`](struct.MaxLogLevelFilter.html#method.set) the
-// [`MaxLogLevelFilter`](struct.MaxLogLevelFilter.html), or to match with the getter
-// [`max_log_level()`](fn.max_log_level.html).
-enum class LogLevelFilter : uintptr_t {
+// A `LevelFilter` may be compared directly to a [`Level`]. Use this type
+// to get and set the maximum log level with [`max_level()`] and [`set_max_level`].
+//
+// [`Level`]: enum.Level.html
+// [`max_level()`]: fn.max_level.html
+// [`set_max_level`]: fn.set_max_level.html
+enum class LevelFilter : uintptr_t {
   // A level lower than all log levels.
   Off = 0,
   // Corresponds to the `Error` log level.
@@ -148,6 +122,22 @@ enum class LogLevelFilter : uintptr_t {
   Debug = 4,
   // Corresponds to the `Trace` log level.
   Trace = 5,
+
+  Sentinel /* this must be last for serialization purposes. */
+};
+
+enum class LineOrientation : uint8_t {
+  Vertical = 0,
+  Horizontal = 1,
+
+  Sentinel /* this must be last for serialization purposes. */
+};
+
+enum class LineStyle : uint8_t {
+  Solid = 0,
+  Dotted = 1,
+  Dashed = 2,
+  Wavy = 3,
 
   Sentinel /* this must be last for serialization purposes. */
 };
@@ -200,6 +190,16 @@ enum class TransformStyle : uint32_t {
 enum class WrAnimationType : uint32_t {
   Transform = 0,
   Opacity = 1,
+
+  Sentinel /* this must be last for serialization purposes. */
+};
+
+enum class WrExternalImageBufferType {
+  TextureHandle = 0,
+  TextureRectHandle = 1,
+  TextureArrayHandle = 2,
+  TextureExternalHandle = 3,
+  ExternalBuffer = 4,
 
   Sentinel /* this must be last for serialization purposes. */
 };
@@ -273,9 +273,9 @@ struct Vec;
 // Geometry in the document's coordinate space (logical pixels).
 struct WorldPixel;
 
-struct WrProgramCache;
+struct WrPipelineInfo;
 
-struct WrRenderedEpochs;
+struct WrProgramCache;
 
 struct WrState;
 
@@ -324,6 +324,8 @@ struct TypedSize2D {
            height == aOther.height;
   }
 };
+
+using DeviceUintSize = TypedSize2D<uint32_t, DevicePixel>;
 
 using LayerSize = TypedSize2D<float, LayerPixel>;
 
@@ -719,7 +721,7 @@ struct GlyphOptions {
 
 using WrYuvColorSpace = YuvColorSpace;
 
-using WrLogLevelFilter = LogLevelFilter;
+using WrLogLevelFilter = LevelFilter;
 
 struct ByteSlice {
   const uint8_t *buffer;
@@ -842,8 +844,6 @@ struct WrImageDescriptor {
            is_opaque == aOther.is_opaque;
   }
 };
-
-using WrExternalImageBufferType = ExternalImageType;
 
 // Represents RGBA screen colors with one byte per channel.
 //
@@ -978,12 +978,29 @@ const VecU8 *wr_add_ref_arc(const ArcVecU8 *aArc)
 WR_FUNC;
 
 WR_INLINE
+void wr_api_capture(DocumentHandle *aDh,
+                    const char *aPath,
+                    uint32_t aBitsRaw)
+WR_FUNC;
+
+WR_INLINE
 void wr_api_clone(DocumentHandle *aDh,
                   DocumentHandle **aOutHandle)
 WR_FUNC;
 
 WR_INLINE
+void wr_api_create_document(DocumentHandle *aRootDh,
+                            DocumentHandle **aOutHandle,
+                            DeviceUintSize aDocSize,
+                            int8_t aLayer)
+WR_FUNC;
+
+WR_INLINE
 void wr_api_delete(DocumentHandle *aDh)
+WR_DESTRUCTOR_SAFE_FUNC;
+
+WR_INLINE
+void wr_api_delete_document(DocumentHandle *aDh)
 WR_DESTRUCTOR_SAFE_FUNC;
 
 WR_INLINE
@@ -1016,6 +1033,10 @@ void wr_api_send_transaction(DocumentHandle *aDh,
 WR_FUNC;
 
 WR_INLINE
+void wr_api_shut_down(DocumentHandle *aDh)
+WR_DESTRUCTOR_SAFE_FUNC;
+
+WR_INLINE
 void wr_clear_item_tag(WrState *aState)
 WR_FUNC;
 
@@ -1038,12 +1059,12 @@ uint64_t wr_dp_define_clip(WrState *aState,
 WR_FUNC;
 
 WR_INLINE
-void wr_dp_define_scroll_layer(WrState *aState,
-                               uint64_t aScrollId,
-                               const uint64_t *aAncestorScrollId,
-                               const uint64_t *aAncestorClipId,
-                               LayoutRect aContentRect,
-                               LayoutRect aClipRect)
+uint64_t wr_dp_define_scroll_layer(WrState *aState,
+                                   uint64_t aScrollId,
+                                   const uint64_t *aAncestorScrollId,
+                                   const uint64_t *aAncestorClipId,
+                                   LayoutRect aContentRect,
+                                   LayoutRect aClipRect)
 WR_FUNC;
 
 WR_INLINE
@@ -1335,22 +1356,29 @@ extern void wr_notifier_new_frame_ready(WrWindowId aWindowId);
 extern void wr_notifier_new_scroll_frame_ready(WrWindowId aWindowId,
                                                bool aCompositeNeeded);
 
+extern void wr_notifier_wake_up(WrWindowId aWindowId);
+
+WR_INLINE
+void wr_pipeline_info_delete(WrPipelineInfo *aInfo)
+WR_DESTRUCTOR_SAFE_FUNC;
+
+WR_INLINE
+bool wr_pipeline_info_next_epoch(WrPipelineInfo *aInfo,
+                                 WrPipelineId *aOutPipeline,
+                                 WrEpoch *aOutEpoch)
+WR_FUNC;
+
+WR_INLINE
+bool wr_pipeline_info_next_removed_pipeline(WrPipelineInfo *aInfo,
+                                            WrPipelineId *aOutPipeline)
+WR_FUNC;
+
 WR_INLINE
 void wr_program_cache_delete(WrProgramCache *aProgramCache)
 WR_DESTRUCTOR_SAFE_FUNC;
 
 WR_INLINE
 WrProgramCache *wr_program_cache_new()
-WR_FUNC;
-
-WR_INLINE
-void wr_rendered_epochs_delete(WrRenderedEpochs *aPipelineEpochs)
-WR_DESTRUCTOR_SAFE_FUNC;
-
-WR_INLINE
-bool wr_rendered_epochs_next(WrRenderedEpochs *aPipelineEpochs,
-                             WrPipelineId *aOutPipeline,
-                             WrEpoch *aOutEpoch)
 WR_FUNC;
 
 WR_INLINE
@@ -1364,7 +1392,7 @@ void wr_renderer_delete(Renderer *aRenderer)
 WR_DESTRUCTOR_SAFE_FUNC;
 
 WR_INLINE
-WrRenderedEpochs *wr_renderer_flush_rendered_epochs(Renderer *aRenderer)
+WrPipelineInfo *wr_renderer_flush_pipeline_info(Renderer *aRenderer)
 WR_FUNC;
 
 WR_INLINE
@@ -1583,8 +1611,8 @@ WR_FUNC;
 
 WR_INLINE
 void wr_transaction_set_window_parameters(Transaction *aTxn,
-                                          int32_t aWindowWidth,
-                                          int32_t aWindowHeight)
+                                          const DeviceUintSize *aWindowSize,
+                                          const DeviceUintRect *aDocRect)
 WR_FUNC;
 
 WR_INLINE

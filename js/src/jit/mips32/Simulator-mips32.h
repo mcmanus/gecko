@@ -101,6 +101,7 @@ const uint32_t kFCSRExceptionFlagMask = kFCSRFlagMask ^ kFCSRInexactFlagMask;
 //   debugger.
 const uint32_t kMaxWatchpointCode = 31;
 const uint32_t kMaxStopCode = 127;
+const uint32_t kWasmTrapCode = 6;
 
 // -----------------------------------------------------------------------------
 // Utility functions
@@ -154,6 +155,8 @@ class Simulator {
     // Constructor/destructor are for internal use only; use the static methods above.
     Simulator();
     ~Simulator();
+
+    static bool supportsAtomics() { return true; }
 
     // The currently executing Simulator instance. Potentially there can be one
     // for each native thread.
@@ -300,6 +303,7 @@ class Simulator {
 
     // Handle any wasm faults, returning true if the fault was handled.
     bool handleWasmFault(int32_t addr, unsigned numBytes);
+    bool handleWasmTrapFault();
 
     // Executes one instruction.
     void instructionDecode(SimInstruction* instr);

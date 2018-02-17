@@ -10,7 +10,6 @@
 
 this.EXPORTED_SYMBOLS = ["FormAutofillPreferences"];
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 // Add addresses enabled flag in telemetry environment for recording the number of
 // users who disable/enable the address autofill feature.
 const BUNDLE_URI = "chrome://formautofill/locale/formautofill.properties";
@@ -18,9 +17,9 @@ const MANAGE_ADDRESSES_URL = "chrome://formautofill/content/manageAddresses.xhtm
 const MANAGE_CREDITCARDS_URL = "chrome://formautofill/content/manageCreditCards.xhtml";
 const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://formautofill/FormAutofillUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://formautofill/FormAutofillUtils.jsm");
 
 const {
   ENABLED_AUTOFILL_ADDRESSES_PREF,

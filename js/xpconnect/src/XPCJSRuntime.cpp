@@ -82,6 +82,10 @@ const char* const XPCJSRuntime::mStrings[] = {
     "value",                // IDX_VALUE
     "QueryInterface",       // IDX_QUERY_INTERFACE
     "Components",           // IDX_COMPONENTS
+    "Cc",                   // IDX_CC
+    "Ci",                   // IDX_CI
+    "Cr",                   // IDX_CR
+    "Cu",                   // IDX_CU
     "wrappedJSObject",      // IDX_WRAPPED_JSOBJECT
     "Object",               // IDX_OBJECT
     "Function",             // IDX_FUNCTION
@@ -102,7 +106,8 @@ const char* const XPCJSRuntime::mStrings[] = {
     "columnNumber",         // IDX_COLUMNNUMBER
     "stack",                // IDX_STACK
     "message",              // IDX_MESSAGE
-    "lastIndex"             // IDX_LASTINDEX
+    "lastIndex",            // IDX_LASTINDEX
+    "then"                  // IDX_THEN
 };
 
 /***************************************************************************/
@@ -1837,6 +1842,10 @@ ReportCompartmentStats(const JS::CompartmentStats& cStats,
         cStats.privateData,
         "Extra data attached to the compartment by XPConnect, including "
         "its wrapped-js.");
+
+    ZCREPORT_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("script-counts-map"),
+        cStats.scriptCountsMap,
+        "Profiling-related information for scripts.");
 
     if (sundriesGCHeap > 0) {
         // We deliberately don't use ZCREPORT_GC_BYTES here.

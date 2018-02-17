@@ -12,12 +12,11 @@
 #include "jit/BaselineCacheIRCompiler.h"
 #include "jit/BaselineIC.h"
 #include "jit/CacheIRSpewer.h"
-
 #include "vm/SelfHosting.h"
-#include "jsobjinlines.h"
 
 #include "jit/MacroAssembler-inl.h"
 #include "vm/EnvironmentObject-inl.h"
+#include "vm/JSObject-inl.h"
 #include "vm/UnboxedObject-inl.h"
 
 using namespace js;
@@ -212,7 +211,7 @@ GetPropIRGenerator::tryAttachStub()
             if (tryAttachProxy(obj, objId, id))
                 return true;
 
-            trackNotAttached();
+            trackAttached(IRGenerator::NotAttached);
             return false;
         }
 
@@ -233,11 +232,11 @@ GetPropIRGenerator::tryAttachStub()
             if (tryAttachArgumentsObjectArg(obj, objId, index, indexId))
                 return true;
 
-            trackNotAttached();
+            trackAttached(IRGenerator::NotAttached);
             return false;
         }
 
-        trackNotAttached();
+        trackAttached(IRGenerator::NotAttached);
         return false;
     }
 
@@ -249,7 +248,7 @@ GetPropIRGenerator::tryAttachStub()
         if (tryAttachMagicArgumentsName(valId, id))
             return true;
 
-        trackNotAttached();
+        trackAttached(IRGenerator::NotAttached);
         return false;
     }
 
@@ -260,11 +259,11 @@ GetPropIRGenerator::tryAttachStub()
         if (tryAttachMagicArgument(valId, indexId))
             return true;
 
-        trackNotAttached();
+        trackAttached(IRGenerator::NotAttached);
         return false;
     }
 
-    trackNotAttached();
+    trackAttached(IRGenerator::NotAttached);
     return false;
 }
 
@@ -286,7 +285,7 @@ GetPropIRGenerator::tryAttachIdempotentStub()
         return true;
 
     // Object lengths are supported only if int32 results are allowed.
-    if ((resultFlags_ & GetPropertyResultFlags::AllowInt32) && tryAttachObjectLength(obj, objId, id))
+    if (tryAttachObjectLength(obj, objId, id))
         return true;
 
     // Also support native data properties on DOMProxy prototypes.
@@ -339,7 +338,7 @@ IsCacheableGetPropCallNative(JSObject* obj, JSObject* holder, Shape* shape)
         return false;
 
     JSFunction& getter = shape->getterValue().toObject().as<JSFunction>();
-    if (!getter.isNative())
+    if (!getter.isNativeWithCppEntry())
         return false;
 
     if (getter.isClassConstructor())
@@ -374,8 +373,12 @@ IsCacheableGetPropCallScripted(JSObject* obj, JSObject* holder, Shape* shape,
         return false;
 
     JSFunction& getter = shape->getterValue().toObject().as<JSFunction>();
-    if (getter.isNative())
+    if (getter.isNativeWithCppEntry())
         return false;
+
+    // Natives with jit entry can use the scripted path.
+    if (getter.isNativeWithJitEntry())
+        return true;
 
     if (!getter.hasScript()) {
         if (isTemporarilyUnoptimizable)
@@ -684,7 +687,7 @@ EmitCallGetterResultNoGuards(CacheIRWriter& writer, JSObject* obj, JSObject* hol
 {
     if (IsCacheableGetPropCallNative(obj, holder, shape)) {
         JSFunction* target = &shape->getterValue().toObject().as<JSFunction>();
-        MOZ_ASSERT(target->isNative());
+        MOZ_ASSERT(target->isNativeWithCppEntry());
         writer.callNativeGetterResult(receiverId, target);
         writer.typeMonitorResult();
         return;
@@ -693,7 +696,7 @@ EmitCallGetterResultNoGuards(CacheIRWriter& writer, JSObject* obj, JSObject* hol
     MOZ_ASSERT(IsCacheableGetPropCallScripted(obj, holder, shape));
 
     JSFunction* target = &shape->getterValue().toObject().as<JSFunction>();
-    MOZ_ASSERT(target->hasScript());
+    MOZ_ASSERT(target->hasJitEntry());
     writer.callScriptedGetterResult(receiverId, target);
     writer.typeMonitorResult();
 }
@@ -1433,6 +1436,9 @@ GetPropIRGenerator::tryAttachObjectLength(HandleObject obj, ObjOperandId objId, 
     if (!JSID_IS_ATOM(id, cx_->names().length))
         return false;
 
+    if (!(resultFlags_ & GetPropertyResultFlags::AllowInt32))
+        return false;
+
     if (obj->is<ArrayObject>()) {
         // Make sure int32 is added to the TypeSet before we attach a stub, so
         // the stub can return int32 values without monitoring the result.
@@ -1546,16 +1552,16 @@ GetPropIRGenerator::tryAttachPrimitive(ValOperandId valId, HandleId id)
             return false;
         }
         primitiveType = JSVAL_TYPE_STRING;
-        proto = MaybeNativeObject(GetBuiltinPrototypePure(cx_->global(), JSProto_String));
+        proto = MaybeNativeObject(cx_->global()->maybeGetPrototype(JSProto_String));
     } else if (val_.isNumber()) {
         primitiveType = JSVAL_TYPE_DOUBLE;
-        proto = MaybeNativeObject(GetBuiltinPrototypePure(cx_->global(), JSProto_Number));
+        proto = MaybeNativeObject(cx_->global()->maybeGetPrototype(JSProto_Number));
     } else if (val_.isBoolean()) {
         primitiveType = JSVAL_TYPE_BOOLEAN;
-        proto = MaybeNativeObject(GetBuiltinPrototypePure(cx_->global(), JSProto_Boolean));
+        proto = MaybeNativeObject(cx_->global()->maybeGetPrototype(JSProto_Boolean));
     } else if (val_.isSymbol()) {
         primitiveType = JSVAL_TYPE_SYMBOL;
-        proto = MaybeNativeObject(GetBuiltinPrototypePure(cx_->global(), JSProto_Symbol));
+        proto = MaybeNativeObject(cx_->global()->maybeGetPrototype(JSProto_Symbol));
     } else {
         MOZ_ASSERT(val_.isNullOrUndefined() || val_.isMagic());
         return false;
@@ -1695,6 +1701,9 @@ GetPropIRGenerator::tryAttachArgumentsObjectArg(HandleObject obj, ObjOperandId o
                                                 uint32_t index, Int32OperandId indexId)
 {
     if (!obj->is<ArgumentsObject>() || obj->as<ArgumentsObject>().hasOverriddenElement())
+        return false;
+
+    if (!(resultFlags_ & GetPropertyResultFlags::Monitored))
         return false;
 
     if (obj->is<MappedArgumentsObject>()) {
@@ -1894,29 +1903,9 @@ void
 GetPropIRGenerator::trackAttached(const char* name)
 {
 #ifdef JS_CACHEIR_SPEW
-    CacheIRSpewer& sp = CacheIRSpewer::singleton();
-    if (sp.enabled()) {
-        LockGuard<Mutex> guard(sp.lock());
-        sp.beginCache(guard, *this);
-        sp.valueProperty(guard, "base", val_);
-        sp.valueProperty(guard, "property", idVal_);
-        sp.attached(guard, name);
-        sp.endCache(guard);
-    }
-#endif
-}
-
-void
-GetPropIRGenerator::trackNotAttached()
-{
-#ifdef JS_CACHEIR_SPEW
-    CacheIRSpewer& sp = CacheIRSpewer::singleton();
-    if (sp.enabled()) {
-        LockGuard<Mutex> guard(sp.lock());
-        sp.beginCache(guard, *this);
-        sp.valueProperty(guard, "base", val_);
-        sp.valueProperty(guard, "property", idVal_);
-        sp.endCache(guard);
+    if (const CacheIRSpewer::Guard& sp = CacheIRSpewer::Guard(*this, name)) {
+        sp.valueProperty("base", val_);
+        sp.valueProperty("property", idVal_);
     }
 #endif
 }
@@ -1985,7 +1974,7 @@ GetNameIRGenerator::tryAttachStub()
     if (tryAttachEnvironmentName(envId, id))
         return true;
 
-    trackNotAttached();
+    trackAttached(IRGenerator::NotAttached);
     return false;
 }
 
@@ -2209,29 +2198,9 @@ void
 GetNameIRGenerator::trackAttached(const char* name)
 {
 #ifdef JS_CACHEIR_SPEW
-    CacheIRSpewer& sp = CacheIRSpewer::singleton();
-    if (sp.enabled()) {
-        LockGuard<Mutex> guard(sp.lock());
-        sp.beginCache(guard, *this);
-        sp.valueProperty(guard, "base", ObjectValue(*env_));
-        sp.valueProperty(guard, "property", StringValue(name_));
-        sp.attached(guard, name);
-        sp.endCache(guard);
-    }
-#endif
-}
-
-void
-GetNameIRGenerator::trackNotAttached()
-{
-#ifdef JS_CACHEIR_SPEW
-    CacheIRSpewer& sp = CacheIRSpewer::singleton();
-    if (sp.enabled()) {
-        LockGuard<Mutex> guard(sp.lock());
-        sp.beginCache(guard, *this);
-        sp.valueProperty(guard, "base", ObjectValue(*env_));
-        sp.valueProperty(guard, "property", StringValue(name_));
-        sp.endCache(guard);
+    if (const CacheIRSpewer::Guard& sp = CacheIRSpewer::Guard(*this, name)) {
+        sp.valueProperty("base", ObjectValue(*env_));
+        sp.valueProperty("property", StringValue(name_));
     }
 #endif
 }
@@ -2259,7 +2228,7 @@ BindNameIRGenerator::tryAttachStub()
     if (tryAttachEnvironmentName(envId, id))
         return true;
 
-    trackNotAttached();
+    trackAttached(IRGenerator::NotAttached);
     return false;
 }
 
@@ -2367,29 +2336,9 @@ void
 BindNameIRGenerator::trackAttached(const char* name)
 {
 #ifdef JS_CACHEIR_SPEW
-    CacheIRSpewer& sp = CacheIRSpewer::singleton();
-    if (sp.enabled()) {
-        LockGuard<Mutex> guard(sp.lock());
-        sp.beginCache(guard, *this);
-        sp.valueProperty(guard, "base", ObjectValue(*env_));
-        sp.valueProperty(guard, "property", StringValue(name_));
-        sp.attached(guard, name);
-        sp.endCache(guard);
-    }
-#endif
-}
-
-void
-BindNameIRGenerator::trackNotAttached()
-{
-#ifdef JS_CACHEIR_SPEW
-    CacheIRSpewer& sp = CacheIRSpewer::singleton();
-    if (sp.enabled()) {
-        LockGuard<Mutex> guard(sp.lock());
-        sp.beginCache(guard, *this);
-        sp.valueProperty(guard, "base", ObjectValue(*env_));
-        sp.valueProperty(guard, "property", StringValue(name_));
-        sp.endCache(guard);
+    if (const CacheIRSpewer::Guard& sp = CacheIRSpewer::Guard(*this, name)) {
+        sp.valueProperty("base", ObjectValue(*env_));
+        sp.valueProperty("property", StringValue(name_));
     }
 #endif
 }
@@ -2723,7 +2672,7 @@ HasPropIRGenerator::tryAttachStub()
     ValOperandId valId(writer.setInputOperandId(1));
 
     if (!val_.isObject()) {
-        trackNotAttached();
+        trackAttached(IRGenerator::NotAttached);
         return false;
     }
     RootedObject obj(cx_, &val_.toObject());
@@ -2746,7 +2695,7 @@ HasPropIRGenerator::tryAttachStub()
         if (tryAttachDoesNotExist(obj, objId, id, keyId))
             return true;
 
-        trackNotAttached();
+        trackAttached(IRGenerator::NotAttached);
         return false;
     }
 
@@ -2762,11 +2711,11 @@ HasPropIRGenerator::tryAttachStub()
         if (tryAttachSparse(obj, objId, index, indexId))
             return true;
 
-        trackNotAttached();
+        trackAttached(IRGenerator::NotAttached);
         return false;
     }
 
-    trackNotAttached();
+    trackAttached(IRGenerator::NotAttached);
     return false;
 }
 
@@ -2774,29 +2723,9 @@ void
 HasPropIRGenerator::trackAttached(const char* name)
 {
 #ifdef JS_CACHEIR_SPEW
-    CacheIRSpewer& sp = CacheIRSpewer::singleton();
-    if (sp.enabled()) {
-        LockGuard<Mutex> guard(sp.lock());
-        sp.beginCache(guard, *this);
-        sp.valueProperty(guard, "base", val_);
-        sp.valueProperty(guard, "property", idVal_);
-        sp.attached(guard, name);
-        sp.endCache(guard);
-    }
-#endif
-}
-
-void
-HasPropIRGenerator::trackNotAttached()
-{
-#ifdef JS_CACHEIR_SPEW
-    CacheIRSpewer& sp = CacheIRSpewer::singleton();
-    if (sp.enabled()) {
-        LockGuard<Mutex> guard(sp.lock());
-        sp.beginCache(guard, *this);
-        sp.valueProperty(guard, "base", val_);
-        sp.valueProperty(guard, "property", idVal_);
-        sp.endCache(guard);
+    if (const CacheIRSpewer::Guard& sp = CacheIRSpewer::Guard(*this, name)) {
+        sp.valueProperty("base", val_);
+        sp.valueProperty("property", idVal_);
     }
 #endif
 }
@@ -3160,31 +3089,10 @@ void
 SetPropIRGenerator::trackAttached(const char* name)
 {
 #ifdef JS_CACHEIR_SPEW
-    CacheIRSpewer& sp = CacheIRSpewer::singleton();
-    if (sp.enabled()) {
-        LockGuard<Mutex> guard(sp.lock());
-        sp.beginCache(guard, *this);
-        sp.valueProperty(guard, "base", lhsVal_);
-        sp.valueProperty(guard, "property", idVal_);
-        sp.valueProperty(guard, "value", rhsVal_);
-        sp.attached(guard, name);
-        sp.endCache(guard);
-    }
-#endif
-}
-
-void
-SetPropIRGenerator::trackNotAttached()
-{
-#ifdef JS_CACHEIR_SPEW
-    CacheIRSpewer& sp = CacheIRSpewer::singleton();
-    if (sp.enabled()) {
-        LockGuard<Mutex> guard(sp.lock());
-        sp.beginCache(guard, *this);
-        sp.valueProperty(guard, "base", lhsVal_);
-        sp.valueProperty(guard, "property", idVal_);
-        sp.valueProperty(guard, "value", rhsVal_);
-        sp.endCache(guard);
+    if (const CacheIRSpewer::Guard& sp = CacheIRSpewer::Guard(*this, name)) {
+        sp.valueProperty("base", lhsVal_);
+        sp.valueProperty("property", idVal_);
+        sp.valueProperty("value", rhsVal_);
     }
 #endif
 }
@@ -3202,7 +3110,7 @@ IsCacheableSetPropCallNative(JSObject* obj, JSObject* holder, Shape* shape)
         return false;
 
     JSFunction& setter = shape->setterObject()->as<JSFunction>();
-    if (!setter.isNative())
+    if (!setter.isNativeWithCppEntry())
         return false;
 
     if (setter.isClassConstructor())
@@ -3231,8 +3139,12 @@ IsCacheableSetPropCallScripted(JSObject* obj, JSObject* holder, Shape* shape,
         return false;
 
     JSFunction& setter = shape->setterObject()->as<JSFunction>();
-    if (setter.isNative())
+    if (setter.isNativeWithCppEntry())
         return false;
+
+    // Natives with jit entry can use the scripted path.
+    if (setter.isNativeWithJitEntry())
+        return true;
 
     if (!setter.hasScript()) {
         if (isTemporarilyUnoptimizable)
@@ -3277,7 +3189,7 @@ EmitCallSetterNoGuards(CacheIRWriter& writer, JSObject* obj, JSObject* holder,
 {
     if (IsCacheableSetPropCallNative(obj, holder, shape)) {
         JSFunction* target = &shape->setterValue().toObject().as<JSFunction>();
-        MOZ_ASSERT(target->isNative());
+        MOZ_ASSERT(target->isNativeWithCppEntry());
         writer.callNativeSetter(objId, target, rhsId);
         writer.returnFromIC();
         return;
@@ -3286,7 +3198,7 @@ EmitCallSetterNoGuards(CacheIRWriter& writer, JSObject* obj, JSObject* holder,
     MOZ_ASSERT(IsCacheableSetPropCallScripted(obj, holder, shape));
 
     JSFunction* target = &shape->setterValue().toObject().as<JSFunction>();
-    MOZ_ASSERT(target->hasScript());
+    MOZ_ASSERT(target->hasJitEntry());
     writer.callScriptedSetter(objId, target, rhsId);
     writer.returnFromIC();
 }
@@ -4001,6 +3913,100 @@ SetPropIRGenerator::tryAttachAddSlotStub(HandleObjectGroup oldGroup, HandleShape
     return true;
 }
 
+InstanceOfIRGenerator::InstanceOfIRGenerator(JSContext* cx, HandleScript script, jsbytecode* pc,
+                                            ICState::Mode mode, HandleValue lhs, HandleObject rhs)
+  : IRGenerator(cx, script, pc, CacheKind::InstanceOf, mode),
+    lhsVal_(lhs),
+    rhsObj_(rhs)
+{ }
+
+bool
+InstanceOfIRGenerator::tryAttachStub()
+{
+    MOZ_ASSERT(cacheKind_ == CacheKind::InstanceOf);
+    AutoAssertNoPendingException aanpe(cx_);
+
+    // Ensure RHS is a function -- could be a Proxy, which the IC isn't prepared to handle.
+    if (!rhsObj_->is<JSFunction>()) {
+        trackAttached(IRGenerator::NotAttached);
+        return false;
+    }
+
+    HandleFunction fun = rhsObj_.as<JSFunction>();
+
+    if (fun->isBoundFunction()) {
+        trackAttached(IRGenerator::NotAttached);
+        return false;
+    }
+
+    // If the user has supplied their own @@hasInstance method we shouldn't
+    // clobber it.
+    if (!js::FunctionHasDefaultHasInstance(fun, cx_->wellKnownSymbols())) {
+        trackAttached(IRGenerator::NotAttached);
+        return false;
+    }
+
+    // Refuse to optimize any function whose [[Prototype]] isn't
+    // Function.prototype.
+    if (!fun->hasStaticPrototype() || fun->hasUncacheableProto()) {
+        trackAttached(IRGenerator::NotAttached);
+        return false;
+    }
+
+    Value funProto = cx_->global()->getPrototype(JSProto_Function);
+    if (!funProto.isObject() || fun->staticPrototype() != &funProto.toObject()) {
+        trackAttached(IRGenerator::NotAttached);
+        return false;
+    }
+
+    // Ensure that the function's prototype slot is the same.
+    Shape* shape = fun->lookupPure(cx_->names().prototype);
+    if (!shape || !shape->isDataProperty()) {
+        trackAttached(IRGenerator::NotAttached);
+        return false;
+    }
+
+    uint32_t slot = shape->slot();
+
+    MOZ_ASSERT(fun->numFixedSlots() == 0, "Stub code relies on this");
+    if (!fun->getSlot(slot).isObject()) {
+        trackAttached(IRGenerator::NotAttached);
+        return false;
+    }
+
+    JSObject* prototypeObject = &fun->getSlot(slot).toObject();
+
+    // Abstract Objects
+    ValOperandId lhs(writer.setInputOperandId(0));
+    ValOperandId rhs(writer.setInputOperandId(1));
+
+    ObjOperandId rhsId = writer.guardIsObject(rhs);
+    writer.guardShape(rhsId, fun->lastProperty());
+
+    // Load prototypeObject into the cache -- consumed twice in the IC
+    ObjOperandId protoId = writer.loadObject(prototypeObject);
+    // Ensure that rhs[slot] == prototypeObject.
+    writer.guardFunctionPrototype(rhsId, slot, protoId);
+
+    // Needn't guard LHS is object, because the actual stub can handle that
+    // and correctly return false.
+    writer.loadInstanceOfObjectResult(lhs, protoId, slot);
+    writer.returnFromIC();
+    trackAttached("InstanceOf");
+    return true;
+}
+
+void
+InstanceOfIRGenerator::trackAttached(const char* name)
+{
+#ifdef JS_CACHEIR_SPEW
+    if (const CacheIRSpewer::Guard& sp = CacheIRSpewer::Guard(*this, name)) {
+        sp.valueProperty("lhs", lhsVal_);
+        sp.valueProperty("rhs", ObjectValue(*rhsObj_));
+    }
+#endif
+}
+
 TypeOfIRGenerator::TypeOfIRGenerator(JSContext* cx, HandleScript script, jsbytecode* pc,
                                      ICState::Mode mode, HandleValue value)
   : IRGenerator(cx, script, pc, CacheKind::TypeOf, mode),
@@ -4029,7 +4035,11 @@ TypeOfIRGenerator::tryAttachPrimitive(ValOperandId valId)
     if (!val_.isPrimitive())
         return false;
 
-    writer.guardType(valId, val_.isNumber() ? JSVAL_TYPE_DOUBLE : val_.extractNonDoubleType());
+    if (val_.isNumber())
+        writer.guardIsNumber(valId);
+    else
+        writer.guardType(valId,  val_.extractNonDoubleType());
+
     writer.loadStringResult(TypeName(js::TypeOfValue(val_), cx_->names()));
     writer.returnFromIC();
 
@@ -4384,15 +4394,10 @@ void
 CallIRGenerator::trackAttached(const char* name)
 {
 #ifdef JS_CACHEIR_SPEW
-    CacheIRSpewer& sp = CacheIRSpewer::singleton();
-    if (sp.enabled()) {
-        LockGuard<Mutex> guard(sp.lock());
-        sp.beginCache(guard, *this);
-        sp.valueProperty(guard, "callee", callee_);
-        sp.valueProperty(guard, "thisval", thisval_);
-        sp.valueProperty(guard, "argc", Int32Value(argc_));
-        sp.attached(guard, name);
-        sp.endCache(guard);
+    if (const CacheIRSpewer::Guard& sp = CacheIRSpewer::Guard(*this, name)) {
+        sp.valueProperty("callee", callee_);
+        sp.valueProperty("thisval", thisval_);
+        sp.valueProperty("argc", Int32Value(argc_));
     }
 #endif
 }
@@ -4431,23 +4436,8 @@ jit::LoadShapeWrapperContents(MacroAssembler& masm, Register obj, Register dst, 
     Address privateAddr(dst, detail::ProxyReservedSlots::offsetOfPrivateSlot());
     masm.branchTestObject(Assembler::NotEqual, privateAddr, failure);
     masm.unboxObject(privateAddr, dst);
-    masm.unboxNonDouble(Address(dst, NativeObject::getFixedSlotOffset(SHAPE_CONTAINER_SLOT)), dst);
-}
-
-void
-CallIRGenerator::trackNotAttached()
-{
-#ifdef JS_CACHEIR_SPEW
-    CacheIRSpewer& sp = CacheIRSpewer::singleton();
-    if (sp.enabled()) {
-        LockGuard<Mutex> guard(sp.lock());
-        sp.beginCache(guard, *this);
-        sp.valueProperty(guard, "callee", callee_);
-        sp.valueProperty(guard, "thisval", thisval_);
-        sp.valueProperty(guard, "argc", Int32Value(argc_));
-        sp.endCache(guard);
-    }
-#endif
+    masm.unboxNonDouble(Address(dst, NativeObject::getFixedSlotOffset(SHAPE_CONTAINER_SLOT)), dst,
+                        JSVAL_TYPE_PRIVATE_GCTHING);
 }
 
 CompareIRGenerator::CompareIRGenerator(JSContext* cx, HandleScript script, jsbytecode* pc,
@@ -4529,11 +4519,11 @@ CompareIRGenerator::tryAttachStub()
         if (tryAttachSymbol(lhsId, rhsId))
             return true;
 
-        trackNotAttached();
+        trackAttached(IRGenerator::NotAttached);
         return false;
     }
 
-    trackNotAttached();
+    trackAttached(IRGenerator::NotAttached);
     return false;
 }
 
@@ -4541,29 +4531,238 @@ void
 CompareIRGenerator::trackAttached(const char* name)
 {
 #ifdef JS_CACHEIR_SPEW
-    CacheIRSpewer& sp = CacheIRSpewer::singleton();
-    if (sp.enabled()) {
-        LockGuard<Mutex> guard(sp.lock());
-        sp.beginCache(guard, *this);
-        sp.valueProperty(guard, "lhs", lhsVal_);
-        sp.valueProperty(guard, "rhs", rhsVal_);
-        sp.attached(guard, name);
-        sp.endCache(guard);
+    if (const CacheIRSpewer::Guard& sp = CacheIRSpewer::Guard(*this, name)) {
+        sp.valueProperty("lhs", lhsVal_);
+        sp.valueProperty("rhs", rhsVal_);
     }
 #endif
 }
 
+ToBoolIRGenerator::ToBoolIRGenerator(JSContext* cx, HandleScript script, jsbytecode* pc, ICState::Mode mode,
+                                     HandleValue val)
+  : IRGenerator(cx, script, pc, CacheKind::ToBool, mode),
+    val_(val)
+{}
+
 void
-CompareIRGenerator::trackNotAttached()
+ToBoolIRGenerator::trackAttached(const char* name)
 {
 #ifdef JS_CACHEIR_SPEW
-    CacheIRSpewer& sp = CacheIRSpewer::singleton();
-    if (sp.enabled()) {
-        LockGuard<Mutex> guard(sp.lock());
-        sp.beginCache(guard, *this);
-        sp.valueProperty(guard, "lhs", lhsVal_);
-        sp.valueProperty(guard, "rhs", rhsVal_);
-        sp.endCache(guard);
+    if (const CacheIRSpewer::Guard& sp = CacheIRSpewer::Guard(*this, name)) {
+        sp.valueProperty("val", val_);
     }
 #endif
+}
+
+bool
+ToBoolIRGenerator::tryAttachStub()
+{
+    AutoAssertNoPendingException aanpe(cx_);
+
+    if (tryAttachInt32())
+        return true;
+    if (tryAttachDouble())
+        return true;
+    if (tryAttachString())
+        return true;
+    if (tryAttachNullOrUndefined())
+        return true;
+    if (tryAttachObject())
+        return true;
+    if (tryAttachSymbol())
+        return true;
+
+    trackAttached(IRGenerator::NotAttached);
+    return false;
+}
+
+bool
+ToBoolIRGenerator::tryAttachInt32()
+{
+    if (!val_.isInt32())
+        return false;
+
+    ValOperandId valId(writer.setInputOperandId(0));
+    writer.guardType(valId, JSVAL_TYPE_INT32);
+    writer.loadInt32TruthyResult(valId);
+    writer.returnFromIC();
+    trackAttached("ToBoolInt32");
+    return true;
+}
+
+bool
+ToBoolIRGenerator::tryAttachDouble()
+{
+    if (!val_.isDouble() || !cx_->runtime()->jitSupportsFloatingPoint)
+        return false;
+
+    ValOperandId valId(writer.setInputOperandId(0));
+    writer.guardType(valId, JSVAL_TYPE_DOUBLE);
+    writer.loadDoubleTruthyResult(valId);
+    writer.returnFromIC();
+    trackAttached("ToBoolDouble");
+    return true;
+}
+
+bool
+ToBoolIRGenerator::tryAttachSymbol()
+{
+    if (!val_.isSymbol())
+        return false;
+
+    ValOperandId valId(writer.setInputOperandId(0));
+    writer.guardType(valId, JSVAL_TYPE_SYMBOL);
+    writer.loadBooleanResult(true);
+    writer.returnFromIC();
+    trackAttached("ToBoolSymbol");
+    return true;
+}
+
+bool
+ToBoolIRGenerator::tryAttachString()
+{
+    if (!val_.isString())
+        return false;
+
+    ValOperandId valId(writer.setInputOperandId(0));
+    StringOperandId strId = writer.guardIsString(valId);
+    writer.loadStringTruthyResult(strId);
+    writer.returnFromIC();
+    trackAttached("ToBoolString");
+    return true;
+}
+
+bool
+ToBoolIRGenerator::tryAttachNullOrUndefined()
+{
+    if (!val_.isNullOrUndefined())
+        return false;
+
+    ValOperandId valId(writer.setInputOperandId(0));
+    writer.guardIsNullOrUndefined(valId);
+    writer.loadBooleanResult(false);
+    writer.returnFromIC();
+    trackAttached("ToBoolNullOrUndefined");
+    return true;
+}
+
+bool
+ToBoolIRGenerator::tryAttachObject()
+{
+    if (!val_.isObject())
+        return false;
+
+    ValOperandId valId(writer.setInputOperandId(0));
+    ObjOperandId objId = writer.guardIsObject(valId);
+    writer.loadObjectTruthyResult(objId);
+    writer.returnFromIC();
+    trackAttached("ToBoolObject");
+    return true;
+}
+
+GetIntrinsicIRGenerator::GetIntrinsicIRGenerator(JSContext* cx, HandleScript script, jsbytecode* pc, ICState::Mode mode,
+                                                 HandleValue val)
+  : IRGenerator(cx, script, pc, CacheKind::GetIntrinsic, mode)
+  , val_(val)
+{}
+
+void
+GetIntrinsicIRGenerator::trackAttached(const char* name)
+{
+#ifdef JS_CACHEIR_SPEW
+    if (const CacheIRSpewer::Guard& sp = CacheIRSpewer::Guard(*this, name)) {
+        sp.valueProperty("val", val_);
+    }
+#endif
+}
+
+bool
+GetIntrinsicIRGenerator::tryAttachStub()
+{
+    writer.loadValueResult(val_);
+    writer.returnFromIC();
+    trackAttached("GetIntrinsic");
+    return true;
+}
+UnaryArithIRGenerator::UnaryArithIRGenerator(JSContext* cx, HandleScript script, jsbytecode* pc, ICState::Mode mode,
+                                             JSOp op, HandleValue val, HandleValue res)
+  : IRGenerator(cx, script, pc, CacheKind::UnaryArith, mode),
+    op_(op),
+    val_(val),
+    res_(res)
+{ }
+
+void
+UnaryArithIRGenerator::trackAttached(const char* name)
+{
+#ifdef JS_CACHEIR_SPEW
+    if (const CacheIRSpewer::Guard& sp = CacheIRSpewer::Guard(*this, name)) {
+        sp.valueProperty("val", val_);
+    }
+#endif
+}
+
+bool
+UnaryArithIRGenerator::tryAttachStub()
+{
+    if (tryAttachInt32())
+        return true;
+    if (tryAttachNumber())
+        return true;
+
+    trackAttached(IRGenerator::NotAttached);
+    return false;
+}
+
+bool
+UnaryArithIRGenerator::tryAttachInt32()
+{
+    if (!val_.isInt32() || !res_.isInt32())
+        return false;
+
+    ValOperandId valId(writer.setInputOperandId(0));
+
+    Int32OperandId intId = writer.guardIsInt32(valId);
+    switch (op_) {
+      case JSOP_BITNOT:
+        writer.int32NotResult(intId);
+        trackAttached("UnaryArith.Int32Not");
+        break;
+      case JSOP_NEG:
+        writer.int32NegationResult(intId);
+        trackAttached("UnaryArith.Int32Neg");
+        break;
+      default:
+        MOZ_CRASH("Unexected OP");
+    }
+
+    writer.returnFromIC();
+    return true;
+}
+
+bool
+UnaryArithIRGenerator::tryAttachNumber()
+{
+    if (!val_.isNumber() || !res_.isNumber() || !cx_->runtime()->jitSupportsFloatingPoint)
+        return false;
+
+    ValOperandId valId(writer.setInputOperandId(0));
+    writer.guardType(valId, JSVAL_TYPE_DOUBLE);
+    Int32OperandId truncatedId;
+    switch (op_) {
+      case JSOP_BITNOT:
+        truncatedId = writer.truncateDoubleToUInt32(valId);
+        writer.int32NotResult(truncatedId);
+        trackAttached("UnaryArith.DoubleNot");
+        break;
+      case JSOP_NEG:
+        writer.doubleNegationResult(valId);
+        trackAttached("UnaryArith.DoubleNeg");
+        break;
+      default:
+        MOZ_CRASH("Unexpected OP");
+    }
+
+    writer.returnFromIC();
+    return true;
 }

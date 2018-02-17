@@ -9,17 +9,15 @@ this.EXPORTED_SYMBOLS = ["ProxyScriptContext"];
 
 /* exported ProxyScriptContext */
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/ExtensionCommon.jsm");
+ChromeUtils.import("resource://gre/modules/ExtensionUtils.jsm");
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/ExtensionCommon.jsm");
-Cu.import("resource://gre/modules/ExtensionUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "ExtensionChild",
-                                  "resource://gre/modules/ExtensionChild.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Schemas",
-                                  "resource://gre/modules/Schemas.jsm");
+ChromeUtils.defineModuleGetter(this, "ExtensionChild",
+                               "resource://gre/modules/ExtensionChild.jsm");
+ChromeUtils.defineModuleGetter(this, "Schemas",
+                               "resource://gre/modules/Schemas.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "ProxyService",
                                    "@mozilla.org/network/protocol-proxy-service;1",
                                    "nsIProtocolProxyService");
@@ -292,13 +290,15 @@ class ProxyScriptContext extends BaseContext {
    * @param {Object} uri The URI for which these proxy settings apply.
    * @param {Object} defaultProxyInfo The proxy (or list of proxies) that
    *     would be used by default for the given URI. This may be null.
-   * @returns {Object} The proxy info to apply for the given URI.
+   * @param {Object} callback nsIProxyProtocolFilterResult to call onProxyFilterResult
+         on with the proxy info to apply for the given URI.
    */
-  applyFilter(service, uri, defaultProxyInfo) {
+  applyFilter(service, uri, defaultProxyInfo, callback) {
     try {
       // TODO Bug 1337001 - provide path and query components to non-https URLs.
       let ret = this.FindProxyForURL(uri.prePath, uri.host, this.contextInfo);
-      return this.proxyInfoFromProxyData(ret, defaultProxyInfo);
+      ret = this.proxyInfoFromProxyData(ret, defaultProxyInfo);
+      callback.onProxyFilterResult(ret);
     } catch (e) {
       let error = this.normalizeError(e);
       this.extension.emit("proxy-error", {
@@ -307,8 +307,8 @@ class ProxyScriptContext extends BaseContext {
         lineNumber: error.lineNumber,
         stack: error.stack,
       });
+      callback.onProxyFilterResult(defaultProxyInfo);
     }
-    return defaultProxyInfo;
   }
 
   /**

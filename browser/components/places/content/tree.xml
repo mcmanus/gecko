@@ -76,7 +76,8 @@
           // tag containers, so we must fall to the default case.
           if (PlacesUtils.nodeIsHistoryContainer(queryNode) ||
               options.resultType == options.RESULTS_AS_TAG_QUERY ||
-              options.resultType == options.RESULTS_AS_TAG_CONTENTS)
+              options.resultType == options.RESULTS_AS_TAG_CONTENTS ||
+              options.resultType == options.RESULTS_AS_ROOTS_QUERY)
             options.resultType = options.RESULTS_AS_URI;
 
           var query = PlacesUtils.history.getNewQuery();
@@ -242,7 +243,7 @@
             // opening each folder as we go.
             for (var i = parents.length - 1; i >= 0; --i) {
               let index = view.treeIndexForNode(parents[i]);
-              if (index != Ci.nsINavHistoryResultTreeViewer.INDEX_INVISIBLE &&
+              if (index != -1 &&
                   view.isContainer(index) && !view.isContainerOpen(index))
                 view.toggleOpenState(index);
             }
@@ -250,7 +251,7 @@
           }
 
           let index = view.treeIndexForNode(node);
-          if (index == Ci.nsINavHistoryResultTreeViewer.INDEX_INVISIBLE)
+          if (index == -1)
             return;
 
           view.selection.select(index);
@@ -621,8 +622,12 @@
                 checkedGuidsSet.has(concreteGuid))
               return foundOne;
 
-            // Only follow a query if it has been been explicitly opened by the caller.
-            let shouldOpen = aOpenContainers && PlacesUtils.nodeIsFolder(node);
+            // Only follow a query if it has been been explicitly opened by the
+            // caller. We support the "AllBookmarks" case to allow callers to
+            // specify just the top-level bookmark folders.
+            let shouldOpen = aOpenContainers && (PlacesUtils.nodeIsFolder(node) ||
+              (PlacesUtils.nodeIsQuery(node) && node.itemId == PlacesUIUtils.leftPaneQueries.AllBookmarks));
+
             PlacesUtils.asContainer(node);
             if (!node.containerOpen && !shouldOpen)
               return foundOne;
@@ -672,7 +677,7 @@
           }
           for (let i = 0; i < nodes.length; i++) {
             var index = resultview.treeIndexForNode(nodes[i]);
-            if (index == Ci.nsINavHistoryResultTreeViewer.INDEX_INVISIBLE)
+            if (index == -1)
               continue;
             selection.rangedSelect(index, index, true);
           }

@@ -1,7 +1,4 @@
-Cu.import("resource://gre/modules/NetUtil.jsm");
-
-var Cc = Components.classes;
-var Ci = Components.interfaces;
+ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
 
 var listener = {
   expect_failure: false,

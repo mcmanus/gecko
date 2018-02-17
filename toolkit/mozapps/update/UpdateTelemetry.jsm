@@ -8,9 +8,7 @@ this.EXPORTED_SYMBOLS = [
   "AUSTLMY"
 ];
 
-const {classes: Cc, interfaces: Ci, results: Cr, utils: Cu} = Components;
-
-Cu.import("resource://gre/modules/Services.jsm", this);
+ChromeUtils.import("resource://gre/modules/Services.jsm", this);
 
 this.AUSTLMY = {
   // Telemetry for the application update background update check occurs when

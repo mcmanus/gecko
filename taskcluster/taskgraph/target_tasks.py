@@ -60,8 +60,6 @@ def filter_beta_release_tasks(task, parameters, ignore_kinds=None, allow_l10n=Fa
             # On beta, Nightly builds are already PGOs
             'linux-pgo', 'linux64-pgo',
             'win32-pgo', 'win64-pgo',
-            # MinGW build is broken on beta
-            'win32-mingw32',
             ):
         return False
     if str(platform).startswith('android') and 'nightly' in str(platform):
@@ -334,20 +332,14 @@ def target_tasks_promote_firefox(full_task_graph, parameters, graph_config):
 
         # 'secondary' update/final verify tasks only run for
         # RCs
-        if parameters.get('desktop_release_type') != 'rc':
-            if task.kind in ('release-buildbot-update-verify',
-                             'release-update-verify',
+        if parameters.get('release_type') != 'rc':
+            if task.kind in ('release-secondary-update-verify',
                              'release-secondary-final-verify'):
-                if 'secondary' in task.label:
-                    return False
+                return False
 
         if task.attributes.get('shipping_product') == 'firefox' and \
                 task.attributes.get('shipping_phase') == 'promote':
             return True
-
-        # TODO: funsize, all but balrog submission
-        # TODO: bouncer sub
-        # TODO: recompression tasks
 
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
 
@@ -367,11 +359,6 @@ def target_tasks_push_firefox(full_task_graph, parameters, graph_config):
         if task.attributes.get('shipping_product') == 'firefox' and \
                 task.attributes.get('shipping_phase') == 'push':
             return True
-        # TODO: add beetmover push-to-releases
-        # TODO: publish to balrog
-        # TODO: funsize balrog submission
-        # TODO: recompression push-to-releases + balrog
-        # TODO: checksums
 
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
 
@@ -380,22 +367,34 @@ def target_tasks_push_firefox(full_task_graph, parameters, graph_config):
 def target_tasks_ship_firefox(full_task_graph, parameters, graph_config):
     """Select the set of tasks required to ship firefox.
     Previous build deps will be optimized out via action task."""
-    filtered_for_candidates = target_tasks_push_firefox(
-        full_task_graph, parameters, graph_config,
-    )
+    is_rc = (parameters.get('release_type') == 'rc')
+    if is_rc:
+        # ship_firefox_rc runs after `promote` rather than `push`; include
+        # all promote tasks.
+        filtered_for_candidates = target_tasks_promote_firefox(
+            full_task_graph, parameters, graph_config,
+        )
+    else:
+        # ship_firefox runs after `push`; include all push tasks.
+        filtered_for_candidates = target_tasks_push_firefox(
+            full_task_graph, parameters, graph_config,
+        )
 
     def filter(task):
         # Include promotion tasks; these will be optimized out
         if task.label in filtered_for_candidates:
             return True
-        if task.attributes.get('shipping_product') == 'firefox' and \
-                task.attributes.get('shipping_phase') == 'ship':
-            return True
-        # TODO: add beetmover push-to-releases
-        # TODO: publish to balrog
-        # TODO: funsize balrog submission
-        # TODO: recompression push-to-releases + balrog
-        # TODO: checksums
+        if task.attributes.get('shipping_product') != 'firefox' or \
+                task.attributes.get('shipping_phase') != 'ship':
+            return False
+
+        if task.kind in (
+            'release-secondary-balrog-publishing',
+            'release-secondary-notify-ship',
+        ):
+                return is_rc
+        else:
+                return not is_rc
 
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
 
@@ -433,11 +432,6 @@ def target_tasks_promote_devedition(full_task_graph, parameters, graph_config):
                 task.attributes.get('shipping_phase') == 'promote':
             return True
 
-        # TODO: funsize, all but balrog submission
-        # TODO: binary transparency
-        # TODO: bouncer sub
-        # TODO: recompression tasks
-
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
 
 
@@ -456,11 +450,6 @@ def target_tasks_push_devedition(full_task_graph, parameters, graph_config):
         if task.attributes.get('shipping_product') == 'devedition' and \
                 task.attributes.get('shipping_phase') == 'push':
             return True
-        # TODO: add beetmover push-to-releases
-        # TODO: publish to balrog
-        # TODO: funsize balrog submission
-        # TODO: recompression push-to-releases + balrog
-        # TODO: checksums
 
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
 
@@ -480,11 +469,6 @@ def target_tasks_ship_devedition(full_task_graph, parameters, graph_config):
         if task.attributes.get('shipping_product') == 'devedition' and \
                 task.attributes.get('shipping_phase') == 'ship':
             return True
-        # TODO: add beetmover push-to-releases
-        # TODO: publish to balrog
-        # TODO: funsize balrog submission
-        # TODO: recompression push-to-releases + balrog
-        # TODO: checksums
 
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
 
@@ -516,6 +500,7 @@ def target_tasks_promote_fennec(full_task_graph, parameters, graph_config):
 def target_tasks_ship_fennec(full_task_graph, parameters, graph_config):
     """Select the set of tasks required to ship fennec.
     Previous build deps will be optimized out via action task."""
+    is_rc = (parameters.get('release_type') == 'rc')
     filtered_for_candidates = target_tasks_promote_fennec(
         full_task_graph, parameters, graph_config,
     )
@@ -524,9 +509,23 @@ def target_tasks_ship_fennec(full_task_graph, parameters, graph_config):
         # Include candidates build tasks; these will be optimized out
         if task.label in filtered_for_candidates:
             return True
-        if task.attributes.get('shipping_product') == 'fennec' and \
-                task.attributes.get('shipping_phase') in ('ship', 'push'):
-            return True
+        if task.attributes.get('shipping_product') != 'fennec' or \
+                task.attributes.get('shipping_phase') not in ('ship', 'push'):
+            return False
+        # We always run push-apk* during ship
+        if task.kind in (
+            'push-apk',
+            'push-apk-breakpoint',
+        ):
+                return True
+        # secondary-notify-ship is only for RC
+        if task.kind in (
+            'release-secondary-notify-ship',
+        ):
+            return is_rc
+
+        # Everything else is only for non-RC
+        return not is_rc
 
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(full_task_graph[l])]
 

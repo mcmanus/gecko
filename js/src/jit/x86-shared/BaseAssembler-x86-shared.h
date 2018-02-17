@@ -303,6 +303,11 @@ public:
         spew("push       " MEM_ob, ADDR_ob(offset, base));
         m_formatter.oneByteOp(OP_GROUP5_Ev, offset, base, GROUP5_OP_PUSH);
     }
+    void push_m(int32_t offset, RegisterID base, RegisterID index, int scale)
+    {
+        spew("push       " MEM_obs, ADDR_obs(offset, base, index, scale));
+        m_formatter.oneByteOp(OP_GROUP5_Ev, offset, base, index, scale, GROUP5_OP_PUSH);
+    }
 
     void pop_m(int32_t offset, RegisterID base)
     {
@@ -923,6 +928,12 @@ public:
         m_formatter.oneByteOp(OP_AND_GvEv, offset, base, dst);
     }
 
+    void andl_mr(int32_t offset, RegisterID base, RegisterID index, int scale, RegisterID dst)
+    {
+        spew("andl       " MEM_obs ", %s", ADDR_obs(offset, base, index, scale), GPReg32Name(dst));
+        m_formatter.oneByteOp(OP_AND_GvEv, offset, base, index, scale, dst);
+    }
+
     void andl_rm(RegisterID src, int32_t offset, RegisterID base)
     {
         spew("andl       %s, " MEM_ob, GPReg32Name(src), ADDR_ob(offset, base));
@@ -1230,6 +1241,12 @@ public:
             m_formatter.oneByteOp(OP_GROUP1_EvIz, offset, base, index, scale, GROUP1_OP_OR);
             m_formatter.immediate16(imm);
         }
+    }
+
+    void sbbl_rr(RegisterID src, RegisterID dst)
+    {
+        spew("sbbl       %s, %s", GPReg32Name(src), GPReg32Name(dst));
+        m_formatter.oneByteOp(OP_SBB_GvEv, src, dst);
     }
 
     void subl_rr(RegisterID src, RegisterID dst)
@@ -2094,20 +2111,21 @@ public:
         m_formatter.oneByteOp(OP_XCHG_GvEv, offset, base, index, scale, src);
     }
 
-    void cmovz_rr(RegisterID src, RegisterID dst)
+    void cmovCCl_rr(Condition cond, RegisterID src, RegisterID dst)
     {
-        spew("cmovz     %s, %s", GPReg16Name(src), GPReg32Name(dst));
-        m_formatter.twoByteOp(OP2_CMOVZ_GvEv, src, dst);
+        spew("cmov%s     %s, %s", CCName(cond), GPReg32Name(src), GPReg32Name(dst));
+        m_formatter.twoByteOp(cmovccOpcode(cond), src, dst);
     }
-    void cmovz_mr(int32_t offset, RegisterID base, RegisterID dst)
+    void cmovCCl_mr(Condition cond, int32_t offset, RegisterID base, RegisterID dst)
     {
-        spew("cmovz     " MEM_ob ", %s", ADDR_ob(offset, base), GPReg32Name(dst));
-        m_formatter.twoByteOp(OP2_CMOVZ_GvEv, offset, base, dst);
+        spew("cmov%s     " MEM_ob ", %s", CCName(cond), ADDR_ob(offset, base), GPReg32Name(dst));
+        m_formatter.twoByteOp(cmovccOpcode(cond), offset, base, dst);
     }
-    void cmovz_mr(int32_t offset, RegisterID base, RegisterID index, int scale, RegisterID dst)
+    void cmovCCl_mr(Condition cond, int32_t offset, RegisterID base, RegisterID index, int scale, RegisterID dst)
     {
-        spew("cmovz     " MEM_obs ", %s", ADDR_obs(offset, base, index, scale), GPReg32Name(dst));
-        m_formatter.twoByteOp(OP2_CMOVZ_GvEv, offset, base, index, scale, dst);
+        spew("cmov%s     " MEM_obs ", %s", CCName(cond), ADDR_obs(offset, base, index, scale),
+             GPReg32Name(dst));
+        m_formatter.twoByteOp(cmovccOpcode(cond), offset, base, index, scale, dst);
     }
 
     void movl_rr(RegisterID src, RegisterID dst)

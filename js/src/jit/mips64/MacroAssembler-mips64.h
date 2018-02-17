@@ -7,11 +7,10 @@
 #ifndef jit_mips64_MacroAssembler_mips64_h
 #define jit_mips64_MacroAssembler_mips64_h
 
-#include "jsopcode.h"
-
 #include "jit/JitFrames.h"
 #include "jit/mips-shared/MacroAssembler-mips-shared.h"
 #include "jit/MoveResolver.h"
+#include "vm/BytecodeUtil.h"
 
 namespace js {
 namespace jit {
@@ -362,9 +361,44 @@ class MacroAssemblerMIPS64Compat : public MacroAssemblerMIPS64
     }
 
     // unboxing code
-    void unboxNonDouble(const ValueOperand& operand, Register dest);
-    void unboxNonDouble(const Address& src, Register dest);
-    void unboxNonDouble(const BaseIndex& src, Register dest);
+    void unboxNonDouble(const ValueOperand& operand, Register dest, JSValueType type) {
+        unboxNonDouble(operand.valueReg(), dest, type);
+    }
+
+    template <typename T>
+    void unboxNonDouble(T src, Register dest, JSValueType type) {
+        MOZ_ASSERT(type != JSVAL_TYPE_DOUBLE);
+        if (type == JSVAL_TYPE_INT32 || type == JSVAL_TYPE_BOOLEAN) {
+            load32(src, dest);
+            return;
+        }
+        loadPtr(src, dest);
+        unboxNonDouble(dest, dest, type);
+    }
+
+    void unboxNonDouble(Register src, Register dest, JSValueType type) {
+        MOZ_ASSERT(type != JSVAL_TYPE_DOUBLE);
+        if (type == JSVAL_TYPE_INT32 || type == JSVAL_TYPE_BOOLEAN) {
+            ma_sll(dest, src, Imm32(0));
+            return;
+        }
+        MOZ_ASSERT(ScratchRegister != src);
+        mov(ImmWord(JSVAL_TYPE_TO_SHIFTED_TAG(type)), ScratchRegister);
+        as_xor(dest, src, ScratchRegister);
+    }
+
+    template <typename T>
+    void unboxObjectOrNull(const T& src, Register dest) {
+        unboxNonDouble(src, dest, JSVAL_TYPE_OBJECT);
+        JS_STATIC_ASSERT(JSVAL_OBJECT_OR_NULL_BIT == (uint64_t(0x8) << JSVAL_TAG_SHIFT));
+        ma_dins(dest, zero, Imm32(JSVAL_TAG_SHIFT + 3), Imm32(1));
+    }
+
+    void unboxGCThingForPreBarrierTrampoline(const Address& src, Register dest) {
+        loadPtr(src, dest);
+        ma_dext(dest, dest, Imm32(0), Imm32(JSVAL_TAG_SHIFT));
+    }
+
     void unboxInt32(const ValueOperand& operand, Register dest);
     void unboxInt32(Register src, Register dest);
     void unboxInt32(const Address& src, Register dest);
@@ -385,8 +419,8 @@ class MacroAssemblerMIPS64Compat : public MacroAssemblerMIPS64
     void unboxObject(const ValueOperand& src, Register dest);
     void unboxObject(Register src, Register dest);
     void unboxObject(const Address& src, Register dest);
-    void unboxObject(const BaseIndex& src, Register dest) { unboxNonDouble(src, dest); }
-    void unboxValue(const ValueOperand& src, AnyRegister dest);
+    void unboxObject(const BaseIndex& src, Register dest) { unboxNonDouble(src, dest, JSVAL_TYPE_OBJECT); }
+    void unboxValue(const ValueOperand& src, AnyRegister dest, JSValueType type);
     void unboxPrivate(const ValueOperand& src, Register dest);
 
     void notBoolean(const ValueOperand& val) {
@@ -403,6 +437,21 @@ class MacroAssemblerMIPS64Compat : public MacroAssemblerMIPS64
     Register extractObject(const Address& address, Register scratch);
     Register extractObject(const ValueOperand& value, Register scratch) {
         unboxObject(value, scratch);
+        return scratch;
+    }
+    Register extractString(const ValueOperand& value, Register scratch) {
+        unboxString(value, scratch);
+        return scratch;
+    }
+    Register extractSymbol(const ValueOperand& value, Register scratch) {
+        unboxSymbol(value, scratch);
+        return scratch;
+    }
+    Register extractCell(const Address& address, Register scratch) {
+        return extractObject(address, scratch);
+    }
+    Register extractCell(const ValueOperand& value, Register scratch) {
+        unboxNonDouble(value, scratch);
         return scratch;
     }
     Register extractInt32(const ValueOperand& value, Register scratch) {
@@ -449,20 +498,40 @@ class MacroAssemblerMIPS64Compat : public MacroAssemblerMIPS64
     void loadUnboxedValue(const T& address, MIRType type, AnyRegister dest) {
         if (dest.isFloat())
             loadInt32OrDouble(address, dest.fpu());
-        else if (type == MIRType::Int32)
-            unboxInt32(address, dest.gpr());
-        else if (type == MIRType::Boolean)
-            unboxBoolean(address, dest.gpr());
+        else if (type == MIRType::ObjectOrNull)
+            unboxObjectOrNull(address, dest.gpr());
         else
-            unboxNonDouble(address, dest.gpr());
+            unboxNonDouble(address, dest.gpr(), ValueTypeFromMIRType(type));
     }
 
-    template <typename T>
-    void storeUnboxedPayload(ValueOperand value, T address, size_t nbytes) {
+    void storeUnboxedPayload(ValueOperand value, BaseIndex address, size_t nbytes, JSValueType type) {
         switch (nbytes) {
           case 8:
-            unboxNonDouble(value, ScratchRegister);
-            storePtr(ScratchRegister, address);
+            if (type == JSVAL_TYPE_OBJECT)
+                unboxObjectOrNull(value, SecondScratchReg);
+            else
+                unboxNonDouble(value, SecondScratchReg, type);
+            computeEffectiveAddress(address, ScratchRegister);
+            as_sd(SecondScratchReg, ScratchRegister, 0);
+            return;
+          case 4:
+            store32(value.valueReg(), address);
+            return;
+          case 1:
+            store8(value.valueReg(), address);
+            return;
+          default: MOZ_CRASH("Bad payload width");
+        }
+    }
+
+    void storeUnboxedPayload(ValueOperand value, Address address, size_t nbytes, JSValueType type) {
+        switch (nbytes) {
+          case 8:
+            if (type == JSVAL_TYPE_OBJECT)
+                unboxObjectOrNull(value, SecondScratchReg);
+            else
+                unboxNonDouble(value, SecondScratchReg, type);
+            storePtr(SecondScratchReg, address);
             return;
           case 4:
             store32(value.valueReg(), address);
@@ -526,326 +595,6 @@ class MacroAssemblerMIPS64Compat : public MacroAssemblerMIPS64
     /////////////////////////////////////////////////////////////////
   public:
     // The following functions are exposed for use in platform-shared code.
-
-    // TODO: These are no longer used in platform code.
-  private:
-    template<typename T>
-    void compareExchange8SignExtend(const T& mem, Register oldval, Register newval, Register valueTemp,
-                                    Register offsetTemp, Register maskTemp, Register output)
-    {
-        compareExchange(1, true, mem, oldval, newval, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T>
-    void compareExchange8ZeroExtend(const T& mem, Register oldval, Register newval, Register valueTemp,
-                                    Register offsetTemp, Register maskTemp, Register output)
-    {
-        compareExchange(1, false, mem, oldval, newval, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T>
-    void compareExchange16SignExtend(const T& mem, Register oldval, Register newval, Register valueTemp,
-                                     Register offsetTemp, Register maskTemp, Register output)
-    {
-        compareExchange(2, true, mem, oldval, newval, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T>
-    void compareExchange16ZeroExtend(const T& mem, Register oldval, Register newval, Register valueTemp,
-                                     Register offsetTemp, Register maskTemp, Register output)
-    {
-        compareExchange(2, false, mem, oldval, newval, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T>
-    void compareExchange32(const T& mem, Register oldval, Register newval, Register valueTemp,
-                           Register offsetTemp, Register maskTemp, Register output)
-    {
-        compareExchange(4, false, mem, oldval, newval, valueTemp, offsetTemp, maskTemp, output);
-    }
-
-    template<typename T>
-    void atomicExchange8SignExtend(const T& mem, Register value, Register valueTemp,
-                          Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicExchange(1, true, mem, value, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T>
-    void atomicExchange8ZeroExtend(const T& mem, Register value, Register valueTemp,
-                          Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicExchange(1, false, mem, value, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T>
-    void atomicExchange16SignExtend(const T& mem, Register value, Register valueTemp,
-                          Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicExchange(2, true, mem, value, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T>
-    void atomicExchange16ZeroExtend(const T& mem, Register value, Register valueTemp,
-                          Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicExchange(2, false, mem, value, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T>
-    void atomicExchange32(const T& mem, Register value, Register valueTemp,
-                          Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicExchange(4, false, mem, value, valueTemp, offsetTemp, maskTemp, output);
-    }
-
-    template<typename T, typename S>
-    void atomicFetchAdd8SignExtend(const S& value, const T& mem, Register flagTemp,
-                                   Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(1, true, AtomicFetchAddOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchAdd8ZeroExtend(const S& value, const T& mem, Register flagTemp,
-                                   Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(1, false, AtomicFetchAddOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchAdd16SignExtend(const S& value, const T& mem, Register flagTemp,
-                                    Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(2, true, AtomicFetchAddOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchAdd16ZeroExtend(const S& value, const T& mem, Register flagTemp,
-                                    Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(2, false, AtomicFetchAddOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchAdd32(const S& value, const T& mem, Register flagTemp,
-                          Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(4, false, AtomicFetchAddOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template <typename T, typename S>
-    void atomicAdd8(const T& value, const S& mem, Register flagTemp,
-                    Register valueTemp, Register offsetTemp, Register maskTemp)
-    {
-        atomicEffectOp(1, AtomicFetchAddOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp);
-    }
-    template <typename T, typename S>
-    void atomicAdd16(const T& value, const S& mem, Register flagTemp,
-                     Register valueTemp, Register offsetTemp, Register maskTemp)
-    {
-        atomicEffectOp(2, AtomicFetchAddOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp);
-    }
-    template <typename T, typename S>
-    void atomicAdd32(const T& value, const S& mem, Register flagTemp,
-                     Register valueTemp, Register offsetTemp, Register maskTemp)
-    {
-        atomicEffectOp(4, AtomicFetchAddOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp);
-    }
-
-    template<typename T, typename S>
-    void atomicFetchSub8SignExtend(const S& value, const T& mem, Register flagTemp,
-                                   Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(1, true, AtomicFetchSubOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchSub8ZeroExtend(const S& value, const T& mem, Register flagTemp,
-                                   Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(1, false, AtomicFetchSubOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchSub16SignExtend(const S& value, const T& mem, Register flagTemp,
-                                    Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(2, true, AtomicFetchSubOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchSub16ZeroExtend(const S& value, const T& mem, Register flagTemp,
-                                    Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(2, false, AtomicFetchSubOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchSub32(const S& value, const T& mem, Register flagTemp,
-                          Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(4, false, AtomicFetchSubOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template <typename T, typename S>
-    void atomicSub8(const T& value, const S& mem, Register flagTemp,
-                    Register valueTemp, Register offsetTemp, Register maskTemp)
-    {
-        atomicEffectOp(1, AtomicFetchSubOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp);
-    }
-    template <typename T, typename S>
-    void atomicSub16(const T& value, const S& mem, Register flagTemp,
-                     Register valueTemp, Register offsetTemp, Register maskTemp)
-    {
-        atomicEffectOp(2, AtomicFetchSubOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp);
-    }
-    template <typename T, typename S>
-    void atomicSub32(const T& value, const S& mem, Register flagTemp,
-                     Register valueTemp, Register offsetTemp, Register maskTemp)
-    {
-        atomicEffectOp(4, AtomicFetchSubOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp);
-    }
-
-    template<typename T, typename S>
-    void atomicFetchAnd8SignExtend(const S& value, const T& mem, Register flagTemp,
-                                   Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(1, true, AtomicFetchAndOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchAnd8ZeroExtend(const S& value, const T& mem, Register flagTemp,
-                                   Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(1, false, AtomicFetchAndOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchAnd16SignExtend(const S& value, const T& mem, Register flagTemp,
-                                    Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(2, true, AtomicFetchAndOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchAnd16ZeroExtend(const S& value, const T& mem, Register flagTemp,
-                                    Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(2, false, AtomicFetchAndOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchAnd32(const S& value, const T& mem, Register flagTemp,
-                          Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(4, false, AtomicFetchAndOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template <typename T, typename S>
-    void atomicAnd8(const T& value, const S& mem, Register flagTemp,
-                    Register valueTemp, Register offsetTemp, Register maskTemp)
-    {
-        atomicEffectOp(1, AtomicFetchAndOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp);
-    }
-    template <typename T, typename S>
-    void atomicAnd16(const T& value, const S& mem, Register flagTemp,
-                     Register valueTemp, Register offsetTemp, Register maskTemp)
-    {
-        atomicEffectOp(2, AtomicFetchAndOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp);
-    }
-    template <typename T, typename S>
-    void atomicAnd32(const T& value, const S& mem, Register flagTemp,
-                     Register valueTemp, Register offsetTemp, Register maskTemp)
-    {
-        atomicEffectOp(4, AtomicFetchAndOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp);
-    }
-
-    template<typename T, typename S>
-    void atomicFetchOr8SignExtend(const S& value, const T& mem, Register flagTemp,
-                                  Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(1, true, AtomicFetchOrOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchOr8ZeroExtend(const S& value, const T& mem, Register flagTemp,
-                                  Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(1, false, AtomicFetchOrOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchOr16SignExtend(const S& value, const T& mem, Register flagTemp,
-                                   Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(2, true, AtomicFetchOrOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchOr16ZeroExtend(const S& value, const T& mem, Register flagTemp,
-                                   Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(2, false, AtomicFetchOrOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchOr32(const S& value, const T& mem, Register flagTemp,
-                         Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(4, false, AtomicFetchOrOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template <typename T, typename S>
-    void atomicOr8(const T& value, const S& mem, Register flagTemp,
-                   Register valueTemp, Register offsetTemp, Register maskTemp)
-    {
-        atomicEffectOp(1, AtomicFetchOrOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp);
-    }
-    template <typename T, typename S>
-    void atomicOr16(const T& value, const S& mem, Register flagTemp,
-                    Register valueTemp, Register offsetTemp, Register maskTemp)
-    {
-        atomicEffectOp(2, AtomicFetchOrOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp);
-    }
-    template <typename T, typename S>
-    void atomicOr32(const T& value, const S& mem, Register flagTemp,
-                    Register valueTemp, Register offsetTemp, Register maskTemp)
-    {
-        atomicEffectOp(4, AtomicFetchOrOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp);
-    }
-
-    template<typename T, typename S>
-    void atomicFetchXor8SignExtend(const S& value, const T& mem, Register flagTemp,
-                                   Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(1, true, AtomicFetchXorOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchXor8ZeroExtend(const S& value, const T& mem, Register flagTemp,
-                                   Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(1, false, AtomicFetchXorOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchXor16SignExtend(const S& value, const T& mem, Register flagTemp,
-                                    Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(2, true, AtomicFetchXorOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchXor16ZeroExtend(const S& value, const T& mem, Register flagTemp,
-                                    Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(2, false, AtomicFetchXorOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template<typename T, typename S>
-    void atomicFetchXor32(const S& value, const T& mem, Register flagTemp,
-                          Register valueTemp, Register offsetTemp, Register maskTemp, Register output)
-    {
-        atomicFetchOp(4, false, AtomicFetchXorOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp, output);
-    }
-    template <typename T, typename S>
-    void atomicXor8(const T& value, const S& mem, Register flagTemp,
-                     Register valueTemp, Register offsetTemp, Register maskTemp)
-    {
-        atomicEffectOp(1, AtomicFetchXorOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp);
-    }
-    template <typename T, typename S>
-    void atomicXor16(const T& value, const S& mem, Register flagTemp,
-                     Register valueTemp, Register offsetTemp, Register maskTemp)
-    {
-        atomicEffectOp(2, AtomicFetchXorOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp);
-    }
-    template <typename T, typename S>
-    void atomicXor32(const T& value, const S& mem, Register flagTemp,
-                     Register valueTemp, Register offsetTemp, Register maskTemp)
-    {
-        atomicEffectOp(4, AtomicFetchXorOp, value, mem, flagTemp, valueTemp, offsetTemp, maskTemp);
-    }
-
-  public:
-    template<typename T>
-    void compareExchangeToTypedIntArray(Scalar::Type arrayType, const T& mem, Register oldval, Register newval,
-                                        Register temp, Register valueTemp, Register offsetTemp, Register maskTemp,
-                                        AnyRegister output);
-
-    template<typename T>
-    void atomicExchangeToTypedIntArray(Scalar::Type arrayType, const T& mem, Register value,
-                                       Register temp, Register valueTemp, Register offsetTemp, Register maskTemp,
-                                       AnyRegister output);
 
     inline void incrementInt32Value(const Address& addr);
 
@@ -982,14 +731,7 @@ class MacroAssemblerMIPS64Compat : public MacroAssemblerMIPS64
         moveToDouble(zero, reg);
     }
 
-    void convertInt64ToDouble(Register src, FloatRegister dest);
-    void convertInt64ToFloat32(Register src, FloatRegister dest);
-
     void convertUInt64ToDouble(Register src, FloatRegister dest);
-    void convertUInt64ToFloat32(Register src, FloatRegister dest);
-
-    static bool convertUInt64ToDoubleNeedsTemp();
-    void convertUInt64ToDouble(Register64 src, FloatRegister dest, Register temp);
 
     void breakpoint();
 
@@ -1009,124 +751,6 @@ class MacroAssemblerMIPS64Compat : public MacroAssemblerMIPS64
     void cmp64Set(Assembler::Condition cond, Register lhs, Imm32 rhs, Register dest)
     {
         ma_cmp_set(dest, lhs, rhs, cond);
-    }
-
-    template<typename T>
-    void atomicFetchAdd8ZeroExtend(Register value, const T& mem, Register temp, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void atomicFetchSub8ZeroExtend(Register value, const T& mem, Register temp, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void atomicFetchAnd8ZeroExtend(Register value, const T& mem, Register temp, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void atomicFetchOr8ZeroExtend(Register value, const T& mem, Register temp, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void atomicFetchXor8ZeroExtend(Register value, const T& mem, Register temp, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void compareExchange8ZeroExtend(const T& mem, Register oldval, Register newval,
-                                    Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void atomicExchange8ZeroExtend(const T& mem, Register value, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void atomicFetchAdd16ZeroExtend(Register value, const T& mem, Register temp, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void atomicFetchSub16ZeroExtend(Register value, const T& mem, Register temp, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void atomicFetchAnd16ZeroExtend(Register value, const T& mem, Register temp, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void atomicFetchOr16ZeroExtend(Register value, const T& mem, Register temp, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void atomicFetchXor16ZeroExtend(Register value, const T& mem, Register temp, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void compareExchange16ZeroExtend(const T& mem, Register oldval, Register newval,
-                                     Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void atomicExchange16ZeroExtend(const T& mem, Register value, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void atomicFetchAdd32(Register value, const T& mem, Register temp, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void atomicFetchSub32(Register value, const T& mem, Register temp, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void atomicFetchAnd32(Register value, const T& mem, Register temp, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void atomicFetchOr32(Register value, const T& mem, Register temp, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void atomicFetchXor32(Register value, const T& mem, Register temp, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T>
-    void compareExchange32(const T& mem, Register oldval, Register newval, Register output) {
-        MOZ_CRASH();
-    }
-    template<typename T> void atomicExchange32(const T& mem, Register value, Register output) {
-        MOZ_CRASH();
-    }
-    template <typename T>
-    void atomicFetchAdd64(Register64 value, const T& mem, Register64 temp, Register64 output) {
-        MOZ_CRASH();
-    }
-    template <typename T>
-    void atomicFetchSub64(Register64 value, const T& mem, Register64 temp, Register64 output) {
-        MOZ_CRASH();
-    }
-    template <typename T>
-    void atomicFetchAnd64(Register64 value, const T& mem, Register64 temp, Register64 output) {
-        MOZ_CRASH();
-    }
-    template <typename T>
-    void atomicFetchOr64(Register64 value, const T& mem, Register64 temp, Register64 output) {
-        MOZ_CRASH();
-    }
-    template <typename T>
-    void atomicFetchXor64(Register64 value, const T& mem, Register64 temp, Register64 output) {
-        MOZ_CRASH();
-    }
-    template <typename T>
-    void atomicExchange64(const T& mem, Register64 src, Register64 output) {
-        MOZ_CRASH();
-    }
-    template <typename T>
-    void compareExchange64(const T& mem, Register64 expect, Register64 replace, Register64 output) {
-        MOZ_CRASH();
-    }
-    template <typename T>
-    void atomicLoad64(const T& mem, Register64 temp, Register64 output) {
-        MOZ_CRASH();
     }
 
   protected:

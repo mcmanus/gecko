@@ -17,16 +17,11 @@
 
 var EXPORTED_SYMBOLS = ["PdfjsChromeUtils"];
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cr = Components.results;
-const Cu = Components.utils;
-
 const PREF_PREFIX = "pdfjs";
 const PDF_CONTENT_TYPE = "application/pdf";
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 var Svc = {};
 XPCOMUtils.defineLazyServiceGetter(Svc, "mime",
@@ -265,7 +260,7 @@ var PdfjsChromeUtils = {
   _ensurePreferenceAllowed(aPrefName) {
     let unPrefixedName = aPrefName.split(PREF_PREFIX + ".");
     if (unPrefixedName[0] !== "" ||
-        this._allowedPrefNames.indexOf(unPrefixedName[1]) === -1) {
+        !this._allowedPrefNames.includes(unPrefixedName[1])) {
       let msg = "\"" + aPrefName + "\" " +
                 "can't be accessed from content. See PdfjsChromeUtils.";
       throw new Error(msg);

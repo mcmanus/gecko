@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Рекомендовано {provider}",
   "header_bookmarks_placeholder": "У вас ще немає закладок.",
   "header_stories_from": "від",
+  "context_menu_button_sr": "Відкрити контекстне меню для {title}",
   "type_label_visited": "Відвідано",
   "type_label_bookmarked": "Закладено",
   "type_label_synced": "Синхронізовано з іншого пристрою",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Змінити цей сайт",
   "edit_topsites_dismiss_button": "Сховати цей сайт",
   "edit_topsites_add_button": "Додати",
+  "edit_topsites_add_button_tooltip": "Додати до популярних сайтів",
   "topsites_form_add_header": "Новий популярний сайт",
   "topsites_form_edit_header": "Редагувати популярний сайт",
   "topsites_form_title_placeholder": "Введіть назву",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Готово. Перевірте згодом, щоб побачити більше матеріалів від {provider}. Не хочете чекати? Оберіть популярну тему, щоб знайти більше цікавих матеріалів з усього Інтернету.",
   "manual_migration_explanation2": "Спробуйте Firefox із закладками, історією та паролями з іншого браузера.",
   "manual_migration_cancel_button": "Ні, дякую",
-  "manual_migration_import_button": "Імпортувати зараз"
+  "manual_migration_import_button": "Імпортувати зараз",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

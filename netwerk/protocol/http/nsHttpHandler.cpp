@@ -16,8 +16,6 @@
 #include "nsHttpAuthCache.h"
 #include "nsStandardURL.h"
 #include "nsIDOMWindow.h"
-#include "nsIDOMNavigator.h"
-#include "nsIMozNavigatorNetwork.h"
 #include "nsINetworkProperties.h"
 #include "nsIHttpChannel.h"
 #include "nsIStandardURL.h"
@@ -69,6 +67,7 @@
 #include "mozilla/BasePrincipal.h"
 
 #include "mozilla/dom/ContentParent.h"
+#include "mozilla/dom/Navigator.h"
 
 #include "nsNSSComponent.h"
 
@@ -137,16 +136,12 @@ NewURI(const nsACString &aSpec,
        int32_t aDefaultPort,
        nsIURI **aURI)
 {
-    RefPtr<nsStandardURL> url = new nsStandardURL();
-
-    nsresult rv = url->Init(nsIStandardURL::URLTYPE_AUTHORITY,
-                            aDefaultPort, aSpec, aCharset, aBaseURI);
-    if (NS_FAILED(rv)) {
-        return rv;
-    }
-
-    url.forget(aURI);
-    return NS_OK;
+    return NS_MutateURI(new nsStandardURL::Mutator())
+             .Apply<nsIStandardURLMutator>(&nsIStandardURLMutator::Init,
+                                           nsIStandardURL::URLTYPE_AUTHORITY,
+                                           aDefaultPort, nsCString(aSpec), aCharset, aBaseURI,
+                                           nullptr)
+             .Finalize(aURI);
 }
 
 #ifdef ANDROID
@@ -262,7 +257,7 @@ nsHttpHandler::nsHttpHandler()
     , mEnableOriginExtension(false)
     , mSpdySendingChunkSize(ASpdySession::kSendingChunkSize)
     , mSpdySendBufferSize(ASpdySession::kTCPSendBufferSize)
-    , mSpdyPushAllowance(32768)
+    , mSpdyPushAllowance(131072) // match default pref
     , mSpdyPullAllowance(ASpdySession::kInitialRwin)
     , mDefaultSpdyConcurrent(ASpdySession::kDefaultMaxConcurrent)
     , mSpdyPingThreshold(PR_SecondsToInterval(58))
@@ -293,6 +288,7 @@ nsHttpHandler::nsHttpHandler()
     , mFastOpenStallsIdleTime(10)
     , mFastOpenStallsTimeout(20)
     , mActiveTabPriority(true)
+    , mAllowPlaintextServerTiming(false)
     , mProcessId(0)
     , mNextChannelId(1)
     , mLastActiveTabLoadOptimizationLock("nsHttpConnectionMgr::LastActiveTabLoadOptimization")
@@ -469,6 +465,7 @@ nsHttpHandler::Init()
         prefBranch->AddObserver(TCP_FAST_OPEN_STALLS_LIMIT, this, true);
         prefBranch->AddObserver(TCP_FAST_OPEN_STALLS_IDLE, this, true);
         prefBranch->AddObserver(TCP_FAST_OPEN_STALLS_TIMEOUT, this, true);
+        prefBranch->AddObserver(HTTP_PREF("allow-plaintext-server-timing"), this, false);
         PrefsChanged(prefBranch, nullptr);
     }
 
@@ -1779,6 +1776,10 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
         }
     }
 
+    if (PREF_CHANGED(HTTP_PREF("allow-plaintext-server-timing"))) {
+        Unused << prefs->GetBoolPref(HTTP_PREF("allow-plaintext-server-timing"), &mAllowPlaintextServerTiming);
+    }
+
     //
     // INTL options
     //
@@ -2655,14 +2656,12 @@ nsHttpHandler::TickleWifi(nsIInterfaceRequestor *cb)
     if (!piWindow)
         return;
 
-    nsCOMPtr<nsIDOMNavigator> domNavigator = piWindow->GetNavigator();
-    nsCOMPtr<nsIMozNavigatorNetwork> networkNavigator =
-        do_QueryInterface(domNavigator);
-    if (!networkNavigator)
+    RefPtr<dom::Navigator> navigator = piWindow->GetNavigator();
+    if (!navigator)
         return;
 
-    nsCOMPtr<nsINetworkProperties> networkProperties;
-    networkNavigator->GetProperties(getter_AddRefs(networkProperties));
+    nsCOMPtr<nsINetworkProperties> networkProperties =
+        navigator->GetNetworkProperties();
     if (!networkProperties)
         return;
 

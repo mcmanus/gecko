@@ -6,13 +6,8 @@
 
 this.EXPORTED_SYMBOLS = ["ChromeManifestParser"];
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cr = Components.results;
-const Cu = Components.utils;
-
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/NetUtil.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
 
 const MSG_JAR_FLUSH = "AddonJarFlush";
 

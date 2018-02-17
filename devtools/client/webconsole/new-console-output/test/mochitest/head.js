@@ -31,14 +31,14 @@ const STATUS_CODES_GA_PARAMS = `?${new URLSearchParams({
   "utm_campaign": "default"
 })}`;
 
-Services.prefs.setBoolPref("devtools.webconsole.new-frontend-enabled", true);
-registerCleanupFunction(function* () {
-  Services.prefs.clearUserPref("devtools.webconsole.new-frontend-enabled");
+Services.prefs.setBoolPref("devtools.browserconsole.new-frontend-enabled", true);
+registerCleanupFunction(async function () {
+  Services.prefs.clearUserPref("devtools.browserconsole.new-frontend-enabled");
   Services.prefs.clearUserPref("devtools.webconsole.ui.filterbar");
 
   // Reset all filter prefs between tests. First flushPrefEnv in case one of the
   // filter prefs has been pushed for the test
-  yield SpecialPowers.flushPrefEnv();
+  await SpecialPowers.flushPrefEnv();
   Services.prefs.getChildList("devtools.webconsole.filter").forEach(pref => {
     Services.prefs.clearUserPref(pref);
   });
@@ -47,7 +47,7 @@ registerCleanupFunction(function* () {
     if (browserConsole.jsterm) {
       browserConsole.jsterm.clearOutput(true);
     }
-    yield HUDService.toggleBrowserConsole();
+    await HUDService.toggleBrowserConsole();
   }
 });
 
@@ -73,6 +73,26 @@ async function openNewTabAndConsole(url, clearJstermHistory = true) {
   }
 
   return hud;
+}
+
+/**
+ * Subscribe to the store and log out stringinfied versions of messages.
+ * This is a helper function for debugging, to make is easier to see what
+ * happened during the test in the log.
+ *
+ * @param object hud
+ */
+function logAllStoreChanges(hud) {
+  const store = hud.ui.newConsoleOutput.getStore();
+  // Adding logging each time the store is modified in order to check
+  // the store state in case of failure.
+  store.subscribe(() => {
+    const messages = [...store.getState().messages.messagesById.values()];
+    const debugMessages = messages.map(({id, type, parameters, messageText}) => {
+      return {id, type, parameters, messageText};
+    });
+    info("messages : " + JSON.stringify(debugMessages));
+  });
 }
 
 /**
@@ -119,6 +139,31 @@ function waitForMessages({ hud, messages }) {
 }
 
 /**
+ * Wait for a message with the provided text and showing the provided repeat count.
+ *
+ * @param {Object} hud : the webconsole
+ * @param {String} text : text included in .message-body
+ * @param {Number} repeat : expected repeat count in .message-repeats
+ */
+function waitForRepeatedMessage(hud, text, repeat) {
+  return waitFor(() => {
+    // Wait for a message matching the provided text.
+    let node = findMessage(hud, text);
+    if (!node) {
+      return false;
+    }
+
+    // Check if there is a repeat node with the expected count.
+    let repeatNode = node.querySelector(".message-repeats");
+    if (repeatNode && parseInt(repeatNode.textContent, 10) === repeat) {
+      return node;
+    }
+
+    return false;
+  });
+}
+
+/**
  * Wait for a single message in the web console output, resolving once it is received.
  *
  * @param {Object} hud : the webconsole
@@ -157,6 +202,7 @@ async function waitFor(condition, message = "waitFor", interval = 10, maxTries =
  *        A substring that can be found in the message.
  * @param selector [optional]
  *        The selector to use in finding the message.
+ * @return {Node} the node corresponding the found message
  */
 function findMessage(hud, text, selector = ".message") {
   const elements = findMessages(hud, text, selector);
@@ -529,4 +575,34 @@ async function openMessageInNetmonitor(toolbox, hud, url, urlInConsole) {
   });
 
   ok(true, "The attached url is correct.");
+}
+
+function selectNode(hud, node) {
+  let outputContainer = hud.ui.outputNode.querySelector(".webconsole-output");
+
+  // We must first blur the input or else we can't select anything.
+  outputContainer.ownerDocument.activeElement.blur();
+
+  let selection = outputContainer.ownerDocument.getSelection();
+  let range = document.createRange();
+  range.selectNodeContents(node);
+  selection.removeAllRanges();
+  selection.addRange(range);
+
+  return selection;
+}
+
+async function waitForBrowserConsole() {
+  return new Promise(resolve => {
+    Services.obs.addObserver(function observer(subject) {
+      Services.obs.removeObserver(observer, "web-console-created");
+      subject.QueryInterface(Ci.nsISupportsString);
+
+      let hud = HUDService.getBrowserConsole();
+      ok(hud, "browser console is open");
+      is(subject.data, hud.hudId, "notification hudId is correct");
+
+      executeSoon(() => resolve(hud));
+    }, "web-console-created");
+  });
 }

@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "{provider} က အကြံပြုထားသည်",
   "header_bookmarks_placeholder": "မည်သည့်စာမှတ်မျှ မရှိသေးပါ။",
   "header_stories_from": "မှ",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "သွားလည်ခဲ့သော",
   "type_label_bookmarked": "စာအမှတ်မှတ်ထားသော",
   "type_label_synced": "အခြားပစ္စည်းတစ်ခုမှရယူထားသှ်",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "ဆိုက်အားပြင်မည်",
   "edit_topsites_dismiss_button": "ဆိုက်အားဖျက်လိုက်မည်",
   "edit_topsites_add_button": "ထည့်ရန်",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "ထိပ်တန်းဆိုက် အသစ်",
   "topsites_form_edit_header": "ထိပ်တန်းဆိုက်ကို တည်းဖြတ်ရန်",
   "topsites_form_title_placeholder": "ခေါင်းစဉ် ရေးပါ",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "You’ve caught up. Check back later for more top stories from {provider}. Can’t wait? Select a popular topic to find more great stories from around the web.",
   "manual_migration_explanation2": "အခြားဘရောင်ဇာမှ စာမှတ်များ၊ မှတ်တမ်းများ၊ စကားဝှက်များနှင့်အတူ Firefox တွင် စမ်းသုံးကြည့်ပါ။",
   "manual_migration_cancel_button": "မလိုတော့ပါ၊ ကျေးဇူးတင်ပါသည်။",
-  "manual_migration_import_button": "ထည့်သွင်းရန်"
+  "manual_migration_import_button": "ထည့်သွင်းရန်",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

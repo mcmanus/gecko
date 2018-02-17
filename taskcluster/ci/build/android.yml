@@ -21,7 +21,7 @@ android-api-16/debug:
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
             - name: public/build/geckoview_example.apk
-              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/geckoview_example-withGeckoBinaries.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
             - name: public/build
               path: /builds/worker/artifacts/
@@ -32,13 +32,13 @@ android-api-16/debug:
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
-            - platform_supports_post_upload_to_latest.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
         custom-build-variant-cfg: api-16-debug
         tooltool-downloads: internal
     toolchains:
         - android-gradle-dependencies
+        - android-ndk-linux
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
@@ -73,7 +73,7 @@ android-x86/opt:
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
             - name: public/build/geckoview_example.apk
-              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/geckoview_example-withGeckoBinaries.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
             - name: public/build
               path: /builds/worker/artifacts/
@@ -84,13 +84,13 @@ android-x86/opt:
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
-            - platform_supports_post_upload_to_latest.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
         custom-build-variant-cfg: x86
         tooltool-downloads: internal
     toolchains:
         - android-gradle-dependencies
+        - android-ndk-linux
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
@@ -130,7 +130,7 @@ android-x86-nightly/opt:
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
             - name: public/build/geckoview_example.apk
-              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/geckoview_example-withGeckoBinaries.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
             - name: public/build
               path: /builds/worker/artifacts/
@@ -141,7 +141,6 @@ android-x86-nightly/opt:
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
-            - platform_supports_post_upload_to_latest.py
             - taskcluster_nightly.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
@@ -149,6 +148,7 @@ android-x86-nightly/opt:
         tooltool-downloads: internal
     toolchains:
         - android-gradle-dependencies
+        - android-ndk-linux
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
@@ -178,6 +178,54 @@ android-api-16/opt:
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
             - name: public/build/geckoview_example.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
+              type: file
+            - name: public/build
+              path: /builds/worker/artifacts/
+              type: directory
+    run:
+        using: mozharness
+        actions: [get-secrets build multi-l10n update]
+        config:
+            - builds/releng_base_android_64_builds.py
+            - disable_signing.py
+        script: "mozharness/scripts/fx_desktop_build.py"
+        secrets: true
+        custom-build-variant-cfg: api-16
+        tooltool-downloads: internal
+    toolchains:
+        - android-gradle-dependencies
+        - android-ndk-linux
+        - android-sdk-linux
+        - linux64-clang
+        - linux64-rust-android
+        - linux64-sccache
+        - proguard-jar
+
+android-api-16-without-google-play-services/opt:
+    description: "Android 4.0 api-16+ (without Google Play Services) Opt"
+    index:
+        product: mobile
+        job-name: android-api-16-without-google-play-services-opt
+    treeherder:
+        platform: android-4-0-armv7-api16/opt
+        symbol: BnoGPS
+    worker-type: aws-provisioner-v1/gecko-{level}-b-android
+    worker:
+        docker-image: {in-tree: android-build}
+        max-run-time: 7200
+        env:
+            GRADLE_USER_HOME: "/builds/worker/workspace/build/src/mobile/android/gradle/dotgradle-offline"
+            PERFHERDER_EXTRA_OPTIONS: android-api-16-without-google-play-services
+            TOOLTOOL_MANIFEST: "mobile/android/config/tooltool-manifests/android/releng.manifest"
+        artifacts:
+            - name: public/android/R
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/app/R
+              type: directory
+            - name: public/android/maven
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
+              type: directory
+            - name: public/build/geckoview_example.apk
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/geckoview_example-withGeckoBinaries.apk
               type: file
             - name: public/build
@@ -189,13 +237,14 @@ android-api-16/opt:
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
-            - platform_supports_post_upload_to_latest.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
-        custom-build-variant-cfg: api-16
+        custom-build-variant-cfg: api-16-without-google-play-services
         tooltool-downloads: internal
+    run-on-projects: ['mozilla-central']
     toolchains:
         - android-gradle-dependencies
+        - android-ndk-linux
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
@@ -230,7 +279,7 @@ android-api-16-nightly/opt:
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
             - name: public/build/geckoview_example.apk
-              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/geckoview_example-withGeckoBinaries.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
             - name: public/build
               path: /builds/worker/artifacts/
@@ -241,7 +290,6 @@ android-api-16-nightly/opt:
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
-            - platform_supports_post_upload_to_latest.py
             - taskcluster_nightly.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
@@ -249,6 +297,7 @@ android-api-16-nightly/opt:
         tooltool-downloads: internal
     toolchains:
         - android-gradle-dependencies
+        - android-ndk-linux
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
@@ -283,7 +332,7 @@ android-x86-old-id/opt:
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
             - name: public/build/geckoview_example.apk
-              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/geckoview_example-withGeckoBinaries.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
             - name: public/build
               path: /builds/worker/artifacts/
@@ -294,7 +343,6 @@ android-x86-old-id/opt:
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
-            - platform_supports_post_upload_to_latest.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
         custom-build-variant-cfg: x86-old-id
@@ -302,6 +350,7 @@ android-x86-old-id/opt:
     run-on-projects: ['mozilla-central']
     toolchains:
         - android-gradle-dependencies
+        - android-ndk-linux
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
@@ -339,7 +388,7 @@ android-x86-old-id-nightly/opt:
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
             - name: public/build/geckoview_example.apk
-              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/geckoview_example-withGeckoBinaries.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
             - name: public/build
               path: /builds/worker/artifacts/
@@ -350,7 +399,6 @@ android-x86-old-id-nightly/opt:
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
-            - platform_supports_post_upload_to_latest.py
             - taskcluster_nightly.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
@@ -359,6 +407,7 @@ android-x86-old-id-nightly/opt:
     run-on-projects: ['mozilla-central']
     toolchains:
         - android-gradle-dependencies
+        - android-ndk-linux
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
@@ -388,7 +437,7 @@ android-api-16-old-id/opt:
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
             - name: public/build/geckoview_example.apk
-              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/geckoview_example-withGeckoBinaries.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
             - name: public/build
               path: /builds/worker/artifacts/
@@ -399,7 +448,6 @@ android-api-16-old-id/opt:
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
-            - platform_supports_post_upload_to_latest.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
         custom-build-variant-cfg: api-16-old-id
@@ -407,6 +455,7 @@ android-api-16-old-id/opt:
     run-on-projects: ['mozilla-central']
     toolchains:
         - android-gradle-dependencies
+        - android-ndk-linux
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
@@ -439,7 +488,7 @@ android-api-16-old-id-nightly/opt:
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
             - name: public/build/geckoview_example.apk
-              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/geckoview_example-withGeckoBinaries.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
             - name: public/build
               path: /builds/worker/artifacts/
@@ -450,7 +499,6 @@ android-api-16-old-id-nightly/opt:
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
-            - platform_supports_post_upload_to_latest.py
             - taskcluster_nightly.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
@@ -459,6 +507,7 @@ android-api-16-old-id-nightly/opt:
     run-on-projects: ['mozilla-central']
     toolchains:
         - android-gradle-dependencies
+        - android-ndk-linux
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
@@ -488,7 +537,7 @@ android-api-16-gradle/opt:
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
             - name: public/build/geckoview_example.apk
-              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/geckoview_example-withGeckoBinaries.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
             - name: public/build
               path: /builds/worker/artifacts/
@@ -499,12 +548,12 @@ android-api-16-gradle/opt:
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
-            - platform_supports_post_upload_to_latest.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
         custom-build-variant-cfg: api-16-gradle
         tooltool-downloads: internal
     toolchains:
+        - android-ndk-linux
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
@@ -534,7 +583,7 @@ android-aarch64/opt:
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
             - name: public/build/geckoview_example.apk
-              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/geckoview_example-withGeckoBinaries.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
             - name: public/build
               path: /builds/worker/artifacts/
@@ -545,13 +594,13 @@ android-aarch64/opt:
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
-            - platform_supports_post_upload_to_latest.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
         custom-build-variant-cfg: aarch64
         tooltool-downloads: internal
     toolchains:
         - android-gradle-dependencies
+        - android-ndk-linux
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
@@ -586,7 +635,7 @@ android-aarch64-nightly/opt:
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
             - name: public/build/geckoview_example.apk
-              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/geckoview_example-withGeckoBinaries.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
             - name: public/build
               path: /builds/worker/artifacts/
@@ -597,7 +646,6 @@ android-aarch64-nightly/opt:
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
-            - platform_supports_post_upload_to_latest.py
             - taskcluster_nightly.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
@@ -605,6 +653,7 @@ android-aarch64-nightly/opt:
         tooltool-downloads: internal
     toolchains:
         - android-gradle-dependencies
+        - android-ndk-linux
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android

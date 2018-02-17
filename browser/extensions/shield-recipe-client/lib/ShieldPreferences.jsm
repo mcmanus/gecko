@@ -3,17 +3,16 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const {utils: Cu} = Components;
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(
+ChromeUtils.defineModuleGetter(
   this, "AppConstants", "resource://gre/modules/AppConstants.jsm"
 );
-XPCOMUtils.defineLazyModuleGetter(
+ChromeUtils.defineModuleGetter(
   this, "AddonStudies", "resource://shield-recipe-client/lib/AddonStudies.jsm"
 );
-XPCOMUtils.defineLazyModuleGetter(
+ChromeUtils.defineModuleGetter(
   this, "CleanupManager", "resource://shield-recipe-client/lib/CleanupManager.jsm"
 );
 
@@ -73,22 +72,24 @@ this.ShieldPreferences = {
     let prefValue;
     switch (prefName) {
       // If the FHR pref changes, set the opt-out-study pref to the value it is changing to.
-      case FHR_UPLOAD_ENABLED_PREF:
+      case FHR_UPLOAD_ENABLED_PREF: {
         prefValue = Services.prefs.getBoolPref(FHR_UPLOAD_ENABLED_PREF);
         Services.prefs.setBoolPref(OPT_OUT_STUDIES_ENABLED_PREF, prefValue);
         break;
+      }
 
       // If the opt-out pref changes to be false, disable all current studies.
-      case OPT_OUT_STUDIES_ENABLED_PREF:
+      case OPT_OUT_STUDIES_ENABLED_PREF: {
         prefValue = Services.prefs.getBoolPref(OPT_OUT_STUDIES_ENABLED_PREF);
         if (!prefValue) {
           for (const study of await AddonStudies.getAll()) {
             if (study.active) {
-              await AddonStudies.stop(study.recipeId);
+              await AddonStudies.stop(study.recipeId, "general-opt-out");
             }
           }
         }
         break;
+      }
     }
   },
 
@@ -108,9 +109,18 @@ this.ShieldPreferences = {
     checkbox.setAttribute("id", "optOutStudiesEnabled");
     checkbox.setAttribute("class", "tail-with-learn-more");
     checkbox.setAttribute("label", "Allow Firefox to install and run studies");
-    checkbox.setAttribute("preference", OPT_OUT_STUDIES_ENABLED_PREF);
+
+    let allowedByPolicy = Services.policies.isAllowed("Shield");
+    if (allowedByPolicy) {
+      // If Shield is not allowed by policy, don't tie this checkbox to the preference,
+      // so that the checkbox remains unchecked.
+      // Otherwise, it would be grayed out but still checked, which looks confusing
+      // because it appears it's enabled with no way to disable it.
+      checkbox.setAttribute("preference", OPT_OUT_STUDIES_ENABLED_PREF);
+    }
     checkbox.setAttribute("disabled", Services.prefs.prefIsLocked(FHR_UPLOAD_ENABLED_PREF) ||
-      !AppConstants.MOZ_TELEMETRY_REPORTING);
+                                      !AppConstants.MOZ_TELEMETRY_REPORTING ||
+                                      !allowedByPolicy);
     hContainer.appendChild(checkbox);
 
     const viewStudies = doc.createElementNS(XUL_NS, "label");
@@ -127,7 +137,7 @@ this.ShieldPreferences = {
     // Weirdly, FHR doesn't have a Preference instance on the page, so we create it.
     const fhrPref = doc.defaultView.Preferences.add({ id: FHR_UPLOAD_ENABLED_PREF, type: "bool" });
     function onChangeFHRPref(event) {
-      checkbox.disabled = !Services.prefs.getBoolPref(FHR_UPLOAD_ENABLED_PREF);
+      checkbox.disabled = !Services.prefs.getBoolPref(FHR_UPLOAD_ENABLED_PREF) || !allowedByPolicy;
     }
     fhrPref.on("change", onChangeFHRPref);
     doc.defaultView.addEventListener("unload", () => fhrPref.off("change", onChangeFHRPref), { once: true });

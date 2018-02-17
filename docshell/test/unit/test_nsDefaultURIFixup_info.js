@@ -1,7 +1,7 @@
 var urifixup = Cc["@mozilla.org/docshell/urifixup;1"].
                getService(Ci.nsIURIFixup);
 
-Components.utils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 var prefList = ["browser.fixup.typo.scheme", "keyword.enabled",
                 "browser.fixup.domainwhitelist.whitelisted"];
@@ -13,6 +13,11 @@ const kSearchEngineID = "test_urifixup_search_engine";
 const kSearchEngineURL = "http://www.example.org/?search={searchTerms}";
 Services.search.addEngineWithDetails(kSearchEngineID, "", "", "", "get",
                                      kSearchEngineURL);
+
+Services.io.getProtocolHandler("resource")
+        .QueryInterface(Ci.nsIResProtocolHandler)
+        .setSubstitution("search-plugins",
+                         Services.io.newURI("chrome://mozapps/locale/searchplugins/"));
 
 var oldDefaultEngine = Services.search.defaultEngine;
 Services.search.defaultEngine = Services.search.getEngineByName(kSearchEngineID);

@@ -9,6 +9,7 @@
 #include "nsDataHandler.h"
 #include "nsIChannel.h"
 #include "nsIHttpChannelInternal.h"
+#include "nsINode.h"
 #include "nsIStreamListener.h"
 #include "nsILoadInfo.h"
 #include "nsIOService.h"
@@ -342,7 +343,7 @@ DoContentSecurityChecks(nsIChannel* aChannel, nsILoadInfo* aLoadInfo)
 #ifdef DEBUG
       {
         nsCOMPtr<nsINode> node = do_QueryInterface(requestingContext);
-        MOZ_ASSERT(!node || node->NodeType() == nsIDOMNode::DOCUMENT_NODE,
+        MOZ_ASSERT(!node || node->NodeType() == nsINode::DOCUMENT_NODE,
                    "type_xml requires requestingContext of type Document");
       }
 #endif
@@ -369,7 +370,7 @@ DoContentSecurityChecks(nsIChannel* aChannel, nsILoadInfo* aLoadInfo)
 #ifdef DEBUG
       {
         nsCOMPtr<nsINode> node = do_QueryInterface(requestingContext);
-        MOZ_ASSERT(!node || node->NodeType() == nsIDOMNode::ELEMENT_NODE,
+        MOZ_ASSERT(!node || node->NodeType() == nsINode::ELEMENT_NODE,
                    "type_subrequest requires requestingContext of type Element");
       }
 #endif
@@ -382,7 +383,7 @@ DoContentSecurityChecks(nsIChannel* aChannel, nsILoadInfo* aLoadInfo)
 #ifdef DEBUG
       {
         nsCOMPtr<nsINode> node = do_QueryInterface(requestingContext);
-        MOZ_ASSERT(!node || node->NodeType() == nsIDOMNode::DOCUMENT_NODE,
+        MOZ_ASSERT(!node || node->NodeType() == nsINode::DOCUMENT_NODE,
                    "type_dtd requires requestingContext of type Document");
       }
 #endif
@@ -406,7 +407,7 @@ DoContentSecurityChecks(nsIChannel* aChannel, nsILoadInfo* aLoadInfo)
 #ifdef DEBUG
       {
         nsCOMPtr<nsINode> node = do_QueryInterface(requestingContext);
-        MOZ_ASSERT(!node || node->NodeType() == nsIDOMNode::ELEMENT_NODE,
+        MOZ_ASSERT(!node || node->NodeType() == nsINode::ELEMENT_NODE,
                    "type_media requires requestingContext of type Element");
       }
 #endif
@@ -440,7 +441,7 @@ DoContentSecurityChecks(nsIChannel* aChannel, nsILoadInfo* aLoadInfo)
 #ifdef DEBUG
       {
         nsCOMPtr<nsINode> node = do_QueryInterface(requestingContext);
-        MOZ_ASSERT(!node || node->NodeType() == nsIDOMNode::DOCUMENT_NODE,
+        MOZ_ASSERT(!node || node->NodeType() == nsINode::DOCUMENT_NODE,
                    "type_xslt requires requestingContext of type Document");
       }
 #endif
@@ -453,7 +454,7 @@ DoContentSecurityChecks(nsIChannel* aChannel, nsILoadInfo* aLoadInfo)
 #ifdef DEBUG
       {
         nsCOMPtr<nsINode> node = do_QueryInterface(requestingContext);
-        MOZ_ASSERT(!node || node->NodeType() == nsIDOMNode::DOCUMENT_NODE,
+        MOZ_ASSERT(!node || node->NodeType() == nsINode::DOCUMENT_NODE,
                    "type_beacon requires requestingContext of type Document");
       }
 #endif
@@ -605,6 +606,36 @@ nsContentSecurityManager::AsyncOnChannelRedirect(nsIChannel* aOldChannel,
   nsCOMPtr<nsIURI> newURI;
   Unused << NS_GetFinalChannelURI(aNewChannel, getter_AddRefs(newURI));
   NS_ENSURE_STATE(oldPrincipal && newURI);
+
+  // Do not allow insecure redirects to data: URIs
+  if (loadInfo && loadInfo->GetExternalContentPolicyType() == nsIContentPolicy::TYPE_SCRIPT) {
+    bool isDataURI = (NS_SUCCEEDED(newURI->SchemeIs("data", &isDataURI)) && isDataURI);
+    if (isDataURI) {
+      nsAutoCString dataSpec;
+      newURI->GetSpec(dataSpec);
+      if (dataSpec.Length() > 50) {
+        dataSpec.Truncate(50);
+        dataSpec.AppendLiteral("...");
+      }
+      nsCOMPtr<nsIDocument> doc;
+      nsINode* node = loadInfo->LoadingNode();
+      if (node) {
+        doc = node->OwnerDoc();
+      }
+      NS_ConvertUTF8toUTF16 specUTF16(NS_UnescapeURL(dataSpec));
+      const char16_t* params[] = { specUTF16.get() };
+      nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
+                                      NS_LITERAL_CSTRING("DATA_URI_BLOCKED"),
+                                      doc,
+                                      nsContentUtils::eSECURITY_PROPERTIES,
+                                      "BlockSubresourceRedirectToData",
+                                      params, ArrayLength(params));
+
+      // cancel the old channel and return an error
+      aOldChannel->Cancel(NS_ERROR_CONTENT_BLOCKED);
+      return NS_ERROR_CONTENT_BLOCKED;
+    }
+  }
 
   const uint32_t flags =
       nsIScriptSecurityManager::LOAD_IS_AUTOMATIC_DOCUMENT_REPLACEMENT |

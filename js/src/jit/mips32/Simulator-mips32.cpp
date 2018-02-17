@@ -242,7 +242,7 @@ class SimInstruction
     bool isForbiddenInBranchDelay() const;
     // Say if the instruction 'links'. e.g. jal, bal.
     bool isLinkingInstruction() const;
-    // Say if the instruction is a break or a trap.
+    // Say if the instruction is a debugger break/trap.
     bool isTrap() const;
 
   private:
@@ -328,18 +328,20 @@ SimInstruction::isTrap() const
     } else {
         switch (functionFieldRaw()) {
           case ff_break:
+            return instructionBits() != kCallRedirInstr;
           case ff_tge:
           case ff_tgeu:
           case ff_tlt:
           case ff_tltu:
           case ff_teq:
           case ff_tne:
-            return true;
+            return bits(15, 6) != kWasmTrapCode;
           default:
             return false;
         };
     }
 }
+
 
 SimInstruction::Type
 SimInstruction::instructionType() const
@@ -858,8 +860,7 @@ MipsDebugger::debug()
                               cmd, arg1, arg2);
             if ((strcmp(cmd, "si") == 0) || (strcmp(cmd, "stepi") == 0)) {
                 SimInstruction* instr = reinterpret_cast<SimInstruction*>(sim_->get_pc());
-                if (!(instr->isTrap()) ||
-                        instr->instructionBits() == kCallRedirInstr) {
+                if (!instr->isTrap()) {
                     sim_->instructionDecode(
                         reinterpret_cast<SimInstruction*>(sim_->get_pc()));
                 } else {
@@ -1645,15 +1646,11 @@ Simulator::handleWasmInterrupt()
 
     JitActivation* activation = TlsContext.get()->activation()->asJit();
     const wasm::CodeSegment* segment = wasm::LookupCodeSegment(pc);
-    if (!segment || !segment->containsCodePC(pc))
-        return;
-
-    // fp can be null during the prologue/epilogue of the entry function.
-    if (!fp)
+    if (!segment || !segment->isModule() || !segment->containsCodePC(pc))
         return;
 
     startInterrupt(activation);
-    set_pc(int32_t(segment->interruptCode()));
+    set_pc(int32_t(segment->asModule()->interruptCode()));
 }
 
 
@@ -1678,10 +1675,11 @@ Simulator::handleWasmFault(int32_t addr, unsigned numBytes)
     uint8_t* fp = reinterpret_cast<uint8_t*>(getRegister(Register::fp));
 
     const wasm::CodeSegment* segment = wasm::LookupCodeSegment(pc);
-    if (!segment)
+    if (!segment || !segment->isModule())
         return false;
+    const wasm::ModuleSegment* moduleSegment = segment->asModule();
 
-    wasm::Instance* instance = wasm::LookupFaultingInstance(*segment, pc, fp);
+    wasm::Instance* instance = wasm::LookupFaultingInstance(*moduleSegment, pc, fp);
     if (!instance || !instance->memoryAccessInGuardRegion((uint8_t*)addr, numBytes))
         return false;
 
@@ -1692,12 +1690,41 @@ Simulator::handleWasmFault(int32_t addr, unsigned numBytes)
         startInterrupt(act);
         if (!instance->code().containsCodePC(pc))
             MOZ_CRASH("Cannot map PC to trap handler");
-        set_pc(int32_t(segment->outOfBoundsCode()));
+        set_pc(int32_t(moduleSegment->outOfBoundsCode()));
         return true;
     }
 
     MOZ_ASSERT(memoryAccess->hasTrapOutOfLineCode());
-    set_pc(int32_t(memoryAccess->trapOutOfLineCode(segment->base())));
+    set_pc(int32_t(memoryAccess->trapOutOfLineCode(moduleSegment->base())));
+    return true;
+}
+
+bool
+Simulator::handleWasmTrapFault()
+{
+    if (!wasm::CodeExists)
+        return false;
+
+    JSContext* cx = TlsContext.get();
+    if (!cx->activation() || !cx->activation()->isJit())
+        return false;
+    JitActivation* act = cx->activation()->asJit();
+
+    void* pc = reinterpret_cast<void*>(get_pc());
+    uint8_t* fp = reinterpret_cast<uint8_t*>(getRegister(Register::fp));
+
+    const wasm::CodeSegment* segment = wasm::LookupCodeSegment(pc);
+    if (!segment || !segment->isModule())
+        return false;
+    const wasm::ModuleSegment* moduleSegment = segment->asModule();
+
+    wasm::Trap trap;
+    wasm::BytecodeOffset bytecode;
+    if (!moduleSegment->code().lookupTrap(pc, &trap, &bytecode))
+        return false;
+
+    act->startWasmTrap(trap, bytecode.offset, pc, fp);
+    set_pc(int32_t(moduleSegment->trapCode()));
     return true;
 }
 
@@ -1896,6 +1923,10 @@ int
 Simulator::loadLinkedW(uint32_t addr, SimInstruction* instr)
 {
     if ((addr & kPointerAlignmentMask) == 0) {
+
+        if (handleWasmFault(addr, 1))
+            return -1;
+
         volatile int32_t* ptr = reinterpret_cast<volatile int32_t*>(addr);
         int32_t value = *ptr;
         lastLLValue_ = value;
@@ -1994,6 +2025,10 @@ typedef int64_t (*Prototype_General7)(int32_t arg0, int32_t arg1, int32_t arg2, 
                                       int32_t arg4, int32_t arg5, int32_t arg6);
 typedef int64_t (*Prototype_General8)(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3,
                                       int32_t arg4, int32_t arg5, int32_t arg6, int32_t arg7);
+typedef int64_t (*Prototype_GeneralGeneralGeneralInt64)(int32_t arg0, int32_t arg1, int32_t arg2,
+                                                        int64_t arg3);
+typedef int64_t (*Prototype_GeneralGeneralInt64Int64)(int32_t arg0, int32_t arg1, int64_t arg2,
+                                                      int64_t arg3);
 
 typedef double (*Prototype_Double_None)();
 typedef double (*Prototype_Double_Double)(double arg0);
@@ -2016,6 +2051,13 @@ typedef int32_t (*Prototype_Int_IntDouble)(int32_t arg0, double arg1);
 typedef double (*Prototype_Double_DoubleDoubleDouble)(double arg0, double arg1, double arg2);
 typedef double (*Prototype_Double_DoubleDoubleDoubleDouble)(double arg0, double arg1,
                                                             double arg2, double arg3);
+
+static int64_t
+MakeInt64(int32_t first, int32_t second)
+{
+    // Little-endian order.
+    return ((int64_t)second << 32) | (uint32_t)first;
+}
 
 // Software interrupt instructions are used by the simulator to call into C++.
 void
@@ -2123,6 +2165,21 @@ Simulator::softwareInterrupt(SimInstruction* instr)
             Prototype_Int_Double target = reinterpret_cast<Prototype_Int_Double>(external);
             int32_t res = target(dval0);
             setRegister(v0, res);
+            break;
+          }
+          case Args_Int_GeneralGeneralGeneralInt64: {
+            Prototype_GeneralGeneralGeneralInt64 target =
+                reinterpret_cast<Prototype_GeneralGeneralGeneralInt64>(external);
+            // The int64 arg is not split across register and stack
+            int64_t result = target(arg0, arg1, arg2, MakeInt64(arg4, arg5));
+            setCallResult(result);
+            break;
+          }
+          case Args_Int_GeneralGeneralInt64Int64: {
+            Prototype_GeneralGeneralInt64Int64 target =
+                reinterpret_cast<Prototype_GeneralGeneralInt64Int64>(external);
+            int64_t result = target(arg0, arg1, MakeInt64(arg2, arg3), MakeInt64(arg4, arg5));
+            setCallResult(result);
             break;
           }
           case Args_Int64_Double: {
@@ -2265,6 +2322,16 @@ Simulator::softwareInterrupt(SimInstruction* instr)
             handleStop(code, instr);
         }
     } else {
+          switch (func) {
+            case ff_tge:
+            case ff_tgeu:
+            case ff_tlt:
+            case ff_tltu:
+            case ff_teq:
+            case ff_tne:
+            if (instr->bits(15, 6) == kWasmTrapCode && handleWasmTrapFault())
+                return;
+        };
         // All remaining break_ codes, and all traps are handled here.
         MipsDebugger dbg(this);
         dbg.debug();
@@ -3574,8 +3641,8 @@ FakeInterruptHandler()
     JSContext* cx = TlsContext.get();
     uint8_t* pc = cx->simulator()->get_pc_as<uint8_t*>();
 
-    const wasm::CodeSegment* cs = nullptr;
-    if (!wasm::InInterruptibleCode(cx, pc, &cs))
+    const wasm::ModuleSegment* ms = nullptr;
+    if (!wasm::InInterruptibleCode(cx, pc, &ms))
         return;
 
     cx->simulator()->trigger_wasm_interrupt();

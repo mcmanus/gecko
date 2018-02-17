@@ -6,22 +6,21 @@
 
 this.EXPORTED_SYMBOLS = ["NewTabUtils"];
 
-const Ci = Components.interfaces;
-const Cc = Components.classes;
-const Cu = Components.utils;
-
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.importGlobalProperties(["btoa"]);
 
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
+ChromeUtils.defineModuleGetter(this, "PlacesUtils",
   "resource://gre/modules/PlacesUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "PageThumbs",
+ChromeUtils.defineModuleGetter(this, "PageThumbs",
   "resource://gre/modules/PageThumbs.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "BinarySearch",
+ChromeUtils.defineModuleGetter(this, "BinarySearch",
   "resource://gre/modules/BinarySearch.jsm");
+
+ChromeUtils.defineModuleGetter(this, "pktApi",
+  "chrome://pocket/content/pktApi.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "gCryptoHash", function() {
   return Cc["@mozilla.org/security/hash;1"].createInstance(Ci.nsICryptoHash);
@@ -955,6 +954,11 @@ var ActivityStreamProvider = {
     // the original link object. We must wait until all favicons for the array
     // of links are computed before returning
     return Promise.all(aLinks.map(link => new Promise(async resolve => {
+      // Never add favicon data for pocket items
+      if (link.type === "pocket") {
+        resolve(link);
+        return;
+      }
       let iconData;
       try {
         const linkUri = Services.io.newURI(link.url);
@@ -972,6 +976,75 @@ var ActivityStreamProvider = {
       // Add the icon data to the link if we have any
       resolve(Object.assign(link, iconData || {}));
     })));
+  },
+
+  /**
+   * Helper function which makes the call to the Pocket API to fetch the user's
+   * saved Pocket items.
+   */
+  fetchSavedPocketItems(requestData) {
+    if (!pktApi.isUserLoggedIn()) {
+      return Promise.resolve(null);
+    }
+    return new Promise((resolve, reject) => {
+      pktApi.retrieve(requestData, {
+        success(data) {
+          resolve(data);
+        },
+        error(error) {
+          reject(error);
+        }
+      });
+    });
+  },
+
+  /**
+   * Get the most recently Pocket-ed items from a user's Pocket list. See:
+   * https://getpocket.com/developer/docs/v3/retrieve for details
+   *
+   * @param {Object} aOptions
+   *   {int} numItems: The max number of pocket items to fetch
+   */
+  async getRecentlyPocketed(aOptions) {
+    const pocketSecondsAgo = Math.floor(Date.now() / 1000) - ACTIVITY_STREAM_DEFAULT_RECENT;
+    const requestData = {
+      detailType: "complete",
+      count: aOptions.numItems,
+      since: pocketSecondsAgo
+    };
+    let data;
+    try {
+      data = await this.fetchSavedPocketItems(requestData);
+      if (!data) {
+        return [];
+      }
+    } catch (e) {
+      Cu.reportError(e);
+      return [];
+    }
+    /* Extract relevant parts needed to show this card as a highlight:
+     * url, preview image, title, description, and the unique item_id
+     * necessary for Pocket to identify the item
+     */
+    let items = Object.values(data.list)
+                  // status "0" means not archived or deleted
+                  .filter(item => item.status === "0")
+                  .map(item => ({
+                    description: item.excerpt,
+                    preview_image_url: item.image && item.image.src,
+                    title: item.resolved_title,
+                    url: item.resolved_url,
+                    pocket_id: item.item_id
+                  }));
+
+    // Add bookmark guid for Pocket items that are also bookmarks
+    for (let item of items) {
+      const bookmarkData = await this.getBookmark({url: item.url});
+      if (bookmarkData) {
+        item.bookmarkGuid = bookmarkData.bookmarkGuid;
+      }
+    }
+    return this._processHighlights(items, aOptions, "pocket");
   },
 
   /**
@@ -1160,13 +1233,16 @@ var ActivityStreamProvider = {
   },
 
   /**
-   * Gets a specific bookmark given an id
+   * Gets a specific bookmark given some info about it
    *
-   * @param {String} aGuid
-   *          A bookmark guid to use as a refrence to fetch the bookmark
+   * @param {Obj} aInfo
+   *          An object with one and only one of the following properties:
+   *            - url
+   *            - guid
+   *            - parentGuid and index
    */
-  async getBookmark(aGuid) {
-    let bookmark = await PlacesUtils.bookmarks.fetch(aGuid);
+  async getBookmark(aInfo) {
+    let bookmark = await PlacesUtils.bookmarks.fetch(aInfo);
     if (!bookmark) {
       return null;
     }
@@ -1291,11 +1367,38 @@ var ActivityStreamLinks = {
   },
 
   /**
+   * Helper function which makes the call to the Pocket API to delete an item from
+   * a user's saved to Pocket feed.
+   *
+   * @param {Integer} aItemID
+   *           The unique pocket ID used to find the item to be deleted
+   *
+   *@returns {Promise} Returns a promise at completion
+   */
+  deletePocketEntry(aItemID) {
+    return new Promise((success, error) => pktApi.deleteItem(aItemID, {success, error}));
+  },
+
+  /**
+   * Helper function which makes the call to the Pocket API to archive an item from
+   * a user's saved to Pocket feed.
+   *
+   * @param {Integer} aItemID
+   *           The unique pocket ID used to find the item to be archived
+   *
+   *@returns {Promise} Returns a promise at completion
+   */
+  archivePocketEntry(aItemID) {
+    return new Promise((success, error) => pktApi.archiveItem(aItemID, {success, error}));
+  },
+
+  /**
    * Get the Highlights links to show on Activity Stream
    *
    * @param {Object} aOptions
    *   {bool} excludeBookmarks: Don't add bookmark items.
    *   {bool} excludeHistory: Don't add history items.
+   *   {bool} excludePocket: Don't add Pocket items.
    *   {bool} withFavicons: Add favicon data: URIs, when possible.
    *   {int}  numItems: Maximum number of (bookmark or history) items to return.
    *
@@ -1308,6 +1411,11 @@ var ActivityStreamLinks = {
     // First get bookmarks if we want them
     if (!aOptions.excludeBookmarks) {
       results.push(...await ActivityStreamProvider.getRecentBookmarks(aOptions));
+    }
+
+    // Add the Pocket items if we need more and want them
+    if (aOptions.numItems - results.length > 0 && !aOptions.excludePocket) {
+      results.push(...await ActivityStreamProvider.getRecentlyPocketed(aOptions));
     }
 
     // Add in history if we need more and want them

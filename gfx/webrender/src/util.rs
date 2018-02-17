@@ -111,17 +111,11 @@ pub trait RectHelpers<U>
 where
     Self: Sized,
 {
-    fn contains_rect(&self, other: &Self) -> bool;
     fn from_floats(x0: f32, y0: f32, x1: f32, y1: f32) -> Self;
     fn is_well_formed_and_nonempty(&self) -> bool;
 }
 
 impl<U> RectHelpers<U> for TypedRect<f32, U> {
-    fn contains_rect(&self, other: &Self) -> bool {
-        self.origin.x <= other.origin.x && self.origin.y <= other.origin.y &&
-            self.max_x() >= other.max_x() && self.max_y() >= other.max_y()
-    }
-
     fn from_floats(x0: f32, y0: f32, x1: f32, y1: f32) -> Self {
         TypedRect::new(
             TypedPoint2D::new(x0, y0),
@@ -216,7 +210,8 @@ pub fn _subtract_rect<U>(
 
 #[repr(u32)]
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-#[cfg_attr(feature = "capture", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub enum TransformedRectKind {
     AxisAligned = 0,
     Complex = 1,

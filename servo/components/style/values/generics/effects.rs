@@ -4,8 +4,8 @@
 
 //! Generic types for CSS values related to effects.
 
-use std::fmt;
-use style_traits::values::{SequenceWriter, ToCss};
+use std::fmt::{self, Write};
+use style_traits::values::{CssWriter, SequenceWriter, ToCss};
 #[cfg(feature = "gecko")]
 use values::specified::url::SpecifiedUrl;
 
@@ -24,7 +24,8 @@ pub struct BoxShadow<Color, SizeLength, BlurShapeLength, ShapeLength> {
 
 /// A generic value for a single `filter`.
 #[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
-#[derive(Clone, Debug, MallocSizeOf, PartialEq, ToAnimatedValue, ToComputedValue, ToCss)]
+#[derive(Clone, ComputeSquaredDistance, Debug, MallocSizeOf, PartialEq)]
+#[derive(ToAnimatedValue, ToComputedValue, ToCss)]
 pub enum Filter<Angle, Factor, Length, DropShadow> {
     /// `blur(<length>)`
     #[css(function)]
@@ -57,6 +58,7 @@ pub enum Filter<Angle, Factor, Length, DropShadow> {
     #[css(function)]
     DropShadow(DropShadow),
     /// `<url>`
+    #[animation(error)]
     #[cfg(feature = "gecko")]
     Url(SpecifiedUrl),
 }
@@ -88,9 +90,9 @@ where
     BlurShapeLength: ToCss,
     ShapeLength: ToCss,
 {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result
+    fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
     where
-        W: fmt::Write,
+        W: Write,
     {
         {
             let mut writer = SequenceWriter::new(&mut *dest, " ");

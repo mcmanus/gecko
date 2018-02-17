@@ -32,6 +32,7 @@ class nsDOMAttributeMap;
 class nsDOMTokenList;
 class nsIControllers;
 class nsICSSDeclaration;
+class nsDOMCSSAttributeDeclaration;
 class nsIDocument;
 class nsDOMStringMap;
 class nsIURI;
@@ -119,9 +120,11 @@ public:
   // nsINode interface methods
   virtual uint32_t GetChildCount() const override;
   virtual nsIContent *GetChildAt_Deprecated(uint32_t aIndex) const override;
-  virtual int32_t IndexOf(const nsINode* aPossibleChild) const override;
-  virtual nsresult InsertChildAt(nsIContent* aKid, uint32_t aIndex,
-                                 bool aNotify) override;
+  virtual int32_t ComputeIndexOf(const nsINode* aPossibleChild) const override;
+  virtual nsresult InsertChildBefore(nsIContent* aKid, nsIContent* aBeforeThis,
+                                     bool aNotify) override;
+  virtual nsresult InsertChildAt_Deprecated(nsIContent* aKid, uint32_t aIndex,
+                                            bool aNotify) override;
   virtual void RemoveChildAt_Deprecated(uint32_t aIndex, bool aNotify) override;
   virtual void RemoveChildNode(nsIContent* aKid, bool aNotify) override;
   virtual void GetTextContentInternal(nsAString& aTextContent,
@@ -251,7 +254,7 @@ public:
      * SMIL Overridde style rules (for SMIL animation of CSS properties)
      * @see Element::GetSMILOverrideStyle
      */
-    nsCOMPtr<nsICSSDeclaration> mSMILOverrideStyle;
+    RefPtr<nsDOMCSSAttributeDeclaration> mSMILOverrideStyle;
 
     /**
      * Holds any SMIL override style declaration for this element.
@@ -315,8 +318,7 @@ public:
     nsDOMStringMap* mDataset; // [Weak]
 
     /**
-     * An object implementing nsIDOMMozNamedAttrMap for this content (attributes)
-     * @see FragmentOrElement::GetAttributes
+     * @see Element::Attributes
      */
     RefPtr<nsDOMAttributeMap> mAttributeMap;
 
@@ -333,7 +335,8 @@ public:
 
 protected:
   void GetMarkup(bool aIncludeSelf, nsAString& aMarkup);
-  void SetInnerHTMLInternal(const nsAString& aInnerHTML, ErrorResult& aError);
+  void SetInnerHTMLInternal(const nsAString& aInnerHTML, ErrorResult& aError,
+                            bool aNeverSanitize = false);
 
   // Override from nsINode
   nsIContent::nsContentSlots* CreateSlots() override

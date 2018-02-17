@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Rekomendavo „{provider}“",
   "header_bookmarks_placeholder": "Jūs dar neturite adresyno įrašų.",
   "header_stories_from": "iš",
+  "context_menu_button_sr": "Atverti kontekstinį {title} meniu",
   "type_label_visited": "Aplankyti",
   "type_label_bookmarked": "Adresyne",
   "type_label_synced": "Sinchronizuoti iš kito įrenginio",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Redaguoti šią svetainę",
   "edit_topsites_dismiss_button": "Paslėpti šią svetainę",
   "edit_topsites_add_button": "Pridėti",
+  "edit_topsites_add_button_tooltip": "Pridėti mėgstamą svetainę",
   "topsites_form_add_header": "Nauja mėgstama svetainė",
   "topsites_form_edit_header": "Redaguoti mėgstamą svetainę",
   "topsites_form_title_placeholder": "Įveskite pavadinimą",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Viską perskaitėte. Užsukite vėliau, norėdami rasti daugiau gerų straipsnių iš „{provider}“. Nekantraujate? Pasirinkite populiarią temą, norėdami rasti daugiau puikių straipsnių saityne.",
   "manual_migration_explanation2": "Išbandykite „Firefox“ su adresynu, žurnalu bei slaptažodžiais iš kitos naršyklės.",
   "manual_migration_cancel_button": "Ačiū, ne",
-  "manual_migration_import_button": "Importuoti dabar"
+  "manual_migration_import_button": "Importuoti dabar",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

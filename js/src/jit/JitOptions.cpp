@@ -8,7 +8,9 @@
 #include "mozilla/TypeTraits.h"
 
 #include <cstdlib>
-#include "jsfun.h"
+
+#include "vm/JSFunction.h"
+
 using namespace js;
 using namespace js::jit;
 
@@ -232,7 +234,9 @@ DefaultJitOptions::DefaultJitOptions()
             Warn(forcedRegisterAllocatorEnv, env);
     }
 
-    SET_DEFAULT(spectreIndexMasking, false);
+    SET_DEFAULT(spectreIndexMasking, true);
+    SET_DEFAULT(spectreStringMitigations, true);
+    SET_DEFAULT(spectreValueMasking, true);
 
     // Toggles whether unboxed plain objects can be created by the VM.
     SET_DEFAULT(disableUnboxedObjects, false);

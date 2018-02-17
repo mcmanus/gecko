@@ -1577,7 +1577,7 @@ class SimpleXMLParser {
     return { documentElement: nodes.pop() };
   }
   _decodeXML(text) {
-    if (text.indexOf('&') < 0) {
+    if (!text.includes('&')) {
       return text;
     }
     return text.replace(/&(#(x[0-9a-f]+|\d+)|\w+);/gi, function (all, entityName, number) {
@@ -1672,8 +1672,6 @@ function getDefaultSetting(id) {
       return globalSettings ? globalSettings.workerPort : null;
     case 'workerSrc':
       return globalSettings ? globalSettings.workerSrc : null;
-    case 'disableWorker':
-      return globalSettings ? globalSettings.disableWorker : false;
     case 'maxImageSize':
       return globalSettings ? globalSettings.maxImageSize : -1;
     case 'imageResourcesPath':
@@ -1718,9 +1716,6 @@ function isExternalLinkTargetSet() {
 class StatTimer {
   constructor(enable = true) {
     this.enabled = !!enable;
-    this.reset();
-  }
-  reset() {
     this.started = Object.create(null);
     this.times = [];
   }
@@ -1769,7 +1764,6 @@ class DummyStatTimer {
   constructor() {
     (0, _util.unreachable)('Cannot initialize DummyStatTimer.');
   }
-  static reset() {}
   static time(name) {}
   static timeEnd(name) {}
   static toString() {
@@ -1809,7 +1803,7 @@ module.exports = typeof window !== 'undefined' && window.Math === Math ? window 
 Object.defineProperty(exports, "__esModule", {
   value: true
 });
-exports.build = exports.version = exports.setPDFNetworkStreamClass = exports.PDFPageProxy = exports.PDFDocumentProxy = exports.PDFWorker = exports.PDFDataRangeTransport = exports.LoopbackPort = exports.getDocument = undefined;
+exports.build = exports.version = exports.setPDFNetworkStreamFactory = exports.PDFPageProxy = exports.PDFDocumentProxy = exports.PDFWorker = exports.PDFDataRangeTransport = exports.LoopbackPort = exports.getDocument = undefined;
 
 var _util = __w_pdfjs_require__(0);
 
@@ -1839,9 +1833,9 @@ var pdfjsFilePath = null;
 var fakeWorkerFilesLoader = null;
 var useRequireEnsure = false;
 ;
-var PDFNetworkStream;
-function setPDFNetworkStreamClass(cls) {
-  PDFNetworkStream = cls;
+var createPDFNetworkStream;
+function setPDFNetworkStreamFactory(pdfNetworkStreamFactory) {
+  createPDFNetworkStream = pdfNetworkStreamFactory;
 }
 function getDocument(src) {
   var task = new PDFDocumentLoadingTask();
@@ -1917,7 +1911,7 @@ function getDocument(src) {
       if (rangeTransport) {
         networkStream = new _transport_stream.PDFDataTransportStream(params, rangeTransport);
       } else if (!params.data) {
-        networkStream = new PDFNetworkStream(params);
+        networkStream = createPDFNetworkStream(params);
       }
       var messageHandler = new _util.MessageHandler(docId, workerId, worker.port);
       messageHandler.postMessageTransfers = worker.postMessageTransfers;
@@ -1932,7 +1926,7 @@ function _fetchDocument(worker, source, pdfDataRangeTransport, docId) {
   if (worker.destroyed) {
     return Promise.reject(new Error('Worker was destroyed'));
   }
-  let apiVersion = '2.0.274';
+  let apiVersion = '2.0.332';
   source.disableRange = (0, _dom_utils.getDefaultSetting)('disableRange');
   source.disableAutoFetch = (0, _dom_utils.getDefaultSetting)('disableAutoFetch');
   source.disableStream = (0, _dom_utils.getDefaultSetting)('disableStream');
@@ -2319,8 +2313,8 @@ var PDFPageProxy = function PDFPageProxyClosure() {
       }, this);
       this.objs.clear();
       this.annotationsPromise = null;
-      if (resetStats) {
-        this._stats.reset();
+      if (resetStats && this._stats instanceof _dom_utils.StatTimer) {
+        this._stats = new _dom_utils.StatTimer();
       }
       this.pendingCleanup = false;
     },
@@ -2369,7 +2363,7 @@ class LoopbackPort {
       var result;
       var buffer;
       if ((buffer = value.buffer) && (0, _util.isArrayBuffer)(buffer)) {
-        var transferable = transfers && transfers.indexOf(buffer) >= 0;
+        var transferable = transfers && transfers.includes(buffer);
         if (value === buffer) {
           result = value;
         } else if (transferable) {
@@ -2431,14 +2425,24 @@ var PDFWorker = function PDFWorkerClosure() {
     }
     throw new Error('No PDFJS.workerSrc specified');
   }
+  function getMainThreadWorkerMessageHandler() {
+    if (typeof window === 'undefined') {
+      return null;
+    }
+    return window.pdfjsDistBuildPdfWorker && window.pdfjsDistBuildPdfWorker.WorkerMessageHandler;
+  }
   let fakeWorkerFilesLoadedCapability;
   function setupFakeWorkerGlobal() {
-    var WorkerMessageHandler;
     if (fakeWorkerFilesLoadedCapability) {
       return fakeWorkerFilesLoadedCapability.promise;
     }
     fakeWorkerFilesLoadedCapability = (0, _util.createPromiseCapability)();
-    var loader = fakeWorkerFilesLoader || function (callback) {
+    let mainWorkerMessageHandler = getMainThreadWorkerMessageHandler();
+    if (mainWorkerMessageHandler) {
+      fakeWorkerFilesLoadedCapability.resolve(mainWorkerMessageHandler);
+      return fakeWorkerFilesLoadedCapability.promise;
+    }
+    let loader = fakeWorkerFilesLoader || function (callback) {
       _util.Util.loadScript(getWorkerSrc(), function () {
         callback(window.pdfjsDistBuildPdfWorker.WorkerMessageHandler);
       });
@@ -2486,7 +2490,7 @@ var PDFWorker = function PDFWorkerClosure() {
       this._readyCapability.resolve();
     },
     _initialize: function PDFWorker_initialize() {
-      if (!isWorkerDisabled && !(0, _dom_utils.getDefaultSetting)('disableWorker') && typeof Worker !== 'undefined') {
+      if (typeof Worker !== 'undefined' && !isWorkerDisabled && !getMainThreadWorkerMessageHandler()) {
         var workerSrc = getWorkerSrc();
         try {
           var worker = new Worker(workerSrc);
@@ -2562,7 +2566,7 @@ var PDFWorker = function PDFWorkerClosure() {
       this._setupFakeWorker();
     },
     _setupFakeWorker: function PDFWorker_setupFakeWorker() {
-      if (!isWorkerDisabled && !(0, _dom_utils.getDefaultSetting)('disableWorker')) {
+      if (!isWorkerDisabled) {
         (0, _util.warn)('Setting up fake worker.');
         isWorkerDisabled = true;
       }
@@ -2601,6 +2605,9 @@ var PDFWorker = function PDFWorkerClosure() {
       return pdfWorkerPorts.get(port);
     }
     return new PDFWorker(null, port);
+  };
+  PDFWorker.getWorkerSrc = function () {
+    return getWorkerSrc();
   };
   return PDFWorker;
 }();
@@ -3010,10 +3017,11 @@ var WorkerTransport = function WorkerTransportClosure() {
       return this.messageHandler.sendWithPromise('GetOutline', null);
     },
     getMetadata: function WorkerTransport_getMetadata() {
-      return this.messageHandler.sendWithPromise('GetMetadata', null).then(function transportMetadata(results) {
+      return this.messageHandler.sendWithPromise('GetMetadata', null).then(results => {
         return {
           info: results[0],
-          metadata: results[1] ? new _metadata.Metadata(results[1]) : null
+          metadata: results[1] ? new _metadata.Metadata(results[1]) : null,
+          contentDispositionFilename: this._fullReader ? this._fullReader.filename : null
         };
       });
     },
@@ -3226,8 +3234,8 @@ var InternalRenderTask = function InternalRenderTaskClosure() {
 }();
 var version, build;
 {
-  exports.version = version = '2.0.274';
-  exports.build = build = 'f774abc8';
+  exports.version = version = '2.0.332';
+  exports.build = build = '6b7e2cbc';
 }
 exports.getDocument = getDocument;
 exports.LoopbackPort = LoopbackPort;
@@ -3235,7 +3243,7 @@ exports.PDFDataRangeTransport = PDFDataRangeTransport;
 exports.PDFWorker = PDFWorker;
 exports.PDFDocumentProxy = PDFDocumentProxy;
 exports.PDFPageProxy = PDFPageProxy;
-exports.setPDFNetworkStreamClass = setPDFNetworkStreamClass;
+exports.setPDFNetworkStreamFactory = setPDFNetworkStreamFactory;
 exports.version = version;
 exports.build = build;
 
@@ -3683,7 +3691,7 @@ class ChoiceWidgetAnnotationElement extends WidgetAnnotationElement {
       let optionElement = document.createElement('option');
       optionElement.textContent = option.displayValue;
       optionElement.value = option.exportValue;
-      if (this.data.fieldValue.indexOf(option.displayValue) >= 0) {
+      if (this.data.fieldValue.includes(option.displayValue)) {
         optionElement.setAttribute('selected', true);
       }
       selectElement.appendChild(optionElement);
@@ -3700,7 +3708,7 @@ class PopupAnnotationElement extends AnnotationElement {
   render() {
     const IGNORE_TYPES = ['Line', 'Square', 'Circle', 'PolyLine', 'Polygon'];
     this.container.className = 'popupAnnotation';
-    if (IGNORE_TYPES.indexOf(this.data.parentType) >= 0) {
+    if (IGNORE_TYPES.includes(this.data.parentType)) {
       return this.container;
     }
     let selector = '[data-annotation-id="' + this.data.parentId + '"]';
@@ -4620,8 +4628,8 @@ exports.SVGGraphics = SVGGraphics;
 "use strict";
 
 
-var pdfjsVersion = '2.0.274';
-var pdfjsBuild = 'f774abc8';
+var pdfjsVersion = '2.0.332';
+var pdfjsBuild = '6b7e2cbc';
 var pdfjsSharedUtil = __w_pdfjs_require__(0);
 var pdfjsDisplayGlobal = __w_pdfjs_require__(12);
 var pdfjsDisplayAPI = __w_pdfjs_require__(3);
@@ -7743,8 +7751,8 @@ if (!_global_scope2.default.PDFJS) {
 }
 var PDFJS = _global_scope2.default.PDFJS;
 {
-  PDFJS.version = '2.0.274';
-  PDFJS.build = 'f774abc8';
+  PDFJS.version = '2.0.332';
+  PDFJS.build = '6b7e2cbc';
 }
 PDFJS.pdfBug = false;
 if (PDFJS.verbosity !== undefined) {
@@ -7791,7 +7799,6 @@ PDFJS.cMapUrl = PDFJS.cMapUrl === undefined ? null : PDFJS.cMapUrl;
 PDFJS.cMapPacked = PDFJS.cMapPacked === undefined ? false : PDFJS.cMapPacked;
 PDFJS.disableFontFace = PDFJS.disableFontFace === undefined ? false : PDFJS.disableFontFace;
 PDFJS.imageResourcesPath = PDFJS.imageResourcesPath === undefined ? '' : PDFJS.imageResourcesPath;
-PDFJS.disableWorker = PDFJS.disableWorker === undefined ? false : PDFJS.disableWorker;
 PDFJS.workerSrc = PDFJS.workerSrc === undefined ? null : PDFJS.workerSrc;
 PDFJS.workerPort = PDFJS.workerPort === undefined ? null : PDFJS.workerPort;
 PDFJS.disableRange = PDFJS.disableRange === undefined ? false : PDFJS.disableRange;
@@ -10170,6 +10177,7 @@ var PDFDataTransportStream = function PDFDataTransportStreamClosure() {
   function PDFDataTransportStreamReader(stream, queuedChunks) {
     this._stream = stream;
     this._done = false;
+    this._filename = null;
     this._queuedChunks = queuedChunks || [];
     this._requests = [];
     this._headersReady = Promise.resolve();
@@ -10193,6 +10201,9 @@ var PDFDataTransportStream = function PDFDataTransportStreamClosure() {
     },
     get headersReady() {
       return this._headersReady;
+    },
+    get filename() {
+      return this._filename;
     },
     get isRangeSupported() {
       return this._stream._isRangeSupported;

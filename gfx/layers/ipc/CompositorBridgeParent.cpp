@@ -324,7 +324,6 @@ CompositorBridgeParent::CompositorBridgeParent(CompositorManagerParent* aManager
   , mWidget(nullptr)
   , mScale(aScale)
   , mVsyncRate(aVsyncRate)
-  , mIsTesting(false)
   , mPendingTransaction(0)
   , mPaused(false)
   , mUseExternalSurfaceSize(aUseExternalSurfaceSize)
@@ -542,7 +541,7 @@ mozilla::ipc::IPCResult
 CompositorBridgeParent::RecvFlushRendering()
 {
   if (mOptions.UseWebRender()) {
-    mWrBridge->FlushRendering(/* aIsSync */ true);
+    mWrBridge->FlushRendering();
     return IPC_OK();
   }
 
@@ -557,7 +556,7 @@ mozilla::ipc::IPCResult
 CompositorBridgeParent::RecvFlushRenderingAsync()
 {
   if (mOptions.UseWebRender()) {
-    mWrBridge->FlushRendering(/* aIsSync */ false);
+    mWrBridge->FlushRenderingAsync();
     return IPC_OK();
   }
 
@@ -745,7 +744,7 @@ CompositorBridgeParent::ResumeComposition()
   mPaused = false;
 
   Invalidate();
-  mCompositorScheduler->ResumeComposition();
+  mCompositorScheduler->ForceComposeToTarget(nullptr, nullptr);
 
   // if anyone's waiting to make sure that composition really got resumed, tell them
   lock.NotifyAll();
@@ -952,15 +951,6 @@ CompositorBridgeParent::CompositeToTarget(DrawTarget* aTarget, const gfx::IntRec
              "Composite can only be called on the compositor thread");
   TimeStamp start = TimeStamp::Now();
 
-#ifdef COMPOSITOR_PERFORMANCE_WARNING
-  TimeDuration scheduleDelta = TimeStamp::Now() - mCompositorScheduler->GetExpectedComposeStartTime();
-  if (scheduleDelta > TimeDuration::FromMilliseconds(2) ||
-      scheduleDelta < TimeDuration::FromMilliseconds(-2)) {
-    printf_stderr("Compositor: Compose starting off schedule by %4.1f ms\n",
-                  scheduleDelta.ToMilliseconds());
-  }
-#endif
-
   if (!CanComposite()) {
     TimeStamp end = TimeStamp::Now();
     DidComposite(start, end);
@@ -1024,7 +1014,7 @@ CompositorBridgeParent::CompositeToTarget(DrawTarget* aTarget, const gfx::IntRec
 
   mCompositionManager->ComputeRotation();
 
-  TimeStamp time = mIsTesting ? mTestTime : mCompositorScheduler->GetLastComposeTime();
+  TimeStamp time = mTestTime.valueOr(mCompositorScheduler->GetLastComposeTime());
   bool requestNextFrame = mCompositionManager->TransformShadowTree(time, mVsyncRate);
   if (requestNextFrame) {
     ScheduleComposition();
@@ -1279,7 +1269,7 @@ CompositorBridgeParent::ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
 }
 
 void
-CompositorBridgeParent::ForceComposite(LayerTransactionParent* aLayerTree)
+CompositorBridgeParent::ScheduleComposite(LayerTransactionParent* aLayerTree)
 {
   ScheduleComposition();
 }
@@ -1288,12 +1278,18 @@ bool
 CompositorBridgeParent::SetTestSampleTime(const uint64_t& aId,
                                           const TimeStamp& aTime)
 {
+  MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
+
   if (aTime.IsNull()) {
     return false;
   }
 
-  mIsTesting = true;
-  mTestTime = aTime;
+  mTestTime = Some(aTime);
+
+  if (mWrBridge) {
+    mWrBridge->FlushRendering();
+    return true;
+  }
 
   bool testComposite = mCompositionManager &&
                        mCompositorScheduler->NeedsComposite();
@@ -1316,14 +1312,14 @@ CompositorBridgeParent::SetTestSampleTime(const uint64_t& aId,
 void
 CompositorBridgeParent::LeaveTestMode(const uint64_t& aId)
 {
-  mIsTesting = false;
+  mTestTime = Nothing();
 }
 
 void
 CompositorBridgeParent::ApplyAsyncProperties(LayerTransactionParent* aLayerTree)
 {
-  // NOTE: This should only be used for testing. For example, when mIsTesting is
-  // true or when called from test-only methods like
+  // NOTE: This should only be used for testing. For example, when mTestTime is
+  // non-empty, or when called from test-only methods like
   // LayerTransactionParent::RecvGetAnimationTransform.
 
   // Synchronously update the layer tree
@@ -1331,7 +1327,7 @@ CompositorBridgeParent::ApplyAsyncProperties(LayerTransactionParent* aLayerTree)
     AutoResolveRefLayers resolve(mCompositionManager);
     SetShadowProperties(mLayerManager->GetRoot());
 
-    TimeStamp time = mIsTesting ? mTestTime : mCompositorScheduler->GetLastComposeTime();
+    TimeStamp time = mTestTime.valueOr(mCompositorScheduler->GetLastComposeTime());
     bool requestNextFrame =
       mCompositionManager->TransformShadowTree(time, mVsyncRate,
         AsyncCompositionManager::TransformsToSkip::APZ);
@@ -1483,6 +1479,19 @@ CompositorBridgeParent::NewCompositor(const nsTArray<LayersBackend>& aBackendHin
 #endif
     }
     nsCString failureReason;
+
+    // Some software GPU emulation implementations will happily try to create
+    // unreasonably big surfaces and then fail in awful ways.
+    // Let's at least limit this to the default max texture size we use for content,
+    // anything larger than that will fail to render on the content side anyway.
+    // We can revisit this value and make it even tighter if need be.
+    const int max_fb_size = 32767;
+    const LayoutDeviceIntSize size = mWidget->GetClientSize();
+    if (size.width > max_fb_size || size.height > max_fb_size) {
+      failureReason = "FEATURE_FAILURE_MAX_FRAMEBUFFER_SIZE";
+      return nullptr;
+    }
+
     MOZ_ASSERT(!gfxVars::UseWebRender() || aBackendHints[i] == LayersBackend::LAYERS_BASIC);
     if (compositor && compositor->Initialize(&failureReason)) {
       if (failureReason.IsEmpty()){
@@ -1762,7 +1771,7 @@ CompositorBridgeParent::GetWebRenderBridgeParent() const
 Maybe<TimeStamp>
 CompositorBridgeParent::GetTestingTimeStamp() const
 {
-  return mIsTesting ? Some(mTestTime) : Nothing();
+  return mTestTime;
 }
 
 void
@@ -1974,12 +1983,20 @@ CompositorBridgeParent::DidComposite(TimeStamp& aCompositeStart,
 }
 
 void
+CompositorBridgeParent::NotifyPipelineRemoved(const wr::PipelineId& aPipelineId)
+{
+  if (mAsyncImageManager) {
+    mAsyncImageManager->PipelineRemoved(aPipelineId);
+  }
+}
+
+void
 CompositorBridgeParent::NotifyDidCompositeToPipeline(const wr::PipelineId& aPipelineId, const wr::Epoch& aEpoch, TimeStamp& aCompositeStart, TimeStamp& aCompositeEnd)
 {
   if (!mWrBridge || !mAsyncImageManager) {
     return;
   }
-  mAsyncImageManager->Update(aPipelineId, aEpoch);
+  mAsyncImageManager->PipelineRendered(aPipelineId, aEpoch);
 
   if (mPaused) {
     return;

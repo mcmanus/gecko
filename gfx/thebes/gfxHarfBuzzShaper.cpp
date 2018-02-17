@@ -55,6 +55,7 @@ gfxHarfBuzzShaper::gfxHarfBuzzShaper(gfxFont *aFont)
       mUVSTableOffset(0),
       mNumLongHMetrics(0),
       mNumLongVMetrics(0),
+      mDefaultVOrg(-1.0),
       mUseFontGetGlyph(aFont->ProvidesGetGlyph()),
       mUseFontGlyphWidths(false),
       mInitialized(false),
@@ -209,8 +210,8 @@ VertFormsGlyphCompare(const void* aKey, const void* aElem)
 
 // Return a vertical presentation-form codepoint corresponding to the
 // given Unicode value, or 0 if no such form is available.
-static hb_codepoint_t
-GetVerticalPresentationForm(hb_codepoint_t unicode)
+hb_codepoint_t
+gfxHarfBuzzShaper::GetVerticalPresentationForm(hb_codepoint_t aUnicode)
 {
     static const uint16_t sVerticalForms[][2] = {
         { 0x2013, 0xfe32 }, // EN DASH
@@ -248,7 +249,7 @@ GetVerticalPresentationForm(hb_codepoint_t unicode)
         { 0xff5d, 0xfe38 }  // FULLWIDTH RIGHT CURLY BRACKET
     };
     const uint16_t* charPair =
-        static_cast<const uint16_t*>(bsearch(&unicode,
+        static_cast<const uint16_t*>(bsearch(&aUnicode,
                                              sVerticalForms,
                                              ArrayLength(sVerticalForms),
                                              sizeof(sVerticalForms[0]),
@@ -266,7 +267,8 @@ HBGetNominalGlyph(hb_font_t *font, void *font_data,
         static_cast<const gfxHarfBuzzShaper::FontCallbackData*>(font_data);
 
     if (fcd->mShaper->UseVerticalPresentationForms()) {
-        hb_codepoint_t verticalForm = GetVerticalPresentationForm(unicode);
+        hb_codepoint_t verticalForm =
+            gfxHarfBuzzShaper::GetVerticalPresentationForm(unicode);
         if (verticalForm) {
             *glyph = fcd->mShaper->GetNominalGlyph(verticalForm);
             if (*glyph != 0) {
@@ -290,7 +292,8 @@ HBGetVariationGlyph(hb_font_t *font, void *font_data,
         static_cast<const gfxHarfBuzzShaper::FontCallbackData*>(font_data);
 
     if (fcd->mShaper->UseVerticalPresentationForms()) {
-        hb_codepoint_t verticalForm = GetVerticalPresentationForm(unicode);
+        hb_codepoint_t verticalForm =
+            gfxHarfBuzzShaper::GetVerticalPresentationForm(unicode);
         if (verticalForm) {
             *glyph = fcd->mShaper->GetVariationGlyph(verticalForm,
                                                      variation_selector);
@@ -420,15 +423,17 @@ gfxHarfBuzzShaper::HBGetGlyphVOrigin(hb_font_t *font, void *font_data,
 {
     const gfxHarfBuzzShaper::FontCallbackData *fcd =
         static_cast<const gfxHarfBuzzShaper::FontCallbackData*>(font_data);
-    fcd->mShaper->GetGlyphVOrigin(glyph, x, y);
+    fcd->mShaper->GetGlyphVOrigin(*fcd->mDrawTarget, glyph, x, y);
     return true;
 }
 
 void
-gfxHarfBuzzShaper::GetGlyphVOrigin(hb_codepoint_t aGlyph,
+gfxHarfBuzzShaper::GetGlyphVOrigin(DrawTarget& aDT, hb_codepoint_t aGlyph,
                                    hb_position_t *aX, hb_position_t *aY) const
 {
-    *aX = 0.5 * GetGlyphHAdvance(aGlyph);
+    *aX = 0.5 * (mUseFontGlyphWidths
+                 ? mFont->GetGlyphWidth(aDT, aGlyph)
+                 : GetGlyphHAdvance(aGlyph));
 
     if (mVORGTable) {
         // We checked in Initialize() that the VORG table is safely readable,
@@ -491,27 +496,42 @@ gfxHarfBuzzShaper::GetGlyphVOrigin(hb_codepoint_t aGlyph,
         }
     }
 
-    // XXX should we consider using OS/2 sTypo* metrics if available?
+    if (mDefaultVOrg < 0.0) {
+        // XXX should we consider using OS/2 sTypo* metrics if available?
 
-    gfxFontEntry::AutoTable hheaTable(GetFont()->GetFontEntry(),
-                                      TRUETYPE_TAG('h','h','e','a'));
-    if (hheaTable) {
-        uint32_t len;
-        const MetricsHeader* hhea =
-            reinterpret_cast<const MetricsHeader*>(hb_blob_get_data(hheaTable,
-                                                                    &len));
-        if (len >= sizeof(MetricsHeader)) {
-            // divide up the default advance we're using (1em) in proportion
-            // to ascender:descender from the hhea table
-            int16_t a = int16_t(hhea->ascender);
-            int16_t d = int16_t(hhea->descender);
-            *aY = FloatToFixed(GetFont()->GetAdjustedSize() * a / (a - d));
-            return;
+        gfxFontEntry::AutoTable hheaTable(GetFont()->GetFontEntry(),
+                                          TRUETYPE_TAG('h','h','e','a'));
+        if (hheaTable) {
+            uint32_t len;
+            const MetricsHeader* hhea =
+                reinterpret_cast<const MetricsHeader*>(hb_blob_get_data(hheaTable,
+                                                                        &len));
+            if (len >= sizeof(MetricsHeader)) {
+                // divide up the default advance we're using (1em) in proportion
+                // to ascender:descender from the hhea table
+                int16_t a = int16_t(hhea->ascender);
+                int16_t d = int16_t(hhea->descender);
+                mDefaultVOrg =
+                    FloatToFixed(GetFont()->GetAdjustedSize() * a / (a - d));
+            }
+        }
+
+        if (mDefaultVOrg < 0.0) {
+            // Last resort, for non-sfnt fonts: get the horizontal metrics and
+            // compute a default VOrg from their ascent and descent.
+            const gfxFont::Metrics& mtx = mFont->GetHorizontalMetrics();
+            gfxFloat advance = mFont->GetMetrics(gfxFont::eVertical).aveCharWidth;
+            gfxFloat ascent = mtx.emAscent;
+            gfxFloat height = ascent + mtx.emDescent;
+            // vOrigin that will place the glyph so that its origin is shifted
+            // down most of the way within overall (vertical) advance, in
+            // proportion to the font ascent as a part of the overall font
+            // height.
+            mDefaultVOrg = FloatToFixed(advance * ascent / height);
         }
     }
 
-    NS_NOTREACHED("we shouldn't be here!");
-    *aY = FloatToFixed(GetFont()->GetAdjustedSize() / 2);
+    *aY = mDefaultVOrg;
 }
 
 static hb_bool_t
@@ -1329,19 +1349,19 @@ gfxHarfBuzzShaper::LoadHmtxTable()
     return true;
 }
 
-bool
+void
 gfxHarfBuzzShaper::InitializeVertical()
 {
-    // We only try this once. If we don't have a mHmtxTable after that,
-    // this font can't handle vertical shaping, so return false.
+    // We only do this once. If we don't have a mHmtxTable after that,
+    // we'll be making up fallback metrics.
     if (mVerticalInitialized) {
-        return mHmtxTable != nullptr;
+        return;
     }
     mVerticalInitialized = true;
 
     if (!mHmtxTable) {
         if (!LoadHmtxTable()) {
-            return false;
+            return;
         }
     }
 
@@ -1402,8 +1422,6 @@ gfxHarfBuzzShaper::InitializeVertical()
             }
         }
     }
-
-    return true;
 }
 
 bool
@@ -1429,9 +1447,7 @@ gfxHarfBuzzShaper::ShapeText(DrawTarget      *aDrawTarget,
     }
 
     if (aVertical) {
-        if (!InitializeVertical()) {
-            return false;
-        }
+        InitializeVertical();
         if (!mFont->GetFontEntry()->
             SupportsOpenTypeFeature(aScript, HB_TAG('v','e','r','t'))) {
             mUseVerticalPresentationForms = true;

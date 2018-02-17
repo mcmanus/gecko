@@ -26,19 +26,19 @@
  *   Date when the study was ended.
  */
 
-const {utils: Cu, interfaces: Ci} = Components;
-Cu.import("resource://gre/modules/osfile.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/osfile.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "FileUtils", "resource://gre/modules/FileUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "IndexedDB", "resource://gre/modules/IndexedDB.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AddonManager", "resource://gre/modules/AddonManager.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Addons", "resource://shield-recipe-client/lib/Addons.jsm");
-XPCOMUtils.defineLazyModuleGetter(
+ChromeUtils.defineModuleGetter(this, "FileUtils", "resource://gre/modules/FileUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "IndexedDB", "resource://gre/modules/IndexedDB.jsm");
+ChromeUtils.defineModuleGetter(this, "AddonManager", "resource://gre/modules/AddonManager.jsm");
+ChromeUtils.defineModuleGetter(this, "Addons", "resource://shield-recipe-client/lib/Addons.jsm");
+ChromeUtils.defineModuleGetter(
   this, "CleanupManager", "resource://shield-recipe-client/lib/CleanupManager.jsm"
 );
-XPCOMUtils.defineLazyModuleGetter(this, "LogManager", "resource://shield-recipe-client/lib/LogManager.jsm");
+ChromeUtils.defineModuleGetter(this, "LogManager", "resource://shield-recipe-client/lib/LogManager.jsm");
+ChromeUtils.defineModuleGetter(this, "TelemetryEvents", "resource://shield-recipe-client/lib/TelemetryEvents.jsm");
 
 Cu.importGlobalProperties(["fetch"]); /* globals fetch */
 
@@ -92,12 +92,23 @@ function getStore(db) {
  * Mark a study object as having ended. Modifies the study in-place.
  * @param {IDBDatabase} db
  * @param {Study} study
+ * @param {String} reason Why the study is ending.
  */
-async function markAsEnded(db, study) {
+async function markAsEnded(db, study, reason) {
+  if (reason === "unknown") {
+    log.warn(`Study ${study.name} ending for unknown reason.`);
+  }
+
   study.active = false;
   study.studyEndDate = new Date();
   await getStore(db).put(study);
+
   Services.obs.notifyObservers(study, STUDY_ENDED_TOPIC, `${study.recipeId}`);
+  TelemetryEvents.sendEvent("unenroll", "addon_study", study.name, {
+    addonId: study.addonId,
+    addonVersion: study.addonVersion,
+    reason,
+  });
 }
 
 this.AddonStudies = {
@@ -145,7 +156,7 @@ this.AddonStudies = {
     for (const study of activeStudies) {
       const addon = await AddonManager.getAddonByID(study.addonId);
       if (!addon) {
-        await markAsEnded(db, study);
+        await markAsEnded(db, study, "uninstalled-sideload");
       }
     }
     await this.close();
@@ -168,7 +179,7 @@ this.AddonStudies = {
       // Use a dedicated DB connection instead of the shared one so that we can
       // close it without fear of affecting other users of the shared connection.
       const db = await openDatabase();
-      await markAsEnded(db, matchingStudy);
+      await markAsEnded(db, matchingStudy, "uninstalled");
       await db.close();
     }
   },
@@ -245,29 +256,48 @@ this.AddonStudies = {
       throw new Error(`A study for recipe ${recipeId} already exists.`);
     }
 
-    const addonFile = await this.downloadAddonToTemporaryFile(addonUrl);
-    const install = await AddonManager.getInstallForFile(addonFile);
-    const study = {
-      recipeId,
-      name,
-      description,
-      addonId: install.addon.id,
-      addonVersion: install.addon.version,
-      addonUrl,
-      active: true,
-      studyStartDate: new Date(),
-    };
-
+    let addonFile;
     try {
+      addonFile = await this.downloadAddonToTemporaryFile(addonUrl);
+      const install = await AddonManager.getInstallForFile(addonFile);
+      const study = {
+        recipeId,
+        name,
+        description,
+        addonId: install.addon.id,
+        addonVersion: install.addon.version,
+        addonUrl,
+        active: true,
+        studyStartDate: new Date(),
+      };
+
       await getStore(db).add(study);
       await Addons.applyInstall(install, false);
+
+      TelemetryEvents.sendEvent("enroll", "addon_study", name, {
+        addonId: install.addon.id,
+        addonVersion: install.addon.version,
+      });
+
       return study;
     } catch (err) {
       await getStore(db).delete(recipeId);
+
+      // The actual stack trace and error message could possibly
+      // contain PII, so we don't include them here. Instead include
+      // some information that should still be helpful, and is less
+      // likely to be unsafe.
+      const safeErrorMessage = `${err.fileName}:${err.lineNumber}:${err.columnNumber} ${err.name}`;
+      TelemetryEvents.sendEvent("enrollFailed", "addon_study", name, {
+        reason: safeErrorMessage.slice(0, 80),  // max length is 80 chars
+      });
+
       throw err;
     } finally {
-      Services.obs.notifyObservers(addonFile, "flush-cache-entry");
-      await OS.File.remove(addonFile.path);
+      if (addonFile) {
+        Services.obs.notifyObservers(addonFile, "flush-cache-entry");
+        await OS.File.remove(addonFile.path);
+      }
     }
   },
 
@@ -300,21 +330,22 @@ this.AddonStudies = {
   /**
    * Stop an active study, uninstalling the associated add-on.
    * @param {Number} recipeId
+   * @param {String} reason Why the study is ending. Optional, defaults to "unknown".
    * @throws
    *   If no study is found with the given recipeId.
    *   If the study is already inactive.
    */
-  async stop(recipeId) {
+  async stop(recipeId, reason = "unknown") {
     const db = await getDatabase();
     const study = await getStore(db).get(recipeId);
     if (!study) {
-      throw new Error(`No study found for recipe ${recipeId}`);
+      throw new Error(`No study found for recipe ${recipeId}.`);
     }
     if (!study.active) {
       throw new Error(`Cannot stop study for recipe ${recipeId}; it is already inactive.`);
     }
 
-    await markAsEnded(db, study);
+    await markAsEnded(db, study, reason);
 
     try {
       await Addons.uninstall(study.addonId);

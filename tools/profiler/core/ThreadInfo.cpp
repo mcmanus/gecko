@@ -22,15 +22,16 @@
 ThreadInfo::ThreadInfo(const char* aName,
                        int aThreadId,
                        bool aIsMainThread,
+                       nsIEventTarget* aThread,
                        void* aStackTop)
   : mName(strdup(aName))
   , mRegisterTime(TimeStamp::Now())
   , mIsMainThread(aIsMainThread)
+  , mThread(aThread)
   , mRacyInfo(mozilla::MakeNotNull<RacyThreadInfo*>(aThreadId))
   , mPlatformData(AllocPlatformData(aThreadId))
   , mStackTop(aStackTop)
   , mIsBeingProfiled(false)
-  , mFirstSavedStreamedSampleTime{0.0}
   , mContext(nullptr)
   , mJSSampling(INACTIVE)
   , mLastSample()
@@ -60,44 +61,46 @@ ThreadInfo::StartProfiling()
 {
   mIsBeingProfiled = true;
   mRacyInfo->ReinitializeOnResume();
-  if (mIsMainThread) {
-    mResponsiveness.emplace();
-  }
+  mResponsiveness.emplace(mThread, mIsMainThread);
 }
 
 void
 ThreadInfo::StopProfiling()
 {
   mResponsiveness.reset();
+  mPartialProfile = nullptr;
   mIsBeingProfiled = false;
 }
 
-double
+void
 ThreadInfo::StreamJSON(const ProfileBuffer& aBuffer,
                        SpliceableJSONWriter& aWriter,
                        const TimeStamp& aProcessStartTime, double aSinceTime)
 {
-  // mUniqueStacks may already be emplaced from FlushSamplesAndMarkers.
-  if (!mUniqueStacks.isSome()) {
-    mUniqueStacks.emplace(mContext);
-  }
+  UniquePtr<PartialThreadProfile> partialProfile = Move(mPartialProfile);
 
-  double firstSampleTime = 0.0;
+  UniquePtr<UniqueStacks> uniqueStacks = partialProfile
+    ? Move(partialProfile->mUniqueStacks)
+    : MakeUnique<UniqueStacks>();
+
+  uniqueStacks->AdvanceStreamingGeneration();
+
+  UniquePtr<char[]> partialSamplesJSON;
+  UniquePtr<char[]> partialMarkersJSON;
+  if (partialProfile) {
+    partialSamplesJSON = Move(partialProfile->mSamplesJSON);
+    partialMarkersJSON = Move(partialProfile->mMarkersJSON);
+  }
 
   aWriter.Start();
   {
     StreamSamplesAndMarkers(Name(), ThreadId(), aBuffer, aWriter,
                             aProcessStartTime,
                             mRegisterTime, mUnregisterTime,
-                            aSinceTime, &firstSampleTime,
-                            mContext,
-                            mSavedStreamedSamples.get(),
-                            mFirstSavedStreamedSampleTime,
-                            mSavedStreamedMarkers.get(),
-                            *mUniqueStacks);
-    mSavedStreamedSamples.reset();
-    mFirstSavedStreamedSampleTime = 0.0;
-    mSavedStreamedMarkers.reset();
+                            aSinceTime, mContext,
+                            Move(partialSamplesJSON),
+                            Move(partialMarkersJSON),
+                            *uniqueStacks);
 
     aWriter.StartObjectProperty("stackTable");
     {
@@ -109,7 +112,7 @@ ThreadInfo::StreamJSON(const ProfileBuffer& aBuffer,
 
       aWriter.StartArrayProperty("data");
       {
-        mUniqueStacks->SpliceStackTableElements(aWriter);
+        uniqueStacks->SpliceStackTableElements(aWriter);
       }
       aWriter.EndArray();
     }
@@ -128,7 +131,7 @@ ThreadInfo::StreamJSON(const ProfileBuffer& aBuffer,
 
       aWriter.StartArrayProperty("data");
       {
-        mUniqueStacks->SpliceFrameTableElements(aWriter);
+        uniqueStacks->SpliceFrameTableElements(aWriter);
       }
       aWriter.EndArray();
     }
@@ -136,15 +139,12 @@ ThreadInfo::StreamJSON(const ProfileBuffer& aBuffer,
 
     aWriter.StartArrayProperty("stringTable");
     {
-      mUniqueStacks->mUniqueStrings.SpliceStringTableElements(aWriter);
+      uniqueStacks->mUniqueStrings.SpliceStringTableElements(aWriter);
     }
     aWriter.EndArray();
   }
+
   aWriter.End();
-
-  mUniqueStacks.reset();
-
-  return firstSampleTime;
 }
 
 void
@@ -156,11 +156,9 @@ StreamSamplesAndMarkers(const char* aName,
                         const TimeStamp& aRegisterTime,
                         const TimeStamp& aUnregisterTime,
                         double aSinceTime,
-                        double* aOutFirstSampleTime,
                         JSContext* aContext,
-                        char* aSavedStreamedSamples,
-                        double aFirstSavedStreamedSampleTime,
-                        char* aSavedStreamedMarkers,
+                        UniquePtr<char[]>&& aPartialSamplesJSON,
+                        UniquePtr<char[]>&& aPartialMarkersJSON,
                         UniqueStacks& aUniqueStacks)
 {
   aWriter.StringProperty("processType",
@@ -197,19 +195,15 @@ StreamSamplesAndMarkers(const char* aName,
 
     aWriter.StartArrayProperty("data");
     {
-      if (aSavedStreamedSamples) {
+      if (aPartialSamplesJSON) {
         // We would only have saved streamed samples during shutdown
         // streaming, which cares about dumping the entire buffer, and thus
         // should have passed in 0 for aSinceTime.
         MOZ_ASSERT(aSinceTime == 0);
-        aWriter.Splice(aSavedStreamedSamples);
+        aWriter.Splice(aPartialSamplesJSON.get());
       }
       aBuffer.StreamSamplesToJSON(aWriter, aThreadId, aSinceTime,
-                                  aOutFirstSampleTime, aContext,
-                                  aUniqueStacks);
-      if (aSavedStreamedSamples) {
-        *aOutFirstSampleTime = aFirstSavedStreamedSampleTime;
-      }
+                                  aContext, aUniqueStacks);
     }
     aWriter.EndArray();
   }
@@ -226,9 +220,9 @@ StreamSamplesAndMarkers(const char* aName,
 
     aWriter.StartArrayProperty("data");
     {
-      if (aSavedStreamedMarkers) {
+      if (aPartialMarkersJSON) {
         MOZ_ASSERT(aSinceTime == 0);
-        aWriter.Splice(aSavedStreamedMarkers);
+        aWriter.Splice(aPartialMarkersJSON.get());
       }
       aBuffer.StreamMarkersToJSON(aWriter, aThreadId, aProcessStartTime,
                                   aSinceTime, aUniqueStacks);
@@ -253,30 +247,75 @@ ThreadInfo::FlushSamplesAndMarkers(const TimeStamp& aProcessStartTime,
   //
   // Note that the UniqueStacks instance is persisted so that the frame-index
   // mapping is stable across JS shutdown.
-  mUniqueStacks.emplace(mContext);
+  UniquePtr<UniqueStacks> uniqueStacks = mPartialProfile
+    ? Move(mPartialProfile->mUniqueStacks)
+    : MakeUnique<UniqueStacks>();
+
+  uniqueStacks->AdvanceStreamingGeneration();
+
+  UniquePtr<char[]> samplesJSON;
+  UniquePtr<char[]> markersJSON;
 
   {
     SpliceableChunkedJSONWriter b;
     b.StartBareList();
+    bool haveSamples = false;
     {
-      aBuffer.StreamSamplesToJSON(b, ThreadId(), /* aSinceTime = */ 0,
-                                  &mFirstSavedStreamedSampleTime,
-                                  mContext, *mUniqueStacks);
+      if (mPartialProfile && mPartialProfile->mSamplesJSON) {
+        b.Splice(mPartialProfile->mSamplesJSON.get());
+        haveSamples = true;
+      }
+
+      // We deliberately use a new variable instead of writing something like
+      // `haveSamples || aBuffer.StreamSamplesToJSON(...)` because we don't want
+      // to short-circuit the call.
+      bool streamedNewSamples =
+        aBuffer.StreamSamplesToJSON(b, ThreadId(), /* aSinceTime = */ 0,
+                                    mContext, *uniqueStacks);
+      haveSamples = haveSamples || streamedNewSamples;
     }
     b.EndBareList();
-    mSavedStreamedSamples = b.WriteFunc()->CopyData();
+
+    // https://bugzilla.mozilla.org/show_bug.cgi?id=1428076
+    // If we don't have any data, keep samplesJSON set to null. That
+    // way we won't try to splice it into the JSON later on, which would
+    // result in an invalid JSON due to stray commas.
+    if (haveSamples) {
+      samplesJSON = b.WriteFunc()->CopyData();
+    }
   }
 
   {
     SpliceableChunkedJSONWriter b;
     b.StartBareList();
+    bool haveMarkers = false;
     {
-      aBuffer.StreamMarkersToJSON(b, ThreadId(), aProcessStartTime,
-                                  /* aSinceTime = */ 0, *mUniqueStacks);
+      if (mPartialProfile && mPartialProfile->mMarkersJSON) {
+        b.Splice(mPartialProfile->mMarkersJSON.get());
+        haveMarkers = true;
+      }
+
+      // We deliberately use a new variable instead of writing something like
+      // `haveMarkers || aBuffer.StreamMarkersToJSON(...)` because we don't want
+      // to short-circuit the call.
+      bool streamedNewMarkers =
+        aBuffer.StreamMarkersToJSON(b, ThreadId(), aProcessStartTime,
+                                    /* aSinceTime = */ 0, *uniqueStacks);
+      haveMarkers = haveMarkers || streamedNewMarkers;
     }
     b.EndBareList();
-    mSavedStreamedMarkers = b.WriteFunc()->CopyData();
+
+    // https://bugzilla.mozilla.org/show_bug.cgi?id=1428076
+    // If we don't have any data, keep markersJSON set to null. That
+    // way we won't try to splice it into the JSON later on, which would
+    // result in an invalid JSON due to stray commas.
+    if (haveMarkers) {
+      markersJSON = b.WriteFunc()->CopyData();
+    }
   }
+
+  mPartialProfile = MakeUnique<PartialThreadProfile>(
+    Move(samplesJSON), Move(markersJSON), Move(uniqueStacks));
 
   // Reset the buffer. Attempting to symbolicate JS samples after mContext has
   // gone away will crash.
@@ -293,9 +332,7 @@ ThreadInfo::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
   // Measurement of the following members may be added later if DMD finds it
   // is worthwhile:
   // - mPlatformData
-  // - mSavedStreamedSamples
-  // - mSavedStreamedMarkers
-  // - mUniqueStacks
+  // - mPartialProfile
   //
   // The following members are not measured:
   // - mThread: because it is non-owning

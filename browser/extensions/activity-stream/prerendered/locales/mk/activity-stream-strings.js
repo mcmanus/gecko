@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Препорачано од {provider}",
   "header_bookmarks_placeholder": "Сѐ уште немате обележувачи.",
   "header_stories_from": "од",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "Посетени",
   "type_label_bookmarked": "Обележани",
   "type_label_synced": "Синхронизирани од други уреди",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Уреди го ова место",
   "edit_topsites_dismiss_button": "Отфрли го ова место",
   "edit_topsites_add_button": "Додај",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "Ново врвно мрежно место",
   "topsites_form_edit_header": "Уреди врвно мрежно место",
   "topsites_form_title_placeholder": "Внесете наслов",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Имате видено сѐ! Навратете се подоцна за нови содржини од {provider}. Не можете да чекате? Изберете популарна тема и откријте уште одлични содржини ширум Интернет.",
   "manual_migration_explanation2": "Пробајте го Firefox со обележувачите, историјата и лозинките на друг прелистувач.",
   "manual_migration_cancel_button": "Не, благодарам",
-  "manual_migration_import_button": "Увези сега"
+  "manual_migration_import_button": "Увези сега",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

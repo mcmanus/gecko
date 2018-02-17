@@ -285,7 +285,7 @@ where
 {
     // If this is the special pseudo-element mode, consume the ::pseudo-element
     // before proceeding, since the caller has already handled that part.
-    if context.matching_mode == MatchingMode::ForStatelessPseudoElement &&
+    if context.matching_mode() == MatchingMode::ForStatelessPseudoElement &&
         !context.is_nested() {
         // Consume the pseudo.
         match *iter.next().unwrap() {
@@ -349,7 +349,7 @@ fn matches_hover_and_active_quirk<Impl: SelectorImpl>(
     // This compound selector had a pseudo-element to the right that we
     // intentionally skipped.
     if rightmost == Rightmost::Yes &&
-        context.matching_mode == MatchingMode::ForStatelessPseudoElement {
+        context.matching_mode() == MatchingMode::ForStatelessPseudoElement {
         return MatchesHoverAndActiveQuirk::No;
     }
 
@@ -416,6 +416,7 @@ where
             element.parent_element()
         }
         Combinator::SlotAssignment => {
+            debug_assert!(element.assigned_slot().map_or(true, |s| s.is_html_slot_element()));
             element.assigned_slot()
         }
         Combinator::PseudoElement => {
@@ -631,6 +632,8 @@ where
         Component::Combinator(_) => unreachable!(),
         Component::Slotted(ref selector) => {
             context.shared.nest(|context| {
+                // <slots> are never flattened tree slottables.
+                !element.is_html_slot_element() &&
                 element.assigned_slot().is_some() &&
                 matches_complex_selector(
                     selector.iter(),

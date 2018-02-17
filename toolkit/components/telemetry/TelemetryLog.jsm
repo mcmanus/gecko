@@ -4,11 +4,7 @@
 
 this.EXPORTED_SYMBOLS = ["TelemetryLog"];
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cu = Components.utils;
-
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 const LOG_ENTRY_MAX_COUNT = 1000;
 

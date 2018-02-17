@@ -50,7 +50,7 @@ public:
 
     nsWindow();
 
-    NS_DECL_ISUPPORTS_INHERITED
+    NS_INLINE_DECL_REFCOUNTING_INHERITED(nsWindow, nsBaseWidget)
 
     static void InitNatives();
     void SetScreenId(uint32_t aScreenId) { mScreenId = aScreenId; }
@@ -193,8 +193,10 @@ private:
     // keep it last in the list, so its destructor is called first.
     mozilla::UniquePtr<GeckoViewSupport> mGeckoViewSupport;
 
+#ifdef MOZ_NATIVE_DEVICES
     // Class that implements native PresentationMediaPlayerManager calls.
     class PMPMSupport;
+#endif
 
     mozilla::Atomic<bool, mozilla::ReleaseAcquire> mContentDocumentDisplayed;
 

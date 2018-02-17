@@ -3,41 +3,29 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const {utils: Cu, interfaces: Ci} = Components;
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/Log.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "LogManager",
+ChromeUtils.defineModuleGetter(this, "LogManager",
   "resource://shield-recipe-client/lib/LogManager.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "RecipeRunner",
+ChromeUtils.defineModuleGetter(this, "RecipeRunner",
   "resource://shield-recipe-client/lib/RecipeRunner.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "CleanupManager",
+ChromeUtils.defineModuleGetter(this, "CleanupManager",
   "resource://shield-recipe-client/lib/CleanupManager.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PreferenceExperiments",
+ChromeUtils.defineModuleGetter(this, "PreferenceExperiments",
   "resource://shield-recipe-client/lib/PreferenceExperiments.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AboutPages",
+ChromeUtils.defineModuleGetter(this, "AboutPages",
   "resource://shield-recipe-client-content/AboutPages.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ShieldPreferences",
+ChromeUtils.defineModuleGetter(this, "ShieldPreferences",
   "resource://shield-recipe-client/lib/ShieldPreferences.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AddonStudies",
+ChromeUtils.defineModuleGetter(this, "AddonStudies",
   "resource://shield-recipe-client/lib/AddonStudies.jsm");
+ChromeUtils.defineModuleGetter(this, "TelemetryEvents",
+  "resource://shield-recipe-client/lib/TelemetryEvents.jsm");
 
 this.EXPORTED_SYMBOLS = ["ShieldRecipeClient"];
 
-const {PREF_STRING, PREF_BOOL, PREF_INT} = Ci.nsIPrefBranch;
-
-const REASONS = {
-  APP_STARTUP: 1,      // The application is starting up.
-  APP_SHUTDOWN: 2,     // The application is shutting down.
-  ADDON_ENABLE: 3,     // The add-on is being enabled.
-  ADDON_DISABLE: 4,    // The add-on is being disabled. (Also sent during uninstallation)
-  ADDON_INSTALL: 5,    // The add-on is being installed.
-  ADDON_UNINSTALL: 6,  // The add-on is being uninstalled.
-  ADDON_UPGRADE: 7,    // The add-on is being upgraded.
-  ADDON_DOWNGRADE: 8,  // The add-on is being downgraded.
-};
-const PREF_DEV_MODE = "extensions.shield-recipe-client.dev_mode";
 const PREF_LOGGING_LEVEL = "extensions.shield-recipe-client.logging.level";
 const SHIELD_INIT_NOTIFICATION = "shield-init-complete";
 
@@ -57,6 +45,12 @@ this.ShieldRecipeClient = {
       () => Services.prefs.removeObserver(PREF_LOGGING_LEVEL, LogManager.configure),
     );
     log = LogManager.getLogger("bootstrap");
+
+    try {
+      TelemetryEvents.init();
+    } catch (err) {
+      log.error("Failed to initialize telemetry events:", err);
+    }
 
     try {
       await AboutPages.init();

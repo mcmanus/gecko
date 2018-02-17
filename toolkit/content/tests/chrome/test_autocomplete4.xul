@@ -20,6 +20,8 @@
 <script class="testbody" type="application/javascript">
 <![CDATA[
 
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+
 // Set to indicate whether or not we want autoCompleteSimple to return a result
 var returnResult = true;
 
@@ -185,7 +187,7 @@ function nextTest() {
   currentTest = tests.shift();
 
   // HOME key works differently on Mac, so we skip tests using it.
-  if (currentTest.key == "VK_HOME" && navigator.platform.indexOf("Mac") != -1)
+  if (currentTest.key == "VK_HOME" && navigator.platform.includes("Mac"))
     nextTest();
   else
     setTimeout(runCurrentTest, 0);

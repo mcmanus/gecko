@@ -163,6 +163,23 @@ private:
   mozilla::Atomic<int> mSleep;
 };
 
+// Contains data for partial profiles that get saved when
+// ThreadInfo::FlushSamplesAndMarkers gets called.
+struct PartialThreadProfile final
+{
+  PartialThreadProfile(mozilla::UniquePtr<char[]>&& aSamplesJSON,
+                       mozilla::UniquePtr<char[]>&& aMarkersJSON,
+                       mozilla::UniquePtr<UniqueStacks>&& aUniqueStacks)
+    : mSamplesJSON(mozilla::Move(aSamplesJSON))
+    , mMarkersJSON(mozilla::Move(aMarkersJSON))
+    , mUniqueStacks(mozilla::Move(aUniqueStacks))
+  {}
+
+  mozilla::UniquePtr<char[]> mSamplesJSON;
+  mozilla::UniquePtr<char[]> mMarkersJSON;
+  mozilla::UniquePtr<UniqueStacks> mUniqueStacks;
+};
+
 // This class contains the info for a single thread.
 //
 // Note: A thread's ThreadInfo can be held onto after the thread itself exits,
@@ -175,7 +192,7 @@ class ThreadInfo final
 {
 public:
   ThreadInfo(const char* aName, int aThreadId, bool aIsMainThread,
-             void* aStackTop);
+             nsIEventTarget* aThread, void* aStackTop);
 
   ~ThreadInfo();
 
@@ -193,20 +210,27 @@ public:
   void StopProfiling();
   bool IsBeingProfiled() { return mIsBeingProfiled; }
 
-  void NotifyUnregistered() { mUnregisterTime = TimeStamp::Now(); }
+  void NotifyUnregistered(uint64_t aBufferPosition)
+  {
+    mUnregisterTime = TimeStamp::Now();
+    mBufferPositionWhenUnregistered = mozilla::Some(aBufferPosition);
+  }
+  mozilla::Maybe<uint64_t> BufferPositionWhenUnregistered() { return mBufferPositionWhenUnregistered; }
 
   PlatformData* GetPlatformData() const { return mPlatformData.get(); }
   void* StackTop() const { return mStackTop; }
 
   size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
-  ProfileBuffer::LastSample& LastSample() { return mLastSample; }
+  mozilla::Maybe<uint64_t>& LastSample() { return mLastSample; }
 
 private:
   mozilla::UniqueFreePtr<char> mName;
   mozilla::TimeStamp mRegisterTime;
   mozilla::TimeStamp mUnregisterTime;
+  mozilla::Maybe<uint64_t> mBufferPositionWhenUnregistered;
   const bool mIsMainThread;
+  nsCOMPtr<nsIEventTarget> mThread;
 
   // The thread's RacyThreadInfo. This is an owning pointer. It could be an
   // inline member, but we don't do that because RacyThreadInfo is quite large
@@ -223,10 +247,9 @@ private:
   //
 
 public:
-  // Returns the time of the first sample.
-  double StreamJSON(const ProfileBuffer& aBuffer, SpliceableJSONWriter& aWriter,
-                    const mozilla::TimeStamp& aProcessStartTime,
-                    double aSinceTime);
+  void StreamJSON(const ProfileBuffer& aBuffer, SpliceableJSONWriter& aWriter,
+                  const mozilla::TimeStamp& aProcessStartTime,
+                  double aSinceTime);
 
   // Call this method when the JS entries inside the buffer are about to
   // become invalid, i.e., just before JS shutdown.
@@ -238,7 +261,7 @@ public:
   ThreadResponsiveness* GetThreadResponsiveness()
   {
     ThreadResponsiveness* responsiveness = mResponsiveness.ptrOr(nullptr);
-    MOZ_ASSERT(!!responsiveness == (mIsMainThread && mIsBeingProfiled));
+    MOZ_ASSERT(!responsiveness || mIsBeingProfiled);
     return responsiveness;
   }
 
@@ -318,12 +341,9 @@ private:
   // stringifying JIT frames). In the case of JSRuntime destruction,
   // FlushSamplesAndMarkers should be called to save them. These are spliced
   // into the final stream.
-  mozilla::UniquePtr<char[]> mSavedStreamedSamples;
-  double mFirstSavedStreamedSampleTime;
-  mozilla::UniquePtr<char[]> mSavedStreamedMarkers;
-  mozilla::Maybe<UniqueStacks> mUniqueStacks;
+  UniquePtr<PartialThreadProfile> mPartialProfile;
 
-  // This is only used for the main thread.
+  // This is used only for nsIThreads.
   mozilla::Maybe<ThreadResponsiveness> mResponsiveness;
 
 public:
@@ -379,9 +399,10 @@ private:
     INACTIVE_REQUESTED = 3,
   } mJSSampling;
 
-  // When sampling, this holds the generation number and offset in
-  // ActivePS::mBuffer of the most recent sample for this thread.
-  ProfileBuffer::LastSample mLastSample;
+  // When sampling, this holds the position in ActivePS::mBuffer of the most
+  // recent sample for this thread, or Nothing() if there is no sample for this
+  // thread in the buffer.
+  mozilla::Maybe<uint64_t> mLastSample;
 };
 
 void
@@ -392,11 +413,9 @@ StreamSamplesAndMarkers(const char* aName, int aThreadId,
                         const TimeStamp& aRegisterTime,
                         const TimeStamp& aUnregisterTime,
                         double aSinceTime,
-                        double* aOutFirstSampleTime,
                         JSContext* aContext,
-                        char* aSavedStreamedSamples,
-                        double aFirstSavedStreamedSampleTime,
-                        char* aSavedStreamedMarkers,
+                        UniquePtr<char[]>&& aPartialSamplesJSON,
+                        UniquePtr<char[]>&& aPartialMarkersJSON,
                         UniqueStacks& aUniqueStacks);
 
 #endif  // ThreadInfo_h

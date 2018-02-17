@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "{provider} 推薦",
   "header_bookmarks_placeholder": "您還沒有任何書籤。",
   "header_stories_from": "來自",
+  "context_menu_button_sr": "開啟 {title} 的右鍵選單",
   "type_label_visited": "造訪過的網站",
   "type_label_bookmarked": "已加入書籤",
   "type_label_synced": "從其他裝置同步過來",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "編輯此網站",
   "edit_topsites_dismiss_button": "忽略此網站",
   "edit_topsites_add_button": "新增",
+  "edit_topsites_add_button_tooltip": "新增熱門網站",
   "topsites_form_add_header": "新增熱門網站",
   "topsites_form_edit_header": "編輯熱門網站",
   "topsites_form_title_placeholder": "輸入標題",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "所有文章都讀完啦！晚點再來，{provider} 將提供更多推薦故事。等不及了？選擇熱門主題，看看 Web 上各式精采資訊。",
   "manual_migration_explanation2": "試試將其他瀏覽器的書籤、瀏覽記錄與密碼匯入 Firefox。",
   "manual_migration_cancel_button": "不必了",
-  "manual_migration_import_button": "立即匯入"
+  "manual_migration_import_button": "立即匯入",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

@@ -139,7 +139,7 @@ NewConsoleOutputWrapper.prototype = {
 
         // Emit the "menu-open" event for testing.
         menu.once("open", () => this.emit("menu-open"));
-        menu.popup(screenX, screenY, this.toolbox);
+        menu.popup(screenX, screenY, { doc: this.owner.chromeWindow.document });
 
         return menu;
       };
@@ -197,6 +197,7 @@ NewConsoleOutputWrapper.prototype = {
       });
 
       let filterBar = FilterBar({
+        hidePersistLogsCheckbox: this.jsterm.hud.isBrowserConsole,
         serviceContainer: {
           attachRefToHud
         }
@@ -258,6 +259,9 @@ NewConsoleOutputWrapper.prototype = {
   },
 
   dispatchMessagesClear: function () {
+    this.queuedMessageAdds = [];
+    this.queuedMessageUpdates = [];
+    this.queuedRequestUpdates = [];
     store.dispatch(actions.messagesClear());
   },
 
@@ -273,7 +277,7 @@ NewConsoleOutputWrapper.prototype = {
     // to count with that.
     const NUMBER_OF_NETWORK_UPDATE = 8;
     let expectedLength = NUMBER_OF_NETWORK_UPDATE;
-    if (res.networkInfo.updates.indexOf("requestPostData") != -1) {
+    if (res.networkInfo.updates.includes("requestPostData")) {
       expectedLength++;
     }
 

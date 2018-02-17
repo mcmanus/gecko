@@ -2,6 +2,7 @@
             BASE_URL, TEST_ADDRESS_1, TEST_ADDRESS_2, TEST_ADDRESS_3, TEST_ADDRESS_4, TEST_ADDRESS_5, TEST_ADDRESS_CA_1, TEST_ADDRESS_DE_1,
             TEST_CREDIT_CARD_1, TEST_CREDIT_CARD_2, TEST_CREDIT_CARD_3, FORM_URL, CREDITCARD_FORM_URL,
             FTU_PREF, ENABLED_AUTOFILL_ADDRESSES_PREF, AUTOFILL_CREDITCARDS_AVAILABLE_PREF, ENABLED_AUTOFILL_CREDITCARDS_PREF,
+            SUPPORTED_COUNTRIES_PREF,
             SYNC_USERNAME_PREF, SYNC_ADDRESSES_PREF, SYNC_CREDITCARDS_PREF, SYNC_CREDITCARDS_AVAILABLE_PREF, CREDITCARDS_USED_STATUS_PREF,
             DEFAULT_REGION_PREF,
             sleep, expectPopupOpen, openPopupOn, expectPopupClose, closePopup, clickDoorhangerButton,
@@ -11,7 +12,7 @@
 
 "use strict";
 
-Cu.import("resource://testing-common/LoginTestUtils.jsm", this);
+ChromeUtils.import("resource://testing-common/LoginTestUtils.jsm", this);
 
 const MANAGE_ADDRESSES_DIALOG_URL = "chrome://formautofill/content/manageAddresses.xhtml";
 const MANAGE_CREDIT_CARDS_DIALOG_URL = "chrome://formautofill/content/manageCreditCards.xhtml";
@@ -26,6 +27,7 @@ const CREDITCARDS_USED_STATUS_PREF = "extensions.formautofill.creditCards.used";
 const ENABLED_AUTOFILL_ADDRESSES_PREF = "extensions.formautofill.addresses.enabled";
 const AUTOFILL_CREDITCARDS_AVAILABLE_PREF = "extensions.formautofill.creditCards.available";
 const ENABLED_AUTOFILL_CREDITCARDS_PREF = "extensions.formautofill.creditCards.enabled";
+const SUPPORTED_COUNTRIES_PREF = "extensions.formautofill.supportedCountries";
 const SYNC_USERNAME_PREF = "services.sync.username";
 const SYNC_ADDRESSES_PREF = "services.sync.engine.addresses";
 const SYNC_CREDITCARDS_PREF = "services.sync.engine.creditcards";
@@ -135,7 +137,7 @@ async function focusAndWaitForFieldsIdentified(browser, selector) {
   info("expecting the target input being focused and indentified");
   /* eslint no-shadow: ["error", { "allow": ["selector", "previouslyFocused", "previouslyIdentified"] }] */
   const {previouslyFocused, previouslyIdentified} = await ContentTask.spawn(browser, {selector}, async function({selector}) {
-    Components.utils.import("resource://gre/modules/FormLikeFactory.jsm");
+    ChromeUtils.import("resource://gre/modules/FormLikeFactory.jsm");
     const input = content.document.querySelector(selector);
     const rootElement = FormLikeFactory.findRootForField(input);
     const previouslyFocused = content.document.activeElement == input;
@@ -163,7 +165,7 @@ async function focusAndWaitForFieldsIdentified(browser, selector) {
   // Wait 500ms to ensure that "markAsAutofillField" is completely finished.
   await sleep();
   await ContentTask.spawn(browser, {}, async function() {
-    Components.utils.import("resource://gre/modules/FormLikeFactory.jsm");
+    ChromeUtils.import("resource://gre/modules/FormLikeFactory.jsm");
     FormLikeFactory
       .findRootForField(content.document.activeElement)
       .setAttribute("test-formautofill-identified", "true");
@@ -329,17 +331,19 @@ async function removeAllRecords() {
   }
 }
 
-function testDialog(url, testFn, arg) {
-  return new Promise(resolve => {
-    let win = window.openDialog(url, null, null, arg);
-    win.addEventListener("FormReady", () => {
-      win.addEventListener("unload", () => {
-        ok(true, "Dialog is closed");
-        resolve();
-      }, {once: true});
-      testFn(win);
-    }, {once: true});
-  });
+async function waitForFocusAndFormReady(win) {
+  return Promise.all([
+    new Promise(resolve => waitForFocus(resolve, win)),
+    BrowserTestUtils.waitForEvent(win, "FormReady"),
+  ]);
+}
+
+async function testDialog(url, testFn, arg) {
+  let win = window.openDialog(url, null, null, arg);
+  await waitForFocusAndFormReady(win);
+  let unloadPromise = BrowserTestUtils.waitForEvent(win, "unload");
+  testFn(win);
+  return unloadPromise;
 }
 
 registerCleanupFunction(removeAllRecords);

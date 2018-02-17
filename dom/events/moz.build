@@ -7,6 +7,10 @@
 with Files("**"):
     BUG_COMPONENT = ("Core", "DOM: Events")
 
+BROWSER_CHROME_MANIFESTS += [
+  'test/browser.ini',
+]
+
 MOCHITEST_MANIFESTS += [
     'test/mochitest.ini',
     'test/pointerevents/mochitest.ini',
@@ -29,6 +33,7 @@ EXPORTS.mozilla += [
     'EventNameList.h',
     'EventStateManager.h',
     'EventStates.h',
+    'IMEContentObserver.h',
     'IMEStateManager.h',
     'InternalMutationEvent.h',
     'JSEventHandler.h',
@@ -148,7 +153,6 @@ LOCAL_INCLUDES += [
     '/dom/html',
     '/dom/storage',
     '/dom/svg',
-    '/dom/workers',
     '/dom/xml',
     '/dom/xul',
     '/js/xpconnect/wrappers',

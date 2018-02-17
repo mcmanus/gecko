@@ -16,9 +16,7 @@ this.EXPORTED_SYMBOLS = [
   "ContentTaskUtils",
 ];
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
-
-Cu.import("resource://gre/modules/Timer.jsm");
+ChromeUtils.import("resource://gre/modules/Timer.jsm");
 
 this.ContentTaskUtils = {
   /**

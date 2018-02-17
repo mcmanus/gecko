@@ -4,19 +4,16 @@
 
 "use strict";
 
-var Cu = Components.utils;
-var Ci = Components.interfaces;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/PageThumbs.jsm");
+ChromeUtils.import("resource://gre/modules/BackgroundPageThumbs.jsm");
+ChromeUtils.import("resource:///modules/DirectoryLinksProvider.jsm");
+ChromeUtils.import("resource://gre/modules/NewTabUtils.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/PageThumbs.jsm");
-Cu.import("resource://gre/modules/BackgroundPageThumbs.jsm");
-Cu.import("resource:///modules/DirectoryLinksProvider.jsm");
-Cu.import("resource://gre/modules/NewTabUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "Rect",
+ChromeUtils.defineModuleGetter(this, "Rect",
   "resource://gre/modules/Geometry.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
+ChromeUtils.defineModuleGetter(this, "PrivateBrowsingUtils",
   "resource://gre/modules/PrivateBrowsingUtils.jsm");
 
 var {

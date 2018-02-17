@@ -63,9 +63,12 @@ public:
   NS_DECL_CYCLE_COLLECTION_SKIPPABLE_SCRIPT_HOLDER_CLASS_AMBIGUOUS(nsComputedDOMStyle,
                                                                    nsICSSDeclaration)
 
-  NS_DECL_NSICSSDECLARATION
-
   NS_DECL_NSIDOMCSSSTYLEDECLARATION_HELPER
+  nsresult GetPropertyValue(const nsCSSPropertyID aPropID,
+                            nsAString& aValue) override;
+  nsresult SetPropertyValue(const nsCSSPropertyID aPropID,
+                            const nsAString& aValue,
+                            nsIPrincipal* aSubjectPrincipal) override;
   virtual already_AddRefed<CSSValue>
   GetPropertyCSSValue(const nsAString& aProp, mozilla::ErrorResult& aRv)
     override;
@@ -91,11 +94,6 @@ public:
   virtual nsINode *GetParentObject() override
   {
     return mContent;
-  }
-
-  virtual mozilla::dom::DocGroup* GetDocGroup() const override
-  {
-    return mContent ? mContent->GetDocGroup() : nullptr;
   }
 
   static already_AddRefed<nsStyleContext>
@@ -128,9 +126,6 @@ public:
                                     aStyleType,
                                     eWithoutAnimation);
   }
-
-  static nsIPresShell*
-  GetPresShellForContent(const nsIContent* aContent);
 
   // Helper for nsDOMWindowUtils::GetVisitedDependentComputedStyle
   void SetExposeVisitedStyle(bool aExpose) {
@@ -210,8 +205,6 @@ private:
   already_AddRefed<CSSValue> GetStaticOffset(mozilla::Side aSide);
 
   already_AddRefed<CSSValue> GetPaddingWidthFor(mozilla::Side aSide);
-
-  already_AddRefed<CSSValue> GetBorderColorsFor(mozilla::Side aSide);
 
   already_AddRefed<CSSValue> GetBorderStyleFor(mozilla::Side aSide);
 
@@ -394,10 +387,6 @@ private:
   already_AddRefed<CSSValue> DoGetBorderBottomColor();
   already_AddRefed<CSSValue> DoGetBorderLeftColor();
   already_AddRefed<CSSValue> DoGetBorderRightColor();
-  already_AddRefed<CSSValue> DoGetBorderBottomColors();
-  already_AddRefed<CSSValue> DoGetBorderLeftColors();
-  already_AddRefed<CSSValue> DoGetBorderRightColors();
-  already_AddRefed<CSSValue> DoGetBorderTopColors();
   already_AddRefed<CSSValue> DoGetBorderBottomLeftRadius();
   already_AddRefed<CSSValue> DoGetBorderBottomRightRadius();
   already_AddRefed<CSSValue> DoGetBorderTopLeftRadius();
@@ -515,6 +504,9 @@ private:
   already_AddRefed<CSSValue> DoGetPageBreakInside();
   already_AddRefed<CSSValue> DoGetTouchAction();
   already_AddRefed<CSSValue> DoGetTransform();
+  already_AddRefed<CSSValue> DoGetTranslate();
+  already_AddRefed<CSSValue> DoGetRotate();
+  already_AddRefed<CSSValue> DoGetScale();
   already_AddRefed<CSSValue> DoGetTransformBox();
   already_AddRefed<CSSValue> DoGetTransformOrigin();
   already_AddRefed<CSSValue> DoGetPerspective();

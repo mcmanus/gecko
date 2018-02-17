@@ -5,30 +5,28 @@
 "use strict";
 /* global XPCNativeWrapper */
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+ChromeUtils.import("resource://gre/modules/Log.jsm");
+ChromeUtils.import("resource://gre/modules/Preferences.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://gre/modules/Preferences.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-Cu.import("chrome://marionette/content/accessibility.js");
-Cu.import("chrome://marionette/content/addon.js");
-Cu.import("chrome://marionette/content/assert.js");
-Cu.import("chrome://marionette/content/atom.js");
+ChromeUtils.import("chrome://marionette/content/accessibility.js");
+ChromeUtils.import("chrome://marionette/content/addon.js");
+ChromeUtils.import("chrome://marionette/content/assert.js");
+ChromeUtils.import("chrome://marionette/content/atom.js");
 const {
   browser,
   Context,
   WindowState,
-} = Cu.import("chrome://marionette/content/browser.js", {});
-Cu.import("chrome://marionette/content/capture.js");
-Cu.import("chrome://marionette/content/cert.js");
-Cu.import("chrome://marionette/content/cookie.js");
+} = ChromeUtils.import("chrome://marionette/content/browser.js", {});
+ChromeUtils.import("chrome://marionette/content/capture.js");
+ChromeUtils.import("chrome://marionette/content/cert.js");
+ChromeUtils.import("chrome://marionette/content/cookie.js");
 const {
   ChromeWebElement,
   element,
   WebElement,
-} = Cu.import("chrome://marionette/content/element.js", {});
+} = ChromeUtils.import("chrome://marionette/content/element.js", {});
 const {
   InsecureCertificateError,
   InvalidArgumentError,
@@ -41,19 +39,19 @@ const {
   UnknownError,
   UnsupportedOperationError,
   WebDriverError,
-} = Cu.import("chrome://marionette/content/error.js", {});
-Cu.import("chrome://marionette/content/evaluate.js");
-Cu.import("chrome://marionette/content/interaction.js");
-Cu.import("chrome://marionette/content/l10n.js");
-Cu.import("chrome://marionette/content/legacyaction.js");
-Cu.import("chrome://marionette/content/modal.js");
-Cu.import("chrome://marionette/content/proxy.js");
-Cu.import("chrome://marionette/content/reftest.js");
-Cu.import("chrome://marionette/content/session.js");
+} = ChromeUtils.import("chrome://marionette/content/error.js", {});
+ChromeUtils.import("chrome://marionette/content/evaluate.js");
+ChromeUtils.import("chrome://marionette/content/interaction.js");
+ChromeUtils.import("chrome://marionette/content/l10n.js");
+ChromeUtils.import("chrome://marionette/content/legacyaction.js");
+ChromeUtils.import("chrome://marionette/content/modal.js");
+ChromeUtils.import("chrome://marionette/content/proxy.js");
+ChromeUtils.import("chrome://marionette/content/reftest.js");
+ChromeUtils.import("chrome://marionette/content/session.js");
 const {
   PollPromise,
   TimedPromise,
-} = Cu.import("chrome://marionette/content/sync.js", {});
+} = ChromeUtils.import("chrome://marionette/content/sync.js", {});
 
 Cu.importGlobalProperties(["URL"]);
 
@@ -600,6 +598,10 @@ GeckoDriver.prototype.listeningPromise = function() {
  *
  *  <dt><code>moz:accessibilityChecks</code> (boolean)
  *  <dd>Run a11y checks when clicking elements.
+ *
+ *  <dt><code>moz:useNonSpecCompliantPointerOrigin</code> (boolean)
+ *  <dd>Use the not WebDriver conforming calculation of the pointer origin
+ *   when the origin is an element, and the element center point is used.
  *
  *  <dt><code>moz:webdriverClick</code> (boolean)
  *  <dd>Use a WebDriver conforming <i>WebDriver::ElementClick</i>.

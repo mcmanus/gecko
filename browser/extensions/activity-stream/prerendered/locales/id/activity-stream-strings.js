@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Disarankan oleh {provider}",
   "header_bookmarks_placeholder": "Anda belum memiliki markah.",
   "header_stories_from": "dari",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "Dikunjungi",
   "type_label_bookmarked": "Dimarkahi",
   "type_label_synced": "Disinkronkan dari perangkat lain",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Sunting situs ini",
   "edit_topsites_dismiss_button": "Abaikan situs ini",
   "edit_topsites_add_button": "Tambah",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "Situs Pilihan Baru",
   "topsites_form_edit_header": "Ubah Situs Pilihan",
   "topsites_form_title_placeholder": "Masukkan judul",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Maaf Anda tercegat. Periksa lagi nanti untuk lebih banyak cerita terbaik dari {provider}. Tidak mau menunggu? Pilih topik populer untuk menemukan lebih banyak cerita hebat dari seluruh web.",
   "manual_migration_explanation2": "Coba Firefox dengan markah, riwayat, dan sandi dari peramban lain.",
   "manual_migration_cancel_button": "Tidak, Terima kasih",
-  "manual_migration_import_button": "Impor Sekarang"
+  "manual_migration_import_button": "Impor Sekarang",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

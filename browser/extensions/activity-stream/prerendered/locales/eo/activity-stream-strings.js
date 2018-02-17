@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Rekomendita de {provider}",
   "header_bookmarks_placeholder": "Vi ankoraŭ ne havas legosignojn.",
   "header_stories_from": "el",
+  "context_menu_button_sr": "Malfermi kuntekstan menu por {title}",
   "type_label_visited": "Vizitita",
   "type_label_bookmarked": "Kun legosigno",
   "type_label_synced": "Spegulitaj el alia aparato",
@@ -78,8 +79,9 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Redakti ĉi tiun retejon",
   "edit_topsites_dismiss_button": "Ignori ĉi tiun retejon",
   "edit_topsites_add_button": "Aldoni",
+  "edit_topsites_add_button_tooltip": "Aldoni oftan retejon",
   "topsites_form_add_header": "Nova ofta retejo",
-  "topsites_form_edit_header": "Redakti ofta retejo",
+  "topsites_form_edit_header": "Redakti oftan retejon",
   "topsites_form_title_placeholder": "Tajpu titolon",
   "topsites_form_url_placeholder": "Tajpu aŭ alguu retadreson",
   "topsites_form_add_button": "Aldoni",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Vi legis ĉion. Kontrolu denove poste ĉu estas pli da novaĵon de {provider}. Ĉu vi ne povas atendi? Elektu popularan temon por trovi pli da interesaj artikoloj en la tuta teksaĵo.",
   "manual_migration_explanation2": "Provu Firefox kun la legosignoj, historio kaj pasvortoj de alia retumilo.",
   "manual_migration_cancel_button": "Ne, dankon",
-  "manual_migration_import_button": "Importi nun"
+  "manual_migration_import_button": "Importi nun",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

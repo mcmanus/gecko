@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Disyorkan oleh {provider}",
   "header_bookmarks_placeholder": "Anda masih belum ada tandabuku lagi.",
   "header_stories_from": "dari",
+  "context_menu_button_sr": "Buka menu konteks untuk {title}",
   "type_label_visited": "Dilawati",
   "type_label_bookmarked": "Ditandabuku",
   "type_label_synced": "Sync dari peranti lain",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Edit laman ini",
   "edit_topsites_dismiss_button": "Buang laman ini",
   "edit_topsites_add_button": "Tambah",
+  "edit_topsites_add_button_tooltip": "Tambah Laman Teratas",
   "topsites_form_add_header": "Laman Teratas Baru",
   "topsites_form_edit_header": "Edit Laman Teratas",
   "topsites_form_title_placeholder": "Masukkan tajuk",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Anda sudah di sini. Tapi sila datang lagi untuk mendapatkan lebih banyak berita hangat daripada {provider}. Tidak boleh tunggu? Pilih topik untuk mendapatkannya dari serata dunia.",
   "manual_migration_explanation2": "Cuba Firefox dengan tandabuku, sejarah dan kata laluan yang disimpan dalam pelayar lain.",
   "manual_migration_cancel_button": "Tidak, Terima kasih",
-  "manual_migration_import_button": "Import Sekarang"
+  "manual_migration_import_button": "Import Sekarang",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

@@ -7,10 +7,7 @@
 
 this.EXPORTED_SYMBOLS = ["StyleEditorUI"];
 
-const Ci = Components.interfaces;
-const Cu = Components.utils;
-
-const {loader, require} = Cu.import("resource://devtools/shared/Loader.jsm", {});
+const {loader, require} = ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
 const Services = require("Services");
 const {NetUtil} = require("resource://gre/modules/NetUtil.jsm");
 const {OS} = require("resource://gre/modules/osfile.jsm");

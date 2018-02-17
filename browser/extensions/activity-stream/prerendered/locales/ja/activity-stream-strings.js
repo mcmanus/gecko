@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "{provider} のおすすめ",
   "header_bookmarks_placeholder": "まだブックマークがありません。",
   "header_stories_from": "配信元",
+  "context_menu_button_sr": "{title} のコンテキストメニューを開く",
   "type_label_visited": "訪問済み",
   "type_label_bookmarked": "ブックマーク済み",
   "type_label_synced": "他の端末から同期",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "このサイトを編集",
   "edit_topsites_dismiss_button": "このサイトを削除",
   "edit_topsites_add_button": "追加",
+  "edit_topsites_add_button_tooltip": "トップサイトを追加",
   "topsites_form_add_header": "新着トップサイト",
   "topsites_form_edit_header": "トップサイトを編集",
   "topsites_form_title_placeholder": "タイトルを入力",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "すべて既読です。また後で戻って {provider} からのおすすめ記事をチェックしてください。もし待ちきれないなら、人気のトピックを選択すれば、他にもウェブ上の優れた記事を見つけられます。",
   "manual_migration_explanation2": "他のブラウザーからブックマークや履歴、パスワードを取り込んで Firefox を使ってみましょう。",
   "manual_migration_cancel_button": "今はしない",
-  "manual_migration_import_button": "今すぐインポート"
+  "manual_migration_import_button": "今すぐインポート",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

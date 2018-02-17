@@ -14,10 +14,9 @@
 #include "jit/SharedICHelpers.h"
 #include "proxy/Proxy.h"
 
-#include "jscompartmentinlines.h"
-
 #include "jit/JSJitFrameIter-inl.h"
 #include "jit/MacroAssembler-inl.h"
+#include "vm/JSCompartment-inl.h"
 #include "vm/TypeInference-inl.h"
 
 using namespace js;
@@ -530,9 +529,37 @@ IonCacheIRCompiler::init()
         allocator.initInputLocation(1, ic->value());
         break;
       }
+      case CacheKind::InstanceOf: {
+        IonInstanceOfIC* ic = ic_->asInstanceOfIC();
+        Register output = ic->output();
+        available.add(output);
+        liveRegs_.emplace(ic->liveRegs());
+        outputUnchecked_.emplace(TypedOrValueRegister(MIRType::Boolean, AnyRegister(output)));
+
+        MOZ_ASSERT(numInputs == 2);
+        allocator.initInputLocation(0, ic->lhs());
+        allocator.initInputLocation(1, TypedOrValueRegister(MIRType::Object,
+                                                            AnyRegister(ic->rhs())));
+        break;
+      }
+      case CacheKind::UnaryArith: {
+        IonUnaryArithIC *ic = ic_->asUnaryArithIC();
+        ValueOperand output = ic->output();
+
+        available.add(output);
+
+        liveRegs_.emplace(ic->liveRegs());
+        outputUnchecked_.emplace(TypedOrValueRegister(output));
+
+        MOZ_ASSERT(numInputs == 1);
+        allocator.initInputLocation(0, ic->input());
+        break;
+      }
       case CacheKind::Call:
       case CacheKind::Compare:
       case CacheKind::TypeOf:
+      case CacheKind::ToBool:
+      case CacheKind::GetIntrinsic:
         MOZ_CRASH("Unsupported IC");
     }
 
@@ -587,7 +614,7 @@ IonCacheIRCompiler::compile()
 
     Linker linker(masm);
     AutoFlushICache afc("getStubCode");
-    Rooted<JitCode*> newStubCode(cx_, linker.newCode<NoGC>(cx_, ION_CODE));
+    Rooted<JitCode*> newStubCode(cx_, linker.newCode<NoGC>(cx_, CodeKind::Ion));
     if (!newStubCode) {
         cx_->recoverFromOutOfMemory();
         return nullptr;
@@ -753,8 +780,8 @@ IonCacheIRCompiler::emitGuardSpecificAtom()
 
     // The pointers are not equal, so if the input string is also an atom it
     // must be a different string.
-    masm.branchTest32(Assembler::NonZero, Address(str, JSString::offsetOfFlags()),
-                      Imm32(JSString::ATOM_BIT), failure->label());
+    masm.branchTest32(Assembler::Zero, Address(str, JSString::offsetOfFlags()),
+                      Imm32(JSString::NON_ATOM_BIT), failure->label());
 
     // Check the length.
     masm.branch32(Assembler::NotEqual, Address(str, JSString::offsetOfLength()),
@@ -843,6 +870,42 @@ IonCacheIRCompiler::emitGuardXrayExpandoShapeAndDefaultProto()
 
     return true;
 }
+
+bool
+IonCacheIRCompiler::emitGuardFunctionPrototype()
+{
+    Register obj = allocator.useRegister(masm, reader.objOperandId());
+    Register prototypeObject = allocator.useRegister(masm, reader.objOperandId());
+
+    // Allocate registers before the failure path to make sure they're registered
+    // by addFailurePath.
+    AutoScratchRegister scratch1(allocator, masm);
+    AutoScratchRegister scratch2(allocator, masm);
+
+    FailurePath* failure;
+    if (!addFailurePath(&failure))
+        return false;
+
+     // Guard on the .prototype object.
+    masm.loadPtr(Address(obj, NativeObject::offsetOfSlots()), scratch1);
+    uintptr_t slot =  readStubWord(reader.stubOffset(), StubField::Type::RawWord);
+    masm.move32(Imm32(slot), scratch2);
+    BaseValueIndex prototypeSlot(scratch1, scratch2);
+    masm.branchTestObject(Assembler::NotEqual, prototypeSlot, failure->label());
+    masm.unboxObject(prototypeSlot, scratch1);
+    masm.branchPtr(Assembler::NotEqual,
+                   prototypeObject,
+                   scratch1, failure->label());
+
+    return true;
+}
+
+bool
+IonCacheIRCompiler::emitLoadValueResult()
+{
+   MOZ_CRASH("Baseline-specific op");
+}
+
 
 bool
 IonCacheIRCompiler::emitLoadFixedSlotResult()
@@ -1041,9 +1104,10 @@ IonCacheIRCompiler::emitCallScriptedGetterResult()
     // Check stack alignment. Add sizeof(uintptr_t) for the return address.
     MOZ_ASSERT(((masm.framePushed() + sizeof(uintptr_t)) % JitStackAlignment) == 0);
 
-    // The getter currently has a non-lazy script. We will only relazify when
-    // we do a shrinking GC and when that happens we will also purge IC stubs.
-    MOZ_ASSERT(target->hasScript());
+    // The getter currently has a jit entry or a non-lazy script. We will only
+    // relazify when we do a shrinking GC and when that happens we will also
+    // purge IC stubs.
+    MOZ_ASSERT(target->hasJitEntry());
     masm.loadJitCodeRaw(scratch, scratch);
     masm.callJit(scratch);
     masm.storeCallResultValue(output);
@@ -2066,9 +2130,10 @@ IonCacheIRCompiler::emitCallScriptedSetter()
     // Check stack alignment. Add sizeof(uintptr_t) for the return address.
     MOZ_ASSERT(((masm.framePushed() + sizeof(uintptr_t)) % JitStackAlignment) == 0);
 
-    // The setter currently has a non-lazy script. We will only relazify when
-    // we do a shrinking GC and when that happens we will also purge IC stubs.
-    MOZ_ASSERT(target->hasScript());
+    // The setter currently has a jit entry or a non-lazy script. We will only
+    // relazify when we do a shrinking GC and when that happens we will also
+    // purge IC stubs.
+    MOZ_ASSERT(target->hasJitEntry());
     masm.loadJitCodeRaw(scratch, scratch);
     masm.callJit(scratch);
 

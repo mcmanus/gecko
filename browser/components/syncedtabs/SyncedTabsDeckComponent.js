@@ -4,23 +4,21 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-
-Cu.import("resource:///modules/syncedtabs/SyncedTabsDeckStore.js");
-Cu.import("resource:///modules/syncedtabs/SyncedTabsDeckView.js");
-Cu.import("resource:///modules/syncedtabs/SyncedTabsListStore.js");
-Cu.import("resource:///modules/syncedtabs/TabListComponent.js");
-Cu.import("resource:///modules/syncedtabs/TabListView.js");
-let { getChromeWindow } = Cu.import("resource:///modules/syncedtabs/util.js", {});
+ChromeUtils.import("resource:///modules/syncedtabs/SyncedTabsDeckStore.js");
+ChromeUtils.import("resource:///modules/syncedtabs/SyncedTabsDeckView.js");
+ChromeUtils.import("resource:///modules/syncedtabs/SyncedTabsListStore.js");
+ChromeUtils.import("resource:///modules/syncedtabs/TabListComponent.js");
+ChromeUtils.import("resource:///modules/syncedtabs/TabListView.js");
+let { getChromeWindow } = ChromeUtils.import("resource:///modules/syncedtabs/util.js", {});
 
 XPCOMUtils.defineLazyGetter(this, "FxAccountsCommon", function() {
-  return Components.utils.import("resource://gre/modules/FxAccountsCommon.js", {});
+  return ChromeUtils.import("resource://gre/modules/FxAccountsCommon.js", {});
 });
 
-let log = Cu.import("resource://gre/modules/Log.jsm", {})
+let log = ChromeUtils.import("resource://gre/modules/Log.jsm", {})
             .Log.repository.getLogger("Sync.RemoteTabs");
 
 this.EXPORTED_SYMBOLS = [

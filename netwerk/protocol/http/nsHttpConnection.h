@@ -380,6 +380,10 @@ private:
     // The capabailities associated with the most recent transaction
     uint32_t                        mTransactionCaps;
 
+    // If a large keepalive has been requested for any trans,
+    // scale the default by this factor
+    uint32_t                        mDefaultTimeoutFactor;
+
     bool                            mResponseTimeoutEnabled;
 
     // Flag to indicate connection is in inital keepalive period (fast detect).
@@ -419,6 +423,7 @@ public:
     void BootstrapTimings(TimingStruct times);
 private:
     TimingStruct    mBootstrappedTimings;
+    bool            mBootstrappedTimingsSet;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsHttpConnection, NS_HTTPCONNECTION_IID)

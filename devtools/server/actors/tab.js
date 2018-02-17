@@ -15,7 +15,6 @@
 var { Ci, Cu, Cr, Cc } = require("chrome");
 var Services = require("Services");
 var { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
-var promise = require("promise");
 var {
   ActorPool, createExtraActors, appendExtraActors
 } = require("devtools/server/actors/common");
@@ -28,8 +27,8 @@ const EventEmitter = require("devtools/shared/event-emitter");
 
 const EXTENSION_CONTENT_JSM = "resource://gre/modules/ExtensionContent.jsm";
 
-loader.lazyRequireGetter(this, "ThreadActor", "devtools/server/actors/script", true);
-loader.lazyRequireGetter(this, "unwrapDebuggerObjectGlobal", "devtools/server/actors/script", true);
+loader.lazyRequireGetter(this, "ThreadActor", "devtools/server/actors/thread", true);
+loader.lazyRequireGetter(this, "unwrapDebuggerObjectGlobal", "devtools/server/actors/thread", true);
 loader.lazyRequireGetter(this, "WorkerActorList", "devtools/server/actors/worker-list", true);
 loader.lazyImporter(this, "ExtensionContent", EXTENSION_CONTENT_JSM);
 
@@ -238,9 +237,6 @@ function TabActor(connection) {
   this._onWorkerActorListChanged = this._onWorkerActorListChanged.bind(this);
 }
 
-// XXX (bug 710213): TabActor attach/detach/exit/destroy is a
-// *complete* mess, needs to be rethought asap.
-
 TabActor.prototype = {
   traits: null,
 
@@ -441,15 +437,6 @@ TabActor.prototype = {
       this._sources = new TabSources(this.threadActor, this._allowSource);
     }
     return this._sources;
-  },
-
-  /**
-   * This is called by BrowserTabList.getList for existing tab actors prior to
-   * calling |form| below.  It can be used to do any async work that may be
-   * needed to assemble the form.
-   */
-  update() {
-    return promise.resolve(this);
   },
 
   form() {
@@ -675,8 +662,7 @@ TabActor.prototype = {
     let scriptError = scriptErrorClass.createInstance(Ci.nsIScriptError);
     scriptError.initWithWindowID(text, null, null, 0, 0, 1,
                                  category, getInnerId(this.window));
-    let console = Cc["@mozilla.org/consoleservice;1"].getService(Ci.nsIConsoleService);
-    console.logMessage(scriptError);
+    Services.console.logMessage(scriptError);
     return {};
   },
 

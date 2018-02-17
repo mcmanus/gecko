@@ -3,7 +3,7 @@
 
 "use strict";
 
-var { FileUtils } = Cu.import("resource://gre/modules/FileUtils.jsm", {});
+var { FileUtils } = ChromeUtils.import("resource://gre/modules/FileUtils.jsm", {});
 var Pipe = CC("@mozilla.org/pipe;1", "nsIPipe", "init");
 
 function run_test() {
@@ -147,7 +147,7 @@ var test_bulk_request_cs = Task.async(function* (transportFactory, actorType, re
   let client = new DebuggerClient(transport);
   client.connect().then(([app, traits]) => {
     Assert.equal(traits.bulk, true);
-    client.listTabs(clientDeferred.resolve);
+    client.listTabs().then(clientDeferred.resolve);
   });
 
   function bulkSendReadyCallback({copyFrom}) {
@@ -205,7 +205,7 @@ var test_json_request_cs = Task.async(function* (transportFactory, actorType, re
   let client = new DebuggerClient(transport);
   client.connect((app, traits) => {
     Assert.equal(traits.bulk, true);
-    client.listTabs(clientDeferred.resolve);
+    client.listTabs().then(clientDeferred.resolve);
   });
 
   clientDeferred.promise.then(response => {

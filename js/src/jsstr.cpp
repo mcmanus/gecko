@@ -22,25 +22,27 @@
 
 #include "jsapi.h"
 #include "jsarray.h"
-#include "jsatom.h"
 #include "jsbool.h"
-#include "jscntxt.h"
 #include "jsnum.h"
-#include "jsobj.h"
-#include "jsopcode.h"
 #include "jstypes.h"
 #include "jsutil.h"
 
+#include "builtin/intl/CommonFunctions.h"
+#include "builtin/intl/ICUStubs.h"
 #include "builtin/RegExp.h"
 #include "jit/InlinableNatives.h"
 #include "js/Conversions.h"
 #include "js/UniquePtr.h"
 #if ENABLE_INTL_API
-#include "unicode/uchar.h"
-#include "unicode/unorm2.h"
+# include "unicode/uchar.h"
+# include "unicode/unorm2.h"
 #endif
+#include "vm/BytecodeUtil.h"
 #include "vm/GlobalObject.h"
 #include "vm/Interpreter.h"
+#include "vm/JSAtom.h"
+#include "vm/JSContext.h"
+#include "vm/JSObject.h"
 #include "vm/Opcodes.h"
 #include "vm/Printer.h"
 #include "vm/RegExpObject.h"
@@ -1011,7 +1013,85 @@ js::str_toLowerCase(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
-#if !EXPOSE_INTL_API
+static const char*
+CaseMappingLocale(JSContext* cx, JSString* str)
+{
+    JSLinearString* locale = str->ensureLinear(cx);
+    if (!locale)
+        return nullptr;
+
+    MOZ_ASSERT(locale->length() >= 2, "locale is a valid language tag");
+
+    // Lithuanian, Turkish, and Azeri have language dependent case mappings.
+    static const char languagesWithSpecialCasing[][3] = { "lt", "tr", "az" };
+
+    // All strings in |languagesWithSpecialCasing| are of length two, so we
+    // only need to compare the first two characters to find a matching locale.
+    // ES2017 Intl, §9.2.2 BestAvailableLocale
+    if (locale->length() == 2 || locale->latin1OrTwoByteChar(2) == '-') {
+        for (const auto& language : languagesWithSpecialCasing) {
+            if (locale->latin1OrTwoByteChar(0) == language[0] &&
+                locale->latin1OrTwoByteChar(1) == language[1])
+            {
+                return language;
+            }
+        }
+    }
+
+    return ""; // ICU root locale
+}
+
+bool
+js::intl_toLocaleLowerCase(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 2);
+    MOZ_ASSERT(args[0].isString());
+    MOZ_ASSERT(args[1].isString());
+
+    RootedString string(cx, args[0].toString());
+
+    const char* locale = CaseMappingLocale(cx, args[1].toString());
+    if (!locale)
+        return false;
+
+    // Call String.prototype.toLowerCase() for language independent casing.
+    if (intl::StringsAreEqual(locale, "")) {
+        JSString* str = StringToLowerCase(cx, string);
+        if (!str)
+            return false;
+
+        args.rval().setString(str);
+        return true;
+    }
+
+    AutoStableStringChars inputChars(cx);
+    if (!inputChars.initTwoByte(cx, string))
+        return false;
+    mozilla::Range<const char16_t> input = inputChars.twoByteRange();
+
+    // Maximum case mapping length is three characters.
+    static_assert(JSString::MAX_LENGTH < INT32_MAX / 3,
+                  "Case conversion doesn't overflow int32_t indices");
+
+    JSString* str =
+        intl::CallICU(cx, [&input, locale](UChar* chars, int32_t size, UErrorCode* status) {
+            return u_strToLower(chars, size, input.begin().get(), input.length(), locale, status);
+        });
+    if (!str)
+        return false;
+
+    args.rval().setString(str);
+    return true;
+}
+
+#if EXPOSE_INTL_API
+
+// String.prototype.toLocaleLowerCase is self-hosted when Intl is exposed,
+// with core functionality performed by the intrinsic above.
+
+#else
+
 bool
 js::str_toLocaleLowerCase(JSContext* cx, unsigned argc, Value* vp)
 {
@@ -1045,7 +1125,8 @@ js::str_toLocaleLowerCase(JSContext* cx, unsigned argc, Value* vp)
     args.rval().setString(result);
     return true;
 }
-#endif /* !EXPOSE_INTL_API */
+
+#endif // EXPOSE_INTL_API
 
 static inline bool
 CanUpperCaseSpecialCasing(Latin1Char charCode)
@@ -1348,7 +1429,57 @@ js::str_toUpperCase(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
-#if !EXPOSE_INTL_API
+bool
+js::intl_toLocaleUpperCase(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 2);
+    MOZ_ASSERT(args[0].isString());
+    MOZ_ASSERT(args[1].isString());
+
+    RootedString string(cx, args[0].toString());
+
+    const char* locale = CaseMappingLocale(cx, args[1].toString());
+    if (!locale)
+        return false;
+
+    // Call String.prototype.toUpperCase() for language independent casing.
+    if (intl::StringsAreEqual(locale, "")) {
+        JSString* str = js::StringToUpperCase(cx, string);
+        if (!str)
+            return false;
+
+        args.rval().setString(str);
+        return true;
+    }
+
+    AutoStableStringChars inputChars(cx);
+    if (!inputChars.initTwoByte(cx, string))
+        return false;
+    mozilla::Range<const char16_t> input = inputChars.twoByteRange();
+
+    // Maximum case mapping length is three characters.
+    static_assert(JSString::MAX_LENGTH < INT32_MAX / 3,
+                  "Case conversion doesn't overflow int32_t indices");
+
+    JSString* str =
+        intl::CallICU(cx, [&input, locale](UChar* chars, int32_t size, UErrorCode* status) {
+            return u_strToUpper(chars, size, input.begin().get(), input.length(), locale, status);
+        });
+    if (!str)
+        return false;
+
+    args.rval().setString(str);
+    return true;
+}
+
+#if EXPOSE_INTL_API
+
+// String.prototype.toLocaleLowerCase is self-hosted when Intl is exposed,
+// with core functionality performed by the intrinsic above.
+
+#else
+
 bool
 js::str_toLocaleUpperCase(JSContext* cx, unsigned argc, Value* vp)
 {
@@ -1382,9 +1513,15 @@ js::str_toLocaleUpperCase(JSContext* cx, unsigned argc, Value* vp)
     args.rval().setString(result);
     return true;
 }
-#endif /* !EXPOSE_INTL_API */
 
-#if !EXPOSE_INTL_API
+#endif // EXPOSE_INTL_API
+
+#if EXPOSE_INTL_API
+
+// String.prototype.localeCompare is self-hosted when Intl is exposed.
+
+#else
+
 bool
 js::str_localeCompare(JSContext* cx, unsigned argc, Value* vp)
 {
@@ -1413,9 +1550,11 @@ js::str_localeCompare(JSContext* cx, unsigned argc, Value* vp)
     args.rval().setInt32(result);
     return true;
 }
-#endif
+
+#endif // EXPOSE_INTL_API
 
 #if EXPOSE_INTL_API
+
 // ES2017 draft rev 45e890512fd77add72cc0ee742785f9f6f6482de
 // 21.1.3.12 String.prototype.normalize ( [ form ] )
 bool
@@ -1549,7 +1688,8 @@ js::str_normalize(JSContext* cx, unsigned argc, Value* vp)
     args.rval().setString(ns);
     return true;
 }
-#endif
+
+#endif // EXPOSE_INTL_API
 
 bool
 js::str_charAt(JSContext* cx, unsigned argc, Value* vp)
@@ -2435,17 +2575,17 @@ js::str_endsWith(JSContext* cx, unsigned argc, Value* vp)
 
 template <typename CharT>
 static void
-TrimString(const CharT* chars, bool trimLeft, bool trimRight, size_t length,
+TrimString(const CharT* chars, bool trimStart, bool trimEnd, size_t length,
            size_t* pBegin, size_t* pEnd)
 {
     size_t begin = 0, end = length;
 
-    if (trimLeft) {
+    if (trimStart) {
         while (begin < length && unicode::IsSpace(chars[begin]))
             ++begin;
     }
 
-    if (trimRight) {
+    if (trimEnd) {
         while (end > begin && unicode::IsSpace(chars[end - 1]))
             --end;
     }
@@ -2455,7 +2595,7 @@ TrimString(const CharT* chars, bool trimLeft, bool trimRight, size_t length,
 }
 
 static bool
-TrimString(JSContext* cx, const CallArgs& args, bool trimLeft, bool trimRight)
+TrimString(JSContext* cx, const CallArgs& args, bool trimStart, bool trimEnd)
 {
     JSString* str = ToStringForStringFunction(cx, args.thisv());
     if (!str)
@@ -2469,10 +2609,10 @@ TrimString(JSContext* cx, const CallArgs& args, bool trimLeft, bool trimRight)
     size_t begin, end;
     if (linear->hasLatin1Chars()) {
         AutoCheckCannotGC nogc;
-        TrimString(linear->latin1Chars(nogc), trimLeft, trimRight, length, &begin, &end);
+        TrimString(linear->latin1Chars(nogc), trimStart, trimEnd, length, &begin, &end);
     } else {
         AutoCheckCannotGC nogc;
-        TrimString(linear->twoByteChars(nogc), trimLeft, trimRight, length, &begin, &end);
+        TrimString(linear->twoByteChars(nogc), trimStart, trimEnd, length, &begin, &end);
     }
 
     JSLinearString* result = NewDependentString(cx, linear, begin, end - begin);
@@ -2491,14 +2631,14 @@ js::str_trim(JSContext* cx, unsigned argc, Value* vp)
 }
 
 bool
-js::str_trimLeft(JSContext* cx, unsigned argc, Value* vp)
+js::str_trimStart(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     return TrimString(cx, args, true, false);
 }
 
 bool
-js::str_trimRight(JSContext* cx, unsigned argc, Value* vp)
+js::str_trimEnd(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     return TrimString(cx, args, false, true);
@@ -3183,8 +3323,13 @@ static const JSFunctionSpec string_methods[] = {
     JS_FN("startsWith",        str_startsWith,        1,0),
     JS_FN("endsWith",          str_endsWith,          1,0),
     JS_FN("trim",              str_trim,              0,0),
-    JS_FN("trimLeft",          str_trimLeft,          0,0),
-    JS_FN("trimRight",         str_trimRight,         0,0),
+#ifdef NIGHTLY_BUILD
+    JS_FN("trimStart",         str_trimStart,         0,0),
+    JS_FN("trimEnd",           str_trimEnd,           0,0),
+#else
+    JS_FN("trimLeft",          str_trimStart,         0,0),
+    JS_FN("trimRight",         str_trimEnd,           0,0),
+#endif
 #if EXPOSE_INTL_API
     JS_SELF_HOSTED_FN("toLocaleLowerCase", "String_toLocaleLowerCase", 0,0),
     JS_SELF_HOSTED_FN("toLocaleUpperCase", "String_toLocaleUpperCase", 0,0),
@@ -3470,7 +3615,7 @@ static const JSFunctionSpec string_static_methods[] = {
     JS_INLINABLE_FN("fromCharCode", js::str_fromCharCode, 1, 0, StringFromCharCode),
     JS_INLINABLE_FN("fromCodePoint", js::str_fromCodePoint, 1, 0, StringFromCodePoint),
 
-    JS_SELF_HOSTED_FN("raw",             "String_static_raw",           2,0),
+    JS_SELF_HOSTED_FN("raw",             "String_static_raw",           1,0),
     JS_SELF_HOSTED_FN("substring",       "String_static_substring",     3,0),
     JS_SELF_HOSTED_FN("substr",          "String_static_substr",        3,0),
     JS_SELF_HOSTED_FN("slice",           "String_static_slice",         3,0),
@@ -3542,6 +3687,27 @@ js::InitStringClass(JSContext* cx, HandleObject obj)
     {
         return nullptr;
     }
+
+#ifdef NIGHTLY_BUILD
+    // Create "trimLeft" as an alias for "trimStart".
+    RootedValue trimFn(cx);
+    RootedId trimId(cx, NameToId(cx->names().trimStart));
+    RootedId trimAliasId(cx, NameToId(cx->names().trimLeft));
+    if (!NativeGetProperty(cx, protoObj, trimId, &trimFn) ||
+        !NativeDefineDataProperty(cx, protoObj, trimAliasId, trimFn, 0))
+    {
+        return nullptr;
+    }
+
+    // Create "trimRight" as an alias for "trimEnd".
+    trimId = NameToId(cx->names().trimEnd);
+    trimAliasId = NameToId(cx->names().trimRight);
+    if (!NativeGetProperty(cx, protoObj, trimId, &trimFn) ||
+        !NativeDefineDataProperty(cx, protoObj, trimAliasId, trimFn, 0))
+    {
+        return nullptr;
+    }
+#endif
 
     /*
      * Define escape/unescape, the URI encode/decode functions, and maybe

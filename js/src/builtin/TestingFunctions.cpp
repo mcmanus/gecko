@@ -17,10 +17,7 @@
 #include <ctime>
 
 #include "jsapi.h"
-#include "jscntxt.h"
 #include "jsfriendapi.h"
-#include "jsiter.h"
-#include "jsobj.h"
 #include "jsprf.h"
 #include "jswrapper.h"
 
@@ -44,6 +41,9 @@
 #include "vm/Debugger.h"
 #include "vm/GlobalObject.h"
 #include "vm/Interpreter.h"
+#include "vm/Iteration.h"
+#include "vm/JSContext.h"
+#include "vm/JSObject.h"
 #include "vm/ProxyObject.h"
 #include "vm/SavedStacks.h"
 #include "vm/Stack.h"
@@ -57,11 +57,10 @@
 #include "wasm/WasmTextToBinary.h"
 #include "wasm/WasmTypes.h"
 
-#include "jscntxtinlines.h"
-#include "jsobjinlines.h"
-
 #include "vm/Debugger-inl.h"
 #include "vm/EnvironmentObject-inl.h"
+#include "vm/JSContext-inl.h"
+#include "vm/JSObject-inl.h"
 #include "vm/NativeObject-inl.h"
 
 using namespace js;
@@ -558,6 +557,19 @@ WasmSignExtensionSupported(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 #ifdef ENABLE_WASM_SIGNEXTEND_OPS
+    bool isSupported = true;
+#else
+    bool isSupported = false;
+#endif
+    args.rval().setBoolean(isSupported);
+    return true;
+}
+
+static bool
+WasmSaturatingTruncationSupported(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+#ifdef ENABLE_WASM_SATURATING_TRUNC_OPS
     bool isSupported = true;
 #else
     bool isSupported = false;
@@ -1422,7 +1434,8 @@ NewMaybeExternalString(JSContext* cx, unsigned argc, Value* vp)
     if (!res)
         return false;
 
-    mozilla::Unused << buf.release();
+    if (allocatedExternal)
+        mozilla::Unused << buf.release();
     args.rval().setString(res);
     return true;
 }
@@ -4963,6 +4976,24 @@ IsLegacyIterator(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
+static bool
+EnableExpressionClosures(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    JS::ContextOptionsRef(cx).setExpressionClosures(true);
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+DisableExpressionClosures(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    JS::ContextOptionsRef(cx).setExpressionClosures(false);
+    args.rval().setUndefined();
+    return true;
+}
+
 static const JSFunctionSpecWithHelp TestingFunctions[] = {
     JS_FN_HELP("gc", ::GC, 0, 0,
 "gc([obj] | 'zone' [, 'shrinking'])",
@@ -5281,6 +5312,11 @@ gc::ZealModeHelpText),
 "  Returns a boolean indicating whether the WebAssembly sign extension opcodes are\n"
 "  supported on the current device."),
 
+    JS_FN_HELP("wasmSaturatingTruncationSupported", WasmSaturatingTruncationSupported, 0, 0,
+"wasmSaturatingTruncationSupported()",
+"  Returns a boolean indicating whether the WebAssembly saturating truncates opcodes are\n"
+"  supported on the current device."),
+
     JS_FN_HELP("wasmCompileMode", WasmCompileMode, 0, 0,
 "wasmCompileMode()",
 "  Returns a string indicating the available compile policy: 'baseline', 'ion',\n"
@@ -5363,7 +5399,9 @@ gc::ZealModeHelpText),
 "      to specify whether SharedArrayBuffers may be serialized.\n"
 "    'scope' - SameProcessSameThread, SameProcessDifferentThread, or\n"
 "      DifferentProcess. Determines how some values will be serialized.\n"
-"      Clone buffers may only be deserialized with a compatible scope."),
+"      Clone buffers may only be deserialized with a compatible scope.\n"
+"      NOTE - For DifferentProcess, must also set SharedArrayBuffer:'deny'\n"
+"      if data contains any shared memory object."),
 
     JS_FN_HELP("deserialize", Deserialize, 1, 0,
 "deserialize(clonebuffer[, opts])",
@@ -5576,6 +5614,14 @@ gc::ZealModeHelpText),
     JS_FN_HELP("getTimeZone", GetTimeZone, 0, 0,
 "getTimeZone()",
 "  Get the current time zone.\n"),
+
+    JS_FN_HELP("enableExpressionClosures", EnableExpressionClosures, 0, 0,
+"enableExpressionClosures()",
+"  Enables the deprecated, non-standard expression closures.\n"),
+
+    JS_FN_HELP("disableExpressionClosures", DisableExpressionClosures, 0, 0,
+"disableExpressionClosures()",
+"  Disables the deprecated, non-standard expression closures.\n"),
 
     JS_FS_HELP_END
 };

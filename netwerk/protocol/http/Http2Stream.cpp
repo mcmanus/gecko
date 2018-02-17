@@ -112,10 +112,20 @@ Http2Stream::Http2Stream(nsAHttpTransaction *httpTransaction,
 
 Http2Stream::~Http2Stream()
 {
+  ClearPushSource();
   ClearTransactionsBlockedOnTunnel();
   mStreamID = Http2Session::kDeadStreamID;
 
   LOG3(("Http2Stream::~Http2Stream %p", this));
+}
+
+void
+Http2Stream::ClearPushSource()
+{
+  if (mPushSource) {
+    mPushSource->SetConsumerStream(nullptr);
+    mPushSource = nullptr;
+  }
 }
 
 // ReadSegments() is used to write data down the socket. Generally, HTTP
@@ -333,7 +343,7 @@ Http2Stream::WriteSegments(nsAHttpSegmentWriter *writer,
 }
 
 nsresult
-Http2Stream::MakeOriginURL(const nsACString &origin, RefPtr<nsStandardURL> &url)
+Http2Stream::MakeOriginURL(const nsACString &origin, nsCOMPtr<nsIURI> &url)
 {
   nsAutoCString scheme;
   nsresult rv = net_ExtractURLScheme(origin, scheme);
@@ -343,15 +353,17 @@ Http2Stream::MakeOriginURL(const nsACString &origin, RefPtr<nsStandardURL> &url)
 
 nsresult
 Http2Stream::MakeOriginURL(const nsACString &scheme, const nsACString &origin,
-                           RefPtr<nsStandardURL> &url)
+                           nsCOMPtr<nsIURI> &url)
 {
-  url = new nsStandardURL();
-  nsresult rv = url->Init(nsIStandardURL::URLTYPE_AUTHORITY,
-                          scheme.EqualsLiteral("http") ?
-                              NS_HTTP_DEFAULT_PORT :
-                              NS_HTTPS_DEFAULT_PORT,
-                          origin, nullptr, nullptr);
-  return rv;
+  return NS_MutateURI(new nsStandardURL::Mutator())
+           .Apply<nsIStandardURLMutator>(&nsIStandardURLMutator::Init,
+                                         nsIStandardURL::URLTYPE_AUTHORITY,
+                                         scheme.EqualsLiteral("http") ?
+                                             NS_HTTP_DEFAULT_PORT :
+                                             NS_HTTPS_DEFAULT_PORT,
+                                         nsCString(origin), nullptr, nullptr,
+                                         nullptr)
+           .Finalize(url);
 }
 
 void
@@ -367,7 +379,7 @@ Http2Stream::CreatePushHashKey(const nsCString &scheme,
   fullOrigin.AppendLiteral("://");
   fullOrigin.Append(hostHeader);
 
-  RefPtr<nsStandardURL> origin;
+  nsCOMPtr<nsIURI> origin;
   nsresult rv = Http2Stream::MakeOriginURL(scheme, fullOrigin, origin);
 
   if (NS_SUCCEEDED(rv)) {
@@ -1135,6 +1147,10 @@ Http2Stream::ConvertPushHeaders(Http2Decompressor *decompressor,
 void
 Http2Stream::Close(nsresult reason)
 {
+  // In case we are connected to a push, make sure the push knows we are closed,
+  // so it doesn't try to give us any more DATA that comes on it after our close.
+  ClearPushSource();
+
   mTransaction->Close(reason);
 }
 

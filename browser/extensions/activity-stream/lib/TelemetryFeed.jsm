@@ -5,17 +5,18 @@
 
 "use strict";
 
-const {interfaces: Ci, utils: Cu} = Components;
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-const {actionTypes: at, actionUtils: au} = Cu.import("resource://activity-stream/common/Actions.jsm", {});
-const {Prefs} = Cu.import("resource://activity-stream/lib/ActivityStreamPrefs.jsm", {});
+const {actionTypes: at, actionUtils: au} = ChromeUtils.import("resource://activity-stream/common/Actions.jsm", {});
+const {Prefs} = ChromeUtils.import("resource://activity-stream/lib/ActivityStreamPrefs.jsm", {});
 
-XPCOMUtils.defineLazyModuleGetter(this, "perfService",
+ChromeUtils.defineModuleGetter(this, "perfService",
   "resource://activity-stream/common/PerfService.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PingCentre",
+ChromeUtils.defineModuleGetter(this, "PingCentre",
   "resource:///modules/PingCentre.jsm");
+ChromeUtils.defineModuleGetter(this, "UTEventReporting",
+  "resource://activity-stream/lib/UTEventReporting.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "gUUIDGenerator",
   "@mozilla.org/uuid-generator;1",
@@ -119,6 +120,14 @@ this.TelemetryFeed = class TelemetryFeed {
   }
 
   /**
+   * Lazily initialize UTEventReporting to send pings
+   */
+  get utEvents() {
+    Object.defineProperty(this, "utEvents", {value: new UTEventReporting()});
+    return this.utEvents;
+  }
+
+  /**
    * Get encoded user preferences, multiple prefs will be combined via bitwise OR operator
    */
   get userPreferences() {
@@ -218,7 +227,9 @@ this.TelemetryFeed = class TelemetryFeed {
       session.session_duration = Math.round(perfService.absNow() - session.perf.visibility_event_rcvd_ts);
     }
 
-    this.sendEvent(this.createSessionEndEvent(session));
+    let sessionEndEvent = this.createSessionEndEvent(session);
+    this.sendEvent(sessionEndEvent);
+    this.utEvents.sendSessionEndEvent(sessionEndEvent);
     this.sessions.delete(portID);
   }
 
@@ -333,7 +344,7 @@ this.TelemetryFeed = class TelemetryFeed {
     );
   }
 
-  async sendEvent(event_object) {
+  sendEvent(event_object) {
     if (this.telemetryEnabled) {
       this.pingCentre.sendPing(event_object,
       {filter: ACTIVITY_STREAM_ID});
@@ -345,7 +356,9 @@ this.TelemetryFeed = class TelemetryFeed {
   }
 
   handleUserEvent(action) {
-    this.sendEvent(this.createUserEvent(action));
+    let userEvent = this.createUserEvent(action);
+    this.sendEvent(userEvent);
+    this.utEvents.sendUserEvent(userEvent);
   }
 
   handleUndesiredEvent(action) {
@@ -430,6 +443,9 @@ this.TelemetryFeed = class TelemetryFeed {
     // Only uninit if the getter has initialized it
     if (Object.prototype.hasOwnProperty.call(this, "pingCentre")) {
       this.pingCentre.uninit();
+    }
+    if (Object.prototype.hasOwnProperty.call(this, "utEvents")) {
+      this.utEvents.uninit();
     }
 
     try {

@@ -6,8 +6,6 @@
 
 this.EXPORTED_SYMBOLS = ["FormAutofillUtils", "AddressDataLoader"];
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
-
 const ADDRESS_METADATA_PATH = "resource://formautofill/addressmetadata/";
 const ADDRESS_REFERENCES = "addressReferences.js";
 const ADDRESS_REFERENCES_EXT = "addressReferencesExt.js";
@@ -42,8 +40,8 @@ const SECTION_TYPES = {
 // attacks that fill the user's hard drive(s).
 const MAX_FIELD_VALUE_LENGTH = 200;
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 let AddressDataLoader = {
   // Status of address data loading. We'll load all the countries with basic level 1
@@ -390,7 +388,7 @@ this.FormAutofillUtils = {
 
   defineLazyLogGetter(scope, logPrefix) {
     XPCOMUtils.defineLazyGetter(scope, "log", () => {
-      let ConsoleAPI = Cu.import("resource://gre/modules/Console.jsm", {}).ConsoleAPI;
+      let ConsoleAPI = ChromeUtils.import("resource://gre/modules/Console.jsm", {}).ConsoleAPI;
       return new ConsoleAPI({
         maxLogLevelPref: "extensions.formautofill.loglevel",
         prefix: logPrefix,

@@ -2,19 +2,19 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* import-globals-from extensionControlled.js */
 /* import-globals-from preferences.js */
 /* import-globals-from ../../../../toolkit/mozapps/preferences/fontbuilder.js */
 /* import-globals-from ../../../base/content/aboutDialog-appUpdater.js */
 
-Components.utils.import("resource://gre/modules/Services.jsm");
-Components.utils.import("resource://gre/modules/Downloads.jsm");
-Components.utils.import("resource://gre/modules/FileUtils.jsm");
-Components.utils.import("resource:///modules/ShellService.jsm");
-Components.utils.import("resource:///modules/TransientPrefs.jsm");
-Components.utils.import("resource://gre/modules/AppConstants.jsm");
-Components.utils.import("resource://gre/modules/DownloadUtils.jsm");
-Components.utils.import("resource://gre/modules/LoadContextInfo.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "CloudStorage",
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/Downloads.jsm");
+ChromeUtils.import("resource://gre/modules/FileUtils.jsm");
+ChromeUtils.import("resource:///modules/ShellService.jsm");
+ChromeUtils.import("resource:///modules/TransientPrefs.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/DownloadUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "CloudStorage",
   "resource://gre/modules/CloudStorage.jsm");
 
 // Constants & Enumeration Values
@@ -41,6 +41,7 @@ const CONTAINERS_KEY = "privacy.containers";
 const HOMEPAGE_OVERRIDE_KEY = "homepage_override";
 const URL_OVERRIDES_TYPE = "url_overrides";
 const NEW_TAB_KEY = "newTabURL";
+const NEW_TAB_STRING_ID = "extensionControlled.newTabURL2";
 
 /*
  * Preferences where we store handling information about the feed type.
@@ -94,11 +95,13 @@ const ICON_URL_APP = AppConstants.platform == "linux" ?
 // was set by us to a custom handler icon and CSS should not try to override it.
 const APP_ICON_ATTR_NAME = "appHandlerIcon";
 
-XPCOMUtils.defineLazyModuleGetter(this, "OS",
+ChromeUtils.defineModuleGetter(this, "OS",
   "resource://gre/modules/osfile.jsm");
 
 if (AppConstants.MOZ_DEV_EDITION) {
-  XPCOMUtils.defineLazyModuleGetter(this, "fxAccounts",
+  ChromeUtils.defineModuleGetter(this, "fxAccounts",
+    "resource://gre/modules/FxAccounts.jsm");
+  ChromeUtils.defineModuleGetter(this, "FxAccounts",
     "resource://gre/modules/FxAccounts.jsm");
 }
 
@@ -357,16 +360,25 @@ var gMainPane = {
 
     this.updateBrowserStartupLastSession();
 
-    handleControllingExtension(URL_OVERRIDES_TYPE, NEW_TAB_KEY);
+    handleControllingExtension(
+      URL_OVERRIDES_TYPE, NEW_TAB_KEY, NEW_TAB_STRING_ID);
     let newTabObserver = {
       observe(subject, topic, data) {
-          handleControllingExtension(URL_OVERRIDES_TYPE, NEW_TAB_KEY);
+        handleControllingExtension(
+          URL_OVERRIDES_TYPE, NEW_TAB_KEY, NEW_TAB_STRING_ID);
       },
     };
     Services.obs.addObserver(newTabObserver, "newtab-url-changed");
     window.addEventListener("unload", () => {
       Services.obs.removeObserver(newTabObserver, "newtab-url-changed");
     });
+
+    let connectionSettingsLink = document.getElementById("connectionSettingsLearnMore");
+    let connectionSettingsUrl = Services.urlFormatter.formatURLPref("app.support.baseURL") +
+                                "prefs-connection-settings";
+    connectionSettingsLink.setAttribute("href", connectionSettingsUrl);
+    this.updateProxySettingsUI();
+    initializeProxyUI(gMainPane);
 
     if (AppConstants.platform == "win") {
       // Functionality for "Show tabs in taskbar" on Windows 7 and up.
@@ -438,7 +450,7 @@ var gMainPane = {
       let row = document.getElementById("translationBox");
       row.removeAttribute("hidden");
       // Showing attribution only for Bing Translator.
-      Components.utils.import("resource:///modules/translation/Translation.jsm");
+      ChromeUtils.import("resource:///modules/translation/Translation.jsm");
       if (Translation.translationEngine == "bing") {
         document.getElementById("bingAttribution").removeAttribute("hidden");
       }
@@ -654,7 +666,7 @@ var gMainPane = {
     this.readBrowserContainersCheckbox();
   },
 
-  separateProfileModeChange() {
+  async separateProfileModeChange() {
     if (AppConstants.MOZ_DEV_EDITION) {
       function quitApp() {
         Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestartNotSameProfile);
@@ -677,14 +689,13 @@ var gMainPane = {
       }
 
       let separateProfileModeCheckbox = document.getElementById("separateProfileMode");
-      let button_index = confirmRestartPrompt(separateProfileModeCheckbox.checked,
+      let button_index = await confirmRestartPrompt(separateProfileModeCheckbox.checked,
         0, false, true);
       switch (button_index) {
         case CONFIRM_RESTART_PROMPT_CANCEL:
           revertCheckbox();
           return;
         case CONFIRM_RESTART_PROMPT_RESTART_NOW:
-          const Cc = Components.classes, Ci = Components.interfaces;
           let cancelQuit = Cc["@mozilla.org/supports-PRBool;1"]
             .createInstance(Ci.nsISupportsPRBool);
           Services.obs.notifyObservers(cancelQuit, "quit-application-requested",
@@ -717,7 +728,7 @@ var gMainPane = {
       win.openUILinkIn("about:preferences#sync", "current");
       return;
     }
-    let url = await fxAccounts.promiseAccountsSignInURI("dev-edition-setup");
+    let url = await FxAccounts.config.promiseSignInURI("dev-edition-setup");
     let accountsTab = win.gBrowser.addTab(url);
     win.gBrowser.selectedTab = accountsTab;
   },
@@ -764,7 +775,8 @@ var gMainPane = {
       setInputDisabledStates(false);
     } else {
       // Asynchronously update the extension controlled UI.
-      handleControllingExtension(PREF_SETTING_TYPE, HOMEPAGE_OVERRIDE_KEY)
+      handleControllingExtension(
+        PREF_SETTING_TYPE, HOMEPAGE_OVERRIDE_KEY, "extensionControlled.homepage_override2")
         .then(setInputDisabledStates);
     }
 
@@ -887,11 +899,8 @@ var gMainPane = {
   },
 
   _getTabsForHomePage() {
-    var win;
     var tabs = [];
-
-    const Cc = Components.classes, Ci = Components.interfaces;
-    win = Services.wm.getMostRecentWindow("navigator:browser");
+    var win = Services.wm.getMostRecentWindow("navigator:browser");
 
     if (win && win.document.documentElement
       .getAttribute("windowtype") == "navigator:browser") {
@@ -926,7 +935,7 @@ var gMainPane = {
   updateButtons(aButtonID, aPreferenceID) {
     var button = document.getElementById(aButtonID);
     var preference = Preferences.get(aPreferenceID);
-    button.disabled = preference.value != true;
+    button.disabled = !preference.value;
     return undefined;
   },
 
@@ -1066,7 +1075,7 @@ var gMainPane = {
   },
 
   openTranslationProviderAttribution() {
-    Components.utils.import("resource:///modules/translation/Translation.jsm");
+    ChromeUtils.import("resource:///modules/translation/Translation.jsm");
     Translation.openProviderAttribution();
   },
 
@@ -1091,7 +1100,29 @@ var gMainPane = {
    * Displays a dialog in which proxy settings may be changed.
    */
   showConnections() {
-    gSubDialog.open("chrome://browser/content/preferences/connection.xul");
+    gSubDialog.open("chrome://browser/content/preferences/connection.xul",
+                    null, null, this.updateProxySettingsUI.bind(this));
+  },
+
+  // Update the UI to show the proper description depending on whether an
+  // extension is in control or not.
+  async updateProxySettingsUI() {
+    let controllingExtension = await getControllingExtension(PREF_SETTING_TYPE, PROXY_KEY);
+    let fragment = controllingExtension ?
+      getControllingExtensionFragment(
+        "extensionControlled.proxyConfig", controllingExtension, this._brandShortName) :
+      BrowserUtils.getLocalizedFragment(
+        document,
+        this._prefsBundle.getString("connectionDesc.label"),
+        this._brandShortName);
+    let description = document.getElementById("connectionSettingsDescription");
+
+    // Remove the old content from the description.
+    while (description.firstChild) {
+      description.firstChild.remove();
+    }
+
+    description.appendChild(fragment);
   },
 
   checkBrowserContainers(event) {
@@ -1693,8 +1724,8 @@ var gMainPane = {
 
   _matchesFilter(aType) {
     var filterValue = this._filter.value.toLowerCase();
-    return this._describeType(aType).toLowerCase().indexOf(filterValue) != -1 ||
-      this._describePreferredAction(aType).toLowerCase().indexOf(filterValue) != -1;
+    return this._describeType(aType).toLowerCase().includes(filterValue) ||
+      this._describePreferredAction(aType).toLowerCase().includes(filterValue);
   },
 
   /**
@@ -3022,7 +3053,7 @@ HandlerInfoWrapper.prototype = {
   handledOnlyByPlugin: undefined,
 
   get isDisabledPluginType() {
-    return this._getDisabledPluginTypes().indexOf(this.type) != -1;
+    return this._getDisabledPluginTypes().includes(this.type);
   },
 
   _getDisabledPluginTypes() {
@@ -3042,7 +3073,7 @@ HandlerInfoWrapper.prototype = {
   disablePluginType() {
     var disabledPluginTypes = this._getDisabledPluginTypes();
 
-    if (disabledPluginTypes.indexOf(this.type) == -1)
+    if (!disabledPluginTypes.includes(this.type))
       disabledPluginTypes.push(this.type);
 
     Services.prefs.setCharPref(PREF_DISABLED_PLUGIN_TYPES,
@@ -3355,7 +3386,7 @@ FeedHandlerInfo.prototype = {
   },
 
   set alwaysAskBeforeHandling(aNewValue) {
-    if (aNewValue == true)
+    if (aNewValue)
       Preferences.get(this._prefSelectedAction).value = "ask";
     else
       Preferences.get(this._prefSelectedAction).value = "reader";

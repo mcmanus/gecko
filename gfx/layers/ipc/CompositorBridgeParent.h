@@ -107,7 +107,7 @@ public:
 
   virtual void NotifyClearCachedResources(LayerTransactionParent* aLayerTree) { }
 
-  virtual void ForceComposite(LayerTransactionParent* aLayerTree) { }
+  virtual void ScheduleComposite(LayerTransactionParent* aLayerTree) { }
   virtual bool SetTestSampleTime(const uint64_t& aId,
                                  const TimeStamp& aTime) { return true; }
   virtual void LeaveTestMode(const uint64_t& aId) { }
@@ -132,7 +132,11 @@ public:
 
   virtual void DidComposite(uint64_t aId, TimeStamp& aCompositeStart, TimeStamp& aCompositeEnd) {}
 
-  virtual void NotifyDidCompositeToPipeline(const wr::PipelineId& aPipelineId, const wr::Epoch& aEpoch, TimeStamp& aCompositeStart, TimeStamp& aCompositeEnd) {}
+  virtual void NotifyDidCompositeToPipeline(const wr::PipelineId& aPipelineId,
+                                            const wr::Epoch& aEpoch,
+                                            TimeStamp& aCompositeStart,
+                                            TimeStamp& aCompositeEnd) { MOZ_ASSERT_UNREACHABLE("WebRender only"); }
+  virtual void NotifyPipelineRemoved(const wr::PipelineId& aPipelineId) { MOZ_ASSERT_UNREACHABLE("WebRender only"); }
 
   // HostIPCAllocator
   base::ProcessId GetChildProcessId() override;
@@ -236,7 +240,7 @@ public:
   void ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
                            const TransactionInfo& aInfo,
                            bool aHitTestUpdate) override;
-  void ForceComposite(LayerTransactionParent* aLayerTree) override;
+  void ScheduleComposite(LayerTransactionParent* aLayerTree) override;
   bool SetTestSampleTime(const uint64_t& aId,
                          const TimeStamp& aTime) override;
   void LeaveTestMode(const uint64_t& aId) override;
@@ -293,7 +297,7 @@ public:
   bool ScheduleResumeOnCompositorThread();
   bool ScheduleResumeOnCompositorThread(int width, int height);
 
-  virtual void ScheduleComposition();
+  void ScheduleComposition();
   void NotifyShadowTreeTransaction(uint64_t aId, bool aIsFirstPaint,
       const FocusTarget& aFocusTarget,
       bool aScheduleComposite, uint32_t aPaintSequenceNumber,
@@ -562,7 +566,11 @@ protected:
   using CompositorBridgeParentBase::DidComposite;
   void DidComposite(TimeStamp& aCompositeStart, TimeStamp& aCompositeEnd);
 
-  void NotifyDidCompositeToPipeline(const wr::PipelineId& aPipelineId, const wr::Epoch& aEpoch, TimeStamp& aCompositeStart, TimeStamp& aCompositeEnd) override;
+  void NotifyDidCompositeToPipeline(const wr::PipelineId& aPipelineId,
+                                    const wr::Epoch& aEpoch,
+                                    TimeStamp& aCompositeStart,
+                                    TimeStamp& aCompositeEnd) override;
+  void NotifyPipelineRemoved(const wr::PipelineId& aPipelineId) override;
 
   void NotifyDidComposite(uint64_t aTransactionId, TimeStamp& aCompositeStart, TimeStamp& aCompositeEnd);
 
@@ -577,10 +585,9 @@ protected:
   RefPtr<AsyncImagePipelineManager> mAsyncImageManager;
   RefPtr<WebRenderBridgeParent> mWrBridge;
   widget::CompositorWidget* mWidget;
-  TimeStamp mTestTime;
+  Maybe<TimeStamp> mTestTime;
   CSSToLayoutDeviceScale mScale;
   TimeDuration mVsyncRate;
-  bool mIsTesting;
 
   uint64_t mPendingTransaction;
   TimeStamp mTxnStartTime;

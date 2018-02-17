@@ -20,7 +20,6 @@
 #include "js/Value.h"
 #include "js/Vector.h"
 
-struct JSRuntime;
 struct JSStructuredCloneReader;
 struct JSStructuredCloneWriter;
 
@@ -265,6 +264,11 @@ JS_ReadStructuredClone(JSContext* cx, JSStructuredCloneData& data, uint32_t vers
                        JS::MutableHandleValue vp,
                        const JSStructuredCloneCallbacks* optionalCallbacks, void* closure);
 
+/**
+ * Note: If the scope is DifferentProcess then the cloneDataPolicy must deny
+ * shared-memory objects, or an error will be signaled if a shared memory object
+ * is seen.
+ */
 JS_PUBLIC_API(bool)
 JS_WriteStructuredClone(JSContext* cx, JS::HandleValue v, JSStructuredCloneData* data,
                         JS::StructuredCloneScope scope,

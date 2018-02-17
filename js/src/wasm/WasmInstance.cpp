@@ -25,9 +25,8 @@
 #include "wasm/WasmBuiltins.h"
 #include "wasm/WasmModule.h"
 
-#include "jsobjinlines.h"
-
 #include "vm/ArrayBufferObject-inl.h"
+#include "vm/JSObject-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -109,19 +108,19 @@ js::wasm::ShutDownInstanceStaticData()
 const void**
 Instance::addressOfSigId(const SigIdDesc& sigId) const
 {
-    return (const void**)(globalSegment().globalData() + sigId.globalDataOffset());
+    return (const void**)(globalData() + sigId.globalDataOffset());
 }
 
 FuncImportTls&
 Instance::funcImportTls(const FuncImport& fi)
 {
-    return *(FuncImportTls*)(globalSegment().globalData() + fi.tlsDataOffset());
+    return *(FuncImportTls*)(globalData() + fi.tlsDataOffset());
 }
 
 TableTls&
 Instance::tableTls(const TableDesc& td) const
 {
-    return *(TableTls*)(globalSegment().globalData() + td.globalDataOffset);
+    return *(TableTls*)(globalData() + td.globalDataOffset);
 }
 
 bool
@@ -384,23 +383,22 @@ Instance::Instance(JSContext* cx,
                    Handle<WasmInstanceObject*> object,
                    SharedCode code,
                    UniqueDebugState debug,
-                   UniqueGlobalSegment globals,
+                   UniqueTlsData tlsDataIn,
                    HandleWasmMemoryObject memory,
                    SharedTableVector&& tables,
                    Handle<FunctionVector> funcImports,
                    const ValVector& globalImports)
   : compartment_(cx->compartment()),
     object_(object),
-    jsJitArgsRectifier_(),
     code_(code),
     debug_(Move(debug)),
-    globals_(Move(globals)),
+    tlsData_(Move(tlsDataIn)),
     memory_(memory),
     tables_(Move(tables)),
     enterFrameTrapsEnabled_(false)
 {
 #ifdef DEBUG
-    for (auto t : metadata().tiers())
+    for (auto t : code_->tiers())
         MOZ_ASSERT(funcImports.length() == metadata(t).funcImports.length());
 #endif
     MOZ_ASSERT(tables_.length() == metadata().tables.length());
@@ -410,8 +408,9 @@ Instance::Instance(JSContext* cx,
     tlsData()->boundsCheckLimit = memory ? memory->buffer().wasmBoundsCheckLimit() : 0;
 #endif
     tlsData()->instance = this;
-    tlsData()->addressOfContext = (JSContext**)object->zone()->group()->addressOfOwnerContext();
-    tlsData()->jumpTable = code_->jumpTable();
+    tlsData()->cx = cx;
+    tlsData()->stackLimit = cx->stackLimitForJitCode(JS::StackForUntrustedScript);
+    tlsData()->jumpTable = code_->tieringJumpTable();
 
     Tier callerTier = code_->bestTier();
 
@@ -448,14 +447,12 @@ Instance::Instance(JSContext* cx,
         table.base = tables_[i]->base();
     }
 
-    uint8_t* globalData = globals_->globalData();
-
     for (size_t i = 0; i < metadata().globals.length(); i++) {
         const GlobalDesc& global = metadata().globals[i];
         if (global.isConstant())
             continue;
 
-        uint8_t* globalAddr = globalData + global.offset();
+        uint8_t* globalAddr = globalData() + global.offset();
         switch (global.kind()) {
           case GlobalKind::Import: {
             globalImports[global.importIndex()].writePayload(globalAddr);
@@ -509,13 +506,11 @@ Instance::init(JSContext* cx)
         }
     }
 
-    if (!metadata(code_->bestTier()).funcImports.empty()) {
-        JitRuntime* jitRuntime = cx->runtime()->getJitRuntime(cx);
-        if (!jitRuntime)
-            return false;
-        jsJitArgsRectifier_ = jitRuntime->getArgumentsRectifier();
-    }
-
+    JitRuntime* jitRuntime = cx->runtime()->getJitRuntime(cx);
+    if (!jitRuntime)
+        return false;
+    jsJitArgsRectifier_ = jitRuntime->getArgumentsRectifier();
+    jsJitExceptionHandler_ = jitRuntime->getExceptionTail();
     return true;
 }
 
@@ -887,50 +882,11 @@ Instance::addSizeOfMisc(MallocSizeOf mallocSizeOf,
                         size_t* code,
                         size_t* data) const
 {
-    *data += mallocSizeOf(this) + globals_->sizeOfMisc(mallocSizeOf);
-
+    *data += mallocSizeOf(this);
+    *data += mallocSizeOf(tlsData_.get());
     for (const SharedTable& table : tables_)
          *data += table->sizeOfIncludingThisIfNotSeen(mallocSizeOf, seenTables);
 
     debug_->addSizeOfMisc(mallocSizeOf, seenMetadata, seenBytes, seenCode, code, data);
     code_->addSizeOfMiscIfNotSeen(mallocSizeOf, seenMetadata, seenCode, code, data);
-}
-
-// We will emit SIMD memory accesses that require 16-byte alignment.
-static const size_t TlsAlign = Simd128DataSize;
-
-/* static */ UniqueGlobalSegment
-GlobalSegment::create(uint32_t globalDataLength)
-{
-    MOZ_ASSERT(globalDataLength % gc::SystemPageSize() == 0);
-
-    auto gs = MakeUnique<GlobalSegment>();
-    if (!gs)
-        return nullptr;
-
-    void* allocatedBase = js_calloc(TlsAlign + offsetof(TlsData, globalArea) + globalDataLength);
-    if (!allocatedBase)
-        return nullptr;
-
-    TlsData* tlsData = reinterpret_cast<TlsData*>(AlignBytes(size_t(allocatedBase), TlsAlign));
-    tlsData->allocatedBase = allocatedBase;
-
-    gs->tlsData_ = tlsData;
-    gs->globalDataLength_ = globalDataLength;
-
-    return gs;
-}
-
-GlobalSegment::~GlobalSegment()
-{
-    if (tlsData_)
-        js_free(tlsData_->allocatedBase);
-}
-
-size_t
-GlobalSegment::sizeOfMisc(MallocSizeOf mallocSizeOf) const
-{
-    // Note, once the GlobalSegment is shared among instances, we will have to
-    // take that sharing into account.
-    return mallocSizeOf(this) + mallocSizeOf(tlsData_);
 }

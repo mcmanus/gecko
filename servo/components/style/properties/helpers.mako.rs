@@ -82,8 +82,8 @@
                           need_animatable=need_animatable, **kwargs)">
         #[allow(unused_imports)]
         use smallvec::SmallVec;
-        use std::fmt;
-        use style_traits::{Separator, ToCss};
+        use std::fmt::{self, Write};
+        use style_traits::{CssWriter, Separator, ToCss};
 
         pub mod single_value {
             #[allow(unused_imports)]
@@ -154,8 +154,9 @@
         }
 
         impl ToCss for computed_value::T {
-            fn to_css<W>(&self, dest: &mut W) -> fmt::Result
-                where W: fmt::Write,
+            fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
+            where
+                W: Write,
             {
                 let mut iter = self.0.iter();
                 if let Some(val) = iter.next() {
@@ -180,8 +181,9 @@
         pub struct SpecifiedValue(pub Vec<single_value::SpecifiedValue>);
 
         impl ToCss for SpecifiedValue {
-            fn to_css<W>(&self, dest: &mut W) -> fmt::Result
-                where W: fmt::Write,
+            fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
+            where
+                W: Write,
             {
                 let mut iter = self.0.iter();
                 if let Some(val) = iter.next() {
@@ -300,9 +302,9 @@
                 PropertyDeclaration::${property.camel_case}(ref value) => {
                     DeclaredValue::Value(value)
                 },
-                PropertyDeclaration::CSSWideKeyword(id, value) => {
-                    debug_assert!(id == LonghandId::${property.camel_case});
-                    DeclaredValue::CSSWideKeyword(value)
+                PropertyDeclaration::CSSWideKeyword(ref declaration) => {
+                    debug_assert_eq!(declaration.id, LonghandId::${property.camel_case});
+                    DeclaredValue::CSSWideKeyword(declaration.keyword)
                 },
                 PropertyDeclaration::WithVariables(..) => {
                     panic!("variables should already have been substituted")
@@ -422,20 +424,13 @@
         use properties::longhands::system_font::SystemFont;
 
         pub mod computed_value {
-            use cssparser::Parser;
-            use parser::{Parse, ParserContext};
-
-            use style_traits::ParseError;
-            define_css_keyword_enum! { T:
-                % for value in keyword.values_for(product):
-                    "${value}" => ${to_camel_case(value)},
-                % endfor
-            }
-
-            impl Parse for T {
-                fn parse<'i, 't>(_: &ParserContext, input: &mut Parser<'i, 't>) -> Result<Self, ParseError<'i>> {
-                    T::parse(input)
-                }
+            #[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
+            #[derive(Clone, Copy, Debug, Eq, Hash, MallocSizeOf, Parse)]
+            #[derive(PartialEq, ToCss)]
+            pub enum T {
+            % for value in keyword.values_for(product):
+                ${to_camel_case(value)},
+            % endfor
             }
 
             ${gecko_keyword_conversion(keyword, keyword.values_for(product), type="T", cast_to="i32")}
@@ -489,33 +484,6 @@
                     Some(s)
                 } else {
                     None
-                }
-            }
-        }
-    </%call>
-</%def>
-
-<%def name="single_keyword(name, values, vector=False, **kwargs)">
-    <%call expr="single_keyword_computed(name, values, vector, **kwargs)">
-        // FIXME(emilio): WTF is this even trying to do? Those are no-ops,
-        // should be derived instead!
-        impl ToComputedValue for SpecifiedValue {
-            type ComputedValue = computed_value::T;
-
-            #[inline]
-            fn to_computed_value(&self, _context: &Context) -> computed_value::T {
-                match *self {
-                    % for value in data.longhands_by_name[name].keyword.values_for(product):
-                        SpecifiedValue::${to_camel_case(value)} => computed_value::T::${to_camel_case(value)},
-                    % endfor
-                }
-            }
-            #[inline]
-            fn from_computed_value(computed: &computed_value::T) -> Self {
-                match *computed {
-                    % for value in data.longhands_by_name[name].keyword.values_for(product):
-                        computed_value::T::${to_camel_case(value)} => SpecifiedValue::${to_camel_case(value)},
-                    % endfor
                 }
             }
         }
@@ -589,7 +557,7 @@
     }
 </%def>
 
-<%def name="single_keyword_computed(name, values, vector=False,
+<%def name="single_keyword(name, values, vector=False,
             extra_specified=None, needs_conversion=False, **kwargs)">
     <%
         keyword_kwargs = {a: kwargs.pop(a, None) for a in [
@@ -601,27 +569,39 @@
     %>
 
     <%def name="inner_body(keyword, extra_specified=None, needs_conversion=False)">
-        % if extra_specified or keyword.aliases_for(product):
-            define_css_keyword_enum! { SpecifiedValue:
-                values {
-                    % for value in keyword.values_for(product) + (extra_specified or "").split():
-                        "${value}" => ${to_camel_case(value)},
-                    % endfor
-                }
-                aliases {
-                    % for alias, value in keyword.aliases_for(product).iteritems():
-                        "${alias}" => ${to_camel_case(value)},
-                    % endfor
-                }
+        <%def name="variants(variants, include_aliases)">
+            % for variant in variants:
+            % if include_aliases:
+            <%
+                aliases = []
+                for alias, v in keyword.aliases_for(product).iteritems():
+                    if variant == v:
+                        aliases.append(alias)
+            %>
+            % if aliases:
+            #[css(aliases = "${','.join(aliases)}")]
+            % endif
+            % endif
+            ${to_camel_case(variant)},
+            % endfor
+        </%def>
+        % if extra_specified:
+            #[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
+            #[derive(Clone, Copy, Debug, Eq, MallocSizeOf, Parse, PartialEq, ToCss)]
+            pub enum SpecifiedValue {
+                ${variants(keyword.values_for(product) + extra_specified.split(), bool(extra_specified))}
             }
         % else:
             pub use self::computed_value::T as SpecifiedValue;
         % endif
         pub mod computed_value {
-            define_css_keyword_enum! { T:
-                % for value in data.longhands_by_name[name].keyword.values_for(product):
-                    "${value}" => ${to_camel_case(value)},
-                % endfor
+            #[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
+            #[derive(Clone, Copy, Debug, Eq, MallocSizeOf, PartialEq, ToCss)]
+            % if not extra_specified:
+            #[derive(Parse, ToComputedValue)]
+            % endif
+            pub enum T {
+                ${variants(data.longhands_by_name[name].keyword.values_for(product), not extra_specified)}
             }
         }
         #[inline]
@@ -637,13 +617,6 @@
                              -> Result<SpecifiedValue, ParseError<'i>> {
             SpecifiedValue::parse(input)
         }
-        impl Parse for SpecifiedValue {
-            #[inline]
-            fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>)
-                             -> Result<SpecifiedValue, ParseError<'i>> {
-                SpecifiedValue::parse(input)
-            }
-        }
 
         % if needs_conversion:
             <%
@@ -658,13 +631,17 @@
     % if vector:
         <%call expr="vector_longhand(name, keyword=Keyword(name, values, **keyword_kwargs), **kwargs)">
             ${inner_body(Keyword(name, values, **keyword_kwargs))}
+            % if caller:
             ${caller.body()}
+            % endif
         </%call>
     % else:
         <%call expr="longhand(name, keyword=Keyword(name, values, **keyword_kwargs), **kwargs)">
             ${inner_body(Keyword(name, values, **keyword_kwargs),
                          extra_specified=extra_specified, needs_conversion=needs_conversion)}
+            % if caller:
             ${caller.body()}
+            % endif
         </%call>
     % endif
 </%def>
@@ -682,11 +659,11 @@
         #[allow(unused_imports)]
         use selectors::parser::SelectorParseErrorKind;
         #[allow(unused_imports)]
-        use std::fmt;
+        use std::fmt::{self, Write};
         #[allow(unused_imports)]
         use style_traits::{ParseError, StyleParseErrorKind};
         #[allow(unused_imports)]
-        use style_traits::ToCss;
+        use style_traits::{CssWriter, ToCss};
 
         pub struct Longhands {
             % for sub_property in shorthand.sub_properties:
@@ -806,7 +783,10 @@
         }
 
         impl<'a> ToCss for LonghandsToSerialize<'a> {
-            fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+            fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
+            where
+                W: Write,
+            {
                 let rect = Rect::new(
                     % for side in ["top", "right", "bottom", "left"]:
                     &self.${to_rust_ident(sub_property_pattern % side)},
@@ -914,115 +894,3 @@
         return "nsCSSPropertyID::eCSSProperty_%s" % ident
     %>
 </%def>
-
-// Define property that supports prefixed intrinsic size keyword values for gecko.
-// E.g. -moz-max-content, -moz-min-content, etc.
-//
-// FIXME(emilio): This feels a lot like a huge hack, get rid of this.
-<%def name="gecko_size_type(name, length_type, initial_value, logical, **kwargs)">
-    <%call expr="longhand(name,
-                          predefined_type=length_type,
-                          logical=logical,
-                          **kwargs)">
-        % if not logical:
-            use values::specified::AllowQuirks;
-        % endif
-        use values::specified::${length_type};
-
-        pub mod computed_value {
-            pub type T = ::values::computed::${length_type};
-        }
-
-        #[derive(Clone, Debug, MallocSizeOf, PartialEq, ToCss)]
-        pub struct SpecifiedValue(pub ${length_type});
-
-        % if length_type == "MozLength":
-        impl SpecifiedValue {
-            /// Returns the `auto` value.
-            pub fn auto() -> Self {
-                use values::specified::length::LengthOrPercentageOrAuto;
-                SpecifiedValue(MozLength::LengthOrPercentageOrAuto(LengthOrPercentageOrAuto::Auto))
-            }
-
-            /// Returns a value representing a `0` length.
-            pub fn zero() -> Self {
-                use values::specified::length::LengthOrPercentageOrAuto;
-                SpecifiedValue(MozLength::LengthOrPercentageOrAuto(LengthOrPercentageOrAuto::zero()))
-            }
-
-            /// Returns a value representing a `0%` length.
-            pub fn zero_percent() -> Self {
-                use values::specified::length::LengthOrPercentageOrAuto;
-                SpecifiedValue(MozLength::LengthOrPercentageOrAuto(LengthOrPercentageOrAuto::zero_percent()))
-            }
-        }
-        % endif
-
-        #[inline]
-        pub fn get_initial_value() -> computed_value::T {
-            use values::computed::${length_type};
-            ${length_type}::${initial_value}
-        }
-
-        impl Parse for SpecifiedValue {
-            fn parse<'i, 't>(
-                context: &ParserContext,
-                input: &mut Parser<'i, 't>,
-            ) -> Result<SpecifiedValue, ParseError<'i>> {
-                % if logical:
-                let ret = ${length_type}::parse(context, input);
-                % else:
-                let ret = ${length_type}::parse_quirky(context, input, AllowQuirks::Yes);
-                % endif
-                // Keyword values don't make sense in the block direction; don't parse them
-                % if "block" in name:
-                    if let Ok(${length_type}::ExtremumLength(..)) = ret {
-                        return Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
-                    }
-                % endif
-                ret.map(SpecifiedValue)
-            }
-        }
-
-        fn parse<'i, 't>(
-            context: &ParserContext,
-            input: &mut Parser<'i, 't>,
-        ) -> Result<SpecifiedValue, ParseError<'i>> {
-            SpecifiedValue::parse(context, input)
-        }
-
-        impl ToComputedValue for SpecifiedValue {
-            type ComputedValue = computed_value::T;
-            #[inline]
-            fn to_computed_value(&self, context: &Context) -> computed_value::T {
-                % if not logical or "block" in name:
-                    use values::computed::${length_type};
-                % endif
-                let computed = self.0.to_computed_value(context);
-
-                // filter out keyword values in the block direction
-                % if logical:
-                    % if "block" in name:
-                        if let ${length_type}::ExtremumLength(..) = computed {
-                            return get_initial_value()
-                        }
-                    % endif
-                % else:
-                    if let ${length_type}::ExtremumLength(..) = computed {
-                        <% is_height = "true" if "height" in name else "false" %>
-                        if ${is_height} != context.builder.writing_mode.is_vertical() {
-                            return get_initial_value()
-                        }
-                    }
-                % endif
-                computed
-            }
-
-            #[inline]
-            fn from_computed_value(computed: &computed_value::T) -> Self {
-                SpecifiedValue(ToComputedValue::from_computed_value(computed))
-            }
-        }
-    </%call>
-</%def>
-

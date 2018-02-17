@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "{provider} ರಿಂದ ಶಿಫಾರಸುಮಾಡುಲಾಗಿದೆ",
   "header_bookmarks_placeholder": "ನಿಮ್ಮ ಹತ್ತಿರ ಇನ್ನೂ ಯಾವುದೇ ಪುಟಗುರುತುಗಳಿಲ್ಲ.",
   "header_stories_from": "ಯಿಂದ",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "ಭೇಟಿ ನೀಡಲಾದ‍",
   "type_label_bookmarked": "ಪುಟಗುರುತು ಮಾಡಲಾದ",
   "type_label_synced": "ಮತ್ತೊಂದು ಸಾಧನದಿಂದ ಸಿಂಕ್ ಮಾಡಲಾಗಿದೆ",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "ಈ ತಾಣವನ್ನು ಸಂಪಾದಿಸು",
   "edit_topsites_dismiss_button": "ಈ ತಾಣವನ್ನು ತೆಗೆದುಹಾಕು",
   "edit_topsites_add_button": "ಸೇರಿಸು",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "ಹೊಸ ಅಗ್ರ ತಾಣಗಳು",
   "topsites_form_edit_header": "ಅಗ್ರ ತಾಣಗಳನ್ನು ಸಂಪಾದಿಸಿ",
   "topsites_form_title_placeholder": "ಶೀರ್ಷಿಕೆಯನ್ನು ನಮೂದಿಸಿ",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "You’ve caught up. Check back later for more top stories from {provider}. Can’t wait? Select a popular topic to find more great stories from around the web.",
   "manual_migration_explanation2": "Try Firefox with the bookmarks, history and passwords from another browser.",
   "manual_migration_cancel_button": "ಪರವಾಗಿಲ್ಲ",
-  "manual_migration_import_button": "ಈಗ ಆಮದು ಮಾಡು"
+  "manual_migration_import_button": "ಈಗ ಆಮದು ಮಾಡು",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

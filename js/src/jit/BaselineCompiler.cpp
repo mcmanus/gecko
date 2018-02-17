@@ -8,8 +8,6 @@
 
 #include "mozilla/Casting.h"
 
-#include "jsfun.h"
-
 #include "jit/BaselineIC.h"
 #include "jit/BaselineJIT.h"
 #include "jit/FixedList.h"
@@ -27,14 +25,14 @@
 #include "vm/AsyncIteration.h"
 #include "vm/EnvironmentObject.h"
 #include "vm/Interpreter.h"
+#include "vm/JSFunction.h"
 #include "vm/TraceLogging.h"
 #include "vtune/VTuneWrapper.h"
-
-#include "jsscriptinlines.h"
 
 #include "jit/BaselineFrameInfo-inl.h"
 #include "jit/MacroAssembler-inl.h"
 #include "vm/Interpreter-inl.h"
+#include "vm/JSScript-inl.h"
 #include "vm/NativeObject-inl.h"
 #include "vm/TypeInference-inl.h"
 
@@ -136,7 +134,7 @@ BaselineCompiler::compile()
     }
 
     AutoFlushICache afc("Baseline");
-    JitCode* code = linker.newCode<CanGC>(cx, BASELINE_CODE);
+    JitCode* code = linker.newCode<CanGC>(cx, CodeKind::Baseline);
     if (!code)
         return Method_Error;
 
@@ -1932,7 +1930,7 @@ BaselineCompiler::emitUnaryArith()
     frame.popRegsAndSync(1);
 
     // Call IC
-    ICUnaryArith_Fallback::Compiler stubCompiler(cx, ICStubCompiler::Engine::Baseline);
+    ICUnaryArith_Fallback::Compiler stubCompiler(cx);
     if (!emitOpIC(stubCompiler.getStub(&stubSpace_)))
         return false;
 
@@ -2792,7 +2790,7 @@ BaselineCompiler::emit_JSOP_SETALIASEDVAR()
 
     Label skipBarrier;
     masm.branchPtrInNurseryChunk(Assembler::Equal, objReg, temp, &skipBarrier);
-    masm.branchValueIsNurseryObject(Assembler::NotEqual, R0, temp, &skipBarrier);
+    masm.branchValueIsNurseryCell(Assembler::NotEqual, R0, temp, &skipBarrier);
 
     masm.call(&postBarrierSlot_); // Won't clobber R0
 
@@ -3216,7 +3214,7 @@ BaselineCompiler::emitFormalArgAccess(uint32_t arg, bool get)
         Label skipBarrier;
 
         masm.branchPtrInNurseryChunk(Assembler::Equal, reg, temp, &skipBarrier);
-        masm.branchValueIsNurseryObject(Assembler::NotEqual, R0, temp, &skipBarrier);
+        masm.branchValueIsNurseryCell(Assembler::NotEqual, R0, temp, &skipBarrier);
 
         masm.call(&postBarrierSlot_);
 
@@ -4087,7 +4085,7 @@ BaselineCompiler::emit_JSOP_TOASYNCGEN()
     return true;
 }
 
-typedef JSObject* (*ToAsyncIterFn)(JSContext*, HandleObject);
+typedef JSObject* (*ToAsyncIterFn)(JSContext*, HandleObject, HandleValue);
 static const VMFunction ToAsyncIterInfo =
     FunctionInfo<ToAsyncIterFn>(js::CreateAsyncFromSyncIterator, "ToAsyncIter");
 
@@ -4095,16 +4093,18 @@ bool
 BaselineCompiler::emit_JSOP_TOASYNCITER()
 {
     frame.syncStack(0);
-    masm.unboxObject(frame.addressOfStackValue(frame.peek(-1)), R0.scratchReg());
+    masm.unboxObject(frame.addressOfStackValue(frame.peek(-2)), R0.scratchReg());
+    masm.loadValue(frame.addressOfStackValue(frame.peek(-1)), R1);
 
     prepareVMCall();
+    pushArg(R1);
     pushArg(R0.scratchReg());
 
     if (!callVM(ToAsyncIterInfo))
         return false;
 
     masm.tagValue(JSVAL_TYPE_OBJECT, ReturnReg, R0);
-    frame.pop();
+    frame.popn(2);
     frame.push(R0);
     return true;
 }
@@ -4782,8 +4782,7 @@ BaselineCompiler::emit_JSOP_RESUME()
         masm.branch32(Assembler::Equal, addressOfEnabled, Imm32(0), &skip);
         masm.loadJSContext(scratchReg);
         masm.loadPtr(Address(scratchReg, JSContext::offsetOfProfilingActivation()), scratchReg);
-        masm.storePtr(masm.getStackPointer(),
-                      Address(scratchReg, JitActivation::offsetOfLastProfilingFrame()));
+        masm.storeStackPtr(Address(scratchReg, JitActivation::offsetOfLastProfilingFrame()));
         masm.bind(&skip);
     }
 
@@ -4800,8 +4799,9 @@ BaselineCompiler::emit_JSOP_RESUME()
 
     // Store the arguments object if there is one.
     Label noArgsObj;
-    masm.unboxObject(Address(genObj, GeneratorObject::offsetOfArgsObjSlot()), scratch2);
-    masm.branchTestPtr(Assembler::Zero, scratch2, scratch2, &noArgsObj);
+    Address argsObjSlot(genObj, GeneratorObject::offsetOfArgsObjSlot());
+    masm.branchTestUndefined(Assembler::Equal, argsObjSlot, &noArgsObj);
+    masm.unboxObject(argsObjSlot, scratch2);
     {
         masm.storePtr(scratch2, frame.addressOfArgsObj());
         masm.or32(Imm32(BaselineFrame::HAS_ARGS_OBJ), frame.addressOfFlags());
@@ -5009,10 +5009,10 @@ bool
 BaselineCompiler::emit_JSOP_BUILTINPROTO()
 {
     // The builtin prototype is a constant for a given global.
-    RootedObject builtin(cx);
     JSProtoKey key = static_cast<JSProtoKey>(GET_UINT8(pc));
     MOZ_ASSERT(key < JSProto_LIMIT);
-    if (!GetBuiltinPrototype(cx, key, &builtin))
+    JSObject* builtin = GlobalObject::getOrCreatePrototype(cx, key);
+    if (!builtin)
         return false;
     frame.push(ObjectValue(*builtin));
     return true;

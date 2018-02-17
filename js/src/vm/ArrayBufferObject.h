@@ -9,10 +9,9 @@
 
 #include "mozilla/Maybe.h"
 
-#include "jsobj.h"
-
 #include "builtin/TypedObjectConstants.h"
 #include "js/GCHashTable.h"
+#include "vm/JSObject.h"
 #include "vm/Runtime.h"
 #include "vm/SharedMem.h"
 #include "wasm/WasmTypes.h"
@@ -102,23 +101,14 @@ int32_t LiveMappedBufferCount();
 
 class ArrayBufferObjectMaybeShared;
 
-uint32_t AnyArrayBufferByteLength(const ArrayBufferObjectMaybeShared* buf);
 mozilla::Maybe<uint32_t> WasmArrayBufferMaxSize(const ArrayBufferObjectMaybeShared* buf);
 size_t WasmArrayBufferMappedSize(const ArrayBufferObjectMaybeShared* buf);
-bool WasmArrayBufferGrowForWasm(ArrayBufferObjectMaybeShared* buf, uint32_t delta);
-bool AnyArrayBufferIsPreparedForAsmJS(const ArrayBufferObjectMaybeShared* buf);
-bool AnyArrayBufferIsWasm(const ArrayBufferObjectMaybeShared* buf);
-ArrayBufferObjectMaybeShared& AsAnyArrayBuffer(HandleValue val);
 
 class ArrayBufferObjectMaybeShared : public NativeObject
 {
   public:
-    uint32_t byteLength() {
-        return AnyArrayBufferByteLength(this);
-    }
-
+    inline uint32_t byteLength();
     inline bool isDetached() const;
-
     inline SharedMem<uint8_t*> dataPointerEither();
 
     // WebAssembly support:
@@ -135,13 +125,8 @@ class ArrayBufferObjectMaybeShared : public NativeObject
     uint32_t wasmBoundsCheckLimit() const;
 #endif
 
-    bool isPreparedForAsmJS() const {
-        return AnyArrayBufferIsPreparedForAsmJS(this);
-    }
-
-    bool isWasm() const {
-        return AnyArrayBufferIsWasm(this);
-    }
+    inline bool isPreparedForAsmJS() const;
+    inline bool isWasm() const;
 };
 
 typedef Rooted<ArrayBufferObjectMaybeShared*> RootedArrayBufferObjectMaybeShared;
@@ -449,7 +434,7 @@ bool CreateWasmBuffer(JSContext* cx, const wasm::Limits& memory,
  * Common definitions shared by all array buffer views.
  */
 
-class ArrayBufferViewObject : public JSObject
+class ArrayBufferViewObject : public NativeObject
 {
   public:
     static ArrayBufferObjectMaybeShared* bufferObject(JSContext* cx, Handle<ArrayBufferViewObject*> obj);

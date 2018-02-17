@@ -3,10 +3,8 @@
 
 const PREF_NEWTAB_ENABLED = "browser.newtabpage.enabled";
 const PREF_NEWTAB_DIRECTORYSOURCE = "browser.newtabpage.directory.source";
-const PREF_NEWTAB_ACTIVITY_STREAM = "browser.newtabpage.activity-stream.enabled";
 
 Services.prefs.setBoolPref(PREF_NEWTAB_ENABLED, true);
-Services.prefs.setBoolPref(PREF_NEWTAB_ACTIVITY_STREAM, false);
 
 // Opens and closes a new tab to clear any existing preloaded ones. This is
 // necessary to prevent any left-over activity-stream preloaded new tabs from
@@ -15,12 +13,14 @@ BrowserOpenTab();
 const initialTab = gBrowser.selectedTab;
 gBrowser.removeTab(initialTab);
 
-var tmp = {};
-Cu.import("resource://gre/modules/NewTabUtils.jsm", tmp);
-Cu.import("resource:///modules/DirectoryLinksProvider.jsm", tmp);
-Cu.import("resource://testing-common/PlacesTestUtils.jsm", tmp);
-Services.scriptloader.loadSubScript("chrome://browser/content/sanitize.js", tmp);
-var {NewTabUtils, Sanitizer, DirectoryLinksProvider, PlacesTestUtils} = tmp;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+
+XPCOMUtils.defineLazyModuleGetters(this, {
+  NewTabUtils: "resource://gre/modules/NewTabUtils.jsm",
+  DirectoryLinksProvider: "resource:///modules/DirectoryLinksProvider.jsm",
+  PlacesTestUtils: "resource://testing-common/PlacesTestUtils.jsm",
+  Sanitizer: "resource:///modules/Sanitizer.jsm",
+});
 
 var gWindow = window;
 
@@ -94,7 +94,6 @@ add_task(async function setupWindowSize() {
 
 registerCleanupFunction(function() {
   Services.prefs.clearUserPref(PREF_NEWTAB_ENABLED);
-  Services.prefs.clearUserPref(PREF_NEWTAB_ACTIVITY_STREAM);
   Services.prefs.setCharPref(PREF_NEWTAB_DIRECTORYSOURCE, gOrigDirectorySource);
 
   return watchLinksChangeOnce();
@@ -124,7 +123,7 @@ add_task(async function setup() {
   registerCleanupFunction(function() {
     return new Promise(resolve => {
       function cleanupAndFinish() {
-        PlacesTestUtils.clearHistory().then(() => {
+        PlacesUtils.history.clear().then(() => {
           whenPagesUpdated().then(resolve);
           NewTabUtils.restore();
         });
@@ -192,7 +191,7 @@ function setLinks(aLinks) {
     // given entries and call populateCache() now again to make sure the cache
     // has the desired contents.
     NewTabUtils.links.populateCache(function() {
-      PlacesTestUtils.clearHistory().then(() => {
+      PlacesUtils.history.clear().then(() => {
         fillHistory(links).then(() => {
           NewTabUtils.links.populateCache(function() {
             NewTabUtils.allPages.update();

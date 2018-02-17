@@ -3,26 +3,21 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cu = Components.utils;
-const Cr = Components.results;
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-Cu.import("resource://gre/modules/AppConstants.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "Task", "resource://gre/modules/Task.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "OS", "resource://gre/modules/osfile.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "EventDispatcher", "resource://gre/modules/Messaging.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils", "resource://gre/modules/PrivateBrowsingUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PrivacyLevel", "resource://gre/modules/sessionstore/PrivacyLevel.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "FormData", "resource://gre/modules/FormData.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ScrollPosition", "resource://gre/modules/ScrollPosition.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "TelemetryStopwatch", "resource://gre/modules/TelemetryStopwatch.jsm");
+ChromeUtils.defineModuleGetter(this, "Task", "resource://gre/modules/Task.jsm");
+ChromeUtils.defineModuleGetter(this, "OS", "resource://gre/modules/osfile.jsm");
+ChromeUtils.defineModuleGetter(this, "EventDispatcher", "resource://gre/modules/Messaging.jsm");
+ChromeUtils.defineModuleGetter(this, "PrivateBrowsingUtils", "resource://gre/modules/PrivateBrowsingUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "PrivacyLevel", "resource://gre/modules/sessionstore/PrivacyLevel.jsm");
+ChromeUtils.defineModuleGetter(this, "FormData", "resource://gre/modules/FormData.jsm");
+ChromeUtils.defineModuleGetter(this, "ScrollPosition", "resource://gre/modules/ScrollPosition.jsm");
+ChromeUtils.defineModuleGetter(this, "TelemetryStopwatch", "resource://gre/modules/TelemetryStopwatch.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Log", "resource://gre/modules/AndroidLog.jsm", "AndroidLog");
-XPCOMUtils.defineLazyModuleGetter(this, "SharedPreferences", "resource://gre/modules/SharedPreferences.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "SessionHistory", "resource://gre/modules/sessionstore/SessionHistory.jsm");
+ChromeUtils.defineModuleGetter(this, "SharedPreferences", "resource://gre/modules/SharedPreferences.jsm");
+ChromeUtils.defineModuleGetter(this, "SessionHistory", "resource://gre/modules/sessionstore/SessionHistory.jsm");
 
 function dump(a) {
   Services.console.logStringMessage(a);
@@ -54,10 +49,6 @@ const PREFS_MAX_CRASH_RESUMES = "browser.sessionstore.max_resumed_crashes";
 const PREFS_MAX_TABS_UNDO = "browser.sessionstore.max_tabs_undo";
 
 const MINIMUM_SAVE_DELAY = 2000;
-// We reduce the delay in background because we could be killed at any moment,
-// however we don't set it to 0 in order to allow for multiple events arriving
-// one after the other to be batched together in one write operation.
-const MINIMUM_SAVE_DELAY_BACKGROUND = 200;
 
 function SessionStore() { }
 
@@ -74,7 +65,6 @@ SessionStore.prototype = {
   _lastBackupTime: 0,
   _interval: 10000,
   _backupInterval: 120000, // 2 minutes
-  _minSaveDelay: MINIMUM_SAVE_DELAY,
   _maxTabsUndo: 5,
   _pendingWrite: 0,
   _scrollSavePending: null,
@@ -391,20 +381,12 @@ SessionStore.prototype = {
         // point without notice; therefore, we must synchronously write out any
         // pending save state to ensure that this data does not get lost.
         log("application-background");
-        // Tab events dispatched immediately before the application was backgrounded
-        // might actually arrive after this point, therefore save them without delay.
         if (this._loadState == STATE_RUNNING) {
-          this._interval = 0;
-          this._minSaveDelay = MINIMUM_SAVE_DELAY_BACKGROUND; // A small delay allows successive tab events to be batched together.
           this.flushPendingState();
         }
         break;
       case "application-foreground":
-        // Reset minimum interval between session store writes back to default.
         log("application-foreground");
-        this._interval = Services.prefs.getIntPref("browser.sessionstore.interval");
-        this._minSaveDelay = MINIMUM_SAVE_DELAY;
-
         // If we skipped restoring a zombified tab before backgrounding,
         // we might have to do it now instead.
         let window = Services.wm.getMostRecentWindow("navigator:browser");
@@ -987,7 +969,7 @@ SessionStore.prototype = {
       let currentDelay = this._lastSaveTime + this._interval - Date.now();
 
       // If we have to wait, set a timer, otherwise saveState directly
-      let delay = Math.max(currentDelay, this._minSaveDelay);
+      let delay = Math.max(currentDelay, MINIMUM_SAVE_DELAY);
       if (delay > 0) {
         this._pendingWrite++;
         this._saveTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
@@ -1269,8 +1251,10 @@ SessionStore.prototype = {
     let window = Services.wm.getMostRecentWindow("navigator:browser");
     for (let i = 0; i < aData.urls.length; i++) {
       let url = aData.urls[i];
+      let selected = (i == aData.urls.length - 1);
       let params = {
-        selected: (i == aData.urls.length - 1),
+        selected,
+        delayLoad: !selected,
         isPrivate: false,
         desktopMode: false,
       };
@@ -1284,19 +1268,26 @@ SessionStore.prototype = {
     let window = Services.wm.getMostRecentWindow("navigator:browser");
     for (let i = 0; i < aData.tabs.length; i++) {
       let tabData = JSON.parse(aData.tabs[i]);
-      let isSelectedTab = (i == aData.tabs.length - 1);
+      let activeSHEntry = tabData.entries[tabData.index - 1];
+      let selected = (i == aData.tabs.length - 1);
+      let delayLoad = !selected;
+
       let params = {
-        selected: isSelectedTab,
+        title: activeSHEntry.title,
+        selected,
+        delayLoad,
         isPrivate: tabData.isPrivate,
         desktopMode: tabData.desktopMode,
-        cancelEditMode: isSelectedTab,
+        cancelEditMode: selected,
         parentId: tabData.parentId
       };
 
-      let tab = window.BrowserApp.addTab(tabData.entries[tabData.index - 1].url, params);
+      let tab = window.BrowserApp.addTab(activeSHEntry.url, params);
       tab.browser.__SS_data = tabData;
       tab.browser.__SS_extdata = tabData.extData;
-      this._restoreTab(tabData, tab.browser);
+      if (!delayLoad) {
+        this._restoreTab(tabData, tab.browser);
+      }
     }
   },
 

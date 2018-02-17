@@ -17,6 +17,8 @@
 <script class="testbody" type="application/javascript">
 <![CDATA[
 
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+
 // Set to indicate whether or not we want autoCompleteSimple to return a result
 var returnResult = true;
 
@@ -154,7 +156,7 @@ function checkResult() {
     // TODO (bug 494809): Autocomplete-in-the-middle should take in count RTL
     // and complete on VK_RIGHT or VK_LEFT based on that.  It should also revert
     // what user has typed to far if he moves in the opposite direction.
-    if (autocomplete.value.indexOf(">>") == -1) {
+    if (!autocomplete.value.includes(">>")) {
       // Test result if user accepts autocomplete suggestion.
       synthesizeKey("VK_RIGHT", {});
       is(autocomplete.value, "Result",

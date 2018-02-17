@@ -23,7 +23,6 @@ interface ApplicationCache;
 interface IID;
 interface nsIBrowserDOMWindow;
 interface nsIMessageBroadcaster;
-interface nsIDOMCrypto;
 interface XULControllers;
 
 // http://www.whatwg.org/specs/web-apps/current-work/
@@ -72,7 +71,7 @@ interface XULControllers;
 #ifdef HAVE_SIDEBAR
   [Replaceable, Throws] readonly attribute External external;
 #endif
-  [Throws, Pref="browser.cache.offline.enable"] readonly attribute ApplicationCache applicationCache;
+  [Throws, Pref="browser.cache.offline.enable", Func="nsGlobalWindowInner::OfflineCacheAllowedForContext"] readonly attribute ApplicationCache applicationCache;
 
   // user prompts
   [Throws, NeedsSubjectPrincipal] void alert();

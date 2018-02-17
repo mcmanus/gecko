@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "{provider} öneriyor",
   "header_bookmarks_placeholder": "Henüz hiç yer iminiz yok.",
   "header_stories_from": "kaynak:",
+  "context_menu_button_sr": "{title} sağ tıklama menüsünü aç",
   "type_label_visited": "Ziyaret etmiştiniz",
   "type_label_bookmarked": "Yer imlerinizde",
   "type_label_synced": "Başka bir cihazdan eşitlendi",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Bu siteyi düzenle",
   "edit_topsites_dismiss_button": "Bu siteyi görmezden gel",
   "edit_topsites_add_button": "Ekle",
+  "edit_topsites_add_button_tooltip": "Sık kullanılan site ekle",
   "topsites_form_add_header": "Yeni sık kullanılan site",
   "topsites_form_edit_header": "Sık kullanılan siteyi düzenle",
   "topsites_form_title_placeholder": "Başlık yazın",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Hepsini bitirdiniz. Yeni {provider} haberleri için daha fazla yine gelin. Beklemek istemiyor musunuz? İlginç yazılara ulaşmak için popüler konulardan birini seçebilirsiniz.",
   "manual_migration_explanation2": "Öteki tarayıcılarınızdaki yer imlerinizi, geçmişinizi ve parolalarınızı Firefox’a aktarabilirsiniz.",
   "manual_migration_cancel_button": "Gerek yok",
-  "manual_migration_import_button": "Olur, aktaralım"
+  "manual_migration_import_button": "Olur, aktaralım",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

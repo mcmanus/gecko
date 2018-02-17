@@ -4,9 +4,9 @@
 
 "use strict";
 
-Cu.import("resource://testing-common/httpd.js");
-Cu.import("resource://gre/modules/NetUtil.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://testing-common/httpd.js");
+ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 var httpserver = new HttpServer();
 httpserver.start(-1);
@@ -80,6 +80,21 @@ function run_test() {
 
 let testGenerator = testSteps();
 function *testSteps() {
+  /*
+   * In this test, we have a relatively low timeout of 200ms and an assertion that
+   * the timer works properly by checking that the time was greater than 200ms.
+   * With a timer precision of 100ms (for example) we will clamp downwards to 200
+   * and cause the assertion to fail. To resolve this, we hardcode a precision of
+   * 20ms.
+   */
+  Services.prefs.setBoolPref("privacy.reduceTimerPrecision", true);
+  Services.prefs.setIntPref("privacy.resistFingerprinting.reduceTimerPrecision.microseconds", 20000);
+
+  registerCleanupFunction(function() {
+    Services.prefs.clearUserPref("privacy.reduceTimerPrecision");
+    Services.prefs.clearUserPref("privacy.resistFingerprinting.reduceTimerPrecision.microseconds");
+  });
+
   // Initial request. Stores the response in the cache.
   var channel = make_channel("http://localhost:" + PORT + "/rcwn");
   channel.asyncOpen2(new ChannelListener(checkContent, null));

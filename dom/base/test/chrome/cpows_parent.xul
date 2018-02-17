@@ -14,7 +14,6 @@
     var test_node = null;
     var reentered = false;
     var savedMM = null;
-    const Cu = Components.utils;
 
     function info(message) {
       return opener.wrappedJSObject.info(message);
@@ -224,7 +223,6 @@
         }
       }
 
-      testNoInterface(savedElement, Components.interfaces.nsIDOMAttr);
       testNoInterface(savedElement, Components.interfaces.nsIClassInfo);
 
       // Test to ensure that we don't pass CPOWs to C++-implemented interfaces.
@@ -249,7 +247,7 @@
 
         let walker = Components.classes["@mozilla.org/inspector/deep-tree-walker;1"]
                                .createInstance(Components.interfaces.inIDeepTreeWalker);
-        const SHOW_ELEMENT = Components.interfaces.nsIDOMNodeFilter.SHOW_ELEMENT;
+        const SHOW_ELEMENT = NodeFilter.SHOW_ELEMENT;
         walker.showAnonymousContent = true;
         walker.showSubDocuments = false;
 

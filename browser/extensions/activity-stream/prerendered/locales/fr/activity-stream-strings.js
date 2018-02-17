@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Recommandations par {provider}",
   "header_bookmarks_placeholder": "Vous ne possédez aucun marque-page pour l’instant.",
   "header_stories_from": "par",
+  "context_menu_button_sr": "Ouvrir le menu contextuel pour {title}",
   "type_label_visited": "Visité",
   "type_label_bookmarked": "Ajouté aux marque-pages",
   "type_label_synced": "Synchronisé depuis un autre appareil",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Modifier ce site",
   "edit_topsites_dismiss_button": "Retirer ce site",
   "edit_topsites_add_button": "Ajouter",
+  "edit_topsites_add_button_tooltip": "Ajouter un site populaire",
   "topsites_form_add_header": "Nouveau site populaire",
   "topsites_form_edit_header": "Modifier le site populaire",
   "topsites_form_title_placeholder": "Saisir un titre",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Il n’y en a pas d’autres. Revenez plus tard pour plus d’articles de {provider}. Vous ne voulez pas attendre ? Choisissez un sujet parmi les plus populaires pour découvrir d’autres articles intéressants sur le Web.",
   "manual_migration_explanation2": "Essayez Firefox en important les marque-pages, l’historique et les mots de passe depuis un autre navigateur.",
   "manual_migration_cancel_button": "Non merci",
-  "manual_migration_import_button": "Importer"
+  "manual_migration_import_button": "Importer",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

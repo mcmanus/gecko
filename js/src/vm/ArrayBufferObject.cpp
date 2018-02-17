@@ -18,41 +18,38 @@
 #ifndef XP_WIN
 # include <sys/mman.h>
 #endif
-
 #ifdef MOZ_VALGRIND
 # include <valgrind/memcheck.h>
 #endif
 
 #include "jsapi.h"
 #include "jsarray.h"
-#include "jscntxt.h"
 #include "jscpucfg.h"
 #include "jsfriendapi.h"
 #include "jsnum.h"
-#include "jsobj.h"
 #include "jstypes.h"
 #include "jsutil.h"
-#ifdef XP_WIN
-# include "jswin.h"
-#endif
 #include "jswrapper.h"
 
 #include "builtin/DataViewObject.h"
 #include "gc/Barrier.h"
+#include "gc/FreeOp.h"
 #include "gc/Memory.h"
 #include "js/Conversions.h"
 #include "js/MemoryMetrics.h"
+#include "util/Windows.h"
 #include "vm/GlobalObject.h"
 #include "vm/Interpreter.h"
+#include "vm/JSContext.h"
+#include "vm/JSObject.h"
 #include "vm/SharedArrayObject.h"
 #include "vm/WrapperObject.h"
 #include "wasm/WasmSignalHandlers.h"
 #include "wasm/WasmTypes.h"
 
-#include "jsatominlines.h"
-
 #include "gc/Marking-inl.h"
 #include "gc/Nursery-inl.h"
+#include "vm/JSAtom-inl.h"
 #include "vm/NativeObject-inl.h"
 #include "vm/Shape-inl.h"
 
@@ -858,7 +855,7 @@ js::CreateWasmBuffer(JSContext* cx, const wasm::Limits& memory,
     }
 
 #ifndef WASM_HUGE_MEMORY
-    if (sizeof(void*) == 8 && maxSize && maxSize.value() == UINT32_MAX) {
+    if (sizeof(void*) == 8 && maxSize && maxSize.value() >= (UINT32_MAX - wasm::PageSize)) {
         // On 64-bit platforms that don't define WASM_HUGE_MEMORY
         // clamp maxSize to smaller value that satisfies the 32-bit invariants
         // maxSize + wasm::PageSize < UINT32_MAX and maxSize % wasm::PageSize == 0

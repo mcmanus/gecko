@@ -3,8 +3,6 @@
 # This configuration should be combined with suite definitions and other
 # mozharness configuration from android_common.py, or similar.
 
-import os
-
 config = {
     "deprecated_sdk_path": True,
     "tooltool_manifest_path": "testing/config/tooltool-manifests/androidx86/releng.manifest",
@@ -31,7 +29,5 @@ config = {
     "emulator": {
         "name": "test-1",
         "device_id": "emulator-5554",
-        "http_port": "8854",  # starting http port to use for the mochitest server
-        "ssl_port": "4454",  # starting ssl port to use for the server
     },
 }

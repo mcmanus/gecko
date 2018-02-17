@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Poleca: {provider}",
   "header_bookmarks_placeholder": "Nie ma jeszcze żadnych zakładek.",
   "header_stories_from": "od:",
+  "context_menu_button_sr": "Otwórz menu kontekstowe dla „{title}”",
   "type_label_visited": "Odwiedzone",
   "type_label_bookmarked": "Zakładka",
   "type_label_synced": "Z innego urządzenia",
@@ -69,7 +70,7 @@ window.gActivityStreamStrings = {
   "settings_pane_done_button": "Gotowe",
   "settings_pane_topstories_options_sponsored": "Sponsorowane artykuły",
   "edit_topsites_button_text": "Edytuj",
-  "edit_topsites_button_label": "Dostosuj często odwiedzane strony",
+  "edit_topsites_button_label": "Dostosuj popularne strony",
   "edit_topsites_showmore_button": "Więcej",
   "edit_topsites_showless_button": "Mniej",
   "edit_topsites_done_button": "Gotowe",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Edytuj tę stronę",
   "edit_topsites_dismiss_button": "Odrzuć tę stronę",
   "edit_topsites_add_button": "Dodaj",
+  "edit_topsites_add_button_tooltip": "Dodaj popularną stronę",
   "topsites_form_add_header": "Nowa popularna strona",
   "topsites_form_edit_header": "Edytuj popularną stronę",
   "topsites_form_title_placeholder": "Wpisz tytuł",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "To na razie wszystko. {provider} później będzie mieć więcej popularnych artykułów. Nie możesz się doczekać? Wybierz popularny temat, aby znaleźć więcej artykułów z całego Internetu.",
   "manual_migration_explanation2": "Używaj Firefoksa z zakładkami, historią i hasłami z innej przeglądarki.",
   "manual_migration_cancel_button": "Nie, dziękuję",
-  "manual_migration_import_button": "Importuj teraz"
+  "manual_migration_import_button": "Importuj teraz",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

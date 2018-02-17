@@ -22,7 +22,8 @@
 <script class="testbody" type="application/javascript">
 <![CDATA[
 
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 function autoCompleteSimpleResult(aString, searchId) {
   this.searchString = aString;

@@ -10,9 +10,8 @@ this.EXPORTED_SYMBOLS = [
   "ContentTask"
 ];
 
-const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
-Cu.import("resource://gre/modules/Promise.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/Promise.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 const FRAME_SCRIPT = "resource://testing-common/content-task.js";
 

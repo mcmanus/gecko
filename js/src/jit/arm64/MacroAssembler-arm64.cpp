@@ -81,7 +81,7 @@ MacroAssemblerCompat::movePatchablePtr(ImmPtr ptr, Register dest)
 
     // Scratch space for generating the load instruction.
     //
-    // allocEntry() will use InsertIndexIntoTag() to store a temporary
+    // allocLiteralLoadEntry() will use InsertIndexIntoTag() to store a temporary
     // index to the corresponding PoolEntry in the instruction itself.
     //
     // That index will be fixed up later when finishPool()
@@ -94,8 +94,8 @@ MacroAssemblerCompat::movePatchablePtr(ImmPtr ptr, Register dest)
 
     // Add the entry to the pool, fix up the LDR imm19 offset,
     // and add the completed instruction to the buffer.
-    return allocEntry(numInst, numPoolEntries, (uint8_t*)&instructionScratch,
-                      literalAddr);
+    return allocLiteralLoadEntry(numInst, numPoolEntries, (uint8_t*)&instructionScratch,
+                                 literalAddr);
 }
 
 BufferOffset
@@ -107,7 +107,7 @@ MacroAssemblerCompat::movePatchablePtr(ImmWord ptr, Register dest)
 
     // Scratch space for generating the load instruction.
     //
-    // allocEntry() will use InsertIndexIntoTag() to store a temporary
+    // allocLiteralLoadEntry() will use InsertIndexIntoTag() to store a temporary
     // index to the corresponding PoolEntry in the instruction itself.
     //
     // That index will be fixed up later when finishPool()
@@ -120,8 +120,8 @@ MacroAssemblerCompat::movePatchablePtr(ImmWord ptr, Register dest)
 
     // Add the entry to the pool, fix up the LDR imm19 offset,
     // and add the completed instruction to the buffer.
-    return allocEntry(numInst, numPoolEntries, (uint8_t*)&instructionScratch,
-                      literalAddr);
+    return allocLiteralLoadEntry(numInst, numPoolEntries, (uint8_t*)&instructionScratch,
+                                 literalAddr);
 }
 
 void
@@ -220,9 +220,18 @@ MacroAssemblerCompat::handleFailureWithHandlerTail(void* handler, Label* profile
 void
 MacroAssemblerCompat::profilerEnterFrame(Register framePtr, Register scratch)
 {
+    profilerEnterFrame(RegisterOrSP(framePtr), scratch);
+}
+
+void
+MacroAssemblerCompat::profilerEnterFrame(RegisterOrSP framePtr, Register scratch)
+{
     asMasm().loadJSContext(scratch);
     loadPtr(Address(scratch, offsetof(JSContext, profilingActivation_)), scratch);
-    storePtr(framePtr, Address(scratch, JitActivation::offsetOfLastProfilingFrame()));
+    if (IsHiddenSP(framePtr))
+        storeStackPtr(Address(scratch, JitActivation::offsetOfLastProfilingFrame()));
+    else
+        storePtr(AsRegister(framePtr), Address(scratch, JitActivation::offsetOfLastProfilingFrame()));
     storePtr(ImmPtr(nullptr), Address(scratch, JitActivation::offsetOfLastProfilingCallSite()));
 }
 
@@ -240,6 +249,16 @@ MacroAssembler::reserveStack(uint32_t amount)
     // It would save some instructions if we had a fixed frame size.
     vixl::MacroAssembler::Claim(Operand(amount));
     adjustFrame(amount);
+}
+
+void
+MacroAssembler::Push(RegisterOrSP reg)
+{
+    if (IsHiddenSP(reg))
+        push(sp);
+    else
+        push(AsRegister(reg));
+    adjustFrame(sizeof(intptr_t));
 }
 
 //{{{ check_macroassembler_style
@@ -742,6 +761,15 @@ MacroAssembler::moveValue(const Value& src, const ValueOperand& dest)
 // Branch functions
 
 void
+MacroAssembler::loadStoreBuffer(Register ptr, Register buffer)
+{
+    if (ptr != buffer)
+        movePtr(ptr, buffer);
+    orPtr(Imm32(gc::ChunkMask), buffer);
+    loadPtr(Address(buffer, gc::ChunkStoreBufferOffsetFromLastByte), buffer);
+}
+
+void
 MacroAssembler::branchPtrInNurseryChunk(Condition cond, Register ptr, Register temp,
                                         Label* label)
 {
@@ -757,23 +785,49 @@ MacroAssembler::branchPtrInNurseryChunk(Condition cond, Register ptr, Register t
 }
 
 void
-MacroAssembler::branchValueIsNurseryObject(Condition cond, const Address& address, Register temp,
-                                           Label* label)
+MacroAssembler::branchValueIsNurseryCell(Condition cond, const Address& address, Register temp,
+                                         Label* label)
 {
-    branchValueIsNurseryObjectImpl(cond, address, temp, label);
+    branchValueIsNurseryCellImpl(cond, address, temp, label);
+}
+
+void
+MacroAssembler::branchValueIsNurseryCell(Condition cond, ValueOperand value, Register temp,
+                                         Label* label)
+{
+    branchValueIsNurseryCellImpl(cond, value, temp, label);
+}
+
+template <typename T>
+void
+MacroAssembler::branchValueIsNurseryCellImpl(Condition cond, const T& value, Register temp,
+                                             Label* label)
+{
+    MOZ_ASSERT(cond == Assembler::Equal || cond == Assembler::NotEqual);
+    MOZ_ASSERT(temp != ScratchReg && temp != ScratchReg2); // Both may be used internally.
+
+    Label done, checkAddress, checkObjectAddress;
+    bool testNursery = (cond == Assembler::Equal);
+    branchTestObject(Assembler::Equal, value, &checkObjectAddress);
+    branchTestString(Assembler::NotEqual, value, testNursery ? &done : label);
+
+    unboxString(value, temp);
+    jump(&checkAddress);
+
+    bind(&checkObjectAddress);
+    unboxObject(value, temp);
+
+    bind(&checkAddress);
+    orPtr(Imm32(gc::ChunkMask), temp);
+    branch32(cond, Address(temp, gc::ChunkLocationOffsetFromLastByte),
+             Imm32(int32_t(gc::ChunkLocation::Nursery)), label);
+
+    bind(&done);
 }
 
 void
 MacroAssembler::branchValueIsNurseryObject(Condition cond, ValueOperand value, Register temp,
                                            Label* label)
-{
-    branchValueIsNurseryObjectImpl(cond, value, temp, label);
-}
-
-template <typename T>
-void
-MacroAssembler::branchValueIsNurseryObjectImpl(Condition cond, const T& value, Register temp,
-                                               Label* label)
 {
     MOZ_ASSERT(cond == Assembler::Equal || cond == Assembler::NotEqual);
     MOZ_ASSERT(temp != ScratchReg && temp != ScratchReg2); // Both may be used internally.
@@ -853,33 +907,134 @@ MacroAssembler::comment(const char* msg)
 // wasm support
 
 CodeOffset
-MacroAssembler::illegalInstruction()
+MacroAssembler::wasmTrapInstruction()
 {
     MOZ_CRASH("NYI");
 }
 
 void
-MacroAssembler::wasmTruncateDoubleToUInt32(FloatRegister input, Register output, Label* oolEntry)
+MacroAssembler::wasmTruncateDoubleToUInt32(FloatRegister input, Register output,
+                                           bool isSaturating, Label* oolEntry)
 {
     MOZ_CRASH("NYI");
 }
 
 void
-MacroAssembler::wasmTruncateDoubleToInt32(FloatRegister input, Register output, Label* oolEntry)
+MacroAssembler::wasmTruncateDoubleToInt32(FloatRegister input, Register output,
+                                          bool isSaturating, Label* oolEntry)
 {
     MOZ_CRASH("NYI");
 }
 
 void
-MacroAssembler::wasmTruncateFloat32ToUInt32(FloatRegister input, Register output, Label* oolEntry)
+MacroAssembler::wasmTruncateFloat32ToUInt32(FloatRegister input, Register output,
+                                            bool isSaturating, Label* oolEntry)
 {
     MOZ_CRASH("NYI");
 }
 
 void
-MacroAssembler::wasmTruncateFloat32ToInt32(FloatRegister input, Register output, Label* oolEntry)
+MacroAssembler::wasmTruncateFloat32ToInt32(FloatRegister input, Register output,
+                                           bool isSaturating, Label* oolEntry)
 {
     MOZ_CRASH("NYI");
+}
+
+void
+MacroAssembler::wasmTruncateDoubleToInt64(FloatRegister input, Register64 output,
+                                          bool isSaturating, Label* oolEntry,
+                                          Label* oolRejoin, FloatRegister tempDouble)
+{
+    MOZ_CRASH("NYI");
+}
+
+void
+MacroAssembler::wasmTruncateDoubleToUInt64(FloatRegister input, Register64 output,
+                                           bool isSaturating, Label* oolEntry,
+                                           Label* oolRejoin, FloatRegister tempDouble)
+{
+    MOZ_CRASH("NYI");
+}
+
+void
+MacroAssembler::wasmTruncateFloat32ToInt64(FloatRegister input, Register64 output,
+                                           bool isSaturating, Label* oolEntry,
+                                           Label* oolRejoin, FloatRegister tempDouble)
+{
+    MOZ_CRASH("NYI");
+}
+
+void
+MacroAssembler::wasmTruncateFloat32ToUInt64(FloatRegister input, Register64 output,
+                                            bool isSaturating, Label* oolEntry,
+                                            Label* oolRejoin, FloatRegister tempDouble)
+{
+    MOZ_CRASH("NYI");
+}
+
+void
+MacroAssembler::oolWasmTruncateCheckF32ToI32(FloatRegister input, Register output, TruncFlags flags,
+                                             wasm::BytecodeOffset off, Label* rejoin)
+{
+    MOZ_CRASH("NYI");
+}
+
+void
+MacroAssembler::oolWasmTruncateCheckF64ToI32(FloatRegister input, Register output, TruncFlags flags,
+                                             wasm::BytecodeOffset off, Label* rejoin)
+{
+    MOZ_CRASH("NYI");
+}
+
+void
+MacroAssembler::oolWasmTruncateCheckF32ToI64(FloatRegister input, Register64 output,
+                                             TruncFlags flags, wasm::BytecodeOffset off,
+                                             Label* rejoin)
+{
+    MOZ_CRASH("NYI");
+}
+
+void
+MacroAssembler::oolWasmTruncateCheckF64ToI64(FloatRegister input, Register64 output,
+                                             TruncFlags flags, wasm::BytecodeOffset off,
+                                             Label* rejoin)
+{
+    MOZ_CRASH("NYI");
+}
+
+// ========================================================================
+// Convert floating point.
+
+bool
+MacroAssembler::convertUInt64ToDoubleNeedsTemp()
+{
+    return false;
+}
+
+void
+MacroAssembler::convertUInt64ToDouble(Register64 src, FloatRegister dest, Register temp)
+{
+    MOZ_ASSERT(temp == Register::Invalid());
+    Ucvtf(ARMFPRegister(dest, 64), ARMRegister(src.reg, 64));
+}
+
+void
+MacroAssembler::convertInt64ToDouble(Register64 src, FloatRegister dest)
+{
+    Scvtf(ARMFPRegister(dest, 64), ARMRegister(src.reg, 64));
+}
+
+void
+MacroAssembler::convertUInt64ToFloat32(Register64 src, FloatRegister dest, Register temp)
+{
+    MOZ_ASSERT(temp == Register::Invalid());
+    Ucvtf(ARMFPRegister(dest, 32), ARMRegister(src.reg, 64));
+}
+
+void
+MacroAssembler::convertInt64ToFloat32(Register64 src, FloatRegister dest)
+{
+    Scvtf(ARMFPRegister(dest, 32), ARMRegister(src.reg, 64));
 }
 
 // ========================================================================
@@ -979,6 +1134,111 @@ MacroAssembler::atomicFetchOp64(const Synchronization& sync, AtomicOp op, Regist
                                 Register64 temp, Register64 output)
 {
     MOZ_CRASH("NYI");
+}
+
+// ========================================================================
+// JS atomic operations.
+
+template<typename T>
+static void
+CompareExchangeJS(MacroAssembler& masm, Scalar::Type arrayType, const Synchronization& sync,
+                  const T& mem, Register oldval, Register newval, Register temp, AnyRegister output)
+{
+    if (arrayType == Scalar::Uint32) {
+        masm.compareExchange(arrayType, sync, mem, oldval, newval, temp);
+        masm.convertUInt32ToDouble(temp, output.fpu());
+    } else {
+        masm.compareExchange(arrayType, sync, mem, oldval, newval, output.gpr());
+    }
+}
+
+void
+MacroAssembler::compareExchangeJS(Scalar::Type arrayType, const Synchronization& sync,
+                                  const Address& mem, Register oldval, Register newval,
+                                  Register temp, AnyRegister output)
+{
+    CompareExchangeJS(*this, arrayType, sync, mem, oldval, newval, temp, output);
+}
+
+void
+MacroAssembler::compareExchangeJS(Scalar::Type arrayType, const Synchronization& sync,
+                                  const BaseIndex& mem, Register oldval, Register newval,
+                                  Register temp, AnyRegister output)
+{
+    CompareExchangeJS(*this, arrayType, sync, mem, oldval, newval, temp, output);
+}
+
+template<typename T>
+static void
+AtomicExchangeJS(MacroAssembler& masm, Scalar::Type arrayType, const Synchronization& sync,
+                 const T& mem, Register value, Register temp, AnyRegister output)
+{
+    if (arrayType == Scalar::Uint32) {
+        masm.atomicExchange(arrayType, sync, mem, value, temp);
+        masm.convertUInt32ToDouble(temp, output.fpu());
+    } else {
+        masm.atomicExchange(arrayType, sync, mem, value, output.gpr());
+    }
+}
+
+void
+MacroAssembler::atomicExchangeJS(Scalar::Type arrayType, const Synchronization& sync,
+                                 const Address& mem, Register value, Register temp,
+                                 AnyRegister output)
+{
+    AtomicExchangeJS(*this, arrayType, sync, mem, value, temp, output);
+}
+
+void
+MacroAssembler::atomicExchangeJS(Scalar::Type arrayType, const Synchronization& sync,
+                                 const BaseIndex& mem, Register value, Register temp,
+                                 AnyRegister output)
+{
+    AtomicExchangeJS(*this, arrayType, sync, mem, value, temp, output);
+}
+
+template<typename T>
+static void
+AtomicFetchOpJS(MacroAssembler& masm, Scalar::Type arrayType, const Synchronization& sync,
+                AtomicOp op, Register value, const T& mem, Register temp1, Register temp2,
+                AnyRegister output)
+{
+    if (arrayType == Scalar::Uint32) {
+        masm.atomicFetchOp(arrayType, sync, op, value, mem, temp2, temp1);
+        masm.convertUInt32ToDouble(temp1, output.fpu());
+    } else {
+        masm.atomicFetchOp(arrayType, sync, op, value, mem, temp1, output.gpr());
+    }
+}
+
+void
+MacroAssembler::atomicFetchOpJS(Scalar::Type arrayType, const Synchronization& sync, AtomicOp op,
+                                Register value, const Address& mem, Register temp1, Register temp2,
+                                AnyRegister output)
+{
+    AtomicFetchOpJS(*this, arrayType, sync, op, value, mem, temp1, temp2, output);
+}
+
+void
+MacroAssembler::atomicFetchOpJS(Scalar::Type arrayType, const Synchronization& sync, AtomicOp op,
+                                Register value, const BaseIndex& mem, Register temp1, Register temp2,
+                                AnyRegister output)
+{
+    AtomicFetchOpJS(*this, arrayType, sync, op, value, mem, temp1, temp2, output);
+}
+
+void
+MacroAssembler::atomicEffectOpJS(Scalar::Type arrayType, const Synchronization& sync, AtomicOp op,
+                           Register value, const BaseIndex& mem, Register temp)
+{
+    atomicEffectOp(arrayType, sync, op, value, mem, temp);
+}
+
+void
+MacroAssembler::atomicEffectOpJS(Scalar::Type arrayType, const Synchronization& sync, AtomicOp op,
+                           Register value, const Address& mem, Register temp)
+{
+    atomicEffectOp(arrayType, sync, op, value, mem, temp);
 }
 
 //}}} check_macroassembler_style

@@ -9,8 +9,6 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
-
 this.EXPORTED_SYMBOLS = [
   "configureLogging",
   "getManager",
@@ -18,10 +16,10 @@ this.EXPORTED_SYMBOLS = [
   "TestingCrashManager",
 ];
 
-Cu.import("resource://gre/modules/CrashManager.jsm", this);
-Cu.import("resource://gre/modules/Log.jsm", this);
-Cu.import("resource://gre/modules/osfile.jsm", this);
-Cu.import("resource://gre/modules/Timer.jsm", this);
+ChromeUtils.import("resource://gre/modules/CrashManager.jsm", this);
+ChromeUtils.import("resource://gre/modules/Log.jsm", this);
+ChromeUtils.import("resource://gre/modules/osfile.jsm", this);
+ChromeUtils.import("resource://gre/modules/Timer.jsm", this);
 
 var loggingConfigured = false;
 

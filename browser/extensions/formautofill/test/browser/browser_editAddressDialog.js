@@ -1,5 +1,12 @@
 "use strict";
 
+add_task(async function setup_supportedCountries() {
+  await SpecialPowers.pushPrefEnv({set: [
+    [SUPPORTED_COUNTRIES_PREF, "US,CA,DE"],
+  ]});
+});
+
+
 add_task(async function test_cancelEditAddressDialog() {
   await testDialog(EDIT_ADDRESS_DIALOG_URL, win => {
     win.document.querySelector("#cancel").click();
@@ -44,8 +51,8 @@ add_task(async function test_saveAddress() {
     // Verify labels
     is(doc.querySelector("#address-level1-container > span").textContent, "State",
                          "US address-level1 label should be 'State'");
-    is(doc.querySelector("#postal-code-container > span").textContent, "Zip Code",
-                         "US postal-code label should be 'Zip Code'");
+    is(doc.querySelector("#postal-code-container > span").textContent, "ZIP Code",
+                         "US postal-code label should be 'ZIP Code'");
     // Input address info and verify move through form with tab keys
     const keyInputs = [
       "VK_TAB",

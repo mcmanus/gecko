@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "A(z) {provider} ajánlásával",
   "header_bookmarks_placeholder": "Még nincs könyvjelzője.",
   "header_stories_from": "innen:",
+  "context_menu_button_sr": "Környezeti menü megnyitása ehhez: {title}",
   "type_label_visited": "Látogatott",
   "type_label_bookmarked": "Könyvjelzőzött",
   "type_label_synced": "Másik eszközről szinkronizálva",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Webhely szerkesztése",
   "edit_topsites_dismiss_button": "Webhely eltávolítása",
   "edit_topsites_add_button": "Hozzáadás",
+  "edit_topsites_add_button_tooltip": "Népszerű oldal hozzáadása",
   "topsites_form_add_header": "Új népszerű oldal",
   "topsites_form_edit_header": "Népszerű oldal szerkesztése",
   "topsites_form_title_placeholder": "Cím megadása",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Már felzárkózott. Nézzen vissza később a legújabb {provider} hírekért. Nem tud várni? Válasszon egy népszerű témát, hogy még több sztorit találjon a weben.",
   "manual_migration_explanation2": "Próbálja ki a Firefoxot másik böngészőből származó könyvjelzőkkel, előzményekkel és jelszavakkal.",
   "manual_migration_cancel_button": "Köszönöm, nem",
-  "manual_migration_import_button": "Importálás most"
+  "manual_migration_import_button": "Importálás most",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

@@ -2,11 +2,11 @@
  * Bug 1238183 - Test cases for forgetAboutSite with userContextId.
  */
 
-const { classes: Cc, Constructor: CC, interfaces: Ci, utils: Cu } = Components;
+const CC = Components.Constructor;
 
-Cu.import("resource://gre/modules/ForgetAboutSite.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-let {HttpServer} = Cu.import("resource://testing-common/httpd.js", {});
+ChromeUtils.import("resource://gre/modules/ForgetAboutSite.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+let {HttpServer} = ChromeUtils.import("resource://testing-common/httpd.js", {});
 
 const USER_CONTEXTS = [
   "default",

@@ -8,8 +8,6 @@
 
 // Constants
 
-const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
-
 const MS_PER_DAY = 86400000; // 24 * 60 * 60 * 1000
 
 // Match type constants.
@@ -309,8 +307,8 @@ const SQL_BOOKMARKED_TYPED_URL_QUERY = urlQuery("AND bookmarked AND h.typed = 1"
 
 // Getters
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 Cu.importGlobalProperties(["fetch"]);
 
@@ -326,10 +324,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   ProfileAge: "resource://gre/modules/ProfileAge.jsm",
 });
 
-XPCOMUtils.defineLazyServiceGetter(this, "textURIService",
-                                   "@mozilla.org/intl/texttosuburi;1",
-                                   "nsITextToSubURI");
-
 XPCOMUtils.defineLazyPreferenceGetter(this, "syncUsernamePref",
                                       "services.sync.username");
 
@@ -337,14 +331,6 @@ function setTimeout(callback, ms) {
   let timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
   timer.initWithCallback(callback, ms, timer.TYPE_ONE_SHOT);
   return timer;
-}
-
-function convertBucketsCharPrefToArray(str) {
-  return str.split(",")
-            .map(v => {
-              let bucket = v.split(":");
-              return [ bucket[0].trim().toLowerCase(), Number(bucket[1]) ];
-            });
 }
 
 /**
@@ -488,9 +474,9 @@ XPCOMUtils.defineLazyGetter(this, "Prefs", () => {
         // Convert from pref char format to an array and add the default buckets.
         let val = readPref(pref);
         try {
-          val = convertBucketsCharPrefToArray(val);
+          val = PlacesUtils.convertMatchBucketsStringToArray(val);
         } catch (ex) {
-          val = convertBucketsCharPrefToArray(PREF_URLBAR_DEFAULTS.get(pref));
+          val = PlacesUtils.convertMatchBucketsStringToArray(PREF_URLBAR_DEFAULTS.get(pref));
         }
         return [ ...DEFAULT_BUCKETS_BEFORE,
                 ...val,
@@ -502,7 +488,7 @@ XPCOMUtils.defineLazyGetter(this, "Prefs", () => {
         if (val) {
           // Convert from pref char format to an array and add the default buckets.
           try {
-            val = convertBucketsCharPrefToArray(val);
+            val = PlacesUtils.convertMatchBucketsStringToArray(val);
             return [ ...DEFAULT_BUCKETS_BEFORE,
                     ...val,
                     ...DEFAULT_BUCKETS_AFTER ];
@@ -810,7 +796,7 @@ function Search(searchString, searchParam, autocompleteListener,
   let strippedOriginalSearchString =
     stripPrefix(this._trimmedOriginalSearchString.toLowerCase());
   this._searchString =
-    textURIService.unEscapeURIForUI("UTF-8", strippedOriginalSearchString);
+    Services.textToSubURI.unEscapeURIForUI("UTF-8", strippedOriginalSearchString);
 
   // The protocol and the host are lowercased by nsIURI, so it's fine to
   // lowercase the typed prefix, to add it back to the results later.
@@ -1517,7 +1503,7 @@ Search.prototype = {
       value = PlacesUtils.mozActionURI("keyword", {
         url,
         input: this._originalSearchString,
-        postData,
+        postData
       });
     }
     // The title will end up being "host: queryString"
@@ -1763,7 +1749,7 @@ Search.prototype = {
     // to be displayed to the user, and in any case the front-end should not
     // rely on it being canonical.
     let escapedURL = uri.displaySpec;
-    let displayURL = textURIService.unEscapeURIForUI("UTF-8", uri.displaySpec);
+    let displayURL = Services.textToSubURI.unEscapeURIForUI("UTF-8", escapedURL);
 
     let value = PlacesUtils.mozActionURI("visiturl", {
       url: escapedURL,

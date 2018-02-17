@@ -25,10 +25,11 @@
 #include "jit/RangeAnalysis.h"
 #include "js/Conversions.h"
 
-#include "jsatominlines.h"
 #include "jsboolinlines.h"
-#include "jsobjinlines.h"
-#include "jsscriptinlines.h"
+
+#include "vm/JSAtom-inl.h"
+#include "vm/JSObject-inl.h"
+#include "vm/JSScript-inl.h"
 #include "vm/UnboxedObject-inl.h"
 
 using namespace js;
@@ -2041,6 +2042,7 @@ WrappedFunction::WrappedFunction(JSFunction* fun)
   : fun_(fun),
     nargs_(fun->nargs()),
     isNative_(fun->isNative()),
+    isNativeWithJitEntry_(fun->isNativeWithJitEntry()),
     isConstructor_(fun->isConstructor()),
     isClassConstructor_(fun->isClassConstructor()),
     isSelfHostedBuiltin_(fun->isSelfHostedBuiltin())
@@ -4312,20 +4314,20 @@ MResumePoint::isRecoverableOperand(MUse* u) const
 }
 
 MDefinition*
-MToInt32::foldsTo(TempAllocator& alloc)
+MToNumberInt32::foldsTo(TempAllocator& alloc)
 {
     MDefinition* input = getOperand(0);
 
     // Fold this operation if the input operand is constant.
     if (input->isConstant()) {
-        DebugOnly<MacroAssembler::IntConversionInputKind> convert = conversion();
+        DebugOnly<IntConversionInputKind> convert = conversion();
         switch (input->type()) {
           case MIRType::Null:
-            MOZ_ASSERT(convert == MacroAssembler::IntConversion_Any);
+            MOZ_ASSERT(convert.value == IntConversionInputKind::Any);
             return MConstant::New(alloc, Int32Value(0));
           case MIRType::Boolean:
-            MOZ_ASSERT(convert == MacroAssembler::IntConversion_Any ||
-                       convert == MacroAssembler::IntConversion_NumbersOrBoolsOnly);
+            MOZ_ASSERT(convert.value == IntConversionInputKind::Any ||
+                       convert.value == IntConversionInputKind::NumbersOrBoolsOnly);
             return MConstant::New(alloc, Int32Value(input->toConstant()->toBoolean()));
           case MIRType::Int32:
             return MConstant::New(alloc, Int32Value(input->toConstant()->toInt32()));
@@ -4356,7 +4358,7 @@ MToInt32::foldsTo(TempAllocator& alloc)
 }
 
 void
-MToInt32::analyzeEdgeCasesBackward()
+MToNumberInt32::analyzeEdgeCasesBackward()
 {
     if (!NeedNegativeZeroCheck(this))
         setCanBeNegativeZero(false);
@@ -4400,10 +4402,10 @@ MWasmTruncateToInt32::foldsTo(TempAllocator& alloc)
         if (IsNaN(d))
             return this;
 
-        if (!isUnsigned_ && d <= double(INT32_MAX) && d >= double(INT32_MIN))
+        if (!isUnsigned() && d <= double(INT32_MAX) && d >= double(INT32_MIN))
             return MConstant::New(alloc, Int32Value(ToInt32(d)));
 
-        if (isUnsigned_ && d <= double(UINT32_MAX) && d >= 0)
+        if (isUnsigned() && d <= double(UINT32_MAX) && d >= 0)
             return MConstant::New(alloc, Int32Value(ToInt32(d)));
     }
 
@@ -4412,10 +4414,10 @@ MWasmTruncateToInt32::foldsTo(TempAllocator& alloc)
         if (IsNaN(f))
             return this;
 
-        if (!isUnsigned_ && f <= double(INT32_MAX) && f >= double(INT32_MIN))
+        if (!isUnsigned() && f <= double(INT32_MAX) && f >= double(INT32_MIN))
             return MConstant::New(alloc, Int32Value(ToInt32(f)));
 
-        if (isUnsigned_ && f <= double(UINT32_MAX) && f >= 0)
+        if (isUnsigned() && f <= double(UINT32_MAX) && f >= 0)
             return MConstant::New(alloc, Int32Value(ToInt32(f)));
     }
 
@@ -5505,11 +5507,11 @@ DefinitelyDifferentValue(MDefinition* ins1, MDefinition* ins2)
     if (ins1 == ins2)
         return false;
 
-    // Drop the MToInt32 added by the TypePolicy for double and float values.
-    if (ins1->isToInt32())
-        return DefinitelyDifferentValue(ins1->toToInt32()->input(), ins2);
-    if (ins2->isToInt32())
-        return DefinitelyDifferentValue(ins2->toToInt32()->input(), ins1);
+    // Drop the MToNumberInt32 added by the TypePolicy for double and float values.
+    if (ins1->isToNumberInt32())
+        return DefinitelyDifferentValue(ins1->toToNumberInt32()->input(), ins2);
+    if (ins2->isToNumberInt32())
+        return DefinitelyDifferentValue(ins2->toToNumberInt32()->input(), ins1);
 
     // Ignore the bounds check, which in most cases will contain the same info.
     if (ins1->isBoundsCheck())

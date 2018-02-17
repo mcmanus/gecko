@@ -31,13 +31,10 @@ namespace jit {
     _(NewObject_WithTemplate)                    \
                                                  \
     _(ToBool_Fallback)                           \
-    _(ToBool_Int32)                              \
-    _(ToBool_String)                             \
-    _(ToBool_NullUndefined)                      \
-    _(ToBool_Double)                             \
-    _(ToBool_Object)                             \
                                                  \
     _(ToNumber_Fallback)                         \
+                                                 \
+    _(UnaryArith_Fallback)                       \
                                                  \
     _(Call_Fallback)                             \
     _(Call_Scripted)                             \
@@ -61,7 +58,6 @@ namespace jit {
     _(BindName_Fallback)                         \
                                                  \
     _(GetIntrinsic_Fallback)                     \
-    _(GetIntrinsic_Constant)                     \
                                                  \
     _(SetProp_Fallback)                          \
                                                  \

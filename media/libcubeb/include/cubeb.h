@@ -53,16 +53,18 @@ extern "C" {
     output_params.format = CUBEB_SAMPLE_FLOAT32NE;
     output_params.rate = rate;
     output_params.channels = 2;
+    output_params.prefs = CUBEB_STREAM_PREF_NONE;
 
     cubeb_stream_params input_params;
     input_params.format = CUBEB_SAMPLE_FLOAT32NE;
     input_params.rate = rate;
     input_params.channels = 1;
+    input_params.prefs = CUBEB_STREAM_PREF_NONE;
 
     cubeb_stream * stm;
     rv = cubeb_stream_init(app_ctx, &stm, "Example Stream 1",
-                           NULL, input_params,
-                           NULL, output_params,
+                           NULL, &input_params,
+                           NULL, &output_params,
                            latency_frames,
                            data_cb, state_cb,
                            NULL);
@@ -213,6 +215,15 @@ typedef enum {
   CUBEB_LAYOUT_MAX
 } cubeb_channel_layout;
 
+/** Miscellaneous stream preferences. */
+typedef enum {
+  CUBEB_STREAM_PREF_NONE     = 0x00, /**< No stream preferences are requested. */
+  CUBEB_STREAM_PREF_LOOPBACK = 0x01 /**< Request a loopback stream. Should be
+                                         specified on the input params and an
+                                         output device to loopback from should
+                                         be passed in place of an input device. */
+} cubeb_stream_prefs;
+
 /** Stream format initialization parameters. */
 typedef struct {
   cubeb_sample_format format;   /**< Requested sample format.  One of
@@ -220,6 +231,7 @@ typedef struct {
   uint32_t rate;                /**< Requested sample rate.  Valid range is [1000, 192000]. */
   uint32_t channels;            /**< Requested channel count.  Valid range is [1, 8]. */
   cubeb_channel_layout layout;  /**< Requested channel layout. This must be consistent with the provided channels. */
+  cubeb_stream_prefs prefs;     /**< Requested preferences. */
 } cubeb_stream_params;
 
 /** Audio device description */
@@ -586,6 +598,11 @@ CUBEB_EXPORT int cubeb_stream_device_destroy(cubeb_stream * stream,
     @retval CUBEB_ERROR_NOT_SUPPORTED */
 CUBEB_EXPORT int cubeb_stream_register_device_changed_callback(cubeb_stream * stream,
                                                                cubeb_device_changed_callback device_changed_callback);
+
+/** Return the user data pointer registered with the stream with cubeb_stream_init.
+    @param stream the stream for which to retrieve user data pointer.
+    @retval user data pointer */
+CUBEB_EXPORT void * cubeb_stream_user_ptr(cubeb_stream * stream);
 
 /** Returns enumerated devices.
     @param context

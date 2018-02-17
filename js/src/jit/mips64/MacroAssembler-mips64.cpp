@@ -75,20 +75,6 @@ MacroAssemblerMIPS64Compat::convertUInt32ToDouble(Register src, FloatRegister de
 }
 
 void
-MacroAssemblerMIPS64Compat::convertInt64ToDouble(Register src, FloatRegister dest)
-{
-    as_dmtc1(src, dest);
-    as_cvtdl(dest, dest);
-}
-
-void
-MacroAssemblerMIPS64Compat::convertInt64ToFloat32(Register src, FloatRegister dest)
-{
-    as_dmtc1(src, dest);
-    as_cvtsl(dest, dest);
-}
-
-void
 MacroAssemblerMIPS64Compat::convertUInt64ToDouble(Register src, FloatRegister dest)
 {
     Label positive, done;
@@ -110,42 +96,6 @@ MacroAssemblerMIPS64Compat::convertUInt64ToDouble(Register src, FloatRegister de
     as_cvtdl(dest, dest);
 
     bind(&done);
-}
-
-void
-MacroAssemblerMIPS64Compat::convertUInt64ToFloat32(Register src, FloatRegister dest)
-{
-    Label positive, done;
-    ma_b(src, src, &positive, NotSigned, ShortJump);
-
-    MOZ_ASSERT(src!= ScratchRegister);
-    MOZ_ASSERT(src!= SecondScratchReg);
-
-    ma_and(ScratchRegister, src, Imm32(1));
-    ma_dsrl(SecondScratchReg, src, Imm32(1));
-    ma_or(ScratchRegister, SecondScratchReg);
-    as_dmtc1(ScratchRegister, dest);
-    as_cvtsl(dest, dest);
-    asMasm().addFloat32(dest, dest);
-    ma_b(&done, ShortJump);
-
-    bind(&positive);
-    as_dmtc1(src, dest);
-    as_cvtsl(dest, dest);
-
-    bind(&done);
-}
-
-bool
-MacroAssemblerMIPS64Compat::convertUInt64ToDoubleNeedsTemp()
-{
-    return false;
-}
-
-void
-MacroAssemblerMIPS64Compat::convertUInt64ToDouble(Register64 src, FloatRegister dest, Register temp)
-{
-    convertUInt64ToDouble(src.reg, dest);
 }
 
 void
@@ -1482,28 +1432,6 @@ MacroAssemblerMIPS64Compat::testUndefinedSet(Condition cond, const ValueOperand&
     ma_cmp_set(dest, SecondScratchReg, ImmTag(JSVAL_TAG_UNDEFINED), cond);
 }
 
-// unboxing code
-void
-MacroAssemblerMIPS64Compat::unboxNonDouble(const ValueOperand& operand, Register dest)
-{
-    ma_dext(dest, operand.valueReg(), Imm32(0), Imm32(JSVAL_TAG_SHIFT));
-}
-
-void
-MacroAssemblerMIPS64Compat::unboxNonDouble(const Address& src, Register dest)
-{
-    loadPtr(Address(src.base, src.offset), dest);
-    ma_dext(dest, dest, Imm32(0), Imm32(JSVAL_TAG_SHIFT));
-}
-
-void
-MacroAssemblerMIPS64Compat::unboxNonDouble(const BaseIndex& src, Register dest)
-{
-    computeScaledAddress(src, SecondScratchReg);
-    loadPtr(Address(SecondScratchReg, src.offset), dest);
-    ma_dext(dest, dest, Imm32(0), Imm32(JSVAL_TAG_SHIFT));
-}
-
 void
 MacroAssemblerMIPS64Compat::unboxInt32(const ValueOperand& operand, Register dest)
 {
@@ -1569,53 +1497,59 @@ MacroAssemblerMIPS64Compat::unboxDouble(const Address& src, FloatRegister dest)
 void
 MacroAssemblerMIPS64Compat::unboxString(const ValueOperand& operand, Register dest)
 {
-    unboxNonDouble(operand, dest);
+    unboxNonDouble(operand, dest, JSVAL_TYPE_STRING);
 }
 
 void
 MacroAssemblerMIPS64Compat::unboxString(Register src, Register dest)
 {
-    ma_dext(dest, src, Imm32(0), Imm32(JSVAL_TAG_SHIFT));
+    unboxNonDouble(src, dest, JSVAL_TYPE_STRING);
 }
 
 void
 MacroAssemblerMIPS64Compat::unboxString(const Address& src, Register dest)
 {
-    unboxNonDouble(src, dest);
+    unboxNonDouble(src, dest, JSVAL_TYPE_STRING);
+}
+
+void
+MacroAssemblerMIPS64Compat::unboxSymbol(const ValueOperand& operand, Register dest)
+{
+    unboxNonDouble(operand, dest, JSVAL_TYPE_SYMBOL);
 }
 
 void
 MacroAssemblerMIPS64Compat::unboxSymbol(Register src, Register dest)
 {
-    ma_dext(dest, src, Imm32(0), Imm32(JSVAL_TAG_SHIFT));
+    unboxNonDouble(src, dest, JSVAL_TYPE_SYMBOL);
 }
 
 void
 MacroAssemblerMIPS64Compat::unboxSymbol(const Address& src, Register dest)
 {
-    unboxNonDouble(src, dest);
+    unboxNonDouble(src, dest, JSVAL_TYPE_SYMBOL);
 }
 
 void
 MacroAssemblerMIPS64Compat::unboxObject(const ValueOperand& src, Register dest)
 {
-    unboxNonDouble(src, dest);
+    unboxNonDouble(src, dest, JSVAL_TYPE_OBJECT);
 }
 
 void
 MacroAssemblerMIPS64Compat::unboxObject(Register src, Register dest)
 {
-    ma_dext(dest, src, Imm32(0), Imm32(JSVAL_TAG_SHIFT));
+    unboxNonDouble(src, dest, JSVAL_TYPE_OBJECT);
 }
 
 void
 MacroAssemblerMIPS64Compat::unboxObject(const Address& src, Register dest)
 {
-    unboxNonDouble(src, dest);
+    unboxNonDouble(src, dest, JSVAL_TYPE_OBJECT);
 }
 
 void
-MacroAssemblerMIPS64Compat::unboxValue(const ValueOperand& src, AnyRegister dest)
+MacroAssemblerMIPS64Compat::unboxValue(const ValueOperand& src, AnyRegister dest, JSValueType type)
 {
     if (dest.isFloat()) {
         Label notInt32, end;
@@ -1626,14 +1560,14 @@ MacroAssemblerMIPS64Compat::unboxValue(const ValueOperand& src, AnyRegister dest
         unboxDouble(src, dest.fpu());
         bind(&end);
     } else {
-        unboxNonDouble(src, dest.gpr());
+        unboxNonDouble(src, dest.gpr(), type);
     }
 }
 
 void
 MacroAssemblerMIPS64Compat::unboxPrivate(const ValueOperand& src, Register dest)
 {
-    ma_dsrl(dest, src.valueReg(), Imm32(1));
+    ma_dsll(dest, src.valueReg(), Imm32(1));
 }
 
 void
@@ -2122,99 +2056,6 @@ MacroAssemblerMIPS64Compat::handleFailureWithHandlerTail(void* handler, Label* p
     ret();
 }
 
-template<typename T>
-void
-MacroAssemblerMIPS64Compat::compareExchangeToTypedIntArray(Scalar::Type arrayType, const T& mem,
-                                                           Register oldval, Register newval,
-                                                           Register temp, Register valueTemp,
-                                                           Register offsetTemp, Register maskTemp,
-                                                           AnyRegister output)
-{
-    switch (arrayType) {
-      case Scalar::Int8:
-        compareExchange8SignExtend(mem, oldval, newval, valueTemp, offsetTemp, maskTemp, output.gpr());
-        break;
-      case Scalar::Uint8:
-        compareExchange8ZeroExtend(mem, oldval, newval, valueTemp, offsetTemp, maskTemp, output.gpr());
-        break;
-      case Scalar::Int16:
-        compareExchange16SignExtend(mem, oldval, newval, valueTemp, offsetTemp, maskTemp, output.gpr());
-        break;
-      case Scalar::Uint16:
-        compareExchange16ZeroExtend(mem, oldval, newval, valueTemp, offsetTemp, maskTemp, output.gpr());
-        break;
-      case Scalar::Int32:
-        compareExchange32(mem, oldval, newval, valueTemp, offsetTemp, maskTemp, output.gpr());
-        break;
-      case Scalar::Uint32:
-        // At the moment, the code in MCallOptimize.cpp requires the output
-        // type to be double for uint32 arrays.  See bug 1077305.
-        MOZ_ASSERT(output.isFloat());
-        compareExchange32(mem, oldval, newval, valueTemp, offsetTemp, maskTemp, temp);
-        convertUInt32ToDouble(temp, output.fpu());
-        break;
-      default:
-        MOZ_CRASH("Invalid typed array type");
-    }
-}
-
-template void
-MacroAssemblerMIPS64Compat::compareExchangeToTypedIntArray(Scalar::Type arrayType, const Address& mem,
-                                                           Register oldval, Register newval, Register temp,
-                                                           Register valueTemp, Register offsetTemp, Register maskTemp,
-                                                           AnyRegister output);
-template void
-MacroAssemblerMIPS64Compat::compareExchangeToTypedIntArray(Scalar::Type arrayType, const BaseIndex& mem,
-                                                           Register oldval, Register newval, Register temp,
-                                                           Register valueTemp, Register offsetTemp, Register maskTemp,
-                                                           AnyRegister output);
-
-template<typename T>
-void
-MacroAssemblerMIPS64Compat::atomicExchangeToTypedIntArray(Scalar::Type arrayType, const T& mem,
-                                                          Register value, Register temp, Register valueTemp,
-                                                          Register offsetTemp, Register maskTemp,
-                                                          AnyRegister output)
-{
-    switch (arrayType) {
-      case Scalar::Int8:
-        atomicExchange8SignExtend(mem, value, valueTemp, offsetTemp, maskTemp, output.gpr());
-        break;
-      case Scalar::Uint8:
-        atomicExchange8ZeroExtend(mem, value, valueTemp, offsetTemp, maskTemp, output.gpr());
-        break;
-      case Scalar::Int16:
-        atomicExchange16SignExtend(mem, value, valueTemp, offsetTemp, maskTemp, output.gpr());
-        break;
-      case Scalar::Uint16:
-        atomicExchange16ZeroExtend(mem, value, valueTemp, offsetTemp, maskTemp, output.gpr());
-        break;
-      case Scalar::Int32:
-        atomicExchange32(mem, value, valueTemp, offsetTemp, maskTemp, output.gpr());
-        break;
-      case Scalar::Uint32:
-        // At the moment, the code in MCallOptimize.cpp requires the output
-        // type to be double for uint32 arrays.  See bug 1077305.
-        MOZ_ASSERT(output.isFloat());
-        atomicExchange32(mem, value, valueTemp, offsetTemp, maskTemp, temp);
-        convertUInt32ToDouble(temp, output.fpu());
-        break;
-      default:
-        MOZ_CRASH("Invalid typed array type");
-    }
-}
-
-template void
-MacroAssemblerMIPS64Compat::atomicExchangeToTypedIntArray(Scalar::Type arrayType, const Address& mem,
-                                                          Register value, Register temp, Register valueTemp,
-                                                          Register offsetTemp, Register maskTemp,
-                                                          AnyRegister output);
-template void
-MacroAssemblerMIPS64Compat::atomicExchangeToTypedIntArray(Scalar::Type arrayType, const BaseIndex& mem,
-                                                          Register value, Register temp, Register valueTemp,
-                                                          Register offsetTemp, Register maskTemp,
-                                                          AnyRegister output);
-
 CodeOffset
 MacroAssemblerMIPS64Compat::toggledJump(Label* label)
 {
@@ -2494,23 +2335,8 @@ MacroAssembler::moveValue(const Value& src, const ValueOperand& dest)
 // Branch functions
 
 void
-MacroAssembler::branchValueIsNurseryObject(Condition cond, const Address& address, Register temp,
-                                           Label* label)
-{
-    branchValueIsNurseryObjectImpl(cond, address, temp, label);
-}
-
-void
 MacroAssembler::branchValueIsNurseryObject(Condition cond, ValueOperand value,
                                            Register temp, Label* label)
-{
-    branchValueIsNurseryObjectImpl(cond, value, temp, label);
-}
-
-template <typename T>
-void
-MacroAssembler::branchValueIsNurseryObjectImpl(Condition cond, const T& value, Register temp,
-                                               Label* label)
 {
     MOZ_ASSERT(cond == Assembler::Equal || cond == Assembler::NotEqual);
 
@@ -2518,6 +2344,40 @@ MacroAssembler::branchValueIsNurseryObjectImpl(Condition cond, const T& value, R
     branchTestObject(Assembler::NotEqual, value, cond == Assembler::Equal ? &done : label);
 
     extractObject(value, SecondScratchReg);
+    orPtr(Imm32(gc::ChunkMask), SecondScratchReg);
+    branch32(cond, Address(SecondScratchReg, gc::ChunkLocationOffsetFromLastByte),
+             Imm32(int32_t(gc::ChunkLocation::Nursery)), label);
+
+    bind(&done);
+}
+
+void
+MacroAssembler::branchValueIsNurseryCell(Condition cond, const Address& address, Register temp,
+                                         Label* label)
+{
+    branchValueIsNurseryCellImpl(cond, address, temp, label);
+}
+
+void
+MacroAssembler::branchValueIsNurseryCell(Condition cond, ValueOperand value,
+                                         Register temp, Label* label)
+{
+    branchValueIsNurseryCellImpl(cond, value, temp, label);
+}
+
+template <typename T>
+void
+MacroAssembler::branchValueIsNurseryCellImpl(Condition cond, const T& value, Register temp,
+                                             Label* label)
+{
+    MOZ_ASSERT(cond == Assembler::Equal || cond == Assembler::NotEqual);
+
+    Label done, checkAddress;
+    branchTestObject(Assembler::Equal, value, &checkAddress);
+    branchTestString(Assembler::NotEqual, value, cond == Assembler::Equal ? &done : label);
+
+    bind(&checkAddress);
+    extractCell(value, SecondScratchReg);
     orPtr(Imm32(gc::ChunkMask), SecondScratchReg);
     branch32(cond, Address(SecondScratchReg, gc::ChunkLocationOffsetFromLastByte),
              Imm32(int32_t(gc::ChunkLocation::Nursery)), label);
@@ -2578,8 +2438,11 @@ MacroAssembler::storeUnboxedValue(const ConstantOrRegister& value, MIRType value
 
 
 void
-MacroAssembler::wasmTruncateDoubleToUInt32(FloatRegister input, Register output, Label* oolEntry)
+MacroAssembler::wasmTruncateDoubleToUInt32(FloatRegister input, Register output, bool isSaturating,
+                                           Label* oolEntry)
 {
+    MOZ_ASSERT(!isSaturating, "NYI");
+
     as_truncld(ScratchDoubleReg, input);
     moveFromDoubleHi(ScratchDoubleReg, output);
     as_cfc1(ScratchRegister, Assembler::FCSR);
@@ -2592,8 +2455,11 @@ MacroAssembler::wasmTruncateDoubleToUInt32(FloatRegister input, Register output,
 }
 
 void
-MacroAssembler::wasmTruncateFloat32ToUInt32(FloatRegister input, Register output, Label* oolEntry)
+MacroAssembler::wasmTruncateFloat32ToUInt32(FloatRegister input, Register output, bool isSaturating,
+                                            Label* oolEntry)
 {
+    MOZ_ASSERT(!isSaturating, "NYI");
+
     as_truncls(ScratchDoubleReg, input);
     moveFromDoubleHi(ScratchDoubleReg, output);
     as_cfc1(ScratchRegister, Assembler::FCSR);
@@ -2602,6 +2468,192 @@ MacroAssembler::wasmTruncateFloat32ToUInt32(FloatRegister input, Register output
     moveFromFloat32(ScratchDoubleReg, output);
     ma_b(ScratchRegister, Imm32(0), oolEntry, Assembler::NotEqual);
 
+}
+
+template <typename T>
+static void
+CompareExchange64(MacroAssembler& masm, const Synchronization& sync, const T& mem,
+                  Register64 expect, Register64 replace, Register64 output)
+{
+    masm.computeEffectiveAddress(mem, SecondScratchReg);
+
+    Label tryAgain;
+    Label exit;
+
+    masm.memoryBarrierBefore(sync);
+
+    masm.bind(&tryAgain);
+
+    masm.as_lld(output.reg, SecondScratchReg, 0);
+    masm.ma_b(output.reg, expect.reg, &exit, Assembler::NotEqual, ShortJump);
+    masm.movePtr(replace.reg, ScratchRegister);
+    masm.as_scd(ScratchRegister, SecondScratchReg, 0);
+    masm.ma_b(ScratchRegister, ScratchRegister, &tryAgain, Assembler::Zero, ShortJump);
+
+    masm.memoryBarrierAfter(sync);
+
+    masm.bind(&exit);
+}
+
+void
+MacroAssembler::compareExchange64(const Synchronization& sync, const Address& mem,
+                                  Register64 expect, Register64 replace, Register64 output)
+{
+    CompareExchange64(*this, sync, mem, expect, replace, output);
+}
+
+void
+MacroAssembler::compareExchange64(const Synchronization& sync, const BaseIndex& mem,
+                                  Register64 expect, Register64 replace, Register64 output)
+{
+    CompareExchange64(*this, sync, mem, expect, replace, output);
+}
+
+template <typename T>
+static void
+AtomicExchange64(MacroAssembler& masm, const Synchronization& sync, const T& mem,
+                 Register64 src, Register64 output)
+{
+    masm.computeEffectiveAddress(mem, SecondScratchReg);
+
+    Label tryAgain;
+
+    masm.memoryBarrierBefore(sync);
+
+    masm.bind(&tryAgain);
+
+    masm.as_lld(output.reg, SecondScratchReg, 0);
+    masm.movePtr(src.reg, ScratchRegister);
+    masm.as_scd(ScratchRegister, SecondScratchReg, 0);
+    masm.ma_b(ScratchRegister, ScratchRegister, &tryAgain, Assembler::Zero, ShortJump);
+
+    masm.memoryBarrierAfter(sync);
+}
+
+void
+MacroAssembler::atomicExchange64(const Synchronization& sync, const Address& mem, Register64 src,
+                                 Register64 output)
+{
+    AtomicExchange64(*this, sync, mem, src, output);
+}
+
+void
+MacroAssembler::atomicExchange64(const Synchronization& sync, const BaseIndex& mem, Register64 src,
+                                 Register64 output)
+{
+    AtomicExchange64(*this, sync, mem, src, output);
+}
+
+template<typename T>
+static void
+AtomicFetchOp64(MacroAssembler& masm, const Synchronization& sync, AtomicOp op, Register64 value,
+                const T& mem, Register64 temp, Register64 output)
+{
+    masm.computeEffectiveAddress(mem, SecondScratchReg);
+
+    Label tryAgain;
+
+    masm.memoryBarrierBefore(sync);
+
+    masm.bind(&tryAgain);
+
+    masm.as_lld(output.reg, SecondScratchReg, 0);
+
+    switch(op) {
+      case AtomicFetchAddOp:
+        masm.as_daddu(temp.reg, output.reg, value.reg);
+        break;
+      case AtomicFetchSubOp:
+        masm.as_dsubu(temp.reg, output.reg, value.reg);
+        break;
+      case AtomicFetchAndOp:
+        masm.as_and(temp.reg, output.reg, value.reg);
+        break;
+      case AtomicFetchOrOp:
+        masm.as_or(temp.reg, output.reg, value.reg);
+        break;
+      case AtomicFetchXorOp:
+        masm.as_xor(temp.reg, output.reg, value.reg);
+        break;
+      default:
+        MOZ_CRASH();
+    }
+
+    masm.as_scd(temp.reg, SecondScratchReg, 0);
+    masm.ma_b(temp.reg, temp.reg, &tryAgain, Assembler::Zero, ShortJump);
+
+    masm.memoryBarrierAfter(sync);
+}
+
+void
+MacroAssembler::atomicFetchOp64(const Synchronization& sync, AtomicOp op, Register64 value,
+                                const Address& mem, Register64 temp, Register64 output)
+{
+    AtomicFetchOp64(*this, sync, op, value, mem, temp, output);
+}
+
+void
+MacroAssembler::atomicFetchOp64(const Synchronization& sync, AtomicOp op, Register64 value,
+                                const BaseIndex& mem, Register64 temp, Register64 output)
+{
+    AtomicFetchOp64(*this, sync, op, value, mem, temp, output);
+}
+
+// ========================================================================
+// Convert floating point.
+
+void
+MacroAssembler::convertInt64ToDouble(Register64 src, FloatRegister dest)
+{
+    as_dmtc1(src.reg, dest);
+    as_cvtdl(dest, dest);
+}
+
+void
+MacroAssembler::convertInt64ToFloat32(Register64 src, FloatRegister dest)
+{
+    as_dmtc1(src.reg, dest);
+    as_cvtsl(dest, dest);
+}
+
+bool
+MacroAssembler::convertUInt64ToDoubleNeedsTemp()
+{
+    return false;
+}
+
+void
+MacroAssembler::convertUInt64ToDouble(Register64 src, FloatRegister dest, Register temp)
+{
+    MOZ_ASSERT(temp == Register::Invalid());
+    MacroAssemblerSpecific::convertUInt64ToDouble(src.reg, dest);
+}
+
+void
+MacroAssembler::convertUInt64ToFloat32(Register64 src_, FloatRegister dest, Register temp)
+{
+    MOZ_ASSERT(temp == Register::Invalid());
+
+    Register src = src_.reg;
+    Label positive, done;
+    ma_b(src, src, &positive, NotSigned, ShortJump);
+
+    MOZ_ASSERT(src!= ScratchRegister);
+    MOZ_ASSERT(src!= SecondScratchReg);
+
+    ma_and(ScratchRegister, src, Imm32(1));
+    ma_dsrl(SecondScratchReg, src, Imm32(1));
+    ma_or(ScratchRegister, SecondScratchReg);
+    as_dmtc1(ScratchRegister, dest);
+    as_cvtsl(dest, dest);
+    addFloat32(dest, dest);
+    ma_b(&done, ShortJump);
+
+    bind(&positive);
+    as_dmtc1(src, dest);
+    as_cvtsl(dest, dest);
+
+    bind(&done);
 }
 
 //}}} check_macroassembler_style

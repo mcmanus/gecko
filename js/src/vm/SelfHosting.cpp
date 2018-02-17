@@ -12,18 +12,18 @@
 #include "mozilla/Maybe.h"
 
 #include "jsarray.h"
-#include "jscntxt.h"
-#include "jscompartment.h"
 #include "jsdate.h"
 #include "jsfriendapi.h"
-#include "jsfun.h"
-#include "jshashutil.h"
-#include "jsiter.h"
 #include "jsstr.h"
 #include "jswrapper.h"
 #include "selfhosted.out.h"
 
-#include "builtin/Intl.h"
+#include "builtin/intl/Collator.h"
+#include "builtin/intl/DateTimeFormat.h"
+#include "builtin/intl/IntlObject.h"
+#include "builtin/intl/NumberFormat.h"
+#include "builtin/intl/PluralRules.h"
+#include "builtin/intl/RelativeTimeFormat.h"
 #include "builtin/MapObject.h"
 #include "builtin/ModuleObject.h"
 #include "builtin/Object.h"
@@ -35,6 +35,7 @@
 #include "builtin/Stream.h"
 #include "builtin/TypedObject.h"
 #include "builtin/WeakMapObject.h"
+#include "gc/HashUtil.h"
 #include "gc/Marking.h"
 #include "gc/Policy.h"
 #include "jit/AtomicOperations.h"
@@ -44,6 +45,10 @@
 #include "vm/Compression.h"
 #include "vm/GeneratorObject.h"
 #include "vm/Interpreter.h"
+#include "vm/Iteration.h"
+#include "vm/JSCompartment.h"
+#include "vm/JSContext.h"
+#include "vm/JSFunction.h"
 #include "vm/Printer.h"
 #include "vm/RegExpObject.h"
 #include "vm/String.h"
@@ -51,13 +56,12 @@
 #include "vm/TypedArrayObject.h"
 #include "vm/WrapperObject.h"
 
-#include "jsatominlines.h"
-#include "jsfuninlines.h"
-#include "jsobjinlines.h"
-#include "jsscriptinlines.h"
-
-#include "gc/Iteration-inl.h"
+#include "gc/PrivateIterators-inl.h"
 #include "vm/BooleanObject-inl.h"
+#include "vm/JSAtom-inl.h"
+#include "vm/JSFunction-inl.h"
+#include "vm/JSObject-inl.h"
+#include "vm/JSScript-inl.h"
 #include "vm/NativeObject-inl.h"
 #include "vm/NumberObject-inl.h"
 #include "vm/StringObject-inl.h"
@@ -231,8 +235,8 @@ intrinsic_GetBuiltinConstructor(JSContext* cx, unsigned argc, Value* vp)
     RootedId id(cx, AtomToId(atom));
     JSProtoKey key = JS_IdToProtoKey(cx, id);
     MOZ_ASSERT(key != JSProto_Null);
-    RootedObject ctor(cx);
-    if (!GetBuiltinConstructor(cx, key, &ctor))
+    JSObject* ctor = GlobalObject::getOrCreateConstructor(cx, key);
+    if (!ctor)
         return false;
     args.rval().setObject(*ctor);
     return true;
@@ -375,6 +379,9 @@ intrinsic_CreateModuleSyntaxError(JSContext* cx, unsigned argc, Value* vp)
 
     RootedModuleObject module(cx, &args[0].toObject().as<ModuleObject>());
     RootedString filename(cx, JS_NewStringCopyZ(cx, module->script()->filename()));
+    if (!filename)
+        return false;
+
     RootedString message(cx, args[3].toString());
 
     RootedValue error(cx);
@@ -1992,8 +1999,8 @@ intrinsic_ConstructorForTypedArray(JSContext* cx, unsigned argc, Value* vp)
     // compartment, and never call the constructor in the ArrayBuffer's
     // compartment from script, we are not guaranteed to have initialized
     // the constructor.
-    RootedObject ctor(cx);
-    if (!GetBuiltinConstructor(cx, protoKey, &ctor))
+    JSObject* ctor = GlobalObject::getOrCreateConstructor(cx, protoKey);
+    if (!ctor)
         return false;
 
     args.rval().setObject(*ctor);
@@ -2215,8 +2222,8 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_INLINABLE_FN("std_String_charAt",         str_charAt,                   1,0, StringCharAt),
     JS_FN("std_String_endsWith",                 str_endsWith,                 1,0),
     JS_FN("std_String_trim",                     str_trim,                     0,0),
-    JS_FN("std_String_trimLeft",                 str_trimLeft,                 0,0),
-    JS_FN("std_String_trimRight",                str_trimRight,                0,0),
+    JS_FN("std_String_trimStart",                str_trimStart,                0,0),
+    JS_FN("std_String_trimEnd",                  str_trimEnd,                  0,0),
 #if !EXPOSE_INTL_API
     JS_FN("std_String_toLocaleLowerCase",        str_toLocaleLowerCase,        0,0),
     JS_FN("std_String_toLocaleUpperCase",        str_toLocaleUpperCase,        0,0),
@@ -2465,7 +2472,7 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FOR_EACH_REFERENCE_TYPE_REPR(LOAD_AND_STORE_REFERENCE_FN_DECLS)
 #undef LOAD_AND_STORE_REFERENCE_FN_DECLS
 
-    // See builtin/Intl.h for descriptions of the intl_* functions.
+    // See builtin/intl/*.h for descriptions of the intl_* functions.
     JS_FN("intl_availableCalendars", intl_availableCalendars, 1,0),
     JS_FN("intl_availableCollations", intl_availableCollations, 1,0),
     JS_FN("intl_canonicalizeTimeZone", intl_canonicalizeTimeZone, 1,0),
@@ -2491,10 +2498,10 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("intl_patternForSkeleton", intl_patternForSkeleton, 2,0),
     JS_FN("intl_patternForStyle", intl_patternForStyle, 3,0),
     JS_FN("intl_PluralRules_availableLocales", intl_PluralRules_availableLocales, 0,0),
-    JS_FN("intl_GetPluralCategories", intl_GetPluralCategories, 2, 0),
+    JS_FN("intl_GetPluralCategories", intl_GetPluralCategories, 1, 0),
     JS_FN("intl_SelectPluralRule", intl_SelectPluralRule, 2,0),
     JS_FN("intl_RelativeTimeFormat_availableLocales", intl_RelativeTimeFormat_availableLocales, 0,0),
-    JS_FN("intl_FormatRelativeTime", intl_FormatRelativeTime, 3,0),
+    JS_FN("intl_FormatRelativeTime", intl_FormatRelativeTime, 4,0),
     JS_FN("intl_toLocaleLowerCase", intl_toLocaleLowerCase, 2,0),
     JS_FN("intl_toLocaleUpperCase", intl_toLocaleUpperCase, 2,0),
 

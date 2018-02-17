@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Recomandat de {provider}",
   "header_bookmarks_placeholder": "Nu ai niciun marcaj încă.",
   "header_stories_from": "de la",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "Vizitate",
   "type_label_bookmarked": "Însemnat",
   "type_label_synced": "Sincronizat de pe alt dispozitiv",
@@ -27,7 +28,7 @@ window.gActivityStreamStrings = {
   "menu_action_delete": "Șterge din istoric",
   "menu_action_pin": "Fixează",
   "menu_action_unpin": "Anulează fixarea",
-  "confirm_history_delete_p1": "Sigur dorești să ştergi fiecare instanţă a acestei pagini din istoric?",
+  "confirm_history_delete_p1": "Sigur vrei să ştergi fiecare instanţă a acestei pagini din istoric?",
   "confirm_history_delete_notice_p2": "Această acțiune este ireversibilă.",
   "menu_action_save_to_pocket": "Salvează în Pocket",
   "search_for_something_with": "Caută {search_term} cu: ",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Editează acest site",
   "edit_topsites_dismiss_button": "Înlătură acest site",
   "edit_topsites_add_button": "Adaugă",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "Site de top nou",
   "topsites_form_edit_header": "Editează site-ul de top",
   "topsites_form_title_placeholder": "Introdu un titlu",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Ai ajuns la capăt. Revino mai târziu pentru alte articole de la {provider}. Nu mai vrei să aștepți? Alege un subiect popular și găsește alte articole interesante de pe web.",
   "manual_migration_explanation2": "Încearcă Firefox cu marcajele, istoricul și parolele din alt navigator.",
   "manual_migration_cancel_button": "Nu, mulțumesc",
-  "manual_migration_import_button": "Importă acum"
+  "manual_migration_import_button": "Importă acum",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

@@ -12,17 +12,15 @@
 
 this.EXPORTED_SYMBOLS = ["FormAutofillHandler"];
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://formautofill/FormAutofillUtils.jsm");
 
-Cu.import("resource://formautofill/FormAutofillUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "FormAutofillHeuristics",
-                                  "resource://formautofill/FormAutofillHeuristics.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "FormLikeFactory",
-                                  "resource://gre/modules/FormLikeFactory.jsm");
+ChromeUtils.defineModuleGetter(this, "FormAutofillHeuristics",
+                               "resource://formautofill/FormAutofillHeuristics.jsm");
+ChromeUtils.defineModuleGetter(this, "FormLikeFactory",
+                               "resource://gre/modules/FormLikeFactory.jsm");
 
 this.log = null;
 FormAutofillUtils.defineLazyLogGetter(this, this.EXPORTED_SYMBOLS[0]);
@@ -115,8 +113,11 @@ class FormAutofillSection {
    *
    * @param {Object} profile
    *        A profile for pre-processing before filling values.
+   * @returns {boolean} Whether the profile should be filled.
    */
-  async prepareFillingProfile(profile) {}
+  async prepareFillingProfile(profile) {
+    return true;
+  }
 
   /*
    * Override this methid if any data for `createRecord` is needed to be
@@ -248,7 +249,10 @@ class FormAutofillSection {
       throw new Error("No fieldDetail for the focused input.");
     }
 
-    await this.prepareFillingProfile(profile);
+    if (!await this.prepareFillingProfile(profile)) {
+      log.debug("profile cannot be filled", profile);
+      return;
+    }
     log.debug("profile in autofillFields:", profile);
 
     this.filledRecordGUID = profile.guid;
@@ -853,6 +857,7 @@ class FormAutofillCreditCardSection extends FormAutofillSection {
    *
    * @param {Object} profile
    *        A profile for pre-processing before filling values.
+   * @returns {boolean} Whether the profile should be filled.
    * @override
    */
   async prepareFillingProfile(profile) {
@@ -865,11 +870,12 @@ class FormAutofillCreditCardSection extends FormAutofillSection {
 
       if (!decrypted) {
         // Early return if the decrypted is empty or undefined
-        return;
+        return false;
       }
 
       profile["cc-number"] = decrypted;
     }
+    return true;
   }
 }
 
@@ -951,7 +957,7 @@ class FormAutofillHandler {
       return true;
     }
 
-    if (this.form.elements.indexOf(element) === -1) {
+    if (!this.form.elements.includes(element)) {
       log.debug("The element can not be found in the current form.");
       this._updateForm(getFormLike());
       return true;

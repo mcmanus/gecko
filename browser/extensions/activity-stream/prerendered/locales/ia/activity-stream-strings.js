@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Recommendate per {provider}",
   "header_bookmarks_placeholder": "Tu ha ancora nulle marcapaginas.",
   "header_stories_from": "de",
+  "context_menu_button_sr": "Aperir le menu contextual pro {title}",
   "type_label_visited": "Visitate",
   "type_label_bookmarked": "Marcapaginas addite",
   "type_label_synced": "Synchronisate de altere apparato",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Editar iste sito",
   "edit_topsites_dismiss_button": "Dimitter iste sito",
   "edit_topsites_add_button": "Adder",
+  "edit_topsites_add_button_tooltip": "Adder un sito popular",
   "topsites_form_add_header": "Nove sito popular",
   "topsites_form_edit_header": "Editar le sito popular",
   "topsites_form_title_placeholder": "Scriber un titulo",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Tu ja es in die con toto. Reveni plus tarde pro plus historias popular de {provider}. Non vole attender? Selectiona un subjecto popular pro trovar plus altere historias interessante del web.",
   "manual_migration_explanation2": "Essaya Firefox con le marcapaginas, le chronologia e le contrasignos de un altere navigator.",
   "manual_migration_cancel_button": "No, gratias",
-  "manual_migration_import_button": "Importar ora"
+  "manual_migration_import_button": "Importar ora",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

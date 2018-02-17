@@ -10,8 +10,8 @@
 use cssparser::Parser;
 use parser::{Parse, ParserContext};
 use std::borrow::Cow;
-use std::fmt;
-use style_traits::{ToCss, ParseError, StyleParseErrorKind};
+use std::fmt::{self, Write};
+use style_traits::{CssWriter, ParseError, StyleParseErrorKind, ToCss};
 use values::computed::Percentage;
 use values::generics::basic_shape::{Circle as GenericCircle};
 use values::generics::basic_shape::{ClippingShape as GenericClippingShape, Ellipse as GenericEllipse};
@@ -129,8 +129,10 @@ impl Parse for InsetRect {
 
 impl InsetRect {
     /// Parse the inner function arguments of `inset()`
-    pub fn parse_function_arguments<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                                            -> Result<Self, ParseError<'i>> {
+    fn parse_function_arguments<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Self, ParseError<'i>> {
         let rect = Rect::parse_with(context, input, LengthOrPercentage::parse)?;
         let round = if input.try(|i| i.expect_ident_matching("round")).is_ok() {
             Some(BorderRadius::parse(context, input)?)
@@ -153,9 +155,10 @@ impl Parse for Circle {
 }
 
 impl Circle {
-    #[allow(missing_docs)]
-    pub fn parse_function_arguments<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                                            -> Result<Self, ParseError<'i>> {
+    fn parse_function_arguments<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Self, ParseError<'i>> {
         let radius = input.try(|i| ShapeRadius::parse(context, i)).unwrap_or_default();
         let position = if input.try(|i| i.expect_ident_matching("at")).is_ok() {
             Position::parse(context, input)?
@@ -163,15 +166,15 @@ impl Circle {
             Position::center()
         };
 
-        Ok(GenericCircle {
-            radius: radius,
-            position: position,
-        })
+        Ok(GenericCircle { radius, position })
     }
 }
 
 impl ToCss for Circle {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+    fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
+    where
+        W: Write,
+    {
         dest.write_str("circle(")?;
         if GenericShapeRadius::ClosestSide != self.radius {
             self.radius.to_css(dest)?;
@@ -192,9 +195,10 @@ impl Parse for Ellipse {
 }
 
 impl Ellipse {
-    #[allow(missing_docs)]
-    pub fn parse_function_arguments<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                                            -> Result<Self, ParseError<'i>> {
+    fn parse_function_arguments<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Self, ParseError<'i>> {
         let (a, b) = input.try(|i| -> Result<_, ParseError> {
             Ok((ShapeRadius::parse(context, i)?, ShapeRadius::parse(context, i)?))
         }).unwrap_or_default();
@@ -213,7 +217,10 @@ impl Ellipse {
 }
 
 impl ToCss for Ellipse {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+    fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
+    where
+        W: Write,
+    {
         dest.write_str("ellipse(")?;
         if self.semiaxis_x != ShapeRadius::default() || self.semiaxis_y != ShapeRadius::default() {
             self.semiaxis_x.to_css(dest)?;
@@ -248,8 +255,12 @@ impl Parse for ShapeRadius {
 /// are converted to percentages where possible. Only the two or four
 /// value forms are used. In case of two keyword-percentage pairs,
 /// the keywords are folded into the percentages
-fn serialize_basicshape_position<W>(position: &Position, dest: &mut W) -> fmt::Result
-    where W: fmt::Write
+fn serialize_basicshape_position<W>(
+    position: &Position,
+    dest: &mut CssWriter<W>,
+) -> fmt::Result
+where
+    W: Write,
 {
     fn to_keyword_and_lop<S>(component: &PositionComponent<S>) -> (S, Cow<LengthOrPercentage>)
         where S: Copy + Side
@@ -289,8 +300,11 @@ fn serialize_basicshape_position<W>(position: &Position, dest: &mut W) -> fmt::R
         }
     }
 
-    fn write_pair<A, B, W>(a: &A, b: &B, dest: &mut W) -> fmt::Result
-        where A: ToCss, B: ToCss, W: fmt::Write
+    fn write_pair<A, B, W>(a: &A, b: &B, dest: &mut CssWriter<W>) -> fmt::Result
+    where
+        A: ToCss,
+        B: ToCss,
+        W: Write,
     {
         a.to_css(dest)?;
         dest.write_str(" ")?;
@@ -318,8 +332,10 @@ impl Parse for Polygon {
 
 impl Polygon {
     /// Parse the inner arguments of a `polygon` function.
-    pub fn parse_function_arguments<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                                            -> Result<Self, ParseError<'i>> {
+    fn parse_function_arguments<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Self, ParseError<'i>> {
         let fill = input.try(|i| -> Result<_, ParseError> {
             let fill = FillRule::parse(i)?;
             i.expect_comma()?;      // only eat the comma if there is something before it

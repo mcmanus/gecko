@@ -16,6 +16,7 @@
 #include "vtune/VTuneWrapper.h"
 
 #include "jit/MacroAssembler-inl.h"
+#include "jit/SharedICHelpers-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -882,7 +883,7 @@ JitRuntime::generateDebugTrapHandler(JSContext* cx)
     masm.ret();
 
     Linker linker(masm);
-    JitCode* codeDbg = linker.newCode<NoGC>(cx, OTHER_CODE);
+    JitCode* codeDbg = linker.newCode<NoGC>(cx, CodeKind::Other);
 
 #ifdef JS_ION_PERF
     writePerfSpewerJitCodeProfile(codeDbg, "DebugTrapHandler");

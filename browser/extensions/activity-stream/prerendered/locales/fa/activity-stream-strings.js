@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "پیشنهاد شده توسط {provider}",
   "header_bookmarks_placeholder": "هنوز هیچ نشانکی ندارید.",
   "header_stories_from": "از",
+  "context_menu_button_sr": "بازکردن فهرست زمینه برای {title}",
   "type_label_visited": "مشاهده شده",
   "type_label_bookmarked": "نشانک شده",
   "type_label_synced": "هم‌گام شده از دستگاهی دیگر",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "ویرایش این سایت",
   "edit_topsites_dismiss_button": "نادیده گرفتن این سایت",
   "edit_topsites_add_button": "افزودن",
+  "edit_topsites_add_button_tooltip": "اضافه کردن به سایت های برتر",
   "topsites_form_add_header": "سایت برتر جدید",
   "topsites_form_edit_header": "ویرایش سایت برتر",
   "topsites_form_title_placeholder": "عنوان را وارد کنید",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "فعلا تموم شد. بعدا دوباره سر بزن تا مطالب جدید از {provider} ببینی. نمی‌تونی صبر کنی؟ یک موضوع محبوب رو انتخاب کن تا مطالب جالب مرتبط از سراسر دنیا رو پیدا کنی.",
   "manual_migration_explanation2": "فایرفاکس را با نشانک‌ها،‌ تاریخچه‌ها و کلمات عبور از سایر مرورگر ها تجربه کنید.",
   "manual_migration_cancel_button": "نه ممنون",
-  "manual_migration_import_button": "هم‌اکنون وارد شوند"
+  "manual_migration_import_button": "هم‌اکنون وارد شوند",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

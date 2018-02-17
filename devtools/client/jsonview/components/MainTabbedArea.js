@@ -61,16 +61,18 @@ define(function (require, exports, module) {
           tabActive: this.state.tabActive,
           onAfterChange: this.onTabChanged},
           TabPanel({
+            id: "json",
             className: "json",
             title: JSONView.Locale.$STR("jsonViewer.tab.JSON")},
             JsonPanel({
               data: this.state.json,
-              expandedNodes: this.props.expandedNodes,
+              expandedNodes: this.state.expandedNodes,
               actions: this.props.actions,
               searchFilter: this.state.searchFilter
             })
           ),
           TabPanel({
+            id: "rawdata",
             className: "rawdata",
             title: JSONView.Locale.$STR("jsonViewer.tab.RawData")},
             TextPanel({
@@ -81,6 +83,7 @@ define(function (require, exports, module) {
             })
           ),
           TabPanel({
+            id: "headers",
             className: "headers",
             title: JSONView.Locale.$STR("jsonViewer.tab.Headers")},
             HeadersPanel({

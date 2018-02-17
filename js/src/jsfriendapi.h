@@ -20,6 +20,7 @@
 #include "js/CallArgs.h"
 #include "js/CallNonGenericMethod.h"
 #include "js/Class.h"
+#include "js/HeapAPI.h"
 #include "js/Utility.h"
 
 #if JS_STACK_GROWTH_DIRECTION > 0
@@ -28,7 +29,6 @@
 # define JS_CHECK_STACK_SIZE(limit, sp) (MOZ_LIKELY((uintptr_t)(sp) > (limit)))
 #endif
 
-class JSAtom;
 struct JSErrorFormatString;
 class JSLinearString;
 struct JSJitInfo;
@@ -193,6 +193,11 @@ JS_SetCompartmentPrincipals(JSCompartment* compartment, JSPrincipals* principals
 
 extern JS_FRIEND_API(JSPrincipals*)
 JS_GetScriptPrincipals(JSScript* script);
+
+namespace js {
+extern JS_FRIEND_API(JSCompartment*)
+GetScriptCompartment(JSScript* script);
+} /* namespace js */
 
 extern JS_FRIEND_API(bool)
 JS_ScriptHasMutedErrors(JSScript* script);
@@ -612,10 +617,11 @@ struct Function {
 
 struct String
 {
-    static const uint32_t INLINE_CHARS_BIT = JS_BIT(2);
+    static const uint32_t NON_ATOM_BIT     = JS_BIT(0);
+    static const uint32_t LINEAR_BIT       = JS_BIT(1);
+    static const uint32_t INLINE_CHARS_BIT = JS_BIT(3);
     static const uint32_t LATIN1_CHARS_BIT = JS_BIT(6);
-    static const uint32_t ROPE_FLAGS       = 0;
-    static const uint32_t EXTERNAL_FLAGS   = JS_BIT(5);
+    static const uint32_t EXTERNAL_FLAGS   = LINEAR_BIT | NON_ATOM_BIT | JS_BIT(5);
     static const uint32_t TYPE_FLAGS_MASK  = JS_BIT(6) - 1;
     uint32_t flags;
     uint32_t length;
@@ -626,12 +632,17 @@ struct String
         char16_t inlineStorageTwoByte[1];
     };
     const JSStringFinalizer* externalFinalizer;
+
+    static bool nurseryCellIsString(const js::gc::Cell* cell) {
+        MOZ_ASSERT(IsInsideNursery(cell));
+        return reinterpret_cast<const String*>(cell)->flags & NON_ATOM_BIT;
+    }
 };
 
 } /* namespace shadow */
 
 // This is equal to |&JSObject::class_|.  Use it in places where you don't want
-// to #include jsobj.h.
+// to #include vm/JSObject.h.
 extern JS_FRIEND_DATA(const js::Class* const) ObjectClassPtr;
 
 inline const js::Class*
@@ -904,7 +915,7 @@ StringToLinearString(JSContext* cx, JSString* str)
 {
     using shadow::String;
     String* s = reinterpret_cast<String*>(str);
-    if (MOZ_UNLIKELY((s->flags & String::TYPE_FLAGS_MASK) == String::ROPE_FLAGS))
+    if (MOZ_UNLIKELY(!(s->flags & String::LINEAR_BIT)))
         return StringToLinearStringSlow(cx, str);
     return reinterpret_cast<JSLinearString*>(str);
 }
@@ -1379,12 +1390,6 @@ DateGetMsecSinceEpoch(JSContext* cx, JS::HandleObject obj, double* msecSinceEpoc
 
 } /* namespace js */
 
-/* Implemented in jscntxt.cpp. */
-
-/**
- * Report an exception, which is currently realized as a printf-style format
- * string and its arguments.
- */
 typedef enum JSErrNum {
 #define MSG_DEF(name, count, exception, format) \
     name,
@@ -1394,6 +1399,8 @@ typedef enum JSErrNum {
 } JSErrNum;
 
 namespace js {
+
+/* Implemented in vm/JSContext.cpp. */
 
 extern JS_FRIEND_API(const JSErrorFormatString*)
 GetErrorMessage(void* userRef, const unsigned errorNumber);
@@ -2601,7 +2608,7 @@ FunctionObjectToShadowFunction(JSObject* fun)
     return reinterpret_cast<shadow::Function*>(fun);
 }
 
-/* Statically asserted in jsfun.h. */
+/* Statically asserted in JSFunction.h. */
 static const unsigned JS_FUNCTION_INTERPRETED_BITS = 0x0201;
 
 // Return whether the given function object is native.

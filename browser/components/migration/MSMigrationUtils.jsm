@@ -6,21 +6,19 @@
 
 this.EXPORTED_SYMBOLS = ["MSMigrationUtils"];
 
-const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
-
-Cu.import("resource://gre/modules/AppConstants.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource:///modules/MigrationUtils.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource:///modules/MigrationUtils.jsm");
 
 Cu.importGlobalProperties(["FileReader"]);
 
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
-                                  "resource://gre/modules/PlacesUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "WindowsRegistry",
-                                  "resource://gre/modules/WindowsRegistry.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ctypes",
-                                  "resource://gre/modules/ctypes.jsm");
+ChromeUtils.defineModuleGetter(this, "PlacesUtils",
+                               "resource://gre/modules/PlacesUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "WindowsRegistry",
+                               "resource://gre/modules/WindowsRegistry.jsm");
+ChromeUtils.defineModuleGetter(this, "ctypes",
+                               "resource://gre/modules/ctypes.jsm");
 
 const EDGE_COOKIE_PATH_OPTIONS = ["", "#!001\\", "#!002\\"];
 const EDGE_COOKIES_SUFFIX = "MicrosoftEdge\\Cookies";
@@ -65,12 +63,12 @@ function CtypesKernelHelpers() {
     {wHour: wintypes.WORD},
     {wMinute: wintypes.WORD},
     {wSecond: wintypes.WORD},
-    {wMilliseconds: wintypes.WORD}
+    {wMilliseconds: wintypes.WORD},
   ]);
 
   this._structs.FILETIME = new ctypes.StructType("FILETIME", [
     {dwLowDateTime: wintypes.DWORD},
-    {dwHighDateTime: wintypes.DWORD}
+    {dwHighDateTime: wintypes.DWORD},
   ]);
 
   try {
@@ -133,7 +131,7 @@ CtypesKernelHelpers.prototype = {
                                systemTime.wMinute,
                                systemTime.wSecond,
                                systemTime.wMilliseconds) / 1000);
-  }
+  },
 };
 
 function CtypesVaultHelpers() {
@@ -256,7 +254,7 @@ CtypesVaultHelpers.prototype = {
       this._vaultcliLib.close();
     } catch (ex) {}
     this._vaultcliLib = null;
-  }
+  },
 };
 
 /**
@@ -644,7 +642,7 @@ Cookies.prototype = {
                            expireTime,
                            {});
     }
-  }
+  },
 };
 
 function getTypedURLs(registryKeyPath) {
@@ -798,7 +796,7 @@ WindowsVaultFormPasswords.prototype = {
           try {
             realURL = Services.io.newURI(url);
           } catch (ex) { /* leave realURL as null */ }
-          if (!realURL || ["http", "https", "ftp"].indexOf(realURL.scheme) == -1) {
+          if (!realURL || !["http", "https", "ftp"].includes(realURL.scheme)) {
             // Ignore items for non-URLs or URLs that aren't HTTP(S)/FTP
             continue;
           }
@@ -871,7 +869,7 @@ WindowsVaultFormPasswords.prototype = {
       return false;
     }
     return undefined;
-  }
+  },
 };
 
 var MSMigrationUtils = {

@@ -16,7 +16,6 @@
 #include "mozilla/EventListenerManager.h"
 #include "nsIXPConnect.h"
 #include "PLDHashTable.h"
-#include "nsIDOMAttr.h"
 #include "nsCOMArray.h"
 #include "nsPIDOMWindow.h"
 #include "nsDocument.h"
@@ -359,7 +358,7 @@ nsNodeUtils::LastRelease(nsINode* aNode)
   }
   aNode->UnsetFlags(NODE_HAS_PROPERTIES);
 
-  if (aNode->NodeType() != nsIDOMNode::DOCUMENT_NODE &&
+  if (aNode->NodeType() != nsINode::DOCUMENT_NODE &&
       aNode->HasFlag(NODE_HAS_LISTENERMANAGER)) {
 #ifdef DEBUG
     if (nsContentUtils::IsInitialized()) {
@@ -513,9 +512,11 @@ nsNodeUtils::CloneAndAdopt(nsINode *aNode, bool aClone, bool aDeep,
         // cloned.
         RefPtr<nsAtom> typeAtom = extension.IsEmpty() ? tagAtom : NS_Atomize(extension);
         cloneElem->SetCustomElementData(new CustomElementData(typeAtom));
+
+        MOZ_ASSERT(nodeInfo->NameAtom()->Equals(nodeInfo->LocalName()));
         CustomElementDefinition* definition =
           nsContentUtils::LookupCustomElementDefinition(nodeInfo->GetDocument(),
-                                                        nodeInfo->LocalName(),
+                                                        nodeInfo->NameAtom(),
                                                         nodeInfo->NamespaceID(),
                                                         typeAtom);
         if (definition) {
@@ -604,9 +605,8 @@ nsNodeUtils::CloneAndAdopt(nsINode *aNode, bool aClone, bool aDeep,
     }
 
     if (wasRegistered && oldDoc != newDoc) {
-      nsCOMPtr<nsIDOMHTMLMediaElement> domMediaElem(do_QueryInterface(aNode));
-      if (domMediaElem) {
-        HTMLMediaElement* mediaElem = static_cast<HTMLMediaElement*>(aNode);
+      nsIContent* content = aNode->AsContent();
+      if (auto mediaElem = HTMLMediaElement::FromContentOrNull(content)) {
         mediaElem->NotifyOwnerDocumentActivityChanged();
       }
       nsCOMPtr<nsIObjectLoadingContent> objectLoadingContent(do_QueryInterface(aNode));

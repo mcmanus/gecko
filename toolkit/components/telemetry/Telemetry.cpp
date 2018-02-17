@@ -1727,7 +1727,15 @@ TelemetryImpl::RegisterScalars(const nsACString& aCategoryName,
                                JS::Handle<JS::Value> aScalarData,
                                JSContext* cx)
 {
-  return TelemetryScalar::RegisterScalars(aCategoryName, aScalarData, cx);
+  return TelemetryScalar::RegisterScalars(aCategoryName, aScalarData, false, cx);
+}
+
+NS_IMETHODIMP
+TelemetryImpl::RegisterBuiltinScalars(const nsACString& aCategoryName,
+                                      JS::Handle<JS::Value> aScalarData,
+                                      JSContext* cx)
+{
+  return TelemetryScalar::RegisterScalars(aCategoryName, aScalarData, true, cx);
 }
 
 NS_IMETHODIMP
@@ -1971,12 +1979,35 @@ AccumulateCategorical(HistogramID id, const nsCString& label)
 }
 
 void
+AccumulateCategorical(HistogramID id, const nsTArray<nsCString>& labels)
+{
+  TelemetryHistogram::AccumulateCategorical(id, labels);
+}
+
+void
 AccumulateTimeDelta(HistogramID aHistogram, TimeStamp start, TimeStamp end)
 {
+  if (start > end) {
+    Accumulate(aHistogram, 0);
+    return;
+  }
   Accumulate(aHistogram,
              static_cast<uint32_t>((end - start).ToMilliseconds()));
 }
 
+void
+AccumulateTimeDelta(HistogramID aHistogram,
+                    const nsCString& key,
+                    TimeStamp start,
+                    TimeStamp end)
+{
+  if (start > end) {
+    Accumulate(aHistogram, key, 0);
+    return;
+  }
+  Accumulate(
+    aHistogram, key, static_cast<uint32_t>((end - start).ToMilliseconds()));
+}
 const char*
 GetHistogramName(HistogramID id)
 {

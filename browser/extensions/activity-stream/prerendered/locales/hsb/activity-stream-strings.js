@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Wot {provider} doporučeny",
   "header_bookmarks_placeholder": "Hišće zapołožki nimaće.",
   "header_stories_from": "wot",
+  "context_menu_button_sr": "Kontekstowy meni za {title} wočinić",
   "type_label_visited": "Wopytany",
   "type_label_bookmarked": "Jako zapołožka składowany",
   "type_label_synced": "Z druheho grata synchronizowany",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Tute sydło wobdźěłać",
   "edit_topsites_dismiss_button": "Sydło zaćisnyć",
   "edit_topsites_add_button": "Přidać",
+  "edit_topsites_add_button_tooltip": "Woblubowane sydło přidać",
   "topsites_form_add_header": "Nowe najhusćišo wopytane sydło",
   "topsites_form_edit_header": "Najhusćišo wopytane sydło wobdźěłać",
   "topsites_form_title_placeholder": "Titul zapodać",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "To je nachwilu wšitko. Wróćće so pozdźišo dalšich wulkotnych stawiznow dla wot {provider}. Njemóžeće čakać? Wubjerće woblubowanu temu, zo byšće dalše wulkotne stawizny z weba namakał.",
   "manual_migration_explanation2": "Wupruwujće Firefox ze zapołožkami, historiju a hesłami z druheho wobhladowaka.",
   "manual_migration_cancel_button": "Ně, dźakuju so",
-  "manual_migration_import_button": "Nětko importować"
+  "manual_migration_import_button": "Nětko importować",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

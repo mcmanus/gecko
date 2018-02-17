@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Preporučeno od {provider}",
   "header_bookmarks_placeholder": "Nemate nijednu zabilješku.",
   "header_stories_from": "od",
+  "context_menu_button_sr": "Otvorite kontekstni meni za {title}",
   "type_label_visited": "Posjećeno",
   "type_label_bookmarked": "Zabilježeno",
   "type_label_synced": "Sinhronizovano s drugog uređaja",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Uredi ovu stranicu",
   "edit_topsites_dismiss_button": "Odbaci ovu stranicu",
   "edit_topsites_add_button": "Dodaj",
+  "edit_topsites_add_button_tooltip": "Dodajte top stranicu",
   "topsites_form_add_header": "Nova najbolja stranica",
   "topsites_form_edit_header": "Uredi najbolju stranicu",
   "topsites_form_title_placeholder": "Unesi naslov",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Provjerite kasnije za više najpopularnijih priča od {provider}. Ne možete čekati? Odaberite popularne teme kako biste pronašli više kvalitetnih priča s cijelog weba.",
   "manual_migration_explanation2": "Probajte Firefox s zabilješkama, historijom i lozinkama iz drugog pretraživača.",
   "manual_migration_cancel_button": "Ne, hvala",
-  "manual_migration_import_button": "Uvezi sada"
+  "manual_migration_import_button": "Uvezi sada",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Rekommenderas av {provider}",
   "header_bookmarks_placeholder": "Du har inga bokmärken ännu.",
   "header_stories_from": "från",
+  "context_menu_button_sr": "Öppna snabbmeny för {title}",
   "type_label_visited": "Besökta",
   "type_label_bookmarked": "Bokmärkta",
   "type_label_synced": "Synkroniserade från en annan enhet",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Redigera denna webbplats",
   "edit_topsites_dismiss_button": "Avfärda denna webbplats",
   "edit_topsites_add_button": "Lägg till",
+  "edit_topsites_add_button_tooltip": "Lägg till mest besökt",
   "topsites_form_add_header": "Ny mest besökt",
   "topsites_form_edit_header": "Redigera mest besökta",
   "topsites_form_title_placeholder": "Ange en titel",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Det finns inte fler. Kom tillbaka senare för fler huvudnyheter från {provider}. Kan du inte vänta? Välj ett populärt ämne för att hitta fler bra nyheter från hela världen.",
   "manual_migration_explanation2": "Testa Firefox med bokmärken, historik och lösenord från en annan webbläsare.",
   "manual_migration_cancel_button": "Nej tack",
-  "manual_migration_import_button": "Importera nu"
+  "manual_migration_import_button": "Importera nu",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

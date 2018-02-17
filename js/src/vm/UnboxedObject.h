@@ -7,10 +7,9 @@
 #ifndef vm_UnboxedObject_h
 #define vm_UnboxedObject_h
 
-#include "jsobj.h"
-
 #include "gc/DeletePolicy.h"
 #include "gc/Zone.h"
+#include "vm/JSObject.h"
 #include "vm/Runtime.h"
 #include "vm/TypeInference.h"
 
@@ -40,7 +39,7 @@ UnboxedTypeNeedsPreBarrier(JSValueType type)
 static inline bool
 UnboxedTypeNeedsPostBarrier(JSValueType type)
 {
-    return type == JSVAL_TYPE_OBJECT;
+    return type == JSVAL_TYPE_STRING || type == JSVAL_TYPE_OBJECT;
 }
 
 // Class tracking information specific to unboxed objects.
@@ -225,10 +224,13 @@ class UnboxedExpandoObject : public NativeObject
 // how their properties are stored.
 class UnboxedPlainObject : public UnboxedObject
 {
-    // Optional object which stores extra properties on this object. This is
-    // not automatically barriered to avoid problems if the object is converted
-    // to a native. See ensureExpando().
-    UnboxedExpandoObject* expando_;
+    // The |JSObject::shapeOrExpando_| field can optionally refer to an object
+    // which stores extra properties on this object. This is not automatically
+    // barriered to avoid problems if the object is converted to a native. See
+    // ensureExpando(). This object must be an UnboxedExpandoObject.
+    //
+    // NOTE: The JIT should not assume that seeing the same expando pointer
+    //       means the object is even an UnboxedObject. Always check |group_|.
 
     // Start of the inline data, which immediately follows the group and extra properties.
     uint8_t data_[1];
@@ -272,16 +274,20 @@ class UnboxedPlainObject : public UnboxedObject
     }
 
     UnboxedExpandoObject* maybeExpando() const {
-        return expando_;
+        return static_cast<UnboxedExpandoObject*>(shapeOrExpando_);
+    }
+
+    void setExpandoUnsafe(UnboxedExpandoObject* expando) {
+        shapeOrExpando_ = expando;
     }
 
     void initExpando() {
-        expando_ = nullptr;
+        shapeOrExpando_ = nullptr;
     }
 
     // For use during GC.
     JSObject** addressOfExpando() {
-        return reinterpret_cast<JSObject**>(&expando_);
+        return reinterpret_cast<JSObject**>(&shapeOrExpando_);
     }
 
     bool containsUnboxedOrExpandoProperty(JSContext* cx, jsid id) const;
@@ -303,7 +309,7 @@ class UnboxedPlainObject : public UnboxedObject
     static void trace(JSTracer* trc, JSObject* object);
 
     static size_t offsetOfExpando() {
-        return offsetof(UnboxedPlainObject, expando_);
+        return offsetOfShapeOrExpando();
     }
 
     static size_t offsetOfData() {

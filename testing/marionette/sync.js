@@ -4,12 +4,10 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
-
 const {
   error,
   TimeoutError,
-} = Cu.import("chrome://marionette/content/error.js", {});
+} = ChromeUtils.import("chrome://marionette/content/error.js", {});
 
 /* exported PollPromise, TimedPromise */
 this.EXPORTED_SYMBOLS = ["PollPromise", "TimedPromise"];

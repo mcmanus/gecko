@@ -2,17 +2,18 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use {BuiltDisplayList, BuiltDisplayListDescriptor, ClipId, ColorF, DeviceIntPoint, DeviceUintRect};
-use {DeviceUintSize, FontInstanceKey, FontInstanceOptions};
-use {FontInstancePlatformOptions, FontKey, FontVariation, GlyphDimensions, GlyphKey, ImageData};
-use {ImageDescriptor, ImageKey, ItemTag, LayoutPoint, LayoutSize, LayoutTransform, LayoutVector2D};
-use {NativeFontHandle, WorldPoint};
 use app_units::Au;
 use channel::{self, MsgSender, Payload, PayloadSender, PayloadSenderHelperMethods};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
 use std::path::PathBuf;
+use std::u32;
+use {BuiltDisplayList, BuiltDisplayListDescriptor, ClipId, ColorF, DeviceIntPoint, DeviceUintRect};
+use {DeviceUintSize, ExternalScrollId, FontInstanceKey, FontInstanceOptions};
+use {FontInstancePlatformOptions, FontKey, FontVariation, GlyphDimensions, GlyphKey, ImageData};
+use {ImageDescriptor, ImageKey, ItemTag, LayoutPoint, LayoutSize, LayoutTransform, LayoutVector2D};
+use {NativeFontHandle, WorldPoint};
 
 pub type TileSize = u16;
 /// Documents are rendered in the ascending order of their associated layer values.
@@ -253,7 +254,7 @@ impl Transaction {
     pub fn scroll_node_with_id(
         &mut self,
         origin: LayoutPoint,
-        id: ClipId,
+        id: ScrollNodeIdType,
         clamp: ScrollClamping,
     ) {
         self.ops.push(DocumentMsg::ScrollNodeWithId(origin, id, clamp));
@@ -383,11 +384,35 @@ pub enum DocumentMsg {
         device_pixel_ratio: f32,
     },
     Scroll(ScrollLocation, WorldPoint, ScrollEventPhase),
-    ScrollNodeWithId(LayoutPoint, ClipId, ScrollClamping),
+    ScrollNodeWithId(LayoutPoint, ScrollNodeIdType, ScrollClamping),
     TickScrollingBounce,
-    GetScrollNodeState(MsgSender<Vec<ScrollLayerState>>),
+    GetScrollNodeState(MsgSender<Vec<ScrollNodeState>>),
     GenerateFrame,
     UpdateDynamicProperties(DynamicProperties),
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub enum ScrollNodeIdType {
+    ExternalScrollId(ExternalScrollId),
+    ClipId(ClipId),
+}
+
+impl From<ExternalScrollId> for ScrollNodeIdType {
+    fn from(id: ExternalScrollId) -> Self {
+        ScrollNodeIdType::ExternalScrollId(id)
+    }
+}
+
+impl From<ClipId> for ScrollNodeIdType {
+    fn from(id: ClipId) -> Self {
+        ScrollNodeIdType::ClipId(id)
+    }
+}
+
+impl<'a> From<&'a ClipId> for ScrollNodeIdType {
+    fn from(id: &'a ClipId) -> Self {
+        ScrollNodeIdType::ClipId(*id)
+    }
 }
 
 impl fmt::Debug for DocumentMsg {
@@ -424,12 +449,24 @@ bitflags!{
     }
 }
 
+bitflags!{
+    /// Mask for clearing caches in debug commands.
+    #[derive(Deserialize, Serialize)]
+    pub struct ClearCache: u8 {
+        const IMAGES = 0x1;
+        const GLYPHS = 0x2;
+        const GLYPH_DIMENSIONS = 0x4;
+        const RENDER_TASKS = 0x8;
+    }
+}
+
 /// Information about a loaded capture of each document
 /// that is returned by `RenderBackend`.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CapturedDocument {
     pub document_id: DocumentId,
     pub root_pipeline_id: Option<PipelineId>,
+    pub window_size: DeviceUintSize,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -440,12 +477,12 @@ pub enum DebugCommand {
     EnableTextureCacheDebug(bool),
     /// Display intermediate render targets on screen.
     EnableRenderTargetDebug(bool),
-    /// Display alpha primitive rects.
-    EnableAlphaRectsDebug(bool),
     /// Display GPU timing results.
     EnableGpuTimeQueries(bool),
     /// Display GPU overdraw results
     EnableGpuSampleQueries(bool),
+    /// Configure if dual-source blending is used, if available.
+    EnableDualSourceBlending(bool),
     /// Fetch current documents and display lists.
     FetchDocuments,
     /// Fetch current passes and batches.
@@ -460,8 +497,10 @@ pub enum DebugCommand {
     SaveCapture(PathBuf, CaptureBits),
     /// Load a capture of all the documents state.
     LoadCapture(PathBuf, MsgSender<CapturedDocument>),
-    /// Configure if dual-source blending is used, if available.
-    EnableDualSourceBlending(bool),
+    /// Clear cached resources, forcing them to be re-uploaded from templates.
+    ClearCaches(ClearCache),
+    /// Invalidate GPU cache, forcing the update from the CPU mirror.
+    InvalidateGpuCache,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -519,6 +558,12 @@ impl fmt::Debug for ApiMsg {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Epoch(pub u32);
+
+impl Epoch {
+    pub fn invalid() -> Epoch {
+        Epoch(u32::MAX)
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Deserialize, Serialize)]
@@ -790,7 +835,7 @@ impl RenderApi {
         );
     }
 
-    pub fn get_scroll_node_state(&self, document_id: DocumentId) -> Vec<ScrollLayerState> {
+    pub fn get_scroll_node_state(&self, document_id: DocumentId) -> Vec<ScrollNodeState> {
         let (tx, rx) = channel::msg_channel().unwrap();
         self.send(document_id, DocumentMsg::GetScrollNodeState(tx));
         rx.recv().unwrap()
@@ -840,8 +885,8 @@ pub enum ScrollEventPhase {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub struct ScrollLayerState {
-    pub id: ClipId,
+pub struct ScrollNodeState {
+    pub id: ExternalScrollId,
     pub scroll_offset: LayoutVector2D,
 }
 

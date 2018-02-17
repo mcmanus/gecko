@@ -119,6 +119,10 @@ button > hbox > label {
   border-radius: 0;
 }
 
+.ac-site-icon {
+  display: -moz-box;
+}
+
 /* Subcategory title */
 
 /**
@@ -548,6 +552,10 @@ button > hbox > label {
   margin-bottom: 4px;
 }
 
+#tosPP-small {
+  margin-top: 32px;
+}
+
 #tosPP-small-ToS {
   margin-bottom: 14px;
 }
@@ -608,7 +616,7 @@ button > hbox > label {
 }
 
 .fxaMobilePromo {
-  margin: 2px 0 32px 0 !important;
+  margin-top: 2px !important;
 }
 
 .androidLink {

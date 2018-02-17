@@ -23,7 +23,6 @@
 #include "mozilla/dom/PaymentRequestChild.h"
 #include "mozilla/dom/TelemetryScrollProbe.h"
 #include "mozilla/IMEStateManager.h"
-#include "mozilla/ipc/DocumentRendererChild.h"
 #include "mozilla/ipc/URIUtils.h"
 #include "mozilla/layers/APZChild.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
@@ -147,7 +146,6 @@
 using namespace mozilla;
 using namespace mozilla::dom;
 using namespace mozilla::dom::ipc;
-using namespace mozilla::dom::workers;
 using namespace mozilla::ipc;
 using namespace mozilla::layers;
 using namespace mozilla::layout;
@@ -1121,8 +1119,10 @@ TabChild::ActorDestroy(ActorDestroyReason why)
     }
   }
 
-  CompositorBridgeChild* compositorChild = static_cast<CompositorBridgeChild*>(CompositorBridgeChild::Get());
-  compositorChild->CancelNotifyAfterRemotePaint(this);
+  CompositorBridgeChild* compositorChild = CompositorBridgeChild::Get();
+  if (compositorChild) {
+    compositorChild->CancelNotifyAfterRemotePaint(this);
+  }
 
   if (GetTabId() != 0) {
     NestedTabChildMap().erase(GetTabId());
@@ -1949,7 +1949,8 @@ TabChild::RecvNormalPriorityRealTouchMoveEvent(
 mozilla::ipc::IPCResult
 TabChild::RecvRealDragEvent(const WidgetDragEvent& aEvent,
                             const uint32_t& aDragAction,
-                            const uint32_t& aDropEffect)
+                            const uint32_t& aDropEffect,
+                            const nsCString& aPrincipalURISpec)
 {
   WidgetDragEvent localEvent(aEvent);
   localEvent.mWidget = mPuppetWidget;
@@ -1957,6 +1958,7 @@ TabChild::RecvRealDragEvent(const WidgetDragEvent& aEvent,
   nsCOMPtr<nsIDragSession> dragSession = nsContentUtils::GetDragSession();
   if (dragSession) {
     dragSession->SetDragAction(aDragAction);
+    dragSession->SetTriggeringPrincipalURISpec(aPrincipalURISpec);
     nsCOMPtr<nsIDOMDataTransfer> initialDataTransfer;
     dragSession->GetDataTransfer(getter_AddRefs(initialDataTransfer));
     if (initialDataTransfer) {
@@ -2131,19 +2133,6 @@ TabChild::RecvNormalPriorityRealKeyEvent(const WidgetKeyboardEvent& aEvent)
 }
 
 mozilla::ipc::IPCResult
-TabChild::RecvKeyEvent(const nsString& aType,
-                       const int32_t& aKeyCode,
-                       const int32_t& aCharCode,
-                       const int32_t& aModifiers,
-                       const bool& aPreventDefault)
-{
-  bool ignored = false;
-  nsContentUtils::SendKeyEvent(mPuppetWidget, aType, aKeyCode, aCharCode,
-                               aModifiers, aPreventDefault, &ignored);
-  return IPC_OK();
-}
-
-mozilla::ipc::IPCResult
 TabChild::RecvCompositionEvent(const WidgetCompositionEvent& aEvent)
 {
   WidgetCompositionEvent localEvent(aEvent);
@@ -2225,60 +2214,6 @@ TabChild::DeallocPDocAccessibleChild(a11y::PDocAccessibleChild* aChild)
   delete static_cast<mozilla::a11y::DocAccessibleChild*>(aChild);
 #endif
   return true;
-}
-
-PDocumentRendererChild*
-TabChild::AllocPDocumentRendererChild(const nsRect& documentRect,
-                                      const mozilla::gfx::Matrix& transform,
-                                      const nsString& bgcolor,
-                                      const uint32_t& renderFlags,
-                                      const bool& flushLayout,
-                                      const nsIntSize& renderSize)
-{
-    return new DocumentRendererChild();
-}
-
-bool
-TabChild::DeallocPDocumentRendererChild(PDocumentRendererChild* actor)
-{
-    delete actor;
-    return true;
-}
-
-mozilla::ipc::IPCResult
-TabChild::RecvPDocumentRendererConstructor(PDocumentRendererChild* actor,
-                                           const nsRect& documentRect,
-                                           const mozilla::gfx::Matrix& transform,
-                                           const nsString& bgcolor,
-                                           const uint32_t& renderFlags,
-                                           const bool& flushLayout,
-                                           const nsIntSize& renderSize)
-{
-    DocumentRendererChild *render = static_cast<DocumentRendererChild *>(actor);
-
-    nsCOMPtr<nsIWebBrowser> browser = do_QueryInterface(WebNavigation());
-    if (!browser)
-        return IPC_OK(); // silently ignore
-    nsCOMPtr<mozIDOMWindowProxy> window;
-    if (NS_FAILED(browser->GetContentDOMWindow(getter_AddRefs(window))) ||
-        !window)
-    {
-        return IPC_OK(); // silently ignore
-    }
-
-    nsCString data;
-    bool ret = render->RenderDocument(nsPIDOMWindowOuter::From(window),
-                                      documentRect, transform,
-                                      bgcolor,
-                                      renderFlags, flushLayout,
-                                      renderSize, data);
-    if (!ret)
-        return IPC_OK(); // silently ignore
-
-    if (!PDocumentRendererChild::Send__delete__(actor, renderSize, data)) {
-      return IPC_FAIL_NO_REASON(this);
-    }
-    return IPC_OK();
 }
 
 PColorPickerChild*

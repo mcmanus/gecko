@@ -166,6 +166,8 @@ protected:
               const bool&                aSuspendAfterSynthesizeResponse,
               const bool&                aAllowStaleCacheContent,
               const nsCString&           aContentTypeHint,
+              const uint32_t&            aCorsMode,
+              const uint32_t&            aRedirectMode,
               const uint64_t&            aChannelId,
               const uint64_t&            aContentWindowId,
               const nsCString&           aPreferredAlternativeType,
@@ -264,7 +266,7 @@ private:
   RefPtr<HttpBaseChannel>       mChannel;
   nsCOMPtr<nsICacheEntry>       mCacheEntry;
   nsCOMPtr<nsIAssociatedContentSecurity>  mAssociatedContentSecurity;
-  bool mIPCClosed;                // PHttpChannel actor has been Closed()
+  Atomic<bool> mIPCClosed; // PHttpChannel actor has been Closed()
 
   nsCOMPtr<nsIChannel> mRedirectChannel;
   nsCOMPtr<nsIAsyncVerifyRedirectCallback> mRedirectCallback;

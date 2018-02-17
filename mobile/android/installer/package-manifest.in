@@ -81,7 +81,6 @@
 
 [xpcom]
 @BINPATH@/package-name.txt
-@BINPATH@/classes.dex
 
 [browser]
 ; [Base Browser Files]
@@ -143,13 +142,10 @@
 @BINPATH@/components/dom_sidebar.xpt
 @BINPATH@/components/dom_storage.xpt
 @BINPATH@/components/dom_system.xpt
-@BINPATH@/components/dom_traversal.xpt
 #ifdef MOZ_WEBSPEECH
 @BINPATH@/components/dom_webspeechrecognition.xpt
 #endif
-@BINPATH@/components/dom_xbl.xpt
 @BINPATH@/components/dom_xhr.xpt
-@BINPATH@/components/dom_xpath.xpt
 @BINPATH@/components/dom_xul.xpt
 @BINPATH@/components/dom_presentation.xpt
 @BINPATH@/components/downloads.xpt
@@ -438,7 +434,11 @@
 
 ; [Default Preferences]
 ; All the pref files must be part of base to prevent migration bugs
+#ifdef MOZ_GECKOVIEW_JAR
+@BINPATH@/@PREF_DIR@/geckoview-prefs.js
+#else
 @BINPATH@/@PREF_DIR@/mobile.js
+#endif
 @BINPATH@/@PREF_DIR@/channel-prefs.js
 @BINPATH@/ua-update.json
 @BINPATH@/greprefs.js
@@ -469,7 +469,6 @@
 @BINPATH@/res/table-remove-row.gif
 @BINPATH@/res/grabber.gif
 @BINPATH@/res/dtd/*
-@BINPATH@/res/html/*
 @BINPATH@/res/language.properties
 
 #ifndef MOZ_ANDROID_EXCLUDE_FONTS
@@ -483,8 +482,6 @@
 
 ; svg
 @BINPATH@/res/svg.css
-@BINPATH@/components/dom_svg.xpt
-@BINPATH@/components/dom_smil.xpt
 
 ; [Personal Security Manager]
 ;

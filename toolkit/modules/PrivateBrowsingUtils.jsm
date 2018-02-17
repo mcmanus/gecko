@@ -4,16 +4,13 @@
 
 this.EXPORTED_SYMBOLS = ["PrivateBrowsingUtils"];
 
-Components.utils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 const kAutoStartPref = "browser.privatebrowsing.autostart";
 
 // This will be set to true when the PB mode is autostarted from the command
 // line for the current session.
 var gTemporaryAutoStartMode = false;
-
-const Cc = Components.classes;
-const Ci = Components.interfaces;
 
 this.PrivateBrowsingUtils = {
   // Rather than passing content windows to this function, please use

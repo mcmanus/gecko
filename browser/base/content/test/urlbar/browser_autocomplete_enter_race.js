@@ -100,7 +100,6 @@ add_task(async function test_delay() {
   // Set a large delay.
   let delay = Preferences.get("browser.urlbar.delay");
   Preferences.set("browser.urlbar.delay", TIMEOUT);
-
   registerCleanupFunction(function() {
     Preferences.set("browser.urlbar.delay", delay);
   });

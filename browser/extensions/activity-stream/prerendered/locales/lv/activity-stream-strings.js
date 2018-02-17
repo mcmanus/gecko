@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Iesaka {provider}",
   "header_bookmarks_placeholder": "Jums vēl nav nevienas grāmatzīmes.",
   "header_stories_from": "no",
+  "context_menu_button_sr": "Atvērt izvēlni {title}",
   "type_label_visited": "Apmeklēta",
   "type_label_bookmarked": "Grāmatzīmēs",
   "type_label_synced": "Atsūtīta no citas ierīces",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Rediģēt šo lapu",
   "edit_topsites_dismiss_button": "Noraidīt šo lapu",
   "edit_topsites_add_button": "Pievienot",
+  "edit_topsites_add_button_tooltip": "Pievienot populāru lapu",
   "topsites_form_add_header": "Jauna populārā lapa",
   "topsites_form_edit_header": "Rediģēt populārās lapas",
   "topsites_form_title_placeholder": "Ievadiet nosaukumu",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Viss ir apskatīts! Atnāciet atpakaļ nedaudz vēlāk, lai redzētu populāros stāstus no {provider}. Nevarat sagaidīt? Izvēlieties kādu no tēmām jau tagad.",
   "manual_migration_explanation2": "Izmēģiniet Firefox ar grāmatzīmēm, vēsturi un parolēm no cita pārlūka.",
   "manual_migration_cancel_button": "Nē, paldies",
-  "manual_migration_import_button": "Importē tagad"
+  "manual_migration_import_button": "Importē tagad",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

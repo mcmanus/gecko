@@ -37,7 +37,7 @@ public:
                                                               float aOpacity) override;
   virtual void SetPermitSubpixelAA(bool aPermitSubpixelAA) override;
   virtual void DetachAllSnapshots() override;
-  virtual IntSize GetSize() override { return mSize; }
+  virtual IntSize GetSize() const override { return mSize; }
   virtual void Flush() override {}
   virtual void DrawSurface(SourceSurface *aSurface,
                            const Rect &aDest,
@@ -149,6 +149,8 @@ public:
 
   bool ContainsOnlyColoredGlyphs(RefPtr<ScaledFont>& aScaledFont, Color& aColor, std::vector<Glyph>& aGlyphs) override;
 
+  void Dump() override;
+
 protected:
   virtual ~DrawTargetCaptureImpl();
 
@@ -164,6 +166,13 @@ private:
       MarkChanged();
     }
     return mCommands.Append<T>();
+  }
+  template<typename T>
+  T* ReuseOrAppendToCommandList() {
+    if (T::AffectsSnapshot) {
+      MarkChanged();
+    }
+    return mCommands.ReuseOrAppend<T>();
   }
 
   RefPtr<DrawTarget> mRefDT;

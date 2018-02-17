@@ -11,7 +11,6 @@ complexities of worker implementations, scopes, and treeherder annotations.
 from __future__ import absolute_import, print_function, unicode_literals
 
 import hashlib
-import json
 import os
 import re
 import time
@@ -350,10 +349,11 @@ task_description_schema = Schema({
         Required('max-run-time'): int,
 
         # the exit status code(s) that indicates the task should be retried
-        Optional('retry-exit-status'): Any(
-            int,
-            [int],
-        ),
+        Optional('retry-exit-status'): [int],
+
+        # the exit status code(s) that indicates the caches used by the task
+        # should be purged
+        Optional('purge-caches-exit-status'): [int],
     }, {
         Required('implementation'): 'generic-worker',
         Required('os'): Any('windows', 'macosx'),
@@ -449,6 +449,7 @@ task_description_schema = Schema({
             Optional('release_promotion'): bool,
             Optional('generate_bz2_blob'): bool,
             Optional('tuxedo_server_url'): optionally_keyed_by('project', basestring),
+            Optional('release_eta'): basestring,
             Extra: taskref_or_string,  # additional properties are allowed
         },
     }, {
@@ -582,6 +583,9 @@ task_description_schema = Schema({
         Required('google-play-track'): Any('production', 'beta', 'alpha', 'rollout', 'invalid'),
         Required('commit'): bool,
         Optional('rollout-percentage'): Any(int, None),
+    }, {
+        Required('implementation'): 'shipit',
+        Required('release-name'): basestring,
     }),
 })
 
@@ -815,11 +819,11 @@ def build_docker_worker_payload(config, task, task_def):
     if 'max-run-time' in worker:
         payload['maxRunTime'] = worker['max-run-time']
 
+    payload['onExitStatus'] = {}
     if 'retry-exit-status' in worker:
-        if isinstance(worker['retry-exit-status'], int):
-            payload['onExitStatus'] = {'retry': [worker['retry-exit-status']]}
-        elif isinstance(worker['retry-exit-status'], list):
-            payload['onExitStatus'] = {'retry': worker['retry-exit-status']}
+        payload['onExitStatus']['retry'] = worker['retry-exit-status']
+    if 'purge-caches-exit-status' in worker:
+        payload['onExitStatus']['purgeCaches'] = worker['purge-caches-exit-status']
 
     if 'artifacts' in worker:
         artifacts = {}
@@ -865,15 +869,22 @@ def build_docker_worker_payload(config, task, task_def):
         # the run-task content into the cache name. However, doing so preserves
         # the mechanism whereby changing run-task results in new caches
         # everywhere.
+
+        # As an additional mechanism to force the use of different caches, the
+        # string literal in the variable below can be changed. This is
+        # preferred to changing run-task because it doesn't require images
+        # to be rebuilt.
+        cache_version = 'v3'
+
         if run_task:
-            suffix = '-%s' % _run_task_suffix()
+            suffix = '-%s-%s' % (cache_version, _run_task_suffix())
 
             if out_of_tree_image:
                 name_hash = hashlib.sha256(out_of_tree_image).hexdigest()
                 suffix += name_hash[0:12]
 
         else:
-            suffix = ''
+            suffix = '-%s' % cache_version
 
         skip_untrusted = config.params.is_try() or level == 1
 
@@ -952,9 +963,6 @@ def build_generic_worker_payload(config, task, task_def):
     }
 
     # needs-sccache is handled in mozharness_on_windows
-
-    if 'retry-exit-status' in worker:
-        raise Exception("retry-exit-status not supported in generic-worker")
 
     # currently only support one feature (chain of trust) but this will likely grow
     features = {}
@@ -1056,6 +1064,15 @@ def build_push_apk_payload(config, task, task_def):
 @payload_builder('push-apk-breakpoint')
 def build_push_apk_breakpoint_payload(config, task, task_def):
     task_def['payload'] = task['worker']['payload']
+
+
+@payload_builder('shipit')
+def build_ship_it_payload(config, task, task_def):
+    worker = task['worker']
+
+    task_def['payload'] = {
+        'release_name': worker['release-name']
+    }
 
 
 @payload_builder('invalid')
@@ -1618,9 +1635,10 @@ def check_caches_are_volumes(task):
         return
 
     raise Exception('task %s (image %s) has caches that are not declared as '
-                    'Docker volumes: %s' % (task['label'],
-                                            task['worker']['docker-image'],
-                                            ', '.join(sorted(missing))))
+                    'Docker volumes: %s'
+                    'Have you added them as VOLUMEs in the Dockerfile?'
+                    % (task['label'], task['worker']['docker-image'],
+                       ', '.join(sorted(missing))))
 
 
 @transforms.add
@@ -1691,41 +1709,3 @@ def check_run_task_caches(config, tasks):
                             'cache name so it is sparse aware' % task['label'])
 
         yield task
-
-
-# Check that the v2 route templates match those used by Mozharness.  This can
-# go away once Mozharness builds are no longer performed in Buildbot, and the
-# Mozharness code referencing routes.json is deleted.
-def check_v2_routes():
-    with open(os.path.join(GECKO, "testing/mozharness/configs/routes.json"), "rb") as f:
-        routes_json = json.load(f)
-
-    for key in ('routes', 'nightly', 'l10n', 'nightly-l10n'):
-        if key == 'routes':
-            tc_template = V2_ROUTE_TEMPLATES
-        elif key == 'nightly':
-            tc_template = V2_NIGHTLY_TEMPLATES
-        elif key == 'l10n':
-            tc_template = V2_L10N_TEMPLATES
-        elif key == 'nightly-l10n':
-            tc_template = V2_NIGHTLY_L10N_TEMPLATES + V2_L10N_TEMPLATES
-
-        routes = routes_json[key]
-
-        # we use different variables than mozharness
-        for mh, tg in [
-                ('{index}', 'index'),
-                ('gecko', '{trust-domain}'),
-                ('{build_product}', '{product}'),
-                ('{build_name}-{build_type}', '{job-name}'),
-                ('{year}.{month}.{day}.{pushdate}', '{build_date_long}'),
-                ('{pushid}', '{pushlog_id}'),
-                ('{year}.{month}.{day}', '{build_date}')]:
-            routes = [r.replace(mh, tg) for r in routes]
-
-        if sorted(routes) != sorted(tc_template):
-            raise Exception("V2 TEMPLATES do not match Mozharness's routes.json: "
-                            "(tc):%s vs (mh):%s" % (tc_template, routes))
-
-
-check_v2_routes()

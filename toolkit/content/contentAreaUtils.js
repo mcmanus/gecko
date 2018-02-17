@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
@@ -187,8 +187,6 @@ function saveBrowser(aBrowser, aSkipPrompt, aOuterWindowID = 0) {
 // unavailable.  This is a temporary measure for the "Save Frame As"
 // command (bug 1141337) and pre-e10s add-ons.
 function saveDocument(aDocument, aSkipPrompt) {
-  const Ci = Components.interfaces;
-
   if (!aDocument)
     throw "Must have a document when calling saveDocument";
 
@@ -892,8 +890,6 @@ function appendFiltersForContentType(aFilePicker, aContentType, aFileExtension, 
 }
 
 function getPostData(aDocument) {
-  const Ci = Components.interfaces;
-
   if (aDocument instanceof Ci.nsIWebBrowserPersistDocument) {
     return aDocument.postData;
   }
@@ -1009,9 +1005,7 @@ function getDefaultFileName(aDefaultFileName, aURI, aDocument,
     var url = aURI.QueryInterface(Components.interfaces.nsIURL);
     if (url.fileName != "") {
       // 3) Use the actual file name, if present
-      var textToSubURI = Components.classes["@mozilla.org/intl/texttosuburi;1"]
-                                   .getService(Components.interfaces.nsITextToSubURI);
-      return validateFileName(textToSubURI.unEscapeURIForUI("UTF-8", url.fileName));
+      return validateFileName(Services.textToSubURI.unEscapeURIForUI("UTF-8", url.fileName));
     }
   } catch (e) {
     // This is something like a data: and so forth URI... no filename here.
@@ -1061,9 +1055,9 @@ function validateFileName(aFileName) {
       processed = "download";
 
       // Preserve a suffix, if there is one
-      if (original.indexOf(".") >= 0) {
+      if (original.includes(".")) {
         var suffix = original.split(".").slice(-1)[0];
-        if (suffix && suffix.indexOf("_") < 0)
+        if (suffix && !suffix.includes("_"))
           processed += "." + suffix;
       }
     }

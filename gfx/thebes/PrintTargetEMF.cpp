@@ -6,6 +6,7 @@
 #include "PrintTargetEMF.h"
 #include "nsAnonymousTemporaryFile.h"
 #include "nsIFile.h"
+#include "nsNativeCharsetUtils.h"
 #include "mozilla/widget/PDFiumProcessParent.h"
 #include "mozilla/widget/PDFiumParent.h"
 #include "mozilla/widget/WindowsEMF.h"
@@ -101,7 +102,15 @@ PrintTargetEMF::BeginPage()
   NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
 
   nsAutoCString filePath;
+#ifdef XP_WIN
+  // Unfortunately, SkFILEWStream does not support wide char paths yet.
+  // We have to use the native charset even though it is lossy :(
+  nsAutoString filePathU;
+  mPDFFileForOnePage->GetPath(filePathU);
+  NS_CopyUnicodeToNative(filePathU, filePath);
+#else
   mPDFFileForOnePage->GetNativePath(filePath);
+#endif
   auto  stream = MakeUnique<SkFILEWStream>(filePath.get());
 
   // Creating a new PrintTargetSkPDF for each page so that we can convert each
@@ -149,7 +158,7 @@ PrintTargetEMF::MakeDrawTarget(const IntSize& aSize,
 }
 
 already_AddRefed<DrawTarget>
-PrintTargetEMF::GetReferenceDrawTarget(DrawEventRecorder* aRecorder)
+PrintTargetEMF::GetReferenceDrawTarget()
 {
   if (!mRefTarget) {
     auto dummy = MakeUnique<SkNullWStream>();
@@ -157,7 +166,7 @@ PrintTargetEMF::GetReferenceDrawTarget(DrawEventRecorder* aRecorder)
   }
 
   if (!mRefDT) {
-    mRefDT = mRefTarget->GetReferenceDrawTarget(aRecorder);
+    mRefDT = mRefTarget->GetReferenceDrawTarget();
   }
 
   return mRefDT.forget();

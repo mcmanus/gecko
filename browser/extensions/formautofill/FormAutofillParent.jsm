@@ -31,21 +31,19 @@
 // constructor via a backstage pass.
 this.EXPORTED_SYMBOLS = ["formAutofillParent"];
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://formautofill/FormAutofillUtils.jsm");
 
-Cu.import("resource://formautofill/FormAutofillUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "FormAutofillPreferences",
-                                  "resource://formautofill/FormAutofillPreferences.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "FormAutofillDoorhanger",
-                                  "resource://formautofill/FormAutofillDoorhanger.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "MasterPassword",
-                                  "resource://formautofill/MasterPassword.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
-                                  "resource:///modules/RecentWindow.jsm");
+ChromeUtils.defineModuleGetter(this, "FormAutofillPreferences",
+                               "resource://formautofill/FormAutofillPreferences.jsm");
+ChromeUtils.defineModuleGetter(this, "FormAutofillDoorhanger",
+                               "resource://formautofill/FormAutofillDoorhanger.jsm");
+ChromeUtils.defineModuleGetter(this, "MasterPassword",
+                               "resource://formautofill/MasterPassword.jsm");
+ChromeUtils.defineModuleGetter(this, "RecentWindow",
+                               "resource:///modules/RecentWindow.jsm");
 
 this.log = null;
 FormAutofillUtils.defineLazyLogGetter(this, this.EXPORTED_SYMBOLS[0]);
@@ -60,7 +58,7 @@ function FormAutofillParent() {
   // Lazily load the storage JSM to avoid disk I/O until absolutely needed.
   // Once storage is loaded we need to update saved field names and inform content processes.
   XPCOMUtils.defineLazyGetter(this, "profileStorage", () => {
-    let {profileStorage} = Cu.import("resource://formautofill/ProfileStorage.jsm", {});
+    let {profileStorage} = ChromeUtils.import("resource://formautofill/FormAutofillStorage.jsm", {});
     log.debug("Loading profileStorage");
 
     profileStorage.initialize().then(() => {
@@ -96,7 +94,7 @@ FormAutofillParent.prototype = {
   },
 
   /**
-   * Initializes ProfileStorage and registers the message handler.
+   * Initializes FormAutofillStorage and registers the message handler.
    */
   async init() {
     if (this._initialized) {
@@ -443,7 +441,7 @@ FormAutofillParent.prototype = {
             return;
           }
 
-          target.ownerGlobal.openPreferences("panePrivacy",
+          target.ownerGlobal.openPreferences("privacy-address-autofill",
                                              {origin: "autofillDoorhanger"});
         };
       } else {

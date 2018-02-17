@@ -203,7 +203,7 @@ impl<'a> SharedStyleContext<'a> {
 /// within the `CurrentElementInfo`. At the end of the cascade, they are folded
 /// down into the main `ComputedValues` to reduce memory usage per element while
 /// still remaining accessible.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct CascadeInputs {
     /// The rule node representing the ordered list of rules matched for this
     /// node.
@@ -223,15 +223,6 @@ impl CascadeInputs {
             rules: style.rules.clone(),
             visited_rules: style.visited_style().and_then(|v| v.rules.clone()),
         }
-    }
-}
-
-// We manually implement Debug for CascadeInputs so that we can avoid the
-// verbose stringification of ComputedValues for normal logging.
-impl fmt::Debug for CascadeInputs {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "CascadeInputs {{ rules: {:?}, visited_rules: {:?}, .. }}",
-               self.rules, self.visited_rules)
     }
 }
 
@@ -481,7 +472,7 @@ impl<E: TElement> SequentialTask<E> {
     /// Executes this task.
     pub fn execute(self) {
         use self::SequentialTask::*;
-        debug_assert!(thread_state::get() == ThreadState::LAYOUT);
+        debug_assert_eq!(thread_state::get(), ThreadState::LAYOUT);
         match self {
             Unused(_) => unreachable!(),
             #[cfg(feature = "gecko")]
@@ -569,7 +560,7 @@ impl<E: TElement> SelectorFlagsMap<E> {
 
     /// Applies the flags. Must be called on the main thread.
     fn apply_flags(&mut self) {
-        debug_assert!(thread_state::get() == ThreadState::LAYOUT);
+        debug_assert_eq!(thread_state::get(), ThreadState::LAYOUT);
         self.cache.evict_all();
         for (el, flags) in self.map.drain() {
             unsafe { el.set_selector_flags(flags); }
@@ -607,7 +598,7 @@ where
     E: TElement,
 {
     fn drop(&mut self) {
-        debug_assert!(thread_state::get() == ThreadState::LAYOUT);
+        debug_assert_eq!(thread_state::get(), ThreadState::LAYOUT);
         for task in self.0.drain(..) {
             task.execute()
         }
@@ -760,7 +751,7 @@ impl<E: TElement> ThreadLocalStyleContext<E> {
 
 impl<E: TElement> Drop for ThreadLocalStyleContext<E> {
     fn drop(&mut self) {
-        debug_assert!(thread_state::get() == ThreadState::LAYOUT);
+        debug_assert_eq!(thread_state::get(), ThreadState::LAYOUT);
 
         // Apply any slow selector flags that need to be set on parents.
         self.selector_flags.apply_flags();

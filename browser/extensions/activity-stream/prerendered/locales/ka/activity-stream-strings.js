@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "რეკომენდებულია {provider}-ის მიერ",
   "header_bookmarks_placeholder": "სანიშნები ჯერ არაა დამატებული.",
   "header_stories_from": "მომწოდებელი:",
+  "context_menu_button_sr": "კონტექსტური მენიუს გახსნა {title}",
   "type_label_visited": "მონახულებული",
   "type_label_bookmarked": "ჩანიშნული",
   "type_label_synced": "სხვა მოწყობილობიდან დასინქრონებული",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "საიტის ჩასწორება",
   "edit_topsites_dismiss_button": "საიტის დამალვა",
   "edit_topsites_add_button": "დამატება",
+  "edit_topsites_add_button_tooltip": "რჩეული საიტის დამატება",
   "topsites_form_add_header": "ახალი საიტი რჩეულებში",
   "topsites_form_edit_header": "რჩეული საიტების ჩასწორება",
   "topsites_form_title_placeholder": "სათაურის შეყვანა",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "უკვე ყველაფერი წაკითხული გაქვთ. {provider}-იდან ახალი რჩეული სტატიების მისაღებად, მოგვიანებით შემოიარეთ. თუ ვერ ითმენთ, აირჩიეთ რომელიმე მოთხოვნადი თემა, ახალი საინტერესო სტატიების მოსაძიებლად.",
   "manual_migration_explanation2": "გადმოიტანეთ სხვა ბრაუზერებიდან თქვენი სანიშნები, ისტორია და პაროლები Firefox-ში.",
   "manual_migration_cancel_button": "არა, გმადლობთ",
-  "manual_migration_import_button": "ახლავე გადმოტანა"
+  "manual_migration_import_button": "ახლავე გადმოტანა",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

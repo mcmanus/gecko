@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "מומלץ על ידי {provider}",
   "header_bookmarks_placeholder": "אין לך סימניות עדיין.",
   "header_stories_from": "מאת",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "ביקורים קודמים",
   "type_label_bookmarked": "שמור כסימניה",
   "type_label_synced": "סונכרן מהתקן אחר",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "עריכת אתר זה",
   "edit_topsites_dismiss_button": "הסרת אתר זה",
   "edit_topsites_add_button": "הוספה",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "אתר מוביל חדש",
   "topsites_form_edit_header": "עריכת אתר מוביל",
   "topsites_form_title_placeholder": "נא להזין כותרת",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "התעדכנת בכל הסיפורים. כדאי לנסות שוב מאוחר יותר כדי לקבל עוד סיפורים מובילים מאת {provider}. לא רוצה לחכות? ניתן לבחור נושא נפוץ כדי למצוא עוד סיפורים נפלאים מרחבי הרשת.",
   "manual_migration_explanation2": "ניתן להתנסות ב־Firefox עם הסימניות, ההיסטוריה והססמאות מדפדפן אחר.",
   "manual_migration_cancel_button": "לא תודה",
-  "manual_migration_import_button": "ייבוא כעת"
+  "manual_migration_import_button": "ייבוא כעת",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

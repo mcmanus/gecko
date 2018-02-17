@@ -5,15 +5,8 @@
 /* import-globals-from report.js */
 /* eslint mozilla/avoid-Date-timing: "off" */
 
-try {
-  if (Cc === undefined) {
-    var Cc = Components.classes;
-    var Ci = Components.interfaces;
-  }
-} catch (ex) {}
-
-Components.utils.import("resource://gre/modules/Services.jsm");
-Components.utils.import("resource://gre/modules/E10SUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/E10SUtils.jsm");
 
 var NUM_CYCLES = 5;
 var numPageCycles = 1;
@@ -247,6 +240,7 @@ function plInit() {
 
         }
         content.selectedBrowser.messageManager.loadFrameScript("chrome://pageloader/content/talos-content.js", false);
+        content.selectedBrowser.messageManager.loadFrameScript("chrome://talos-powers-content/content/TalosContentProfiler.js", false, true);
         content.selectedBrowser.messageManager.loadFrameScript("chrome://pageloader/content/tscroll.js", false, true);
         content.selectedBrowser.messageManager.loadFrameScript("chrome://pageloader/content/Profiler.js", false, true);
 
@@ -412,7 +406,7 @@ var plNextPage = async function() {
     doNextPage = true;
   }
 
-  if (doNextPage == true) {
+  if (doNextPage) {
     if (forceCC) {
       var tccstart = new Date();
       window.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
@@ -546,7 +540,7 @@ function plWaitForPaintingCapturing() {
                    .getInterface(Components.interfaces.nsIDOMWindowUtils);
 
   if (utils.isMozAfterPaintPending && useMozAfterPaint) {
-    if (gPaintListener == false)
+    if (!gPaintListener)
       gPaintWindow.addEventListener("MozAfterPaint", plPaintedCapturing, true);
     gPaintListener = true;
     return;
@@ -607,7 +601,7 @@ function waitForPainted() {
     return;
   }
 
-  if (gPaintListener == false)
+  if (!gPaintListener)
     gPaintWindow.addEventListener("MozAfterPaint", plPainted, true);
   gPaintListener = true;
 }
@@ -709,7 +703,7 @@ function plStop(force) {
 
 function plStopAll(force) {
   try {
-    if (force == false) {
+    if (!force) {
       pageIndex = 0;
       pageCycle = 1;
       if (cycle < NUM_CYCLES - 1) {
@@ -832,7 +826,7 @@ function plLoadURLsFromURI(manifestUri) {
       }
 
       if (items.length == 2) {
-        if (items[0].indexOf("%") != -1)
+        if (items[0].includes("%"))
           flags |= TEST_DOES_OWN_TIMING;
 
         urlspec = items[1];
@@ -842,7 +836,7 @@ function plLoadURLsFromURI(manifestUri) {
         // & http://localhost/tests/perf-reftest/base-page.html, http://localhost/tests/perf-reftest/reference-page.html
         // test will run with the base page, then with the reference page; and ultimately the actual test results will
         // be the comparison values of those two pages; more than one line will result in base vs ref subtests
-        if (items[0].indexOf("&") != -1) {
+        if (items[0].includes("&")) {
           baseVsRef = true;
           flags |= TEST_DOES_OWN_TIMING;
           // for the base, must remove the comma on the end of the actual url

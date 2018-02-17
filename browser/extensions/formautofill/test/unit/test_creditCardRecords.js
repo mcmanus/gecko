@@ -1,10 +1,12 @@
 /**
- * Tests ProfileStorage object with creditCards records.
+ * Tests FormAutofillStorage object with creditCards records.
  */
 
 "use strict";
 
-const {ProfileStorage} = Cu.import("resource://formautofill/ProfileStorage.jsm", {});
+const {FormAutofillStorage} = ChromeUtils.import("resource://formautofill/FormAutofillStorage.jsm", {});
+ChromeUtils.defineModuleGetter(this, "Preferences",
+                               "resource://gre/modules/Preferences.jsm");
 
 const TEST_STORE_FILE_NAME = "test-credit-card.json";
 const COLLECTION_NAME = "creditCards";
@@ -146,7 +148,7 @@ const MERGE_TESTCASES = [
 ];
 
 let prepareTestCreditCards = async function(path) {
-  let profileStorage = new ProfileStorage(path);
+  let profileStorage = new FormAutofillStorage(path);
   await profileStorage.initialize();
 
   let onChanged = TestUtils.topicObserved(
@@ -180,7 +182,7 @@ let do_check_credit_card_matches = (creditCardWithMeta, creditCard) => {
 
 add_task(async function test_initialize() {
   let path = getTempFile(TEST_STORE_FILE_NAME).path;
-  let profileStorage = new ProfileStorage(path);
+  let profileStorage = new FormAutofillStorage(path);
   await profileStorage.initialize();
 
   Assert.equal(profileStorage._store.data.version, 1);
@@ -191,7 +193,7 @@ add_task(async function test_initialize() {
 
   await profileStorage._saveImmediately();
 
-  profileStorage = new ProfileStorage(path);
+  profileStorage = new FormAutofillStorage(path);
   await profileStorage.initialize();
 
   Assert.deepEqual(profileStorage._store.data, data);
@@ -201,7 +203,7 @@ add_task(async function test_getAll() {
   let path = getTempFile(TEST_STORE_FILE_NAME).path;
   await prepareTestCreditCards(path);
 
-  let profileStorage = new ProfileStorage(path);
+  let profileStorage = new FormAutofillStorage(path);
   await profileStorage.initialize();
 
   let creditCards = profileStorage.creditCards.getAll();
@@ -230,7 +232,7 @@ add_task(async function test_get() {
   let path = getTempFile(TEST_STORE_FILE_NAME).path;
   await prepareTestCreditCards(path);
 
-  let profileStorage = new ProfileStorage(path);
+  let profileStorage = new FormAutofillStorage(path);
   await profileStorage.initialize();
 
   let creditCards = profileStorage.creditCards.getAll();
@@ -250,7 +252,7 @@ add_task(async function test_add() {
   let path = getTempFile(TEST_STORE_FILE_NAME).path;
   await prepareTestCreditCards(path);
 
-  let profileStorage = new ProfileStorage(path);
+  let profileStorage = new FormAutofillStorage(path);
   await profileStorage.initialize();
 
   let creditCards = profileStorage.creditCards.getAll();
@@ -290,10 +292,20 @@ add_task(async function test_add() {
 });
 
 add_task(async function test_update() {
+  // Test assumes that when an entry is saved a second time, it's last modified date will
+  // be different from the first. With high values of precision reduction, we execute too
+  // fast for that to be true.
+  let timerPrecision = Preferences.get("privacy.reduceTimerPrecision");
+  Preferences.set("privacy.reduceTimerPrecision", false);
+
+  registerCleanupFunction(function() {
+    Preferences.set("privacy.reduceTimerPrecision", timerPrecision);
+  });
+
   let path = getTempFile(TEST_STORE_FILE_NAME).path;
   await prepareTestCreditCards(path);
 
-  let profileStorage = new ProfileStorage(path);
+  let profileStorage = new FormAutofillStorage(path);
   await profileStorage.initialize();
 
   let creditCards = profileStorage.creditCards.getAll();
@@ -312,7 +324,7 @@ add_task(async function test_update() {
   await onChanged;
   await profileStorage._saveImmediately();
 
-  profileStorage = new ProfileStorage(path);
+  profileStorage = new FormAutofillStorage(path);
   await profileStorage.initialize();
 
   let creditCard = profileStorage.creditCards.get(guid);
@@ -367,7 +379,7 @@ add_task(async function test_update() {
 add_task(async function test_validate() {
   let path = getTempFile(TEST_STORE_FILE_NAME).path;
 
-  let profileStorage = new ProfileStorage(path);
+  let profileStorage = new FormAutofillStorage(path);
   await profileStorage.initialize();
 
   profileStorage.creditCards.add(TEST_CREDIT_CARD_WITH_INVALID_EXPIRY_DATE);
@@ -393,7 +405,7 @@ add_task(async function test_notifyUsed() {
   let path = getTempFile(TEST_STORE_FILE_NAME).path;
   await prepareTestCreditCards(path);
 
-  let profileStorage = new ProfileStorage(path);
+  let profileStorage = new FormAutofillStorage(path);
   await profileStorage.initialize();
 
   let creditCards = profileStorage.creditCards.getAll();
@@ -408,7 +420,7 @@ add_task(async function test_notifyUsed() {
   await onChanged;
   await profileStorage._saveImmediately();
 
-  profileStorage = new ProfileStorage(path);
+  profileStorage = new FormAutofillStorage(path);
   await profileStorage.initialize();
 
   let creditCard = profileStorage.creditCards.get(guid);
@@ -424,7 +436,7 @@ add_task(async function test_remove() {
   let path = getTempFile(TEST_STORE_FILE_NAME).path;
   await prepareTestCreditCards(path);
 
-  let profileStorage = new ProfileStorage(path);
+  let profileStorage = new FormAutofillStorage(path);
   await profileStorage.initialize();
 
   let creditCards = profileStorage.creditCards.getAll();
@@ -443,7 +455,7 @@ add_task(async function test_remove() {
   await onChanged;
   await profileStorage._saveImmediately();
 
-  profileStorage = new ProfileStorage(path);
+  profileStorage = new FormAutofillStorage(path);
   await profileStorage.initialize();
 
   creditCards = profileStorage.creditCards.getAll();

@@ -2912,13 +2912,7 @@ gfxFontGroup::FindFontForChar(uint32_t aCh, uint32_t aPrevCh, uint32_t aNextCh,
                 // fallback within the family to handle cases where some faces
                 // such as Italic or Black have reduced character sets compared
                 // to the family's Regular face.
-                gfxFontEntry* fe = firstFont->GetFontEntry();
-                if (!fe->IsNormalStyle()) {
-                    // If style/weight/stretch was not Normal, see if we can
-                    // fall back to a next-best face (e.g. Arial Black -> Bold,
-                    // or Arial Narrow -> Regular).
-                    font = FindFallbackFaceForChar(mFonts[0].Family(), aCh);
-                }
+                font = FindFallbackFaceForChar(mFonts[0].Family(), aCh);
             }
             if (font) {
                 *aMatchType = gfxTextRange::kFontGroup;
@@ -3029,8 +3023,7 @@ gfxFontGroup::FindFontForChar(uint32_t aCh, uint32_t aPrevCh, uint32_t aNextCh,
             // fallback to handle styles with reduced character sets (see
             // also above).
             fe = ff.FontEntry();
-            if (!fe->mIsUserFontContainer && !fe->IsUserFont() &&
-                !fe->IsNormalStyle()) {
+            if (!fe->mIsUserFontContainer && !fe->IsUserFont()) {
                 font = FindFallbackFaceForChar(ff.Family(), aCh);
                 if (font) {
                     *aMatchType = gfxTextRange::kFontGroup;
@@ -3180,10 +3173,25 @@ void gfxFontGroup::ComputeRanges(nsTArray<gfxTextRange>& aRanges,
             // on a per-character basis using the UTR50 orientation property.
             switch (GetVerticalOrientation(ch)) {
             case VERTICAL_ORIENTATION_U:
-            case VERTICAL_ORIENTATION_Tr:
             case VERTICAL_ORIENTATION_Tu:
                 orient = ShapedTextFlags::TEXT_ORIENT_VERTICAL_UPRIGHT;
                 break;
+            case VERTICAL_ORIENTATION_Tr: {
+                // We check for a vertical presentation form first as that's
+                // likely to be cheaper than inspecting lookups to see if the
+                // 'vert' feature is going to handle this character, and if the
+                // presentation form is available then it will be used as
+                // fallback if needed, so it's OK if the feature is missing.
+                uint32_t v = gfxHarfBuzzShaper::GetVerticalPresentationForm(ch);
+                orient = (!font ||
+                          (v && font->HasCharacter(v)) ||
+                          font->FeatureWillHandleChar(aRunScript,
+                                                      HB_TAG('v','e','r','t'),
+                                                      ch))
+                         ? ShapedTextFlags::TEXT_ORIENT_VERTICAL_UPRIGHT
+                         : ShapedTextFlags::TEXT_ORIENT_VERTICAL_SIDEWAYS_RIGHT;
+                break;
+            }
             case VERTICAL_ORIENTATION_R:
                 orient = ShapedTextFlags::TEXT_ORIENT_VERTICAL_SIDEWAYS_RIGHT;
                 break;
@@ -3408,20 +3416,15 @@ gfxFontGroup::WhichPrefFontSupportsChar(uint32_t aCh, uint32_t aNextCh)
                 return prefFont;
             }
 
-            // If we requested a styled font (bold and/or italic), and the char
-            // was not available, check the regular face as well.
-            if (!fe->IsNormalStyle()) {
-                // If style/weight/stretch was not Normal, see if we can
-                // fall back to a next-best face (e.g. Arial Black -> Bold,
-                // or Arial Narrow -> Regular).
-                gfxFont* prefFont = FindFallbackFaceForChar(family, aCh);
-                if (prefFont) {
-                    mLastPrefFamily = family;
-                    mLastPrefFont = prefFont;
-                    mLastPrefLang = charLang;
-                    mLastPrefFirstFont = (i == 0 && j == 0);
-                    return prefFont;
-                }
+            // If the char was not available, see if we can fall back to an
+            // alternative face in the same family.
+            gfxFont* prefFont = FindFallbackFaceForChar(family, aCh);
+            if (prefFont) {
+                mLastPrefFamily = family;
+                mLastPrefFont = prefFont;
+                mLastPrefLang = charLang;
+                mLastPrefFirstFont = (i == 0 && j == 0);
+                return prefFont;
             }
         }
     }

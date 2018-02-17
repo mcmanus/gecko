@@ -1878,8 +1878,8 @@ nsUrlClassifierDBService::AsyncClassifyLocalWithTables(nsIURI *aURI,
         "nsUrlClassifierDBService::AsyncClassifyLocalWithTables",
         [callback, matchedLists, startTime]() -> void {
           // Measure the time diff between calling and callback.
-          AccumulateDelta_impl<Millisecond>::compute(
-            Telemetry::URLCLASSIFIER_ASYNC_CLASSIFYLOCAL_TIME, startTime);
+          AccumulateTimeDelta(Telemetry::URLCLASSIFIER_ASYNC_CLASSIFYLOCAL_TIME,
+                              startTime);
 
           // |callback| is captured as const value so ...
           auto cb = const_cast<nsIURIClassifierCallback*>(callback.get());
@@ -2127,6 +2127,7 @@ nsUrlClassifierDBService::SendThreatHitReport(nsIChannel *aChannel,
                      nsContentUtils::GetSystemPrincipal(),
                      nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                      nsIContentPolicy::TYPE_OTHER,
+                     nullptr,  // aPerformanceStorage
                      nullptr,  // aLoadGroup
                      nullptr,
                      loadFlags);

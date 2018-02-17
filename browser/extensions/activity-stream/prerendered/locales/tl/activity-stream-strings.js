@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Inirekomenda ni {provider}",
   "header_bookmarks_placeholder": "Wala kang anumang mga bookmark.",
   "header_stories_from": "mula sa",
+  "context_menu_button_sr": "Buksan ang menu ng konteksto para sa {title}",
   "type_label_visited": "Binisita",
   "type_label_bookmarked": "Bookmarked",
   "type_label_synced": "Naka-sync mula sa ibang kagamitan",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "I-edit ang site na ito",
   "edit_topsites_dismiss_button": "I-dismiss sa site na ito",
   "edit_topsites_add_button": "Idagdag",
+  "edit_topsites_add_button_tooltip": "Magdagdag ng Nangungunang Site",
   "topsites_form_add_header": "Bagong nangungunang site",
   "topsites_form_edit_header": "I-edit ang nangungunang site",
   "topsites_form_title_placeholder": "Magpasok ng isang pamagat",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Nakahabol ka na. Bumalik sa ibang pagkakataon para sa higit pang mga nangungunang kuwento mula sa {provider}. Hindi makapaghintay? Pumili ng isang tanyag na paksa upang makahanap ng higit pang mahusay na mga kuwento mula sa buong web.",
   "manual_migration_explanation2": "Subukan ang Firefox gamit ang mga bookmark, kasaysayan at mga password mula sa isa pang browser.",
   "manual_migration_cancel_button": "Salamat na lang",
-  "manual_migration_import_button": "Angkatin Ngayon"
+  "manual_migration_import_button": "Angkatin Ngayon",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

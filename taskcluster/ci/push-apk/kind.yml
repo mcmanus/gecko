@@ -6,12 +6,14 @@ loader: taskgraph.loader.push_apk:loader
 
 transforms:
    - taskgraph.transforms.push_apk:transforms
+   - taskgraph.transforms.release_notifications:transforms
    - taskgraph.transforms.task:transforms
 
 kind-dependencies:
    - build-signing
    - google-play-strings
    - push-apk-breakpoint
+   - beetmover-checksums
 
 jobs:
    push-apk/opt:
@@ -36,6 +38,11 @@ jobs:
                mozilla-beta: 'rollout'
                mozilla-release: 'rollout'
                default: 'invalid'
+         rc-google-play-track:
+            by-project:
+               mozilla-release: 'rollout'
+               birch: 'rollout'
+               default: 'invalid'
          implementation: push-apk
          commit:
             by-project:
@@ -49,6 +56,11 @@ jobs:
                # 'rollout' if you add a new supported project
                mozilla-release: 10
                mozilla-beta: 10
+               default: null
+         rc-rollout-percentage:
+            by-project:
+               mozilla-release: 5
+               birch: 5
                default: null
       requires: all-resolved
       scopes:  # see transforms

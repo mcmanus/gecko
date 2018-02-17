@@ -11,16 +11,14 @@
  * between ExtensionParent.jsm and ExtensionChild.jsm.
  */
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
-
 /* exported ExtensionCommon */
 
 this.EXPORTED_SYMBOLS = ["ExtensionCommon"];
 
 Cu.importGlobalProperties(["fetch"]);
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   ConsoleAPI: "resource://gre/modules/Console.jsm",
@@ -36,7 +34,7 @@ XPCOMUtils.defineLazyServiceGetter(this, "styleSheetService",
 
 const global = Cu.getGlobalForObject(this);
 
-Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+ChromeUtils.import("resource://gre/modules/ExtensionUtils.jsm");
 
 var {
   DefaultMap,
@@ -136,6 +134,7 @@ var ExtensionAPIs = {
       wantXrays: false,
       sandboxName: script,
       addonId,
+      wantGlobalProperties: ["ChromeUtils"],
       metadata: {addonID: addonId},
     });
 
@@ -1326,12 +1325,12 @@ class SchemaAPIManager extends EventEmitter {
   _createExtGlobal() {
     let global = Cu.Sandbox(Services.scriptSecurityManager.getSystemPrincipal(), {
       wantXrays: false,
+      wantGlobalProperties: ["ChromeUtils"],
       sandboxName: `Namespace of ext-*.js scripts for ${this.processType} (from: resource://gre/modules/ExtensionCommon.jsm)`,
     });
 
     Object.assign(global, {
       Cc,
-      ChromeUtils,
       ChromeWorker,
       Ci,
       Cr,
@@ -1347,7 +1346,7 @@ class SchemaAPIManager extends EventEmitter {
       global,
     });
 
-    Cu.import("resource://gre/modules/AppConstants.jsm", global);
+    ChromeUtils.import("resource://gre/modules/AppConstants.jsm", global);
 
     XPCOMUtils.defineLazyGetter(global, "console", getConsole);
 

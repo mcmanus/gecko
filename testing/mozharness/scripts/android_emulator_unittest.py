@@ -23,28 +23,18 @@ from mozprocess import ProcessHandler
 
 from mozharness.base.log import FATAL
 from mozharness.base.script import BaseScript, PreScriptAction, PostScriptAction
-from mozharness.base.vcs.vcsbase import VCSMixin
-from mozharness.mozilla.blob_upload import BlobUploadMixin, blobupload_config_options
 from mozharness.mozilla.buildbot import TBPL_RETRY, EXIT_STATUS_DICT
 from mozharness.mozilla.mozbase import MozbaseMixin
 from mozharness.mozilla.testing.testbase import TestingMixin, testing_config_options
 from mozharness.mozilla.testing.unittest import EmulatorMixin
 
 
-class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin, BaseScript,
-                          MozbaseMixin):
+class AndroidEmulatorTest(TestingMixin, EmulatorMixin, BaseScript, MozbaseMixin):
     config_options = [[
         ["--test-suite"],
         {"action": "store",
          "dest": "test_suite",
          "default": None
-         }
-    ], [
-        ["--adb-path"],
-        {"action": "store",
-         "dest": "adb_path",
-         "default": None,
-         "help": "Path to adb",
          }
     ], [
         ["--total-chunk"],
@@ -60,17 +50,7 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
          "default": None,
          "help": "Number of this chunk",
          }
-    ]] + copy.deepcopy(testing_config_options) + \
-        copy.deepcopy(blobupload_config_options)
-
-    error_list = [
-    ]
-
-    virtualenv_requirements = [
-    ]
-
-    virtualenv_modules = [
-    ]
+    ]] + copy.deepcopy(testing_config_options)
 
     app_name = None
 
@@ -87,18 +67,10 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
                          'install',
                          'run-tests',
                          ],
-            default_actions=['clobber',
-                             'start-emulator',
-                             'download-and-extract',
-                             'create-virtualenv',
-                             'verify-emulator',
-                             'install',
-                             'run-tests',
-                             ],
             require_config_file=require_config_file,
             config={
-                'virtualenv_modules': self.virtualenv_modules,
-                'virtualenv_requirements': self.virtualenv_requirements,
+                'virtualenv_modules': [],
+                'virtualenv_requirements': [],
                 'require_test_zip': True,
                 # IP address of the host as seen from the emulator
                 'remote_webserver': '10.0.2.2',
@@ -115,7 +87,6 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
         self.test_packages_url = c.get('test_packages_url')
         self.test_manifest = c.get('test_manifest')
         self.robocop_path = os.path.join(abs_dirs['abs_work_dir'], "robocop.apk")
-        self.minidump_stackwalk_path = c.get("minidump_stackwalk_path")
         self.emulator = c.get('emulator')
         self.test_suite = c.get('test_suite')
         self.this_chunk = c.get('this_chunk')
@@ -134,7 +105,7 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
         dirs = self.query_abs_dirs()
         try:
             test_dir = self.config["suite_definitions"][self.test_suite]["testsdir"]
-        except:
+        except Exception:
             test_dir = self.test_suite
         return os.path.join(dirs['abs_test_install_dir'], test_dir)
 
@@ -208,7 +179,7 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
             try:
                 os.remove(AUTH_FILE)
                 self.info("deleted %s" % AUTH_FILE)
-            except:
+            except Exception:
                 self.warning("failed to remove %s" % AUTH_FILE)
 
         avd_path = os.path.join(avd_home_dir, 'avd')
@@ -406,6 +377,11 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
 
     def _query_package_name(self):
         if self.app_name is None:
+            # For convenience, assume geckoview_example when install target
+            # looks like geckoview.
+            if 'geckoview' in self.installer_path:
+                self.app_name = 'org.mozilla.geckoview_example'
+        if self.app_name is None:
             # Find appname from package-name.txt - assumes download-and-extract
             # has completed successfully.
             # The app/package name will typically be org.mozilla.fennec,
@@ -451,8 +427,6 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
             'remote_webserver': c['remote_webserver'],
             'xre_path': self.xre_path,
             'utility_path': self.xre_path,
-            'http_port': self.emulator['http_port'],
-            'ssl_port': self.emulator['ssl_port'],
             'certs_path': os.path.join(dirs['abs_work_dir'], 'tests/certs'),
             # TestingMixin._download_and_extract_symbols() will set
             # self.symbols_path when downloading/extracting.
@@ -791,14 +765,10 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
         """
         self.start_time = datetime.datetime.now()
         max_verify_time = datetime.timedelta(minutes=60)
-        aliases = {
-            'reftest-debug': 'reftest',
-            'jsreftest-debug': 'jsreftest',
-            'crashtest-debug': 'crashtest',
-        }
 
         verify_args = []
         suites = self._query_suites()
+        minidump = self.query_minidump_stackwalk()
         for (verify_suite, suite) in suites:
             self.test_suite = suite
 
@@ -806,11 +776,11 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
 
             try:
                 cwd = self._query_tests_dir()
-            except:
+            except Exception:
                 self.fatal("Don't know how to run --test-suite '%s'!" % self.test_suite)
             env = self.query_env()
-            if self.query_minidump_stackwalk():
-                env['MINIDUMP_STACKWALK'] = self.minidump_stackwalk_path
+            if minidump:
+                env['MINIDUMP_STACKWALK'] = minidump
             env['MOZ_UPLOAD_DIR'] = self.query_abs_dirs()['abs_blob_upload_dir']
             env['MINIDUMP_SAVE_PATH'] = self.query_abs_dirs()['abs_blob_upload_dir']
             env['RUST_BACKTRACE'] = 'full'
@@ -838,13 +808,12 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
                           subprocess.list2cmdline(final_cmd)))
                 self.info("##### %s log begins" % self.test_suite)
 
-                # TinderBoxPrintRe does not know about the '-debug' categories
-                suite_category = aliases.get(self.test_suite, self.test_suite)
+                suite_category = self.test_suite
                 parser = self.get_test_output_parser(
                     suite_category,
                     config=self.config,
                     log_obj=self.log_obj,
-                    error_list=self.error_list)
+                    error_list=[])
                 self.run_command(final_cmd, cwd=cwd, env=env, output_parser=parser)
                 tbpl_status, log_level = parser.evaluate_parser(0)
                 parser.append_tinderboxprint_line(self.test_suite)
@@ -866,23 +835,9 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
     @PostScriptAction('run-tests')
     def stop_emulator(self, action, success=None):
         '''
-        Report emulator health, then make sure that the emulator has been stopped
+        Make sure that the emulator has been stopped
         '''
-        self._verify_emulator()
         self._kill_processes(self.config["emulator_process_name"])
-
-    def upload_blobber_files(self):
-        '''
-        Override BlobUploadMixin.upload_blobber_files to ensure emulator is killed
-        first (if the emulator is still running, logcat may still be running, which
-        may lock the blob upload directory, causing a hang).
-        '''
-        if self.config.get('blob_upload_branch'):
-            # Except on interactive workers, we want the emulator to keep running
-            # after the script is finished. So only kill it if blobber would otherwise
-            # have run anyway (it doesn't get run on interactive workers).
-            self._kill_processes(self.config["emulator_process_name"])
-        super(AndroidEmulatorTest, self).upload_blobber_files()
 
 
 if __name__ == '__main__':

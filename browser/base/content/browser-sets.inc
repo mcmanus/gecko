@@ -98,12 +98,15 @@
     <command id="Tools:Search" oncommand="BrowserSearch.webSearch();"/>
     <command id="Tools:Downloads" oncommand="BrowserDownloadsUI();"/>
     <command id="Tools:Addons" oncommand="BrowserOpenAddonsMgr();"/>
-    <command id="Tools:Sanitize"
-     oncommand="Cc['@mozilla.org/browser/browserglue;1'].getService(Ci.nsIBrowserGlue).sanitize(window);"/>
+    <command id="Tools:Sanitize" oncommand="Sanitizer.showUI(window);"/>
     <command id="Tools:PrivateBrowsing"
       oncommand="OpenBrowserWindow({private: true});"/>
     <command id="History:UndoCloseTab" oncommand="undoCloseTab();"/>
     <command id="History:UndoCloseWindow" oncommand="undoCloseWindow();"/>
+
+#ifdef NIGHTLY_BUILD
+    <command id="wrCaptureCmd" oncommand="gWebRender.capture();"/>
+#endif
   </commandset>
 
   <commandset id="placesCommands">
@@ -181,6 +184,8 @@
                  command="View:PageSource">
       <observes element="canViewSource" attribute="disabled"/>
     </broadcaster>
+    <broadcaster id="reportPhishingBroadcaster" disabled="true"/>
+    <broadcaster id="reportPhishingErrorBroadcaster" disabled="true"/>
   </broadcasterset>
 
   <keyset id="mainKeyset">
@@ -380,6 +385,15 @@
 #expand    <key id="key_selectTab8" oncommand="gBrowser.selectTabAtIndex(7, event);" key="8" modifiers="__NUM_SELECT_TAB_MODIFIER__"/>
 #expand    <key id="key_selectLastTab" oncommand="gBrowser.selectTabAtIndex(-1, event);" key="9" modifiers="__NUM_SELECT_TAB_MODIFIER__"/>
 
+#ifdef NIGHTLY_BUILD
+    <key id="key_wrCaptureCmd"
+#ifdef XP_MACOSX
+    key="3" modifiers="control,shift"
+#else
+    key="#" modifiers="control"
+#endif
+    command="wrCaptureCmd"/>
+#endif
   </keyset>
 
 # Used by baseMenuOverlay

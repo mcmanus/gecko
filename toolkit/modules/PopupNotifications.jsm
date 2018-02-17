@@ -4,11 +4,9 @@
 
 this.EXPORTED_SYMBOLS = ["PopupNotifications"];
 
-var Cc = Components.classes, Ci = Components.interfaces, Cu = Components.utils;
-
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/PrivateBrowsingUtils.jsm");
-Cu.import("resource://gre/modules/PromiseUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/PrivateBrowsingUtils.jsm");
+ChromeUtils.import("resource://gre/modules/PromiseUtils.jsm");
 
 const NOTIFICATION_EVENT_DISMISSED = "dismissed";
 const NOTIFICATION_EVENT_REMOVED = "removed";
@@ -779,15 +777,9 @@ PopupNotifications.prototype = {
       if (typeof n.message == "string") {
         popupnotification.setAttribute("label", n.message);
       } else {
-        if (n.message.start) {
-          popupnotification.setAttribute("label", n.message.start);
-        }
-        if (n.message.host) {
-          popupnotification.setAttribute("hostname", n.message.host);
-        }
-        if (n.message.end) {
-          popupnotification.setAttribute("endlabel", n.message.end);
-        }
+        popupnotification.setAttribute("label", n.message.start || "");
+        popupnotification.setAttribute("hostname", n.message.host || "");
+        popupnotification.setAttribute("endlabel", n.message.end || "");
       }
 
       popupnotification.setAttribute("id", popupnotificationID);
@@ -1256,8 +1248,8 @@ PopupNotifications.prototype = {
       return;
 
     if (type == "keypress" &&
-        !(event.charCode == Ci.nsIDOMKeyEvent.DOM_VK_SPACE ||
-          event.keyCode == Ci.nsIDOMKeyEvent.DOM_VK_RETURN))
+        !(event.charCode == event.DOM_VK_SPACE ||
+          event.keyCode == event.DOM_VK_RETURN))
       return;
 
     if (this._currentNotifications.length == 0)
@@ -1401,7 +1393,7 @@ PopupNotifications.prototype = {
     Array.forEach(this.panel.childNodes, function(nEl) {
       let notificationObj = nEl.notification;
       // Never call a dismissal handler on a notification that's been removed.
-      if (notifications.indexOf(notificationObj) == -1)
+      if (!notifications.includes(notificationObj))
         return;
 
       // Record the time of the first notification dismissal if the main action

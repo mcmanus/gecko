@@ -5,6 +5,7 @@
 use super::shader_source;
 use api::{ColorF, ImageDescriptor, ImageFormat};
 use api::{DeviceIntPoint, DeviceIntRect, DeviceUintRect, DeviceUintSize};
+use api::TextureTarget;
 use euclid::Transform3D;
 use gleam::gl;
 use internal_types::{FastHashMap, RenderTargetInfo};
@@ -22,11 +23,12 @@ use std::thread;
 
 
 #[derive(Debug, Copy, Clone, PartialEq, Ord, Eq, PartialOrd)]
-#[cfg_attr(feature = "capture", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct FrameId(usize);
 
 impl FrameId {
-    pub fn new(value: usize) -> FrameId {
+    pub fn new(value: usize) -> Self {
         FrameId(value)
     }
 }
@@ -63,29 +65,12 @@ pub enum DepthFunction {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub enum TextureTarget {
-    Default,
-    Array,
-    Rect,
-    External,
-}
-
-impl TextureTarget {
-    pub fn to_gl_target(&self) -> gl::GLuint {
-        match *self {
-            TextureTarget::Default => gl::TEXTURE_2D,
-            TextureTarget::Array => gl::TEXTURE_2D_ARRAY,
-            TextureTarget::Rect => gl::TEXTURE_RECTANGLE,
-            TextureTarget::External => gl::TEXTURE_EXTERNAL_OES,
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "capture", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub enum TextureFilter {
     Nearest,
     Linear,
+    Trilinear,
 }
 
 #[derive(Debug)]
@@ -128,6 +113,15 @@ pub enum UploadMethod {
 pub enum ReadPixelsFormat {
     Standard(ImageFormat),
     Rgba8,
+}
+
+pub fn get_gl_target(target: TextureTarget) -> gl::GLuint {
+    match target {
+        TextureTarget::Default => gl::TEXTURE_2D,
+        TextureTarget::Array => gl::TEXTURE_2D_ARRAY,
+        TextureTarget::Rect => gl::TEXTURE_RECTANGLE,
+        TextureTarget::External => gl::TEXTURE_EXTERNAL_OES,
+    }
 }
 
 pub fn get_gl_format_bgra(gl: &gl::Gl) -> gl::GLuint {
@@ -413,7 +407,7 @@ impl<T> Drop for VBO<T> {
     }
 }
 
-#[cfg_attr(feature = "capture", derive(Clone))]
+#[cfg_attr(feature = "replay", derive(Clone))]
 pub struct ExternalTexture {
     id: gl::GLuint,
     target: gl::GLuint,
@@ -423,8 +417,13 @@ impl ExternalTexture {
     pub fn new(id: u32, target: TextureTarget) -> Self {
         ExternalTexture {
             id,
-            target: target.to_gl_target(),
+            target: get_gl_target(target),
         }
+    }
+
+    #[cfg(feature = "replay")]
+    pub fn internal_id(&self) -> gl::GLuint {
+        self.id
     }
 }
 
@@ -474,7 +473,7 @@ impl Texture {
         self.render_target.as_ref()
     }
 
-    #[cfg(feature = "capture")]
+    #[cfg(feature = "replay")]
     pub fn into_external(mut self) -> ExternalTexture {
         let ext = ExternalTexture {
             id: self.id,
@@ -762,17 +761,17 @@ impl Device {
         shader_type: gl::GLenum,
         source: &String,
     ) -> Result<gl::GLuint, ShaderError> {
-        debug!("compile {:?}", name);
+        debug!("compile {}", name);
         let id = gl.create_shader(shader_type);
         gl.shader_source(id, &[source.as_bytes()]);
         gl.compile_shader(id);
         let log = gl.get_shader_info_log(id);
         if gl.get_shader_iv(id, gl::COMPILE_STATUS) == (0 as gl::GLint) {
-            println!("Failed to compile shader: {:?}\n{}", name, log);
+            println!("Failed to compile shader: {}\n{}", name, log);
             Err(ShaderError::Compilation(name.to_string(), log))
         } else {
             if !log.is_empty() {
-                println!("Warnings detected on shader: {:?}\n{}", name, log);
+                println!("Warnings detected on shader: {}\n{}", name, log);
             }
             Ok(id)
         }
@@ -926,11 +925,13 @@ impl Device {
     }
 
     pub fn create_texture(
-        &mut self, target: TextureTarget, format: ImageFormat,
+        &mut self,
+        target: TextureTarget,
+        format: ImageFormat,
     ) -> Texture {
         Texture {
             id: self.gl.gen_textures(1)[0],
-            target: target.to_gl_target(),
+            target: get_gl_target(target),
             width: 0,
             height: 0,
             layer_count: 0,
@@ -943,15 +944,21 @@ impl Device {
     }
 
     fn set_texture_parameters(&mut self, target: gl::GLuint, filter: TextureFilter) {
-        let filter = match filter {
+        let mag_filter = match filter {
+            TextureFilter::Nearest => gl::NEAREST,
+            TextureFilter::Linear | TextureFilter::Trilinear => gl::LINEAR,
+        };
+
+        let min_filter = match filter {
             TextureFilter::Nearest => gl::NEAREST,
             TextureFilter::Linear => gl::LINEAR,
+            TextureFilter::Trilinear => gl::LINEAR_MIPMAP_LINEAR,
         };
 
         self.gl
-            .tex_parameter_i(target, gl::TEXTURE_MAG_FILTER, filter as gl::GLint);
+            .tex_parameter_i(target, gl::TEXTURE_MAG_FILTER, mag_filter as gl::GLint);
         self.gl
-            .tex_parameter_i(target, gl::TEXTURE_MIN_FILTER, filter as gl::GLint);
+            .tex_parameter_i(target, gl::TEXTURE_MIN_FILTER, min_filter as gl::GLint);
 
         self.gl
             .tex_parameter_i(target, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as gl::GLint);
@@ -1269,7 +1276,7 @@ impl Device {
         texture.id = 0;
     }
 
-    #[cfg(feature = "capture")]
+    #[cfg(feature = "replay")]
     pub fn delete_external_texture(&mut self, mut external: ExternalTexture) {
         self.bind_external_texture(DEFAULT_TEXTURE, &external);
         //Note: the format descriptor here doesn't really matter
@@ -1319,7 +1326,7 @@ impl Device {
                 if self.gl.get_program_iv(pid, gl::LINK_STATUS) == (0 as gl::GLint) {
                     let error_log = self.gl.get_program_info_log(pid);
                     println!(
-                      "Failed to load a program object with a program binary: {:?} renderer {}\n{}",
+                      "Failed to load a program object with a program binary: {} renderer {}\n{}",
                       base_filename,
                       self.renderer_name,
                       error_log
@@ -1381,7 +1388,7 @@ impl Device {
             if self.gl.get_program_iv(pid, gl::LINK_STATUS) == (0 as gl::GLint) {
                 let error_log = self.gl.get_program_info_log(pid);
                 println!(
-                    "Failed to link shader program: {:?}\n{}",
+                    "Failed to link shader program: {}\n{}",
                     base_filename,
                     error_log
                 );
@@ -1511,7 +1518,7 @@ impl Device {
         )
     }
 
-    /// Read rectangle of RGBA8 or BGRA8 pixels into the specified output slice.
+    /// Read rectangle of pixels into the specified output slice.
     pub fn read_pixels_into(
         &mut self,
         rect: DeviceUintRect,
@@ -1539,6 +1546,24 @@ impl Device {
             rect.origin.y as _,
             rect.size.width as _,
             rect.size.height as _,
+            desc.external,
+            desc.pixel_type,
+            output,
+        );
+    }
+
+    /// Get texels of a texture into the specified output slice.
+    pub fn get_tex_image_into(
+        &mut self,
+        texture: &Texture,
+        format: ImageFormat,
+        output: &mut [u8],
+    ) {
+        self.bind_texture(DEFAULT_TEXTURE, texture);
+        let desc = gl_describe_format(self.gl(), format);
+        self.gl.get_tex_image_into_buffer(
+            texture.target,
+            0,
             desc.external,
             desc.pixel_type,
             output,
@@ -1575,7 +1600,7 @@ impl Device {
     pub fn attach_read_texture_external(
         &mut self, texture_id: gl::GLuint, target: TextureTarget, layer_id: i32
     ) {
-        self.attach_read_texture_raw(texture_id, target.to_gl_target(), layer_id)
+        self.attach_read_texture_raw(texture_id, get_gl_target(target), layer_id)
     }
 
     pub fn attach_read_texture(&mut self, texture: &Texture, layer_id: i32) {
@@ -1927,6 +1952,19 @@ impl Device {
         self.gl.disable(gl::STENCIL_TEST);
     }
 
+    pub fn set_scissor_rect(&self, rect: DeviceIntRect) {
+        self.gl.scissor(
+            rect.origin.x,
+            rect.origin.y,
+            rect.size.width,
+            rect.size.height,
+        );
+    }
+
+    pub fn enable_scissor(&self) {
+        self.gl.enable(gl::SCISSOR_TEST);
+    }
+
     pub fn disable_scissor(&self) {
         self.gl.disable(gl::SCISSOR_TEST);
     }
@@ -2198,6 +2236,11 @@ impl<'a> UploadTarget<'a> {
                 );
             }
             _ => panic!("BUG: Unexpected texture target!"),
+        }
+
+        // If using tri-linear filtering, build the mip-map chain for this texture.
+        if self.texture.filter == TextureFilter::Trilinear {
+            self.gl.generate_mipmap(self.texture.target);
         }
 
         // Reset row length to 0, otherwise the stride would apply to all texture uploads.

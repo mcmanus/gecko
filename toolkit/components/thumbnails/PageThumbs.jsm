@@ -6,10 +6,6 @@
 
 this.EXPORTED_SYMBOLS = ["PageThumbs", "PageThumbsStorage"];
 
-const Cu = Components.utils;
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-
 const PREF_STORAGE_VERSION = "browser.pagethumbnails.storage_version";
 const LATEST_STORAGE_VERSION = 3;
 
@@ -28,9 +24,9 @@ const MAX_THUMBNAIL_AGE_SECS = 172800; // 2 days == 60*60*24*2 == 172800 secs.
  */
 const THUMBNAIL_DIRECTORY = "thumbnails";
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
-Cu.import("resource://gre/modules/PromiseWorker.jsm", this);
-Cu.import("resource://gre/modules/osfile.jsm", this);
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+ChromeUtils.import("resource://gre/modules/PromiseWorker.jsm", this);
+ChromeUtils.import("resource://gre/modules/osfile.jsm", this);
 
 Cu.importGlobalProperties(["FileReader"]);
 

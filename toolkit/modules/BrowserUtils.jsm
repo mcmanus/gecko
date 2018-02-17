@@ -7,11 +7,9 @@
 
 this.EXPORTED_SYMBOLS = [ "BrowserUtils" ];
 
-const {interfaces: Ci, utils: Cu, classes: Cc} = Components;
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.defineModuleGetter(this, "PlacesUtils",
   "resource://gre/modules/PlacesUtils.jsm");
 
 Cu.importGlobalProperties(["URL"]);
@@ -313,7 +311,7 @@ this.BrowserUtils = {
     // The HTML spec says that rel should be split on spaces before looking
     // for particular rel values.
     let values = rel.split(/[ \t\r\n\f]/);
-    return values.indexOf("noreferrer") != -1;
+    return values.includes("noreferrer");
   },
 
   /**
@@ -477,13 +475,49 @@ this.BrowserUtils = {
       .getInterface(Ci.nsIDOMWindow);
   },
 
-  getSelectionDetails(topWindow, aCharLen) {
-    // selections of more than 150 characters aren't useful
-    const kMaxSelectionLen = 150;
-    const charLen = Math.min(aCharLen || kMaxSelectionLen, kMaxSelectionLen);
+  /**
+   * Trim the selection text to a reasonable size and sanitize it to make it
+   * safe for search query input.
+   *
+   * @param aSelection
+   *        The selection text to trim.
+   * @param aMaxLen
+   *        The maximum string length, defaults to a reasonable size if undefined.
+   * @return The trimmed selection text.
+   */
+  trimSelection(aSelection, aMaxLen) {
+    // Selections of more than 150 characters aren't useful.
+    const maxLen = Math.min(aMaxLen || 150, aSelection.length);
 
+    if (aSelection.length > maxLen) {
+      // only use the first maxLen important chars. see bug 221361
+      let pattern = new RegExp("^(?:\\s*.){0," + maxLen + "}");
+      pattern.test(aSelection);
+      aSelection = RegExp.lastMatch;
+    }
+
+    aSelection = aSelection.trim().replace(/\s+/g, " ");
+
+    if (aSelection.length > maxLen) {
+      aSelection = aSelection.substr(0, maxLen);
+    }
+
+    return aSelection;
+  },
+
+  /**
+   * Retrieve the text selection details for the given window.
+   *
+   * @param  aTopWindow
+   *         The top window of the element containing the selection.
+   * @param  aCharLen
+   *         The maximum string length for the selection text.
+   * @return The selection details containing the full and trimmed selection text
+   *         and link details for link selections.
+   */
+  getSelectionDetails(aTopWindow, aCharLen) {
     let focusedWindow = {};
-    let focusedElement = Services.focus.getFocusedElementForWindow(topWindow, true, focusedWindow);
+    let focusedElement = Services.focus.getFocusedElementForWindow(aTopWindow, true, focusedWindow);
     focusedWindow = focusedWindow.value;
 
     let selection = focusedWindow.getSelection();
@@ -560,19 +594,7 @@ this.BrowserUtils = {
       // Pass up to 16K through unmolested.  If an add-on needs more, they will
       // have to use a content script.
       fullText = selectionStr.substr(0, 16384);
-
-      if (selectionStr.length > charLen) {
-        // only use the first charLen important chars. see bug 221361
-        var pattern = new RegExp("^(?:\\s*.){0," + charLen + "}");
-        pattern.test(selectionStr);
-        selectionStr = RegExp.lastMatch;
-      }
-
-      selectionStr = selectionStr.trim().replace(/\s+/g, " ");
-
-      if (selectionStr.length > charLen) {
-        selectionStr = selectionStr.substr(0, charLen);
-      }
+      selectionStr = this.trimSelection(selectionStr, aCharLen);
     }
 
     if (url && !url.host) {
@@ -722,5 +744,71 @@ this.BrowserUtils = {
     }
 
     return this.promiseReflowed(doc, callback);
+  },
+
+  /**
+   * Generate a document fragment for a localized string that has DOM
+   * node replacements. This avoids using getFormattedString followed
+   * by assigning to innerHTML. Fluent can probably replace this when
+   * it is in use everywhere.
+   *
+   * @param {Document} doc
+   * @param {String}   msg
+   *                   The string to put replacements in. Fetch from
+   *                   a stringbundle using getString or GetStringFromName,
+   *                   or even an inserted dtd string.
+   * @param {Node|String} nodesOrStrings
+   *                   The replacement items. Can be a mix of Nodes
+   *                   and Strings. However, for correct behaviour, the
+   *                   number of items provided needs to exactly match
+   *                   the number of replacement strings in the l10n string.
+   * @returns {DocumentFragment}
+   *                   A document fragment. In the trivial case (no
+   *                   replacements), this will simply be a fragment with 1
+   *                   child, a text node containing the localized string.
+   */
+  getLocalizedFragment(doc, msg, ...nodesOrStrings) {
+    // Ensure replacement points are indexed:
+    for (let i = 1; i <= nodesOrStrings.length; i++) {
+      if (!msg.includes("%" + i + "$S")) {
+        msg = msg.replace(/%S/, "%" + i + "$S");
+      }
+    }
+    let numberOfInsertionPoints = msg.match(/%\d+\$S/g).length;
+    if (numberOfInsertionPoints != nodesOrStrings.length) {
+      Cu.reportError(`Message has ${numberOfInsertionPoints} insertion points, ` +
+                     `but got ${nodesOrStrings.length} replacement parameters!`);
+    }
+
+    let fragment = doc.createDocumentFragment();
+    let parts = [msg];
+    let insertionPoint = 1;
+    for (let replacement of nodesOrStrings) {
+      let insertionString = "%" + (insertionPoint++) + "$S";
+      let partIndex = parts.findIndex(part => typeof part == "string" && part.includes(insertionString));
+      if (partIndex == -1) {
+        fragment.appendChild(doc.createTextNode(msg));
+        return fragment;
+      }
+
+      if (typeof replacement == "string") {
+        parts[partIndex] = parts[partIndex].replace(insertionString, replacement);
+      } else {
+        let [firstBit, lastBit] = parts[partIndex].split(insertionString);
+        parts.splice(partIndex, 1, firstBit, replacement, lastBit);
+      }
+    }
+
+    // Put everything in a document fragment:
+    for (let part of parts) {
+      if (typeof part == "string") {
+        if (part) {
+          fragment.appendChild(doc.createTextNode(part));
+        }
+      } else {
+        fragment.appendChild(part);
+      }
+    }
+    return fragment;
   },
 };

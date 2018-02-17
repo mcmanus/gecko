@@ -5,16 +5,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const { interfaces: Ci, utils: Cu } = Components;
-
-const { require, loader } = Cu.import("resource://devtools/shared/Loader.jsm", {});
+const { require, loader } = ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
 const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
 const { ViewHelpers } = require("devtools/client/shared/widgets/view-helpers");
 const { KeyCodes } = require("devtools/client/shared/keycodes");
 
 loader.lazyRequireGetter(this, "EventEmitter", "devtools/shared/old-event-emitter");
 
-XPCOMUtils.defineLazyModuleGetter(this, "console",
+ChromeUtils.defineModuleGetter(this, "console",
   "resource://gre/modules/Console.jsm");
 
 this.EXPORTED_SYMBOLS = ["AbstractTreeItem"];

@@ -23,7 +23,7 @@
 #include "wasm/WasmInstance.h"
 #include "wasm/WasmSerialize.h"
 
-#include "jsobjinlines.h"
+#include "vm/JSObject-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -793,7 +793,7 @@ CodeRange::CodeRange(Kind kind, uint32_t funcIndex, Offsets offsets)
     u.func.lineOrBytecode_ = 0;
     u.func.beginToNormalEntry_ = 0;
     u.func.beginToTierEntry_ = 0;
-    MOZ_ASSERT(kind == InterpEntry);
+    MOZ_ASSERT(isEntry());
     MOZ_ASSERT(begin_ <= end_);
 }
 
@@ -887,4 +887,19 @@ wasm::LookupInSorted(const CodeRangeVector& codeRanges, CodeRange::OffsetInCode 
         return nullptr;
 
     return &codeRanges[match];
+}
+
+UniqueTlsData
+wasm::CreateTlsData(uint32_t globalDataLength)
+{
+    MOZ_ASSERT(globalDataLength % gc::SystemPageSize() == 0);
+
+    void* allocatedBase = js_calloc(TlsDataAlign + offsetof(TlsData, globalArea) + globalDataLength);
+    if (!allocatedBase)
+        return nullptr;
+
+    auto* tlsData = reinterpret_cast<TlsData*>(AlignBytes(uintptr_t(allocatedBase), TlsDataAlign));
+    tlsData->allocatedBase = allocatedBase;
+
+    return UniqueTlsData(tlsData);
 }

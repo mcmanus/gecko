@@ -6,9 +6,8 @@
 
 "use strict";
 
-const { utils: Cu } = Components;
 const { BrowserLoader } =
-  Cu.import("resource://devtools/client/shared/browser-loader.js", {});
+  ChromeUtils.import("resource://devtools/client/shared/browser-loader.js", {});
 const { require } = BrowserLoader({
   baseURI: "resource://devtools/client/responsive.html/",
   window

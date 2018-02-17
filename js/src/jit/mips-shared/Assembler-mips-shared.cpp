@@ -9,12 +9,12 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/MathAlgorithms.h"
 
-#include "jscompartment.h"
 #include "jsutil.h"
 
 #include "gc/Marking.h"
 #include "jit/ExecutableAllocator.h"
 #include "jit/JitCompartment.h"
+#include "vm/JSCompartment.h"
 
 using mozilla::DebugOnly;
 
@@ -824,6 +824,13 @@ AssemblerMIPSShared::as_ll(Register rd, Register rs, int16_t off)
 }
 
 BufferOffset
+AssemblerMIPSShared::as_lld(Register rd, Register rs, int16_t off)
+{
+    spew("lld     %3s, (0x%x)%2s", rd.name(), off, rs.name());
+    return writeInst(InstImm(op_lld, rs, rd, Imm16(off)).encode());
+}
+
+BufferOffset
 AssemblerMIPSShared::as_ld(Register rd, Register rs, int16_t off)
 {
     spew("ld     %3s, (0x%x)%2s", rd.name(), off, rs.name());
@@ -885,6 +892,14 @@ AssemblerMIPSShared::as_sc(Register rd, Register rs, int16_t off)
     spew("sc     %3s, (0x%x)%2s", rd.name(), off, rs.name());
     return writeInst(InstImm(op_sc, rs, rd, Imm16(off)).encode());
 }
+
+BufferOffset
+AssemblerMIPSShared::as_scd(Register rd, Register rs, int16_t off)
+{
+    spew("scd     %3s, (0x%x)%2s", rd.name(), off, rs.name());
+    return writeInst(InstImm(op_scd, rs, rd, Imm16(off)).encode());
+}
+
 
 BufferOffset
 AssemblerMIPSShared::as_sd(Register rd, Register rs, int16_t off)
@@ -1779,6 +1794,54 @@ AssemblerMIPSShared::as_movn(FloatFormat fmt, FloatRegister fd, FloatRegister fs
     }
 }
 
+BufferOffset
+AssemblerMIPSShared::as_tge(Register rs, Register rt, uint32_t code)
+{
+    MOZ_ASSERT(code <= MAX_BREAK_CODE);
+    spew("tge %3s,%3s,%d", rs.name(), rt.name(), code);
+    return writeInst(InstReg(op_special, rs, rt, zero, code, ff_tge).encode());
+}
+
+BufferOffset
+AssemblerMIPSShared::as_tgeu(Register rs, Register rt, uint32_t code)
+{
+    MOZ_ASSERT(code <= MAX_BREAK_CODE);
+    spew("tgeu %3s,%3s,%d", rs.name(), rt.name(), code);
+    return writeInst(InstReg(op_special, rs, rt, zero, code, ff_tgeu).encode());
+}
+
+BufferOffset
+AssemblerMIPSShared::as_tlt(Register rs, Register rt, uint32_t code)
+{
+    MOZ_ASSERT(code <= MAX_BREAK_CODE);
+    spew("tlt %3s,%3s,%d", rs.name(), rt.name(), code);
+    return writeInst(InstReg(op_special, rs, rt, zero, code, ff_tlt).encode());
+}
+
+BufferOffset
+AssemblerMIPSShared::as_tltu(Register rs, Register rt, uint32_t code)
+{
+    MOZ_ASSERT(code <= MAX_BREAK_CODE);
+    spew("tltu %3s,%3s,%d", rs.name(), rt.name(), code);
+    return writeInst(InstReg(op_special, rs, rt, zero, code, ff_tltu).encode());
+}
+
+BufferOffset
+AssemblerMIPSShared::as_teq(Register rs, Register rt, uint32_t code)
+{
+    MOZ_ASSERT(code <= MAX_BREAK_CODE);
+    spew("teq %3s,%3s,%d", rs.name(), rt.name(), code);
+    return writeInst(InstReg(op_special, rs, rt, zero, code, ff_teq).encode());
+}
+
+BufferOffset
+AssemblerMIPSShared::as_tne(Register rs, Register rt, uint32_t code)
+{
+    MOZ_ASSERT(code <= MAX_BREAK_CODE);
+    spew("tne %3s,%3s,%d", rs.name(), rt.name(), code);
+    return writeInst(InstReg(op_special, rs, rt, zero, code, ff_tne).encode());
+}
+
 void
 AssemblerMIPSShared::bind(Label* label, BufferOffset boff)
 {
@@ -1878,8 +1941,6 @@ void
 AssemblerMIPSShared::as_sync(uint32_t stype)
 {
     MOZ_ASSERT(stype <= 31);
-    if (isLoongson())
-        stype = 0;
     spew("sync %d", stype);
     writeInst(InstReg(op_special, zero, zero, zero, stype, ff_sync).encode());
 }

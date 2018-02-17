@@ -5,10 +5,8 @@
 
 'use strict';
 
-const Cu = Components.utils;
-
-Cu.import('resource://gre/modules/Services.jsm');
-Cu.import('resource://gre/modules/XPCOMUtils.jsm');
+ChromeUtils.import('resource://gre/modules/Services.jsm');
+ChromeUtils.import('resource://gre/modules/XPCOMUtils.jsm');
 
 XPCOMUtils.defineLazyGetter(this, 'gDOMBundle', () =>
   Services.strings.createBundle('chrome://global/locale/dom/dom.properties'));

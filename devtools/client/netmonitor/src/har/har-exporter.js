@@ -119,6 +119,16 @@ const HarExporter = {
     });
   },
 
+  /**
+   * Get HAR data as JSON object.
+   *
+   * @param Object options
+   *        Configuration object, see save() for detailed description.
+   */
+  getHar: function (options) {
+    return this.fetchHarData(options).then(JSON.parse);
+  },
+
   // Helpers
 
   fetchHarData: function (options) {
@@ -126,15 +136,22 @@ const HarExporter = {
     options.id = options.id || uid++;
 
     // Set default generic HAR export options.
-    options.jsonp = options.jsonp ||
-      Services.prefs.getBoolPref("devtools.netmonitor.har.jsonp");
-    options.includeResponseBodies = options.includeResponseBodies ||
-      Services.prefs.getBoolPref(
+    if (typeof options.jsonp != "boolean") {
+      options.jsonp = Services.prefs.getBoolPref(
+        "devtools.netmonitor.har.jsonp");
+    }
+    if (typeof options.includeResponseBodies != "boolean") {
+      options.includeResponseBodies = Services.prefs.getBoolPref(
         "devtools.netmonitor.har.includeResponseBodies");
-    options.jsonpCallback = options.jsonpCallback ||
-      Services.prefs.getCharPref("devtools.netmonitor.har.jsonpCallback");
-    options.forceExport = options.forceExport ||
-      Services.prefs.getBoolPref("devtools.netmonitor.har.forceExport");
+    }
+    if (typeof options.jsonpCallback != "boolean") {
+      options.jsonpCallback = Services.prefs.getCharPref(
+        "devtools.netmonitor.har.jsonpCallback");
+    }
+    if (typeof options.forceExport != "boolean") {
+      options.forceExport = Services.prefs.getBoolPref(
+        "devtools.netmonitor.har.forceExport");
+    }
 
     // Build HAR object.
     return this.buildHarData(options).then(har => {

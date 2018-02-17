@@ -336,7 +336,7 @@ trait PrivateMatchMethods: TElement {
 
         // We need to cascade the children in order to ensure the correct
         // propagation of inherited computed value flags.
-        if old_values.flags.inherited() != new_values.flags.inherited() {
+        if old_values.flags.maybe_inherited() != new_values.flags.maybe_inherited() {
             debug!(" > flags changed: {:?} != {:?}", old_values.flags, new_values.flags);
             return ChildCascadeRequirement::MustCascadeChildren;
         }
@@ -460,10 +460,12 @@ trait PrivateMatchMethods: TElement {
                 // See #12171 and the associated PR for an example where this
                 // happened while debugging other release panic.
                 if !running_animation.is_expired() {
-                    animation::update_style_for_animation(context,
-                                                          running_animation,
-                                                          style,
-                                                          font_metrics);
+                    animation::update_style_for_animation::<Self>(
+                        context,
+                        running_animation,
+                        style,
+                        font_metrics,
+                    );
                     if let Animation::Transition(_, _, ref frame, _) = *running_animation {
                         possibly_expired_animations.push(frame.property_animation.clone())
                     }

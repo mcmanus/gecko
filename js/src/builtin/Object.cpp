@@ -9,7 +9,6 @@
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/MaybeOneOf.h"
 
-#include "jscntxt.h"
 #include "jsstr.h"
 
 #include "builtin/Eval.h"
@@ -18,11 +17,11 @@
 #include "jit/InlinableNatives.h"
 #include "js/UniquePtr.h"
 #include "vm/AsyncFunction.h"
+#include "vm/JSContext.h"
 #include "vm/RegExpObject.h"
 #include "vm/StringBuffer.h"
 
-#include "jsobjinlines.h"
-
+#include "vm/JSObject-inl.h"
 #include "vm/NativeObject-inl.h"
 #include "vm/Shape-inl.h"
 #include "vm/UnboxedObject-inl.h"
@@ -1988,7 +1987,7 @@ static const JSFunctionSpec object_static_methods[] = {
     JS_FN("keys",                      obj_keys,                    1, 0),
     JS_FN("values",                    obj_values,                  1, 0),
     JS_FN("entries",                   obj_entries,                 1, 0),
-    JS_FN("is",                        obj_is,                      2, 0),
+    JS_INLINABLE_FN("is",              obj_is,                      2, 0, ObjectIs),
     JS_SELF_HOSTED_FN("defineProperty", "ObjectDefineProperty",     3, 0),
     JS_FN("defineProperties",          obj_defineProperties,        2, 0),
     JS_INLINABLE_FN("create",          obj_create,                  2, 0, ObjectCreate),

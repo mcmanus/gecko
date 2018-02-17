@@ -185,7 +185,7 @@ struct gfxFontStyle {
 
     PLDHashNumber Hash() const {
         return ((style + (systemFont << 7) +
-            (weight << 8)) + uint32_t(size*1000) + uint32_t(sizeAdjust*1000)) ^
+            (weight << 8)) + uint32_t(size*1000) + int32_t(sizeAdjust*1000)) ^
             nsRefPtrHashKey<nsAtom>::HashKey(language);
     }
 
@@ -1592,6 +1592,10 @@ public:
                                 const char16_t *aString,
                                 uint32_t aLength,
                                 Script aRunScript);
+
+    // whether the specified feature will apply to the given character
+    bool FeatureWillHandleChar(Script aRunScript, uint32_t aFeature,
+                               uint32_t aUnicode);
 
     // Subclasses may choose to look up glyph ids for characters.
     // If they do not override this, gfxHarfBuzzShaper will fetch the cmap

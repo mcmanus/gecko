@@ -36,7 +36,6 @@
 #include <algorithm>
 
 #include "jsapi.h"
-#include "jscntxt.h"
 #include "jsdate.h"
 #include "jswrapper.h"
 
@@ -44,6 +43,7 @@
 #include "builtin/MapObject.h"
 #include "js/Date.h"
 #include "js/GCHashTable.h"
+#include "vm/JSContext.h"
 #include "vm/RegExpObject.h"
 #include "vm/SavedFrame.h"
 #include "vm/SharedArrayObject.h"
@@ -51,8 +51,8 @@
 #include "vm/WrapperObject.h"
 #include "wasm/WasmJS.h"
 
-#include "jscntxtinlines.h"
-#include "jsobjinlines.h"
+#include "vm/JSContext-inl.h"
+#include "vm/JSObject-inl.h"
 
 using namespace js;
 
@@ -1247,10 +1247,14 @@ JSStructuredCloneWriter::writeSharedArrayBuffer(HandleObject obj)
         return false;
     }
 
-    // We must not transfer buffer pointers cross-process.  The cloneDataPolicy
-    // should guard against this; check that it does.
+    // We must not transmit SAB pointers (including for WebAssembly.Memory)
+    // cross-process.  The cloneDataPolicy should have guarded against this;
+    // since it did not then throw, with a very explicit message.
 
-    MOZ_RELEASE_ASSERT(scope <= JS::StructuredCloneScope::SameProcessDifferentThread);
+    if (scope > JS::StructuredCloneScope::SameProcessDifferentThread) {
+        JS_ReportErrorNumberASCII(context(), GetErrorMessage, nullptr, JSMSG_SC_SHMEM_POLICY);
+        return false;
+    }
 
     Rooted<SharedArrayBufferObject*> sharedArrayBuffer(context(), &CheckedUnwrap(obj)->as<SharedArrayBufferObject>());
     SharedArrayRawBuffer* rawbuf = sharedArrayBuffer->rawBufferObject();
@@ -2675,6 +2679,14 @@ JSStructuredCloneReader::read(MutableHandleValue vp)
         } else {
             // For any other Object, interpret them as plain properties.
             RootedId id(context());
+
+            if (!key.isString() && !key.isInt32()) {
+                JS_ReportErrorNumberASCII(context(), GetErrorMessage, nullptr,
+                                          JSMSG_SC_BAD_SERIALIZED_DATA,
+                                          "property key expected");
+                return false;
+            }
+
             if (!ValueToId<CanGC>(context(), key, &id))
                 return false;
 

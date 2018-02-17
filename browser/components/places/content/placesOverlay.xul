@@ -18,18 +18,12 @@
   <script type="application/javascript"
           src="chrome://browser/content/utilityOverlay.js"/>
   <script type="application/javascript"><![CDATA[
-    // TODO: Bug 406371.
-    // A bunch of browser code depends on us defining these, sad but true :(
-    var Cc = Components.classes;
-    var Ci = Components.interfaces;
-    var Cr = Components.results;
-    var Cu = Components.utils;
-
-    Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
-    Components.utils.import("resource://gre/modules/PlacesUtils.jsm");
-    XPCOMUtils.defineLazyModuleGetter(window,
+    ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+    ChromeUtils.defineModuleGetter(window,
+      "PlacesUtils", "resource://gre/modules/PlacesUtils.jsm");
+    ChromeUtils.defineModuleGetter(window,
       "PlacesUIUtils", "resource:///modules/PlacesUIUtils.jsm");
-    XPCOMUtils.defineLazyModuleGetter(window,
+    ChromeUtils.defineModuleGetter(window,
       "PlacesTransactions", "resource://gre/modules/PlacesTransactions.jsm");
   ]]></script>
   <script type="application/javascript"
@@ -74,8 +68,6 @@
              oncommand="goDoPlacesCommand('placesCmd_reload');"/>
     <command id="placesCmd_sortBy:name"
              oncommand="goDoPlacesCommand('placesCmd_sortBy:name');"/>
-    <command id="placesCmd_moveBookmarks"
-             oncommand="goDoPlacesCommand('placesCmd_moveBookmarks');"/>
     <command id="placesCmd_deleteDataHost"
              oncommand="goDoPlacesCommand('placesCmd_deleteDataHost');"/>
     <command id="placesCmd_createBookmark"

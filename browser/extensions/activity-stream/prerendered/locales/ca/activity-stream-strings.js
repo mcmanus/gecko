@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Recomanat per {provider}",
   "header_bookmarks_placeholder": "Encara no teniu cap adreça d'interès.",
   "header_stories_from": "de",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "Visitat",
   "type_label_bookmarked": "A les adreces d'interès",
   "type_label_synced": "Sincronitzat des d'un altre dispositiu",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Edita aquest lloc",
   "edit_topsites_dismiss_button": "Elimina aquest lloc",
   "edit_topsites_add_button": "Afegeix",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "Lloc principal nou",
   "topsites_form_edit_header": "Edita el lloc principal",
   "topsites_form_title_placeholder": "Escriviu el títol",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Ja esteu al dia. Torneu més tard per veure més articles populars de {provider}. No podeu esperar? Trieu un tema popular per descobrir els articles més interessants de tot el web.",
   "manual_migration_explanation2": "Proveu el Firefox amb les adreces d'interès, l'historial i les contrasenyes d'un altre navegador.",
   "manual_migration_cancel_button": "No, gràcies",
-  "manual_migration_import_button": "Importa-ho ara"
+  "manual_migration_import_button": "Importa-ho ara",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

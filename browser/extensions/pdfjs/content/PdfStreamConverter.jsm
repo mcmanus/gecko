@@ -17,35 +17,31 @@
 
 var EXPORTED_SYMBOLS = ["PdfStreamConverter"];
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cr = Components.results;
-const Cu = Components.utils;
-
 const PDFJS_EVENT_ID = "pdf.js.message";
-const PDF_CONTENT_TYPE = "application/pdf";
 const PREF_PREFIX = "pdfjs";
 const PDF_VIEWER_WEB_PAGE = "resource://pdf.js/web/viewer.html";
 const MAX_NUMBER_OF_PREFS = 50;
 const MAX_STRING_PREF_LENGTH = 128;
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
+ChromeUtils.defineModuleGetter(this, "NetUtil",
   "resource://gre/modules/NetUtil.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "NetworkManager",
+ChromeUtils.defineModuleGetter(this, "NetworkManager",
   "resource://pdf.js/PdfJsNetwork.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
+ChromeUtils.defineModuleGetter(this, "PrivateBrowsingUtils",
   "resource://gre/modules/PrivateBrowsingUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "PdfJsTelemetry",
+ChromeUtils.defineModuleGetter(this, "PdfJsTelemetry",
   "resource://pdf.js/PdfJsTelemetry.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "PdfjsContentUtils",
+ChromeUtils.defineModuleGetter(this, "PdfjsContentUtils",
   "resource://pdf.js/PdfjsContentUtils.jsm");
+
+Cu.importGlobalProperties(["XMLHttpRequest"]);
 
 var Svc = {};
 XPCOMUtils.defineLazyServiceGetter(Svc, "mime",
@@ -599,8 +595,6 @@ class RangedChromeActions extends ChromeActions {
       }
     };
     var getXhr = function getXhr() {
-      const XMLHttpRequest = Components.Constructor(
-          "@mozilla.org/xmlextras/xmlhttprequest;1");
       var xhr = new XMLHttpRequest();
       xhr.addEventListener("readystatechange", xhr_onreadystatechange);
       return xhr;
@@ -920,12 +914,12 @@ PdfStreamConverter.prototype = {
                      aRequest.contentLength >= 0 &&
                      !getBoolPref(PREF_PREFIX + ".disableRange", false) &&
                      (!isPDFBugEnabled ||
-                      hash.toLowerCase().indexOf("disablerange=true") < 0);
+                      !hash.toLowerCase().includes("disablerange=true"));
       streamRequest = contentEncoding === "identity" &&
                       aRequest.contentLength >= 0 &&
                       !getBoolPref(PREF_PREFIX + ".disableStream", false) &&
                       (!isPDFBugEnabled ||
-                       hash.toLowerCase().indexOf("disablestream=true") < 0);
+                       !hash.toLowerCase().includes("disablestream=true"));
     }
 
     aRequest.QueryInterface(Ci.nsIChannel);

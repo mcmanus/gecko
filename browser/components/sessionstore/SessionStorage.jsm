@@ -6,14 +6,10 @@
 
 this.EXPORTED_SYMBOLS = ["SessionStorage"];
 
-const Cu = Components.utils;
-const Cc = Components.classes;
-const Ci = Components.interfaces;
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "console",
+ChromeUtils.defineModuleGetter(this, "console",
   "resource://gre/modules/Console.jsm");
 
 const ssu = Cc["@mozilla.org/browser/sessionstore/utils;1"]
@@ -206,7 +202,6 @@ var SessionStorageInternal = {
     let usage = window.QueryInterface(Ci.nsIInterfaceRequestor)
                       .getInterface(Ci.nsIDOMWindowUtils)
                       .getStorageUsage(storage);
-    Services.telemetry.getHistogramById("FX_SESSION_RESTORE_DOM_STORAGE_SIZE_ESTIMATE_CHARS").add(usage);
     if (usage > Services.prefs.getIntPref(DOM_STORAGE_LIMIT_PREF)) {
       return hostData;
     }

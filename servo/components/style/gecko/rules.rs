@@ -5,7 +5,7 @@
 //! Bindings for CSS Rule objects
 
 use byteorder::{BigEndian, WriteBytesExt};
-use computed_values::{font_feature_settings, font_stretch, font_style, font_weight};
+use computed_values::{font_stretch, font_style, font_weight};
 use counter_style;
 use cssparser::UnicodeRange;
 use font_face::{FontFaceRuleData, Source, FontDisplay, FontWeight};
@@ -17,9 +17,12 @@ use gecko_bindings::sugar::refptr::{RefPtr, UniqueRefPtr};
 use nsstring::nsString;
 use properties::longhands::font_language_override;
 use shared_lock::{ToCssWithGuard, SharedRwLockReadGuard};
-use std::{fmt, str};
+use std::fmt::{self, Write};
+use std::str;
+use str::CssStringWriter;
 use values::computed::font::FamilyName;
-use values::generics::FontSettings;
+use values::generics::font::FontTag;
+use values::specified::font::{FontVariationSettings, SpecifiedFontFeatureSettings};
 
 /// A @font-face rule
 pub type FontFaceRule = RefPtr<nsCSSFontFaceRule>;
@@ -48,24 +51,41 @@ impl ToNsCssValue for FontWeight {
     }
 }
 
-impl ToNsCssValue for font_feature_settings::T {
+impl ToNsCssValue for FontTag {
     fn convert(self, nscssvalue: &mut nsCSSValue) {
-        match self {
-            FontSettings::Normal => nscssvalue.set_normal(),
-            FontSettings::Tag(tags) => {
-                nscssvalue.set_pair_list(tags.into_iter().map(|entry| {
-                    let mut feature = nsCSSValue::null();
-                    let mut raw = [0u8; 4];
-                    (&mut raw[..]).write_u32::<BigEndian>(entry.tag).unwrap();
-                    feature.set_string(str::from_utf8(&raw).unwrap());
+        let mut raw = [0u8; 4];
+        (&mut raw[..]).write_u32::<BigEndian>(self.0).unwrap();
+        nscssvalue.set_string(str::from_utf8(&raw).unwrap());
+    }
+}
 
-                    let mut index = nsCSSValue::null();
-                    index.set_integer(entry.value.0 as i32);
-
-                    (feature, index)
-                }))
-            }
+impl ToNsCssValue for SpecifiedFontFeatureSettings {
+    fn convert(self, nscssvalue: &mut nsCSSValue) {
+        if self.0.is_empty() {
+            nscssvalue.set_normal();
+            return;
         }
+
+        nscssvalue.set_pair_list(self.0.into_iter().map(|entry| {
+            let mut index = nsCSSValue::null();
+            index.set_integer(entry.value.value());
+            (entry.tag.into(), index)
+        }))
+    }
+}
+
+impl ToNsCssValue for FontVariationSettings {
+    fn convert(self, nscssvalue: &mut nsCSSValue) {
+        if self.0.is_empty() {
+            nscssvalue.set_normal();
+            return;
+        }
+
+        nscssvalue.set_pair_list(self.0.into_iter().map(|entry| {
+            let mut value = nsCSSValue::null();
+            value.set_number(entry.value.into());
+            (entry.tag.into(), value)
+        }))
     }
 }
 
@@ -200,8 +220,7 @@ impl From<FontFaceRuleData> for FontFaceRule {
 }
 
 impl ToCssWithGuard for FontFaceRule {
-    fn to_css<W>(&self, _guard: &SharedRwLockReadGuard, dest: &mut W) -> fmt::Result
-    where W: fmt::Write {
+    fn to_css(&self, _guard: &SharedRwLockReadGuard, dest: &mut CssStringWriter) -> fmt::Result {
         let mut css_text = nsString::new();
         unsafe {
             bindings::Gecko_CSSFontFaceRule_GetCssText(self.get(), &mut *css_text);
@@ -237,8 +256,7 @@ impl From<counter_style::CounterStyleRuleData> for CounterStyleRule {
 }
 
 impl ToCssWithGuard for CounterStyleRule {
-    fn to_css<W>(&self, _guard: &SharedRwLockReadGuard, dest: &mut W) -> fmt::Result
-    where W: fmt::Write {
+    fn to_css(&self, _guard: &SharedRwLockReadGuard, dest: &mut CssStringWriter) -> fmt::Result {
         let mut css_text = nsString::new();
         unsafe {
             bindings::Gecko_CSSCounterStyle_GetCssText(self.get(), &mut *css_text);

@@ -138,8 +138,7 @@ add_task(async function setup() {
  * with the default values in Places.
  */
 add_task(async function() {
-  let win = await BrowserTestUtils.openNewBrowserWindow();
-  await ensureNoPreloadedBrowser(win);
+  let win = await prepareSettledWindow();
 
   let URLBar = win.gURLBar;
   let popup = URLBar.popup;
@@ -170,7 +169,7 @@ add_task(async function() {
       return URLBar.controller.searchStatus >=
         Ci.nsIAutoCompleteController.STATUS_COMPLETE_NO_MATCH;
     });
-    let matchCount = URLBar.popup._matchCount;
+    let matchCount = URLBar.popup.matchCount;
     await BrowserTestUtils.waitForCondition(() => {
       return URLBar.popup.richlistbox.childNodes.length == matchCount;
     });

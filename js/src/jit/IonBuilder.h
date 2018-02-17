@@ -328,7 +328,7 @@ class IonBuilder
 
     // jsop_compare helpers.
     AbortReasonOr<Ok> compareTrySpecialized(bool* emitted, JSOp op, MDefinition* left,
-                                            MDefinition* right);
+                                            MDefinition* right, bool canTrackOptimization);
     AbortReasonOr<Ok> compareTryBitwise(bool* emitted, JSOp op, MDefinition* left,
                                         MDefinition* right);
     AbortReasonOr<Ok> compareTrySpecializedOnBaselineInspector(bool* emitted, JSOp op,
@@ -504,7 +504,7 @@ class IonBuilder
     AbortReasonOr<Ok> jsop_setarg(uint32_t arg);
     AbortReasonOr<Ok> jsop_defvar(uint32_t index);
     AbortReasonOr<Ok> jsop_deflexical(uint32_t index);
-    AbortReasonOr<Ok> jsop_deffun(uint32_t index);
+    AbortReasonOr<Ok> jsop_deffun();
     AbortReasonOr<Ok> jsop_notearg();
     AbortReasonOr<Ok> jsop_throwsetconst();
     AbortReasonOr<Ok> jsop_checklexical();
@@ -697,6 +697,7 @@ class IonBuilder
     // Object natives and intrinsics.
     InliningResult inlineObject(CallInfo& callInfo);
     InliningResult inlineObjectCreate(CallInfo& callInfo);
+    InliningResult inlineObjectIs(CallInfo& callInfo);
     InliningResult inlineObjectToString(CallInfo& callInfo);
     InliningResult inlineDefineDataProperty(CallInfo& callInfo);
 

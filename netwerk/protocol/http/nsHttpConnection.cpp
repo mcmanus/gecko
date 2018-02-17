@@ -81,6 +81,7 @@ nsHttpConnection::nsHttpConnection()
     , mEverUsedSpdy(false)
     , mLastHttpResponseVersion(NS_HTTP_VERSION_1_1)
     , mTransactionCaps(0)
+    , mDefaultTimeoutFactor(1)
     , mResponseTimeoutEnabled(false)
     , mTCPKeepaliveConfig(kTCPKeepaliveDisabled)
     , mForceSendPending(false)
@@ -95,6 +96,7 @@ nsHttpConnection::nsHttpConnection()
     , mReceivedSocketWouldBlockDuringFastOpen(false)
     , mCheckNetworkStallsWithTFO(false)
     , mLastRequestBytesSentTime(0)
+    , mBootstrappedTimingsSet(false)
 {
     LOG(("Creating nsHttpConnection @%p\n", this));
 
@@ -349,7 +351,7 @@ nsHttpConnection::StartSpdy(nsISSLSocketControl *sslControl, uint8_t spdyVersion
              "rv[0x%" PRIx32 "]", this, static_cast<uint32_t>(rv)));
     }
 
-    mIdleTimeout = gHttpHandler->SpdyTimeout();
+    mIdleTimeout = gHttpHandler->SpdyTimeout() * mDefaultTimeoutFactor;
 
     if (!mTLSFilter) {
         mTransaction = mSpdySession;
@@ -634,12 +636,19 @@ nsHttpConnection::Activate(nsAHttpTransaction *trans, uint32_t caps, int32_t pri
         if (!mFastOpen) {
             mExperienced = true;
         }
-        nsHttpTransaction *hTrans = trans->QueryHttpTransaction();
-        if (hTrans) {
-            hTrans->BootstrapTimings(mBootstrappedTimings);
-            SetUrgentStartPreferred(hTrans->ClassOfService() & nsIClassOfService::UrgentStart);
+        if (mBootstrappedTimingsSet) {
+            mBootstrappedTimingsSet = false;
+            nsHttpTransaction *hTrans = trans->QueryHttpTransaction();
+            if (hTrans) {
+                hTrans->BootstrapTimings(mBootstrappedTimings);
+                SetUrgentStartPreferred(hTrans->ClassOfService() & nsIClassOfService::UrgentStart);
+            }
         }
         mBootstrappedTimings = TimingStruct();
+    }
+
+    if (caps & NS_HTTP_LARGE_KEEPALIVE) {
+        mDefaultTimeoutFactor = 10; // don't ever lower
     }
 
     mTransactionCaps = caps;
@@ -1042,14 +1051,20 @@ nsHttpConnection::IdleTime()
 uint32_t
 nsHttpConnection::TimeToLive()
 {
-    if (IdleTime() >= mIdleTimeout)
+    LOG(("nsHttpConnection::TTL: %p %s idle %d timeout %d\n",
+         this, mConnInfo->Origin(), IdleTime(), mIdleTimeout));
+
+    if (IdleTime() >= mIdleTimeout) {
         return 0;
+    }
+
     uint32_t timeToLive = PR_IntervalToSeconds(mIdleTimeout - IdleTime());
 
     // a positive amount of time can be rounded to 0. Because 0 is used
     // as the expiration signal, round all values from 0 to 1 up to 1.
-    if (!timeToLive)
+    if (!timeToLive) {
         timeToLive = 1;
+    }
     return timeToLive;
 }
 
@@ -1180,7 +1195,7 @@ nsHttpConnection::OnHeadersAvailable(nsAHttpTransaction *trans,
             if (cp)
                 mIdleTimeout = PR_SecondsToInterval((uint32_t) atoi(cp + 8));
             else
-                mIdleTimeout = gHttpHandler->IdleTimeout();
+                mIdleTimeout = gHttpHandler->IdleTimeout() * mDefaultTimeoutFactor;
 
             cp = PL_strcasestr(keepAlive.get(), "max=");
             if (cp) {
@@ -1190,9 +1205,6 @@ nsHttpConnection::OnHeadersAvailable(nsAHttpTransaction *trans,
                     mRemainingConnectionUses = static_cast<uint32_t>(maxUses);
                 }
             }
-        }
-        else {
-            mIdleTimeout = gHttpHandler->SpdyTimeout();
         }
 
         LOG(("Connection can be reused [this=%p idle-timeout=%usec]\n",
@@ -2524,6 +2536,7 @@ nsHttpConnection::SetFastOpenStatus(uint8_t tfoStatus) {
 void
 nsHttpConnection::BootstrapTimings(TimingStruct times)
 {
+    mBootstrappedTimingsSet = true;
     mBootstrappedTimings = times;
 }
 
@@ -2535,7 +2548,7 @@ nsHttpConnection::SetEvent(nsresult aStatus)
     mBootstrappedTimings.domainLookupStart = TimeStamp::Now();
     break;
   case NS_NET_STATUS_RESOLVED_HOST:
-    mBootstrappedTimings.domainLookupStart = TimeStamp::Now();
+    mBootstrappedTimings.domainLookupEnd = TimeStamp::Now();
     break;
   case NS_NET_STATUS_CONNECTING_TO:
     mBootstrappedTimings.connectStart = TimeStamp::Now();

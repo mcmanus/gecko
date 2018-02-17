@@ -15,20 +15,18 @@ this.EXPORTED_SYMBOLS = [
   "BrowserTestUtils",
 ];
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
-
-Cu.import("resource://gre/modules/AppConstants.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://testing-common/TestUtils.jsm");
-Cu.import("resource://testing-common/ContentTask.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://testing-common/TestUtils.jsm");
+ChromeUtils.import("resource://testing-common/ContentTask.jsm");
 
 Cc["@mozilla.org/globalmessagemanager;1"]
   .getService(Ci.nsIMessageListenerManager)
   .loadFrameScript(
     "chrome://mochikit/content/tests/BrowserTestUtils/content-utils.js", true);
 
-XPCOMUtils.defineLazyModuleGetter(this, "E10SUtils",
+ChromeUtils.defineModuleGetter(this, "E10SUtils",
   "resource://gre/modules/E10SUtils.jsm");
 
 const PROCESSSELECTOR_CONTRACTID = "@mozilla.org/ipc/processselector;1";
@@ -106,6 +104,10 @@ this.BrowserTestUtils = {
     let result = await taskFn(tab.linkedBrowser);
     let finalWindow = tab.ownerGlobal;
     if (originalWindow == finalWindow && !tab.closing && tab.linkedBrowser) {
+      // taskFn may resolve within a tick after opening a new tab.
+      // We shouldn't remove the newly opened tab in the same tick.
+      // Wait for the next tick here.
+      await TestUtils.waitForTick();
       await BrowserTestUtils.removeTab(tab);
     } else {
       Services.console.logStringMessage(
@@ -1157,7 +1159,7 @@ this.BrowserTestUtils = {
     let extra = {};
     let KeyValueParser = {};
     if (AppConstants.MOZ_CRASHREPORTER) {
-      Cu.import("resource://gre/modules/KeyValueParser.jsm", KeyValueParser);
+      ChromeUtils.import("resource://gre/modules/KeyValueParser.jsm", KeyValueParser);
     }
 
     if (!browser.isRemoteBrowser) {
@@ -1197,8 +1199,7 @@ this.BrowserTestUtils = {
     // a bad pointer. The crash should happen immediately upon loading this
     // frame script.
     let frame_script = () => {
-      const Cu = Components.utils;
-      Cu.import("resource://gre/modules/ctypes.jsm");
+      ChromeUtils.import("resource://gre/modules/ctypes.jsm");
 
       let dies = function() {
         privateNoteIntentionalCrash();

@@ -3,12 +3,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-Components.utils.import("resource://gre/modules/BrowserUtils.jsm");
+ChromeUtils.import("resource://gre/modules/BrowserUtils.jsm");
 
 /* import-globals-from pageInfo.js */
 
-XPCOMUtils.defineLazyModuleGetter(this, "LoginHelper",
-                                  "resource://gre/modules/LoginHelper.jsm");
+ChromeUtils.defineModuleGetter(this, "LoginHelper",
+                               "resource://gre/modules/LoginHelper.jsm");
+ChromeUtils.defineModuleGetter(this, "PluralForm",
+                               "resource://gre/modules/PluralForm.jsm");
 
 var security = {
   init(uri, windowInfo) {
@@ -167,7 +169,7 @@ function securityOnLoad(uri, windowInfo) {
   security.init(uri, windowInfo);
 
   var info = security._getSecurityInfo();
-  if (!info) {
+  if (!info || uri.scheme === "about") {
     document.getElementById("securityTab").hidden = true;
     return;
   }
@@ -229,15 +231,12 @@ function securityOnLoad(uri, windowInfo) {
           realmHasPasswords(uri) ? yesStr : noStr);
 
   var visitCount = previousVisitCount(info.hostName);
-  if (visitCount > 1) {
-    setText("security-privacy-history-value",
-            pageInfoBundle.getFormattedString("securityNVisits", [visitCount.toLocaleString()]));
-  } else if (visitCount == 1) {
-    setText("security-privacy-history-value",
-            pageInfoBundle.getString("securityOneVisit"));
-  } else {
-    setText("security-privacy-history-value", noStr);
-  }
+
+  let visitCountStr = visitCount > 0
+    ? PluralForm.get(visitCount, pageInfoBundle.getString("securityVisitsNumber"))
+        .replace("#1", visitCount.toLocaleString())
+    : pageInfoBundle.getString("securityNoVisits");
+  setText("security-privacy-history-value", visitCountStr);
 
   /* Set the Technical Detail section messages */
   const pkiBundle = document.getElementById("pkiBundle");

@@ -994,6 +994,61 @@ MacroAssembler::branchTestMagic(Condition cond, const BaseIndex& address, Label*
     branchTestMagic(cond, scratch2, label);
 }
 
+void
+MacroAssembler::cmp32Move32(Condition cond, Register lhs, Register rhs, Register src,
+                            Register dest)
+{
+    MOZ_CRASH();
+}
+
+void
+MacroAssembler::cmp32MovePtr(Condition cond, Register lhs, Imm32 rhs, Register src,
+                             Register dest)
+{
+    MOZ_CRASH();
+}
+
+void
+MacroAssembler::cmp32Move32(Condition cond, Register lhs, const Address& rhs, Register src,
+                            Register dest)
+{
+    MOZ_CRASH();
+}
+
+void
+MacroAssembler::test32LoadPtr(Condition cond, const Address& addr, Imm32 mask, const Address& src,
+                              Register dest)
+{
+    MOZ_RELEASE_ASSERT(!JitOptions.spectreStringMitigations);
+    Label skip;
+    branchTest32(Assembler::InvertCondition(cond), addr, mask, &skip);
+    loadPtr(src, dest);
+    bind(&skip);
+}
+
+void
+MacroAssembler::test32MovePtr(Condition cond, const Address& addr, Imm32 mask, Register src,
+                              Register dest)
+{
+    MOZ_CRASH();
+}
+
+void
+MacroAssembler::boundsCheck32ForLoad(Register index, Register length, Register scratch,
+                                     Label* failure)
+{
+    MOZ_RELEASE_ASSERT(!JitOptions.spectreIndexMasking);
+    branch32(Assembler::BelowOrEqual, length, index, failure);
+}
+
+void
+MacroAssembler::boundsCheck32ForLoad(Register index, const Address& length, Register scratch,
+                                     Label* failure)
+{
+    MOZ_RELEASE_ASSERT(!JitOptions.spectreIndexMasking);
+    branch32(Assembler::BelowOrEqual, length, index, failure);
+}
+
 // ========================================================================
 // Memory access primitives.
 void
@@ -1010,14 +1065,7 @@ MacroAssembler::storeFloat32x3(FloatRegister src, const BaseIndex& dest)
 void
 MacroAssembler::memoryBarrier(MemoryBarrierBits barrier)
 {
-    if (barrier == MembarLoadLoad)
-        as_sync(19);
-    else if (barrier == MembarStoreStore)
-        as_sync(4);
-    else if (barrier & MembarSynchronizing)
-        as_sync();
-    else if (barrier)
-        as_sync(16);
+    as_sync();
 }
 
 // ===============================================================

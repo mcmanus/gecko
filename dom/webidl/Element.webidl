@@ -236,6 +236,16 @@ partial interface Element {
   attribute DOMString outerHTML;
   [CEReactions, Throws]
   void insertAdjacentHTML(DOMString position, DOMString text);
+
+  /**
+   * Like the innerHTML setter, but does not sanitize its values, even in
+   * chrome-privileged documents.
+   *
+   * If you're thinking about using this, don't. You have many, much better
+   * options.
+   */
+  [ChromeOnly, Throws]
+  void unsafeSetInnerHTML(DOMString html);
 };
 
 // http://www.w3.org/TR/selectors-api/#interface-definitions
@@ -258,6 +268,10 @@ partial interface Element {
   ShadowRoot attachShadow(ShadowRootInit shadowRootInitDict);
   [BinaryName="shadowRootByMode", Func="nsDocument::IsShadowDOMEnabled"]
   readonly attribute ShadowRoot? shadowRoot;
+
+  [ChromeOnly, Func="nsDocument::IsShadowDOMEnabled", BinaryName="shadowRoot"]
+  readonly attribute ShadowRoot? openOrClosedShadowRoot;
+
   [BinaryName="assignedSlotByMode", Func="nsDocument::IsShadowDOMEnabled"]
   readonly attribute HTMLSlotElement? assignedSlot;
   [CEReactions, Unscopable, SetterThrows, Func="nsDocument::IsShadowDOMEnabled"]

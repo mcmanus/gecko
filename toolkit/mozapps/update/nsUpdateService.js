@@ -6,14 +6,12 @@
 
 "use strict";
 
-const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
-Cu.import("resource://gre/modules/FileUtils.jsm", this);
-Cu.import("resource://gre/modules/Services.jsm", this);
-Cu.import("resource://gre/modules/ctypes.jsm", this);
-Cu.import("resource://gre/modules/UpdateTelemetry.jsm", this);
-Cu.import("resource://gre/modules/AppConstants.jsm", this);
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+ChromeUtils.import("resource://gre/modules/FileUtils.jsm", this);
+ChromeUtils.import("resource://gre/modules/Services.jsm", this);
+ChromeUtils.import("resource://gre/modules/ctypes.jsm", this);
+ChromeUtils.import("resource://gre/modules/UpdateTelemetry.jsm", this);
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm", this);
 Cu.importGlobalProperties(["XMLHttpRequest"]);
 
 const UPDATESERVICE_CID = Components.ID("{B3C290A6-3943-4B89-8BBE-C01EB7B3B311}");
@@ -194,18 +192,18 @@ const DOWNLOAD_PROGRESS_INTERVAL = 500; // ms
 var gSaveUpdateXMLDelay = 2000;
 var gUpdateMutexHandle = null;
 
-XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
-                                  "resource://gre/modules/UpdateUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "WindowsRegistry",
-                                  "resource://gre/modules/WindowsRegistry.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AsyncShutdown",
-                                  "resource://gre/modules/AsyncShutdown.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "OS",
-                                  "resource://gre/modules/osfile.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "DeferredTask",
-                                  "resource://gre/modules/DeferredTask.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
-                                  "resource://gre/modules/NetUtil.jsm");
+ChromeUtils.defineModuleGetter(this, "UpdateUtils",
+                               "resource://gre/modules/UpdateUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "WindowsRegistry",
+                               "resource://gre/modules/WindowsRegistry.jsm");
+ChromeUtils.defineModuleGetter(this, "AsyncShutdown",
+                               "resource://gre/modules/AsyncShutdown.jsm");
+ChromeUtils.defineModuleGetter(this, "OS",
+                               "resource://gre/modules/osfile.jsm");
+ChromeUtils.defineModuleGetter(this, "DeferredTask",
+                               "resource://gre/modules/DeferredTask.jsm");
+ChromeUtils.defineModuleGetter(this, "NetUtil",
+                               "resource://gre/modules/NetUtil.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "gLogEnabled", function aus_gLogEnabled() {
   return Services.prefs.getBoolPref(PREF_APP_UPDATE_LOG, false);
@@ -218,7 +216,7 @@ XPCOMUtils.defineLazyGetter(this, "gUpdateBundle", function aus_gUpdateBundle() 
 // shared code for suppressing bad cert dialogs
 XPCOMUtils.defineLazyGetter(this, "gCertUtils", function aus_gCertUtils() {
   let temp = { };
-  Cu.import("resource://gre/modules/CertUtils.jsm", temp);
+  ChromeUtils.import("resource://gre/modules/CertUtils.jsm", temp);
   return temp;
 });
 
@@ -537,6 +535,12 @@ XPCOMUtils.defineLazyGetter(this, "gCanCheckForUpdates", function aus_gCanCheckF
   if (!enabled && Services.prefs.prefIsLocked(PREF_APP_UPDATE_ENABLED)) {
     LOG("gCanCheckForUpdates - unable to automatically check for updates, " +
         "the preference is disabled and admistratively locked.");
+    return false;
+  }
+
+  if (Services.policies && !Services.policies.isAllowed("appUpdate")) {
+    LOG("gCanCheckForUpdates - unable to automatically check for updates. " +
+        "Functionality disabled by enterprise policy.");
     return false;
   }
 
@@ -1119,7 +1123,6 @@ function UpdatePatch(patch) {
   this._properties = {};
   for (var i = 0; i < patch.attributes.length; ++i) {
     var attr = patch.attributes.item(i);
-    attr.QueryInterface(Ci.nsIDOMAttr);
     switch (attr.name) {
       case "selected":
         this.selected = attr.value == "true";
@@ -1292,7 +1295,6 @@ function Update(update) {
 
   for (let i = 0; i < update.attributes.length; ++i) {
     var attr = update.attributes.item(i);
-    attr.QueryInterface(Ci.nsIDOMAttr);
     if (attr.value == "undefined") {
       continue;
     } else if (attr.name == "detailsURL") {
@@ -2950,11 +2952,11 @@ Checker.prototype = {
     url = await UpdateUtils.formatUpdateURL(url);
 
     if (force) {
-      url += (url.indexOf("?") != -1 ? "&" : "?") + "force=1";
+      url += (url.includes("?") ? "&" : "?") + "force=1";
     }
 
     if (this._getCanMigrate()) {
-      url += (url.indexOf("?") != -1 ? "&" : "?") + "mig64=1";
+      url += (url.includes("?") ? "&" : "?") + "mig64=1";
     }
 
     LOG("Checker:getUpdateURL - update URL: " + url);
@@ -3601,9 +3603,6 @@ class ChannelDownloader extends CommonDownloader {
    * See nsIProgressEventSink.idl
    */
   onProgress(request, context, progress, maxProgress) {
-    LOG("ChannelDownloader:onProgress - progress: " + progress +
-        "/" + maxProgress);
-
     if (progress > this._patch.size) {
       LOG("ChannelDownloader:onProgress - progress: " + progress +
           " is higher than patch size: " + this._patch.size);
@@ -3625,6 +3624,8 @@ class ChannelDownloader extends CommonDownloader {
 
     let currentTime = Date.now();
     if ((currentTime - this._lastProgressTimeMs) > DOWNLOAD_PROGRESS_INTERVAL) {
+      LOG("ChannelDownloader:onProgress - progress: " + progress +
+          "/" + maxProgress);
       this._lastProgressTimeMs = currentTime;
       let listeners = this._listeners.concat();
       let listenerCount = listeners.length;

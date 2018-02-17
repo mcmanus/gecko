@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "{provider} hornitzaileak gomendatuta",
   "header_bookmarks_placeholder": "Ez daukazu laster-markarik oraindik.",
   "header_stories_from": "hornitzailea:",
+  "context_menu_button_sr": "Ikusi {title} gunerako testuinguru-menua",
   "type_label_visited": "Bisitatuta",
   "type_label_bookmarked": "Laster-marka eginda",
   "type_label_synced": "Beste gailu batetik sinkronizatuta",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Editatu gune hau",
   "edit_topsites_dismiss_button": "Baztertu gune hau",
   "edit_topsites_add_button": "Gehitu",
+  "edit_topsites_add_button_tooltip": "Gehitu maiz erabilitako gunea",
   "topsites_form_add_header": "Maiz erabilitako gune berria",
   "topsites_form_edit_header": "Editatu maiz erabilitako gunea",
   "topsites_form_title_placeholder": "Idatzi izenburua",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Egunean zaude jada. Etorri berriro geroago {provider} hornitzailearen istorio ezagun gehiagorako. Ezin duzu itxaron? Hautatu gai ezagun bat webeko istorio gehiago aurkitzeko.",
   "manual_migration_explanation2": "Probatu Firefox beste nabigatzaile batetik ekarritako laster-marka, historia eta pasahitzekin.",
   "manual_migration_cancel_button": "Ez, eskerrik asko",
-  "manual_migration_import_button": "Inportatu orain"
+  "manual_migration_import_button": "Inportatu orain",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

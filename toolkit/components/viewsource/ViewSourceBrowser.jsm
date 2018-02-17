@@ -4,13 +4,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const { utils: Cu, interfaces: Ci, classes: Cc } = Components;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
+ChromeUtils.defineModuleGetter(this, "Services",
   "resource://gre/modules/Services.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Deprecated",
+ChromeUtils.defineModuleGetter(this, "Deprecated",
   "resource://gre/modules/Deprecated.jsm");
 
 const BUNDLE_URL = "chrome://global/locale/viewSource.properties";
@@ -27,10 +25,6 @@ var gKnownBrowsers = new WeakSet();
  * ViewSourceBrowser manages the view source <browser> from the chrome side.
  * It's companion frame script, viewSource-content.js, needs to be loaded as a
  * frame script into the browser being managed.
- *
- * For a view source window using viewSource.xul, the script viewSource.js in
- * the window extends an instance of this with more window specific functions.
- * The page script takes care of loading the companion frame script.
  *
  * For a view source tab (or some other non-window case), an instance of this is
  * created by viewSourceUtils.js to wrap the <browser>.  The frame script will
@@ -79,13 +73,8 @@ ViewSourceBrowser.prototype = {
       this.mm.addMessageListener(msgName, this);
     });
 
-    // If we have a known <browser> already, load the frame script here.  This
-    // is not true for the window case, as the element does not exist until the
-    // XUL document loads.  For that case, the frame script is loaded by
-    // viewSource.js.
-    if (this._browser) {
-      this.loadFrameScript();
-    }
+    // If we have a known <browser> already, load the frame script here.
+    this.loadFrameScript();
   },
 
   /**
@@ -162,7 +151,6 @@ ViewSourceBrowser.prototype = {
    * Loads the source for a URL while applying some optional features if
    * enabled.
    *
-   * For the viewSource.xul window, this is called by onXULLoaded above.
    * For view source in a specific browser, this is manually called after
    * this object is constructed.
    *

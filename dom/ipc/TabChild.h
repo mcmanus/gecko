@@ -391,7 +391,8 @@ public:
 
   virtual mozilla::ipc::IPCResult RecvRealDragEvent(const WidgetDragEvent& aEvent,
                                                     const uint32_t& aDragAction,
-                                                    const uint32_t& aDropEffect) override;
+                                                    const uint32_t& aDropEffect,
+                                                    const nsCString& aPrincipalURISpec) override;
 
   virtual mozilla::ipc::IPCResult
   RecvRealKeyEvent(const mozilla::WidgetKeyboardEvent& aEvent) override;
@@ -430,12 +431,6 @@ public:
                                        const ScrollableLayerGuid& aGuid,
                                        const uint64_t& aInputBlockId,
                                        const nsEventStatus& aApzResponse) override;
-
-  virtual mozilla::ipc::IPCResult RecvKeyEvent(const nsString& aType,
-                                               const int32_t& aKeyCode,
-                                               const int32_t& aCharCode,
-                                               const int32_t& aModifiers,
-                                               const bool& aPreventDefault) override;
 
   virtual mozilla::ipc::IPCResult RecvNativeSynthesisResponse(const uint64_t& aObserverId,
                                                               const nsCString& aResponse) override;
@@ -479,27 +474,6 @@ public:
                            const uint32_t&, const IAccessibleHolder&) override;
 
   virtual bool DeallocPDocAccessibleChild(PDocAccessibleChild*) override;
-
-  virtual PDocumentRendererChild*
-  AllocPDocumentRendererChild(const nsRect& aDocumentRect,
-                              const gfx::Matrix& aTransform,
-                              const nsString& aBggcolor,
-                              const uint32_t& aRenderFlags,
-                              const bool& aFlushLayout,
-                              const nsIntSize& arenderSize) override;
-
-  virtual bool
-  DeallocPDocumentRendererChild(PDocumentRendererChild* aCctor) override;
-
-  virtual mozilla::ipc::IPCResult
-  RecvPDocumentRendererConstructor(PDocumentRendererChild* aActor,
-                                   const nsRect& aDocumentRect,
-                                   const gfx::Matrix& aTransform,
-                                   const nsString& aBgcolor,
-                                   const uint32_t& aRenderFlags,
-                                   const bool& aFlushLayout,
-                                   const nsIntSize& aRenderSize) override;
-
 
   virtual PColorPickerChild*
   AllocPColorPickerChild(const nsString& aTitle,

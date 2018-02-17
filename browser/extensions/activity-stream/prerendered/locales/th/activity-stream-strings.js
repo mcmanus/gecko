@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "แนะนำโดย {provider}",
   "header_bookmarks_placeholder": "คุณยังไม่มีที่คั่นหน้าใด ๆ",
   "header_stories_from": "จาก",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "เยี่ยมชมแล้ว",
   "type_label_bookmarked": "เพิ่มที่คั่นหน้าแล้ว",
   "type_label_synced": "ซิงค์จากอุปกรณ์อื่น",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "แก้ไขไซต์นี้",
   "edit_topsites_dismiss_button": "ไม่สนใจไซต์นี้",
   "edit_topsites_add_button": "เพิ่ม",
+  "edit_topsites_add_button_tooltip": "เพิ่มไซต์เด่น",
   "topsites_form_add_header": "ไซต์เด่นใหม่",
   "topsites_form_edit_header": "แก้ไขไซต์เด่น",
   "topsites_form_title_placeholder": "ป้อนชื่อเรื่อง",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "คุณได้อ่านเรื่องราวครบทั้งหมดแล้ว คุณสามารถกลับมาตรวจดูเรื่องราวเด่นจาก {provider} ได้ภายหลัง อดใจรอไม่ได้งั้นหรือ? เลือกหัวข้อยอดนิยมเพื่อค้นหาเรื่องราวที่ยอดเยี่ยมจากเว็บต่าง ๆ",
   "manual_migration_explanation2": "ลอง Firefox ด้วยที่คั่นหน้า, ประวัติ และรหัสผ่านจากเบราว์เซอร์อื่น",
   "manual_migration_cancel_button": "ไม่ ขอบคุณ",
-  "manual_migration_import_button": "นำเข้าตอนนี้"
+  "manual_migration_import_button": "นำเข้าตอนนี้",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

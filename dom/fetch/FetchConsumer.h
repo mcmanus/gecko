@@ -19,11 +19,8 @@ namespace mozilla {
 namespace dom {
 
 class Promise;
-
-namespace workers {
-class WorkerPrivate;
 class WorkerHolder;
-}
+class WorkerPrivate;
 
 template <class Derived> class FetchBody;
 
@@ -54,15 +51,16 @@ public:
   BeginConsumeBodyMainThread();
 
   void
-  ContinueConsumeBody(nsresult aStatus, uint32_t aLength, uint8_t* aResult);
+  ContinueConsumeBody(nsresult aStatus, uint32_t aLength, uint8_t* aResult,
+                      bool aShuttingDown = false);
 
   void
-  ContinueConsumeBlobBody(BlobImpl* aBlobImpl);
+  ContinueConsumeBlobBody(BlobImpl* aBlobImpl, bool aShuttingDown = false);
 
   void
   ShutDownMainThreadConsuming();
 
-  workers::WorkerPrivate*
+  WorkerPrivate*
   GetWorkerPrivate() const
   {
     return mWorkerPrivate;
@@ -81,7 +79,7 @@ public:
 private:
   FetchBodyConsumer(nsIEventTarget* aMainThreadEventTarget,
                     nsIGlobalObject* aGlobalObject,
-                    workers::WorkerPrivate* aWorkerPrivate,
+                    WorkerPrivate* aWorkerPrivate,
                     FetchBody<Derived>* aBody,
                     nsIInputStream* aBodyStream,
                     Promise* aPromise,
@@ -112,12 +110,12 @@ private:
   // Set when consuming the body is attempted on a worker.
   // Unset when consumption is done/aborted.
   // This WorkerHolder keeps alive the consumer via a cycle.
-  UniquePtr<workers::WorkerHolder> mWorkerHolder;
+  UniquePtr<WorkerHolder> mWorkerHolder;
 
   nsCOMPtr<nsIGlobalObject> mGlobal;
 
   // Always set whenever the FetchBodyConsumer is created on the worker thread.
-  workers::WorkerPrivate* mWorkerPrivate;
+  WorkerPrivate* mWorkerPrivate;
 
   // Touched on the main-thread only.
   nsCOMPtr<nsIInputStreamPump> mConsumeBodyPump;

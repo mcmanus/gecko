@@ -56,6 +56,7 @@ public:
 
   uint32_t StreamID() { return mStreamID; }
   Http2PushedStream *PushSource() { return mPushSource; }
+  void ClearPushSource();
 
   stateType HTTPState() { return mState; }
   void SetHTTPState(stateType val) { mState = val; }
@@ -161,11 +162,11 @@ public:
   Http2Session *Session() { return mSession; }
 
   static MOZ_MUST_USE nsresult MakeOriginURL(const nsACString &origin,
-                                             RefPtr<nsStandardURL> &url);
+                                             nsCOMPtr<nsIURI> &url);
 
   static MOZ_MUST_USE nsresult MakeOriginURL(const nsACString &scheme,
                                              const nsACString &origin,
-                                             RefPtr<nsStandardURL> &url);
+                                             nsCOMPtr<nsIURI> &url);
 
   // Mirrors nsAHttpTransaction
   bool Do0RTT();

@@ -32,6 +32,8 @@ MacIOSurfaceTextureHostOGL::~MacIOSurfaceTextureHostOGL()
 GLTextureSource*
 MacIOSurfaceTextureHostOGL::CreateTextureSourceForPlane(size_t aPlane)
 {
+  MOZ_ASSERT(mSurface);
+
   GLuint textureHandle;
   gl::GLContext* gl = mProvider->GetGLContext();
   gl->fGenTextures(1, &textureHandle);
@@ -94,11 +96,17 @@ MacIOSurfaceTextureHostOGL::SetTextureSourceProvider(TextureSourceProvider* aPro
 
 gfx::SurfaceFormat
 MacIOSurfaceTextureHostOGL::GetFormat() const {
+  if (!mSurface) {
+    return gfx::SurfaceFormat::UNKNOWN;
+  }
   return mSurface->GetFormat();
 }
 
 gfx::SurfaceFormat
 MacIOSurfaceTextureHostOGL::GetReadFormat() const {
+  if (!mSurface) {
+    return gfx::SurfaceFormat::UNKNOWN;
+  }
   return mSurface->GetReadFormat();
 }
 
@@ -148,15 +156,15 @@ MacIOSurfaceTextureHostOGL::NumSubTextures() const
 }
 
 void
-MacIOSurfaceTextureHostOGL::PushResourceUpdates(wr::ResourceUpdateQueue& aResources,
+MacIOSurfaceTextureHostOGL::PushResourceUpdates(wr::TransactionBuilder& aResources,
                                                 ResourceUpdateOp aOp,
                                                 const Range<wr::ImageKey>& aImageKeys,
                                                 const wr::ExternalImageId& aExtID)
 {
   MOZ_ASSERT(mSurface);
 
-  auto method = aOp == TextureHost::ADD_IMAGE ? &wr::ResourceUpdateQueue::AddExternalImage
-                                              : &wr::ResourceUpdateQueue::UpdateExternalImage;
+  auto method = aOp == TextureHost::ADD_IMAGE ? &wr::TransactionBuilder::AddExternalImage
+                                              : &wr::TransactionBuilder::UpdateExternalImage;
   auto bufferType = wr::WrExternalImageBufferType::TextureRectHandle;
 
   switch (GetFormat()) {

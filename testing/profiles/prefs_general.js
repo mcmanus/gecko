@@ -22,7 +22,6 @@ user_pref("dom.ipc.reportProcessHangs", false); // process hang monitor
 user_pref("dom.popup_maximum", -1);
 user_pref("dom.send_after_paint_to_content", true);
 user_pref("dom.successive_dialog_time_limit", 0);
-user_pref("signed.applets.codebase_principal_support", true);
 user_pref("browser.shell.checkDefaultBrowser", false);
 user_pref("shell.checkDefaultClient", false);
 user_pref("browser.warnOnQuit", false);
@@ -269,12 +268,8 @@ user_pref("toolkit.telemetry.test.pref2", false);
 // resolves and accepts requests, even if they all fail.
 user_pref("identity.fxaccounts.auth.uri", "https://%(server)s/fxa-dummy/");
 
-// Ditto for all the other Firefox accounts URIs used for about:accounts et al.:
-user_pref("identity.fxaccounts.remote.signup.uri", "https://%(server)s/fxa-signup");
-user_pref("identity.fxaccounts.remote.force_auth.uri", "https://%(server)s/fxa-force-auth");
-user_pref("identity.fxaccounts.remote.signin.uri", "https://%(server)s/fxa-signin");
-user_pref("identity.fxaccounts.settings.uri", "https://%(server)s/fxa-settings");
-user_pref("identity.fxaccounts.remote.webchannel.uri", "https://%(server)s/");
+// Ditto for all the FxA content root URI.
+user_pref("identity.fxaccounts.remote.root", "https://%(server)s/");
 
 // We don't want browser tests to perform FxA device registration.
 user_pref("identity.fxaccounts.skipDeviceRegistration", true);
@@ -394,3 +389,6 @@ user_pref("extensions.screenshots.disabled", true);
 // relatively long time which may cause unnecessary intermittents and slow down
 // tests. This, like many things, will stop working correctly in 2038.
 user_pref("places.database.lastMaintenance", 2147483647);
+
+// Disable Bookmark backups by default.
+user_pref("browser.bookmarks.max_backups", 0);

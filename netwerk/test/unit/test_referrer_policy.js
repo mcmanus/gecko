@@ -1,4 +1,4 @@
-Cu.import("resource://gre/modules/NetUtil.jsm");
+ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
 
 function test_policy(test) {
   info("Running test: " + test.toSource());
@@ -6,10 +6,10 @@ function test_policy(test) {
   var prefs = Cc["@mozilla.org/preferences-service;1"]
     .getService(Components.interfaces.nsIPrefBranch);
   if (test.defaultReferrerPolicyPref !== undefined) {
-    prefs.setIntPref("network.http.referer.userControlPolicy",
+    prefs.setIntPref("network.http.referer.defaultPolicy",
                      test.defaultReferrerPolicyPref);
   } else {
-    prefs.setIntPref("network.http.referer.userControlPolicy", 3);
+    prefs.setIntPref("network.http.referer.defaultPolicy", 3);
   }
 
   var uri = NetUtil.newURI(test.url)

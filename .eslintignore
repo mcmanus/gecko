@@ -77,6 +77,10 @@ browser/base/content/newtab/**
 # Test files that are really json not js, and don't need to be linted.
 browser/components/sessionstore/test/unit/data/sessionstore_valid.js
 browser/components/sessionstore/test/unit/data/sessionstore_invalid.js
+# This file is split into two in order to keep it as a valid json file
+# for documentation purposes (policies.json) but to be accessed by the
+# code as a .jsm (schema.jsm)
+browser/components/enterprisepolicies/schemas/schema.jsm
 # generated & special files in cld2
 browser/components/translation/cld2/**
 # Screenshots and Follow-on search are imported as a system add-on and have
@@ -141,7 +145,6 @@ devtools/client/webaudioeditor/**
 devtools/client/webconsole/net/**
 devtools/client/webconsole/new-console-output/test/mochitest/**
 devtools/client/webconsole/test/**
-devtools/client/webconsole/hudservice.js
 devtools/client/webconsole/webconsole-connection-proxy.js
 devtools/client/webconsole/webconsole.js
 devtools/client/webide/**
@@ -267,6 +270,7 @@ dom/security/test/hsts/**
 dom/security/test/mixedcontentblocker/**
 dom/security/test/sri/**
 dom/security/test/unit/**
+dom/serviceworkers/**
 dom/smil/**
 dom/storage/**
 dom/svg/**
@@ -320,6 +324,7 @@ mobile/android/tests/browser/chrome/tp5/**
 
 # Uses `#filter substitution`
 mobile/android/app/mobile.js
+mobile/android/app/geckoview-prefs.js
 
 # Uses `#expand`
 mobile/android/chrome/content/about.js
@@ -372,6 +377,8 @@ testing/talos/talos/tests/canvasmark/**
 testing/talos/talos/tests/dromaeo/**
 testing/talos/talos/tests/v8_7/**
 testing/talos/talos/tests/kraken/**
+# Runing Talos may extract data here, see bug 1435677.
+testing/talos/talos/tests/tp5n/**
 
 testing/web-platform/**
 testing/xpcshell/moz-http2/**

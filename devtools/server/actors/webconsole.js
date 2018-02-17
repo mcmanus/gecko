@@ -11,7 +11,7 @@
 const Services = require("Services");
 const { Cc, Ci, Cu } = require("chrome");
 const { DebuggerServer, ActorPool } = require("devtools/server/main");
-const { ThreadActor } = require("devtools/server/actors/script");
+const { ThreadActor } = require("devtools/server/actors/thread");
 const { ObjectActor, LongStringActor, createValueGrip, stringIsLong } = require("devtools/server/actors/object");
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
 const ErrorDocs = require("devtools/server/actors/errordocs");
@@ -40,6 +40,7 @@ if (isWorker) {
   loader.lazyRequireGetter(this, "ConsoleServiceListener", "devtools/server/actors/webconsole/listeners", true);
   loader.lazyRequireGetter(this, "ConsoleReflowListener", "devtools/server/actors/webconsole/listeners", true);
   loader.lazyRequireGetter(this, "ContentProcessListener", "devtools/server/actors/webconsole/listeners", true);
+  loader.lazyRequireGetter(this, "DocumentEventsListener", "devtools/server/actors/webconsole/listeners", true);
 }
 
 function isObject(value) {
@@ -694,6 +695,16 @@ WebConsoleActor.prototype =
           }
           startedListeners.push(listener);
           break;
+        case "DocumentEvents":
+          // Workers don't support this message type
+          if (isWorker) {
+            break;
+          }
+          if (!this.documentEventsListener) {
+            this.documentEventsListener = new DocumentEventsListener(this);
+          }
+          startedListeners.push(listener);
+          break;
       }
     }
 
@@ -783,6 +794,13 @@ WebConsoleActor.prototype =
           if (this.contentProcessListener) {
             this.contentProcessListener.destroy();
             this.contentProcessListener = null;
+          }
+          stoppedListeners.push(listener);
+          break;
+        case "DocumentEvents":
+          if (this.documentEventsListener) {
+            this.documentEventsListener.destroy();
+            this.documentEventsListener = null;
           }
           stoppedListeners.push(listener);
           break;
@@ -2062,6 +2080,7 @@ NetworkEventActor.prototype =
 
     this._discardRequestBody = networkEvent.discardRequestBody;
     this._discardResponseBody = networkEvent.discardResponseBody;
+    this._truncated = false;
     this._private = networkEvent.private;
   },
 
@@ -2363,10 +2382,14 @@ NetworkEventActor.prototype =
    *
    * @param object content
    *        The response content.
-   * @param boolean discardedResponseBody
-   *        Tells if the response content was recorded or not.
+   * @param object
+   *        - boolean discardedResponseBody
+   *          Tells if the response content was recorded or not.
+   *        - boolean truncated
+   *          Tells if the some of the response content is missing.
    */
-  addResponseContent: function (content, discardedResponseBody) {
+  addResponseContent: function (content, {discardResponseBody, truncated}) {
+    this._truncated = truncated;
     this._response.content = content;
     content.text = this.parent._createStringGrip(content.text);
     if (typeof content.text == "object") {
@@ -2381,7 +2404,7 @@ NetworkEventActor.prototype =
       contentSize: content.size,
       encoding: content.encoding,
       transferredSize: content.transferredSize,
-      discardResponseBody: discardedResponseBody,
+      discardResponseBody,
     };
 
     this.conn.send(packet);

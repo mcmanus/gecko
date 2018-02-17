@@ -7,14 +7,10 @@
             writeTestTempFile, socket_transport, local_transport, really_long
 */
 
-var Cc = Components.classes;
-var Ci = Components.interfaces;
-var Cu = Components.utils;
-var Cr = Components.results;
 var CC = Components.Constructor;
 
 const { require } =
-  Cu.import("resource://devtools/shared/Loader.jsm", {});
+  ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
 const { NetUtil } = require("resource://gre/modules/NetUtil.jsm");
 const promise = require("promise");
 const defer = require("devtools/shared/defer");
@@ -90,15 +86,13 @@ var listener = {
   }
 };
 
-var consoleService = Cc["@mozilla.org/consoleservice;1"]
-                     .getService(Ci.nsIConsoleService);
-consoleService.registerListener(listener);
+Services.console.registerListener(listener);
 
 /**
  * Initialize the testing debugger server.
  */
 function initTestDebuggerServer() {
-  DebuggerServer.registerModule("devtools/server/actors/script", {
+  DebuggerServer.registerModule("devtools/server/actors/thread", {
     prefix: "script",
     constructor: "ScriptActor",
     type: { global: true, tab: true }

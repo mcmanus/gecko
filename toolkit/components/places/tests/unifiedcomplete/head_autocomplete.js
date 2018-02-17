@@ -2,15 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-var Ci = Components.interfaces;
-var Cc = Components.classes;
-var Cr = Components.results;
-var Cu = Components.utils;
-
 const FRECENCY_DEFAULT = 10000;
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://testing-common/httpd.js");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://testing-common/httpd.js");
 
 // Import common head.
 {
@@ -41,7 +36,7 @@ async function cleanup() {
   }
   Services.prefs.clearUserPref("browser.search.suggest.enabled");
   await PlacesUtils.bookmarks.eraseEverything();
-  await PlacesTestUtils.clearHistory();
+  await PlacesUtils.history.clear();
 }
 registerCleanupFunction(cleanup);
 
@@ -66,9 +61,6 @@ AutoCompleteInput.prototype = {
 
   minResultsForPopup: 0,
   maxRows: 0,
-
-  showCommentColumn: false,
-  showImageColumn: false,
 
   timeout: 10,
   searchParam: "",

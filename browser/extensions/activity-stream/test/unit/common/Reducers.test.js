@@ -35,18 +35,14 @@ describe("Reducers", () => {
       const nextState = TopSites(undefined, {type: at.TOP_SITES_UPDATED});
       assert.equal(nextState, INITIAL_STATE.TopSites);
     });
-    it("should set editForm.visible to true on TOP_SITES_EDIT", () => {
-      const nextState = TopSites(undefined, {type: at.TOP_SITES_EDIT, data: {index: 3}});
-      assert.isTrue(nextState.editForm.visible);
-    });
     it("should set editForm.site to action.data on TOP_SITES_EDIT", () => {
       const data = {index: 7};
       const nextState = TopSites(undefined, {type: at.TOP_SITES_EDIT, data});
       assert.equal(nextState.editForm.index, data.index);
     });
-    it("should set editForm.visible to false on TOP_SITES_CANCEL_EDIT", () => {
+    it("should set editForm to null on TOP_SITES_CANCEL_EDIT", () => {
       const nextState = TopSites(undefined, {type: at.TOP_SITES_CANCEL_EDIT});
-      assert.isFalse(nextState.editForm.visible);
+      assert.isNull(nextState.editForm);
     });
     it("should add screenshots for SCREENSHOT_UPDATED", () => {
       const oldState = {rows: [{url: "foo.com"}, {url: "bar.com"}]};
@@ -72,7 +68,7 @@ describe("Reducers", () => {
         }
       };
       const nextState = TopSites(oldState, action);
-      const newRow = nextState.rows[1];
+      const [, newRow] = nextState.rows;
       // new row has bookmark data
       assert.equal(newRow.url, action.data.url);
       assert.equal(newRow.bookmarkGuid, action.data.bookmarkGuid);
@@ -97,7 +93,7 @@ describe("Reducers", () => {
       };
       const action = {type: at.PLACES_BOOKMARK_REMOVED, data: {url: "bar.com"}};
       const nextState = TopSites(oldState, action);
-      const newRow = nextState.rows[1];
+      const [, newRow] = nextState.rows;
       // new row no longer has bookmark data
       assert.equal(newRow.url, oldState.rows[1].url);
       assert.isUndefined(newRow.bookmarkGuid);
@@ -373,8 +369,7 @@ describe("Reducers", () => {
       };
       const nextState = Sections(oldState, action);
       // check a section to ensure the correct url was bookmarked
-      const newRow = nextState[0].rows[0];
-      const oldRow = nextState[0].rows[1];
+      const [newRow, oldRow] = nextState[0].rows;
 
       // new row has bookmark data
       assert.equal(newRow.url, action.data.url);
@@ -407,8 +402,7 @@ describe("Reducers", () => {
       });
       const nextState = Sections(oldState, action);
       // check a section to ensure the correct bookmark was removed
-      const newRow = nextState[0].rows[0];
-      const oldRow = nextState[0].rows[1];
+      const [newRow, oldRow] = nextState[0].rows;
 
       // new row isn't a bookmark
       assert.equal(newRow.url, action.data.url);

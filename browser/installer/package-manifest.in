@@ -217,18 +217,15 @@
 @RESPATH@/components/dom_security.xpt
 @RESPATH@/components/dom_sidebar.xpt
 @RESPATH@/components/dom_storage.xpt
-@RESPATH@/components/dom_traversal.xpt
 #ifdef MOZ_WEBSPEECH
 @RESPATH@/components/dom_webspeechrecognition.xpt
 #endif
 @RESPATH@/components/dom_workers.xpt
-@RESPATH@/components/dom_xbl.xpt
-@RESPATH@/components/dom_xhr.xpt
-@RESPATH@/components/dom_xpath.xpt
 @RESPATH@/components/dom_xul.xpt
 @RESPATH@/components/dom_presentation.xpt
 @RESPATH@/components/downloads.xpt
 @RESPATH@/components/editor.xpt
+@RESPATH@/components/enterprisepolicies.xpt
 @RESPATH@/components/extensions.xpt
 @RESPATH@/components/exthandler.xpt
 @RESPATH@/components/fastfind.xpt
@@ -379,6 +376,9 @@
 @RESPATH@/browser/components/browser-newtab.xpt
 @RESPATH@/browser/components/aboutNewTabService.js
 @RESPATH@/browser/components/NewTabComponents.manifest
+@RESPATH@/browser/components/EnterprisePolicies.js
+@RESPATH@/browser/components/EnterprisePoliciesContent.js
+@RESPATH@/browser/components/EnterprisePolicies.manifest
 @RESPATH@/components/Downloads.manifest
 @RESPATH@/components/DownloadLegacy.js
 @RESPATH@/components/thumbnails.xpt
@@ -690,7 +690,6 @@
 #endif
 @RESPATH@/res/fonts/*
 @RESPATH@/res/dtd/*
-@RESPATH@/res/html/*
 @RESPATH@/res/language.properties
 #ifdef XP_MACOSX
 @RESPATH@/res/MainMenu.nib/
@@ -701,8 +700,6 @@
 
 ; svg
 @RESPATH@/res/svg.css
-@RESPATH@/components/dom_svg.xpt
-@RESPATH@/components/dom_smil.xpt
 
 ; [Personal Security Manager]
 ;

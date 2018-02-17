@@ -93,11 +93,13 @@ struct cubeb {
 };
 
 struct cubeb_stream {
+  /* Note: Must match cubeb_stream layout in cubeb.c. */
   cubeb * context;
+  void * user_ptr;
+  /**/
   cubeb_stream_params params;
   cubeb_data_callback data_callback;
   cubeb_state_callback state_callback;
-  void * user_ptr;
   WAVEHDR buffers[NBUFS];
   size_t buffer_size;
   int next_buffer;
@@ -402,6 +404,7 @@ winmm_stream_init(cubeb * context, cubeb_stream ** stream, char const * stream_n
 
   XASSERT(context);
   XASSERT(stream);
+  XASSERT(output_stream_params);
 
   if (input_stream_params) {
     /* Capture support not yet implemented. */
@@ -411,6 +414,11 @@ winmm_stream_init(cubeb * context, cubeb_stream ** stream, char const * stream_n
   if (input_device || output_device) {
     /* Device selection not yet implemented. */
     return CUBEB_ERROR_DEVICE_UNAVAILABLE;
+  }
+
+  if (output_stream_params->prefs & CUBEB_STREAM_PREF_LOOPBACK) {
+    /* Loopback is not supported */
+    return CUBEB_ERROR_NOT_SUPPORTED;
   }
 
   *stream = NULL;

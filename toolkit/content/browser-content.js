@@ -6,21 +6,16 @@
 /* eslint-env mozilla/frame-script */
 /* global sendAsyncMessage */
 
-var Cc = Components.classes;
-var Ci = Components.interfaces;
-var Cu = Components.utils;
-var Cr = Components.results;
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "ReaderMode",
+ChromeUtils.defineModuleGetter(this, "ReaderMode",
   "resource://gre/modules/ReaderMode.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
+ChromeUtils.defineModuleGetter(this, "BrowserUtils",
   "resource://gre/modules/BrowserUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "SelectContentHelper",
+ChromeUtils.defineModuleGetter(this, "SelectContentHelper",
   "resource://gre/modules/SelectContentHelper.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "FindContent",
+ChromeUtils.defineModuleGetter(this, "FindContent",
   "resource://gre/modules/FindContent.jsm");
 
 var global = this;
@@ -28,7 +23,7 @@ var global = this;
 
 // Lazily load the finder code
 addMessageListener("Finder:Initialize", function() {
-  let {RemoteFinderListener} = Cu.import("resource://gre/modules/RemoteFinder.jsm", {});
+  let {RemoteFinderListener} = ChromeUtils.import("resource://gre/modules/RemoteFinder.jsm", {});
   new RemoteFinderListener(global);
 });
 
@@ -146,13 +141,13 @@ var ClickEventHandler = {
       // overflow property
       var scrollVert = node.scrollTopMax &&
         (node instanceof content.HTMLSelectElement ||
-         scrollingAllowed.indexOf(overflowy) >= 0);
+         scrollingAllowed.includes(overflowy));
 
       // do not allow horizontal scrolling for select elements, it leads
       // to visual artifacts and is not the expected behavior anyway
       if (!(node instanceof content.HTMLSelectElement) &&
           node.scrollLeftMin != node.scrollLeftMax &&
-          scrollingAllowed.indexOf(overflowx) >= 0) {
+          scrollingAllowed.includes(overflowx)) {
         this._scrolldir = scrollVert ? "NSEW" : "EW";
         this._scrollable = node;
         break;
@@ -489,7 +484,7 @@ PopupBlocking.init();
 
 XPCOMUtils.defineLazyGetter(this, "console", () => {
   // Set up console.* for frame scripts.
-  let Console = Components.utils.import("resource://gre/modules/Console.jsm", {});
+  let Console = ChromeUtils.import("resource://gre/modules/Console.jsm", {});
   return new Console.ConsoleAPI();
 });
 
@@ -976,7 +971,7 @@ var FindBar = {
       fakeEvent,
       shouldFastFind: fastFind.should
     });
-    if (rv.indexOf(false) !== -1) {
+    if (rv.includes(false)) {
       event.preventDefault();
       return false;
     }
@@ -1402,7 +1397,8 @@ var ViewSelectionSource = {
     var source =
       "<!DOCTYPE html>"
     + "<html>"
-    + "<head><title>" + title + "</title>"
+    + '<head><meta name="viewport" content="width=device-width"/>'
+    + "<title>" + title + "</title>"
     + '<link rel="stylesheet" type="text/css" href="' + VIEW_SOURCE_CSS + '">'
     + '<style type="text/css">'
     + "#target { border: dashed 1px; background-color: lightyellow; }"

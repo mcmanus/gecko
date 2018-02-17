@@ -1522,6 +1522,40 @@ gfxFont::SupportsSubSuperscript(uint32_t aSubSuperscript,
 }
 
 bool
+gfxFont::FeatureWillHandleChar(Script aRunScript, uint32_t aFeature,
+                               uint32_t aUnicode)
+{
+    if (!SupportsFeature(aRunScript, aFeature)) {
+        return false;
+    }
+
+    // xxx - for graphite, don't really know how to sniff lookups so bail
+    if (mGraphiteShaper && gfxPlatform::GetPlatform()->UseGraphiteShaping()) {
+        return true;
+    }
+
+    if (!mHarfBuzzShaper) {
+        mHarfBuzzShaper = MakeUnique<gfxHarfBuzzShaper>(this);
+    }
+    gfxHarfBuzzShaper* shaper =
+        static_cast<gfxHarfBuzzShaper*>(mHarfBuzzShaper.get());
+    if (!shaper->Initialize()) {
+        return false;
+    }
+
+    // get the hbset containing input glyphs for the feature
+    const hb_set_t *inputGlyphs =
+        mFontEntry->InputsForOpenTypeFeature(aRunScript, aFeature);
+
+    if (aUnicode == 0xa0) {
+        aUnicode = ' ';
+    }
+
+    hb_codepoint_t gid = shaper->GetNominalGlyph(aUnicode);
+    return hb_set_has(inputGlyphs, gid);
+}
+
+bool
 gfxFont::HasFeatureSet(uint32_t aFeature, bool& aFeatureOn)
 {
     aFeatureOn = false;
@@ -1677,6 +1711,14 @@ private:
         buf.mNumGlyphs = mNumGlyphs;
 
         const gfxContext::AzureState &state = mRunParams.context->CurrentState();
+
+        // Draw stroke first if the UNDERNEATH flag is set in drawMode.
+        if (mRunParams.strokeOpts &&
+            GetStrokeMode(mRunParams.drawMode) ==
+                (DrawMode::GLYPH_STROKE | DrawMode::GLYPH_STROKE_UNDERNEATH)) {
+            DrawStroke(state, buf);
+        }
+
         if (mRunParams.drawMode & DrawMode::GLYPH_FILL) {
             if (state.pattern || mFontParams.contextPaint) {
                 Pattern *pat;
@@ -1714,29 +1756,36 @@ private:
                                           mFontParams.drawOptions);
             }
         }
-        if (GetStrokeMode(mRunParams.drawMode) == DrawMode::GLYPH_STROKE &&
-            mRunParams.strokeOpts) {
-            Pattern *pat;
-            if (mRunParams.textStrokePattern) {
-                pat = mRunParams.textStrokePattern->GetPattern(
-                  mRunParams.dt, state.patternTransformChanged
-                                   ? &state.patternTransform
-                                   : nullptr);
 
-                if (pat) {
-                    FlushStroke(buf, *pat);
-                }
-            } else {
-                FlushStroke(buf,
-                            ColorPattern(
-                              Color::FromABGR(mRunParams.textStrokeColor)));
-            }
+        // Draw stroke if the UNDERNEATH flag is not set.
+        if (mRunParams.strokeOpts &&
+            GetStrokeMode(mRunParams.drawMode) == DrawMode::GLYPH_STROKE) {
+            DrawStroke(state, buf);
         }
+
         if (mRunParams.drawMode & DrawMode::GLYPH_PATH) {
             mRunParams.context->EnsurePathBuilder();
             Matrix mat = mRunParams.dt->GetTransform();
             mFontParams.scaledFont->CopyGlyphsToBuilder(
                 buf, mRunParams.context->mPathBuilder, &mat);
+        }
+    }
+
+    void DrawStroke(const gfxContext::AzureState& aState,
+                    gfx::GlyphBuffer& aBuffer)
+    {
+        if (mRunParams.textStrokePattern) {
+            Pattern* pat = mRunParams.textStrokePattern->GetPattern(
+                mRunParams.dt, aState.patternTransformChanged
+                               ? &aState.patternTransform
+                               : nullptr);
+
+            if (pat) {
+                FlushStroke(aBuffer, *pat);
+            }
+        } else {
+            FlushStroke(aBuffer, ColorPattern(
+                Color::FromABGR(mRunParams.textStrokeColor)));
         }
     }
 

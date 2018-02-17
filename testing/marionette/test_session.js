@@ -4,13 +4,11 @@
 
 "use strict";
 
-const {utils: Cu} = Components;
+ChromeUtils.import("resource://gre/modules/Preferences.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-Cu.import("resource://gre/modules/Preferences.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-
-Cu.import("chrome://marionette/content/error.js");
-Cu.import("chrome://marionette/content/session.js");
+ChromeUtils.import("chrome://marionette/content/error.js");
+ChromeUtils.import("chrome://marionette/content/session.js");
 
 add_test(function test_Timeouts_ctor() {
   let ts = new session.Timeouts();
@@ -379,6 +377,7 @@ add_test(function test_Capabilities_ctor() {
   equal(false, caps.get("moz:accessibilityChecks"));
   ok(caps.has("moz:processID"));
   ok(caps.has("moz:profile"));
+  equal(false, caps.get("moz:useNonSpecCompliantPointerOrigin"));
   equal(true, caps.get("moz:webdriverClick"));
 
   run_next_test();
@@ -408,6 +407,8 @@ add_test(function test_Capabilities_toJSON() {
   equal(caps.get("moz:accessibilityChecks"), json["moz:accessibilityChecks"]);
   equal(caps.get("moz:processID"), json["moz:processID"]);
   equal(caps.get("moz:profile"), json["moz:profile"]);
+  equal(caps.get("moz:useNonSpecCompliantPointerOrigin"),
+        json["moz:useNonSpecCompliantPointerOrigin"]);
   equal(caps.get("moz:webdriverClick"), json["moz:webdriverClick"]);
 
   run_next_test();
@@ -447,17 +448,26 @@ add_test(function test_Capabilities_fromJSON() {
   caps = fromJSON({timeouts: timeoutsConfig});
   equal(123, caps.get("timeouts").implicit);
 
-  equal(true, caps.get("moz:webdriverClick"));
-  caps = fromJSON({"moz:webdriverClick": true});
-  equal(true, caps.get("moz:webdriverClick"));
-  Assert.throws(() => fromJSON({"moz:webdriverClick": "foo"}));
-  Assert.throws(() => fromJSON({"moz:webdriverClick": 1}));
-
   caps = fromJSON({"moz:accessibilityChecks": true});
   equal(true, caps.get("moz:accessibilityChecks"));
   caps = fromJSON({"moz:accessibilityChecks": false});
   equal(false, caps.get("moz:accessibilityChecks"));
   Assert.throws(() => fromJSON({"moz:accessibilityChecks": "foo"}));
+  Assert.throws(() => fromJSON({"moz:accessibilityChecks": 1}));
+
+  caps = fromJSON({"moz:useNonSpecCompliantPointerOrigin": false});
+  equal(false, caps.get("moz:useNonSpecCompliantPointerOrigin"));
+  caps = fromJSON({"moz:useNonSpecCompliantPointerOrigin": true});
+  equal(true, caps.get("moz:useNonSpecCompliantPointerOrigin"));
+  Assert.throws(() => fromJSON({"moz:useNonSpecCompliantPointerOrigin": "foo"}));
+  Assert.throws(() => fromJSON({"moz:useNonSpecCompliantPointerOrigin": 1}));
+
+  caps = fromJSON({"moz:webdriverClick": true});
+  equal(true, caps.get("moz:webdriverClick"));
+  caps = fromJSON({"moz:webdriverClick": false});
+  equal(false, caps.get("moz:webdriverClick"));
+  Assert.throws(() => fromJSON({"moz:webdriverClick": "foo"}));
+  Assert.throws(() => fromJSON({"moz:webdriverClick": 1}));
 
   run_next_test();
 });

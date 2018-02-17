@@ -6,6 +6,8 @@
 
 #include "mozilla/ServoKeyframeRule.h"
 
+#include "mozilla/DeclarationBlockInlines.h"
+#include "mozilla/ServoDeclarationBlock.h"
 #include "nsDOMCSSDeclaration.h"
 #include "mozAutoDocUpdate.h"
 
@@ -72,16 +74,6 @@ public:
   nsINode* GetParentObject() final override
   {
     return mRule ? mRule->GetDocument() : nullptr;
-  }
-
-  DocGroup* GetDocGroup() const final override
-  {
-    if (!mRule) {
-      return nullptr;
-    }
-
-    nsIDocument* document = mRule->GetDocument();
-    return document ? document->GetDocGroup() : nullptr;
   }
 
   size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
@@ -200,7 +192,7 @@ ServoKeyframeRule::SetKeyText(const nsAString& aKeyText)
 }
 
 void
-ServoKeyframeRule::GetCssTextImpl(nsAString& aCssText) const
+ServoKeyframeRule::GetCssText(nsAString& aCssText) const
 {
   Servo_Keyframe_GetCssText(mRaw, &aCssText);
 }

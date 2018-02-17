@@ -6,17 +6,15 @@
 
 this.EXPORTED_SYMBOLS = ["PlacesSyncUtils"];
 
-const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
-
 Cu.importGlobalProperties(["URL", "URLSearchParams"]);
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "Log",
-                                  "resource://gre/modules/Log.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
-                                  "resource://gre/modules/PlacesUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "Log",
+                               "resource://gre/modules/Log.jsm");
+ChromeUtils.defineModuleGetter(this, "PlacesUtils",
+                               "resource://gre/modules/PlacesUtils.jsm");
 
 /**
  * This module exports functions for Sync to use when applying remote
@@ -51,9 +49,6 @@ const { SOURCE_SYNC } = Ci.nsINavBookmarksService;
 const MICROSECONDS_PER_SECOND = 1000000;
 const SQLITE_MAX_VARIABLE_NUMBER = 999;
 
-const ORGANIZER_QUERY_ANNO = "PlacesOrganizer/OrganizerQuery";
-const ORGANIZER_ALL_BOOKMARKS_ANNO_VALUE = "AllBookmarks";
-const ORGANIZER_MOBILE_QUERY_ANNO_VALUE = "MobileBookmarks";
 const MOBILE_BOOKMARKS_PREF = "browser.bookmarks.showMobileBookmarks";
 
 // These are defined as lazy getters to defer initializing the bookmarks
@@ -564,6 +559,7 @@ const BookmarkSyncUtils = PlacesSyncUtils.bookmarks = Object.freeze({
     return PlacesUtils.withConnectionWrapper(
       "BookmarkSyncUtils: pushChanges", async function(db) {
         let skippedCount = 0;
+        let weakCount = 0;
         let updateParams = [];
 
         for (let recordId in changeRecords) {
@@ -576,6 +572,12 @@ const BookmarkSyncUtils = PlacesSyncUtils.bookmarks = Object.freeze({
               synced: { required: true },
             }
           );
+
+          // Skip weakly uploaded records.
+          if (!changeRecord.counter) {
+            weakCount++;
+            continue;
+          }
 
           // Sync sets the `synced` flag for reconciled or successfully
           // uploaded items. If upload failed, ignore the change; we'll
@@ -617,7 +619,8 @@ const BookmarkSyncUtils = PlacesSyncUtils.bookmarks = Object.freeze({
         }
 
         BookmarkSyncLog.debug(`pushChanges: Processed change records`,
-                              { skipped: skippedCount,
+                              { weak: weakCount,
+                                skipped: skippedCount,
                                 updated: updateParams.length });
       }
     );
@@ -1024,14 +1027,14 @@ const BookmarkSyncUtils = PlacesSyncUtils.bookmarks = Object.freeze({
   },
 
   /**
-   * Returns `undefined` if no sensible timestamp could be found.
+   * Returns `0` if no sensible timestamp could be found.
    * Otherwise, returns the earliest sensible timestamp between `existingMillis`
    * and `serverMillis`.
    */
   ratchetTimestampBackwards(existingMillis, serverMillis, lowerBound = BookmarkSyncUtils.EARLIEST_BOOKMARK_TIMESTAMP) {
     const possible = [+existingMillis, +serverMillis].filter(n => !isNaN(n) && n > lowerBound);
     if (!possible.length) {
-      return undefined;
+      return 0;
     }
     return Math.min(...possible);
   },
@@ -1054,71 +1057,6 @@ const BookmarkSyncUtils = PlacesSyncUtils.bookmarks = Object.freeze({
     let hasMobileBookmarks = mobileChildGuids.length > 0;
 
     Services.prefs.setBoolPref(MOBILE_BOOKMARKS_PREF, hasMobileBookmarks);
-    if (hasMobileBookmarks) {
-      await this.upsertMobileQuery(db);
-    } else {
-      await this.removeMobileQuery(db);
-    }
-  },
-
-  async upsertMobileQuery(db) {
-    let maybeAllBookmarksGuids = await fetchGuidsWithAnno(db,
-      ORGANIZER_QUERY_ANNO, ORGANIZER_ALL_BOOKMARKS_ANNO_VALUE);
-    if (!maybeAllBookmarksGuids.length) {
-      return;
-    }
-
-    let allBookmarksGuid = maybeAllBookmarksGuids[0];
-    let mobileTitle = PlacesUtils.getString("MobileBookmarksFolderTitle");
-
-    let maybeMobileQueryGuids = await fetchGuidsWithAnno(db,
-      ORGANIZER_QUERY_ANNO, ORGANIZER_MOBILE_QUERY_ANNO_VALUE);
-    if (maybeMobileQueryGuids.length) {
-      let mobileQueryGuid = maybeMobileQueryGuids[0];
-      // We have a left pane query for mobile bookmarks, make sure the
-      // query title is correct.
-      await PlacesUtils.bookmarks.update({
-        guid: mobileQueryGuid,
-        url: "place:folder=MOBILE_BOOKMARKS",
-        title: mobileTitle,
-        source: SOURCE_SYNC,
-      });
-    } else {
-      // We have no left pane query. Create the query.
-      let mobileQuery = await PlacesUtils.bookmarks.insert({
-        parentGuid: allBookmarksGuid,
-        url: "place:folder=MOBILE_BOOKMARKS",
-        title: mobileTitle,
-        source: SOURCE_SYNC,
-      });
-
-      let mobileQueryId = await PlacesUtils.promiseItemId(mobileQuery.guid);
-
-      PlacesUtils.annotations.setItemAnnotation(mobileQueryId,
-        ORGANIZER_QUERY_ANNO, ORGANIZER_MOBILE_QUERY_ANNO_VALUE, 0,
-        PlacesUtils.annotations.EXPIRE_NEVER, SOURCE_SYNC);
-      PlacesUtils.annotations.setItemAnnotation(mobileQueryId,
-        PlacesUtils.EXCLUDE_FROM_BACKUP_ANNO, 1, 0,
-        PlacesUtils.annotations.EXPIRE_NEVER, SOURCE_SYNC);
-    }
-
-    // Make sure the mobile root title matches the query.
-    await PlacesUtils.bookmarks.update({
-      guid: PlacesUtils.bookmarks.mobileGuid,
-      title: mobileTitle,
-      source: SOURCE_SYNC,
-    });
-  },
-
-  async removeMobileQuery(db) {
-    let maybeMobileQueryGuids = await fetchGuidsWithAnno(db,
-      ORGANIZER_QUERY_ANNO, ORGANIZER_MOBILE_QUERY_ANNO_VALUE);
-    if (!maybeMobileQueryGuids.length) {
-      BookmarkSyncLog.warn("Trying to remove non-existent mobile query");
-      return;
-    }
-    let mobileQueryGuid = maybeMobileQueryGuids[0];
-    await PlacesUtils.bookmarks.remove(mobileQueryGuid);
   },
 
   /**

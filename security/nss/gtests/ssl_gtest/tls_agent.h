@@ -165,6 +165,24 @@ class TlsAgent : public PollTarget {
   void DisableECDHEServerKeyReuse();
   bool GetPeerChainLength(size_t* count);
   void CheckCipherSuite(uint16_t cipher_suite);
+  void SetResumptionTokenCallback();
+  bool MaybeSetResumptionToken();
+  void SetResumptionToken(const std::vector<uint8_t>& resumption_token) {
+    resumption_token_ = resumption_token;
+  }
+  const std::vector<uint8_t>& GetResumptionToken() const {
+    return resumption_token_;
+  }
+  void GetTokenInfo(ScopedSSLResumptionTokenInfo& token) {
+    SECStatus rv = SSL_GetResumptionTokenInfo(
+        resumption_token_.data(), resumption_token_.size(), token.get(),
+        sizeof(SSLResumptionTokenInfo));
+    ASSERT_EQ(SECSuccess, rv);
+  }
+  void SetResumptionCallbackCalled() { resumption_callback_called_ = true; }
+  bool resumption_callback_called() const {
+    return resumption_callback_called_;
+  }
 
   const std::string& name() const { return name_; }
 
@@ -382,6 +400,7 @@ class TlsAgent : public PollTarget {
   uint8_t expected_sent_alert_;
   uint8_t expected_sent_alert_level_;
   bool handshake_callback_called_;
+  bool resumption_callback_called_;
   SSLChannelInfo info_;
   SSLCipherSuiteInfo csinfo_;
   SSLVersionRange vrange_;
@@ -393,6 +412,7 @@ class TlsAgent : public PollTarget {
   AuthCertificateCallbackFunction auth_certificate_callback_;
   SniCallbackFunction sni_callback_;
   bool skip_version_checks_;
+  std::vector<uint8_t> resumption_token_;
 };
 
 inline std::ostream& operator<<(std::ostream& stream,

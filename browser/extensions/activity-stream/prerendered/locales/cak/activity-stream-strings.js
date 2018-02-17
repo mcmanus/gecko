@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Chilab'en ruma {provider}",
   "header_bookmarks_placeholder": "K'a majun ayaketal k'o.",
   "header_stories_from": "richin",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "Tz'eton",
   "type_label_bookmarked": "Yakon retal",
   "type_label_synced": "Ximon rik'in jun chik okisaxel",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Tinuk' re ruxaq k'amaya'l re'",
   "edit_topsites_dismiss_button": "Tiyuj re ruxaq k'amaya'l re'",
   "edit_topsites_add_button": "Titz'aqatisäx",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "K'ak'a' Utziläj Ruxaq K'amaya'l",
   "topsites_form_edit_header": "Tinuk' re Utziläj Ruxaq K'amaya'l re'",
   "topsites_form_title_placeholder": "Tatz'ib'aj jun b'i'aj",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Xaq'i'. Katzolin chik pe richin ye'ak'ül ri utziläj taq rub'anob'al {provider}. ¿La man noyob'en ta? Tacha' jun ütz na'oj richin nawïl ch'aqa' chik taq b'anob'äl e k'o chi rij ri ajk'amaya'l.",
   "manual_migration_explanation2": "Tatojtob'ej Firefox kik'in ri taq ruyaketal, runatab'äl chuqa' taq ewan rutzij jun chik okik'amaya'l.",
   "manual_migration_cancel_button": "Mani matyox",
-  "manual_migration_import_button": "Tijik' pe"
+  "manual_migration_import_button": "Tijik' pe",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

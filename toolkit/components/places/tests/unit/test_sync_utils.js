@@ -1,6 +1,8 @@
-Cu.import("resource://gre/modules/ObjectUtils.jsm");
-Cu.import("resource://gre/modules/PlacesSyncUtils.jsm");
-Cu.import("resource://testing-common/httpd.js");
+ChromeUtils.import("resource://gre/modules/ObjectUtils.jsm");
+ChromeUtils.import("resource://gre/modules/PlacesSyncUtils.jsm");
+ChromeUtils.import("resource://testing-common/httpd.js");
+ChromeUtils.defineModuleGetter(this, "Preferences",
+                               "resource://gre/modules/Preferences.jsm");
 Cu.importGlobalProperties(["URLSearchParams"]);
 
 const DESCRIPTION_ANNO = "bookmarkProperties/description";
@@ -181,7 +183,7 @@ add_task(async function test_fetchURLFrecency() {
   }
 
   // Remove the visits added during this test.
- await PlacesTestUtils.clearHistory();
+ await PlacesUtils.history.clear();
 });
 
 add_task(async function test_determineNonSyncableGuids() {
@@ -215,7 +217,7 @@ add_task(async function test_determineNonSyncableGuids() {
   }
 
   // Remove the visits added during this test.
-  await PlacesTestUtils.clearHistory();
+  await PlacesUtils.history.clear();
 });
 
 add_task(async function test_changeGuid() {
@@ -241,7 +243,7 @@ add_task(async function test_changeGuid() {
   }
 
   // Remove the visits added during this test.
-  await PlacesTestUtils.clearHistory();
+  await PlacesUtils.history.clear();
 });
 
 add_task(async function test_fetchVisitsForURL() {
@@ -272,7 +274,7 @@ add_task(async function test_fetchVisitsForURL() {
   }
 
   // Remove the visits added during this test.
-  await PlacesTestUtils.clearHistory();
+  await PlacesUtils.history.clear();
 });
 
 add_task(async function test_fetchGuidForURL() {
@@ -299,7 +301,7 @@ add_task(async function test_fetchGuidForURL() {
   }
 
   // Remove the visits added during this test.
-  await PlacesTestUtils.clearHistory();
+  await PlacesUtils.history.clear();
 });
 
 add_task(async function test_fetchURLInfoForGuid() {
@@ -330,7 +332,7 @@ add_task(async function test_fetchURLInfoForGuid() {
   equal(info, null, "The information object of a non-existent guid should be null.");
 
   // Remove the visits added during this test.
-  await PlacesTestUtils.clearHistory();
+  await PlacesUtils.history.clear();
 });
 
 add_task(async function test_getAllURLs() {
@@ -352,7 +354,7 @@ add_task(async function test_getAllURLs() {
   }
 
   // Remove the visits added during this test.
-  await PlacesTestUtils.clearHistory();
+  await PlacesUtils.history.clear();
 });
 
 add_task(async function test_order() {
@@ -646,9 +648,13 @@ add_task(async function test_pullChanges_tags() {
 
   info("Create tag");
   PlacesUtils.tagging.tagURI(uri("https://example.org"), ["taggy"]);
-  let tagFolderId = PlacesUtils.bookmarks.getIdForItemAt(
-    PlacesUtils.tagsFolderId, 0);
-  let tagFolderGuid = await PlacesUtils.promiseItemGuid(tagFolderId);
+
+  let tagBm = await PlacesUtils.bookmarks.fetch({
+    parentGuid: PlacesUtils.bookmarks.tagsGuid,
+    index: 0
+  });
+  let tagFolderGuid = tagBm.guid;
+  let tagFolderId = await PlacesUtils.promiseItemId(tagFolderGuid);
 
   info("Tagged bookmarks should be in changeset");
   {
@@ -703,10 +709,14 @@ add_task(async function test_pullChanges_tags() {
     await setChangesSynced(changes);
   }
 
-  info("Change tag entry URI using Bookmarks.changeBookmarkURI");
+  info("Change tag entry URL using Bookmarks.update");
   {
-    let tagId = PlacesUtils.bookmarks.getIdForItemAt(tagFolderId, 0);
-    PlacesUtils.bookmarks.changeBookmarkURI(tagId, uri("https://bugzilla.org"));
+    let bm = await PlacesUtils.bookmarks.fetch({
+      parentGuid: tagFolderGuid,
+      index: 0
+    });
+    bm.url = "https://bugzilla.org/";
+    await PlacesUtils.bookmarks.update(bm);
     let changes = await PlacesSyncUtils.bookmarks.pullChanges();
     deepEqual(Object.keys(changes).sort(),
       [firstItem.recordId, secondItem.recordId, untaggedItem.recordId].sort(),
@@ -714,17 +724,10 @@ add_task(async function test_pullChanges_tags() {
     assertTagForURLs("tricky", ["https://bugzilla.org/", "https://mozilla.org/"],
       "Should remove tag entry for old URI");
     await setChangesSynced(changes);
-  }
 
-  info("Change tag entry URL using Bookmarks.update");
-  {
-    let tagGuid = await PlacesUtils.promiseItemGuid(
-      PlacesUtils.bookmarks.getIdForItemAt(tagFolderId, 0));
-    await PlacesUtils.bookmarks.update({
-      guid: tagGuid,
-      url: "https://example.com",
-    });
-    let changes = await PlacesSyncUtils.bookmarks.pullChanges();
+    bm.url = "https://example.com/";
+    await PlacesUtils.bookmarks.update(bm);
+    changes = await PlacesSyncUtils.bookmarks.pullChanges();
     deepEqual(Object.keys(changes).sort(),
       [untaggedItem.recordId].sort(),
       "Should include tagged bookmarks after changing tag entry URL");
@@ -1785,21 +1788,6 @@ add_task(async function test_set_orphan_indices() {
       "Orphaned bookmarks should match before changing indices");
   }
 
-  info("Set synced orphan indices");
-  {
-    let fxId = await recordIdToId(fxBmk.recordId);
-    let tbId = await recordIdToId(tbBmk.recordId);
-    PlacesUtils.bookmarks.runInBatchMode(_ => {
-      PlacesUtils.bookmarks.setItemIndex(fxId, 1);
-      PlacesUtils.bookmarks.setItemIndex(tbId, 0);
-    }, null);
-    await PlacesTestUtils.promiseAsyncUpdates();
-    let orphanGuids = await PlacesSyncUtils.bookmarks.fetchGuidsWithAnno(
-      SYNC_PARENT_ANNO, nonexistentRecordId);
-    deepEqual(orphanGuids, [],
-      "Should remove orphan annos after updating indices");
-  }
-
   await PlacesUtils.bookmarks.eraseEverything();
   await PlacesSyncUtils.bookmarks.reset();
 });
@@ -1906,7 +1894,7 @@ add_task(async function test_fetch() {
       parentRecordId: "menu",
       description: "Folder description",
       childRecordIds: [folderBmk.recordId, folderSep.recordId],
-      parentTitle: "Bookmarks Menu",
+      parentTitle: "menu",
       dateAdded: item.dateAdded,
       title: "",
     }, "Should include description, children, title, and parent title in folder");
@@ -1924,7 +1912,7 @@ add_task(async function test_fetch() {
     deepEqual(item.tags, ["taggy"], "Should return tags");
     equal(item.description, "Bookmark description", "Should return bookmark description");
     strictEqual(item.loadInSidebar, true, "Should return sidebar anno");
-    equal(item.parentTitle, "Bookmarks Menu", "Should return parent title");
+    equal(item.parentTitle, "menu", "Should return parent title");
     strictEqual(item.title, "", "Should return empty title");
   }
 
@@ -2823,6 +2811,13 @@ add_task(async function test_remove_partial() {
 });
 
 add_task(async function test_migrateOldTrackerEntries() {
+  let timerPrecision = Preferences.get("privacy.reduceTimerPrecision");
+  Preferences.set("privacy.reduceTimerPrecision", false);
+
+  registerCleanupFunction(function() {
+    Preferences.set("privacy.reduceTimerPrecision", timerPrecision);
+  });
+
   let unknownBmk = await PlacesUtils.bookmarks.insert({
     parentGuid: PlacesUtils.bookmarks.menuGuid,
     url: "http://getfirefox.com",
@@ -2889,16 +2884,9 @@ add_task(async function test_migrateOldTrackerEntries() {
 });
 
 add_task(async function test_ensureMobileQuery() {
-  info("Ensure we correctly create the mobile query");
-
-  let PlacesUIUtils;
-  try {
-    PlacesUIUtils = Cu.import("resource:///modules/PlacesUIUtils.jsm", {}).PlacesUIUtils;
-    PlacesUIUtils.maybeRebuildLeftPane();
-  } catch (ex) {
-    info("Can't build left pane roots; skipping test");
-    return;
-  }
+  info("Ensure we correctly set the showMobileBookmarks preference");
+  const mobilePref = "browser.bookmarks.showMobileBookmarks";
+  Services.prefs.clearUserPref(mobilePref);
 
   await PlacesUtils.bookmarks.insert({
     guid: "bookmarkAAAA",
@@ -2914,65 +2902,18 @@ add_task(async function test_ensureMobileQuery() {
     title: "B",
   });
 
-  // Creates the organizer queries as a side effect.
-  let leftPaneId = PlacesUIUtils.leftPaneFolderId;
-  info(`Left pane root ID: ${leftPaneId}`);
-
-  let allBookmarksGuids = await PlacesSyncUtils.bookmarks.fetchGuidsWithAnno(
-    "PlacesOrganizer/OrganizerQuery", "AllBookmarks");
-  equal(allBookmarksGuids.length, 1, "Should create folder with all bookmarks queries");
-  let allBookmarkGuid = allBookmarksGuids[0];
-
-  info("Try creating query after organizer is ready");
   await PlacesSyncUtils.bookmarks.ensureMobileQuery();
-  let queryGuids = await PlacesSyncUtils.bookmarks.fetchGuidsWithAnno(
-    "PlacesOrganizer/OrganizerQuery", "MobileBookmarks");
-  equal(queryGuids.length, 1, "Should create query because we have bookmarks A and B");
 
-  let queryGuid = queryGuids[0];
-
-  let queryInfo = await PlacesUtils.bookmarks.fetch(queryGuid);
-  equal(queryInfo.url, `place:folder=MOBILE_BOOKMARKS`, "Query should point to mobile root");
-  equal(queryInfo.title, "Mobile Bookmarks", "Query title should be localized");
-  equal(queryInfo.parentGuid, allBookmarkGuid, "Should append mobile query to all bookmarks queries");
-
-  info("Rename root and query, then recreate");
-  await PlacesUtils.bookmarks.update({
-    guid: PlacesUtils.bookmarks.mobileGuid,
-    title: "renamed root",
-  });
-  await PlacesUtils.bookmarks.update({
-    guid: queryGuid,
-    title: "renamed query",
-  });
-  await PlacesSyncUtils.bookmarks.ensureMobileQuery();
-  let rootInfo = await PlacesUtils.bookmarks.fetch(PlacesUtils.bookmarks.mobileGuid);
-  equal(rootInfo.title, "Mobile Bookmarks", "Should fix root title");
-  queryInfo = await PlacesUtils.bookmarks.fetch(queryGuid);
-  equal(queryInfo.title, "Mobile Bookmarks", "Should fix query title");
-
-  info("Point query to different folder");
-  await PlacesUtils.bookmarks.update({
-    guid: queryGuid,
-    url: "place:folder=BOOKMARKS_MENU",
-  });
-  await PlacesSyncUtils.bookmarks.ensureMobileQuery();
-  queryInfo = await PlacesUtils.bookmarks.fetch(queryGuid);
-  equal(queryInfo.url.href, `place:folder=MOBILE_BOOKMARKS`,
-    "Should fix query URL to point to mobile root");
-
-  info("We shouldn't track the query or the left pane root");
-
-  let changes = await PlacesSyncUtils.bookmarks.pullChanges();
-  ok(!(queryGuid in changes), "Should not track mobile query");
+  Assert.ok(Services.prefs.getBoolPref(mobilePref),
+            "Pref should be true where there are bookmarks in the folder.");
 
   await PlacesUtils.bookmarks.remove("bookmarkAAAA");
   await PlacesUtils.bookmarks.remove("bookmarkBBBB");
+
   await PlacesSyncUtils.bookmarks.ensureMobileQuery();
 
-  queryGuids = await PlacesSyncUtils.bookmarks.fetchGuidsWithAnno(
-    "PlacesOrganizer/OrganizerQuery", "MobileBookmarks");
-  equal(queryGuids.length, 0, "Should delete query since there are no bookmarks");
+  Assert.ok(!Services.prefs.getBoolPref(mobilePref),
+            "Pref should be false where there are no bookmarks in the folder.");
 
   await PlacesUtils.bookmarks.eraseEverything();
   await PlacesSyncUtils.bookmarks.reset();

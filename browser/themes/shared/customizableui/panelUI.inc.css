@@ -30,12 +30,22 @@
 :root:not([uidensity=compact]):not([chromehidden~="toolbar"]) #PanelUI-button {
   margin-inline-start: 3px;
   border-inline-start: 1px solid;
-  border-image: linear-gradient(transparent 4px, rgba(0,0,0,.1) 4px, rgba(0,0,0,.1) calc(100% - 4px), transparent calc(100% - 4px));
+  border-image: linear-gradient(
+    transparent 4px,
+    var(--lwt-toolbar-vertical-separator, rgba(0,0,0,.1)) 4px,
+    var(--lwt-toolbar-vertical-separator, rgba(0,0,0,.1)) calc(100% - 4px),
+    transparent calc(100% - 4px)
+  );
   border-image-slice: 1;
 }
 
 :root:not([uidensity=compact]):not([chromehidden~="toolbar"]) #nav-bar[brighttext] > #PanelUI-button {
-  border-image-source: linear-gradient(transparent 4px, rgba(100%,100%,100%,.2) 4px, rgba(100%,100%,100%,.2) calc(100% - 4px), transparent calc(100% - 4px));
+  border-image-source: linear-gradient(
+    transparent 4px,
+    var(--lwt-toolbar-vertical-separator, rgba(255,255,255,.2)) 4px,
+    var(--lwt-toolbar-vertical-separator, rgba(255,255,255,.2)) calc(100% - 4px),
+    transparent calc(100% - 4px)
+  );
 }
 
 #PanelUI-menu-button[badge-status] > .toolbarbutton-badge-stack > .toolbarbutton-badge {
@@ -612,23 +622,18 @@ toolbarbutton[constrain-size="true"][cui-areatype="menu-panel"] > .toolbarbutton
 }
 
 #PanelUI-remotetabs {
-  --panel-ui-sync-illustration-height: 157.5px;
+  --panel-ui-sync-illustration-height: 91px;
 }
 
-.PanelUI-remotetabs-instruction-title,
 .PanelUI-remotetabs-instruction-label {
   /* If you change the margin here, the min-height of the synced tabs panel
     (e.g. #PanelUI-remotetabs[mainview] #PanelUI-remotetabs-setupsync, etc) may
     need adjusting (see bug 1248506) */
-  margin: 15px;
+  margin: 0;
   text-align: center;
   text-shadow: none;
   max-width: 15em;
   color: GrayText;
-}
-
-.PanelUI-remotetabs-instruction-title {
-  font-size: 1.3em;
 }
 
 /* The boxes with "instructions" get extra top and bottom padding for space
@@ -638,7 +643,6 @@ toolbarbutton[constrain-size="true"][cui-areatype="menu-panel"] > .toolbarbutton
     (e.g. #PanelUI-remotetabs[mainview] #PanelUI-remotetabs-setupsync, etc) may
     need adjusting (see bug 1248506) */
   padding-bottom: 30px;
-  padding-top: 15px;
 }
 
 .PanelUI-remotetabs-button {
@@ -651,8 +655,8 @@ toolbarbutton[constrain-size="true"][cui-areatype="menu-panel"] > .toolbarbutton
   /* If you change the margin or padding below, the min-height of the synced tabs
      panel (e.g. #PanelUI-remotetabs[mainview] #PanelUI-remotetabs-setupsync,
      etc) may need adjusting (see bug 1248506) */
-  margin-top: 10px;
-  margin-bottom: 10px;
+  margin-top: 15px;
+  margin-bottom: 15px;
   padding: 8px;
   text-shadow: none;
   min-width: 200px;
@@ -682,8 +686,12 @@ toolbarbutton[constrain-size="true"][cui-areatype="menu-panel"] > .toolbarbutton
 
 .fxaSyncIllustration,
 .fxaSyncIllustrationIssue {
-  width: 180px;
+  /* If you change the margin here, the min-height of the synced tabs panel
+    (e.g. #PanelUI-remotetabs[mainview] #PanelUI-remotetabs-setupsync, etc) may
+    need adjusting (see bug 1248506) */
+  width: 104px;
   height: var(--panel-ui-sync-illustration-height);
+  margin: 38px 0 15px;
   -moz-context-properties: fill;
   fill: #cdcdcd;
 }
@@ -715,10 +723,10 @@ toolbarbutton[constrain-size="true"][cui-areatype="menu-panel"] > .toolbarbutton
 #PanelUI-remotetabs[mainview] #PanelUI-remotetabs-nodevicespane,
 #PanelUI-remotetabs[mainview] #PanelUI-remotetabs-tabsdisabledpane {
   min-height: calc(var(--panel-ui-sync-illustration-height) +
-                   20px + /* margin of .PanelUI-remotetabs-button */
+                   53px + /* margin of .fxaSyncIllustration */
+                   30px + /* margin of .PanelUI-remotetabs-button */
                    16px + /* padding of .PanelUI-remotetabs-button */
-                   30px + /* margin of .PanelUI-remotetabs-instruction-label */
-                   30px + 15px + /* padding of .PanelUI-remotetabs-instruction-box */
+                   30px + /* padding of .PanelUI-remotetabs-instruction-box */
                    11em);
 }
 
@@ -1117,6 +1125,8 @@ menuitem.panel-subview-footer@menuStateActive@,
 #PanelUI-remotetabs-tabslist > toolbarbutton[itemtype="tab"],
 #PanelUI-historyItems > toolbarbutton {
   list-style-image: url("chrome://mozapps/skin/places/defaultFavicon.svg");
+  -moz-context-properties: fill;
+  fill: currentColor;
 }
 
 #appMenu-fxa-avatar,
@@ -1267,19 +1277,6 @@ toolbarpaletteitem[place="menu-panel"] > .subviewbutton-nav::after {
   -moz-appearance: none;
   margin-inline-end: 0;
 }
-
-%ifdef XP_WIN
-/* Overrides from menu.css to prevent items in the bookmarks popup from being too tall.
-   These won't be necessary once menu.css is loaded as a UA style (Bug 1420229). */
-#BMB_bookmarksPopup .subviewbutton > .menu-iconic-left {
-  padding-top: 0;
-  -moz-appearance: none;
-}
-
-#BMB_bookmarksPopup .subviewbutton {
-  -moz-appearance: none;
-}
-%endif
 
 menuitem[checked="true"].subviewbutton > .menu-iconic-left {
   visibility: hidden;
@@ -1511,10 +1508,6 @@ menuitem[checked="true"].subviewbutton > .menu-iconic-left {
   /* !important to override .cui-widget-panel toolbarbutton:not([wrap]) > .toolbarbutton-text
    * selector further down. */
   display: none !important;
-}
-
-#panelMenu_pocket {
-  display: none;
 }
 
 .subviewbutton.download {

@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Ұсынушы {provider}",
   "header_bookmarks_placeholder": "Сізде әлі бетбелгілер жоқ.",
   "header_stories_from": "ұсынған",
+  "context_menu_button_sr": "{title} үшін контекст мәзірін ашу",
   "type_label_visited": "Қаралған",
   "type_label_bookmarked": "Бетбелгілерде",
   "type_label_synced": "Басқа құрылғыдан синхрондалған",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Бұл сайтты түзету",
   "edit_topsites_dismiss_button": "Бұл сайтты тайдыру",
   "edit_topsites_add_button": "Қосу",
+  "edit_topsites_add_button_tooltip": "Топ сайт қосу",
   "topsites_form_add_header": "Жаңа топ сайты",
   "topsites_form_edit_header": "Топ сайтын түзету",
   "topsites_form_title_placeholder": "Атауын енгізіңіз",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Дайын. {provider} ұсынған көбірек мақалаларды алу үшін кейінірек тексеріңіз. Күте алмайсыз ба? Интернеттен көбірек тамаша мақалаларды алу үшін әйгілі теманы таңдаңыз.",
   "manual_migration_explanation2": "Firefox қолданбасын басқа браузер бетбелгілері, тарихы және парольдерімен қолданып көріңіз.",
   "manual_migration_cancel_button": "Жоқ, рахмет",
-  "manual_migration_import_button": "Қазір импорттау"
+  "manual_migration_import_button": "Қазір импорттау",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

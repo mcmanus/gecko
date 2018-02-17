@@ -883,7 +883,7 @@ SimpleTest.waitForFocus = function (callback, targetWindow, expectBlankPage) {
         if (isWrapper) {
             // Look for a tabbrowser and see if targetWindow corresponds to one
             // within that tabbrowser. If not, just return.
-            var tabBrowser = document.getElementsByTagName("tabbrowser")[0] || null;
+            var tabBrowser = window.gBrowser || null;
             browser = tabBrowser ? tabBrowser.getBrowserForContentWindow(targetWindow.top) : null;
             if (!browser) {
                 SimpleTest.info("child process window cannot be focused");
@@ -1683,13 +1683,13 @@ function getAndroidSdk() {
         var iframe = document.documentElement.appendChild(document.createElement("iframe"));
         iframe.style.display = "none";
         var nav = iframe.contentWindow.navigator;
-        if (nav.userAgent.indexOf("Mobile") == -1 &&
-            nav.userAgent.indexOf("Tablet") == -1) {
+        if (!nav.userAgent.includes("Mobile") &&
+            !nav.userAgent.includes("Tablet")) {
             gAndroidSdk = -1;
         } else {
             // See nsSystemInfo.cpp, the getProperty('version') returns different value
             // on each platforms, so we need to distinguish the android platform.
-            var versionString = nav.userAgent.indexOf("Android") != -1 ?
+            var versionString = nav.userAgent.includes("Android") ?
                                 'version' : 'sdk_version';
             gAndroidSdk = SpecialPowers.Cc['@mozilla.org/system-info;1']
                                        .getService(SpecialPowers.Ci.nsIPropertyBag2)

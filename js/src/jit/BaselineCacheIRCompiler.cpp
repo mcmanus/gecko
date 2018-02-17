@@ -11,10 +11,10 @@
 #include "jit/SharedICHelpers.h"
 #include "proxy/Proxy.h"
 
-#include "jscntxtinlines.h"
-#include "jscompartmentinlines.h"
-
 #include "jit/MacroAssembler-inl.h"
+#include "jit/SharedICHelpers-inl.h"
+#include "vm/JSCompartment-inl.h"
+#include "vm/JSContext-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -198,7 +198,7 @@ BaselineCacheIRCompiler::compile()
 
     Linker linker(masm);
     AutoFlushICache afc("getStubCode");
-    Rooted<JitCode*> newStubCode(cx_, linker.newCode<NoGC>(cx_, BASELINE_CODE));
+    Rooted<JitCode*> newStubCode(cx_, linker.newCode<NoGC>(cx_, CodeKind::Baseline));
     if (!newStubCode) {
         cx_->recoverFromOutOfMemory();
         return nullptr;
@@ -356,8 +356,8 @@ BaselineCacheIRCompiler::emitGuardSpecificAtom()
 
     // The pointers are not equal, so if the input string is also an atom it
     // must be a different string.
-    masm.branchTest32(Assembler::NonZero, Address(str, JSString::offsetOfFlags()),
-                      Imm32(JSString::ATOM_BIT), failure->label());
+    masm.branchTest32(Assembler::Zero, Address(str, JSString::offsetOfFlags()),
+                      Imm32(JSString::NON_ATOM_BIT), failure->label());
 
     // Check the length.
     masm.loadPtr(atomAddr, scratch);
@@ -445,6 +445,42 @@ BaselineCacheIRCompiler::emitGuardXrayExpandoShapeAndDefaultProto()
         masm.bind(&done);
     }
 
+    return true;
+}
+
+bool
+BaselineCacheIRCompiler::emitGuardFunctionPrototype()
+{
+    Register obj = allocator.useRegister(masm, reader.objOperandId());
+    Register prototypeObject = allocator.useRegister(masm, reader.objOperandId());
+
+    // Allocate registers before the failure path to make sure they're registered
+    // by addFailurePath.
+    AutoScratchRegister scratch1(allocator, masm);
+    AutoScratchRegister scratch2(allocator, masm);
+
+    FailurePath* failure;
+    if (!addFailurePath(&failure))
+        return false;
+
+     // Guard on the .prototype object.
+    masm.loadPtr(Address(obj, NativeObject::offsetOfSlots()), scratch1);
+    masm.load32(Address(stubAddress(reader.stubOffset())), scratch2);
+    BaseValueIndex prototypeSlot(scratch1, scratch2);
+    masm.branchTestObject(Assembler::NotEqual, prototypeSlot, failure->label());
+    masm.unboxObject(prototypeSlot, scratch1);
+    masm.branchPtr(Assembler::NotEqual,
+                   prototypeObject,
+                   scratch1, failure->label());
+
+    return true;
+}
+
+bool
+BaselineCacheIRCompiler::emitLoadValueResult()
+{
+    AutoOutputRegister output(*this);
+    masm.loadValue(stubAddress(reader.stubOffset()), output.valueReg());
     return true;
 }
 
@@ -622,7 +658,7 @@ BaselineCacheIRCompiler::emitCallScriptedGetterResult()
             return false;
 
         masm.loadPtr(getterAddr, callee);
-        masm.branchIfFunctionHasNoScript(callee, failure->label());
+        masm.branchIfFunctionHasNoJitEntry(callee, /* constructing */ false, failure->label());
         masm.loadJitCodeRaw(callee, code);
     }
 
@@ -865,15 +901,16 @@ BaselineCacheIRCompiler::emitLoadFrameArgumentResult()
 {
     AutoOutputRegister output(*this);
     Register index = allocator.useRegister(masm, reader.int32OperandId());
-    AutoScratchRegisterMaybeOutput scratch(allocator, masm, output);
+    AutoScratchRegister scratch1(allocator, masm);
+    AutoScratchRegisterMaybeOutput scratch2(allocator, masm, output);
 
     FailurePath* failure;
     if (!addFailurePath(&failure))
         return false;
 
     // Bounds check.
-    masm.loadPtr(Address(BaselineFrameReg, BaselineFrame::offsetOfNumActualArgs()), scratch);
-    masm.branch32(Assembler::AboveOrEqual, index, scratch, failure->label());
+    masm.loadPtr(Address(BaselineFrameReg, BaselineFrame::offsetOfNumActualArgs()), scratch1);
+    masm.boundsCheck32ForLoad(index, scratch1, scratch2, failure->label());
 
     // Load the argument.
     masm.loadValue(BaseValueIndex(BaselineFrameReg, index, BaselineFrame::offsetOfArg(0)),
@@ -1266,9 +1303,8 @@ BaselineCacheIRCompiler::emitStoreTypedObjectReferenceProperty()
     Address dest(scratch1, 0);
 
     emitStoreTypedObjectReferenceProp(val, type, dest, scratch2);
+    emitPostBarrierSlot(obj, val, scratch1);
 
-    if (type != ReferenceTypeDescr::TYPE_STRING)
-        emitPostBarrierSlot(obj, val, scratch1);
     return true;
 }
 
@@ -1721,7 +1757,7 @@ BaselineCacheIRCompiler::emitCallScriptedSetter()
             return false;
 
         masm.loadPtr(setterAddr, scratch1);
-        masm.branchIfFunctionHasNoScript(scratch1, failure->label());
+        masm.branchIfFunctionHasNoJitEntry(scratch1, /* constructing */ false, failure->label());
     }
 
     allocator.discardStack(masm);
@@ -2062,9 +2098,14 @@ BaselineCacheIRCompiler::init(CacheKind kind)
     AllocatableGeneralRegisterSet available(ICStubCompiler::availableGeneralRegs(numInputsInRegs));
 
     switch (kind) {
+      case CacheKind::GetIntrinsic:
+        MOZ_ASSERT(numInputs == 0);
+        break;
       case CacheKind::GetProp:
       case CacheKind::TypeOf:
       case CacheKind::GetIterator:
+      case CacheKind::ToBool:
+      case CacheKind::UnaryArith:
         MOZ_ASSERT(numInputs == 1);
         allocator.initInputLocation(0, R0);
         break;
@@ -2074,6 +2115,7 @@ BaselineCacheIRCompiler::init(CacheKind kind)
       case CacheKind::SetProp:
       case CacheKind::In:
       case CacheKind::HasOwn:
+      case CacheKind::InstanceOf:
         MOZ_ASSERT(numInputs == 2);
         allocator.initInputLocation(0, R0);
         allocator.initInputLocation(1, R1);
@@ -2299,6 +2341,24 @@ ICCacheIR_Updated::stubDataStart()
 {
     return reinterpret_cast<uint8_t*>(this) + stubInfo_->stubDataOffset();
 }
+
+/* static */ ICCacheIR_Regular*
+ICCacheIR_Regular::Clone(JSContext* cx, ICStubSpace* space, ICStub* firstMonitorStub,
+                         ICCacheIR_Regular& other)
+{
+    const CacheIRStubInfo* stubInfo = other.stubInfo();
+    MOZ_ASSERT(stubInfo->makesGCCalls());
+
+    size_t bytesNeeded = stubInfo->stubDataOffset() + stubInfo->stubDataSize();
+    void* newStub = space->alloc(bytesNeeded);
+    if (!newStub)
+        return nullptr;
+
+    ICCacheIR_Regular* res = new(newStub) ICCacheIR_Regular(other.jitCode(), stubInfo);
+    stubInfo->copyStubData(&other, res);
+    return res;
+}
+
 
 /* static */ ICCacheIR_Monitored*
 ICCacheIR_Monitored::Clone(JSContext* cx, ICStubSpace* space, ICStub* firstMonitorStub,

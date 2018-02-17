@@ -22,19 +22,18 @@
 #include "jsapi.h"
 // For JSFunctionSpecWithHelp
 #include "jsfriendapi.h"
-#include "jsobj.h"
 #include "jsstr.h"
-#ifdef XP_WIN
-# include "jswin.h"
-#endif
 #include "jswrapper.h"
 
+#include "gc/FreeOp.h"
 #include "js/Conversions.h"
 #include "shell/jsshell.h"
+#include "util/Windows.h"
+#include "vm/JSObject.h"
 #include "vm/StringBuffer.h"
 #include "vm/TypedArrayObject.h"
 
-#include "jsobjinlines.h"
+#include "vm/JSObject-inl.h"
 
 #ifdef XP_WIN
 # ifndef PATH_MAX
@@ -393,7 +392,8 @@ RCFile::release()
     return true;
 }
 
-class FileObject : public JSObject {
+class FileObject : public NativeObject
+{
     enum : uint32_t {
         FILE_SLOT = 0,
         NUM_SLOTS

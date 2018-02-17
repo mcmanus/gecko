@@ -42,19 +42,19 @@ describe("PlacesFeed", () => {
       }
     });
     globals.set("Pocket", {savePage: sandbox.spy()});
-    global.Components.classes["@mozilla.org/browser/nav-history-service;1"] = {
+    global.Cc["@mozilla.org/browser/nav-history-service;1"] = {
       getService() {
         return global.PlacesUtils.history;
       }
     };
-    global.Components.classes["@mozilla.org/browser/nav-bookmarks-service;1"] = {
+    global.Cc["@mozilla.org/browser/nav-bookmarks-service;1"] = {
       getService() {
         return global.PlacesUtils.bookmarks;
       }
     };
     sandbox.spy(global.Services.obs, "addObserver");
     sandbox.spy(global.Services.obs, "removeObserver");
-    sandbox.spy(global.Components.utils, "reportError");
+    sandbox.spy(global.Cu, "reportError");
 
     feed = new PlacesFeed();
     feed.store = {dispatch: sinon.spy()};
@@ -119,48 +119,68 @@ describe("PlacesFeed", () => {
       assert.calledWith(global.NewTabUtils.activityStreamLinks.deleteHistoryEntry, "guava.com");
       assert.calledWith(global.NewTabUtils.activityStreamLinks.blockURL, {url: "guava.com"});
     });
-    it("should call openNewWindow with the correct url on OPEN_NEW_WINDOW", () => {
-      sinon.stub(feed, "openNewWindow");
-      const openWindowAction = {type: at.OPEN_NEW_WINDOW, data: {url: "foo.com"}};
-      feed.onAction(openWindowAction);
-      assert.calledWith(feed.openNewWindow, openWindowAction);
-    });
-    it("should call openNewWindow with the correct url and privacy args on OPEN_PRIVATE_WINDOW", () => {
-      sinon.stub(feed, "openNewWindow");
-      const openWindowAction = {type: at.OPEN_PRIVATE_WINDOW, data: {url: "foo.com"}};
-      feed.onAction(openWindowAction);
-      assert.calledWith(feed.openNewWindow, openWindowAction, true);
-    });
-    it("should call openNewWindow with the correct url on OPEN_NEW_WINDOW", () => {
+    it("should call openLinkIn with the correct url and where on OPEN_NEW_WINDOW", () => {
+      const openLinkIn = sinon.stub();
       const openWindowAction = {
         type: at.OPEN_NEW_WINDOW,
         data: {url: "foo.com"},
-        _target: {browser: {ownerGlobal: {openLinkIn: () => {}}}}
+        _target: {browser: {ownerGlobal: {openLinkIn}}}
       };
-      sinon.stub(openWindowAction._target.browser.ownerGlobal, "openLinkIn");
+
       feed.onAction(openWindowAction);
-      assert.calledOnce(openWindowAction._target.browser.ownerGlobal.openLinkIn);
+
+      assert.calledOnce(openLinkIn);
+      const [url, where, params] = openLinkIn.firstCall.args;
+      assert.equal(url, "foo.com");
+      assert.equal(where, "window");
+      assert.propertyVal(params, "private", false);
+    });
+    it("should call openLinkIn with the correct url, where and privacy args on OPEN_PRIVATE_WINDOW", () => {
+      const openLinkIn = sinon.stub();
+      const openWindowAction = {
+        type: at.OPEN_PRIVATE_WINDOW,
+        data: {url: "foo.com"},
+        _target: {browser: {ownerGlobal: {openLinkIn}}}
+      };
+
+      feed.onAction(openWindowAction);
+
+      assert.calledOnce(openLinkIn);
+      const [url, where, params] = openLinkIn.firstCall.args;
+      assert.equal(url, "foo.com");
+      assert.equal(where, "window");
+      assert.propertyVal(params, "private", true);
     });
     it("should open link on OPEN_LINK", () => {
-      sinon.stub(feed, "openNewWindow");
+      const openLinkIn = sinon.stub();
       const openLinkAction = {
         type: at.OPEN_LINK,
-        data: {url: "foo.com", event: {where: "current"}},
-        _target: {browser: {ownerGlobal: {openLinkIn: sinon.spy(), whereToOpenLink: e => e.where}}}
+        data: {url: "foo.com"},
+        _target: {browser: {ownerGlobal: {openLinkIn, whereToOpenLink: e => "current"}}}
       };
+
       feed.onAction(openLinkAction);
-      assert.calledWith(openLinkAction._target.browser.ownerGlobal.openLinkIn, openLinkAction.data.url, "current");
+
+      assert.calledOnce(openLinkIn);
+      const [url, where, params] = openLinkIn.firstCall.args;
+      assert.equal(url, "foo.com");
+      assert.equal(where, "current");
+      assert.propertyVal(params, "private", false);
+      assert.propertyVal(params, "triggeringPrincipal", undefined);
     });
     it("should open link with referrer on OPEN_LINK", () => {
-      globals.set("Services", {io: {newURI: url => `URI:${url}`}});
-      sinon.stub(feed, "openNewWindow");
+      const openLinkIn = sinon.stub();
       const openLinkAction = {
         type: at.OPEN_LINK,
-        data: {url: "foo.com", referrer: "foo.com/ref", event: {where: "tab"}},
-        _target: {browser: {ownerGlobal: {openLinkIn: sinon.spy(), whereToOpenLink: e => e.where}}}
+        data: {url: "foo.com", referrer: "foo.com/ref"},
+        _target: {browser: {ownerGlobal: {openLinkIn, whereToOpenLink: e => "tab"}}}
       };
+
       feed.onAction(openLinkAction);
-      assert.calledWith(openLinkAction._target.browser.ownerGlobal.openLinkIn, openLinkAction.data.url, "tab", {referrerURI: `URI:${openLinkAction.data.referrer}`});
+
+      const [, , params] = openLinkIn.firstCall.args;
+      assert.propertyVal(params, "referrerPolicy", 5);
+      assert.propertyVal(params.referrerURI, "spec", "foo.com/ref");
     });
     it("should save to Pocket on SAVE_TO_POCKET", () => {
       feed.onAction({type: at.SAVE_TO_POCKET, data: {site: {url: "raspberry.com", title: "raspberry"}}, _target: {browser: {}}});
@@ -244,11 +264,7 @@ describe("PlacesFeed", () => {
         // Yes, onItemAdded has at least 8 arguments. See function definition for docs.
         const args = [null, null, null, TYPE_BOOKMARK,
           {spec: FAKE_BOOKMARK.url, scheme: "http"}, FAKE_BOOKMARK.bookmarkTitle,
-          FAKE_BOOKMARK.dateAdded,
-          FAKE_BOOKMARK.bookmarkGuid,
-          "",
-          SOURCES.DEFAULT
-        ];
+          FAKE_BOOKMARK.dateAdded, FAKE_BOOKMARK.bookmarkGuid, "", SOURCES.DEFAULT];
         await observer.onItemAdded(...args);
 
         assert.calledWith(dispatch, {type: at.PLACES_BOOKMARK_ADDED, data: FAKE_BOOKMARK});
@@ -257,11 +273,7 @@ describe("PlacesFeed", () => {
         // Yes, onItemAdded has at least 8 arguments. See function definition for docs.
         const args = [null, null, null, TYPE_BOOKMARK,
           {spec: FAKE_BOOKMARK.url, scheme: "https"}, FAKE_BOOKMARK.bookmarkTitle,
-          FAKE_BOOKMARK.dateAdded,
-          FAKE_BOOKMARK.bookmarkGuid,
-          "",
-          SOURCES.DEFAULT
-        ];
+          FAKE_BOOKMARK.dateAdded, FAKE_BOOKMARK.bookmarkGuid, "", SOURCES.DEFAULT];
         await observer.onItemAdded(...args);
 
         assert.calledWith(dispatch, {type: at.PLACES_BOOKMARK_ADDED, data: FAKE_BOOKMARK});
@@ -270,11 +282,7 @@ describe("PlacesFeed", () => {
         // Yes, onItemAdded has at least 8 arguments. See function definition for docs.
         const args = [null, null, null, TYPE_BOOKMARK,
           {spec: FAKE_BOOKMARK.url, scheme: "places"}, FAKE_BOOKMARK.bookmarkTitle,
-          FAKE_BOOKMARK.dateAdded,
-          FAKE_BOOKMARK.bookmarkGuid,
-          "",
-          SOURCES.DEFAULT
-        ];
+          FAKE_BOOKMARK.dateAdded, FAKE_BOOKMARK.bookmarkGuid, "", SOURCES.DEFAULT];
         await observer.onItemAdded(...args);
 
         assert.notCalled(dispatch);
@@ -283,11 +291,7 @@ describe("PlacesFeed", () => {
         // Yes, onItemAdded has at least 8 arguments. See function definition for docs.
         const args = [null, null, null, TYPE_BOOKMARK,
           {spec: FAKE_BOOKMARK.url, scheme: "http"}, FAKE_BOOKMARK.bookmarkTitle,
-          FAKE_BOOKMARK.dateAdded,
-          FAKE_BOOKMARK.bookmarkGuid,
-          "",
-          SOURCES.IMPORT_REPLACE
-        ];
+          FAKE_BOOKMARK.dateAdded, FAKE_BOOKMARK.bookmarkGuid, "", SOURCES.IMPORT_REPLACE];
         await observer.onItemAdded(...args);
 
         assert.notCalled(dispatch);
@@ -332,7 +336,7 @@ describe("PlacesFeed", () => {
         const args = [null, "title", null, null, null, TYPE_BOOKMARK, null, FAKE_BOOKMARK.guid];
         await observer.onItemChanged(...args);
 
-        assert.calledWith(global.Components.utils.reportError, e);
+        assert.calledWith(global.Cu.reportError, e);
       });
       it.skip("should ignore events that are not of TYPE_BOOKMARK", async () => {
         await observer.onItemChanged(null, "title", null, null, null, "nottypebookmark");

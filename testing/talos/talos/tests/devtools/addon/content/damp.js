@@ -1,10 +1,11 @@
-const { Services } = Components.utils.import("resource://gre/modules/Services.jsm", {});
-const { XPCOMUtils } = Cu.import("resource://gre/modules/XPCOMUtils.jsm", {});
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm", {});
+const { XPCOMUtils } = ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", {});
 const gMgr = Cc["@mozilla.org/memory-reporter-manager;1"].getService(Ci.nsIMemoryReporterManager);
+const env = Cc["@mozilla.org/process/environment;1"].getService(Ci.nsIEnvironment);
 
 XPCOMUtils.defineLazyGetter(this, "require", function() {
   let { require } =
-    Components.utils.import("resource://devtools/shared/Loader.jsm", {});
+    ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
   return require;
 });
 XPCOMUtils.defineLazyGetter(this, "gDevTools", function() {
@@ -19,15 +20,17 @@ XPCOMUtils.defineLazyGetter(this, "TargetFactory", function() {
   let { TargetFactory } = require("devtools/client/framework/target");
   return TargetFactory;
 });
-XPCOMUtils.defineLazyGetter(this, "ChromeUtils", function() {
-  return require("ChromeUtils");
-});
 
 const webserver = Services.prefs.getCharPref("addon.test.damp.webserver");
 
 const SIMPLE_URL = webserver + "/tests/devtools/addon/content/pages/simple.html";
 const COMPLICATED_URL = webserver + "/tests/tp5n/bild.de/www.bild.de/index.html";
 const CUSTOM_URL = webserver + "/tests/devtools/addon/content/pages/custom/$TOOL.html";
+
+// Record allocation count in new subtests if DEBUG_DEVTOOLS_ALLOCATIONS is set to
+// "normal". Print allocation sites to stdout if DEBUG_DEVTOOLS_ALLOCATIONS is set to
+// "verbose".
+const DEBUG_ALLOCATIONS = env.get("DEBUG_DEVTOOLS_ALLOCATIONS");
 
 function getMostRecentBrowserWindow() {
   return Services.wm.getMostRecentWindow("navigator:browser");
@@ -231,6 +234,14 @@ Damp.prototype = {
    *         and we should record its duration.
    */
   runTest(label) {
+    if (DEBUG_ALLOCATIONS) {
+      if (!this.allocationTracker) {
+        this.allocationTracker = this.startAllocationTracker();
+      }
+      // Flush the current allocations before running the test
+      this.allocationTracker.flushAllocations();
+    }
+
     let startLabel = label + ".start";
     performance.mark(startLabel);
     let start = performance.now();
@@ -244,6 +255,15 @@ Damp.prototype = {
           name: label,
           value: duration
         });
+
+        if (DEBUG_ALLOCATIONS == "normal") {
+          this._results.push({
+            name: label + ".allocations",
+            value: this.allocationTracker.countAllocations()
+          });
+        } else if (DEBUG_ALLOCATIONS == "verbose") {
+          this.allocationTracker.logAllocationSites();
+        }
       }
     };
   },
@@ -266,7 +286,7 @@ Damp.prototype = {
   reloadPage(onReload) {
     return new Promise(resolve => {
       let browser = gBrowser.selectedBrowser;
-      if (typeof (onReload) == "function") {
+      if (typeof(onReload) == "function") {
         onReload().then(resolve);
       } else {
         browser.addEventListener("load", resolve, {capture: true, once: true});
@@ -772,6 +792,35 @@ async _consoleOpenWithCachedMessagesTest() {
     await this.testTeardown();
   },
 
+  async reloadConsoleAndLog(label, toolbox, expectedMessages) {
+    let onReload = async function() {
+      let webconsole = toolbox.getPanel("webconsole");
+      await new Promise(done => {
+        let messages = 0;
+        let receiveMessages = () => {
+          if (++messages == expectedMessages) {
+            webconsole.hud.ui.off("new-messages", receiveMessages);
+            done();
+          }
+        };
+        webconsole.hud.ui.on("new-messages", receiveMessages);
+      });
+    };
+    await this.reloadPageAndLog(label + ".webconsole", toolbox, onReload);
+  },
+
+  async customConsole() {
+    // These numbers controls the number of console api calls we do in the test
+    let sync = 250, stream = 250, async = 250;
+    let page = `console.html?sync=${sync}&stream=${stream}&async=${async}`;
+    let url = CUSTOM_URL.replace(/\$TOOL\.html/, page);
+    await this.testSetup(url);
+    let toolbox = await this.openToolboxAndLog("custom.webconsole", "webconsole");
+    await this.reloadConsoleAndLog("custom", toolbox, sync + stream + async);
+    await this.closeToolboxAndLog("custom.webconsole", toolbox);
+    await this.testTeardown();
+  },
+
   _getToolLoadingTests(url, label, {
     expectedMessages,
     expectedRequests,
@@ -791,20 +840,7 @@ async _consoleOpenWithCachedMessagesTest() {
       async webconsole() {
         await this.testSetup(url);
         let toolbox = await this.openToolboxAndLog(label + ".webconsole", "webconsole");
-        let onReload = async function() {
-          let webconsole = toolbox.getPanel("webconsole");
-          await new Promise(done => {
-            let messages = 0;
-            let receiveMessages = () => {
-              if (++messages == expectedMessages) {
-                webconsole.hud.ui.off("new-messages", receiveMessages);
-                done();
-              }
-            };
-            webconsole.hud.ui.on("new-messages", receiveMessages);
-          });
-        };
-        await this.reloadPageAndLog(label + ".webconsole", toolbox, onReload);
+        await this.reloadConsoleAndLog(label, toolbox, expectedMessages);
         await this.closeToolboxAndLog(label + ".webconsole", toolbox);
         await this.testTeardown();
       },
@@ -944,6 +980,10 @@ async _consoleOpenWithCachedMessagesTest() {
   _onTestComplete: null,
 
   _doneInternal() {
+    if (this.allocationTracker) {
+      this.allocationTracker.stop();
+      this.allocationTracker = null;
+    }
     this._logLine("DAMP_RESULTS_JSON=" + JSON.stringify(this._results));
     this._reportAllResults();
     this._win.gBrowser.selectedTab = this._dampTab;
@@ -1005,6 +1045,11 @@ async _consoleOpenWithCachedMessagesTest() {
     });
   },
 
+  startAllocationTracker() {
+    const { allocationTracker } = require("devtools/shared/test-helpers/allocation-tracker");
+    return allocationTracker();
+  },
+
   startTest(doneCallback, config) {
     this._onTestComplete = function(results) {
       TalosParentProfiler.pause("DAMP - end");
@@ -1012,7 +1057,6 @@ async _consoleOpenWithCachedMessagesTest() {
     };
     this._config = config;
 
-    const Ci = Components.interfaces;
     var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"].getService(Ci.nsIWindowMediator);
     this._win = wm.getMostRecentWindow("navigator:browser");
     this._dampTab = this._win.gBrowser.selectedTab;
@@ -1052,6 +1096,7 @@ async _consoleOpenWithCachedMessagesTest() {
     // Run all tests against a document specific to each tool
     tests["custom.inspector"] = this.customInspector;
     tests["custom.debugger"] = this.customDebugger;
+    tests["custom.webconsole"] = this.customConsole;
 
     // Run individual tests covering a very precise tool feature
     tests["console.bulklog"] = this._consoleBulkLoggingTest;
@@ -1092,6 +1137,8 @@ async _consoleOpenWithCachedMessagesTest() {
     // related to Firefox startup or DAMP setup during the first test.
     garbageCollect().then(() => {
       this._doSequence(sequenceArray, this._doneInternal);
+    }).catch(e => {
+      dump("Exception while running DAMP tests: " + e + "\n" + e.stack + "\n");
     });
   }
 };

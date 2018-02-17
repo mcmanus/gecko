@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "បានណែនាំដោយ {provider}",
   "header_bookmarks_placeholder": "អ្នកមិនមានចំណាំណាមួយនៅឡើយទេ ។",
   "header_stories_from": "មកពី",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "បាន​ចូល​មើល",
   "type_label_bookmarked": "បាន​ចំណាំ",
   "type_label_synced": "បាន​ធ្វើ​សមកាលកម្ម​ពី​ឧបករណ៍​ផ្សេង​ទៀត",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "កែសម្រួលសាយនេះ",
   "edit_topsites_dismiss_button": "ច្រានចោលសាយនេះ",
   "edit_topsites_add_button": "បន្ថែម",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "សាយកំពូលថ្មី",
   "topsites_form_edit_header": "កែសម្រួលសាយកំពូល",
   "topsites_form_title_placeholder": "បញ្ចូលចំណងជើង",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "You’ve caught up. Check back later for more top stories from {provider}. Can’t wait? Select a popular topic to find more great stories from around the web.",
   "manual_migration_explanation2": "សាកល្បងប្រើ Firefox ជាមួយចំណាំ ប្រវត្តិ និងពាក្យសម្ងាត់ពីកម្មវិធីរុករកផ្សេងទៀត។",
   "manual_migration_cancel_button": "ទេ អរគុណ",
-  "manual_migration_import_button": "នាំចូលឥឡូវនេះ"
+  "manual_migration_import_button": "នាំចូលឥឡូវនេះ",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

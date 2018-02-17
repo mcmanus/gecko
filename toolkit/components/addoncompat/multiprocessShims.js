@@ -4,15 +4,12 @@
 
 "use strict";
 
-const Cu = Components.utils;
-const Ci = Components.interfaces;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "Prefetcher",
-                                  "resource://gre/modules/Prefetcher.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "RemoteAddonsParent",
-                                  "resource://gre/modules/RemoteAddonsParent.jsm");
+ChromeUtils.defineModuleGetter(this, "Prefetcher",
+                               "resource://gre/modules/Prefetcher.jsm");
+ChromeUtils.defineModuleGetter(this, "RemoteAddonsParent",
+                               "resource://gre/modules/RemoteAddonsParent.jsm");
 
 /**
  * This service overlays the API that the browser exposes to

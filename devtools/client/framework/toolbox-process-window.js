@@ -6,9 +6,7 @@
 
 "use strict";
 
-var { classes: Cc, interfaces: Ci, utils: Cu } = Components;
-
-var { loader, require } = Cu.import("resource://devtools/shared/Loader.jsm", {});
+var { loader, require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
 // Require this module to setup core modules
 loader.require("devtools/client/framework/devtools-browser");
 
@@ -78,6 +76,7 @@ function setPrefDefaults() {
   Services.prefs.setBoolPref("devtools.debugger.new-debugger-frontend", true);
   Services.prefs.setBoolPref("devtools.webconsole.new-frontend-enabled", false);
   Services.prefs.setBoolPref("devtools.preference.new-panel-enabled", false);
+  Services.prefs.setBoolPref("layout.css.emulate-moz-box-with-flex", false);
 }
 window.addEventListener("load", function () {
   let cmdClose = document.getElementById("toolbox-cmd-close");
@@ -144,6 +143,7 @@ function evaluateTestScript(script, toolbox) {
   let sandbox = Cu.Sandbox(window);
   sandbox.window = window;
   sandbox.toolbox = toolbox;
+  sandbox.ChromeUtils = ChromeUtils;
   Cu.evalInSandbox(script, sandbox);
 }
 
@@ -164,7 +164,7 @@ function bindToolboxHandlers() {
 }
 
 function setupThreadListeners(panel) {
-  updateBadgeText(panel._selectors.getPause(panel._getState()));
+  updateBadgeText(panel.isPaused());
 
   let onPaused = updateBadgeText.bind(null, true);
   let onResumed = updateBadgeText.bind(null, false);

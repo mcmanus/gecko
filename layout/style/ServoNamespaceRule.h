@@ -22,7 +22,8 @@ public:
   {
   }
 
-  NS_DECL_ISUPPORTS_INHERITED
+  NS_INLINE_DECL_REFCOUNTING_INHERITED(ServoNamespaceRule,
+                                       dom::CSSNamespaceRule)
 
 #ifdef DEBUG
   void List(FILE* out = stdout, int32_t aIndent = 0) const final override;
@@ -33,7 +34,7 @@ public:
   void GetURLSpec(nsString& aURLSpec) const final override;
 
   // WebIDL interface
-  void GetCssTextImpl(nsAString& aCssText) const final override;
+  void GetCssText(nsAString& aCssText) const final override;
 
   size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const final override;
 

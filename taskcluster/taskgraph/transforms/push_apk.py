@@ -61,6 +61,14 @@ def make_task_description(config, jobs):
     for job in jobs:
         job['dependencies'] = generate_dependencies(job['dependent-tasks'])
         job['worker']['upstream-artifacts'] = generate_upstream_artifacts(job['dependencies'])
+
+        # Use the rc-google-play-track and rc-rollout-percentage in RC relpro flavors
+        if config.params['release_type'] == 'rc':
+            job['worker']['google-play-track'] = job['worker']['rc-google-play-track']
+            job['worker']['rollout-percentage'] = job['worker']['rc-rollout-percentage']
+        del(job['worker']['rc-google-play-track'])
+        del(job['worker']['rc-rollout-percentage'])
+
         resolve_keyed_by(
             job, 'worker.google-play-track', item_name=job['name'],
             project=config.params['project']
@@ -94,7 +102,7 @@ def generate_upstream_artifacts(dependencies):
         'taskType': 'signing',
         'paths': ['public/build/target.apk'],
     } for task_kind in dependencies.keys()
-      if task_kind not in ('push-apk-breakpoint', 'google-play-strings')
+      if task_kind not in ('push-apk-breakpoint', 'google-play-strings', 'beetmover-checksums')
     ]
 
     google_play_strings = [{

@@ -82,9 +82,6 @@ pref("devtools.gridinspector.showGridAreas", false);
 pref("devtools.gridinspector.showGridLineNumbers", false);
 pref("devtools.gridinspector.showInfiniteLines", false);
 
-// Common highlighter preferences
-pref("devtools.highlighter.writingModeAdjust", false);
-
 // Whether or not the box model panel is opened in the computed view
 pref("devtools.computed.boxmodel.opened", true);
 // Whether or not the box model panel is opened in the layout view
@@ -306,6 +303,9 @@ pref("devtools.webconsole.autoMultiline", true);
 
 // Enable the new webconsole frontend
 pref("devtools.webconsole.new-frontend-enabled", true);
+
+// Enable the new webconsole frontend in the browser console
+pref("devtools.browserconsole.new-frontend-enabled", false);
 
 // Enable the webconsole sidebar toggle
 pref("devtools.webconsole.sidebarToggle", false);

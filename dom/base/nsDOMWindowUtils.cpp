@@ -978,22 +978,6 @@ nsDOMWindowUtils::SendTouchEventCommon(const nsAString& aType,
 }
 
 NS_IMETHODIMP
-nsDOMWindowUtils::SendKeyEvent(const nsAString& aType,
-                               int32_t aKeyCode,
-                               int32_t aCharCode,
-                               int32_t aModifiers,
-                               uint32_t aAdditionalFlags,
-                               bool* aDefaultActionTaken)
-{
-  // get the widget to send the event to
-  nsCOMPtr<nsIWidget> widget = GetWidget();
-
-  return nsContentUtils::SendKeyEvent(widget, aType, aKeyCode, aCharCode,
-                                      aModifiers, aAdditionalFlags,
-                                      aDefaultActionTaken);
-}
-
-NS_IMETHODIMP
 nsDOMWindowUtils::SendNativeKeyEvent(int32_t aNativeKeyboardLayout,
                                      int32_t aNativeKeyCode,
                                      int32_t aModifiers,
@@ -1264,21 +1248,6 @@ nsDOMWindowUtils::GetWidgetForElement(nsIDOMElement* aElement)
   }
 
   return nullptr;
-}
-
-NS_IMETHODIMP
-nsDOMWindowUtils::Focus(nsIDOMElement* aElement)
-{
-  nsCOMPtr<nsPIDOMWindowOuter> window = do_QueryReferent(mWindow);
-  nsIFocusManager* fm = nsFocusManager::GetFocusManager();
-  if (fm) {
-    if (aElement)
-      fm->SetFocus(aElement, 0);
-    else
-      fm->ClearFocus(window);
-  }
-
-  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -1819,17 +1788,14 @@ nsDOMWindowUtils::GetIMEStatus(uint32_t *aState)
 }
 
 NS_IMETHODIMP
-nsDOMWindowUtils::GetFocusedInputType(char** aType)
+nsDOMWindowUtils::GetFocusedInputType(nsAString& aType)
 {
-  NS_ENSURE_ARG_POINTER(aType);
-
   nsCOMPtr<nsIWidget> widget = GetWidget();
   if (!widget) {
     return NS_ERROR_FAILURE;
   }
 
-  InputContext context = widget->GetInputContext();
-  *aType = ToNewCString(context.mHTMLInputType);
+  aType = widget->GetInputContext().mHTMLInputType;
   return NS_OK;
 }
 
@@ -2882,6 +2848,7 @@ nsDOMWindowUtils::GetUnanimatedComputedStyle(nsIDOMElement* aElement,
     return NS_OK;
   }
 
+#ifdef MOZ_OLD_STYLE
   StyleAnimationValue computedValue;
   if (!StyleAnimationValue::ExtractComputedValue(propertyID,
                                                  styleContext->AsGecko(),
@@ -2915,6 +2882,9 @@ nsDOMWindowUtils::GetUnanimatedComputedStyle(nsIDOMElement* aElement,
   MOZ_ASSERT(uncomputeResult,
              "Unable to get specified value from computed value");
   return NS_OK;
+#else
+  MOZ_CRASH("old style system disabled");
+#endif
 }
 
 nsresult
@@ -4445,24 +4415,6 @@ nsDOMWindowUtils::GetIsStyledByServo(bool* aStyledByServo)
   return NS_OK;
 }
 
-NS_IMETHODIMP
-nsDOMWindowUtils::AddToStyloBlocklist(const nsACString& aBlockedDomain)
-{
-#ifdef MOZ_STYLO
-  nsLayoutUtils::AddToStyloBlocklist(aBlockedDomain);
-#endif
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDOMWindowUtils::RemoveFromStyloBlocklist(const nsACString& aBlockedDomain)
-{
-#ifdef MOZ_STYLO
-  nsLayoutUtils::RemoveFromStyloBlocklist(aBlockedDomain);
-#endif
-  return NS_OK;
-}
-
 NS_INTERFACE_MAP_BEGIN(nsTranslationNodeList)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
   NS_INTERFACE_MAP_ENTRY(nsITranslationNodeList)
@@ -4497,5 +4449,14 @@ nsTranslationNodeList::GetLength(uint32_t* aRetVal)
 {
   NS_ENSURE_ARG_POINTER(aRetVal);
   *aRetVal = mLength;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::WrCapture()
+{
+  if (WebRenderBridgeChild* wrbc = GetWebRenderBridge()) {
+    wrbc->Capture();
+  }
   return NS_OK;
 }

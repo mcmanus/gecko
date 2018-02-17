@@ -39,31 +39,31 @@ const MAX_TIME_DIFFERENCE = 3000;
 // times are modified (10 hours old).
 const MAKE_FILE_OLD_DIFFERENCE = 10 * 3600 * 1000;
 
-Components.utils.import("resource://gre/modules/addons/AddonRepository.jsm");
-Components.utils.import("resource://gre/modules/AppConstants.jsm");
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
-Components.utils.import("resource://gre/modules/FileUtils.jsm");
-Components.utils.import("resource://gre/modules/Services.jsm");
-Components.utils.import("resource://gre/modules/NetUtil.jsm");
-const { OS } = Components.utils.import("resource://gre/modules/osfile.jsm", {});
-Components.utils.import("resource://gre/modules/AsyncShutdown.jsm");
+ChromeUtils.import("resource://gre/modules/addons/AddonRepository.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/FileUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
+const { OS } = ChromeUtils.import("resource://gre/modules/osfile.jsm", {});
+ChromeUtils.import("resource://gre/modules/AsyncShutdown.jsm");
 
-Components.utils.import("resource://testing-common/AddonTestUtils.jsm");
+ChromeUtils.import("resource://testing-common/AddonTestUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "Extension",
-                                  "resource://gre/modules/Extension.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ExtensionTestUtils",
-                                  "resource://testing-common/ExtensionXPCShellUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ExtensionTestCommon",
-                                  "resource://testing-common/ExtensionTestCommon.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "HttpServer",
-                                  "resource://testing-common/httpd.js");
-XPCOMUtils.defineLazyModuleGetter(this, "MockAsyncShutdown",
-                                  "resource://testing-common/AddonTestUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "MockRegistrar",
-                                  "resource://testing-common/MockRegistrar.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "MockRegistry",
-                                  "resource://testing-common/MockRegistry.jsm");
+ChromeUtils.defineModuleGetter(this, "Extension",
+                               "resource://gre/modules/Extension.jsm");
+ChromeUtils.defineModuleGetter(this, "ExtensionTestUtils",
+                               "resource://testing-common/ExtensionXPCShellUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "ExtensionTestCommon",
+                               "resource://testing-common/ExtensionTestCommon.jsm");
+ChromeUtils.defineModuleGetter(this, "HttpServer",
+                               "resource://testing-common/httpd.js");
+ChromeUtils.defineModuleGetter(this, "MockAsyncShutdown",
+                               "resource://testing-common/AddonTestUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "MockRegistrar",
+                               "resource://testing-common/MockRegistrar.jsm");
+ChromeUtils.defineModuleGetter(this, "MockRegistry",
+                               "resource://testing-common/MockRegistry.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "aomStartup",
                                    "@mozilla.org/addons/addon-manager-startup;1",
@@ -156,7 +156,7 @@ Object.defineProperty(this, "TEST_UNPACKED", {
 });
 
 // We need some internal bits of AddonManager
-var AMscope = Components.utils.import("resource://gre/modules/AddonManager.jsm", {});
+var AMscope = ChromeUtils.import("resource://gre/modules/AddonManager.jsm", {});
 var { AddonManager, AddonManagerInternal, AddonManagerPrivate } = AMscope;
 
 const promiseAddonByID = AddonManager.getAddonByID;
@@ -678,16 +678,21 @@ function check_startup_changes(aType, aIds) {
  * @return  An nsIFile for the directory in which the add-on is installed.
  */
 function writeInstallRDFToDir(aData, aDir, aId = aData.id, aExtraFile = null) {
+  return awaitPromise(promiseWriteInstallRDFToDir(aData, aDir, aId, aExtraFile));
+}
+async function promiseWriteInstallRDFToDir(aData, aDir, aId = aData.id, aExtraFile = null) {
   let files = {
     "install.rdf": AddonTestUtils.createInstallRDF(aData),
   };
-  if (aExtraFile)
+  if (typeof aExtraFile === "object")
+    Object.assign(files, aExtraFile);
+  else
     files[aExtraFile] = "";
 
   let dir = aDir.clone();
   dir.append(aId);
 
-  awaitPromise(AddonTestUtils.promiseWriteFilesToDir(dir.path, files));
+  await AddonTestUtils.promiseWriteFilesToDir(dir.path, files);
   return dir;
 }
 
@@ -712,6 +717,9 @@ function writeInstallRDFToXPI(aData, aDir, aId = aData.id, aExtraFile = null) {
   let files = {
     "install.rdf": AddonTestUtils.createInstallRDF(aData),
   };
+  if (typeof aExtraFile === "object")
+    Object.assign(files, aExtraFile);
+  else
   if (aExtraFile)
     files[aExtraFile] = "";
 
@@ -724,6 +732,9 @@ function writeInstallRDFToXPI(aData, aDir, aId = aData.id, aExtraFile = null) {
   AddonTestUtils.writeFilesToZip(file.path, files);
 
   return file;
+}
+async function promiseWriteInstallRDFToXPI(aData, aDir, aId = aData.id, aExtraFile = null) {
+  return writeInstallRDFToXPI(aData, aDir, aId, aExtraFile);
 }
 
 /**
@@ -826,7 +837,7 @@ const AddonListener = {
     properties.forEach(function(aProperty) {
       // Only test that the expected properties are listed, having additional
       // properties listed is not necessary a problem
-      if (aProperties.indexOf(aProperty) == -1)
+      if (!aProperties.includes(aProperty))
         do_throw("Did not see property change for " + aProperty);
     });
     return check_test_completed(arguments);
@@ -978,7 +989,7 @@ const InstallListener = {
     // onInstallStarted, then the state will revert to STATE_DOWNLOADED.
     let possibleStates = [AddonManager.STATE_CANCELLED,
                           AddonManager.STATE_DOWNLOADED];
-    Assert.ok(possibleStates.indexOf(install.state) != -1);
+    Assert.ok(possibleStates.includes(install.state));
     Assert.equal(install.error, 0);
     Assert.equal("onInstallCancelled", getExpectedInstall(install.addon));
     return check_test_completed(arguments);
@@ -1329,7 +1340,7 @@ async function installSystemAddons(xml, testserver) {
   info("Triggering system add-on update check.");
 
   await serveSystemUpdate(xml, async function() {
-    let { XPIProvider } = Components.utils.import("resource://gre/modules/addons/XPIProvider.jsm", {});
+    let { XPIProvider } = ChromeUtils.import("resource://gre/modules/addons/XPIProvider.jsm", {});
     await XPIProvider.updateSystemAddons();
   }, testserver);
 }

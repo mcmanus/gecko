@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "દ્વારા ભલામણ",
   "header_bookmarks_placeholder": "તમારી પાસે હજી સુધી કોઈ બુકમાર્ક્સ નથી.",
   "header_stories_from": "થી",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "જોવામા આવેલ:",
   "type_label_bookmarked": "બુકમાર્ક્સ",
   "type_label_synced": "બીજા ઉપકરણ થી સમન્વયિત કરેલ છે",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "આ સાઇટને સંપાદિત કરો",
   "edit_topsites_dismiss_button": "આ સાઇટને કાઢી નાખો",
   "edit_topsites_add_button": "ઉમેરો",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "નવી ટોચની સાઇટ",
   "topsites_form_edit_header": "ટોચની સાઇટ સંપાદિત કરો",
   "topsites_form_title_placeholder": "શીર્ષક દાખલ કરો",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "તમે પકડાઈ ગયા છો. {પ્રદાતા} તરફથી વધુ ટોચની વાતો માટે પછીથી પાછા તપાસો. રાહ નથી જોઈ શકતા? સમગ્ર વેબ પરથી વધુ સુંદર વાર્તાઓ શોધવા માટે એક લોકપ્રિય વિષય પસંદ કરો.",
   "manual_migration_explanation2": "અન્ય બ્રાઉઝરથી બુકમાર્ક્સ, ઇતિહાસ અને પાસવર્ડ્સ સાથે ફાયરફોક્સ અજમાવો.",
   "manual_migration_cancel_button": "ના અભાર",
-  "manual_migration_import_button": "હવે આયાત કરો"
+  "manual_migration_import_button": "હવે આયાત કરો",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

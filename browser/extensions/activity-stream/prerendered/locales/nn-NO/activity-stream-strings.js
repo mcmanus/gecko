@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Tilrådd av {provider}",
   "header_bookmarks_placeholder": "Du har ingen bokmerke enno.",
   "header_stories_from": "frå",
+  "context_menu_button_sr": "Opne kontekstmeny for {title}",
   "type_label_visited": "Besøkt",
   "type_label_bookmarked": "Bokmerkte",
   "type_label_synced": "Synkronisert frå ei anna eining",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Rediger denne nettsida",
   "edit_topsites_dismiss_button": "Avvis denne nettsida",
   "edit_topsites_add_button": "Legg til",
+  "edit_topsites_add_button_tooltip": "Legg til mest besøkt",
   "topsites_form_add_header": "Ny Mest besøkt",
   "topsites_form_edit_header": "Rediger Mest besøkt",
   "topsites_form_title_placeholder": "Skriv inn ein tittel",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Det finst ikkje fleire. Kom tilbake seinare for fleire topphistoriar frå {provider}. Kan du ikkje vente? Vel eit populært emne for å finne fleire gode artiklar frå heile nettet.",
   "manual_migration_explanation2": "Prøv Firefox med bokmerka, historikk og passord frå ein annan nettlesar.",
   "manual_migration_cancel_button": "Nei takk",
-  "manual_migration_import_button": "Importer no"
+  "manual_migration_import_button": "Importer no",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

@@ -4,15 +4,15 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
-
 this.EXPORTED_SYMBOLS = [ "YandexTranslator" ];
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://gre/modules/PromiseUtils.jsm");
-Cu.import("resource://services-common/utils.js");
-Cu.import("resource://gre/modules/Http.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/Log.jsm");
+ChromeUtils.import("resource://gre/modules/PromiseUtils.jsm");
+ChromeUtils.import("resource://services-common/utils.js");
+ChromeUtils.import("resource://gre/modules/Http.jsm");
+
+Cu.importGlobalProperties(["XMLHttpRequest"]);
 
 // The maximum amount of net data allowed per request on Bing's API.
 const MAX_REQUEST_DATA = 5000; // Documentation says 10000 but anywhere
@@ -140,14 +140,14 @@ this.YandexTranslator.prototype = {
    * @param   aError   [optional] The XHR object of the request that failed.
    */
   _chunkFailed(aError) {
-    if (aError instanceof Ci.nsIXMLHttpRequest) {
+    if (aError instanceof XMLHttpRequest) {
       let body = aError.responseText;
       let json = { code: 0 };
       try {
         json = JSON.parse(body);
       } catch (e) {}
 
-      if (json.code && YANDEX_PERMANENT_ERRORS.indexOf(json.code) != -1)
+      if (json.code && YANDEX_PERMANENT_ERRORS.includes(json.code))
         this._serviceUnavailable = true;
     }
 

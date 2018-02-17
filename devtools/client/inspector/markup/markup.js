@@ -560,7 +560,7 @@ MarkupView.prototype = {
       "test"
     ];
     let isHighlight = this._hoveredNode === this.inspector.selection.nodeFront;
-    return !isHighlight && reason && unwantedReasons.indexOf(reason) === -1;
+    return !isHighlight && reason && !unwantedReasons.includes(reason);
   },
 
   /**
@@ -1015,9 +1015,6 @@ MarkupView.prototype = {
         continue;
       }
 
-      if (type === "attributes" && mutation.attributeName === "class") {
-        container.updateIsDisplayed();
-      }
       if (type === "attributes" || type === "characterData"
         || type === "events" || type === "pseudoClassLock") {
         container.update();
@@ -1062,7 +1059,7 @@ MarkupView.prototype = {
     for (let node of nodes) {
       let container = this.getContainer(node);
       if (container) {
-        container.updateIsDisplayed();
+        container.update();
       }
     }
   },

@@ -2,35 +2,36 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use api::{AlphaType, BorderDetails, BorderDisplayItem, BuiltDisplayList, ClipAndScrollInfo, ClipId};
-use api::{ColorF, ColorU, DeviceIntPoint, DevicePixelScale, DeviceUintPoint, DeviceUintRect};
-use api::{DeviceUintSize, DocumentLayer, ExtendMode, FontRenderMode, GlyphInstance, GlyphOptions};
-use api::{GradientStop, HitTestFlags, HitTestItem, HitTestResult, ImageKey, ImageRendering};
-use api::{ItemRange, ItemTag, LayerPoint, LayerPrimitiveInfo, LayerRect, LayerSize};
+use api::{AlphaType, BorderDetails, BorderDisplayItem, BuiltDisplayList, ClipAndScrollInfo};
+use api::{ClipId, ColorF, DeviceIntPoint, DeviceIntRect, DeviceIntSize, DevicePixelScale};
+use api::{DeviceUintPoint, DeviceUintRect, DeviceUintSize, DocumentLayer, Epoch, ExtendMode};
+use api::{ExternalScrollId, FontRenderMode, GlyphInstance, GlyphOptions, GradientStop, ImageKey};
+use api::{ImageRendering, ItemRange, LayerPoint, LayerPrimitiveInfo, LayerRect, LayerSize};
 use api::{LayerTransform, LayerVector2D, LayoutTransform, LayoutVector2D, LineOrientation};
 use api::{LineStyle, LocalClip, PipelineId, PremultipliedColorF, PropertyBinding, RepeatMode};
-use api::{ScrollSensitivity, Shadow, TileOffset, TransformStyle, WorldPoint, YuvColorSpace};
-use api::YuvData;
+use api::{ScrollSensitivity, Shadow, TexelRect, TileOffset, TransformStyle, WorldPoint};
+use api::{WorldToLayerTransform, YuvColorSpace, YuvData};
 use app_units::Au;
 use border::ImageBorderSegment;
-use clip::{ClipRegion, ClipSource, ClipSources, ClipStore, Contains};
+use clip::{ClipRegion, ClipSource, ClipSources, ClipStore};
 use clip_scroll_node::{ClipScrollNode, NodeType};
 use clip_scroll_tree::ClipScrollTree;
 use euclid::{SideOffsets2D, vec2};
 use frame::FrameId;
 use glyph_rasterizer::FontInstance;
 use gpu_cache::GpuCache;
-use gpu_types::{ClipScrollNodeData, PictureType};
+use gpu_types::{ClipChainRectIndex, ClipScrollNodeData, PictureType};
+use hit_test::{HitTester, HitTestingItem, HitTestingRun};
 use internal_types::{FastHashMap, FastHashSet, RenderPassIndex};
 use picture::{ContentOrigin, PictureCompositeMode, PictureKind, PicturePrimitive, PictureSurface};
-use prim_store::{BrushKind, BrushPrimitive, TexelRect, YuvImagePrimitiveCpu};
-use prim_store::{GradientPrimitiveCpu, ImagePrimitiveCpu, PrimitiveKind};
-use prim_store::{PrimitiveContainer, PrimitiveIndex, SpecificPrimitiveIndex};
+use prim_store::{BrushKind, BrushPrimitive, ImageCacheKey, YuvImagePrimitiveCpu};
+use prim_store::{GradientPrimitiveCpu, ImagePrimitiveCpu, ImageSource, PrimitiveKind};
+use prim_store::{PrimitiveContainer, PrimitiveIndex};
 use prim_store::{PrimitiveStore, RadialGradientPrimitiveCpu};
-use prim_store::{BrushSegmentDescriptor, TextRunPrimitiveCpu};
+use prim_store::{BrushSegmentDescriptor, PrimitiveRun, TextRunPrimitiveCpu};
 use profiler::{FrameProfileCounters, GpuCacheProfileCounters, TextureCacheProfileCounters};
-use render_task::{ClearMode, ClipChain, RenderTask, RenderTaskId, RenderTaskTree};
-use resource_cache::ResourceCache;
+use render_task::{ClearMode, ClipChain, RenderTask, RenderTaskId, RenderTaskLocation, RenderTaskTree};
+use resource_cache::{ImageRequest, ResourceCache};
 use scene::{ScenePipeline, SceneProperties};
 use std::{mem, usize, f32};
 use tiling::{CompositeOps, Frame, RenderPass, RenderTargetKind};
@@ -61,13 +62,15 @@ struct StackingContext {
     /// CSS transform-style property.
     transform_style: TransformStyle,
 
-    /// The primitive index for the root Picture primitive
-    /// that this stacking context is mapped to.
-    pic_prim_index: PrimitiveIndex,
+    /// If Some(..), this stacking context establishes a new
+    /// 3d rendering context, and the value is the primitive
+    // index of the 3d context container.
+    rendering_context_3d_prim_index: Option<PrimitiveIndex>,
 }
 
 #[derive(Clone, Copy)]
-#[cfg_attr(feature = "capture", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct FrameBuilderConfig {
     pub enable_scrollbars: bool,
     pub default_font_render_mode: FontRenderMode,
@@ -75,25 +78,6 @@ pub struct FrameBuilderConfig {
     pub dual_source_blending_is_supported: bool,
     pub dual_source_blending_is_enabled: bool,
 }
-
-#[derive(Debug)]
-pub struct HitTestingItem {
-    rect: LayerRect,
-    clip: LocalClip,
-    tag: ItemTag,
-}
-
-impl HitTestingItem {
-    fn new(tag: ItemTag, info: &LayerPrimitiveInfo) -> HitTestingItem {
-        HitTestingItem {
-            rect: info.rect,
-            clip: info.local_clip,
-            tag: tag,
-        }
-    }
-}
-
-pub struct HitTestingRun(Vec<HitTestingItem>, ClipAndScrollInfo);
 
 /// A builder structure for `tiling::Frame`
 pub struct FrameBuilder {
@@ -125,25 +109,62 @@ pub struct FrameBuilder {
     sc_stack: Vec<StackingContext>,
 }
 
-pub struct PrimitiveContext<'a> {
+pub struct FrameContext<'a> {
     pub device_pixel_scale: DevicePixelScale,
-    pub display_list: &'a BuiltDisplayList,
-    pub clip_chain: Option<&'a ClipChain>,
-    pub scroll_node: &'a ClipScrollNode,
+    pub scene_properties: &'a SceneProperties,
+    pub pipelines: &'a FastHashMap<PipelineId, ScenePipeline>,
+    pub screen_rect: DeviceIntRect,
+    pub clip_scroll_tree: &'a ClipScrollTree,
+    pub node_data: &'a [ClipScrollNodeData],
 }
 
-impl<'a> PrimitiveContext<'a> {
+pub struct FrameState<'a> {
+    pub render_tasks: &'a mut RenderTaskTree,
+    pub profile_counters: &'a mut FrameProfileCounters,
+    pub clip_store: &'a mut ClipStore,
+    pub local_clip_rects: &'a mut Vec<LayerRect>,
+    pub resource_cache: &'a mut ResourceCache,
+    pub gpu_cache: &'a mut GpuCache,
+}
+
+pub struct PictureContext<'a> {
+    pub pipeline_id: PipelineId,
+    pub perform_culling: bool,
+    pub prim_runs: Vec<PrimitiveRun>,
+    pub original_reference_frame_id: Option<ClipId>,
+    pub display_list: &'a BuiltDisplayList,
+    pub draw_text_transformed: bool,
+    pub inv_world_transform: Option<WorldToLayerTransform>,
+}
+
+pub struct PictureState {
+    pub tasks: Vec<RenderTaskId>,
+}
+
+impl PictureState {
+    pub fn new() -> PictureState {
+        PictureState {
+            tasks: Vec::new(),
+        }
+    }
+}
+
+pub struct PrimitiveRunContext<'a> {
+    pub clip_chain: Option<&'a ClipChain>,
+    pub scroll_node: &'a ClipScrollNode,
+    pub clip_chain_rect_index: ClipChainRectIndex,
+}
+
+impl<'a> PrimitiveRunContext<'a> {
     pub fn new(
-        device_pixel_scale: DevicePixelScale,
-        display_list: &'a BuiltDisplayList,
         clip_chain: Option<&'a ClipChain>,
         scroll_node: &'a ClipScrollNode,
+        clip_chain_rect_index: ClipChainRectIndex,
     ) -> Self {
-        PrimitiveContext {
-            device_pixel_scale,
-            display_list,
+        PrimitiveRunContext {
             clip_chain,
             scroll_node,
+            clip_chain_rect_index,
         }
     }
 }
@@ -374,28 +395,72 @@ impl FrameBuilder {
             None => TransformStyle::Flat,
         };
 
-        // If either the parent or this stacking context is preserve-3d
-        // then we are in a 3D context.
-        let is_in_3d_context = composite_ops.count() == 0 &&
-                               (parent_transform_style == TransformStyle::Preserve3D ||
-                                transform_style == TransformStyle::Preserve3D);
+        // If this is preserve-3d *or* the parent is, then this stacking
+        // context is participating in the 3d rendering context. In that
+        // case, hoist the picture up to the 3d rendering context
+        // container, so that it's rendered as a sibling with other
+        // elements in this context.
+        let participating_in_3d_context =
+            composite_ops.count() == 0 &&
+            (parent_transform_style == TransformStyle::Preserve3D ||
+             transform_style == TransformStyle::Preserve3D);
 
-        // TODO(gw): For now, we don't handle filters and mix-blend-mode when there
-        //           is a 3D rendering context. We can easily do this in the future
-        //           by creating a chain of pictures for the effects, and ensuring
-        //           that the last composited picture is what's used as the input to
-        //           the plane splitting code.
-        let mut parent_pic_prim_index = if is_in_3d_context {
+        // If this is participating in a 3d context *and* the
+        // parent was not a 3d context, then this must be the
+        // element that establishes a new 3d context.
+        let establishes_3d_context =
+            participating_in_3d_context &&
+            parent_transform_style == TransformStyle::Flat;
+
+        let rendering_context_3d_prim_index = if establishes_3d_context {
+            // If establishing a 3d context, we need to add a picture
+            // that will be the container for all the planes and any
+            // un-transformed content.
+            let container = PicturePrimitive::new_image(
+                None,
+                false,
+                pipeline_id,
+                current_reference_frame_id,
+                None,
+            );
+
+            let clip_sources = self.clip_store.insert(ClipSources::new(Vec::new()));
+
+            let prim_index = self.prim_store.add_primitive(
+                &LayerRect::zero(),
+                &max_clip,
+                is_backface_visible,
+                clip_sources,
+                None,
+                PrimitiveContainer::Picture(container),
+            );
+
+            let parent_pic_prim_index = *self.picture_stack.last().unwrap();
+            let pic_prim_index = self.prim_store.cpu_metadata[parent_pic_prim_index.0].cpu_prim_index;
+            let pic = &mut self.prim_store.cpu_pictures[pic_prim_index.0];
+            pic.add_primitive(
+                prim_index,
+                clip_and_scroll,
+            );
+
+            self.picture_stack.push(prim_index);
+
+            Some(prim_index)
+        } else {
+            None
+        };
+
+        let mut parent_pic_prim_index = if !establishes_3d_context && participating_in_3d_context {
             // If we're in a 3D context, we will parent the picture
-            // to the first stacking context we find in the stack that
-            // is transform-style: flat. This follows the spec
+            // to the first stacking context we find that is a
+            // 3D rendering context container. This follows the spec
             // by hoisting these items out into the same 3D context
             // for plane splitting.
             self.sc_stack
                 .iter()
                 .rev()
-                .find(|sc| sc.transform_style == TransformStyle::Flat)
-                .map(|sc| sc.pic_prim_index)
+                .find(|sc| sc.rendering_context_3d_prim_index.is_some())
+                .map(|sc| sc.rendering_context_3d_prim_index.unwrap())
                 .unwrap()
         } else {
             *self.picture_stack.last().unwrap()
@@ -475,7 +540,7 @@ impl FrameBuilder {
             frame_output_pipeline_id = Some(pipeline_id);
         }
 
-        if is_in_3d_context {
+        if participating_in_3d_context {
             // TODO(gw): For now, as soon as this picture is in
             //           a 3D context, we draw it to an intermediate
             //           surface and apply plane splitting. However,
@@ -489,7 +554,7 @@ impl FrameBuilder {
         // Add picture for this actual stacking context contents to render into.
         let sc_prim = PicturePrimitive::new_image(
             composite_mode,
-            is_in_3d_context,
+            participating_in_3d_context,
             pipeline_id,
             current_reference_frame_id,
             frame_output_pipeline_id,
@@ -528,9 +593,7 @@ impl FrameBuilder {
             pipeline_id,
             allow_subpixel_aa,
             transform_style,
-            // TODO(gw): This is not right when filters are present (but we
-            //           don't handle that right now, per comment above).
-            pic_prim_index: sc_prim_index,
+            rendering_context_3d_prim_index,
         };
 
         self.sc_stack.push(sc);
@@ -539,11 +602,18 @@ impl FrameBuilder {
     pub fn pop_stacking_context(&mut self) {
         let sc = self.sc_stack.pop().unwrap();
 
-        // Remove the picture for this stacking contents.
-        self.picture_stack.pop().expect("bug");
+        // Always pop at least the main picture for this stacking context.
+        let mut pop_count = 1;
 
         // Remove the picture for any filter/mix-blend-mode effects.
-        for _ in 0 .. sc.composite_ops.count() {
+        pop_count += sc.composite_ops.count();
+
+        // Remove the 3d context container if created
+        if sc.rendering_context_3d_prim_index.is_some() {
+            pop_count += 1;
+        }
+
+        for _ in 0 .. pop_count {
             self.picture_stack.pop().expect("bug: mismatched picture stack");
         }
 
@@ -562,26 +632,25 @@ impl FrameBuilder {
 
     pub fn push_reference_frame(
         &mut self,
+        reference_frame_id: ClipId,
         parent_id: Option<ClipId>,
         pipeline_id: PipelineId,
         rect: &LayerRect,
         source_transform: Option<PropertyBinding<LayoutTransform>>,
         source_perspective: Option<LayoutTransform>,
         origin_in_parent_reference_frame: LayerVector2D,
-        root_for_pipeline: bool,
         clip_scroll_tree: &mut ClipScrollTree,
-    ) -> ClipId {
-        let new_id = clip_scroll_tree.add_reference_frame(
+    ) {
+        let node = ClipScrollNode::new_reference_frame(
+            parent_id,
             rect,
             source_transform,
             source_perspective,
             origin_in_parent_reference_frame,
             pipeline_id,
-            parent_id,
-            root_for_pipeline,
         );
-        self.reference_frame_stack.push(new_id);
-        new_id
+        clip_scroll_tree.add_node(node, reference_frame_id);
+        self.reference_frame_stack.push(reference_frame_id);
     }
 
     pub fn current_reference_frame_id(&self) -> ClipId {
@@ -616,13 +685,13 @@ impl FrameBuilder {
     ) -> ClipId {
         let viewport_rect = LayerRect::new(LayerPoint::zero(), *viewport_size);
         self.push_reference_frame(
+            ClipId::root_reference_frame(pipeline_id),
             None,
             pipeline_id,
             &viewport_rect,
             None,
             None,
             LayerVector2D::zero(),
-            true,
             clip_scroll_tree,
         );
 
@@ -632,6 +701,7 @@ impl FrameBuilder {
         self.add_scroll_frame(
             topmost_scrolling_node_id,
             clip_scroll_tree.root_reference_frame_id,
+            Some(ExternalScrollId(0, pipeline_id)),
             pipeline_id,
             &viewport_rect,
             content_size,
@@ -664,6 +734,7 @@ impl FrameBuilder {
         &mut self,
         new_node_id: ClipId,
         parent_id: ClipId,
+        external_id: Option<ExternalScrollId>,
         pipeline_id: PipelineId,
         frame_rect: &LayerRect,
         content_size: &LayerSize,
@@ -673,6 +744,7 @@ impl FrameBuilder {
         let node = ClipScrollNode::new_scroll_frame(
             pipeline_id,
             parent_id,
+            external_id,
             frame_rect,
             content_size,
             scroll_sensitivity,
@@ -1094,8 +1166,8 @@ impl FrameBuilder {
                     self.add_image(
                         clip_and_scroll,
                         &info,
-                        &segment.stretch_size,
-                        &segment.tile_spacing,
+                        segment.stretch_size,
+                        segment.tile_spacing,
                         Some(segment.sub_rect),
                         border.image_key,
                         ImageRendering::Auto,
@@ -1334,7 +1406,7 @@ impl FrameBuilder {
             glyph_gpu_blocks: Vec::new(),
             glyph_keys: Vec::new(),
             offset: run_offset,
-            shadow_color: ColorU::new(0, 0, 0, 0),
+            shadow: false,
         };
 
         // Text shadows that have a blur radius of 0 need to be rendered as normal
@@ -1352,7 +1424,8 @@ impl FrameBuilder {
             match picture_prim.kind {
                 PictureKind::TextShadow { offset, color, blur_radius, .. } if blur_radius == 0.0 => {
                     let mut text_prim = prim.clone();
-                    text_prim.shadow_color = color.into();
+                    text_prim.font.color = color.into();
+                    text_prim.shadow = true;
                     text_prim.offset += offset;
                     fast_shadow_prims.push((idx, text_prim));
                 }
@@ -1422,49 +1495,80 @@ impl FrameBuilder {
         &mut self,
         clip_and_scroll: ClipAndScrollInfo,
         info: &LayerPrimitiveInfo,
-        stretch_size: &LayerSize,
-        tile_spacing: &LayerSize,
+        stretch_size: LayerSize,
+        mut tile_spacing: LayerSize,
         sub_rect: Option<TexelRect>,
         image_key: ImageKey,
         image_rendering: ImageRendering,
         alpha_type: AlphaType,
-        tile: Option<TileOffset>,
+        tile_offset: Option<TileOffset>,
     ) {
-        let sub_rect_block = sub_rect.unwrap_or(TexelRect::invalid()).into();
-
         // If the tile spacing is the same as the rect size,
         // then it is effectively zero. We use this later on
         // in prim_store to detect if an image can be considered
         // opaque.
-        let tile_spacing = if *tile_spacing == info.rect.size {
-            LayerSize::zero()
+        if tile_spacing == info.rect.size {
+            tile_spacing = LayerSize::zero();
+        }
+
+        let request = ImageRequest {
+            key: image_key,
+            rendering: image_rendering,
+            tile: tile_offset,
+        };
+
+        // See if conditions are met to run through the new
+        // image brush shader, which supports segments.
+        if tile_spacing == LayerSize::zero() &&
+           stretch_size == info.rect.size &&
+           sub_rect.is_none() &&
+           tile_offset.is_none() {
+            let prim = BrushPrimitive::new(
+                BrushKind::Image {
+                    request,
+                    current_epoch: Epoch::invalid(),
+                    alpha_type,
+                },
+                None,
+            );
+
+            self.add_primitive(
+                clip_and_scroll,
+                info,
+                Vec::new(),
+                PrimitiveContainer::Brush(prim),
+            );
         } else {
-            *tile_spacing
-        };
+            let prim_cpu = ImagePrimitiveCpu {
+                tile_spacing,
+                alpha_type,
+                stretch_size,
+                current_epoch: Epoch::invalid(),
+                source: ImageSource::Default,
+                key: ImageCacheKey {
+                    request,
+                    texel_rect: sub_rect.map(|texel_rect| {
+                        DeviceIntRect::new(
+                            DeviceIntPoint::new(
+                                texel_rect.uv0.x as i32,
+                                texel_rect.uv0.y as i32,
+                            ),
+                            DeviceIntSize::new(
+                                (texel_rect.uv1.x - texel_rect.uv0.x) as i32,
+                                (texel_rect.uv1.y - texel_rect.uv0.y) as i32,
+                            ),
+                        )
+                    }),
+                },
+            };
 
-        let prim_cpu = ImagePrimitiveCpu {
-            image_key,
-            image_rendering,
-            tile_offset: tile,
-            tile_spacing,
-            alpha_type,
-            gpu_blocks: [
-                [
-                    stretch_size.width,
-                    stretch_size.height,
-                    tile_spacing.width,
-                    tile_spacing.height,
-                ].into(),
-                sub_rect_block,
-            ],
-        };
-
-        self.add_primitive(
-            clip_and_scroll,
-            info,
-            Vec::new(),
-            PrimitiveContainer::Image(prim_cpu),
-        );
+            self.add_primitive(
+                clip_and_scroll,
+                info,
+                Vec::new(),
+                PrimitiveContainer::Image(prim_cpu),
+            );
+        }
     }
 
     pub fn add_yuv_image(
@@ -1477,9 +1581,9 @@ impl FrameBuilder {
     ) {
         let format = yuv_data.get_format();
         let yuv_key = match yuv_data {
-            YuvData::NV12(plane_0, plane_1) => [plane_0, plane_1, ImageKey::dummy()],
+            YuvData::NV12(plane_0, plane_1) => [plane_0, plane_1, ImageKey::DUMMY],
             YuvData::PlanarYCbCr(plane_0, plane_1, plane_2) => [plane_0, plane_1, plane_2],
-            YuvData::InterleavedYCbCr(plane_0) => [plane_0, ImageKey::dummy(), ImageKey::dummy()],
+            YuvData::InterleavedYCbCr(plane_0) => [plane_0, ImageKey::DUMMY, ImageKey::DUMMY],
         };
 
         let prim_cpu = YuvImagePrimitiveCpu {
@@ -1498,80 +1602,11 @@ impl FrameBuilder {
         );
     }
 
-    pub fn hit_test(
-        &self,
-        clip_scroll_tree: &ClipScrollTree,
-        pipeline_id: Option<PipelineId>,
-        point: WorldPoint,
-        flags: HitTestFlags
-    ) -> HitTestResult {
-        let point = if flags.contains(HitTestFlags::POINT_RELATIVE_TO_PIPELINE_VIEWPORT) {
-            let point = LayerPoint::new(point.x, point.y);
-            clip_scroll_tree.make_node_relative_point_absolute(pipeline_id, &point)
-        } else {
-            point
-        };
-
-        let mut node_cache = FastHashMap::default();
-        let mut result = HitTestResult::default();
-        for &HitTestingRun(ref items, ref clip_and_scroll) in self.hit_testing_runs.iter().rev() {
-            let scroll_node = &clip_scroll_tree.nodes[&clip_and_scroll.scroll_node_id];
-            match (pipeline_id, scroll_node.pipeline_id) {
-                (Some(id), node_id) if node_id != id => continue,
-                _ => {},
-            }
-
-            let transform = scroll_node.world_content_transform;
-            let point_in_layer = match transform.inverse() {
-                Some(inverted) => inverted.transform_point2d(&point),
-                None => continue,
-            };
-
-            let mut clipped_in = false;
-            for item in items.iter().rev() {
-                if !item.rect.contains(&point_in_layer) || !item.clip.contains(&point_in_layer) {
-                    continue;
-                }
-
-                let clip_id = &clip_and_scroll.clip_node_id();
-                if !clipped_in {
-                    clipped_in = clip_scroll_tree.is_point_clipped_in_for_node(point,
-                                                                               clip_id,
-                                                                               &mut node_cache,
-                                                                               &self.clip_store);
-                    if !clipped_in {
-                        break;
-                    }
-                }
-
-                let root_pipeline_reference_frame_id =
-                    ClipId::root_reference_frame(clip_id.pipeline_id());
-                let point_in_viewport = match node_cache.get(&root_pipeline_reference_frame_id) {
-                    Some(&Some(point)) => point,
-                    _ => unreachable!("Hittest target's root reference frame not hit."),
-                };
-
-                result.items.push(HitTestItem {
-                    pipeline: clip_and_scroll.clip_node_id().pipeline_id(),
-                    tag: item.tag,
-                    point_in_viewport,
-                    point_relative_to_item: point_in_layer - item.rect.origin.to_vector(),
-                });
-                if !flags.contains(HitTestFlags::FIND_ALL) {
-                    return result;
-                }
-            }
-        }
-
-        result.items.dedup();
-        result
-    }
-
     /// Compute the contribution (bounding rectangles, and resources) of layers and their
     /// primitives in screen space.
     fn build_layer_screen_rects_and_cull_layers(
         &mut self,
-        clip_scroll_tree: &mut ClipScrollTree,
+        clip_scroll_tree: &ClipScrollTree,
         pipelines: &FastHashMap<PipelineId, ScenePipeline>,
         resource_cache: &mut ResourceCache,
         gpu_cache: &mut GpuCache,
@@ -1579,8 +1614,8 @@ impl FrameBuilder {
         profile_counters: &mut FrameProfileCounters,
         device_pixel_scale: DevicePixelScale,
         scene_properties: &SceneProperties,
+        local_clip_rects: &mut Vec<LayerRect>,
         node_data: &[ClipScrollNodeData],
-        local_rects: &mut Vec<LayerRect>,
     ) -> Option<RenderTaskId> {
         profile_scope!("cull");
 
@@ -1589,7 +1624,6 @@ impl FrameBuilder {
         }
 
         // The root picture is always the first one added.
-        let prim_run_cmds = mem::replace(&mut self.prim_store.cpu_pictures[0].runs, Vec::new());
         let root_clip_scroll_node = &clip_scroll_tree.nodes[&clip_scroll_tree.root_reference_frame_id()];
 
         let display_list = &pipelines
@@ -1597,51 +1631,59 @@ impl FrameBuilder {
             .expect("No display list?")
             .display_list;
 
-        let root_prim_context = PrimitiveContext::new(
+        let frame_context = FrameContext {
             device_pixel_scale,
-            display_list,
-            root_clip_scroll_node.clip_chain.as_ref(),
-            root_clip_scroll_node,
-        );
+            scene_properties,
+            pipelines,
+            screen_rect: self.screen_rect.to_i32(),
+            clip_scroll_tree,
+            node_data,
+        };
 
-        let mut child_tasks = Vec::new();
+        let mut frame_state = FrameState {
+            render_tasks,
+            profile_counters,
+            clip_store: &mut self.clip_store,
+            local_clip_rects,
+            resource_cache,
+            gpu_cache,
+        };
+
+        let pic_context = PictureContext {
+            pipeline_id: root_clip_scroll_node.pipeline_id,
+            perform_culling: true,
+            prim_runs: mem::replace(&mut self.prim_store.cpu_pictures[0].runs, Vec::new()),
+            original_reference_frame_id: None,
+            display_list,
+            draw_text_transformed: true,
+            inv_world_transform: None,
+        };
+
+        let mut pic_state = PictureState::new();
+
         self.prim_store.reset_prim_visibility();
         self.prim_store.prepare_prim_runs(
-            &prim_run_cmds,
-            root_clip_scroll_node.pipeline_id,
-            gpu_cache,
-            resource_cache,
-            render_tasks,
-            &mut self.clip_store,
-            clip_scroll_tree,
-            pipelines,
-            &root_prim_context,
-            true,
-            &mut child_tasks,
-            profile_counters,
-            None,
-            scene_properties,
-            SpecificPrimitiveIndex(0),
-            &self.screen_rect.to_i32(),
-            node_data,
-            local_rects,
+            &pic_context,
+            &mut pic_state,
+            &frame_context,
+            &mut frame_state,
         );
 
         let pic = &mut self.prim_store.cpu_pictures[0];
-        pic.runs = prim_run_cmds;
+        pic.runs = pic_context.prim_runs;
 
         let root_render_task = RenderTask::new_picture(
-            None,
+            RenderTaskLocation::Fixed(frame_context.screen_rect),
             PrimitiveIndex(0),
             RenderTargetKind::Color,
             ContentOrigin::Screen(DeviceIntPoint::zero()),
             PremultipliedColorF::TRANSPARENT,
             ClearMode::Transparent,
-            child_tasks,
+            pic_state.tasks,
             PictureType::Image,
         );
 
-        let render_task_id = render_tasks.add(root_render_task);
+        let render_task_id = frame_state.render_tasks.add(root_render_task);
         pic.surface = Some(PictureSurface::RenderTask(render_task_id));
         Some(render_task_id)
     }
@@ -1734,8 +1776,8 @@ impl FrameBuilder {
             &mut profile_counters,
             device_pixel_scale,
             scene_properties,
-            &node_data,
             &mut clip_chain_local_clip_rects,
+            &node_data,
         );
 
         let mut passes = Vec::new();
@@ -1770,9 +1812,9 @@ impl FrameBuilder {
                 device_pixel_scale,
                 prim_store: &self.prim_store,
                 resource_cache,
-                node_data: &node_data,
                 clip_scroll_tree,
                 use_dual_source_blending,
+                node_data: &node_data,
             };
 
             pass.build(
@@ -1789,7 +1831,7 @@ impl FrameBuilder {
             }
         }
 
-        let gpu_cache_updates = gpu_cache.end_frame(gpu_cache_profile);
+        let gpu_cache_frame_id = gpu_cache.end_frame(gpu_cache_profile);
 
         render_tasks.build();
 
@@ -1807,9 +1849,17 @@ impl FrameBuilder {
             clip_chain_local_clip_rects,
             render_tasks,
             deferred_resolves,
-            gpu_cache_updates: Some(gpu_cache_updates),
+            gpu_cache_frame_id,
             has_been_rendered: false,
             has_texture_cache_tasks,
         }
+    }
+
+    pub fn create_hit_tester(&mut self, clip_scroll_tree: &ClipScrollTree) -> HitTester {
+        HitTester::new(
+            &self.hit_testing_runs,
+            &clip_scroll_tree,
+            &self.clip_store
+        )
     }
 }

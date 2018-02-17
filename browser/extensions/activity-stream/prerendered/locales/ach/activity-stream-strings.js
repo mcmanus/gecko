@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "Lami tam obedo {provider}",
   "header_bookmarks_placeholder": "Pud i pee ki alamabuk.",
   "header_stories_from": "ki bot",
+  "context_menu_button_sr": "Yab jami ayera pi {title}",
   "type_label_visited": "Kilimo",
   "type_label_bookmarked": "Kiketo alamabuk",
   "type_label_synced": "Kiribo ki i nyonyo mukene",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Yub kakube man",
   "edit_topsites_dismiss_button": "Kwer kakube man",
   "edit_topsites_add_button": "Medi",
+  "edit_topsites_add_button_tooltip": "Med Kakube maloyo",
   "topsites_form_add_header": "Kakube maloyo manyen",
   "topsites_form_edit_header": "Yub Kakube maloyo",
   "topsites_form_title_placeholder": "Ket wiye",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Ityeko weng. Rot doki lacen pi lok madito mapol ki bot {provider}. Pe itwero kuro? Yer lok macuke lamal me nongo lok mabeco mapol ki i but kakube.",
   "manual_migration_explanation2": "Tem Firefox ki alamabuk, gin mukato ki mung me donyo ki ii layeny mukene.",
   "manual_migration_cancel_button": "Pe Apwoyo",
-  "manual_migration_import_button": "Kel kombedi"
+  "manual_migration_import_button": "Kel kombedi",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

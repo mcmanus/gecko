@@ -18,7 +18,7 @@ add_task(async function setup() {
     sandbox.restore();
     delete window.sinon;
     await PlacesUtils.bookmarks.eraseEverything();
-    await PlacesTestUtils.clearHistory();
+    await PlacesUtils.history.clear();
   });
 
   sandbox.stub(PlacesTransactions, "batch");
@@ -39,11 +39,6 @@ add_task(async function setup() {
 });
 
 async function run_drag_test(startBookmarkIndex, newParentGuid) {
-  if (!PlacesUIUtils.useAsyncTransactions) {
-    Assert.ok(true, "Skipping test as async transactions are turned off");
-    return;
-  }
-
   if (!newParentGuid) {
     newParentGuid = PlacesUtils.bookmarks.unfiledGuid;
   }

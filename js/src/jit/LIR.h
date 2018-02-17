@@ -656,18 +656,39 @@ class LElementVisitor;
 // The common base class for LPhi and LInstruction.
 class LNode
 {
-    uint32_t id_;
-    LBlock* block_;
-
   protected:
     MDefinition* mir_;
 
+  private:
+    LBlock* block_;
+    uint32_t id_;
+
+  protected:
+    // Bitfields below are all uint32_t to make sure MSVC packs them correctly.
+    uint32_t isCall_ : 1;
+    // LPhi::numOperands() may not fit in this bitfield, so we only use this
+    // field for LInstruction.
+    uint32_t nonPhiNumOperands_ : 6;
+    uint32_t numDefs_ : 4;
+    uint32_t numTemps_ : 4;
+    uint32_t numSuccessors_ : 2;
+
   public:
-    LNode()
-      : id_(0),
+    LNode(uint32_t nonPhiNumOperands, uint32_t numDefs, uint32_t numTemps)
+      : mir_(nullptr),
         block_(nullptr),
-        mir_(nullptr)
-    { }
+        id_(0),
+        isCall_(false),
+        nonPhiNumOperands_(nonPhiNumOperands),
+        numDefs_(numDefs),
+        numTemps_(numTemps),
+        numSuccessors_(0)
+    {
+        MOZ_ASSERT(nonPhiNumOperands_ == nonPhiNumOperands,
+                   "nonPhiNumOperands must fit in bitfield");
+        MOZ_ASSERT(numDefs_ == numDefs, "numDefs must fit in bitfield");
+        MOZ_ASSERT(numTemps_ == numTemps, "numTemps must fit in bitfield");
+    }
 
     enum Opcode {
 #   define LIROP(name) LOp_##name,
@@ -689,9 +710,13 @@ class LNode
 
     // Hook for opcodes to add extra high level detail about what code will be
     // emitted for the op.
-    virtual const char* extraName() const {
+  private:
+    const char* extraName() const {
         return nullptr;
     }
+
+  public:
+    const char* getExtraName() const;
 
     virtual Opcode op() const = 0;
 
@@ -703,37 +728,21 @@ class LNode
 
     // Returns the number of outputs of this instruction. If an output is
     // unallocated, it is an LDefinition, defining a virtual register.
-    virtual size_t numDefs() const = 0;
-    virtual LDefinition* getDef(size_t index) = 0;
-    virtual void setDef(size_t index, const LDefinition& def) = 0;
+    size_t numDefs() const {
+        return numDefs_;
+    }
 
     // Returns information about operands.
-    virtual size_t numOperands() const = 0;
     virtual LAllocation* getOperand(size_t index) = 0;
     virtual void setOperand(size_t index, const LAllocation& a) = 0;
 
-    // Returns information about temporary registers needed. Each temporary
-    // register is an LDefinition with a fixed or virtual register and
-    // either GENERAL, FLOAT32, or DOUBLE type.
-    virtual size_t numTemps() const = 0;
-    virtual LDefinition* getTemp(size_t index) = 0;
-    virtual void setTemp(size_t index, const LDefinition& a) = 0;
-
-    // Returns the number of successors of this instruction, if it is a control
-    // transfer instruction, or zero otherwise.
-    virtual size_t numSuccessors() const = 0;
-    virtual MBasicBlock* getSuccessor(size_t i) const = 0;
-    virtual void setSuccessor(size_t i, MBasicBlock* successor) = 0;
-
-    virtual bool isCall() const {
-        return false;
+    bool isCall() const {
+        return isCall_;
     }
 
     // Does this call preserve the given register?
     // By default, it is assumed that all registers are clobbered by a call.
-    virtual bool isCallPreserved(AnyRegister reg) const {
-        return false;
-    }
+    inline bool isCallPreserved(AnyRegister reg) const;
 
     uint32_t id() const {
         return id_;
@@ -759,15 +768,13 @@ class LNode
 
     // For an instruction which has a MUST_REUSE_INPUT output, whether that
     // output register will be restored to its original value when bailing out.
-    virtual bool recoversInput() const {
-        return false;
-    }
+    inline bool recoversInput() const;
 
-    virtual void dump(GenericPrinter& out);
+    void dump(GenericPrinter& out);
     void dump();
     static void printName(GenericPrinter& out, Opcode op);
-    virtual void printName(GenericPrinter& out);
-    virtual void printOperands(GenericPrinter& out);
+    void printName(GenericPrinter& out);
+    void printOperands(GenericPrinter& out);
 
   public:
     // Opcode testing and casts.
@@ -780,15 +787,9 @@ class LNode
     LIR_OPCODE_LIST(LIROP)
 #   undef LIROP
 
-    virtual void accept(LElementVisitor* visitor) = 0;
-
 #define LIR_HEADER(opcode)                                                  \
     Opcode op() const override {                                            \
         return LInstruction::LOp_##opcode;                                  \
-    }                                                                       \
-    void accept(LElementVisitor* visitor) override {                        \
-        visitor->setElement(this);                                          \
-        visitor->visit##opcode(this);                                       \
     }
 };
 
@@ -810,15 +811,44 @@ class LInstruction
     LMoveGroup* movesAfter_;
 
   protected:
-    LInstruction()
-      : snapshot_(nullptr),
+    LInstruction(uint32_t numOperands, uint32_t numDefs, uint32_t numTemps)
+      : LNode(numOperands, numDefs, numTemps),
+        snapshot_(nullptr),
         safepoint_(nullptr),
         inputMoves_(nullptr),
         fixReuseMoves_(nullptr),
         movesAfter_(nullptr)
     { }
 
+    void setIsCall() {
+        isCall_ = true;
+    }
+
   public:
+    inline LDefinition* getDef(size_t index);
+
+    void setDef(size_t index, const LDefinition& def) {
+        *getDef(index) = def;
+    }
+
+    // Returns information about temporary registers needed. Each temporary
+    // register is an LDefinition with a fixed or virtual register and
+    // either GENERAL, FLOAT32, or DOUBLE type.
+    size_t numTemps() const {
+        return numTemps_;
+    }
+    inline LDefinition* getTemp(size_t index);
+
+    // Returns the number of successors of this instruction, if it is a control
+    // transfer instruction, or zero otherwise.
+    size_t numSuccessors() const {
+        return numSuccessors_;
+    }
+    void setNumSuccessors(size_t succ) {
+        numSuccessors_ = succ;
+        MOZ_ASSERT(numSuccessors_ == succ, "Number of successors must fit in bitfield");
+    }
+
     LSnapshot* snapshot() const {
         return snapshot_;
     }
@@ -842,6 +872,9 @@ class LInstruction
     }
     void setMovesAfter(LMoveGroup* moves) {
         movesAfter_ = moves;
+    }
+    uint32_t numOperands() const {
+        return nonPhiNumOperands_;
     }
     void assignSnapshot(LSnapshot* snapshot);
     void initSafepoint(TempAllocator& alloc);
@@ -875,7 +908,6 @@ class LElementVisitor
         return ins_;
     }
 
-  public:
     void setElement(LNode* ins) {
         ins_ = ins;
         if (ins->mirRaw()) {
@@ -891,8 +923,7 @@ class LElementVisitor
         lastNotInlinedPC_(nullptr)
     {}
 
-  public:
-#define VISIT_INS(op) virtual void visit##op(L##op*) { MOZ_CRASH("NYI: " #op); }
+#define VISIT_INS(op) void visit##op(L##op*) { MOZ_CRASH("NYI: " #op); }
     LIR_OPCODE_LIST(VISIT_INS)
 #undef VISIT_INS
 };
@@ -915,23 +946,23 @@ class LPhi final : public LNode
     LIR_HEADER(Phi)
 
     LPhi(MPhi* ins, LAllocation* inputs)
-        : inputs_(inputs)
+      : LNode(/* nonPhiNumOperands = */ 0,
+              /* numDefs = */ 1,
+              /* numTemps = */ 0),
+        inputs_(inputs)
     {
         setMir(ins);
     }
 
-    size_t numDefs() const override {
-        return 1;
-    }
-    LDefinition* getDef(size_t index) override {
+    LDefinition* getDef(size_t index) {
         MOZ_ASSERT(index == 0);
         return &def_;
     }
-    void setDef(size_t index, const LDefinition& def) override {
+    void setDef(size_t index, const LDefinition& def) {
         MOZ_ASSERT(index == 0);
         def_ = def;
     }
-    size_t numOperands() const override {
+    size_t numOperands() const {
         return mir_->toPhi()->numOperands();
     }
     LAllocation* getOperand(size_t index) override {
@@ -942,24 +973,10 @@ class LPhi final : public LNode
         MOZ_ASSERT(index < numOperands());
         inputs_[index] = a;
     }
-    size_t numTemps() const override {
-        return 0;
-    }
-    LDefinition* getTemp(size_t index) override {
-        MOZ_CRASH("no temps");
-    }
-    void setTemp(size_t index, const LDefinition& temp) override {
-        MOZ_CRASH("no temps");
-    }
-    size_t numSuccessors() const override {
-        return 0;
-    }
-    MBasicBlock* getSuccessor(size_t i) const override {
-        MOZ_CRASH("no successors");
-    }
-    void setSuccessor(size_t i, MBasicBlock*) override {
-        MOZ_CRASH("no successors");
-    }
+
+    // Phis don't have temps, so calling numTemps/getTemp is pointless.
+    size_t numTemps() const = delete;
+    LDefinition* getTemp(size_t index) = delete;
 };
 
 class LMoveGroup;
@@ -1063,47 +1080,38 @@ namespace details {
     template <size_t Defs, size_t Temps>
     class LInstructionFixedDefsTempsHelper : public LInstruction
     {
-        mozilla::Array<LDefinition, Defs> defs_;
-        mozilla::Array<LDefinition, Temps> temps_;
+        mozilla::Array<LDefinition, Defs + Temps> defsAndTemps_;
+
+      protected:
+        explicit LInstructionFixedDefsTempsHelper(uint32_t numOperands)
+          : LInstruction(numOperands, Defs, Temps)
+        {}
 
       public:
-        size_t numDefs() const final override {
-            return Defs;
+        LDefinition* getDef(size_t index) {
+            MOZ_ASSERT(index < Defs);
+            return &defsAndTemps_[index];
         }
-        LDefinition* getDef(size_t index) final override {
-            return &defs_[index];
-        }
-        size_t numTemps() const final override {
-            return Temps;
-        }
-        LDefinition* getTemp(size_t index) final override {
-            return &temps_[index];
+        LDefinition* getTemp(size_t index) {
+            MOZ_ASSERT(index < Temps);
+            return &defsAndTemps_[Defs + index];
         }
 
-        void setDef(size_t index, const LDefinition& def) final override {
-            defs_[index] = def;
+        void setDef(size_t index, const LDefinition& def) {
+            MOZ_ASSERT(index < Defs);
+            defsAndTemps_[index] = def;
         }
-        void setTemp(size_t index, const LDefinition& a) final override {
-            temps_[index] = a;
+        void setTemp(size_t index, const LDefinition& a) {
+            MOZ_ASSERT(index < Temps);
+            defsAndTemps_[Defs + index] = a;
         }
         void setInt64Temp(size_t index, const LInt64Definition& a) {
 #if JS_BITS_PER_WORD == 32
-            temps_[index] = a.low();
-            temps_[index + 1] = a.high();
+            setTemp(index, a.low());
+            setTemp(index + 1, a.high());
 #else
-            temps_[index] = a.value();
+            setTemp(index, a.value());
 #endif
-        }
-
-        size_t numSuccessors() const override {
-            return 0;
-        }
-        MBasicBlock* getSuccessor(size_t i) const override {
-            MOZ_ASSERT(false);
-            return nullptr;
-        }
-        void setSuccessor(size_t i, MBasicBlock* successor) override {
-            MOZ_ASSERT(false);
         }
 
         // Default accessors, assuming a single input and output, respectively.
@@ -1115,18 +1123,46 @@ namespace details {
             MOZ_ASSERT(numDefs() == 1);
             return getDef(0);
         }
+        static size_t offsetOfDef(size_t index) {
+            using T = LInstructionFixedDefsTempsHelper<0, 0>;
+            return offsetof(T, defsAndTemps_) + index * sizeof(LDefinition);
+        }
+        static size_t offsetOfTemp(uint32_t numDefs, uint32_t index) {
+            using T = LInstructionFixedDefsTempsHelper<0, 0>;
+            return offsetof(T, defsAndTemps_) + (numDefs + index) * sizeof(LDefinition);
+        }
     };
 } // namespace details
+
+inline LDefinition*
+LInstruction::getDef(size_t index)
+{
+    MOZ_ASSERT(index < numDefs());
+    using T = details::LInstructionFixedDefsTempsHelper<0, 0>;
+    uint8_t* p = reinterpret_cast<uint8_t*>(this) + T::offsetOfDef(index);
+    return reinterpret_cast<LDefinition*>(p);
+}
+
+inline LDefinition*
+LInstruction::getTemp(size_t index)
+{
+    MOZ_ASSERT(index < numTemps());
+    using T = details::LInstructionFixedDefsTempsHelper<0, 0>;
+    uint8_t* p = reinterpret_cast<uint8_t*>(this) + T::offsetOfTemp(numDefs(), index);
+    return reinterpret_cast<LDefinition*>(p);
+}
 
 template <size_t Defs, size_t Operands, size_t Temps>
 class LInstructionHelper : public details::LInstructionFixedDefsTempsHelper<Defs, Temps>
 {
     mozilla::Array<LAllocation, Operands> operands_;
 
+  protected:
+    LInstructionHelper()
+      : details::LInstructionFixedDefsTempsHelper<Defs, Temps>(Operands)
+    {}
+
   public:
-    size_t numOperands() const final override {
-        return Operands;
-    }
     LAllocation* getOperand(size_t index) final override {
         return &operands_[index];
     }
@@ -1164,12 +1200,14 @@ class LVariadicInstruction : public details::LInstructionFixedDefsTempsHelper<De
 {
     FixedList<LAllocation> operands_;
 
+  protected:
+    explicit LVariadicInstruction(size_t numOperands)
+      : details::LInstructionFixedDefsTempsHelper<Defs, Temps>(numOperands)
+    {}
+
   public:
-    MOZ_MUST_USE bool init(TempAllocator& alloc, size_t length) {
-        return operands_.init(alloc, length);
-    }
-    size_t numOperands() const final override {
-        return operands_.length();
+    MOZ_MUST_USE bool init(TempAllocator& alloc) {
+        return operands_.init(alloc, this->nonPhiNumOperands_);
     }
     LAllocation* getOperand(size_t index) final override {
         return &operands_[index];
@@ -1191,8 +1229,8 @@ template <size_t Defs, size_t Operands, size_t Temps>
 class LCallInstructionHelper : public LInstructionHelper<Defs, Operands, Temps>
 {
   public:
-    virtual bool isCall() const override {
-        return true;
+    LCallInstructionHelper() {
+        this->setIsCall();
     }
 };
 

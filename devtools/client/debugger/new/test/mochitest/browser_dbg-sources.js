@@ -11,8 +11,15 @@ async function waitForSourceCount(dbg, i) {
   });
 }
 
+async function assertSourceCount(dbg, count) {
+  await waitForSourceCount(dbg, count);
+  is(findAllElements(dbg, "sourceNodes").length, count, `${count} sources`);
+}
+
 function getLabel(dbg, index) {
-  return findElement(dbg, "sourceNode", index).textContent.trim();
+  return findElement(dbg, "sourceNode", index)
+    .textContent.trim()
+    .replace(/^[\s\u200b]*/g, "");
 }
 
 add_task(async function() {
@@ -22,22 +29,24 @@ add_task(async function() {
   await waitForSources(dbg, "simple1", "simple2", "nested-source", "long.js");
 
   // Expand nodes and make sure more sources appear.
-  is(findAllElements(dbg, "sourceNodes").length, 2);
-
+  await assertSourceCount(dbg, 2);
   await clickElement(dbg, "sourceArrow", 2);
-  is(findAllElements(dbg, "sourceNodes").length, 7);
 
+  await assertSourceCount(dbg, 7);
   await clickElement(dbg, "sourceArrow", 3);
-  is(findAllElements(dbg, "sourceNodes").length, 8);
+  await assertSourceCount(dbg, 8);
 
-  // Select a source.
+  // Select a source
   ok(
     !findElementWithSelector(dbg, ".sources-list .focused"),
     "Source is not focused"
   );
+
   const selected = waitForDispatch(dbg, "SELECT_SOURCE");
   await clickElement(dbg, "sourceNode", 4);
   await selected;
+  await waitForSelectedSource(dbg);
+
   ok(
     findElementWithSelector(dbg, ".sources-list .focused"),
     "Source is focused"
@@ -57,21 +66,9 @@ add_task(async function() {
   });
 
   await waitForSourceCount(dbg, 9);
-  is(getLabel(dbg, 7), "math.min.js", "The dynamic script exists");
-
-  // Make sure named eval sources appear in the list.
-});
-
-add_task(async function() {
-  const dbg = await initDebugger("doc-sources.html");
-  const { selectors: { getSelectedSource }, getState } = dbg;
-
-  await waitForSources(dbg, "simple1", "simple2", "nested-source", "long.js");
-
-  ContentTask.spawn(gBrowser.selectedBrowser, null, function() {
-    content.eval("window.evaledFunc = function() {} //# sourceURL=evaled.js");
-  });
-  await waitForSourceCount(dbg, 3);
-
-  is(getLabel(dbg, 3), "evaled.js", "the eval script exists");
+  is(
+    getLabel(dbg, 7),
+    "math.min.js",
+    "math.min.js - The dynamic script exists"
+  );
 });

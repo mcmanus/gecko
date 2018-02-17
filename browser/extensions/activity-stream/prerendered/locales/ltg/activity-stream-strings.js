@@ -10,6 +10,7 @@ window.gActivityStreamStrings = {
   "header_recommended_by": "{provider} īsaceitōs",
   "header_bookmarks_placeholder": "Tu vāļ naesi nikū saglobōjs.",
   "header_stories_from": "nu",
+  "context_menu_button_sr": "Open context menu for {title}",
   "type_label_visited": "Apsavārtys lopys",
   "type_label_bookmarked": "Saglobōts grōmotzemēs",
   "type_label_synced": "Sinhroniziets nu cytas īreices",
@@ -78,6 +79,7 @@ window.gActivityStreamStrings = {
   "edit_topsites_edit_button": "Maineit lopu",
   "edit_topsites_dismiss_button": "Paslēpt lopu",
   "edit_topsites_add_button": "Pīvīnōt",
+  "edit_topsites_add_button_tooltip": "Add Top Site",
   "topsites_form_add_header": "Jauna lopa topā",
   "topsites_form_edit_header": "Maineit lopu topā",
   "topsites_form_title_placeholder": "Īvodi viersrokstu",
@@ -94,5 +96,7 @@ window.gActivityStreamStrings = {
   "topstories_empty_state": "Esi vysu izlasiejs. Īej vāļōk, kab redzēt vaira ziņu nu {provider}. Nagribi gaidēt? Izavielej popularu tēmu, kab atrostu vaira interesantu rokstu nu vysa interneta.",
   "manual_migration_explanation2": "Paraugi Firefox ar grōmotzeimem, viesturi un parolem nu cyta porlyuka.",
   "manual_migration_cancel_button": "Nā, paļdis",
-  "manual_migration_import_button": "Importeit"
+  "manual_migration_import_button": "Importeit",
+  "error_fallback_default_info": "Oops, something went wrong loading this content.",
+  "error_fallback_default_refresh_suggestion": "Refresh page to try again."
 };

@@ -9,12 +9,6 @@ function dumpLog(msg) {
   MozillaFileLogger.log(msg);
 }
 
-
-if (Cc === undefined) {
-  var Cc = Components.classes;
-  var Ci = Components.interfaces;
-}
-
 const FOSTREAM_CID = "@mozilla.org/network/file-output-stream;1";
 const LF_CID = "@mozilla.org/file/local;1";
 
@@ -61,7 +55,7 @@ MozillaFileLogger.getLogCallback = function() {
     if (MozillaFileLogger._foStream)
       MozillaFileLogger._foStream.write(data, data.length);
 
-    if (data.indexOf("SimpleTest FINISH") >= 0) {
+    if (data.includes("SimpleTest FINISH")) {
       MozillaFileLogger.close();
     }
   };

@@ -10,9 +10,24 @@
 #include "Layers.h"
 #include "LayerAnimationInfo.h" // For LayerAnimationInfo::sRecords
 #include "mozilla/StyleSetHandleInlines.h"
+#include "nsAnimationManager.h"
+#include "nsCSSFrameConstructor.h"
+#include "nsCSSRendering.h"
 #include "nsIFrame.h"
+#include "nsIFrameInlines.h"
 #include "nsIPresShellInlines.h"
+#include "nsPlaceholderFrame.h"
+#include "nsStyleChangeList.h"
+#include "nsStyleUtil.h"
+#include "StickyScrollContainer.h"
+#include "mozilla/EffectSet.h"
+#include "mozilla/ViewportFrame.h"
+#include "SVGObserverUtils.h"
+#include "SVGTextFrame.h"
+#include "ActiveLayerTracker.h"
+#include "nsSVGIntegrationUtils.h"
 
+using namespace mozilla::dom;
 
 namespace mozilla {
 
@@ -432,12 +447,14 @@ RestyleManager::ChangeHintToString(nsChangeHint aHint)
     "ReflowChangesSizeOrPosition", "UpdateComputedBSize",
     "UpdateUsesOpacity", "UpdateBackgroundPosition",
     "AddOrRemoveTransform", "CSSOverflowChange",
-    "UpdateWidgetProperties", "UpdateTableCellSpans"
+    "UpdateWidgetProperties", "UpdateTableCellSpans",
+    "VisibilityChange"
   };
-  static_assert(nsChangeHint_AllHints == (1u << ArrayLength(names)) - 1,
+  static_assert(nsChangeHint_AllHints ==
+                  static_cast<uint32_t>((1ull << ArrayLength(names)) - 1),
                 "Name list doesn't match change hints.");
-  uint32_t hint = aHint & ((1u << ArrayLength(names)) - 1);
-  uint32_t rest = aHint & ~((1u << ArrayLength(names)) - 1);
+  uint32_t hint = aHint & static_cast<uint32_t>((1ull << ArrayLength(names)) - 1);
+  uint32_t rest = aHint & ~static_cast<uint32_t>((1ull << ArrayLength(names)) - 1);
   if ((hint & NS_STYLE_HINT_REFLOW) == NS_STYLE_HINT_REFLOW) {
     result.AppendLiteral("NS_STYLE_HINT_REFLOW");
     hint = hint & ~NS_STYLE_HINT_REFLOW;
@@ -452,7 +469,7 @@ RestyleManager::ChangeHintToString(nsChangeHint aHint)
     any = true;
   }
   for (uint32_t i = 0; i < ArrayLength(names); i++) {
-    if (hint & (1 << i)) {
+    if (hint & (1u << i)) {
       if (any) {
         result.AppendLiteral(" | ");
       }
@@ -482,6 +499,7 @@ static bool gInApplyRenderingChangeToTree = false;
 #endif
 
 #ifdef DEBUG
+#ifdef MOZ_OLD_STYLE
 static void
 DumpContext(nsIFrame* aFrame, nsStyleContext* aContext)
 {
@@ -628,6 +646,7 @@ VerifyStyleTree(nsIFrame* aFrame)
     VerifyContextParent(aFrame, extraContext->AsGecko(), context);
   }
 }
+#endif
 
 void
 RestyleManager::DebugVerifyStyleTree(nsIFrame* aFrame)
@@ -638,9 +657,13 @@ RestyleManager::DebugVerifyStyleTree(nsIFrame* aFrame)
     // we work out what we want to assert (bug 1322570).
     return;
   }
+#ifdef MOZ_OLD_STYLE
   if (aFrame) {
     VerifyStyleTree(aFrame);
   }
+#else
+  MOZ_CRASH("old style system disabled");
+#endif
 }
 
 #endif // DEBUG
@@ -1057,7 +1080,7 @@ DoApplyRenderingChangeToTree(nsIFrame* aFrame,
       // layer for this frame, and not scheduling an invalidating
       // paint.
       if (!needInvalidatingPaint) {
-        Layer* layer;
+        nsDisplayItem::Layer* layer;
         needInvalidatingPaint |= !aFrame->TryUpdateTransformOnly(&layer);
 
         if (!needInvalidatingPaint) {
@@ -1715,6 +1738,9 @@ RestyleManager::ProcessRestyledFrames(nsStyleChangeList& aChangeList)
       if (hint & nsChangeHint_UpdateTableCellSpans) {
         frameConstructor->UpdateTableCellSpans(content);
       }
+      if (hint & nsChangeHint_VisibilityChange) {
+        frame->UpdateVisibleDescendantsState();
+      }
     }
   }
 
@@ -1752,10 +1778,20 @@ RestyleManager::IncrementAnimationGeneration()
   // We update the animation generation at start of each call to
   // ProcessPendingRestyles so we should ignore any subsequent (redundant)
   // calls that occur while we are still processing restyles.
-  if ((IsGecko() && !AsGecko()->IsProcessingRestyles()) ||
-      (IsServo() && !mInStyleRefresh)) {
-    ++mAnimationGeneration;
+  if (IsGecko()) {
+#ifdef MOZ_OLD_STYLE
+    if (AsGecko()->IsProcessingRestyles()) {
+      return;
+    }
+#else
+    MOZ_CRASH("old style system disabled");
+#endif
+  } else {
+    if (mInStyleRefresh) {
+      return;
+    }
   }
+  ++mAnimationGeneration;
 }
 
 /* static */ void

@@ -4,19 +4,17 @@
  */
 "use strict";
 
-const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
-
 const { AppConstants } =
-  Cu.import("resource://gre/modules/AppConstants.jsm", {});
-const { ctypes } = Cu.import("resource://gre/modules/ctypes.jsm", {});
-const { FileUtils } = Cu.import("resource://gre/modules/FileUtils.jsm", {});
-const { HttpServer } = Cu.import("resource://testing-common/httpd.js", {});
+  ChromeUtils.import("resource://gre/modules/AppConstants.jsm", {});
+const { ctypes } = ChromeUtils.import("resource://gre/modules/ctypes.jsm", {});
+const { FileUtils } = ChromeUtils.import("resource://gre/modules/FileUtils.jsm", {});
+const { HttpServer } = ChromeUtils.import("resource://testing-common/httpd.js", {});
 const { MockRegistrar } =
-  Cu.import("resource://testing-common/MockRegistrar.jsm", {});
-const { NetUtil } = Cu.import("resource://gre/modules/NetUtil.jsm", {});
-const { Promise } = Cu.import("resource://gre/modules/Promise.jsm", {});
-const { Services } = Cu.import("resource://gre/modules/Services.jsm", {});
-const { XPCOMUtils } = Cu.import("resource://gre/modules/XPCOMUtils.jsm", {});
+  ChromeUtils.import("resource://testing-common/MockRegistrar.jsm", {});
+const { NetUtil } = ChromeUtils.import("resource://gre/modules/NetUtil.jsm", {});
+const { Promise } = ChromeUtils.import("resource://gre/modules/Promise.jsm", {});
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm", {});
+const { XPCOMUtils } = ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", {});
 
 const isDebugBuild = Cc["@mozilla.org/xpcom/debug;1"]
                        .getService(Ci.nsIDebug2).isDebugBuild;
@@ -475,7 +473,7 @@ function _getBinaryUtil(binaryUtilName) {
   // is in another location.
   if (!utilBin.exists()) {
     utilBin = Services.dirsvc.get("CurWorkD", Ci.nsIFile);
-    while (utilBin.path.indexOf("xpcshell") != -1) {
+    while (utilBin.path.includes("xpcshell")) {
       utilBin = utilBin.parent;
     }
     utilBin.append("bin");
@@ -609,9 +607,12 @@ function getFailingHttpServer(serverPort, serverIdentities) {
 //   by which HTTP method the server is expected to be queried.
 // expectedResponseTypes is an optional array of OCSP response types to use (see
 //   GenerateOCSPResponse.cpp).
+// responseHeaderPairs is an optional array of HTTP header (name, value) pairs
+//   to set in each response.
 function startOCSPResponder(serverPort, identity, nssDBLocation,
                             expectedCertNames, expectedBasePaths,
-                            expectedMethods, expectedResponseTypes) {
+                            expectedMethods, expectedResponseTypes,
+                            responseHeaderPairs = []) {
   let ocspResponseGenerationArgs = expectedCertNames.map(
     function(expectedNick) {
       let responseType = "good";
@@ -640,6 +641,9 @@ function startOCSPResponder(serverPort, identity, nssDBLocation,
       }
       aResponse.setStatusLine(aRequest.httpVersion, 200, "OK");
       aResponse.setHeader("Content-Type", "application/ocsp-response");
+      for (let headerPair of responseHeaderPairs) {
+        aResponse.setHeader(headerPair[0], headerPair[1]);
+      }
       aResponse.write(ocspResponses.shift());
     });
   httpServer.identity.setPrimary("http", identity, serverPort);
