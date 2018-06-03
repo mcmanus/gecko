@@ -4,41 +4,37 @@
 
 "use strict";
 
-const { addons, createClass, createFactory, DOM: dom, PropTypes } =
-  require("devtools/client/shared/vendor/react");
+const { createFactory, PureComponent } = require("devtools/client/shared/vendor/react");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
+const { getStr } = require("devtools/client/inspector/layout/utils/l10n");
 
 const GridDisplaySettings = createFactory(require("./GridDisplaySettings"));
 const GridList = createFactory(require("./GridList"));
 const GridOutline = createFactory(require("./GridOutline"));
 
 const Types = require("../types");
-const { getStr } = require("../utils/l10n");
 
-module.exports = createClass({
-
-  displayName: "Grid",
-
-  propTypes: {
-    getSwatchColorPickerTooltip: PropTypes.func.isRequired,
-    grids: PropTypes.arrayOf(PropTypes.shape(Types.grid)).isRequired,
-    highlighterSettings: PropTypes.shape(Types.highlighterSettings).isRequired,
-    setSelectedNode: PropTypes.func.isRequired,
-    onHideBoxModelHighlighter: PropTypes.func.isRequired,
-    onSetGridOverlayColor: PropTypes.func.isRequired,
-    onShowBoxModelHighlighterForNode: PropTypes.func.isRequired,
-    onShowGridAreaHighlight: PropTypes.func.isRequired,
-    onShowGridCellHighlight: PropTypes.func.isRequired,
-    onShowGridLineNamesHighlight: PropTypes.func.isRequired,
-    onToggleGridHighlighter: PropTypes.func.isRequired,
-    onToggleShowGridAreas: PropTypes.func.isRequired,
-    onToggleShowGridLineNumbers: PropTypes.func.isRequired,
-    onToggleShowInfiniteLines: PropTypes.func.isRequired,
-  },
-
-  mixins: [ addons.PureRenderMixin ],
+class Grid extends PureComponent {
+  static get propTypes() {
+    return {
+      getSwatchColorPickerTooltip: PropTypes.func.isRequired,
+      grids: PropTypes.arrayOf(PropTypes.shape(Types.grid)).isRequired,
+      highlighterSettings: PropTypes.shape(Types.highlighterSettings).isRequired,
+      setSelectedNode: PropTypes.func.isRequired,
+      onHideBoxModelHighlighter: PropTypes.func.isRequired,
+      onSetGridOverlayColor: PropTypes.func.isRequired,
+      onShowBoxModelHighlighterForNode: PropTypes.func.isRequired,
+      onShowGridOutlineHighlight: PropTypes.func.isRequired,
+      onToggleGridHighlighter: PropTypes.func.isRequired,
+      onToggleShowGridAreas: PropTypes.func.isRequired,
+      onToggleShowGridLineNumbers: PropTypes.func.isRequired,
+      onToggleShowInfiniteLines: PropTypes.func.isRequired,
+    };
+  }
 
   render() {
-    let {
+    const {
       getSwatchColorPickerTooltip,
       grids,
       highlighterSettings,
@@ -46,8 +42,7 @@ module.exports = createClass({
       onHideBoxModelHighlighter,
       onSetGridOverlayColor,
       onShowBoxModelHighlighterForNode,
-      onShowGridAreaHighlight,
-      onShowGridCellHighlight,
+      onShowGridOutlineHighlight,
       onToggleShowGridAreas,
       onToggleGridHighlighter,
       onToggleShowGridLineNumbers,
@@ -81,8 +76,7 @@ module.exports = createClass({
         ),
         GridOutline({
           grids,
-          onShowGridAreaHighlight,
-          onShowGridCellHighlight,
+          onShowGridOutlineHighlight,
         })
       )
       :
@@ -92,6 +86,7 @@ module.exports = createClass({
         },
         getStr("layout.noGridsOnThisPage")
       );
-  },
+  }
+}
 
-});
+module.exports = Grid;

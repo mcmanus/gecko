@@ -4,7 +4,7 @@
 
 "use strict";
 
-this.EXPORTED_SYMBOLS = [ "ExtensionSearchHandler" ];
+var EXPORTED_SYMBOLS = [ "ExtensionSearchHandler" ];
 
 // Used to keep track of all of the registered keywords, where each keyword is
 // mapped to a KeywordInfo instance.
@@ -262,6 +262,10 @@ var ExtensionSearchHandler = Object.freeze({
       throw new Error(`The keyword provided is not registered: "${keyword}"`);
     }
 
+    if (!gActiveInputSession) {
+      throw new Error("There is no active input session");
+    }
+
     if (gActiveInputSession && gActiveInputSession.keyword != keyword) {
       throw new Error("A different input session is already ongoing");
     }
@@ -274,7 +278,7 @@ var ExtensionSearchHandler = Object.freeze({
       current: "currentTab",
       tab: "newForegroundTab",
       tabshifted: "newBackgroundTab",
-    }
+    };
     let disposition = dispositionMap[where];
 
     if (!disposition) {
@@ -285,7 +289,7 @@ var ExtensionSearchHandler = Object.freeze({
     // we only want to send the text that follows.
     text = text.substring(keyword.length + 1);
 
-    gActiveInputSession.end(this.MSG_INPUT_ENTERED, text, disposition)
+    gActiveInputSession.end(this.MSG_INPUT_ENTERED, text, disposition);
     gActiveInputSession = null;
   },
 

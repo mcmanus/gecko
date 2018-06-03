@@ -13,6 +13,9 @@
 
 namespace mozilla {
 
+template<typename T, typename U>
+class EditorDOMPointBase;
+
 // This class will maintain a reference to the child immediately
 // before the boundary's offset. We try to avoid computing the
 // offset as much as possible and just ensure mRef points to the
@@ -42,6 +45,8 @@ class RangeBoundaryBase
 {
   template<typename T, typename U>
   friend class RangeBoundaryBase;
+  template<typename T, typename U>
+  friend class EditorDOMPointBase;
 
   friend void ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback&,
                                           RangeBoundary&, const char*,
@@ -72,7 +77,7 @@ public:
       if (aOffset == static_cast<int32_t>(aContainer->GetChildCount())) {
         mRef = aContainer->GetLastChild();
       } else if (aOffset != 0) {
-        mRef = mParent->GetChildAt(aOffset - 1);
+        mRef = mParent->GetChildAt_Deprecated(aOffset - 1);
       }
 
       NS_WARNING_ASSERTION(mRef || aOffset == 0,
@@ -120,8 +125,44 @@ public:
       MOZ_ASSERT(Offset() == 0, "invalid RangeBoundary");
       return mParent->GetFirstChild();
     }
-    MOZ_ASSERT(mParent->GetChildAt(Offset()) == mRef->GetNextSibling());
+    MOZ_ASSERT(mParent->GetChildAt_Deprecated(Offset()) == mRef->GetNextSibling());
     return mRef->GetNextSibling();
+  }
+
+  /**
+   * GetNextSiblingOfChildOffset() returns next sibling of a child at offset.
+   * If this refers after the last child or the container cannot have children,
+   * this returns nullptr with warning.
+   */
+  nsIContent*
+  GetNextSiblingOfChildAtOffset() const
+  {
+    if (NS_WARN_IF(!mParent) || NS_WARN_IF(!mParent->IsContainerNode())) {
+      return nullptr;
+    }
+    if (NS_WARN_IF(!mRef->GetNextSibling())) {
+      // Already referring the end of the container.
+      return nullptr;
+    }
+    return mRef->GetNextSibling()->GetNextSibling();
+  }
+
+  /**
+   * GetPreviousSiblingOfChildAtOffset() returns previous sibling of a child
+   * at offset.  If this refers the first child or the container cannot have
+   * children, this returns nullptr with warning.
+   */
+  nsIContent*
+  GetPreviousSiblingOfChildAtOffset() const
+  {
+    if (NS_WARN_IF(!mParent) || NS_WARN_IF(!mParent->IsContainerNode())) {
+      return nullptr;
+    }
+    if (NS_WARN_IF(!mRef)) {
+      // Already referring the start of the container.
+      return nullptr;
+    }
+    return mRef;
   }
 
   uint32_t
@@ -137,7 +178,7 @@ public:
 
     MOZ_ASSERT(mRef);
     MOZ_ASSERT(mRef->GetParentNode() == mParent);
-    mOffset = mozilla::Some(mParent->IndexOf(mRef) + 1);
+    mOffset = mozilla::Some(mParent->ComputeIndexOf(mRef) + 1);
 
     return mOffset.value();
   }
@@ -167,7 +208,7 @@ public:
       } else if (aOffset == 0) {
         mRef = nullptr;
       } else {
-        mRef = mParent->GetChildAt(aOffset - 1);
+        mRef = mParent->GetChildAt_Deprecated(aOffset - 1);
         MOZ_ASSERT(mRef);
       }
 
@@ -246,8 +287,14 @@ public:
   template<typename A, typename B>
   RangeBoundaryBase& operator=(const RangeBoundaryBase<A,B>& aOther)
   {
-    mParent = aOther.mParent;
-    mRef = aOther.mRef;
+    // mParent and mRef can be strong pointers, so better to try to avoid any
+    // extra AddRef/Release calls.
+    if (mParent != aOther.mParent) {
+      mParent = aOther.mParent;
+    }
+    if (mRef != aOther.mRef) {
+      mRef = aOther.mRef;
+    }
     mOffset = aOther.mOffset;
     return *this;
   }

@@ -9,12 +9,12 @@ loadHelperScript("helper_inplace_editor.js");
 
 // Test that the trimOutput option for the inplace editor works correctly.
 
-add_task(function* () {
-  yield addTab("data:text/html;charset=utf-8,inline editor tests");
-  let [host, , doc] = yield createHost();
+add_task(async function() {
+  await addTab("data:text/html;charset=utf-8,inline editor tests");
+  const [host, , doc] = await createHost();
 
-  yield testNonTrimmed(doc);
-  yield testTrimmed(doc);
+  await testNonTrimmed(doc);
+  await testTrimmed(doc);
 
   host.destroy();
   gBrowser.removeCurrentTab();
@@ -22,15 +22,15 @@ add_task(function* () {
 
 function testNonTrimmed(doc) {
   info("Testing the trimOutput=false option");
-  let def = defer();
+  const def = defer();
 
-  let initial = "\nMultiple\nLines\n";
-  let changed = " \nMultiple\nLines\n with more whitespace ";
+  const initial = "\nMultiple\nLines\n";
+  const changed = " \nMultiple\nLines\n with more whitespace ";
   createInplaceEditorAndClick({
     trimOutput: false,
     multiline: true,
     initial: initial,
-    start: function (editor) {
+    start: function(editor) {
       is(editor.input.value, initial, "Explicit initial value should be used.");
       editor.input.value = changed;
       EventUtils.sendKey("return");
@@ -43,14 +43,14 @@ function testNonTrimmed(doc) {
 
 function testTrimmed(doc) {
   info("Testing the trimOutput=true option (default value)");
-  let def = defer();
+  const def = defer();
 
-  let initial = "\nMultiple\nLines\n";
-  let changed = " \nMultiple\nLines\n with more whitespace ";
+  const initial = "\nMultiple\nLines\n";
+  const changed = " \nMultiple\nLines\n with more whitespace ";
   createInplaceEditorAndClick({
     initial: initial,
     multiline: true,
-    start: function (editor) {
+    start: function(editor) {
       is(editor.input.value, initial, "Explicit initial value should be used.");
       editor.input.value = changed;
       EventUtils.sendKey("return");
@@ -62,7 +62,7 @@ function testTrimmed(doc) {
 }
 
 function onDone(value, isCommit, def) {
-  return function (actualValue, actualCommit) {
+  return function(actualValue, actualCommit) {
     info("Inplace-editor's done callback executed, checking its state");
     is(actualValue, value, "The value is correct");
     is(actualCommit, isCommit, "The commit boolean is correct");

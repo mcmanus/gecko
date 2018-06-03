@@ -1,20 +1,21 @@
 :root {
-  --toolbarbutton-icon-fill-attention: #0a84ff;
+  --toolbarbutton-icon-fill-attention: var(--lwt-toolbarbutton-icon-fill-attention, #0a84ff);
 }
 
 :root:-moz-lwtheme {
   --toolbarbutton-icon-fill-opacity: 1;
 }
 
+:root[lwt-popup-brighttext] panel,
 toolbar[brighttext] {
-  --toolbarbutton-icon-fill-attention: #45a1ff;
+  --toolbarbutton-icon-fill-attention: var(--lwt-toolbarbutton-icon-fill-attention, #45a1ff);
 }
 
 .toolbarbutton-animatable-box,
 .toolbarbutton-1 {
   color: inherit;
   -moz-context-properties: fill, fill-opacity;
-  fill: currentColor;
+  fill: var(--lwt-toolbarbutton-icon-fill, currentColor);
   fill-opacity: var(--toolbarbutton-icon-fill-opacity);
 }
 
@@ -105,14 +106,8 @@ toolbar[brighttext] {
   /* Since .toolbarbutton-icon uses a different width than the animatable-box,
      we need to set a padding relative to the difference in widths. */
   margin-inline-start: calc((16px + 2 * var(--toolbarbutton-inner-padding) - 18px) / 2);
-  /* Set the min- and max- width and height of the box equal to that
-     of each frame of the SVG sprite. Setting the width and height via
-     the `width` and `height` CSS properties causes an assertion for
-     `inline-size less than zero: 'aContainingBlockISize >= 0'` (bug 1379332). */
-  min-width: 18px;
-  max-width: 18px;
-  min-height: 20px;
-  max-height: 20px;
+  width: 18px; /* Width of each frame within the SVG sprite */
+  height: 20px; /* Height of each frame within the SVG sprite */
 }
 
 #reload-button > .toolbarbutton-animatable-box > .toolbarbutton-animatable-image,
@@ -214,7 +209,7 @@ toolbar[brighttext] {
 }
 
 #sync-button {
-  list-style-image: url("chrome://browser/skin/synced-tabs.svg");
+  list-style-image: url("chrome://browser/skin/tab.svg");
 }
 
 #feed-button {
@@ -227,14 +222,6 @@ toolbar[brighttext] {
 
 #new-window-button {
   list-style-image: url("chrome://browser/skin/new-window.svg");
-}
-
-#e10s-button {
-  list-style-image: url("chrome://browser/skin/new-window.svg");
-}
-
-#e10s-button > .toolbarbutton-icon {
-  transform: scaleY(-1);
 }
 
 #new-tab-button {
@@ -488,12 +475,8 @@ toolbar[brighttext] {
      and the .toolbar-animatable-box. This is correct even in RTL because the item
      is positioned using `left`. */
   left: calc(var(--library-icon-x) + (16px + 2 * var(--toolbarbutton-inner-padding) - 22px) / 2);
-  /* Set the min- and max- width and height of the box equal to that
-     of each frame of the SVG sprite (must use min- and max- due to bug 1379332). */
-  min-width: 22px;
-  max-width: 22px;
-  min-height: 54px;
-  max-height: 54px;
+  width: 22px; /* Width of each frame within the SVG sprite */
+  height: 54px; /* Height of each frame within the SVG sprite */
   z-index: 2;
 }
 
@@ -527,7 +510,7 @@ toolbar[brighttext] {
 .bookmark-item {
   list-style-image: url("chrome://mozapps/skin/places/defaultFavicon.svg");
   -moz-context-properties: fill, fill-opacity;
-  fill: currentColor;
+  fill: var(--lwt-toolbarbutton-icon-fill, currentColor);
   fill-opacity: var(--toolbarbutton-icon-fill-opacity);
 }
 
@@ -553,7 +536,7 @@ toolbar[brighttext] {
 }
 
 .bookmark-item[query][tagContainer] {
-  list-style-image: url("chrome://browser/skin/places/tag.png");
+  list-style-image: url("chrome://browser/skin/places/tag.svg");
   -moz-image-region: auto;
 }
 
@@ -565,11 +548,3 @@ toolbar[brighttext] {
 .bookmark-item[query][hostContainer] {
   list-style-image: url("chrome://browser/skin/places/folder.svg");
 }
-
-%ifdef XP_MACOSX
-@media (min-resolution: 2dppx) {
-  .bookmark-item[query][tagContainer] {
-    list-style-image: url("chrome://browser/skin/places/tag@2x.png");
-  }
-}
-%endif

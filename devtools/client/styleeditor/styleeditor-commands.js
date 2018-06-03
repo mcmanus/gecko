@@ -60,11 +60,11 @@ exports.items = [{
   item: "converter",
   from: "editArgs",
   to: "dom",
-  exec: function (args, context) {
-    let target = context.environment.target;
-    let toolboxOpened = gDevTools.showToolbox(target, "styleeditor");
-    return toolboxOpened.then(function (toolbox) {
-      let styleEditor = toolbox.getCurrentPanel();
+  exec: function(args, context) {
+    const target = context.environment.target;
+    const toolboxOpened = gDevTools.showToolbox(target, "styleeditor");
+    return toolboxOpened.then(function(toolbox) {
+      const styleEditor = toolbox.getCurrentPanel();
       styleEditor.selectStyleSheet(args.href, args.line);
       return null;
     });

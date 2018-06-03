@@ -232,26 +232,85 @@
 #  define MOZ_TSAN_BLACKLIST /* nothing */
 #endif
 
-/*
- * The MOZ_NO_SANITIZE_* family of macros is an annotation based on a more recently
- * introduced Clang feature that allows disabling various sanitizer features for
- * the particular function, including those from UndefinedBehaviorSanitizer.
- */
-
 #if defined(__has_attribute)
 #  if __has_attribute(no_sanitize)
 #    define MOZ_HAVE_NO_SANITIZE_ATTR
 #  endif
 #endif
 
-#if defined(MOZ_HAVE_NO_SANITIZE_ATTR)
-#  define MOZ_NO_SANITIZE_UINT_OVERFLOW __attribute__((no_sanitize("unsigned-integer-overflow")))
-#  define MOZ_NO_SANITIZE_INT_OVERFLOW __attribute__((no_sanitize("signed-integer-overflow")))
-#else
-#  define MOZ_NO_SANITIZE_UINT_OVERFLOW /* nothing */
-#  define MOZ_NO_SANITIZE_INT_OVERFLOW /* nothing */
+#ifdef __clang__
+#  ifdef MOZ_HAVE_NO_SANITIZE_ATTR
+#    define MOZ_HAVE_UNSIGNED_OVERFLOW_SANITIZE_ATTR
+#    define MOZ_HAVE_SIGNED_OVERFLOW_SANITIZE_ATTR
+#  endif
 #endif
 
+/*
+ * MOZ_NO_SANITIZE_UNSIGNED_OVERFLOW disables *un*signed integer overflow
+ * checking on the function it annotates, in builds configured to perform it.
+ * (Currently this is only Clang using -fsanitize=unsigned-integer-overflow, or
+ * via --enable-unsigned-overflow-sanitizer in Mozilla's build system.)  It has
+ * no effect in other builds.
+ *
+ * Place this attribute at the very beginning of a function declaration.
+ *
+ * Unsigned integer overflow isn't *necessarily* a bug.  It's well-defined in
+ * C/C++, and code may reasonably depend upon it.  For example,
+ *
+ *   MOZ_NO_SANITIZE_UNSIGNED_OVERFLOW inline bool
+ *   IsDecimal(char aChar)
+ *   {
+ *     // For chars less than '0', unsigned integer underflow occurs, to a value
+ *     // much greater than 10, so the overall test is false.
+ *     // For chars greater than '0', no overflow occurs, and only '0' to '9'
+ *     // pass the overall test.
+ *     return static_cast<unsigned int>(aChar) - '0' < 10;
+ *   }
+ *
+ * But even well-defined unsigned overflow often causes bugs when it occurs, so
+ * it should be restricted to functions annotated with this attribute.
+ *
+ * The compiler instrumentation to detect unsigned integer overflow has costs
+ * both at compile time and at runtime.  Functions that are repeatedly inlined
+ * at compile time will also implicitly inline the necessary instrumentation,
+ * increasing compile time.  Similarly, frequently-executed functions that
+ * require large amounts of instrumentation will also notice significant runtime
+ * slowdown to execute that instrumentation.  Use this attribute to eliminate
+ * those costs -- but only after carefully verifying that no overflow can occur.
+ */
+#ifdef MOZ_HAVE_UNSIGNED_OVERFLOW_SANITIZE_ATTR
+#  define MOZ_NO_SANITIZE_UNSIGNED_OVERFLOW __attribute__((no_sanitize("unsigned-integer-overflow")))
+#else
+#  define MOZ_NO_SANITIZE_UNSIGNED_OVERFLOW /* nothing */
+#endif
+
+/*
+ * MOZ_NO_SANITIZE_SIGNED_OVERFLOW disables *signed* integer overflow checking
+ * on the function it annotates, in builds configured to perform it.  (Currently
+ * this is only Clang using -fsanitize=signed-integer-overflow, or via
+ * --enable-signed-overflow-sanitizer in Mozilla's build system.  GCC support
+ * will probably be added in the future.)  It has no effect in other builds.
+ *
+ * Place this attribute at the very beginning of a function declaration.
+ *
+ * Signed integer overflow is undefined behavior in C/C++: *anything* can happen
+ * when it occurs.  *Maybe* wraparound behavior will occur, but maybe also the
+ * compiler will assume no overflow happens and will adversely optimize the rest
+ * of your code.  Code that contains signed integer overflow needs to be fixed.
+ *
+ * The compiler instrumentation to detect signed integer overflow has costs both
+ * at compile time and at runtime.  Functions that are repeatedly inlined at
+ * compile time will also implicitly inline the necessary instrumentation,
+ * increasing compile time.  Similarly, frequently-executed functions that
+ * require large amounts of instrumentation will also notice significant runtime
+ * slowdown to execute that instrumentation.  Use this attribute to eliminate
+ * those costs -- but only after carefully verifying that no overflow can occur.
+ */
+#ifdef MOZ_HAVE_SIGNED_OVERFLOW_SANITIZE_ATTR
+#  define MOZ_NO_SANITIZE_SIGNED_OVERFLOW __attribute__((no_sanitize("signed-integer-overflow")))
+#else
+#  define MOZ_NO_SANITIZE_SIGNED_OVERFLOW /* nothing */
+#endif
 
 #undef MOZ_HAVE_NO_SANITIZE_ATTR
 
@@ -390,6 +449,46 @@
 #  define MOZ_FALLTHROUGH /* FALLTHROUGH */
 #endif
 
+/**
+ * C++11 lets unions contain members that have non-trivial special member
+ * functions (default/copy/move constructor, copy/move assignment operator,
+ * destructor) if the user defines the corresponding functions on the union.
+ * (Such user-defined functions must rely on external knowledge about which arm
+ * is active to be safe.  Be extra-careful defining these functions!)
+ *
+ * MSVC unfortunately warns/errors for this bog-standard C++11 pattern.  Use
+ * these macro-guards around such member functions to disable the warnings:
+ *
+ *   union U
+ *   {
+ *     std::string s;
+ *     int x;
+ *
+ *     MOZ_PUSH_DISABLE_NONTRIVIAL_UNION_WARNINGS
+ *
+ *     // |U| must have a user-defined default constructor because |std::string|
+ *     // has a non-trivial default constructor.
+ *     U() ... { ... }
+ *
+ *     // |U| must have a user-defined destructor because |std::string| has a
+ *     // non-trivial destructor.
+ *     ~U() { ... }
+ *
+ *     MOZ_POP_DISABLE_NONTRIVIAL_UNION_WARNINGS
+ *   };
+ */
+#if defined(_MSC_VER)
+#  define MOZ_PUSH_DISABLE_NONTRIVIAL_UNION_WARNINGS \
+     __pragma(warning(push)) \
+     __pragma(warning(disable:4582)) \
+     __pragma(warning(disable:4583))
+#  define MOZ_POP_DISABLE_NONTRIVIAL_UNION_WARNINGS \
+     __pragma(warning(pop))
+#else
+#  define MOZ_PUSH_DISABLE_NONTRIVIAL_UNION_WARNINGS /* nothing */
+#  define MOZ_POP_DISABLE_NONTRIVIAL_UNION_WARNINGS /* nothing */
+#endif
+
 /*
  * The following macros are attributes that support the static analysis plugin
  * included with Mozilla, and will be implemented (when such support is enabled)
@@ -438,12 +537,24 @@
  * MOZ_CAN_RUN_SCRIPT: Applies to functions which can run script. Callers of
  *   this function must also be marked as MOZ_CAN_RUN_SCRIPT, and all refcounted
  *   arguments must be strongly held in the caller.
+ * MOZ_CAN_RUN_SCRIPT_BOUNDARY: Applies to functions which need to call
+ *   MOZ_CAN_RUN_SCRIPT functions, but should not themselves be considered
+ *   MOZ_CAN_RUN_SCRIPT. This is important for some bindings and low level code
+ *   which need to opt out of the safety checks performed by MOZ_CAN_RUN_SCRIPT.
  * MOZ_MUST_OVERRIDE: Applies to all C++ member functions. All immediate
  *   subclasses must provide an exact override of this method; if a subclass
  *   does not override this method, the compiler will emit an error. This
  *   attribute is not limited to virtual methods, so if it is applied to a
  *   nonvirtual method and the subclass does not provide an equivalent
  *   definition, the compiler will emit an error.
+ * MOZ_STATIC_CLASS: Applies to all classes. Any class with this annotation is
+ *   expected to live in static memory, so it is a compile-time error to use
+ *   it, or an array of such objects, as the type of a variable declaration, or
+ *   as a temporary object, or as the type of a new expression (unless
+ *   placement new is being used). If a member of another class uses this
+ *   class, or if another class inherits from this class, then it is considered
+ *   to be a static class as well, although this attribute need not be provided
+ *   in such cases.
  * MOZ_STACK_CLASS: Applies to all classes. Any class with this annotation is
  *   expected to live on the stack, so it is a compile-time error to use it, or
  *   an array of such objects, as a global or static variable, or as the type of
@@ -468,6 +579,10 @@
  *   class uses this class or if another class inherits from this class, then it
  *   is considered to be a non-temporary class as well, although this attribute
  *   need not be provided in such cases.
+ * MOZ_TEMPORARY_CLASS: Applies to all classes. Any class with this annotation
+ *   is expected to only live in a temporary. If another class inherits from
+ *   this class, then it is considered to be a non-temporary class as well,
+ *   although this attribute need not be provided in such cases.
  * MOZ_RAII: Applies to all classes. Any class with this annotation is assumed
  *   to be a RAII guard, which is expected to live on the stack in an automatic
  *   allocation. It is prohibited from being allocated in a temporary, static
@@ -597,11 +712,14 @@
  */
 #ifdef MOZ_CLANG_PLUGIN
 #  define MOZ_CAN_RUN_SCRIPT __attribute__((annotate("moz_can_run_script")))
+#  define MOZ_CAN_RUN_SCRIPT_BOUNDARY __attribute__((annotate("moz_can_run_script_boundary")))
 #  define MOZ_MUST_OVERRIDE __attribute__((annotate("moz_must_override")))
+#  define MOZ_STATIC_CLASS __attribute__((annotate("moz_global_class")))
 #  define MOZ_STACK_CLASS __attribute__((annotate("moz_stack_class")))
 #  define MOZ_NONHEAP_CLASS __attribute__((annotate("moz_nonheap_class")))
 #  define MOZ_HEAP_CLASS __attribute__((annotate("moz_heap_class")))
 #  define MOZ_NON_TEMPORARY_CLASS __attribute__((annotate("moz_non_temporary_class")))
+#  define MOZ_TEMPORARY_CLASS __attribute__((annotate("moz_temporary_class")))
 #  define MOZ_TRIVIAL_CTOR_DTOR __attribute__((annotate("moz_trivial_ctor_dtor")))
 #  ifdef DEBUG
      /* in debug builds, these classes do have non-trivial constructors. */
@@ -652,11 +770,14 @@
     _Pragma("clang diagnostic pop")
 #else
 #  define MOZ_CAN_RUN_SCRIPT /* nothing */
+#  define MOZ_CAN_RUN_SCRIPT_BOUNDARY /* nothing */
 #  define MOZ_MUST_OVERRIDE /* nothing */
+#  define MOZ_STATIC_CLASS /* nothing */
 #  define MOZ_STACK_CLASS /* nothing */
 #  define MOZ_NONHEAP_CLASS /* nothing */
 #  define MOZ_HEAP_CLASS /* nothing */
 #  define MOZ_NON_TEMPORARY_CLASS /* nothing */
+#  define MOZ_TEMPORARY_CLASS /* nothing */
 #  define MOZ_TRIVIAL_CTOR_DTOR /* nothing */
 #  define MOZ_ONLY_USED_TO_AVOID_STATIC_CONSTRUCTORS /* nothing */
 #  define MOZ_IMPLICIT /* nothing */

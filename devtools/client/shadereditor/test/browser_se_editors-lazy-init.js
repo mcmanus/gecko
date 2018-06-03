@@ -5,15 +5,15 @@
  * Tests if source editors are lazily initialized.
  */
 
-function* ifWebGLSupported() {
-  let { target, panel } = yield initShaderEditor(SIMPLE_CANVAS_URL);
-  let { gFront, ShadersEditorsView } = panel.panelWin;
+async function ifWebGLSupported() {
+  const { target, panel } = await initShaderEditor(SIMPLE_CANVAS_URL);
+  const { gFront, ShadersEditorsView } = panel.panelWin;
 
   reload(target);
-  yield once(gFront, "program-linked");
+  await once(gFront, "program-linked");
 
-  let vsEditor = yield ShadersEditorsView._getEditor("vs");
-  let fsEditor = yield ShadersEditorsView._getEditor("fs");
+  const vsEditor = await ShadersEditorsView._getEditor("vs");
+  const fsEditor = await ShadersEditorsView._getEditor("fs");
 
   ok(vsEditor, "A vertex shader editor was initialized.");
   ok(fsEditor, "A fragment shader editor was initialized.");
@@ -21,14 +21,14 @@ function* ifWebGLSupported() {
   isnot(vsEditor, fsEditor,
     "The vertex shader editor is distinct from the fragment shader editor.");
 
-  let vsEditor2 = yield ShadersEditorsView._getEditor("vs");
-  let fsEditor2 = yield ShadersEditorsView._getEditor("fs");
+  const vsEditor2 = await ShadersEditorsView._getEditor("vs");
+  const fsEditor2 = await ShadersEditorsView._getEditor("fs");
 
   is(vsEditor, vsEditor2,
     "The vertex shader editor instances are cached.");
   is(fsEditor, fsEditor2,
     "The fragment shader editor instances are cached.");
 
-  yield teardown(panel);
+  await teardown(panel);
   finish();
 }

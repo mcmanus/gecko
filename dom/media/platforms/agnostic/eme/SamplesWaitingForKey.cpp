@@ -34,9 +34,9 @@ SamplesWaitingForKey::WaitIfKeyNotUsable(MediaRawData* aSample)
   if (!aSample || !aSample->mCrypto.mValid || !mProxy) {
     return WaitForKeyPromise::CreateAndResolve(aSample, __func__);
   }
-  CDMCaps::AutoLock caps(mProxy->Capabilites());
+  auto caps = mProxy->Capabilites().Lock();
   const auto& keyid = aSample->mCrypto.mKeyId;
-  if (caps.IsKeyUsable(keyid)) {
+  if (caps->IsKeyUsable(keyid)) {
     return WaitForKeyPromise::CreateAndResolve(aSample, __func__);
   }
   SampleEntry entry;
@@ -44,12 +44,12 @@ SamplesWaitingForKey::WaitIfKeyNotUsable(MediaRawData* aSample)
   RefPtr<WaitForKeyPromise> p = entry.mPromise.Ensure(__func__);
   {
     MutexAutoLock lock(mMutex);
-    mSamples.AppendElement(Move(entry));
+    mSamples.AppendElement(std::move(entry));
   }
   if (mOnWaitingForKeyEvent) {
     mOnWaitingForKeyEvent->Notify(mType);
   }
-  caps.NotifyWhenKeyIdUsable(aSample->mCrypto.mKeyId, this);
+  caps->NotifyWhenKeyIdUsable(aSample->mCrypto.mKeyId, this);
   return p;
 }
 

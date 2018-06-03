@@ -10,8 +10,16 @@ namespace mozilla {
 
 // Return the current sandbox level. This is the
 // "security.sandbox.content.level" preference, but rounded up to the current
-// minimum allowed level.
+// minimum allowed level. Returns 0 (disabled) if the env var
+// MOZ_DISABLE_CONTENT_SANDBOX is set.
 int GetEffectiveContentSandboxLevel();
+
+// Checks whether the effective content sandbox level is > 0.
+bool IsContentSandboxEnabled();
+
+#if defined(XP_MACOSX)
+int ClampFlashSandboxLevel(const int aLevel);
+#endif
 
 }
 #endif // mozilla_SandboxPolicies_h

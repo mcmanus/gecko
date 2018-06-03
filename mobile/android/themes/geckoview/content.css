@@ -21,7 +21,6 @@ xul|scrollbar[root="true"] {
 
 xul|scrollbar {
   -moz-appearance: none !important;
-  -moz-binding: url("chrome://global/content/bindings/scrollbar.xml#scrollbar");
   background-color: transparent !important;
   background-image: none !important;
   border: 0px solid transparent !important;
@@ -73,10 +72,6 @@ xul|scrollbarbutton[sbattr="scrollbar-bottom-top"] {
 
 xul|scrollbar xul|thumb {
   background-color: rgba(119, 119, 119, 0.4) !important;
-  -moz-border-top-colors: none !important;
-  -moz-border-bottom-colors: none !important;
-  -moz-border-right-colors: none !important;
-  -moz-border-left-colors: none !important;
   border: none;
   border-radius: 4px;
 }
@@ -105,7 +100,7 @@ xul|button,
 textarea,
 button,
 xul|button,
-* > input:not(:-moz-any([type="image"], [type="checkbox"], [type="radio"])) {
+* > input:not(:-moz-any([type="image"], [type="checkbox"], [type="radio"], [type="range"])) {
   border-radius: var(--form_border_radius);
 }
 
@@ -113,15 +108,17 @@ select[size],
 select[multiple],
 select[size][multiple],
 textarea,
-* > input:not(:-moz-any([type="image"], [type="checkbox"], [type="radio"])) {
+* > input:not(:-moz-any([type="image"], [type="checkbox"], [type="radio"], [type="range"])) {
   border-style: solid;
   border-color: var(--form_border);
   color: var(--form_text);
   background-color: var(--form_background);
 }
 
-/* Selects are handled by the form helper, see bug 685197 */
-select option, select optgroup {
+/* These elements are handled by the prompt module. */
+select option, select optgroup,
+input[type="date"] div:-moz-native-anonymous.datetime-input-box-wrapper,
+input[type="time"] div:-moz-native-anonymous.datetime-input-box-wrapper {
   pointer-events: none;
 }
 
@@ -167,6 +164,7 @@ textarea {
 input[type="button"],
 input[type="submit"],
 input[type="reset"],
+input[type="color"],
 button {
   border-width: 1px;
   padding-inline-start: 7px;
@@ -206,6 +204,7 @@ input[type="file"]:focus > input[type="text"],
 select:not([size]):not([multiple]):focus,
 select[size="0"]:focus,
 select[size="1"]:focus,
+input[type="color"]:focus,
 input[type="button"]:focus,
 input[type="submit"]:focus,
 input[type="reset"]:focus,
@@ -247,6 +246,8 @@ input[type="submit"]:disabled,
 input[type="submit"]:disabled:active,
 input[type="reset"]:disabled,
 input[type="reset"]:disabled:active,
+input[type="color"]:disabled,
+input[type="color"]:disabled:active,
 button:disabled,
 button:disabled:active {
   padding-inline-start: 7px;
@@ -262,11 +263,6 @@ select:disabled > button {
   padding-inline-end: 7px;
   padding-block-start: 1px;
   padding-block-end: 1px;
-}
-
-/* -moz-touch-enabled? media elements */
-:-moz-any(video, audio) > xul|videocontrols {
-  -moz-binding: url("chrome://global/content/bindings/videocontrols.xml#touchControls");
 }
 
 /* display click to play when autoplay is blocked for videos */
@@ -288,7 +284,7 @@ xul|menulist:active {
 }
 
 button:active:hover,
-input[type="color"]:-moz-system-metric(color-picker-available):active:hover,
+input[type="color"]:active:hover,
 input[type="reset"]:active:hover,
 input[type="button"]:active:hover,
 input[type="submit"]:active:hover {
@@ -298,6 +294,10 @@ input[type="submit"]:active:hover {
 
 input[type=number] > div > div, /* work around bug 946184 */
 input[type=number]::-moz-number-spin-box {
+  display: none;
+}
+
+button:-moz-native-anonymous.datetime-reset-button {
   display: none;
 }
 

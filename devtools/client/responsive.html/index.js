@@ -6,14 +6,12 @@
 
 "use strict";
 
-const { utils: Cu } = Components;
 const { BrowserLoader } =
-  Cu.import("resource://devtools/client/shared/browser-loader.js", {});
+  ChromeUtils.import("resource://devtools/client/shared/browser-loader.js", {});
 const { require } = BrowserLoader({
   baseURI: "resource://devtools/client/responsive.html/",
   window
 });
-const { Task } = require("devtools/shared/task");
 const Telemetry = require("devtools/client/shared/telemetry");
 const { loadAgentSheet } = require("./utils/css");
 
@@ -25,33 +23,36 @@ const { Provider } = require("devtools/client/shared/vendor/react-redux");
 const message = require("./utils/message");
 const App = createFactory(require("./app"));
 const Store = require("./store");
-const { changeLocation } = require("./actions/location");
-const { changeDisplayPixelRatio } = require("./actions/display-pixel-ratio");
-const { addViewport, resizeViewport } = require("./actions/viewports");
 const { loadDevices } = require("./actions/devices");
+const { changeDisplayPixelRatio } = require("./actions/display-pixel-ratio");
+const { changeLocation } = require("./actions/location");
+const { loadReloadConditions } = require("./actions/reload-conditions");
+const { addViewport, resizeViewport } = require("./actions/viewports");
 
 // Exposed for use by tests
 window.require = require;
 
-let bootstrap = {
+const bootstrap = {
 
   telemetry: new Telemetry(),
 
   store: null,
 
-  init: Task.async(function* () {
+  async init() {
     // Load a special UA stylesheet to reset certain styles such as dropdown
     // lists.
     loadAgentSheet(
       window,
       "resource://devtools/client/responsive.html/responsive-ua.css"
     );
+
     this.telemetry.toolOpened("responsive");
-    let store = this.store = Store();
-    let provider = createElement(Provider, { store }, App());
+
+    const store = this.store = Store();
+    const provider = createElement(Provider, { store }, App());
     ReactDOM.render(provider, document.querySelector("#root"));
     message.post(window, "init:done");
-  }),
+  },
 
   destroy() {
     this.store = null;
@@ -81,9 +82,12 @@ message.wait(window, "init").then(() => bootstrap.init());
 
 // manager.js sends a message to signal init is done, which can be used for delayed
 // startup work that shouldn't block initial load
-message.wait(window, "post-init").then(() => bootstrap.dispatch(loadDevices()));
+message.wait(window, "post-init").then(() => {
+  bootstrap.dispatch(loadDevices());
+  bootstrap.dispatch(loadReloadConditions());
+});
 
-window.addEventListener("unload", function () {
+window.addEventListener("unload", function() {
   bootstrap.destroy();
 }, {once: true});
 
@@ -102,14 +106,14 @@ Object.defineProperty(window, "store", {
 // TODO: It would be better to move this watching into the actor, so that it can be
 // better synchronized with any overrides that might be applied.  Also, reading a single
 // value like this makes less sense with multiple viewports.
-function onDPRChange() {
-  let dpr = window.devicePixelRatio;
-  let mql = window.matchMedia(`(resolution: ${dpr}dppx)`);
+function onDevicePixelRatioChange() {
+  const dpr = window.devicePixelRatio;
+  const mql = window.matchMedia(`(resolution: ${dpr}dppx)`);
 
   function listener() {
     bootstrap.dispatch(changeDisplayPixelRatio(window.devicePixelRatio));
     mql.removeListener(listener);
-    onDPRChange();
+    onDevicePixelRatioChange();
   }
 
   mql.addListener(listener);
@@ -120,7 +124,7 @@ function onDPRChange() {
  */
 window.addInitialViewport = contentURI => {
   try {
-    onDPRChange();
+    onDevicePixelRatioChange();
     bootstrap.dispatch(changeLocation(contentURI));
     bootstrap.dispatch(changeDisplayPixelRatio(window.devicePixelRatio));
     bootstrap.dispatch(addViewport());
@@ -133,7 +137,7 @@ window.addInitialViewport = contentURI => {
  * Called by manager.js when tests want to check the viewport size.
  */
 window.getViewportSize = () => {
-  let { width, height } = bootstrap.store.getState().viewports[0];
+  const { width, height } = bootstrap.store.getState().viewports[0];
   return { width, height };
 };
 
@@ -155,7 +159,7 @@ window.setViewportSize = ({ width, height }) => {
  * to the message manager without pulling the frame loader.
  */
 window.getViewportBrowser = () => {
-  let browser = document.querySelector("iframe.browser");
+  const browser = document.querySelector("iframe.browser");
   if (!browser.messageManager) {
     Object.defineProperty(browser, "messageManager", {
       get() {

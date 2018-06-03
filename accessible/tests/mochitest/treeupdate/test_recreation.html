@@ -52,11 +52,11 @@
 
       this.invoke = function changeAttr_invoke() {
         this.node.setAttribute(aAttr, aValue);
-      }
+      };
 
       this.getID = function changeAttr_getID() {
         return "change " + aAttr + "attribute for " + aID;
-      }
+      };
     }
 
     function removeAttr(aID, aAttr) {
@@ -64,11 +64,11 @@
 
       this.invoke = function remvoeAttr_invoke() {
         this.node.removeAttribute(aAttr);
-      }
+      };
 
       this.getID = function remvoeAttr_getID() {
         return "remove " + aAttr + "attribute for " + aID;
-      }
+      };
     }
 
     function changeRole(aID, aHasAccessible) {
@@ -85,6 +85,14 @@
 
     function changeMultiselectable(aID) {
       this.__proto__ = new changeAttr(aID, "aria-multiselectable", "true");
+    }
+
+    function changeTypeToPassword(aID) {
+      this.__proto__ = new changeAttr(aID, "type", "password");
+    }
+
+    function changeTypeToText(aID) {
+      this.__proto__ = new changeAttr(aID, "type", "text");
     }
 
     // //////////////////////////////////////////////////////////////////////////
@@ -113,6 +121,10 @@
       // recreate an accessible by aria-multiselectable change
       gQueue.push(new changeMultiselectable("div3"));
 
+      // recreate an accessible by type
+      gQueue.push(new changeTypeToText("password"));
+      gQueue.push(new changeTypeToPassword("text"));
+
       gQueue.invoke(); // SimpleTest.finish() will be called in the end
     }
 
@@ -139,5 +151,8 @@
   <div id="div3" role="listbox">list</div>
 
   <div id="eventdump"></div>
+
+  <form><input type="password" id="password"/></form>
+  <form><input type="text" id="text"/></form>
 </body>
 </html>

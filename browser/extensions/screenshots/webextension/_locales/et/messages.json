@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "Laadi alla"
   },
+  "downloadOnlyNotice": {
+    "message": "Oled hetkel režiimis, kus saab vaid alla laadida."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots lülitub sellesse režiimi automaatselt, kui:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "oled privaatse veebilehitsemise aknas"
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "kolmanda osapoole küpsised on keelatud"
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "“ei säilita ajalugu” on lubatud"
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "Sa kasutad Firefox ESRi."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "Üleslaadimised on keelatud."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Link kopeeriti"
   },
@@ -36,6 +57,28 @@
     "message": "Link sinu pildile kopeeriti lõikepuhvrisse. Asetamiseks vajuta $META_KEY$-V.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Kopeeri"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Pilt kopeeriti"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Sinu pilt kopeeriti vahemällu. Asetamiseks vajuta $META_KEY$-V.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "See pilt on vähendatud $PIXELS$-le pikslile.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -81,6 +124,12 @@
   },
   "tourBodyIntro": {
     "message": "Tee, salvesta ja jaga ekraanipilte Firefoxist lahkumata."
+  },
+  "tourHeaderPageAction": {
+    "message": "Uus viis salvestamiseks"
+  },
+  "tourBodyPageAction": {
+    "message": "Laienda lehe tegevuste menüüd aadressiribal, kui soovid ekraanipildi teha."
   },
   "tourHeaderClickAndDrag": {
     "message": "Salvesta just seda, mida soovid"

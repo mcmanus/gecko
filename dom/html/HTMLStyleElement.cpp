@@ -7,7 +7,6 @@
 #include "mozilla/dom/HTMLStyleElementBinding.h"
 #include "nsGkAtoms.h"
 #include "nsStyleConsts.h"
-#include "nsIDOMStyleSheet.h"
 #include "nsIDocument.h"
 #include "nsUnicharUtils.h"
 #include "nsThreadUtils.h"
@@ -65,33 +64,26 @@ HTMLStyleElement::SetDisabled(bool aDisabled)
 }
 
 void
-HTMLStyleElement::CharacterDataChanged(nsIDocument* aDocument,
-                                       nsIContent* aContent,
-                                       CharacterDataChangeInfo* aInfo)
+HTMLStyleElement::CharacterDataChanged(nsIContent* aContent,
+                                       const CharacterDataChangeInfo&)
 {
   ContentChanged(aContent);
 }
 
 void
-HTMLStyleElement::ContentAppended(nsIDocument* aDocument,
-                                  nsIContent* aContainer,
-                                  nsIContent* aFirstNewContent)
+HTMLStyleElement::ContentAppended(nsIContent* aFirstNewContent)
 {
-  ContentChanged(aContainer);
+  ContentChanged(aFirstNewContent->GetParent());
 }
 
 void
-HTMLStyleElement::ContentInserted(nsIDocument* aDocument,
-                                  nsIContent* aContainer,
-                                  nsIContent* aChild)
+HTMLStyleElement::ContentInserted(nsIContent* aChild)
 {
   ContentChanged(aChild);
 }
 
 void
-HTMLStyleElement::ContentRemoved(nsIDocument* aDocument,
-                                 nsIContent* aContainer,
-                                 nsIContent* aChild,
+HTMLStyleElement::ContentRemoved(nsIContent* aChild,
                                  nsIContent* aPreviousSibling)
 {
   ContentChanged(aChild);
@@ -100,8 +92,9 @@ HTMLStyleElement::ContentRemoved(nsIDocument* aDocument,
 void
 HTMLStyleElement::ContentChanged(nsIContent* aContent)
 {
+  mTriggeringPrincipal = nullptr;
   if (nsContentUtils::IsInSameAnonymousTree(this, aContent)) {
-    UpdateStyleSheetInternal(nullptr, nullptr);
+    Unused << UpdateStyleSheetInternal(nullptr, nullptr);
   }
 }
 
@@ -137,96 +130,94 @@ HTMLStyleElement::UnbindFromTree(bool aDeep, bool aNullParent)
     return;
   }
 
-  UpdateStyleSheetInternal(oldDoc, oldShadow);
+  Unused << UpdateStyleSheetInternal(oldDoc, oldShadow);
 }
 
 nsresult
 HTMLStyleElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                                const nsAttrValue* aValue,
-                               const nsAttrValue* aOldValue, bool aNotify)
+                               const nsAttrValue* aOldValue,
+                               nsIPrincipal* aSubjectPrincipal,
+                               bool aNotify)
 {
   if (aNameSpaceID == kNameSpaceID_None) {
     if (aName == nsGkAtoms::title ||
         aName == nsGkAtoms::media ||
         aName == nsGkAtoms::type) {
-      UpdateStyleSheetInternal(nullptr, nullptr, true);
-    } else if (aName == nsGkAtoms::scoped &&
-               OwnerDoc()->IsScopedStyleEnabled()) {
-      bool isScoped = aValue;
-      UpdateStyleSheetScopedness(isScoped);
+      Unused << UpdateStyleSheetInternal(nullptr, nullptr, ForceUpdate::Yes);
     }
   }
 
   return nsGenericHTMLElement::AfterSetAttr(aNameSpaceID, aName, aValue,
-                                            aOldValue, aNotify);
+                                            aOldValue, aSubjectPrincipal, aNotify);
 }
 
-NS_IMETHODIMP
-HTMLStyleElement::GetInnerHTML(nsAString& aInnerHTML)
+void
+HTMLStyleElement::GetInnerHTML(nsAString& aInnerHTML, OOMReporter& aError)
 {
   if (!nsContentUtils::GetNodeTextContent(this, false, aInnerHTML, fallible)) {
-    return NS_ERROR_OUT_OF_MEMORY;
+    aError.ReportOOM();
   }
-  return NS_OK;
 }
 
 void
 HTMLStyleElement::SetInnerHTML(const nsAString& aInnerHTML,
+                               nsIPrincipal* aScriptedPrincipal,
                                ErrorResult& aError)
 {
-  SetEnableUpdates(false);
-
-  aError = nsContentUtils::SetNodeTextContent(this, aInnerHTML, true);
-
-  SetEnableUpdates(true);
-
-  UpdateStyleSheetInternal(nullptr, nullptr);
-}
-
-already_AddRefed<nsIURI>
-HTMLStyleElement::GetStyleSheetURL(bool* aIsInline)
-{
-  *aIsInline = true;
-  return nullptr;
+  SetTextContentInternal(aInnerHTML, aScriptedPrincipal, aError);
 }
 
 void
-HTMLStyleElement::GetStyleSheetInfo(nsAString& aTitle,
-                                    nsAString& aType,
-                                    nsAString& aMedia,
-                                    bool* aIsScoped,
-                                    bool* aIsAlternate)
+HTMLStyleElement::SetTextContentInternal(const nsAString& aTextContent,
+                                         nsIPrincipal* aScriptedPrincipal,
+                                         ErrorResult& aError)
 {
-  aTitle.Truncate();
-  aType.Truncate();
-  aMedia.Truncate();
-  *aIsAlternate = false;
-
-  nsAutoString title;
-  GetAttr(kNameSpaceID_None, nsGkAtoms::title, title);
-  title.CompressWhitespace();
-  aTitle.Assign(title);
-
-  GetAttr(kNameSpaceID_None, nsGkAtoms::media, aMedia);
-  // The HTML5 spec is formulated in terms of the CSSOM spec, which specifies
-  // that media queries should be ASCII lowercased during serialization.
-  nsContentUtils::ASCIIToLower(aMedia);
-
-  GetAttr(kNameSpaceID_None, nsGkAtoms::type, aType);
-
-  *aIsScoped = HasAttr(kNameSpaceID_None, nsGkAtoms::scoped) &&
-               OwnerDoc()->IsScopedStyleEnabled();
-
-  nsAutoString mimeType;
-  nsAutoString notUsed;
-  nsContentUtils::SplitMimeType(aType, mimeType, notUsed);
-  if (!mimeType.IsEmpty() && !mimeType.LowerCaseEqualsLiteral("text/css")) {
-    return;
+  // Per spec, if we're setting text content to an empty string and don't
+  // already have any children, we should not trigger any mutation observers, or
+  // re-parse the stylesheet.
+  if (aTextContent.IsEmpty() && !GetFirstChild()) {
+    nsIPrincipal* principal = mTriggeringPrincipal ? mTriggeringPrincipal.get() : NodePrincipal();
+    if (principal == aScriptedPrincipal) {
+      return;
+    }
   }
 
-  // If we get here we assume that we're loading a css file, so set the
-  // type to 'text/css'
-  aType.AssignLiteral("text/css");
+  SetEnableUpdates(false);
+
+  aError = nsContentUtils::SetNodeTextContent(this, aTextContent, true);
+
+  SetEnableUpdates(true);
+
+  mTriggeringPrincipal = aScriptedPrincipal;
+
+  Unused << UpdateStyleSheetInternal(nullptr, nullptr);
+}
+
+Maybe<nsStyleLinkElement::SheetInfo>
+HTMLStyleElement::GetStyleSheetInfo()
+{
+  if (!IsCSSMimeTypeAttribute(*this)) {
+    return Nothing();
+  }
+
+  nsAutoString title;
+  nsAutoString media;
+  GetTitleAndMediaForElement(*this, title, media);
+
+  nsCOMPtr<nsIPrincipal> prin = mTriggeringPrincipal;
+  return Some(SheetInfo {
+    *OwnerDoc(),
+    this,
+    nullptr,
+    prin.forget(),
+    net::ReferrerPolicy::RP_Unset,
+    CORS_NONE,
+    title,
+    media,
+    HasAlternateRel::No,
+    IsInline::Yes,
+  });
 }
 
 JSObject*

@@ -25,16 +25,13 @@
 
 "use strict";
 
-const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
-
-var { XPCOMUtils } = Cu.import("resource://gre/modules/XPCOMUtils.jsm", {});
-var { NetUtil } = Cu.import("resource://gre/modules/NetUtil.jsm", {});
-var { LoadContextInfo } = Cu.import("resource://gre/modules/LoadContextInfo.jsm", {});
-var { require } = Cu.import("resource://devtools/shared/Loader.jsm", {});
+var { XPCOMUtils } = ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", {});
+var { NetUtil } = ChromeUtils.import("resource://gre/modules/NetUtil.jsm", {});
+var { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
 
 var { gDevTools } = require("devtools/client/framework/devtools");
 var Services = require("Services");
-var promise = require("promise");
+var { globals } = require("devtools/shared/builtin-modules");
 
 this.EXPORTED_SYMBOLS = ["AppCacheUtils"];
 
@@ -71,7 +68,7 @@ AppCacheUtils.prototype = {
         this._getURIInfo(this.manifestURI).then(uriInfo => {
           this._parseManifest(uriInfo).then(() => {
             // Sort errors by line number.
-            this.errors.sort(function (a, b) {
+            this.errors.sort(function(a, b) {
               return a.line - b.line;
             });
             resolve(this.errors);
@@ -83,8 +80,8 @@ AppCacheUtils.prototype = {
 
   _parseManifest: function ACU__parseManifest(uriInfo) {
     return new Promise((resolve, reject) => {
-      let manifestName = uriInfo.name;
-      let manifestLastModified = new Date(uriInfo.responseHeaders["last-modified"]);
+      const manifestName = uriInfo.name;
+      const manifestLastModified = new Date(uriInfo.responseHeaders["last-modified"]);
 
       if (uriInfo.charset.toLowerCase() != "utf-8") {
         this._addError(0, "notUTF8", uriInfo.charset);
@@ -94,16 +91,16 @@ AppCacheUtils.prototype = {
         this._addError(0, "badMimeType", uriInfo.mimeType);
       }
 
-      let parser = new ManifestParser(uriInfo.text, this.manifestURI);
-      let parsed = parser.parse();
+      const parser = new ManifestParser(uriInfo.text, this.manifestURI);
+      const parsed = parser.parse();
 
       if (parsed.errors.length > 0) {
         this.errors.push.apply(this.errors, parsed.errors);
       }
 
       // Check for duplicate entries.
-      let dupes = {};
-      for (let parsedUri of parsed.uris) {
+      const dupes = {};
+      for (const parsedUri of parsed.uris) {
         dupes[parsedUri.uri] = dupes[parsedUri.uri] || [];
         dupes[parsedUri.uri].push({
           line: parsedUri.line,
@@ -111,7 +108,7 @@ AppCacheUtils.prototype = {
           original: parsedUri.original
         });
       }
-      for (let [uri, value] of Object.entries(dupes)) {
+      for (const [uri, value] of Object.entries(dupes)) {
         if (value.length > 1) {
           this._addError(0, "duplicateURI", uri, JSON.stringify(value));
         }
@@ -119,9 +116,9 @@ AppCacheUtils.prototype = {
 
       // Loop through network entries making sure that fallback and cache don't
       // contain uris starting with the network uri.
-      for (let neturi of parsed.uris) {
+      for (const neturi of parsed.uris) {
         if (neturi.section == "NETWORK") {
-          for (let parsedUri of parsed.uris) {
+          for (const parsedUri of parsed.uris) {
             if (parsedUri.section !== "NETWORK" &&
                 parsedUri.uri.startsWith(neturi.uri)) {
               this._addError(neturi.line, "networkBlocksURI", neturi.line,
@@ -134,8 +131,8 @@ AppCacheUtils.prototype = {
 
       // Loop through fallback entries making sure that fallback and cache don't
       // contain uris starting with the network uri.
-      for (let fb of parsed.fallbacks) {
-        for (let parsedUri of parsed.uris) {
+      for (const fb of parsed.fallbacks) {
+        for (const parsedUri of parsed.uris) {
           if (parsedUri.uri.startsWith(fb.namespace)) {
             this._addError(fb.line, "fallbackBlocksURI", fb.line,
                            fb.original, parsedUri.line, parsedUri.original,
@@ -148,14 +145,14 @@ AppCacheUtils.prototype = {
       // not set to no-store.
       let current = -1;
       for (let i = 0, len = parsed.uris.length; i < len; i++) {
-        let parsedUri = parsed.uris[i];
+        const parsedUri = parsed.uris[i];
         this._getURIInfo(parsedUri.uri).then(uriInfo => {
           current++;
 
           if (uriInfo.success) {
             // Check that the resource was not modified after the manifest was last
             // modified. If it was then the manifest file should be refreshed.
-            let resourceLastModified =
+            const resourceLastModified =
               new Date(uriInfo.responseHeaders["last-modified"]);
 
             if (manifestLastModified < resourceLastModified) {
@@ -184,10 +181,10 @@ AppCacheUtils.prototype = {
 
   _getURIInfo: function ACU__getURIInfo(uri) {
     return new Promise((resolve, reject) => {
-      let inputStream = Cc["@mozilla.org/scriptableinputstream;1"]
+      const inputStream = Cc["@mozilla.org/scriptableinputstream;1"]
                           .createInstance(Ci.nsIScriptableInputStream);
       let buffer = "";
-      var channel = NetUtil.newChannel({
+      const channel = NetUtil.newChannel({
         uri: uri,
         loadUsingSystemPrincipal: true,
         securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL
@@ -198,12 +195,12 @@ AppCacheUtils.prototype = {
       channel.loadFlags |= Ci.nsIRequest.INHIBIT_CACHING;
 
       channel.asyncOpen2({
-        onStartRequest: function (request, context) {
+        onStartRequest: function(request, context) {
           // This empty method is needed in order for onDataAvailable to be
           // called.
         },
 
-        onDataAvailable: function (request, context, stream, offset, count) {
+        onDataAvailable: function(request, context, stream, offset, count) {
           request.QueryInterface(Ci.nsIHttpChannel);
           inputStream.init(stream);
           buffer = buffer.concat(inputStream.read(count));
@@ -213,7 +210,7 @@ AppCacheUtils.prototype = {
           if (statusCode === 0) {
             request.QueryInterface(Ci.nsIHttpChannel);
 
-            let result = {
+            const result = {
               name: request.name,
               success: request.requestSucceeded,
               status: request.responseStatus + " - " + request.responseStatusText,
@@ -226,12 +223,12 @@ AppCacheUtils.prototype = {
             };
 
             result.requestHeaders = {};
-            request.visitRequestHeaders(function (header, value) {
+            request.visitRequestHeaders(function(header, value) {
               result.requestHeaders[header.toLowerCase()] = value;
             });
 
             result.responseHeaders = {};
-            request.visitResponseHeaders(function (header, value) {
+            request.visitResponseHeaders(function(header, value) {
               result.responseHeaders[header.toLowerCase()] = value;
             });
 
@@ -252,16 +249,16 @@ AppCacheUtils.prototype = {
       throw new Error(l10n.GetStringFromName("cacheDisabled"));
     }
 
-    let entries = [];
+    const entries = [];
 
-    let appCacheStorage = Services.cache2.appCacheStorage(LoadContextInfo.default, null);
+    const appCacheStorage = Services.cache2.appCacheStorage(Services.loadContextInfo.default, null);
     appCacheStorage.asyncVisitStorage({
-      onCacheStorageInfo: function () {},
+      onCacheStorageInfo: function() {},
 
-      onCacheEntryInfo: function (aURI, aIdEnhance, aDataSize, aFetchCount, aLastModifiedTime, aExpirationTime) {
-        let lowerKey = aURI.asciiSpec.toLowerCase();
+      onCacheEntryInfo: function(aURI, aIdEnhance, aDataSize, aFetchCount, aLastModifiedTime, aExpirationTime) {
+        const lowerKey = aURI.asciiSpec.toLowerCase();
 
-        if (searchTerm && lowerKey.indexOf(searchTerm.toLowerCase()) == -1) {
+        if (searchTerm && !lowerKey.includes(searchTerm.toLowerCase())) {
           return;
         }
 
@@ -269,7 +266,7 @@ AppCacheUtils.prototype = {
           aIdEnhance += ":";
         }
 
-        let entry = {
+        const entry = {
           "deviceID": "offline",
           "key": aIdEnhance + aURI.asciiSpec,
           "fetchCount": aFetchCount,
@@ -291,11 +288,9 @@ AppCacheUtils.prototype = {
   },
 
   viewEntry: function ACU_viewEntry(key) {
-    let wm = Cc["@mozilla.org/appshell/window-mediator;1"]
-               .getService(Ci.nsIWindowMediator);
-    let win = wm.getMostRecentWindow(gDevTools.chromeWindowType);
-    let url = "about:cache-entry?storage=appcache&context=&eid=&uri=" + key;
-    win.openUILinkIn(url, "tab");
+    const win = Services.wm.getMostRecentWindow(gDevTools.chromeWindowType);
+    const url = "about:cache-entry?storage=appcache&context=&eid=&uri=" + key;
+    win.openTrustedLinkIn(url, "tab");
   },
 
   clearAll: function ACU_clearAll() {
@@ -303,48 +298,49 @@ AppCacheUtils.prototype = {
       throw new Error(l10n.GetStringFromName("cacheDisabled"));
     }
 
-    let appCacheStorage = Services.cache2.appCacheStorage(LoadContextInfo.default, null);
+    const appCacheStorage = Services.cache2.appCacheStorage(Services.loadContextInfo.default, null);
     appCacheStorage.asyncEvictStorage({
-      onCacheEntryDoomed: function (result) {}
+      onCacheEntryDoomed: function(result) {}
     });
   },
 
   _getManifestURI: function ACU__getManifestURI() {
     return new Promise((resolve, reject) => {
-      let getURI = () => {
-        let htmlNode = this.doc.querySelector("html[manifest]");
+      const getURI = () => {
+        const htmlNode = this.doc.querySelector("html[manifest]");
         if (htmlNode) {
-          let pageUri = this.doc.location ? this.doc.location.href : this.uri;
-          let origin = pageUri.substr(0, pageUri.lastIndexOf("/") + 1);
-          let manifestURI = htmlNode.getAttribute("manifest");
+          const pageUri = this.doc.location ? this.doc.location.href : this.uri;
+          const manifestURI = htmlNode.getAttribute("manifest");
 
-          if (manifestURI.startsWith("/")) {
-            manifestURI = manifestURI.substr(1);
+          const originRegExp = new RegExp(/([a-z]*:\/\/[^/]*\/)/);
+          if (originRegExp.test(manifestURI)) {
+            return manifestURI;
+          } else if (manifestURI.startsWith("/")) {
+            return pageUri.match(originRegExp)[0] + manifestURI.substring(1);
           }
 
-          return origin + manifestURI;
+          return pageUri.substring(0, pageUri.lastIndexOf("/") + 1) + manifestURI;
         }
       };
 
       if (this.doc) {
-        let uri = getURI();
+        const uri = getURI();
         return resolve(uri);
-      } else {
-        this._getURIInfo(this.uri).then(uriInfo => {
-          if (uriInfo.success) {
-            let html = uriInfo.text;
-            let parser = _DOMParser;
-            this.doc = parser.parseFromString(html, "text/html");
-            let uri = getURI();
-            resolve(uri);
-          } else {
-            this.errors.push({
+      }
+      this._getURIInfo(this.uri).then(uriInfo => {
+        if (uriInfo.success) {
+          const html = uriInfo.text;
+          const parser = _DOMParser;
+          this.doc = parser.parseFromString(html, "text/html");
+          const uri = getURI();
+          resolve(uri);
+        } else {
+          this.errors.push({
               line: 0,
               msg: l10n.GetStringFromName("invalidURI")
-            });
-          }
-        });
-      }
+          });
+        }
+      });
     });
   },
 
@@ -382,16 +378,16 @@ function ManifestParser(manifestText, manifestURI) {
 
 ManifestParser.prototype = {
   parse: function OCIMP_parse() {
-    let lines = this.manifestText.split(/\r?\n/);
-    let fallbacks = this.fallbacks = [];
-    let settings = this.settings = [];
-    let errors = this.errors = [];
-    let uris = this.uris = [];
+    const lines = this.manifestText.split(/\r?\n/);
+    const fallbacks = this.fallbacks = [];
+    const settings = this.settings = [];
+    const errors = this.errors = [];
+    const uris = this.uris = [];
 
     this.currSection = "CACHE";
 
     for (let i = 0; i < lines.length; i++) {
-      let text = this.text = lines[i].trim();
+      const text = this.text = lines[i].trim();
       this.currentLine = i + 1;
 
       if (i === 0 && text !== "CACHE MANIFEST") {
@@ -440,7 +436,7 @@ ManifestParser.prototype = {
   parseLine: function OCIMP_parseLine() {
     let text = this.text;
 
-    if (text.indexOf("*") != -1) {
+    if (text.includes("*")) {
       if (this.currSection != "NETWORK" || text.length != 1) {
         this._addError(this.currentLine, "asteriskInWrongSection2",
                        this.currSection, this.currentLine);
@@ -468,7 +464,7 @@ ManifestParser.prototype = {
       let path = text;
 
       while (path.substr(0, 3) == "../" && /^https?:\/\/.*?\/.*?\//.test(origin)) {
-        let trimIdx = origin.substr(0, origin.length - 1).lastIndexOf("/") + 1;
+        const trimIdx = origin.substr(0, origin.length - 1).lastIndexOf("/") + 1;
         origin = origin.substr(0, trimIdx);
         path = path.substr(3);
       }
@@ -487,8 +483,8 @@ ManifestParser.prototype = {
   },
 
   parseFallbackLine: function OCIMP_parseFallbackLine() {
-    let split = this.text.split(/\s+/);
-    let origURI = this.text;
+    const split = this.text.split(/\s+/);
+    const origURI = this.text;
 
     if (split.length != 2) {
       this._addError(this.currentLine, "fallbackUseSpaces", this.currentLine);
@@ -497,7 +493,7 @@ ManifestParser.prototype = {
 
     let [ namespace, fallback ] = split;
 
-    if (namespace.indexOf("*") != -1) {
+    if (namespace.includes("*")) {
       this._addError(this.currentLine, "fallbackAsterisk2", this.currentLine);
     }
 
@@ -519,7 +515,7 @@ ManifestParser.prototype = {
       let path = namespace;
 
       while (path.substr(0, 3) == "../" && /^https?:\/\/.*?\/.*?\//.test(origin)) {
-        let trimIdx = origin.substr(0, origin.length - 1).lastIndexOf("/") + 1;
+        const trimIdx = origin.substr(0, origin.length - 1).lastIndexOf("/") + 1;
         origin = origin.substr(0, trimIdx);
         path = path.substr(3);
       }
@@ -550,7 +546,7 @@ ManifestParser.prototype = {
   },
 
   parseSettingsLine: function OCIMP_parseSettingsLine() {
-    let text = this.text;
+    const text = this.text;
 
     if (this.settings.length == 1 || !/prefer-online|fast/.test(text)) {
       this._addError(this.currentLine, "settingsBadValue", this.currentLine);
@@ -616,12 +612,6 @@ ManifestParser.prototype = {
 XPCOMUtils.defineLazyGetter(this, "l10n", () => Services.strings
   .createBundle("chrome://devtools/locale/appcacheutils.properties"));
 
-XPCOMUtils.defineLazyGetter(this, "appcacheservice", function () {
-  return Cc["@mozilla.org/network/application-cache-service;1"]
-           .getService(Ci.nsIApplicationCacheService);
-
-});
-
-XPCOMUtils.defineLazyGetter(this, "_DOMParser", function () {
-  return Cc["@mozilla.org/xmlextras/domparser;1"].createInstance(Ci.nsIDOMParser);
+XPCOMUtils.defineLazyGetter(this, "_DOMParser", function() {
+  return globals.DOMParser();
 });

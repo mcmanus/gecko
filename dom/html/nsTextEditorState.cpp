@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsTextEditorState.h"
+#include "mozilla/TextInputListener.h"
 
 #include "nsCOMPtr.h"
 #include "nsIPresShell.h"
@@ -13,13 +14,9 @@
 #include "nsEditorCID.h"
 #include "nsLayoutCID.h"
 #include "nsITextControlFrame.h"
-#include "nsIDOMCharacterData.h"
-#include "nsIDOMDocument.h"
 #include "nsContentCreatorFunctions.h"
 #include "nsTextControlFrame.h"
 #include "nsIControllers.h"
-#include "nsIDOMHTMLInputElement.h"
-#include "nsIDOMHTMLTextAreaElement.h"
 #include "nsITransactionManager.h"
 #include "nsIControllerContext.h"
 #include "nsAttrValue.h"
@@ -29,7 +26,6 @@
 #include "nsIEditorObserver.h"
 #include "nsIWidget.h"
 #include "nsIDocumentEncoder.h"
-#include "nsISelectionPrivate.h"
 #include "nsPIDOMWindow.h"
 #include "nsServiceManagerUtils.h"
 #include "mozilla/dom/Selection.h"
@@ -41,19 +37,18 @@
 #include "nsIController.h"
 #include "mozilla/AutoRestore.h"
 #include "mozilla/TextEvents.h"
+#include "mozilla/dom/Event.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/HTMLInputElement.h"
+#include "mozilla/dom/HTMLTextAreaElement.h"
+#include "mozilla/dom/Text.h"
 #include "nsNumberControlFrame.h"
 #include "nsFrameSelection.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/Telemetry.h"
-#include "mozilla/layers/ScrollInputMethods.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
-using mozilla::layers::ScrollInputMethod;
-
-static NS_DEFINE_CID(kTextEditorCID, NS_TEXTEDITOR_CID);
 
 class MOZ_STACK_CLASS ValueSetter
 {
@@ -69,11 +64,11 @@ public:
   }
   ~ValueSetter()
   {
-    mTextEditor->SetSuppressDispatchingInputEvent(mOuterTransaction);
+    mTextEditor->SuppressDispatchingInputEvent(mOuterTransaction);
   }
   void Init()
   {
-    mTextEditor->SetSuppressDispatchingInputEvent(true);
+    mTextEditor->SuppressDispatchingInputEvent(true);
   }
 
 private:
@@ -177,16 +172,23 @@ public:
     MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     MOZ_ASSERT(mTextEditor);
 
-    bool canUndo;
-    DebugOnly<nsresult> rv = mTextEditor->CanUndo(&mPreviousEnabled, &canUndo);
-    MOZ_ASSERT(NS_SUCCEEDED(rv));
-
-    mTextEditor->EnableUndo(false);
+    mPreviousEnabled = mTextEditor->IsUndoRedoEnabled();
+    DebugOnly<bool> disabledUndoRedo = mTextEditor->DisableUndoRedo();
+    NS_WARNING_ASSERTION(disabledUndoRedo,
+      "Failed to disable undo/redo transactions");
   }
 
   ~AutoDisableUndo()
   {
-    mTextEditor->EnableUndo(mPreviousEnabled);
+    if (mPreviousEnabled) {
+      DebugOnly<bool> enabledUndoRedo = mTextEditor->EnableUndoRedo();
+      NS_WARNING_ASSERTION(enabledUndoRedo,
+        "Failed to enable undo/redo transactions");
+    } else {
+      DebugOnly<bool> disabledUndoRedo = mTextEditor->DisableUndoRedo();
+      NS_WARNING_ASSERTION(disabledUndoRedo,
+        "Failed to disable undo/redo transactions");
+    }
   }
 
 private:
@@ -208,11 +210,12 @@ nsITextControlElement::GetWrapPropertyEnum(nsIContent* aContent,
 
   nsAutoString wrap;
   if (aContent->IsHTMLElement()) {
-    static nsIContent::AttrValuesArray strings[] =
+    static Element::AttrValuesArray strings[] =
       {&nsGkAtoms::HARD, &nsGkAtoms::OFF, nullptr};
 
-    switch (aContent->FindAttrValueIn(kNameSpaceID_None, nsGkAtoms::wrap,
-                                      strings, eIgnoreCase)) {
+    switch (aContent->AsElement()->FindAttrValueIn(kNameSpaceID_None,
+                                                   nsGkAtoms::wrap, strings,
+                                                   eIgnoreCase)) {
       case 0: aWrapProp = eHTMLTextWrap_Hard; break;
       case 1: aWrapProp = eHTMLTextWrap_Off; break;
     }
@@ -294,9 +297,9 @@ public:
   NS_IMETHOD GetDisplaySelection(int16_t* _retval) override;
   NS_IMETHOD SetSelectionFlags(int16_t aInEnable) override;
   NS_IMETHOD GetSelectionFlags(int16_t *aOutEnable) override;
-  NS_IMETHOD GetSelection(RawSelectionType aRawSelectionType,
-                          nsISelection** aSelection) override;
-  Selection* GetDOMSelection(RawSelectionType aRawSelectionType) override;
+  NS_IMETHOD GetSelectionFromScript(RawSelectionType aRawSelectionType,
+                                    Selection** aSelection) override;
+  Selection* GetSelection(RawSelectionType aRawSelectionType) override;
   NS_IMETHOD ScrollSelectionIntoView(RawSelectionType aRawSelectionType,
                                      int16_t aRegion, int16_t aFlags) override;
   NS_IMETHOD RepaintSelection(RawSelectionType aRawSelectionType) override;
@@ -322,7 +325,7 @@ public:
   NS_IMETHOD ScrollLine(bool aForward) override;
   NS_IMETHOD ScrollCharacter(bool aRight) override;
   NS_IMETHOD SelectAll(void) override;
-  NS_IMETHOD CheckVisibility(nsIDOMNode *node, int16_t startOffset, int16_t EndOffset, bool* _retval) override;
+  NS_IMETHOD CheckVisibility(nsINode *node, int16_t startOffset, int16_t EndOffset, bool* _retval) override;
   virtual nsresult CheckVisibilityContent(nsIContent* aNode, int16_t aStartOffset, int16_t aEndOffset, bool* aRetval) override;
 
 private:
@@ -417,8 +420,8 @@ nsTextInputSelectionImpl::GetSelectionFlags(int16_t *aOutEnable)
 }
 
 NS_IMETHODIMP
-nsTextInputSelectionImpl::GetSelection(RawSelectionType aRawSelectionType,
-                                       nsISelection** aSelection)
+nsTextInputSelectionImpl::GetSelectionFromScript(RawSelectionType aRawSelectionType,
+                                                 Selection** aSelection)
 {
   if (!mFrameSelection)
     return NS_ERROR_NULL_POINTER;
@@ -436,7 +439,7 @@ nsTextInputSelectionImpl::GetSelection(RawSelectionType aRawSelectionType,
 }
 
 Selection*
-nsTextInputSelectionImpl::GetDOMSelection(RawSelectionType aRawSelectionType)
+nsTextInputSelectionImpl::GetSelection(RawSelectionType aRawSelectionType)
 {
   return GetSelection(ToSelectionType(aRawSelectionType));
 }
@@ -670,9 +673,6 @@ nsTextInputSelectionImpl::CompleteScroll(bool aForward)
   if (!mScrollFrame)
     return NS_ERROR_NOT_INITIALIZED;
 
-  mozilla::Telemetry::Accumulate(mozilla::Telemetry::SCROLL_INPUT_METHODS,
-      (uint32_t) ScrollInputMethod::MainThreadCompleteScroll);
-
   mScrollFrame->ScrollBy(nsIntPoint(0, aForward ? 1 : -1),
                          nsIScrollableFrame::WHOLE,
                          nsIScrollableFrame::INSTANT);
@@ -725,9 +725,6 @@ nsTextInputSelectionImpl::ScrollPage(bool aForward)
   if (!mScrollFrame)
     return NS_ERROR_NOT_INITIALIZED;
 
-  mozilla::Telemetry::Accumulate(mozilla::Telemetry::SCROLL_INPUT_METHODS,
-      (uint32_t) ScrollInputMethod::MainThreadScrollPage);
-
   mScrollFrame->ScrollBy(nsIntPoint(0, aForward ? 1 : -1),
                          nsIScrollableFrame::PAGES,
                          nsIScrollableFrame::SMOOTH);
@@ -740,9 +737,6 @@ nsTextInputSelectionImpl::ScrollLine(bool aForward)
   if (!mScrollFrame)
     return NS_ERROR_NOT_INITIALIZED;
 
-  mozilla::Telemetry::Accumulate(mozilla::Telemetry::SCROLL_INPUT_METHODS,
-      (uint32_t) ScrollInputMethod::MainThreadScrollLine);
-
   mScrollFrame->ScrollBy(nsIntPoint(0, aForward ? 1 : -1),
                          nsIScrollableFrame::LINES,
                          nsIScrollableFrame::SMOOTH);
@@ -754,9 +748,6 @@ nsTextInputSelectionImpl::ScrollCharacter(bool aRight)
 {
   if (!mScrollFrame)
     return NS_ERROR_NOT_INITIALIZED;
-
-  mozilla::Telemetry::Accumulate(mozilla::Telemetry::SCROLL_INPUT_METHODS,
-      (uint32_t) ScrollInputMethod::MainThreadScrollCharacter);
 
   mScrollFrame->ScrollBy(nsIntPoint(aRight ? 1 : -1, 0),
                          nsIScrollableFrame::LINES,
@@ -775,7 +766,7 @@ nsTextInputSelectionImpl::SelectAll()
 }
 
 NS_IMETHODIMP
-nsTextInputSelectionImpl::CheckVisibility(nsIDOMNode *node, int16_t startOffset, int16_t EndOffset, bool *_retval)
+nsTextInputSelectionImpl::CheckVisibility(nsINode *node, int16_t startOffset, int16_t EndOffset, bool *_retval)
 {
   if (!mPresShellWeak) return NS_ERROR_NOT_INITIALIZED;
   nsresult result;
@@ -804,110 +795,43 @@ nsTextInputSelectionImpl::CheckVisibilityContent(nsIContent* aNode,
   return shell->CheckVisibilityContent(aNode, aStartOffset, aEndOffset, aRetval);
 }
 
-class nsTextInputListener final : public nsISelectionListener,
-                                  public nsIDOMEventListener,
-                                  public nsIEditorObserver,
-                                  public nsSupportsWeakReference
-{
-public:
-  /** the default constructor
-   */
-  explicit nsTextInputListener(nsITextControlElement* aTxtCtrlElement);
-
-  /** SetEditor gives an address to the editor that will be accessed
-   *  @param aEditor the editor this listener calls for editing operations
-   */
-  void SetFrame(nsTextControlFrame *aFrame){mFrame = aFrame;}
-
-  void SettingValue(bool aValue) { mSettingValue = aValue; }
-  void SetValueChanged(bool aSetValueChanged) { mSetValueChanged = aSetValueChanged; }
-
-  // aFrame is an optional pointer to our frame, if not passed the method will
-  // use mFrame to compute it lazily.
-  void HandleValueChanged(nsTextControlFrame* aFrame = nullptr);
-
-  NS_DECL_ISUPPORTS
-
-  NS_DECL_NSISELECTIONLISTENER
-
-  NS_DECL_NSIDOMEVENTLISTENER
-
-  NS_DECL_NSIEDITOROBSERVER
-
-protected:
-  /** the default destructor. virtual due to the possibility of derivation.
-   */
-  virtual ~nsTextInputListener();
-
-  nsresult  UpdateTextInputCommands(const nsAString& commandsToUpdate,
-                                    nsISelection* sel = nullptr,
-                                    int16_t reason = 0);
-
-protected:
-
-  nsIFrame* mFrame;
-
-  nsITextControlElement* const mTxtCtrlElement;
-
-  bool            mSelectionWasCollapsed;
-  /**
-   * Whether we had undo items or not the last time we got EditAction()
-   * notification (when this state changes we update undo and redo menus)
-   */
-  bool            mHadUndoItems;
-  /**
-   * Whether we had redo items or not the last time we got EditAction()
-   * notification (when this state changes we update undo and redo menus)
-   */
-  bool            mHadRedoItems;
-  /**
-   * Whether we're in the process of a SetValue call, and should therefore
-   * refrain from calling OnValueChanged.
-   */
-  bool mSettingValue;
-  /**
-   * Whether we are in the process of a SetValue call that doesn't want
-   * |SetValueChanged| to be called.
-   */
-  bool mSetValueChanged;
-};
-
-
 /*
- * nsTextInputListener implementation
+ * mozilla::TextInputListener implementation
  */
 
-nsTextInputListener::nsTextInputListener(nsITextControlElement* aTxtCtrlElement)
-: mFrame(nullptr)
-, mTxtCtrlElement(aTxtCtrlElement)
-, mSelectionWasCollapsed(true)
-, mHadUndoItems(false)
-, mHadRedoItems(false)
-, mSettingValue(false)
-, mSetValueChanged(true)
+TextInputListener::TextInputListener(nsITextControlElement* aTxtCtrlElement)
+  : mFrame(nullptr)
+  , mTxtCtrlElement(aTxtCtrlElement)
+  , mSelectionWasCollapsed(true)
+  , mHadUndoItems(false)
+  , mHadRedoItems(false)
+  , mSettingValue(false)
+  , mSetValueChanged(true)
+  , mListeningToSelectionChange(false)
 {
 }
 
-nsTextInputListener::~nsTextInputListener()
+NS_IMPL_CYCLE_COLLECTING_ADDREF(TextInputListener)
+NS_IMPL_CYCLE_COLLECTING_RELEASE(TextInputListener)
+
+NS_INTERFACE_MAP_BEGIN(TextInputListener)
+  NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
+  NS_INTERFACE_MAP_ENTRY(nsIDOMEventListener)
+  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIDOMEventListener)
+  NS_INTERFACE_MAP_ENTRIES_CYCLE_COLLECTION(TextInputListener)
+NS_INTERFACE_MAP_END
+
+NS_IMPL_CYCLE_COLLECTION_0(TextInputListener)
+
+void
+TextInputListener::OnSelectionChange(Selection& aSelection,
+                                     int16_t aReason)
 {
-}
+  if (!mListeningToSelectionChange) {
+    return;
+  }
 
-NS_IMPL_ISUPPORTS(nsTextInputListener,
-                  nsISelectionListener,
-                  nsIEditorObserver,
-                  nsISupportsWeakReference,
-                  nsIDOMEventListener)
-
-// BEGIN nsIDOMSelectionListener
-
-NS_IMETHODIMP
-nsTextInputListener::NotifySelectionChanged(nsIDOMDocument* aDoc, nsISelection* aSel, int16_t aReason)
-{
-  bool collapsed;
   AutoWeakFrame weakFrame = mFrame;
-
-  if (!aDoc || !aSel || NS_FAILED(aSel->GetIsCollapsed(&collapsed)))
-    return NS_OK;
 
   // Fire the select event
   // The specs don't exactly say when we should fire the select event.
@@ -923,19 +847,16 @@ nsTextInputListener::NotifySelectionChanged(nsIDOMDocument* aDoc, nsISelection* 
   //          was previously selected, becase technically select all will first collapse
   //          and then extend. Mozilla will never create an event if the selection
   //          collapses to nothing.
+  bool collapsed = aSelection.IsCollapsed();
   if (!collapsed && (aReason & (nsISelectionListener::MOUSEUP_REASON |
                                 nsISelectionListener::KEYPRESS_REASON |
-                                nsISelectionListener::SELECTALL_REASON)))
-  {
+                                nsISelectionListener::SELECTALL_REASON))) {
     nsIContent* content = mFrame->GetContent();
-    if (content)
-    {
+    if (content) {
       nsCOMPtr<nsIDocument> doc = content->GetComposedDoc();
-      if (doc)
-      {
+      if (doc) {
         nsCOMPtr<nsIPresShell> presShell = doc->GetShell();
-        if (presShell)
-        {
+        if (presShell) {
           nsEventStatus status = nsEventStatus_eIgnore;
           WidgetEvent event(true, eFormSelect);
 
@@ -946,18 +867,20 @@ nsTextInputListener::NotifySelectionChanged(nsIDOMDocument* aDoc, nsISelection* 
   }
 
   // if the collapsed state did not change, don't fire notifications
-  if (collapsed == mSelectionWasCollapsed)
-    return NS_OK;
+  if (collapsed == mSelectionWasCollapsed) {
+    return;
+  }
 
   mSelectionWasCollapsed = collapsed;
 
-  if (!weakFrame.IsAlive() || !nsContentUtils::IsFocusedContent(mFrame->GetContent()))
-    return NS_OK;
+  if (!weakFrame.IsAlive() || !mFrame ||
+      !nsContentUtils::IsFocusedContent(mFrame->GetContent())) {
+    return;
+  }
 
-  return UpdateTextInputCommands(NS_LITERAL_STRING("select"), aSel, aReason);
+  UpdateTextInputCommands(NS_LITERAL_STRING("select"),
+                          &aSelection, aReason);
 }
-
-// END nsIDOMSelectionListener
 
 static void
 DoCommandCallback(Command aCommand, void* aData)
@@ -966,12 +889,12 @@ DoCommandCallback(Command aCommand, void* aData)
   nsIContent *content = frame->GetContent();
 
   nsCOMPtr<nsIControllers> controllers;
-  nsCOMPtr<nsIDOMHTMLInputElement> input = do_QueryInterface(content);
+  HTMLInputElement* input = HTMLInputElement::FromNode(content);
   if (input) {
     input->GetControllers(getter_AddRefs(controllers));
   } else {
-    nsCOMPtr<nsIDOMHTMLTextAreaElement> textArea =
-      do_QueryInterface(content);
+    HTMLTextAreaElement* textArea =
+      HTMLTextAreaElement::FromNode(content);
 
     if (textArea) {
       textArea->GetControllers(getter_AddRefs(controllers));
@@ -1000,19 +923,13 @@ DoCommandCallback(Command aCommand, void* aData)
 }
 
 NS_IMETHODIMP
-nsTextInputListener::HandleEvent(nsIDOMEvent* aEvent)
+TextInputListener::HandleEvent(Event* aEvent)
 {
-  bool defaultPrevented = false;
-  nsresult rv = aEvent->GetDefaultPrevented(&defaultPrevented);
-  NS_ENSURE_SUCCESS(rv, rv);
-  if (defaultPrevented) {
+  if (aEvent->DefaultPrevented()) {
     return NS_OK;
   }
 
-  bool isTrusted = false;
-  rv = aEvent->GetIsTrusted(&isTrusted);
-  NS_ENSURE_SUCCESS(rv, rv);
-  if (!isTrusted) {
+  if (!aEvent->IsTrusted()) {
     return NS_OK;
   }
 
@@ -1051,15 +968,13 @@ nsTextInputListener::HandleEvent(nsIDOMEvent* aEvent)
   return NS_OK;
 }
 
-// BEGIN nsIEditorObserver
-
-NS_IMETHODIMP
-nsTextInputListener::EditAction()
+void
+TextInputListener::OnEditActionHandled()
 {
   if (!mFrame) {
     // We've been disconnected from the nsTextEditorState object, nothing to do
     // here.
-    return NS_OK;
+    return;
   }
 
   AutoWeakFrame weakFrame = mFrame;
@@ -1073,8 +988,8 @@ nsTextInputListener::EditAction()
   RefPtr<TextEditor> textEditor = frame->GetTextEditor();
 
   // Get the number of undo / redo items
-  int32_t numUndoItems = textEditor->NumberOfUndoItems();
-  int32_t numRedoItems = textEditor->NumberOfRedoItems();
+  size_t numUndoItems = textEditor->NumberOfUndoItems();
+  size_t numRedoItems = textEditor->NumberOfRedoItems();
   if ((numUndoItems && !mHadUndoItems) || (!numUndoItems && mHadUndoItems) ||
       (numRedoItems && !mHadRedoItems) || (!numRedoItems && mHadRedoItems)) {
     // Modify the menu if undo or redo items are different
@@ -1085,16 +1000,14 @@ nsTextInputListener::EditAction()
   }
 
   if (!weakFrame.IsAlive()) {
-    return NS_OK;
+    return;
   }
 
   HandleValueChanged(frame);
-
-  return NS_OK;
 }
 
 void
-nsTextInputListener::HandleValueChanged(nsTextControlFrame* aFrame)
+TextInputListener::HandleValueChanged(nsTextControlFrame* aFrame)
 {
   // Make sure we know we were changed (do NOT set this to false if there are
   // no undo items; JS could change the value and we'd still need to save it)
@@ -1113,25 +1026,10 @@ nsTextInputListener::HandleValueChanged(nsTextControlFrame* aFrame)
   }
 }
 
-NS_IMETHODIMP
-nsTextInputListener::BeforeEditAction()
-{
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsTextInputListener::CancelEditAction()
-{
-  return NS_OK;
-}
-
-// END nsIEditorObserver
-
-
 nsresult
-nsTextInputListener::UpdateTextInputCommands(const nsAString& commandsToUpdate,
-                                             nsISelection* sel,
-                                             int16_t reason)
+TextInputListener::UpdateTextInputCommands(const nsAString& aCommandsToUpdate,
+                                           Selection* aSelection,
+                                           int16_t aReason)
 {
   nsIContent* content = mFrame->GetContent();
   NS_ENSURE_TRUE(content, NS_ERROR_FAILURE);
@@ -1139,13 +1037,14 @@ nsTextInputListener::UpdateTextInputCommands(const nsAString& commandsToUpdate,
   nsCOMPtr<nsIDocument> doc = content->GetComposedDoc();
   NS_ENSURE_TRUE(doc, NS_ERROR_FAILURE);
 
-  nsPIDOMWindowOuter *domWindow = doc->GetWindow();
+  nsPIDOMWindowOuter* domWindow = doc->GetWindow();
   NS_ENSURE_TRUE(domWindow, NS_ERROR_FAILURE);
 
-  return domWindow->UpdateCommands(commandsToUpdate, sel, reason);
+  domWindow->UpdateCommands(aCommandsToUpdate, aSelection, aReason);
+  return NS_OK;
 }
 
-// END nsTextInputListener
+// END mozilla::TextInputListener
 
 // nsTextEditorState
 
@@ -1207,12 +1106,6 @@ nsTextEditorState::GetRootNode()
 }
 
 Element*
-nsTextEditorState::GetPlaceholderNode()
-{
-  return mBoundFrame ? mBoundFrame->GetPlaceholderNode() : nullptr;
-}
-
-Element*
 nsTextEditorState::GetPreviewNode()
 {
   return mBoundFrame ? mBoundFrame->GetPreviewNode() : nullptr;
@@ -1221,6 +1114,10 @@ nsTextEditorState::GetPreviewNode()
 void
 nsTextEditorState::Clear()
 {
+  if (mTextEditor) {
+    mTextEditor->SetTextInputListener(nullptr);
+  }
+
   if (mBoundFrame) {
     // Oops, we still have a frame!
     // This should happen when the type of a text input control is being changed
@@ -1342,7 +1239,7 @@ nsTextEditorState::BindToFrame(nsTextControlFrame* aFrame)
   // Create a SelectionController
   mSelCon = new nsTextInputSelectionImpl(frameSel, shell, rootNode);
   MOZ_ASSERT(!mTextListener, "Should not overwrite the object");
-  mTextListener = new nsTextInputListener(mTextCtrlElement);
+  mTextListener = new TextInputListener(mTextCtrlElement);
 
   mTextListener->SetFrame(mBoundFrame);
   mSelCon->SetDisplaySelection(nsISelectionController::SELECTION_ON);
@@ -1357,7 +1254,7 @@ nsTextEditorState::BindToFrame(nsTextControlFrame* aFrame)
     if (caret) {
       selection->AddSelectionListener(caret);
     }
-    selection->AddSelectionListener(mTextListener);
+    mTextListener->StartToListenToSelectionChange();
   }
 
   // If an editor exists from before, prepare it for usage
@@ -1487,9 +1384,10 @@ nsTextEditorState::PrepareEditor(const nsAString *aValue)
     //       editor's Init() call.
 
     // Get the DOM document
-    nsCOMPtr<nsIDOMDocument> domdoc = do_QueryInterface(shell->GetDocument());
-    if (!domdoc)
+    nsCOMPtr<nsIDocument> doc = shell->GetDocument();
+    if (NS_WARN_IF(!doc)) {
       return NS_ERROR_FAILURE;
+    }
 
     // What follows is a bit of a hack.  The editor uses the public DOM APIs
     // for its content manipulations, and it causes it to fail some security
@@ -1500,7 +1398,7 @@ nsTextEditorState::PrepareEditor(const nsAString *aValue)
     // already does the relevant security checks.
     AutoNoJSAPI nojsapi;
 
-    rv = newTextEditor->Init(domdoc, GetRootNode(), mSelCon, editorFlags,
+    rv = newTextEditor->Init(*doc, GetRootNode(), mSelCon, editorFlags,
                              defaultValue);
     NS_ENSURE_SUCCESS(rv, rv);
   }
@@ -1509,13 +1407,14 @@ nsTextEditorState::PrepareEditor(const nsAString *aValue)
 
   if (!SuppressEventHandlers(presContext)) {
     nsCOMPtr<nsIControllers> controllers;
-    nsCOMPtr<nsIDOMHTMLInputElement> inputElement =
-      do_QueryInterface(mTextCtrlElement);
+    nsCOMPtr<nsIContent> content = do_QueryInterface(mTextCtrlElement);
+    HTMLInputElement* inputElement =
+      HTMLInputElement::FromNodeOrNull(content);
     if (inputElement) {
       rv = inputElement->GetControllers(getter_AddRefs(controllers));
     } else {
-      nsCOMPtr<nsIDOMHTMLTextAreaElement> textAreaElement =
-        do_QueryInterface(mTextCtrlElement);
+      HTMLTextAreaElement* textAreaElement =
+        HTMLTextAreaElement::FromNodeOrNull(content);
 
       if (!textAreaElement)
         return NS_ERROR_FAILURE;
@@ -1556,17 +1455,16 @@ nsTextEditorState::PrepareEditor(const nsAString *aValue)
   // Set max text field length
   newTextEditor->SetMaxTextLength(GetMaxLength());
 
-  nsCOMPtr<nsIContent> content = do_QueryInterface(mTextCtrlElement);
-  if (content) {
+  if (nsCOMPtr<Element> element = do_QueryInterface(mTextCtrlElement)) {
     editorFlags = newTextEditor->Flags();
 
     // Check if the readonly attribute is set.
-    if (content->HasAttr(kNameSpaceID_None, nsGkAtoms::readonly))
+    if (element->HasAttr(kNameSpaceID_None, nsGkAtoms::readonly))
       editorFlags |= nsIPlaintextEditor::eEditorReadonlyMask;
 
     // Check if the disabled attribute is set.
     // TODO: call IsDisabled() here!
-    if (content->HasAttr(kNameSpaceID_None, nsGkAtoms::disabled))
+    if (element->HasAttr(kNameSpaceID_None, nsGkAtoms::disabled))
       editorFlags |= nsIPlaintextEditor::eEditorDisabledMask;
 
     // Disable the selection if necessary.
@@ -1605,22 +1503,20 @@ nsTextEditorState::PrepareEditor(const nsAString *aValue)
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
-  nsCOMPtr<nsITransactionManager> transactionManager =
-    newTextEditor->GetTransactionManager();
-  if (NS_WARN_IF(!transactionManager)) {
-    return NS_ERROR_FAILURE;
-  }
-
-  transactionManager->SetMaxTransactionCount(
-                        nsITextControlElement::DEFAULT_UNDO_CAP);
-
   if (IsPasswordTextControl()) {
-    // Disable undo for password textfields.  Note that we want to do this at
-    // the very end of InitEditor, so the calls to EnableUndo when setting the
-    // default value don't screw us up.
-    // Since changing the control type does a reframe, we don't have to worry
-    // about dynamic type changes here.
-    newTextEditor->EnableUndo(false);
+    // Disable undo for <input type="password">.  Note that we want to do this
+    // at the very end of InitEditor(), so the calls to EnableUndoRedo() when
+    // setting the default value don't screw us up.  Since changing the
+    // control type does a reframe, we don't have to worry about dynamic type
+    // changes here.
+    DebugOnly<bool> disabledUndoRedo = newTextEditor->DisableUndoRedo();
+    NS_WARNING_ASSERTION(disabledUndoRedo,
+      "Failed to disable undo/redo transaction");
+  } else {
+    DebugOnly<bool> enabledUndoRedo =
+      newTextEditor->EnableUndoRedo(nsITextControlElement::DEFAULT_UNDO_CAP);
+    NS_WARNING_ASSERTION(enabledUndoRedo,
+      "Failed to enable undo/redo transaction");
   }
 
   if (!mEditorInitialized) {
@@ -1630,7 +1526,7 @@ nsTextEditorState::PrepareEditor(const nsAString *aValue)
   }
 
   if (mTextListener) {
-    newTextEditor->AddEditorObserver(mTextListener);
+    newTextEditor->SetTextInputListener(mTextListener);
   }
 
   // Restore our selection after being bound to a new frame
@@ -1764,7 +1660,7 @@ nsTextEditorState::GetSelectionDirection(ErrorResult& aRv)
     return nsITextControlFrame::eForward; // Doesn't really matter
   }
 
-  nsDirection direction = sel->GetSelectionDirection();
+  nsDirection direction = sel->GetDirection();
   if (direction == eDirNext) {
     return nsITextControlFrame::eForward;
   }
@@ -1807,8 +1703,9 @@ nsTextEditorState::SetSelectionRange(uint32_t aStart, uint32_t aEnd,
     props.SetEnd(aEnd);
     props.SetDirection(aDirection);
   } else {
+    WeakPtr<nsTextEditorState> self(this);
     aRv = mBoundFrame->SetSelectionRange(aStart, aEnd, aDirection);
-    if (aRv.Failed()) {
+    if (aRv.Failed() || !self.get()) {
       return;
     }
     rv = mBoundFrame->ScrollSelectionIntoView();
@@ -2082,7 +1979,7 @@ nsTextEditorState::GetParentNumberControl(nsFrame* aFrame) const
   if (!parentOfParent) {
     return nullptr;
   }
-  HTMLInputElement* input = HTMLInputElement::FromContent(parentOfParent);
+  HTMLInputElement* input = HTMLInputElement::FromNode(parentOfParent);
   if (input) {
     // This function might be called during frame reconstruction as a result
     // of changing the input control's type from number to something else. In
@@ -2100,9 +1997,6 @@ nsTextEditorState::DestroyEditor()
 {
   // notify the editor that we are going away
   if (mEditorInitialized) {
-    if (mTextListener) {
-      mTextEditor->RemoveEditorObserver(mTextListener);
-    }
     mTextEditor->PreDestroy(true);
     mEditorInitialized = false;
   }
@@ -2121,8 +2015,8 @@ nsTextEditorState::UnbindFromFrame(nsTextControlFrame* aFrame)
   // called yet, we need to notify it here because editor may be destroyed
   // before EditAction() is called if selection listener causes flushing layout.
   if (mTextListener && mTextEditor && mEditorInitialized &&
-      mTextEditor->IsInEditAction()) {
-    mTextListener->EditAction();
+      mTextEditor->IsInEditSubAction()) {
+    mTextListener->OnEditActionHandled();
   }
 
   // We need to start storing the value outside of the editor if we're not
@@ -2143,12 +2037,10 @@ nsTextEditorState::UnbindFromFrame(nsTextControlFrame* aFrame)
   if (!IsSelectionCached()) {
     // Go ahead and cache it now.
     uint32_t start = 0, end = 0;
-    IgnoredErrorResult rangeRv;
-    GetSelectionRange(&start, &end, rangeRv);
+    GetSelectionRange(&start, &end, IgnoreErrors());
 
-    IgnoredErrorResult dirRv;
     nsITextControlFrame::SelectionDirection direction =
-      GetSelectionDirection(dirRv);
+      GetSelectionDirection(IgnoreErrors());
 
     SelectionProperties& props = GetSelectionProperties();
     props.SetStart(start);
@@ -2172,14 +2064,15 @@ nsTextEditorState::UnbindFromFrame(nsTextControlFrame* aFrame)
   if (!SuppressEventHandlers(mBoundFrame->PresContext()))
   {
     nsCOMPtr<nsIControllers> controllers;
-    nsCOMPtr<nsIDOMHTMLInputElement> inputElement =
-      do_QueryInterface(mTextCtrlElement);
+    nsCOMPtr<nsIContent> content = do_QueryInterface(mTextCtrlElement);
+    HTMLInputElement* inputElement =
+      HTMLInputElement::FromNodeOrNull(content);
     if (inputElement)
       inputElement->GetControllers(getter_AddRefs(controllers));
     else
     {
-      nsCOMPtr<nsIDOMHTMLTextAreaElement> textAreaElement =
-        do_QueryInterface(mTextCtrlElement);
+      HTMLTextAreaElement* textAreaElement =
+        HTMLTextAreaElement::FromNodeOrNull(content);
       if (textAreaElement) {
         textAreaElement->GetControllers(getter_AddRefs(controllers));
       }
@@ -2208,14 +2101,7 @@ nsTextEditorState::UnbindFromFrame(nsTextControlFrame* aFrame)
 
   if (mSelCon) {
     if (mTextListener) {
-      // FYI: It's safe to use raw pointer for calling
-      //      Selection::RemoveSelectionListener() because it only removes the
-      //      listener from its array.
-      Selection* selection =
-        mSelCon->GetSelection(SelectionType::eNormal);
-      if (selection) {
-        selection->RemoveSelectionListener(mTextListener);
-      }
+      mTextListener->EndListeningToSelectionChange();
     }
 
     mSelCon->SetScrollableFrame(nullptr);
@@ -2259,7 +2145,7 @@ nsTextEditorState::GetMaxLength()
 {
   nsCOMPtr<nsIContent> content = do_QueryInterface(mTextCtrlElement);
   nsGenericHTMLElement* element =
-    nsGenericHTMLElement::FromContentOrNull(content);
+    nsGenericHTMLElement::FromNodeOrNull(content);
   if (NS_WARN_IF(!element)) {
     return -1;
   }
@@ -2528,9 +2414,16 @@ nsTextEditorState::SetValue(const nsAString& aValue, const nsAString* aOldValue,
               StringTail(newValue, newlength - currentLength);
 
             if (insertValue.IsEmpty()) {
-              textEditor->DeleteSelection(nsIEditor::eNone, nsIEditor::eStrip);
+              DebugOnly<nsresult> rv =
+                textEditor->DeleteSelectionAsAction(nsIEditor::eNone,
+                                                    nsIEditor::eStrip);
+              NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                "Failed to remove the text");
             } else {
-              textEditor->InsertText(insertValue);
+              DebugOnly<nsresult> rv =
+                textEditor->InsertTextAsAction(insertValue);
+              NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                "Failed to insert the new value");
             }
           } else {
             AutoDisableUndo disableUndo(textEditor);
@@ -2687,7 +2580,7 @@ nsTextEditorState::SetPreviewText(const nsAString& aValue, bool aNotify)
 
   nsContentUtils::RemoveNewlines(previewValue);
   MOZ_ASSERT(previewDiv->GetFirstChild(), "preview div has no child");
-  previewDiv->GetFirstChild()->SetText(previewValue, aNotify);
+  previewDiv->GetFirstChild()->AsText()->SetText(previewValue, aNotify);
 
   UpdateOverlayTextVisibility(aNotify);
 }

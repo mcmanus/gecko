@@ -10,6 +10,7 @@
 
 #include "mozilla/Maybe.h"
 #include "nsAutoPtr.h"
+#include "nsTArray.h"
 
 struct OpusMSDecoder;
 
@@ -17,7 +18,11 @@ namespace mozilla {
 
 class OpusParser;
 
-class OpusDataDecoder : public MediaDataDecoder
+DDLoggedTypeDeclNameAndBase(OpusDataDecoder, MediaDataDecoder);
+
+class OpusDataDecoder
+  : public MediaDataDecoder
+  , public DecoderDoctorLifeLogger<OpusDataDecoder>
 {
 public:
   explicit OpusDataDecoder(const CreateDecoderParams& aParams);
@@ -64,7 +69,8 @@ private:
   bool mPaddingDiscarded;
   int64_t mFrames;
   Maybe<int64_t> mLastFrameTime;
-  uint8_t mMappingTable[MAX_AUDIO_CHANNELS]; // Channel mapping table.
+  AutoTArray<uint8_t, 8> mMappingTable;
+  AudioConfig::ChannelLayout::ChannelMap mChannelMap;
 };
 
 } // namespace mozilla

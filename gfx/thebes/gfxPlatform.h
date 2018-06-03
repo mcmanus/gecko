@@ -6,6 +6,7 @@
 #ifndef GFX_PLATFORM_H
 #define GFX_PLATFORM_H
 
+#include "mozilla/FontPropertyTypes.h"
 #include "mozilla/Logging.h"
 #include "mozilla/gfx/Types.h"
 #include "nsTArray.h"
@@ -64,7 +65,7 @@ BackendTypeBit(BackendType b)
 
 } // namespace gfx
 namespace dom {
-class FontFamilyListEntry;
+class SystemFontListEntry;
 }
 } // namespace mozilla
 
@@ -146,10 +147,21 @@ enum class ForcedDeviceResetReason
   COMPOSITOR_UPDATED,
 };
 
+struct BackendPrefsData
+{
+  uint32_t mCanvasBitmask = 0;
+  mozilla::gfx::BackendType mCanvasDefault = mozilla::gfx::BackendType::NONE;
+  uint32_t mContentBitmask = 0;
+  mozilla::gfx::BackendType mContentDefault = mozilla::gfx::BackendType::NONE;
+};
+
 class gfxPlatform {
     friend class SRGBOverrideObserver;
 
 public:
+    typedef mozilla::StretchRange StretchRange;
+    typedef mozilla::SlantStyleRange SlantStyleRange;
+    typedef mozilla::WeightRange WeightRange;
     typedef mozilla::gfx::Color Color;
     typedef mozilla::gfx::DataSourceSurface DataSourceSurface;
     typedef mozilla::gfx::DrawTarget DrawTarget;
@@ -260,16 +272,6 @@ public:
                               bool aUninitialized = false);
 
     /**
-     * Returns true if rendering to data surfaces produces the same results as
-     * rendering to offscreen surfaces on this platform, making it safe to
-     * render content to data surfaces. This is generally false on platforms
-     * which use different backends for each type of DrawTarget.
-     */
-    virtual bool CanRenderContentToDataSurface() const {
-      return false;
-    }
-
-    /**
      * Returns true if we should use Azure to render content with aTarget. For
      * example, it is possible that we are using Direct2D for rendering and thus
      * using Azure. But we want to render to a CairoDrawTarget, in which case
@@ -288,7 +290,7 @@ public:
     /// asking for it, we will examine the commands in the first few seconds
     /// of the canvas usage, and potentially change to accelerated or
     /// non-accelerated canvas.
-    bool AllowOpenGLCanvas();
+    virtual bool AllowOpenGLCanvas();
     virtual void InitializeSkiaCacheLimits();
 
     static bool AsyncPanZoomEnabled();
@@ -300,7 +302,7 @@ public:
     // Get the default content backend that will be used with the default
     // compositor. If the compositor is known when calling this function,
     // GetContentBackendFor() should be called instead.
-    mozilla::gfx::BackendType GetDefaultContentBackend() {
+    mozilla::gfx::BackendType GetDefaultContentBackend() const {
       return mContentBackend;
     }
 
@@ -315,7 +317,7 @@ public:
       return mContentBackend;
     }
 
-    mozilla::gfx::BackendType GetPreferredCanvasBackend() {
+    virtual mozilla::gfx::BackendType GetPreferredCanvasBackend() {
       return mPreferredCanvasBackend;
     }
     mozilla::gfx::BackendType GetFallbackCanvasBackend() {
@@ -337,12 +339,12 @@ public:
                                  nsTArray<nsString>& aListOfFonts);
 
     /**
-     * Fill aFontFamilies with a list of FontFamilyListEntry records for the
+     * Fill aFontList with a list of SystemFontListEntry records for the
      * available fonts on the platform; used to pass the list from chrome to
-     * content process. Currently implemented only on MacOSX.
+     * content process. Currently implemented only on MacOSX and Linux.
      */
-    virtual void GetSystemFontFamilyList(
-      InfallibleTArray<mozilla::dom::FontFamilyListEntry>* aFontFamilies)
+    virtual void ReadSystemFontList(
+      InfallibleTArray<mozilla::dom::SystemFontListEntry>* aFontList)
     { }
 
     /**
@@ -392,10 +394,10 @@ public:
      * Ownership of the returned gfxFontEntry is passed to the caller,
      * who must either AddRef() or delete.
      */
-    virtual gfxFontEntry* LookupLocalFont(const nsAString& aFontName,
-                                          uint16_t aWeight,
-                                          int16_t aStretch,
-                                          uint8_t aStyle);
+    gfxFontEntry* LookupLocalFont(const nsAString& aFontName,
+                                  WeightRange aWeightForEntry,
+                                  StretchRange aStretchForEntry,
+                                  SlantStyleRange aStyleForEntry);
 
     /**
      * Activate a platform font.  (Needed to support @font-face src url().)
@@ -405,12 +407,12 @@ public:
      * Ownership of the returned gfxFontEntry is passed to the caller,
      * who must either AddRef() or delete.
      */
-    virtual gfxFontEntry* MakePlatformFont(const nsAString& aFontName,
-                                           uint16_t aWeight,
-                                           int16_t aStretch,
-                                           uint8_t aStyle,
-                                           const uint8_t* aFontData,
-                                           uint32_t aLength);
+    gfxFontEntry* MakePlatformFont(const nsAString& aFontName,
+                                   WeightRange aWeightForEntry,
+                                   StretchRange aStretchForEntry,
+                                   SlantStyleRange aStyleForEntry,
+                                   const uint8_t* aFontData,
+                                   uint32_t aLength);
 
     /**
      * Whether to allow downloadable fonts via @font-face rules
@@ -591,6 +593,17 @@ public:
     { return mozilla::gfx::SurfaceFormat::X8R8G8B8_UINT32; }
 
     /**
+     * Returns whether the current process should use tiling for layers.
+     */
+    virtual bool UsesTiling() const;
+
+    /**
+     * Returns whether the content process will use tiling for layers. This is
+     * only used by about:support.
+     */
+    virtual bool ContentUsesTiling() const;
+
+    /**
      * Returns a logger if one is available and logging is enabled
      */
     static mozilla::LogModule* GetLog(eGfxLog aWhichLog);
@@ -720,11 +733,25 @@ public:
       return nullptr;
     }
 
+    bool HasVariationFontSupport() const {
+      return mHasVariationFontSupport;
+    }
+
+    bool HasNativeColrFontSupport() const {
+      return mHasNativeColrFontSupport;
+    }
+
+    // you probably want to use gfxVars::UseWebRender() instead of this
+    static bool WebRenderPrefEnabled();
+    // you probably want to use gfxVars::UseWebRender() instead of this
+    static bool WebRenderEnvvarEnabled();
+
 protected:
     gfxPlatform();
     virtual ~gfxPlatform();
 
     virtual void InitAcceleration();
+    virtual void InitWebRenderConfig();
 
     /**
      * Called immediately before deleting the gfxPlatform object.
@@ -742,14 +769,16 @@ protected:
     // Returns a prioritized list of available compositor backends for acceleration.
     virtual void GetAcceleratedCompositorBackends(nsTArray<mozilla::layers::LayersBackend>& aBackends);
 
+    // Returns preferences of canvas and content backends.
+    virtual BackendPrefsData GetBackendPrefs() const;
+
     /**
      * Initialise the preferred and fallback canvas backends
      * aBackendBitmask specifies the backends which are acceptable to the caller.
      * The backend used is determined by aBackendBitmask and the order specified
      * by the gfx.canvas.azure.backends pref.
      */
-    void InitBackendPrefs(uint32_t aCanvasBitmask, mozilla::gfx::BackendType aCanvasDefault,
-                          uint32_t aContentBitmask, mozilla::gfx::BackendType aContentDefault);
+    void InitBackendPrefs(BackendPrefsData&& aPrefsData);
 
     /**
      * Content-process only. Requests device preferences from the parent process
@@ -790,6 +819,8 @@ protected:
 
     virtual bool CanUseHardwareVideoDecoding();
 
+    virtual bool CheckVariationFontSupport() = 0;
+
     int8_t  mAllowDownloadableFonts;
     int8_t  mGraphiteShapingEnabled;
     int8_t  mOpenTypeSVGEnabled;
@@ -799,6 +830,13 @@ protected:
     // whether to always search font cmaps globally
     // when doing system font fallback
     int8_t  mFallbackUsesCmaps;
+
+    // Whether the platform supports rendering OpenType font variations
+    bool    mHasVariationFontSupport;
+
+    // Whether the platform font APIs have native support for COLR fonts.
+    // Set to true during initialization on platforms that implement this.
+    bool    mHasNativeColrFontSupport = false;
 
     // max character limit for words in word cache
     int32_t mWordCacheCharLimit;
@@ -842,10 +880,10 @@ private:
 
     void InitCompositorAccelerationPrefs();
     void InitGPUProcessPrefs();
-    void InitWebRenderConfig();
     void InitOMTPConfig();
 
     static bool IsDXInterop2Blocked();
+    static bool IsDXNV12Blocked();
 
     RefPtr<gfxASurface> mScreenReferenceSurface;
     nsCOMPtr<nsIObserver> mSRGBOverrideObserver;

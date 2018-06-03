@@ -35,6 +35,7 @@ TEST_HARNESS_BINS = [
     'BadCertServer',
     'GenerateOCSPResponse',
     'OCSPStaplingServer',
+    'SymantecSanctionsServer',
     'SmokeDMD',
     'certutil',
     'crashinject',
@@ -105,6 +106,7 @@ ARCHIVE_FILES = {
                 'mochitest/**',
                 'reftest/**',
                 'talos/**',
+                'raptor/**',
                 'awsy/**',
                 'web-platform/**',
                 'xpcshell/**',
@@ -151,6 +153,15 @@ ARCHIVE_FILES = {
             'source': buildconfig.topsrcdir,
             'base': 'testing',
             'pattern': 'firefox-ui/**',
+            'ignore': [
+                'firefox-ui/tests',
+            ]
+        },
+        {
+            'source': buildconfig.topsrcdir,
+            'base': '',
+            'pattern': 'testing/firefox-ui/tests',
+            'dest': 'firefox-ui/tests',
         },
         {
             'source': buildconfig.topsrcdir,
@@ -161,13 +172,19 @@ ARCHIVE_FILES = {
         {
             'source': buildconfig.topsrcdir,
             'base': 'js/src/tests',
-            'pattern': 'ecma_6/**',
+            'pattern': 'non262/shell.js',
             'dest': 'jit-test/tests',
         },
         {
             'source': buildconfig.topsrcdir,
             'base': 'js/src/tests',
-            'pattern': 'js1_8_5/**',
+            'pattern': 'non262/Math/shell.js',
+            'dest': 'jit-test/tests',
+        },
+        {
+            'source': buildconfig.topsrcdir,
+            'base': 'js/src/tests',
+            'pattern': 'non262/reflect-parse/Match.js',
             'dest': 'jit-test/tests',
         },
         {
@@ -203,6 +220,18 @@ ARCHIVE_FILES = {
             'base': 'testing/web-platform/tests/tools/wptserve',
             'pattern': '**',
             'dest': 'tools/wptserve',
+        },
+        {
+            'source': buildconfig.topsrcdir,
+            'base': 'python/mozterm',
+            'pattern': '**',
+            'dest': 'tools/mozterm',
+        },
+        {
+            'source': buildconfig.topsrcdir,
+            'base': 'third_party/python/six',
+            'pattern': '**',
+            'dest': 'tools/six',
         },
         {
             'source': buildconfig.topobjdir,
@@ -333,7 +362,19 @@ ARCHIVE_FILES = {
             'base': '',
             'pattern': 'mozinfo.json',
             'dest': 'mochitest'
-        }
+        },
+        {
+            'source': buildconfig.topobjdir,
+            'base': 'dist/xpi-stage',
+            'pattern': 'mochijar/**',
+            'dest': 'mochitest'
+        },
+        {
+            'source': buildconfig.topobjdir,
+            'base': 'dist/xpi-stage',
+            'pattern': 'specialpowers/**',
+            'dest': 'mochitest/extensions'
+        },
     ],
     'mozharness': [
         {
@@ -369,6 +410,37 @@ ARCHIVE_FILES = {
             'source': buildconfig.topsrcdir,
             'base': 'testing',
             'pattern': 'talos/**',
+        },
+        {
+            'source': buildconfig.topsrcdir,
+            'base': 'testing/profiles',
+            'pattern': '**',
+            'dest': 'talos/talos/profile_data',
+        },
+        {
+            'source': buildconfig.topsrcdir,
+            'base': 'third_party/webkit/PerformanceTests',
+            'pattern': '**',
+            'dest': 'talos/talos/tests/webkit/PerformanceTests/',
+        },
+    ],
+    'raptor': [
+        {
+            'source': buildconfig.topsrcdir,
+            'base': 'testing',
+            'pattern': 'raptor/**',
+        },
+        {
+            'source': buildconfig.topsrcdir,
+            'base': 'testing/profiles',
+            'pattern': '**',
+            'dest': 'raptor/raptor/profile_data',
+        },
+        {
+            'source': buildconfig.topsrcdir,
+            'base': 'third_party/webkit/PerformanceTests',
+            'pattern': '**',
+            'dest': 'raptor/raptor/tests/webkit/PerformanceTests/',
         },
     ],
     'awsy': [
@@ -443,6 +515,16 @@ ARCHIVE_FILES = {
         },
     ],
 }
+
+if buildconfig.substs.get('MOZ_CODE_COVERAGE'):
+    ARCHIVE_FILES['common'].append({
+        'source': buildconfig.topsrcdir,
+        'base': 'python/mozbuild/',
+        'patterns': [
+            'mozpack/**',
+            'mozbuild/codecoverage/**',
+        ],
+    })
 
 
 if buildconfig.substs.get('MOZ_ASAN') and buildconfig.substs.get('CLANG_CL'):

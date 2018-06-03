@@ -13,7 +13,7 @@
 
 #include "nsTHashtable.h"
 #include "nsHashKeys.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 #include "nsTArray.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/Move.h"
@@ -32,8 +32,8 @@ public:
 
   // Move constructor so we can do Records of Records.
   RecordEntry(RecordEntry<KeyType, ValueType>&& aOther)
-    : mKey(Move(aOther.mKey)),
-      mValue(Move(aOther.mValue))
+    : mKey(std::move(aOther.mKey)),
+      mValue(std::move(aOther.mValue))
   {
   }
 
@@ -56,7 +56,7 @@ public:
 
   // Move constructor so we can do Record of Record.
   Record(SelfType&& aOther) :
-    mEntries(Move(aOther.mEntries))
+    mEntries(std::move(aOther.mEntries))
   {
   }
 

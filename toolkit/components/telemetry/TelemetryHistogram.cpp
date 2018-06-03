@@ -18,6 +18,7 @@
 #include "mozilla/dom/ToJSValue.h"
 #include "mozilla/gfx/GPUProcessManager.h"
 #include "mozilla/Atomics.h"
+#include "mozilla/JSONWriter.h"
 #include "mozilla/StartupTimeline.h"
 #include "mozilla/StaticMutex.h"
 #include "mozilla/Unused.h"
@@ -36,6 +37,7 @@ using base::BooleanHistogram;
 using base::CountHistogram;
 using base::FlagHistogram;
 using base::LinearHistogram;
+using mozilla::MakeTuple;
 using mozilla::StaticMutex;
 using mozilla::StaticMutexAutoLock;
 using mozilla::Telemetry::HistogramAccumulation;
@@ -47,9 +49,13 @@ using mozilla::Telemetry::Common::LogToBrowserConsole;
 using mozilla::Telemetry::Common::RecordedProcessType;
 using mozilla::Telemetry::Common::AutoHashtable;
 using mozilla::Telemetry::Common::GetNameForProcessID;
+using mozilla::Telemetry::Common::GetIDForProcessName;
 using mozilla::Telemetry::Common::IsExpiredVersion;
 using mozilla::Telemetry::Common::CanRecordDataset;
+using mozilla::Telemetry::Common::CanRecordProduct;
+using mozilla::Telemetry::Common::SupportedProduct;
 using mozilla::Telemetry::Common::IsInDataset;
+using mozilla::Telemetry::Common::ToJSString;
 
 namespace TelemetryIPCAccumulator = mozilla::TelemetryIPCAccumulator;
 
@@ -103,6 +109,14 @@ namespace TelemetryIPCAccumulator = mozilla::TelemetryIPCAccumulator;
 // break that cycle, we relax that requirement.  Unfortunately this
 // means that this file is not guaranteed race-free.
 
+// This is a StaticMutex rather than a plain Mutex (1) so that
+// it gets initialised in a thread-safe manner the first time
+// it is used, and (2) because it is never de-initialised, and
+// a normal Mutex would show up as a leak in BloatView.  StaticMutex
+// also has the "OffTheBooks" property, so it won't show as a leak
+// in BloatView.
+static StaticMutex gTelemetryHistogramMutex;
+
 
 ////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////
@@ -128,6 +142,7 @@ struct HistogramInfo {
   uint32_t key_count;
   RecordedProcessType record_in_processes;
   bool keyed;
+  SupportedProduct products;
 
   const char *name() const;
   const char *expiration() const;
@@ -135,44 +150,58 @@ struct HistogramInfo {
   bool allows_key(const nsACString& key) const;
 };
 
-enum reflectStatus {
-  REFLECT_OK,
-  REFLECT_FAILURE
+// Structs used to keep information about the histograms for which a
+// snapshot should be created.
+struct HistogramSnapshotData {
+  nsTArray<Histogram::Sample> mBucketRanges;
+  nsTArray<Histogram::Count> mBucketCounts;
+  int64_t mSampleSum; // Same type as Histogram::SampleSet::sum_
 };
 
-enum class SessionType {
-  Session = 0,
-  Subsession = 1,
-  Count,
+struct HistogramSnapshotInfo {
+  HistogramSnapshotData data;
+  HistogramID histogramID;
 };
+
+typedef mozilla::Vector<HistogramSnapshotInfo> HistogramSnapshotsArray;
+typedef mozilla::Vector<HistogramSnapshotsArray> HistogramProcessSnapshotsArray;
+
+// The following is used to handle snapshot information for keyed histograms.
+typedef nsDataHashtable<nsCStringHashKey, HistogramSnapshotData> KeyedHistogramSnapshotData;
+
+struct KeyedHistogramSnapshotInfo {
+  KeyedHistogramSnapshotData data;
+  HistogramID histogramId;
+};
+
+typedef mozilla::Vector<KeyedHistogramSnapshotInfo> KeyedHistogramSnapshotsArray;
+typedef mozilla::Vector<KeyedHistogramSnapshotsArray> KeyedHistogramProcessSnapshotsArray;
 
 class KeyedHistogram {
 public:
   KeyedHistogram(HistogramID id, const HistogramInfo& info);
   ~KeyedHistogram();
-  nsresult GetHistogram(const nsCString& name, Histogram** histogram, bool subsession);
-  Histogram* GetHistogram(const nsCString& name, bool subsession);
+  nsresult GetHistogram(const nsCString& name, Histogram** histogram);
+  Histogram* GetHistogram(const nsCString& name);
   uint32_t GetHistogramType() const { return mHistogramInfo.histogramType; }
   nsresult GetJSKeys(JSContext* cx, JS::CallArgs& args);
+  // Note: unlike other methods, GetJSSnapshot is thread safe.
   nsresult GetJSSnapshot(JSContext* cx, JS::Handle<JSObject*> obj,
-                         bool subsession, bool clearSubsession);
+                         bool clearSubsession);
+  nsresult GetSnapshot(const StaticMutexAutoLock& aLock,
+                       KeyedHistogramSnapshotData& aSnapshot, bool aClearSubsession);
 
   nsresult Add(const nsCString& key, uint32_t aSample, ProcessID aProcessType);
-  void Clear(bool subsession);
+  void Clear();
 
   HistogramID GetHistogramID() const { return mId; }
+
+  bool IsEmpty() const { return mHistogramMap.IsEmpty(); }
 
 private:
   typedef nsBaseHashtableET<nsCStringHashKey, Histogram*> KeyedHistogramEntry;
   typedef AutoHashtable<KeyedHistogramEntry> KeyedHistogramMapType;
   KeyedHistogramMapType mHistogramMap;
-#if !defined(MOZ_WIDGET_ANDROID)
-  KeyedHistogramMapType mSubsessionMap;
-#endif
-
-  static bool ReflectKeyedHistogram(KeyedHistogramEntry* entry,
-                                    JSContext* cx,
-                                    JS::Handle<JSObject*> obj);
 
   const HistogramID mId;
   const HistogramInfo& mHistogramInfo;
@@ -200,7 +229,6 @@ bool gCanRecordExtended = false;
 // We use separate ones for plain and keyed histograms.
 Histogram** gHistogramStorage;
 // Keyed histograms internally map string keys to individual Histogram instances.
-// KeyedHistogram keeps track of session & subsession histograms internally.
 KeyedHistogram** gKeyedHistogramStorage;
 
 // Cache of histogram name to a histogram id.
@@ -251,38 +279,35 @@ size_t internal_KeyedHistogramStorageIndex(HistogramID aHistogramId,
   return aHistogramId * size_t(ProcessID::Count) + size_t(aProcessId);
 }
 
-size_t internal_HistogramStorageIndex(HistogramID aHistogramId,
-                                      ProcessID aProcessId,
-                                      SessionType aSessionType)
+size_t internal_HistogramStorageIndex(const StaticMutexAutoLock& aLock,
+                                      HistogramID aHistogramId,
+                                      ProcessID aProcessId)
 {
   static_assert(
     HistogramCount <
-      std::numeric_limits<size_t>::max() / size_t(ProcessID::Count) / size_t(SessionType::Count),
-        "Too many histograms, processes, and session types to store in a 1D "
-        "array.");
+      std::numeric_limits<size_t>::max() / size_t(ProcessID::Count),
+        "Too many histograms and processes to store in a 1D array.");
 
-  return aHistogramId * size_t(ProcessID::Count) * size_t(SessionType::Count) +
-         size_t(aProcessId) * size_t(SessionType::Count) +
-         size_t(aSessionType);
+  return aHistogramId * size_t(ProcessID::Count) + size_t(aProcessId);
 }
 
-Histogram* internal_GetHistogramFromStorage(HistogramID aHistogramId,
-                                            ProcessID aProcessId,
-                                            SessionType aSessionType)
+Histogram* internal_GetHistogramFromStorage(const StaticMutexAutoLock& aLock,
+                                            HistogramID aHistogramId,
+                                            ProcessID aProcessId)
 {
-  size_t index = internal_HistogramStorageIndex(aHistogramId, aProcessId, aSessionType);
+  size_t index = internal_HistogramStorageIndex(aLock, aHistogramId, aProcessId);
   return gHistogramStorage[index];
 }
 
-void internal_SetHistogramInStorage(HistogramID aHistogramId,
+void internal_SetHistogramInStorage(const StaticMutexAutoLock& aLock,
+                                    HistogramID aHistogramId,
                                     ProcessID aProcessId,
-                                    SessionType aSessionType,
                                     Histogram* aHistogram)
 {
   MOZ_ASSERT(XRE_IsParentProcess(),
     "Histograms are stored only in the parent process.");
 
-  size_t index = internal_HistogramStorageIndex(aHistogramId, aProcessId, aSessionType);
+  size_t index = internal_HistogramStorageIndex(aLock, aHistogramId, aProcessId);
   MOZ_ASSERT(!gHistogramStorage[index],
     "Mustn't overwrite storage without clearing it first.");
   gHistogramStorage[index] = aHistogram;
@@ -321,17 +346,16 @@ internal_IsHistogramEnumId(HistogramID aID)
 
 // Look up a plain histogram by id.
 Histogram*
-internal_GetHistogramById(HistogramID histogramId, ProcessID processId, SessionType sessionType,
+internal_GetHistogramById(const StaticMutexAutoLock& aLock,
+                          HistogramID histogramId,
+                          ProcessID processId,
                           bool instantiate = true)
 {
   MOZ_ASSERT(internal_IsHistogramEnumId(histogramId));
   MOZ_ASSERT(!gHistogramInfos[histogramId].keyed);
   MOZ_ASSERT(processId < ProcessID::Count);
-  MOZ_ASSERT(sessionType < SessionType::Count);
 
-  Histogram* h = internal_GetHistogramFromStorage(histogramId,
-                                                  processId,
-                                                  sessionType);
+  Histogram* h = internal_GetHistogramFromStorage(aLock, histogramId, processId);
   if (h || !instantiate) {
     return h;
   }
@@ -340,7 +364,7 @@ internal_GetHistogramById(HistogramID histogramId, ProcessID processId, SessionT
   const int bucketsOffset = gHistogramBucketLowerBoundIndex[histogramId];
   h = internal_CreateHistogramInstance(info, bucketsOffset);
   MOZ_ASSERT(h);
-  internal_SetHistogramInStorage(histogramId, processId, sessionType, h);
+  internal_SetHistogramInStorage(aLock, histogramId, processId, h);
   return h;
 }
 
@@ -368,7 +392,9 @@ internal_GetKeyedHistogramById(HistogramID histogramId, ProcessID processId,
 
 // Look up a histogram id from a histogram name.
 nsresult
-internal_GetHistogramIdByName(const nsACString& name, HistogramID* id)
+internal_GetHistogramIdByName(const StaticMutexAutoLock& aLock,
+                              const nsACString& name,
+                              HistogramID* id)
 {
   const bool found = gNameToHistogramIDMap.Get(name, id);
   if (!found) {
@@ -380,9 +406,15 @@ internal_GetHistogramIdByName(const nsACString& name, HistogramID* id)
 
 // Clear a histogram from storage.
 void
-internal_ClearHistogramById(HistogramID histogramId, ProcessID processId, SessionType sessionType)
+internal_ClearHistogramById(const StaticMutexAutoLock& aLock,
+                            HistogramID histogramId,
+                            ProcessID processId)
 {
-  size_t index = internal_HistogramStorageIndex(histogramId, processId, sessionType);
+  size_t index = internal_HistogramStorageIndex(aLock, histogramId, processId);
+  if (gHistogramStorage[index] == gExpiredHistogram) {
+    // We keep gExpiredHistogram until TelemetryHistogram::DeInitializeGlobalState
+    return;
+  }
   delete gHistogramStorage[index];
   gHistogramStorage[index] = nullptr;
 }
@@ -406,21 +438,33 @@ internal_CanRecordExtended() {
   return gCanRecordExtended;
 }
 
+bool
+internal_AttemptedGPUProcess() {
+  // Check if it was tried to launch a process.
+  bool attemptedGPUProcess = false;
+  if (auto gpm = mozilla::gfx::GPUProcessManager::Get()) {
+    attemptedGPUProcess = gpm->AttemptedGPUProcess();
+  }
+  return attemptedGPUProcess;
+}
+
 // Note: this is completely unrelated to mozilla::IsEmpty.
 bool
-internal_IsEmpty(const Histogram *h)
+internal_IsEmpty(const StaticMutexAutoLock& aLock, const Histogram *h)
 {
   return h->is_empty();
 }
 
 bool
-internal_IsExpired(Histogram* h)
+internal_IsExpired(const StaticMutexAutoLock& aLock, Histogram* h)
 {
   return h == gExpiredHistogram;
 }
 
 void
-internal_SetHistogramRecordingEnabled(HistogramID id, bool aEnabled)
+internal_SetHistogramRecordingEnabled(const StaticMutexAutoLock& aLock,
+                                      HistogramID id,
+                                      bool aEnabled)
 {
   MOZ_ASSERT(internal_IsHistogramEnumId(id));
   gHistogramRecordingDisabled[id] = !aEnabled;
@@ -589,9 +633,10 @@ internal_CreateHistogramInstance(const HistogramInfo& passedInfo, int bucketsOff
 }
 
 nsresult
-internal_HistogramAdd(Histogram& histogram,
+internal_HistogramAdd(const StaticMutexAutoLock& aLock,
+                      Histogram& histogram,
                       const HistogramID id,
-                      int32_t value,
+                      uint32_t value,
                       ProcessID aProcessType)
 {
   // Check if we are allowed to record the data.
@@ -605,8 +650,21 @@ internal_HistogramAdd(Histogram& histogram,
     return NS_OK;
   }
 
-  // It is safe to add to the histogram now: the subsession histogram was already
-  // cloned from this so we won't add the sample twice.
+  // Don't record if the current platform is not enabled
+  if (!CanRecordProduct(gHistogramInfos[id].products)) {
+    return NS_OK;
+  }
+
+  // The internal representation of a base::Histogram's buckets uses `int`.
+  // Clamp large values of `value` to be INT_MAX so they continue to be treated
+  // as large values (instead of negative ones).
+  if (value > INT_MAX) {
+    TelemetryScalar::Add(
+      mozilla::Telemetry::ScalarID::TELEMETRY_ACCUMULATE_CLAMPED_VALUES,
+      NS_ConvertASCIItoUTF16(gHistogramInfos[id].name()), 1);
+    value = INT_MAX;
+  }
+
   histogram.Add(value);
 
   return NS_OK;
@@ -621,83 +679,186 @@ internal_HistogramAdd(Histogram& histogram,
 
 namespace {
 
-bool
-internal_FillRanges(JSContext *cx, JS::Handle<JSObject*> array, Histogram *h)
+/**
+ * Copy histograms and samples to Mozilla-friendly structures.
+ * Please note that this version does not make use of JS contexts.
+ *
+ * @param {StaticMutexAutoLock} the proof we hold the mutex.
+ * @param {Histogram} the histogram to reflect.
+ * @return {nsresult} NS_ERROR_FAILURE if we fail to allocate memory for the snapshot.
+ */
+nsresult
+internal_GetHistogramAndSamples(const StaticMutexAutoLock& aLock,
+                                const Histogram *h,
+                                HistogramSnapshotData& aSnapshot)
 {
-  JS::Rooted<JS::Value> range(cx);
-  for (size_t i = 0; i < h->bucket_count(); i++) {
-    range.setInt32(h->ranges(i));
-    if (!JS_DefineElement(cx, array, i, range, JSPROP_ENUMERATE))
-      return false;
-  }
-  return true;
-}
+  MOZ_ASSERT(h);
 
-enum reflectStatus
-internal_ReflectHistogramAndSamples(JSContext *cx,
-                                    JS::Handle<JSObject*> obj, Histogram *h,
-                                    const Histogram::SampleSet &ss)
-{
-  if (!(JS_DefineProperty(cx, obj, "min",
-                          h->declared_min(), JSPROP_ENUMERATE)
-        && JS_DefineProperty(cx, obj, "max",
-                             h->declared_max(), JSPROP_ENUMERATE)
-        && JS_DefineProperty(cx, obj, "histogram_type",
-                             h->histogram_type(), JSPROP_ENUMERATE)
-        && JS_DefineProperty(cx, obj, "sum",
-                             double(ss.sum()), JSPROP_ENUMERATE))) {
-    return REFLECT_FAILURE;
-  }
-
-  const size_t count = h->bucket_count();
-  JS::Rooted<JSObject*> rarray(cx, JS_NewArrayObject(cx, count));
-  if (!rarray) {
-    return REFLECT_FAILURE;
-  }
-  if (!(internal_FillRanges(cx, rarray, h)
-        && JS_DefineProperty(cx, obj, "ranges", rarray, JSPROP_ENUMERATE))) {
-    return REFLECT_FAILURE;
-  }
-
-  JS::Rooted<JSObject*> counts_array(cx, JS_NewArrayObject(cx, count));
-  if (!counts_array) {
-    return REFLECT_FAILURE;
-  }
-  if (!JS_DefineProperty(cx, obj, "counts", counts_array, JSPROP_ENUMERATE)) {
-    return REFLECT_FAILURE;
-  }
-  for (size_t i = 0; i < count; i++) {
-    if (!JS_DefineElement(cx, counts_array, i,
-                          ss.counts(i), JSPROP_ENUMERATE)) {
-      return REFLECT_FAILURE;
+  // Convert the ranges of the buckets to a nsTArray.
+  const size_t bucketCount = h->bucket_count();
+  for (size_t i = 0; i < bucketCount; i++) {
+    if (!aSnapshot.mBucketRanges.AppendElement(h->ranges(i))) {
+      return NS_ERROR_FAILURE;
     }
   }
 
-  return REFLECT_OK;
-}
-
-enum reflectStatus
-internal_ReflectHistogramSnapshot(JSContext *cx,
-                                  JS::Handle<JSObject*> obj, Histogram *h)
-{
+  // Get a snapshot of the samples.
   Histogram::SampleSet ss;
   h->SnapshotSample(&ss);
-  return internal_ReflectHistogramAndSamples(cx, obj, h, ss);
+
+  // Get the number of samples in each bucket.
+  for (size_t i = 0; i < bucketCount; i++) {
+    if (!aSnapshot.mBucketCounts.AppendElement(ss.counts(i))) {
+      return NS_ERROR_FAILURE;
+    }
+  }
+
+  // Finally, save the |sum|. We don't need to reflect declared_min, declared_max and
+  // histogram_type as they are in gHistogramInfo.
+  aSnapshot.mSampleSum = ss.sum();
+  return NS_OK;
+}
+
+nsresult
+internal_ReflectHistogramAndSamples(JSContext *cx,
+                                    JS::Handle<JSObject*> obj,
+                                    const HistogramInfo& aHistogramInfo,
+                                    const HistogramSnapshotData& aSnapshot)
+{
+  if (!(JS_DefineProperty(cx, obj, "min",
+                          aHistogramInfo.min, JSPROP_ENUMERATE)
+        && JS_DefineProperty(cx, obj, "max",
+                             aHistogramInfo.max, JSPROP_ENUMERATE)
+        && JS_DefineProperty(cx, obj, "histogram_type",
+                             aHistogramInfo.histogramType, JSPROP_ENUMERATE)
+        && JS_DefineProperty(cx, obj, "sum",
+                             double(aSnapshot.mSampleSum), JSPROP_ENUMERATE))) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // Don't rely on the bucket counts from "aHistogramInfo": it may
+  // differ from the length of aSnapshot.mBucketCounts due to expired
+  // histograms.
+  const size_t count = aSnapshot.mBucketCounts.Length();
+  MOZ_ASSERT(count == aSnapshot.mBucketRanges.Length(),
+             "The number of buckets and the number of counts must match.");
+
+  // Create the "ranges" property and add it to the final object.
+  JS::Rooted<JSObject*> rarray(cx, JS_NewArrayObject(cx, count));
+  if (!rarray
+      || !JS_DefineProperty(cx, obj, "ranges", rarray, JSPROP_ENUMERATE)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // Fill the "ranges" property.
+  for (size_t i = 0; i < count; i++) {
+    if (!JS_DefineElement(cx, rarray, i, aSnapshot.mBucketRanges[i], JSPROP_ENUMERATE)) {
+      return NS_ERROR_FAILURE;
+    }
+  }
+
+  JS::Rooted<JSObject*> counts_array(cx, JS_NewArrayObject(cx, count));
+  if (!counts_array
+      || !JS_DefineProperty(cx, obj, "counts", counts_array, JSPROP_ENUMERATE)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // Fill the "counts" property.
+  for (size_t i = 0; i < count; i++) {
+    if (!JS_DefineElement(cx, counts_array, i, aSnapshot.mBucketCounts[i], JSPROP_ENUMERATE)) {
+      return NS_ERROR_FAILURE;
+    }
+  }
+
+  return NS_OK;
 }
 
 bool
-internal_ShouldReflectHistogram(Histogram* h, HistogramID id)
+internal_ShouldReflectHistogram(const StaticMutexAutoLock& aLock, Histogram* h, HistogramID id)
 {
   // Only flag histograms are serialized when they are empty.
   // This has historical reasons, changing this will require downstream changes.
   // The cheaper path here is to just deprecate flag histograms in favor
   // of scalars.
   uint32_t type = gHistogramInfos[id].histogramType;
-  if (internal_IsEmpty(h) && type != nsITelemetry::HISTOGRAM_FLAG) {
+  if (internal_IsEmpty(aLock, h) && type != nsITelemetry::HISTOGRAM_FLAG) {
+    return false;
+  }
+
+  // Don't reflect the histogram if it's not allowed in this product.
+  if (!CanRecordProduct(gHistogramInfos[id].products)) {
     return false;
   }
 
   return true;
+}
+
+/**
+ * Helper function to get a snapshot of the histograms.
+ *
+ * @param {aLock} the lock proof.
+ * @param {aDataset} the dataset for which the snapshot is being requested.
+ * @param {aClearSubsession} whether or not to clear the data after
+ *        taking the snapshot.
+ * @param {aIncludeGPU} whether or not to include data for the GPU.
+ * @param {aOutSnapshot} the container in which the snapshot data will be stored.
+ * @return {nsresult} NS_OK if the snapshot was successfully taken or
+ *         NS_ERROR_OUT_OF_MEMORY if it failed to allocate memory.
+ */
+nsresult
+internal_GetHistogramsSnapshot(const StaticMutexAutoLock& aLock,
+                               unsigned int aDataset,
+                               bool aClearSubsession,
+                               bool aIncludeGPU,
+                               HistogramProcessSnapshotsArray& aOutSnapshot)
+{
+  if (!aOutSnapshot.resize(static_cast<uint32_t>(ProcessID::Count))) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
+  for (uint32_t process = 0; process < static_cast<uint32_t>(ProcessID::Count); ++process) {
+    HistogramSnapshotsArray& hArray = aOutSnapshot[process];
+
+    for (size_t i = 0; i < HistogramCount; ++i) {
+      const HistogramInfo& info = gHistogramInfos[i];
+      if (info.keyed) {
+        continue;
+      }
+
+      HistogramID id = HistogramID(i);
+
+      if (!CanRecordInProcess(info.record_in_processes, ProcessID(process)) ||
+          ((ProcessID(process) == ProcessID::Gpu) && !aIncludeGPU)) {
+        continue;
+      }
+
+      if (!IsInDataset(info.dataset, aDataset)) {
+        continue;
+      }
+
+      bool shouldInstantiate =
+        info.histogramType == nsITelemetry::HISTOGRAM_FLAG;
+      Histogram* h = internal_GetHistogramById(aLock, id, ProcessID(process),
+                                               shouldInstantiate);
+      if (!h || internal_IsExpired(aLock, h) || !internal_ShouldReflectHistogram(aLock, h, id)) {
+        continue;
+      }
+
+      HistogramSnapshotData snapshotData;
+      if (NS_FAILED(internal_GetHistogramAndSamples(aLock, h, snapshotData))) {
+        continue;
+      }
+
+      if (!hArray.emplaceBack(HistogramSnapshotInfo{snapshotData, id})) {
+        return NS_ERROR_OUT_OF_MEMORY;
+      }
+
+      if (aClearSubsession) {
+        h->Clear();
+      }
+    }
+  }
+  return NS_OK;
 }
 
 } // namespace
@@ -705,15 +866,41 @@ internal_ShouldReflectHistogram(Histogram* h, HistogramID id)
 ////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////
 //
-// PRIVATE: class KeyedHistogram
+// PRIVATE: class KeyedHistogram and internal_ReflectKeyedHistogram
 
 namespace {
 
+nsresult
+internal_ReflectKeyedHistogram(const KeyedHistogramSnapshotData& aSnapshot,
+                               const HistogramInfo& info,
+                               JSContext* aCx, JS::Handle<JSObject*> aObj)
+{
+  for (auto iter = aSnapshot.ConstIter(); !iter.Done(); iter.Next()) {
+    HistogramSnapshotData& keyData = iter.Data();
+
+    JS::RootedObject histogramSnapshot(aCx, JS_NewPlainObject(aCx));
+    if (!histogramSnapshot) {
+      return NS_ERROR_FAILURE;
+    }
+
+    if (NS_FAILED(internal_ReflectHistogramAndSamples(aCx, histogramSnapshot,
+                                                      info,
+                                                      keyData))) {
+      return NS_ERROR_FAILURE;
+    }
+
+    const NS_ConvertUTF8toUTF16 key(iter.Key());
+    if (!JS_DefineUCProperty(aCx, aObj, key.Data(), key.Length(),
+                             histogramSnapshot, JSPROP_ENUMERATE)) {
+      return NS_ERROR_FAILURE;
+    }
+  }
+
+  return NS_OK;
+}
+
 KeyedHistogram::KeyedHistogram(HistogramID id, const HistogramInfo& info)
   : mHistogramMap()
-#if !defined(MOZ_WIDGET_ANDROID)
-  , mSubsessionMap()
-#endif
   , mId(id)
   , mHistogramInfo(info)
 {
@@ -729,29 +916,12 @@ KeyedHistogram::~KeyedHistogram()
     delete h;
   }
   mHistogramMap.Clear();
-
-#if !defined(MOZ_WIDGET_ANDROID)
-  for (auto iter = mSubsessionMap.Iter(); !iter.Done(); iter.Next()) {
-    Histogram* h = iter.Get()->mData;
-    if (h == gExpiredHistogram) {
-      continue;
-    }
-    delete h;
-  }
-  mSubsessionMap.Clear();
-#endif
 }
 
 nsresult
-KeyedHistogram::GetHistogram(const nsCString& key, Histogram** histogram,
-                             bool subsession)
+KeyedHistogram::GetHistogram(const nsCString& key, Histogram** histogram)
 {
-#if !defined(MOZ_WIDGET_ANDROID)
-  KeyedHistogramMapType& map = subsession ? mSubsessionMap : mHistogramMap;
-#else
-  KeyedHistogramMapType& map = mHistogramMap;
-#endif
-  KeyedHistogramEntry* entry = map.GetEntry(key);
+  KeyedHistogramEntry* entry = mHistogramMap.GetEntry(key);
   if (entry) {
     *histogram = entry->mData;
     return NS_OK;
@@ -766,7 +936,7 @@ KeyedHistogram::GetHistogram(const nsCString& key, Histogram** histogram,
   h->ClearFlags(Histogram::kUmaTargetedHistogramFlag);
   *histogram = h;
 
-  entry = map.PutEntry(key);
+  entry = mHistogramMap.PutEntry(key);
   if (MOZ_UNLIKELY(!entry)) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
@@ -776,10 +946,10 @@ KeyedHistogram::GetHistogram(const nsCString& key, Histogram** histogram,
 }
 
 Histogram*
-KeyedHistogram::GetHistogram(const nsCString& key, bool subsession)
+KeyedHistogram::GetHistogram(const nsCString& key)
 {
   Histogram* h = nullptr;
-  if (NS_FAILED(GetHistogram(key, &h, subsession))) {
+  if (NS_FAILED(GetHistogram(key, &h))) {
     return nullptr;
   }
   return h;
@@ -799,46 +969,38 @@ KeyedHistogram::Add(const nsCString& key, uint32_t sample,
     return NS_OK;
   }
 
-  Histogram* histogram = GetHistogram(key, false);
+  // Don't record if the current platform is not enabled
+  if (!CanRecordProduct(gHistogramInfos[mId].products)) {
+    return NS_OK;
+  }
+
+  Histogram* histogram = GetHistogram(key);
   MOZ_ASSERT(histogram);
   if (!histogram) {
     return NS_ERROR_FAILURE;
   }
-#if !defined(MOZ_WIDGET_ANDROID)
-  Histogram* subsession = GetHistogram(key, true);
-  MOZ_ASSERT(subsession);
-  if (!subsession) {
-    return NS_ERROR_FAILURE;
+
+  // The internal representation of a base::Histogram's buckets uses `int`.
+  // Clamp large values of `sample` to be INT_MAX so they continue to be treated
+  // as large values (instead of negative ones).
+  if (sample > INT_MAX) {
+    TelemetryScalar::Add(
+      mozilla::Telemetry::ScalarID::TELEMETRY_ACCUMULATE_CLAMPED_VALUES,
+      NS_ConvertASCIItoUTF16(mHistogramInfo.name()), 1);
+    sample = INT_MAX;
   }
-#endif
 
   histogram->Add(sample);
-#if !defined(MOZ_WIDGET_ANDROID)
-  subsession->Add(sample);
-#endif
   return NS_OK;
 }
 
 void
-KeyedHistogram::Clear(bool onlySubsession)
+KeyedHistogram::Clear()
 {
   MOZ_ASSERT(XRE_IsParentProcess());
   if (!XRE_IsParentProcess()) {
     return;
   }
-#if !defined(MOZ_WIDGET_ANDROID)
-  for (auto iter = mSubsessionMap.Iter(); !iter.Done(); iter.Next()) {
-    Histogram* h = iter.Get()->mData;
-    if (h == gExpiredHistogram) {
-      continue;
-    }
-    delete h;
-  }
-  mSubsessionMap.Clear();
-  if (onlySubsession) {
-    return;
-  }
-#endif
 
   for (auto iter = mHistogramMap.Iter(); !iter.Done(); iter.Next()) {
     Histogram* h = iter.Get()->mData;
@@ -860,8 +1022,7 @@ KeyedHistogram::GetJSKeys(JSContext* cx, JS::CallArgs& args)
 
   for (auto iter = mHistogramMap.Iter(); !iter.Done(); iter.Next()) {
     JS::RootedValue jsKey(cx);
-    const NS_ConvertUTF8toUTF16 key(iter.Get()->GetKey());
-    jsKey.setString(JS_NewUCStringCopyN(cx, key.Data(), key.Length()));
+    jsKey.setString(ToJSString(cx, iter.Get()->GetKey()));
     if (!keys.append(jsKey)) {
       return NS_ERROR_OUT_OF_MEMORY;
     }
@@ -876,48 +1037,118 @@ KeyedHistogram::GetJSKeys(JSContext* cx, JS::CallArgs& args)
   return NS_OK;
 }
 
-bool
-KeyedHistogram::ReflectKeyedHistogram(KeyedHistogramEntry* entry,
-                                      JSContext* cx, JS::Handle<JSObject*> obj)
+nsresult
+KeyedHistogram::GetJSSnapshot(JSContext* cx, JS::Handle<JSObject*> obj, bool clearSubsession)
 {
-  JS::RootedObject histogramSnapshot(cx, JS_NewPlainObject(cx));
-  if (!histogramSnapshot) {
-    return false;
+  // Get a snapshot of the data.
+  KeyedHistogramSnapshotData dataSnapshot;
+  {
+    StaticMutexAutoLock locker(gTelemetryHistogramMutex);
+    MOZ_ASSERT(internal_IsHistogramEnumId(mId));
+
+    // Take a snapshot of the data here, protected by the lock, and then,
+    // outside of the lock protection, mirror it to a JS structure.
+    if (NS_FAILED(GetSnapshot(locker, dataSnapshot, clearSubsession))) {
+      return NS_ERROR_FAILURE;
+    }
   }
 
-  if (internal_ReflectHistogramSnapshot(cx, histogramSnapshot,
-                                        entry->mData) != REFLECT_OK) {
-    return false;
-  }
-
-  const NS_ConvertUTF8toUTF16 key(entry->GetKey());
-  if (!JS_DefineUCProperty(cx, obj, key.Data(), key.Length(),
-                           histogramSnapshot, JSPROP_ENUMERATE)) {
-    return false;
-  }
-
-  return true;
+  // Now that we have a copy of the data, mirror it to JS.
+  return internal_ReflectKeyedHistogram(dataSnapshot, gHistogramInfos[mId], cx, obj);
 }
 
 nsresult
-KeyedHistogram::GetJSSnapshot(JSContext* cx, JS::Handle<JSObject*> obj,
-                              bool subsession, bool clearSubsession)
+KeyedHistogram::GetSnapshot(const StaticMutexAutoLock& aLock,
+                            KeyedHistogramSnapshotData& aSnapshot, bool aClearSubsession)
 {
-#if !defined(MOZ_WIDGET_ANDROID)
-  KeyedHistogramMapType& map = subsession ? mSubsessionMap : mHistogramMap;
-#else
-  KeyedHistogramMapType& map = mHistogramMap;
-#endif
-  if (!map.ReflectIntoJS(&KeyedHistogram::ReflectKeyedHistogram, cx, obj)) {
-    return NS_ERROR_FAILURE;
+  // Snapshot every key.
+  for (auto iter = mHistogramMap.ConstIter(); !iter.Done(); iter.Next()) {
+    Histogram* keyData = iter.Get()->mData;
+    if (!keyData) {
+      return NS_ERROR_FAILURE;
+    }
+
+    HistogramSnapshotData keySnapshot;
+    if (NS_FAILED(internal_GetHistogramAndSamples(aLock, keyData, keySnapshot))) {
+      return NS_ERROR_FAILURE;
+    }
+
+    // Append to the final snapshot.
+    aSnapshot.Put(iter.Get()->GetKey(), std::move(keySnapshot));
   }
 
-#if !defined(MOZ_WIDGET_ANDROID)
-  if (subsession && clearSubsession) {
-    Clear(true);
+  if (aClearSubsession) {
+    Clear();
   }
-#endif
 
+  return NS_OK;
+}
+
+
+/**
+ * Helper function to get a snapshot of the keyed histograms.
+ *
+ * @param {aLock} the lock proof.
+ * @param {aDataset} the dataset for which the snapshot is being requested.
+ * @param {aClearSubsession} whether or not to clear the data after
+ *        taking the snapshot.
+ * @param {aIncludeGPU} whether or not to include data for the GPU.
+ * @param {aOutSnapshot} the container in which the snapshot data will be stored.
+ * @param {aSkipEmpty} whether or not to skip empty keyed histograms from the
+ *        snapshot. Can't always assume "true" for consistency with the other
+ *        callers.
+ * @return {nsresult} NS_OK if the snapshot was successfully taken or
+ *         NS_ERROR_OUT_OF_MEMORY if it failed to allocate memory.
+ */
+nsresult
+internal_GetKeyedHistogramsSnapshot(const StaticMutexAutoLock& aLock,
+                                    unsigned int aDataset,
+                                    bool aClearSubsession,
+                                    bool aIncludeGPU,
+                                    KeyedHistogramProcessSnapshotsArray& aOutSnapshot,
+                                    bool aSkipEmpty = false)
+{
+  if (!aOutSnapshot.resize(static_cast<uint32_t>(ProcessID::Count))) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
+  for (uint32_t process = 0; process < static_cast<uint32_t>(ProcessID::Count); ++process) {
+    KeyedHistogramSnapshotsArray& hArray = aOutSnapshot[process];
+
+    for (size_t i = 0; i < HistogramCount; ++i) {
+      HistogramID id = HistogramID(i);
+      const HistogramInfo& info = gHistogramInfos[id];
+      if (!info.keyed) {
+        continue;
+      }
+
+      if (!CanRecordInProcess(info.record_in_processes, ProcessID(process)) ||
+        ((ProcessID(process) == ProcessID::Gpu) && !aIncludeGPU)) {
+        continue;
+      }
+
+      if (!IsInDataset(info.dataset, aDataset)) {
+        continue;
+      }
+
+      KeyedHistogram* keyed = internal_GetKeyedHistogramById(id,
+                                                             ProcessID(process),
+                                                             /* instantiate = */ false);
+      if (!keyed || (aSkipEmpty && keyed->IsEmpty())) {
+        continue;
+      }
+
+      // Take a snapshot of the keyed histogram data!
+      KeyedHistogramSnapshotData snapshot;
+      if (!NS_SUCCEEDED(keyed->GetSnapshot(aLock, snapshot, aClearSubsession))) {
+        return NS_ERROR_FAILURE;
+      }
+
+      if (!hArray.emplaceBack(KeyedHistogramSnapshotInfo{std::move(snapshot), id})) {
+        return NS_ERROR_OUT_OF_MEMORY;
+      }
+    }
+  }
   return NS_OK;
 }
 
@@ -928,18 +1159,10 @@ KeyedHistogram::GetJSSnapshot(JSContext* cx, JS::Handle<JSObject*> obj,
 //
 // PRIVATE: thread-unsafe helpers for the external interface
 
-// This is a StaticMutex rather than a plain Mutex (1) so that
-// it gets initialised in a thread-safe manner the first time
-// it is used, and (2) because it is never de-initialised, and
-// a normal Mutex would show up as a leak in BloatView.  StaticMutex
-// also has the "OffTheBooks" property, so it won't show as a leak
-// in BloatView.
-static StaticMutex gTelemetryHistogramMutex;
-
 namespace {
 
 bool
-internal_RemoteAccumulate(HistogramID aId, uint32_t aSample)
+internal_RemoteAccumulate(const StaticMutexAutoLock& aLock, HistogramID aId, uint32_t aSample)
 {
   if (XRE_IsParentProcess()) {
     return false;
@@ -954,7 +1177,7 @@ internal_RemoteAccumulate(HistogramID aId, uint32_t aSample)
 }
 
 bool
-internal_RemoteAccumulate(HistogramID aId,
+internal_RemoteAccumulate(const StaticMutexAutoLock& aLock, HistogramID aId,
                           const nsCString& aKey, uint32_t aSample)
 {
   if (XRE_IsParentProcess()) {
@@ -969,30 +1192,24 @@ internal_RemoteAccumulate(HistogramID aId,
   return true;
 }
 
-void internal_Accumulate(HistogramID aId, uint32_t aSample)
+void internal_Accumulate(const StaticMutexAutoLock& aLock, HistogramID aId, uint32_t aSample)
 {
   if (!internal_CanRecordBase() ||
-      internal_RemoteAccumulate(aId, aSample)) {
+      internal_RemoteAccumulate(aLock, aId, aSample)) {
     return;
   }
 
-  Histogram *h = internal_GetHistogramById(aId, ProcessID::Parent, SessionType::Session);
+  Histogram *h = internal_GetHistogramById(aLock, aId, ProcessID::Parent);
   MOZ_ASSERT(h);
-  internal_HistogramAdd(*h, aId, aSample, ProcessID::Parent);
-
-#if !defined(MOZ_WIDGET_ANDROID)
-  h = internal_GetHistogramById(aId, ProcessID::Parent, SessionType::Subsession);
-  MOZ_ASSERT(h);
-  internal_HistogramAdd(*h, aId, aSample, ProcessID::Parent);
-#endif
+  internal_HistogramAdd(aLock, *h, aId, aSample, ProcessID::Parent);
 }
 
 void
-internal_Accumulate(HistogramID aId,
+internal_Accumulate(const StaticMutexAutoLock& aLock, HistogramID aId,
                     const nsCString& aKey, uint32_t aSample)
 {
   if (!gInitDone || !internal_CanRecordBase() ||
-      internal_RemoteAccumulate(aId, aKey, aSample)) {
+      internal_RemoteAccumulate(aLock, aId, aKey, aSample)) {
     return;
   }
 
@@ -1002,30 +1219,25 @@ internal_Accumulate(HistogramID aId,
 }
 
 void
-internal_AccumulateChild(ProcessID aProcessType, HistogramID aId, uint32_t aSample)
+internal_AccumulateChild(const StaticMutexAutoLock& aLock,
+                         ProcessID aProcessType,
+                         HistogramID aId,
+                         uint32_t aSample)
 {
   if (!internal_CanRecordBase()) {
     return;
   }
 
-  if (Histogram* h = internal_GetHistogramById(aId, aProcessType, SessionType::Session)) {
-    internal_HistogramAdd(*h, aId, aSample, aProcessType);
+  if (Histogram* h = internal_GetHistogramById(aLock, aId, aProcessType)) {
+    internal_HistogramAdd(aLock, *h, aId, aSample, aProcessType);
   } else {
     NS_WARNING("Failed GetHistogramById for CHILD");
   }
-
-#if !defined(MOZ_WIDGET_ANDROID)
-  if (Histogram* h = internal_GetHistogramById(aId, aProcessType, SessionType::Subsession)) {
-    internal_HistogramAdd(*h, aId, aSample, aProcessType);
-  } else {
-    NS_WARNING("Failed GetHistogramById for CHILD");
-  }
-#endif
 }
 
 void
-internal_AccumulateChildKeyed(ProcessID aProcessType, HistogramID aId,
-                              const nsCString& aKey, uint32_t aSample)
+internal_AccumulateChildKeyed(const StaticMutexAutoLock& aLock, ProcessID aProcessType,
+                              HistogramID aId, const nsCString& aKey, uint32_t aSample)
 {
   if (!gInitDone || !internal_CanRecordBase()) {
     return;
@@ -1037,7 +1249,7 @@ internal_AccumulateChildKeyed(ProcessID aProcessType, HistogramID aId,
 }
 
 void
-internal_ClearHistogram(HistogramID id, bool onlySubsession)
+internal_ClearHistogram(const StaticMutexAutoLock& aLock, HistogramID id)
 {
   MOZ_ASSERT(XRE_IsParentProcess());
   if (!XRE_IsParentProcess()) {
@@ -1049,28 +1261,14 @@ internal_ClearHistogram(HistogramID id, bool onlySubsession)
     for (uint32_t process = 0; process < static_cast<uint32_t>(ProcessID::Count); ++process) {
       KeyedHistogram* kh = internal_GetKeyedHistogramById(id, static_cast<ProcessID>(process), /* instantiate = */ false);
       if (kh) {
-        kh->Clear(onlySubsession);
+        kh->Clear();
       }
     }
   }
 
-  // Handle plain histograms.
-  // Define the session types we want to clear.
-  nsTArray<SessionType> sessionTypes;
-  if (!onlySubsession) {
-    sessionTypes.AppendElement(SessionType::Session);
-  }
-#if !defined(MOZ_WIDGET_ANDROID)
-  sessionTypes.AppendElement(SessionType::Subsession);
-#endif
-
   // Now reset the histograms instances for all processes.
-  for (SessionType sessionType : sessionTypes) {
-    for (uint32_t process = 0; process < static_cast<uint32_t>(ProcessID::Count); ++process) {
-      internal_ClearHistogramById(id,
-                                  static_cast<ProcessID>(process),
-                                  sessionType);
-    }
+  for (uint32_t process = 0; process < static_cast<uint32_t>(ProcessID::Count); ++process) {
+    internal_ClearHistogramById(aLock, id, static_cast<ProcessID>(process));
   }
 }
 
@@ -1122,75 +1320,157 @@ struct JSHistogramData {
 };
 
 bool
+internal_JSHistogram_CoerceValue(JSContext* aCx, JS::Handle<JS::Value> aElement, HistogramID aId,
+                              uint32_t aHistogramType, uint32_t& aValue)
+{
+  if (aElement.isString()) {
+    // Strings only allowed for categorical histograms
+    if (aHistogramType != nsITelemetry::HISTOGRAM_CATEGORICAL) {
+      LogToBrowserConsole(nsIScriptError::errorFlag,
+          NS_LITERAL_STRING("String argument only allowed for categorical histogram"));
+      return false;
+    }
+
+    // Label is given by the string argument
+    nsAutoJSString label;
+    if (!label.init(aCx, aElement)) {
+      LogToBrowserConsole(nsIScriptError::errorFlag, NS_LITERAL_STRING("Invalid string parameter"));
+      return false;
+    }
+
+    // Get the label id for accumulation
+    nsresult rv = gHistogramInfos[aId].label_id(NS_ConvertUTF16toUTF8(label).get(), &aValue);
+    if (NS_FAILED(rv)) {
+      LogToBrowserConsole(nsIScriptError::errorFlag, NS_LITERAL_STRING("Invalid string label"));
+      return false;
+    }
+  } else if ( !(aElement.isNumber() || aElement.isBoolean()) ) {
+    LogToBrowserConsole(nsIScriptError::errorFlag, NS_LITERAL_STRING("Argument not a number"));
+    return false;
+  } else if ( aElement.isNumber() && aElement.toNumber() > UINT32_MAX ) {
+    // Clamp large numerical arguments to aValue's acceptable values.
+    // JS::ToUint32 will take aElement modulo 2^32 before returning it, which
+    // may result in a smaller final value.
+    aValue = UINT32_MAX;
+#ifdef DEBUG
+    LogToBrowserConsole(nsIScriptError::errorFlag, NS_LITERAL_STRING("Clamped large numeric value"));
+#endif
+  } else if (!JS::ToUint32(aCx, aElement, &aValue)) {
+    LogToBrowserConsole(nsIScriptError::errorFlag, NS_LITERAL_STRING("Failed to convert element to UInt32"));
+    return false;
+  }
+
+  // If we're here then all type checks have passed and aValue contains the coerced integer
+  return true;
+}
+
+bool
+internal_JSHistogram_GetValueArray(JSContext* aCx, JS::CallArgs& args, uint32_t aHistogramType, HistogramID aId,
+                                    bool isKeyed, nsTArray<uint32_t>& aArray)
+{
+  // This function populates aArray with the values extracted from args. Handles keyed and non-keyed histograms,
+  // and single and array of values. Also performs sanity checks on the arguments.
+  // Returns true upon successful population, false otherwise.
+
+  uint32_t firstArgIndex = 0;
+  if (isKeyed) {
+    firstArgIndex = 1;
+  }
+
+  // Special case of no argument (or only key) and count histogram
+  if (args.length() == firstArgIndex) {
+    if (!(aHistogramType == nsITelemetry::HISTOGRAM_COUNT)) {
+      LogToBrowserConsole(nsIScriptError::errorFlag,
+          NS_LITERAL_STRING("Need at least one argument for non count type histogram"));
+      return false;
+    }
+
+    aArray.AppendElement(1);
+    return true;
+  }
+
+  if (args[firstArgIndex].isObject() && !args[firstArgIndex].isString()) {
+    JS::Rooted<JSObject*> arrayObj(aCx, &args[firstArgIndex].toObject());
+
+    bool isArray = false;
+    JS_IsArrayObject(aCx, arrayObj, &isArray);
+
+    if (!isArray) {
+      LogToBrowserConsole(nsIScriptError::errorFlag, NS_LITERAL_STRING("The argument to accumulate can't be a non-array object"));
+      return false;
+    }
+
+    uint32_t arrayLength = 0;
+    if (!JS_GetArrayLength(aCx, arrayObj, &arrayLength)) {
+      LogToBrowserConsole(nsIScriptError::errorFlag, NS_LITERAL_STRING("Failed while trying to get array length"));
+      return false;
+    }
+
+    for (uint32_t arrayIdx = 0; arrayIdx < arrayLength; arrayIdx++) {
+      JS::Rooted<JS::Value> element(aCx);
+
+      if (!JS_GetElement(aCx, arrayObj, arrayIdx, &element)) {
+        nsPrintfCString msg("Failed while trying to get element at index %d", arrayIdx);
+        LogToBrowserConsole(nsIScriptError::errorFlag, NS_ConvertUTF8toUTF16(msg));
+        return false;
+      }
+
+      uint32_t value = 0;
+      if (!internal_JSHistogram_CoerceValue(aCx, element, aId, aHistogramType, value)) {
+        nsPrintfCString msg("Element at index %d failed type checks", arrayIdx);
+        LogToBrowserConsole(nsIScriptError::errorFlag, NS_ConvertUTF8toUTF16(msg));
+        return false;
+      }
+      aArray.AppendElement(value);
+    }
+
+    return true;
+  }
+
+  uint32_t value = 0;
+  if (!internal_JSHistogram_CoerceValue(aCx, args[firstArgIndex], aId, aHistogramType, value)) {
+    return false;
+  }
+  aArray.AppendElement(value);
+  return true;
+}
+
+bool
 internal_JSHistogram_Add(JSContext *cx, unsigned argc, JS::Value *vp)
 {
-  JSObject *obj = JS_THIS_OBJECT(cx, vp);
-  MOZ_ASSERT(obj);
-  if (!obj ||
-      JS_GetClass(obj) != &sJSHistogramClass) {
+  JS::CallArgs args = CallArgsFromVp(argc, vp);
+
+  if (!args.thisv().isObject() ||
+      JS_GetClass(&args.thisv().toObject()) != &sJSHistogramClass) {
     JS_ReportErrorASCII(cx, "Wrong JS class, expected JSHistogram class");
     return false;
   }
 
+  JSObject* obj = &args.thisv().toObject();
   JSHistogramData* data = static_cast<JSHistogramData*>(JS_GetPrivate(obj));
   MOZ_ASSERT(data);
   HistogramID id = data->histogramId;
   MOZ_ASSERT(internal_IsHistogramEnumId(id));
   uint32_t type = gHistogramInfos[id].histogramType;
 
-  JS::CallArgs args = CallArgsFromVp(argc, vp);
+
   // This function should always return |undefined| and never fail but
   // rather report failures using the console.
   args.rval().setUndefined();
 
-  if (!internal_CanRecordBase()) {
+  nsTArray<uint32_t> values;
+  if (!internal_JSHistogram_GetValueArray(cx, args, type, id, false, values)) {
+    // Either GetValueArray or CoerceValue utility function will have printed a meaningful
+    // error message, so we simply return true
     return true;
-  }
-
-  uint32_t value = 0;
-  if ((type == nsITelemetry::HISTOGRAM_COUNT) && (args.length() == 0)) {
-    // If we don't have an argument for the count histogram, assume an increment of 1.
-    // Otherwise, make sure to run some sanity checks on the argument.
-    value = 1;
-  } else if ((args.length() > 0) && args[0].isString() &&
-             gHistogramInfos[id].histogramType == nsITelemetry::HISTOGRAM_CATEGORICAL) {
-    // For categorical histograms we allow passing a string argument that specifies the label.
-    nsAutoJSString label;
-    if (!label.init(cx, args[0])) {
-      LogToBrowserConsole(nsIScriptError::errorFlag, NS_LITERAL_STRING("Invalid string parameter"));
-      return true;
-    }
-
-    // Get label id value.
-    nsresult rv = gHistogramInfos[id].label_id(NS_ConvertUTF16toUTF8(label).get(), &value);
-    if (NS_FAILED(rv)) {
-      LogToBrowserConsole(nsIScriptError::errorFlag,
-                          NS_LITERAL_STRING("Unknown label for categorical histogram"));
-      return true;
-    }
-  } else {
-    // All other accumulations expect one numerical argument.
-    if (!args.length()) {
-      LogToBrowserConsole(nsIScriptError::errorFlag, NS_LITERAL_STRING("Expected one argument"));
-      return true;
-    }
-
-    if (!(args[0].isNumber() || args[0].isBoolean())) {
-      LogToBrowserConsole(nsIScriptError::errorFlag, NS_LITERAL_STRING("Not a number"));
-      return true;
-    }
-
-    if (!JS::ToUint32(cx, args[0], &value)) {
-      LogToBrowserConsole(nsIScriptError::errorFlag, NS_LITERAL_STRING("Failed to convert argument"));
-      return true;
-    }
   }
 
   {
     StaticMutexAutoLock locker(gTelemetryHistogramMutex);
-    internal_Accumulate(id, value);
+    for (uint32_t aValue: values) {
+      internal_Accumulate(locker, id, aValue);
+    }
   }
-
   return true;
 }
 
@@ -1198,75 +1478,76 @@ bool
 internal_JSHistogram_Snapshot(JSContext *cx, unsigned argc, JS::Value *vp)
 {
   JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
-  JSObject *obj = JS_THIS_OBJECT(cx, vp);
-  if (!obj ||
-      JS_GetClass(obj) != &sJSHistogramClass) {
+
+  if (!args.thisv().isObject() ||
+      JS_GetClass(&args.thisv().toObject()) != &sJSHistogramClass) {
     JS_ReportErrorASCII(cx, "Wrong JS class, expected JSHistogram class");
     return false;
   }
 
+  JSObject* obj = &args.thisv().toObject();
   JSHistogramData* data = static_cast<JSHistogramData*>(JS_GetPrivate(obj));
   MOZ_ASSERT(data);
   HistogramID id = data->histogramId;
-  MOZ_ASSERT(internal_IsHistogramEnumId(id));
 
-  // This is not good standard behavior given that we have histogram instances
-  // covering multiple processes and two session types.
-  // However, changing this requires some broader changes to callers.
-  Histogram* h = internal_GetHistogramById(id, ProcessID::Parent, SessionType::Session);
-  MOZ_ASSERT(h);
+  HistogramSnapshotData dataSnapshot;
+  {
+    StaticMutexAutoLock locker(gTelemetryHistogramMutex);
+    MOZ_ASSERT(internal_IsHistogramEnumId(id));
+
+    // This is not good standard behavior given that we have histogram instances
+    // covering multiple processes.
+    // However, changing this requires some broader changes to callers.
+    Histogram* h = internal_GetHistogramById(locker, id, ProcessID::Parent);
+    // Take a snapshot of the data here, protected by the lock, and then,
+    // outside of the lock protection, mirror it to a JS structure
+    if (NS_FAILED(internal_GetHistogramAndSamples(locker, h, dataSnapshot))) {
+      return false;
+    }
+  }
 
   JS::Rooted<JSObject*> snapshot(cx, JS_NewPlainObject(cx));
   if (!snapshot) {
     return false;
   }
 
-  switch (internal_ReflectHistogramSnapshot(cx, snapshot, h)) {
-  case REFLECT_FAILURE:
+  if (NS_FAILED(internal_ReflectHistogramAndSamples(cx,
+                                                    snapshot,
+                                                    gHistogramInfos[id],
+                                                    dataSnapshot))) {
     return false;
-  case REFLECT_OK:
-    args.rval().setObject(*snapshot);
-    return true;
-  default:
-    MOZ_ASSERT_UNREACHABLE("Unhandled reflection status.");
   }
 
+  args.rval().setObject(*snapshot);
   return true;
 }
 
 bool
 internal_JSHistogram_Clear(JSContext *cx, unsigned argc, JS::Value *vp)
 {
-  JSObject *obj = JS_THIS_OBJECT(cx, vp);
-  if (!obj ||
-      JS_GetClass(obj) != &sJSHistogramClass) {
+  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
+
+  if (!args.thisv().isObject() ||
+      JS_GetClass(&args.thisv().toObject()) != &sJSHistogramClass) {
     JS_ReportErrorASCII(cx, "Wrong JS class, expected JSHistogram class");
     return false;
   }
 
+  JSObject* obj = &args.thisv().toObject();
   JSHistogramData* data = static_cast<JSHistogramData*>(JS_GetPrivate(obj));
   MOZ_ASSERT(data);
-  HistogramID id = data->histogramId;
-  MOZ_ASSERT(internal_IsHistogramEnumId(id));
 
-  bool onlySubsession = false;
-  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
   // This function should always return |undefined| and never fail but
   // rather report failures using the console.
   args.rval().setUndefined();
 
-#if !defined(MOZ_WIDGET_ANDROID)
-  if (args.length() >= 1) {
-    if (!args[0].isBoolean()) {
-      JS_ReportErrorASCII(cx, "Not a boolean");
-      return false;
-    }
+  HistogramID id = data->histogramId;
+  {
+    StaticMutexAutoLock locker(gTelemetryHistogramMutex);
 
-    onlySubsession = JS::ToBoolean(args[0]);
+    MOZ_ASSERT(internal_IsHistogramEnumId(id));
+    internal_ClearHistogram(locker, id);
   }
-#endif
-
-  internal_ClearHistogram(id, onlySubsession);
 
   return true;
 }
@@ -1326,8 +1607,6 @@ internal_JSHistogram_finalize(JSFreeOp*, JSObject* obj)
 //   internal_JSKeyedHistogram_Add
 //   internal_JSKeyedHistogram_Keys
 //   internal_JSKeyedHistogram_Snapshot
-//   internal_JSKeyedHistogram_SubsessionSnapshot
-//   internal_JSKeyedHistogram_SnapshotSubsessionAndClear
 //   internal_JSKeyedHistogram_Clear
 //   internal_WrapAndReturnKeyedHistogram
 //
@@ -1357,27 +1636,28 @@ static const JSClass sJSKeyedHistogramClass = {
 bool
 internal_KeyedHistogram_SnapshotImpl(JSContext *cx, unsigned argc,
                                      JS::Value *vp,
-                                     bool subsession, bool clearSubsession)
+                                     bool clearSubsession)
 {
-  JSObject *obj = JS_THIS_OBJECT(cx, vp);
-  if (!obj ||
-      JS_GetClass(obj) != &sJSKeyedHistogramClass) {
+  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
+
+  if (!args.thisv().isObject() ||
+      JS_GetClass(&args.thisv().toObject()) != &sJSKeyedHistogramClass) {
     JS_ReportErrorASCII(cx, "Wrong JS class, expected JSKeyedHistogram class");
     return false;
   }
 
+  JSObject *obj = &args.thisv().toObject();
   JSHistogramData* data = static_cast<JSHistogramData*>(JS_GetPrivate(obj));
   MOZ_ASSERT(data);
   HistogramID id = data->histogramId;
   MOZ_ASSERT(internal_IsHistogramEnumId(id));
 
-  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
   // This function should always return |undefined| and never fail but
   // rather report failures using the console.
   args.rval().setUndefined();
 
   // This is not good standard behavior given that we have histogram instances
-  // covering multiple processes and two session types.
+  // covering multiple processes.
   // However, changing this requires some broader changes to callers.
   KeyedHistogram* keyed = internal_GetKeyedHistogramById(id, ProcessID::Parent, /* instantiate = */ true);
   if (!keyed) {
@@ -1385,6 +1665,7 @@ internal_KeyedHistogram_SnapshotImpl(JSContext *cx, unsigned argc,
     return false;
   }
 
+  // No argument was passed, so snapshot all the keys.
   if (args.length() == 0) {
     JS::RootedObject snapshot(cx, JS_NewPlainObject(cx));
     if (!snapshot) {
@@ -1392,7 +1673,7 @@ internal_KeyedHistogram_SnapshotImpl(JSContext *cx, unsigned argc,
       return false;
     }
 
-    if (!NS_SUCCEEDED(keyed->GetJSSnapshot(cx, snapshot, subsession, clearSubsession))) {
+    if (!NS_SUCCEEDED(keyed->GetJSSnapshot(cx, snapshot, clearSubsession))) {
       JS_ReportErrorASCII(cx, "Failed to reflect keyed histograms");
       return false;
     }
@@ -1401,17 +1682,30 @@ internal_KeyedHistogram_SnapshotImpl(JSContext *cx, unsigned argc,
     return true;
   }
 
+  // One argument was passed. If it's a string, use it as a key
+  // and just snapshot the data for that key.
   nsAutoJSString key;
   if (!args[0].isString() || !key.init(cx, args[0])) {
     JS_ReportErrorASCII(cx, "Not a string");
     return false;
   }
 
-  Histogram* h = nullptr;
-  nsresult rv = keyed->GetHistogram(NS_ConvertUTF16toUTF8(key), &h, subsession);
-  if (NS_FAILED(rv)) {
-    JS_ReportErrorASCII(cx, "Failed to get histogram");
-    return false;
+  HistogramSnapshotData dataSnapshot;
+  {
+    StaticMutexAutoLock locker(gTelemetryHistogramMutex);
+
+    // Get data for the key we're looking for.
+    Histogram* h = nullptr;
+    nsresult rv = keyed->GetHistogram(NS_ConvertUTF16toUTF8(key), &h);
+    if (NS_FAILED(rv)) {
+      return false;
+    }
+
+    // Take a snapshot of the data here, protected by the lock, and then,
+    // outside of the lock protection, mirror it to a JS structure
+    if (NS_FAILED(internal_GetHistogramAndSamples(locker, h, dataSnapshot))) {
+      return false;
+    }
   }
 
   JS::RootedObject snapshot(cx, JS_NewPlainObject(cx));
@@ -1419,36 +1713,35 @@ internal_KeyedHistogram_SnapshotImpl(JSContext *cx, unsigned argc,
     return false;
   }
 
-  switch (internal_ReflectHistogramSnapshot(cx, snapshot, h)) {
-  case REFLECT_FAILURE:
+  if (NS_FAILED(internal_ReflectHistogramAndSamples(cx,
+                                                    snapshot,
+                                                    gHistogramInfos[id],
+                                                    dataSnapshot))) {
     JS_ReportErrorASCII(cx, "Failed to reflect histogram");
     return false;
-  case REFLECT_OK:
-    args.rval().setObject(*snapshot);
-    return true;
-  default:
-    MOZ_CRASH("unhandled reflection status");
   }
 
+  args.rval().setObject(*snapshot);
   return true;
 }
 
 bool
 internal_JSKeyedHistogram_Add(JSContext *cx, unsigned argc, JS::Value *vp)
 {
-  JSObject *obj = JS_THIS_OBJECT(cx, vp);
-  if (!obj ||
-      JS_GetClass(obj) != &sJSKeyedHistogramClass) {
+  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
+
+  if (!args.thisv().isObject() ||
+      JS_GetClass(&args.thisv().toObject()) != &sJSKeyedHistogramClass) {
     JS_ReportErrorASCII(cx, "Wrong JS class, expected JSKeyedHistogram class");
     return false;
   }
 
+  JSObject *obj = &args.thisv().toObject();
   JSHistogramData* data = static_cast<JSHistogramData*>(JS_GetPrivate(obj));
   MOZ_ASSERT(data);
   HistogramID id = data->histogramId;
   MOZ_ASSERT(internal_IsHistogramEnumId(id));
 
-  JS::CallArgs args = CallArgsFromVp(argc, vp);
   // This function should always return |undefined| and never fail but
   // rather report failures using the console.
   args.rval().setUndefined();
@@ -1477,154 +1770,99 @@ internal_JSKeyedHistogram_Add(JSContext *cx, unsigned argc, JS::Value *vp)
 
   const uint32_t type = gHistogramInfos[id].histogramType;
 
-  // If we don't have an argument for the count histogram, assume an increment of 1.
-  // Otherwise, make sure to run some sanity checks on the argument.
-  uint32_t value = 1;
-  if ((type != nsITelemetry::HISTOGRAM_COUNT) || (args.length() == 2)) {
-    if (args.length() < 2) {
-      LogToBrowserConsole(nsIScriptError::errorFlag,
-                          NS_LITERAL_STRING("Expected two arguments for this histogram type"));
-      return true;
-    }
-
-    if (type == nsITelemetry::HISTOGRAM_CATEGORICAL && args[1].isString()) {
-      // For categorical histograms we allow passing a string argument that specifies the label.
-
-      // Get label string.
-      nsAutoJSString label;
-      if (!label.init(cx, args[1])) {
-        LogToBrowserConsole(nsIScriptError::errorFlag, NS_LITERAL_STRING("Invalid string parameter"));
-        return true;
-      }
-
-      // Get label id value.
-      nsresult rv = gHistogramInfos[id].label_id(NS_ConvertUTF16toUTF8(label).get(), &value);
-      if (NS_FAILED(rv)) {
-        LogToBrowserConsole(nsIScriptError::errorFlag,
-                            NS_LITERAL_STRING("Unknown label for categorical histogram"));
-        return true;
-      }
-    } else {
-      // All other accumulations expect one numerical argument.
-      if (!(args[1].isNumber() || args[1].isBoolean())) {
-        LogToBrowserConsole(nsIScriptError::errorFlag, NS_LITERAL_STRING("Not a number"));
-        return true;
-      }
-
-      if (!JS::ToUint32(cx, args[1], &value)) {
-        LogToBrowserConsole(nsIScriptError::errorFlag, NS_LITERAL_STRING("Failed to convert argument"));
-        return true;
-      }
-    }
+  nsTArray<uint32_t> values;
+  if (!internal_JSHistogram_GetValueArray(cx, args, type, id, true, values)) {
+    // Either GetValueArray or CoerceValue utility function will have printed a meaningful
+    // error message so we simple return true
+    return true;
   }
 
-  internal_Accumulate(id, NS_ConvertUTF16toUTF8(key), value);
-
+  {
+    StaticMutexAutoLock locker(gTelemetryHistogramMutex);
+    for (uint32_t aValue: values) {
+      internal_Accumulate(locker, id, NS_ConvertUTF16toUTF8(key), aValue);
+    }
+  }
   return true;
 }
 
 bool
 internal_JSKeyedHistogram_Keys(JSContext *cx, unsigned argc, JS::Value *vp)
 {
-  JSObject *obj = JS_THIS_OBJECT(cx, vp);
-  if (!obj ||
-      JS_GetClass(obj) != &sJSKeyedHistogramClass) {
+  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
+
+  if (!args.thisv().isObject() ||
+      JS_GetClass(&args.thisv().toObject()) != &sJSKeyedHistogramClass) {
     JS_ReportErrorASCII(cx, "Wrong JS class, expected JSKeyedHistogram class");
     return false;
   }
 
+  JSObject *obj = &args.thisv().toObject();
   JSHistogramData* data = static_cast<JSHistogramData*>(JS_GetPrivate(obj));
   MOZ_ASSERT(data);
   HistogramID id = data->histogramId;
-  MOZ_ASSERT(internal_IsHistogramEnumId(id));
 
-  // This is not good standard behavior given that we have histogram instances
-  // covering multiple processes and two session types.
-  // However, changing this requires some broader changes to callers.
-  KeyedHistogram* keyed = internal_GetKeyedHistogramById(id, ProcessID::Parent);
+  KeyedHistogram* keyed = nullptr;
+  {
+    StaticMutexAutoLock locker(gTelemetryHistogramMutex);
+    MOZ_ASSERT(internal_IsHistogramEnumId(id));
+
+    // This is not good standard behavior given that we have histogram instances
+    // covering multiple processes.
+    // However, changing this requires some broader changes to callers.
+    keyed = internal_GetKeyedHistogramById(id, ProcessID::Parent);
+  }
+
   MOZ_ASSERT(keyed);
   if (!keyed) {
     return false;
   }
 
-  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
   return NS_SUCCEEDED(keyed->GetJSKeys(cx, args));
 }
 
 bool
 internal_JSKeyedHistogram_Snapshot(JSContext *cx, unsigned argc, JS::Value *vp)
 {
-  return internal_KeyedHistogram_SnapshotImpl(cx, argc, vp, false, false);
+  return internal_KeyedHistogram_SnapshotImpl(cx, argc, vp, false);
 }
-
-#if !defined(MOZ_WIDGET_ANDROID)
-bool
-internal_JSKeyedHistogram_SubsessionSnapshot(JSContext *cx,
-                                             unsigned argc, JS::Value *vp)
-{
-  return internal_KeyedHistogram_SnapshotImpl(cx, argc, vp, true, false);
-}
-#endif
-
-#if !defined(MOZ_WIDGET_ANDROID)
-bool
-internal_JSKeyedHistogram_SnapshotSubsessionAndClear(JSContext *cx,
-                                                     unsigned argc,
-                                                     JS::Value *vp)
-{
-  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
-  if (args.length() != 0) {
-    JS_ReportErrorASCII(cx, "No key arguments supported for snapshotSubsessionAndClear");
-  }
-
-  return internal_KeyedHistogram_SnapshotImpl(cx, argc, vp, true, true);
-}
-#endif
 
 bool
 internal_JSKeyedHistogram_Clear(JSContext *cx, unsigned argc, JS::Value *vp)
 {
-  JSObject *obj = JS_THIS_OBJECT(cx, vp);
-  if (!obj ||
-      JS_GetClass(obj) != &sJSKeyedHistogramClass) {
+  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
+
+  if (!args.thisv().isObject() ||
+      JS_GetClass(&args.thisv().toObject()) != &sJSKeyedHistogramClass) {
     JS_ReportErrorASCII(cx, "Wrong JS class, expected JSKeyedHistogram class");
     return false;
   }
 
+  JSObject *obj = &args.thisv().toObject();
   JSHistogramData* data = static_cast<JSHistogramData*>(JS_GetPrivate(obj));
   MOZ_ASSERT(data);
   HistogramID id = data->histogramId;
-  MOZ_ASSERT(internal_IsHistogramEnumId(id));
 
-  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
   // This function should always return |undefined| and never fail but
   // rather report failures using the console.
   args.rval().setUndefined();
 
-  // This is not good standard behavior given that we have histogram instances
-  // covering multiple processes and two session types.
-  // However, changing this requires some broader changes to callers.
-  KeyedHistogram* keyed = internal_GetKeyedHistogramById(id, ProcessID::Parent, /* instantiate = */ false);
-  if (!keyed) {
-    return true;
-  }
+  KeyedHistogram* keyed = nullptr;
+  {
+    MOZ_ASSERT(internal_IsHistogramEnumId(id));
+    StaticMutexAutoLock locker(gTelemetryHistogramMutex);
 
-#if !defined(MOZ_WIDGET_ANDROID)
-  bool onlySubsession = false;
+    // This is not good standard behavior given that we have histogram instances
+    // covering multiple processes.
+    // However, changing this requires some broader changes to callers.
+    keyed = internal_GetKeyedHistogramById(id, ProcessID::Parent, /* instantiate = */ false);
 
-  if (args.length() >= 1) {
-    if (!(args[0].isNumber() || args[0].isBoolean())) {
-      JS_ReportErrorASCII(cx, "Not a boolean");
-      return false;
+    if (!keyed) {
+      return true;
     }
 
-    onlySubsession = JS::ToBoolean(args[0]);
+    keyed->Clear();
   }
-
-  keyed->Clear(onlySubsession);
-#else
-  keyed->Clear(false);
-#endif
 
   return true;
 }
@@ -1643,12 +1881,6 @@ internal_WrapAndReturnKeyedHistogram(HistogramID id, JSContext *cx,
   if (!(JS_DefineFunction(cx, obj, "add", internal_JSKeyedHistogram_Add, 2, 0)
         && JS_DefineFunction(cx, obj, "snapshot",
                              internal_JSKeyedHistogram_Snapshot, 1, 0)
-#if !defined(MOZ_WIDGET_ANDROID)
-        && JS_DefineFunction(cx, obj, "subsessionSnapshot",
-                             internal_JSKeyedHistogram_SubsessionSnapshot, 1, 0)
-        && JS_DefineFunction(cx, obj, "snapshotSubsessionAndClear",
-                             internal_JSKeyedHistogram_SnapshotSubsessionAndClear, 0, 0)
-#endif
         && JS_DefineFunction(cx, obj, "keys",
                              internal_JSKeyedHistogram_Keys, 0, 0)
         && JS_DefineFunction(cx, obj, "clear",
@@ -1705,7 +1937,7 @@ void TelemetryHistogram::InitializeGlobalState(bool canRecordBase,
 
   if (XRE_IsParentProcess()) {
     gHistogramStorage =
-      new Histogram*[HistogramCount * size_t(ProcessID::Count) * size_t(SessionType::Count)] {};
+      new Histogram*[HistogramCount * size_t(ProcessID::Count)] {};
     gKeyedHistogramStorage =
       new KeyedHistogram*[HistogramCount * size_t(ProcessID::Count)] {};
   }
@@ -1714,9 +1946,19 @@ void TelemetryHistogram::InitializeGlobalState(bool canRecordBase,
   // declaration point further up in this file.
 
   // Populate the static histogram name->id cache.
-  // Note that the histogram names are statically allocated.
+  // Note that the histogram names come from a static table so we can wrap them
+  // in a literal string to avoid allocations when it gets copied.
   for (uint32_t i = 0; i < HistogramCount; i++) {
-    gNameToHistogramIDMap.Put(nsDependentCString(gHistogramInfos[i].name()), HistogramID(i));
+    auto name = gHistogramInfos[i].name();
+
+    // Make sure the name pointer is in a valid region. See bug 1428612.
+    MOZ_DIAGNOSTIC_ASSERT(name >= gHistogramStringTable);
+    MOZ_DIAGNOSTIC_ASSERT(
+        uintptr_t(name) < (uintptr_t(gHistogramStringTable) + sizeof(gHistogramStringTable)));
+
+    nsCString wrappedName;
+    wrappedName.AssignLiteral(name, strlen(name));
+    gNameToHistogramIDMap.Put(wrappedName, HistogramID(i));
   }
 
 #ifdef DEBUG
@@ -1757,7 +1999,7 @@ void TelemetryHistogram::DeInitializeGlobalState()
 
   // FactoryGet `new`s Histograms for us, but requires us to manually delete.
   if (XRE_IsParentProcess()) {
-    for (size_t i = 0; i < HistogramCount * size_t(ProcessID::Count) * size_t(SessionType::Count); ++i) {
+    for (size_t i = 0; i < HistogramCount * size_t(ProcessID::Count); ++i) {
       if (i < HistogramCount * size_t(ProcessID::Count)) {
         delete gKeyedHistogramStorage[i];
       }
@@ -1812,13 +2054,14 @@ TelemetryHistogram::InitHistogramRecordingEnabled()
   for (size_t i = 0; i < HistogramCount; ++i) {
     const HistogramInfo& h = gHistogramInfos[i];
     mozilla::Telemetry::HistogramID id = mozilla::Telemetry::HistogramID(i);
-    internal_SetHistogramRecordingEnabled(id,
-                                          CanRecordInProcess(h.record_in_processes,
-                                                             processType));
+    bool canRecordInProcess = CanRecordInProcess(h.record_in_processes, processType);
+    bool canRecordProduct = CanRecordProduct(h.products);
+    internal_SetHistogramRecordingEnabled(locker, id, canRecordInProcess && canRecordProduct);
   }
 
   for (auto recordingInitiallyDisabledID : kRecordingInitiallyDisabledIDs) {
-    internal_SetHistogramRecordingEnabled(recordingInitiallyDisabledID,
+    internal_SetHistogramRecordingEnabled(locker,
+                                          recordingInitiallyDisabledID,
                                           false);
   }
 }
@@ -1838,8 +2081,13 @@ TelemetryHistogram::SetHistogramRecordingEnabled(HistogramID aID,
     return;
   }
 
+  if (!CanRecordProduct(h.products)) {
+    // Don't permit products-disabled recording to be re-enabled.
+    return;
+  }
+
   StaticMutexAutoLock locker(gTelemetryHistogramMutex);
-  internal_SetHistogramRecordingEnabled(aID, aEnabled);
+  internal_SetHistogramRecordingEnabled(locker, aID, aEnabled);
 }
 
 
@@ -1849,13 +2097,13 @@ TelemetryHistogram::SetHistogramRecordingEnabled(const nsACString& name,
 {
   StaticMutexAutoLock locker(gTelemetryHistogramMutex);
   HistogramID id;
-  if (NS_FAILED(internal_GetHistogramIdByName(name, &id))) {
+  if (NS_FAILED(internal_GetHistogramIdByName(locker, name, &id))) {
     return NS_ERROR_FAILURE;
   }
 
   const HistogramInfo& hi = gHistogramInfos[id];
   if (CanRecordInProcess(hi.record_in_processes, XRE_GetProcessType())) {
-    internal_SetHistogramRecordingEnabled(id, aEnabled);
+    internal_SetHistogramRecordingEnabled(locker, id, aEnabled);
   }
   return NS_OK;
 }
@@ -1871,7 +2119,23 @@ TelemetryHistogram::Accumulate(HistogramID aID,
   }
 
   StaticMutexAutoLock locker(gTelemetryHistogramMutex);
-  internal_Accumulate(aID, aSample);
+  internal_Accumulate(locker, aID, aSample);
+}
+
+void
+TelemetryHistogram::Accumulate(HistogramID aID, const nsTArray<uint32_t>& aSamples)
+{
+  if (NS_WARN_IF(!internal_IsHistogramEnumId(aID))) {
+    MOZ_ASSERT_UNREACHABLE("Histogram usage requires valid ids.");
+    return;
+  }
+
+  MOZ_ASSERT(!gHistogramInfos[aID].keyed, "Cannot accumulate into a keyed histogram. No key given.");
+
+  StaticMutexAutoLock locker(gTelemetryHistogramMutex);
+  for(uint32_t sample: aSamples){
+    internal_Accumulate(locker, aID, sample);
+  }
 }
 
 void
@@ -1896,7 +2160,37 @@ TelemetryHistogram::Accumulate(HistogramID aID,
   }
 
   StaticMutexAutoLock locker(gTelemetryHistogramMutex);
-  internal_Accumulate(aID, aKey, aSample);
+  internal_Accumulate(locker, aID, aKey, aSample);
+}
+
+void
+TelemetryHistogram::Accumulate(HistogramID aID, const nsCString& aKey,
+                              const nsTArray<uint32_t>& aSamples)
+{
+  if (NS_WARN_IF(!internal_IsHistogramEnumId(aID))) {
+    MOZ_ASSERT_UNREACHABLE("Histogram usage requires valid ids");
+    return;
+  }
+
+  // Check that this histogram is keyed
+  MOZ_ASSERT(gHistogramInfos[aID].keyed, "Cannot accumulate into a non-keyed histogram using a key.");
+
+  // Check if we're allowed to record in the provided key, for this histogram.
+  if (!gHistogramInfos[aID].allows_key(aKey)) {
+    nsPrintfCString msg("%s - key '%s' not allowed for this keyed histogram",
+                        gHistogramInfos[aID].name(),
+                        aKey.get());
+    LogToBrowserConsole(nsIScriptError::errorFlag, NS_ConvertUTF8toUTF16(msg));
+    TelemetryScalar::Add(
+      mozilla::Telemetry::ScalarID::TELEMETRY_ACCUMULATE_UNKNOWN_HISTOGRAM_KEYS,
+      NS_ConvertASCIItoUTF16(gHistogramInfos[aID].name()), 1);
+    return;
+  }
+
+  StaticMutexAutoLock locker(gTelemetryHistogramMutex);
+  for(uint32_t sample: aSamples){
+    internal_Accumulate(locker, aID, aKey, sample);
+  }
 }
 
 void
@@ -1907,11 +2201,11 @@ TelemetryHistogram::Accumulate(const char* name, uint32_t sample)
     return;
   }
   HistogramID id;
-  nsresult rv = internal_GetHistogramIdByName(nsDependentCString(name), &id);
+  nsresult rv = internal_GetHistogramIdByName(locker, nsDependentCString(name), &id);
   if (NS_FAILED(rv)) {
     return;
   }
-  internal_Accumulate(id, sample);
+  internal_Accumulate(locker, id, sample);
 }
 
 void
@@ -1926,11 +2220,11 @@ TelemetryHistogram::Accumulate(const char* name,
       return;
     }
     HistogramID id;
-    nsresult rv = internal_GetHistogramIdByName(nsDependentCString(name), &id);
+    nsresult rv = internal_GetHistogramIdByName(locker, nsDependentCString(name), &id);
     if (NS_SUCCEEDED(rv)) {
       // Check if we're allowed to record in the provided key, for this histogram.
       if (gHistogramInfos[id].allows_key(key)) {
-        internal_Accumulate(id, key, sample);
+        internal_Accumulate(locker, id, key, sample);
         return;
       }
       // We're holding |gTelemetryHistogramMutex|, so we can't print a message
@@ -1965,7 +2259,40 @@ TelemetryHistogram::AccumulateCategorical(HistogramID aId,
   if (NS_FAILED(gHistogramInfos[aId].label_id(label.get(), &labelId))) {
     return;
   }
-  internal_Accumulate(aId, labelId);
+  internal_Accumulate(locker, aId, labelId);
+}
+
+void
+TelemetryHistogram::AccumulateCategorical(HistogramID aId, const nsTArray<nsCString>& aLabels)
+{
+  if (NS_WARN_IF(!internal_IsHistogramEnumId(aId))) {
+    MOZ_ASSERT_UNREACHABLE("Histogram usage requires valid ids.");
+    return;
+  }
+
+  if (!internal_CanRecordBase()) {
+    return;
+  }
+
+  // We use two loops, one for getting label_ids and another one for actually accumulating
+  // the values. This ensures that in the case of an invalid label in the array, no values
+  // are accumulated. In any call to this API, either all or (in case of error) none of the
+  // values will be accumulated.
+
+  nsTArray<uint32_t> intSamples(aLabels.Length());
+  for (const nsCString& label: aLabels){
+    uint32_t labelId = 0;
+    if (NS_FAILED(gHistogramInfos[aId].label_id(label.get(), &labelId))) {
+      return;
+    }
+    intSamples.AppendElement(labelId);
+  }
+
+  StaticMutexAutoLock locker(gTelemetryHistogramMutex);
+
+  for (uint32_t sample: intSamples){
+    internal_Accumulate(locker, aId, sample);
+  }
 }
 
 void
@@ -1983,7 +2310,10 @@ TelemetryHistogram::AccumulateChild(ProcessID aProcessType,
       MOZ_ASSERT_UNREACHABLE("Histogram usage requires valid ids.");
       continue;
     }
-    internal_AccumulateChild(aProcessType, aAccumulations[i].mId, aAccumulations[i].mSample);
+    internal_AccumulateChild(locker,
+                             aProcessType,
+                             aAccumulations[i].mId,
+                             aAccumulations[i].mSample);
   }
 }
 
@@ -2001,7 +2331,8 @@ TelemetryHistogram::AccumulateChildKeyed(ProcessID aProcessType,
       MOZ_ASSERT_UNREACHABLE("Histogram usage requires valid ids.");
       continue;
     }
-    internal_AccumulateChildKeyed(aProcessType,
+    internal_AccumulateChildKeyed(locker,
+                                  aProcessType,
                                   aAccumulations[i].mId,
                                   aAccumulations[i].mKey,
                                   aAccumulations[i].mSample);
@@ -2015,7 +2346,7 @@ TelemetryHistogram::GetHistogramById(const nsACString &name, JSContext *cx,
   HistogramID id;
   {
     StaticMutexAutoLock locker(gTelemetryHistogramMutex);
-    nsresult rv = internal_GetHistogramIdByName(name, &id);
+    nsresult rv = internal_GetHistogramIdByName(locker, name, &id);
     if (NS_FAILED(rv)) {
       return NS_ERROR_FAILURE;
     }
@@ -2036,7 +2367,7 @@ TelemetryHistogram::GetKeyedHistogramById(const nsACString &name,
   HistogramID id;
   {
     StaticMutexAutoLock locker(gTelemetryHistogramMutex);
-    nsresult rv = internal_GetHistogramIdByName(name, &id);
+    nsresult rv = internal_GetHistogramIdByName(locker, name, &id);
     if (NS_FAILED(rv)) {
       return NS_ERROR_FAILURE;
     }
@@ -2066,15 +2397,8 @@ nsresult
 TelemetryHistogram::CreateHistogramSnapshots(JSContext* aCx,
                                              JS::MutableHandleValue aResult,
                                              unsigned int aDataset,
-                                             bool aSubsession,
                                              bool aClearSubsession)
 {
-#if defined(MOZ_WIDGET_ANDROID)
-  if (aSubsession) {
-    return NS_OK;
-  }
-#endif
-
   // Runs without protection from |gTelemetryHistogramMutex|
   JS::Rooted<JSObject*> root_obj(aCx, JS_NewPlainObject(aCx));
   if (!root_obj) {
@@ -2084,14 +2408,23 @@ TelemetryHistogram::CreateHistogramSnapshots(JSContext* aCx,
 
   // Include the GPU process in histogram snapshots only if we actually tried
   // to launch a process for it.
-  bool includeGPUProcess = false;
-  if (auto gpm = mozilla::gfx::GPUProcessManager::Get()) {
-    includeGPUProcess = gpm->AttemptedGPUProcess();
+  bool includeGPUProcess = internal_AttemptedGPUProcess();
+
+  HistogramProcessSnapshotsArray processHistArray;
+  {
+    StaticMutexAutoLock locker(gTelemetryHistogramMutex);
+    nsresult rv = internal_GetHistogramsSnapshot(locker,
+                                                 aDataset,
+                                                 aClearSubsession,
+                                                 includeGPUProcess,
+                                                 processHistArray);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
   }
 
-  SessionType sessionType = SessionType(aSubsession);
-
-  for (uint32_t process = 0; process < static_cast<uint32_t>(ProcessID::Count); ++process) {
+  // Make the JS calls on the stashed histograms for every process
+  for (uint32_t process = 0; process < processHistArray.length(); ++process) {
     JS::Rooted<JSObject*> processObject(aCx, JS_NewPlainObject(aCx));
     if (!processObject) {
       return NS_ERROR_FAILURE;
@@ -2101,51 +2434,26 @@ TelemetryHistogram::CreateHistogramSnapshots(JSContext* aCx,
                            processObject, JSPROP_ENUMERATE)) {
       return NS_ERROR_FAILURE;
     }
-    for (size_t i = 0; i < HistogramCount; ++i) {
-      const HistogramInfo& info = gHistogramInfos[i];
-      if (info.keyed) {
-        continue;
-      }
 
-      HistogramID id = HistogramID(i);
-
-      if (!CanRecordInProcess(info.record_in_processes, ProcessID(process)) ||
-        ((ProcessID(process) == ProcessID::Gpu) && !includeGPUProcess)) {
-        continue;
-      }
-
-      if (!IsInDataset(info.dataset, aDataset)) {
-        continue;
-      }
-
-      bool shouldInstantiate =
-        info.histogramType == nsITelemetry::HISTOGRAM_FLAG;
-      Histogram* h = internal_GetHistogramById(id, ProcessID(process),
-                                               sessionType,
-                                               shouldInstantiate);
-      if (!h || internal_IsExpired(h) || !internal_ShouldReflectHistogram(h, id)) {
-        continue;
-      }
+    for (const HistogramSnapshotInfo& hData : processHistArray[process]) {
+      HistogramID id = hData.histogramID;
 
       JS::Rooted<JSObject*> hobj(aCx, JS_NewPlainObject(aCx));
       if (!hobj) {
         return NS_ERROR_FAILURE;
       }
-      switch (internal_ReflectHistogramSnapshot(aCx, hobj, h)) {
-      case REFLECT_FAILURE:
+
+      if (NS_FAILED(internal_ReflectHistogramAndSamples(aCx,
+                                                        hobj,
+                                                        gHistogramInfos[id],
+                                                        hData.data))) {
         return NS_ERROR_FAILURE;
-      case REFLECT_OK:
-        if (!JS_DefineProperty(aCx, processObject, gHistogramInfos[id].name(),
-                               hobj, JSPROP_ENUMERATE)) {
-          return NS_ERROR_FAILURE;
-        }
       }
 
-#if !defined(MOZ_WIDGET_ANDROID)
-      if ((sessionType == SessionType::Subsession) && aClearSubsession) {
-        h->Clear();
+      if (!JS_DefineProperty(aCx, processObject, gHistogramInfos[id].name(),
+                             hobj, JSPROP_ENUMERATE)) {
+          return NS_ERROR_FAILURE;
       }
-#endif
     }
   }
   return NS_OK;
@@ -2155,14 +2463,8 @@ nsresult
 TelemetryHistogram::GetKeyedHistogramSnapshots(JSContext* aCx,
                                                JS::MutableHandleValue aResult,
                                                unsigned int aDataset,
-                                               bool aSubsession,
                                                bool aClearSubsession)
 {
-#if defined(MOZ_WIDGET_ANDROID)
-  if (aSubsession) {
-    return NS_OK;
-  }
-#endif
   // Runs without protection from |gTelemetryHistogramMutex|
   JS::Rooted<JSObject*> obj(aCx, JS_NewPlainObject(aCx));
   if (!obj) {
@@ -2172,12 +2474,24 @@ TelemetryHistogram::GetKeyedHistogramSnapshots(JSContext* aCx,
 
   // Include the GPU process in histogram snapshots only if we actually tried
   // to launch a process for it.
-  bool includeGPUProcess = false;
-  if (auto gpm = mozilla::gfx::GPUProcessManager::Get()) {
-    includeGPUProcess = gpm->AttemptedGPUProcess();
+  bool includeGPUProcess = internal_AttemptedGPUProcess();
+
+  // Get a snapshot of all the data while holding the mutex.
+  KeyedHistogramProcessSnapshotsArray processHistArray;
+  {
+    StaticMutexAutoLock locker(gTelemetryHistogramMutex);
+    nsresult rv = internal_GetKeyedHistogramsSnapshot(locker,
+                                                      aDataset,
+                                                      aClearSubsession,
+                                                      includeGPUProcess,
+                                                      processHistArray);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
   }
 
-  for (uint32_t process = 0; process < static_cast<uint32_t>(ProcessID::Count); ++process) {
+  // Mirror the snapshot data to JS, now that we released the mutex.
+  for (uint32_t process = 0; process < processHistArray.length(); ++process) {
     JS::Rooted<JSObject*> processObject(aCx, JS_NewPlainObject(aCx));
     if (!processObject) {
       return NS_ERROR_FAILURE;
@@ -2186,39 +2500,20 @@ TelemetryHistogram::GetKeyedHistogramSnapshots(JSContext* aCx,
                            processObject, JSPROP_ENUMERATE)) {
       return NS_ERROR_FAILURE;
     }
-    for (size_t id = 0; id < HistogramCount; ++id) {
-      const HistogramInfo& info = gHistogramInfos[id];
-      if (!info.keyed) {
-        continue;
-      }
 
-      if (!CanRecordInProcess(info.record_in_processes, ProcessID(process)) ||
-        ((ProcessID(process) == ProcessID::Gpu) && !includeGPUProcess)) {
-        continue;
-      }
-
-      if (!IsInDataset(info.dataset, aDataset)) {
-        continue;
-      }
-
-      KeyedHistogram* keyed = internal_GetKeyedHistogramById(HistogramID(id),
-                                                             ProcessID(process),
-                                                             /* instantiate = */ false);
-      if (!keyed) {
-        continue;
-      }
+    for (const KeyedHistogramSnapshotInfo& hData : processHistArray[process]) {
+      const HistogramInfo& info = gHistogramInfos[hData.histogramId];
 
       JS::RootedObject snapshot(aCx, JS_NewPlainObject(aCx));
       if (!snapshot) {
         return NS_ERROR_FAILURE;
       }
 
-      if (!NS_SUCCEEDED(keyed->GetJSSnapshot(aCx, snapshot, aSubsession,
-                                             aClearSubsession))) {
+      if (!NS_SUCCEEDED(internal_ReflectKeyedHistogram(hData.data, info, aCx, snapshot))) {
         return NS_ERROR_FAILURE;
       }
 
-      if (!JS_DefineProperty(aCx, processObject, gHistogramInfos[id].name(),
+      if (!JS_DefineProperty(aCx, processObject, info.name(),
                              snapshot, JSPROP_ENUMERATE)) {
         return NS_ERROR_FAILURE;
       }
@@ -2232,8 +2527,7 @@ TelemetryHistogram::GetMapShallowSizesOfExcludingThis(mozilla::MallocSizeOf
                                                       aMallocSizeOf)
 {
   StaticMutexAutoLock locker(gTelemetryHistogramMutex);
-  // TODO
-  return 0;
+  return gNameToHistogramIDMap.ShallowSizeOfExcludingThis(aMallocSizeOf);
 }
 
 size_t
@@ -2243,4 +2537,622 @@ TelemetryHistogram::GetHistogramSizesofIncludingThis(mozilla::MallocSizeOf
   StaticMutexAutoLock locker(gTelemetryHistogramMutex);
   // TODO
   return 0;
+}
+
+////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////
+//
+// PRIVATE: GeckoView specific helpers
+
+namespace base {
+class PersistedSampleSet : public Histogram::SampleSet
+{
+public:
+  explicit PersistedSampleSet(const nsTArray<Histogram::Count>& aCounts,
+                              int64_t aSampleSum);
+};
+
+PersistedSampleSet::PersistedSampleSet(const nsTArray<Histogram::Count>& aCounts,
+                                       int64_t aSampleSum)
+{
+  // Initialize the data in the base class. See Histogram::SampleSet
+  // for the fields documentation.
+  const size_t numCounts = aCounts.Length();
+  counts_.SetLength(numCounts);
+
+  for (size_t i = 0; i < numCounts; i++) {
+    counts_[i] = aCounts[i];
+    redundant_count_ += aCounts[i];
+  }
+  sum_ = aSampleSum;
+};
+} // base (from ipc/chromium/src/base)
+
+namespace {
+/**
+ * Helper function to write histogram properties to JSON.
+ * Please note that this needs to be called between
+ * StartObjectProperty/EndObject calls that mark the histogram's
+ * JSON creation.
+ */
+void
+internal_ReflectHistogramToJSON(const HistogramSnapshotData& aSnapshot,
+                                mozilla::JSONWriter& aWriter)
+{
+  aWriter.IntProperty("sum", aSnapshot.mSampleSum);
+
+  // Fill the "counts" property.
+  aWriter.StartArrayProperty("counts");
+  for (size_t i = 0; i < aSnapshot.mBucketCounts.Length(); i++) {
+    aWriter.IntElement(aSnapshot.mBucketCounts[i]);
+  }
+  aWriter.EndArray();
+}
+
+bool
+internal_CanRecordHistogram(const HistogramID id,
+                            ProcessID aProcessType)
+{
+  // Check if we are allowed to record the data.
+  if (!CanRecordDataset(gHistogramInfos[id].dataset,
+                        internal_CanRecordBase(),
+                        internal_CanRecordExtended())) {
+    return false;
+  }
+
+  // Check if we're allowed to record in the given process.
+  if (aProcessType == ProcessID::Parent && !internal_IsRecordingEnabled(id)) {
+    return false;
+  }
+
+  if (aProcessType != ProcessID::Parent
+      && !CanRecordInProcess(gHistogramInfos[id].record_in_processes, aProcessType)) {
+    return false;
+  }
+
+  // Don't record if the current platform is not enabled
+  if (!CanRecordProduct(gHistogramInfos[id].products)) {
+    return false;
+  }
+
+  return true;
+}
+
+nsresult
+internal_ParseHistogramData(JSContext* aCx, JS::HandleId aEntryId,
+                            JS::HandleObject aContainerObj, nsACString& aOutName,
+                            nsTArray<Histogram::Count>& aOutCountArray, int64_t& aOutSum)
+{
+  // Get the histogram name.
+  nsAutoJSString histogramName;
+  if (!histogramName.init(aCx, aEntryId)) {
+    JS_ClearPendingException(aCx);
+    return NS_ERROR_FAILURE;
+  }
+
+  aOutName = NS_ConvertUTF16toUTF8(histogramName);
+
+  // Get the data for this histogram.
+  JS::RootedValue histogramData(aCx);
+  if (!JS_GetPropertyById(aCx, aContainerObj, aEntryId, &histogramData)) {
+    JS_ClearPendingException(aCx);
+    return NS_ERROR_FAILURE;
+  }
+
+  if (!histogramData.isObject()) {
+    // Histogram data need to be an object. If that's not the case, skip it
+    // and try to load the rest of the data.
+    return NS_ERROR_FAILURE;
+  }
+
+  // Get the "sum" property.
+  JS::RootedValue sumValue(aCx);
+  JS::RootedObject histogramObj(aCx, &histogramData.toObject());
+  if (!JS_GetProperty(aCx, histogramObj, "sum", &sumValue)) {
+    JS_ClearPendingException(aCx);
+    return NS_ERROR_FAILURE;
+  }
+
+  if (!JS::ToInt64(aCx, sumValue, &aOutSum)) {
+    JS_ClearPendingException(aCx);
+    return NS_ERROR_FAILURE;
+  }
+
+  // Get the "counts" array.
+  JS::RootedValue countsArray(aCx);
+  bool countsIsArray = false;
+  if (!JS_GetProperty(aCx, histogramObj, "counts", &countsArray)
+      || !JS_IsArrayObject(aCx, countsArray, &countsIsArray)) {
+    JS_ClearPendingException(aCx);
+    return NS_ERROR_FAILURE;
+  }
+
+  if (!countsIsArray) {
+    // The "counts" property needs to be an array. If this is not the case,
+    // skip this histogram.
+    return NS_ERROR_FAILURE;
+  }
+
+  // Get the length of the array.
+  uint32_t countsLen = 0;
+  JS::RootedObject countsArrayObj(aCx, &countsArray.toObject());
+  if (!JS_GetArrayLength(aCx, countsArrayObj, &countsLen)) {
+    JS_ClearPendingException(aCx);
+    return NS_ERROR_FAILURE;
+  }
+
+  // Parse the "counts" in the array.
+  for (uint32_t arrayIdx = 0; arrayIdx < countsLen; arrayIdx++) {
+    JS::RootedValue elementValue(aCx);
+    int countAsInt = 0;
+    if (!JS_GetElement(aCx, countsArrayObj, arrayIdx, &elementValue)
+        || !JS::ToInt32(aCx, elementValue, &countAsInt)) {
+      JS_ClearPendingException(aCx);
+      return NS_ERROR_FAILURE;
+    }
+    aOutCountArray.AppendElement(countAsInt);
+  }
+
+  return NS_OK;
+}
+
+} // Anonymous namespace
+
+////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////
+//
+// PUBLIC: GeckoView serialization/deserialization functions.
+
+nsresult
+TelemetryHistogram::SerializeHistograms(mozilla::JSONWriter& aWriter)
+{
+  MOZ_ASSERT(XRE_IsParentProcess(), "Only save histograms in the parent process");
+  if (!XRE_IsParentProcess()) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // Include the GPU process in histogram snapshots only if we actually tried
+  // to launch a process for it.
+  bool includeGPUProcess = internal_AttemptedGPUProcess();
+
+  // Take a snapshot of the histograms.
+  HistogramProcessSnapshotsArray processHistArray;
+  {
+    StaticMutexAutoLock locker(gTelemetryHistogramMutex);
+    // We always request the "opt-in"/"prerelease" dataset: we internally
+    // record the right subset, so this will only return "prerelease" if
+    // it was recorded.
+    if (NS_FAILED(internal_GetHistogramsSnapshot(locker,
+                                                 nsITelemetry::DATASET_RELEASE_CHANNEL_OPTIN,
+                                                 false /* aClearSubsession */,
+                                                 includeGPUProcess,
+                                                 processHistArray))) {
+      return NS_ERROR_FAILURE;
+    }
+  }
+
+
+
+  // Make the JSON calls on the stashed histograms for every process
+  for (uint32_t process = 0; process < processHistArray.length(); ++process) {
+    aWriter.StartObjectProperty(GetNameForProcessID(ProcessID(process)));
+
+    for (const HistogramSnapshotInfo& hData : processHistArray[process]) {
+      HistogramID id = hData.histogramID;
+
+      aWriter.StartObjectProperty(gHistogramInfos[id].name());
+      internal_ReflectHistogramToJSON(hData.data, aWriter);
+      aWriter.EndObject();
+    }
+    aWriter.EndObject();
+  }
+
+  return NS_OK;
+}
+
+nsresult
+TelemetryHistogram::SerializeKeyedHistograms(mozilla::JSONWriter& aWriter)
+{
+  MOZ_ASSERT(XRE_IsParentProcess(), "Only save keyed histograms in the parent process");
+  if (!XRE_IsParentProcess()) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // Include the GPU process in histogram snapshots only if we actually tried
+  // to launch a process for it.
+  bool includeGPUProcess = internal_AttemptedGPUProcess();
+
+  // Take a snapshot of the keyed histograms.
+  KeyedHistogramProcessSnapshotsArray processHistArray;
+  {
+    StaticMutexAutoLock locker(gTelemetryHistogramMutex);
+    // We always request the "opt-in"/"prerelease" dataset: we internally
+    // record the right subset, so this will only return "prerelease" if
+    // it was recorded.
+    if (NS_FAILED(internal_GetKeyedHistogramsSnapshot(locker,
+                                                      nsITelemetry::DATASET_RELEASE_CHANNEL_OPTIN,
+                                                      false /* aClearSubsession */,
+                                                      includeGPUProcess,
+                                                      processHistArray,
+                                                      true /* aSkipEmpty */))) {
+      return NS_ERROR_FAILURE;
+    }
+  }
+
+  // Serialize the keyed histograms for every process.
+  for (uint32_t process = 0; process < processHistArray.length(); ++process) {
+    aWriter.StartObjectProperty(GetNameForProcessID(ProcessID(process)));
+
+    const KeyedHistogramSnapshotsArray& hArray = processHistArray[process];
+    for (size_t i = 0; i < hArray.length(); ++i) {
+      const KeyedHistogramSnapshotInfo& hData = hArray[i];
+      HistogramID id = hData.histogramId;
+      const HistogramInfo& info = gHistogramInfos[id];
+
+      aWriter.StartObjectProperty(info.name());
+
+      // Each key is a new object with a "sum" and a "counts" property.
+      for (auto iter = hData.data.ConstIter(); !iter.Done(); iter.Next()) {
+        HistogramSnapshotData& keyData = iter.Data();
+        aWriter.StartObjectProperty(PromiseFlatCString(iter.Key()).get());
+        internal_ReflectHistogramToJSON(keyData, aWriter);
+        aWriter.EndObject();
+      }
+
+      aWriter.EndObject();
+    }
+    aWriter.EndObject();
+  }
+
+  return NS_OK;
+}
+
+nsresult
+TelemetryHistogram::DeserializeHistograms(JSContext* aCx, JS::HandleValue aData)
+{
+  MOZ_ASSERT(XRE_IsParentProcess(), "Only load histograms in the parent process");
+  if (!XRE_IsParentProcess()) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // Telemetry is disabled. This should never happen, but let's leave this check
+  // for consistency with other histogram updates routines.
+  if (!internal_CanRecordBase()) {
+    return NS_OK;
+  }
+
+  typedef mozilla::Tuple<nsCString, nsTArray<Histogram::Count>, int64_t>
+    PersistedHistogramTuple;
+  typedef mozilla::Vector<PersistedHistogramTuple> PersistedHistogramArray;
+  typedef mozilla::Vector<PersistedHistogramArray> PersistedHistogramStorage;
+
+  // Before updating the histograms, we need to get the data out of the JS
+  // wrappers. We can't hold the histogram mutex while handling JS stuff.
+  // Build a <histogram name, value> map.
+  JS::RootedObject histogramDataObj(aCx, &aData.toObject());
+  JS::Rooted<JS::IdVector> processes(aCx, JS::IdVector(aCx));
+  if (!JS_Enumerate(aCx, histogramDataObj, &processes)) {
+    // We can't even enumerate the processes in the loaded data, so
+    // there is nothing we could recover from the persistence file. Bail out.
+    JS_ClearPendingException(aCx);
+    return NS_ERROR_FAILURE;
+  }
+
+  // Make sure we have enough storage for all the processes.
+  PersistedHistogramStorage histogramsToUpdate;
+  if (!histogramsToUpdate.resize(static_cast<uint32_t>(ProcessID::Count))) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
+  // The following block of code attempts to extract as much data as possible
+  // from the serialized JSON, even in case of light data corruptions: if, for example,
+  // the data for a single process is corrupted or is in an unexpected form, we press on
+  // and attempt to load the data for the other processes.
+  JS::RootedId process(aCx);
+  for (auto& processVal : processes) {
+    // This is required as JS API calls require an Handle<jsid> and not a
+    // plain jsid.
+    process = processVal;
+    // Get the process name.
+    nsAutoJSString processNameJS;
+    if (!processNameJS.init(aCx, process)) {
+      JS_ClearPendingException(aCx);
+      continue;
+    }
+
+    // Make sure it's valid. Note that this is safe to call outside
+    // of a locked section.
+    NS_ConvertUTF16toUTF8 processName(processNameJS);
+    ProcessID processID = GetIDForProcessName(processName.get());
+    if (processID == ProcessID::Count) {
+      NS_WARNING(nsPrintfCString("Failed to get process ID for %s", processName.get()).get());
+      continue;
+    }
+
+    // And its probes.
+    JS::RootedValue processData(aCx);
+    if (!JS_GetPropertyById(aCx, histogramDataObj, process, &processData)) {
+      JS_ClearPendingException(aCx);
+      continue;
+    }
+
+    if (!processData.isObject()) {
+      // |processData| should be an object containing histograms. If this is
+      // not the case, silently skip and try to load the data for the other
+      // processes.
+      continue;
+    }
+
+    // Iterate through each histogram.
+    JS::RootedObject processDataObj(aCx, &processData.toObject());
+    JS::Rooted<JS::IdVector> histograms(aCx, JS::IdVector(aCx));
+    if (!JS_Enumerate(aCx, processDataObj, &histograms)) {
+      JS_ClearPendingException(aCx);
+      continue;
+    }
+
+    // Get a reference to the deserialized data for this process.
+    PersistedHistogramArray& deserializedProcessData =
+      histogramsToUpdate[static_cast<uint32_t>(processID)];
+
+    JS::RootedId histogram(aCx);
+    for (auto& histogramVal : histograms) {
+      histogram = histogramVal;
+
+      int64_t sum = 0;
+      nsTArray<Histogram::Count> deserializedCounts;
+      nsCString histogramName;
+      if (NS_FAILED(internal_ParseHistogramData(aCx, histogram, processDataObj,
+                                                histogramName, deserializedCounts, sum))) {
+        continue;
+      }
+
+      // Finally append the deserialized data to the storage.
+      if (!deserializedProcessData.emplaceBack(
+        MakeTuple(std::move(histogramName), std::move(deserializedCounts), sum))) {
+        return NS_ERROR_OUT_OF_MEMORY;
+      }
+    }
+  }
+
+  // Update the histogram storage.
+  {
+    StaticMutexAutoLock locker(gTelemetryHistogramMutex);
+
+    for (uint32_t process = 0; process < histogramsToUpdate.length(); ++process) {
+      PersistedHistogramArray& processArray = histogramsToUpdate[process];
+
+      for (auto& histogramData : processArray) {
+        // Attempt to get the corresponding ID for the deserialized histogram name.
+        HistogramID id;
+        if (NS_FAILED(internal_GetHistogramIdByName(locker, mozilla::Get<0>(histogramData), &id))) {
+          continue;
+        }
+
+        ProcessID procID = static_cast<ProcessID>(process);
+        if (!internal_CanRecordHistogram(id, procID)) {
+          // We're not allowed to record this, so don't try to restore it.
+          continue;
+        }
+
+        // Get the Histogram instance: this will instantiate it if it doesn't exist.
+        Histogram* h = internal_GetHistogramById(locker, id, procID);
+        MOZ_ASSERT(h);
+
+        if (!h || internal_IsExpired(locker, h)) {
+          // Don't restore expired histograms.
+          continue;
+        }
+
+        // Make sure that histogram counts have matching sizes. If not,
+        // |AddSampleSet| will fail and crash.
+        size_t numCounts = mozilla::Get<1>(histogramData).Length();
+        if (h->bucket_count() != numCounts) {
+          MOZ_ASSERT(false,
+                     "The number of restored buckets does not match with the on in the definition");
+          continue;
+        }
+
+        // Update the data for the histogram.
+        h->AddSampleSet(base::PersistedSampleSet(std::move(mozilla::Get<1>(histogramData)),
+                                                 mozilla::Get<2>(histogramData)));
+      }
+    }
+  }
+
+  return NS_OK;
+}
+
+nsresult
+TelemetryHistogram::DeserializeKeyedHistograms(JSContext* aCx, JS::HandleValue aData)
+{
+  MOZ_ASSERT(XRE_IsParentProcess(), "Only load keyed histograms in the parent process");
+  if (!XRE_IsParentProcess()) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // Telemetry is disabled. This should never happen, but let's leave this check
+  // for consistency with other histogram updates routines.
+  if (!internal_CanRecordBase()) {
+    return NS_OK;
+  }
+
+  typedef mozilla::Tuple<nsCString, nsCString, nsTArray<Histogram::Count>, int64_t>
+    PersistedKeyedHistogramTuple;
+  typedef mozilla::Vector<PersistedKeyedHistogramTuple> PersistedKeyedHistogramArray;
+  typedef mozilla::Vector<PersistedKeyedHistogramArray> PersistedKeyedHistogramStorage;
+
+  // Before updating the histograms, we need to get the data out of the JS
+  // wrappers. We can't hold the histogram mutex while handling JS stuff.
+  // Build a <histogram name, value> map.
+  JS::RootedObject histogramDataObj(aCx, &aData.toObject());
+  JS::Rooted<JS::IdVector> processes(aCx, JS::IdVector(aCx));
+  if (!JS_Enumerate(aCx, histogramDataObj, &processes)) {
+    // We can't even enumerate the processes in the loaded data, so
+    // there is nothing we could recover from the persistence file. Bail out.
+    JS_ClearPendingException(aCx);
+    return NS_ERROR_FAILURE;
+  }
+
+  // Make sure we have enough storage for all the processes.
+  PersistedKeyedHistogramStorage histogramsToUpdate;
+  if (!histogramsToUpdate.resize(static_cast<uint32_t>(ProcessID::Count))) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
+  // The following block of code attempts to extract as much data as possible
+  // from the serialized JSON, even in case of light data corruptions: if, for example,
+  // the data for a single process is corrupted or is in an unexpected form, we press on
+  // and attempt to load the data for the other processes.
+  JS::RootedId process(aCx);
+  for (auto& processVal : processes) {
+    // This is required as JS API calls require an Handle<jsid> and not a
+    // plain jsid.
+    process = processVal;
+    // Get the process name.
+    nsAutoJSString processNameJS;
+    if (!processNameJS.init(aCx, process)) {
+      JS_ClearPendingException(aCx);
+      continue;
+    }
+
+    // Make sure it's valid. Note that this is safe to call outside
+    // of a locked section.
+    NS_ConvertUTF16toUTF8 processName(processNameJS);
+    ProcessID processID = GetIDForProcessName(processName.get());
+    if (processID == ProcessID::Count) {
+      NS_WARNING(nsPrintfCString("Failed to get process ID for %s", processName.get()).get());
+      continue;
+    }
+
+    // And its probes.
+    JS::RootedValue processData(aCx);
+    if (!JS_GetPropertyById(aCx, histogramDataObj, process, &processData)) {
+      JS_ClearPendingException(aCx);
+      continue;
+    }
+
+    if (!processData.isObject()) {
+      // |processData| should be an object containing histograms. If this is
+      // not the case, silently skip and try to load the data for the other
+      // processes.
+      continue;
+    }
+
+    // Iterate through each keyed histogram.
+    JS::RootedObject processDataObj(aCx, &processData.toObject());
+    JS::Rooted<JS::IdVector> histograms(aCx, JS::IdVector(aCx));
+    if (!JS_Enumerate(aCx, processDataObj, &histograms)) {
+      JS_ClearPendingException(aCx);
+      continue;
+    }
+
+    // Get a reference to the deserialized data for this process.
+    PersistedKeyedHistogramArray& deserializedProcessData =
+      histogramsToUpdate[static_cast<uint32_t>(processID)];
+
+    JS::RootedId histogram(aCx);
+    for (auto& histogramVal : histograms) {
+      histogram = histogramVal;
+      // Get the histogram name.
+      nsAutoJSString histogramName;
+      if (!histogramName.init(aCx, histogram)) {
+        JS_ClearPendingException(aCx);
+        continue;
+      }
+
+      // Get the data for this histogram.
+      JS::RootedValue histogramData(aCx);
+      if (!JS_GetPropertyById(aCx, processDataObj, histogram, &histogramData)) {
+        JS_ClearPendingException(aCx);
+        continue;
+      }
+
+      // Iterate through each key in the histogram.
+      JS::RootedObject keysDataObj(aCx, &histogramData.toObject());
+      JS::Rooted<JS::IdVector> keys(aCx, JS::IdVector(aCx));
+      if (!JS_Enumerate(aCx, keysDataObj, &keys)) {
+        JS_ClearPendingException(aCx);
+        continue;
+      }
+
+      JS::RootedId key(aCx);
+      for (auto& keyVal : keys) {
+        key = keyVal;
+
+        int64_t sum = 0;
+        nsTArray<Histogram::Count> deserializedCounts;
+        nsCString keyName;
+        if (NS_FAILED(internal_ParseHistogramData(aCx, key, keysDataObj, keyName,
+                                                  deserializedCounts, sum))) {
+          continue;
+        }
+
+        // Finally append the deserialized data to the storage.
+        if (!deserializedProcessData.emplaceBack(
+          MakeTuple(nsCString(NS_ConvertUTF16toUTF8(histogramName)), std::move(keyName),
+                    std::move(deserializedCounts), sum))) {
+          return NS_ERROR_OUT_OF_MEMORY;
+        }
+      }
+    }
+  }
+
+  // Update the keyed histogram storage.
+  {
+    StaticMutexAutoLock locker(gTelemetryHistogramMutex);
+
+    for (uint32_t process = 0; process < histogramsToUpdate.length(); ++process) {
+      PersistedKeyedHistogramArray& processArray = histogramsToUpdate[process];
+
+      for (auto& histogramData : processArray) {
+        // Attempt to get the corresponding ID for the deserialized histogram name.
+        HistogramID id;
+        if (NS_FAILED(internal_GetHistogramIdByName(locker, mozilla::Get<0>(histogramData), &id))) {
+          continue;
+        }
+
+        ProcessID procID = static_cast<ProcessID>(process);
+        if (!internal_CanRecordHistogram(id, procID)) {
+          // We're not allowed to record this, so don't try to restore it.
+          continue;
+        }
+
+        KeyedHistogram* keyed = internal_GetKeyedHistogramById(id, procID);
+        MOZ_ASSERT(keyed);
+
+        if (!keyed) {
+          // Don't restore if we don't have a destination storage.
+          continue;
+        }
+
+        // Get data for the key we're looking for.
+        Histogram* h = nullptr;
+        if (NS_FAILED(keyed->GetHistogram(mozilla::Get<1>(histogramData), &h))) {
+          continue;
+        }
+        MOZ_ASSERT(h);
+
+        if (!h || internal_IsExpired(locker, h)) {
+          // Don't restore expired histograms.
+          continue;
+        }
+
+        // Make sure that histogram counts have matching sizes. If not,
+        // |AddSampleSet| will fail and crash.
+        size_t numCounts = mozilla::Get<2>(histogramData).Length();
+        if (h->bucket_count() != numCounts) {
+          MOZ_ASSERT(false,
+                     "The number of restored buckets does not match with the on in the definition");
+          continue;
+        }
+
+        // Update the data for the histogram.
+        h->AddSampleSet(base::PersistedSampleSet(std::move(mozilla::Get<2>(histogramData)),
+                                                 mozilla::Get<3>(histogramData)));
+      }
+    }
+  }
+
+  return NS_OK;
 }

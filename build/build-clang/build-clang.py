@@ -107,7 +107,7 @@ def delete(path):
     else:
         try:
             os.unlink(path)
-        except:
+        except Exception:
             pass
 
 
@@ -139,8 +139,8 @@ def svn_co(source_dir, url, directory, revision):
 
 
 def svn_update(directory, revision):
+    run_in(directory, ["svn", "revert", "-q", "-R", "."])
     run_in(directory, ["svn", "update", "-q", "-r", revision])
-    run_in(directory, ["svn", "revert", "-q", "-R", revision])
 
 
 def is_darwin():
@@ -189,7 +189,7 @@ def build_one_stage(cc, cxx, asm, ld, ar, ranlib, libtool,
                   "-DCMAKE_EXE_LINKER_FLAGS=%s" % ' '.join(ld[1:]),
                   "-DCMAKE_SHARED_LINKER_FLAGS=%s" % ' '.join(ld[1:]),
                   "-DCMAKE_BUILD_TYPE=%s" % build_type,
-                  "-DLLVM_TARGETS_TO_BUILD=X86;ARM",
+                  "-DLLVM_TARGETS_TO_BUILD=X86;ARM;AArch64",
                   "-DLLVM_ENABLE_ASSERTIONS=%s" % ("ON" if assertions else "OFF"),
                   "-DPYTHON_EXECUTABLE=%s" % slashify_path(python_path),
                   "-DCMAKE_INSTALL_PREFIX=%s" % inst_dir,
@@ -209,13 +209,14 @@ def build_one_stage(cc, cxx, asm, ld, ar, ranlib, libtool,
                        "-DLLVM_ENABLE_THREADS=OFF",
                        "-DLIBCXXABI_LIBCXX_INCLUDES=%s" % libcxx_include_dir,
                        "-DCMAKE_OSX_SYSROOT=%s" % slashify_path(os.getenv("CROSS_SYSROOT")),
-                       "-DCMAKE_FIND_ROOT_PATH=%s" % slashify_path(os.getenv("CROSS_CCTOOLS_PATH")),
+                       "-DCMAKE_FIND_ROOT_PATH=%s" % slashify_path(os.getenv("CROSS_CCTOOLS_PATH")), # noqa
                        "-DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER",
                        "-DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY",
                        "-DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY",
-                       "-DCMAKE_MACOSX_RPATH=@executable_path",
+                       "-DCMAKE_MACOSX_RPATH=ON",
                        "-DCMAKE_OSX_ARCHITECTURES=x86_64",
                        "-DDARWIN_osx_ARCHS=x86_64",
+                       "-DDARWIN_osx_SYSROOT=%s" % slashify_path(os.getenv("CROSS_SYSROOT")),
                        "-DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-apple-darwin11"]
     build_package(build_dir, cmake_args)
 
@@ -252,14 +253,17 @@ def get_tool(config, key):
 
 
 # This function is intended to be called on the final build directory when
-# building clang-tidy.  Its job is to remove all of the files which won't
-# be used for clang-tidy to reduce the download size.  Currently when this
-# function finishes its job, it will leave final_dir with a layout like this:
+# building clang-tidy. Also clang-format binaries are included that can be used
+# in conjunction with clang-tidy.
+# Its job is to remove all of the files which won't be used for clang-tidy or
+# clang-format to reduce the download size.  Currently when this function
+# finishes its job, it will leave final_dir with a layout like this:
 #
 # clang/
 #   bin/
-#     clang-tidy
 #     clang-apply-replacements
+#     clang-format
+#     clang-tidy
 #   include/
 #     * (nothing will be deleted here)
 #   lib/
@@ -269,6 +273,7 @@ def get_tool(config, key):
 #           * (nothing will be deleted here)
 #   share/
 #     clang/
+#       clang-format-diff.py
 #       clang-tidy-diff.py
 #       run-clang-tidy.py
 def prune_final_dir_for_clang_tidy(final_dir):
@@ -283,7 +288,7 @@ def prune_final_dir_for_clang_tidy(final_dir):
     # In bin/, only keep clang-tidy and clang-apply-replacements. The last one
     # is used to auto-fix some of the issues detected by clang-tidy.
     re_clang_tidy = re.compile(
-        r"^clang-(tidy|apply-replacements)(\.exe)?$", re.I)
+        r"^clang-(apply-replacements|format|tidy)(\.exe)?$", re.I)
     for f in glob.glob("%s/bin/*" % final_dir):
         if re_clang_tidy.search(os.path.basename(f)) is None:
             delete(f)
@@ -310,7 +315,7 @@ def prune_final_dir_for_clang_tidy(final_dir):
             shutil.rmtree(d)
 
     # In share/, only keep share/clang/*tidy*
-    re_clang_tidy = re.compile(r"tidy", re.I)
+    re_clang_tidy = re.compile(r"format|tidy", re.I)
     for f in glob.glob("%s/share/*" % final_dir):
         if os.path.basename(f) != "clang":
             delete(f)
@@ -322,9 +327,9 @@ def prune_final_dir_for_clang_tidy(final_dir):
 if __name__ == "__main__":
     # The directories end up in the debug info, so the easy way of getting
     # a reproducible build is to run it in a know absolute directory.
-    # We use a directory in /builds/slave because the mozilla infrastructure
-    # cleans it up automatically.
-    base_dir = "/builds/slave/moz-toolchain"
+    # We use a directory that is registered as a volume in the Docker image.
+    base_dir = "/builds/worker/workspace/moz-toolchain"
+
     if is_windows():
         # TODO: Because Windows taskcluster builds are run with distinct
         # user IDs for each job, we can't store things in some globally
@@ -342,6 +347,7 @@ if __name__ == "__main__":
     llvm_source_dir = source_dir + "/llvm"
     clang_source_dir = source_dir + "/clang"
     extra_source_dir = source_dir + "/extra"
+    lld_source_dir = source_dir + "/lld"
     compiler_rt_source_dir = source_dir + "/compiler-rt"
     libcxx_source_dir = source_dir + "/libcxx"
     libcxxabi_source_dir = source_dir + "/libcxxabi"
@@ -366,6 +372,9 @@ if __name__ == "__main__":
     parser.add_argument('--clean', required=False,
                         action='store_true',
                         help="Clean the build directory")
+    parser.add_argument('--skip-tar', required=False,
+                        action='store_true',
+                        help="Skip tar packaging stage")
 
     args = parser.parse_args()
     config = json.load(args.config)
@@ -378,6 +387,7 @@ if __name__ == "__main__":
     llvm_repo = config["llvm_repo"]
     clang_repo = config["clang_repo"]
     extra_repo = config.get("extra_repo")
+    lld_repo = config.get("lld_repo")
     compiler_repo = config["compiler_repo"]
     libcxx_repo = config["libcxx_repo"]
     libcxxabi_repo = config.get("libcxxabi_repo")
@@ -390,7 +400,8 @@ if __name__ == "__main__":
     if "build_type" in config:
         build_type = config["build_type"]
         if build_type not in ("Release", "Debug", "RelWithDebInfo", "MinSizeRel"):
-            raise ValueError("We only know how to do Release, Debug, RelWithDebInfo or MinSizeRel builds")
+            raise ValueError("We only know how to do Release, Debug, RelWithDebInfo or "
+                             "MinSizeRel builds")
     build_libcxx = False
     if "build_libcxx" in config:
         build_libcxx = config["build_libcxx"]
@@ -447,6 +458,8 @@ if __name__ == "__main__":
     checkout_or_update(clang_repo, clang_source_dir)
     checkout_or_update(compiler_repo, compiler_rt_source_dir)
     checkout_or_update(libcxx_repo, libcxx_source_dir)
+    if lld_repo:
+        checkout_or_update(lld_repo, lld_source_dir)
     if libcxxabi_repo:
         checkout_or_update(libcxxabi_repo, libcxxabi_source_dir)
     if extra_repo:
@@ -454,15 +467,17 @@ if __name__ == "__main__":
     for p in config.get("patches", []):
         patch(p, source_dir)
 
-    symlinks = [(source_dir + "/clang",
+    symlinks = [(clang_source_dir,
                  llvm_source_dir + "/tools/clang"),
-                (source_dir + "/extra",
+                (extra_source_dir,
                  llvm_source_dir + "/tools/clang/tools/extra"),
-                (source_dir + "/compiler-rt",
+                (lld_source_dir,
+                 llvm_source_dir + "/tools/lld"),
+                (compiler_rt_source_dir,
                  llvm_source_dir + "/projects/compiler-rt"),
-                (source_dir + "/libcxx",
+                (libcxx_source_dir,
                  llvm_source_dir + "/projects/libcxx"),
-                (source_dir + "/libcxxabi",
+                (libcxxabi_source_dir,
                  llvm_source_dir + "/projects/libcxxabi")]
     for l in symlinks:
         # On Windows, we have to re-copy the whole directory every time.
@@ -502,7 +517,8 @@ if __name__ == "__main__":
         extra_ldflags = []
 
         if 'LD_LIBRARY_PATH' in os.environ:
-            os.environ['LD_LIBRARY_PATH'] = '%s/lib64/:%s' % (gcc_dir, os.environ['LD_LIBRARY_PATH'])
+            os.environ['LD_LIBRARY_PATH'] = ('%s/lib64/:%s' %
+                                             (gcc_dir, os.environ['LD_LIBRARY_PATH']))
         else:
             os.environ['LD_LIBRARY_PATH'] = '%s/lib64/' % gcc_dir
     elif is_windows():
@@ -512,7 +528,7 @@ if __name__ == "__main__":
         # by looking at an MSVC install, but we don't really have that here.
         # Force things on.
         extra_cflags2 = []
-        extra_cxxflags2 = ['-fms-compatibility-version=19.00.24213', '-Xclang', '-std=c++14']
+        extra_cxxflags2 = ['-fms-compatibility-version=19.13.26128', '-Xclang', '-std=c++14']
         extra_asmflags = []
         extra_ldflags = []
 
@@ -583,5 +599,6 @@ if __name__ == "__main__":
         prune_final_dir_for_clang_tidy(os.path.join(final_stage_dir, "clang"))
         package_name = "clang-tidy"
 
-    ext = "bz2" if is_darwin() or is_windows() else "xz"
-    build_tar_package("tar", "%s.tar.%s" % (package_name, ext), final_stage_dir, "clang")
+    if not args.skip_tar:
+        ext = "bz2" if is_darwin() or is_windows() else "xz"
+        build_tar_package("tar", "%s.tar.%s" % (package_name, ext), final_stage_dir, "clang")

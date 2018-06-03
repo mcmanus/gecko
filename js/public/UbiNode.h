@@ -163,8 +163,6 @@
 // structure of the snapshot file, the analyses should be prepared for ubi::Node
 // graphs constructed from snapshots to be even more bizarre.
 
-class JSAtom;
-
 namespace JS {
 namespace ubi {
 
@@ -180,7 +178,6 @@ namespace ubi {
 
 using mozilla::Forward;
 using mozilla::Maybe;
-using mozilla::Move;
 using mozilla::RangedPtr;
 using mozilla::Variant;
 
@@ -759,14 +756,14 @@ class Node {
     template<typename T>
     T* as() const {
         MOZ_ASSERT(isLive());
-        MOZ_ASSERT(is<T>());
+        MOZ_ASSERT(this->is<T>());
         return static_cast<T*>(base()->ptr);
     }
 
     template<typename T>
     T* asOrNull() const {
         MOZ_ASSERT(isLive());
-        return is<T>() ? static_cast<T*>(base()->ptr) : nullptr;
+        return this->is<T>() ? static_cast<T*>(base()->ptr) : nullptr;
     }
 
     // If this node refers to something that can be represented as a JavaScript
@@ -846,14 +843,14 @@ class Edge {
 
     // Move construction and assignment.
     Edge(Edge&& rhs)
-        : name(mozilla::Move(rhs.name))
+        : name(std::move(rhs.name))
         , referent(rhs.referent)
     { }
 
     Edge& operator=(Edge&& rhs) {
         MOZ_ASSERT(&rhs != this);
         this->~Edge();
-        new (this) Edge(mozilla::Move(rhs));
+        new (this) Edge(std::move(rhs));
         return *this;
     }
 
@@ -864,7 +861,7 @@ class Edge {
     // false as the wantNames parameter.
     //
     // The storage is owned by this Edge, and will be freed when this Edge is
-    // destructed. You may take ownership of the name by `mozilla::Move`ing it
+    // destructed. You may take ownership of the name by `std::move`ing it
     // out of the edge; it is just a UniquePtr.
     //
     // (In real life we'll want a better representation for names, to avoid
@@ -1057,6 +1054,24 @@ class JS_PUBLIC_API(Concrete<JS::Symbol>) : TracerConcrete<JS::Symbol> {
     const char16_t* typeName() const override { return concreteTypeName; }
     static const char16_t concreteTypeName[];
 };
+
+#ifdef ENABLE_BIGINT
+template<>
+class JS_PUBLIC_API(Concrete<JS::BigInt>) : TracerConcrete<JS::BigInt> {
+  protected:
+    explicit Concrete(JS::BigInt* ptr) : TracerConcrete(ptr) {}
+
+  public:
+    static void construct(void* storage, JS::BigInt* ptr) {
+        new (storage) Concrete(ptr);
+    }
+
+    Size size(mozilla::MallocSizeOf mallocSizeOf) const override;
+
+    const char16_t* typeName() const override { return concreteTypeName; }
+    static const char16_t concreteTypeName[];
+};
+#endif
 
 template<>
 class JS_PUBLIC_API(Concrete<JSScript>) : TracerConcreteWithCompartment<JSScript> {

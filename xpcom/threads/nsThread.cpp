@@ -28,6 +28,7 @@
 #include "mozilla/IOInterposer.h"
 #include "mozilla/ipc/MessageChannel.h"
 #include "mozilla/ipc/BackgroundChild.h"
+#include "mozilla/Preferences.h"
 #include "mozilla/Scheduler.h"
 #include "mozilla/SchedulerGroup.h"
 #include "mozilla/Services.h"
@@ -38,16 +39,15 @@
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Unused.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "nsICrashReporter.h"
 #include "nsThreadSyncDispatch.h"
+#include "nsServiceManagerUtils.h"
 #include "GeckoProfiler.h"
 #include "InputEventStatistics.h"
 #include "ThreadEventTarget.h"
 
-#ifdef MOZ_CRASHREPORTER
-#include "nsServiceManagerUtils.h"
-#include "nsICrashReporter.h"
 #include "mozilla/dom/ContentChild.h"
-#endif
+#include "mozilla/dom/DOMPrefs.h"
 
 #ifdef XP_LINUX
 #include <sys/time.h>
@@ -143,16 +143,16 @@ nsThreadClassInfo::GetScriptableHelper(nsIXPCScriptable** aResult)
 }
 
 NS_IMETHODIMP
-nsThreadClassInfo::GetContractID(char** aResult)
+nsThreadClassInfo::GetContractID(nsACString& aResult)
 {
-  *aResult = nullptr;
+  aResult.SetIsVoid(true);
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsThreadClassInfo::GetClassDescription(char** aResult)
+nsThreadClassInfo::GetClassDescription(nsACString& aResult)
 {
-  *aResult = nullptr;
+  aResult.SetIsVoid(true);
   return NS_OK;
 }
 
@@ -197,7 +197,7 @@ NS_IMPL_CI_INTERFACE_GETTER(nsThread, nsIThread, nsIThreadInternal,
 
 //-----------------------------------------------------------------------------
 
-class nsThreadStartupEvent : public Runnable
+class nsThreadStartupEvent final : public Runnable
 {
 public:
   nsThreadStartupEvent()
@@ -217,11 +217,9 @@ public:
     }
   }
 
-  // This method needs to be public to support older compilers (xlC_r on AIX).
-  // It should be called directly as this class type is reference counted.
-  virtual ~nsThreadStartupEvent() {}
-
 private:
+  ~nsThreadStartupEvent() = default;
+
   NS_IMETHOD Run() override
   {
     ReentrantMonitorAutoEnter mon(mMon);
@@ -476,7 +474,6 @@ nsThread::ThreadFunc(void* aArg)
 
 //-----------------------------------------------------------------------------
 
-#ifdef MOZ_CRASHREPORTER
 // Tell the crash reporter to save a memory report if our heuristics determine
 // that an OOM failure is likely to occur soon.
 // Memory usage will not be checked more than every 30 seconds or saved more
@@ -541,7 +538,6 @@ nsThread::SaveMemoryReportNearOOM(ShouldSaveMemoryReport aShouldSave)
 
   return recentlySavedReport;
 }
-#endif
 
 #ifdef MOZ_CANARY
 int sCanaryOutputFD = -1;
@@ -562,6 +558,10 @@ nsThread::nsThread(NotNull<SynchronizedEventQueue*> aQueue,
   , mIsMainThread(aMainThread)
   , mLastUnlabeledRunnable(TimeStamp::Now())
   , mCanInvokeJS(false)
+  , mCurrentEvent(nullptr)
+  , mCurrentEventStart(TimeStamp::Now())
+  , mCurrentEventLoopDepth(-1)
+  , mCurrentPerformanceCounter(nullptr)
 {
 }
 
@@ -580,6 +580,14 @@ nsThread::~nsThread()
     Unused << mRequestedShutdownContexts[i].forget();
   }
 #endif
+}
+
+bool
+nsThread::GetSchedulerLoggingEnabled() {
+  if (!NS_IsMainThread() || !mozilla::Preferences::IsServiceAvailable()) {
+    return false;
+  }
+  return mozilla::dom::DOMPrefs::SchedulerLoggingEnabled();
 }
 
 nsresult
@@ -641,13 +649,13 @@ nsThread::Dispatch(already_AddRefed<nsIRunnable> aEvent, uint32_t aFlags)
 {
   LOG(("THRD(%p) Dispatch [%p %x]\n", this, /* XXX aEvent */nullptr, aFlags));
 
-  return mEventTarget->Dispatch(Move(aEvent), aFlags);
+  return mEventTarget->Dispatch(std::move(aEvent), aFlags);
 }
 
 NS_IMETHODIMP
 nsThread::DelayedDispatch(already_AddRefed<nsIRunnable> aEvent, uint32_t aDelayMs)
 {
-  return mEventTarget->DelayedDispatch(Move(aEvent), aDelayMs);
+  return mEventTarget->DelayedDispatch(std::move(aEvent), aDelayMs);
 }
 
 NS_IMETHODIMP
@@ -886,9 +894,11 @@ void canary_alarm_handler(int signum)
     }                                                                          \
   } while(0)
 
-#ifndef RELEASE_OR_BETA
+#ifdef MOZ_COLLECTING_RUNNABLE_TELEMETRY
 static bool
-GetLabeledRunnableName(nsIRunnable* aEvent, nsACString& aName)
+GetLabeledRunnableName(nsIRunnable* aEvent,
+                       nsACString& aName,
+                       EventPriority aPriority)
 {
   bool labeled = false;
   if (RefPtr<SchedulerGroup::Runnable> groupRunnable = do_QueryObject(aEvent)) {
@@ -903,9 +913,26 @@ GetLabeledRunnableName(nsIRunnable* aEvent, nsACString& aName)
     aName.AssignLiteral("anonymous runnable");
   }
 
+  if (!labeled && aPriority > EventPriority::Input) {
+    aName.AppendLiteral("(unlabeled)");
+  }
+
   return labeled;
 }
 #endif
+
+mozilla::PerformanceCounter*
+nsThread::GetPerformanceCounter(nsIRunnable* aEvent)
+{
+  RefPtr<SchedulerGroup::Runnable> docRunnable = do_QueryObject(aEvent);
+  if (docRunnable) {
+    mozilla::dom::DocGroup* docGroup = docRunnable->DocGroup();
+    if (docGroup) {
+      return docGroup->GetPerformanceCounter();
+    }
+  }
+  return nullptr;
+}
 
 NS_IMETHODIMP
 nsThread::ProcessNextEvent(bool aMayWait, bool* aResult)
@@ -977,20 +1004,31 @@ nsThread::ProcessNextEvent(bool aMayWait, bool* aResult)
         HangMonitor::NotifyActivity();
       }
 
-#ifndef RELEASE_OR_BETA
+      bool schedulerLoggingEnabled = GetSchedulerLoggingEnabled();
+      if (schedulerLoggingEnabled
+          && mNestedEventLoopDepth > mCurrentEventLoopDepth
+          && mCurrentPerformanceCounter) {
+          // This is a recursive call, we're saving the time
+          // spent in the parent event if the runnable is linked to a DocGroup.
+          mozilla::TimeDuration duration = TimeStamp::Now() - mCurrentEventStart;
+          mCurrentPerformanceCounter->IncrementExecutionDuration(duration.ToMicroseconds());
+      }
+
+#ifdef MOZ_COLLECTING_RUNNABLE_TELEMETRY
       Maybe<Telemetry::AutoTimer<Telemetry::MAIN_THREAD_RUNNABLE_MS>> timer;
       Maybe<Telemetry::AutoTimer<Telemetry::IDLE_RUNNABLE_BUDGET_OVERUSE_MS>> idleTimer;
 
       nsAutoCString name;
       if ((MAIN_THREAD == mIsMainThread) || mNextIdleDeadline) {
-        bool labeled = GetLabeledRunnableName(event, name);
+        bool labeled = GetLabeledRunnableName(event, name, priority);
 
         if (MAIN_THREAD == mIsMainThread) {
           timer.emplace(name);
 
           // High-priority runnables are ignored here since they'll run right away
           // even with the cooperative scheduler.
-          if (!labeled && priority == EventPriority::Normal) {
+          if (!labeled && (priority == EventPriority::Normal ||
+                           priority == EventPriority::Idle)) {
             TimeStamp now = TimeStamp::Now();
             double diff = (now - mLastUnlabeledRunnable).ToMilliseconds();
             Telemetry::Accumulate(Telemetry::TIME_BETWEEN_UNLABELED_RUNNABLES_MS, diff);
@@ -1034,7 +1072,39 @@ nsThread::ProcessNextEvent(bool aMayWait, bool* aResult)
       if (priority == EventPriority::Input) {
         timeDurationHelper.emplace();
       }
+
+      // The event starts to run, storing the timestamp.
+      bool recursiveEvent = false;
+      RefPtr<mozilla::PerformanceCounter> currentPerformanceCounter;
+      if (schedulerLoggingEnabled) {
+        recursiveEvent = mNestedEventLoopDepth > mCurrentEventLoopDepth;
+        mCurrentEventStart = mozilla::TimeStamp::Now();
+        mCurrentEvent = event;
+        mCurrentEventLoopDepth = mNestedEventLoopDepth;
+        mCurrentPerformanceCounter = GetPerformanceCounter(event);
+        currentPerformanceCounter = mCurrentPerformanceCounter;
+      }
+
       event->Run();
+
+      // End of execution, we can send the duration for the group
+      if (schedulerLoggingEnabled) {
+       if (recursiveEvent) {
+          // If we're in a recursive call, reset the timer,
+          // so the parent gets its remaining execution time right.
+          mCurrentEventStart = mozilla::TimeStamp::Now();
+          mCurrentPerformanceCounter = currentPerformanceCounter;
+        } else {
+          // We're done with this dispatch
+          if (currentPerformanceCounter) {
+            mozilla::TimeDuration duration = TimeStamp::Now() - mCurrentEventStart;
+            currentPerformanceCounter->IncrementExecutionDuration(duration.ToMicroseconds());
+          }
+          mCurrentEvent = nullptr;
+          mCurrentEventLoopDepth = -1;
+          mCurrentPerformanceCounter = nullptr;
+        }
+      }
     } else if (aMayWait) {
       MOZ_ASSERT(ShuttingDown(),
                  "This should only happen when shutting down");
@@ -1196,22 +1266,22 @@ nsThread::DoMainThreadSpecificProcessing(bool aReallyWait)
       nsCOMPtr<nsIObserverService> os = services::GetObserverService();
 
       if (os) {
-        // Use no-forward to prevent the notifications from being transferred to
-        // the children of this process.
-        os->NotifyObservers(nullptr, "memory-pressure",
-                            mpPending == MemPressure_New ? u"low-memory-no-forward" :
-                            u"low-memory-ongoing-no-forward");
+        if (mpPending == MemPressure_Stopping) {
+          os->NotifyObservers(nullptr, "memory-pressure-stop", nullptr);
+        } else {
+          os->NotifyObservers(nullptr, "memory-pressure",
+                              mpPending == MemPressure_New ? u"low-memory" :
+                              u"low-memory-ongoing");
+        }
       } else {
         NS_WARNING("Can't get observer service!");
       }
     }
   }
 
-#ifdef MOZ_CRASHREPORTER
   if (!ShuttingDown()) {
     SaveMemoryReportNearOOM(ShouldSaveMemoryReport::kMaybeReport);
   }
-#endif
 }
 
 NS_IMETHODIMP

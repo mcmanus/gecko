@@ -21,6 +21,8 @@ class HTMLAudioElement final : public HTMLMediaElement
 public:
   typedef mozilla::dom::NodeInfo NodeInfo;
 
+  NS_IMPL_FROMNODE_HTML_WITH_TAG(HTMLAudioElement, audio)
+
   explicit HTMLAudioElement(already_AddRefed<NodeInfo>& aNodeInfo);
 
   // Element
@@ -32,8 +34,6 @@ public:
   virtual nsresult Clone(NodeInfo *aNodeInfo, nsINode **aResult,
                          bool aPreallocateChildren) const override;
   virtual nsresult SetAcceptHeader(nsIHttpChannel* aChannel) override;
-
-  virtual nsIDOMNode* AsDOMNode() override { return this; }
 
   // WebIDL
 

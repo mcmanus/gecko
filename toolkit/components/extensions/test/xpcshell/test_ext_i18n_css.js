@@ -1,6 +1,6 @@
 "use strict";
 
-Cu.import("resource://gre/modules/Preferences.jsm");
+ChromeUtils.import("resource://gre/modules/Preferences.jsm");
 
 
 const server = createHttpServer();
@@ -8,7 +8,7 @@ server.registerDirectory("/data/", do_get_file("data"));
 
 const BASE_URL = `http://localhost:${server.identity.primaryPort}/data`;
 
-const XMLHttpRequest = Components.Constructor("@mozilla.org/xmlextras/xmlhttprequest;1", "nsIXMLHttpRequest");
+Cu.importGlobalProperties(["XMLHttpRequest"]);
 
 const {
   createAppInfo,
@@ -19,6 +19,10 @@ const {
 AddonTestUtils.init(this);
 
 createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "42");
+
+// Some multibyte characters. This sample was taken from the encoding/api-basics.html web platform test.
+const MULTIBYTE_STRING = "z\xA2\u6C34\uD834\uDD1E\uF8FF\uDBFF\uDFFD\uFFFE";
+let getCSS = (a, b) => `a { content: '${a}'; } b { content: '${b}'; }`;
 
 let extensionData = {
   background: function() {
@@ -42,7 +46,7 @@ let extensionData = {
       browser.test.notifyPass("i18n-css");
     });
 
-    browser.test.sendMessage("ready", browser.runtime.getURL("foo.css"));
+    browser.test.sendMessage("ready", browser.runtime.getURL("/"));
   },
 
   manifest: {
@@ -52,12 +56,19 @@ let extensionData = {
       },
     },
 
-    "web_accessible_resources": ["foo.css", "foo.txt", "locale.css"],
+    "web_accessible_resources": ["foo.css", "foo.txt", "locale.css", "multibyte.css"],
 
-    "content_scripts": [{
-      "matches": ["http://*/*/file_sample.html"],
-      "css": ["foo.css"],
-    }],
+    "content_scripts": [
+      {
+        "matches": ["http://*/*/file_sample.html"],
+        "css": ["foo.css"],
+        "run_at": "document_start",
+      },
+      {
+        "matches": ["http://*/*/file_sample.html"],
+        "js": ["content.js"],
+      },
+    ],
 
     "default_locale": "en",
   },
@@ -68,12 +79,21 @@ let extensionData = {
         "message": "max-width: 42px",
         "description": "foo",
       },
+      "multibyteKey": {
+        "message": MULTIBYTE_STRING,
+      },
     }),
+
+    "content.js": function() {
+      let style = getComputedStyle(document.body);
+      browser.test.sendMessage("content-maxWidth", style.maxWidth);
+    },
 
     "foo.css": "body { __MSG_foo__; }",
     "bar.CsS": "body { __MSG_foo__; }",
     "foo.txt": "body { __MSG_foo__; }",
     "locale.css": '* { content: "__MSG_@@ui_locale__ __MSG_@@bidi_dir__ __MSG_@@bidi_reversed_dir__ __MSG_@@bidi_start_edge__ __MSG_@@bidi_end_edge__" }',
+    "multibyte.css": getCSS("__MSG_multibyteKey__", MULTIBYTE_STRING),
   },
 };
 
@@ -82,63 +102,42 @@ async function test_i18n_css(options = {}) {
   let extension = ExtensionTestUtils.loadExtension(extensionData);
 
   await extension.startup();
-  let cssURL = await extension.awaitMessage("ready");
-
-  function fetch(url) {
-    return new Promise((resolve, reject) => {
-      let xhr = new XMLHttpRequest();
-      xhr.overrideMimeType("text/plain");
-      xhr.open("GET", url);
-      xhr.onload = () => { resolve(xhr.responseText); };
-      xhr.onerror = reject;
-      xhr.send();
-    });
-  }
-
-  let css = await fetch(cssURL);
-
-  equal(css, "body { max-width: 42px; }", "CSS file localized in mochitest scope");
+  let baseURL = await extension.awaitMessage("ready");
 
   let contentPage = await ExtensionTestUtils.loadContentPage(`${BASE_URL}/file_sample.html`);
 
-  // workaround for extension may not be ready for applying foo.css
-  await new Promise(do_execute_soon);
+  let css = await contentPage.fetch(baseURL + "foo.css");
 
-  let maxWidth = await ContentTask.spawn(contentPage.browser, {}, async function() {
-    /* globals content */
-    let style = content.getComputedStyle(content.document.body);
+  equal(css, "body { max-width: 42px; }", "CSS file localized in mochitest scope");
 
-    return style.maxWidth;
-  });
+  let maxWidth = await extension.awaitMessage("content-maxWidth");
 
   equal(maxWidth, "42px", "stylesheet correctly applied");
 
-  await contentPage.close();
-
-  cssURL = cssURL.replace(/foo.css$/, "locale.css");
-
-  css = await fetch(cssURL);
+  css = await contentPage.fetch(baseURL + "locale.css");
   equal(css, '* { content: "en-US ltr rtl left right" }', "CSS file localized in mochitest scope");
+
+  css = await contentPage.fetch(baseURL + "multibyte.css");
+  equal(css, getCSS(MULTIBYTE_STRING, MULTIBYTE_STRING), "CSS file contains multibyte string");
+
+  await contentPage.close();
 
   // We don't currently have a good way to mock this.
   if (false) {
-    const LOCALE = "general.useragent.locale";
     const DIR = "intl.uidirection";
-    const DIR_LEGACY = "intl.uidirection.en"; // Needed for Android until bug 1215247 is resolved
 
     // We don't wind up actually switching the chrome registry locale, since we
     // don't have a chrome package for Hebrew. So just override it, and force
     // RTL directionality.
-    Preferences.set(LOCALE, "he");
+    const origReqLocales = Services.locale.getRequestedLocales();
+    Services.locale.setRequestedLocales(["he"]);
     Preferences.set(DIR, 1);
-    Preferences.set(DIR_LEGACY, "rtl");
 
-    css = await fetch(cssURL);
+    css = await fetch(baseURL + "locale.css");
     equal(css, '* { content: "he rtl ltr right left" }', "CSS file localized in mochitest scope");
 
-    Preferences.reset(LOCALE);
+    Services.locale.setRequestedLocales(origReqLocales);
     Preferences.reset(DIR);
-    Preferences.reset(DIR_LEGACY);
   }
 
   await extension.awaitFinish("i18n-css");

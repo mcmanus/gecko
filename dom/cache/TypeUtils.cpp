@@ -14,6 +14,7 @@
 #include "mozilla/dom/cache/CacheTypes.h"
 #include "mozilla/dom/cache/ReadStream.h"
 #include "mozilla/ipc/BackgroundChild.h"
+#include "mozilla/ipc/IPCStreamUtils.h"
 #include "mozilla/ipc/PBackgroundChild.h"
 #include "mozilla/ipc/PFileDescriptorSetChild.h"
 #include "mozilla/ipc/InputStreamUtils.h"
@@ -257,7 +258,8 @@ already_AddRefed<Response>
 TypeUtils::ToResponse(const CacheResponse& aIn)
 {
   if (aIn.type() == ResponseType::Error) {
-    RefPtr<InternalResponse> error = InternalResponse::NetworkError();
+    // We don't bother tracking the internal error code for cached responses...
+    RefPtr<InternalResponse> error = InternalResponse::NetworkError(NS_ERROR_FAILURE);
     RefPtr<Response> r = new Response(GetGlobalObject(), error, nullptr);
     return r.forget();
   }
@@ -280,7 +282,7 @@ TypeUtils::ToResponse(const CacheResponse& aIn)
   ir->InitChannelInfo(aIn.channelInfo());
   if (aIn.principalInfo().type() == mozilla::ipc::OptionalPrincipalInfo::TPrincipalInfo) {
     UniquePtr<mozilla::ipc::PrincipalInfo> info(new mozilla::ipc::PrincipalInfo(aIn.principalInfo().get_PrincipalInfo()));
-    ir->SetPrincipalInfo(Move(info));
+    ir->SetPrincipalInfo(std::move(info));
   }
 
   nsCOMPtr<nsIInputStream> stream = ReadStream::Create(aIn.body());
@@ -370,7 +372,7 @@ TypeUtils::ToInternalHeaders(const nsTArray<HeadersEntry>& aHeadersEntryList,
                                                    headersEntry.value()));
   }
 
-  RefPtr<InternalHeaders> ref = new InternalHeaders(Move(entryList), aGuard);
+  RefPtr<InternalHeaders> ref = new InternalHeaders(std::move(entryList), aGuard);
   return ref.forget();
 }
 
@@ -508,7 +510,7 @@ TypeUtils::SerializeCacheStream(nsIInputStream* aStream,
   UniquePtr<AutoIPCStream> autoStream(new AutoIPCStream(cacheStream.stream()));
   autoStream->Serialize(aStream, GetIPCManager());
 
-  aStreamCleanupList.AppendElement(Move(autoStream));
+  aStreamCleanupList.AppendElement(std::move(autoStream));
 }
 
 } // namespace cache

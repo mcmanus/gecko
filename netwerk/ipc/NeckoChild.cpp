@@ -32,6 +32,7 @@
 #include "nsIOService.h"
 #include "nsINetworkPredictor.h"
 #include "nsINetworkPredictorVerifier.h"
+#include "nsINetworkLinkService.h"
 #include "mozilla/ipc/URIUtils.h"
 #include "nsNetUtil.h"
 
@@ -45,9 +46,6 @@ namespace net {
 PNeckoChild *gNeckoChild = nullptr;
 
 // C++ file contents
-NeckoChild::NeckoChild()
-{
-}
 
 NeckoChild::~NeckoChild()
 {
@@ -114,6 +112,7 @@ NeckoChild::DeallocPStunAddrsRequestChild(PStunAddrsRequestChild* aActor)
 PAltDataOutputStreamChild*
 NeckoChild::AllocPAltDataOutputStreamChild(
         const nsCString& type,
+        const int64_t& predictedSize,
         PHttpChannelChild* channel)
 {
   // We don't allocate here: see HttpChannelChild::OpenAlternativeOutputStream()
@@ -206,7 +205,7 @@ PWebSocketEventListenerChild*
 NeckoChild::AllocPWebSocketEventListenerChild(const uint64_t& aInnerWindowID)
 {
   nsCOMPtr<nsIEventTarget> target;
-  if (nsGlobalWindow* win = nsGlobalWindow::GetInnerWindowWithId(aInnerWindowID)) {
+  if (nsGlobalWindowInner* win = nsGlobalWindowInner::GetInnerWindowWithId(aInnerWindowID)) {
     target = win->EventTargetFor(TaskCategory::Other);
   }
 
@@ -325,8 +324,7 @@ NeckoChild::DeallocPUDPSocketChild(PUDPSocketChild* child)
 PDNSRequestChild*
 NeckoChild::AllocPDNSRequestChild(const nsCString& aHost,
                                   const OriginAttributes& aOriginAttributes,
-                                  const uint32_t& aFlags,
-                                  const nsCString& aNetworkInterface)
+                                  const uint32_t& aFlags)
 {
   // We don't allocate here: instead we always use IPDL constructor that takes
   // an existing object
@@ -449,6 +447,17 @@ NeckoChild::RecvSpeculativeConnectRequest()
   if (obsService) {
     obsService->NotifyObservers(nullptr, "speculative-connect-request",
                                 nullptr);
+  }
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+NeckoChild::RecvNetworkChangeNotification(nsCString const& type)
+{
+  nsCOMPtr<nsIObserverService> obsService = services::GetObserverService();
+  if (obsService) {
+    obsService->NotifyObservers(nullptr, NS_NETWORK_LINK_TOPIC,
+                                NS_ConvertUTF8toUTF16(type).get());
   }
   return IPC_OK();
 }

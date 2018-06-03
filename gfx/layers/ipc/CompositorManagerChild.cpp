@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -64,7 +65,7 @@ CompositorManagerChild::Init(Endpoint<PCompositorManagerChild>&& aEndpoint,
     MOZ_ASSERT(sInstance->mNamespace != aNamespace);
   }
 
-  sInstance = new CompositorManagerChild(Move(aEndpoint), aProcessToken,
+  sInstance = new CompositorManagerChild(std::move(aEndpoint), aProcessToken,
                                          aNamespace);
   return sInstance->CanSend();
 }
@@ -108,7 +109,7 @@ CompositorManagerChild::CreateContentCompositorBridge(uint32_t aNamespace)
   PCompositorBridgeChild* pbridge =
     sInstance->SendPCompositorBridgeConstructor(options);
   if (NS_WARN_IF(!pbridge)) {
-    return true;
+    return false;
   }
 
   auto bridge = static_cast<CompositorBridgeChild*>(pbridge);
@@ -243,9 +244,9 @@ CompositorManagerChild::DeallocPCompositorBridgeChild(PCompositorBridgeChild* aA
 }
 
 void
-CompositorManagerChild::HandleFatalError(const char* aName, const char* aMsg) const
+CompositorManagerChild::HandleFatalError(const char* aMsg) const
 {
-  dom::ContentChild::FatalErrorIfNotUsingGPUProcess(aName, aMsg, OtherPid());
+  dom::ContentChild::FatalErrorIfNotUsingGPUProcess(aMsg, OtherPid());
 }
 
 void
@@ -260,7 +261,7 @@ already_AddRefed<nsIEventTarget>
 CompositorManagerChild::GetSpecificMessageEventTarget(const Message& aMsg)
 {
   if (aMsg.type() == PCompositorBridge::Msg_DidComposite__ID) {
-    uint64_t layersId;
+    LayersId layersId;
     PickleIterator iter(aMsg);
     if (!IPC::ReadParam(&aMsg, &iter, &layersId)) {
       return nullptr;
@@ -286,10 +287,8 @@ CompositorManagerChild::SetReplyTimeout()
 {
 #ifndef DEBUG
   // Add a timeout for release builds to kill GPU process when it hangs.
-  // Don't apply timeout when using web render as it tend to timeout frequently.
   if (XRE_IsParentProcess() &&
-      GPUProcessManager::Get()->GetGPUChild() &&
-      !gfx::gfxVars::UseWebRender()) {
+      GPUProcessManager::Get()->GetGPUChild()) {
     int32_t timeout = gfxPrefs::GPUProcessIPCReplyTimeoutMs();
     SetReplyTimeoutMs(timeout);
   }

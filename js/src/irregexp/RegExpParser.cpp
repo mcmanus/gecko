@@ -34,14 +34,14 @@
 #include "mozilla/Move.h"
 
 #include "frontend/TokenStream.h"
+#include "gc/GC.h"
 #include "irregexp/RegExpCharacters.h"
+#include "util/StringBuffer.h"
 #include "vm/ErrorReporting.h"
-#include "vm/StringBuffer.h"
 
 using namespace js;
 using namespace js::irregexp;
 
-using mozilla::Move;
 using mozilla::PointerRangeSize;
 
 // ----------------------------------------------------------------------------
@@ -235,7 +235,7 @@ RegExpBuilder::AddQuantifierToAtom(int min, int max,
 // RegExpParser
 
 template <typename CharT>
-RegExpParser<CharT>::RegExpParser(frontend::TokenStream& ts, LifoAlloc* alloc,
+RegExpParser<CharT>::RegExpParser(frontend::TokenStreamAnyChars& ts, LifoAlloc* alloc,
                                   const CharT* chars, const CharT* end, bool multiline_mode,
                                   bool unicode, bool ignore_case)
   : ts(ts),
@@ -305,7 +305,7 @@ RegExpParser<CharT>::SyntaxError(unsigned errorNumber, ...)
     va_list args;
     va_start(args, errorNumber);
 
-    ReportCompileError(ts.context(), Move(err), nullptr, JSREPORT_ERROR, errorNumber, args);
+    ReportCompileError(ts.context(), std::move(err), nullptr, JSREPORT_ERROR, errorNumber, args);
 
     va_end(args);
 }
@@ -328,6 +328,7 @@ RegExpParser<CharT>::Advance()
         next_pos_++;
     } else {
         current_ = kEndMarker;
+        next_pos_ = end_ + 1;
         has_more_ = false;
     }
 }
@@ -1900,7 +1901,8 @@ template class irregexp::RegExpParser<char16_t>;
 
 template <typename CharT>
 static bool
-ParsePattern(frontend::TokenStream& ts, LifoAlloc& alloc, const CharT* chars, size_t length,
+ParsePattern(frontend::TokenStreamAnyChars& ts, LifoAlloc& alloc,
+             const CharT* chars, size_t length,
              bool multiline, bool match_only, bool unicode, bool ignore_case,
              bool global, bool sticky, RegExpCompileData* data)
 {
@@ -1939,7 +1941,7 @@ ParsePattern(frontend::TokenStream& ts, LifoAlloc& alloc, const CharT* chars, si
 }
 
 bool
-irregexp::ParsePattern(frontend::TokenStream& ts, LifoAlloc& alloc, JSAtom* str,
+irregexp::ParsePattern(frontend::TokenStreamAnyChars& ts, LifoAlloc& alloc, JSAtom* str,
                        bool multiline, bool match_only, bool unicode, bool ignore_case,
                        bool global, bool sticky, RegExpCompileData* data)
 {
@@ -1953,8 +1955,8 @@ irregexp::ParsePattern(frontend::TokenStream& ts, LifoAlloc& alloc, JSAtom* str,
 
 template <typename CharT>
 static bool
-ParsePatternSyntax(frontend::TokenStream& ts, LifoAlloc& alloc, const CharT* chars, size_t length,
-                   bool unicode)
+ParsePatternSyntax(frontend::TokenStreamAnyChars& ts, LifoAlloc& alloc,
+                   const CharT* chars, size_t length, bool unicode)
 {
     LifoAllocScope scope(&alloc);
 
@@ -1963,7 +1965,7 @@ ParsePatternSyntax(frontend::TokenStream& ts, LifoAlloc& alloc, const CharT* cha
 }
 
 bool
-irregexp::ParsePatternSyntax(frontend::TokenStream& ts, LifoAlloc& alloc, JSAtom* str,
+irregexp::ParsePatternSyntax(frontend::TokenStreamAnyChars& ts, LifoAlloc& alloc, JSAtom* str,
                              bool unicode)
 {
     JS::AutoCheckCannotGC nogc;
@@ -1973,7 +1975,7 @@ irregexp::ParsePatternSyntax(frontend::TokenStream& ts, LifoAlloc& alloc, JSAtom
 }
 
 bool
-irregexp::ParsePatternSyntax(frontend::TokenStream& ts, LifoAlloc& alloc,
+irregexp::ParsePatternSyntax(frontend::TokenStreamAnyChars& ts, LifoAlloc& alloc,
                              const mozilla::Range<const char16_t> chars, bool unicode)
 {
     return ::ParsePatternSyntax(ts, alloc, chars.begin().get(), chars.length(), unicode);

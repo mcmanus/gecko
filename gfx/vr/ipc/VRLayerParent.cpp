@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -7,8 +8,10 @@
 #include "VRLayerParent.h"
 #include "mozilla/Unused.h"
 #include "VRDisplayHost.h"
+#include "mozilla/layers/CompositorThread.h"
 
 namespace mozilla {
+using namespace layers;
 namespace gfx {
 
 VRLayerParent::VRLayerParent(uint32_t aVRDisplayID, const uint32_t aGroup)
@@ -65,14 +68,12 @@ VRLayerParent::RecvSubmitFrame(const layers::SurfaceDescriptor &aTexture,
     VRManager* vm = VRManager::Get();
     RefPtr<VRDisplayHost> display = vm->GetDisplay(mVRDisplayID);
     if (display) {
-      display->SubmitFrame(this, aTexture, aFrameId,
-                           aLeftEyeRect, aRightEyeRect);
+      display->SubmitFrame(this, aTexture, aFrameId, aLeftEyeRect, aRightEyeRect);
     }
   }
 
   return IPC_OK();
 }
-
 
 } // namespace gfx
 } // namespace mozilla

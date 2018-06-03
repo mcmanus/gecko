@@ -4,8 +4,7 @@
 
 "use strict";
 
-const { Cu } = require("chrome");
-const promise = Cu.import("resource://devtools/shared/deprecated-sync-thenables.js", {}).Promise;
+const promise = require("devtools/shared/deprecated-sync-thenables");
 
 const eventSource = require("devtools/shared/client/event-source");
 const {DebuggerClient} = require("devtools/shared/client/debugger-client");
@@ -60,8 +59,8 @@ BreakpointClient.prototype = {
   /**
    * Determines if this breakpoint has a condition
    */
-  hasCondition: function () {
-    let root = this._client.mainRoot;
+  hasCondition: function() {
+    const root = this._client.mainRoot;
     // XXX bug 990137: We will remove support for client-side handling of
     // conditional breakpoints
     if (root.traits.conditionalBreakpoints) {
@@ -77,8 +76,8 @@ BreakpointClient.prototype = {
    * different property when moving it server-side to ensure that we
    * are testing the right code.
    */
-  getCondition: function () {
-    let root = this._client.mainRoot;
+  getCondition: function() {
+    const root = this._client.mainRoot;
     if (root.traits.conditionalBreakpoints) {
       return this.condition;
     }
@@ -88,12 +87,12 @@ BreakpointClient.prototype = {
   /**
    * Set the condition of this breakpoint
    */
-  setCondition: function (gThreadClient, condition) {
-    let root = this._client.mainRoot;
-    let deferred = promise.defer();
+  setCondition: function(gThreadClient, condition) {
+    const root = this._client.mainRoot;
+    const deferred = promise.defer();
 
     if (root.traits.conditionalBreakpoints) {
-      let info = {
+      const info = {
         line: this.location.line,
         column: this.location.column,
         condition: condition

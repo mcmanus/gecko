@@ -10,12 +10,12 @@ const {getClientCssProperties} = require("devtools/shared/fronts/css-properties"
 
 const TEST_URI = CHROME_URL_ROOT + "doc_filter-editor-01.html";
 
-add_task(function* () {
-  let [,, doc] = yield createHost("bottom", TEST_URI);
+add_task(async function() {
+  const [,, doc] = await createHost("bottom", TEST_URI);
   const cssIsValid = getClientCssProperties().getValidityChecker(doc);
 
   const container = doc.querySelector("#filter-container");
-  let widget = new CSSFilterEditorWidget(
+  const widget = new CSSFilterEditorWidget(
     container, "blur(2px) contrast(200%)", cssIsValid
   );
 

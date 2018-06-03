@@ -6,38 +6,35 @@
 
 "use strict";
 
-var Cu = Components.utils;
-var Cc = Components.classes;
-var Ci = Components.interfaces;
-var Cr = Components.results;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+ChromeUtils.import("resource://gre/modules/Timer.jsm", this);
+ChromeUtils.import("resource://gre/modules/Services.jsm", this);
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
-Cu.import("resource://gre/modules/Timer.jsm", this);
-Cu.import("resource://gre/modules/Services.jsm", this);
-
-XPCOMUtils.defineLazyModuleGetter(this, "TelemetryStopwatch",
+ChromeUtils.defineModuleGetter(this, "TelemetryStopwatch",
   "resource://gre/modules/TelemetryStopwatch.jsm");
 
 function debug(msg) {
   Services.console.logStringMessage("SessionStoreContent: " + msg);
 }
 
-XPCOMUtils.defineLazyModuleGetter(this, "FormData",
+ChromeUtils.defineModuleGetter(this, "FormData",
   "resource://gre/modules/FormData.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "DocShellCapabilities",
+ChromeUtils.defineModuleGetter(this, "DocShellCapabilities",
   "resource:///modules/sessionstore/DocShellCapabilities.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ScrollPosition",
+ChromeUtils.defineModuleGetter(this, "ScrollPosition",
   "resource://gre/modules/ScrollPosition.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "SessionHistory",
+ChromeUtils.defineModuleGetter(this, "SessionHistory",
   "resource://gre/modules/sessionstore/SessionHistory.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "SessionStorage",
+ChromeUtils.defineModuleGetter(this, "SessionStorage",
   "resource:///modules/sessionstore/SessionStorage.jsm");
 
-Cu.import("resource:///modules/sessionstore/ContentRestore.jsm", this);
+ChromeUtils.import("resource:///modules/sessionstore/ContentRestore.jsm", this);
 XPCOMUtils.defineLazyGetter(this, "gContentRestore",
-                            () => { return new ContentRestore(this) });
+                            () => { return new ContentRestore(this); });
 
+ChromeUtils.defineModuleGetter(this, "Utils",
+  "resource://gre/modules/sessionstore/Utils.jsm");
 const ssu = Cc["@mozilla.org/browser/sessionstore/utils;1"]
               .getService(Ci.nsISessionStoreUtils);
 
@@ -56,30 +53,16 @@ const PREF_INTERVAL = "browser.sessionstore.interval";
 const kNoIndex = Number.MAX_SAFE_INTEGER;
 const kLastIndex = Number.MAX_SAFE_INTEGER - 1;
 
+// Grab our global so we can access it in functions below.
+const global = this;
+
 /**
- * A function that will recursively call |cb| to collected data for all
+ * A function that will recursively call |cb| to collect data for all
  * non-dynamic frames in the current frame/docShell tree.
  */
 function mapFrameTree(callback) {
-  return (function map(frame, cb) {
-    // Collect data for the current frame.
-    let obj = cb(frame) || {};
-    let children = [];
-
-    // Recurse into child frames.
-    ssu.forEachNonDynamicChildFrame(frame, (subframe, index) => {
-      let result = map(subframe, cb);
-      if (result && Object.keys(result).length) {
-        children[index] = result;
-      }
-    });
-
-    if (children.length) {
-      obj.children = children;
-    }
-
-    return Object.keys(obj).length ? obj : null;
-  })(content, callback);
+  let [data] = Utils.mapFrameTree(content, callback);
+  return data;
 }
 
 /**
@@ -144,8 +127,8 @@ var StateChangeNotifier = {
     }
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener,
-                                         Ci.nsISupportsWeakReference])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIWebProgressListener,
+                                          Ci.nsISupportsWeakReference])
 };
 
 /**
@@ -155,7 +138,7 @@ var StateChangeNotifier = {
 var EventListener = {
 
   init() {
-    addEventListener("load", ssu.createDynamicFrameEventFilter(this), true);
+    ssu.addDynamicFrameFilteredListener(global, "load", this, true);
   },
 
   handleEvent(event) {
@@ -233,16 +216,7 @@ var MessageListener = {
         this.flush(data);
         break;
       case "SessionStore:becomeActiveProcess":
-        let shistory = docShell.QueryInterface(Ci.nsIWebNavigation).sessionHistory;
-        // Check if we are at the end of the current session history, if we are,
-        // it is safe for us to collect and transmit our session history, so
-        // transmit all of it. Otherwise, we only want to transmit our index changes,
-        // so collect from kLastIndex.
-        if (shistory.globalCount - shistory.globalIndexOffset == shistory.count) {
-          SessionHistoryListener.collect();
-        } else {
-          SessionHistoryListener.collectFrom(kLastIndex);
-        }
+        SessionHistoryListener.collect();
         break;
       default:
         debug("received unknown message '" + name + "'");
@@ -334,8 +308,8 @@ var SessionHistoryListener = {
     // waiting to add the listener later because these notifications are cheap.
     // We will likely only collect once since we are batching collection on
     // a delay.
-    docShell.QueryInterface(Ci.nsIWebNavigation).sessionHistory.
-      addSHistoryListener(this);
+    docShell.QueryInterface(Ci.nsIWebNavigation).
+      sessionHistory.legacySHistory.addSHistoryListener(this);
 
     // Collect data if we start with a non-empty shistory.
     if (!SessionHistory.isEmpty(docShell)) {
@@ -356,7 +330,7 @@ var SessionHistoryListener = {
   uninit() {
     let sessionHistory = docShell.QueryInterface(Ci.nsIWebNavigation).sessionHistory;
     if (sessionHistory) {
-      sessionHistory.removeSHistoryListener(this);
+      sessionHistory.legacySHistory.removeSHistoryListener(this);
     }
   },
 
@@ -458,7 +432,7 @@ var SessionHistoryListener = {
     // Ignore, the method is implemented so that XPConnect doesn't throw!
   },
 
-  QueryInterface: XPCOMUtils.generateQI([
+  QueryInterface: ChromeUtils.generateQI([
     Ci.nsISHistoryListener,
     Ci.nsISupportsWeakReference
   ])
@@ -478,7 +452,7 @@ var SessionHistoryListener = {
  */
 var ScrollPositionListener = {
   init() {
-    addEventListener("scroll", ssu.createDynamicFrameEventFilter(this));
+    ssu.addDynamicFrameFilteredListener(global, "scroll", this, false);
     StateChangeNotifier.addObserver(this);
   },
 
@@ -518,7 +492,7 @@ var ScrollPositionListener = {
  */
 var FormDataListener = {
   init() {
-    addEventListener("input", ssu.createDynamicFrameEventFilter(this), true);
+    ssu.addDynamicFrameFilteredListener(global, "input", this, true);
     StateChangeNotifier.addObserver(this);
   },
 
@@ -610,13 +584,15 @@ var SessionStorageListener = {
 
   resetEventListener() {
     if (!this._listener) {
-      this._listener = ssu.createDynamicFrameEventFilter(this);
-      addEventListener("MozSessionStorageChanged", this._listener, true);
+      this._listener =
+        ssu.addDynamicFrameFilteredListener(global, "MozSessionStorageChanged",
+                                            this, true);
     }
   },
 
   removeEventListener() {
-    removeEventListener("MozSessionStorageChanged", this._listener, true);
+    ssu.removeDynamicFrameFilteredListener(global, "MozSessionStorageChanged",
+                                           this._listener, true);
     this._listener = null;
   },
 
@@ -629,7 +605,6 @@ var SessionStorageListener = {
     let usage = content.QueryInterface(Ci.nsIInterfaceRequestor)
                        .getInterface(Ci.nsIDOMWindowUtils)
                        .getStorageUsage(event.storageArea);
-    Services.telemetry.getHistogramById("FX_SESSION_RESTORE_DOM_STORAGE_SIZE_ESTIMATE_CHARS").add(usage);
 
     // Don't store any data if we exceed the limit. Wipe any data we previously
     // collected so that we don't confuse websites with partial state.
@@ -709,8 +684,8 @@ var PrivacyListener = {
     MessageQueue.push("isPrivate", () => enabled || null);
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIPrivacyTransitionObserver,
-                                         Ci.nsISupportsWeakReference])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIPrivacyTransitionObserver,
+                                          Ci.nsISupportsWeakReference])
 };
 
 /**

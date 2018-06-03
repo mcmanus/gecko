@@ -37,14 +37,13 @@ HTMLIFrameElement::~HTMLIFrameElement()
 {
 }
 
-NS_IMPL_ISUPPORTS_INHERITED0(HTMLIFrameElement, nsGenericHTMLFrameElement)
-
 NS_IMPL_ELEMENT_CLONE(HTMLIFrameElement)
 
 bool
 HTMLIFrameElement::ParseAttribute(int32_t aNamespaceID,
                                   nsAtom* aAttribute,
                                   const nsAString& aValue,
+                                  nsIPrincipal* aMaybeScriptedPrincipal,
                                   nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None) {
@@ -76,28 +75,28 @@ HTMLIFrameElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return nsGenericHTMLFrameElement::ParseAttribute(aNamespaceID, aAttribute,
-                                                   aValue, aResult);
+                                                   aValue,
+                                                   aMaybeScriptedPrincipal,
+                                                   aResult);
 }
 
 void
 HTMLIFrameElement::MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
                                          GenericSpecifiedValues* aData)
 {
-  if (aData->ShouldComputeStyleStruct(NS_STYLE_INHERIT_BIT(Border))) {
-    // frameborder: 0 | 1 (| NO | YES in quirks mode)
-    // If frameborder is 0 or No, set border to 0
-    // else leave it as the value set in html.css
-    const nsAttrValue* value = aAttributes->GetAttr(nsGkAtoms::frameborder);
-    if (value && value->Type() == nsAttrValue::eEnum) {
-      int32_t frameborder = value->GetEnumValue();
-      if (NS_STYLE_FRAME_0 == frameborder ||
-          NS_STYLE_FRAME_NO == frameborder ||
-          NS_STYLE_FRAME_OFF == frameborder) {
-        aData->SetPixelValueIfUnset(eCSSProperty_border_top_width, 0.0f);
-        aData->SetPixelValueIfUnset(eCSSProperty_border_right_width, 0.0f);
-        aData->SetPixelValueIfUnset(eCSSProperty_border_bottom_width, 0.0f);
-        aData->SetPixelValueIfUnset(eCSSProperty_border_left_width, 0.0f);
-      }
+  // frameborder: 0 | 1 (| NO | YES in quirks mode)
+  // If frameborder is 0 or No, set border to 0
+  // else leave it as the value set in html.css
+  const nsAttrValue* value = aAttributes->GetAttr(nsGkAtoms::frameborder);
+  if (value && value->Type() == nsAttrValue::eEnum) {
+    int32_t frameborder = value->GetEnumValue();
+    if (NS_STYLE_FRAME_0 == frameborder ||
+        NS_STYLE_FRAME_NO == frameborder ||
+        NS_STYLE_FRAME_OFF == frameborder) {
+      aData->SetPixelValueIfUnset(eCSSProperty_border_top_width, 0.0f);
+      aData->SetPixelValueIfUnset(eCSSProperty_border_right_width, 0.0f);
+      aData->SetPixelValueIfUnset(eCSSProperty_border_bottom_width, 0.0f);
+      aData->SetPixelValueIfUnset(eCSSProperty_border_left_width, 0.0f);
     }
   }
 
@@ -136,7 +135,9 @@ HTMLIFrameElement::GetAttributeMappingFunction() const
 nsresult
 HTMLIFrameElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
-                                const nsAttrValue* aOldValue, bool aNotify)
+                                const nsAttrValue* aOldValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
+                                bool aNotify)
 {
   AfterMaybeChangeAttr(aNameSpaceID, aName, aNotify);
 
@@ -150,8 +151,10 @@ HTMLIFrameElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
       }
     }
   }
-  return nsGenericHTMLFrameElement::AfterSetAttr(aNameSpaceID, aName, aValue,
-                                                 aOldValue, aNotify);
+  return nsGenericHTMLFrameElement::AfterSetAttr(aNameSpaceID, aName,
+                                                 aValue, aOldValue,
+                                                 aMaybeScriptedPrincipal,
+                                                 aNotify);
 }
 
 nsresult

@@ -70,8 +70,11 @@ HTMLOutputElement::SubmitNamesValues(HTMLFormSubmission* aFormSubmission)
 }
 
 bool
-HTMLOutputElement::ParseAttribute(int32_t aNamespaceID, nsAtom* aAttribute,
-                                  const nsAString& aValue, nsAttrValue& aResult)
+HTMLOutputElement::ParseAttribute(int32_t aNamespaceID,
+                                  nsAtom* aAttribute,
+                                  const nsAString& aValue,
+                                  nsIPrincipal* aMaybeScriptedPrincipal,
+                                  nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None) {
     if (aAttribute == nsGkAtoms::_for) {
@@ -81,7 +84,9 @@ HTMLOutputElement::ParseAttribute(int32_t aNamespaceID, nsAtom* aAttribute,
   }
 
   return nsGenericHTMLFormElement::ParseAttribute(aNamespaceID, aAttribute,
-                                                  aValue, aResult);
+                                                  aValue,
+                                                  aMaybeScriptedPrincipal,
+                                                  aResult);
 }
 
 void
@@ -150,7 +155,9 @@ HTMLOutputElement::SetDefaultValue(const nsAString& aDefaultValue, ErrorResult& 
 {
   mDefaultValue = aDefaultValue;
   if (mValueModeFlag == eModeDefault) {
-    aRv = nsContentUtils::SetNodeTextContent(this, mDefaultValue, true);
+    // We can't pass mDefaultValue, because it'll be truncated when
+    // the element's descendants are changed.
+    aRv = nsContentUtils::SetNodeTextContent(this, aDefaultValue, true);
   }
 }
 
@@ -172,30 +179,23 @@ void HTMLOutputElement::DescendantsChanged()
 
 // nsIMutationObserver
 
-void HTMLOutputElement::CharacterDataChanged(nsIDocument* aDocument,
-                                             nsIContent* aContent,
-                                             CharacterDataChangeInfo* aInfo)
+void HTMLOutputElement::CharacterDataChanged(nsIContent* aContent,
+                                             const CharacterDataChangeInfo&)
 {
   DescendantsChanged();
 }
 
-void HTMLOutputElement::ContentAppended(nsIDocument* aDocument,
-                                        nsIContent* aContainer,
-                                        nsIContent* aFirstNewContent)
+void HTMLOutputElement::ContentAppended(nsIContent* aFirstNewContent)
 {
   DescendantsChanged();
 }
 
-void HTMLOutputElement::ContentInserted(nsIDocument* aDocument,
-                                        nsIContent* aContainer,
-                                        nsIContent* aChild)
+void HTMLOutputElement::ContentInserted(nsIContent* aChild)
 {
   DescendantsChanged();
 }
 
-void HTMLOutputElement::ContentRemoved(nsIDocument* aDocument,
-                                       nsIContent* aContainer,
-                                       nsIContent* aChild,
+void HTMLOutputElement::ContentRemoved(nsIContent* aChild,
                                        nsIContent* aPreviousSibling)
 {
   DescendantsChanged();

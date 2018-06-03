@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/gfx/PrintTargetCG.h"
 #include "mozilla/Preferences.h"
 
 #include "nsPrintDialogX.h"
@@ -22,6 +23,7 @@
 #include "nsObjCExceptions.h"
 
 using namespace mozilla;
+using mozilla::gfx::PrintTarget;
 
 NS_IMPL_ISUPPORTS(nsPrintDialogServiceX, nsIPrintDialogService)
 
@@ -45,7 +47,7 @@ nsPrintDialogServiceX::Show(nsPIDOMWindowOuter *aParent, nsIPrintSettings *aSett
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
-  NS_PRECONDITION(aSettings, "aSettings must not be null");
+  MOZ_ASSERT(aSettings, "aSettings must not be null");
 
   RefPtr<nsPrintSettingsX> settingsX(do_QueryObject(aSettings));
   if (!settingsX)
@@ -59,8 +61,16 @@ nsPrintDialogServiceX::Show(nsPIDOMWindowOuter *aParent, nsIPrintSettings *aSett
   uint32_t titleCount;
   nsresult rv = aWebBrowserPrint->EnumerateDocumentNames(&titleCount, &docTitles);
   if (NS_SUCCEEDED(rv) && titleCount > 0) {
-    CFStringRef cfTitleString = CFStringCreateWithCharacters(NULL, reinterpret_cast<const UniChar*>(docTitles[0]),
-                                                             NS_strlen(docTitles[0]));
+    // Print Core of Application Service sent print job with names exceeding
+    // 255 bytes. This is a workaround until fix it.
+    // (https://openradar.appspot.com/34428043)
+    nsAutoString adjustedTitle;
+    PrintTarget::AdjustPrintJobNameForIPP(nsDependentString(docTitles[0]),
+                                          adjustedTitle);
+    CFStringRef cfTitleString =
+      CFStringCreateWithCharacters(NULL,
+                                   reinterpret_cast<const UniChar*>(adjustedTitle.BeginReading()),
+                                   adjustedTitle.Length());
     if (cfTitleString) {
       ::PMPrintSettingsSetJobName(settingsX->GetPMPrintSettings(), cfTitleString);
       CFRelease(cfTitleString);
@@ -187,8 +197,8 @@ nsPrintDialogServiceX::ShowPageSetup(nsPIDOMWindowOuter *aParent,
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
-  NS_PRECONDITION(aParent, "aParent must not be null");
-  NS_PRECONDITION(aNSSettings, "aSettings must not be null");
+  MOZ_ASSERT(aParent, "aParent must not be null");
+  MOZ_ASSERT(aNSSettings, "aSettings must not be null");
   NS_ENSURE_TRUE(aNSSettings, NS_ERROR_FAILURE);
 
   RefPtr<nsPrintSettingsX> settingsX(do_QueryObject(aNSSettings));
@@ -515,32 +525,32 @@ static const char sHeaderFooterTags[][4] =  {"", "&T", "&U", "&D", "&P", "&PT"};
   // Lists
   nsString sel;
 
-  mSettings->GetHeaderStrLeft(getter_Copies(sel));
+  mSettings->GetHeaderStrLeft(sel);
   mHeaderLeftList = [self headerFooterItemListWithFrame:NSMakeRect(156, 44, 100, 22)
                                            selectedItem:sel];
   [self addSubview:mHeaderLeftList];
 
-  mSettings->GetHeaderStrCenter(getter_Copies(sel));
+  mSettings->GetHeaderStrCenter(sel);
   mHeaderCenterList = [self headerFooterItemListWithFrame:NSMakeRect(256, 44, 100, 22)
                                              selectedItem:sel];
   [self addSubview:mHeaderCenterList];
 
-  mSettings->GetHeaderStrRight(getter_Copies(sel));
+  mSettings->GetHeaderStrRight(sel);
   mHeaderRightList = [self headerFooterItemListWithFrame:NSMakeRect(356, 44, 100, 22)
                                             selectedItem:sel];
   [self addSubview:mHeaderRightList];
 
-  mSettings->GetFooterStrLeft(getter_Copies(sel));
+  mSettings->GetFooterStrLeft(sel);
   mFooterLeftList = [self headerFooterItemListWithFrame:NSMakeRect(156, 0, 100, 22)
                                            selectedItem:sel];
   [self addSubview:mFooterLeftList];
 
-  mSettings->GetFooterStrCenter(getter_Copies(sel));
+  mSettings->GetFooterStrCenter(sel);
   mFooterCenterList = [self headerFooterItemListWithFrame:NSMakeRect(256, 0, 100, 22)
                                              selectedItem:sel];
   [self addSubview:mFooterCenterList];
 
-  mSettings->GetFooterStrRight(getter_Copies(sel));
+  mSettings->GetFooterStrRight(sel);
   mFooterRightList = [self headerFooterItemListWithFrame:NSMakeRect(356, 0, 100, 22)
                                             selectedItem:sel];
   [self addSubview:mFooterRightList];
@@ -570,22 +580,22 @@ static const char sHeaderFooterTags[][4] =  {"", "&T", "&U", "&D", "&P", "&PT"};
 {
   const char* headerFooterStr;
   headerFooterStr = [self headerFooterStringForList:mHeaderLeftList];
-  mSettings->SetHeaderStrLeft(NS_ConvertUTF8toUTF16(headerFooterStr).get());
+  mSettings->SetHeaderStrLeft(NS_ConvertUTF8toUTF16(headerFooterStr));
 
   headerFooterStr = [self headerFooterStringForList:mHeaderCenterList];
-  mSettings->SetHeaderStrCenter(NS_ConvertUTF8toUTF16(headerFooterStr).get());
+  mSettings->SetHeaderStrCenter(NS_ConvertUTF8toUTF16(headerFooterStr));
 
   headerFooterStr = [self headerFooterStringForList:mHeaderRightList];
-  mSettings->SetHeaderStrRight(NS_ConvertUTF8toUTF16(headerFooterStr).get());
+  mSettings->SetHeaderStrRight(NS_ConvertUTF8toUTF16(headerFooterStr));
 
   headerFooterStr = [self headerFooterStringForList:mFooterLeftList];
-  mSettings->SetFooterStrLeft(NS_ConvertUTF8toUTF16(headerFooterStr).get());
+  mSettings->SetFooterStrLeft(NS_ConvertUTF8toUTF16(headerFooterStr));
 
   headerFooterStr = [self headerFooterStringForList:mFooterCenterList];
-  mSettings->SetFooterStrCenter(NS_ConvertUTF8toUTF16(headerFooterStr).get());
+  mSettings->SetFooterStrCenter(NS_ConvertUTF8toUTF16(headerFooterStr));
 
   headerFooterStr = [self headerFooterStringForList:mFooterRightList];
-  mSettings->SetFooterStrRight(NS_ConvertUTF8toUTF16(headerFooterStr).get());
+  mSettings->SetFooterStrRight(NS_ConvertUTF8toUTF16(headerFooterStr));
 }
 
 // Summary

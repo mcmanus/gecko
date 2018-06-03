@@ -134,6 +134,7 @@ StreamFilterChild::Disconnect(ErrorResult& aRv)
     mState = State::Disconnecting;
     mNextState = State::Disconnected;
 
+    WriteBufferedData();
     SendDisconnect();
     break;
 
@@ -267,6 +268,8 @@ StreamFilterChild::MaybeStopRequest()
     return;
 
   case State::Disconnecting:
+  case State::Closing:
+  case State::Closed:
     break;
 
   default:
@@ -299,6 +302,18 @@ StreamFilterChild::RecvInitialized(bool aSuccess)
       mStreamFilter = nullptr;
     }
   }
+}
+
+IPCResult
+StreamFilterChild::RecvError(const nsCString& aError)
+{
+  mState = State::Error;
+  if (mStreamFilter) {
+    mStreamFilter->FireErrorEvent(NS_ConvertUTF8toUTF16(aError));
+    mStreamFilter = nullptr;
+  }
+  SendDestroy();
+  return IPC_OK();
 }
 
 IPCResult
@@ -365,7 +380,7 @@ StreamFilterChild::Write(Data&& aData, ErrorResult& aRv)
     return;
   }
 
-  SendWrite(Move(aData));
+  SendWrite(std::move(aData));
 }
 
 StreamFilterStatus
@@ -475,6 +490,16 @@ StreamFilterChild::FlushBufferedData()
   }
 }
 
+void
+StreamFilterChild::WriteBufferedData()
+{
+  while (!mBufferedData.isEmpty()) {
+    UniquePtr<BufferedData> data(mBufferedData.popFirst());
+
+    SendWrite(data->mData);
+  }
+}
+
 IPCResult
 StreamFilterChild::RecvData(Data&& aData)
 {
@@ -497,11 +522,11 @@ StreamFilterChild::RecvData(Data&& aData)
 
   case State::Suspending:
   case State::Suspended:
-    BufferData(Move(aData));
+    BufferData(std::move(aData));
     break;
 
   case State::Disconnecting:
-    SendWrite(Move(aData));
+    SendWrite(std::move(aData));
     break;
 
   case State::Closing:

@@ -7,10 +7,10 @@
  * works properly.
  */
 
-add_task(function () {
-  let FrameUtils = require("devtools/client/performance/modules/logic/frame-utils");
+add_task(function() {
+  const FrameUtils = require("devtools/client/performance/modules/logic/frame-utils");
 
-  let isContent = (frame) => {
+  const isContent = (frame) => {
     FrameUtils.computeIsContentAndCategory(frame);
     return frame.isContent;
   };

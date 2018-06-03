@@ -110,7 +110,6 @@ GetObject(const MDefinition* ins)
       case MDefinition::Opcode::GuardReceiverPolymorphic:
       case MDefinition::Opcode::GuardObjectGroup:
       case MDefinition::Opcode::GuardObjectIdentity:
-      case MDefinition::Opcode::GuardClass:
       case MDefinition::Opcode::GuardUnboxedExpando:
       case MDefinition::Opcode::LoadUnboxedExpando:
       case MDefinition::Opcode::LoadSlot:
@@ -124,8 +123,6 @@ GetObject(const MDefinition* ins)
         object = ins->getOperand(0);
         break;
       case MDefinition::Opcode::GetPropertyCache:
-      case MDefinition::Opcode::LoadTypedArrayElementStatic:
-      case MDefinition::Opcode::StoreTypedArrayElementStatic:
       case MDefinition::Opcode::GetDOMProperty:
       case MDefinition::Opcode::GetDOMMember:
       case MDefinition::Opcode::Call:
@@ -142,8 +139,9 @@ GetObject(const MDefinition* ins)
       case MDefinition::Opcode::WasmLoadTls:
       case MDefinition::Opcode::WasmLoad:
       case MDefinition::Opcode::WasmStore:
-      case MDefinition::Opcode::AsmJSCompareExchangeHeap:
-      case MDefinition::Opcode::AsmJSAtomicBinopHeap:
+      case MDefinition::Opcode::WasmCompareExchangeHeap:
+      case MDefinition::Opcode::WasmAtomicBinopHeap:
+      case MDefinition::Opcode::WasmAtomicExchangeHeap:
       case MDefinition::Opcode::WasmLoadGlobalVar:
       case MDefinition::Opcode::WasmStoreGlobalVar:
       case MDefinition::Opcode::ArrayJoin:

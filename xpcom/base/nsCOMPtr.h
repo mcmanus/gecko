@@ -123,7 +123,7 @@ template<class T>
 inline already_AddRefed<T>&&
 dont_AddRef(already_AddRefed<T>&& aAlreadyAddRefedPtr)
 {
-  return mozilla::Move(aAlreadyAddRefedPtr);
+  return std::move(aAlreadyAddRefedPtr);
 }
 
 
@@ -616,6 +616,13 @@ public:
   nsCOMPtr<T>& operator=(const nsCOMPtr<T>& aRhs)
   {
     assign_with_AddRef(aRhs.mRawPtr);
+    return *this;
+  }
+
+  nsCOMPtr<T>& operator=(nsCOMPtr<T>&& aRhs)
+  {
+    assign_assuming_AddRef(aRhs.forget().take());
+    NSCAP_ASSERT_NO_QUERY_NEEDED();
     return *this;
   }
 
@@ -1547,6 +1554,14 @@ RefPtr<T>::operator=(const nsCOMPtr_helper& aHelper)
   }
   assign_assuming_AddRef(static_cast<T*>(newRawPtr));
   return *this;
+}
+
+template <class T>
+inline already_AddRefed<T>
+do_AddRef(const nsCOMPtr<T>& aObj)
+{
+  nsCOMPtr<T> ref(aObj);
+  return ref.forget();
 }
 
 #endif // !defined(nsCOMPtr_h___)

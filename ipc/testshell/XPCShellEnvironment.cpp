@@ -132,11 +132,10 @@ Load(JSContext *cx,
 {
     JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
 
-    JS::Rooted<JSObject*> obj(cx, JS_THIS_OBJECT(cx, vp));
-    if (!obj)
+    JS::RootedObject thisObject(cx);
+    if (!args.computeThis(cx, &thisObject))
         return false;
-
-    if (!JS_IsGlobalObject(obj)) {
+    if (!JS_IsGlobalObject(thisObject)) {
         JS_ReportErrorASCII(cx, "Trying to load() into a non-global object");
         return false;
     }
@@ -170,18 +169,6 @@ Load(JSContext *cx,
         }
     }
     args.rval().setUndefined();
-    return true;
-}
-
-static bool
-Version(JSContext *cx,
-        unsigned argc,
-        JS::Value *vp)
-{
-    JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
-    args.rval().setInt32(JS_GetVersion(cx));
-    if (args.get(0).isInt32())
-        JS::SetVersionForCurrentRealm(cx, JSVersion(args[0].toInt32()));
     return true;
 }
 
@@ -250,7 +237,6 @@ const JSFunctionSpec gGlobalFunctions[] =
     JS_FN("print",           Print,          0,0),
     JS_FN("load",            Load,           1,0),
     JS_FN("quit",            Quit,           0,0),
-    JS_FN("version",         Version,        1,0),
     JS_FN("dumpXPC",         DumpXPC,        1,0),
     JS_FN("dump",            Dump,           1,0),
     JS_FN("gc",              GC,             0,0),
@@ -401,7 +387,7 @@ XPCShellEnvironment::~XPCShellEnvironment()
         Rooted<JSObject*> global(cx, GetGlobalObject());
 
         {
-            JSAutoCompartment ac(cx, global);
+            JSAutoRealm ar(cx, global);
             JS_SetAllNonReservedSlotsToUndefined(cx, global);
         }
         mGlobalHolder.reset();
@@ -442,9 +428,8 @@ XPCShellEnvironment::Init()
         return false;
     }
 
-    JS::CompartmentOptions options;
+    JS::RealmOptions options;
     options.creationOptions().setSystemZone();
-    options.behaviors().setVersion(JSVERSION_DEFAULT);
     if (xpc::SharedMemoryEnabled())
         options.creationOptions().setSharedMemoryAndAtomicsEnabled(true);
 
@@ -463,7 +448,7 @@ XPCShellEnvironment::Init()
         NS_ERROR("Failed to get global JSObject!");
         return false;
     }
-    JSAutoCompartment ac(cx, globalObj);
+    JSAutoRealm ar(cx, globalObj);
 
     backstagePass->SetGlobalObject(globalObj);
 

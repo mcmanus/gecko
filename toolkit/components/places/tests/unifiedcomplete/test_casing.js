@@ -3,24 +3,22 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 add_task(async function test_casing_1() {
-  do_print("Searching for cased entry 1");
+  info("Searching for cased entry 1");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("http://mozilla.org/test/"),
-    transition: TRANSITION_TYPED
   });
   await check_autocomplete({
     search: "MOZ",
     autofilled: "MOZilla.org/",
-    completed: "mozilla.org/"
+    completed: "http://mozilla.org/"
   });
   await cleanup();
 });
 
 add_task(async function test_casing_2() {
-  do_print("Searching for cased entry 2");
+  info("Searching for cased entry 2");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("http://mozilla.org/test/"),
-    transition: TRANSITION_TYPED
   });
   await check_autocomplete({
     search: "mozilla.org/T",
@@ -31,10 +29,9 @@ add_task(async function test_casing_2() {
 });
 
 add_task(async function test_casing_3() {
-  do_print("Searching for cased entry 3");
+  info("Searching for cased entry 3");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("http://mozilla.org/Test/"),
-    transition: TRANSITION_TYPED
   });
   await check_autocomplete({
     search: "mozilla.org/T",
@@ -45,10 +42,9 @@ add_task(async function test_casing_3() {
 });
 
 add_task(async function test_casing_4() {
-  do_print("Searching for cased entry 4");
+  info("Searching for cased entry 4");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("http://mozilla.org/Test/"),
-    transition: TRANSITION_TYPED
   });
   await check_autocomplete({
     search: "mOzilla.org/t",
@@ -59,10 +55,9 @@ add_task(async function test_casing_4() {
 });
 
 add_task(async function test_casing_5() {
-  do_print("Searching for cased entry 5");
+  info("Searching for cased entry 5");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("http://mozilla.org/Test/"),
-    transition: TRANSITION_TYPED
   });
   await check_autocomplete({
     search: "mOzilla.org/T",
@@ -73,10 +68,9 @@ add_task(async function test_casing_5() {
 });
 
 add_task(async function test_untrimmed_casing() {
-  do_print("Searching for untrimmed cased entry");
+  info("Searching for untrimmed cased entry");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("http://mozilla.org/Test/"),
-    transition: TRANSITION_TYPED
   });
   await check_autocomplete({
     search: "http://mOz",
@@ -87,10 +81,9 @@ add_task(async function test_untrimmed_casing() {
 });
 
 add_task(async function test_untrimmed_www_casing() {
-  do_print("Searching for untrimmed cased entry with www");
+  info("Searching for untrimmed cased entry with www");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("http://www.mozilla.org/Test/"),
-    transition: TRANSITION_TYPED
   });
   await check_autocomplete({
     search: "http://www.mOz",
@@ -101,10 +94,9 @@ add_task(async function test_untrimmed_www_casing() {
 });
 
 add_task(async function test_untrimmed_path_casing() {
-  do_print("Searching for untrimmed cased entry with path");
+  info("Searching for untrimmed cased entry with path");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("http://mozilla.org/Test/"),
-    transition: TRANSITION_TYPED
   });
   await check_autocomplete({
     search: "http://mOzilla.org/t",
@@ -115,10 +107,9 @@ add_task(async function test_untrimmed_path_casing() {
 });
 
 add_task(async function test_untrimmed_path_casing_2() {
-  do_print("Searching for untrimmed cased entry with path 2");
+  info("Searching for untrimmed cased entry with path 2");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("http://mozilla.org/Test/"),
-    transition: TRANSITION_TYPED
   });
   await check_autocomplete({
     search: "http://mOzilla.org/T",
@@ -129,10 +120,9 @@ add_task(async function test_untrimmed_path_casing_2() {
 });
 
 add_task(async function test_untrimmed_path_www_casing() {
-  do_print("Searching for untrimmed cased entry with www and path");
+  info("Searching for untrimmed cased entry with www and path");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("http://www.mozilla.org/Test/"),
-    transition: TRANSITION_TYPED
   });
   await check_autocomplete({
     search: "http://www.mOzilla.org/t",
@@ -143,10 +133,9 @@ add_task(async function test_untrimmed_path_www_casing() {
 });
 
 add_task(async function test_untrimmed_path_www_casing_2() {
-  do_print("Searching for untrimmed cased entry with www and path 2");
+  info("Searching for untrimmed cased entry with www and path 2");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("http://www.mozilla.org/Test/"),
-    transition: TRANSITION_TYPED
   });
   await check_autocomplete({
     search: "http://www.mOzilla.org/T",
@@ -171,21 +160,21 @@ add_task(async function test_searching() {
     { uri: uri5, title: "lowercase k" },
   ]);
 
-  do_print("Search for lowercase lambda");
+  info("Search for lowercase lambda");
   await check_autocomplete({
     search: "\u03BB",
     matches: [ { uri: uri1, title: "uppercase lambda \u039B" },
                { uri: uri2, title: "lowercase lambda \u03BB" } ]
   });
 
-  do_print("Search for uppercase lambda");
+  info("Search for uppercase lambda");
   await check_autocomplete({
     search: "\u039B",
     matches: [ { uri: uri1, title: "uppercase lambda \u039B" },
                { uri: uri2, title: "lowercase lambda \u03BB" } ]
   });
 
-  do_print("Search for kelvin sign");
+  info("Search for kelvin sign");
   await check_autocomplete({
     search: "\u212A",
     matches: [ { uri: uri3, title: "symbol \u212A" },
@@ -193,7 +182,7 @@ add_task(async function test_searching() {
                { uri: uri5, title: "lowercase k" } ]
   });
 
-  do_print("Search for lowercase k");
+  info("Search for lowercase k");
   await check_autocomplete({
     search: "k",
     matches: [ { uri: uri3, title: "symbol \u212A" },
@@ -201,7 +190,7 @@ add_task(async function test_searching() {
                { uri: uri5, title: "lowercase k" } ]
   });
 
-  do_print("Search for uppercase k");
+  info("Search for uppercase k");
   await check_autocomplete({
     search: "K",
     matches: [ { uri: uri3, title: "symbol \u212A" },

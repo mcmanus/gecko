@@ -45,32 +45,32 @@ const TEST_DATA = [
   }
 ];
 
-add_task(function* () {
-  let { toolbox, inspector } = yield openInspectorForURL(TEST_URL);
-  let doc = inspector.panelDoc;
-  let {breadcrumbs} = inspector;
+add_task(async function() {
+  const { toolbox, inspector } = await openInspectorForURL(TEST_URL);
+  const doc = inspector.panelDoc;
+  const {breadcrumbs} = inspector;
 
-  yield selectNode("#i2", inspector);
+  await selectNode("#i2", inspector);
 
   info("Clicking on the corresponding breadcrumbs node to focus it");
-  let container = doc.getElementById("inspector-breadcrumbs");
+  const container = doc.getElementById("inspector-breadcrumbs");
 
-  let button = container.querySelector("button[checked]");
-  let onHighlight = toolbox.once("node-highlight");
+  const button = container.querySelector("button[checked]");
+  const onHighlight = toolbox.once("node-highlight");
   button.click();
-  yield onHighlight;
+  await onHighlight;
 
   // Ensure a breadcrumb is focused.
   is(doc.activeElement, container, "Focus is on selected breadcrumb");
   is(container.getAttribute("aria-activedescendant"), button.id,
     "aria-activedescendant is set correctly");
 
-  for (let { desc, focused, key, options } of TEST_DATA) {
+  for (const { desc, focused, key, options } of TEST_DATA) {
     info(desc);
 
     EventUtils.synthesizeKey(key, options);
     // Wait until the keyPromise promise resolves.
-    yield breadcrumbs.keyPromise;
+    await breadcrumbs.keyPromise;
 
     if (focused) {
       is(doc.activeElement, container, "Focus is on selected breadcrumb");

@@ -10,6 +10,7 @@
 #include "nsCOMPtr.h"
 #include "nsContentUtils.h"
 #include "nsDocShell.h"
+#include "nsHttp.h"
 #include "nsIDocShellTreeItem.h"
 #include "nsIScriptSecurityManager.h"
 #include "prtime.h"
@@ -119,8 +120,23 @@ nsDOMNavigationTiming::NotifyLoadEventStart()
   PROFILER_TRACING("Navigation", "Load", TRACING_INTERVAL_START);
 
   if (IsTopLevelContentDocumentInContentProcess()) {
+    TimeStamp now = TimeStamp::Now();
+
     Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_LOAD_EVENT_START_MS,
-                                   mNavigationStart);
+                                   mNavigationStart,
+                                   now);
+
+    if (mDocShellHasBeenActiveSinceNavigationStart) {
+      if (net::nsHttp::IsBeforeLastActiveTabLoadOptimization(mNavigationStart)) {
+        Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_LOAD_EVENT_START_ACTIVE_NETOPT_MS,
+                                       mNavigationStart,
+                                       now);
+      } else {
+        Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_LOAD_EVENT_START_ACTIVE_MS,
+                                       mNavigationStart,
+                                       now);
+      }
+    }
   }
 }
 
@@ -199,8 +215,23 @@ nsDOMNavigationTiming::NotifyDOMContentLoadedStart(nsIURI* aURI)
   PROFILER_TRACING("Navigation", "DOMContentLoaded", TRACING_INTERVAL_START);
 
   if (IsTopLevelContentDocumentInContentProcess()) {
+    TimeStamp now = TimeStamp::Now();
+
     Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_DOM_CONTENT_LOADED_START_MS,
-                                   mNavigationStart);
+                                   mNavigationStart,
+                                   now);
+
+    if (mDocShellHasBeenActiveSinceNavigationStart) {
+      if (net::nsHttp::IsBeforeLastActiveTabLoadOptimization(mNavigationStart)) {
+        Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_DOM_CONTENT_LOADED_START_ACTIVE_NETOPT_MS,
+                                       mNavigationStart,
+                                       now);
+      } else {
+        Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_DOM_CONTENT_LOADED_START_ACTIVE_MS,
+                                       mNavigationStart,
+                                       now);
+      }
+    }
   }
 }
 
@@ -249,10 +280,47 @@ nsDOMNavigationTiming::NotifyNonBlankPaintForRootContentDocument()
 #endif
 
   if (mDocShellHasBeenActiveSinceNavigationStart) {
+    if (net::nsHttp::IsBeforeLastActiveTabLoadOptimization(mNavigationStart)) {
+      Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_NON_BLANK_PAINT_NETOPT_MS,
+                                     mNavigationStart,
+                                     mNonBlankPaint);
+    } else {
+      Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_NON_BLANK_PAINT_NO_NETOPT_MS,
+                                     mNavigationStart,
+                                     mNonBlankPaint);
+    }
+
     Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_NON_BLANK_PAINT_MS,
                                    mNavigationStart,
                                    mNonBlankPaint);
   }
+}
+
+void
+nsDOMNavigationTiming::NotifyDOMContentFlushedForRootContentDocument()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!mNavigationStart.IsNull());
+
+  if (!mDOMContentFlushed.IsNull()) {
+    return;
+  }
+
+  mDOMContentFlushed = TimeStamp::Now();
+
+#ifdef MOZ_GECKO_PROFILER
+  if (profiler_is_active()) {
+    TimeDuration elapsed = mDOMContentFlushed - mNavigationStart;
+    nsAutoCString spec;
+    if (mLoadedURI) {
+      mLoadedURI->GetSpec(spec);
+    }
+    nsPrintfCString marker("DOMContentFlushed after %dms for URL %s, %s",
+                           int(elapsed.ToMilliseconds()), spec.get(),
+                           mDocShellHasBeenActiveSinceNavigationStart ? "foreground tab" : "this tab was inactive some of the time between navigation start and DOMContentFlushed");
+    profiler_add_marker(marker.get());
+  }
+#endif
 }
 
 void

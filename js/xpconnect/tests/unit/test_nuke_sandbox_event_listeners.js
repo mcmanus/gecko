@@ -4,9 +4,7 @@
 
 // See https://bugzilla.mozilla.org/show_bug.cgi?id=1273251
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
-
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 function promiseEvent(target, event) {
   return new Promise(resolve => {
@@ -47,29 +45,29 @@ add_task(async function() {
   equal(window.onload.name, "SandboxOnLoad",
         "window.onload have the correct function name");
 
-  do_print("Dispatch FromTest event");
+  info("Dispatch FromTest event");
   window.dispatchEvent(new window.CustomEvent("FromTest"));
 
   await fromTestPromise;
-  do_print("Got event from test");
+  info("Got event from test");
 
   await fromSandboxPromise;
-  do_print("Got response from sandbox");
+  info("Got response from sandbox");
 
 
   window.addEventListener("FromSandbox", () => {
     ok(false, "Got unexpected reply from sandbox");
   }, true);
 
-  do_print("Nuke sandbox");
+  info("Nuke sandbox");
   Cu.nukeSandbox(sandbox);
 
 
-  do_print("Dispatch FromTest event");
+  info("Dispatch FromTest event");
   fromTestPromise = promiseEvent(window, "FromTest");
   window.dispatchEvent(new window.CustomEvent("FromTest"));
   await fromTestPromise;
-  do_print("Got event from test");
+  info("Got event from test");
 
 
   // Force cycle collection, which should cause our callback reference
@@ -80,11 +78,11 @@ add_task(async function() {
   ok(Cu.isDeadWrapper(window.onload),
      "window.onload should contain a dead wrapper after sandbox is nuked");
 
-  do_print("Dispatch FromTest event");
+  info("Dispatch FromTest event");
   fromTestPromise = promiseEvent(window, "FromTest");
   window.dispatchEvent(new window.CustomEvent("FromTest"));
   await fromTestPromise;
-  do_print("Got event from test");
+  info("Got event from test");
 
   let listeners = Services.els.getListenerInfoFor(window);
   ok(!listeners.some(info => info.type == "FromTest"),

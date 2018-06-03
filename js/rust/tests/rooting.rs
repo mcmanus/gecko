@@ -17,12 +17,12 @@ use std::ptr;
 #[test]
 fn rooting() {
     unsafe {
-        let runtime = Runtime::new().unwrap();
+        let runtime = Runtime::new(false).unwrap();
         JS_SetGCZeal(runtime.cx(), 2, 1);
 
         let cx = runtime.cx();
         let h_option = JS::OnNewGlobalHookOption::FireOnNewGlobalHook;
-        let c_option = JS::CompartmentOptions::default();
+        let c_option = JS::RealmOptions::default();
 
         rooted!(in(cx) let global = JS_NewGlobalObject(cx,
                                                        &SIMPLE_GLOBAL_CLASS,

@@ -2,23 +2,20 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const {utils: Cu} = Components;
-
 Cu.importGlobalProperties(["fetch", "URL"]);
 
 const TIPPYTOP_JSON_PATH = "resource://activity-stream/data/content/tippytop/top_sites.json";
 const TIPPYTOP_URL_PREFIX = "resource://activity-stream/data/content/tippytop/images/";
 
 function getDomain(url) {
-  let domain = new URL(url).hostname;
+  let domain;
+  try {
+    domain = new URL(url).hostname;
+  } catch (ex) {}
   if (domain && domain.startsWith("www.")) {
     domain = domain.slice(4);
   }
   return domain;
-}
-
-function getPath(url) {
-  return new URL(url).pathname;
 }
 
 this.TippyTopProvider = class TippyTopProvider {
@@ -26,6 +23,7 @@ this.TippyTopProvider = class TippyTopProvider {
     this._sitesByDomain = new Map();
     this.initialized = false;
   }
+
   async init() {
     // Load the Tippy Top sites from the json manifest.
     try {
@@ -41,16 +39,8 @@ this.TippyTopProvider = class TippyTopProvider {
       Cu.reportError("Failed to load tippy top manifest.");
     }
   }
-  processSite(site) {
-    // Skip URLs with a path that isn't the root path /
-    let path;
-    try {
-      path = getPath(site.url);
-    } catch (e) {}
-    if (path !== "/") {
-      return site;
-    }
 
+  processSite(site) {
     const tippyTop = this._sitesByDomain.get(getDomain(site.url));
     if (tippyTop) {
       site.tippyTopIcon = TIPPYTOP_URL_PREFIX + tippyTop.image_url;
@@ -60,4 +50,4 @@ this.TippyTopProvider = class TippyTopProvider {
   }
 };
 
-this.EXPORTED_SYMBOLS = ["TippyTopProvider"];
+const EXPORTED_SYMBOLS = ["TippyTopProvider", "getDomain"];

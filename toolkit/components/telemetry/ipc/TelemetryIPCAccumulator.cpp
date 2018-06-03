@@ -87,10 +87,7 @@ DoArmIPCTimerMainThread(const StaticMutexAutoLock& lock)
     return;
   }
   if (!gIPCTimer) {
-    CallCreateInstance(NS_TIMER_CONTRACTID, &gIPCTimer);
-    if (gIPCTimer) {
-      gIPCTimer->SetTarget(SystemGroup::EventTargetFor(TaskCategory::Other));
-    }
+    gIPCTimer = NS_NewTimer(SystemGroup::EventTargetFor(TaskCategory::Other)).take();
   }
   if (gIPCTimer) {
     gIPCTimer->InitWithNamedFuncCallback(TelemetryIPCAccumulator::IPCTimerFired,
@@ -194,8 +191,8 @@ TelemetryIPCAccumulator::RecordChildScalarAction(uint32_t aId, bool aDynamic,
   if (gChildScalarsActions->Length() == kScalarActionsArrayHighWaterMark) {
     DispatchIPCTimerFired();
   }
-  // Store the action.
-  gChildScalarsActions->AppendElement(ScalarAction{aId, aDynamic, aAction, Some(aValue)});
+  // Store the action. The ProcessID will be determined by the receiver.
+  gChildScalarsActions->AppendElement(ScalarAction{aId, aDynamic, aAction, Some(aValue), Telemetry::ProcessID::Count});
   ArmIPCTimer(locker);
 }
 
@@ -218,9 +215,9 @@ TelemetryIPCAccumulator::RecordChildKeyedScalarAction(uint32_t aId, bool aDynami
   if (gChildKeyedScalarsActions->Length() == kScalarActionsArrayHighWaterMark) {
     DispatchIPCTimerFired();
   }
-  // Store the action.
+  // Store the action. The ProcessID will be determined by the receiver.
   gChildKeyedScalarsActions->AppendElement(
-    KeyedScalarAction{aId, aDynamic, aAction, NS_ConvertUTF16toUTF8(aKey), Some(aValue)});
+    KeyedScalarAction{aId, aDynamic, aAction, NS_ConvertUTF16toUTF8(aKey), Some(aValue), Telemetry::ProcessID::Count});
   ArmIPCTimer(locker);
 }
 
@@ -293,7 +290,7 @@ SendAccumulatedData(TActor* ipcActor)
   }
 
   // Send the accumulated data to the parent process.
-  mozilla::Unused << NS_WARN_IF(!ipcActor);
+  MOZ_ASSERT(ipcActor);
   if (histogramsToSend.Length()) {
     mozilla::Unused <<
       NS_WARN_IF(!ipcActor->SendAccumulateChildHistograms(histogramsToSend));
@@ -364,6 +361,6 @@ TelemetryIPCAccumulator::DeInitializeGlobalState()
 void
 TelemetryIPCAccumulator::DispatchToMainThread(already_AddRefed<nsIRunnable>&& aEvent)
 {
-  SystemGroup::EventTargetFor(TaskCategory::Other)->Dispatch(Move(aEvent),
+  SystemGroup::EventTargetFor(TaskCategory::Other)->Dispatch(std::move(aEvent),
                                                              nsIEventTarget::DISPATCH_NORMAL);
 }

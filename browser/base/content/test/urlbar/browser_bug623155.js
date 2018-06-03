@@ -53,18 +53,12 @@ function test() {
   gBrowser.getBrowserForTab(gNewTab)
           .webProgress
           .addProgressListener(gWebProgressListener,
-                               Components.interfaces.nsIWebProgress
-                                                    .NOTIFY_LOCATION);
+                               Ci.nsIWebProgress
+                                 .NOTIFY_LOCATION);
 }
 
 var gWebProgressListener = {
-  QueryInterface(aIID) {
-    if (aIID.equals(Components.interfaces.nsIWebProgressListener) ||
-        aIID.equals(Components.interfaces.nsISupportsWeakReference) ||
-        aIID.equals(Components.interfaces.nsISupports))
-      return this;
-    throw Components.results.NS_NOINTERFACE;
-  },
+  QueryInterface: ChromeUtils.generateQI(["nsIWebProgressListener", "nsISupportsWeakReference"]),
 
   // ---------------------------------------------------------------------------
   // NOTIFY_LOCATION mode should work fine without these methods.

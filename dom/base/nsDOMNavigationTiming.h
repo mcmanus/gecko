@@ -10,6 +10,7 @@
 #include "nsCOMPtr.h"
 #include "nsCOMArray.h"
 #include "mozilla/WeakPtr.h"
+#include "mozilla/RelativeTimeline.h"
 #include "mozilla/TimeStamp.h"
 
 class nsDocShell;
@@ -19,6 +20,7 @@ typedef unsigned long long DOMTimeMilliSec;
 typedef double DOMHighResTimeStamp;
 
 class nsDOMNavigationTiming final
+  : public mozilla::RelativeTimeline
 {
 public:
   enum Type {
@@ -94,6 +96,10 @@ public:
   {
     return TimeStampToDOM(mNonBlankPaint);
   }
+  DOMTimeMilliSec GetTimeToDOMContentFlushed() const
+  {
+    return TimeStampToDOM(mDOMContentFlushed);
+  }
 
   DOMHighResTimeStamp GetUnloadEventStartHighRes()
   {
@@ -159,13 +165,13 @@ public:
   void NotifyDOMContentLoadedEnd(nsIURI* aURI);
 
   void NotifyNonBlankPaintForRootContentDocument();
+  void NotifyDOMContentFlushedForRootContentDocument();
   void NotifyDocShellStateChanged(DocShellState aDocShellState);
 
   DOMTimeMilliSec TimeStampToDOM(mozilla::TimeStamp aStamp) const;
 
   inline DOMHighResTimeStamp TimeStampToDOMHighRes(mozilla::TimeStamp aStamp) const
   {
-    MOZ_ASSERT(!aStamp.IsNull(), "The timestamp should not be null");
     if (aStamp.IsNull()) {
       return 0;
     }
@@ -193,6 +199,7 @@ private:
   DOMHighResTimeStamp mNavigationStartHighRes;
   mozilla::TimeStamp mNavigationStart;
   mozilla::TimeStamp mNonBlankPaint;
+  mozilla::TimeStamp mDOMContentFlushed;
 
   mozilla::TimeStamp mBeforeUnloadStart;
   mozilla::TimeStamp mUnloadStart;

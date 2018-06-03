@@ -7,7 +7,6 @@
 #include "base/basictypes.h"
 
 #include "jsfriendapi.h"
-#include "jswrapper.h"
 
 #include "nsAutoPtr.h"
 #include "nsIInterfaceRequestorUtils.h"
@@ -22,12 +21,12 @@
 #include "nsIDocument.h"
 #include "nsIXPConnect.h"
 #include "xpcpublic.h"
-#include "nsIDOMElement.h"
 #include "nsIContent.h"
 #include "nsPluginInstanceOwner.h"
 #include "nsWrapperCacheInlines.h"
 #include "js/GCHashTable.h"
 #include "js/TracingAPI.h"
+#include "js/Wrapper.h"
 #include "mozilla/HashFunctions.h"
 #include "mozilla/dom/ScriptSettings.h"
 
@@ -739,7 +738,7 @@ nsJSObjWrapper::NP_HasMethod(NPObject *npobj, NPIdentifier id)
 
   nsJSObjWrapper *npjsobj = (nsJSObjWrapper *)npobj;
 
-  JSAutoCompartment ac(cx, npjsobj->mJSObj);
+  JSAutoRealm ar(cx, npjsobj->mJSObj);
   MarkCrossZoneNPIdentifier(cx, id);
 
   AutoJSExceptionSuppressor suppressor(aes, npjsobj);
@@ -779,7 +778,7 @@ doInvoke(NPObject *npobj, NPIdentifier method, const NPVariant *args,
   nsJSObjWrapper *npjsobj = (nsJSObjWrapper *)npobj;
 
   JS::Rooted<JSObject*> jsobj(cx, npjsobj->mJSObj);
-  JSAutoCompartment ac(cx, jsobj);
+  JSAutoRealm ar(cx, jsobj);
   MarkCrossZoneNPIdentifier(cx, method);
   JS::Rooted<JS::Value> fv(cx);
 
@@ -872,7 +871,7 @@ nsJSObjWrapper::NP_HasProperty(NPObject *npobj, NPIdentifier npid)
 
   AutoJSExceptionSuppressor suppressor(aes, npjsobj);
   JS::Rooted<JSObject*> jsobj(cx, npjsobj->mJSObj);
-  JSAutoCompartment ac(cx, jsobj);
+  JSAutoRealm ar(cx, jsobj);
   MarkCrossZoneNPIdentifier(cx, npid);
 
   NS_ASSERTION(NPIdentifierIsInt(npid) || NPIdentifierIsString(npid),
@@ -909,7 +908,7 @@ nsJSObjWrapper::NP_GetProperty(NPObject *npobj, NPIdentifier id,
   nsJSObjWrapper *npjsobj = (nsJSObjWrapper *)npobj;
 
   AutoJSExceptionSuppressor suppressor(aes, npjsobj);
-  JSAutoCompartment ac(cx, npjsobj->mJSObj);
+  JSAutoRealm ar(cx, npjsobj->mJSObj);
   MarkCrossZoneNPIdentifier(cx, id);
 
   JS::Rooted<JS::Value> v(cx);
@@ -946,7 +945,7 @@ nsJSObjWrapper::NP_SetProperty(NPObject *npobj, NPIdentifier npid,
 
   AutoJSExceptionSuppressor suppressor(aes, npjsobj);
   JS::Rooted<JSObject*> jsObj(cx, npjsobj->mJSObj);
-  JSAutoCompartment ac(cx, jsObj);
+  JSAutoRealm ar(cx, jsObj);
   MarkCrossZoneNPIdentifier(cx, npid);
 
   JS::Rooted<JS::Value> v(cx, NPVariantToJSVal(npp, cx, value));
@@ -984,7 +983,7 @@ nsJSObjWrapper::NP_RemoveProperty(NPObject *npobj, NPIdentifier npid)
   AutoJSExceptionSuppressor suppressor(aes, npjsobj);
   JS::ObjectOpResult result;
   JS::Rooted<JSObject*> obj(cx, npjsobj->mJSObj);
-  JSAutoCompartment ac(cx, obj);
+  JSAutoRealm ar(cx, obj);
   MarkCrossZoneNPIdentifier(cx, npid);
 
   NS_ASSERTION(NPIdentifierIsInt(npid) || NPIdentifierIsString(npid),
@@ -1038,7 +1037,7 @@ nsJSObjWrapper::NP_Enumerate(NPObject *npobj, NPIdentifier **idarray,
 
   AutoJSExceptionSuppressor suppressor(aes, npjsobj);
   JS::Rooted<JSObject*> jsobj(cx, npjsobj->mJSObj);
-  JSAutoCompartment ac(cx, jsobj);
+  JSAutoRealm ar(cx, jsobj);
 
   JS::Rooted<JS::IdVector> ida(cx, JS::IdVector(cx));
   if (!JS_Enumerate(cx, jsobj, &ida)) {
@@ -1180,7 +1179,7 @@ GetNPObjectWrapper(JSContext *cx, JS::Handle<JSObject*> aObj, bool wrapResult = 
       return obj;
     }
 
-    JSAutoCompartment ac(cx, obj);
+    JSAutoRealm ar(cx, obj);
     if (!::JS_GetPrototype(cx, obj, &obj)) {
       return nullptr;
     }
@@ -1600,10 +1599,11 @@ static bool
 CallNPMethod(JSContext *cx, unsigned argc, JS::Value *vp)
 {
   JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
-  JS::Rooted<JSObject*> obj(cx, JS_THIS_OBJECT(cx, vp));
-  if (!obj)
-      return false;
-
+  if (!args.thisv().isObject()) {
+    ThrowJSExceptionASCII(cx, "plug-in method called on incompatible non-object");
+    return false;
+  }
+  JS::Rooted<JSObject*> obj(cx, &args.thisv().toObject());
   return CallNPMethodInternal(cx, obj, args.length(), args.array(), vp, false);
 }
 
@@ -1894,10 +1894,8 @@ nsNPObjWrapper::OnDestroy(NPObject *npobj)
     static_cast<NPObjWrapperHashEntry*>(sNPObjWrappers->Search(npobj));
 
   if (entry && entry->mJSObj) {
-    // Found a live NPObject wrapper, null out its JSObjects' private
-    // data.
-
-    js::SetProxyPrivate(entry->mJSObj, JS::PrivateValue(nullptr));
+    // Found an NPObject wrapper, null out its JSObjects' private data.
+    js::SetProxyPrivate(entry->mJSObj.unbarrieredGetPtr(), JS::PrivateValue(nullptr));
 
     // Remove the npobj from the hash now that it went away.
     sNPObjWrappers->RawRemove(entry);
@@ -1953,7 +1951,7 @@ nsNPObjWrapper::GetNewOrUsed(NPP npp, JSContext *cx, NPObject *npobj)
 
   if (entry->mJSObj) {
     // Found a NPObject wrapper. First check it is still alive.
-    JSObject* obj = entry->mJSObj;
+    JSObject* obj = entry->mJSObj.unbarrieredGetPtr();
     if (js::gc::EdgeNeedsSweepUnbarriered(&obj)) {
       // The object is dead (finalization will happen at a later time). By the
       // time we leave this function, this entry will either be updated with a
@@ -2073,7 +2071,8 @@ nsJSNPRuntime::OnPluginDestroy(NPP npp)
           free(npobj);
         }
 
-        js::SetProxyPrivate(entry->mJSObj, JS::PrivateValue(nullptr));
+        js::SetProxyPrivate(entry->mJSObj.unbarrieredGetPtr(),
+                            JS::PrivateValue(nullptr));
 
         sNPObjWrappers = tmp;
 

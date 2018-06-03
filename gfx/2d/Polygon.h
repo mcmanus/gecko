@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -171,7 +172,7 @@ public:
 
   explicit PolygonTyped(nsTArray<Point4DType>&& aPoints,
                         const Point4DType& aNormal = DefaultNormal())
-    : mNormal(aNormal), mPoints(Move(aPoints)) {}
+    : mNormal(aNormal), mPoints(std::move(aPoints)) {}
 
   explicit PolygonTyped(const std::initializer_list<Point4DType>& aPoints,
                         const Point4DType& aNormal = DefaultNormal())
@@ -257,7 +258,7 @@ public:
                           backPoints, frontPoints);
 
       // Only use the points behind the clipping plane.
-      clippedPoints = Move(backPoints);
+      clippedPoints = std::move(backPoints);
 
       if (clippedPoints.Length() < 3) {
         // The clipping created a polygon with no area.
@@ -265,7 +266,7 @@ public:
       }
     }
 
-    return PolygonTyped<Units>(Move(clippedPoints), mNormal);
+    return PolygonTyped<Units>(std::move(clippedPoints), mNormal);
   }
 
   /**
@@ -274,13 +275,13 @@ public:
   static PolygonTyped<Units> FromRect(const RectTyped<Units>& aRect)
   {
     nsTArray<Point4DType> points {
-      Point4DType(aRect.x, aRect.y, 0.0f, 1.0f),
-      Point4DType(aRect.x, aRect.YMost(), 0.0f, 1.0f),
+      Point4DType(aRect.X(), aRect.Y(), 0.0f, 1.0f),
+      Point4DType(aRect.X(), aRect.YMost(), 0.0f, 1.0f),
       Point4DType(aRect.XMost(), aRect.YMost(), 0.0f, 1.0f),
-      Point4DType(aRect.XMost(), aRect.y, 0.0f, 1.0f)
+      Point4DType(aRect.XMost(), aRect.Y(), 0.0f, 1.0f)
     };
 
-    return PolygonTyped<Units>(Move(points));
+    return PolygonTyped<Units>(std::move(points));
   }
 
   const Point4DType& GetNormal() const
@@ -315,7 +316,7 @@ public:
       TriangleTyped<Units> triangle(Point(mPoints[0].x, mPoints[0].y),
                                     Point(mPoints[i].x, mPoints[i].y),
                                     Point(mPoints[i + 1].x, mPoints[i + 1].y));
-      triangles.AppendElement(Move(triangle));
+      triangles.AppendElement(std::move(triangle));
     }
 
     return triangles;

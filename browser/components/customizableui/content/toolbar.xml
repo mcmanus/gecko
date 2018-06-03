@@ -8,61 +8,14 @@
           xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
           xmlns:xbl="http://www.mozilla.org/xbl">
 
-  <binding id="toolbar" role="xul:toolbar">
-    <resources>
-      <stylesheet src="chrome://global/skin/toolbar.css"/>
-    </resources>
+  <binding id="toolbar">
     <implementation>
       <field name="overflowedDuringConstruction">null</field>
 
       <constructor><![CDATA[
           let scope = {};
-          Cu.import("resource:///modules/CustomizableUI.jsm", scope);
-          // Add an early overflow event listener that will mark if the
-          // toolbar overflowed during construction.
-          if (scope.CustomizableUI.isAreaOverflowable(this.id)) {
-            this.addEventListener("overflow", this);
-            this.addEventListener("underflow", this);
-          }
-
-          if (document.readyState == "complete") {
-            this._init();
-          } else {
-            // Need to wait until XUL overlays are loaded. See bug 554279.
-            let self = this;
-            document.addEventListener("readystatechange", function onReadyStateChange() {
-              if (document.readyState != "complete")
-                return;
-              document.removeEventListener("readystatechange", onReadyStateChange);
-              self._init();
-            });
-          }
-      ]]></constructor>
-
-      <method name="_init">
-        <body><![CDATA[
-          let scope = {};
-          Cu.import("resource:///modules/CustomizableUI.jsm", scope);
+          ChromeUtils.import("resource:///modules/CustomizableUI.jsm", scope);
           let CustomizableUI = scope.CustomizableUI;
-
-          // Bug 989289: Forcibly set the now unsupported "mode" and "iconsize"
-          // attributes, just in case they accidentally get restored from
-          // persistence from a user that's been upgrading and downgrading.
-          if (CustomizableUI.isBuiltinToolbar(this.id)) {
-            const kAttributes = new Map([["mode", "icons"], ["iconsize", "small"]]);
-            for (let [attribute, value] of kAttributes) {
-              if (this.getAttribute(attribute) != value) {
-                this.setAttribute(attribute, value);
-                document.persist(this.id, attribute);
-              }
-              if (this.toolbox) {
-                if (this.toolbox.getAttribute(attribute) != value) {
-                  this.toolbox.setAttribute(attribute, value);
-                  document.persist(this.toolbox.id, attribute);
-                }
-              }
-            }
-          }
 
           // Searching for the toolbox palette in the toolbar binding because
           // toolbars are constructed first.
@@ -83,23 +36,7 @@
                               .filter(node => node.getAttribute("skipintoolbarset") != "true" && node.id)
                               .map(node => node.id);
           CustomizableUI.registerToolbarNode(this, children);
-        ]]></body>
-      </method>
-
-      <method name="handleEvent">
-        <parameter name="aEvent"/>
-        <body><![CDATA[
-          if (aEvent.type == "overflow" && aEvent.detail > 0) {
-            if (this.overflowable && this.overflowable.initialized) {
-              this.overflowable.onOverflow(aEvent);
-            } else {
-              this.overflowedDuringConstruction = aEvent;
-            }
-          } else if (aEvent.type == "underflow" && aEvent.detail > 0) {
-            this.overflowedDuringConstruction = null;
-          }
-        ]]></body>
-      </method>
+      ]]></constructor>
 
       <method name="insertItem">
         <parameter name="aId"/>
@@ -161,9 +98,6 @@
           if (toolboxId) {
             let toolbox = document.getElementById(toolboxId);
             if (toolbox) {
-              if (toolbox.externalToolbars.indexOf(this) == -1)
-                toolbox.externalToolbars.push(this);
-
               this._toolbox = toolbox;
             }
           }
@@ -205,7 +139,7 @@
           let oldIds = CustomizableUI.getWidgetIdsInArea(this.id);
 
           // Get a list of items only in the new list
-          let newIds = newVal.filter(id => oldIds.indexOf(id) == -1);
+          let newIds = newVal.filter(id => !oldIds.includes(id));
           CustomizableUI.beginBatchUpdate();
           try {
             for (let newId of newIds) {
@@ -226,7 +160,7 @@
             }
 
             let currentIds = this.currentSet.split(",");
-            let removedIds = currentIds.filter(id => newIds.indexOf(id) == -1 && newVal.indexOf(id) == -1);
+            let removedIds = currentIds.filter(id => !newIds.includes(id) && !newVal.includes(id));
             for (let removedId of removedIds) {
               CustomizableUI.removeWidgetFromArea(removedId);
             }
@@ -378,7 +312,7 @@
           this._draggableStarted = true;
           try {
             let tmp = {};
-            Components.utils.import("resource://gre/modules/WindowDraggingUtils.jsm", tmp);
+            ChromeUtils.import("resource://gre/modules/WindowDraggingUtils.jsm", tmp);
             let draggableThis = new tmp.WindowDraggingElement(this);
             draggableThis.mouseDownCheck = function(e) {
               return this._dragBindingAlive;
@@ -387,5 +321,14 @@
         }
       ]]></constructor>
     </implementation>
+  </binding>
+
+  <binding id="toolbarpaletteitem">
+    <content>
+      <xul:hbox class="toolbarpaletteitem-box">
+        <children/>
+      </xul:hbox>
+      <xul:label class="toolbarpaletteitem-label" xbl:inherits="xbl:text=title"/>
+    </content>
   </binding>
 </bindings>

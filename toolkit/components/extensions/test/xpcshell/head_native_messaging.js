@@ -5,14 +5,14 @@
 /* globals AppConstants, FileUtils */
 /* exported getSubprocessCount, setupHosts, waitForSubprocessExit */
 
-XPCOMUtils.defineLazyModuleGetter(this, "MockRegistry",
-                                  "resource://testing-common/MockRegistry.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "OS",
-                                  "resource://gre/modules/osfile.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "setTimeout",
-                                  "resource://gre/modules/Timer.jsm");
+ChromeUtils.defineModuleGetter(this, "MockRegistry",
+                               "resource://testing-common/MockRegistry.jsm");
+ChromeUtils.defineModuleGetter(this, "OS",
+                               "resource://gre/modules/osfile.jsm");
+ChromeUtils.defineModuleGetter(this, "setTimeout",
+                               "resource://gre/modules/Timer.jsm");
 
-let {Subprocess, SubprocessImpl} = Cu.import("resource://gre/modules/Subprocess.jsm", {});
+let {Subprocess, SubprocessImpl} = ChromeUtils.import("resource://gre/modules/Subprocess.jsm", {});
 
 
 // It's important that we use a space in this directory name to make sure we
@@ -23,7 +23,7 @@ tmpDir.createUnique(Ci.nsIFile.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
 const TYPE_SLUG = AppConstants.platform === "linux" ? "native-messaging-hosts" : "NativeMessagingHosts";
 OS.File.makeDir(OS.Path.join(tmpDir.path, TYPE_SLUG));
 
-do_register_cleanup(() => {
+registerCleanupFunction(() => {
   tmpDir.remove(true);
 });
 
@@ -74,7 +74,7 @@ async function setupHosts(scripts) {
       };
 
       Services.dirsvc.registerProvider(dirProvider);
-      do_register_cleanup(() => {
+      registerCleanupFunction(() => {
         Services.dirsvc.unregisterProvider(dirProvider);
       });
 
@@ -89,7 +89,7 @@ async function setupHosts(scripts) {
       const REGKEY = String.raw`Software\Mozilla\NativeMessagingHosts`;
 
       let registry = new MockRegistry();
-      do_register_cleanup(() => {
+      registerCleanupFunction(() => {
         registry.shutdown();
       });
 

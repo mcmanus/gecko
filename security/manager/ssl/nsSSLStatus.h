@@ -12,8 +12,11 @@
 #include "nsCOMPtr.h"
 #include "nsString.h"
 #include "nsIX509Cert.h"
+#include "nsIX509CertList.h"
 #include "nsISerializable.h"
 #include "nsIClassInfo.h"
+#include "nsNSSCertificate.h"
+#include "ScopedNSSTypes.h"
 
 class nsNSSCertificate;
 
@@ -28,7 +31,7 @@ class nsSSLStatus final
   , public nsIClassInfo
 {
 protected:
-  virtual ~nsSSLStatus();
+  virtual ~nsSSLStatus() {}
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSISSLSTATUS
@@ -38,6 +41,9 @@ public:
   nsSSLStatus();
 
   void SetServerCert(nsNSSCertificate* aServerCert, EVStatus aEVStatus);
+
+  nsresult SetSucceededCertChain(mozilla::UniqueCERTCertList certList);
+  void SetFailedCertChain(nsIX509CertList* x509CertList);
 
   bool HasServerCert() {
     return mServerCert != nullptr;
@@ -67,6 +73,8 @@ public:
 
 private:
   nsCOMPtr<nsIX509Cert> mServerCert;
+  nsCOMPtr<nsIX509CertList> mSucceededCertChain;
+  nsCOMPtr<nsIX509CertList> mFailedCertChain;
 };
 
 #define NS_SSLSTATUS_CID \

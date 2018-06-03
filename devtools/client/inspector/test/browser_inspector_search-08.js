@@ -35,23 +35,23 @@ const TEST_DATA = [{
   suggestions: ["svg"]
 }];
 
-add_task(function* () {
-  let {inspector} = yield openInspectorForURL(TEST_URI);
-  let {searchBox} = inspector;
-  let popup = inspector.searchSuggestions.searchPopup;
+add_task(async function() {
+  const {inspector} = await openInspectorForURL(TEST_URI);
+  const {searchBox} = inspector;
+  const popup = inspector.searchSuggestions.searchPopup;
 
-  yield focusSearchBoxUsingShortcut(inspector.panelWin);
+  await focusSearchBoxUsingShortcut(inspector.panelWin);
 
-  for (let {key, suggestions} of TEST_DATA) {
+  for (const {key, suggestions} of TEST_DATA) {
     info("Pressing " + key + " to get " + suggestions.join(", "));
 
-    let command = once(searchBox, "input");
+    const command = once(searchBox, "input");
     EventUtils.synthesizeKey(key, {}, inspector.panelWin);
-    yield command;
+    await command;
 
     info("Waiting for search query to complete and getting the suggestions");
-    yield inspector.searchSuggestions._lastQuery;
-    let actualSuggestions = popup.getItems().reverse();
+    await inspector.searchSuggestions._lastQuery;
+    const actualSuggestions = popup.getItems().reverse();
 
     is(popup.isOpen ? actualSuggestions.length : 0, suggestions.length,
        "There are expected number of suggestions.");

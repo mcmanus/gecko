@@ -14,12 +14,14 @@ cubeb_pulse_rust = ["gkrust-shared/cubeb_pulse_rust"]
 gecko_debug = ["gkrust-shared/gecko_debug"]
 simd-accel = ["gkrust-shared/simd-accel"]
 no-static-ideograph-encoder-tables = ["gkrust-shared/no-static-ideograph-encoder-tables"]
+oom_with_global_alloc = ["gkrust-shared/oom_with_global_alloc"]
+moz_memory = ["gkrust-shared/moz_memory"]
 
 [dependencies]
 gkrust-shared = { path = "shared" }
 
 [dev-dependencies]
-stylo_tests = { path = "../../../servo/tests/unit/stylo/" }
+stylo_tests = { path = "../../../servo/ports/geckolib/tests/" }
 
 [lib]
 path = "lib.rs"
@@ -30,21 +32,3 @@ bench = false
 doc = false
 plugin = false
 harness = false
-
-# Explicitly specify what our profiles use.
-[profile.dev]
-opt-level = 1
-rpath = false
-lto = false
-debug-assertions = true
-codegen-units = 4
-panic = "abort"
-
-[profile.release]
-opt-level = 2
-rpath = false
-debug-assertions = false
-panic = "abort"
-
-[replace]
-"libudev-sys:0.1.3" = { path = "../../../dom/webauthn/libudev-sys" }

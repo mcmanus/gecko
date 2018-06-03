@@ -10,17 +10,16 @@
 #include "mozilla/dom/PerformanceBinding.h"
 #include "mozilla/dom/PerformanceEntryBinding.h"
 #include "mozilla/dom/PerformanceObserverBinding.h"
+#include "mozilla/dom/WorkerPrivate.h"
+#include "mozilla/dom/WorkerScope.h"
 #include "nsPIDOMWindow.h"
 #include "nsQueryObject.h"
 #include "nsString.h"
 #include "PerformanceEntry.h"
 #include "PerformanceObserverEntryList.h"
-#include "WorkerPrivate.h"
-#include "WorkerScope.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
-using namespace mozilla::dom::workers;
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(PerformanceObserver)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(PerformanceObserver)
@@ -82,7 +81,6 @@ PerformanceObserver::Constructor(const GlobalObject& aGlobal,
       aRv.Throw(NS_ERROR_FAILURE);
       return nullptr;
     }
-    MOZ_ASSERT(ownerWindow->IsInnerWindow());
 
     RefPtr<PerformanceObserver> observer =
       new PerformanceObserver(ownerWindow, aCb);
@@ -136,11 +134,10 @@ PerformanceObserver::QueueEntry(PerformanceEntry* aEntry)
   mQueuedEntries.AppendElement(aEntry);
 }
 
-static const char16_t *const sValidTypeNames[4] = {
+static const char16_t *const sValidTypeNames[3] = {
   u"mark",
   u"measure",
   u"resource",
-  u"server"
 };
 
 void
@@ -192,4 +189,11 @@ PerformanceObserver::Disconnect()
     mPerformance->RemoveObserver(this);
     mConnected = false;
   }
+}
+
+void
+PerformanceObserver::TakeRecords(nsTArray<RefPtr<PerformanceEntry>>& aRetval)
+{
+  MOZ_ASSERT(aRetval.IsEmpty());
+  aRetval.SwapElements(mQueuedEntries);
 }

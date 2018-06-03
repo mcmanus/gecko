@@ -222,7 +222,7 @@ nsCellMap*
 nsTableCellMap::GetMapFor(const nsTableRowGroupFrame* aRowGroup,
                           nsCellMap* aStartHint) const
 {
-  NS_PRECONDITION(aRowGroup, "Must have a rowgroup");
+  MOZ_ASSERT(aRowGroup, "Must have a rowgroup");
   NS_ASSERTION(!aRowGroup->GetPrevInFlow(), "GetMapFor called with continuation");
   if (aStartHint) {
     nsCellMap* map = FindMapFor(aRowGroup, aStartHint, nullptr);
@@ -669,8 +669,8 @@ nsTableCellMap::RebuildConsideringRows(nsCellMap*                  aCellMap,
                                        int32_t                     aNumRowsToRemove,
                                        TableArea&                  aDamageArea)
 {
-  NS_PRECONDITION(!aRowsToInsert || aNumRowsToRemove == 0,
-                  "Can't handle both removing and inserting rows at once");
+  MOZ_ASSERT(!aRowsToInsert || aNumRowsToRemove == 0,
+             "Can't handle both removing and inserting rows at once");
 
   int32_t numOrigCols = GetColCount();
   ClearCols();
@@ -898,9 +898,12 @@ bool nsTableCellMap::RowHasSpanningCells(int32_t aRowIndex,
   return false;
 }
 
+// FIXME: The only value callers pass for aSide is eLogicalSideBEnd.
+// Consider removing support for the other three values.
 void
 nsTableCellMap::ResetBStartStart(LogicalSide aSide,
                                  nsCellMap&  aCellMap,
+                                 uint32_t    aRowGroupStart,
                                  uint32_t    aRowIndex,
                                  uint32_t    aColIndex,
                                  bool        aIsBEndIEnd)
@@ -915,7 +918,7 @@ nsTableCellMap::ResetBStartStart(LogicalSide aSide,
     aRowIndex++;
     MOZ_FALLTHROUGH;
   case eLogicalSideBStart:
-    cellData = (BCCellData*)aCellMap.GetDataAt(aRowIndex, aColIndex);
+    cellData = (BCCellData*)aCellMap.GetDataAt(aRowIndex - aRowGroupStart, aColIndex);
     if (cellData) {
       bcData = &cellData->mData;
     }
@@ -938,7 +941,7 @@ nsTableCellMap::ResetBStartStart(LogicalSide aSide,
     aColIndex++;
     MOZ_FALLTHROUGH;
   case eLogicalSideIStart:
-    cellData = (BCCellData*)aCellMap.GetDataAt(aRowIndex, aColIndex);
+    cellData = (BCCellData*)aCellMap.GetDataAt(aRowIndex - aRowGroupStart, aColIndex);
     if (cellData) {
       bcData = &cellData->mData;
     }
@@ -2431,9 +2434,8 @@ void nsCellMap::Dump(bool aIsBorderCollapse) const
       if (cd) {
         if (cd->IsOrig()) {
           nsTableCellFrame* cellFrame = cd->GetCellFrame();
-          int32_t cellFrameColIndex;
-          cellFrame->GetColIndex(cellFrameColIndex);
-          printf("C%d,%d=%p(%d)  ", rIndex, colIndex, (void*)cellFrame,
+          uint32_t cellFrameColIndex = cellFrame->ColIndex();
+          printf("C%d,%d=%p(%u)  ", rIndex, colIndex, (void*)cellFrame,
                  cellFrameColIndex);
           cellCount++;
         }
@@ -2520,8 +2522,7 @@ nsCellMap::GetCellInfoAt(const nsTableCellMap& aMap,
       cellFrame = GetCellFrame(aRowX, aColX, *data, true);
     }
     if (cellFrame && aColSpan) {
-      int32_t initialColIndex;
-      cellFrame->GetColIndex(initialColIndex);
+      uint32_t initialColIndex = cellFrame->ColIndex();
       *aColSpan = GetEffectiveColSpan(aMap, aRowX, initialColIndex);
     }
   }
@@ -2642,8 +2643,8 @@ nsCellMapColumnIterator::AdvanceRowGroup()
 void
 nsCellMapColumnIterator::IncrementRow(int32_t aIncrement)
 {
-  NS_PRECONDITION(aIncrement >= 0, "Bogus increment");
-  NS_PRECONDITION(mCurMap, "Bogus mOrigCells?");
+  MOZ_ASSERT(aIncrement >= 0, "Bogus increment");
+  MOZ_ASSERT(mCurMap, "Bogus mOrigCells?");
   if (aIncrement == 0) {
     AdvanceRowGroup();
   }

@@ -5,7 +5,7 @@
 "use strict";
 
 // Make this available to both AMD and CJS environments
-define(function (require, exports, module) {
+define(function(require, exports, module) {
   /**
    * Scroll the document so that the element "elem" appears in the viewport.
    *
@@ -17,16 +17,16 @@ define(function (require, exports, module) {
    *        you want.
    */
   function scrollIntoViewIfNeeded(elem, centered = true) {
-    let win = elem.ownerDocument.defaultView;
-    let clientRect = elem.getBoundingClientRect();
+    const win = elem.ownerDocument.defaultView;
+    const clientRect = elem.getBoundingClientRect();
 
     // The following are always from the {top, bottom}
     // of the viewport, to the {top, …} of the box.
     // Think of them as geometrical vectors, it helps.
     // The origin is at the top left.
 
-    let topToBottom = clientRect.bottom;
-    let bottomToTop = clientRect.top - win.innerHeight;
+    const topToBottom = clientRect.bottom;
+    const bottomToTop = clientRect.top - win.innerHeight;
     // We allow one translation on the y axis.
     let yAllowed = true;
 

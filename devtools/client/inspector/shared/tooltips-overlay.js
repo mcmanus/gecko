@@ -11,11 +11,12 @@
  * editor tooltips that appear when clicking swatch based editors.
  */
 
-const { Task } = require("devtools/shared/task");
 const Services = require("Services");
 const {
   VIEW_NODE_VALUE_TYPE,
+  VIEW_NODE_FONT_TYPE,
   VIEW_NODE_IMAGE_URL_TYPE,
+  VIEW_NODE_VARIABLE_TYPE,
 } = require("devtools/client/inspector/shared/node-types");
 const { getColor } = require("devtools/client/shared/theme");
 const { HTMLTooltip } = require("devtools/client/shared/widgets/tooltip/HTMLTooltip");
@@ -29,12 +30,15 @@ loader.lazyRequireGetter(this, "setImageTooltip",
   "devtools/client/shared/widgets/tooltip/ImageTooltipHelper", true);
 loader.lazyRequireGetter(this, "setBrokenImageTooltip",
   "devtools/client/shared/widgets/tooltip/ImageTooltipHelper", true);
+loader.lazyRequireGetter(this, "setVariableTooltip",
+  "devtools/client/shared/widgets/tooltip/VariableTooltipHelper", true);
 
 const PREF_IMAGE_TOOLTIP_SIZE = "devtools.inspector.imagePreviewTooltipSize";
 
 // Types of existing tooltips
 const TOOLTIP_IMAGE_TYPE = "image";
 const TOOLTIP_FONTFAMILY_TYPE = "font-family";
+const TOOLTIP_VARIABLE_TYPE = "variable";
 
 /**
  * Manages all tooltips in the style-inspector.
@@ -55,13 +59,13 @@ function TooltipsOverlay(view) {
 TooltipsOverlay.prototype = {
   get _cssProperties() {
     delete TooltipsOverlay.prototype._cssProperties;
-    let properties = getCssProperties(this.view.inspector.toolbox);
+    const properties = getCssProperties(this.view.inspector.toolbox);
     TooltipsOverlay.prototype._cssProperties = properties;
     return properties;
   },
 
   get isEditing() {
-    for (let [, tooltip] of this._instances) {
+    for (const [, tooltip] of this._instances) {
       if (typeof (tooltip.isEditing) == "function" && tooltip.isEditing()) {
         return true;
       }
@@ -73,7 +77,7 @@ TooltipsOverlay.prototype = {
    * Add the tooltips overlay to the view. This will start tracking mouse
    * movements and display tooltips when needed
    */
-  addToView: function () {
+  addToView: function() {
     if (this._isStarted || this._isDestroyed) {
       return;
     }
@@ -94,12 +98,12 @@ TooltipsOverlay.prototype = {
    * @param {String} name
    *        Identifier name for the tooltip
    */
-  getTooltip: function (name) {
+  getTooltip: function(name) {
     let tooltip = this._instances.get(name);
     if (tooltip) {
       return tooltip;
     }
-    let { doc } = this.view.inspector.toolbox;
+    const { doc } = this.view.inspector.toolbox;
     switch (name) {
       case "colorPicker":
         const SwatchColorPickerTooltip =
@@ -137,12 +141,12 @@ TooltipsOverlay.prototype = {
    * Remove the tooltips overlay from the view. This will stop tracking mouse
    * movements and displaying tooltips
    */
-  removeFromView: function () {
+  removeFromView: function() {
     if (!this._isStarted || this._isDestroyed) {
       return;
     }
 
-    for (let [, tooltip] of this._instances) {
+    for (const [, tooltip] of this._instances) {
       tooltip.destroy();
     }
 
@@ -156,22 +160,26 @@ TooltipsOverlay.prototype = {
    * @param {Object} nodeInfo
    * @return {String} The tooltip type to be shown, or null
    */
-  _getTooltipType: function ({type, value: prop}) {
+  _getTooltipType: function({type, value: prop}) {
     let tooltipType = null;
-    let inspector = this.view.inspector;
 
     // Image preview tooltip
-    if (type === VIEW_NODE_IMAGE_URL_TYPE &&
-        inspector.hasUrlToImageDataResolver) {
+    if (type === VIEW_NODE_IMAGE_URL_TYPE) {
       tooltipType = TOOLTIP_IMAGE_TYPE;
     }
 
     // Font preview tooltip
-    if (type === VIEW_NODE_VALUE_TYPE && prop.property === "font-family") {
-      let value = prop.value.toLowerCase();
+    if ((type === VIEW_NODE_VALUE_TYPE && prop.property === "font-family") ||
+        (type === VIEW_NODE_FONT_TYPE)) {
+      const value = prop.value.toLowerCase();
       if (value !== "inherit" && value !== "unset" && value !== "initial") {
         tooltipType = TOOLTIP_FONTFAMILY_TYPE;
       }
+    }
+
+    // Variable preview tooltip
+    if (type === VIEW_NODE_VARIABLE_TYPE) {
+      tooltipType = TOOLTIP_VARIABLE_TYPE;
     }
 
     return tooltipType;
@@ -186,47 +194,59 @@ TooltipsOverlay.prototype = {
    * @param {DOMNode} target The currently hovered node
    * @return {Promise}
    */
-  _onPreviewTooltipTargetHover: Task.async(function* (target) {
-    let nodeInfo = this.view.getNodeInfo(target);
+  async _onPreviewTooltipTargetHover(target) {
+    const nodeInfo = this.view.getNodeInfo(target);
     if (!nodeInfo) {
       // The hovered node isn't something we care about
       return false;
     }
 
-    let type = this._getTooltipType(nodeInfo);
+    const type = this._getTooltipType(nodeInfo);
     if (!type) {
       // There is no tooltip type defined for the hovered node
       return false;
     }
 
-    for (let [, tooltip] of this._instances) {
+    for (const [, tooltip] of this._instances) {
       if (tooltip.isVisible()) {
         tooltip.revert();
         tooltip.hide();
       }
     }
 
-    let inspector = this.view.inspector;
+    const inspector = this.view.inspector;
 
     if (type === TOOLTIP_IMAGE_TYPE) {
       try {
-        yield this._setImagePreviewTooltip(nodeInfo.value.url);
+        await this._setImagePreviewTooltip(nodeInfo.value.url);
       } catch (e) {
-        yield setBrokenImageTooltip(this.getTooltip("previewTooltip"),
+        await setBrokenImageTooltip(this.getTooltip("previewTooltip"),
           this.view.inspector.panelDoc);
       }
       return true;
     }
 
     if (type === TOOLTIP_FONTFAMILY_TYPE) {
-      let font = nodeInfo.value.value;
-      let nodeFront = inspector.selection.nodeFront;
-      yield this._setFontPreviewTooltip(font, nodeFront);
+      const font = nodeInfo.value.value;
+      const nodeFront = inspector.selection.nodeFront;
+      await this._setFontPreviewTooltip(font, nodeFront);
+
+      if (nodeInfo.type === VIEW_NODE_FONT_TYPE) {
+        // If the hovered element is on the font family span, anchor
+        // the tooltip on the whole property value instead.
+        return target.parentNode;
+      }
+      return true;
+    }
+
+    if (type === TOOLTIP_VARIABLE_TYPE && nodeInfo.value.value.startsWith("--")) {
+      const variable = nodeInfo.value.variable;
+      await this._setVariablePreviewTooltip(variable);
       return true;
     }
 
     return false;
-  }),
+  },
 
   /**
    * Set the content of the preview tooltip to display an image preview. The image URL can
@@ -237,27 +257,27 @@ TooltipsOverlay.prototype = {
    *        The image url value (may be relative or absolute).
    * @return {Promise} A promise that resolves when the preview tooltip content is ready
    */
-  _setImagePreviewTooltip: Task.async(function* (imageUrl) {
-    let doc = this.view.inspector.panelDoc;
-    let maxDim = Services.prefs.getIntPref(PREF_IMAGE_TOOLTIP_SIZE);
+  async _setImagePreviewTooltip(imageUrl) {
+    const doc = this.view.inspector.panelDoc;
+    const maxDim = Services.prefs.getIntPref(PREF_IMAGE_TOOLTIP_SIZE);
 
     let naturalWidth, naturalHeight;
     if (imageUrl.startsWith("data:")) {
       // If the imageUrl already is a data-url, save ourselves a round-trip
-      let size = yield getImageDimensions(doc, imageUrl);
+      const size = await getImageDimensions(doc, imageUrl);
       naturalWidth = size.naturalWidth;
       naturalHeight = size.naturalHeight;
     } else {
-      let inspectorFront = this.view.inspector.inspector;
-      let {data, size} = yield inspectorFront.getImageDataFromURL(imageUrl, maxDim);
-      imageUrl = yield data.string();
+      const inspectorFront = this.view.inspector.inspector;
+      const {data, size} = await inspectorFront.getImageDataFromURL(imageUrl, maxDim);
+      imageUrl = await data.string();
       naturalWidth = size.naturalWidth;
       naturalHeight = size.naturalHeight;
     }
 
-    yield setImageTooltip(this.getTooltip("previewTooltip"), doc, imageUrl,
+    await setImageTooltip(this.getTooltip("previewTooltip"), doc, imageUrl,
       {maxDim, naturalWidth, naturalHeight});
-  }),
+  },
 
   /**
    * Set the content of the preview tooltip to display a font family preview.
@@ -269,7 +289,7 @@ TooltipsOverlay.prototype = {
    *        family tooltip contents.
    * @return {Promise} A promise that resolves when the preview tooltip content is ready
    */
-  _setFontPreviewTooltip: Task.async(function* (font, nodeFront) {
+  async _setFontPreviewTooltip(font, nodeFront) {
     if (!font || !nodeFront || typeof nodeFront.getFontFamilyDataURL !== "function") {
       throw new Error("Unable to create font preview tooltip content.");
     }
@@ -278,20 +298,32 @@ TooltipsOverlay.prototype = {
     font = font.replace("!important", "");
     font = font.trim();
 
-    let fillStyle = getColor("body-color");
-    let {data, size: maxDim} = yield nodeFront.getFontFamilyDataURL(font, fillStyle);
+    const fillStyle = getColor("body-color");
+    const {data, size: maxDim} = await nodeFront.getFontFamilyDataURL(font, fillStyle);
 
-    let imageUrl = yield data.string();
-    let doc = this.view.inspector.panelDoc;
-    let {naturalWidth, naturalHeight} = yield getImageDimensions(doc, imageUrl);
+    const imageUrl = await data.string();
+    const doc = this.view.inspector.panelDoc;
+    const {naturalWidth, naturalHeight} = await getImageDimensions(doc, imageUrl);
 
-    yield setImageTooltip(this.getTooltip("previewTooltip"), doc, imageUrl,
+    await setImageTooltip(this.getTooltip("previewTooltip"), doc, imageUrl,
       {hideDimensionLabel: true, hideCheckeredBackground: true,
        maxDim, naturalWidth, naturalHeight});
-  }),
+  },
 
-  _onNewSelection: function () {
-    for (let [, tooltip] of this._instances) {
+  /**
+   * Set the content of the preview tooltip to display a variable preview.
+   *
+   * @param {String} text
+   *        The text to display for the variable tooltip
+   * @return {Promise} A promise that resolves when the preview tooltip content is ready
+   */
+  async _setVariablePreviewTooltip(text) {
+    const doc = this.view.inspector.panelDoc;
+    await setVariableTooltip(this.getTooltip("previewTooltip"), doc, text);
+  },
+
+  _onNewSelection: function() {
+    for (const [, tooltip] of this._instances) {
       tooltip.hide();
     }
   },
@@ -299,7 +331,7 @@ TooltipsOverlay.prototype = {
   /**
    * Destroy this overlay instance, removing it from the view
    */
-  destroy: function () {
+  destroy: function() {
     this.removeFromView();
 
     this.view.inspector.selection.off("new-node-front", this._onNewSelection);

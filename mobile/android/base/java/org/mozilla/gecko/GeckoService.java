@@ -10,6 +10,7 @@ import android.app.Service;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Bundle;
 import android.os.IBinder;
 import android.os.Handler;
 import android.os.Looper;
@@ -17,6 +18,7 @@ import android.util.Log;
 
 import java.io.File;
 
+import org.mozilla.gecko.mozglue.SafeIntent;
 import org.mozilla.gecko.util.BundleEventListener;
 import org.mozilla.gecko.util.GeckoBundle;
 import org.mozilla.gecko.util.EventCallback;
@@ -115,6 +117,11 @@ public class GeckoService extends Service {
 
     private static Intent getIntentForAction(final Context context, final String action) {
         final Intent intent = new Intent(action, /* uri */ null, context, GeckoService.class);
+        final Bundle extras = GeckoThread.getActiveExtras();
+        if (extras != null && extras.size() > 0) {
+            intent.replaceExtras(extras);
+        }
+
         final GeckoProfile profile = GeckoThread.getActiveProfile();
         if (profile != null) {
             setIntentProfile(intent, profile.getName(), profile.getDir().getAbsolutePath());
@@ -160,19 +167,22 @@ public class GeckoService extends Service {
             throw new IllegalArgumentException("Intent must specify profile.");
         }
 
-        if (!GeckoThread.initMainProcessWithProfile(
-                profileName, profileDir != null ? new File(profileDir) : null,
-                GeckoApplication.addDefaultGeckoArgs(null))) {
-            Log.w(LOGTAG, "Ignoring due to profile mismatch: " +
-                          profileName + " [" + profileDir + ']');
-
-            final GeckoProfile profile = GeckoThread.getActiveProfile();
-            if (profile != null) {
-                Log.w(LOGTAG, "Current profile is " + profile.getName() +
-                              " [" + profile.getDir().getAbsolutePath() + ']');
-            }
-            return false;
+        if (GeckoApplication.getRuntime() != null) {
+            // Gecko has already been initialized, make sure it's using the
+            // expected profile.
+            return GeckoThread.canUseProfile(profileName,
+                    profileDir != null ? new File(profileDir) : null);
         }
+
+        String args;
+        if (profileDir != null) {
+            args = "-profile " + profileDir;
+        } else {
+            args = "-P " + profileName;
+        }
+
+        intent.putExtra(GeckoThread.EXTRA_ARGS, args);
+        GeckoApplication.createRuntime(this, new SafeIntent(intent));
         return true;
     }
 
@@ -185,8 +195,6 @@ public class GeckoService extends Service {
             stopSelf(startId);
             return Service.START_NOT_STICKY;
         }
-
-        GeckoThread.launch();
 
         switch (intent.getAction()) {
         case INTENT_ACTION_UPDATE_ADDONS:

@@ -8,6 +8,7 @@
 #include "js/UbiNodePostOrder.h"
 #include "js/UbiNodeShortestPaths.h"
 #include "jsapi-tests/tests.h"
+#include "util/Text.h"
 #include "vm/SavedFrame.h"
 
 using JS::RootedObject;
@@ -74,7 +75,7 @@ BEGIN_TEST(test_ubiNodeZone)
     CHECK(global1);
     CHECK(JS::ubi::Node(global1).zone() == cx->zone());
 
-    JS::CompartmentOptions globalOptions;
+    JS::RealmOptions globalOptions;
     RootedObject global2(cx, JS_NewGlobalObject(cx, getGlobalClass(), nullptr,
                                                 JS::FireOnNewGlobalHook, globalOptions));
     CHECK(global2);
@@ -93,7 +94,7 @@ BEGIN_TEST(test_ubiNodeZone)
     {
         // ... and then enter global2's zone and create a string and script
         // there, too.
-        JSAutoCompartment ac(cx, global2);
+        JSAutoRealm ar(cx, global2);
 
         RootedString string2(cx, JS_NewStringCopyZ(cx, "A million household uses!"));
         CHECK(string2);
@@ -118,7 +119,7 @@ BEGIN_TEST(test_ubiNodeCompartment)
     CHECK(global1);
     CHECK(JS::ubi::Node(global1).compartment() == cx->compartment());
 
-    JS::CompartmentOptions globalOptions;
+    JS::RealmOptions globalOptions;
     RootedObject global2(cx, JS_NewGlobalObject(cx, getGlobalClass(), nullptr,
                                                 JS::FireOnNewGlobalHook, globalOptions));
     CHECK(global2);
@@ -128,14 +129,14 @@ BEGIN_TEST(test_ubiNodeCompartment)
 
     JS::CompileOptions options(cx);
 
-    // Create a script in the original compartment...
+    // Create a script in the original realm...
     RootedScript script1(cx);
     CHECK(JS::Compile(cx, options, "", 0, &script1));
 
     {
-        // ... and then enter global2's compartment and create a script
+        // ... and then enter global2's realm and create a script
         // there, too.
-        JSAutoCompartment ac(cx, global2);
+        JSAutoRealm ar(cx, global2);
 
         RootedScript script2(cx);
         CHECK(JS::Compile(cx, options, "", 0, &script2));
@@ -700,7 +701,7 @@ BEGIN_TEST(test_JS_ubi_ShortestPaths_no_path)
         CHECK(targets.put(&b));
 
         maybeShortestPaths = JS::ubi::ShortestPaths::Create(cx, noGC, 10, &a,
-                                                            mozilla::Move(targets));
+                                                            std::move(targets));
     }
 
     CHECK(maybeShortestPaths);
@@ -742,7 +743,7 @@ BEGIN_TEST(test_JS_ubi_ShortestPaths_one_path)
         CHECK(targets.put(&b));
 
         maybeShortestPaths = JS::ubi::ShortestPaths::Create(cx, noGC, 10, &a,
-                                                            mozilla::Move(targets));
+                                                            std::move(targets));
     }
 
     CHECK(maybeShortestPaths);
@@ -809,7 +810,7 @@ BEGIN_TEST(test_JS_ubi_ShortestPaths_multiple_paths)
         CHECK(targets.put(&f));
 
         maybeShortestPaths = JS::ubi::ShortestPaths::Create(cx, noGC, 10, &a,
-                                                            mozilla::Move(targets));
+                                                            std::move(targets));
     }
 
     CHECK(maybeShortestPaths);
@@ -901,7 +902,7 @@ BEGIN_TEST(test_JS_ubi_ShortestPaths_more_paths_than_max)
         CHECK(targets.put(&f));
 
         maybeShortestPaths = JS::ubi::ShortestPaths::Create(cx, noGC, 1, &a,
-                                                            mozilla::Move(targets));
+                                                            std::move(targets));
     }
 
     CHECK(maybeShortestPaths);
@@ -951,7 +952,7 @@ BEGIN_TEST(test_JS_ubi_ShortestPaths_multiple_edges_to_target)
         CHECK(targets.put(&b));
 
         maybeShortestPaths = JS::ubi::ShortestPaths::Create(cx, noGC, 10, &a,
-                                                            mozilla::Move(targets));
+                                                            std::move(targets));
     }
 
     CHECK(maybeShortestPaths);

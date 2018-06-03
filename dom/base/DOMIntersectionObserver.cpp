@@ -5,11 +5,11 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "DOMIntersectionObserver.h"
-#include "nsCSSParser.h"
 #include "nsCSSPropertyID.h"
 #include "nsIFrame.h"
 #include "nsContentUtils.h"
 #include "nsLayoutUtils.h"
+#include "mozilla/ServoBindings.h"
 
 namespace mozilla {
 namespace dom {
@@ -47,6 +47,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(DOMIntersectionObserver)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mOwner)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocument)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mCallback)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mRoot)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mQueuedEntries)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
@@ -54,6 +55,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(DOMIntersectionObserver)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOwner)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocument)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCallback)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mRoot)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mQueuedEntries)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
@@ -79,10 +81,7 @@ DOMIntersectionObserver::Constructor(const mozilla::dom::GlobalObject& aGlobal,
   RefPtr<DOMIntersectionObserver> observer =
     new DOMIntersectionObserver(window.forget(), aCb);
 
-  if (aOptions.mRoot) {
-    observer->mRoot = aOptions.mRoot;
-    observer->mRoot->RegisterIntersectionObserver(observer);
-  }
+  observer->mRoot = aOptions.mRoot;
 
   if (!observer->SetRootMargin(aOptions.mRootMargin)) {
     aRv.ThrowDOMException(NS_ERROR_DOM_SYNTAX_ERR,
@@ -116,30 +115,14 @@ DOMIntersectionObserver::Constructor(const mozilla::dom::GlobalObject& aGlobal,
 bool
 DOMIntersectionObserver::SetRootMargin(const nsAString& aString)
 {
-  // By not passing a CSS Loader object we make sure we don't parse in quirks
-  // mode so that pixel/percent and unit-less values will be differentiated.
-  nsCSSParser parser(nullptr);
-  nsCSSValue value;
-  if (!parser.ParseMarginString(aString, nullptr, 0, value, true)) {
-    return false;
-  }
-
-  mRootMargin = value.GetRectValue();
-
-  for (auto side : nsCSSRect::sides) {
-    nsCSSValue& value = mRootMargin.*side;
-    if (!(value.IsPixelLengthUnit() || value.IsPercentLengthUnit())) {
-      return false;
-    }
-  }
-
-  return true;
+  return Servo_IntersectionObserverRootMargin_Parse(&aString, &mRootMargin);
 }
 
 void
 DOMIntersectionObserver::GetRootMargin(mozilla::dom::DOMString& aRetVal)
 {
-  mRootMargin.AppendToString(eCSSProperty_DOM, aRetVal);
+  nsString& retVal = aRetVal;
+  Servo_IntersectionObserverRootMargin_ToString(&mRootMargin, &retVal);
 }
 
 void
@@ -176,13 +159,8 @@ DOMIntersectionObserver::Unobserve(Element& aTarget)
 }
 
 void
-DOMIntersectionObserver::UnlinkElement(Element& aTarget)
+DOMIntersectionObserver::UnlinkTarget(Element& aTarget)
 {
-  if (mRoot && mRoot == &aTarget) {
-    mRoot = nullptr;
-    Disconnect();
-    return;
-  }
   mObservationTargets.RemoveElement(&aTarget);
   if (mObservationTargets.Length() == 0) {
     Disconnect();
@@ -327,15 +305,7 @@ DOMIntersectionObserver::Update(nsIDocument* aDocument, DOMHighResTimeStamp time
   NS_FOR_CSS_SIDES(side) {
     nscoord basis = side == eSideTop || side == eSideBottom ?
       rootRect.Height() : rootRect.Width();
-    nsCSSValue value = mRootMargin.*nsCSSRect::sides[side];
-    nsStyleCoord coord;
-    if (value.IsPixelLengthUnit()) {
-      coord.SetCoordValue(value.GetPixelLength());
-    } else if (value.IsPercentLengthUnit()) {
-      coord.SetPercentValue(value.GetPercentValue());
-    } else {
-      MOZ_ASSERT_UNREACHABLE("invalid length unit");
-    }
+    nsStyleCoord coord = mRootMargin.Get(side);
     rootMargin.Side(side) = nsLayoutUtils::ComputeCBDependentValue(basis, coord);
   }
 
@@ -436,33 +406,33 @@ DOMIntersectionObserver::Update(nsIDocument* aDocument, DOMHighResTimeStamp time
       }
     }
 
-    double targetArea = targetRect.Width() * targetRect.Height();
-    double intersectionArea = !intersectionRect ?
-      0 : intersectionRect->Width() * intersectionRect->Height();
+    int64_t targetArea =
+      (int64_t) targetRect.Width() * (int64_t) targetRect.Height();
+    int64_t intersectionArea = !intersectionRect ? 0 :
+      (int64_t) intersectionRect->Width() *
+      (int64_t) intersectionRect->Height();
 
     double intersectionRatio;
     if (targetArea > 0.0) {
-      intersectionRatio = intersectionArea / targetArea;
+      intersectionRatio =
+        std::min((double) intersectionArea / (double) targetArea, 1.0);
     } else {
       intersectionRatio = intersectionRect.isSome() ? 1.0 : 0.0;
     }
 
     int32_t threshold = -1;
-    if (intersectionRatio > 0.0) {
-      if (intersectionRatio >= 1.0) {
-        intersectionRatio = 1.0;
-        threshold = (int32_t)mThresholds.Length();
-      } else {
-        for (size_t k = 0; k < mThresholds.Length(); ++k) {
-          if (mThresholds[k] <= intersectionRatio) {
-            threshold = (int32_t)k + 1;
-          } else {
-            break;
-          }
-        }
+    if (intersectionRect.isSome()) {
+      // Spec: "Let thresholdIndex be the index of the first entry in
+      // observer.thresholds whose value is greater than intersectionRatio."
+      threshold = mThresholds.IndexOfFirstElementGt(intersectionRatio);
+      if (threshold == 0) {
+        // Per the spec, we should leave threshold at 0 and distinguish between
+        // "less than all thresholds and intersecting" and "not intersecting"
+        // (queuing observer entries as both cases come to pass). However,
+        // neither Chrome nor the WPT tests expect this behavior, so treat these
+        // two cases as one.
+        threshold = -1;
       }
-    } else if (intersectionRect.isSome()) {
-      threshold = 0;
     }
 
     if (target->UpdateIntersectionObservation(this, threshold)) {

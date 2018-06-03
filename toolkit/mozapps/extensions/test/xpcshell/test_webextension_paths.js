@@ -5,11 +5,11 @@ add_task(async function setup() {
   profileDir.append("extensions");
 
   createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "1.9.2");
-  startupManager();
+  await promiseStartupManager();
 });
 
 // When installing an unpacked addon we derive the ID from the
-// directory name.  Make sure that if the directoy name is not a valid
+// directory name.  Make sure that if the directory name is not a valid
 // addon ID that we reject it.
 add_task(async function test_bad_unpacked_path() {
   let MANIFEST_ID = "webext_bad_path@tests.mozilla.org";
@@ -44,9 +44,9 @@ add_task(async function test_bad_unpacked_path() {
     await promiseRestartManager();
 
     let addon = await promiseAddonByID(dir);
-    do_check_eq(addon, null);
+    Assert.equal(addon, null);
     addon = await promiseAddonByID(MANIFEST_ID);
-    do_check_eq(addon, null);
+    Assert.equal(addon, null);
   }
 });
 

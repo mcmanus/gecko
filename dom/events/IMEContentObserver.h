@@ -4,17 +4,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_IMEContentObserver_h_
-#define mozilla_IMEContentObserver_h_
+#ifndef mozilla_IMEContentObserver_h
+#define mozilla_IMEContentObserver_h
 
 #include "mozilla/Attributes.h"
 #include "mozilla/EditorBase.h"
+#include "mozilla/dom/Selection.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsIDocShell.h" // XXX Why does only this need to be included here?
-#include "nsIEditorObserver.h"
 #include "nsIReflowObserver.h"
-#include "nsISelectionListener.h"
 #include "nsIScrollObserver.h"
 #include "nsIWidget.h"
 #include "nsStubDocumentObserver.h"
@@ -24,7 +23,6 @@
 
 class nsIContent;
 class nsINode;
-class nsISelection;
 class nsPresContext;
 
 namespace mozilla {
@@ -32,18 +30,18 @@ namespace mozilla {
 class EventStateManager;
 class TextComposition;
 
+namespace dom {
+class Selection;
+} // namespace dom
+
 // IMEContentObserver notifies widget of any text and selection changes
 // in the currently focused editor
-class IMEContentObserver final : public nsISelectionListener
-                               , public nsStubMutationObserver
+class IMEContentObserver final : public nsStubMutationObserver
                                , public nsIReflowObserver
                                , public nsIScrollObserver
                                , public nsSupportsWeakReference
-                               , public nsIEditorObserver
 {
 public:
-  typedef ContentEventHandler::NodePosition NodePosition;
-  typedef ContentEventHandler::NodePositionBefore NodePositionBefore;
   typedef widget::IMENotification::SelectionChangeData SelectionChangeData;
   typedef widget::IMENotification::TextChangeData TextChangeData;
   typedef widget::IMENotification::TextChangeDataBase TextChangeDataBase;
@@ -54,9 +52,7 @@ public:
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(IMEContentObserver,
-                                           nsISelectionListener)
-  NS_DECL_NSIEDITOROBSERVER
-  NS_DECL_NSISELECTIONLISTENER
+                                           nsIReflowObserver)
   NS_DECL_NSIMUTATIONOBSERVER_CHARACTERDATAWILLCHANGE
   NS_DECL_NSIMUTATIONOBSERVER_CHARACTERDATACHANGED
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTAPPENDED
@@ -68,6 +64,11 @@ public:
 
   // nsIScrollObserver
   virtual void ScrollPositionChanged() override;
+
+  /**
+   * OnSelectionChange() is called when selection is changed in the editor.
+   */
+  void OnSelectionChange(dom::Selection& aSelection);
 
   bool OnMouseButtonEvent(nsPresContext* aPresContext,
                           WidgetMouseEvent* aMouseEvent);
@@ -148,7 +149,7 @@ public:
   void SuppressNotifyingIME();
   void UnsuppressNotifyingIME();
   nsPresContext* GetPresContext() const;
-  nsresult GetSelectionAndRoot(nsISelection** aSelection,
+  nsresult GetSelectionAndRoot(dom::Selection** aSelection,
                                nsIContent** aRoot) const;
 
   /**
@@ -164,6 +165,16 @@ public:
    * notification into the pseudo queue.
    */
   void MaybeNotifyCompositionEventHandled();
+
+  /**
+   * Following methods are called when the editor:
+   *   - an edit action handled.
+   *   - before handling an edit action.
+   *   - canceled handling an edit action after calling BeforeEditAction().
+   */
+  void OnEditActionHandled();
+  void BeforeEditAction();
+  void CancelEditAction();
 
 private:
   ~IMEContentObserver() {}
@@ -186,12 +197,6 @@ private:
   bool IsReflowLocked() const;
   bool IsSafeToNotifyIME() const;
   bool IsEditorComposing() const;
-
-  /**
-   * nsINode::GetChildAt() is slow.  So, this avoids to use it if it's
-   * first child or last child of aParent.
-   */
-  static nsIContent* GetChildNode(nsINode* aParent, int32_t aOffset);
 
   // Following methods are called by DocumentObserver when
   // beginning to update the contents and ending updating the contents.
@@ -309,7 +314,7 @@ private:
   // focused editor is in XUL panel, this should be the widget of the panel.
   // On the other hand, mWidget is its parent which handles IME.
   nsCOMPtr<nsIWidget> mFocusedWidget;
-  nsCOMPtr<nsISelection> mSelection;
+  RefPtr<dom::Selection> mSelection;
   nsCOMPtr<nsIContent> mRootContent;
   nsCOMPtr<nsINode> mEditableNode;
   nsCOMPtr<nsIDocShell> mDocShell;
@@ -336,14 +341,14 @@ private:
       : Runnable(aName)
       , mIMEContentObserver(
           do_GetWeakReference(
-            static_cast<nsISelectionListener*>(aIMEContentObserver)))
+            static_cast<nsIReflowObserver*>(aIMEContentObserver)))
     {
       MOZ_ASSERT(aIMEContentObserver);
     }
 
     already_AddRefed<IMEContentObserver> GetObserver() const
     {
-      nsCOMPtr<nsISelectionListener> observer =
+      nsCOMPtr<nsIReflowObserver> observer =
         do_QueryReferent(mIMEContentObserver);
       return observer.forget().downcast<IMEContentObserver>();
     }
@@ -534,4 +539,4 @@ private:
 
 } // namespace mozilla
 
-#endif // mozilla_IMEContentObserver_h_
+#endif // mozilla_IMEContentObserver_h

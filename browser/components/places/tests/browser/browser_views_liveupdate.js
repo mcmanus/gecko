@@ -127,7 +127,7 @@ add_task(async function test() {
  * nodes positions in the affected views.
  */
 var bookmarksObserver = {
-  QueryInterface: XPCOMUtils.generateQI([
+  QueryInterface: ChromeUtils.generateQI([
     Ci.nsINavBookmarkObserver,
     Ci.nsIAnnotationObserver
   ]),
@@ -261,7 +261,7 @@ function getNodeForToolbarItem(aItemId, aValidator) {
       var child = children[i];
 
       // Is this a Places node?
-      if (!child._placesNode || child.hasAttribute("simulated-places-node")) {
+      if (!child._placesNode) {
         staticNodes++;
         continue;
       }
@@ -275,7 +275,7 @@ function getNodeForToolbarItem(aItemId, aValidator) {
       // different position.  Search only folders
       if (PlacesUtils.nodeIsFolder(child._placesNode)) {
         var popup = child.lastChild;
-        popup.showPopup(popup);
+        popup.openPopup();
         var foundNode = findNode(popup);
         popup.hidePopup();
         if (foundNode[0] != null)
@@ -304,7 +304,7 @@ function getNodeForMenuItem(aItemId, aValidator) {
       var child = children[i];
 
       // Is this a Places node?
-      if (!child._placesNode || child.hasAttribute("simulated-places-node")) {
+      if (!child._placesNode) {
         staticNodes++;
         continue;
       }
@@ -374,7 +374,7 @@ function getNodeForSidebarItem(aItemId, aValidator) {
       if (!tree.view.hasNextSibling(aContainerIndex + 1, i))
         break;
     }
-    return [null, null, false]
+    return [null, null, false];
   }
 
   // Root node is hidden, so we need to manually walk the first level.
@@ -406,11 +406,11 @@ function getViewsForFolder(aFolderId) {
 
   switch (rootId) {
     case PlacesUtils.toolbarFolderId:
-      return ["toolbar", "sidebar"]
+      return ["toolbar", "sidebar"];
     case PlacesUtils.bookmarksMenuFolderId:
-      return ["menu", "sidebar"]
+      return ["menu", "sidebar"];
     case PlacesUtils.unfiledBookmarksFolderId:
-      return ["sidebar"]
+      return ["sidebar"];
   }
   return [];
 }

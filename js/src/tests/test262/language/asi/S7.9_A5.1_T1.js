@@ -7,12 +7,12 @@ info: Check Postfix Increment Operator for automatic semicolon insertion
 es5id: 7.9_A5.1_T1
 description: Try use Variable \n ++ construction
 negative:
-  phase: early
+  phase: parse
   type: SyntaxError
 ---*/
 
-//CHECK#1
+throw "Test262: This statement should not be evaluated.";
+
 var x = 0;
 x
 ++;
-$ERROR('#1: Check Postfix Increment Operator for automatic semicolon insertion');

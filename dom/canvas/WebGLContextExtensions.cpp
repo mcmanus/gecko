@@ -93,6 +93,8 @@ bool WebGLContext::IsExtensionSupported(dom::CallerType callerType,
 
     if (allowPrivilegedExts) {
         switch (ext) {
+        case WebGLExtensionID::EXT_disjoint_timer_query:
+            return WebGLExtensionDisjointTimerQuery::IsSupported(this);
         case WebGLExtensionID::MOZ_debug:
             return true;
         case WebGLExtensionID::WEBGL_debug_renderer_info:
@@ -118,8 +120,6 @@ WebGLContext::IsExtensionSupported(WebGLExtensionID ext) const
     switch (ext) {
     // In alphabetical order
     // EXT_
-    case WebGLExtensionID::EXT_disjoint_timer_query:
-        return WebGLExtensionDisjointTimerQuery::IsSupported(this);
     case WebGLExtensionID::EXT_texture_filter_anisotropic:
         return gl->IsExtensionSupported(gl::GLContext::EXT_texture_filter_anisotropic);
 
@@ -145,7 +145,8 @@ WebGLContext::IsExtensionSupported(WebGLExtensionID ext) const
     case WebGLExtensionID::WEBGL_compressed_texture_s3tc_srgb:
         return WebGLExtensionCompressedTextureS3TC_SRGB::IsSupported(this);
     case WebGLExtensionID::WEBGL_debug_renderer_info:
-        return Preferences::GetBool("webgl.enable-debug-renderer-info", false);
+        return Preferences::GetBool("webgl.enable-debug-renderer-info", false) &&
+               !nsContentUtils::ShouldResistFingerprinting();
     case WebGLExtensionID::WEBGL_debug_shaders:
         return !nsContentUtils::ShouldResistFingerprinting();
     case WebGLExtensionID::WEBGL_lose_context:

@@ -18,6 +18,7 @@
 // Windows silliness. winbase.h defines an empty no-argument Yield macro.
 #undef Yield
 
+class nsIBlockThreadedExecutionCallback;
 class nsIIdlePeriod;
 class nsThread;
 
@@ -34,7 +35,7 @@ class SynchronizedEventQueue;
 // Scheduler can schedule work on the main thread. Its behavior is controlled by
 // a number of preferences:
 //
-// "dom.ipc.scheduler": If this pref is false, Scheduler is not used at all.
+// XXX The cooperative scheduler is disabled because it will crash immediately.
 //
 // "dom.ipc.scheduler.useMultipleQueues": When this pref is true, a
 // LabeledEventQueue is used for the main thread event queue. This divides the
@@ -73,6 +74,9 @@ public:
 
   static bool UnlabeledEventRunning();
   static bool AnyEventRunning();
+
+  static void BlockThreadedExecution(nsIBlockThreadedExecutionCallback* aCallback);
+  static void UnblockThreadedExecution();
 
   class MOZ_RAII EventLoopActivation
   {

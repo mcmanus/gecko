@@ -2,8 +2,8 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-const {DevToolsShim} = Cu.import("chrome://devtools-shim/content/DevToolsShim.jsm", {});
-const {gDevTools} = DevToolsShim;
+const {require} = ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
+const {gDevTools} = require("devtools/client/framework/devtools");
 
 /**
  * Helper that returns the id of the last additional/extension tool for a provided
@@ -49,9 +49,9 @@ add_task(async function test_devtools_inspectedWindow_tabId() {
   }
 
   function devtools_page() {
-    browser.test.assertEq(undefined, browser.runtime.getBackgroundPage,
-      "The `runtime.getBackgroundPage` API method should be missing in a devtools_page context"
-    );
+    browser.test.assertEq(
+      undefined, browser.runtime.getBackgroundPage,
+      "The `runtime.getBackgroundPage` API method should be missing in a devtools_page context");
 
     try {
       let tabId = browser.devtools.inspectedWindow.tabId;
@@ -127,7 +127,7 @@ add_task(async function test_devtools_inspectedWindow_tabId() {
 
   await extension.unload();
 
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });
 
 add_task(async function test_devtools_inspectedWindow_eval() {
@@ -249,7 +249,7 @@ add_task(async function test_devtools_inspectedWindow_eval() {
 
   await extension.unload();
 
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });
 
 /**
@@ -367,5 +367,5 @@ add_task(async function test_devtools_inspectedWindow_eval_in_page_and_panel() {
   await gDevTools.closeToolbox(target);
   await target.destroy();
   await extension.unload();
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });

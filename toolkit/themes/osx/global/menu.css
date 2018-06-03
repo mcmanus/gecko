@@ -39,15 +39,8 @@ menuitem[_moz-menuactive="true"][disabled="true"] {
   color: inherit;
 }
 
-menucaption > .menu-text,
 menucaption > .menu-iconic-text {
   font-weight: bold;
-}
-
-.menu-description {
-  font-style: italic;
-  color: -moz-mac-menutextdisable;
-  margin-inline-start: 1ex !important;
 }
 
 .menu-iconic-icon {

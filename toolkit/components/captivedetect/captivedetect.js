@@ -5,14 +5,10 @@
 
 "use strict";
 
-const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-
-XPCOMUtils.defineLazyServiceGetter(this, "gSysMsgr",
-                                   "@mozilla.org/system-message-internal;1",
-                                   "nsISystemMessagesInternal");
+Cu.importGlobalProperties(["XMLHttpRequest"]);
 
 const DEBUG = false; // set to true to show debug messages
 
@@ -24,12 +20,9 @@ const kAbortCaptivePortalLoginEvent = "captive-portal-login-abort";
 const kCaptivePortalLoginSuccessEvent = "captive-portal-login-success";
 const kCaptivePortalCheckComplete = "captive-portal-check-complete";
 
-const kCaptivePortalSystemMessage = "captive-portal";
-
 function URLFetcher(url, timeout) {
   let self = this;
-  let xhr = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"]
-              .createInstance(Ci.nsIXMLHttpRequest);
+  let xhr = new XMLHttpRequest();
   xhr.open("GET", url, true);
   // Prevent the request from reading from the cache.
   xhr.channel.loadFlags |= Ci.nsIRequest.LOAD_BYPASS_CACHE;
@@ -74,7 +67,7 @@ URLFetcher.prototype = {
       this._xhr.abort();
     }
   },
-}
+};
 
 function LoginObserver(captivePortalDetector) {
   const LOGIN_OBSERVER_STATE_DETACHED = 0; /* Should not monitor network activity since no ongoing login procedure */
@@ -122,8 +115,8 @@ function LoginObserver(captivePortalDetector) {
 
   // Public interface of LoginObserver
   let observer = {
-    QueryInterface: XPCOMUtils.generateQI([Ci.nsIHttpActivityObserver,
-                                           Ci.nsITimerCallback]),
+    QueryInterface: ChromeUtils.generateQI([Ci.nsIHttpActivityObserver,
+                                            Ci.nsITimerCallback]),
 
     attach: function attach() {
       if (state === LOGIN_OBSERVER_STATE_DETACHED) {
@@ -205,7 +198,7 @@ function CaptivePortalDetector() {
     this._canonicalSiteExpectedContent =
       Services.prefs.getCharPref("captivedetect.canonicalContent");
   } catch (e) {
-    debug("canonicalURL or canonicalContent not set.")
+    debug("canonicalURL or canonicalContent not set.");
   }
 
   this._maxWaitingTime =
@@ -235,7 +228,7 @@ CaptivePortalDetector.prototype = {
                                     contractID: kCAPTIVEPORTALDETECTOR_CONTRACTID,
                                     classDescription: "Captive Portal Detector",
                                     interfaces: [Ci.nsICaptivePortalDetector]}),
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsICaptivePortalDetector]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsICaptivePortalDetector]),
 
   // nsICaptivePortalDetector
   checkCaptivePortal: function checkCaptivePortal(aInterfaceName, aCallback) {
@@ -336,7 +329,6 @@ CaptivePortalDetector.prototype = {
     this._loginObserver.attach();
     this._runningRequest.eventId = id;
     this._sendEvent(kOpenCaptivePortalLoginEvent, details);
-    gSysMsgr.broadcastMessage(kCaptivePortalSystemMessage, {});
   },
 
   _mayRetry: function _mayRetry() {

@@ -15,34 +15,34 @@ Bug 1067491 - Test forcing a gc.
 <script>
 "use strict";
 
-window.onload = function () {
+window.onload = function() {
   SimpleTest.waitForExplicitFinish();
 
-  Task.spawn(function* () {
-    let { memory, client } = yield startServerAndGetSelectedTabMemory();
+  (async function() {
+    const { memory, client } = await startServerAndGetSelectedTabMemory();
 
     let beforeGC, afterGC;
 
     do {
       let objects = [];
       for (let i = 0; i < 1000; i++) {
-        let o = {};
+        const o = {};
         o[Math.random()] = 1;
         objects.push(o);
       }
       objects = null;
 
-      yield { total: beforeGC } = memory.measure();
+      beforeGC = (await memory.measure()).total;
 
-      yield memory.forceGarbageCollection();
+      await memory.forceGarbageCollection();
 
-      yield { total: afterGC } = memory.measure();
+      afterGC = (await memory.measure()).total;
     } while (beforeGC < afterGC);
 
     ok(true, "The amount of memory after GC should eventually decrease");
 
     destroyServerAndFinish(client);
-  });
+  })();
 };
 </script>
 </pre>

@@ -19,14 +19,10 @@
  * - Status of the database (clean or dirty).
  */
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cu = Components.utils;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
+ChromeUtils.defineModuleGetter(this, "PlacesUtils",
   "resource://gre/modules/PlacesUtils.jsm");
 
 // Constants
@@ -71,7 +67,7 @@ const DATABASE_TO_MEMORY_PERC = 4;
 const DATABASE_TO_DISK_PERC = 2;
 // Maximum size of the optimal database.  High-end hardware has plenty of
 // memory and disk space, but performances don't grow linearly.
-const DATABASE_MAX_SIZE = 73400320; // 70MiB
+const DATABASE_MAX_SIZE = 78643200; // 75 MiB
 // If the physical memory size is bogus, fallback to this.
 const MEMSIZE_FALLBACK_BYTES = 268435456; // 256 MiB
 // If the disk available space is bogus, fallback to this.
@@ -235,7 +231,7 @@ const EXPIRATION_QUERIES = {
   // Hosts accumulated during the places delete are updated through a trigger
   // (see nsPlacesTriggers.h).
   QUERY_UPDATE_HOSTS: {
-    sql: `DELETE FROM moz_updatehosts_temp`,
+    sql: `DELETE FROM moz_updateoriginsdelete_temp`,
     actions: ACTION.TIMED | ACTION.TIMED_OVERLIMIT | ACTION.SHUTDOWN_DIRTY |
              ACTION.IDLE_DIRTY | ACTION.IDLE_DAILY | ACTION.DEBUG
   },
@@ -252,8 +248,9 @@ const EXPIRATION_QUERIES = {
 
   // Expire orphan icons from the database.
   QUERY_EXPIRE_FAVICONS: {
-    sql: `DELETE FROM moz_icons
-          WHERE root = 0 AND id NOT IN (
+    sql: `DELETE FROM moz_icons WHERE id IN (
+            SELECT id FROM moz_icons WHERE root = 0
+            EXCEPT
             SELECT icon_id FROM moz_icons_to_pages
           )`,
     actions: ACTION.TIMED_OVERLIMIT | ACTION.SHUTDOWN_DIRTY |
@@ -393,9 +390,7 @@ function nsPlacesExpiration() {
   // Smart Getters
 
   XPCOMUtils.defineLazyGetter(this, "_db", function() {
-    let db = Cc["@mozilla.org/browser/nav-history-service;1"].
-             getService(Ci.nsPIPlacesDatabase).
-             DBConnection;
+    let db = PlacesUtils.history.DBConnection;
 
     // Create the temporary notifications table.
     let stmt = db.createAsyncStatement(
@@ -419,9 +414,7 @@ function nsPlacesExpiration() {
                                      "@mozilla.org/widget/idleservice;1",
                                      "nsIIdleService");
 
-  this._prefBranch = Cc["@mozilla.org/preferences-service;1"].
-                     getService(Ci.nsIPrefService).
-                     getBranch(PREF_BRANCH);
+  this._prefBranch = Services.prefs.getBranch(PREF_BRANCH);
 
   this._loadPrefsPromise = this._loadPrefs().then(() => {
     // Observe our preferences branch for changes.
@@ -508,6 +501,12 @@ nsPlacesExpiration.prototype = {
       this._expireWithActionAndLimit(ACTION.IDLE_DAILY, LIMIT.LARGE);
     } else if (aTopic == TOPIC_TESTING_MODE) {
       this._testingMode = true;
+    } else if (aTopic == PlacesUtils.TOPIC_INIT_COMPLETE) {
+      // Ideally we'd add this observer only when notifications start being
+      // triggered. However, that's difficult to work out, so we do it on
+      // TOPIC_INIT_COMPLETE which means we have to take the hit of initializing
+      // this service slightly earlier.
+      PlacesUtils.history.addObserver(this, true);
     }
   },
 
@@ -537,7 +536,7 @@ nsPlacesExpiration.prototype = {
     this.status = STATUS.CLEAN;
   },
 
-  onVisit() {},
+  onVisits() {},
   onTitleChanged() {},
   onDeleteURI() {},
   onPageChanged() {},
@@ -624,7 +623,7 @@ nsPlacesExpiration.prototype = {
                   .getHistogramById("PLACES_MOST_RECENT_EXPIRED_VISIT_DAYS")
                   .add(this._mostRecentExpiredVisitDays);
         } catch (ex) {
-          Components.utils.reportError("Unable to report telemetry.");
+          Cu.reportError("Unable to report telemetry.");
         } finally {
           delete this._mostRecentExpiredVisitDays;
         }
@@ -650,7 +649,7 @@ nsPlacesExpiration.prototype = {
                       .getHistogramById("PLACES_EXPIRATION_STEPS_TO_CLEAN2")
                       .add(this._telemetrySteps);
             } catch (ex) {
-              Components.utils.reportError("Unable to report telemetry.");
+              Cu.reportError("Unable to report telemetry.");
             }
           }
           this._telemetrySteps = 1;
@@ -992,7 +991,7 @@ nsPlacesExpiration.prototype = {
 
   _xpcom_factory: XPCOMUtils.generateSingletonFactory(nsPlacesExpiration),
 
-  QueryInterface: XPCOMUtils.generateQI([
+  QueryInterface: ChromeUtils.generateQI([
     Ci.nsIObserver,
     Ci.nsINavHistoryObserver,
     Ci.nsITimerCallback,

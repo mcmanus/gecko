@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -25,7 +26,6 @@ class AsyncCanvasRenderer;
 class ClientCanvasRenderer;
 class CopyableCanvasRenderer;
 class PersistentBufferProvider;
-class WebRenderCanvasRendererSync;
 class WebRenderCanvasRendererAsync;
 
 struct CanvasInitializeData {
@@ -82,8 +82,6 @@ struct CanvasInitializeData {
 // ClientCanvasLayer.
 // WebRenderCanvasRenderer inherites ShareableCanvasRenderer and provides all
 // functionality that WebRender uses.
-// WebRenderCanvasRendererSync inherites WebRenderCanvasRenderer and be used in
-// WebRenderCanvasLayer.
 // WebRenderCanvasRendererAsync inherites WebRenderCanvasRenderer and be used in
 // layers-free mode of WebRender.
 //
@@ -107,13 +105,12 @@ struct CanvasInitializeData {
 //           |                            |
 // +--------------------+       +---------+-------------+
 // |ClientCanvasRenderer|       |WebRenderCanvasRenderer|
-// +--------------------+       +--------+--+-----------+
-//                                       ^  ^
-//               +-----------------------+  +----+
-//               |                               |
-// +-------------+-------------+   +-------------+--------------+
-// |WebRenderCanvasRendererSync|   |WebRenderCanvasRendererAsync|
-// +---------------------------+   +----------------------------+
+// +--------------------+       +-----------+-----------+
+//                                          ^
+//                                          |
+//                           +-------------+--------------+
+//                           |WebRenderCanvasRendererAsync|
+//                           +----------------------------+
 class CanvasRenderer
 {
 public:
@@ -135,7 +132,6 @@ public:
 
   virtual CopyableCanvasRenderer* AsCopyableCanvasRenderer() { return nullptr; }
   virtual ClientCanvasRenderer* AsClientCanvasRenderer() { return nullptr; }
-  virtual WebRenderCanvasRendererSync* AsWebRenderCanvasRendererSync() { return nullptr; }
   virtual WebRenderCanvasRendererAsync* AsWebRenderCanvasRendererAsync() { return nullptr; }
 
 protected:

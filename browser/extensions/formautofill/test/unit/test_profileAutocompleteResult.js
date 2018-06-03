@@ -1,7 +1,7 @@
 "use strict";
 
 /* global AddressResult, CreditCardResult */
-Cu.import("resource://formautofill/ProfileAutoCompleteResult.jsm");
+ChromeUtils.import("resource://formautofill/ProfileAutoCompleteResult.jsm");
 
 let matchingProfiles = [{
   guid: "test-guid-1",
@@ -351,7 +351,7 @@ let testSets = [{
 add_task(async function test_all_patterns() {
   testSets.forEach(({collectionConstructor, testCases}) => {
     testCases.forEach(testCase => {
-      do_print("Starting testcase: " + testCase.description);
+      info("Starting testcase: " + testCase.description);
       let actual = new collectionConstructor(testCase.searchString,
                                              testCase.fieldName,
                                              testCase.allFieldNames,

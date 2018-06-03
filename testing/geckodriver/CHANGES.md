@@ -3,19 +3,113 @@ Change log
 
 All notable changes to this program is documented in this file.
 
+
 Unreleased
 ----------
 
+Note that with geckodriver 'next' the following versions are recommended:
+- Firefox 56.0 (and greater)
+- Selenium 3.11 (and greater)
+
+### Added
+
+- Support for the new chrome element identifier in Marionette.
+
+### Changed
+
+- Updated mapping of all supported commands to the new prefixed commands
+  in Marionette, whereby all WebDriver specific commands make use of the
+  `WebDriver:` prefix.
+
+
+0.20.1 (2018-04-06)
+-------------------
+
+### Fixed
+
+- Avoid attempting to kill Firefox process that has stopped.
+
+  With the change to allow Firefox enough time to shut down in
+  0.20.0, geckodriver started unconditionally killing the process
+  to reap its exit status.  This caused geckodriver to inaccurately
+  report a successful Firefox shutdown as a failure.
+
+  The regression should not have caused any functional problems, but
+  the termination cause and the exit status are now reported correctly.
+
+
+0.20.0 (2018-03-08)
+-------------------
+
+### Added
+
+- New `--jsdebugger` flag to open the [Browser Toolbox] when Firefox
+  launches.  This is useful for debugging Marionette internals.
+
+- Introduced the temporary, boolean capability
+  `moz:useNonSpecCompliantPointerOrigin` to disable the WebDriver
+  conforming behavior of calculating the Pointer Origin.
+
+### Changed
+
+- HTTP status code for the [`StaleElementReference`] error changed
+  from 400 (Bad Request) to 404 (Not Found).
+
+- Backtraces from geckodriver no longer substitute for missing
+  Marionette stacktraces.
+
+- [webdriver crate] upgraded to 0.35.0.
+
+### Fixed
+
+- The Firefox process is now given ample time to shut down, allowing
+  enough time for the Firefox shutdown hang monitor to kick in.
+
+  Firefox has an integrated background monitor that observes
+  long-running threads during shutdown.  These threads will be
+  killed after 63 seconds in the event of a hang.  To allow Firefox
+  to shut down these threads on its own, geckodriver has to wait
+  that time and some additional seconds.
+
+- Grapheme clusters are now accepted as input for keyboard input
+  to actions.
+
+  Input to the `value` field of the `keyDown` and `keyUp` action
+  primitives used to only accept single characters, which means
+  geckodriver would error when a valid grapheme cluster was sent in,
+  for example with the tamil nadu character U+0BA8 U+0BBF.
+
+  Thanks to Greg Fraley for fixing this bug.
+
+- Improved error messages for malformed capability values.
+
+
+0.19.1 (2017-10-30)
+-------------------
+
+### Changed
+
+- Search suggestions in the location bar turned off as not to
+  trigger network connections
+
+- Block addons incompatible with E10s
+
+### Fixed
+
+- Marionette stacktraces are now correctly propagated
+
+- Some error messages have been clarified
+
 ### Removed
 
-- Removed `socksUsername` and `socksPassword` because both are no longer
-  valid keys for proxy capabilities
+- Removed obsolete `socksUsername` and `socksPassword` proxy
+  configuration keys because neither were picked up or recognised
 
 
 0.19.0 (2017-09-16)
 -------------------
 
-Note that with geckodriver v0.19.0 the following versions are recommended:
+Note that with geckodriver 0.19.0 the following versions are recommended:
 - Firefox 55.0 (and greater)
 - Selenium 3.5 (and greater)
 
@@ -25,11 +119,11 @@ Note that with geckodriver v0.19.0 the following versions are recommended:
   - POST `/session/{session id}/window/minimize` for the [Minimize Window]
     command
 
-- Added preference `extensions.shield-recipe-client.api_url` to disable shield
-  studies which could unexpectedly change the behavior of Firefox
+- Added preference `extensions.shield-recipe-client.api_url` to disable
+  shield studies which could unexpectedly change the behavior of Firefox
 
-- Introduced the temporary, boolean capability `moz:webdriverClick` to enable
-  the WebDriver conforming behavior of the [Element Click] command.
+- Introduced the temporary, boolean capability `moz:webdriverClick` to
+  enable the WebDriver conforming behavior of the [Element Click] command
 
 - Added crashreporter environment variables to better control the browser
   in case of crashes
@@ -750,9 +844,11 @@ and greater.
 
 
 [README]: https://github.com/mozilla/geckodriver/blob/master/README.md
+[Browser Toolbox]: https://developer.mozilla.org/en-US/docs/Tools/Browser_Toolbox
 
 [`CloseWindowResponse`]: https://docs.rs/webdriver/newest/webdriver/response/struct.CloseWindowResponse.html
 [`CookieResponse`]: https://docs.rs/webdriver/newest/webdriver/response/struct.CookieResponse.html
+[`DeleteSession`]: https://docs.rs/webdriver/newest/webdriver/command/enum.WebDriverCommand.html#variant.DeleteSession
 [`ElementClickIntercepted`]: https://docs.rs/webdriver/newest/webdriver/error/enum.ErrorStatus.html#variant.ElementClickIntercepted
 [`ElementNotInteractable`]: https://docs.rs/webdriver/newest/webdriver/error/enum.ErrorStatus.html#variant.ElementNotInteractable
 [`FullscreenWindow`]: https://docs.rs/webdriver/newest/webdriver/command/enum.WebDriverCommand.html#variant.FullscreenWindow
@@ -768,6 +864,7 @@ and greater.
 [`SessionNotCreated`]: https://docs.rs/webdriver/newest/webdriver/error/enum.ErrorStatus.html#variant.SessionNotCreated
 [`SetTimeouts`]: https://docs.rs/webdriver/newest/webdriver/command/enum.WebDriverCommand.html#variant.SetTimeouts
 [`SetWindowRect`]: https://docs.rs/webdriver/newest/webdriver/command/enum.WebDriverCommand.html#variant.SetWindowRect
+[`StaleElementReference`]: https://docs.rs/webdriver/newest/webdriver/error/enum.ErrorStatus.html#variant.StaleElementReference
 [`UnableToCaptureScreen`]: https://docs.rs/webdriver/newest/webdriver/error/enum.ErrorStatus.html#variant.UnableToCaptureScreen
 [`UnknownCommand`]: https://docs.rs/webdriver/newest/webdriver/error/enum.ErrorStatus.html#variant.UnknownCommand
 [`UnknownError`]: https://docs.rs/webdriver/newest/webdriver/error/enum.ErrorStatus.html#variant.UnknownError
@@ -777,15 +874,16 @@ and greater.
 [webdriver crate]: https://crates.io/crates/webdriver
 
 [Actions]: https://w3c.github.io/webdriver/webdriver-spec.html#actions
+[Delete Session]: https://w3c.github.io/webdriver/webdriver-spec.html#delete-session
 [Element Click]: https://w3c.github.io/webdriver/webdriver-spec.html#element-click
 [Get Timeouts]: https://w3c.github.io/webdriver/webdriver-spec.html#get-timeouts
-[Set Timeouts]: https://w3c.github.io/webdriver/webdriver-spec.html#set-timeouts
 [Get Window Rect]: https://w3c.github.io/webdriver/webdriver-spec.html#get-window-rect
-[Set Window Rect]: https://w3c.github.io/webdriver/webdriver-spec.html#set-window-rect
 [insecure certificate]: https://w3c.github.io/webdriver/webdriver-spec.html#dfn-insecure-certificate
 [Minimize Window]: https://w3c.github.io/webdriver/webdriver-spec.html#minimize-window
 [New Session]: https://w3c.github.io/webdriver/webdriver-spec.html#new-session
 [Send Alert Text]: https://w3c.github.io/webdriver/webdriver-spec.html#send-alert-text
+[Set Timeouts]: https://w3c.github.io/webdriver/webdriver-spec.html#set-timeouts
+[Set Window Rect]: https://w3c.github.io/webdriver/webdriver-spec.html#set-window-rect
 [Status]: https://w3c.github.io/webdriver/webdriver-spec.html#status
 [Take Element Screenshot]: https://w3c.github.io/webdriver/webdriver-spec.html#take-element-screenshot
 [WebDriver errors]: https://w3c.github.io/webdriver/webdriver-spec.html#handling-errors

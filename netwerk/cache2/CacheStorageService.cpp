@@ -29,6 +29,7 @@
 #include "nsNetUtil.h"
 #include "nsServiceManagerUtils.h"
 #include "nsWeakReference.h"
+#include "nsXULAppAPI.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Services.h"
@@ -121,6 +122,7 @@ CacheStorageService::CacheStorageService()
 {
   CacheFileIOManager::Init();
 
+  MOZ_ASSERT(XRE_IsParentProcess());
   MOZ_ASSERT(!sSelf);
 
   sSelf = this;
@@ -584,7 +586,7 @@ private:
 #endif
   }
 
-  virtual ~CleaupCacheDirectoriesRunnable() {}
+  virtual ~CleaupCacheDirectoriesRunnable() = default;
   nsCOMPtr<nsIFile> mCache1Dir, mCache2Dir;
 #if defined(MOZ_WIDGET_ANDROID)
   nsCOMPtr<nsIFile> mCache2Profileless;
@@ -1235,7 +1237,7 @@ CacheStorageService::SchedulePurgeOverMemoryLimit()
     return;
   }
 
-  mPurgeTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
+  mPurgeTimer = NS_NewTimer();
   if (mPurgeTimer) {
     nsresult rv;
     rv = mPurgeTimer->InitWithCallback(this, 1000, nsITimer::TYPE_ONE_SHOT);
@@ -2158,6 +2160,7 @@ CacheStorageService::SizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) con
   if (sGlobalEntryTables) {
     n += sGlobalEntryTables->ShallowSizeOfIncludingThis(mallocSizeOf);
   }
+  n += mPurgeTimeStamps.SizeOfExcludingThis(mallocSizeOf);
 
   return n;
 }

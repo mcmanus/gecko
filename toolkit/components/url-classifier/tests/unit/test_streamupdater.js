@@ -97,7 +97,7 @@ function testInvalidUrlForward() {
   var update = buildPhishingUpdate(
     [{ "chunkNum": 1,
        "urls": add1Urls }]);
-  update += "u:asdf://blah/blah\n";  // invalid URL scheme
+  update += "u:asdf://blah/blah\n"; // invalid URL scheme
 
   // add1Urls is present, but that is an artifact of the way we do the test.
   var assertions = {
@@ -115,7 +115,7 @@ function testErrorUrlForward() {
   var update = buildPhishingUpdate(
     [{ "chunkNum": 1,
        "urls": add1Urls }]);
-  update += "u:http://test.invalid/asdf/asdf\n";  // invalid URL scheme
+  update += "u:http://test.invalid/asdf/asdf\n"; // invalid URL scheme
 
   // add1Urls is present, but that is an artifact of the way we do the test.
   var assertions = {
@@ -214,13 +214,7 @@ function Observer(callback) {
 
 Observer.prototype =
 {
-QueryInterface(iid) {
-  if (!iid.equals(Ci.nsISupports) &&
-      !iid.equals(Ci.nsIObserver)) {
-    throw Cr.NS_ERROR_NO_INTERFACE;
-  }
-  return this;
-}
+QueryInterface: ChromeUtils.generateQI(["nsIObserver"])
 };
 
 // Tests a database reset request.

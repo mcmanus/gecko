@@ -4,17 +4,23 @@
 
 #include "nsHtml5OwningUTF16Buffer.h"
 
+#include "mozilla/Span.h"
+
+using namespace mozilla;
+
 nsHtml5OwningUTF16Buffer::nsHtml5OwningUTF16Buffer(char16_t* aBuffer)
-  : nsHtml5UTF16Buffer(aBuffer, 0),
-    next(nullptr),
-    key(nullptr)
-{}
+  : nsHtml5UTF16Buffer(aBuffer, 0)
+  , next(nullptr)
+  , key(nullptr)
+{
+}
 
 nsHtml5OwningUTF16Buffer::nsHtml5OwningUTF16Buffer(void* aKey)
-  : nsHtml5UTF16Buffer(nullptr, 0),
-    next(nullptr),
-    key(aKey)
-{}
+  : nsHtml5UTF16Buffer(nullptr, 0)
+  , next(nullptr)
+  , key(aKey)
+{
+}
 
 nsHtml5OwningUTF16Buffer::~nsHtml5OwningUTF16Buffer()
 {
@@ -72,7 +78,7 @@ nsHtml5OwningUTF16Buffer::AdvanceEnd(int32_t aNumberOfCodeUnits)
 nsrefcnt
 nsHtml5OwningUTF16Buffer::AddRef()
 {
-  NS_PRECONDITION(int32_t(mRefCnt) >= 0, "Illegal refcount.");
+  MOZ_ASSERT(int32_t(mRefCnt) >= 0, "Illegal refcount.");
   ++mRefCnt;
   NS_LOG_ADDREF(this, mRefCnt, "nsHtml5OwningUTF16Buffer", sizeof(*this));
   return mRefCnt;
@@ -81,7 +87,7 @@ nsHtml5OwningUTF16Buffer::AddRef()
 nsrefcnt
 nsHtml5OwningUTF16Buffer::Release()
 {
-  NS_PRECONDITION(0 != mRefCnt, "Release without AddRef.");
+  MOZ_ASSERT(0 != mRefCnt, "Release without AddRef.");
   --mRefCnt;
   NS_LOG_RELEASE(this, mRefCnt, "nsHtml5OwningUTF16Buffer");
   if (mRefCnt == 0) {

@@ -19,63 +19,19 @@
 #include "nsNSSCertTrust.h"
 #include "nsNSSCertValidity.h"
 #include "nsNSSCertificate.h"
+#include "nsReadableUtils.h"
 #include "nsServiceManagerUtils.h"
 #include "prerror.h"
 #include "secder.h"
 
 using namespace mozilla;
 
-/* Object Identifier constants */
-#define CONST_OID static const unsigned char
-#define MICROSOFT_OID 0x2b, 0x6, 0x1, 0x4, 0x1, 0x82, 0x37
-#define PKIX_OID 0x2b, 0x6, 0x01, 0x05, 0x05, 0x07
-CONST_OID msCertExtCerttype[] = { MICROSOFT_OID, 20, 2 };
-CONST_OID msNTPrincipalName[] = { MICROSOFT_OID, 20, 2, 3 };
-CONST_OID msCertsrvCAVersion[] = { MICROSOFT_OID, 21, 1 };
-CONST_OID msNTDSReplication[] = { MICROSOFT_OID, 25, 1 };
-CONST_OID pkixLogotype[] = { PKIX_OID, 1, 12 };
+// To avoid relying on localized strings in PSM, we hard-code the root module
+// name internally. When we display it to the user in the list of modules in the
+// front-end, we look up the localized value and display that instead of this.
+const char* kRootModuleName = "Builtin Roots Module";
+const size_t kRootModuleNameLen = strlen(kRootModuleName);
 
-#define OI(x)                                                                  \
-  {                                                                            \
-    siDEROID, (unsigned char*)x, sizeof x                                      \
-  }
-#define OD(oid, desc, mech, ext)                                               \
-  {                                                                            \
-    OI(oid), SEC_OID_UNKNOWN, desc, mech, ext                                  \
-  }
-#define SEC_OID(tag) more_oids[tag].offset
-
-static SECOidData more_oids[] = {
-/* Microsoft OIDs */
-#define MS_CERT_EXT_CERTTYPE 0
-  OD(msCertExtCerttype,
-     "Microsoft Certificate Template Name",
-     CKM_INVALID_MECHANISM,
-     INVALID_CERT_EXTENSION),
-
-#define MS_NT_PRINCIPAL_NAME 1
-  OD(msNTPrincipalName,
-     "Microsoft Principal Name",
-     CKM_INVALID_MECHANISM,
-     INVALID_CERT_EXTENSION),
-
-#define MS_CERTSERV_CA_VERSION 2
-  OD(msCertsrvCAVersion,
-     "Microsoft CA Version",
-     CKM_INVALID_MECHANISM,
-     INVALID_CERT_EXTENSION),
-
-#define MS_NTDS_REPLICATION 3
-  OD(msNTDSReplication,
-     "Microsoft Domain GUID",
-     CKM_INVALID_MECHANISM,
-     INVALID_CERT_EXTENSION),
-
-#define PKIX_LOGOTYPE 4
-  OD(pkixLogotype, "Logotype", CKM_INVALID_MECHANISM, INVALID_CERT_EXTENSION),
-};
-
-static const unsigned int numOids = (sizeof more_oids) / (sizeof more_oids[0]);
 
 static nsresult
 GetPIPNSSBundle(nsIStringBundle** pipnssBundle)
@@ -109,7 +65,7 @@ GetPIPNSSBundleString(const char* stringName, nsAString& result)
   return pipnssBundle->GetStringFromName(stringName, result);
 }
 
-static nsresult
+nsresult
 PIPBundleFormatStringFromName(const char* stringName, const char16_t** params,
                               uint32_t numParams, nsAString& result)
 {
@@ -591,19 +547,7 @@ GetOIDText(SECItem* oid, nsAString& text)
       bundlekey = "CertDumpECsect571r1";
       break;
     default:
-      if (oidTag == SEC_OID(MS_CERT_EXT_CERTTYPE)) {
-        bundlekey = "CertDumpMSCerttype";
-        break;
-      }
-      if (oidTag == SEC_OID(MS_CERTSERV_CA_VERSION)) {
-        bundlekey = "CertDumpMSCAVersion";
-        break;
-      }
-      if (oidTag == SEC_OID(PKIX_LOGOTYPE)) {
-        bundlekey = "CertDumpLogotype";
-        break;
-      }
-      /* fallthrough */
+      break;
   }
 
   if (bundlekey) {
@@ -663,7 +607,7 @@ ProcessRawBytes(SECItem* data, nsAString& text, bool wantHeader = true)
   char buffer[5];
   for (i = 0; i < data->len; i++) {
     SprintfLiteral(buffer, "%02x ", data->data[i]);
-    AppendASCIItoUTF16(buffer, text);
+    text.AppendASCII(buffer);
     if ((i + 1) % 16 == 0) {
       text.AppendLiteral(SEPARATOR);
     }
@@ -818,25 +762,30 @@ ProcessExtKeyUsage(SECItem* extData, nsAString& text)
   return NS_OK;
 }
 
+void
+LossyUTF8ToUTF16(const char* str, uint32_t len, /*out*/ nsAString& result)
+{
+  nsDependentCSubstring substring(str, len);
+  if (IsUTF8(substring)) {
+    result.Assign(NS_ConvertUTF8toUTF16(substring));
+  } else {
+    char16_t* newUTF16(ToNewUnicode(substring));
+    result.Adopt(newUTF16);
+  }
+}
+
 static nsresult
 ProcessRDN(CERTRDN* rdn, nsAString& finalString)
 {
-  nsresult rv;
-  CERTAVA** avas;
-  CERTAVA* ava;
-  nsString avavalue;
-  nsString type;
-  nsAutoString temp;
-  const char16_t* params[2];
-
-  avas = rdn->avas;
-  while ((ava = *avas++) != 0) {
-    rv = GetOIDText(&ava->type, type);
+  CERTAVA** avas = rdn->avas;
+  for (auto i = 0; avas[i]; i++) {
+    CERTAVA* ava = avas[i];
+    nsAutoString type;
+    nsresult rv = GetOIDText(&ava->type, type);
     if (NS_FAILED(rv)) {
       return rv;
     }
 
-    // This function returns a string in UTF8 format.
     UniqueSECItem decodeItem(CERT_DecodeAVAValue(&ava->value));
     if (!decodeItem) {
       return NS_ERROR_FAILURE;
@@ -855,10 +804,13 @@ ProcessRDN(CERTRDN* rdn, nsAString& finalString)
       return NS_ERROR_FAILURE;
     }
 
-    avavalue = NS_ConvertUTF8toUTF16(escapedValue.get());
+    nsAutoString avaValue;
+    LossyUTF8ToUTF16(escapedValue.get(), strlen(escapedValue.get()), avaValue);
 
+    const char16_t* params[2];
     params[0] = type.get();
-    params[1] = avavalue.get();
+    params[1] = avaValue.get();
+    nsAutoString temp;
     PIPBundleFormatStringFromName("AVATemplate", params, 2, temp);
     finalString += temp + NS_LITERAL_STRING("\n");
   }
@@ -916,8 +868,13 @@ ProcessIA5String(const SECItem& extData,
     return NS_ERROR_FAILURE;
   }
 
-  text.AppendASCII(BitwiseCast<char*, unsigned char*>(item.data),
-                   AssertedCast<uint32_t>(item.len));
+  // Yes this is supposed to be ASCII and not UTF8, but this is just for display
+  // purposes.
+  nsAutoString utf16;
+  const char* str = BitwiseCast<char*, unsigned char*>(item.data);
+  uint32_t len = AssertedCast<uint32_t>(item.len);
+  LossyUTF8ToUTF16(str, len, utf16);
+  text.Append(utf16);
   return NS_OK;
 }
 
@@ -945,24 +902,6 @@ AppendBMPtoUTF16(const UniquePLArenaPool& arena,
 }
 
 static nsresult
-ProcessBMPString(SECItem* extData, nsAString& text)
-{
-  UniquePLArenaPool arena(PORT_NewArena(DER_DEFAULT_CHUNKSIZE));
-  if (!arena) {
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
-
-  SECItem item;
-  if (SEC_ASN1DecodeItem(
-        arena.get(), &item, SEC_ASN1_GET(SEC_BMPStringTemplate), extData) !=
-      SECSuccess) {
-    return NS_ERROR_FAILURE;
-  }
-
-  return AppendBMPtoUTF16(arena, item.data, item.len, text);
-}
-
-static nsresult
 ProcessGeneralName(const UniquePLArenaPool& arena, CERTGeneralName* current,
                    nsAString& text)
 {
@@ -973,79 +912,27 @@ ProcessGeneralName(const UniquePLArenaPool& arena, CERTGeneralName* current,
   nsresult rv = NS_OK;
 
   switch (current->type) {
-    case certOtherName: {
-      SECOidTag oidTag = SECOID_FindOIDTag(&current->name.OthName.oid);
-      if (oidTag == SEC_OID(MS_NT_PRINCIPAL_NAME)) {
-        /* The type of this name is apparently nowhere explicitly
-         documented. However, in the generated templates, it is always
-         UTF-8. So try to decode this as UTF-8; if that fails, dump the
-         raw data. */
-        SECItem decoded;
-        GetPIPNSSBundleString("CertDumpMSNTPrincipal", key);
-        if (SEC_ASN1DecodeItem(arena.get(),
-                               &decoded,
-                               SEC_ASN1_GET(SEC_UTF8StringTemplate),
-                               &current->name.OthName.name) == SECSuccess) {
-          AppendUTF8toUTF16(nsAutoCString((char*)decoded.data, decoded.len),
-                            value);
-        } else {
-          ProcessRawBytes(&current->name.OthName.name, value);
-        }
-        break;
-      } else if (oidTag == SEC_OID(MS_NTDS_REPLICATION)) {
-        /* This should be a 16-byte GUID */
-        SECItem guid;
-        GetPIPNSSBundleString("CertDumpMSDomainGUID", key);
-        if (SEC_ASN1DecodeItem(arena.get(),
-                               &guid,
-                               SEC_ASN1_GET(SEC_OctetStringTemplate),
-                               &current->name.OthName.name) == SECSuccess &&
-            guid.len == 16) {
-          char buf[40];
-          unsigned char* d = guid.data;
-          SprintfLiteral(buf,
-                         "{%.2x%.2x%.2x%.2x-%.2x%.2x-%.2x%.2x-%.2x%.2x-%.2x%"
-                         ".2x%.2x%.2x%.2x%.2x}",
-                         d[3],
-                         d[2],
-                         d[1],
-                         d[0],
-                         d[5],
-                         d[4],
-                         d[7],
-                         d[6],
-                         d[8],
-                         d[9],
-                         d[10],
-                         d[11],
-                         d[12],
-                         d[13],
-                         d[14],
-                         d[15]);
-          value.AssignASCII(buf);
-        } else {
-          ProcessRawBytes(&current->name.OthName.name, value);
-        }
-      } else {
-        rv = GetDefaultOIDFormat(
-          &current->name.OthName.oid, key, ' ');
-        if (NS_FAILED(rv)) {
-          return rv;
-        }
-        ProcessRawBytes(&current->name.OthName.name, value);
+    case certOtherName:
+      rv = GetDefaultOIDFormat(&current->name.OthName.oid, key, ' ');
+      if (NS_FAILED(rv)) {
+        return rv;
       }
+      ProcessRawBytes(&current->name.OthName.name, value);
+      break;
+    case certRFC822Name: {
+      GetPIPNSSBundleString("CertDumpRFC822Name", key);
+      const char* str = reinterpret_cast<const char*>(current->name.other.data);
+      uint32_t len = current->name.other.len;
+      LossyUTF8ToUTF16(str, len, value);
       break;
     }
-    case certRFC822Name:
-      GetPIPNSSBundleString("CertDumpRFC822Name", key);
-      value.AssignASCII((char*)current->name.other.data,
-                        current->name.other.len);
-      break;
-    case certDNSName:
+    case certDNSName: {
       GetPIPNSSBundleString("CertDumpDNSName", key);
-      value.AssignASCII((char*)current->name.other.data,
-                        current->name.other.len);
+      const char* str = reinterpret_cast<const char*>(current->name.other.data);
+      uint32_t len = current->name.other.len;
+      LossyUTF8ToUTF16(str, len, value);
       break;
+    }
     case certX400Address:
       GetPIPNSSBundleString("CertDumpX400Address", key);
       ProcessRawBytes(&current->name.other, value);
@@ -1062,11 +949,13 @@ ProcessGeneralName(const UniquePLArenaPool& arena, CERTGeneralName* current,
       GetPIPNSSBundleString("CertDumpEDIPartyName", key);
       ProcessRawBytes(&current->name.other, value);
       break;
-    case certURI:
+    case certURI: {
       GetPIPNSSBundleString("CertDumpURI", key);
-      value.AssignASCII((char*)current->name.other.data,
-                        current->name.other.len);
+      const char* str = reinterpret_cast<const char*>(current->name.other.data);
+      uint32_t len = current->name.other.len;
+      LossyUTF8ToUTF16(str, len, value);
       break;
+    }
     case certIPAddress: {
       char buf[INET6_ADDRSTRLEN];
       PRStatus status = PR_FAILURE;
@@ -1229,11 +1118,15 @@ ProcessUserNotice(SECItem* derNotice, nsAString& text)
     switch (notice->noticeReference.organization.type) {
       case siAsciiString:
       case siVisibleString:
-      case siUTF8String:
-        text.Append(NS_ConvertUTF8toUTF16(
-          (const char*)notice->noticeReference.organization.data,
-          notice->noticeReference.organization.len));
+      case siUTF8String: {
+        const char* str = reinterpret_cast<const char*>(
+          notice->noticeReference.organization.data);
+        uint32_t len = notice->noticeReference.organization.len;
+        nsAutoString utf16;
+        LossyUTF8ToUTF16(str, len, utf16);
+        text.Append(utf16);
         break;
+      }
       case siBMPString:
         AppendBMPtoUTF16(arena,
                          notice->noticeReference.organization.data,
@@ -1252,7 +1145,7 @@ ProcessUserNotice(SECItem* derNotice, nsAString& text)
         SprintfLiteral(buffer, "#%lu", number);
         if (itemList != notice->noticeReference.noticeNumbers)
           text.AppendLiteral(", ");
-        AppendASCIItoUTF16(buffer, text);
+        text.AppendASCII(buffer);
       }
       itemList++;
     }
@@ -1263,10 +1156,15 @@ ProcessUserNotice(SECItem* derNotice, nsAString& text)
     switch (notice->displayText.type) {
       case siAsciiString:
       case siVisibleString:
-      case siUTF8String:
-        text.Append(NS_ConvertUTF8toUTF16((const char*)notice->displayText.data,
-                                          notice->displayText.len));
+      case siUTF8String: {
+        const char* str =
+          reinterpret_cast<const char*>(notice->displayText.data);
+        uint32_t len = notice->displayText.len;
+        nsAutoString utf16;
+        LossyUTF8ToUTF16(str, len, utf16);
+        text.Append(utf16);
         break;
+      }
       case siBMPString:
         AppendBMPtoUTF16(
           arena, notice->displayText.data, notice->displayText.len, text);
@@ -1494,38 +1392,6 @@ ProcessAuthInfoAccess(SECItem* extData, nsAString& text)
 }
 
 static nsresult
-ProcessMSCAVersion(SECItem* extData, nsAString& text)
-{
-  MOZ_ASSERT(extData);
-  NS_ENSURE_ARG(extData);
-
-  ScopedAutoSECItem decoded;
-  if (SEC_ASN1DecodeItem(
-        nullptr, &decoded, SEC_ASN1_GET(SEC_IntegerTemplate), extData) !=
-      SECSuccess) {
-    /* This extension used to be an Integer when this code
-       was written, but apparently isn't anymore. Display
-       the raw bytes instead. */
-    return ProcessRawBytes(extData, text);
-  }
-
-  unsigned long version;
-  if (SEC_ASN1DecodeInteger(&decoded, &version) != SECSuccess) {
-    /* Value out of range, display raw bytes */
-    return ProcessRawBytes(extData, text);
-  }
-
-  /* Apparently, the encoding is <minor><major>, with 16 bits each */
-  char buf[50];
-  if (SprintfLiteral(buf, "%lu.%lu", version & 0xFFFF, version >> 16) <= 0) {
-    return NS_ERROR_FAILURE;
-  }
-
-  text.AppendASCII(buf);
-  return NS_OK;
-}
-
-static nsresult
 ProcessExtensionData(SECOidTag oidTag, SECItem* extData, nsAString& text)
 {
   nsresult rv;
@@ -1559,14 +1425,6 @@ ProcessExtensionData(SECOidTag oidTag, SECItem* extData, nsAString& text)
       rv = ProcessAuthInfoAccess(extData, text);
       break;
     default:
-      if (oidTag == SEC_OID(MS_CERT_EXT_CERTTYPE)) {
-        rv = ProcessBMPString(extData, text);
-        break;
-      }
-      if (oidTag == SEC_OID(MS_CERTSERV_CA_VERSION)) {
-        rv = ProcessMSCAVersion(extData, text);
-        break;
-      }
       rv = ProcessRawBytes(extData, text);
       break;
   }
@@ -1627,13 +1485,13 @@ ProcessSECAlgorithmID(SECAlgorithmID* algID, nsIASN1Sequence** retSequence)
     printableItem->SetDisplayValue(text);
     nsCOMPtr<nsIMutableArray> asn1Objects;
     sequence->GetASN1Objects(getter_AddRefs(asn1Objects));
-    asn1Objects->AppendElement(printableItem, false);
+    asn1Objects->AppendElement(printableItem);
     GetPIPNSSBundleString("CertDumpAlgID", text);
     printableItem->SetDisplayName(text);
 
     printableItem = new nsNSSASN1PrintableItem();
 
-    asn1Objects->AppendElement(printableItem, false);
+    asn1Objects->AppendElement(printableItem);
     GetPIPNSSBundleString("CertDumpParams", text);
     printableItem->SetDisplayName(text);
     if ((algOIDTag == SEC_OID_ANSIX962_EC_PUBLIC_KEY) &&
@@ -1675,7 +1533,13 @@ ProcessTime(PRTime dispTime,
     kDateFormatLong, kTimeFormatSeconds, &explodedTimeGMT, tempString);
 
   text.Append(tempString);
-  text.AppendLiteral(" GMT)");
+  // Append "GMT" if it's not already added by the formatter
+  // since the OS pattern contained a timezone (Mac and Linux).
+  if (tempString.Find(" GMT") == kNotFound) {
+    text.AppendLiteral(" GMT)");
+  } else {
+    text.Append(')');
+  }
 
   nsCOMPtr<nsIASN1PrintableItem> printableItem = new nsNSSASN1PrintableItem();
 
@@ -1683,7 +1547,7 @@ ProcessTime(PRTime dispTime,
   printableItem->SetDisplayName(nsDependentString(displayName));
   nsCOMPtr<nsIMutableArray> asn1Objects;
   parentSequence->GetASN1Objects(getter_AddRefs(asn1Objects));
-  asn1Objects->AppendElement(printableItem, false);
+  asn1Objects->AppendElement(printableItem);
   return NS_OK;
 }
 
@@ -1706,7 +1570,7 @@ ProcessSubjectPublicKeyInfo(CERTSubjectPublicKeyInfo* spki,
   sequenceItem->SetDisplayName(text);
   nsCOMPtr<nsIMutableArray> asn1Objects;
   spkiSequence->GetASN1Objects(getter_AddRefs(asn1Objects));
-  asn1Objects->AppendElement(sequenceItem, false);
+  asn1Objects->AppendElement(sequenceItem);
 
   nsCOMPtr<nsIASN1PrintableItem> printableItem = new nsNSSASN1PrintableItem();
 
@@ -1769,10 +1633,10 @@ ProcessSubjectPublicKeyInfo(CERTSubjectPublicKeyInfo* spki,
   printableItem->SetDisplayValue(text);
   GetPIPNSSBundleString("CertDumpSubjPubKey", text);
   printableItem->SetDisplayName(text);
-  asn1Objects->AppendElement(printableItem, false);
+  asn1Objects->AppendElement(printableItem);
 
   parentSequence->GetASN1Objects(getter_AddRefs(asn1Objects));
-  asn1Objects->AppendElement(spkiSequence, false);
+  asn1Objects->AppendElement(spkiSequence);
   return NS_OK;
 }
 
@@ -1796,45 +1660,16 @@ ProcessExtensions(CERTCertExtension** extensions,
     if (NS_FAILED(rv))
       return rv;
 
-    asn1Objects->AppendElement(newExtension, false);
+    asn1Objects->AppendElement(newExtension);
   }
   parentSequence->GetASN1Objects(getter_AddRefs(asn1Objects));
-  asn1Objects->AppendElement(extensionSequence, false);
+  asn1Objects->AppendElement(extensionSequence);
   return NS_OK;
-}
-
-static bool registered;
-static SECStatus
-RegisterDynamicOids()
-{
-  unsigned int i;
-  SECStatus rv = SECSuccess;
-
-  if (registered)
-    return rv;
-
-  for (i = 0; i < numOids; i++) {
-    SECOidTag tag = SECOID_AddEntry(&more_oids[i]);
-    if (tag == SEC_OID_UNKNOWN) {
-      rv = SECFailure;
-      continue;
-    }
-    more_oids[i].offset = tag;
-  }
-  registered = true;
-  return rv;
 }
 
 nsresult
 nsNSSCertificate::CreateTBSCertificateASN1Struct(nsIASN1Sequence** retSequence)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown())
-    return NS_ERROR_NOT_AVAILABLE;
-
-  if (RegisterDynamicOids() != SECSuccess)
-    return NS_ERROR_FAILURE;
-
   //
   //   TBSCertificate  ::=  SEQUENCE  {
   //        version         [0]  EXPLICIT Version DEFAULT v1,
@@ -1869,12 +1704,12 @@ nsNSSCertificate::CreateTBSCertificateASN1Struct(nsIASN1Sequence** retSequence)
   if (NS_FAILED(rv))
     return rv;
 
-  asn1Objects->AppendElement(printableItem, false);
+  asn1Objects->AppendElement(printableItem);
 
   rv = ProcessSerialNumberDER(mCert->serialNumber, printableItem);
   if (NS_FAILED(rv))
     return rv;
-  asn1Objects->AppendElement(printableItem, false);
+  asn1Objects->AppendElement(printableItem);
 
   nsCOMPtr<nsIASN1Sequence> algID;
   rv = ProcessSECAlgorithmID(&mCert->signature, getter_AddRefs(algID));
@@ -1883,7 +1718,7 @@ nsNSSCertificate::CreateTBSCertificateASN1Struct(nsIASN1Sequence** retSequence)
 
   GetPIPNSSBundleString("CertDumpSigAlg", text);
   algID->SetDisplayName(text);
-  asn1Objects->AppendElement(algID, false);
+  asn1Objects->AppendElement(algID);
 
   nsString value;
   ProcessName(&mCert->issuer, getter_Copies(value));
@@ -1893,12 +1728,12 @@ nsNSSCertificate::CreateTBSCertificateASN1Struct(nsIASN1Sequence** retSequence)
   printableItem->SetDisplayValue(value);
   GetPIPNSSBundleString("CertDumpIssuer", text);
   printableItem->SetDisplayName(text);
-  asn1Objects->AppendElement(printableItem, false);
+  asn1Objects->AppendElement(printableItem);
 
   nsCOMPtr<nsIASN1Sequence> validitySequence = new nsNSSASN1Sequence();
   GetPIPNSSBundleString("CertDumpValidity", text);
   validitySequence->SetDisplayName(text);
-  asn1Objects->AppendElement(validitySequence, false);
+  asn1Objects->AppendElement(validitySequence);
   GetPIPNSSBundleString("CertDumpNotBefore", text);
   nsCOMPtr<nsIX509CertValidity> validityData;
   GetValidity(getter_AddRefs(validityData));
@@ -1923,7 +1758,7 @@ nsNSSCertificate::CreateTBSCertificateASN1Struct(nsIASN1Sequence** retSequence)
   printableItem->SetDisplayName(text);
   ProcessName(&mCert->subject, getter_Copies(value));
   printableItem->SetDisplayValue(value);
-  asn1Objects->AppendElement(printableItem, false);
+  asn1Objects->AppendElement(printableItem);
 
   rv = ProcessSubjectPublicKeyInfo(&mCert->subjectPublicKeyInfo, sequence);
   if (NS_FAILED(rv))
@@ -1945,7 +1780,7 @@ nsNSSCertificate::CreateTBSCertificateASN1Struct(nsIASN1Sequence** retSequence)
     printableItem->SetDisplayValue(text);
     GetPIPNSSBundleString("CertDumpIssuerUniqueID", text);
     printableItem->SetDisplayName(text);
-    asn1Objects->AppendElement(printableItem, false);
+    asn1Objects->AppendElement(printableItem);
   }
 
   if (mCert->subjectID.data) {
@@ -1962,7 +1797,7 @@ nsNSSCertificate::CreateTBSCertificateASN1Struct(nsIASN1Sequence** retSequence)
     printableItem->SetDisplayValue(text);
     GetPIPNSSBundleString("CertDumpSubjectUniqueID", text);
     printableItem->SetDisplayName(text);
-    asn1Objects->AppendElement(printableItem, false);
+    asn1Objects->AppendElement(printableItem);
   }
   if (mCert->extensions) {
     rv = ProcessExtensions(mCert->extensions, sequence);
@@ -1976,10 +1811,6 @@ nsNSSCertificate::CreateTBSCertificateASN1Struct(nsIASN1Sequence** retSequence)
 nsresult
 nsNSSCertificate::CreateASN1Struct(nsIASN1Object** aRetVal)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown())
-    return NS_ERROR_NOT_AVAILABLE;
-
   nsCOMPtr<nsIASN1Sequence> sequence = new nsNSSASN1Sequence();
 
   nsCOMPtr<nsIMutableArray> asn1Objects;
@@ -2003,7 +1834,7 @@ nsNSSCertificate::CreateASN1Struct(nsIASN1Object** aRetVal)
   if (NS_FAILED(rv))
     return rv;
 
-  asn1Objects->AppendElement(sequence, false);
+  asn1Objects->AppendElement(sequence);
   nsCOMPtr<nsIASN1Sequence> algID;
 
   rv = ProcessSECAlgorithmID(&mCert->signatureWrap.signatureAlgorithm,
@@ -2013,7 +1844,7 @@ nsNSSCertificate::CreateASN1Struct(nsIASN1Object** aRetVal)
   nsString text;
   GetPIPNSSBundleString("CertDumpSigAlg", text);
   algID->SetDisplayName(text);
-  asn1Objects->AppendElement(algID, false);
+  asn1Objects->AppendElement(algID);
   nsCOMPtr<nsIASN1PrintableItem> printableItem = new nsNSSASN1PrintableItem();
   GetPIPNSSBundleString("CertDumpCertSig", text);
   printableItem->SetDisplayName(text);
@@ -2027,7 +1858,7 @@ nsNSSCertificate::CreateASN1Struct(nsIASN1Object** aRetVal)
   text.Truncate();
   ProcessRawBytes(&temp, text);
   printableItem->SetDisplayValue(text);
-  asn1Objects->AppendElement(printableItem, false);
+  asn1Objects->AppendElement(printableItem);
   return NS_OK;
 }
 
@@ -2039,9 +1870,9 @@ getCertType(CERTCertificate* cert)
     return nsIX509Cert::USER_CERT;
   if (trust.HasAnyCA())
     return nsIX509Cert::CA_CERT;
-  if (trust.HasPeer(true, false, false))
+  if (trust.HasPeer(true, false))
     return nsIX509Cert::SERVER_CERT;
-  if (trust.HasPeer(false, true, false) && cert->emailAddr)
+  if (trust.HasPeer(false, true) && cert->emailAddr)
     return nsIX509Cert::EMAIL_CERT;
   if (CERT_IsCACert(cert, nullptr))
     return nsIX509Cert::CA_CERT;

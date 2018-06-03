@@ -9,48 +9,56 @@
 
 const { Curl, CurlUtils } = require("devtools/client/shared/curl");
 
-add_task(function* () {
-  let { tab, monitor } = yield initNetMonitor(CURL_UTILS_URL);
+add_task(async function() {
+  const { tab, monitor } = await initNetMonitor(CURL_UTILS_URL);
   info("Starting test... ");
 
-  let { store, windowRequire } = monitor.panelWin;
-  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
-  let {
+  const { store, windowRequire, connector } = monitor.panelWin;
+  const Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+  const {
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
-  let { getLongString } = windowRequire("devtools/client/netmonitor/src/connector/index");
+  const {
+    getLongString,
+    requestData,
+  } = connector;
 
   store.dispatch(Actions.batchEnable(false));
 
-  let wait = waitForNetworkEvents(monitor, 1, 3);
-  yield ContentTask.spawn(tab.linkedBrowser, SIMPLE_SJS, function* (url) {
+  const wait = waitForNetworkEvents(monitor, 5);
+  await ContentTask.spawn(tab.linkedBrowser, SIMPLE_SJS, async function(url) {
     content.wrappedJSObject.performRequests(url);
   });
-  yield wait;
+  await wait;
 
-  let requests = {
+  const requests = {
     get: getSortedRequests(store.getState()).get(0),
     post: getSortedRequests(store.getState()).get(1),
-    multipart: getSortedRequests(store.getState()).get(2),
-    multipartForm: getSortedRequests(store.getState()).get(3),
+    patch: getSortedRequests(store.getState()).get(2),
+    multipart: getSortedRequests(store.getState()).get(3),
+    multipartForm: getSortedRequests(store.getState()).get(4),
   };
 
-  let data = yield createCurlData(requests.get, getLongString);
+  let data = await createCurlData(requests.get, getLongString, requestData);
   testFindHeader(data);
 
-  data = yield createCurlData(requests.post, getLongString);
+  data = await createCurlData(requests.post, getLongString, requestData);
   testIsUrlEncodedRequest(data);
   testWritePostDataTextParams(data);
   testWriteEmptyPostDataTextParams(data);
   testDataArgumentOnGeneratedCommand(data);
 
-  data = yield createCurlData(requests.multipart, getLongString);
+  data = await createCurlData(requests.patch, getLongString, requestData);
+  testWritePostDataTextParams(data);
+  testDataArgumentOnGeneratedCommand(data);
+
+  data = await createCurlData(requests.multipart, getLongString, requestData);
   testIsMultipartRequest(data);
   testGetMultipartBoundary(data);
   testMultiPartHeaders(data);
   testRemoveBinaryDataFromMultipartText(data);
 
-  data = yield createCurlData(requests.multipartForm, getLongString);
+  data = await createCurlData(requests.multipartForm, getLongString, requestData);
   testMultiPartHeaders(data);
 
   testGetHeadersFromMultipartText({
@@ -63,24 +71,24 @@ add_task(function* () {
     testEscapeStringWin();
   }
 
-  yield teardown(monitor);
+  await teardown(monitor);
 });
 
 function testIsUrlEncodedRequest(data) {
-  let isUrlEncoded = CurlUtils.isUrlEncodedRequest(data);
+  const isUrlEncoded = CurlUtils.isUrlEncodedRequest(data);
   ok(isUrlEncoded, "Should return true for url encoded requests.");
 }
 
 function testIsMultipartRequest(data) {
-  let isMultipart = CurlUtils.isMultipartRequest(data);
+  const isMultipart = CurlUtils.isMultipartRequest(data);
   ok(isMultipart, "Should return true for multipart/form-data requests.");
 }
 
 function testFindHeader(data) {
-  let headers = data.headers;
-  let hostName = CurlUtils.findHeader(headers, "Host");
-  let requestedWithLowerCased = CurlUtils.findHeader(headers, "x-requested-with");
-  let doesNotExist = CurlUtils.findHeader(headers, "X-Does-Not-Exist");
+  const headers = data.headers;
+  const hostName = CurlUtils.findHeader(headers, "Host");
+  const requestedWithLowerCased = CurlUtils.findHeader(headers, "x-requested-with");
+  const doesNotExist = CurlUtils.findHeader(headers, "X-Does-Not-Exist");
 
   is(hostName, "example.com",
     "Header with name 'Host' should be found in the request array.");
@@ -91,43 +99,43 @@ function testFindHeader(data) {
 }
 
 function testMultiPartHeaders(data) {
-  let headers = data.headers;
-  let contentType = CurlUtils.findHeader(headers, "Content-Type");
+  const headers = data.headers;
+  const contentType = CurlUtils.findHeader(headers, "Content-Type");
 
   ok(contentType.startsWith("multipart/form-data; boundary="),
      "Multi-part content type header is present in headers array");
 }
 
 function testWritePostDataTextParams(data) {
-  let params = CurlUtils.writePostDataTextParams(data.postDataText);
+  const params = CurlUtils.writePostDataTextParams(data.postDataText);
   is(params, "param1=value1&param2=value2&param3=value3",
     "Should return a serialized representation of the request parameters");
 }
 
 function testWriteEmptyPostDataTextParams(data) {
-  let params = CurlUtils.writePostDataTextParams(null);
+  const params = CurlUtils.writePostDataTextParams(null);
   is(params, "",
     "Should return a empty string when no parameters provided");
 }
 
 function testDataArgumentOnGeneratedCommand(data) {
-  let curlCommand = Curl.generateCommand(data);
+  const curlCommand = Curl.generateCommand(data);
   ok(curlCommand.includes("--data"),
     "Should return a curl command with --data");
 }
 
 function testGetMultipartBoundary(data) {
-  let boundary = CurlUtils.getMultipartBoundary(data);
+  const boundary = CurlUtils.getMultipartBoundary(data);
   ok(/-{3,}\w+/.test(boundary),
     "A boundary string should be found in a multipart request.");
 }
 
 function testRemoveBinaryDataFromMultipartText(data) {
-  let generatedBoundary = CurlUtils.getMultipartBoundary(data);
-  let text = data.postDataText;
-  let binaryRemoved =
+  const generatedBoundary = CurlUtils.getMultipartBoundary(data);
+  const text = data.postDataText;
+  const binaryRemoved =
     CurlUtils.removeBinaryDataFromMultipartText(text, generatedBoundary);
-  let boundary = "--" + generatedBoundary;
+  const boundary = "--" + generatedBoundary;
 
   const EXPECTED_POSIX_RESULT = [
     "$'",
@@ -176,7 +184,7 @@ function testRemoveBinaryDataFromMultipartText(data) {
 }
 
 function testGetHeadersFromMultipartText(data) {
-  let headers = CurlUtils.getHeadersFromMultipartText(data.postDataText);
+  const headers = CurlUtils.getHeadersFromMultipartText(data.postDataText);
 
   ok(Array.isArray(headers), "Should return an array.");
   ok(headers.length > 0, "There should exist at least one request header.");
@@ -184,58 +192,58 @@ function testGetHeadersFromMultipartText(data) {
 }
 
 function testEscapeStringPosix() {
-  let surroundedWithQuotes = "A simple string";
+  const surroundedWithQuotes = "A simple string";
   is(CurlUtils.escapeStringPosix(surroundedWithQuotes), "'A simple string'",
     "The string should be surrounded with single quotes.");
 
-  let singleQuotes = "It's unusual to put crickets in your coffee.";
+  const singleQuotes = "It's unusual to put crickets in your coffee.";
   is(CurlUtils.escapeStringPosix(singleQuotes),
     "$'It\\'s unusual to put crickets in your coffee.'",
     "Single quotes should be escaped.");
 
-  let newLines = "Line 1\r\nLine 2\u000d\u000ALine3";
+  const newLines = "Line 1\r\nLine 2\u000d\u000ALine3";
   is(CurlUtils.escapeStringPosix(newLines), "$'Line 1\\r\\nLine 2\\r\\nLine3'",
     "Newlines should be escaped.");
 
-  let controlChars = "\u0007 \u0009 \u000C \u001B";
+  const controlChars = "\u0007 \u0009 \u000C \u001B";
   is(CurlUtils.escapeStringPosix(controlChars), "$'\\x07 \\x09 \\x0c \\x1b'",
     "Control characters should be escaped.");
 
-  let extendedAsciiChars = "æ ø ü ß ö é";
+  const extendedAsciiChars = "æ ø ü ß ö é";
   is(CurlUtils.escapeStringPosix(extendedAsciiChars),
     "$'\\xc3\\xa6 \\xc3\\xb8 \\xc3\\xbc \\xc3\\x9f \\xc3\\xb6 \\xc3\\xa9'",
     "Character codes outside of the decimal range 32 - 126 should be escaped.");
 }
 
 function testEscapeStringWin() {
-  let surroundedWithDoubleQuotes = "A simple string";
+  const surroundedWithDoubleQuotes = "A simple string";
   is(CurlUtils.escapeStringWin(surroundedWithDoubleQuotes), '"A simple string"',
     "The string should be surrounded with double quotes.");
 
-  let doubleQuotes = "Quote: \"Time is an illusion. Lunchtime doubly so.\"";
+  const doubleQuotes = "Quote: \"Time is an illusion. Lunchtime doubly so.\"";
   is(CurlUtils.escapeStringWin(doubleQuotes),
     '"Quote: ""Time is an illusion. Lunchtime doubly so."""',
     "Double quotes should be escaped.");
 
-  let percentSigns = "%AppData%";
+  const percentSigns = "%AppData%";
   is(CurlUtils.escapeStringWin(percentSigns), '""%"AppData"%""',
     "Percent signs should be escaped.");
 
-  let backslashes = "\\A simple string\\";
+  const backslashes = "\\A simple string\\";
   is(CurlUtils.escapeStringWin(backslashes), '"\\\\A simple string\\\\"',
     "Backslashes should be escaped.");
 
-  let newLines = "line1\r\nline2\r\nline3";
+  const newLines = "line1\r\nline2\r\nline3";
   is(CurlUtils.escapeStringWin(newLines),
     '"line1"^\u000d\u000A"line2"^\u000d\u000A"line3"',
     "Newlines should be escaped.");
 }
 
-function* createCurlData(selected, getLongString) {
-  let { url, method, httpVersion } = selected;
+async function createCurlData(selected, getLongString, requestData) {
+  const { id, url, method, httpVersion } = selected;
 
   // Create a sanitized object for the Curl command generator.
-  let data = {
+  const data = {
     url,
     method,
     headers: [],
@@ -243,16 +251,18 @@ function* createCurlData(selected, getLongString) {
     postDataText: null
   };
 
+  const requestHeaders = await requestData(id, "requestHeaders");
   // Fetch header values.
-  for (let { name, value } of selected.requestHeaders.headers) {
-    let text = yield getLongString(value);
+  for (const { name, value } of requestHeaders.headers) {
+    const text = await getLongString(value);
     data.headers.push({ name: name, value: text });
   }
 
+  const requestPostData = await requestData(id, "requestPostData");
   // Fetch the request payload.
-  if (selected.requestPostData) {
-    let postData = selected.requestPostData.postData.text;
-    data.postDataText = yield getLongString(postData);
+  if (requestPostData) {
+    const postData = requestPostData.postData.text;
+    data.postDataText = await getLongString(postData);
   }
 
   return data;

@@ -24,14 +24,11 @@ loader.lazyRequireGetter(this, "DebuggerServer", "devtools/server/main", true);
 loader.lazyRequireGetter(this, "DebuggerClient", "devtools/shared/client/debugger-client", true);
 loader.lazyRequireGetter(this, "BrowserMenus", "devtools/client/framework/browser-menus");
 loader.lazyRequireGetter(this, "appendStyleSheet", "devtools/client/shared/stylesheet-utils", true);
-loader.lazyRequireGetter(this, "DeveloperToolbar", "devtools/client/shared/developer-toolbar", true);
 loader.lazyRequireGetter(this, "ResponsiveUIManager", "devtools/client/responsive.html/manager", true);
 loader.lazyImporter(this, "BrowserToolboxProcess", "resource://devtools/client/framework/ToolboxProcess.jsm");
 loader.lazyImporter(this, "ScratchpadManager", "resource://devtools/client/scratchpad/scratchpad-manager.jsm");
 
 loader.lazyImporter(this, "CustomizableUI", "resource:///modules/CustomizableUI.jsm");
-loader.lazyImporter(this, "CustomizableWidgets", "resource:///modules/CustomizableWidgets.jsm");
-loader.lazyImporter(this, "AppConstants", "resource://gre/modules/AppConstants.jsm");
 
 const {LocalizationHelper} = require("devtools/shared/l10n");
 const L10N = new LocalizationHelper("devtools/client/locales/toolbox.properties");
@@ -56,32 +53,24 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
   _browserStyleSheets: new WeakMap(),
 
   /**
-   * WeakMap keeping track of DeveloperToolbar instances for each firefox window.
-   */
-  _toolbars: new WeakMap(),
-
-  _tabStats: {
-    peakOpen: 0,
-    peakPinned: 0,
-    histOpen: [],
-    histPinned: []
-  },
-
-  /**
    * This function is for the benefit of Tools:DevToolbox in
    * browser/base/content/browser-sets.inc and should not be used outside
    * of there
    */
   // used by browser-sets.inc, command
-  toggleToolboxCommand(gBrowser) {
-    let target = TargetFactory.forTab(gBrowser.selectedTab);
-    let toolbox = gDevTools.getToolbox(target);
+  toggleToolboxCommand(gBrowser, startTime) {
+    const target = TargetFactory.forTab(gBrowser.selectedTab);
+    const toolbox = gDevTools.getToolbox(target);
 
     // If a toolbox exists, using toggle from the Main window :
     // - should close a docked toolbox
     // - should focus a windowed toolbox
-    let isDocked = toolbox && toolbox.hostType != Toolbox.HostType.WINDOW;
-    isDocked ? gDevTools.closeToolbox(target) : gDevTools.showToolbox(target);
+    const isDocked = toolbox && toolbox.hostType != Toolbox.HostType.WINDOW;
+    if (isDocked) {
+      gDevTools.closeToolbox(target);
+    } else {
+      gDevTools.showToolbox(target, null, null, null, startTime);
+    }
   },
 
   /**
@@ -90,10 +79,10 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
    * or when any of the devtools prefs change.
    */
   updateCommandAvailability(win) {
-    let doc = win.document;
+    const doc = win.document;
 
     function toggleMenuItem(id, isEnabled) {
-      let cmd = doc.getElementById(id);
+      const cmd = doc.getElementById(id);
       if (isEnabled) {
         cmd.removeAttribute("disabled");
         cmd.removeAttribute("hidden");
@@ -103,21 +92,8 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
       }
     }
 
-    // Enable developer toolbar?
-    let devToolbarEnabled = Services.prefs.getBoolPref("devtools.toolbar.enabled");
-    toggleMenuItem("menu_devToolbar", devToolbarEnabled);
-    let focusEl = doc.getElementById("menu_devToolbar");
-    if (devToolbarEnabled) {
-      focusEl.removeAttribute("disabled");
-    } else {
-      focusEl.setAttribute("disabled", "true");
-    }
-    if (devToolbarEnabled && Services.prefs.getBoolPref("devtools.toolbar.visible")) {
-      this.getDeveloperToolbar(win).show(false).catch(console.error);
-    }
-
     // Enable WebIDE?
-    let webIDEEnabled = Services.prefs.getBoolPref("devtools.webide.enabled");
+    const webIDEEnabled = Services.prefs.getBoolPref("devtools.webide.enabled");
     toggleMenuItem("menu_webide", webIDEEnabled);
 
     if (webIDEEnabled) {
@@ -127,10 +103,10 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     }
 
     // Enable Browser Toolbox?
-    let chromeEnabled = Services.prefs.getBoolPref("devtools.chrome.enabled");
-    let devtoolsRemoteEnabled = Services.prefs.getBoolPref(
+    const chromeEnabled = Services.prefs.getBoolPref("devtools.chrome.enabled");
+    const devtoolsRemoteEnabled = Services.prefs.getBoolPref(
       "devtools.debugger.remote-enabled");
-    let remoteEnabled = chromeEnabled && devtoolsRemoteEnabled;
+    const remoteEnabled = chromeEnabled && devtoolsRemoteEnabled;
     toggleMenuItem("menu_browserToolbox", remoteEnabled);
     toggleMenuItem("menu_browserContentToolbox",
       remoteEnabled && win.gMultiProcessBrowser);
@@ -157,7 +133,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     // bug 1331449.
     win.document.getElementById("browser-bottombox")
        .setAttribute("devtoolstheme", devtoolsTheme);
-    win.document.getElementById("content")
+    win.document.getElementById("appcontent")
        .setAttribute("devtoolstheme", devtoolsTheme);
   },
 
@@ -168,12 +144,12 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
         break;
       case "nsPref:changed":
         if (prefName.endsWith("enabled")) {
-          for (let win of this._trackedBrowserWindows) {
+          for (const win of this._trackedBrowserWindows) {
             this.updateCommandAvailability(win);
           }
         }
         if (prefName === "devtools.theme") {
-          for (let win of this._trackedBrowserWindows) {
+          for (const win of this._trackedBrowserWindows) {
             this.updateDevtoolsThemeAttribute(win);
           }
         }
@@ -181,7 +157,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
       case "quit-application":
         gDevToolsBrowser.destroy({ shuttingDown: true });
         break;
-      case "sdk:loader:destroy":
+      case "devtools:loader:destroy":
         // This event is fired when the devtools loader unloads, which happens
         // only when the add-on workflow ask devtools to be reloaded.
         if (subject.wrappedJSObject == require("@loader/unload")) {
@@ -216,10 +192,10 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
    */
   // Used when: - registering a new tool
   //            - new xul window, to add menu items
-  selectToolCommand(gBrowser, toolId) {
-    let target = TargetFactory.forTab(gBrowser.selectedTab);
-    let toolbox = gDevTools.getToolbox(target);
-    let toolDefinition = gDevTools.getToolDefinition(toolId);
+  selectToolCommand(gBrowser, toolId, startTime) {
+    const target = TargetFactory.forTab(gBrowser.selectedTab);
+    const toolbox = gDevTools.getToolbox(target);
+    const toolDefinition = gDevTools.getToolDefinition(toolId);
 
     if (toolbox &&
         (toolbox.currentToolId == toolId ||
@@ -234,7 +210,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
       }
       gDevTools.emit("select-tool-command", toolId);
     } else {
-      gDevTools.showToolbox(target, toolId).then(newToolbox => {
+      gDevTools.showToolbox(target, toolId, null, null, startTime).then(newToolbox => {
         newToolbox.fireCustomKey(toolId);
         gDevTools.emit("select-tool-command", toolId);
       });
@@ -253,21 +229,21 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
    *         - `toolId` used to identify a toolbox's panel like inspector or webconsole,
    *         - `id` used to identify any other key shortcuts like scratchpad or
    *         about:debugging
+   * @param {Number} startTime
+   *        Optional, indicates the time at which the key event fired. This is a
+   *        `Cu.now()` timing.
    */
-  onKeyShortcut(window, key) {
+  onKeyShortcut(window, key, startTime) {
     // If this is a toolbox's panel key shortcut, delegate to selectToolCommand
     if (key.toolId) {
-      gDevToolsBrowser.selectToolCommand(window.gBrowser, key.toolId);
+      gDevToolsBrowser.selectToolCommand(window.gBrowser, key.toolId, startTime);
       return;
     }
     // Otherwise implement all other key shortcuts individually here
     switch (key.id) {
       case "toggleToolbox":
       case "toggleToolboxF12":
-        gDevToolsBrowser.toggleToolboxCommand(window.gBrowser);
-        break;
-      case "toggleToolbar":
-        gDevToolsBrowser.getDeveloperToolbar(window).focusToggle();
+        gDevToolsBrowser.toggleToolboxCommand(window.gBrowser, startTime);
         break;
       case "webide":
         gDevToolsBrowser.openWebIDE();
@@ -276,14 +252,19 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
         BrowserToolboxProcess.init();
         break;
       case "browserConsole":
-        let {HUDService} = require("devtools/client/webconsole/hudservice");
+        const {HUDService} = require("devtools/client/webconsole/hudservice");
         HUDService.openBrowserConsoleOrFocus();
         break;
       case "responsiveDesignMode":
-        ResponsiveUIManager.toggle(window, window.gBrowser.selectedTab);
+        ResponsiveUIManager.toggle(window, window.gBrowser.selectedTab, {
+          trigger: "shortcut"
+        });
         break;
       case "scratchpad":
         ScratchpadManager.openScratchpad();
+        break;
+      case "inspectorMac":
+        gDevToolsBrowser.selectToolCommand(window.gBrowser, "inspector", startTime);
         break;
     }
   },
@@ -293,7 +274,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
    */
    // Used by browser-sets.inc, command
   openAboutDebugging(gBrowser, hash) {
-    let url = "about:debugging" + (hash ? "#" + hash : "");
+    const url = "about:debugging" + (hash ? "#" + hash : "");
     gBrowser.selectedTab = gBrowser.addTab(url);
   },
 
@@ -311,7 +292,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
    // Used by browser-sets.inc, command
    //         itself, webide widget
   openWebIDE() {
-    let win = Services.wm.getMostRecentWindow("devtools:webide");
+    const win = Services.wm.getMostRecentWindow("devtools:webide");
     if (win) {
       win.focus();
     } else {
@@ -321,20 +302,18 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
 
   _getContentProcessTarget(processId) {
     // Create a DebuggerServer in order to connect locally to it
-    if (!DebuggerServer.initialized) {
-      DebuggerServer.init();
-      DebuggerServer.addBrowserActors();
-    }
+    DebuggerServer.init();
+    DebuggerServer.registerAllActors();
     DebuggerServer.allowChromeProcess = true;
 
-    let transport = DebuggerServer.connectPipe();
-    let client = new DebuggerClient(transport);
+    const transport = DebuggerServer.connectPipe();
+    const client = new DebuggerClient(transport);
 
-    let deferred = defer();
+    const deferred = defer();
     client.connect().then(() => {
       client.getProcess(processId)
             .then(response => {
-              let options = {
+              const options = {
                 form: response.form,
                 client: client,
                 chrome: true,
@@ -356,30 +335,54 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     return deferred.promise;
   },
 
-   // Used by menus.js
+  /**
+   * Open the Browser Content Toolbox for the provided gBrowser instance.
+   * Returns a promise that resolves with a toolbox instance. If no content process is
+   * available, the promise will be rejected and a message will be displayed to the user.
+   *
+   * Used by menus.js
+  */
   openContentProcessToolbox(gBrowser) {
-    let { childCount } = Services.ppmm;
+    const { childCount } = Services.ppmm;
     // Get the process message manager for the current tab
-    let mm = gBrowser.selectedBrowser.messageManager.processMessageManager;
+    const mm = gBrowser.selectedBrowser.messageManager.processMessageManager;
     let processId = null;
     for (let i = 1; i < childCount; i++) {
-      let child = Services.ppmm.getChildAt(i);
+      const child = Services.ppmm.getChildAt(i);
       if (child == mm) {
         processId = i;
         break;
       }
     }
     if (processId) {
-      this._getContentProcessTarget(processId)
+      return this._getContentProcessTarget(processId)
           .then(target => {
-            // Display a new toolbox, in a new window, with debugger by default
-            return gDevTools.showToolbox(target, "jsdebugger",
-                                         Toolbox.HostType.WINDOW);
+            // Display a new toolbox in a new window
+            return gDevTools.showToolbox(target, null, Toolbox.HostType.WINDOW);
           });
-    } else {
-      let msg = L10N.getStr("toolbox.noContentProcessForTab.message");
-      Services.prompt.alert(null, "", msg);
     }
+
+    const msg = L10N.getStr("toolbox.noContentProcessForTab.message");
+    Services.prompt.alert(null, "", msg);
+    return Promise.reject(msg);
+  },
+
+  /**
+   * Open a window-hosted toolbox to debug the worker associated to the provided
+   * worker actor.
+   *
+   * @param  {DebuggerClient} client
+   * @param  {Object} workerActor
+   *         worker actor form to debug
+   */
+  openWorkerToolbox(client, workerActor) {
+    client.attachWorker(workerActor, (response, workerClient) => {
+      const workerTarget = TargetFactory.forWorker(workerClient);
+      gDevTools.showToolbox(workerTarget, null, Toolbox.HostType.WINDOW)
+        .then(toolbox => {
+          toolbox.once("destroy", () => workerClient.detach());
+        });
+    });
   },
 
   /**
@@ -403,7 +406,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
   },
 
   isWebIDEWidgetInstalled() {
-    let widgetWrapper = CustomizableUI.getWidget("webide-button");
+    const widgetWrapper = CustomizableUI.getWidget("webide-button");
     return !!(widgetWrapper && widgetWrapper.provider == CustomizableUI.PROVIDER_API);
   },
 
@@ -415,13 +418,13 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
    * @return {Promise} promise that resolves when the stylesheet is loaded (or rejects
    *         if it fails to load).
    */
-  loadBrowserStyleSheet: function (win) {
+  loadBrowserStyleSheet: function(win) {
     if (this._browserStyleSheets.has(win)) {
       return Promise.resolve();
     }
 
-    let doc = win.document;
-    let {styleSheet, loadPromise} = appendStyleSheet(doc, BROWSER_STYLESHEET_URL);
+    const doc = win.document;
+    const {styleSheet, loadPromise} = appendStyleSheet(doc, BROWSER_STYLESHEET_URL);
     this._browserStyleSheets.set(win, styleSheet);
     return loadPromise;
   },
@@ -460,28 +463,8 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     this.ensurePrefObserver();
     win.addEventListener("unload", this);
 
-    let tabContainer = win.gBrowser.tabContainer;
+    const tabContainer = win.gBrowser.tabContainer;
     tabContainer.addEventListener("TabSelect", this);
-    tabContainer.addEventListener("TabOpen", this);
-    tabContainer.addEventListener("TabClose", this);
-    tabContainer.addEventListener("TabPinned", this);
-    tabContainer.addEventListener("TabUnpinned", this);
-  },
-
-  /**
-   * Create singleton instance of the developer toolbar for a given top level window.
-   *
-   * @param {Window} win
-   *        The window to which the toolbar should be created.
-   */
-  getDeveloperToolbar(win) {
-    let toolbar = this._toolbars.get(win);
-    if (toolbar) {
-      return toolbar;
-    }
-    toolbar = new DeveloperToolbar(win);
-    this._toolbars.set(win, toolbar);
-    return toolbar;
   },
 
   /**
@@ -489,15 +472,14 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
    * dialog.
    */
   setSlowScriptDebugHandler() {
-    let debugService = Cc["@mozilla.org/dom/slow-script-debug;1"]
+    const debugService = Cc["@mozilla.org/dom/slow-script-debug;1"]
                          .getService(Ci.nsISlowScriptDebug);
-    let tm = Cc["@mozilla.org/thread-manager;1"].getService(Ci.nsIThreadManager);
 
     function slowScriptDebugHandler(tab, callback) {
-      let target = TargetFactory.forTab(tab);
+      const target = TargetFactory.forTab(tab);
 
       gDevTools.showToolbox(target, "jsdebugger").then(toolbox => {
-        let threadClient = toolbox.threadClient;
+        const threadClient = toolbox.threadClient;
 
         // Break in place, which means resuming the debuggee thread and pausing
         // right before the next step happens.
@@ -530,8 +512,8 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
       });
     }
 
-    debugService.activationHandler = function (window) {
-      let chromeWindow = window.QueryInterface(Ci.nsIInterfaceRequestor)
+    debugService.activationHandler = function(window) {
+      const chromeWindow = window.QueryInterface(Ci.nsIInterfaceRequestor)
                                 .getInterface(Ci.nsIWebNavigation)
                                 .QueryInterface(Ci.nsIDocShellTreeItem)
                                 .rootTreeItem
@@ -547,21 +529,21 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
 
       // Don't return from the interrupt handler until the debugger is brought
       // up; no reason to continue executing the slow script.
-      let utils = window.QueryInterface(Ci.nsIInterfaceRequestor)
+      const utils = window.QueryInterface(Ci.nsIInterfaceRequestor)
                          .getInterface(Ci.nsIDOMWindowUtils);
       utils.enterModalState();
-      tm.spinEventLoopUntil(() => {
+      Services.tm.spinEventLoopUntil(() => {
         return setupFinished;
       });
       utils.leaveModalState();
     };
 
-    debugService.remoteActivationHandler = function (browser, callback) {
-      let chromeWindow = browser.ownerDocument.defaultView;
-      let tab = chromeWindow.gBrowser.getTabForBrowser(browser);
+    debugService.remoteActivationHandler = function(browser, callback) {
+      const chromeWindow = browser.ownerDocument.defaultView;
+      const tab = chromeWindow.gBrowser.getTabForBrowser(browser);
       chromeWindow.gBrowser.selected = tab;
 
-      slowScriptDebugHandler(tab, function () {
+      slowScriptDebugHandler(tab, function() {
         callback.finishDebuggerStartup();
       });
     };
@@ -571,7 +553,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
    * Unset the slow script debug handler.
    */
   unsetSlowScriptDebugHandler() {
-    let debugService = Cc["@mozilla.org/dom/slow-script-debug;1"]
+    const debugService = Cc["@mozilla.org/dom/slow-script-debug;1"]
                          .getService(Ci.nsISlowScriptDebug);
     debugService.activationHandler = undefined;
   },
@@ -600,9 +582,9 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
 
     // We need to insert the new tool in the right place, which means knowing
     // the tool that comes before the tool that we're trying to add
-    let allDefs = gDevTools.getToolDefinitionArray();
+    const allDefs = gDevTools.getToolDefinitionArray();
     let prevDef;
-    for (let def of allDefs) {
+    for (const def of allDefs) {
       if (!def.inMenu) {
         continue;
       }
@@ -612,7 +594,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
       prevDef = def;
     }
 
-    for (let win of gDevToolsBrowser._trackedBrowserWindows) {
+    for (const win of gDevToolsBrowser._trackedBrowserWindows) {
       BrowserMenus.insertToolMenuElements(win.document, toolDefinition, prevDef);
     }
 
@@ -622,8 +604,8 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
   },
 
   hasToolboxOpened(win) {
-    let tab = win.gBrowser.selectedTab;
-    for (let [target, ] of gDevTools._toolboxes) {
+    const tab = win.gBrowser.selectedTab;
+    for (const [target, ] of gDevTools._toolboxes) {
       if (target.tab == tab) {
         return true;
       }
@@ -636,10 +618,10 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
    * called when a toolbox is created or destroyed.
    */
   _updateMenuCheckbox() {
-    for (let win of gDevToolsBrowser._trackedBrowserWindows) {
-      let hasToolbox = gDevToolsBrowser.hasToolboxOpened(win);
+    for (const win of gDevToolsBrowser._trackedBrowserWindows) {
+      const hasToolbox = gDevToolsBrowser.hasToolboxOpened(win);
 
-      let menu = win.document.getElementById("menu_devToolbox");
+      const menu = win.document.getElementById("menu_devToolbox");
       if (hasToolbox) {
         menu.setAttribute("checked", "true");
       } else {
@@ -655,7 +637,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
    *        id of the tool to remove
    */
   _removeToolFromWindows(toolId) {
-    for (let win of gDevToolsBrowser._trackedBrowserWindows) {
+    for (const win of gDevToolsBrowser._trackedBrowserWindows) {
       BrowserMenus.removeToolFromMenu(toolId, win.document);
     }
 
@@ -681,51 +663,24 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     BrowserMenus.removeMenus(win.document);
 
     // Destroy toolboxes for closed window
-    for (let [target, toolbox] of gDevTools._toolboxes) {
+    for (const [target, toolbox] of gDevTools._toolboxes) {
       if (target.tab && target.tab.ownerDocument.defaultView == win) {
         toolbox.destroy();
       }
     }
 
-    let styleSheet = this._browserStyleSheets.get(win);
+    const styleSheet = this._browserStyleSheets.get(win);
     if (styleSheet) {
       styleSheet.remove();
       this._browserStyleSheets.delete(win);
     }
 
-    this._toolbars.delete(win);
-
-    let tabContainer = win.gBrowser.tabContainer;
+    const tabContainer = win.gBrowser.tabContainer;
     tabContainer.removeEventListener("TabSelect", this);
-    tabContainer.removeEventListener("TabOpen", this);
-    tabContainer.removeEventListener("TabClose", this);
-    tabContainer.removeEventListener("TabPinned", this);
-    tabContainer.removeEventListener("TabUnpinned", this);
   },
 
   handleEvent(event) {
     switch (event.type) {
-      case "TabOpen":
-      case "TabClose":
-      case "TabPinned":
-      case "TabUnpinned":
-        let open = 0;
-        let pinned = 0;
-
-        for (let win of this._trackedBrowserWindows) {
-          let tabContainer = win.gBrowser.tabContainer;
-          let numPinnedTabs = win.gBrowser._numPinnedTabs || 0;
-          let numTabs = tabContainer.itemCount - numPinnedTabs;
-
-          open += numTabs;
-          pinned += numPinnedTabs;
-        }
-
-        this._tabStats.histOpen.push(open);
-        this._tabStats.histPinned.push(pinned);
-        this._tabStats.peakOpen = Math.max(open, this._tabStats.peakOpen);
-        this._tabStats.peakPinned = Math.max(pinned, this._tabStats.peakPinned);
-        break;
       case "TabSelect":
         gDevToolsBrowser._updateMenuCheckbox();
         break;
@@ -737,7 +692,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
   },
 
   /**
-   * Either the SDK Loader has been destroyed by the add-on contribution
+   * Either the DevTools Loader has been destroyed by the add-on contribution
    * workflow, or firefox is shutting down.
 
    * @param {boolean} shuttingDown
@@ -749,9 +704,9 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     Services.prefs.removeObserver("devtools.", gDevToolsBrowser);
     Services.obs.removeObserver(gDevToolsBrowser, "browser-delayed-startup-finished");
     Services.obs.removeObserver(gDevToolsBrowser, "quit-application");
-    Services.obs.removeObserver(gDevToolsBrowser, "sdk:loader:destroy");
+    Services.obs.removeObserver(gDevToolsBrowser, "devtools:loader:destroy");
 
-    for (let win of gDevToolsBrowser._trackedBrowserWindows) {
+    for (const win of gDevToolsBrowser._trackedBrowserWindows) {
       gDevToolsBrowser._forgetBrowserWindow(win);
     }
 
@@ -766,8 +721,8 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
 gDevTools.getToolDefinitionArray()
          .forEach(def => gDevToolsBrowser._addToolToWindows(def));
 // and the new ones.
-gDevTools.on("tool-registered", function (ev, toolId) {
-  let toolDefinition = gDevTools._tools.get(toolId);
+gDevTools.on("tool-registered", function(toolId) {
+  const toolDefinition = gDevTools._tools.get(toolId);
   // If the tool has been registered globally, add to all the
   // available windows.
   if (toolDefinition) {
@@ -775,7 +730,7 @@ gDevTools.on("tool-registered", function (ev, toolId) {
   }
 });
 
-gDevTools.on("tool-unregistered", function (ev, toolId) {
+gDevTools.on("tool-unregistered", function(toolId) {
   gDevToolsBrowser._removeToolFromWindows(toolId);
 });
 
@@ -785,13 +740,13 @@ gDevTools.on("toolbox-destroyed", gDevToolsBrowser._updateMenuCheckbox);
 Services.obs.addObserver(gDevToolsBrowser, "quit-application");
 Services.obs.addObserver(gDevToolsBrowser, "browser-delayed-startup-finished");
 // Watch for module loader unload. Fires when the tools are reloaded.
-Services.obs.addObserver(gDevToolsBrowser, "sdk:loader:destroy");
+Services.obs.addObserver(gDevToolsBrowser, "devtools:loader:destroy");
 
 // Fake end of browser window load event for all already opened windows
 // that is already fully loaded.
-let enumerator = Services.wm.getEnumerator(gDevTools.chromeWindowType);
+const enumerator = Services.wm.getEnumerator(gDevTools.chromeWindowType);
 while (enumerator.hasMoreElements()) {
-  let win = enumerator.getNext();
+  const win = enumerator.getNext();
   if (win.gBrowserInit && win.gBrowserInit.delayedStartupFinished) {
     gDevToolsBrowser._registerBrowserWindow(win);
   }

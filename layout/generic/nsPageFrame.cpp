@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -29,9 +30,9 @@ using namespace mozilla;
 using namespace mozilla::gfx;
 
 nsPageFrame*
-NS_NewPageFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewPageFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsPageFrame(aContext);
+  return new (aPresShell) nsPageFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsPageFrame)
@@ -40,8 +41,8 @@ NS_QUERYFRAME_HEAD(nsPageFrame)
   NS_QUERYFRAME_ENTRY(nsPageFrame)
 NS_QUERYFRAME_TAIL_INHERITING(nsContainerFrame)
 
-nsPageFrame::nsPageFrame(nsStyleContext* aContext)
-  : nsContainerFrame(aContext, kClassID)
+nsPageFrame::nsPageFrame(ComputedStyle* aStyle)
+  : nsContainerFrame(aStyle, kClassID)
 {
 }
 
@@ -509,7 +510,7 @@ void
 nsPageFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                               const nsDisplayListSet& aLists)
 {
-  nsDisplayListCollection set;
+  nsDisplayListCollection set(aBuilder);
 
   if (PresContext()->IsScreen()) {
     DisplayBorderBackgroundOutline(aBuilder, aLists);
@@ -546,9 +547,9 @@ nsPageFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     clipState.Clear();
     clipState.ClipContainingBlockDescendants(clipRect, nullptr);
 
-    nsRect dirtyRect = child->GetVisualOverflowRectRelativeToSelf();
+    nsRect visibleRect = child->GetVisualOverflowRectRelativeToSelf();
     nsDisplayListBuilder::AutoBuildingDisplayList
-      buildingForChild(aBuilder, child, dirtyRect,
+      buildingForChild(aBuilder, child, visibleRect, visibleRect,
                        aBuilder->IsAtRootOfPseudoStackingContext());
     child->BuildDisplayListForStackingContext(aBuilder, &content);
 
@@ -561,19 +562,19 @@ nsPageFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     // following placeholders to their out-of-flows) end up on the list.
     nsIFrame* page = child;
     while ((page = GetNextPage(page)) != nullptr) {
-      nsRect childDirty = dirtyRect + child->GetOffsetTo(page);
+      nsRect childVisible = visibleRect + child->GetOffsetTo(page);
 
       nsDisplayListBuilder::AutoBuildingDisplayList
-        buildingForChild(aBuilder, page, childDirty,
+        buildingForChild(aBuilder, page, childVisible, childVisible,
                          aBuilder->IsAtRootOfPseudoStackingContext());
       BuildDisplayListForExtraPage(aBuilder, this, page, &content);
     }
 
-    // Invoke AutoBuildingDisplayList to ensure that the correct dirtyRect
+    // Invoke AutoBuildingDisplayList to ensure that the correct visibleRect
     // is used to compute the visible rect if AddCanvasBackgroundColorItem
     // creates a display item.
     nsDisplayListBuilder::AutoBuildingDisplayList
-      building(aBuilder, child, dirtyRect, true);
+      building(aBuilder, child, visibleRect, visibleRect, true);
 
     // Add the canvas background color to the bottom of the list. This
     // happens after we've built the list so that AddCanvasBackgroundColorItem
@@ -585,14 +586,14 @@ nsPageFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       *aBuilder, content, child, backgroundRect, NS_RGBA(0,0,0,0));
   }
 
-  content.AppendNewToTop(new (aBuilder) nsDisplayTransform(aBuilder, child,
-      &content, content.GetVisibleRect(), ::ComputePageTransform));
+  content.AppendToTop(MakeDisplayItem<nsDisplayTransform>(aBuilder, child,
+      &content, content.GetBuildingRect(), ::ComputePageTransform));
 
   set.Content()->AppendToTop(&content);
 
   if (PresContext()->IsRootPaginatedDocument()) {
-    set.Content()->AppendNewToTop(new (aBuilder)
-        nsDisplayHeaderFooter(aBuilder, this));
+    set.Content()->AppendToTop(
+        MakeDisplayItem<nsDisplayHeaderFooter>(aBuilder, this));
   }
 
   set.MoveTo(aLists);
@@ -642,17 +643,17 @@ nsPageFrame::PaintHeaderFooter(gfxContext& aRenderingContext,
 
   // print document headers and footers
   nsString headerLeft, headerCenter, headerRight;
-  mPD->mPrintSettings->GetHeaderStrLeft(getter_Copies(headerLeft));
-  mPD->mPrintSettings->GetHeaderStrCenter(getter_Copies(headerCenter));
-  mPD->mPrintSettings->GetHeaderStrRight(getter_Copies(headerRight));
+  mPD->mPrintSettings->GetHeaderStrLeft(headerLeft);
+  mPD->mPrintSettings->GetHeaderStrCenter(headerCenter);
+  mPD->mPrintSettings->GetHeaderStrRight(headerRight);
   DrawHeaderFooter(aRenderingContext, *fontMet, eHeader,
                    headerLeft, headerCenter, headerRight,
                    rect, ascent, visibleHeight);
 
   nsString footerLeft, footerCenter, footerRight;
-  mPD->mPrintSettings->GetFooterStrLeft(getter_Copies(footerLeft));
-  mPD->mPrintSettings->GetFooterStrCenter(getter_Copies(footerCenter));
-  mPD->mPrintSettings->GetFooterStrRight(getter_Copies(footerRight));
+  mPD->mPrintSettings->GetFooterStrLeft(footerLeft);
+  mPD->mPrintSettings->GetFooterStrCenter(footerCenter);
+  mPD->mPrintSettings->GetFooterStrRight(footerRight);
   DrawHeaderFooter(aRenderingContext, *fontMet, eFooter,
                    footerLeft, footerCenter, footerRight,
                    rect, ascent, visibleHeight);
@@ -680,19 +681,19 @@ nsPageFrame::AppendDirectlyOwnedAnonBoxes(nsTArray<OwnedAnonBox>& aResult)
 }
 
 nsIFrame*
-NS_NewPageBreakFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewPageBreakFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  NS_PRECONDITION(aPresShell, "null PresShell");
+  MOZ_ASSERT(aPresShell, "null PresShell");
   //check that we are only creating page break frames when printing
   NS_ASSERTION(aPresShell->GetPresContext()->IsPaginated(), "created a page break frame while not printing");
 
-  return new (aPresShell) nsPageBreakFrame(aContext);
+  return new (aPresShell) nsPageBreakFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsPageBreakFrame)
 
-nsPageBreakFrame::nsPageBreakFrame(nsStyleContext* aContext)
-  : nsLeafFrame(aContext, kClassID)
+nsPageBreakFrame::nsPageBreakFrame(ComputedStyle* aStyle)
+  : nsLeafFrame(aStyle, kClassID)
   , mHaveReflowed(false)
 {
 }

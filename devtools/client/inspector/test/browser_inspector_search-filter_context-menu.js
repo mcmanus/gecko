@@ -8,35 +8,35 @@
 const TEST_INPUT = "h1";
 const TEST_URI = "<h1>test filter context menu</h1>";
 
-add_task(function* () {
-  yield addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
-  let {toolbox, inspector} = yield openInspector();
-  let {searchBox} = inspector;
-  yield selectNode("h1", inspector);
+add_task(async function() {
+  await addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
+  const {toolbox, inspector} = await openInspector();
+  const {searchBox} = inspector;
+  await selectNode("h1", inspector);
 
-  let win = inspector.panelWin;
-  let searchContextMenu = toolbox.textBoxContextMenuPopup;
+  const win = inspector.panelWin;
+  const searchContextMenu = toolbox.textBoxContextMenuPopup;
   ok(searchContextMenu,
     "The search filter context menu is loaded in the inspector");
 
-  let cmdUndo = searchContextMenu.querySelector("[command=cmd_undo]");
-  let cmdDelete = searchContextMenu.querySelector("[command=cmd_delete]");
-  let cmdSelectAll = searchContextMenu.querySelector("[command=cmd_selectAll]");
-  let cmdCut = searchContextMenu.querySelector("[command=cmd_cut]");
-  let cmdCopy = searchContextMenu.querySelector("[command=cmd_copy]");
-  let cmdPaste = searchContextMenu.querySelector("[command=cmd_paste]");
+  const cmdUndo = searchContextMenu.querySelector("[command=cmd_undo]");
+  const cmdDelete = searchContextMenu.querySelector("[command=cmd_delete]");
+  const cmdSelectAll = searchContextMenu.querySelector("[command=cmd_selectAll]");
+  const cmdCut = searchContextMenu.querySelector("[command=cmd_cut]");
+  const cmdCopy = searchContextMenu.querySelector("[command=cmd_copy]");
+  const cmdPaste = searchContextMenu.querySelector("[command=cmd_paste]");
 
   emptyClipboard();
 
   info("Opening context menu");
-  let onFocus = once(searchBox, "focus");
+  const onFocus = once(searchBox, "focus");
   searchBox.focus();
-  yield onFocus;
+  await onFocus;
 
-  let onContextMenuPopup = once(searchContextMenu, "popupshowing");
+  const onContextMenuPopup = once(searchContextMenu, "popupshowing");
   EventUtils.synthesizeMouse(searchBox, 2, 2,
     {type: "contextmenu", button: 2}, win);
-  yield onContextMenuPopup;
+  await onContextMenuPopup;
 
   is(cmdUndo.getAttribute("disabled"), "true", "cmdUndo is disabled");
   is(cmdDelete.getAttribute("disabled"), "true", "cmdDelete is disabled");
@@ -49,9 +49,9 @@ add_task(function* () {
   is(cmdPaste.getAttribute("disabled"), "", "cmdPaste is enabled");
 
   info("Closing context menu");
-  let onContextMenuHidden = once(searchContextMenu, "popuphidden");
+  const onContextMenuHidden = once(searchContextMenu, "popuphidden");
   searchContextMenu.hidePopup();
-  yield onContextMenuHidden;
+  await onContextMenuHidden;
 
   info("Copy text in search field using the context menu");
   searchBox.setUserInput(TEST_INPUT);
@@ -59,15 +59,15 @@ add_task(function* () {
   searchBox.focus();
   EventUtils.synthesizeMouse(searchBox, 2, 2,
     {type: "contextmenu", button: 2}, win);
-  yield onContextMenuPopup;
-  yield waitForClipboardPromise(() => cmdCopy.click(), TEST_INPUT);
+  await onContextMenuPopup;
+  await waitForClipboardPromise(() => cmdCopy.click(), TEST_INPUT);
   searchContextMenu.hidePopup();
-  yield onContextMenuHidden;
+  await onContextMenuHidden;
 
   info("Reopen context menu and check command properties");
   EventUtils.synthesizeMouse(searchBox, 2, 2,
     {type: "contextmenu", button: 2}, win);
-  yield onContextMenuPopup;
+  await onContextMenuPopup;
 
   is(cmdUndo.getAttribute("disabled"), "", "cmdUndo is enabled");
   is(cmdDelete.getAttribute("disabled"), "", "cmdDelete is enabled");
@@ -78,5 +78,5 @@ add_task(function* () {
 
   // We have to wait for search query to avoid test failure.
   info("Waiting for search query to complete and getting the suggestions");
-  yield inspector.searchSuggestions._lastQuery;
+  await inspector.searchSuggestions._lastQuery;
 });

@@ -8,6 +8,7 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 
+#include "mozilla/FontPropertyTypes.h"
 #include "mozilla/MemoryReporting.h"
 #include "nsDataHashtable.h"
 #include "nsRefPtrHashtable.h"
@@ -29,14 +30,15 @@ class MacOSFontEntry : public gfxFontEntry
 {
 public:
     friend class gfxMacPlatformFontList;
+    friend class gfxMacFont;
 
-    MacOSFontEntry(const nsAString& aPostscriptName, int32_t aWeight,
+    MacOSFontEntry(const nsAString& aPostscriptName, WeightRange aWeight,
                    bool aIsStandardFace = false,
                    double aSizeHint = 0.0);
 
     // for use with data fonts
     MacOSFontEntry(const nsAString& aPostscriptName, CGFontRef aFontRef,
-                   uint16_t aWeight, uint16_t aStretch, uint8_t aStyle,
+                   WeightRange aWeight, StretchRange aStretch, SlantStyleRange aStyle,
                    bool aIsDataUserFont, bool aIsLocal);
 
     virtual ~MacOSFontEntry() {
@@ -61,7 +63,10 @@ public:
 
     bool RequiresAATLayout() const { return mRequiresAAT; }
 
-    bool HasVariations();
+    bool HasVariations() override;
+    void GetVariationAxes(nsTArray<gfxFontVariationAxis>& aVariationAxes) override;
+    void GetVariationInstances(nsTArray<gfxFontVariationInstance>& aInstances) override;
+
     bool IsCFF();
 
     // Return true if the font has a 'trak' table (and we can successfully
@@ -69,13 +74,14 @@ public:
     // the first time it is called.
     bool HasTrackingTable();
 
+    bool SupportsOpenTypeFeature(Script aScript, uint32_t aFeatureTag) override;
+
     // Return the tracking (in font units) to be applied for the given size.
     // (This is a floating-point number because of possible interpolation.)
     float TrackingForCSSPx(float aPointSize) const;
 
 protected:
-    gfxFont* CreateFontInstance(const gfxFontStyle *aFontStyle,
-                                bool aNeedsBold) override;
+    gfxFont* CreateFontInstance(const gfxFontStyle *aFontStyle) override;
 
     bool HasFontTable(uint32_t aTableTag) override;
 
@@ -96,10 +102,25 @@ protected:
     bool mIsCFFInitialized;
     bool mHasVariations;
     bool mHasVariationsInitialized;
+    bool mHasAATSmallCaps;
+    bool mHasAATSmallCapsInitialized;
     bool mCheckedForTracking;
+
+    // To work around Core Text's mishandling of the default value for 'opsz',
+    // we need to record whether the font has an a optical size axis, what its
+    // range and default values are, and a usable close-to-default alternative.
+    // (See bug 1457417 for details.)
+    // These fields are used by gfxMacFont, but stored in the font entry so
+    // that only a single font instance needs to inspect the available
+    // variations.
+    bool mCheckedForOpszAxis;
+    bool mHasOpszAxis;
+    gfxFontVariationAxis mOpszAxis;
+    float mAdjustedDefaultOpsz;
+
     nsTHashtable<nsUint32HashKey> mAvailableTables;
 
-    mozilla::WeakPtr<mozilla::gfx::UnscaledFont> mUnscaledFont;
+    mozilla::ThreadSafeWeakPtr<mozilla::gfx::UnscaledFontMac> mUnscaledFont;
 
     // For AAT font being shaped by Core Text, a strong reference to the 'trak'
     // table (if present).
@@ -123,14 +144,14 @@ public:
     bool GetStandardFamilyName(const nsAString& aFontName, nsAString& aFamilyName) override;
 
     gfxFontEntry* LookupLocalFont(const nsAString& aFontName,
-                                  uint16_t aWeight,
-                                  int16_t aStretch,
-                                  uint8_t aStyle) override;
+                                  WeightRange aWeightForEntry,
+                                  StretchRange aStretchForEntry,
+                                  SlantStyleRange aStyleForEntry) override;
 
     gfxFontEntry* MakePlatformFont(const nsAString& aFontName,
-                                   uint16_t aWeight,
-                                   int16_t aStretch,
-                                   uint8_t aStyle,
+                                   WeightRange aWeightForEntry,
+                                   StretchRange aStretchForEntry,
+                                   SlantStyleRange aStyleForEntry,
                                    const uint8_t* aFontData,
                                    uint32_t aLength) override;
 
@@ -155,8 +176,8 @@ public:
         kTextSizeSystemFontFamily = 2, // name of 'system' font at text sizes
         kDisplaySizeSystemFontFamily = 3 // 'system' font at display sizes
     };
-    void GetSystemFontFamilyList(
-        InfallibleTArray<mozilla::dom::FontFamilyListEntry>* aList);
+    void ReadSystemFontList(
+        InfallibleTArray<mozilla::dom::SystemFontListEntry>* aList);
 
 protected:
     gfxFontFamily*

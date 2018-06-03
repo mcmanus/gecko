@@ -11,7 +11,7 @@ const WindowWatcher = {
     do_throw("should not have seen getNewPrompter!");
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIWindowWatcher])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIWindowWatcher])
 };
 
 function run_test() {
@@ -25,7 +25,7 @@ function run_test() {
   let windowWatcherCID =
     MockRegistrar.register("@mozilla.org/embedcomp/window-watcher;1",
                            WindowWatcher);
-  do_register_cleanup(() => {
+  registerCleanupFunction(() => {
     MockRegistrar.unregister(windowWatcherCID);
   });
 
@@ -55,7 +55,7 @@ function run_test() {
             "calling showUpdateError should not attempt to open a window");
 
   gUpdateManager.cleanupActiveUpdate();
-  do_execute_soon(waitForUpdateXMLFiles);
+  executeSoon(waitForUpdateXMLFiles);
 }
 
 /**

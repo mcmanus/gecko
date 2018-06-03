@@ -573,24 +573,51 @@ if (typeof Mozilla == "undefined") {
    * for the URL opened by the browser.
    * @since 31, 47 for `extraURLCampaignParams`
    * @example
-   * // Will open about:accounts?action=signup&entrypoint=uitour
+   * // Will open https://accounts.firefox.com/signup?entrypoint=uitour
    * Mozilla.UITour.showFirefoxAccounts();
    * @example
    * // Will open:
-   * // about:accounts?action=signup&entrypoint=uitour&utm_foo=bar&utm_bar=baz
+   * // https://accounts.firefox.com/signup?entrypoint=uitour&utm_foo=bar&utm_bar=baz
    * Mozilla.UITour.showFirefoxAccounts({
    *   'utm_foo': 'bar',
    *   'utm_bar': 'baz'
    * });
    * @example
    * // Will open:
-   * // about:accounts?action=signup&entrypoint=uitour&email=foo%40bar.com
+   * // https://accounts.firefox.com/?action=email&email=foo%40bar.com&entrypoint=uitour
    * Mozilla.UITour.showFirefoxAccounts(null, "foo@bar.com");
    */
   Mozilla.UITour.showFirefoxAccounts = function(extraURLCampaignParams, email) {
     _sendEvent("showFirefoxAccounts", {
       extraURLCampaignParams: JSON.stringify(extraURLCampaignParams),
       email
+    });
+  };
+
+  /**
+   * Request the browser open the "Connect Another Device" Firefox Accounts page.
+   *
+   * @param {Object} extraURLCampaignParams - An object containing additional
+   * parameters for the URL opened by the browser for reasons of promotional
+   * campaign tracking. Each attribute of the object must have a name that
+   * is a string, begins with "utm_" and contains only only alphanumeric
+   * characters, dashes or underscores. The values may be any string and will
+   * automatically be encoded.
+   * @since 59
+   * @example
+   * // Will open https://accounts.firefox.com/connect_another_device?entrypoint=uitour
+   * Mozilla.UITour.showConnectAnotherDevice();
+   * @example
+   * // Will open:
+   * // https://accounts.firefox.com/connect_another_device?entrypoint=uitour&utm_foo=bar&utm_bar=baz
+   * Mozilla.UITour.showConnectAnotherDevice({
+   *   'utm_foo': 'bar',
+   *   'utm_bar': 'baz'
+   * });
+   */
+  Mozilla.UITour.showConnectAnotherDevice = function(extraURLCampaignParams) {
+    _sendEvent("showConnectAnotherDevice", {
+      extraURLCampaignParams: JSON.stringify(extraURLCampaignParams)
     });
   };
 

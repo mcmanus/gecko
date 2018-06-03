@@ -30,6 +30,11 @@
 #urlbar[pageproxystate="valid"] > #identity-box.verifiedIdentity > #identity-icon-labels {
   color: #058B00;
 }
+
+:root[lwt-toolbar-field-brighttext] #urlbar[pageproxystate="valid"] > #identity-box.verifiedIdentity > #identity-icon-labels {
+  color: #30e60b;
+}
+
 #urlbar[pageproxystate="valid"] > #identity-box.chromeUI > #identity-icon-labels {
 %ifdef MOZ_OFFICIAL_BRANDING
   color: rgb(229,115,0);
@@ -44,13 +49,14 @@
 #identity-icon-labels:-moz-locale-dir(rtl) {
   padding-right: 4px;
 }
-#identity-box:not(.chromeUI):not(.extensionPage) {
+#identity-box:not(.chromeUI):not(.extensionPage):not(.notSecureText) {
   --urlbar-separator-color: transparent;
 }
 #urlbar[pageproxystate=valid] > #identity-box.verifiedIdentity {
   --urlbar-separator-color: rgba(18, 188, 0, .5);
 }
 
+#urlbar[pageproxystate=valid] > #identity-box.notSecureText,
 #urlbar[pageproxystate=valid] > #identity-box.verifiedIdentity,
 #urlbar[pageproxystate=valid] > #identity-box.chromeUI,
 #urlbar[pageproxystate=valid] > #identity-box.extensionPage,
@@ -61,6 +67,7 @@
   border-image-slice: 1;
 }
 
+#urlbar[pageproxystate=valid] > #identity-box.notSecureText,
 #urlbar[pageproxystate=valid] > #identity-box.verifiedIdentity,
 #urlbar[pageproxystate=valid] > #identity-box.chromeUI,
 #urlbar[pageproxystate=valid] > #identity-box.extensionPage {
@@ -74,6 +81,7 @@
   border-image-slice: 1;
 }
 
+#sharing-icon,
 #identity-icon,
 #tracking-protection-icon,
 #connection-icon,
@@ -82,7 +90,7 @@
 #extension-icon {
   width: 16px;
   height: 16px;
-  margin-inline-start: 2px;
+  margin-inline-start: 4px;
   -moz-context-properties: fill, fill-opacity;
 }
 
@@ -111,16 +119,6 @@
 
 /* SHARING ICON */
 
-#sharing-icon {
-  width: 16px;
-  height: 16px;
-  margin-inline-start: -16px;
-  position: relative;
-  -moz-context-properties: fill;
-  fill: rgb(224, 41, 29);
-  display: none;
-}
-
 #identity-box[sharing="camera"] > #sharing-icon {
   list-style-image: url("chrome://browser/skin/notification-icons/camera.svg");
 }
@@ -133,24 +131,18 @@
   list-style-image: url("chrome://browser/skin/notification-icons/screen.svg");
 }
 
-#identity-box[sharing] > #sharing-icon {
-  display: -moz-box;
-  animation-delay: -1.5s;
+#identity-box:not([sharing]) > #sharing-icon {
+  display: none;
 }
 
-#identity-box[sharing] > #identity-icon,
-#sharing-icon {
-  animation: 3s linear identity-box-sharing-icon-pulse infinite;
+#identity-box[sharing]:not([paused]) > #sharing-icon {
+  animation: 1.5s ease in-use-blink infinite;
+  -moz-context-properties: fill;
+  fill: rgb(224, 41, 29);
 }
 
-/* This should remain identical to tab-sharing-icon-pulse in tabs.inc.css */
-@keyframes identity-box-sharing-icon-pulse {
-  0%, 16.66%, 83.33%, 100% {
-    opacity: 0;
-  }
-  33.33%, 66.66% {
-    opacity: 1;
-  }
+@keyframes in-use-blink {
+  50% { opacity: 0; }
 }
 
 /* TRACKING PROTECTION ICON */
@@ -169,11 +161,12 @@
 }
 
 #tracking-protection-icon:not([state]) {
-  margin-inline-end: -18px;
+  margin-inline-end: -20px;
   pointer-events: none;
   opacity: 0;
   /* Only animate the shield in, when it disappears hide it immediately. */
   transition: none;
+  list-style-image: none;
 }
 
 #urlbar[pageproxystate="invalid"] > #identity-box > #extension-icon,
@@ -201,8 +194,11 @@
 #urlbar[pageproxystate="valid"] > #identity-box.certUserOverridden > #connection-icon {
   list-style-image: url(chrome://browser/skin/connection-mixed-passive-loaded.svg);
   visibility: visible;
+  fill: unset;
+  -moz-context-properties: fill, fill-opacity;
 }
 
+#urlbar[pageproxystate="valid"] > #identity-box.notSecure > #connection-icon,
 #urlbar[pageproxystate="valid"] > #identity-box.insecureLoginForms > #connection-icon,
 #urlbar[pageproxystate="valid"] > #identity-box.mixedActiveContent > #connection-icon {
   list-style-image: url(chrome://browser/skin/connection-mixed-active-loaded.svg);
@@ -210,7 +206,7 @@
 }
 
 #identity-box.extensionPage > #extension-icon {
-  list-style-image: url(chrome://browser/skin/controlcenter/extension.svg);
+  list-style-image: url(chrome://mozapps/skin/extensions/extensionGeneric-16.svg);
   visibility: visible;
 }
 

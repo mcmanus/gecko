@@ -24,7 +24,6 @@
 #include "nsISupportsImpl.h"
 #include "nsStyledElement.h"
 #include "nsSVGClass.h"
-#include "nsIDOMSVGElement.h"
 #include "SVGContentUtils.h"
 #include "gfxMatrix.h"
 
@@ -44,10 +43,7 @@ class DeclarationBlock;
 
 namespace dom {
 class SVGSVGElement;
-
-static const unsigned short SVG_UNIT_TYPE_UNKNOWN           = 0;
-static const unsigned short SVG_UNIT_TYPE_USERSPACEONUSE    = 1;
-static const unsigned short SVG_UNIT_TYPE_OBJECTBOUNDINGBOX = 2;
+class SVGViewportElement;
 
 } // namespace dom
 
@@ -69,7 +65,6 @@ struct nsSVGEnumMapping;
 typedef nsStyledElement nsSVGElementBase;
 
 class nsSVGElement : public nsSVGElementBase    // nsIContent
-                   , public nsIDOMSVGElement
 {
 protected:
   explicit nsSVGElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
@@ -94,7 +89,7 @@ public:
   typedef mozilla::SVGStringList SVGStringList;
 
   // nsISupports
-  NS_DECL_ISUPPORTS_INHERITED
+  NS_INLINE_DECL_REFCOUNTING_INHERITED(nsSVGElement, nsSVGElementBase)
 
   void DidAnimateClass();
 
@@ -103,9 +98,6 @@ public:
   virtual nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                               nsIContent* aBindingParent,
                               bool aCompileEventHandlers) override;
-
-  virtual nsresult UnsetAttr(int32_t aNameSpaceID, nsAtom* aAttribute,
-                             bool aNotify) override;
 
   virtual nsChangeHint GetAttributeChangeHint(const nsAtom* aAttribute,
                                               int32_t aModType) const override;
@@ -118,8 +110,6 @@ public:
    */
   virtual void NodeInfoChanged(nsIDocument* aOldDoc) override;
 
-  NS_IMETHOD WalkContentStyleRules(nsRuleWalker* aRuleWalker) override;
-  void WalkAnimatedContentStyleRules(nsRuleWalker* aRuleWalker);
 
   NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* aAttribute) const override;
 
@@ -136,16 +126,12 @@ public:
   static const MappedAttributeEntry sLightingEffectsMap[];
   static const MappedAttributeEntry sMaskMap[];
 
-  NS_FORWARD_NSIDOMNODE_TO_NSINODE
-  NS_FORWARD_NSIDOMELEMENT_TO_GENERIC
-  NS_DECL_NSIDOMSVGELEMENT
-
-  NS_IMPL_FROMCONTENT(nsSVGElement, kNameSpaceID_SVG)
+  NS_IMPL_FROMNODE(nsSVGElement, kNameSpaceID_SVG)
 
   // Gets the element that establishes the rectangular viewport against which
   // we should resolve percentage lengths (our "coordinate context"). Returns
   // nullptr for outer <svg> or SVG without an <svg> parent (invalid SVG).
-  mozilla::dom::SVGSVGElement* GetCtx() const;
+  mozilla::dom::SVGViewportElement* GetCtx() const;
 
   /**
    * Returns aMatrix pre-multiplied by (explicit or implicit) transforms that
@@ -318,7 +304,6 @@ public:
   }
 
   virtual void ClearAnyCachedPath() {}
-  virtual nsIDOMNode* AsDOMNode() final override { return this; }
   virtual bool IsTransformable() { return false; }
 
   // WebIDL
@@ -329,31 +314,29 @@ public:
   virtual bool IsSVGFocusable(bool* aIsFocusable, int32_t* aTabIndex);
   virtual bool IsFocusableInternal(int32_t* aTabIndex, bool aWithMouse) override;
 
-  void UpdateContentDeclarationBlock(mozilla::StyleBackendType aBackend);
+  void UpdateContentDeclarationBlock();
   const mozilla::DeclarationBlock* GetContentDeclarationBlock() const;
 
 protected:
   virtual JSObject* WrapNode(JSContext *cx, JS::Handle<JSObject*> aGivenProto) override;
 
-#ifdef DEBUG
   // We define BeforeSetAttr here and mark it final to ensure it is NOT used
   // by SVG elements.
   // This is because we're not currently passing the correct value for aValue to
   // BeforeSetAttr since it would involve allocating extra SVG value types.
   // See the comment in nsSVGElement::WillChangeValue.
-  virtual nsresult BeforeSetAttr(int32_t aNamespaceID, nsAtom* aName,
-                                 const nsAttrValueOrString* aValue,
-                                 bool aNotify) override final
-  {
-    return nsSVGElementBase::BeforeSetAttr(aNamespaceID, aName, aValue, aNotify);
-  }
-#endif // DEBUG
+  nsresult BeforeSetAttr(int32_t aNamespaceID, nsAtom* aName,
+                         const nsAttrValueOrString* aValue,
+                         bool aNotify) final;
   virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
                                 const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
                                 bool aNotify) override;
   virtual bool ParseAttribute(int32_t aNamespaceID, nsAtom* aAttribute,
-                                const nsAString& aValue, nsAttrValue& aResult) override;
+                                const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
+                                nsAttrValue& aResult) override;
   static nsresult ReportAttributeParseFailure(nsIDocument* aDocument,
                                               nsAtom* aAttribute,
                                               const nsAString& aValue);
@@ -368,7 +351,7 @@ protected:
   static nsAtom* GetEventNameForAttr(nsAtom* aAttr);
 
   struct LengthInfo {
-    nsAtom** mName;
+    nsStaticAtom** mName;
     float     mDefaultValue;
     uint8_t   mDefaultUnitType;
     uint8_t   mCtxType;
@@ -389,7 +372,7 @@ protected:
   };
 
   struct NumberInfo {
-    nsAtom** mName;
+    nsStaticAtom** mName;
     float     mDefaultValue;
     bool mPercentagesAllowed;
   };
@@ -409,7 +392,7 @@ protected:
   };
 
   struct NumberPairInfo {
-    nsAtom** mName;
+    nsStaticAtom** mName;
     float     mDefaultValue1;
     float     mDefaultValue2;
   };
@@ -430,7 +413,7 @@ protected:
   };
 
   struct IntegerInfo {
-    nsAtom** mName;
+    nsStaticAtom** mName;
     int32_t   mDefaultValue;
   };
 
@@ -449,7 +432,7 @@ protected:
   };
 
   struct IntegerPairInfo {
-    nsAtom** mName;
+    nsStaticAtom** mName;
     int32_t   mDefaultValue1;
     int32_t   mDefaultValue2;
   };
@@ -470,7 +453,7 @@ protected:
   };
 
   struct AngleInfo {
-    nsAtom** mName;
+    nsStaticAtom** mName;
     float     mDefaultValue;
     uint8_t   mDefaultUnitType;
   };
@@ -490,7 +473,7 @@ protected:
   };
 
   struct BooleanInfo {
-    nsAtom**    mName;
+    nsStaticAtom** mName;
     bool mDefaultValue;
   };
 
@@ -511,7 +494,7 @@ protected:
   friend class nsSVGEnum;
 
   struct EnumInfo {
-    nsAtom**         mName;
+    nsStaticAtom**    mName;
     nsSVGEnumMapping* mMapping;
     uint16_t          mDefaultValue;
   };
@@ -528,10 +511,11 @@ protected:
       {}
 
     void Reset(uint8_t aAttrEnum);
+    void SetUnknownValue(uint8_t aAttrEnum);
   };
 
   struct NumberListInfo {
-    nsAtom** mName;
+    nsStaticAtom** mName;
   };
 
   struct NumberListAttributesInfo {
@@ -551,7 +535,7 @@ protected:
   };
 
   struct LengthListInfo {
-    nsAtom** mName;
+    nsStaticAtom** mName;
     uint8_t   mAxis;
     /**
      * Flag to indicate whether appending zeros to the end of the list would
@@ -581,7 +565,7 @@ protected:
   };
 
   struct StringInfo {
-    nsAtom**    mName;
+    nsStaticAtom** mName;
     int32_t      mNamespaceID;
     bool mIsAnimatable;
   };
@@ -603,7 +587,7 @@ protected:
   friend class mozilla::DOMSVGStringList;
 
   struct StringListInfo {
-    nsAtom**    mName;
+    nsStaticAtom** mName;
   };
 
   struct StringListAttributesInfo {

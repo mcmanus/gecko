@@ -26,10 +26,6 @@ config = {
         "gittool.py": os.path.join(LOCAL_WORKDIR, "gittool.py"),
     },
 
-    # Pip
-    "find_links": ["http://pypi.pub.build.mozilla.org/pub"],
-    "pip_index": False,
-
     # Talos related
     "python_webserver": True,
     "virtualenv_path": '%s/build/venv' % os.getcwd(),
@@ -37,7 +33,6 @@ config = {
     "postflight_run_cmd_suites": [],
 
     # Tooltool related
-    "download_tooltool": True,
     "tooltool_cache": os.path.join(LOCAL_WORKDIR, "builds/tooltool_cache"),
     "tooltool_cache_path": os.path.join(LOCAL_WORKDIR, "builds/tooltool_cache"),
     "tooltool_authentication_file": os.path.join(LOCAL_WORKDIR, "relengapi.tok"),

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -205,10 +206,6 @@ class nsCSSScanner {
   nsCSSScanner(const nsAString& aBuffer, uint32_t aLineNumber);
   ~nsCSSScanner();
 
-  void SetErrorReporter(mozilla::css::ErrorReporter* aReporter) {
-    mReporter = aReporter;
-  }
-
   // Reset or check whether a BAD_URL or BAD_STRING token has been seen.
   void ClearSeenBadToken() { mSeenBadToken = false; }
   bool SeenBadToken() const { return mSeenBadToken; }
@@ -362,8 +359,6 @@ protected:
 
   uint32_t mRecordStartOffset;
   EOFCharacters mEOFCharacters;
-
-  mozilla::css::ErrorReporter *mReporter;
 
   bool mRecording;
   bool mSeenBadToken;

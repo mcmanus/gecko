@@ -2,6 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 import manifestparser
 import mozunit
 import pytest
@@ -455,11 +457,8 @@ def test_option_e10s_sets_prefs(mach_parsed_kwargs, e10s):
     e10s_prefs = {
         'browser.tabs.remote.autostart': True,
         'browser.tabs.remote.force-enable': True,
-        'extensions.e10sBlocksEnabling': False
     }
     for k,v in e10s_prefs.iteritems():
-        if k == 'extensions.e10sBlocksEnabling' and not e10s:
-            continue
         assert runner.prefs.get(k, False) == (v and e10s)
 
 

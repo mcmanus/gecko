@@ -277,10 +277,9 @@ PromiseDebugging::FlushUncaughtRejectionsInternal()
       RefPtr<UncaughtRejectionObserver> obs =
         static_cast<UncaughtRejectionObserver*>(observers[j].get());
 
-      IgnoredErrorResult err;
-      obs->OnLeftUncaught(promise, err);
+      obs->OnLeftUncaught(promise, IgnoreErrors());
     }
-    JSAutoCompartment ac(cx, promise);
+    JSAutoRealm ar(cx, promise);
     Promise::ReportRejectedPromise(cx, promise);
   }
   storage->mUncaughtRejections.clear();
@@ -294,8 +293,7 @@ PromiseDebugging::FlushUncaughtRejectionsInternal()
       RefPtr<UncaughtRejectionObserver> obs =
         static_cast<UncaughtRejectionObserver*>(observers[j].get());
 
-      IgnoredErrorResult err;
-      obs->OnConsumed(promise, err);
+      obs->OnConsumed(promise, IgnoreErrors());
     }
   }
   storage->mConsumedRejections.clear();

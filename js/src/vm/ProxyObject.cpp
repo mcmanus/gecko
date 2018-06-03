@@ -6,11 +6,14 @@
 
 #include "vm/ProxyObject.h"
 
-#include "jscompartment.h"
-
+#include "gc/Allocator.h"
+#include "gc/GCTrace.h"
 #include "proxy/DeadObjectProxy.h"
+#include "vm/JSCompartment.h"
 
-#include "jsobjinlines.h"
+#include "gc/ObjectKind-inl.h"
+#include "vm/JSObject-inl.h"
+#include "vm/TypeInference-inl.h"
 
 using namespace js;
 
@@ -51,6 +54,7 @@ ProxyObject::New(JSContext* cx, const BaseProxyHandler* handler, HandleValue pri
     MOZ_ASSERT(clasp->shouldDelayMetadataBuilder());
     MOZ_ASSERT_IF(proto.isObject(), cx->compartment() == proto.toObject()->compartment());
     MOZ_ASSERT(clasp->hasFinalize());
+    MOZ_ASSERT_IF(priv.isGCThing(), !JS::GCThingIsMarkedGray(JS::GCCellPtr(priv)));
 
     /*
      * Eagerly mark properties unknown for proxies, so we don't try to track
@@ -60,8 +64,9 @@ ProxyObject::New(JSContext* cx, const BaseProxyHandler* handler, HandleValue pri
      * ways.
      */
     if (proto.isObject() && !options.singleton() && !clasp->isDOMClass()) {
+        ObjectGroupRealm& realm = ObjectGroupRealm::getForNewObject(cx);
         RootedObject protoObj(cx, proto.toObject());
-        if (!JSObject::setNewGroupUnknown(cx, clasp, protoObj))
+        if (!JSObject::setNewGroupUnknown(cx, realm, clasp, protoObj))
             return nullptr;
     }
 
@@ -156,12 +161,12 @@ ProxyObject::create(JSContext* cx, const Class* clasp, Handle<TaggedProto> proto
 {
     MOZ_ASSERT(clasp->isProxy());
 
-    JSCompartment* comp = cx->compartment();
+    Realm* realm = cx->realm();
     RootedObjectGroup group(cx);
     RootedShape shape(cx);
 
     // Try to look up the group and shape in the NewProxyCache.
-    if (!comp->newProxyCache.lookup(clasp, proto, group.address(), shape.address())) {
+    if (!realm->newProxyCache.lookup(clasp, proto, group.address(), shape.address())) {
         group = ObjectGroup::defaultNewGroup(cx, clasp, proto, nullptr);
         if (!group)
             return cx->alreadyReportedOOM();
@@ -170,24 +175,25 @@ ProxyObject::create(JSContext* cx, const Class* clasp, Handle<TaggedProto> proto
         if (!shape)
             return cx->alreadyReportedOOM();
 
-        comp->newProxyCache.add(group, shape);
+        MOZ_ASSERT(group->realm() == realm);
+        realm->newProxyCache.add(group, shape);
     }
 
     gc::InitialHeap heap = GetInitialHeap(newKind, clasp);
     debugCheckNewObject(group, shape, allocKind, heap);
 
-    JSObject* obj = js::Allocate<JSObject>(cx, allocKind, /* numDynamicSlots = */ 0, heap, clasp);
+    JSObject* obj = js::Allocate<JSObject>(cx, allocKind, /* nDynamicSlots = */ 0, heap, clasp);
     if (!obj)
         return cx->alreadyReportedOOM();
 
     ProxyObject* pobj = static_cast<ProxyObject*>(obj);
-    pobj->group_.init(group);
+    pobj->initGroup(group);
     pobj->initShape(shape);
 
     MOZ_ASSERT(clasp->shouldDelayMetadataBuilder());
-    cx->compartment()->setObjectPendingMetadata(cx, pobj);
+    cx->realm()->setObjectPendingMetadata(cx, pobj);
 
-    js::gc::TraceCreateObject(pobj);
+    js::gc::gcTracer.traceCreateObject(pobj);
 
     if (newKind == SingletonObject) {
         Rooted<ProxyObject*> pobjRoot(cx, pobj);
@@ -200,7 +206,7 @@ ProxyObject::create(JSContext* cx, const Class* clasp, Handle<TaggedProto> proto
 }
 
 JS_FRIEND_API(void)
-js::SetValueInProxy(Value* slot, const Value& value)
+js::detail::SetValueInProxy(Value* slot, const Value& value)
 {
     // Slots in proxies are not GCPtrValues, so do a cast whenever assigning
     // values to them which might trigger a barrier.

@@ -3,47 +3,40 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 add_task(async function test_no_slash() {
-  do_print("Searching for host match without slash should match host");
-  await PlacesTestUtils.addVisits({
-    uri: NetUtil.newURI("http://file.org/test/"),
-    transition: TRANSITION_TYPED
-  }, {
-    uri: NetUtil.newURI("file:///c:/test.html"),
-    transition: TRANSITION_TYPED
-  });
+  info("Searching for host match without slash should match host");
+  await PlacesTestUtils.addVisits([
+    { uri: "http://file.org/test/" },
+    { uri: "file:///c:/test.html" }
+  ]);
   await check_autocomplete({
     search: "file",
     autofilled: "file.org/",
-    completed: "file.org/"
+    completed: "http://file.org/"
   });
   await cleanup();
 });
 
 add_task(async function test_w_slash() {
-  do_print("Searching match with slash at the end should do nothing");
+  info("Searching match with slash at the end should match url");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("http://file.org/test/"),
-    transition: TRANSITION_TYPED
   }, {
     uri: NetUtil.newURI("file:///c:/test.html"),
-    transition: TRANSITION_TYPED
   });
   await check_autocomplete({
     search: "file.org/",
     autofilled: "file.org/",
-    completed: "file.org/"
+    completed: "http://file.org/"
   });
   await cleanup();
 });
 
 add_task(async function test_middle() {
-  do_print("Searching match with slash in the middle should match url");
+  info("Searching match with slash in the middle should match url");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("http://file.org/test/"),
-    transition: TRANSITION_TYPED
   }, {
     uri: NetUtil.newURI("file:///c:/test.html"),
-    transition: TRANSITION_TYPED
   });
   await check_autocomplete({
     search: "file.org/t",
@@ -54,10 +47,9 @@ add_task(async function test_middle() {
 });
 
 add_task(async function test_nonhost() {
-  do_print("Searching for non-host match without slash should not match url");
+  info("Searching for non-host match without slash should not match url");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("file:///c:/test.html"),
-    transition: TRANSITION_TYPED
   });
   await check_autocomplete({
     search: "file",

@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim:cindent:ts=2:et:sw=2:
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -203,8 +203,8 @@ ListFloats(FILE* out, const char* aPrefix, const nsFloatCacheList& aFloats)
   }
 }
 
-const char*
-nsLineBox::BreakTypeToString(StyleClear aBreakType) const
+/* static */ const char*
+nsLineBox::BreakTypeToString(StyleClear aBreakType)
 {
   switch (aBreakType) {
     case StyleClear::None: return "nobr";
@@ -381,7 +381,8 @@ nsLineBox::CachedIsEmpty()
 
 void
 nsLineBox::DeleteLineList(nsPresContext* aPresContext, nsLineList& aLines,
-                          nsIFrame* aDestructRoot, nsFrameList* aFrames)
+                          nsIFrame* aDestructRoot, nsFrameList* aFrames,
+                          PostDestroyData& aPostDestroyData)
 {
   nsIPresShell* shell = aPresContext->PresShell();
 
@@ -398,7 +399,7 @@ nsLineBox::DeleteLineList(nsPresContext* aPresContext, nsLineList& aLines,
       MOZ_ASSERT(child == line->mFirstChild, "Lines out of sync");
       line->mFirstChild = aFrames->FirstChild();
       line->NoteFrameRemoved(child);
-      child->DestroyFrom(aDestructRoot);
+      child->DestroyFrom(aDestructRoot, aPostDestroyData);
     }
 
     aLines.pop_front();
@@ -413,7 +414,7 @@ nsLineBox::RFindLineContaining(nsIFrame* aFrame,
                                nsIFrame* aLastFrameBeforeEnd,
                                int32_t* aFrameIndexInLine)
 {
-  NS_PRECONDITION(aFrame, "null ptr");
+  MOZ_ASSERT(aFrame, "null ptr");
 
   nsIFrame* curFrame = aLastFrameBeforeEnd;
   while (aBegin != aEnd) {
@@ -692,7 +693,7 @@ nsLineIterator::GetLine(int32_t aLineNumber,
 int32_t
 nsLineIterator::FindLineContaining(nsIFrame* aFrame, int32_t aStartLine)
 {
-  NS_PRECONDITION(aStartLine <= mNumLines, "Bogus line numbers");
+  MOZ_ASSERT(aStartLine <= mNumLines, "Bogus line numbers");
   int32_t lineNumber = aStartLine;
   while (lineNumber != mNumLines) {
     nsLineBox* line = mLines[lineNumber];
@@ -738,8 +739,9 @@ nsLineIterator::FindFrameAt(int32_t aLineNumber,
                             bool* aPosIsBeforeFirstFrame,
                             bool* aPosIsAfterLastFrame)
 {
-  NS_PRECONDITION(aFrameFound && aPosIsBeforeFirstFrame && aPosIsAfterLastFrame,
-                  "null OUT ptr");
+  MOZ_ASSERT(aFrameFound && aPosIsBeforeFirstFrame && aPosIsAfterLastFrame,
+             "null OUT ptr");
+
   if (!aFrameFound || !aPosIsBeforeFirstFrame || !aPosIsAfterLastFrame) {
     return NS_ERROR_NULL_POINTER;
   }
@@ -871,7 +873,7 @@ nsFloatCacheList::Tail() const
 void
 nsFloatCacheList::Append(nsFloatCacheFreeList& aList)
 {
-  NS_PRECONDITION(aList.NotEmpty(), "Appending empty list will fail");
+  MOZ_ASSERT(aList.NotEmpty(), "Appending empty list will fail");
 
   nsFloatCache* tail = Tail();
   if (tail) {
@@ -937,7 +939,7 @@ nsFloatCacheFreeList::~nsFloatCacheFreeList()
 void
 nsFloatCacheFreeList::Append(nsFloatCacheList& aList)
 {
-  NS_PRECONDITION(aList.NotEmpty(), "Appending empty list will fail");
+  MOZ_ASSERT(aList.NotEmpty(), "Appending empty list will fail");
 
   if (mTail) {
     NS_ASSERTION(!mTail->mNext, "Bogus");
@@ -970,8 +972,9 @@ nsFloatCacheFreeList::DeleteAll()
 nsFloatCache*
 nsFloatCacheFreeList::Alloc(nsIFrame* aFloat)
 {
-  NS_PRECONDITION(aFloat->GetStateBits() & NS_FRAME_OUT_OF_FLOW,
-                  "This is a float cache, why isn't the frame out-of-flow?");
+  MOZ_ASSERT(aFloat->GetStateBits() & NS_FRAME_OUT_OF_FLOW,
+             "This is a float cache, why isn't the frame out-of-flow?");
+
   nsFloatCache* fc = mHead;
   if (mHead) {
     if (mHead == mTail) {

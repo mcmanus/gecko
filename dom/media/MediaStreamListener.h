@@ -39,7 +39,8 @@ class VideoSegment;
  * callback to notify of the initial blocking state. Also, if a listener is
  * attached to a stream that has already finished, we'll call NotifyFinished.
  */
-class MediaStreamListener {
+class MediaStreamListener
+{
 protected:
   // Protected destructor, to discourage deletion outside of Release():
   virtual ~MediaStreamListener() {}

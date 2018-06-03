@@ -10,6 +10,7 @@
 #include "mozilla/gfx/Coord.h"
 #include "mozilla/gfx/Point.h"
 #include "mozilla/gfx/Rect.h"
+#include "mozilla/gfx/RectAbsolute.h"
 #include "mozilla/gfx/ScaleFactor.h"
 #include "mozilla/gfx/ScaleFactors2D.h"
 #include "nsMargin.h"
@@ -32,12 +33,14 @@ struct RenderTargetPixel;
 struct ScreenPixel;
 struct ParentLayerPixel;
 struct DesktopPixel;
+struct ImagePixel;
 
 template<> struct IsPixel<CSSPixel>          : TrueType {};
 template<> struct IsPixel<LayoutDevicePixel> : TrueType {};
 template<> struct IsPixel<LayerPixel>        : TrueType {};
 template<> struct IsPixel<CSSTransformedLayerPixel> : TrueType {};
 template<> struct IsPixel<RenderTargetPixel> : TrueType {};
+template<> struct IsPixel<ImagePixel> : TrueType {};
 template<> struct IsPixel<ScreenPixel>       : TrueType {};
 template<> struct IsPixel<ParentLayerPixel>  : TrueType {};
 template<> struct IsPixel<DesktopPixel>      : TrueType {};
@@ -73,6 +76,7 @@ typedef gfx::IntPointTyped<LayerPixel> LayerIntPoint;
 typedef gfx::SizeTyped<LayerPixel> LayerSize;
 typedef gfx::IntSizeTyped<LayerPixel> LayerIntSize;
 typedef gfx::RectTyped<LayerPixel> LayerRect;
+typedef gfx::RectAbsoluteTyped<LayerPixel> LayerRectAbsolute;
 typedef gfx::IntRectTyped<LayerPixel> LayerIntRect;
 typedef gfx::MarginTyped<LayerPixel> LayerMargin;
 typedef gfx::IntMarginTyped<LayerPixel> LayerIntMargin;
@@ -99,6 +103,8 @@ typedef gfx::IntRectTyped<RenderTargetPixel> RenderTargetIntRect;
 typedef gfx::MarginTyped<RenderTargetPixel> RenderTargetMargin;
 typedef gfx::IntMarginTyped<RenderTargetPixel> RenderTargetIntMargin;
 typedef gfx::IntRegionTyped<RenderTargetPixel> RenderTargetIntRegion;
+
+typedef gfx::IntRectTyped<ImagePixel> ImageIntRect;
 
 typedef gfx::CoordTyped<ScreenPixel> ScreenCoord;
 typedef gfx::IntCoordTyped<ScreenPixel> ScreenIntCoord;
@@ -374,6 +380,13 @@ struct LayoutDevicePixel {
                   NSFloatPixelsToAppUnits(aRect.Width(), aAppUnitsPerDevPixel),
                   NSFloatPixelsToAppUnits(aRect.Height(), aAppUnitsPerDevPixel));
   }
+
+  static nsMargin ToAppUnits(const LayoutDeviceIntMargin& aMargin, nscoord aAppUnitsPerDevPixel) {
+    return nsMargin(aMargin.top * aAppUnitsPerDevPixel,
+                    aMargin.right * aAppUnitsPerDevPixel,
+                    aMargin.bottom * aAppUnitsPerDevPixel,
+                    aMargin.left * aAppUnitsPerDevPixel);
+  }
 };
 
 /*
@@ -406,6 +419,13 @@ struct CSSTransformedLayerPixel {
  * have RenderTargetPixel == LayerPixel.
  */
 struct RenderTargetPixel {
+};
+
+/*
+ * This unit represents one pixel in an image. Image space
+ * is largely independent of any other space.
+ */
+struct ImagePixel {
 };
 
 /*

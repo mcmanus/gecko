@@ -7,34 +7,30 @@
  * Tests if JSON responses encoded in base64 are handled correctly.
  */
 
-add_task(function* () {
-  let { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
-  let { tab, monitor } = yield initNetMonitor(JSON_B64_URL);
+add_task(async function() {
+  const { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
+  const { tab, monitor } = await initNetMonitor(JSON_B64_URL);
   info("Starting test... ");
 
-  let { document, store, windowRequire } = monitor.panelWin;
-  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+  const { document, store, windowRequire } = monitor.panelWin;
+  const Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
 
   store.dispatch(Actions.batchEnable(false));
 
-  let wait = waitForNetworkEvents(monitor, 1);
-  yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
-    content.wrappedJSObject.performRequests();
-  });
-  yield wait;
+  // Execute requests.
+  await performRequests(monitor, tab, 1);
 
   wait = waitForDOM(document, "#response-panel .CodeMirror-code");
-  EventUtils.sendMouseEvent({ type: "click" },
-    document.querySelector(".network-details-panel-toggle"));
+  store.dispatch(Actions.toggleNetworkDetails());
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector("#response-tab"));
-  yield wait;
+  await wait;
 
-  let tabpanel = document.querySelector("#response-panel");
+  const tabpanel = document.querySelector("#response-panel");
 
   is(tabpanel.querySelector(".response-error-header") === null, true,
     "The response error header doesn't have the intended visibility.");
-  let jsonView = tabpanel.querySelector(".tree-section .treeLabel") || {};
+  const jsonView = tabpanel.querySelector(".tree-section .treeLabel") || {};
   is(jsonView.textContent === L10N.getStr("jsonScopeName"), true,
     "The response json view has the intended visibility.");
   is(tabpanel.querySelector(".CodeMirror-code") === null, false,
@@ -49,9 +45,9 @@ add_task(function* () {
   is(tabpanel.querySelectorAll(".empty-notice").length, 0,
     "The empty notice should not be displayed in this tabpanel.");
 
-  let labels = tabpanel
+  const labels = tabpanel
     .querySelectorAll("tr:not(.tree-section) .treeLabelCell .treeLabel");
-  let values = tabpanel
+  const values = tabpanel
     .querySelectorAll("tr:not(.tree-section) .treeValueCell .objectBox");
 
   is(labels[0].textContent, "greeting",
@@ -59,5 +55,5 @@ add_task(function* () {
   is(values[0].textContent, "This is a base 64 string.",
     "The first json property value was incorrect.");
 
-  yield teardown(monitor);
+  await teardown(monitor);
 });

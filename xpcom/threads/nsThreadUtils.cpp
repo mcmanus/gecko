@@ -10,8 +10,8 @@
 #include "mozilla/TimeStamp.h"
 #include "LeakRefPtr.h"
 #include "nsComponentManagerUtils.h"
-
-#include "nsComponentManagerUtils.h"
+#include "nsExceptionHandler.h"
+#include "nsITimer.h"
 
 #ifdef MOZILLA_INTERNAL_API
 # include "nsThreadManager.h"
@@ -27,10 +27,6 @@
 #include <sys/resource.h>
 #endif
 
-#ifdef MOZ_CRASHREPORTER
-#include "nsExceptionHandler.h"
-#endif
-
 using namespace mozilla;
 
 #ifndef XPCOM_GLUE_AVOID_NSPR
@@ -44,7 +40,16 @@ IdlePeriod::GetIdlePeriodHint(TimeStamp* aIdleDeadline)
   return NS_OK;
 }
 
-NS_IMPL_ISUPPORTS(Runnable, nsIRunnable, nsINamed)
+// NS_IMPL_NAMED_* relies on the mName field, which is not present on
+// release or beta. Instead, fall back to using "Runnable" for all
+// runnables.
+#ifndef MOZ_COLLECTING_RUNNABLE_TELEMETRY
+NS_IMPL_ISUPPORTS(Runnable, nsIRunnable)
+#else
+NS_IMPL_NAMED_ADDREF(Runnable, mName)
+NS_IMPL_NAMED_RELEASE(Runnable, mName)
+NS_IMPL_QUERY_INTERFACE(Runnable, nsIRunnable, nsINamed)
+#endif
 
 NS_IMETHODIMP
 Runnable::Run()
@@ -53,20 +58,18 @@ Runnable::Run()
   return NS_OK;
 }
 
+#ifdef MOZ_COLLECTING_RUNNABLE_TELEMETRY
 NS_IMETHODIMP
 Runnable::GetName(nsACString& aName)
 {
-#ifdef RELEASE_OR_BETA
-  aName.Truncate();
-#else
   if (mName) {
     aName.AssignASCII(mName);
   } else {
     aName.Truncate();
   }
-#endif
   return NS_OK;
 }
+#endif
 
 NS_IMPL_ISUPPORTS_INHERITED(CancelableRunnable, Runnable,
                             nsICancelableRunnable)
@@ -81,16 +84,6 @@ CancelableRunnable::Cancel()
 NS_IMPL_ISUPPORTS_INHERITED(IdleRunnable, CancelableRunnable,
                             nsIIdleRunnable)
 
-namespace mozilla {
-namespace detail {
-already_AddRefed<nsITimer> CreateTimer()
-{
-  nsCOMPtr<nsITimer> timer = do_CreateInstance(NS_TIMER_CONTRACTID);
-  return timer.forget();
-}
-} // namespace detail
-} // namespace mozilla
-
 NS_IMPL_ISUPPORTS_INHERITED(PrioritizableRunnable, Runnable,
                             nsIRunnablePriority)
 
@@ -98,7 +91,7 @@ PrioritizableRunnable::PrioritizableRunnable(already_AddRefed<nsIRunnable>&& aRu
                                              uint32_t aPriority)
  // Real runnable name is managed by overridding the GetName function.
  : Runnable("PrioritizableRunnable")
- , mRunnable(Move(aRunnable))
+ , mRunnable(std::move(aRunnable))
  , mPriority(aPriority)
 {
 #if DEBUG
@@ -107,6 +100,7 @@ PrioritizableRunnable::PrioritizableRunnable(already_AddRefed<nsIRunnable>&& aRu
 #endif
 }
 
+#ifdef MOZ_COLLECTING_RUNNABLE_TELEMETRY
 NS_IMETHODIMP
 PrioritizableRunnable::GetName(nsACString& aName)
 {
@@ -117,6 +111,7 @@ PrioritizableRunnable::GetName(nsACString& aName)
   }
   return NS_OK;
 }
+#endif
 
 NS_IMETHODIMP
 PrioritizableRunnable::Run()
@@ -254,7 +249,7 @@ NS_DispatchToCurrentThread(nsIRunnable* aEvent)
 nsresult
 NS_DispatchToMainThread(already_AddRefed<nsIRunnable>&& aEvent, uint32_t aDispatchFlags)
 {
-  LeakRefPtr<nsIRunnable> event(Move(aEvent));
+  LeakRefPtr<nsIRunnable> event(std::move(aEvent));
   nsCOMPtr<nsIThread> thread;
   nsresult rv = NS_GetMainThread(getter_AddRefs(thread));
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -326,7 +321,7 @@ NS_IdleDispatchToThread(already_AddRefed<nsIRunnable>&& aEvent,
 nsresult
 NS_IdleDispatchToCurrentThread(already_AddRefed<nsIRunnable>&& aEvent)
 {
-  return NS_IdleDispatchToThread(Move(aEvent),
+  return NS_IdleDispatchToThread(std::move(aEvent),
                                  NS_GetCurrentThread());
 }
 
@@ -334,7 +329,7 @@ class IdleRunnableWrapper : public IdleRunnable
 {
 public:
   explicit IdleRunnableWrapper(already_AddRefed<nsIRunnable>&& aEvent)
-    : mRunnable(Move(aEvent))
+    : mRunnable(std::move(aEvent))
   {
   }
 
@@ -360,17 +355,16 @@ public:
   {
     MOZ_ASSERT(aTarget);
     MOZ_ASSERT(!mTimer);
-    mTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
-    if (mTimer) {
-      mTimer->SetTarget(aTarget);
-      mTimer->InitWithNamedFuncCallback(TimedOut,
-                                        this,
-                                        aDelay,
-                                        nsITimer::TYPE_ONE_SHOT,
-                                        "IdleRunnableWrapper::SetTimer");
-    }
+    NS_NewTimerWithFuncCallback(getter_AddRefs(mTimer),
+                                TimedOut,
+                                this,
+                                aDelay,
+                                nsITimer::TYPE_ONE_SHOT,
+                                "IdleRunnableWrapper::SetTimer",
+                                aTarget);
   }
 
+#ifdef MOZ_COLLECTING_RUNNABLE_TELEMETRY
   NS_IMETHOD GetName(nsACString& aName) override
   {
     aName.AssignLiteral("IdleRunnableWrapper");
@@ -384,6 +378,7 @@ public:
     }
     return NS_OK;
   }
+#endif
 
 private:
   ~IdleRunnableWrapper()
@@ -407,7 +402,7 @@ NS_IdleDispatchToThread(already_AddRefed<nsIRunnable>&& aEvent,
                         uint32_t aTimeout,
                         nsIThread* aThread)
 {
-  nsCOMPtr<nsIRunnable> event(Move(aEvent));
+  nsCOMPtr<nsIRunnable> event(std::move(aEvent));
   NS_ENSURE_TRUE(event, NS_ERROR_INVALID_ARG);
 
   //XXX Using current thread for now as the nsIEventTarget.
@@ -432,7 +427,7 @@ extern nsresult
 NS_IdleDispatchToCurrentThread(already_AddRefed<nsIRunnable>&& aEvent,
                                uint32_t aTimeout)
 {
-  return NS_IdleDispatchToThread(Move(aEvent), aTimeout,
+  return NS_IdleDispatchToThread(std::move(aEvent), aTimeout,
                                  NS_GetCurrentThread());
 }
 
@@ -528,9 +523,7 @@ void
 NS_SetCurrentThreadName(const char* aName)
 {
   PR_SetCurrentThreadName(aName);
-#ifdef MOZ_CRASHREPORTER
   CrashReporter::SetCurrentThreadName(aName);
-#endif
 }
 
 #ifdef MOZILLA_INTERNAL_API
@@ -538,6 +531,16 @@ nsIThread*
 NS_GetCurrentThread()
 {
   return nsThreadManager::get().GetCurrentThread();
+}
+
+
+nsIThread*
+NS_GetCurrentThreadNoCreate()
+{
+  if (nsThreadManager::get().IsNSThread()) {
+    return NS_GetCurrentThread();
+  }
+  return nullptr;
 }
 #endif
 

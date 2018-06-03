@@ -54,7 +54,7 @@ SourceClient.prototype = {
   blackBox: DebuggerClient.requester({
     type: "blackbox"
   }, {
-    after: function (response) {
+    after: function(response) {
       if (!response.error) {
         this._isBlackBoxed = true;
         if (this._activeThread) {
@@ -74,7 +74,7 @@ SourceClient.prototype = {
   unblackBox: DebuggerClient.requester({
     type: "unblackbox"
   }, {
-    after: function (response) {
+    after: function(response) {
       if (!response.error) {
         this._isBlackBoxed = false;
         if (this._activeThread) {
@@ -91,8 +91,8 @@ SourceClient.prototype = {
    * @param callback Function
    *        The callback function called when we receive the response from the server.
    */
-  getExecutableLines: function (cb = noop) {
-    let packet = {
+  getExecutableLines: function(cb = noop) {
+    const packet = {
       to: this._form.actor,
       type: "getExecutableLines"
     };
@@ -106,8 +106,8 @@ SourceClient.prototype = {
   /**
    * Get a long string grip for this SourceClient's source.
    */
-  source: function (callback = noop) {
-    let packet = {
+  source: function(callback = noop) {
+    const packet = {
       to: this._form.actor,
       type: "source"
     };
@@ -119,7 +119,7 @@ SourceClient.prototype = {
   /**
    * Pretty print this source's text.
    */
-  prettyPrint: function (indent, callback = noop) {
+  prettyPrint: function(indent, callback = noop) {
     const packet = {
       to: this._form.actor,
       type: "prettyPrint",
@@ -138,7 +138,7 @@ SourceClient.prototype = {
   /**
    * Stop pretty printing this source's text.
    */
-  disablePrettyPrint: function (callback = noop) {
+  disablePrettyPrint: function(callback = noop) {
     const packet = {
       to: this._form.actor,
       type: "disablePrettyPrint"
@@ -153,7 +153,7 @@ SourceClient.prototype = {
     });
   },
 
-  _onSourceResponse: function (response, callback) {
+  _onSourceResponse: function(response, callback) {
     if (response.error) {
       callback(response);
       return response;
@@ -164,10 +164,10 @@ SourceClient.prototype = {
       return response;
     }
 
-    let { contentType, source } = response;
+    const { contentType, source } = response;
     if (source.type === "arrayBuffer") {
-      let arrayBuffer = this._activeThread.threadArrayBuffer(source);
-      return arrayBuffer.slice(0, arrayBuffer.length).then(function (resp) {
+      const arrayBuffer = this._activeThread.threadArrayBuffer(source);
+      return arrayBuffer.slice(0, arrayBuffer.length).then(function(resp) {
         if (resp.error) {
           callback(resp);
           return resp;
@@ -175,7 +175,7 @@ SourceClient.prototype = {
         // Keeping str as a string, ArrayBuffer/Uint8Array will not survive
         // setIn/mergeIn operations.
         const str = atob(resp.encoded);
-        let newResponse = {
+        const newResponse = {
           source: {
             binary: str,
             toString: () => "[wasm]",
@@ -187,14 +187,14 @@ SourceClient.prototype = {
       });
     }
 
-    let longString = this._activeThread.threadLongString(source);
-    return longString.substring(0, longString.length).then(function (resp) {
+    const longString = this._activeThread.threadLongString(source);
+    return longString.substring(0, longString.length).then(function(resp) {
       if (resp.error) {
         callback(resp);
         return resp;
       }
 
-      let newResponse = {
+      const newResponse = {
         source: resp.substring,
         contentType: contentType
       };
@@ -212,16 +212,16 @@ SourceClient.prototype = {
    * @param function onResponse
    *        Called with the thread's response.
    */
-  setBreakpoint: function ({ line, column, condition, noSliding }, onResponse = noop) {
+  setBreakpoint: function({ line, column, condition, noSliding }, onResponse = noop) {
     // A helper function that sets the breakpoint.
-    let doSetBreakpoint = callback => {
-      let root = this._client.mainRoot;
-      let location = {
+    const doSetBreakpoint = callback => {
+      const root = this._client.mainRoot;
+      const location = {
         line,
         column,
       };
 
-      let packet = {
+      const packet = {
         to: this.actor,
         type: "setBreakpoint",
         location,
@@ -276,7 +276,16 @@ SourceClient.prototype = {
 
       return doSetBreakpoint(cleanUp);
     });
-  }
+  },
+
+  setPausePoints: function(pausePoints) {
+    const packet = {
+      to: this._form.actor,
+      type: "setPausePoints",
+      pausePoints
+    };
+    return this._client.request(packet);
+  },
 };
 
 module.exports = SourceClient;

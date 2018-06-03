@@ -99,35 +99,13 @@ function checkUnmodifiedForm(formNum) {
 }
 
 /**
- * Mochitest gives us a sendKey(), but it's targeted to a specific element.
- * This basically sends an untargeted key event, to whatever's focused.
- */
-function doKey(aKey, modifier) {
-  var keyName = "DOM_VK_" + aKey.toUpperCase();
-  var key = KeyEvent[keyName];
-
-  // undefined --> null
-  if (!modifier)
-    modifier = null;
-
-  // Window utils for sending fake sey events.
-  var wutils = SpecialPowers.wrap(window).
-               QueryInterface(SpecialPowers.Ci.nsIInterfaceRequestor).
-               getInterface(SpecialPowers.Ci.nsIDOMWindowUtils);
-
-  if (wutils.sendKeyEvent("keydown", key, 0, modifier)) {
-    wutils.sendKeyEvent("keypress", key, 0, modifier);
-  }
-  wutils.sendKeyEvent("keyup", key, 0, modifier);
-}
-
-/**
  * Init with a common login
  * If selfFilling is true or non-undefined, fires an event at the page so that
  * the test can start checking filled-in values. Tests that check observer
  * notifications might be confused by this.
  */
 function commonInit(selfFilling) {
+  // eslint-disable-next-line mozilla/use-services
   var pwmgr = SpecialPowers.Cc["@mozilla.org/login-manager;1"].
               getService(SpecialPowers.Ci.nsILoginManager);
   ok(pwmgr != null, "Access LoginManager");
@@ -183,7 +161,7 @@ function registerRunTests() {
       form.appendChild(password);
 
       var observer = SpecialPowers.wrapCallback(function(subject, topic, data) {
-        var formLikeRoot = subject.QueryInterface(SpecialPowers.Ci.nsIDOMNode);
+        var formLikeRoot = subject;
         if (formLikeRoot.id !== "observerforcer")
           return;
         SpecialPowers.removeObserver(observer, "passwordmgr-processed-form");
@@ -369,16 +347,15 @@ function runChecksAfterCommonInit(aFunction = null) {
 
 // Code to run when loaded as a chrome script in tests via loadChromeScript
 if (this.addMessageListener) {
-  const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
   var SpecialPowers = { Cc, Ci, Cr, Cu, };
   var ok, is;
   // Ignore ok/is in commonInit since they aren't defined in a chrome script.
   ok = is = () => {}; // eslint-disable-line no-native-reassign
 
-  Cu.import("resource://gre/modules/AppConstants.jsm");
-  Cu.import("resource://gre/modules/LoginHelper.jsm");
-  Cu.import("resource://gre/modules/LoginManagerParent.jsm");
-  Cu.import("resource://gre/modules/Services.jsm");
+  ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+  ChromeUtils.import("resource://gre/modules/LoginHelper.jsm");
+  ChromeUtils.import("resource://gre/modules/LoginManagerParent.jsm");
+  ChromeUtils.import("resource://gre/modules/Services.jsm");
 
   function onStorageChanged(subject, topic, data) {
     sendAsyncMessage("storageChanged", {
@@ -435,22 +412,21 @@ if (this.addMessageListener) {
     return rv;
   });
 
-  var globalMM = Cc["@mozilla.org/globalmessagemanager;1"].getService(Ci.nsIMessageListenerManager);
-  globalMM.addMessageListener("RemoteLogins:onFormSubmit", function onFormSubmit(message) {
+  Services.mm.addMessageListener("RemoteLogins:onFormSubmit", function onFormSubmit(message) {
     sendAsyncMessage("formSubmissionProcessed", message.data, message.objects);
   });
 } else {
   // Code to only run in the mochitest pages (not in the chrome script).
   SpecialPowers.pushPrefEnv({"set": [["signon.rememberSignons", true],
                                      ["signon.autofillForms.http", true],
-                                     ["security.insecure_field_warning.contextual.enabled", false]]
+                                     ["security.insecure_field_warning.contextual.enabled", false],
+                                     ["network.auth.non-web-content-triggered-resources-http-auth-allow", true]]
                            });
   SimpleTest.registerCleanupFunction(() => {
     SpecialPowers.popPrefEnv();
     runInParent(function cleanupParent() {
-      const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
-      Cu.import("resource://gre/modules/Services.jsm");
-      Cu.import("resource://gre/modules/LoginManagerParent.jsm");
+      ChromeUtils.import("resource://gre/modules/Services.jsm");
+      ChromeUtils.import("resource://gre/modules/LoginManagerParent.jsm");
 
       // Remove all logins and disabled hosts
       Services.logins.removeAllLogins();

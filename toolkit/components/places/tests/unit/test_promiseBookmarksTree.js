@@ -40,12 +40,12 @@ async function compareToNode(aItem, aNode, aIsRootItem, aExcludedGuids = []) {
 
   if (aIsRootItem && aNode.itemId != PlacesUtils.placesRootId) {
     Assert.ok("parentGuid" in aItem);
-    await check_has_child(aItem.parentGuid, aItem.guid)
+    await check_has_child(aItem.parentGuid, aItem.guid);
   } else {
     check_unset("parentGuid");
   }
 
-  let expectedAnnos = PlacesUtils.getAnnotationsForItem(aItem.id);
+  let expectedAnnos = await PlacesUtils.promiseAnnotationsForItem(aItem.id);
   if (expectedAnnos.length > 0)
     Assert.deepEqual(aItem.annos, expectedAnnos);
   else
@@ -115,7 +115,7 @@ async function compareToNode(aItem, aNode, aIsRootItem, aExcludedGuids = []) {
         try {
           await compareFavicons(aNode.icon, aItem.iconuri);
         } catch (ex) {
-          do_print(ex);
+          info(ex);
           todo_check_true(false);
         }
       } else {
@@ -140,7 +140,7 @@ async function compareToNode(aItem, aNode, aIsRootItem, aExcludedGuids = []) {
       if ("title" in aItem)
         compare_prop("title");
       else
-        do_check_null(aNode.title);
+        Assert.equal(null, aNode.title);
   }
 
   if (aIsRootItem)
@@ -189,12 +189,10 @@ async function test_promiseBookmarksTreeForEachNode(aNode, aOptions, aExcludedGu
   return item;
 }
 
-async function test_promiseBookmarksTreeAgainstResult(aItemGuid = "",
+async function test_promiseBookmarksTreeAgainstResult(aItemGuid = PlacesUtils.bookmarks.rootGuid,
                                                  aOptions = { includeItemIds: true },
                                                  aExcludedGuids) {
-  let itemId = aItemGuid ?
-    await PlacesUtils.promiseItemId(aItemGuid) : PlacesUtils.placesRootId;
-  let node = PlacesUtils.getFolderContents(itemId).root;
+  let node = PlacesUtils.getFolderContents(aItemGuid).root;
   return test_promiseBookmarksTreeForEachNode(node, aOptions, aExcludedGuids);
 }
 

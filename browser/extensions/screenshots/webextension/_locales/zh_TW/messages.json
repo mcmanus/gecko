@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "下載"
   },
+  "downloadOnlyNotice": {
+    "message": "您目前處於「僅可下載模式」。"
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots 會在下列狀況時，進入「僅可下載模式」:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "使用隱私瀏覽模式開啟時。"
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "停用第三方 Cookie 時。"
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "開啟「永不保留瀏覽紀錄」時。"
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "您使用的是 Firefox ESR 版本。"
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "已停用上傳。"
+  },
   "notificationLinkCopiedTitle": {
     "message": "已複製鏈結"
   },
@@ -36,6 +57,28 @@
     "message": "已將您拍攝的圖片鏈結複製到剪貼簿，按下 $META_KEY$+V 即可貼上。",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "複製"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "已複製擷圖"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "已將擷圖複製到剪貼簿，按下 $META_KEY$-V 即可貼上。",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "已將圖片裁切為 $PIXELS$px 大小。",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -104,7 +147,7 @@
     "message": "用您想要的方式分享"
   },
   "tourBodyDownloadUpload": {
-    "message": "裁切過的擷圖，可直接傳到網路上方便分享，也能下載到電腦裡。您也可以點擊「我的擷圖」按鈕，尋找您拍過的所有擷圖。"
+    "message": "裁切過的擷圖，可直接傳到網路上方便分享，也能下載到電腦裡；也可以點擊「我的擷圖」按鈕，尋找拍過的所有擷圖。"
   },
   "tourSkip": {
     "message": "略過"

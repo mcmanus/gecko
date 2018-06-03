@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -24,9 +25,9 @@ class nsSVGOuterSVGFrame final : public nsSVGDisplayContainerFrame
   typedef mozilla::image::imgDrawingParams imgDrawingParams;
 
   friend nsContainerFrame*
-  NS_NewSVGOuterSVGFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
+  NS_NewSVGOuterSVGFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle);
 protected:
-  explicit nsSVGOuterSVGFrame(nsStyleContext* aContext);
+  explicit nsSVGOuterSVGFrame(ComputedStyle* aStyle);
 
 public:
   NS_DECL_QUERYFRAME
@@ -62,8 +63,7 @@ public:
                       nsReflowStatus&          aStatus) override;
 
   virtual void DidReflow(nsPresContext*   aPresContext,
-                         const ReflowInput*  aReflowInput,
-                         nsDidReflowStatus aStatus) override;
+                         const ReflowInput*  aReflowInput) override;
 
   virtual void UnionChildOverflow(nsOverflowAreas& aOverflowAreas) override;
 
@@ -225,10 +225,10 @@ class nsSVGOuterSVGAnonChildFrame final : public nsSVGDisplayContainerFrame
 {
   friend nsContainerFrame*
   NS_NewSVGOuterSVGAnonChildFrame(nsIPresShell* aPresShell,
-                                  nsStyleContext* aContext);
+                                  ComputedStyle* aStyle);
 
-  explicit nsSVGOuterSVGAnonChildFrame(nsStyleContext* aContext)
-    : nsSVGDisplayContainerFrame(aContext, kClassID)
+  explicit nsSVGOuterSVGAnonChildFrame(ComputedStyle* aStyle)
+    : nsSVGDisplayContainerFrame(aStyle, kClassID)
   {}
 
 public:
@@ -239,6 +239,9 @@ public:
                     nsContainerFrame* aParent,
                     nsIFrame*         aPrevInFlow) override;
 #endif
+
+  virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
+                                const nsDisplayListSet& aLists) override;
 
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override {

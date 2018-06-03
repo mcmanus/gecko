@@ -332,7 +332,7 @@ IsInterfaceEqualToOrInheritedFrom(REFIID aInterface, REFIID aFrom,
   // inheritance hierarchy.
   RefPtr<ITypeInfo> typeInfo;
   if (RegisteredProxy::Find(aInterface, getter_AddRefs(typeInfo))) {
-    typeInfos.AppendElement(Move(typeInfo));
+    typeInfos.AppendElement(std::move(typeInfo));
   }
 
   /**
@@ -340,8 +340,7 @@ IsInterfaceEqualToOrInheritedFrom(REFIID aInterface, REFIID aFrom,
    * parent interfaces, searching for aFrom.
    */
   while (!typeInfos.IsEmpty()) {
-    RefPtr<ITypeInfo> curTypeInfo(Move(typeInfos.LastElement()));
-    typeInfos.RemoveElementAt(typeInfos.Length() - 1);
+    RefPtr<ITypeInfo> curTypeInfo(typeInfos.PopLastElement());
 
     TYPEATTR* typeAttr = nullptr;
     HRESULT hr = curTypeInfo->GetTypeAttr(&typeAttr);
@@ -394,7 +393,7 @@ IsInterfaceEqualToOrInheritedFrom(REFIID aInterface, REFIID aFrom,
         return true;
       }
 
-      typeInfos.AppendElement(Move(nextTypeInfo));
+      typeInfos.AppendElement(std::move(nextTypeInfo));
     }
   }
 

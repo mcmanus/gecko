@@ -4,26 +4,22 @@
 
 "use strict";
 
-this.EXPORTED_SYMBOLS = ["ContentRestore"];
+var EXPORTED_SYMBOLS = ["ContentRestore"];
 
-const Cu = Components.utils;
-const Cc = Components.classes;
-const Ci = Components.interfaces;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+ChromeUtils.import("resource://gre/modules/Services.jsm", this);
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
-Cu.import("resource://gre/modules/Services.jsm", this);
-
-XPCOMUtils.defineLazyModuleGetter(this, "DocShellCapabilities",
+ChromeUtils.defineModuleGetter(this, "DocShellCapabilities",
   "resource:///modules/sessionstore/DocShellCapabilities.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "FormData",
+ChromeUtils.defineModuleGetter(this, "FormData",
   "resource://gre/modules/FormData.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ScrollPosition",
+ChromeUtils.defineModuleGetter(this, "ScrollPosition",
   "resource://gre/modules/ScrollPosition.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "SessionHistory",
+ChromeUtils.defineModuleGetter(this, "SessionHistory",
   "resource://gre/modules/sessionstore/SessionHistory.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "SessionStorage",
+ChromeUtils.defineModuleGetter(this, "SessionStorage",
   "resource:///modules/sessionstore/SessionStorage.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Utils",
+ChromeUtils.defineModuleGetter(this, "Utils",
   "resource://gre/modules/sessionstore/Utils.jsm");
 
 const ssu = Cc["@mozilla.org/browser/sessionstore/utils;1"]
@@ -168,7 +164,7 @@ ContentRestoreInternal.prototype = {
       this.restoreTabContent(null, false, callbacks.onLoadFinished);
     });
 
-    webNavigation.sessionHistory.addSHistoryListener(listener);
+    webNavigation.sessionHistory.legacySHistory.addSHistoryListener(listener);
     this._historyListener = listener;
 
     // Make sure to reset the capabilities and attributes in case this tab gets
@@ -207,7 +203,7 @@ ContentRestoreInternal.prototype = {
     this._tabData = null;
 
     let webNavigation = this.docShell.QueryInterface(Ci.nsIWebNavigation);
-    let history = webNavigation.sessionHistory;
+    let history = webNavigation.sessionHistory.legacySHistory;
 
     // Listen for the tab to finish loading.
     this.restoreTabContentStarted(finishCallback);
@@ -369,19 +365,19 @@ ContentRestoreInternal.prototype = {
  */
 function HistoryListener(docShell, callback) {
   let webNavigation = docShell.QueryInterface(Ci.nsIWebNavigation);
-  webNavigation.sessionHistory.addSHistoryListener(this);
+  webNavigation.sessionHistory.legacySHistory.addSHistoryListener(this);
 
   this.webNavigation = webNavigation;
   this.callback = callback;
 }
 HistoryListener.prototype = {
-  QueryInterface: XPCOMUtils.generateQI([
+  QueryInterface: ChromeUtils.generateQI([
     Ci.nsISHistoryListener,
     Ci.nsISupportsWeakReference
   ]),
 
   uninstall() {
-    let shistory = this.webNavigation.sessionHistory;
+    let shistory = this.webNavigation.sessionHistory.legacySHistory;
     if (shistory) {
       shistory.removeSHistoryListener(this);
     }
@@ -433,7 +429,7 @@ HistoryListener.prototype = {
   OnIndexChanged(aIndex) {
     // Ignore, the method is implemented so that XPConnect doesn't throw!
   },
-}
+};
 
 /**
  * This class informs SessionStore.jsm whenever the network requests for a
@@ -455,7 +451,7 @@ function ProgressListener(docShell, callbacks) {
 }
 
 ProgressListener.prototype = {
-  QueryInterface: XPCOMUtils.generateQI([
+  QueryInterface: ChromeUtils.generateQI([
     Ci.nsIWebProgressListener,
     Ci.nsISupportsWeakReference
   ]),

@@ -4,40 +4,38 @@
 
 "use strict";
 
-const { addons, createClass, DOM: dom, PropTypes } =
-  require("devtools/client/shared/vendor/react");
+const { PureComponent } = require("devtools/client/shared/vendor/react");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
 const { editableItem } = require("devtools/client/shared/inplace-editor");
 
 const LONG_TEXT_ROTATE_LIMIT = 3;
 
-module.exports = createClass({
-
-  displayName: "BoxModelEditable",
-
-  propTypes: {
-    box: PropTypes.string.isRequired,
-    direction: PropTypes.string,
-    focusable: PropTypes.bool.isRequired,
-    level: PropTypes.string,
-    property: PropTypes.string.isRequired,
-    textContent: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired,
-    onShowBoxModelEditor: PropTypes.func.isRequired,
-  },
-
-  mixins: [ addons.PureRenderMixin ],
+class BoxModelEditable extends PureComponent {
+  static get propTypes() {
+    return {
+      box: PropTypes.string.isRequired,
+      direction: PropTypes.string,
+      focusable: PropTypes.bool.isRequired,
+      level: PropTypes.string,
+      property: PropTypes.string.isRequired,
+      textContent: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired,
+      onShowBoxModelEditor: PropTypes.func.isRequired,
+    };
+  }
 
   componentDidMount() {
-    let { property, onShowBoxModelEditor } = this.props;
+    const { property, onShowBoxModelEditor } = this.props;
 
     editableItem({
       element: this.boxModelEditable,
     }, (element, event) => {
       onShowBoxModelEditor(element, event, property);
     });
-  },
+  }
 
   render() {
-    let {
+    const {
       box,
       direction,
       focusable,
@@ -46,7 +44,7 @@ module.exports = createClass({
       textContent,
     } = this.props;
 
-    let rotate = direction &&
+    const rotate = direction &&
                  (direction == "left" || direction == "right") &&
                  box !== "position" &&
                  textContent.toString().length > LONG_TEXT_ROTATE_LIMIT;
@@ -70,6 +68,7 @@ module.exports = createClass({
         textContent
       )
     );
-  },
+  }
+}
 
-});
+module.exports = BoxModelEditable;

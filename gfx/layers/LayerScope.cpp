@@ -14,7 +14,6 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/TimeStamp.h"
 
-#include "TexturePoolOGL.h"
 #include "mozilla/layers/CompositorOGL.h"
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/LayerManagerComposite.h"
@@ -374,8 +373,8 @@ LayerScopeManager gLayerScopeManager;
 template<typename T>
 static void DumpRect(T* aPacketRect, const Rect& aRect)
 {
-    aPacketRect->set_x(aRect.x);
-    aPacketRect->set_y(aRect.y);
+    aPacketRect->set_x(aRect.X());
+    aPacketRect->set_y(aRect.Y());
     aPacketRect->set_w(aRect.Width());
     aPacketRect->set_h(aRect.Height());
 }
@@ -477,7 +476,7 @@ public:
           mContextAddress(reinterpret_cast<intptr_t>(cx)),
           mDatasize(0),
           mIsMask(aIsMask),
-          mPacket(Move(aPacket))
+          mPacket(std::move(aPacket))
     {
         // pre-packing
         // DataSourceSurface may have locked buffer,
@@ -503,15 +502,16 @@ private:
         tp->set_ismask(mIsMask);
 
         if (aImage) {
+            DataSourceSurface::ScopedMap map(aImage, DataSourceSurface::READ);
             tp->set_width(aImage->GetSize().width);
             tp->set_height(aImage->GetSize().height);
-            tp->set_stride(aImage->Stride());
+            tp->set_stride(map.GetStride());
 
-            mDatasize = aImage->GetSize().height * aImage->Stride();
+            mDatasize = aImage->GetSize().height * map.GetStride();
 
             auto compresseddata = MakeUnique<char[]>(LZ4::maxCompressedSize(mDatasize));
             if (compresseddata) {
-                int ndatasize = LZ4::compress((char*)aImage->GetData(),
+                int ndatasize = LZ4::compress((char*)map.GetData(),
                                               mDatasize,
                                               compresseddata.get());
                 if (ndatasize > 0) {
@@ -520,11 +520,11 @@ private:
                     tp->set_data(compresseddata.get(), mDatasize);
                 } else {
                     NS_WARNING("Compress data failed");
-                    tp->set_data(aImage->GetData(), mDatasize);
+                    tp->set_data(map.GetData(), mDatasize);
                 }
             } else {
                 NS_WARNING("Couldn't new compressed data.");
-                tp->set_data(aImage->GetData(), mDatasize);
+                tp->set_data(map.GetData(), mDatasize);
             }
         } else {
             tp->set_width(0);
@@ -580,7 +580,7 @@ class DebugGLLayersData final: public DebugGLData {
 public:
     explicit DebugGLLayersData(UniquePtr<Packet> aPacket)
         : DebugGLData(Packet::LAYERS),
-          mPacket(Move(aPacket))
+          mPacket(std::move(aPacket))
     { }
 
     virtual bool Write() override {
@@ -1002,7 +1002,7 @@ SenderHelper::SendTextureSource(GLContext* aGLContext,
                                                          shaderConfig, aFlipY);
     gLayerScopeManager.GetSocketManager()->AppendDebugData(
         new DebugGLTextureData(aGLContext, aLayerRef, textureTarget,
-                               texID, img, aIsMask, Move(aPacket)));
+                               texID, img, aIsMask, std::move(aPacket)));
 
     sSentTextureIds.push_back(texID);
     gLayerScopeManager.CurrentSession().mTexIDs.push_back(texID);
@@ -1021,7 +1021,7 @@ SenderHelper::SetAndSendTexture(GLContext* aGLContext,
     texturePacket->set_mpremultiplied(aEffect->mPremultiplied);
     DumpFilter(texturePacket, aEffect->mSamplingFilter);
     DumpRect(texturePacket->mutable_mtexturecoords(), aEffect->mTextureCoords);
-    SendTextureSource(aGLContext, aLayerRef, aSource, false, false, Move(packet));
+    SendTextureSource(aGLContext, aLayerRef, aSource, false, false, std::move(packet));
 }
 
 void
@@ -1058,7 +1058,7 @@ SenderHelper::SendMaskEffect(GLContext* aGLContext,
         mask->mutable_mmasktransform()->add_m(*element++);
     }
 
-    SendTextureSource(aGLContext, aLayerRef, source, false, true, Move(packet));
+    SendTextureSource(aGLContext, aLayerRef, source, false, true, std::move(packet));
 }
 
 void
@@ -1742,7 +1742,7 @@ LayerScope::SendLayerDump(UniquePtr<Packet> aPacket)
         return;
     }
     gLayerScopeManager.GetSocketManager()->AppendDebugData(
-        new DebugGLLayersData(Move(aPacket)));
+        new DebugGLLayersData(std::move(aPacket)));
 }
 
 /*static*/

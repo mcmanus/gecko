@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=8 et tw=80 : */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -27,13 +27,37 @@
 namespace mozilla {
 namespace layers {
 
-class GenericFlingAnimation: public AsyncPanZoomAnimation {
+/**
+ * The FlingPhysics template parameter determines the physics model
+ * that the fling animation follows. It must have the following methods:
+ *
+ *   - Default constructor.
+ *
+ *   - Init(const ParentLayerPoint& aStartingVelocity, float aPLPPI).
+ *     Called at the beginning of the fling, with the fling's starting velocity,
+ *     and the number of ParentLayer pixels per (Screen) inch at the point of
+ *     the fling's start in the fling's direction.
+ *
+ *   - Sample(const TimeDuration& aDelta,
+ *            ParentLayerPoint* aOutVelocity,
+ *            ParentLayerPoint* aOutOffset);
+ *     Called on each sample of the fling.
+ *     |aDelta| is the time elapsed since the last sample.
+ *     |aOutVelocity| should be the desired velocity after the current sample,
+ *                    in ParentLayer pixels per millisecond.
+ *     |aOutOffset| should be the desired _delta_ to the scroll offset after
+ *     the current sample. |aOutOffset| should _not_ be clamped to the APZC's
+ *     scrollable bounds; the caller will do the clamping, and it needs to
+ *     know the unclamped value to handle handoff/overscroll correctly.
+ */
+template <typename FlingPhysics>
+class GenericFlingAnimation: public AsyncPanZoomAnimation, public FlingPhysics {
 public:
   GenericFlingAnimation(AsyncPanZoomController& aApzc,
-                        PlatformSpecificStateBase* aPlatformSpecificState,
                         const RefPtr<const OverscrollHandoffChain>& aOverscrollHandoffChain,
                         bool aFlingIsHandedOff,
-                        const RefPtr<const AsyncPanZoomController>& aScrolledApzc)
+                        const RefPtr<const AsyncPanZoomController>& aScrolledApzc,
+                        float aPLPPI)
     : mApzc(aApzc)
     , mOverscrollHandoffChain(aOverscrollHandoffChain)
     , mScrolledApzc(aScrolledApzc)
@@ -45,11 +69,11 @@ public:
     // (in this APZC, or an APZC further in the handoff chain).
     // This ensures that we don't take the 'overscroll' path in Sample()
     // on account of one axis which can't scroll having a velocity.
-    if (!mOverscrollHandoffChain->CanScrollInDirection(&mApzc, ScrollDirection::HORIZONTAL)) {
+    if (!mOverscrollHandoffChain->CanScrollInDirection(&mApzc, ScrollDirection::eHorizontal)) {
       RecursiveMutexAutoLock lock(mApzc.mRecursiveMutex);
       mApzc.mX.SetVelocity(0);
     }
-    if (!mOverscrollHandoffChain->CanScrollInDirection(&mApzc, ScrollDirection::VERTICAL)) {
+    if (!mOverscrollHandoffChain->CanScrollInDirection(&mApzc, ScrollDirection::eVertical)) {
       RecursiveMutexAutoLock lock(mApzc.mRecursiveMutex);
       mApzc.mY.SetVelocity(0);
     }
@@ -85,6 +109,8 @@ public:
 
     mApzc.mLastFlingTime = now;
     mApzc.mLastFlingVelocity = velocity;
+
+    FlingPhysics::Init(mApzc.GetVelocityVector(), aPLPPI);
   }
 
   /**
@@ -96,13 +122,14 @@ public:
   virtual bool DoSample(FrameMetrics& aFrameMetrics,
                         const TimeDuration& aDelta) override
   {
-    float friction = gfxPrefs::APZFlingFriction();
-    float threshold = gfxPrefs::APZFlingStoppedThreshold();
+    ParentLayerPoint velocity;
+    ParentLayerPoint offset;
+    FlingPhysics::Sample(aDelta, &velocity, &offset);
 
-    bool shouldContinueFlingX = mApzc.mX.FlingApplyFrictionOrCancel(aDelta, friction, threshold),
-         shouldContinueFlingY = mApzc.mY.FlingApplyFrictionOrCancel(aDelta, friction, threshold);
+    mApzc.SetVelocityVector(velocity);
+
     // If we shouldn't continue the fling, let's just stop and repaint.
-    if (!shouldContinueFlingX && !shouldContinueFlingY) {
+    if (IsZero(velocity)) {
       FLING_LOG("%p ending fling animation. overscrolled=%d\n", &mApzc, mApzc.IsOverscrolled());
       // This APZC or an APZC further down the handoff chain may be be overscrolled.
       // Start a snap-back animation on the overscrolled APZC.
@@ -118,14 +145,6 @@ public:
         &mApzc));
       return false;
     }
-
-    // AdjustDisplacement() zeroes out the Axis velocity if we're in overscroll.
-    // Since we need to hand off the velocity to the tree manager in such a case,
-    // we save it here. Would be ParentLayerVector instead of ParentLayerPoint
-    // if we had vector classes.
-    ParentLayerPoint velocity = mApzc.GetVelocityVector();
-
-    ParentLayerPoint offset = velocity * aDelta.ToMilliseconds();
 
     // Ordinarily we might need to do a ScheduleComposite if either of
     // the following AdjustDisplacement calls returns true, but this

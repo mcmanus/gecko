@@ -2,17 +2,22 @@
    http://creativecommons.org/publicdomain/zero/1.0/ */
 "use strict";
 
+// There are shutdown issues for which multiple rejections are left uncaught.
+// See bug 1018184 for resolving these issues.
+const { PromiseTestUtils } = scopedCuImport("resource://testing-common/PromiseTestUtils.jsm");
+PromiseTestUtils.whitelistRejectionsGlobally(/File closed/);
+
 // Avoid test timeouts that can occur while waiting for the "addon-console-works" message.
 requestLongerTimeout(2);
 
 const ADDON_ID = "test-devtools@mozilla.org";
 const ADDON_NAME = "test-devtools";
 
-const { BrowserToolboxProcess } = Cu.import("resource://devtools/client/framework/ToolboxProcess.jsm", {});
+const { BrowserToolboxProcess } = ChromeUtils.import("resource://devtools/client/framework/ToolboxProcess.jsm", {});
 
-add_task(function* () {
-  yield new Promise(resolve => {
-    let options = {"set": [
+add_task(async function() {
+  await new Promise(resolve => {
+    const options = {"set": [
       // Force enabling of addons debugging
       ["devtools.chrome.enabled", true],
       ["devtools.debugger.remote-enabled", true],
@@ -24,25 +29,25 @@ add_task(function* () {
     SpecialPowers.pushPrefEnv(options, resolve);
   });
 
-  let { tab, document } = yield openAboutDebugging("addons");
-  yield waitForInitialAddonList(document);
-  yield installAddon({
+  const { tab, document } = await openAboutDebugging("addons");
+  await waitForInitialAddonList(document);
+  await installAddon({
     document,
     path: "addons/unpacked/install.rdf",
     name: ADDON_NAME,
   });
 
   // Retrieve the DEBUG button for the addon
-  let names = getInstalledAddonNames(document);
-  let name = names.filter(element => element.textContent === ADDON_NAME)[0];
+  const names = getInstalledAddonNames(document);
+  const name = names.filter(element => element.textContent === ADDON_NAME)[0];
   ok(name, "Found the addon in the list");
-  let targetElement = name.parentNode.parentNode;
-  let debugBtn = targetElement.querySelector(".debug-button");
+  const targetElement = name.parentNode.parentNode;
+  const debugBtn = targetElement.querySelector(".debug-button");
   ok(debugBtn, "Found its debug button");
 
   // Wait for a notification sent by a script evaluated the test addon via
   // the web console.
-  let onCustomMessage = new Promise(done => {
+  const onCustomMessage = new Promise(done => {
     Services.obs.addObserver(function listener() {
       Services.obs.removeObserver(listener, "addon-console-works");
       done();
@@ -51,13 +56,13 @@ add_task(function* () {
 
   // Be careful, this JS function is going to be executed in the addon toolbox,
   // which lives in another process. So do not try to use any scope variable!
-  let env = Cc["@mozilla.org/process/environment;1"]
+  const env = Cc["@mozilla.org/process/environment;1"]
               .getService(Ci.nsIEnvironment);
-  let testScript = function () {
+  const testScript = function() {
     /* eslint-disable no-undef */
     toolbox.selectTool("webconsole")
       .then(console => {
-        let { jsterm } = console.hud;
+        const { jsterm } = console.hud;
         return jsterm.execute("myBootstrapAddonFunction()");
       })
       .then(() => toolbox.destroy());
@@ -68,16 +73,16 @@ add_task(function* () {
     env.set("MOZ_TOOLBOX_TEST_SCRIPT", "");
   });
 
-  let onToolboxClose = BrowserToolboxProcess.once("close");
+  const onToolboxClose = BrowserToolboxProcess.once("close");
 
   debugBtn.click();
 
-  yield onCustomMessage;
+  await onCustomMessage;
   ok(true, "Received the notification message from the bootstrap.js function");
 
-  yield onToolboxClose;
+  await onToolboxClose;
   ok(true, "Addon toolbox closed");
 
-  yield uninstallAddon({document, id: ADDON_ID, name: ADDON_NAME});
-  yield closeAboutDebugging(tab);
+  await uninstallAddon({document, id: ADDON_ID, name: ADDON_NAME});
+  await closeAboutDebugging(tab);
 });

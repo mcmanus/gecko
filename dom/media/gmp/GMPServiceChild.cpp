@@ -84,6 +84,8 @@ GeckoMediaPluginServiceChild::GetContentParent(GMPCrashHelper* aHelper,
       nsCString displayName;
       uint32_t pluginId = 0;
       ipc::Endpoint<PGMPContentParent> endpoint;
+      nsCString errorDescription = NS_LITERAL_CSTRING("");
+
       bool ok = child->SendLaunchGMP(nodeIdString,
                                      api,
                                      tags,
@@ -92,7 +94,8 @@ GeckoMediaPluginServiceChild::GetContentParent(GMPCrashHelper* aHelper,
                                      &otherProcess,
                                      &displayName,
                                      &endpoint,
-                                     &rv);
+                                     &rv,
+                                     &errorDescription);
       if (helper && pluginId) {
         // Note: Even if the launch failed, we need to connect the crash
         // helper so that if the launch failed due to the plugin crashing,
@@ -103,15 +106,19 @@ GeckoMediaPluginServiceChild::GetContentParent(GMPCrashHelper* aHelper,
       }
 
       if (!ok || NS_FAILED(rv)) {
-        LOGD(("GeckoMediaPluginServiceChild::GetContentParent SendLaunchGMP "
-              "failed rv=0x%x",
-              static_cast<uint32_t>(rv)));
-        holder->Reject(rv, __func__);
+        MediaResult error(
+          rv,
+          nsPrintfCString("GeckoMediaPluginServiceChild::GetContentParent "
+                          "SendLaunchGMPForNodeId failed with description (%s)",
+                          errorDescription.get()));
+
+        LOGD(("%s", error.Description().get()));
+        holder->Reject(error, __func__);
         return;
       }
 
       RefPtr<GMPContentParent> parent =
-        child->GetBridgedGMPContentParent(otherProcess, Move(endpoint));
+        child->GetBridgedGMPContentParent(otherProcess, std::move(endpoint));
       if (!alreadyBridgedTo.Contains(otherProcess)) {
         parent->SetDisplayName(displayName);
         parent->SetPluginId(pluginId);
@@ -120,9 +127,9 @@ GeckoMediaPluginServiceChild::GetContentParent(GMPCrashHelper* aHelper,
         new GMPContentParent::CloseBlocker(parent));
       holder->Resolve(blocker, __func__);
     },
-    [rawHolder](nsresult rv) {
+    [rawHolder](MediaResult result) {
       UniquePtr<MozPromiseHolder<GetGMPContentParentPromise>> holder(rawHolder);
-      holder->Reject(rv, __func__);
+      holder->Reject(result, __func__);
     });
 
   return promise;
@@ -146,7 +153,9 @@ GeckoMediaPluginServiceChild::GetContentParent(GMPCrashHelper* aHelper,
   nsTArray<nsCString> tags(aTags);
   RefPtr<GMPCrashHelper> helper(aHelper);
   RefPtr<GeckoMediaPluginServiceChild> self(this);
-  GetServiceChild()->Then(thread, __func__,
+  GetServiceChild()->Then(
+    thread,
+    __func__,
     [self, nodeId, api, tags, helper, rawHolder](GMPServiceChild* child) {
       UniquePtr<MozPromiseHolder<GetGMPContentParentPromise>> holder(rawHolder);
       nsresult rv;
@@ -158,6 +167,7 @@ GeckoMediaPluginServiceChild::GetContentParent(GMPCrashHelper* aHelper,
       nsCString displayName;
       uint32_t pluginId = 0;
       ipc::Endpoint<PGMPContentParent> endpoint;
+      nsCString errorDescription = NS_LITERAL_CSTRING("");
 
       bool ok = child->SendLaunchGMPForNodeId(nodeId,
                                               api,
@@ -167,7 +177,8 @@ GeckoMediaPluginServiceChild::GetContentParent(GMPCrashHelper* aHelper,
                                               &otherProcess,
                                               &displayName,
                                               &endpoint,
-                                              &rv);
+                                              &rv,
+                                              &errorDescription);
 
       if (helper && pluginId) {
         // Note: Even if the launch failed, we need to connect the crash
@@ -179,14 +190,19 @@ GeckoMediaPluginServiceChild::GetContentParent(GMPCrashHelper* aHelper,
       }
 
       if (!ok || NS_FAILED(rv)) {
-        LOGD(("GeckoMediaPluginServiceChild::GetContentParent SendLaunchGMP failed rv=%" PRIu32,
-              static_cast<uint32_t>(rv)));
-        holder->Reject(rv, __func__);
+        MediaResult error(
+          rv,
+          nsPrintfCString("GeckoMediaPluginServiceChild::GetContentParent "
+                          "SendLaunchGMPForNodeId failed with description (%s)",
+                          errorDescription.get()));
+
+        LOGD(("%s", error.Description().get()));
+        holder->Reject(error, __func__);
         return;
       }
 
       RefPtr<GMPContentParent> parent = child->GetBridgedGMPContentParent(otherProcess,
-                                                                          Move(endpoint));
+                                                                          std::move(endpoint));
       if (!alreadyBridgedTo.Contains(otherProcess)) {
         parent->SetDisplayName(displayName);
         parent->SetPluginId(pluginId);
@@ -195,9 +211,9 @@ GeckoMediaPluginServiceChild::GetContentParent(GMPCrashHelper* aHelper,
       RefPtr<GMPContentParent::CloseBlocker> blocker(new GMPContentParent::CloseBlocker(parent));
       holder->Resolve(blocker, __func__);
     },
-    [rawHolder](nsresult rv) {
+    [rawHolder](MediaResult result) {
       UniquePtr<MozPromiseHolder<GetGMPContentParentPromise>> holder(rawHolder);
-      holder->Reject(rv, __func__);
+      holder->Reject(result, __func__);
     });
 
   return promise;
@@ -218,7 +234,7 @@ struct GMPCapabilityAndVersion
       for (const nsCString& tag : tags.tags()) {
         cap.mAPITags.AppendElement(tag);
       }
-      mCapabilities.AppendElement(Move(cap));
+      mCapabilities.AppendElement(std::move(cap));
     }
   }
 
@@ -371,6 +387,8 @@ GeckoMediaPluginServiceChild::Observe(nsISupports* aSubject,
       mServiceChild = nullptr;
     }
     ShutdownGMPThread();
+  } else if (!strcmp(NS_XPCOM_WILL_SHUTDOWN_OBSERVER_ID, aTopic)) {
+    mXPCOMWillShutdown = true;
   }
 
   return NS_OK;
@@ -410,7 +428,7 @@ GeckoMediaPluginServiceChild::SetServiceChild(UniquePtr<GMPServiceChild>&& aServ
 {
   MOZ_ASSERT(mGMPThread->EventTarget()->IsOnCurrentThread());
 
-  mServiceChild = Move(aServiceChild);
+  mServiceChild = std::move(aServiceChild);
 
   nsTArray<MozPromiseHolder<GetServiceChildPromise>> holders;
   holders.SwapElements(mGetServiceChildPromises);
@@ -492,8 +510,8 @@ public:
   OpenPGMPServiceChild(UniquePtr<GMPServiceChild>&& aGMPServiceChild,
                        ipc::Endpoint<PGMPServiceChild>&& aEndpoint)
     : Runnable("gmp::OpenPGMPServiceChild")
-    , mGMPServiceChild(Move(aGMPServiceChild))
-    , mEndpoint(Move(aEndpoint))
+    , mGMPServiceChild(std::move(aGMPServiceChild))
+    , mEndpoint(std::move(aEndpoint))
   {
   }
 
@@ -503,7 +521,7 @@ public:
       GeckoMediaPluginServiceChild::GetSingleton();
     MOZ_ASSERT(!gmp->mServiceChild);
     if (mEndpoint.Bind(mGMPServiceChild.get())) {
-      gmp->SetServiceChild(Move(mGMPServiceChild));
+      gmp->SetServiceChild(std::move(mGMPServiceChild));
     } else {
       gmp->SetServiceChild(nullptr);
     }
@@ -529,8 +547,8 @@ GMPServiceChild::Create(Endpoint<PGMPServiceChild>&& aGMPService)
   nsresult rv = gmp->GetThread(getter_AddRefs(gmpThread));
   NS_ENSURE_SUCCESS(rv, false);
 
-  rv = gmpThread->Dispatch(new OpenPGMPServiceChild(Move(serviceChild),
-                                                    Move(aGMPService)),
+  rv = gmpThread->Dispatch(new OpenPGMPServiceChild(std::move(serviceChild),
+                                                    std::move(aGMPService)),
                            NS_DISPATCH_NORMAL);
   return NS_SUCCEEDED(rv);
 }

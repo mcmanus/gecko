@@ -6,37 +6,27 @@
 
 #include "vm/EnvironmentObject-inl.h"
 
-#include "mozilla/PodOperations.h"
-#include "mozilla/ScopeExit.h"
-
-#include "jscompartment.h"
-#include "jsiter.h"
-
 #include "builtin/ModuleObject.h"
 #include "gc/Policy.h"
 #include "vm/ArgumentsObject.h"
 #include "vm/AsyncFunction.h"
 #include "vm/GlobalObject.h"
+#include "vm/Iteration.h"
+#include "vm/JSCompartment.h"
 #include "vm/ProxyObject.h"
 #include "vm/Shape.h"
 #include "vm/Xdr.h"
 #include "wasm/WasmInstance.h"
 
-#include "jsatominlines.h"
-#include "jsobjinlines.h"
-#include "jsscriptinlines.h"
-
+#include "gc/Marking-inl.h"
+#include "vm/JSAtom-inl.h"
+#include "vm/JSScript-inl.h"
 #include "vm/NativeObject-inl.h"
 #include "vm/Stack-inl.h"
+#include "vm/TypeInference-inl.h"
 
 using namespace js;
 using namespace js::gc;
-
-using mozilla::PodZero;
-using mozilla::Maybe;
-using mozilla::Some;
-using mozilla::Nothing;
-using mozilla::MakeScopeExit;
 
 typedef Rooted<ArgumentsObject*> RootedArgumentsObject;
 typedef MutableHandle<ArgumentsObject*> MutableHandleArgumentsObject;
@@ -155,7 +145,9 @@ CallObject::createSingleton(JSContext* cx, HandleShape shape)
     MOZ_ASSERT(CanBeFinalizedInBackground(kind, &CallObject::class_));
     kind = gc::GetBackgroundAllocKind(kind);
 
-    RootedObjectGroup group(cx, ObjectGroup::lazySingletonGroup(cx, &class_, TaggedProto(nullptr)));
+    ObjectGroupRealm& realm = ObjectGroupRealm::getForNewObject(cx);
+    RootedObjectGroup group(cx, ObjectGroup::lazySingletonGroup(cx, realm, &class_,
+                                                                TaggedProto(nullptr)));
     if (!group)
         return nullptr;
 
@@ -405,7 +397,6 @@ const ObjectOps ModuleEnvironmentObject::objectOps_ = {
     ModuleEnvironmentObject::setProperty,
     ModuleEnvironmentObject::getOwnPropertyDescriptor,
     ModuleEnvironmentObject::deleteProperty,
-    nullptr, nullptr,                                    /* watch/unwatch */
     nullptr,                                             /* getElements */
     nullptr
 };
@@ -494,10 +485,8 @@ ModuleEnvironmentObject::createImportBinding(JSContext* cx, HandleAtom importNam
     RootedId importNameId(cx, AtomToId(importName));
     RootedId localNameId(cx, AtomToId(localName));
     RootedModuleEnvironmentObject env(cx, &module->initialEnvironment());
-    if (!importBindings().putNew(cx, importNameId, env, localNameId)) {
-        ReportOutOfMemory(cx);
+    if (!importBindings().put(cx, importNameId, env, localNameId))
         return false;
-    }
 
     return true;
 }
@@ -857,7 +846,6 @@ static const ObjectOps WithEnvironmentObjectOps = {
     with_SetProperty,
     with_GetOwnPropertyDescriptor,
     with_DeleteProperty,
-    nullptr, nullptr,    /* watch/unwatch */
     nullptr,             /* getElements */
     nullptr,
 };
@@ -1036,12 +1024,12 @@ LexicalEnvironmentObject::clone(JSContext* cx, Handle<LexicalEnvironmentObject*>
 {
     Rooted<LexicalScope*> scope(cx, &env->scope());
     RootedObject enclosing(cx, &env->enclosingEnvironment());
-    Rooted<LexicalEnvironmentObject*> copy(cx, create(cx, scope, enclosing, gc::TenuredHeap));
+    Rooted<LexicalEnvironmentObject*> copy(cx, create(cx, scope, enclosing, gc::DefaultHeap));
     if (!copy)
         return nullptr;
 
     // We can't assert that the clone has the same shape, because it could
-    // have been reshaped by PurgeEnvironmentChain.
+    // have been reshaped by ReshapeForShadowedProp.
     MOZ_ASSERT(env->slotSpan() == copy->slotSpan());
     for (uint32_t i = JSSLOT_FREE(&class_); i < copy->slotSpan(); i++)
         copy->setSlot(i, env->getSlot(i));
@@ -1054,13 +1042,13 @@ LexicalEnvironmentObject::recreate(JSContext* cx, Handle<LexicalEnvironmentObjec
 {
     Rooted<LexicalScope*> scope(cx, &env->scope());
     RootedObject enclosing(cx, &env->enclosingEnvironment());
-    return create(cx, scope, enclosing, gc::TenuredHeap);
+    return create(cx, scope, enclosing, gc::DefaultHeap);
 }
 
 bool
 LexicalEnvironmentObject::isExtensible() const
 {
-    return nonProxyIsExtensible();
+    return NativeObject::isExtensible();
 }
 
 Value
@@ -1224,7 +1212,6 @@ static const ObjectOps RuntimeLexicalErrorObjectObjectOps = {
     lexicalError_SetProperty,
     lexicalError_GetOwnPropertyDescriptor,
     lexicalError_DeleteProperty,
-    nullptr, nullptr,    /* watch/unwatch */
     nullptr,             /* getElements */
     nullptr,             /* this */
 };
@@ -1433,7 +1420,7 @@ static void
 ReportOptimizedOut(JSContext* cx, HandleId id)
 {
     JSAutoByteString printable;
-    if (ValueToPrintable(cx, IdToValue(id), &printable)) {
+    if (ValueToPrintableLatin1(cx, IdToValue(id), &printable)) {
         JS_ReportErrorNumberLatin1(cx, GetErrorMessage, nullptr, JSMSG_DEBUG_OPTIMIZED_OUT,
                                    printable.ptr());
     }
@@ -1509,7 +1496,8 @@ class DebugEnvironmentProxyHandler : public BaseProxyHandler
             CallObject& callobj = env->as<CallObject>();
             RootedFunction fun(cx, &callobj.callee());
             RootedScript script(cx, JSFunction::getOrCreateScript(cx, fun));
-            if (!script->ensureHasTypes(cx) || !script->ensureHasAnalyzedArgsUsage(cx))
+            AutoKeepTypeScripts keepTypes(cx);
+            if (!script->ensureHasTypes(cx, keepTypes) || !script->ensureHasAnalyzedArgsUsage(cx))
                 return false;
 
             BindingIter bi(script);
@@ -1830,7 +1818,7 @@ class DebugEnvironmentProxyHandler : public BaseProxyHandler
      * In this case we don't know we need to recover a missing arguments
      * object until after we've performed the property get.
      */
-    static bool isMagicMissingArgumentsValue(JSContext* cx, EnvironmentObject& env, HandleValue v)
+    static bool isMagicMissingArgumentsValue(EnvironmentObject& env, HandleValue v)
     {
         bool isMagic = v.isMagic() && v.whyMagic() == JS_OPTIMIZED_ARGUMENTS;
 
@@ -1928,8 +1916,7 @@ class DebugEnvironmentProxyHandler : public BaseProxyHandler
 
     static bool isFunctionEnvironmentWithThis(const JSObject& env)
     {
-        // All functions except arrows and generator expression lambdas should
-        // have their own this binding.
+        // All functions except arrows should have their own this binding.
         return isFunctionEnvironment(env) && !env.as<CallObject>().callee().hasLexicalThis();
     }
 
@@ -2025,7 +2012,7 @@ class DebugEnvironmentProxyHandler : public BaseProxyHandler
 
         switch (access) {
           case ACCESS_UNALIASED:
-            if (isMagicMissingArgumentsValue(cx, *env, v))
+            if (isMagicMissingArgumentsValue(*env, v))
                 return getMissingArgumentsPropertyDescriptor(cx, debugEnv, *env, desc);
             desc.object().set(debugEnv);
             desc.setAttributes(JSPROP_READONLY | JSPROP_ENUMERATE | JSPROP_PERMANENT);
@@ -2094,7 +2081,7 @@ class DebugEnvironmentProxyHandler : public BaseProxyHandler
 
         switch (access) {
           case ACCESS_UNALIASED:
-            if (isMagicMissingArgumentsValue(cx, *env, vp))
+            if (isMagicMissingArgumentsValue(*env, vp))
                 return getMissingArguments(cx, *env, vp);
             if (isMaybeUninitializedThisValue(cx, id, vp))
                 return getMissingThis(cx, *env, vp);
@@ -2154,7 +2141,7 @@ class DebugEnvironmentProxyHandler : public BaseProxyHandler
 
         switch (access) {
           case ACCESS_UNALIASED:
-            if (isMagicMissingArgumentsValue(cx, *env, vp))
+            if (isMagicMissingArgumentsValue(*env, vp))
                 return getMissingArgumentsMaybeSentinelValue(cx, *env, vp);
             if (isMaybeUninitializedThisValue(cx, id, vp))
                 return getMissingThisMaybeSentinelValue(cx, *env, vp);
@@ -2329,7 +2316,7 @@ const DebugEnvironmentProxyHandler DebugEnvironmentProxyHandler::singleton;
 /* static */ DebugEnvironmentProxy*
 DebugEnvironmentProxy::create(JSContext* cx, EnvironmentObject& env, HandleObject enclosing)
 {
-    MOZ_ASSERT(env.compartment() == cx->compartment());
+    MOZ_ASSERT(env.realm() == cx->realm());
     MOZ_ASSERT(!enclosing->is<EnvironmentObject>());
 
     RootedValue priv(cx, ObjectValue(env));
@@ -2444,7 +2431,7 @@ DebugEnvironments::trace(JSTracer* trc)
 }
 
 void
-DebugEnvironments::sweep(JSRuntime* rt)
+DebugEnvironments::sweep()
 {
     /*
      * missingEnvs points to debug envs weakly so that debug envs can be
@@ -2496,7 +2483,7 @@ DebugEnvironments::finish()
 
 #ifdef JSGC_HASH_TABLE_CHECKS
 void
-DebugEnvironments::checkHashTablesAfterMovingGC(JSRuntime* runtime)
+DebugEnvironments::checkHashTablesAfterMovingGC()
 {
     /*
      * This is called at the end of StoreBuffer::mark() to check that our
@@ -2525,15 +2512,15 @@ DebugEnvironments::checkHashTablesAfterMovingGC(JSRuntime* runtime)
 static bool
 CanUseDebugEnvironmentMaps(JSContext* cx)
 {
-    return cx->compartment()->isDebuggee();
+    return cx->realm()->isDebuggee();
 }
 
 DebugEnvironments*
-DebugEnvironments::ensureCompartmentData(JSContext* cx)
+DebugEnvironments::ensureRealmData(JSContext* cx)
 {
-    JSCompartment* c = cx->compartment();
-    if (c->debugEnvs)
-        return c->debugEnvs;
+    Realm* realm = cx->realm();
+    if (auto* debugEnvs = realm->debugEnvs())
+        return debugEnvs;
 
     auto debugEnvs = cx->make_unique<DebugEnvironments>(cx, cx->zone());
     if (!debugEnvs || !debugEnvs->init()) {
@@ -2541,14 +2528,14 @@ DebugEnvironments::ensureCompartmentData(JSContext* cx)
         return nullptr;
     }
 
-    c->debugEnvs = debugEnvs.release();
-    return c->debugEnvs;
+    realm->debugEnvsRef() = std::move(debugEnvs);
+    return realm->debugEnvs();
 }
 
 /* static */ DebugEnvironmentProxy*
 DebugEnvironments::hasDebugEnvironment(JSContext* cx, EnvironmentObject& env)
 {
-    DebugEnvironments* envs = env.compartment()->debugEnvs;
+    DebugEnvironments* envs = env.realm()->debugEnvs();
     if (!envs)
         return nullptr;
 
@@ -2564,13 +2551,13 @@ DebugEnvironments::hasDebugEnvironment(JSContext* cx, EnvironmentObject& env)
 DebugEnvironments::addDebugEnvironment(JSContext* cx, Handle<EnvironmentObject*> env,
                                        Handle<DebugEnvironmentProxy*> debugEnv)
 {
-    MOZ_ASSERT(cx->compartment() == env->compartment());
-    MOZ_ASSERT(cx->compartment() == debugEnv->compartment());
+    MOZ_ASSERT(cx->realm() == env->realm());
+    MOZ_ASSERT(cx->realm() == debugEnv->realm());
 
     if (!CanUseDebugEnvironmentMaps(cx))
         return true;
 
-    DebugEnvironments* envs = ensureCompartmentData(cx);
+    DebugEnvironments* envs = ensureRealmData(cx);
     if (!envs)
         return false;
 
@@ -2582,7 +2569,7 @@ DebugEnvironments::hasDebugEnvironment(JSContext* cx, const EnvironmentIter& ei)
 {
     MOZ_ASSERT(!ei.hasSyntacticEnvironment());
 
-    DebugEnvironments* envs = cx->compartment()->debugEnvs;
+    DebugEnvironments* envs = cx->realm()->debugEnvs();
     if (!envs)
         return nullptr;
 
@@ -2598,17 +2585,16 @@ DebugEnvironments::addDebugEnvironment(JSContext* cx, const EnvironmentIter& ei,
                                        Handle<DebugEnvironmentProxy*> debugEnv)
 {
     MOZ_ASSERT(!ei.hasSyntacticEnvironment());
-    MOZ_ASSERT(cx->compartment() == debugEnv->compartment());
+    MOZ_ASSERT(cx->realm() == debugEnv->realm());
     // Generators should always have environments.
     MOZ_ASSERT_IF(ei.scope().is<FunctionScope>(),
-                  !ei.scope().as<FunctionScope>().canonicalFunction()->isStarGenerator() &&
-                  !ei.scope().as<FunctionScope>().canonicalFunction()->isLegacyGenerator() &&
+                  !ei.scope().as<FunctionScope>().canonicalFunction()->isGenerator() &&
                   !ei.scope().as<FunctionScope>().canonicalFunction()->isAsync());
 
     if (!CanUseDebugEnvironmentMaps(cx))
         return true;
 
-    DebugEnvironments* envs = ensureCompartmentData(cx);
+    DebugEnvironments* envs = ensureRealmData(cx);
     if (!envs)
         return false;
 
@@ -2720,7 +2706,8 @@ DebugEnvironments::takeFrameSnapshot(JSContext* cx, Handle<DebugEnvironmentProxy
      */
     RootedArrayObject snapshot(cx, NewDenseCopiedArray(cx, vec.length(), vec.begin()));
     if (!snapshot) {
-        cx->recoverFromOutOfMemory();
+        MOZ_ASSERT(cx->isThrowingOutOfMemory() || cx->isThrowingOverRecursed());
+        cx->clearPendingException();
         return;
     }
 
@@ -2732,7 +2719,7 @@ DebugEnvironments::onPopCall(JSContext* cx, AbstractFramePtr frame)
 {
     assertSameCompartment(cx, frame);
 
-    DebugEnvironments* envs = cx->compartment()->debugEnvs;
+    DebugEnvironments* envs = cx->realm()->debugEnvs();
     if (!envs)
         return;
 
@@ -2749,11 +2736,8 @@ DebugEnvironments::onPopCall(JSContext* cx, AbstractFramePtr frame)
         if (!frame.environmentChain()->is<CallObject>())
             return;
 
-        if (frame.callee()->isStarGenerator() || frame.callee()->isLegacyGenerator() ||
-            frame.callee()->isAsync())
-        {
+        if (frame.callee()->isGenerator() || frame.callee()->isAsync())
             return;
-        }
 
         CallObject& callobj = frame.environmentChain()->as<CallObject>();
         envs->liveEnvs.remove(&callobj);
@@ -2777,7 +2761,7 @@ DebugEnvironments::onPopLexical(JSContext* cx, AbstractFramePtr frame, jsbytecod
 {
     assertSameCompartment(cx, frame);
 
-    DebugEnvironments* envs = cx->compartment()->debugEnvs;
+    DebugEnvironments* envs = cx->realm()->debugEnvs();
     if (!envs)
         return;
 
@@ -2789,7 +2773,7 @@ template <typename Environment, typename Scope>
 void
 DebugEnvironments::onPopGeneric(JSContext* cx, const EnvironmentIter& ei)
 {
-    DebugEnvironments* envs = cx->compartment()->debugEnvs;
+    DebugEnvironments* envs = cx->realm()->debugEnvs();
     if (!envs)
         return;
 
@@ -2825,7 +2809,7 @@ DebugEnvironments::onPopVar(JSContext* cx, AbstractFramePtr frame, jsbytecode* p
 {
     assertSameCompartment(cx, frame);
 
-    DebugEnvironments* envs = cx->compartment()->debugEnvs;
+    DebugEnvironments* envs = cx->realm()->debugEnvs();
     if (!envs)
         return;
 
@@ -2845,14 +2829,15 @@ DebugEnvironments::onPopVar(JSContext* cx, const EnvironmentIter& ei)
 void
 DebugEnvironments::onPopWith(AbstractFramePtr frame)
 {
-    if (DebugEnvironments* envs = frame.compartment()->debugEnvs)
+    Realm* realm = frame.realm();
+    if (DebugEnvironments* envs = realm->debugEnvs())
         envs->liveEnvs.remove(&frame.environmentChain()->as<WithEnvironmentObject>());
 }
 
 void
-DebugEnvironments::onCompartmentUnsetIsDebuggee(JSCompartment* c)
+DebugEnvironments::onRealmUnsetIsDebuggee(Realm* realm)
 {
-    if (DebugEnvironments* envs = c->debugEnvs) {
+    if (DebugEnvironments* envs = realm->debugEnvs()) {
         envs->proxiedEnvs.clear();
         envs->missingEnvs.clear();
         envs->liveEnvs.clear();
@@ -2882,15 +2867,12 @@ DebugEnvironments::updateLiveEnvironments(JSContext* cx)
             continue;
 
         AbstractFramePtr frame = i.abstractFramePtr();
-        if (frame.environmentChain()->compartment() != cx->compartment())
+        if (frame.environmentChain()->realm() != cx->realm())
             continue;
 
         if (frame.isFunctionFrame()) {
-            if (frame.callee()->isStarGenerator() || frame.callee()->isLegacyGenerator() ||
-                frame.callee()->isAsync())
-            {
+            if (frame.callee()->isGenerator() || frame.callee()->isAsync())
                 continue;
-            }
         }
 
         if (!frame.isDebuggee())
@@ -2903,8 +2885,8 @@ DebugEnvironments::updateLiveEnvironments(JSContext* cx)
 
         for (EnvironmentIter ei(cx, env, scope, frame); ei.withinInitialFrame(); ei++) {
             if (ei.hasSyntacticEnvironment() && !ei.scope().is<GlobalScope>()) {
-                MOZ_ASSERT(ei.environment().compartment() == cx->compartment());
-                DebugEnvironments* envs = ensureCompartmentData(cx);
+                MOZ_ASSERT(ei.environment().realm() == cx->realm());
+                DebugEnvironments* envs = ensureRealmData(cx);
                 if (!envs)
                     return false;
                 if (!envs->liveEnvs.put(&ei.environment(), LiveEnvironmentVal(ei)))
@@ -2914,7 +2896,7 @@ DebugEnvironments::updateLiveEnvironments(JSContext* cx)
 
         if (frame.prevUpToDate())
             return true;
-        MOZ_ASSERT(frame.environmentChain()->compartment()->isDebuggee());
+        MOZ_ASSERT(frame.environmentChain()->realm()->isDebuggee());
         frame.setPrevUpToDate();
     }
 
@@ -2924,7 +2906,7 @@ DebugEnvironments::updateLiveEnvironments(JSContext* cx)
 LiveEnvironmentVal*
 DebugEnvironments::hasLiveEnvironment(EnvironmentObject& env)
 {
-    DebugEnvironments* envs = env.compartment()->debugEnvs;
+    DebugEnvironments* envs = env.realm()->debugEnvs();
     if (!envs)
         return nullptr;
 
@@ -2953,7 +2935,7 @@ DebugEnvironments::unsetPrevUpToDateUntil(JSContext* cx, AbstractFramePtr until)
         if (frame == until)
             return;
 
-        if (frame.environmentChain()->compartment() != cx->compartment())
+        if (frame.environmentChain()->realm() != cx->realm())
             continue;
 
         frame.unsetPrevUpToDate();
@@ -2963,7 +2945,7 @@ DebugEnvironments::unsetPrevUpToDateUntil(JSContext* cx, AbstractFramePtr until)
 /* static */ void
 DebugEnvironments::forwardLiveFrame(JSContext* cx, AbstractFramePtr from, AbstractFramePtr to)
 {
-    DebugEnvironments* envs = cx->compartment()->debugEnvs;
+    DebugEnvironments* envs = cx->realm()->debugEnvs();
     if (!envs)
         return;
 
@@ -3053,8 +3035,7 @@ GetDebugEnvironmentForMissing(JSContext* cx, const EnvironmentIter& ei)
     if (ei.scope().is<FunctionScope>()) {
         RootedFunction callee(cx, ei.scope().as<FunctionScope>().canonicalFunction());
         // Generators should always reify their scopes.
-        MOZ_ASSERT(!callee->isStarGenerator() && !callee->isLegacyGenerator() &&
-                   !callee->isAsync());
+        MOZ_ASSERT(!callee->isGenerator() && !callee->isAsync());
 
         JS::ExposeObjectToActiveJS(callee);
         Rooted<CallObject*> callobj(cx, CallObject::createHollowForDebug(cx, callee));
@@ -3237,9 +3218,19 @@ WithEnvironmentObject::scope() const
 ModuleEnvironmentObject*
 js::GetModuleEnvironmentForScript(JSScript* script)
 {
+    ModuleObject* module = GetModuleObjectForScript(script);
+    if (!module)
+        return nullptr;
+
+    return module->environment();
+}
+
+ModuleObject*
+js::GetModuleObjectForScript(JSScript* script)
+{
     for (ScopeIter si(script); si; si++) {
         if (si.kind() == ScopeKind::Module)
-            return si.scope()->as<ModuleScope>().module()->environment();
+            return si.scope()->as<ModuleScope>().module();
     }
     return nullptr;
 }
@@ -3338,7 +3329,7 @@ js::CheckLexicalNameConflict(JSContext* cx, Handle<LexicalEnvironmentObject*> le
     const char* redeclKind = nullptr;
     RootedId id(cx, NameToId(name));
     RootedShape shape(cx);
-    if (varObj->is<GlobalObject>() && varObj->compartment()->isInVarNames(name)) {
+    if (varObj->is<GlobalObject>() && varObj->realm()->isInVarNames(name)) {
         // ES 15.1.11 step 5.a
         redeclKind = "var";
     } else if ((shape = lexicalEnv->lookup(cx, name))) {
@@ -3404,7 +3395,7 @@ js::CheckCanDeclareGlobalBinding(JSContext* cx, Handle<GlobalObject*> global,
     if (!desc.object()) {
         // 8.1.14.15 step 6.
         // 8.1.14.16 step 5.
-        if (global->nonProxyIsExtensible())
+        if (global->isExtensible())
             return true;
 
         ReportCannotDeclareGlobalBinding(cx, name, "global is non-extensible");
@@ -3721,14 +3712,14 @@ AnalyzeEntrainedVariablesInScript(JSContext* cx, HandleScript script, HandleScri
             buf.printf(" ");
         }
 
-        buf.printf("(%s:%zu) has variables entrained by ", script->filename(), script->lineno());
+        buf.printf("(%s:%u) has variables entrained by ", script->filename(), script->lineno());
 
         if (JSAtom* name = innerScript->functionNonDelazifying()->displayAtom()) {
             buf.putString(name);
             buf.printf(" ");
         }
 
-        buf.printf("(%s:%zu) ::", innerScript->filename(), innerScript->lineno());
+        buf.printf("(%s:%u) ::", innerScript->filename(), innerScript->lineno());
 
         for (PropertyNameSet::Range r = remainingNames.all(); !r.empty(); r.popFront()) {
             buf.printf(" ");

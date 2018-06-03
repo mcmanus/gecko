@@ -2,6 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 import sys
 import unittest
 
@@ -187,9 +189,11 @@ class TestAccessibility(MarionetteTestCase):
         self.run_element_test(self.aria_disabled_elementIDs,
                               lambda element: self.assertRaises(ElementNotAccessibleException,
                                                                 element.click))
-        self.run_element_test(self.pointer_events_none_elementIDs,
-                              lambda element: self.assertRaises(ElementNotAccessibleException,
-                                                                element.click))
+        # To be removed with bug 1405967
+        if not self.marionette.session_capabilities["moz:webdriverClick"]:
+            self.run_element_test(self.pointer_events_none_elementIDs,
+                                  lambda element: self.assertRaises(ElementNotAccessibleException,
+                                                                    element.click))
 
         self.setup_accessibility(False, False)
         self.run_element_test(self.aria_disabled_elementIDs,
@@ -198,8 +202,10 @@ class TestAccessibility(MarionetteTestCase):
                               lambda element: element.is_enabled())
         self.run_element_test(self.aria_disabled_elementIDs,
                               lambda element: element.click())
-        self.run_element_test(self.pointer_events_none_elementIDs,
-                              lambda element: element.click())
+        # To be removed with bug 1405967
+        if not self.marionette.session_capabilities["moz:webdriverClick"]:
+            self.run_element_test(self.pointer_events_none_elementIDs,
+                                  lambda element: element.click())
 
     def test_element_is_enabled_to_accessibility(self):
         self.setup_accessibility()
@@ -210,18 +216,6 @@ class TestAccessibility(MarionetteTestCase):
         self.setup_accessibility()
         # Sending keys to valid input should not raise any exceptions
         self.run_element_test(['input1'], lambda element: element.send_keys("a"))
-
-        self.setup_accessibility(False, False)
-        # Sending keys to invalid element should not raise any exceptions when raising accessibility
-        # exceptions is disabled
-        self.run_element_test(['button5'], lambda element: element.send_keys("abc"))
-
-    def test_send_keys_raises_element_not_accessible(self):
-        self.setup_accessibility()
-        # Sending keys to invalid element should raise an exception
-        self.run_element_test(['button5'],
-                              lambda element: self.assertRaises(ElementNotAccessibleException,
-                                                                element.send_keys))
 
     def test_is_selected_raises_no_exception(self):
         self.setup_accessibility()

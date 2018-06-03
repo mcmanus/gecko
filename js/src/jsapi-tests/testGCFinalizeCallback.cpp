@@ -48,7 +48,7 @@ BEGIN_TEST(testGCFinalizeCallback)
     /* Zone GC, non-incremental, single zone. */
     FinalizeCalls = 0;
     JS::PrepareZoneForGC(global1->zone());
-    JS::GCForReason(cx, GC_NORMAL, JS::gcreason::API);
+    JS::NonIncrementalGC(cx, GC_NORMAL, JS::gcreason::API);
     CHECK(!cx->runtime()->gc.isFullGc());
     CHECK(checkSingleGroup());
     CHECK(checkFinalizeStatus());
@@ -58,7 +58,7 @@ BEGIN_TEST(testGCFinalizeCallback)
     JS::PrepareZoneForGC(global1->zone());
     JS::PrepareZoneForGC(global2->zone());
     JS::PrepareZoneForGC(global3->zone());
-    JS::GCForReason(cx, GC_NORMAL, JS::gcreason::API);
+    JS::NonIncrementalGC(cx, GC_NORMAL, JS::gcreason::API);
     CHECK(!cx->runtime()->gc.isFullGc());
     CHECK(checkSingleGroup());
     CHECK(checkFinalizeStatus());
@@ -111,8 +111,7 @@ BEGIN_TEST(testGCFinalizeCallback)
     while (cx->runtime()->gc.isIncrementalGCInProgress())
         cx->runtime()->gc.debugGCSlice(budget);
     CHECK(!cx->runtime()->gc.isIncrementalGCInProgress());
-    CHECK(!cx->runtime()->gc.isFullGc());
-    CHECK(checkMultipleGroups());
+    CHECK(checkSingleGroup());
     CHECK(checkFinalizeStatus());
 
     JS_SetGCZeal(cx, 0, 0);
@@ -133,7 +132,7 @@ BEGIN_TEST(testGCFinalizeCallback)
 
 JSObject* createTestGlobal()
 {
-    JS::CompartmentOptions options;
+    JS::RealmOptions options;
     return JS_NewGlobalObject(cx, getGlobalClass(), nullptr, JS::FireOnNewGlobalHook, options);
 }
 

@@ -1,7 +1,14 @@
-const initStore = require("content-src/lib/init-store");
-const {MERGE_STORE_ACTION, rehydrationMiddleware} = initStore;
-const {GlobalOverrider, addNumberReducer} = require("test/unit/utils");
-const {actionCreators: ac, actionTypes: at} = require("common/Actions.jsm");
+import {actionCreators as ac, actionTypes as at} from "common/Actions.jsm";
+import {addNumberReducer, GlobalOverrider} from "test/unit/utils";
+import {
+  EARLY_QUEUED_ACTIONS,
+  INCOMING_MESSAGE_NAME,
+  initStore,
+  MERGE_STORE_ACTION,
+  OUTGOING_MESSAGE_NAME,
+  queueEarlyMessageMiddleware,
+  rehydrationMiddleware
+} from "content-src/lib/init-store";
 
 describe("initStore", () => {
   let globals;
@@ -18,10 +25,10 @@ describe("initStore", () => {
     assert.property(store.getState(), "number");
   });
   it("should add a listener that dispatches actions", () => {
-    assert.calledWith(global.addMessageListener, initStore.INCOMING_MESSAGE_NAME);
-    const listener = global.addMessageListener.firstCall.args[1];
+    assert.calledWith(global.addMessageListener, INCOMING_MESSAGE_NAME);
+    const [, listener] = global.addMessageListener.firstCall.args;
     globals.sandbox.spy(store, "dispatch");
-    const message = {name: initStore.INCOMING_MESSAGE_NAME, data: {type: "FOO"}};
+    const message = {name: INCOMING_MESSAGE_NAME, data: {type: "FOO"}};
 
     listener(message);
 
@@ -39,23 +46,38 @@ describe("initStore", () => {
     assert.equal(store.getState().number, 42);
   });
   it("should log errors from failed messages", () => {
-    const callback = global.addMessageListener.firstCall.args[1];
+    const [, callback] = global.addMessageListener.firstCall.args;
     globals.sandbox.stub(global.console, "error");
     globals.sandbox.stub(store, "dispatch").throws(Error("failed"));
 
-    const message = {name: initStore.INCOMING_MESSAGE_NAME, data: {type: MERGE_STORE_ACTION}};
+    const message = {name: INCOMING_MESSAGE_NAME, data: {type: MERGE_STORE_ACTION}};
     callback(message);
 
     assert.calledOnce(global.console.error);
   });
   it("should replace the state if a MERGE_STORE_ACTION is dispatched", () => {
-    store.dispatch({type: initStore.MERGE_STORE_ACTION, data: {number: 42}});
+    store.dispatch({type: MERGE_STORE_ACTION, data: {number: 42}});
     assert.deepEqual(store.getState(), {number: 42});
   });
-  it("should send out SendToMain actions", () => {
-    const action = ac.SendToMain({type: "FOO"});
+  it("should call .send and update the local store if an AlsoToMain action is dispatched", () => {
+    const subscriber = sinon.spy();
+    const action = ac.AlsoToMain({type: "FOO"});
+
+    store.subscribe(subscriber);
     store.dispatch(action);
-    assert.calledWith(global.sendAsyncMessage, initStore.OUTGOING_MESSAGE_NAME, action);
+
+    assert.calledWith(global.sendAsyncMessage, OUTGOING_MESSAGE_NAME, action);
+    assert.calledOnce(subscriber);
+  });
+  it("should call .send but not update the local store if an OnlyToMain action is dispatched", () => {
+    const subscriber = sinon.spy();
+    const action = ac.OnlyToMain({type: "FOO"});
+
+    store.subscribe(subscriber);
+    store.dispatch(action);
+
+    assert.calledWith(global.sendAsyncMessage, OUTGOING_MESSAGE_NAME, action);
+    assert.notCalled(subscriber);
   });
   it("should not send out other types of actions", () => {
     store.dispatch({type: "FOO"});
@@ -63,13 +85,13 @@ describe("initStore", () => {
   });
   describe("rehydrationMiddleware", () => {
     it("should allow NEW_TAB_STATE_REQUEST to go through", () => {
-      const action = ac.SendToMain({type: at.NEW_TAB_STATE_REQUEST});
+      const action = ac.AlsoToMain({type: at.NEW_TAB_STATE_REQUEST});
       const next = sinon.spy();
       rehydrationMiddleware(store)(next)(action);
       assert.calledWith(next, action);
     });
     it("should dispatch an additional NEW_TAB_STATE_REQUEST if INIT was received after a request", () => {
-      const requestAction = ac.SendToMain({type: at.NEW_TAB_STATE_REQUEST});
+      const requestAction = ac.AlsoToMain({type: at.NEW_TAB_STATE_REQUEST});
       const next = sinon.spy();
 
       rehydrationMiddleware(store)(next)(requestAction);
@@ -88,7 +110,7 @@ describe("initStore", () => {
       const next = sinon.spy();
 
       rehydrationMiddleware(store)(next)(ac.BroadcastToContent({type: "FOO"}));
-      rehydrationMiddleware(store)(next)(ac.SendToContent({type: "FOO"}, 123));
+      rehydrationMiddleware(store)(next)(ac.AlsoToOneContent({type: "FOO"}, 123));
 
       assert.notCalled(next);
     });
@@ -103,9 +125,58 @@ describe("initStore", () => {
       rehydrationMiddleware(store)(next)({type: MERGE_STORE_ACTION});
       next.reset();
 
-      const action = ac.SendToContent({type: "FOO"}, 123);
+      const action = ac.AlsoToOneContent({type: "FOO"}, 123);
       rehydrationMiddleware(store)(next)(action);
       assert.calledWith(next, action);
+    });
+  });
+  describe("queueEarlyMessageMiddleware", () => {
+    it("should allow all local actions to go through", () => {
+      const action = {type: "FOO"};
+      const next = sinon.spy();
+
+      queueEarlyMessageMiddleware(store)(next)(action);
+
+      assert.calledWith(next, action);
+    });
+    it("should allow action to main that does not belong to EARLY_QUEUED_ACTIONS to go through", () => {
+      const action = ac.AlsoToMain({type: "FOO"});
+      const next = sinon.spy();
+
+      queueEarlyMessageMiddleware(store)(next)(action);
+
+      assert.calledWith(next, action);
+    });
+    it(`should line up EARLY_QUEUED_ACTIONS only let them go through after it receives the action from main`, () => {
+      EARLY_QUEUED_ACTIONS.forEach(actionType => {
+        const testStore = initStore({number: addNumberReducer});
+        const next = sinon.spy();
+        const action = ac.AlsoToMain({type: actionType});
+        const fromMainAction = ac.AlsoToOneContent({type: "FOO"}, 123);
+
+        // Early actions should be added to the queue
+        queueEarlyMessageMiddleware(testStore)(next)(action);
+        queueEarlyMessageMiddleware(testStore)(next)(action);
+
+        assert.notCalled(next);
+        assert.equal(testStore._earlyActionQueue.length, 2);
+        next.reset();
+
+        // Receiving action from main would empty the queue
+        queueEarlyMessageMiddleware(testStore)(next)(fromMainAction);
+
+        assert.calledThrice(next);
+        assert.equal(next.firstCall.args[0], fromMainAction);
+        assert.equal(next.secondCall.args[0], action);
+        assert.equal(next.thirdCall.args[0], action);
+        assert.equal(testStore._earlyActionQueue.length, 0);
+        next.reset();
+
+        // New action should go through immediately
+        queueEarlyMessageMiddleware(testStore)(next)(action);
+        assert.calledOnce(next);
+        assert.calledWith(next, action);
+      });
     });
   });
 });

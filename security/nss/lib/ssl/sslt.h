@@ -123,11 +123,14 @@ typedef enum {
     ssl_sig_ecdsa_secp256r1_sha256 = 0x0403,
     ssl_sig_ecdsa_secp384r1_sha384 = 0x0503,
     ssl_sig_ecdsa_secp521r1_sha512 = 0x0603,
-    ssl_sig_rsa_pss_sha256 = 0x0804,
-    ssl_sig_rsa_pss_sha384 = 0x0805,
-    ssl_sig_rsa_pss_sha512 = 0x0806,
+    ssl_sig_rsa_pss_rsae_sha256 = 0x0804,
+    ssl_sig_rsa_pss_rsae_sha384 = 0x0805,
+    ssl_sig_rsa_pss_rsae_sha512 = 0x0806,
     ssl_sig_ed25519 = 0x0807,
     ssl_sig_ed448 = 0x0808,
+    ssl_sig_rsa_pss_pss_sha256 = 0x0809,
+    ssl_sig_rsa_pss_pss_sha384 = 0x080a,
+    ssl_sig_rsa_pss_pss_sha512 = 0x080b,
 
     ssl_sig_dsa_sha1 = 0x0202,
     ssl_sig_dsa_sha256 = 0x0402,
@@ -143,20 +146,25 @@ typedef enum {
     ssl_sig_rsa_pkcs1_sha1md5 = 0x10101,
 } SSLSignatureScheme;
 
+/* Deprecated names maintained only for source compatibility. */
+#define ssl_sig_rsa_pss_sha256 ssl_sig_rsa_pss_rsae_sha256
+#define ssl_sig_rsa_pss_sha384 ssl_sig_rsa_pss_rsae_sha384
+#define ssl_sig_rsa_pss_sha512 ssl_sig_rsa_pss_rsae_sha512
+
 /*
 ** SSLAuthType describes the type of key that is used to authenticate a
 ** connection.  That is, the type of key in the end-entity certificate.
 */
 typedef enum {
     ssl_auth_null = 0,
-    ssl_auth_rsa_decrypt = 1, /* static RSA */
+    ssl_auth_rsa_decrypt = 1, /* RSA key exchange. */
     ssl_auth_dsa = 2,
     ssl_auth_kea = 3, /* unused */
     ssl_auth_ecdsa = 4,
-    ssl_auth_ecdh_rsa = 5,   /* ECDH cert with an RSA signature */
-    ssl_auth_ecdh_ecdsa = 6, /* ECDH cert with an ECDSA signature */
-    ssl_auth_rsa_sign = 7,   /* RSA PKCS#1.5 signing */
-    ssl_auth_rsa_pss = 8,
+    ssl_auth_ecdh_rsa = 5,   /* ECDH cert with an RSA signature. */
+    ssl_auth_ecdh_ecdsa = 6, /* ECDH cert with an ECDSA signature. */
+    ssl_auth_rsa_sign = 7,   /* RSA signing with an rsaEncryption key. */
+    ssl_auth_rsa_pss = 8,    /* RSA signing with a PSS key. */
     ssl_auth_psk = 9,
     ssl_auth_tls13_any = 10,
     ssl_auth_size /* number of authentication types */
@@ -297,6 +305,14 @@ typedef struct SSLChannelInfoStr {
     SSLAuthType authType;
     SSLSignatureScheme signatureScheme;
 
+    /* The following fields were added in NSS 3.34. */
+    /* When the session was resumed this holds the key exchange group of the
+     * original handshake. */
+    SSLNamedGroup originalKeaGroup;
+    /* This field is PR_TRUE when the session is resumed and PR_FALSE
+     * otherwise. */
+    PRBool resumed;
+
     /* When adding new fields to this structure, please document the
      * NSS version in which they were added. */
 } SSLChannelInfo;
@@ -416,8 +432,9 @@ typedef enum {
     ssl_signed_cert_timestamp_xtn = 18,
     ssl_padding_xtn = 21,
     ssl_extended_master_secret_xtn = 23,
+    ssl_record_size_limit_xtn = 28,
     ssl_session_ticket_xtn = 35,
-    ssl_tls13_key_share_xtn = 40,
+    /* 40 was used in draft versions of TLS 1.3; it is now reserved. */
     ssl_tls13_pre_shared_key_xtn = 41,
     ssl_tls13_early_data_xtn = 42,
     ssl_tls13_supported_versions_xtn = 43,
@@ -425,6 +442,8 @@ typedef enum {
     ssl_tls13_psk_key_exchange_modes_xtn = 45,
     ssl_tls13_ticket_early_data_info_xtn = 46, /* Deprecated. */
     ssl_tls13_certificate_authorities_xtn = 47,
+    ssl_signature_algorithms_cert_xtn = 50,
+    ssl_tls13_key_share_xtn = 51,
     ssl_next_proto_nego_xtn = 13172, /* Deprecated. */
     ssl_renegotiation_info_xtn = 0xff01,
     ssl_tls13_short_header_xtn = 0xff03 /* Deprecated. */
@@ -436,7 +455,7 @@ typedef enum {
 /* SSL_MAX_EXTENSIONS includes the maximum number of extensions that are
  * supported for any single message type.  That is, a ClientHello; ServerHello
  * and TLS 1.3 NewSessionTicket and HelloRetryRequest extensions have fewer. */
-#define SSL_MAX_EXTENSIONS 19
+#define SSL_MAX_EXTENSIONS 21
 
 /* Deprecated */
 typedef enum {

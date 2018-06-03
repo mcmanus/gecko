@@ -8,7 +8,7 @@
 #include "nsThreadUtils.h"
 #include "jsapi.h"
 #include "jsfriendapi.h"
-#include "jswrapper.h"
+#include "js/Wrapper.h"
 #include "mozilla/ModuleUtils.h"
 #include "nsServiceManagerUtils.h"
 #include "nsMemory.h"
@@ -50,7 +50,7 @@ JSDebugger::AddClass(JS::Handle<JS::Value> global, JSContext* cx)
     return NS_ERROR_FAILURE;
   }
 
-  JSAutoCompartment ac(cx, obj);
+  JSAutoRealm ar(cx, obj);
   if (JS_GetGlobalForObject(cx, obj) != obj) {
     return NS_ERROR_INVALID_ARG;
   }

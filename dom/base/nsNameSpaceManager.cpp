@@ -13,6 +13,7 @@
 
 #include "nscore.h"
 #include "mozilla/dom/NodeInfo.h"
+#include "nsAtom.h"
 #include "nsCOMArray.h"
 #include "nsContentCreatorFunctions.h"
 #include "nsGkAtoms.h"
@@ -93,14 +94,21 @@ nsresult
 nsNameSpaceManager::RegisterNameSpace(const nsAString& aURI,
                                       int32_t& aNameSpaceID)
 {
-  if (aURI.IsEmpty()) {
-    aNameSpaceID = kNameSpaceID_None; // xmlns="", see bug 75700 for details
+  RefPtr<nsAtom> atom = NS_Atomize(aURI);
+  return RegisterNameSpace(atom.forget(), aNameSpaceID);
+}
 
+nsresult
+nsNameSpaceManager::RegisterNameSpace(already_AddRefed<nsAtom> aURI,
+                                      int32_t& aNameSpaceID)
+{
+  RefPtr<nsAtom> atom = aURI;
+  nsresult rv = NS_OK;
+  if (atom == nsGkAtoms::_empty) {
+    aNameSpaceID = kNameSpaceID_None; // xmlns="", see bug 75700 for details
     return NS_OK;
   }
 
-  RefPtr<nsAtom> atom = NS_Atomize(aURI);
-  nsresult rv = NS_OK;
   if (!mURIToIDTable.Get(atom, &aNameSpaceID)) {
     aNameSpaceID = mURIArray.Length();
 
@@ -110,7 +118,7 @@ nsNameSpaceManager::RegisterNameSpace(const nsAString& aURI,
     }
   }
 
-  NS_POSTCONDITION(aNameSpaceID >= -1, "Bogus namespace ID");
+  MOZ_ASSERT(aNameSpaceID >= -1, "Bogus namespace ID");
 
   return rv;
 }
@@ -118,7 +126,7 @@ nsNameSpaceManager::RegisterNameSpace(const nsAString& aURI,
 nsresult
 nsNameSpaceManager::GetNameSpaceURI(int32_t aNameSpaceID, nsAString& aURI)
 {
-  NS_PRECONDITION(aNameSpaceID >= 0, "Bogus namespace ID");
+  MOZ_ASSERT(aNameSpaceID >= 0, "Bogus namespace ID");
 
   // We have historically treated GetNameSpaceURI calls for kNameSpaceID_None
   // as erroneous.
@@ -159,11 +167,11 @@ nsNameSpaceManager::GetNameSpaceID(nsAtom* aURI,
       && mDisabledURIToIDTable.Get(aURI, &nameSpaceID)
       && ((mMathMLDisabled && kNameSpaceID_disabled_MathML == nameSpaceID) ||
       (mSVGDisabled && kNameSpaceID_disabled_SVG == nameSpaceID))) {
-    NS_POSTCONDITION(nameSpaceID >= 0, "Bogus namespace ID");
+    MOZ_ASSERT(nameSpaceID >= 0, "Bogus namespace ID");
     return nameSpaceID;
   }
   if (mURIToIDTable.Get(aURI, &nameSpaceID)) {
-    NS_POSTCONDITION(nameSpaceID >= 0, "Bogus namespace ID");
+    MOZ_ASSERT(nameSpaceID >= 0, "Bogus namespace ID");
     return nameSpaceID;
   }
 
@@ -178,12 +186,13 @@ NS_NewElement(Element** aResult,
 {
   RefPtr<mozilla::dom::NodeInfo> ni = aNodeInfo;
   int32_t ns = ni->NamespaceID();
+  RefPtr<nsAtom> isAtom = aIs ? NS_Atomize(*aIs) : nullptr;
   if (ns == kNameSpaceID_XHTML) {
-    return NS_NewHTMLElement(aResult, ni.forget(), aFromParser, aIs);
+    return NS_NewHTMLElement(aResult, ni.forget(), aFromParser, isAtom);
   }
 #ifdef MOZ_XUL
   if (ns == kNameSpaceID_XUL) {
-    return NS_NewXULElement(aResult, ni.forget());
+    return NS_NewXULElement(aResult, ni.forget(), aFromParser, isAtom);
   }
 #endif
   if (ns == kNameSpaceID_MathML) {

@@ -10,6 +10,7 @@
 #include "mozilla/Telemetry.h"
 #include "nsCRTGlue.h"
 #include "nsIMutableArray.h"
+#include "nsNSSCertHelper.h"
 #include "nsNSSComponent.h"
 #include "nsNativeCharsetUtils.h"
 #include "nsPKCS11Slot.h"
@@ -19,50 +20,43 @@ namespace mozilla { namespace psm {
 
 NS_IMPL_ISUPPORTS(PKCS11ModuleDB, nsIPKCS11ModuleDB)
 
-PKCS11ModuleDB::PKCS11ModuleDB()
+// Convert the UTF16 name of the module as it appears to the user to the
+// internal representation. For most modules this just involves converting from
+// UTF16 to UTF8. For the builtin root module, it also involves mapping from the
+// localized name to the internal, non-localized name.
+static nsresult
+NormalizeModuleNameIn(const nsAString& moduleNameIn, nsCString& moduleNameOut)
 {
-}
-
-PKCS11ModuleDB::~PKCS11ModuleDB()
-{
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown()) {
-    return;
+  nsAutoString localizedRootModuleName;
+  nsresult rv = GetPIPNSSBundleString("RootCertModuleName",
+                                      localizedRootModuleName);
+  if (NS_FAILED(rv)) {
+    return rv;
   }
-  shutdown(ShutdownCalledFrom::Object);
+  if (moduleNameIn.Equals(localizedRootModuleName)) {
+    moduleNameOut.Assign(kRootModuleName);
+    return NS_OK;
+  }
+  moduleNameOut.Assign(NS_ConvertUTF16toUTF8(moduleNameIn));
+  return NS_OK;
 }
 
 // Delete a PKCS11 module from the user's profile.
 NS_IMETHODIMP
 PKCS11ModuleDB::DeleteModule(const nsAString& aModuleName)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown()) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
-
   if (aModuleName.IsEmpty()) {
     return NS_ERROR_INVALID_ARG;
   }
 
-  NS_ConvertUTF16toUTF8 moduleName(aModuleName);
-  // Introduce additional scope for module so all references to it are released
-  // before we call SECMOD_DeleteModule, below.
-#ifndef MOZ_NO_SMART_CARDS
-  {
-    UniqueSECMODModule module(SECMOD_FindModule(moduleName.get()));
-    if (!module) {
-      return NS_ERROR_FAILURE;
-    }
-    nsCOMPtr<nsINSSComponent> nssComponent(
-      do_GetService(PSM_COMPONENT_CONTRACTID));
-    nssComponent->ShutdownSmartCardThread(module.get());
+  nsAutoCString moduleNameNormalized;
+  nsresult rv = NormalizeModuleNameIn(aModuleName, moduleNameNormalized);
+  if (NS_FAILED(rv)) {
+    return rv;
   }
-#endif
-
   // modType is an output variable. We ignore it.
   int32_t modType;
-  SECStatus srv = SECMOD_DeleteModule(moduleName.get(), &modType);
+  SECStatus srv = SECMOD_DeleteModule(moduleNameNormalized.get(), &modType);
   if (srv != SECSuccess) {
     return NS_ERROR_FAILURE;
   }
@@ -85,13 +79,13 @@ GetModuleNameForTelemetry(/*in*/ const SECMODModule* module,
 {
   result.Truncate();
   if (module->dllName) {
-    CopyASCIItoUTF16(module->dllName, result);
+    result.AssignASCII(module->dllName);
     int32_t separatorIndex = result.RFind(FILE_PATH_SEPARATOR);
     if (separatorIndex != kNotFound) {
       result = Substring(result, separatorIndex + 1);
     }
   } else {
-    CopyASCIItoUTF16(module->commonName, result);
+    result.AssignASCII(module->commonName);
   }
   if (result.Length() >= 70) {
     result.Truncate(69);
@@ -105,37 +99,48 @@ PKCS11ModuleDB::AddModule(const nsAString& aModuleName,
                           int32_t aCryptoMechanismFlags,
                           int32_t aCipherFlags)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown()) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
-
   if (aModuleName.IsEmpty()) {
     return NS_ERROR_INVALID_ARG;
   }
 
-  NS_ConvertUTF16toUTF8 moduleName(aModuleName);
+  // "Root Certs" is the name some NSS command-line utilities will give the
+  // roots module if they decide to load it when there happens to be a
+  // `DLL_PREFIX "nssckbi" DLL_SUFFIX` file in the directory being operated on.
+  // This causes failures, so as a workaround, the PSM initialization code will
+  // unconditionally remove any module named "Root Certs". We should prevent the
+  // user from adding an unrelated module named "Root Certs" in the first place
+  // so PSM doesn't delete it. See bug 1406396.
+  if (aModuleName.EqualsLiteral("Root Certs")) {
+    return NS_ERROR_ILLEGAL_VALUE;
+  }
+
+  // There appears to be a deadlock if we try to load modules concurrently, so
+  // just wait until the loadable roots module has been loaded.
+  nsresult rv = BlockUntilLoadableRootsLoaded();
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  nsAutoCString moduleNameNormalized;
+  rv = NormalizeModuleNameIn(aModuleName, moduleNameNormalized);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
   nsCString fullPath;
   // NSS doesn't support Unicode path.  Use native charset
   NS_CopyUnicodeToNative(aLibraryFullPath, fullPath);
   uint32_t mechFlags = SECMOD_PubMechFlagstoInternal(aCryptoMechanismFlags);
   uint32_t cipherFlags = SECMOD_PubCipherFlagstoInternal(aCipherFlags);
-  SECStatus srv = SECMOD_AddNewModule(moduleName.get(), fullPath.get(),
-                                      mechFlags, cipherFlags);
+  SECStatus srv = SECMOD_AddNewModule(moduleNameNormalized.get(),
+                                      fullPath.get(), mechFlags, cipherFlags);
   if (srv != SECSuccess) {
     return NS_ERROR_FAILURE;
   }
 
-  UniqueSECMODModule module(SECMOD_FindModule(moduleName.get()));
+  UniqueSECMODModule module(SECMOD_FindModule(moduleNameNormalized.get()));
   if (!module) {
     return NS_ERROR_FAILURE;
   }
-
-#ifndef MOZ_NO_SMART_CARDS
-  nsCOMPtr<nsINSSComponent> nssComponent(
-    do_GetService(PSM_COMPONENT_CONTRACTID));
-  nssComponent->LaunchSmartCardThread(module.get());
-#endif
 
   nsAutoString scalarKey;
   GetModuleNameForTelemetry(module.get(), scalarKey);
@@ -152,22 +157,22 @@ PKCS11ModuleDB::AddModule(const nsAString& aModuleName,
 }
 
 NS_IMETHODIMP
-PKCS11ModuleDB::FindModuleByName(const nsACString& name,
+PKCS11ModuleDB::FindModuleByName(const nsAString& name,
                          /*out*/ nsIPKCS11Module** _retval)
 {
   NS_ENSURE_ARG_POINTER(_retval);
-
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown()) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
 
   nsresult rv = BlockUntilLoadableRootsLoaded();
   if (NS_FAILED(rv)) {
     return rv;
   }
 
-  UniqueSECMODModule mod(SECMOD_FindModule(PromiseFlatCString(name).get()));
+  nsAutoCString moduleNameNormalized;
+  rv = NormalizeModuleNameIn(name, moduleNameNormalized);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  UniqueSECMODModule mod(SECMOD_FindModule(moduleNameNormalized.get()));
   if (!mod) {
     return NS_ERROR_FAILURE;
   }
@@ -181,11 +186,6 @@ NS_IMETHODIMP
 PKCS11ModuleDB::ListModules(nsISimpleEnumerator** _retval)
 {
   NS_ENSURE_ARG_POINTER(_retval);
-
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown()) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
 
   nsresult rv = BlockUntilLoadableRootsLoaded();
   if (NS_FAILED(rv)) {
@@ -202,7 +202,7 @@ PKCS11ModuleDB::ListModules(nsISimpleEnumerator** _retval)
   for (SECMODModuleList* list = SECMOD_GetDefaultModuleList(); list;
        list = list->next) {
     nsCOMPtr<nsIPKCS11Module> module = new nsPKCS11Module(list->module);
-    nsresult rv = array->AppendElement(module, false);
+    nsresult rv = array->AppendElement(module);
     if (NS_FAILED(rv)) {
       return rv;
     }
@@ -212,7 +212,7 @@ PKCS11ModuleDB::ListModules(nsISimpleEnumerator** _retval)
   for (SECMODModuleList* list = SECMOD_GetDeadModuleList(); list;
        list = list->next) {
     nsCOMPtr<nsIPKCS11Module> module = new nsPKCS11Module(list->module);
-    nsresult rv = array->AppendElement(module, false);
+    nsresult rv = array->AppendElement(module);
     if (NS_FAILED(rv)) {
       return rv;
     }
@@ -226,11 +226,6 @@ PKCS11ModuleDB::GetCanToggleFIPS(bool* aCanToggleFIPS)
 {
   NS_ENSURE_ARG_POINTER(aCanToggleFIPS);
 
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown()) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
-
   *aCanToggleFIPS = SECMOD_CanDeleteInternalModule();
   return NS_OK;
 }
@@ -239,11 +234,6 @@ PKCS11ModuleDB::GetCanToggleFIPS(bool* aCanToggleFIPS)
 NS_IMETHODIMP
 PKCS11ModuleDB::ToggleFIPSMode()
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown()) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
-
   // The way to toggle FIPS mode in NSS is extremely obscure. Basically, we
   // delete the internal module, and it gets replaced with the opposite module
   // (i.e. if it was FIPS before, then it becomes non-FIPS next).
@@ -270,11 +260,6 @@ NS_IMETHODIMP
 PKCS11ModuleDB::GetIsFIPSEnabled(bool* aIsFIPSEnabled)
 {
   NS_ENSURE_ARG_POINTER(aIsFIPSEnabled);
-
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown()) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
 
   *aIsFIPSEnabled = PK11_IsFIPS();
   return NS_OK;

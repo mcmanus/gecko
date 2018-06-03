@@ -13,40 +13,40 @@
 const { PerformanceFront } = require("devtools/shared/fronts/performance");
 const { pmmIsProfilerActive, pmmStartProfiler, pmmLoadFrameScripts, pmmClearFrameScripts } = require("devtools/client/performance/test/helpers/profiler-mm-utils");
 
-add_task(function* () {
+add_task(async function() {
   // Ensure the profiler is already running when the test starts.
   pmmLoadFrameScripts(gBrowser);
-  let entries = 1000000;
-  let interval = 1;
-  let features = ["js"];
-  yield pmmStartProfiler({ entries, interval, features });
+  const entries = 1000000;
+  const interval = 1;
+  const features = ["js"];
+  await pmmStartProfiler({ entries, interval, features });
 
-  ok((yield pmmIsProfilerActive()),
+  ok((await pmmIsProfilerActive()),
     "The built-in profiler module should still be active.");
 
-  yield addTab(MAIN_DOMAIN + "doc_perf.html");
+  await addTab(MAIN_DOMAIN + "doc_perf.html");
   initDebuggerServer();
-  let client = new DebuggerClient(DebuggerServer.connectPipe());
-  let form = yield connectDebuggerClient(client);
-  let firstFront = PerformanceFront(client, form);
-  yield firstFront.connect();
+  const client = new DebuggerClient(DebuggerServer.connectPipe());
+  const form = await connectDebuggerClient(client);
+  const firstFront = PerformanceFront(client, form);
+  await firstFront.connect();
 
-  yield firstFront.startRecording();
+  await firstFront.startRecording();
 
-  yield addTab(MAIN_DOMAIN + "doc_perf.html");
-  let client2 = new DebuggerClient(DebuggerServer.connectPipe());
-  let form2 = yield connectDebuggerClient(client2);
-  let secondFront = PerformanceFront(client2, form2);
-  yield secondFront.connect();
+  await addTab(MAIN_DOMAIN + "doc_perf.html");
+  const client2 = new DebuggerClient(DebuggerServer.connectPipe());
+  const form2 = await connectDebuggerClient(client2);
+  const secondFront = PerformanceFront(client2, form2);
+  await secondFront.connect();
 
-  yield secondFront.destroy();
-  yield client2.close();
-  ok((yield pmmIsProfilerActive()),
+  await secondFront.destroy();
+  await client2.close();
+  ok((await pmmIsProfilerActive()),
     "The built-in profiler module should still be active.");
 
-  yield firstFront.destroy();
-  yield client.close();
-  ok(!(yield pmmIsProfilerActive()),
+  await firstFront.destroy();
+  await client.close();
+  ok(!(await pmmIsProfilerActive()),
     "The built-in profiler module should have been automatically stopped.");
 
   pmmClearFrameScripts();

@@ -7,15 +7,12 @@
   <script type="application/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
 </head>
 <body>
-  <iframe id="f" src="http://example.com"></iframe>
+  <iframe id="f" src="about:blank"></iframe>
   <script type="text/javascript">
 SimpleTest.waitForExplicitFinish();
 
 var script = SpecialPowers.loadChromeScript(() => {
-  const Ci = Components.interfaces;
-  const Cc = Components.classes;
-  const Cu = Components.utils;
-  Cu.import('resource://gre/modules/Services.jsm');
+  ChromeUtils.import('resource://gre/modules/Services.jsm');
 
   Services.obs.addObserver(function onExamResp(subject, topic, data) {
     let channel = subject.QueryInterface(Ci.nsIHttpChannel);
@@ -36,6 +33,7 @@ script.addMessageListener('start-test', () => {
   const iframe = document.getElementById('f');
 
   iframe.contentWindow.onunload = function () {
+    info('initiate sync XHR during the page loading');
     xhr = new XMLHttpRequest();
     xhr.open('GET', window.location, false);
     xhr.send(null);

@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "ડાઉનલોડ"
   },
+  "downloadOnlyNotice": {
+    "message": "તમે હાલમા ફક્ત ડાઉનલોડ-કરો પ્રકારમાં છો."
+  },
+  "downloadOnlyDetails": {
+    "message": "આ પરિસ્થિતિઓ માં Firefox સ્ક્રિનશોટસ આપમેળે જ ફક્ત-ડાઉનલોડ પ્રકારમાં જતું રહેશે:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "ખાનગી બ્રાઉઝિંગ વિન્ડો માં."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "અન્ય સ્થાનેથી કુકીઓનું વહન અક્ષમ કરેલું છે."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "“ઇતિહાસ ક્યારેય ન સંભારવો” સક્ષમ કરેલુ છે."
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "તમે Firefox ESR નો ઉપયોગ કરી રહ્યા છો."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "અપલોડ્સ અક્ષમ કરવામાં આવ્યા છે."
+  },
   "notificationLinkCopiedTitle": {
     "message": "લિંક કૉપિ"
   },
@@ -36,6 +57,28 @@
     "message": "તમારા શોટ માટે લિંક ક્લિપબોર્ડ પર કૉપિ કરવામાં આવ્યું છે. પ્રેસ $META_KEY$ -V પેસ્ટ કરવા માટે.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "નકલ કરો"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "શોટ નકલ કર્યો"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "તમારા શોટ ક્લિપબોર્ડ પર નકલ કરવામાં આવ્યાં છે. પેસ્ટ કરવા માટે $META_KEY$-V દબાવો.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "આ છબીને $PIXELS$px પર કાપવામાં આવી છે.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }

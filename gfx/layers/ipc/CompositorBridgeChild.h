@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=8 et tw=80 : */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,6 +14,7 @@
 #include "mozilla/ipc/ProtocolUtils.h"
 #include "mozilla/layers/PCompositorBridgeChild.h"
 #include "mozilla/layers/TextureForwarder.h" // for TextureForwarder
+#include "mozilla/layers/PaintThread.h" // for PaintThread
 #include "mozilla/webrender/WebRenderTypes.h"
 #include "nsClassHashtable.h"           // for nsClassHashtable
 #include "nsRefPtrHashtable.h"
@@ -45,7 +46,6 @@ class CompositorManagerChild;
 class CompositorOptions;
 class TextureClient;
 class TextureClientPool;
-class CapturedPaintState;
 struct FrameMetrics;
 
 class CompositorBridgeChild final : public PCompositorBridgeChild,
@@ -85,12 +85,13 @@ public:
   static bool CompositorIsInGPUProcess();
 
   virtual mozilla::ipc::IPCResult
-  RecvDidComposite(const uint64_t& aId, const uint64_t& aTransactionId,
+  RecvDidComposite(const LayersId& aId,
+                   const TransactionId& aTransactionId,
                    const TimeStamp& aCompositeStart,
                    const TimeStamp& aCompositeEnd) override;
 
   virtual mozilla::ipc::IPCResult
-  RecvInvalidateLayers(const uint64_t& aLayersId) override;
+  RecvInvalidateLayers(const LayersId& aLayersId) override;
 
   virtual mozilla::ipc::IPCResult
   RecvUpdatePluginConfigurations(const LayoutDeviceIntPoint& aContentOffset,
@@ -104,9 +105,10 @@ public:
   RecvHideAllPlugins(const uintptr_t& aParentWidget) override;
 
   virtual PTextureChild* AllocPTextureChild(const SurfaceDescriptor& aSharedData,
+                                            const ReadLockDescriptor& aReadLock,
                                             const LayersBackend& aLayersBackend,
                                             const TextureFlags& aFlags,
-                                            const uint64_t& aId,
+                                            const LayersId& aId,
                                             const uint64_t& aSerial,
                                             const wr::MaybeExternalImageId& aExternalImageId) override;
 
@@ -115,6 +117,7 @@ public:
   virtual mozilla::ipc::IPCResult
   RecvParentAsyncMessages(InfallibleTArray<AsyncParentMessageData>&& aMessages) override;
   virtual PTextureChild* CreateTexture(const SurfaceDescriptor& aSharedData,
+                                       const ReadLockDescriptor& aReadLock,
                                        LayersBackend aLayersBackend,
                                        TextureFlags aFlags,
                                        uint64_t aSerial,
@@ -140,8 +143,8 @@ public:
   bool SendWillClose();
   bool SendPause();
   bool SendResume();
-  bool SendNotifyChildCreated(const uint64_t& id, CompositorOptions* aOptions);
-  bool SendAdoptChild(const uint64_t& id);
+  bool SendNotifyChildCreated(const LayersId& id, CompositorOptions* aOptions);
+  bool SendAdoptChild(const LayersId& id);
   bool SendMakeSnapshot(const SurfaceDescriptor& inSnapshot, const gfx::IntRect& dirtyRect);
   bool SendFlushRendering();
   bool SendGetTileSize(int32_t* tileWidth, int32_t* tileHeight);
@@ -149,9 +152,6 @@ public:
   bool SendStopFrameTimeRecording(const uint32_t& startIndex, nsTArray<float>* intervals);
   bool SendNotifyRegionInvalidated(const nsIntRegion& region);
   bool SendRequestNotifyAfterRemotePaint();
-  bool SendClearApproximatelyVisibleRegions(uint64_t aLayersId, uint32_t aPresShellId);
-  bool SendNotifyApproximatelyVisibleRegion(const ScrollableLayerGuid& aGuid,
-                                            const mozilla::CSSIntRegion& aRegion);
   bool SendAllPluginsCaptured();
   bool IsSameProcess() const override;
 
@@ -200,10 +200,10 @@ public:
   PCompositorWidgetChild* AllocPCompositorWidgetChild(const CompositorWidgetInitData& aInitData) override;
   bool DeallocPCompositorWidgetChild(PCompositorWidgetChild* aActor) override;
 
-  PAPZCTreeManagerChild* AllocPAPZCTreeManagerChild(const uint64_t& aLayersId) override;
+  PAPZCTreeManagerChild* AllocPAPZCTreeManagerChild(const LayersId& aLayersId) override;
   bool DeallocPAPZCTreeManagerChild(PAPZCTreeManagerChild* aActor) override;
 
-  PAPZChild* AllocPAPZChild(const uint64_t& aLayersId) override;
+  PAPZChild* AllocPAPZChild(const LayersId& aLayersId) override;
   bool DeallocPAPZChild(PAPZChild* aActor) override;
 
   void WillEndTransaction();
@@ -213,10 +213,6 @@ public:
                                                     TextureFactoryIdentifier*,
                                                     wr::IdNamespace*) override;
   bool DeallocPWebRenderBridgeChild(PWebRenderBridgeChild* aActor) override;
-
-  uint64_t DeviceResetSequenceNumber() const {
-    return mDeviceResetSequenceNumber;
-  }
 
   wr::MaybeExternalImageId GetNextExternalImageId() override;
 
@@ -229,21 +225,59 @@ public:
 
   // Must only be called from the main thread. Notifies the CompositorBridge
   // that the paint thread is going to begin painting asynchronously.
-  void NotifyBeginAsyncPaint(CapturedPaintState* aState);
+  template<typename CapturedState>
+  void NotifyBeginAsyncPaint(CapturedState& aState)
+  {
+    MOZ_ASSERT(NS_IsMainThread());
+
+    MonitorAutoLock lock(mPaintLock);
+
+    // We must not be waiting for paints or buffer copying to complete yet. This
+    // would imply we started a new paint without waiting for a previous one, which
+    // could lead to incorrect rendering or IPDL deadlocks.
+    MOZ_ASSERT(!mIsDelayingForAsyncPaints);
+
+    mOutstandingAsyncPaints++;
+
+    // Mark texture clients that they are being used for async painting, and
+    // make sure we hold them alive on the main thread.
+    aState->ForEachTextureClient([this] (auto aClient) {
+      aClient->AddPaintThreadRef();
+      mTextureClientsForAsyncPaint.AppendElement(aClient);
+    });
+  }
 
   // Must only be called from the paint thread. Notifies the CompositorBridge
   // that the paint thread has finished an asynchronous paint request.
-  void NotifyFinishedAsyncPaint(CapturedPaintState* aState);
+  template<typename CapturedState>
+  bool NotifyFinishedAsyncWorkerPaint(CapturedState& aState)
+  {
+    MOZ_ASSERT(PaintThread::IsOnPaintThread());
+
+    MonitorAutoLock lock(mPaintLock);
+    mOutstandingAsyncPaints--;
+
+    aState->ForEachTextureClient([] (auto aClient) {
+      aClient->DropPaintThreadRef();
+    });
+    aState->DropTextureClients();
+
+    // If the main thread has completed queuing work and this was the
+    // last paint, then it is time to end the layer transaction and sync
+    return mOutstandingAsyncEndTransaction && mOutstandingAsyncPaints == 0;
+  }
 
   // Must only be called from the main thread. Notifies the CompositorBridge
-  // that the paint thread is going to perform texture synchronization at the
-  // end of async painting, and should postpone messages if needed until
-  // finished.
-  void NotifyBeginAsyncEndLayerTransaction();
+  // that all work has been submitted to the paint thread or paint worker
+  // threads, and returns whether all paints are completed. If this returns
+  // true, then an AsyncEndLayerTransaction must be queued, otherwise once
+  // NotifyFinishedAsyncWorkerPaint returns true, an AsyncEndLayerTransaction
+  // must be executed.
+  bool NotifyBeginAsyncEndLayerTransaction(SyncObjectClient* aSyncObject);
 
   // Must only be called from the paint thread. Notifies the CompositorBridge
-  // that the paint thread has finished all async paints and texture syncs from
-  // a given transaction and may resume sending messages.
+  // that the paint thread has finished all async paints and and may do the
+  // requested texture sync and resume sending messages.
   void NotifyFinishedAsyncEndLayerTransaction();
 
   // Must only be called from the main thread. Notifies the CompoistorBridge
@@ -264,7 +298,7 @@ private:
 
   virtual PLayerTransactionChild*
     AllocPLayerTransactionChild(const nsTArray<LayersBackend>& aBackendHints,
-                                const uint64_t& aId) override;
+                                const LayersId& aId) override;
 
   virtual bool DeallocPLayerTransactionChild(PLayerTransactionChild *aChild) override;
 
@@ -272,7 +306,7 @@ private:
 
   virtual mozilla::ipc::IPCResult RecvSharedCompositorFrameMetrics(const mozilla::ipc::SharedMemoryBasic::Handle& metrics,
                                                                    const CrossProcessMutexHandle& handle,
-                                                                   const uint64_t& aLayersId,
+                                                                   const LayersId& aLayersId,
                                                                    const uint32_t& aAPZCId) override;
 
   virtual mozilla::ipc::IPCResult RecvReleaseSharedCompositorFrameMetrics(const ViewID& aId,
@@ -281,7 +315,7 @@ private:
   virtual mozilla::ipc::IPCResult
   RecvRemotePaintIsReady() override;
 
-  mozilla::ipc::IPCResult RecvObserveLayerUpdate(const uint64_t& aLayersId,
+  mozilla::ipc::IPCResult RecvObserveLayerUpdate(const LayersId& aLayersId,
                                                  const uint64_t& aEpoch,
                                                  const bool& aActive) override;
 
@@ -290,20 +324,22 @@ private:
 
   uint64_t GetNextResourceId();
 
+  void ClearSharedFrameMetricsData(LayersId aLayersId);
+
   // Class used to store the shared FrameMetrics, mutex, and APZCId  in a hash table
   class SharedFrameMetricsData {
   public:
     SharedFrameMetricsData(
         const mozilla::ipc::SharedMemoryBasic::Handle& metrics,
         const CrossProcessMutexHandle& handle,
-        const uint64_t& aLayersId,
+        const LayersId& aLayersId,
         const uint32_t& aAPZCId);
 
     ~SharedFrameMetricsData();
 
     void CopyFrameMetrics(FrameMetrics* aFrame);
     FrameMetrics::ViewID GetViewID();
-    uint64_t GetLayersId() const;
+    LayersId GetLayersId() const;
     uint32_t GetAPZCId();
 
   private:
@@ -311,7 +347,7 @@ private:
     // the shared FrameMetrics
     RefPtr<mozilla::ipc::SharedMemoryBasic> mBuffer;
     CrossProcessMutex* mMutex;
-    uint64_t mLayersId;
+    LayersId mLayersId;
     // Unique ID of the APZC that is sharing the FrameMetrics
     uint32_t mAPZCId;
   };
@@ -350,11 +386,6 @@ private:
   uint64_t mFwdTransactionId;
 
   /**
-   * Last sequence number recognized for a device reset.
-   */
-  uint64_t mDeviceResetSequenceNumber;
-
-  /**
    * Hold TextureClients refs until end of their usages on host side.
    * It defer calling of TextureClient recycle callback.
    */
@@ -383,11 +414,15 @@ private:
 
   // Whether we are waiting for an async paint end transaction
   bool mOutstandingAsyncEndTransaction;
+  RefPtr<SyncObjectClient> mOutstandingAsyncSyncObject;
 
   // True if this CompositorBridge is currently delaying its messages until the
   // paint thread completes. This is R/W on both the main and paint threads, and
   // must be accessed within the paint lock.
-  bool mIsWaitingForPaint;
+  bool mIsDelayingForAsyncPaints;
+
+  uintptr_t mSlowFlushCount;
+  uintptr_t mTotalFlushCount;
 };
 
 } // namespace layers

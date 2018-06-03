@@ -7,8 +7,8 @@
 #include "js/Proxy.h"
 #include "vm/ProxyObject.h"
 
-#include "jscntxtinlines.h"
-#include "jsobjinlines.h"
+#include "vm/JSContext-inl.h"
+#include "vm/JSObject-inl.h"
 
 using namespace js;
 
@@ -284,7 +284,7 @@ BaseProxyHandler::enumerate(JSContext* cx, HandleObject proxy) const
     if (!GetPropertyKeys(cx, proxy, 0, &props))
         return nullptr;
 
-    return EnumeratedIdVectorToIterator(cx, proxy, 0, props);
+    return EnumeratedIdVectorToIterator(cx, proxy, props);
 }
 
 bool
@@ -405,20 +405,6 @@ bool
 BaseProxyHandler::setImmutablePrototype(JSContext* cx, HandleObject proxy, bool* succeeded) const
 {
     *succeeded = false;
-    return true;
-}
-
-bool
-BaseProxyHandler::watch(JSContext* cx, HandleObject proxy, HandleId id, HandleObject callable) const
-{
-    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_CANT_WATCH,
-                              proxy->getClass()->name);
-    return false;
-}
-
-bool
-BaseProxyHandler::unwatch(JSContext* cx, HandleObject proxy, HandleId id) const
-{
     return true;
 }
 

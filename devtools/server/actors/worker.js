@@ -5,6 +5,7 @@
 "use strict";
 
 const { Ci } = require("chrome");
+const ChromeUtils = require("ChromeUtils");
 const { DebuggerServer } = require("devtools/server/main");
 const Services = require("Services");
 const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
@@ -30,7 +31,7 @@ XPCOMUtils.defineLazyServiceGetter(
   "nsIPushService"
 );
 
-let WorkerActor = protocol.ActorClassWithSpec(workerSpec, {
+const WorkerActor = protocol.ActorClassWithSpec(workerSpec, {
   initialize(conn, dbg) {
     protocol.Actor.prototype.initialize.call(this, conn);
     this._dbg = dbg;
@@ -43,16 +44,16 @@ let WorkerActor = protocol.ActorClassWithSpec(workerSpec, {
     if (detail === "actorid") {
       return this.actorID;
     }
-    let form = {
+    const form = {
       actor: this.actorID,
       consoleActor: this._consoleActor,
       url: this._dbg.url,
       type: this._dbg.type
     };
     if (this._dbg.type === Ci.nsIWorkerDebugger.TYPE_SERVICE) {
-      let registration = this._getServiceWorkerRegistrationInfo();
+      const registration = this._getServiceWorkerRegistrationInfo();
       form.scope = registration.scope;
-      let newestWorker = (registration.activeWorker ||
+      const newestWorker = (registration.activeWorker ||
                           registration.waitingWorker ||
                           registration.installingWorker);
       form.fetch = newestWorker && newestWorker.handlesFetchEvents;
@@ -69,7 +70,7 @@ let WorkerActor = protocol.ActorClassWithSpec(workerSpec, {
       // Automatically disable their internal timeout that shut them down
       // Should be refactored by having actors specific to service workers
       if (this._dbg.type == Ci.nsIWorkerDebugger.TYPE_SERVICE) {
-        let worker = this._getServiceWorkerInfo();
+        const worker = this._getServiceWorkerInfo();
         if (worker) {
           worker.attachDebugger();
         }
@@ -134,8 +135,8 @@ let WorkerActor = protocol.ActorClassWithSpec(workerSpec, {
     if (this._dbg.type !== Ci.nsIWorkerDebugger.TYPE_SERVICE) {
       return { error: "wrongType" };
     }
-    let registration = this._getServiceWorkerRegistrationInfo();
-    let originAttributes = ChromeUtils.originAttributesToSuffix(
+    const registration = this._getServiceWorkerRegistrationInfo();
+    const originAttributes = ChromeUtils.originAttributesToSuffix(
       this._dbg.principal.originAttributes);
     swm.sendPushEvent(originAttributes, registration.scope);
     return { type: "pushed" };
@@ -158,7 +159,7 @@ let WorkerActor = protocol.ActorClassWithSpec(workerSpec, {
   },
 
   _getServiceWorkerInfo() {
-    let registration = this._getServiceWorkerRegistrationInfo();
+    const registration = this._getServiceWorkerRegistrationInfo();
     return registration.getWorkerByID(this._dbg.serviceWorkerID);
   },
 
@@ -179,7 +180,7 @@ let WorkerActor = protocol.ActorClassWithSpec(workerSpec, {
     }
 
     if (type == Ci.nsIWorkerDebugger.TYPE_SERVICE) {
-      let worker = this._getServiceWorkerInfo();
+      const worker = this._getServiceWorkerInfo();
       if (worker) {
         worker.detachDebugger();
       }
@@ -192,7 +193,7 @@ let WorkerActor = protocol.ActorClassWithSpec(workerSpec, {
 
 exports.WorkerActor = WorkerActor;
 
-let PushSubscriptionActor = protocol.ActorClassWithSpec(pushSubscriptionSpec, {
+const PushSubscriptionActor = protocol.ActorClassWithSpec(pushSubscriptionSpec, {
   initialize(conn, subscription) {
     protocol.Actor.prototype.initialize.call(this, conn);
     this._subscription = subscription;
@@ -202,7 +203,7 @@ let PushSubscriptionActor = protocol.ActorClassWithSpec(pushSubscriptionSpec, {
     if (detail === "actorid") {
       return this.actorID;
     }
-    let subscription = this._subscription;
+    const subscription = this._subscription;
     return {
       actor: this.actorID,
       endpoint: subscription.endpoint,
@@ -218,7 +219,7 @@ let PushSubscriptionActor = protocol.ActorClassWithSpec(pushSubscriptionSpec, {
   },
 });
 
-let ServiceWorkerActor = protocol.ActorClassWithSpec(serviceWorkerSpec, {
+const ServiceWorkerActor = protocol.ActorClassWithSpec(serviceWorkerSpec, {
   initialize(conn, worker) {
     protocol.Actor.prototype.initialize.call(this, conn);
     this._worker = worker;
@@ -242,10 +243,10 @@ let ServiceWorkerActor = protocol.ActorClassWithSpec(serviceWorkerSpec, {
   },
 });
 
-// Lazily load the service-worker-child.js process script only once.
+// Lazily load the service-worker-process.js process script only once.
 let _serviceWorkerProcessScriptLoaded = false;
 
-let ServiceWorkerRegistrationActor =
+const ServiceWorkerRegistrationActor =
 protocol.ActorClassWithSpec(serviceWorkerRegistrationSpec, {
   /**
    * Create the ServiceWorkerRegistrationActor
@@ -261,7 +262,7 @@ protocol.ActorClassWithSpec(serviceWorkerRegistrationSpec, {
     this._pushSubscriptionActor = null;
     this._registration.addListener(this);
 
-    let {installingWorker, waitingWorker, activeWorker} = registration;
+    const {installingWorker, waitingWorker, activeWorker} = registration;
     this._installingWorker = new ServiceWorkerActor(conn, installingWorker);
     this._waitingWorker = new ServiceWorkerActor(conn, waitingWorker);
     this._activeWorker = new ServiceWorkerActor(conn, activeWorker);
@@ -274,7 +275,7 @@ protocol.ActorClassWithSpec(serviceWorkerRegistrationSpec, {
     this._waitingWorker.destroy();
     this._activeWorker.destroy();
 
-    let {installingWorker, waitingWorker, activeWorker} = this._registration;
+    const {installingWorker, waitingWorker, activeWorker} = this._registration;
     this._installingWorker = new ServiceWorkerActor(this._conn, installingWorker);
     this._waitingWorker = new ServiceWorkerActor(this._conn, waitingWorker);
     this._activeWorker = new ServiceWorkerActor(this._conn, activeWorker);
@@ -286,14 +287,14 @@ protocol.ActorClassWithSpec(serviceWorkerRegistrationSpec, {
     if (detail === "actorid") {
       return this.actorID;
     }
-    let registration = this._registration;
-    let installingWorker = this._installingWorker.form();
-    let waitingWorker = this._waitingWorker.form();
-    let activeWorker = this._activeWorker.form();
+    const registration = this._registration;
+    const installingWorker = this._installingWorker.form();
+    const waitingWorker = this._waitingWorker.form();
+    const activeWorker = this._activeWorker.form();
 
-    let newestWorker = (activeWorker || waitingWorker || installingWorker);
+    const newestWorker = (activeWorker || waitingWorker || installingWorker);
 
-    let isE10s = Services.appinfo.browserTabsRemoteAutostart;
+    const isE10s = Services.appinfo.browserTabsRemoteAutostart;
     return {
       actor: this.actorID,
       scope: registration.scope,
@@ -305,7 +306,8 @@ protocol.ActorClassWithSpec(serviceWorkerRegistrationSpec, {
       // - In e10s: only active registrations are available.
       // - In non-e10s: registrations always have at least one worker, if the worker is
       // active, the registration is active.
-      active: isE10s ? true : !!activeWorker
+      active: isE10s ? true : !!activeWorker,
+      lastUpdateTime: registration.lastUpdateTime,
     };
   },
 
@@ -332,7 +334,7 @@ protocol.ActorClassWithSpec(serviceWorkerRegistrationSpec, {
    * Standard observer interface to listen to push messages and changes.
    */
   observe(subject, topic, data) {
-    let scope = this._registration.scope;
+    const scope = this._registration.scope;
     if (data !== scope) {
       // This event doesn't concern us, pretend nothing happened.
       return;
@@ -351,7 +353,7 @@ protocol.ActorClassWithSpec(serviceWorkerRegistrationSpec, {
   start() {
     if (!_serviceWorkerProcessScriptLoaded) {
       Services.ppmm.loadProcessScript(
-        "resource://devtools/server/service-worker-child.js", true);
+        "resource://devtools/server/actors/worker/service-worker-process.js", true);
       _serviceWorkerProcessScriptLoaded = true;
     }
 
@@ -374,13 +376,13 @@ protocol.ActorClassWithSpec(serviceWorkerRegistrationSpec, {
   },
 
   unregister() {
-    let { principal, scope } = this._registration;
-    let unregisterCallback = {
-      unregisterSucceeded: function () {},
-      unregisterFailed: function () {
+    const { principal, scope } = this._registration;
+    const unregisterCallback = {
+      unregisterSucceeded: function() {},
+      unregisterFailed: function() {
         console.error("Failed to unregister the service worker for " + scope);
       },
-      QueryInterface: XPCOMUtils.generateQI(
+      QueryInterface: ChromeUtils.generateQI(
         [Ci.nsIServiceWorkerUnregisterCallback])
     };
     swm.propagateUnregister(principal, unregisterCallback, scope);
@@ -389,7 +391,7 @@ protocol.ActorClassWithSpec(serviceWorkerRegistrationSpec, {
   },
 
   getPushSubscription() {
-    let registration = this._registration;
+    const registration = this._registration;
     let pushSubscriptionActor = this._pushSubscriptionActor;
     if (pushSubscriptionActor) {
       return Promise.resolve(pushSubscriptionActor);

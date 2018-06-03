@@ -1,6 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: sw=2 ts=8 et :
- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,13 +7,13 @@
 #ifndef MOZILLA_GFX_VR_VRMANAGERPARENT_H
 #define MOZILLA_GFX_VR_VRMANAGERPARENT_H
 
-#include "mozilla/layers/CompositableTransactionParent.h"
-#include "mozilla/layers/CompositorThread.h" // for CompositorThreadHolder
+#include "mozilla/layers/CompositableTransactionParent.h"  // need?
 #include "mozilla/gfx/PVRManagerParent.h" // for PVRManagerParent
 #include "mozilla/gfx/PVRLayerParent.h"   // for PVRLayerParent
 #include "mozilla/ipc/ProtocolUtils.h"    // for IToplevelProtocol
 #include "mozilla/TimeStamp.h"            // for TimeStamp
 #include "gfxVR.h"                        // for VRFieldOfView
+#include "VRThread.h"                     // for VRListenerThreadHolder
 
 namespace mozilla {
 using namespace layers;
@@ -81,26 +80,40 @@ private:
 
   void Bind(Endpoint<PVRManagerParent>&& aEndpoint);
 
-  static void RegisterVRManagerInCompositorThread(VRManagerParent* aVRManager);
+  static void RegisterVRManagerInVRListenerThread(VRManagerParent* aVRManager);
 
   void DeferredDestroy();
+  already_AddRefed<impl::VRControllerPuppet> GetControllerPuppet(uint32_t aDeviceID);
 
   // This keeps us alive until ActorDestroy(), at which point we do a
   // deferred destruction of ourselves.
   RefPtr<VRManagerParent> mSelfRef;
-
-  // Keep the compositor thread alive, until we have destroyed ourselves.
-  RefPtr<layers::CompositorThreadHolder> mCompositorThreadHolder;
+  RefPtr<VRListenerThreadHolder> mVRListenerThreadHolder;
 
   // Keep the VRManager alive, until we have destroyed ourselves.
   RefPtr<VRManager> mVRManagerHolder;
-  nsRefPtrHashtable<nsUint32HashKey, impl::VRDisplayPuppet> mVRDisplayTests;
   nsRefPtrHashtable<nsUint32HashKey, impl::VRControllerPuppet> mVRControllerTests;
-  uint32_t mDisplayTestID;
   uint32_t mControllerTestID;
   bool mHaveEventListener;
   bool mHaveControllerListener;
   bool mIsContentChild;
+};
+
+class VRManagerPromise final
+{
+  friend class VRManager;
+
+public:
+  explicit VRManagerPromise(RefPtr<VRManagerParent> aParent, uint32_t aPromiseID)
+  : mParent(aParent), mPromiseID(aPromiseID)
+  {}
+  ~VRManagerPromise() {
+    mParent = nullptr;
+  }
+
+private:
+  RefPtr<VRManagerParent> mParent;
+  uint32_t mPromiseID;
 };
 
 } // namespace mozilla

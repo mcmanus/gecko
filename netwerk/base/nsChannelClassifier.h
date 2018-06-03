@@ -11,6 +11,8 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/Maybe.h"
 
+#include <functional>
+
 class nsIChannel;
 class nsIHttpChannelInternal;
 class nsIDocument;
@@ -50,7 +52,7 @@ public:
     // Check a tracking URI against the local blacklist and whitelist.
     // Returning NS_OK means the check will be processed
     // and the caller should wait for the result.
-    nsresult CheckIsTrackerWithLocalTable(nsIURIClassifierCallback* aCallback);
+    nsresult CheckIsTrackerWithLocalTable(std::function<void()>&& aCallback);
 
     // Helper function to create a whitelist URL.
     already_AddRefed<nsIURI> CreateWhiteListURI() const;
@@ -89,8 +91,10 @@ private:
     bool AddonMayLoad(nsIChannel *aChannel, nsIURI *aUri);
     void AddShutdownObserver();
     void RemoveShutdownObserver();
-    nsresult SendThreatHitReport(nsIChannel *aChannel,
-                                 const nsACString& aProvider);
+    static nsresult SendThreatHitReport(nsIChannel *aChannel,
+                                        const nsACString& aProvider,
+                                        const nsACString& aList,
+                                        const nsACString& aFullHash);
 public:
     // If we are blocking content, update the corresponding flag in the respective
     // docshell and call nsISecurityEventSink::onSecurityChange.

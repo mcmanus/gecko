@@ -18,8 +18,6 @@
 #include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/Unused.h"
 
-#include "WorkerPrivate.h"
-
 namespace mozilla {
 namespace dom {
 
@@ -75,25 +73,6 @@ Request::Request(nsIGlobalObject* aOwner, InternalRequest* aRequest,
 
 Request::~Request()
 {
-}
-
-// static
-bool
-Request::RequestContextEnabled(JSContext* aCx, JSObject* aObj)
-{
-  if (NS_IsMainThread()) {
-    return Preferences::GetBool("dom.requestcontext.enabled", false);
-  }
-
-  using namespace workers;
-
-  // Otherwise, check the pref via the WorkerPrivate
-  WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(aCx);
-  if (!workerPrivate) {
-    return false;
-  }
-
-  return workerPrivate->RequestContextEnabled();
 }
 
 already_AddRefed<InternalRequest>
@@ -163,7 +142,7 @@ ParseURLFromChrome(const nsAString& aInput, ErrorResult& aRv)
   MOZ_ASSERT(NS_IsMainThread());
   nsCOMPtr<nsIURI> uri;
   aRv = NS_NewURI(getter_AddRefs(uri), aInput, nullptr, nullptr);
-  if (NS_WARN_IF(aRv.Failed())) {
+  if (aRv.Failed()) {
     aRv.ThrowTypeError<MSG_INVALID_URL>(aInput);
   }
   return uri.forget();
@@ -209,7 +188,7 @@ already_AddRefed<URL>
 ParseURLFromWorker(const GlobalObject& aGlobal, const nsAString& aInput,
                    ErrorResult& aRv)
 {
-  workers::WorkerPrivate* worker = workers::GetCurrentThreadWorkerPrivate();
+  WorkerPrivate* worker = GetCurrentThreadWorkerPrivate();
   MOZ_ASSERT(worker);
   worker->AssertIsOnWorkerThread();
 
@@ -230,26 +209,19 @@ GetRequestURLFromWorker(const GlobalObject& aGlobal, const nsAString& aInput,
     return;
   }
   nsString username;
-  url->GetUsername(username, aRv);
-  if (NS_WARN_IF(aRv.Failed())) {
-    return;
-  }
+  url->GetUsername(username);
 
   nsString password;
-  url->GetPassword(password, aRv);
-  if (NS_WARN_IF(aRv.Failed())) {
-    return;
-  }
+  url->GetPassword(password);
+
   if (!username.IsEmpty() || !password.IsEmpty()) {
     aRv.ThrowTypeError<MSG_URL_HAS_CREDENTIALS>(aInput);
     return;
   }
+
   // Get the fragment from URL.
   nsAutoString fragment;
-  url->GetHash(fragment, aRv);
-  if (NS_WARN_IF(aRv.Failed())) {
-    return;
-  }
+  url->GetHash(fragment);
 
   // Note: URL::GetHash() includes the "#" and we want the fragment with out
   // the hash symbol.
@@ -257,24 +229,18 @@ GetRequestURLFromWorker(const GlobalObject& aGlobal, const nsAString& aInput,
     CopyUTF16toUTF8(Substring(fragment, 1), aURLfragment);
   }
 
-  url->SetHash(EmptyString(), aRv);
-  if (NS_WARN_IF(aRv.Failed())) {
-    return;
-  }
-  url->Stringify(aRequestURL, aRv);
-  if (NS_WARN_IF(aRv.Failed())) {
-    return;
-  }
+  url->SetHash(EmptyString());
+  url->Stringify(aRequestURL);
 }
 
-class ReferrerSameOriginChecker final : public workers::WorkerMainThreadRunnable
+class ReferrerSameOriginChecker final : public WorkerMainThreadRunnable
 {
 public:
-  ReferrerSameOriginChecker(workers::WorkerPrivate* aWorkerPrivate,
+  ReferrerSameOriginChecker(WorkerPrivate* aWorkerPrivate,
                             const nsAString& aReferrerURL,
                             nsresult& aResult)
-    : workers::WorkerMainThreadRunnable(aWorkerPrivate,
-                                        NS_LITERAL_CSTRING("Fetch :: Referrer same origin check")),
+    : WorkerMainThreadRunnable(aWorkerPrivate,
+                               NS_LITERAL_CSTRING("Fetch :: Referrer same origin check")),
       mReferrerURL(aReferrerURL),
       mResult(aResult)
   {
@@ -338,7 +304,8 @@ Request::Constructor(const GlobalObject& aGlobal,
     nsAutoString requestURL;
     nsCString fragment;
     if (NS_IsMainThread()) {
-      nsIDocument* doc = GetEntryDocument();
+      nsCOMPtr<nsPIDOMWindowInner> inner(do_QueryInterface(global));
+      nsIDocument* doc = inner ? inner->GetExtantDoc() : nullptr;
       if (doc) {
         GetRequestURLFromDocument(doc, input, requestURL, fragment, aRv);
       } else {
@@ -348,7 +315,7 @@ Request::Constructor(const GlobalObject& aGlobal,
     } else {
       GetRequestURLFromWorker(aGlobal, input, requestURL, fragment, aRv);
     }
-    if (NS_WARN_IF(aRv.Failed())) {
+    if (aRv.Failed()) {
       return nullptr;
     }
     request = new InternalRequest(NS_ConvertUTF16toUTF8(requestURL), fragment);
@@ -362,7 +329,7 @@ Request::Constructor(const GlobalObject& aGlobal,
   RequestCache fallbackCache = RequestCache::EndGuard_;
   if (aInput.IsUSVString()) {
     fallbackMode = RequestMode::Cors;
-    fallbackCredentials = RequestCredentials::Omit;
+    fallbackCredentials = RequestCredentials::Same_origin;
     fallbackCache = RequestCache::Default;
   }
 
@@ -387,7 +354,8 @@ Request::Constructor(const GlobalObject& aGlobal,
     } else {
       nsAutoString referrerURL;
       if (NS_IsMainThread()) {
-        nsIDocument* doc = GetEntryDocument();
+        nsCOMPtr<nsPIDOMWindowInner> inner(do_QueryInterface(global));
+        nsIDocument* doc = inner ? inner->GetExtantDoc() : nullptr;
         nsCOMPtr<nsIURI> uri;
         if (doc) {
           uri = ParseURLFromDocument(doc, referrer, aRv);
@@ -418,13 +386,9 @@ Request::Constructor(const GlobalObject& aGlobal,
           aRv.ThrowTypeError<MSG_INVALID_REFERRER_URL>(referrer);
           return nullptr;
         }
-        url->Stringify(referrerURL, aRv);
-        if (NS_WARN_IF(aRv.Failed())) {
-          aRv.ThrowTypeError<MSG_INVALID_REFERRER_URL>(referrer);
-          return nullptr;
-        }
+        url->Stringify(referrerURL);
         if (!referrerURL.EqualsLiteral(kFETCH_CLIENT_REFERRER_STR)) {
-          workers::WorkerPrivate* worker = workers::GetCurrentThreadWorkerPrivate();
+          WorkerPrivate* worker = GetCurrentThreadWorkerPrivate();
           nsresult rv = NS_OK;
           // ReferrerSameOriginChecker uses a sync loop to get the main thread
           // to perform the same-origin check.  Overall, on Workers this method
@@ -462,7 +426,7 @@ Request::Constructor(const GlobalObject& aGlobal,
       }
     }
   } else {
-    workers::WorkerPrivate* worker = workers::GetCurrentThreadWorkerPrivate();
+    WorkerPrivate* worker = GetCurrentThreadWorkerPrivate();
     if (worker) {
       worker->AssertIsOnWorkerThread();
       request->SetEnvironmentReferrerPolicy(worker->GetReferrerPolicy());
@@ -500,6 +464,10 @@ Request::Constructor(const GlobalObject& aGlobal,
 
   if (aInit.mIntegrity.WasPassed()) {
     request->SetIntegrity(aInit.mIntegrity.Value());
+  }
+
+  if (aInit.mMozErrors.WasPassed() && aInit.mMozErrors.Value()) {
+    request->SetMozErrors();
   }
 
   // Request constructor step 14.

@@ -4,15 +4,18 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
-
 Cu.importGlobalProperties(["URL"]);
 
-Cu.import("resource://gre/modules/Preferences.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/Preferences.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-Cu.import("chrome://marionette/content/assert.js");
-const {InvalidArgumentError} = Cu.import("chrome://marionette/content/error.js", {});
+ChromeUtils.import("chrome://marionette/content/assert.js");
+const {
+  InvalidArgumentError,
+} = ChromeUtils.import("chrome://marionette/content/error.js", {});
+const {
+  pprint,
+} = ChromeUtils.import("chrome://marionette/content/format.js", {});
 
 this.EXPORTED_SYMBOLS = ["session"];
 
@@ -196,9 +199,14 @@ session.Proxy = class {
    *     When proxy configuration is invalid.
    */
   static fromJSON(json) {
+    function stripBracketsFromIpv6Hostname(hostname) {
+      return hostname.includes(":") ? hostname.replace(/[\[\]]/g, "") : hostname;
+    }
+
     // Parse hostname and optional port from host
     function fromHost(scheme, host) {
-      assert.string(host);
+      assert.string(host,
+          pprint`Expected proxy "host" to be a string, got ${host}`);
 
       if (host.includes("://")) {
         throw new InvalidArgumentError(`${host} contains a scheme`);
@@ -218,6 +226,8 @@ session.Proxy = class {
       } catch (e) {
         throw new InvalidArgumentError(e.message);
       }
+
+      let hostname = stripBracketsFromIpv6Hostname(url.hostname);
 
       // If the port hasn't been set, use the default port of
       // the selected scheme (except for socks which doesn't have one).
@@ -239,7 +249,7 @@ session.Proxy = class {
             `${host} was not of the form host[:port]`);
       }
 
-      return [url.hostname, port];
+      return [hostname, port];
     }
 
     let p = new session.Proxy();
@@ -247,10 +257,12 @@ session.Proxy = class {
       return p;
     }
 
-    assert.object(json);
+    assert.object(json, pprint`Expected "proxy" to be an object, got ${json}`);
 
-    assert.in("proxyType", json);
-    p.proxyType = assert.string(json.proxyType);
+    assert.in("proxyType", json,
+        pprint`Expected "proxyType" in "proxy" object, got ${json}`);
+    p.proxyType = assert.string(json.proxyType,
+        pprint`Expected "proxyType" to be a string, got ${json.proxyType}`);
 
     switch (p.proxyType) {
       case "autodetect":
@@ -259,7 +271,9 @@ session.Proxy = class {
         break;
 
       case "pac":
-        p.proxyAutoconfigUrl = assert.string(json.proxyAutoconfigUrl);
+        p.proxyAutoconfigUrl = assert.string(json.proxyAutoconfigUrl,
+            `Expected "proxyAutoconfigUrl" to be a string, ` +
+            pprint`got ${json.proxyAutoconfigUrl}`);
         break;
 
       case "manual":
@@ -277,11 +291,13 @@ session.Proxy = class {
           p.socksVersion = assert.positiveInteger(json.socksVersion);
         }
         if (typeof json.noProxy != "undefined") {
-          let entries = assert.array(json.noProxy);
-          for (let entry of entries) {
-            assert.string(entry);
-          }
-          p.noProxy = entries;
+          let entries = assert.array(json.noProxy,
+              pprint`Expected "noProxy" to be an array, got ${json.noProxy}`);
+          p.noProxy = entries.map(entry => {
+            assert.string(entry,
+                pprint`Expected "noProxy" entry to be a string, got ${entry}`);
+            return stripBracketsFromIpv6Hostname(entry);
+          });
         }
         break;
 
@@ -298,10 +314,17 @@ session.Proxy = class {
    *     JSON serialisation of proxy object.
    */
   toJSON() {
+    function addBracketsToIpv6Hostname(hostname) {
+      return hostname.includes(":") ? `[${hostname}]` : hostname;
+    }
+
     function toHost(hostname, port) {
       if (!hostname) {
         return null;
       }
+
+      // Add brackets around IPv6 addresses
+      hostname = addBracketsToIpv6Hostname(hostname);
 
       if (port != null) {
         return `${hostname}:${port}`;
@@ -310,11 +333,16 @@ session.Proxy = class {
       return hostname;
     }
 
+    let excludes = this.noProxy;
+    if (excludes) {
+      excludes = excludes.map(addBracketsToIpv6Hostname);
+    }
+
     return marshal({
       proxyType: this.proxyType,
       ftpProxy: toHost(this.ftpProxy, this.ftpProxyPort),
       httpProxy: toHost(this.httpProxy, this.httpProxyPort),
-      noProxy: this.noProxy,
+      noProxy: excludes,
       sslProxy: toHost(this.sslProxy, this.sslProxyPort),
       socksProxy: toHost(this.socksProxy, this.socksProxyPort),
       socksVersion: this.socksVersion,
@@ -348,7 +376,8 @@ session.Capabilities = class extends Map {
       ["moz:headless", Cc["@mozilla.org/gfx/info;1"].getService(Ci.nsIGfxInfo).isHeadless],
       ["moz:processID", Services.appinfo.processID],
       ["moz:profile", maybeProfile()],
-      ["moz:webdriverClick", false],
+      ["moz:useNonSpecCompliantPointerOrigin", false],
+      ["moz:webdriverClick", true],
     ]);
   }
 
@@ -435,14 +464,19 @@ session.Capabilities = class extends Map {
           matched.set("timeouts", timeouts);
           break;
 
-        case "moz:webdriverClick":
-          assert.boolean(v);
-          matched.set("moz:webdriverClick", v);
-          break;
-
         case "moz:accessibilityChecks":
           assert.boolean(v);
           matched.set("moz:accessibilityChecks", v);
+          break;
+
+        case "moz:useNonSpecCompliantPointerOrigin":
+          assert.boolean(v);
+          matched.set("moz:useNonSpecCompliantPointerOrigin", v);
+          break;
+
+        case "moz:webdriverClick":
+          assert.boolean(v);
+          matched.set("moz:webdriverClick", v);
           break;
       }
     }

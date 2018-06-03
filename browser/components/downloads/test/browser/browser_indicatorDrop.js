@@ -3,7 +3,7 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-XPCOMUtils.defineLazyModuleGetter(this, "HttpServer",
+ChromeUtils.defineModuleGetter(this, "HttpServer",
   "resource://testing-common/httpd.js");
 
 registerCleanupFunction(async function() {
@@ -17,10 +17,8 @@ add_task(async function test_indicatorDrop() {
   ok(downloadButton, "download button present");
   await promiseButtonShown(downloadButton.id);
 
-  let scriptLoader = Cc["@mozilla.org/moz/jssubscript-loader;1"].
-      getService(Ci.mozIJSSubScriptLoader);
   let EventUtils = {};
-  scriptLoader.loadSubScript("chrome://mochikit/content/tests/SimpleTest/EventUtils.js", EventUtils);
+  Services.scriptloader.loadSubScript("chrome://mochikit/content/tests/SimpleTest/EventUtils.js", EventUtils);
 
   async function task_drop(urls) {
     let dragData = [[{type: "text/plain", data: urls.join("\n")}]];

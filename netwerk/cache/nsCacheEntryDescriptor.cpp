@@ -111,32 +111,29 @@ nsCacheEntryDescriptor::~nsCacheEntryDescriptor()
 
 
 NS_IMETHODIMP
-nsCacheEntryDescriptor::GetClientID(char ** result)
+nsCacheEntryDescriptor::GetClientID(nsACString& aClientID)
 {
-    NS_ENSURE_ARG_POINTER(result);
-
     nsCacheServiceAutoLock lock(LOCK_TELEM(NSCACHEENTRYDESCRIPTOR_GETCLIENTID));
-    if (!mCacheEntry)  return NS_ERROR_NOT_AVAILABLE;
+    if (!mCacheEntry) {
+        aClientID.Truncate();
+        return NS_ERROR_NOT_AVAILABLE;
+    }
 
-    return ClientIDFromCacheKey(*(mCacheEntry->Key()), result);
+    return ClientIDFromCacheKey(*(mCacheEntry->Key()), aClientID);
 }
 
 
 NS_IMETHODIMP
-nsCacheEntryDescriptor::GetDeviceID(char ** aDeviceID)
+nsCacheEntryDescriptor::GetDeviceID(nsACString& aDeviceID)
 {
-    NS_ENSURE_ARG_POINTER(aDeviceID);
     nsCacheServiceAutoLock lock(LOCK_TELEM(NSCACHEENTRYDESCRIPTOR_GETDEVICEID));
-    if (!mCacheEntry)  return NS_ERROR_NOT_AVAILABLE;
-
-    const char* deviceID = mCacheEntry->GetDeviceID();
-    if (!deviceID) {
-        *aDeviceID = nullptr;
-        return NS_OK;
+    if (!mCacheEntry) {
+        aDeviceID.Truncate();
+        return NS_ERROR_NOT_AVAILABLE;
     }
 
-    *aDeviceID = NS_strdup(deviceID);
-    return *aDeviceID ? NS_OK : NS_ERROR_OUT_OF_MEMORY;
+    aDeviceID.Assign(mCacheEntry->GetDeviceID());
+    return NS_OK;
 }
 
 
@@ -672,7 +669,7 @@ nsCacheEntryDescriptor::nsInputStreamWrapper::Release()
         nsCacheService::Lock(LOCK_TELEM(NSINPUTSTREAMWRAPPER_RELEASE));
 
     nsrefcnt count;
-    NS_PRECONDITION(0 != mRefCnt, "dup release");
+    MOZ_ASSERT(0 != mRefCnt, "dup release");
     count = --mRefCnt;
     NS_LOG_RELEASE(this, count, "nsCacheEntryDescriptor::nsInputStreamWrapper");
 
@@ -701,7 +698,7 @@ nsCacheEntryDescriptor::nsInputStreamWrapper::Release()
 NS_INTERFACE_MAP_BEGIN(nsCacheEntryDescriptor::nsInputStreamWrapper)
   NS_INTERFACE_MAP_ENTRY(nsIInputStream)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
-NS_INTERFACE_MAP_END_THREADSAFE
+NS_INTERFACE_MAP_END
 
 nsresult nsCacheEntryDescriptor::
 nsInputStreamWrapper::LazyInit()
@@ -865,7 +862,7 @@ nsCacheEntryDescriptor::nsDecompressInputStreamWrapper::Release()
                              NSDECOMPRESSINPUTSTREAMWRAPPER_RELEASE));
 
     nsrefcnt count;
-    NS_PRECONDITION(0 != mRefCnt, "dup release");
+    MOZ_ASSERT(0 != mRefCnt, "dup release");
     count = --mRefCnt;
     NS_LOG_RELEASE(this, count,
                    "nsCacheEntryDescriptor::nsDecompressInputStreamWrapper");
@@ -895,7 +892,7 @@ nsCacheEntryDescriptor::nsDecompressInputStreamWrapper::Release()
 NS_INTERFACE_MAP_BEGIN(nsCacheEntryDescriptor::nsDecompressInputStreamWrapper)
   NS_INTERFACE_MAP_ENTRY(nsIInputStream)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
-NS_INTERFACE_MAP_END_THREADSAFE
+NS_INTERFACE_MAP_END
 
 NS_IMETHODIMP nsCacheEntryDescriptor::
 nsDecompressInputStreamWrapper::Read(char *    buf,
@@ -989,7 +986,7 @@ nsDecompressInputStreamWrapper::Close()
     EndZstream();
     if (mReadBuffer) {
         free(mReadBuffer);
-        mReadBuffer = 0;
+        mReadBuffer = nullptr;
         mReadBufferLen = 0;
     }
     return nsInputStreamWrapper::Close_Locked();
@@ -1054,7 +1051,7 @@ nsCacheEntryDescriptor::nsOutputStreamWrapper::Release()
         nsCacheService::Lock(LOCK_TELEM(NSOUTPUTSTREAMWRAPPER_RELEASE));
 
     nsrefcnt count;
-    NS_PRECONDITION(0 != mRefCnt, "dup release");
+    MOZ_ASSERT(0 != mRefCnt, "dup release");
     count = --mRefCnt;
     NS_LOG_RELEASE(this, count,
                    "nsCacheEntryDescriptor::nsOutputStreamWrapper");
@@ -1081,7 +1078,7 @@ nsCacheEntryDescriptor::nsOutputStreamWrapper::Release()
 NS_INTERFACE_MAP_BEGIN(nsCacheEntryDescriptor::nsOutputStreamWrapper)
   NS_INTERFACE_MAP_ENTRY(nsIOutputStream)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
-NS_INTERFACE_MAP_END_THREADSAFE
+NS_INTERFACE_MAP_END
 
 nsresult nsCacheEntryDescriptor::
 nsOutputStreamWrapper::LazyInit()
@@ -1284,7 +1281,7 @@ nsCacheEntryDescriptor::nsCompressOutputStreamWrapper::Release()
         nsCacheService::Lock(LOCK_TELEM(NSCOMPRESSOUTPUTSTREAMWRAPPER_RELEASE));
 
     nsrefcnt count;
-    NS_PRECONDITION(0 != mRefCnt, "dup release");
+    MOZ_ASSERT(0 != mRefCnt, "dup release");
     count = --mRefCnt;
     NS_LOG_RELEASE(this, count,
                    "nsCacheEntryDescriptor::nsCompressOutputStreamWrapper");
@@ -1311,7 +1308,7 @@ nsCacheEntryDescriptor::nsCompressOutputStreamWrapper::Release()
 NS_INTERFACE_MAP_BEGIN(nsCacheEntryDescriptor::nsCompressOutputStreamWrapper)
   NS_INTERFACE_MAP_ENTRY(nsIOutputStream)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
-NS_INTERFACE_MAP_END_THREADSAFE
+NS_INTERFACE_MAP_END
 
 NS_IMETHODIMP nsCacheEntryDescriptor::
 nsCompressOutputStreamWrapper::Write(const char * buf,
@@ -1411,7 +1408,7 @@ nsCompressOutputStreamWrapper::Close()
                 mUncompressedCount += oldCount;
             }
         }
-        uncompressedLenStr.Adopt(0);
+        uncompressedLenStr.Adopt(nullptr);
         uncompressedLenStr.AppendInt(mUncompressedCount);
         rv = mDescriptor->SetMetaDataElement("uncompressed-len",
             uncompressedLenStr.get());
@@ -1421,7 +1418,7 @@ nsCompressOutputStreamWrapper::Close()
 
     if (mWriteBuffer) {
         free(mWriteBuffer);
-        mWriteBuffer = 0;
+        mWriteBuffer = nullptr;
         mWriteBufferLen = 0;
     }
 

@@ -18,7 +18,7 @@
 #include "nsIGlobalObject.h"
 #include "nsPIDOMWindow.h"
 #include "nsWrapperCache.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 #include "nsTArray.h"
 #include "mozilla/dom/JSSlots.h"
 #include "mozilla/fallible.h"
@@ -27,9 +27,8 @@
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/Preferences.h"
 
-class nsGlobalWindow;
+class nsGlobalWindowInner;
 class nsIPrincipal;
-class nsScriptNameSpaceManager;
 class nsIHandleReportCallback;
 
 namespace mozilla {
@@ -44,7 +43,7 @@ namespace xpc {
 
 class Scriptability {
 public:
-    explicit Scriptability(JSCompartment* c);
+    explicit Scriptability(JS::Realm* realm);
     bool Allowed();
     bool IsImmuneToScriptPolicy();
 
@@ -77,6 +76,9 @@ private:
 JSObject*
 TransplantObject(JSContext* cx, JS::HandleObject origobj, JS::HandleObject target);
 
+JSObject*
+TransplantObjectRetainingXrayExpandos(JSContext* cx, JS::HandleObject origobj, JS::HandleObject target);
+
 bool IsContentXBLCompartment(JSCompartment* compartment);
 bool IsContentXBLScope(JS::Realm* realm);
 bool IsInContentXBLScope(JSObject* obj);
@@ -105,13 +107,6 @@ GetXBLScopeOrGlobal(JSContext* cx, JSObject* obj)
     return GetXBLScope(cx, obj);
 }
 
-// This function is similar to GetXBLScopeOrGlobal. However, if |obj| is a
-// chrome scope, then it will return an add-on scope if addonId is non-null.
-// Like GetXBLScopeOrGlobal, it returns the scope of |obj| if it's already a
-// content XBL scope. But it asserts that |obj| is not an add-on scope.
-JSObject*
-GetScopeForXBLExecution(JSContext* cx, JS::HandleObject obj, JSAddonId* addonId);
-
 // Returns whether XBL scopes have been explicitly disabled for code running
 // in this compartment. See the comment around mAllowContentXBLScope.
 bool
@@ -128,15 +123,6 @@ UseContentXBLScope(JS::Realm* realm);
 // force creation of a new one if one is needed again.
 void
 ClearContentXBLScope(JSObject* global);
-
-bool
-IsAddonCompartment(JSCompartment* c);
-
-bool
-IsInAddonScope(JSObject* obj);
-
-JSObject*
-GetAddonScope(JSContext* cx, JS::HandleObject contentScope, JSAddonId* addonId);
 
 bool
 IsSandboxPrototypeProxy(JSObject* obj);
@@ -195,7 +181,7 @@ InitClassesWithNewWrappedGlobal(JSContext* aJSContext,
                                 nsISupports* aCOMObj,
                                 nsIPrincipal* aPrincipal,
                                 uint32_t aFlags,
-                                JS::CompartmentOptions& aOptions,
+                                JS::RealmOptions& aOptions,
                                 JS::MutableHandleObject aNewGlobal);
 
 enum InitClassesFlag {
@@ -239,17 +225,23 @@ xpc_FastGetCachedWrapper(JSContext* cx, nsWrapperCache* cache, JS::MutableHandle
     return nullptr;
 }
 
-// If aVariant is an XPCVariant, this marks the object to be in aGeneration.
-// This also unmarks the gray JSObject.
-extern void
-xpc_MarkInCCGeneration(nsISupports* aVariant, uint32_t aGeneration);
-
 // If aWrappedJS is a JS wrapper, unmark its JSObject.
 extern void
 xpc_TryUnmarkWrappedGrayObject(nsISupports* aWrappedJS);
 
 extern void
 xpc_UnmarkSkippableJSHolders();
+
+// Defined in XPCDebug.cpp.
+extern bool
+xpc_DumpJSStack(bool showArgs, bool showLocals, bool showThisProps);
+
+// Return a newly-allocated string containing a representation of the
+// current JS stack. Defined in XPCDebug.cpp.
+extern JS::UniqueChars
+xpc_PrintJSStack(JSContext* cx, bool showArgs, bool showLocals,
+                 bool showThisProps);
+
 
 // readable string conversions, static methods and members only
 class XPCStringConvert
@@ -274,6 +266,19 @@ public:
         if (!str) {
             return false;
         }
+        rval.setString(str);
+        return true;
+    }
+
+    static inline bool
+    StringLiteralToJSVal(JSContext* cx, const char16_t* literal, uint32_t length,
+                         JS::MutableHandleValue rval)
+    {
+        bool ignored;
+        JSString* str = JS_NewMaybeExternalString(cx, literal, length,
+                                                  &sLiteralFinalizer, &ignored);
+        if (!str)
+            return false;
         rval.setString(str);
         return true;
     }
@@ -353,28 +358,33 @@ inline
 bool NonVoidStringToJsval(JSContext* cx, mozilla::dom::DOMString& str,
                           JS::MutableHandleValue rval)
 {
-    if (!str.HasStringBuffer()) {
-        // It's an actual XPCOM string
-        return NonVoidStringToJsval(cx, str.AsAString(), rval);
-    }
-
-    uint32_t length = str.StringBufferLength();
-    if (length == 0) {
+    if (str.IsEmpty()) {
         rval.set(JS_GetEmptyStringValue(cx));
         return true;
     }
 
-    nsStringBuffer* buf = str.StringBuffer();
-    bool shared;
-    if (!XPCStringConvert::StringBufferToJSVal(cx, buf, length, rval,
-                                               &shared)) {
-        return false;
+    if (str.HasStringBuffer()) {
+        uint32_t length = str.StringBufferLength();
+        nsStringBuffer* buf = str.StringBuffer();
+        bool shared;
+        if (!XPCStringConvert::StringBufferToJSVal(cx, buf, length, rval,
+                                                   &shared)) {
+            return false;
+        }
+        if (shared) {
+            // JS now needs to hold a reference to the buffer
+            str.RelinquishBufferOwnership();
+        }
+        return true;
     }
-    if (shared) {
-        // JS now needs to hold a reference to the buffer
-        str.RelinquishBufferOwnership();
+
+    if (str.HasLiteral()) {
+        return XPCStringConvert::StringLiteralToJSVal(cx, str.Literal(),
+                                                      str.LiteralLength(), rval);
     }
-    return true;
+
+    // It's an actual XPCOM string
+    return NonVoidStringToJsval(cx, str.AsAString(), rval);
 }
 
 MOZ_ALWAYS_INLINE
@@ -410,24 +420,24 @@ private:
 };
 
 // ReportJSRuntimeExplicitTreeStats will expect this in the |extra| member
-// of JS::CompartmentStats.
-class CompartmentStatsExtras {
+// of JS::RealmStats.
+class RealmStatsExtras {
 public:
-    CompartmentStatsExtras() {}
+    RealmStatsExtras() {}
 
     nsCString jsPathPrefix;
     nsCString domPathPrefix;
     nsCOMPtr<nsIURI> location;
 
 private:
-    CompartmentStatsExtras(const CompartmentStatsExtras& other) = delete;
-    CompartmentStatsExtras& operator=(const CompartmentStatsExtras& other) = delete;
+    RealmStatsExtras(const RealmStatsExtras& other) = delete;
+    RealmStatsExtras& operator=(const RealmStatsExtras& other) = delete;
 };
 
 // This reports all the stats in |rtStats| that belong in the "explicit" tree,
 // (which isn't all of them).
 // @see ZoneStatsExtras
-// @see CompartmentStatsExtras
+// @see RealmStatsExtras
 void
 ReportJSRuntimeExplicitTreeStats(const JS::RuntimeStats& rtStats,
                                  const nsACString& rtPath,
@@ -480,29 +490,21 @@ NativeGlobal(JSObject* aObj);
  * If |aObj| is a window, returns the associated nsGlobalWindow.
  * Otherwise, returns null.
  */
-nsGlobalWindow*
+nsGlobalWindowInner*
 WindowOrNull(JSObject* aObj);
 
 /**
  * If |aObj| has a window for a global, returns the associated nsGlobalWindow.
  * Otherwise, returns null.
  */
-nsGlobalWindow*
+nsGlobalWindowInner*
 WindowGlobalOrNull(JSObject* aObj);
-
-/**
- * If |aObj| is in an addon scope and that addon scope is associated with a
- * live DOM Window, returns the associated nsGlobalWindow. Otherwise, returns
- * null.
- */
-nsGlobalWindow*
-AddonWindowOrNull(JSObject* aObj);
 
 /**
  * If |cx| is in a compartment whose global is a window, returns the associated
  * nsGlobalWindow. Otherwise, returns null.
  */
-nsGlobalWindow*
+nsGlobalWindowInner*
 CurrentWindowOrNull(JSContext* cx);
 
 void
@@ -515,12 +517,6 @@ ShouldDiscardSystemSource();
 
 bool
 SharedMemoryEnabled();
-
-bool
-SetAddonInterposition(const nsACString& addonId, nsIAddonInterposition* interposition);
-
-bool
-AllowCPOWsInAddon(const nsACString& addonId, bool allow);
 
 bool
 ExtraWarningsForSystemJS();
@@ -645,10 +641,16 @@ AreNonLocalConnectionsDisabled()
 inline bool
 IsInAutomation()
 {
-    const char* prefName =
-      "security.turn_off_all_security_so_that_viruses_can_take_over_this_computer";
-    return mozilla::Preferences::GetBool(prefName) &&
-        AreNonLocalConnectionsDisabled();
+    static bool sAutomationPrefIsSet;
+    static bool sPrefCacheAdded = false;
+    if (!sPrefCacheAdded) {
+        mozilla::Preferences::AddBoolVarCache(
+          &sAutomationPrefIsSet,
+          "security.turn_off_all_security_so_that_viruses_can_take_over_this_computer",
+          false);
+        sPrefCacheAdded = true;
+    }
+    return sAutomationPrefIsSet && AreNonLocalConnectionsDisabled();
 }
 
 void

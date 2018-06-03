@@ -1,6 +1,6 @@
 "use strict";
 
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 
 /**
@@ -39,7 +39,7 @@ async function waitForTabBlockEvent(tab, expectBlocked) {
   } else {
     info("Block state doens't match, wait for attributes changes.");
     await BrowserTestUtils.waitForEvent(tab, "TabAttrModified", false, (event) => {
-      if (event.detail.changed.indexOf("activemedia-blocked") >= 0) {
+      if (event.detail.changed.includes("activemedia-blocked")) {
         is(tab.activeMediaBlocked, expectBlocked, "The tab should " + (expectBlocked ? "" : "not ") + "be blocked");
         return true;
       }
@@ -57,7 +57,7 @@ async function waitForTabPlayingEvent(tab, expectPlaying) {
   } else {
     info("Playing state doens't match, wait for attributes changes.");
     await BrowserTestUtils.waitForEvent(tab, "TabAttrModified", false, (event) => {
-      if (event.detail.changed.indexOf("soundplaying") >= 0) {
+      if (event.detail.changed.includes("soundplaying")) {
         is(tab.soundPlaying, expectPlaying, "The tab should " + (expectPlaying ? "" : "not ") + "be playing");
         return true;
       }
@@ -143,18 +143,31 @@ class DateTimeTestHelper {
   async openPicker(pageUrl) {
     this.tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, pageUrl);
     await BrowserTestUtils.synthesizeMouseAtCenter("input", {}, gBrowser.selectedBrowser);
-    // If dateTimePopupFrame doesn't exist yet, wait for the binding to be attached
+    // If dateTimePopupFrame doesn't exist yet, wait for the binding to be
+    // attached.
+    // FIXME: This has a race condition and we may miss the following events.
+    //        (bug 1423498)
     if (!this.panel.dateTimePopupFrame) {
-      await BrowserTestUtils.waitForEvent(this.panel, "DateTimePickerBindingReady")
+      await BrowserTestUtils.waitForEvent(this.panel, "DateTimePickerBindingReady");
     }
     this.frame = this.panel.dateTimePopupFrame;
     await this.waitForPickerReady();
   }
 
   async waitForPickerReady() {
-    await BrowserTestUtils.waitForEvent(this.frame, "load", true);
+    let readyPromise;
+    let loadPromise = new Promise(resolve => {
+      this.frame.addEventListener("load", () => {
+       // Add the PickerReady event listener directly inside the load event
+        // listener to avoid missing the event.
+        readyPromise = BrowserTestUtils.waitForEvent(this.frame.contentDocument, "PickerReady");
+        resolve();
+      }, { capture: true, once: true });
+    });
+
+    await loadPromise;
     // Wait for picker elements to be ready
-    await BrowserTestUtils.waitForEvent(this.frame.contentDocument, "PickerReady");
+    await readyPromise;
   }
 
   /**
@@ -198,7 +211,7 @@ class DateTimeTestHelper {
       this.panel.closePicker();
       await pickerClosePromise;
     }
-    await BrowserTestUtils.removeTab(this.tab);
+    BrowserTestUtils.removeTab(this.tab);
     this.tab = null;
   }
 
@@ -211,4 +224,16 @@ class DateTimeTestHelper {
     this.panel.removeAttribute("animate");
     this.panel = null;
   }
+}
+
+/**
+ * Used to listen events if you just need it once
+ */
+function once(target, name) {
+  var p = new Promise(function(resolve, reject) {
+    target.addEventListener(name, function() {
+      resolve();
+    }, {once: true});
+  });
+  return p;
 }

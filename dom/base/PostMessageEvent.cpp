@@ -29,9 +29,9 @@
 namespace mozilla {
 namespace dom {
 
-PostMessageEvent::PostMessageEvent(nsGlobalWindow* aSource,
+PostMessageEvent::PostMessageEvent(nsGlobalWindowOuter* aSource,
                                    const nsAString& aCallerOrigin,
-                                   nsGlobalWindow* aTargetWindow,
+                                   nsGlobalWindowOuter* aTargetWindow,
                                    nsIPrincipal* aProvidedPrincipal,
                                    nsIDocument* aSourceDocument,
                                    bool aTrustedCaller)
@@ -55,11 +55,6 @@ PostMessageEvent::~PostMessageEvent()
 NS_IMETHODIMP
 PostMessageEvent::Run()
 {
-  MOZ_ASSERT(mTargetWindow->IsOuterWindow(),
-             "should have been passed an outer window!");
-  MOZ_ASSERT(!mSource || mSource->IsOuterWindow(),
-             "should have been passed an outer window!");
-
   // Note: We don't init this AutoJSAPI with targetWindow, because we do not
   // want exceptions during message deserialization to trigger error events on
   // targetWindow.
@@ -76,15 +71,13 @@ PostMessageEvent::Run()
   // If we bailed before this point we're going to leak mMessage, but
   // that's probably better than crashing.
 
-  RefPtr<nsGlobalWindow> targetWindow;
+  RefPtr<nsGlobalWindowInner> targetWindow;
   if (mTargetWindow->IsClosedOrClosing() ||
       !(targetWindow = mTargetWindow->GetCurrentInnerWindowInternal()) ||
-      targetWindow->IsClosedOrClosing())
+      targetWindow->IsDying())
     return NS_OK;
 
-  MOZ_ASSERT(targetWindow->IsInnerWindow(),
-             "we ordered an inner window!");
-  JSAutoCompartment ac(cx, targetWindow->GetWrapper());
+  JSAutoRealm ar(cx, targetWindow->GetWrapper());
 
   // Ensure that any origin which might have been provided is the origin of this
   // window's document.  Note that we do this *now* instead of when postMessage
@@ -176,7 +169,7 @@ PostMessageEvent::Run()
 }
 
 void
-PostMessageEvent::DispatchError(JSContext* aCx, nsGlobalWindow* aTargetWindow,
+PostMessageEvent::DispatchError(JSContext* aCx, nsGlobalWindowInner* aTargetWindow,
                                 mozilla::dom::EventTarget* aEventTarget)
 {
   RootedDictionary<MessageEventInit> init(aCx);
@@ -195,18 +188,15 @@ PostMessageEvent::DispatchError(JSContext* aCx, nsGlobalWindow* aTargetWindow,
 }
 
 void
-PostMessageEvent::Dispatch(nsGlobalWindow* aTargetWindow, Event* aEvent)
+PostMessageEvent::Dispatch(nsGlobalWindowInner* aTargetWindow, Event* aEvent)
 {
   // We can't simply call dispatchEvent on the window because doing so ends
   // up flipping the trusted bit on the event, and we don't want that to
   // happen because then untrusted content can call postMessage on a chrome
   // window if it can get a reference to it.
 
-  nsIPresShell *shell = aTargetWindow->GetExtantDoc()->GetShell();
-  RefPtr<nsPresContext> presContext;
-  if (shell) {
-    presContext = shell->GetPresContext();
-  }
+  RefPtr<nsPresContext> presContext =
+    aTargetWindow->GetExtantDoc()->GetPresContext();
 
   aEvent->SetTrusted(mTrustedCaller);
   WidgetEvent* internalEvent = aEvent->WidgetEventPtr();

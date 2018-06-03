@@ -4,22 +4,14 @@
 
 extern crate bindgen;
 extern crate cmake;
-extern crate glob;
-
-extern crate log;
 extern crate env_logger;
+extern crate glob;
 
 use std::env;
 use std::path;
 
 fn main() {
-    log::set_logger(|max_log_level| {
-        use env_logger::Logger;
-        let env_logger = Logger::new();
-        max_log_level.set(env_logger.filter());
-        Box::new(env_logger)
-    }).expect("Failed to set logger.");
-
+    env_logger::init();
     build_jsapi_bindings();
     build_jsglue_cpp();
 }
@@ -68,6 +60,10 @@ fn build_jsapi_bindings() {
         .rust_target(bindgen::RustTarget::Stable_1_19)
         .header("./etc/wrapper.hpp")
         .raw_line("pub use self::root::*;")
+        // Translate every enum with the "rustified enum" strategy. We should
+        // investigate switching to the "constified module" strategy, which has
+        // similar ergonomics but avoids some potential Rust UB footguns.
+        .rustified_enum(".*")
         .enable_cxx_namespaces();
 
     if cfg!(feature = "debugmozjs") {
@@ -75,6 +71,10 @@ fn build_jsapi_bindings() {
             .clang_arg("-DJS_GC_ZEAL")
             .clang_arg("-DDEBUG")
             .clang_arg("-DJS_DEBUG");
+    }
+
+    if cfg!(feature = "bigint") {
+        builder = builder.clang_arg("-DENABLE_BIGINT");
     }
 
     let include_dir = get_mozjs_include_dir();
@@ -92,15 +92,19 @@ fn build_jsapi_bindings() {
     }
 
     for ty in WHITELIST_TYPES {
-        builder = builder.whitelisted_type(ty);
+        builder = builder.whitelist_type(ty);
     }
 
     for var in WHITELIST_VARS {
-        builder = builder.whitelisted_var(var);
+        builder = builder.whitelist_var(var);
     }
 
     for func in WHITELIST_FUNCTIONS {
-        builder = builder.whitelisted_function(func);
+        builder = builder.whitelist_function(func);
+    }
+
+    if cfg!(feature = "bigint") {
+        builder = builder.whitelist_type("JS::BigInt");
     }
 
     for ty in OPAQUE_TYPES {
@@ -108,7 +112,7 @@ fn build_jsapi_bindings() {
     }
 
     for ty in BLACKLIST_TYPES {
-        builder = builder.hide_type(ty);
+        builder = builder.blacklist_type(ty);
     }
 
     let bindings = builder.generate()
@@ -139,7 +143,8 @@ const UNSAFE_IMPL_SYNC_TYPES: &'static [&'static str] = &[
 /// Flags passed through bindgen directly to Clang.
 const EXTRA_CLANG_FLAGS: &'static [&'static str] = &[
     "-x", "c++",
-    "-std=c++14",
+    "-std=gnu++14",
+    "-fno-sized-deallocation",
     "-DRUST_BINDGEN",
 ];
 
@@ -151,23 +156,25 @@ const WHITELIST_TYPES: &'static [&'static str] = &[
     "JS::AutoObjectVector",
     "JS::CallArgs",
     "js::Class",
-    "JS::CompartmentOptions",
+    "JS::RealmOptions",
     "JS::ContextOptions",
     "js::DOMCallbacks",
     "js::DOMProxyShadowsResult",
     "js::ESClass",
     "JS::ForOfIterator",
     "JS::Handle",
+    "JS::HandleFunction",
     "JS::HandleId",
     "JS::HandleObject",
     "JS::HandleString",
     "JS::HandleValue",
     "JS::HandleValueArray",
     "JS::IsAcceptableThis",
-    "JSAutoCompartment",
+    "JSAutoRealm",
     "JSAutoStructuredCloneBuffer",
     "JSClass",
     "JSClassOps",
+    "JSCompartment",
     "JSContext",
     "JSErrNum",
     "JSErrorCallback",
@@ -221,6 +228,7 @@ const WHITELIST_TYPES: &'static [&'static str] = &[
     "js::shadow::Object",
     "js::shadow::ObjectGroup",
     "JS::SourceBufferHolder",
+    "js::StackFormat",
     "JSStructuredCloneCallbacks",
     "JS::Symbol",
     "JS::SymbolCode",
@@ -237,7 +245,7 @@ const WHITELIST_VARS: &'static [&'static str] = &[
     "JS_STRUCTURED_CLONE_VERSION",
     "JSCLASS_.*",
     "JSFUN_.*",
-    "JSID_VOID",
+    "JSID_TYPE_VOID",
     "JSITER_.*",
     "JSPROP_.*",
     "JS::FalseHandleValue",
@@ -249,6 +257,7 @@ const WHITELIST_VARS: &'static [&'static str] = &[
 /// Functions we want to generate bindings to.
 const WHITELIST_FUNCTIONS: &'static [&'static str] = &[
     "INTERNED_STRING_TO_JSID",
+    "JS::ExceptionStackOrNull",
     "JS_AddExtraGCRootsTracer",
     "JS_AddInterruptCallback",
     "JS::AddPromiseReactions",
@@ -256,7 +265,9 @@ const WHITELIST_FUNCTIONS: &'static [&'static str] = &[
     "JS_AlreadyHasOwnPropertyById",
     "JS_AtomizeAndPinString",
     "js::AssertSameCompartment",
+    "JS::BuildStackString",
     "JS::Call",
+    "JS_CallFunctionName",
     "JS_CallFunctionValue",
     "JS::CallOriginalPromiseThen",
     "JS::CallOriginalPromiseResolve",
@@ -283,6 +294,7 @@ const WHITELIST_FUNCTIONS: &'static [&'static str] = &[
     "JS_GetObjectPrototype",
     "JS_GetObjectRuntime",
     "JS_GetOwnPropertyDescriptorById",
+    "JS::GetPromiseResult",
     "JS::GetPromiseState",
     "JS_GetPropertyDescriptorById",
     "js::GetPropertyKeys",
@@ -313,10 +325,11 @@ const WHITELIST_FUNCTIONS: &'static [&'static str] = &[
     "js::Dump.*",
     "JS_EncodeStringToUTF8",
     "JS_EndRequest",
-    "JS_EnterCompartment",
+    "JS::EnterRealm",
     "JS_EnumerateStandardClasses",
     "JS_ErrorFromException",
     "JS_FireOnNewGlobalObject",
+    "JS_free",
     "JS_GC",
     "JS_GetArrayBufferData",
     "JS_GetArrayBufferViewType",
@@ -349,7 +362,7 @@ const WHITELIST_FUNCTIONS: &'static [&'static str] = &[
     "JS_IsExceptionPending",
     "JS_IsGlobalObject",
     "JS::IsCallable",
-    "JS_LeaveCompartment",
+    "JS::LeaveRealm",
     "JS_LinkConstructorAndPrototype",
     "JS_MayResolveStandardClass",
     "JS_NewArrayBuffer",
@@ -381,11 +394,13 @@ const WHITELIST_FUNCTIONS: &'static [&'static str] = &[
     "JS_ReadBytes",
     "JS_ReadStructuredClone",
     "JS_ReadUint32Pair",
+    "JS_RemoveExtraGCRootsTracer",
     "js::RemoveRawValueRoot",
     "JS_ReportErrorASCII",
     "JS_ReportErrorNumberUTF8",
     "JS_RequestInterruptCallback",
     "JS_ResolveStandardClass",
+    "js::RunJobs",
     "JS_SameValue",
     "js::SetDOMCallbacks",
     "js::SetDOMProxyInformation",
@@ -403,6 +418,7 @@ const WHITELIST_FUNCTIONS: &'static [&'static str] = &[
     "JS_SetParallelParsingEnabled",
     "JS_SetPendingException",
     "js::SetPreserveWrapperCallback",
+    "JS::SetPromiseRejectionTrackerCallback",
     "JS_SetPrototype",
     "js::SetWindowProxy",
     "js::SetWindowProxyClass",
@@ -411,6 +427,7 @@ const WHITELIST_FUNCTIONS: &'static [&'static str] = &[
     "JS_SetWrapObjectCallbacks",
     "JS_ShutDown",
     "JS_SplicePrototype",
+    "js::StopDrainingJobQueue",
     "JS_StrictPropertyStub",
     "JS_StringEqualsAscii",
     "JS_StringHasLatin1Chars",
@@ -444,6 +461,8 @@ const WHITELIST_FUNCTIONS: &'static [&'static str] = &[
     "js::UnwrapUint32Array",
     "js::UnwrapUint8Array",
     "js::UnwrapUint8ClampedArray",
+    "js::UseInternalJobQueues",
+    "JS_ValueToFunction",
 ];
 
 /// Types that should be treated as an opaque blob of bytes whenever they show
@@ -457,6 +476,7 @@ const OPAQUE_TYPES: &'static [&'static str] = &[
     "mozilla::BufferList",
     "mozilla::UniquePtr.*",
     "JS::Rooted<JS::Auto.*Vector.*>",
+    "JS::Auto.*Vector"
 ];
 
 /// Types for which we should NEVER generate bindings, even if it is used within

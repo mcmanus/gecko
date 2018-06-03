@@ -9,7 +9,8 @@
 #include "mozilla/Maybe.h"
 #include "mozilla/Move.h"
 
-#include "jsstr.h"
+#include "builtin/String.h"
+#include "util/Text.h"
 
 namespace JS {
 namespace ubi {
@@ -27,7 +28,7 @@ BackEdge::clone() const
         if (!clone->name_)
             return nullptr;
     }
-    return mozilla::Move(clone);
+    return std::move(clone);
 }
 
 #ifdef DEBUG
@@ -56,7 +57,7 @@ dumpPaths(JSContext* cx, Node node, uint32_t maxNumPaths /* = 10 */)
     bool ok = targets.init() && targets.putNew(node);
     MOZ_ASSERT(ok);
 
-    auto paths = ShortestPaths::Create(cx, nogc.ref(), maxNumPaths, &rootList, mozilla::Move(targets));
+    auto paths = ShortestPaths::Create(cx, nogc.ref(), maxNumPaths, &rootList, std::move(targets));
     MOZ_ASSERT(paths.isSome());
 
     int i = 0;

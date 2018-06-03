@@ -22,7 +22,8 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(ModuleScript)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mLoader)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mBaseURL)
   tmp->UnlinkModuleRecord();
-  tmp->mError.setUndefined();
+  tmp->mParseError.setUndefined();
+  tmp->mErrorToRethrow.setUndefined();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(ModuleScript)
@@ -31,7 +32,8 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(ModuleScript)
   NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mModuleRecord)
-  NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mError)
+  NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mParseError)
+  NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mErrorToRethrow)
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(ModuleScript)
@@ -39,12 +41,14 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(ModuleScript)
 
 ModuleScript::ModuleScript(ScriptLoader* aLoader, nsIURI* aBaseURL)
  : mLoader(aLoader),
-   mBaseURL(aBaseURL)
+   mBaseURL(aBaseURL),
+   mSourceElementAssociated(false)
 {
   MOZ_ASSERT(mLoader);
   MOZ_ASSERT(mBaseURL);
   MOZ_ASSERT(!mModuleRecord);
-  MOZ_ASSERT(mError.isUndefined());
+  MOZ_ASSERT(!HasParseError());
+  MOZ_ASSERT(!HasErrorToRethrow());
 }
 
 void
@@ -70,7 +74,8 @@ void
 ModuleScript::SetModuleRecord(JS::Handle<JSObject*> aModuleRecord)
 {
   MOZ_ASSERT(!mModuleRecord);
-  MOZ_ASSERT(mError.isUndefined());
+  MOZ_ASSERT(!HasParseError());
+  MOZ_ASSERT(!HasErrorToRethrow());
 
   mModuleRecord = aModuleRecord;
 
@@ -81,37 +86,37 @@ ModuleScript::SetModuleRecord(JS::Handle<JSObject*> aModuleRecord)
 }
 
 void
-ModuleScript::SetPreInstantiationError(const JS::Value& aError)
+ModuleScript::SetParseError(const JS::Value& aError)
 {
   MOZ_ASSERT(!aError.isUndefined());
+  MOZ_ASSERT(!HasParseError());
+  MOZ_ASSERT(!HasErrorToRethrow());
 
   UnlinkModuleRecord();
-  mError = aError;
-
+  mParseError = aError;
   HoldJSObjects(this);
 }
 
-bool
-ModuleScript::IsErrored() const
+void
+ModuleScript::SetErrorToRethrow(const JS::Value& aError)
 {
-  if (!mModuleRecord) {
-    MOZ_ASSERT(!mError.isUndefined());
-    return true;
-  }
+  MOZ_ASSERT(!aError.isUndefined());
+  MOZ_ASSERT(!HasErrorToRethrow());
 
-  return JS::IsModuleErrored(mModuleRecord);
+  // This is only called after SetModuleRecord() or SetParseError() so we don't
+  // need to call HoldJSObjects() here.
+  MOZ_ASSERT(mModuleRecord || HasParseError());
+
+  mErrorToRethrow = aError;
 }
 
-JS::Value
-ModuleScript::Error() const
+void
+ModuleScript::SetSourceElementAssociated()
 {
-  MOZ_ASSERT(IsErrored());
+  MOZ_ASSERT(mModuleRecord);
+  MOZ_ASSERT(!mSourceElementAssociated);
 
-  if (!mModuleRecord) {
-    return mError;
-  }
-
-  return JS::GetModuleError(mModuleRecord);
+  mSourceElementAssociated = true;
 }
 
 } // dom namespace

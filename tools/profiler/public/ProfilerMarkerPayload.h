@@ -8,15 +8,18 @@
 #define ProfilerMarkerPayload_h
 
 #include "mozilla/Attributes.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtrExtensions.h"
+#include "mozilla/net/TimingStruct.h"
 
 #include "nsString.h"
 #include "GeckoProfiler.h"
 
 #include "js/Utility.h"
 #include "gfxASurface.h"
+#include "mozilla/ServoTraversalStatistics.h"
 
 namespace mozilla {
 namespace layers {
@@ -36,7 +39,7 @@ class ProfilerMarkerPayload
 {
 public:
   explicit ProfilerMarkerPayload(UniqueProfilerBacktrace aStack = nullptr)
-    : mStack(Move(aStack))
+    : mStack(std::move(aStack))
   {}
 
   ProfilerMarkerPayload(const mozilla::TimeStamp& aStartTime,
@@ -44,7 +47,7 @@ public:
                         UniqueProfilerBacktrace aStack = nullptr)
     : mStartTime(aStartTime)
     , mEndTime(aEndTime)
-    , mStack(Move(aStack))
+    , mStack(std::move(aStack))
   {}
 
   virtual ~ProfilerMarkerPayload() {}
@@ -63,7 +66,7 @@ protected:
 
   void SetStack(UniqueProfilerBacktrace aStack)
   {
-    mStack = mozilla::Move(aStack);
+    mStack = std::move(aStack);
   }
 
 private:
@@ -86,7 +89,7 @@ public:
     , mKind(aKind)
   {
     if (aCause) {
-      SetStack(Move(aCause));
+      SetStack(std::move(aCause));
     }
   }
 
@@ -104,7 +107,7 @@ public:
                   const mozilla::TimeStamp& aStartTime,
                   const mozilla::TimeStamp& aEndTime,
                   UniqueProfilerBacktrace aStack)
-    : ProfilerMarkerPayload(aStartTime, aEndTime, Move(aStack))
+    : ProfilerMarkerPayload(aStartTime, aEndTime, std::move(aStack))
     , mSource(aSource)
     , mFilename(aFilename ? strdup(aFilename) : nullptr)
   {
@@ -118,14 +121,13 @@ private:
   mozilla::UniqueFreePtr<char> mFilename;
 };
 
-class DOMEventMarkerPayload : public ProfilerMarkerPayload
+class DOMEventMarkerPayload : public TracingMarkerPayload
 {
 public:
   DOMEventMarkerPayload(const nsAString& aEventType, uint16_t aPhase,
                         const mozilla::TimeStamp& aTimeStamp,
-                        const mozilla::TimeStamp& aStartTime,
-                        const mozilla::TimeStamp& aEndTime)
-    : ProfilerMarkerPayload(aStartTime, aEndTime)
+                        const char* aCategory, TracingKind aKind)
+    : TracingMarkerPayload(aCategory, aKind)
     , mTimeStamp(aTimeStamp)
     , mEventType(aEventType)
     , mPhase(aPhase)
@@ -150,11 +152,15 @@ public:
   {}
 
   UserTimingMarkerPayload(const nsAString& aName,
+                          const mozilla::Maybe<nsString>& aStartMark,
+                          const mozilla::Maybe<nsString>& aEndMark,
                           const mozilla::TimeStamp& aStartTime,
                           const mozilla::TimeStamp& aEndTime)
     : ProfilerMarkerPayload(aStartTime, aEndTime)
     , mEntryType("measure")
     , mName(aName)
+    , mStartMark(aStartMark)
+    , mEndMark(aEndMark)
   {}
 
   DECL_STREAM_PAYLOAD
@@ -163,6 +169,8 @@ private:
   // Either "mark" or "measure".
   const char* mEntryType;
   nsString mName;
+  mozilla::Maybe<nsString> mStartMark;
+  mozilla::Maybe<nsString> mEndMark;
 };
 
 // Contains the translation applied to a 2d layer so we can track the layer
@@ -202,27 +210,61 @@ private:
   mozilla::TimeStamp mVsyncTimestamp;
 };
 
-class GPUMarkerPayload : public ProfilerMarkerPayload
+class NetworkMarkerPayload : public ProfilerMarkerPayload
 {
 public:
-  GPUMarkerPayload(const mozilla::TimeStamp& aCpuTimeStart,
-                   const mozilla::TimeStamp& aCpuTimeEnd,
-                   uint64_t aGpuTimeStart,
-                   uint64_t aGpuTimeEnd)
-    : ProfilerMarkerPayload(aCpuTimeStart, aCpuTimeEnd)
-    , mCpuTimeStart(aCpuTimeStart)
-    , mCpuTimeEnd(aCpuTimeEnd)
-    , mGpuTimeStart(aGpuTimeStart)
-    , mGpuTimeEnd(aGpuTimeEnd)
+  NetworkMarkerPayload(int64_t aID, const char* aURI,
+                       NetworkLoadType aType,
+                       const mozilla::TimeStamp& aStartTime,
+                       const mozilla::TimeStamp& aEndTime,
+                       int32_t aPri,
+                       int64_t aCount,
+                       const mozilla::net::TimingStruct* aTimings = nullptr,
+                       const char* aRedirectURI = nullptr)
+    : ProfilerMarkerPayload(aStartTime, aEndTime)
+    , mID(aID)
+    , mURI(aURI ? strdup(aURI) : nullptr)
+    , mRedirectURI(aRedirectURI && (strlen(aRedirectURI) > 0) ? strdup(aRedirectURI) : nullptr)
+    , mType(aType)
+    , mPri(aPri)
+    , mCount(aCount)
+  {
+    if (aTimings) {
+      mTimings = *aTimings;
+    }
+  }
+
+  DECL_STREAM_PAYLOAD
+
+private:
+  int64_t mID;
+  mozilla::UniqueFreePtr<char> mURI;
+  mozilla::UniqueFreePtr<char> mRedirectURI;
+  NetworkLoadType mType;
+  int32_t mPri;
+  int64_t mCount;
+  mozilla::net::TimingStruct mTimings;
+};
+
+class ScreenshotPayload : public ProfilerMarkerPayload
+{
+public:
+  explicit ScreenshotPayload(mozilla::TimeStamp aTimeStamp,
+                             nsCString&& aScreenshotDataURL,
+                             const mozilla::gfx::IntSize& aWindowSize,
+                             uintptr_t aWindowIdentifier)
+    : ProfilerMarkerPayload(aTimeStamp, mozilla::TimeStamp())
+    , mScreenshotDataURL(std::move(aScreenshotDataURL))
+    , mWindowSize(aWindowSize)
+    , mWindowIdentifier(aWindowIdentifier)
   {}
 
   DECL_STREAM_PAYLOAD
 
 private:
-  mozilla::TimeStamp mCpuTimeStart;
-  mozilla::TimeStamp mCpuTimeEnd;
-  uint64_t mGpuTimeStart;
-  uint64_t mGpuTimeEnd;
+  nsCString mScreenshotDataURL;
+  mozilla::gfx::IntSize mWindowSize;
+  uintptr_t mWindowIdentifier;
 };
 
 class GCSliceMarkerPayload : public ProfilerMarkerPayload
@@ -232,7 +274,7 @@ public:
                        const mozilla::TimeStamp& aEndTime,
                        JS::UniqueChars&& aTimingJSON)
    : ProfilerMarkerPayload(aStartTime, aEndTime),
-     mTimingJSON(mozilla::Move(aTimingJSON))
+     mTimingJSON(std::move(aTimingJSON))
   {}
 
   DECL_STREAM_PAYLOAD
@@ -248,7 +290,7 @@ public:
                        const mozilla::TimeStamp& aEndTime,
                        JS::UniqueChars&& aTimingJSON)
    : ProfilerMarkerPayload(aStartTime, aEndTime),
-     mTimingJSON(mozilla::Move(aTimingJSON))
+     mTimingJSON(std::move(aTimingJSON))
   {}
 
   DECL_STREAM_PAYLOAD
@@ -264,13 +306,46 @@ public:
                        const mozilla::TimeStamp& aEndTime,
                        JS::UniqueChars&& aTimingData)
    : ProfilerMarkerPayload(aStartTime, aEndTime),
-     mTimingData(mozilla::Move(aTimingData))
+     mTimingData(std::move(aTimingData))
   {}
 
   DECL_STREAM_PAYLOAD
 
 private:
   JS::UniqueChars mTimingData;
+};
+
+class HangMarkerPayload : public ProfilerMarkerPayload
+{
+public:
+  HangMarkerPayload(const mozilla::TimeStamp& aStartTime,
+                    const mozilla::TimeStamp& aEndTime)
+   : ProfilerMarkerPayload(aStartTime, aEndTime)
+  {}
+
+  DECL_STREAM_PAYLOAD
+private:
+};
+
+class StyleMarkerPayload : public ProfilerMarkerPayload
+{
+public:
+  StyleMarkerPayload(const mozilla::TimeStamp& aStartTime,
+                     const mozilla::TimeStamp& aEndTime,
+                     UniqueProfilerBacktrace aCause,
+                     const mozilla::ServoTraversalStatistics& aStats)
+    : ProfilerMarkerPayload(aStartTime, aEndTime)
+    , mStats(aStats)
+  {
+    if (aCause) {
+      SetStack(std::move(aCause));
+    }
+  }
+
+  DECL_STREAM_PAYLOAD
+
+private:
+  mozilla::ServoTraversalStatistics mStats;
 };
 
 #endif // ProfilerMarkerPayload_h

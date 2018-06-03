@@ -6,7 +6,6 @@
 
 #include "StructuredCloneData.h"
 
-#include "nsIDOMDOMException.h"
 #include "nsIMutable.h"
 #include "nsIXPConnect.h"
 
@@ -33,13 +32,14 @@ StructuredCloneData::StructuredCloneData()
 StructuredCloneData::StructuredCloneData(StructuredCloneData&& aOther)
   : StructuredCloneData(StructuredCloneHolder::TransferringSupported)
 {
-  *this = Move(aOther);
+  *this = std::move(aOther);
 }
 
 StructuredCloneData::StructuredCloneData(TransferringSupport aSupportsTransferring)
   : StructuredCloneHolder(StructuredCloneHolder::CloningSupported,
                           aSupportsTransferring,
                           StructuredCloneHolder::StructuredCloneScope::DifferentProcess)
+  , mExternalData(JS::StructuredCloneScope::DifferentProcess)
   , mInitialized(false)
 {}
 
@@ -49,9 +49,9 @@ StructuredCloneData::~StructuredCloneData()
 StructuredCloneData&
 StructuredCloneData::operator=(StructuredCloneData&& aOther)
 {
-  mExternalData = Move(aOther.mExternalData);
-  mSharedData = Move(aOther.mSharedData);
-  mIPCStreams = Move(aOther.mIPCStreams);
+  mExternalData = std::move(aOther.mExternalData);
+  mSharedData = std::move(aOther.mSharedData);
+  mIPCStreams = std::move(aOther.mIPCStreams);
   mInitialized = aOther.mInitialized;
 
   return *this;
@@ -125,11 +125,11 @@ StructuredCloneData::Write(JSContext* aCx,
     return;
   }
 
-  JSStructuredCloneData data;
+  JSStructuredCloneData data(mBuffer->scope());
   mBuffer->abandon();
   mBuffer->steal(&data);
   mBuffer = nullptr;
-  mSharedData = new SharedJSAllocatedData(Move(data));
+  mSharedData = new SharedJSAllocatedData(std::move(data));
   mInitialized = true;
 }
 
@@ -149,10 +149,10 @@ BuildClonedMessageData(M* aManager, StructuredCloneData& aData,
                        ClonedMessageData& aClonedData)
 {
   SerializedStructuredCloneBuffer& buffer = aClonedData.data();
-  auto iter = aData.Data().Iter();
+  auto iter = aData.Data().Start();
   size_t size = aData.Data().Size();
   bool success;
-  buffer.data = aData.Data().Borrow<js::SystemAllocPolicy>(iter, size, &success);
+  buffer.data = aData.Data().Borrow(iter, size, &success);
   if (NS_WARN_IF(!success)) {
     return false;
   }
@@ -423,11 +423,11 @@ StructuredCloneData::ReadIPCParams(const IPC::Message* aMsg,
                                    PickleIterator* aIter)
 {
   MOZ_ASSERT(!mInitialized);
-  JSStructuredCloneData data;
+  JSStructuredCloneData data(JS::StructuredCloneScope::DifferentProcess);
   if (!ReadParam(aMsg, aIter, &data)) {
     return false;
   }
-  mSharedData = new SharedJSAllocatedData(Move(data));
+  mSharedData = new SharedJSAllocatedData(std::move(data));
   mInitialized = true;
   return true;
 }
@@ -458,7 +458,7 @@ bool
 StructuredCloneData::StealExternalData(JSStructuredCloneData& aData)
 {
   MOZ_ASSERT(!mInitialized);
-  mSharedData = new SharedJSAllocatedData(Move(aData));
+  mSharedData = new SharedJSAllocatedData(std::move(aData));
   mInitialized = true;
   return true;
 }

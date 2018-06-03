@@ -6,10 +6,40 @@
 
 #include "PerformanceMainThread.h"
 #include "PerformanceNavigation.h"
+#include "mozilla/dom/DOMPrefs.h"
 #include "nsICacheInfoChannel.h"
 
 namespace mozilla {
 namespace dom {
+
+namespace {
+
+void
+GetURLSpecFromChannel(nsITimedChannel* aChannel, nsAString& aSpec)
+{
+  aSpec.AssignLiteral("document");
+
+  nsCOMPtr<nsIChannel> channel = do_QueryInterface(aChannel);
+  if (!channel) {
+    return;
+  }
+
+  nsCOMPtr<nsIURI> uri;
+  nsresult rv = channel->GetURI(getter_AddRefs(uri));
+  if (NS_WARN_IF(NS_FAILED(rv)) || !uri) {
+    return;
+  }
+
+  nsAutoCString spec;
+  rv = uri->GetSpec(spec);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return;
+  }
+
+  aSpec = NS_ConvertUTF8toUTF16(spec);
+}
+
+} // anonymous
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(PerformanceMainThread)
 
@@ -93,8 +123,7 @@ PerformanceMainThread::DispatchBufferFullEvent()
   // it bubbles, and it isn't cancelable
   event->InitEvent(NS_LITERAL_STRING("resourcetimingbufferfull"), true, false);
   event->SetTrusted(true);
-  bool dummy;
-  DispatchEvent(event, &dummy);
+  DispatchEvent(*event);
 }
 
 PerformanceNavigation*
@@ -117,53 +146,24 @@ PerformanceMainThread::AddEntry(nsIHttpChannel* channel,
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  // Check if resource timing is prefed off.
-  if (!nsContentUtils::IsResourceTimingEnabled()) {
+  nsAutoString initiatorType;
+  nsAutoString entryName;
+
+  UniquePtr<PerformanceTimingData> performanceTimingData(
+    PerformanceTimingData::Create(timedChannel, channel, 0, initiatorType,
+                                  entryName));
+  if (!performanceTimingData) {
     return;
   }
 
-  // Don't add the entry if the buffer is full
-  if (IsResourceEntryLimitReached()) {
-    return;
-  }
+  // The PerformanceResourceTiming object will use the PerformanceTimingData
+  // object to get all the required timings.
+  RefPtr<PerformanceResourceTiming> performanceEntry =
+    new PerformanceResourceTiming(std::move(performanceTimingData), this,
+                                  entryName);
 
-  if (channel && timedChannel) {
-    nsAutoCString name;
-    nsAutoString initiatorType;
-    nsCOMPtr<nsIURI> originalURI;
-
-    timedChannel->GetInitiatorType(initiatorType);
-
-    // According to the spec, "The name attribute must return the resolved URL
-    // of the requested resource. This attribute must not change even if the
-    // fetch redirected to a different URL."
-    channel->GetOriginalURI(getter_AddRefs(originalURI));
-    originalURI->GetSpec(name);
-    NS_ConvertUTF8toUTF16 entryName(name);
-
-    // The nsITimedChannel argument will be used to gather all the timings.
-    // The nsIHttpChannel argument will be used to check if any cross-origin
-    // redirects occurred.
-    // The last argument is the "zero time" (offset). Since we don't want
-    // any offset for the resource timing, this will be set to "0" - the
-    // resource timing returns a relative timing (no offset).
-    RefPtr<PerformanceTiming> performanceTiming =
-        new PerformanceTiming(this, timedChannel, channel,
-            0);
-
-    // The PerformanceResourceTiming object will use the PerformanceTiming
-    // object to get all the required timings.
-    RefPtr<PerformanceResourceTiming> performanceEntry =
-      new PerformanceResourceTiming(performanceTiming, this, entryName, channel);
-
-    // If the initiator type had no valid value, then set it to the default
-    // ("other") value.
-    if (initiatorType.IsEmpty()) {
-      initiatorType = NS_LITERAL_STRING("other");
-    }
-    performanceEntry->SetInitiatorType(initiatorType);
-    InsertResourceEntry(performanceEntry);
-  }
+  performanceEntry->SetInitiatorType(initiatorType);
+  InsertResourceEntry(performanceEntry);
 }
 
 // To be removed once bug 1124165 lands
@@ -271,7 +271,7 @@ PerformanceMainThread::InsertUserEntry(PerformanceEntry* aEntry)
   nsAutoCString uri;
   uint64_t markCreationEpoch = 0;
 
-  if (nsContentUtils::IsUserTimingLoggingEnabled() ||
+  if (DOMPrefs::PerformanceLoggingEnabled() ||
       nsContentUtils::SendPerformanceTimingNotifications()) {
     nsresult rv = NS_ERROR_FAILURE;
     nsCOMPtr<nsPIDOMWindowInner> owner = GetOwner();
@@ -285,7 +285,7 @@ PerformanceMainThread::InsertUserEntry(PerformanceEntry* aEntry)
     }
     markCreationEpoch = static_cast<uint64_t>(PR_Now() / PR_USEC_PER_MSEC);
 
-    if (nsContentUtils::IsUserTimingLoggingEnabled()) {
+    if (DOMPrefs::PerformanceLoggingEnabled()) {
       Performance::LogEntry(aEntry, uri);
     }
   }
@@ -313,14 +313,39 @@ void
 PerformanceMainThread::EnsureDocEntry()
 {
   if (!mDocEntry && nsContentUtils::IsPerformanceNavigationTimingEnabled()) {
+
+    UniquePtr<PerformanceTimingData> timing(
+      new PerformanceTimingData(mChannel, nullptr, 0));
+
     nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(mChannel);
-    RefPtr<PerformanceTiming> timing =
-      new PerformanceTiming(this, mChannel, nullptr, 0);
-    mDocEntry = new PerformanceNavigationTiming(timing, this,
-                                                httpChannel);
+    if (httpChannel) {
+      timing->SetPropertiesFromHttpChannel(httpChannel);
+    }
+
+    nsAutoString name;
+    GetURLSpecFromChannel(mChannel, name);
+
+    mDocEntry = new PerformanceNavigationTiming(std::move(timing), this, name);
   }
 }
 
+void
+PerformanceMainThread::CreateDocumentEntry(nsITimedChannel* aChannel)
+{
+  MOZ_ASSERT(aChannel);
+  MOZ_ASSERT(!mDocEntry, "mDocEntry should be null.");
+
+  if (!nsContentUtils::IsPerformanceNavigationTimingEnabled()) {
+    return;
+  }
+
+  nsAutoString name;
+  GetURLSpecFromChannel(aChannel, name);
+
+  UniquePtr<PerformanceTimingData> timing(
+      new PerformanceTimingData(aChannel, nullptr, 0));
+  mDocEntry = new PerformanceNavigationTiming(std::move(timing), this, name);
+}
 
 void
 PerformanceMainThread::GetEntries(nsTArray<RefPtr<PerformanceEntry>>& aRetval)

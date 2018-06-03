@@ -5,11 +5,11 @@
  * Tests that switching to an iframe works fine.
  */
 
-add_task(function* () {
+add_task(async function() {
   Services.prefs.setBoolPref("devtools.command-button-frames.enabled", true);
 
-  let { target, panel, toolbox } = yield initWebAudioEditor(IFRAME_CONTEXT_URL);
-  let { gFront, $ } = panel.panelWin;
+  const { target, panel, toolbox } = await initWebAudioEditor(IFRAME_CONTEXT_URL);
+  const { gFront, $ } = panel.panelWin;
 
   is($("#reload-notice").hidden, false,
     "The 'reload this page' notice should initially be visible.");
@@ -18,14 +18,14 @@ add_task(function* () {
   is($("#content").hidden, true,
     "The tool's content should initially be hidden.");
 
-  let btn = toolbox.doc.getElementById("command-button-frames");
+  const btn = toolbox.doc.getElementById("command-button-frames");
   ok(!btn.firstChild, "The frame list button has no children");
 
   // Open frame menu and wait till it's available on the screen.
-  let menu = yield toolbox.showFramesMenu({target: btn});
-  yield once(menu, "open");
+  const menu = await toolbox.showFramesMenu({target: btn});
+  await once(menu, "open");
 
-  let frames = menu.items;
+  const frames = menu.items;
   is(frames.length, 2, "We have both frames in the list");
 
   // Select the iframe
@@ -33,7 +33,7 @@ add_task(function* () {
 
   let navigating = once(target, "will-navigate");
 
-  yield navigating;
+  await navigating;
 
   is($("#reload-notice").hidden, false,
     "The 'reload this page' notice should still be visible when switching to a frame.");
@@ -43,11 +43,11 @@ add_task(function* () {
     "The tool's content should still be hidden.");
 
   navigating = once(target, "will-navigate");
-  let started = once(gFront, "start-context");
+  const started = once(gFront, "start-context");
 
   reload(target);
 
-  yield Promise.all([navigating, started]);
+  await Promise.all([navigating, started]);
 
   is($("#reload-notice").hidden, true,
     "The 'reload this page' notice should be hidden after reloading the frame.");
@@ -56,5 +56,5 @@ add_task(function* () {
   is($("#content").hidden, false,
     "The tool's content should appear after reload.");
 
-  yield teardown(target);
+  await teardown(target);
 });

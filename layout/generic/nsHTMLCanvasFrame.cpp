@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -83,7 +84,7 @@ public:
     *aSnap = false;
     nsHTMLCanvasFrame* f = static_cast<nsHTMLCanvasFrame*>(Frame());
     HTMLCanvasElement* canvas =
-      HTMLCanvasElement::FromContent(f->GetContent());
+      HTMLCanvasElement::FromNode(f->GetContent());
     nsRegion result;
     if (canvas->GetIsOpaque()) {
       // OK, the entire region painted by the canvas is opaque. But what is
@@ -130,6 +131,8 @@ public:
                                        nsDisplayListBuilder* aDisplayListBuilder) override
   {
     HTMLCanvasElement* element = static_cast<HTMLCanvasElement*>(mFrame->GetContent());
+    element->HandlePrintCallback(mFrame->PresContext()->Type());
+
     switch(element->GetCurrentContextType()) {
       case CanvasContextType::Canvas2D:
       case CanvasContextType::WebGL1:
@@ -138,22 +141,18 @@ public:
         bool isRecycled;
         RefPtr<WebRenderCanvasData> canvasData =
           aManager->CommandBuilder().CreateOrRecycleWebRenderUserData<WebRenderCanvasData>(this, &isRecycled);
+        nsHTMLCanvasFrame* canvasFrame = static_cast<nsHTMLCanvasFrame*>(mFrame);
+        if (!canvasFrame->UpdateWebRenderCanvasData(aDisplayListBuilder, canvasData)) {
+          return true;
+        }
         WebRenderCanvasRendererAsync* data =
           static_cast<WebRenderCanvasRendererAsync*>(canvasData->GetCanvasRenderer());
-
-        if (!isRecycled) {
-          nsHTMLCanvasFrame* canvasFrame = static_cast<nsHTMLCanvasFrame*>(mFrame);
-          if (!canvasFrame->InitializeCanvasRenderer(aDisplayListBuilder, data)) {
-            return true;
-          }
-        }
-
+        MOZ_ASSERT(data);
         data->UpdateCompositableClient();
 
         // Push IFrame for async image pipeline.
         // XXX Remove this once partial display list update is supported.
 
-        /* ScrollingLayersHelper scroller(this, aBuilder, aResources, aSc); */
         nsIntSize canvasSizeInPx = data->GetSize();
         IntrinsicSize intrinsicSize = IntrinsicSizeFromCanvasSize(canvasSizeInPx);
         nsSize intrinsicRatio = IntrinsicRatioFromCanvasSize(canvasSizeInPx);
@@ -173,8 +172,8 @@ public:
         // where it will be done when we build the display list for the iframe.
         // That happens in WebRenderCompositableHolder.
 
-        wr::LayoutRect r = aSc.ToRelativeLayoutRect(bounds);
-        aBuilder.PushIFrame(r, !BackfaceIsHidden(), data->GetPipelineId().ref());
+        wr::LayoutRect r = wr::ToRoundedLayoutRect(bounds);
+        aBuilder.PushIFrame(r, !BackfaceIsHidden(), data->GetPipelineId().ref(), /*ignoreMissingPipelines*/ false);
 
         gfx::Matrix4x4 scTransform;
         gfxRect destGFXRect = mFrame->PresContext()->AppUnitsToGfxUnits(dest);
@@ -185,7 +184,7 @@ public:
         }
 
         MaybeIntSize scaleToSize;
-        LayerRect scBounds(0, 0, bounds.width, bounds.height);
+        LayoutDeviceRect scBounds(LayoutDevicePoint(0, 0), bounds.Size());
         wr::ImageRendering filter = wr::ToImageRendering(nsLayoutUtils::GetSamplingFilterForFrame(mFrame));
         wr::MixBlendMode mixBlendMode = wr::MixBlendMode::Normal;
         aManager->WrBridge()->AddWebRenderParentCommand(OpUpdateAsyncImagePipeline(data->GetPipelineId().value(),
@@ -211,7 +210,7 @@ public:
                                    LayerManager* aManager,
                                    const ContainerLayerParameters& aParameters) override
   {
-    if (HTMLCanvasElement::FromContent(mFrame->GetContent())->ShouldForceInactiveLayer(aManager))
+    if (HTMLCanvasElement::FromNode(mFrame->GetContent())->ShouldForceInactiveLayer(aManager))
       return LAYER_INACTIVE;
 
     // If compositing is cheap, just do that
@@ -225,9 +224,9 @@ public:
 
 
 nsIFrame*
-NS_NewHTMLCanvasFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewHTMLCanvasFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsHTMLCanvasFrame(aContext);
+  return new (aPresShell) nsHTMLCanvasFrame(aStyle);
 }
 
 NS_QUERYFRAME_HEAD(nsHTMLCanvasFrame)
@@ -258,7 +257,7 @@ nsHTMLCanvasFrame::GetCanvasSize()
 {
   nsIntSize size(0,0);
   HTMLCanvasElement *canvas =
-    HTMLCanvasElement::FromContentOrNull(GetContent());
+    HTMLCanvasElement::FromNodeOrNull(GetContent());
   if (canvas) {
     size = canvas->GetSize();
     MOZ_ASSERT(size.width >= 0 && size.height >= 0,
@@ -346,7 +345,7 @@ nsHTMLCanvasFrame::Reflow(nsPresContext*           aPresContext,
                   ("enter nsHTMLCanvasFrame::Reflow: availSize=%d,%d",
                   aReflowInput.AvailableWidth(), aReflowInput.AvailableHeight()));
 
-  NS_PRECONDITION(mState & NS_FRAME_IN_REFLOW, "frame is not in reflow");
+  MOZ_ASSERT(mState & NS_FRAME_IN_REFLOW, "frame is not in reflow");
 
   WritingMode wm = aReflowInput.GetWritingMode();
   LogicalSize finalSize(wm,
@@ -458,11 +457,11 @@ nsHTMLCanvasFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
 }
 
 bool
-nsHTMLCanvasFrame::InitializeCanvasRenderer(nsDisplayListBuilder* aBuilder,
-                                            CanvasRenderer* aRenderer)
+nsHTMLCanvasFrame::UpdateWebRenderCanvasData(nsDisplayListBuilder* aBuilder,
+                                             WebRenderCanvasData* aCanvasData)
 {
   HTMLCanvasElement* element = static_cast<HTMLCanvasElement*>(GetContent());
-  return element->InitializeCanvasRenderer(aBuilder, aRenderer);
+  return element->UpdateWebRenderCanvasData(aBuilder, aCanvasData);
 }
 
 void
@@ -481,8 +480,8 @@ nsHTMLCanvasFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   DisplayListClipState::AutoClipContainingBlockDescendantsToContentBox
     clip(aBuilder, this, clipFlags);
 
-  aLists.Content()->AppendNewToTop(
-    new (aBuilder) nsDisplayCanvas(aBuilder, this));
+  aLists.Content()->AppendToTop(
+    MakeDisplayItem<nsDisplayCanvas>(aBuilder, this));
 
   DisplaySelectionOverlay(aBuilder, aLists.Content(),
                           nsISelectionDisplay::DISPLAY_IMAGES);

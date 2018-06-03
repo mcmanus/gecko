@@ -21,7 +21,7 @@
   <script type="application/javascript" src="../layout.js"></script>
 
   <script type="application/javascript">
-    Components.utils.import("resource://gre/modules/accessibility/Traversal.jsm");
+    ChromeUtils.import("resource://gre/modules/accessibility/Traversal.jsm");
     var gBrowserWnd = null;
     var gQueue = null;
 
@@ -33,7 +33,7 @@
 
       gQueue.onFinish = function onFinish() {
         closeBrowserWindow();
-      }
+      };
 
       queueTraversalSequence(gQueue, docAcc, TraversalRules.Heading, null,
                              ["heading-1", "heading-2", "heading-3", "heading-5"]);

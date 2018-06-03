@@ -19,28 +19,27 @@ const TOOLBOX_WIDTH = 500;
 const TOOLTIP_WIDTH = 150;
 const TOOLTIP_HEIGHT = 30;
 
-add_task(function* () {
-  // Force the toolbox to be 500px wide (min width is 465px);
-  yield pushPref("devtools.toolbox.sidebar.width", TOOLBOX_WIDTH);
+add_task(async function() {
+  await pushPref("devtools.toolbox.sidebar.width", TOOLBOX_WIDTH);
 
-  let [,, doc] = yield createHost("side", TEST_URI);
+  const [,, doc] = await createHost("side", TEST_URI);
 
   info("Test a tooltip is not closed when clicking inside itself");
 
-  let tooltip = new HTMLTooltip(doc, {useXulWrapper: false});
-  let div = doc.createElementNS(HTML_NS, "div");
+  const tooltip = new HTMLTooltip(doc, {useXulWrapper: false});
+  const div = doc.createElementNS(HTML_NS, "div");
   div.textContent = "tooltip";
   div.style.cssText = "box-sizing: border-box; border: 1px solid black";
   tooltip.setContent(div, {width: TOOLTIP_WIDTH, height: TOOLTIP_HEIGHT});
 
-  yield testRtlAnchors(doc, tooltip);
-  yield testLtrAnchors(doc, tooltip);
-  yield hideTooltip(tooltip);
+  await testRtlAnchors(doc, tooltip);
+  await testLtrAnchors(doc, tooltip);
+  await hideTooltip(tooltip);
 
   tooltip.destroy();
 });
 
-function* testRtlAnchors(doc, tooltip) {
+async function testRtlAnchors(doc, tooltip) {
   /*
    * The layout of the test page is as follows:
    *   _______________________________
@@ -56,11 +55,11 @@ function* testRtlAnchors(doc, tooltip) {
    * - total toolbox width is 500px so each box is 125px wide
   */
 
-  let box1 = doc.getElementById("box1");
-  let box2 = doc.getElementById("box2");
+  const box1 = doc.getElementById("box1");
+  const box2 = doc.getElementById("box2");
 
   info("Display the tooltip on box1.");
-  yield showTooltip(tooltip, box1, {position: "bottom"});
+  await showTooltip(tooltip, box1, {position: "bottom"});
 
   let panelRect = tooltip.container.getBoundingClientRect();
   let anchorRect = box1.getBoundingClientRect();
@@ -72,7 +71,7 @@ function* testRtlAnchors(doc, tooltip) {
   is(panelRect.height, TOOLTIP_HEIGHT, "Tooltip height is at 100px as expected");
 
   info("Display the tooltip on box2.");
-  yield showTooltip(tooltip, box2, {position: "bottom"});
+  await showTooltip(tooltip, box2, {position: "bottom"});
 
   panelRect = tooltip.container.getBoundingClientRect();
   anchorRect = box2.getBoundingClientRect();
@@ -83,7 +82,7 @@ function* testRtlAnchors(doc, tooltip) {
   is(panelRect.height, TOOLTIP_HEIGHT, "Tooltip height is at 100px as expected");
 }
 
-function* testLtrAnchors(doc, tooltip) {
+async function testLtrAnchors(doc, tooltip) {
     /*
    * The layout of the test page is as follows:
    *   _______________________________
@@ -99,11 +98,11 @@ function* testLtrAnchors(doc, tooltip) {
    * - total toolbox width is 500px so each box is 125px wide
   */
 
-  let box3 = doc.getElementById("box3");
-  let box4 = doc.getElementById("box4");
+  const box3 = doc.getElementById("box3");
+  const box4 = doc.getElementById("box4");
 
   info("Display the tooltip on box3.");
-  yield showTooltip(tooltip, box3, {position: "bottom"});
+  await showTooltip(tooltip, box3, {position: "bottom"});
 
   let panelRect = tooltip.container.getBoundingClientRect();
   let anchorRect = box3.getBoundingClientRect();
@@ -114,7 +113,7 @@ function* testLtrAnchors(doc, tooltip) {
   is(panelRect.height, TOOLTIP_HEIGHT, "Tooltip height is at 100px as expected");
 
   info("Display the tooltip on box4.");
-  yield showTooltip(tooltip, box4, {position: "bottom"});
+  await showTooltip(tooltip, box4, {position: "bottom"});
 
   panelRect = tooltip.container.getBoundingClientRect();
   anchorRect = box4.getBoundingClientRect();

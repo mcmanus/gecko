@@ -3,7 +3,6 @@
   <head>
     <title>aria-pressed=true</title>
     <meta content="text/html; charset=utf-8" http-equiv="Content-Type"/>
-    <link rel="stylesheet" href="/resources/testharness.css">
     <link rel="stylesheet" href="/wai-aria/scripts/manual.css">
     <script src="/resources/testharness.js"></script>
     <script src="/resources/testharnessreport.js"></script>
@@ -23,6 +22,12 @@
                   "states",
                   "contains",
                   "STATE_PRESSED"
+               ],
+               [
+                  "property",
+                  "objectAttributes",
+                  "doesNotContain",
+                  "checkable:true"
                ]
             ],
             "AXAPI" : [
@@ -31,6 +36,14 @@
                   "AXValue",
                   "is",
                   "1"
+               ]
+            ],
+            "IAccessible2" : [
+               [
+                  "property",
+                  "objectAttributes",
+                  "doesNotContain",
+                  "checkable:true"
                ]
             ],
             "MSAA" : [
@@ -69,4 +82,3 @@
   <div id="ATTAmessages"></div>
   </body>
 </html>
-

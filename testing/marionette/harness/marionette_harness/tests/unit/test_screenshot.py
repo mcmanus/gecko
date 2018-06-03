@@ -2,6 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 import base64
 import hashlib
 import imghdr
@@ -203,24 +205,6 @@ class TestScreenCaptureChrome(WindowManagerMixin, ScreenCaptureTestCase):
         self.assertEqual(screenshot_root, screenshot_full)
         self.assertEqual(self.scale(self.get_element_dimensions(self.document_element)),
                          self.get_image_dimensions(screenshot_full))
-
-    @skip_if_mobile("Fennec doesn't support other chrome windows")
-    def test_capture_viewport(self):
-        # Load a HTML test page into the chrome window to get scrollbars
-        test_page = self.marionette.absolute_url("test.html")
-        dialog = self.open_dialog(url=test_page, width=50, height=50)
-        self.marionette.switch_to_window(dialog)
-
-        # Size of screenshot has to match viewport size
-        screenshot = self.marionette.screenshot(full=False)
-        self.assert_png(screenshot)
-        self.assertEqual(self.scale(self.viewport_dimensions),
-                         self.get_image_dimensions(screenshot))
-        self.assertNotEqual(self.scale(self.window_dimensions),
-                            self.get_image_dimensions(screenshot))
-
-        self.marionette.close_chrome_window()
-        self.marionette.switch_to_window(self.start_window)
 
     @skip_if_mobile("Fennec doesn't support other chrome windows")
     def test_capture_window_already_closed(self):

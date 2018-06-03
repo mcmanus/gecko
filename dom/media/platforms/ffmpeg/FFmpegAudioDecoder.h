@@ -16,8 +16,15 @@ template <int V> class FFmpegAudioDecoder
 {
 };
 
-template <>
-class FFmpegAudioDecoder<LIBAV_VER> : public FFmpegDataDecoder<LIBAV_VER>
+template<>
+class FFmpegAudioDecoder<LIBAV_VER>;
+DDLoggedTypeNameAndBase(FFmpegAudioDecoder<LIBAV_VER>,
+                        FFmpegDataDecoder<LIBAV_VER>);
+
+template<>
+class FFmpegAudioDecoder<LIBAV_VER>
+  : public FFmpegDataDecoder<LIBAV_VER>
+  , public DecoderDoctorLifeLogger<FFmpegAudioDecoder<LIBAV_VER>>
 {
 public:
   FFmpegAudioDecoder(FFmpegLibWrapper* aLib, TaskQueue* aTaskQueue,
@@ -33,8 +40,11 @@ public:
   }
 
 private:
-  RefPtr<DecodePromise> ProcessDecode(MediaRawData* aSample) override;
-  RefPtr<DecodePromise> ProcessDrain() override;
+  MediaResult DoDecode(MediaRawData* aSample,
+                       uint8_t* aData,
+                       int aSize,
+                       bool* aGotFrame,
+                       DecodedData& aResults) override;
 };
 
 } // namespace mozilla

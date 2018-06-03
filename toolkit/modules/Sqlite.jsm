@@ -4,17 +4,17 @@
 
 "use strict";
 
-this.EXPORTED_SYMBOLS = [
+var EXPORTED_SYMBOLS = [
   "Sqlite",
 ];
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+// The maximum time to wait before considering a transaction stuck and rejecting
+// it. (Note that the minimum amount of time we wait is 20% less than this, see
+// the `_getTimeoutPromise` method on `ConnectionData` for details).
+const TRANSACTIONS_QUEUE_TIMEOUT_MS = 300000; // 5 minutes
 
-// The time to wait before considering a transaction stuck and rejecting it.
-const TRANSACTIONS_QUEUE_TIMEOUT_MS = 240000 // 4 minutes
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Timer.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Timer.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
@@ -24,7 +24,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   FileUtils: "resource://gre/modules/FileUtils.jsm",
   Task: "resource://gre/modules/Task.jsm",
   PromiseUtils: "resource://gre/modules/PromiseUtils.jsm",
-  console: "resource://gre/modules/Console.jsm",
 });
 
 XPCOMUtils.defineLazyServiceGetter(this, "FinalizationWitnessService",
@@ -228,6 +227,12 @@ function ConnectionData(connection, identifier, options = {}) {
   // Increments whenever we request a unique operation id.
   this._operationsCounter = 0;
 
+  if ("defaultTransactionType" in options) {
+    this.defaultTransactionType = options.defaultTransactionType;
+  } else {
+    this.defaultTransactionType = convertStorageTransactionType(
+      this._dbConn.defaultTransactionType);
+  }
   this._hasInProgressTransaction = false;
   // Manages a chain of transactions promises, so that new transactions
   // always happen in queue to the previous ones.  It never rejects.
@@ -262,6 +267,14 @@ function ConnectionData(connection, identifier, options = {}) {
       statementCounter: this._statementCounter,
     })
   );
+
+  // We avoid creating a timer every transaction that exists solely as a safety
+  // check (e.g. one that never should fire) by reusing it if it's sufficiently
+  // close to when the previous promise was created (see bug 1442353 and
+  // `_getTimeoutPromise` for more info).
+  this._timeoutPromise = null;
+  // The last timestamp when we should consider using `this._timeoutPromise`.
+  this._timeoutPromiseExpires = 0;
 }
 
 /**
@@ -379,7 +392,7 @@ ConnectionData.prototype = Object.freeze({
       try {
         return (await promiseResult);
       } finally {
-        this._barrier.client.removeBlocker(key, promiseComplete)
+        this._barrier.client.removeBlocker(key, promiseComplete);
       }
     })();
   },
@@ -452,7 +465,7 @@ ConnectionData.prototype = Object.freeze({
       // a blocker for Barriers.connections.
       Barriers.connections.client.removeBlocker(this._deferredClose.promise);
       this._deferredClose.resolve();
-    }
+    };
     if (wrappedConnections.has(this._identifier)) {
       wrappedConnections.delete(this._identifier);
       this._dbConn = null;
@@ -542,8 +555,10 @@ ConnectionData.prototype = Object.freeze({
   },
 
   executeTransaction(func, type) {
-    if (typeof type == "undefined") {
-      throw new Error("Internal error: expected a type");
+    if (type == OpenedConnection.prototype.TRANSACTION_DEFAULT) {
+      type = this.defaultTransactionType;
+    } else if (!OpenedConnection.TRANSACTION_TYPES.includes(type)) {
+      throw new Error("Unknown transaction type: " + type);
     }
     this.ensureOpen();
 
@@ -637,15 +652,12 @@ ConnectionData.prototype = Object.freeze({
       // nested, it could hang the transactions queue forever.  Thus we timeout
       // the execution after a meaningful amount of time, to ensure in any case
       // we'll proceed after a while.
-      let timeoutPromise = new Promise((resolve, reject) => {
-        setTimeout(() => reject(new Error("Transaction timeout, most likely caused by unresolved pending work.")),
-                   TRANSACTIONS_QUEUE_TIMEOUT_MS);
-      });
+      let timeoutPromise = this._getTimeoutPromise();
       return Promise.race([transactionPromise, timeoutPromise]);
     });
     // Atomically update the queue before anyone else has a chance to enqueue
     // further transactions.
-    this._transactionQueue = promise.catch(ex => { console.error(ex) });
+    this._transactionQueue = promise.catch(ex => { console.error(ex); });
 
     // Make sure that we do not shutdown the connection during a transaction.
     this._barrier.client.addBlocker(`Transaction (${this._getOperationId()})`,
@@ -846,6 +858,28 @@ ConnectionData.prototype = Object.freeze({
     this._idleShrinkTimer.initWithCallback(this.shrinkMemory.bind(this),
                                            this._idleShrinkMS,
                                            this._idleShrinkTimer.TYPE_ONE_SHOT);
+  },
+
+  // Returns a promise that will resolve after a time comprised between 80% of
+  // `TRANSACTIONS_QUEUE_TIMEOUT_MS` and `TRANSACTIONS_QUEUE_TIMEOUT_MS`. Use
+  // this promise instead of creating several individual timers to reduce the
+  // overhead due to timers (see bug 1442353).
+  _getTimeoutPromise() {
+    if (this._timeoutPromise && Cu.now() <= this._timeoutPromiseExpires) {
+      return this._timeoutPromise;
+    }
+    let timeoutPromise = new Promise((resolve, reject) => {
+      setTimeout(() => {
+        // Clear out this._timeoutPromise if it hasn't changed since we set it.
+        if (this._timeoutPromise == timeoutPromise) {
+          this._timeoutPromise = null;
+        }
+        reject(new Error("Transaction timeout, most likely caused by unresolved pending work."));
+      }, TRANSACTIONS_QUEUE_TIMEOUT_MS);
+    });
+    this._timeoutPromise = timeoutPromise;
+    this._timeoutPromiseExpires = Cu.now() + TRANSACTIONS_QUEUE_TIMEOUT_MS * 0.2;
+    return this._timeoutPromise;
   }
 });
 
@@ -921,6 +955,16 @@ function openConnection(options) {
       options.shrinkMemoryOnConnectionIdleMS;
   }
 
+  if ("defaultTransactionType" in options) {
+    let defaultTransactionType = options.defaultTransactionType;
+    if (!OpenedConnection.TRANSACTION_TYPES.includes(defaultTransactionType)) {
+      throw new Error("Unknown default transaction type: " +
+                      defaultTransactionType);
+    }
+
+    openedOptions.defaultTransactionType = defaultTransactionType;
+  }
+
   let file = FileUtils.File(path);
   let identifier = getIdentifierByFileName(OS.Path.basename(path));
 
@@ -945,7 +989,9 @@ function openConnection(options) {
     Services.storage.openAsyncDatabase(file, dbOptions, (status, connection) => {
       if (!connection) {
         log.warn(`Could not open connection to ${path}: ${status}`);
-        reject(new Error(`Could not open connection to ${path}: ${status}`));
+        let error = new Error(`Could not open connection to ${path}: ${status}`);
+        error.status = status;
+        reject(error);
         return;
       }
       log.info("Connection opened");
@@ -1157,12 +1203,22 @@ function OpenedConnection(connection, identifier, options = {}) {
     this._connectionData._identifier);
 }
 
+OpenedConnection.TRANSACTION_TYPES = ["DEFERRED", "IMMEDIATE", "EXCLUSIVE"];
+
+// Converts a `mozIStorageAsyncConnection::TRANSACTION_*` constant into the
+// corresponding `OpenedConnection.TRANSACTION_TYPES` constant.
+function convertStorageTransactionType(type) {
+  if (!(type in OpenedConnection.TRANSACTION_TYPES)) {
+    throw new Error("Unknown storage transaction type: " + type);
+  }
+  return OpenedConnection.TRANSACTION_TYPES[type];
+}
+
 OpenedConnection.prototype = Object.freeze({
+  TRANSACTION_DEFAULT: "DEFAULT",
   TRANSACTION_DEFERRED: "DEFERRED",
   TRANSACTION_IMMEDIATE: "IMMEDIATE",
   TRANSACTION_EXCLUSIVE: "EXCLUSIVE",
-
-  TRANSACTION_TYPES: ["DEFERRED", "IMMEDIATE", "EXCLUSIVE"],
 
   /**
    * The integer schema version of the database.
@@ -1171,24 +1227,24 @@ OpenedConnection.prototype = Object.freeze({
    *
    * @return Promise<int>
    */
-  getSchemaVersion() {
-    return this.execute("PRAGMA user_version").then(
+  getSchemaVersion(schemaName = "main") {
+    return this.execute(`PRAGMA ${schemaName}.user_version`).then(
       function onSuccess(result) {
         if (result == null) {
           return 0;
         }
-        return JSON.stringify(result[0].getInt32(0));
+        return result[0].getInt32(0);
       }
     );
   },
 
-  setSchemaVersion(value) {
+  setSchemaVersion(value, schemaName = "main") {
     if (!Number.isInteger(value)) {
       // Guarding against accidental SQLi
       throw new TypeError("Schema version must be an integer. Got " + value);
     }
     this._connectionData.ensureOpen();
-    return this.execute("PRAGMA user_version = " + value);
+    return this.execute(`PRAGMA ${schemaName}.user_version = ${value}`);
   },
 
   /**
@@ -1330,6 +1386,13 @@ OpenedConnection.prototype = Object.freeze({
   },
 
   /**
+   * The default behavior for transactions run on this connection.
+   */
+  get defaultTransactionType() {
+    return this._connectionData.defaultTransactionType;
+  },
+
+  /**
    * Whether a transaction is currently in progress.
    */
   get transactionInProgress() {
@@ -1374,11 +1437,7 @@ OpenedConnection.prototype = Object.freeze({
    * @param type optional
    *        One of the TRANSACTION_* constants attached to this type.
    */
-  executeTransaction(func, type = this.TRANSACTION_DEFERRED) {
-    if (this.TRANSACTION_TYPES.indexOf(type) == -1) {
-      throw new Error("Unknown transaction type: " + type);
-    }
-
+  executeTransaction(func, type = this.TRANSACTION_DEFAULT) {
     return this._connectionData.executeTransaction(() => func(this), type);
   },
 
@@ -1455,7 +1514,7 @@ OpenedConnection.prototype = Object.freeze({
   },
 });
 
-this.Sqlite = {
+var Sqlite = {
   openConnection,
   cloneStorageConnection,
   wrapStorageConnection,

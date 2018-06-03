@@ -5,20 +5,14 @@
 // and contextmenu's "Open in a new tab" click.
 
 async function locateBookmarkAndTestCtrlClick(menupopup) {
-  let menuitem = null;
-  for (let node of menupopup.childNodes) {
-    if (node.label == "Test1") {
-      menuitem = node;
-      let promiseTabOpened = BrowserTestUtils.waitForNewTab(gBrowser, null);
-      EventUtils.synthesizeMouseAtCenter(menuitem,
-        AppConstants.platform === "macosx" ? {metaKey: true} : {ctrlKey: true});
-      let newTab = await promiseTabOpened;
-      ok(true, "Bookmark ctrl-click opened new tab.");
-      await BrowserTestUtils.removeTab(newTab);
-      break;
-    }
-  }
-  return menuitem;
+  let testMenuitem = [...menupopup.childNodes].find(node => node.label == "Test1");
+  ok(testMenuitem, "Found test bookmark.");
+  let promiseTabOpened = BrowserTestUtils.waitForNewTab(gBrowser, null);
+  EventUtils.synthesizeMouseAtCenter(testMenuitem, {accelKey: true});
+  let newTab = await promiseTabOpened;
+  ok(true, "Bookmark ctrl-click opened new tab.");
+  BrowserTestUtils.removeTab(newTab);
+  return testMenuitem;
 }
 
 async function testContextmenu(menuitem) {
@@ -28,9 +22,9 @@ async function testContextmenu(menuitem) {
   EventUtils.synthesizeMouseAtCenter(menuitem, {type: "contextmenu", button: 2});
   await promiseEvent;
   let promiseTabOpened = BrowserTestUtils.waitForNewTab(gBrowser, null);
-  EventUtils.synthesizeKey("KEY_ArrowDown", {code: "ArrowDown"});
+  EventUtils.synthesizeKey("KEY_ArrowDown");
   BrowserTestUtils.waitForEvent(menuitem, "DOMMenuItemActive");
-  EventUtils.synthesizeKey("KEY_ArrowDown", {code: "ArrowDown"});
+  EventUtils.synthesizeKey("KEY_ArrowDown");
   BrowserTestUtils.waitForEvent(menuitem, "DOMMenuItemActive");
   EventUtils.sendKey("return");
   let newTab = await promiseTabOpened;
@@ -109,7 +103,7 @@ add_task(async function testStayopenBookmarksClicks() {
   EventUtils.synthesizeMouseAtCenter(menuitem, {button: 1});
   let newTab = await promiseTabOpened;
   ok(true, "Bookmark middle-click opened new tab.");
-  await BrowserTestUtils.removeTab(newTab);
+  BrowserTestUtils.removeTab(newTab);
   ok(BMB.open, "Bookmarks Menu Button's Popup should still be open.");
 
   // Test Bookmarks Menu Button stayopen clicks - 'Open in new tab' on context menu.
@@ -120,7 +114,44 @@ add_task(async function testStayopenBookmarksClicks() {
   BMB.open = false;
   await promiseEvent;
   info("Closing menu");
-  await BrowserTestUtils.removeTab(newTab);
+  BrowserTestUtils.removeTab(newTab);
+
+  // Test App Menu's Bookmarks Library stayopen clicks.
+  let appMenu = document.getElementById("PanelUI-menu-button");
+  let appMenuPopup = document.getElementById("appMenu-popup");
+  let PopupShownPromise = BrowserTestUtils.waitForEvent(appMenuPopup, "popupshown");
+  appMenu.click();
+  await PopupShownPromise;
+  let libView = document.getElementById("appMenu-libraryView");
+  let libraryBtn = document.getElementById("appMenu-library-button");
+  let ViewShownPromise = BrowserTestUtils.waitForEvent(libView, "ViewShown");
+  libraryBtn.click();
+  await ViewShownPromise;
+  info("Library panel shown.");
+  let bookmarks = document.getElementById("appMenu-library-bookmarks-button");
+  let BMview = document.getElementById("PanelUI-bookmarks");
+  ViewShownPromise = BrowserTestUtils.waitForEvent(BMview, "ViewShown");
+  bookmarks.click();
+  await ViewShownPromise;
+  info("Library's bookmarks panel shown.");
+
+  // Test App Menu's Bookmarks Library stayopen clicks: Ctrl-click.
+  let menu = document.getElementById("panelMenu_bookmarksMenu");
+  var testMenuitem = await locateBookmarkAndTestCtrlClick(menu);
+  ok(appMenu.open, "Menu should remain open.");
+
+  // Test App Menu's Bookmarks Library stayopen clicks: middle-click.
+  promiseTabOpened = BrowserTestUtils.waitForNewTab(gBrowser, null);
+  EventUtils.synthesizeMouseAtCenter(testMenuitem, {button: 1});
+  newTab = await promiseTabOpened;
+  ok(true, "Bookmark middle-click opened new tab.");
+  BrowserTestUtils.removeTab(newTab);
+  ok(PanelView.forNode(BMview).active, "Should still show the bookmarks subview");
+  ok(appMenu.open, "Menu should remain open.");
+
+  // Close the App Menu
+  appMenuPopup.hidePopup();
+  ok(!appMenu.open, "The menu should now be closed.");
 
   // Disable the rest of the tests on Mac due to Mac's handling of menus being
   // slightly different to the other platforms.
@@ -143,13 +174,13 @@ add_task(async function testStayopenBookmarksClicks() {
   EventUtils.synthesizeMouseAtCenter(menuitem, {button: 1});
   newTab = await promiseTabOpened;
   ok(true, "Bookmark middle-click opened new tab.");
-  await BrowserTestUtils.removeTab(newTab);
+  BrowserTestUtils.removeTab(newTab);
   ok(BM.open, "Bookmarks Menu's Popup should still be open.");
 
   // Test Bookmarks Menu (menubar) stayopen clicks: 'Open in new tab' on context menu.
   newTab = await testContextmenu(menuitem);
   ok(true, "Bookmark contextmenu opened new tab.");
-  await BrowserTestUtils.removeTab(newTab);
+  BrowserTestUtils.removeTab(newTab);
   ok(BM.open, "Bookmarks Menu's Popup should still be open.");
   promiseEvent = BrowserTestUtils.waitForEvent(BMpopup, "popuphidden");
   BM.open = false;
@@ -174,7 +205,7 @@ add_task(async function testStayopenBookmarksClicks() {
   promiseEvent = BrowserTestUtils.waitForEvent(buttonMenupopup, "popuphidden");
   toolbarbutton.open = false;
   await promiseEvent;
-  await BrowserTestUtils.removeTab(newTab);
+  BrowserTestUtils.removeTab(newTab);
 
   // Test Bookmarks Toolbar stayopen clicks: middle-click.
   promiseEvent = BrowserTestUtils.waitForEvent(buttonMenupopup, "popupshown");
@@ -189,7 +220,7 @@ add_task(async function testStayopenBookmarksClicks() {
   promiseEvent = BrowserTestUtils.waitForEvent(buttonMenupopup, "popuphidden");
   toolbarbutton.open = false;
   await promiseEvent;
-  await BrowserTestUtils.removeTab(newTab);
+  BrowserTestUtils.removeTab(newTab);
 
   // Test Bookmarks Toolbar stayopen clicks: 'Open in new tab' on context menu.
   promiseEvent = BrowserTestUtils.waitForEvent(buttonMenupopup, "popupshown");
@@ -202,5 +233,5 @@ add_task(async function testStayopenBookmarksClicks() {
   promiseEvent = BrowserTestUtils.waitForEvent(buttonMenupopup, "popuphidden");
   toolbarbutton.open = false;
   await promiseEvent;
-  await BrowserTestUtils.removeTab(newTab);
+  BrowserTestUtils.removeTab(newTab);
 });

@@ -29,6 +29,7 @@ class CanvasLayer;
 class CanvasRenderer;
 class Layer;
 class LayerManager;
+class WebRenderCanvasData;
 } // namespace layers
 namespace gfx {
 class SourceSurface;
@@ -44,6 +45,7 @@ public:
   typedef mozilla::layers::CanvasRenderer CanvasRenderer;
   typedef mozilla::layers::Layer Layer;
   typedef mozilla::layers::LayerManager LayerManager;
+  typedef mozilla::layers::WebRenderCanvasData WebRenderCanvasData;
 
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_ICANVASRENDERINGCONTEXTINTERNAL_IID)
 
@@ -91,8 +93,8 @@ public:
   }
 
   // Dimensions of the canvas, in pixels.
-  virtual int32_t GetWidth() const = 0;
-  virtual int32_t GetHeight() const = 0;
+  virtual int32_t GetWidth() = 0;
+  virtual int32_t GetHeight() = 0;
 
   // Sets the dimensions of the canvas, in pixels.  Called
   // whenever the size of the element changes.
@@ -124,11 +126,16 @@ public:
   virtual already_AddRefed<mozilla::gfx::SourceSurface>
   GetSurfaceSnapshot(gfxAlphaType* out_alphaType = nullptr) = 0;
 
-  // If this context is opaque, the backing store of the canvas should
+  // If this is called with true, the backing store of the canvas should
   // be created as opaque; all compositing operators should assume the
-  // dst alpha is always 1.0.  If this is never called, the context
-  // defaults to false (not opaque).
-  virtual void SetIsOpaque(bool isOpaque) = 0;
+  // dst alpha is always 1.0.  If this is never called, the context's
+  // opaqueness is determined by the context attributes that it's initialized
+  // with.
+  virtual void SetOpaqueValueFromOpaqueAttr(bool aOpaqueAttrValue) = 0;
+
+  // Returns whether the context is opaque. This value can be based both on
+  // the value of the moz-opaque attribute and on the context's initialization
+  // attributes.
   virtual bool GetIsOpaque() = 0;
 
   // Invalidate this context and release any held resources, in preperation
@@ -140,6 +147,8 @@ public:
   virtual already_AddRefed<Layer> GetCanvasLayer(nsDisplayListBuilder* builder,
                                                  Layer *oldLayer,
                                                  LayerManager *manager) = 0;
+  virtual bool UpdateWebRenderCanvasData(nsDisplayListBuilder* aBuilder,
+                                         WebRenderCanvasData* aCanvasData) { return false; }
   virtual bool InitializeCanvasRenderer(nsDisplayListBuilder* aBuilder,
                                         CanvasRenderer* aRenderer) { return true; }
 

@@ -27,7 +27,6 @@
 #include "nsThreadUtils.h"
 #include "nsIFile.h"
 #include "nsIWidget.h"
-#include "mozilla/dom/FlyWebService.h"
 
 #ifdef MOZ_TASK_TRACER
 #include "GeckoTaskTracer.h"
@@ -50,10 +49,13 @@ static Atomic<PRThread*, Relaxed> gSocketThread;
 #define KEEPALIVE_PROBE_COUNT_PREF "network.tcp.keepalive.probe_count"
 #define SOCKET_LIMIT_TARGET 1000U
 #define SOCKET_LIMIT_MIN      50U
-#define BLIP_INTERVAL_PREF "network.activity.blipIntervalMilliseconds"
+#define INTERVAL_PREF "network.activity.intervalMilliseconds"
 #define MAX_TIME_BETWEEN_TWO_POLLS "network.sts.max_time_for_events_between_two_polls"
+#define POLL_BUSY_WAIT_PERIOD "network.sts.poll_busy_wait_period"
+#define POLL_BUSY_WAIT_PERIOD_TIMEOUT "network.sts.poll_busy_wait_period_timeout"
 #define TELEMETRY_PREF "toolkit.telemetry.enabled"
 #define MAX_TIME_FOR_PR_CLOSE_DURING_SHUTDOWN "network.sts.max_time_for_pr_close_during_shutdown"
+#define POLLABLE_EVENT_TIMEOUT "network.sts.pollable_event_timeout"
 
 #define REPAIR_POLLABLE_EVENT_TIME 10
 
@@ -65,6 +67,53 @@ bool
 OnSocketThread()
 {
   return PR_GetCurrentThread() == gSocketThread;
+}
+
+//-----------------------------------------------------------------------------
+
+bool
+nsSocketTransportService::SocketContext::IsTimedOut(PRIntervalTime now) const
+{
+    return TimeoutIn(now) == 0;
+}
+
+void
+nsSocketTransportService::SocketContext::EnsureTimeout(PRIntervalTime now)
+{
+    SOCKET_LOG(("SocketContext::EnsureTimeout socket=%p", mHandler));
+    if (!mPollStartEpoch) {
+        SOCKET_LOG(("  engaging"));
+        mPollStartEpoch = now;
+    }
+}
+
+void
+nsSocketTransportService::SocketContext::DisengageTimeout()
+{
+    SOCKET_LOG(("SocketContext::DisengageTimeout socket=%p", mHandler));
+    mPollStartEpoch = 0;
+}
+
+PRIntervalTime
+nsSocketTransportService::SocketContext::TimeoutIn(PRIntervalTime now) const
+{
+    SOCKET_LOG(("SocketContext::TimeoutIn socket=%p, timeout=%us",
+                mHandler, mHandler->mPollTimeout));
+
+    if (mHandler->mPollTimeout == UINT16_MAX || !mPollStartEpoch) {
+        SOCKET_LOG(("  not engaged"));
+        return NS_SOCKET_POLL_TIMEOUT;
+    }
+
+    PRIntervalTime elapsed = (now - mPollStartEpoch);
+    PRIntervalTime timeout = PR_SecondsToInterval(mHandler->mPollTimeout);
+
+    if (elapsed >= timeout) {
+        SOCKET_LOG(("  timed out!"));
+        return 0;
+    }
+    SOCKET_LOG(("  remains %us", PR_IntervalToSeconds(timeout - elapsed)));
+    return timeout - elapsed;
 }
 
 //-----------------------------------------------------------------------------
@@ -89,19 +138,18 @@ nsSocketTransportService::nsSocketTransportService()
     , mKeepaliveRetryIntervalS(1)
     , mKeepaliveProbeCount(kDefaultTCPKeepCount)
     , mKeepaliveEnabledPref(false)
+    , mPollableEventTimeout(TimeDuration::FromSeconds(6))
     , mServingPendingQueue(false)
     , mMaxTimePerPollIter(100)
     , mTelemetryEnabledPref(false)
     , mMaxTimeForPrClosePref(PR_SecondsToInterval(5))
+    , mLastNetworkLinkChangeTime(0)
+    , mNetworkLinkChangeBusyWaitPeriod(PR_SecondsToInterval(50))
+    , mNetworkLinkChangeBusyWaitTimeout(PR_SecondsToInterval(7))
     , mSleepPhase(false)
     , mProbedMaxCount(false)
 #if defined(XP_WIN)
     , mPolling(false)
-#endif
-#if defined(_WIN64) && defined(WIN95)
-    , mFileDesc2PlatformOverlappedIOHandleFuncChecked(false)
-    , mNsprLibrary(nullptr)
-    , mFileDesc2PlatformOverlappedIOHandleFunc(nullptr)
 #endif
 {
     NS_ASSERTION(NS_IsMainThread(), "wrong thread");
@@ -127,12 +175,6 @@ nsSocketTransportService::~nsSocketTransportService()
     free(mIdleList);
     free(mPollList);
     gSocketTransportService = nullptr;
-#if defined(_WIN64) && defined(WIN95)
-    if (mNsprLibrary) {
-        BOOL rv = FreeLibrary(mNsprLibrary);
-        SOCKET_LOG(("Free nspr library: %d\n", rv));
-    }
-#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -225,7 +267,7 @@ nsSocketTransportService::AttachSocket(PRFileDesc *fd, nsASocketHandler *handler
     SocketContext sock;
     sock.mFD = fd;
     sock.mHandler = handler;
-    sock.mElapsedTime = 0;
+    sock.mPollStartEpoch = 0;
 
     nsresult rv = AddToIdleList(&sock);
     if (NS_SUCCEEDED(rv))
@@ -324,6 +366,8 @@ nsSocketTransportService::AddToPollList(SocketContext *sock)
       PodMove(mPollList + newSocketIndex + 2, mPollList + newSocketIndex + 1,
               mActiveCount - newSocketIndex);
     }
+
+    sock->EnsureTimeout(PR_IntervalNow());
     mActiveList[newSocketIndex] = *sock;
     mActiveCount++;
 
@@ -448,40 +492,37 @@ nsSocketTransportService::GrowIdleList()
 }
 
 PRIntervalTime
-nsSocketTransportService::PollTimeout()
+nsSocketTransportService::PollTimeout(PRIntervalTime now)
 {
-    if (mActiveCount == 0)
+    if (mActiveCount == 0) {
         return NS_SOCKET_POLL_TIMEOUT;
+    }
 
     // compute minimum time before any socket timeout expires.
-    uint32_t minR = UINT16_MAX;
+    PRIntervalTime minR = NS_SOCKET_POLL_TIMEOUT;
     for (uint32_t i=0; i<mActiveCount; ++i) {
         const SocketContext &s = mActiveList[i];
-        // mPollTimeout could be less than mElapsedTime if setTimeout
-        // was called with a value smaller than mElapsedTime.
-        uint32_t r = (s.mElapsedTime < s.mHandler->mPollTimeout)
-          ? s.mHandler->mPollTimeout - s.mElapsedTime
-          : 0;
-        if (r < minR)
+        PRIntervalTime r = s.TimeoutIn(now);
+        if (r < minR) {
             minR = r;
+        }
     }
-    // nsASocketHandler defines UINT16_MAX as do not timeout
-    if (minR == UINT16_MAX) {
+    if (minR == NS_SOCKET_POLL_TIMEOUT) {
         SOCKET_LOG(("poll timeout: none\n"));
         return NS_SOCKET_POLL_TIMEOUT;
     }
-    SOCKET_LOG(("poll timeout: %" PRIu32 "\n", minR));
-    return PR_SecondsToInterval(minR);
+    SOCKET_LOG(("poll timeout: %" PRIu32 "\n", PR_IntervalToSeconds(minR)));
+    return minR;
 }
 
 int32_t
-nsSocketTransportService::Poll(uint32_t *interval,
-                               TimeDuration *pollDuration)
+nsSocketTransportService::Poll(TimeDuration *pollDuration,
+                               PRIntervalTime ts)
 {
     PRPollDesc *pollList;
     uint32_t pollCount;
     PRIntervalTime pollTimeout;
-    *pollDuration = 0;
+    *pollDuration = nullptr;
 
     // If there are pending events for this thread then
     // DoPollIteration() should service the network without blocking.
@@ -492,7 +533,7 @@ nsSocketTransportService::Poll(uint32_t *interval,
         mPollList[0].out_flags = 0;
         pollList = mPollList;
         pollCount = mActiveCount + 1;
-        pollTimeout = pendingEvents ? PR_INTERVAL_NO_WAIT : PollTimeout();
+        pollTimeout = pendingEvents ? PR_INTERVAL_NO_WAIT : PollTimeout(ts);
     }
     else {
         // no pollable event, so busy wait...
@@ -505,7 +546,15 @@ nsSocketTransportService::Poll(uint32_t *interval,
             pendingEvents ? PR_INTERVAL_NO_WAIT : PR_MillisecondsToInterval(25);
     }
 
-    PRIntervalTime ts = PR_IntervalNow();
+    if ((ts - mLastNetworkLinkChangeTime) < mNetworkLinkChangeBusyWaitPeriod) {
+        // Being here means we are few seconds after a network change has
+        // been detected.
+        PRIntervalTime to = mNetworkLinkChangeBusyWaitTimeout;
+        if (to) {
+            pollTimeout = std::min(to, pollTimeout);
+            SOCKET_LOG(("  timeout shorthened after network change event"));
+        }
+    }
 
     TimeStamp pollStart;
     if (mTelemetryEnabledPref) {
@@ -514,18 +563,16 @@ nsSocketTransportService::Poll(uint32_t *interval,
 
     SOCKET_LOG(("    timeout = %i milliseconds\n",
          PR_IntervalToMilliseconds(pollTimeout)));
-    int32_t rv = PR_Poll(pollList, pollCount, pollTimeout);
 
-    PRIntervalTime passedInterval = PR_IntervalNow() - ts;
+    int32_t rv = PR_Poll(pollList, pollCount, pollTimeout);
 
     if (mTelemetryEnabledPref && !pollStart.IsNull()) {
         *pollDuration = TimeStamp::NowLoRes() - pollStart;
     }
 
     SOCKET_LOG(("    ...returned after %i milliseconds\n",
-         PR_IntervalToMilliseconds(passedInterval)));
+         PR_IntervalToMilliseconds(PR_IntervalNow() - ts)));
 
-    *interval = PR_IntervalToSeconds(passedInterval);
     return rv;
 }
 
@@ -576,6 +623,7 @@ nsSocketTransportService::Init()
         tmpPrefService->AddObserver(MAX_TIME_BETWEEN_TWO_POLLS, this, false);
         tmpPrefService->AddObserver(TELEMETRY_PREF, this, false);
         tmpPrefService->AddObserver(MAX_TIME_FOR_PR_CLOSE_DURING_SHUTDOWN, this, false);
+        tmpPrefService->AddObserver(POLLABLE_EVENT_TIMEOUT, this, false);
     }
     UpdatePrefs();
 
@@ -586,6 +634,7 @@ nsSocketTransportService::Init()
         obsSvc->AddObserver(this, NS_WIDGET_SLEEP_OBSERVER_TOPIC, true);
         obsSvc->AddObserver(this, NS_WIDGET_WAKE_OBSERVER_TOPIC, true);
         obsSvc->AddObserver(this, "xpcom-shutdown-threads", false);
+        obsSvc->AddObserver(this, NS_NETWORK_LINK_TOPIC, false);
     }
 
     mInitialized = true;
@@ -654,6 +703,7 @@ nsSocketTransportService::ShutdownThread()
         obsSvc->RemoveObserver(this, NS_WIDGET_SLEEP_OBSERVER_TOPIC);
         obsSvc->RemoveObserver(this, NS_WIDGET_WAKE_OBSERVER_TOPIC);
         obsSvc->RemoveObserver(this, "xpcom-shutdown-threads");
+        obsSvc->RemoveObserver(this, NS_NETWORK_LINK_TOPIC);
     }
 
     if (mAfterWakeUpTimer) {
@@ -750,20 +800,6 @@ nsSocketTransportService::CreateRoutedTransport(const char **types,
                                                 nsIProxyInfo *proxyInfo,
                                                 nsISocketTransport **result)
 {
-    // Check FlyWeb table for host mappings.  If one exists, then use that.
-    RefPtr<mozilla::dom::FlyWebService> fws =
-        mozilla::dom::FlyWebService::GetExisting();
-    if (fws) {
-        nsresult rv = fws->CreateTransportForHost(types, typeCount, host, port,
-                                                  hostRoute, portRoute,
-                                                  proxyInfo, result);
-        NS_ENSURE_SUCCESS(rv, rv);
-
-        if (*result) {
-            return NS_OK;
-        }
-    }
-
     NS_ENSURE_TRUE(mInitialized, NS_ERROR_NOT_INITIALIZED);
     NS_ENSURE_TRUE(port >= 0 && port <= 0xFFFF, NS_ERROR_ILLEGAL_VALUE);
 
@@ -781,6 +817,7 @@ NS_IMETHODIMP
 nsSocketTransportService::CreateUnixDomainTransport(nsIFile *aPath,
                                                     nsISocketTransport **result)
 {
+#ifdef XP_UNIX
     nsresult rv;
 
     NS_ENSURE_TRUE(mInitialized, NS_ERROR_NOT_INITIALIZED);
@@ -798,6 +835,9 @@ nsSocketTransportService::CreateUnixDomainTransport(nsIFile *aPath,
 
     trans.forget(result);
     return NS_OK;
+#else
+    return NS_ERROR_SOCKET_ADDRESS_NOT_SUPPORTED;
+#endif
 }
 
 NS_IMETHODIMP
@@ -937,7 +977,7 @@ nsSocketTransportService::Run()
             startOfCycleForLastCycleCalc = TimeStamp::NowLoRes();
             startOfNextIteration = TimeStamp::NowLoRes();
         }
-        pollDuration = 0;
+        pollDuration = nullptr;
 
         do {
             if (mTelemetryEnabledPref) {
@@ -955,9 +995,6 @@ nsSocketTransportService::Run()
                     TimeStamp::NowLoRes());
                 pollDuration += singlePollDuration;
             }
-#if defined(_WIN64) && defined(WIN95)
-            CheckOverlappedPendingSocketsAreDone();
-#endif
 
             mRawThread->HasPendingEvents(&pendingEvents);
             if (pendingEvents) {
@@ -1009,7 +1046,7 @@ nsSocketTransportService::Run()
 
                     numberOfPendingEventsLastCycle += numberOfPendingEvents;
                     numberOfPendingEvents = 0;
-                    pollDuration = 0;
+                    pollDuration = nullptr;
                 }
             }
         } while (pendingEvents);
@@ -1050,22 +1087,13 @@ nsSocketTransportService::Run()
     // socket detach handlers get processed.
     NS_ProcessPendingEvents(mRawThread);
 
-#if defined(_WIN64) && defined(WIN95)
-    // Final pass over panding overlapped ios. If they are not finish we will
-    // leak FDs.
-    CheckOverlappedPendingSocketsAreDone();
-#ifdef NS_BUILD_REFCNT_LOGGING
-    if (mOverlappedPendingSockets.Length()) {
-        PRIntervalTime delay = PR_MillisecondsToInterval(5000);
-        PR_Sleep(delay); // wait another 5s.
-        CheckOverlappedPendingSocketsAreDone();
-    }
-#endif
-#endif
+    // Stopping the SLL threads can generate new events, so we need to
+    // process them before nulling out gSocketThread, otherwise we can get
+    // !onSocketThread assertions.
+    psm::StopSSLServerCertVerificationThreads();
+    NS_ProcessPendingEvents(mRawThread);
 
     gSocketThread = nullptr;
-
-    psm::StopSSLServerCertVerificationThreads();
 
     SOCKET_LOG(("STS thread exit\n"));
 
@@ -1105,6 +1133,8 @@ nsSocketTransportService::DoPollIteration(TimeDuration *pollDuration)
 {
     SOCKET_LOG(("STS poll iter\n"));
 
+    PRIntervalTime now = PR_IntervalNow();
+
     int32_t i, count;
     //
     // poll loop
@@ -1122,16 +1152,17 @@ nsSocketTransportService::DoPollIteration(TimeDuration *pollDuration)
             static_cast<uint32_t>(mActiveList[i].mHandler->mCondition),
             mActiveList[i].mHandler->mPollFlags));
         //---
-        if (NS_FAILED(mActiveList[i].mHandler->mCondition))
+        if (NS_FAILED(mActiveList[i].mHandler->mCondition)) {
             DetachSocket(mActiveList, &mActiveList[i]);
-        else {
+        } else {
             uint16_t in_flags = mActiveList[i].mHandler->mPollFlags;
-            if (in_flags == 0)
+            if (in_flags == 0) {
                 MoveToIdleList(&mActiveList[i]);
-            else {
+            } else {
                 // update poll flags
                 mPollList[i+1].in_flags = in_flags;
                 mPollList[i+1].out_flags = 0;
+                mActiveList[i].EnsureTimeout(now);
             }
         }
     }
@@ -1148,6 +1179,20 @@ nsSocketTransportService::DoPollIteration(TimeDuration *pollDuration)
             MoveToPollList(&mIdleList[i]);
     }
 
+    {
+        MutexAutoLock lock(mLock);
+        if (mPollableEvent) {
+            // we want to make sure the timeout is measured from the time
+            // we enter poll().  This method resets the timestamp to 'now',
+            // if we were first signalled between leaving poll() and here.
+            // If we didn't do this and processing events took longer than
+            // the allowed signal timeout, we would detect it as a
+            // false-positive.  AdjustFirstSignalTimestamp is then a no-op
+            // until mPollableEvent->Clear() is called.
+            mPollableEvent->AdjustFirstSignalTimestamp();
+        }
+    }
+
     SOCKET_LOG(("  calling PR_Poll [active=%u idle=%u]\n", mActiveCount, mIdleCount));
 
 #if defined(XP_WIN)
@@ -1159,19 +1204,21 @@ nsSocketTransportService::DoPollIteration(TimeDuration *pollDuration)
 #endif
 
     // Measures seconds spent while blocked on PR_Poll
-    uint32_t pollInterval = 0;
     int32_t n = 0;
-    *pollDuration = 0;
+    *pollDuration = nullptr;
+
     if (!gIOService->IsNetTearingDown()) {
         // Let's not do polling during shutdown.
 #if defined(XP_WIN)
         StartPolling();
 #endif
-        n = Poll(&pollInterval, pollDuration);
+        n = Poll(pollDuration, now);
 #if defined(XP_WIN)
         EndPolling();
 #endif
     }
+
+    now = PR_IntervalNow();
 
     if (n < 0) {
         SOCKET_LOG(("  PR_Poll error [%d] os error [%d]\n", PR_GetError(),
@@ -1189,32 +1236,17 @@ nsSocketTransportService::DoPollIteration(TimeDuration *pollDuration)
 #ifdef MOZ_TASK_TRACER
 		tasktracer::AutoSourceEvent taskTracerEvent(tasktracer::SourceEventType::SocketIO);
 #endif
-                s.mElapsedTime = 0;
+                s.DisengageTimeout();
                 s.mHandler->OnSocketReady(desc.fd, desc.out_flags);
                 numberOfOnSocketReadyCalls++;
-            }
-            // check for timeout errors unless disabled...
-            else if (s.mHandler->mPollTimeout != UINT16_MAX) {
-                // update elapsed time counter
-                // (NOTE: We explicitly cast UINT16_MAX to be an unsigned value
-                // here -- otherwise, some compilers will treat it as signed,
-                // which makes them fire signed/unsigned-comparison build
-                // warnings for the comparison against 'pollInterval'.)
-                if (MOZ_UNLIKELY(pollInterval >
-                                static_cast<uint32_t>(UINT16_MAX) -
-                                s.mElapsedTime))
-                    s.mElapsedTime = UINT16_MAX;
-                else
-                    s.mElapsedTime += uint16_t(pollInterval);
-                // check for timeout expiration
-                if (s.mElapsedTime >= s.mHandler->mPollTimeout) {
+            } else if (s.IsTimedOut(now)) {
 #ifdef MOZ_TASK_TRACER
-		    tasktracer::AutoSourceEvent taskTracerEvent(tasktracer::SourceEventType::SocketIO);
+		tasktracer::AutoSourceEvent taskTracerEvent(tasktracer::SourceEventType::SocketIO);
 #endif
-                    s.mElapsedTime = 0;
-                    s.mHandler->OnSocketReady(desc.fd, -1);
-                    numberOfOnSocketReadyCalls++;
-                }
+                SOCKET_LOG(("socket %p timed out", s.mHandler));
+                s.DisengageTimeout();
+                s.mHandler->OnSocketReady(desc.fd, -1);
+                numberOfOnSocketReadyCalls++;
             }
         }
         if (mTelemetryEnabledPref) {
@@ -1232,29 +1264,26 @@ nsSocketTransportService::DoPollIteration(TimeDuration *pollDuration)
                 DetachSocket(mActiveList, &mActiveList[i]);
         }
 
-        if (n != 0 && (mPollList[0].out_flags & (PR_POLL_READ | PR_POLL_EXCEPT))) {
+        {
             MutexAutoLock lock(mLock);
-
             // acknowledge pollable event (should not block)
-            if (mPollableEvent &&
-                ((mPollList[0].out_flags & PR_POLL_EXCEPT) ||
-                 !mPollableEvent->Clear())) {
+            if (n != 0 &&
+                (mPollList[0].out_flags & (PR_POLL_READ | PR_POLL_EXCEPT)) &&
+                mPollableEvent &&
+                ((mPollList[0].out_flags & PR_POLL_EXCEPT) || !mPollableEvent->Clear())) {
                 // On Windows, the TCP loopback connection in the
                 // pollable event may become broken when a laptop
                 // switches between wired and wireless networks or
                 // wakes up from hibernation.  We try to create a
                 // new pollable event.  If that fails, we fall back
                 // on "busy wait".
-                NS_WARNING("Trying to repair mPollableEvent");
-                mPollableEvent.reset(new PollableEvent());
-                if (!mPollableEvent->Valid()) {
-                    mPollableEvent = nullptr;
-                }
-                SOCKET_LOG(("running socket transport thread without "
-                            "a pollable event now valid=%d", !!mPollableEvent));
-                mPollList[0].fd = mPollableEvent ? mPollableEvent->PollableFD() : nullptr;
-                mPollList[0].in_flags = PR_POLL_READ | PR_POLL_EXCEPT;
-                mPollList[0].out_flags = 0;
+                TryRepairPollableEvent();
+            }
+
+            if (mPollableEvent &&
+                !mPollableEvent->IsSignallingAlive(mPollableEventTimeout)) {
+                SOCKET_LOG(("Pollable event signalling failed/timed out"));
+                TryRepairPollableEvent();
             }
         }
     }
@@ -1324,6 +1353,18 @@ nsSocketTransportService::UpdatePrefs()
             mMaxTimePerPollIter = maxTimePref;
         }
 
+        int32_t pollBusyWaitPeriod;
+        rv = tmpPrefService->GetIntPref(POLL_BUSY_WAIT_PERIOD, &pollBusyWaitPeriod);
+        if (NS_SUCCEEDED(rv) && pollBusyWaitPeriod > 0) {
+            mNetworkLinkChangeBusyWaitPeriod = PR_SecondsToInterval(pollBusyWaitPeriod);
+        }
+
+        int32_t pollBusyWaitPeriodTimeout;
+        rv = tmpPrefService->GetIntPref(POLL_BUSY_WAIT_PERIOD_TIMEOUT, &pollBusyWaitPeriodTimeout);
+        if (NS_SUCCEEDED(rv) && pollBusyWaitPeriodTimeout > 0) {
+            mNetworkLinkChangeBusyWaitTimeout = PR_SecondsToInterval(pollBusyWaitPeriodTimeout);
+        }
+
         bool telemetryPref = false;
         rv = tmpPrefService->GetBoolPref(TELEMETRY_PREF,
                                          &telemetryPref);
@@ -1336,6 +1377,14 @@ nsSocketTransportService::UpdatePrefs()
                                         &maxTimeForPrClosePref);
         if (NS_SUCCEEDED(rv) && maxTimeForPrClosePref >=0) {
             mMaxTimeForPrClosePref = PR_MillisecondsToInterval(maxTimeForPrClosePref);
+        }
+
+        int32_t pollableEventTimeout;
+        rv = tmpPrefService->GetIntPref(POLLABLE_EVENT_TIMEOUT,
+                                        &pollableEventTimeout);
+        if (NS_SUCCEEDED(rv) && pollableEventTimeout >= 0) {
+            MutexAutoLock lock(mLock);
+            mPollableEventTimeout = TimeDuration::FromSeconds(pollableEventTimeout);
         }
     }
 
@@ -1389,18 +1438,20 @@ nsSocketTransportService::Observe(nsISupports *subject,
                                   const char *topic,
                                   const char16_t *data)
 {
+    SOCKET_LOG(("nsSocketTransportService::Observe topic=%s", topic));
+
     if (!strcmp(topic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
         UpdatePrefs();
         return NS_OK;
     }
 
     if (!strcmp(topic, "profile-initial-state")) {
-        int32_t blipInterval = Preferences::GetInt(BLIP_INTERVAL_PREF, 0);
-        if (blipInterval <= 0) {
+        int32_t interval = Preferences::GetInt(INTERVAL_PREF, 0);
+        if (interval <= 0) {
             return NS_OK;
         }
 
-        return net::NetworkActivityMonitor::Init(blipInterval);
+        return net::NetworkActivityMonitor::Init(interval);
     }
 
     if (!strcmp(topic, "last-pb-context-exited")) {
@@ -1433,13 +1484,13 @@ nsSocketTransportService::Observe(nsISupports *subject,
         }
     } else if (!strcmp(topic, NS_WIDGET_WAKE_OBSERVER_TOPIC)) {
         if (mSleepPhase && !mAfterWakeUpTimer) {
-            mAfterWakeUpTimer = do_CreateInstance("@mozilla.org/timer;1");
-            if (mAfterWakeUpTimer) {
-                mAfterWakeUpTimer->Init(this, 2000, nsITimer::TYPE_ONE_SHOT);
-            }
+            NS_NewTimerWithObserver(getter_AddRefs(mAfterWakeUpTimer),
+                                    this, 2000, nsITimer::TYPE_ONE_SHOT);
         }
     } else if (!strcmp(topic, "xpcom-shutdown-threads")) {
         ShutdownThread();
+    } else if (!strcmp(topic, NS_NETWORK_LINK_TOPIC)) {
+        mLastNetworkLinkChangeTime = PR_IntervalNow();
     }
 
     return NS_OK;
@@ -1665,9 +1716,9 @@ nsSocketTransportService::StartPollWatchdog()
          // signal a pollable event again.
          MOZ_ASSERT(gIOService->IsNetTearingDown());
          if (self->mPolling && !self->mPollRepairTimer) {
-             self->mPollRepairTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
-             self->mPollRepairTimer->Init(self, REPAIR_POLLABLE_EVENT_TIME,
-                                          nsITimer::TYPE_REPEATING_SLACK);
+             NS_NewTimerWithObserver(getter_AddRefs(self->mPollRepairTimer),
+                                     self, REPAIR_POLLABLE_EVENT_TIME,
+                                     nsITimer::TYPE_REPEATING_SLACK);
          }
     }));
 }
@@ -1699,108 +1750,24 @@ nsSocketTransportService::EndPolling()
         mPollRepairTimer->Cancel();
     }
 }
-#endif
-
-#if defined(_WIN64) && defined(WIN95)
-void
-nsSocketTransportService::AddOverlappedPendingSocket(PRFileDesc *aFd)
-{
-    MOZ_ASSERT(OnSocketThread(), "not on socket thread");
-    MOZ_ASSERT(HasFileDesc2PlatformOverlappedIOHandleFunc());
-    SOCKET_LOG(("STS AddOverlappedPendingSocket append aFd=%p\n", aFd));
-    mOverlappedPendingSockets.AppendElement(aFd);
-}
-
-void
-nsSocketTransportService::CheckOverlappedPendingSocketsAreDone()
-{
-    MOZ_ASSERT(OnSocketThread(), "not on socket thread");
-    if (!HasFileDesc2PlatformOverlappedIOHandleFunc()) {
-        return;
-    }
-
-    SOCKET_LOG(("STS CheckOverlappedPendingSocketsAreDone: "
-                "pending sockets = %d\n", mOverlappedPendingSockets.Length()));
-    for (int i = mOverlappedPendingSockets.Length() - 1; i >= 0; i--) {
-        bool canClose = false;
-        PRFileDesc *fd = mOverlappedPendingSockets[i];
-        LPOVERLAPPED ol = nullptr;
-        if (mFileDesc2PlatformOverlappedIOHandleFunc(fd, (void**)&ol) == PR_SUCCESS) {
-            PROsfd osfd = PR_FileDesc2NativeHandle(fd);
-            SOCKET_LOG(("STS CheckOverlappedPendingSocketsAreDone "
-                        "fd=%p osfd=%d\n", fd, (int)osfd));
-            DWORD rvSent;
-            if (GetOverlappedResult((HANDLE)osfd, ol, &rvSent, FALSE) == TRUE) {
-                SOCKET_LOG(("STS CheckOverlappedPendingSocketsAreDone "
-                            "GetOverlappedResult succeeded\n"));
-                canClose = true;
-            } else {
-                int err = WSAGetLastError();
-                SOCKET_LOG(("STS CheckOverlappedPendingSocketsAreDone "
-                            "GetOverlappedResult failed error=%x \n", err));
-                if (err != ERROR_IO_INCOMPLETE) {
-                    canClose = true;
-                }
-            }
-        } else {
-            canClose = true;
-        }
-
-        if (canClose) {
-            SOCKET_LOG(("STS CheckOverlappedPendingSocketsAreDone "
-                        "remove fd=%p\n", fd));
-            mOverlappedPendingSockets.RemoveElementAt(i);
-            PR_Close(fd);
-        }
-    }
-    SOCKET_LOG(("STS CheckOverlappedPendingSocketsAreDone: end a check, "
-                "pending sockets = %d\n", mOverlappedPendingSockets.Length()));
-}
-
-void
-nsSocketTransportService::CheckFileDesc2PlatformOverlappedIOHandleFunc()
-{
-    if (mFileDesc2PlatformOverlappedIOHandleFuncChecked) {
-        return;
-    }
-
-    mFileDesc2PlatformOverlappedIOHandleFuncChecked = true;
-    HMODULE library = LoadLibraryA("nss3.dll");
-    MOZ_ASSERT(library);
-    if (library) {
-        mFileDesc2PlatformOverlappedIOHandleFunc =
-            reinterpret_cast<FileDesc2PlatformOverlappedIOHandleFunc>(
-                GetProcAddress(library, "PR_EXPERIMENTAL_ONLY_IN_4_17_GetOverlappedIOHandle"));
-        if (mFileDesc2PlatformOverlappedIOHandleFunc) {
-            SOCKET_LOG(("PR_EXPERIMENTAL_ONLY_IN_4_17_GetOverlappedIOHandle function "
-                        "present"));
-            mNsprLibrary = library;
-        } else {
-            BOOL rv = FreeLibrary(library);
-            SOCKET_LOG(("No PR_EXPERIMENTAL_ONLY_IN_4_17_GetOverlappedIOHandle function: "
-                        "%d\n", rv));
-        }
-    }
-}
-
-bool
-nsSocketTransportService::HasFileDesc2PlatformOverlappedIOHandleFunc()
-{
-    CheckFileDesc2PlatformOverlappedIOHandleFunc();
-    return mFileDesc2PlatformOverlappedIOHandleFunc;
-}
-
-PRStatus
-nsSocketTransportService::CallFileDesc2PlatformOverlappedIOHandleFunc(PRFileDesc *fd, void **ol)
-{
-    CheckFileDesc2PlatformOverlappedIOHandleFunc();
-    if (mFileDesc2PlatformOverlappedIOHandleFunc) {
-        return mFileDesc2PlatformOverlappedIOHandleFunc(fd, ol);
-    }
-    return PR_FAILURE;
-}
 
 #endif
+
+void nsSocketTransportService::TryRepairPollableEvent()
+{
+    mLock.AssertCurrentThreadOwns();
+
+    NS_WARNING("Trying to repair mPollableEvent");
+    mPollableEvent.reset(new PollableEvent());
+    if (!mPollableEvent->Valid()) {
+        mPollableEvent = nullptr;
+    }
+    SOCKET_LOG(("running socket transport thread without "
+                "a pollable event now valid=%d", !!mPollableEvent));
+    mPollList[0].fd = mPollableEvent ? mPollableEvent->PollableFD() : nullptr;
+    mPollList[0].in_flags = PR_POLL_READ | PR_POLL_EXCEPT;
+    mPollList[0].out_flags = 0;
+}
 
 } // namespace net
 } // namespace mozilla

@@ -19,10 +19,10 @@ PrioritizedEventQueue<InnerQueueT>::PrioritizedEventQueue(UniquePtr<InnerQueueT>
                                                           UniquePtr<InnerQueueT> aNormalQueue,
                                                           UniquePtr<InnerQueueT> aIdleQueue,
                                                           already_AddRefed<nsIIdlePeriod> aIdlePeriod)
-  : mHighQueue(Move(aHighQueue))
-  , mInputQueue(Move(aInputQueue))
-  , mNormalQueue(Move(aNormalQueue))
-  , mIdleQueue(Move(aIdleQueue))
+  : mHighQueue(std::move(aHighQueue))
+  , mInputQueue(std::move(aInputQueue))
+  , mNormalQueue(std::move(aNormalQueue))
+  , mIdleQueue(std::move(aIdleQueue))
   , mIdlePeriod(aIdlePeriod)
 {
   static_assert(IsBaseOf<AbstractEventQueue, InnerQueueT>::value,
@@ -38,15 +38,6 @@ PrioritizedEventQueue<InnerQueueT>::PutEvent(already_AddRefed<nsIRunnable>&& aEv
   // Double check the priority with a QI.
   RefPtr<nsIRunnable> event(aEvent);
   EventPriority priority = aPriority;
-  if (nsCOMPtr<nsIRunnablePriority> runnablePrio = do_QueryInterface(event)) {
-    uint32_t prio = nsIRunnablePriority::PRIORITY_NORMAL;
-    runnablePrio->GetPriority(&prio);
-    if (prio == nsIRunnablePriority::PRIORITY_HIGH) {
-      priority = EventPriority::High;
-    } else if (prio == nsIRunnablePriority::PRIORITY_INPUT) {
-      priority = EventPriority::Input;
-    }
-  }
 
   if (priority == EventPriority::Input && mInputQueueState == STATE_DISABLED) {
     priority = EventPriority::Normal;
@@ -64,6 +55,9 @@ PrioritizedEventQueue<InnerQueueT>::PutEvent(already_AddRefed<nsIRunnable>&& aEv
     break;
   case EventPriority::Idle:
     mIdleQueue->PutEvent(event.forget(), priority, aProofOfLock);
+    break;
+  case EventPriority::Count:
+    MOZ_CRASH("EventPriority::Count isn't a valid priority");
     break;
   }
 }
@@ -124,8 +118,10 @@ PrioritizedEventQueue<InnerQueueT>::SelectQueue(bool aUpdateState,
   bool normalPending = !mNormalQueue->IsEmpty(aProofOfLock);
   size_t inputCount = mInputQueue->Count(aProofOfLock);
 
-  if (mInputQueueState == STATE_ENABLED &&
-      mInputHandlingStartTime.IsNull() && inputCount > 0) {
+  if (aUpdateState &&
+      mInputQueueState == STATE_ENABLED &&
+      mInputHandlingStartTime.IsNull() &&
+      inputCount > 0) {
     mInputHandlingStartTime =
       InputEventStatistics::Get()
       .GetInputHandlingStartTime(inputCount);
@@ -156,6 +152,7 @@ PrioritizedEventQueue<InnerQueueT>::SelectQueue(bool aUpdateState,
     queue = EventPriority::High;
   } else if (inputCount > 0 && (mInputQueueState == STATE_FLUSHING ||
                                 (mInputQueueState == STATE_ENABLED &&
+                                 !mInputHandlingStartTime.IsNull() &&
                                  TimeStamp::Now() > mInputHandlingStartTime))) {
     queue = EventPriority::Input;
   } else if (normalPending) {
@@ -188,7 +185,7 @@ already_AddRefed<nsIRunnable>
 PrioritizedEventQueue<InnerQueueT>::GetEvent(EventPriority* aPriority,
                                              const MutexAutoLock& aProofOfLock)
 {
-  MakeScopeExit([&] {
+  auto guard = MakeScopeExit([&] {
     mHasPendingEventsPromisedIdleEvent = false;
   });
 

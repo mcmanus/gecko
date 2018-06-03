@@ -2,8 +2,8 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-Cu.import("resource://gre/modules/osfile.jsm");
-Cu.import("resource://gre/modules/Downloads.jsm");
+ChromeUtils.import("resource://gre/modules/osfile.jsm");
+ChromeUtils.import("resource://gre/modules/Downloads.jsm");
 
 const gServer = createHttpServer();
 gServer.registerDirectory("/data/", do_get_file("data"));
@@ -23,18 +23,18 @@ let downloadDir;
 function setup() {
   downloadDir = FileUtils.getDir("TmpD", ["downloads"]);
   downloadDir.createUnique(Ci.nsIFile.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
-  do_print(`Using download directory ${downloadDir.path}`);
+  info(`Using download directory ${downloadDir.path}`);
 
   Services.prefs.setIntPref("browser.download.folderList", 2);
   Services.prefs.setComplexValue("browser.download.dir", Ci.nsIFile, downloadDir);
 
-  do_register_cleanup(() => {
+  registerCleanupFunction(() => {
     Services.prefs.clearUserPref("browser.download.folderList");
     Services.prefs.clearUserPref("browser.download.dir");
 
     let entries = downloadDir.directoryEntries;
     while (entries.hasMoreElements()) {
-      let entry = entries.getNext().QueryInterface(Ci.nsIFile);
+      let entry = entries.nextFile;
       ok(false, `Leftover file ${entry.path} in download directory`);
       entry.remove(false);
     }
@@ -127,7 +127,7 @@ add_task(async function test_downloads() {
 
   await extension.startup();
   await extension.awaitMessage("ready");
-  do_print("extension started");
+  info("extension started");
 
   // Call download() with just the url property.
   await testDownload({url: FILE_URL}, FILE_NAME, FILE_LEN, "just source");
@@ -299,7 +299,8 @@ add_task(async function test_download_post() {
     }
 
     if (body) {
-      const str = NetUtil.readInputStreamToString(received.bodyInputStream,
+      const str = NetUtil.readInputStreamToString(
+        received.bodyInputStream,
         received.bodyInputStream.available());
       equal(str, body, "body is correct");
     }

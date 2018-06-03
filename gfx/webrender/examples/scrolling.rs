@@ -2,14 +2,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+extern crate euclid;
 extern crate gleam;
 extern crate glutin;
 extern crate webrender;
+extern crate winit;
 
 #[path = "common/boilerplate.rs"]
 mod boilerplate;
 
 use boilerplate::{Example, HandyDandyRectBuilder};
+use euclid::SideOffsets2D;
 use webrender::api::*;
 
 struct App {
@@ -21,35 +24,38 @@ impl Example for App {
         &mut self,
         _api: &RenderApi,
         builder: &mut DisplayListBuilder,
-        _resources: &mut ResourceUpdates,
-        layout_size: LayoutSize,
+        _txn: &mut Transaction,
+        _framebuffer_size: DeviceUintSize,
         _pipeline_id: PipelineId,
         _document_id: DocumentId,
     ) {
-        let info = LayoutPrimitiveInfo::new(LayoutRect::new(LayoutPoint::zero(), layout_size));
+        let info = LayoutPrimitiveInfo::new(
+            LayoutRect::new(LayoutPoint::zero(), builder.content_size())
+        );
         builder.push_stacking_context(
             &info,
-            ScrollPolicy::Scrollable,
+            None,
             None,
             TransformStyle::Flat,
             None,
             MixBlendMode::Normal,
             Vec::new(),
+            GlyphRasterSpace::Screen,
         );
 
         if true {
             // scrolling and clips stuff
             // let's make a scrollbox
             let scrollbox = (0, 0).to(300, 400);
-            let info = LayoutPrimitiveInfo::new((10, 10).by(0, 0));
             builder.push_stacking_context(
-                &info,
-                ScrollPolicy::Scrollable,
+                &LayoutPrimitiveInfo::new((10, 10).by(0, 0)),
+                None,
                 None,
                 TransformStyle::Flat,
                 None,
                 MixBlendMode::Normal,
                 Vec::new(),
+                GlyphRasterSpace::Screen,
             );
             // set the scrolling clip
             let clip_id = builder.define_scroll_frame(
@@ -64,17 +70,20 @@ impl Example for App {
 
             // now put some content into it.
             // start with a white background
-            let info = LayoutPrimitiveInfo::new((0, 0).to(1000, 1000));
+            let mut info = LayoutPrimitiveInfo::new((0, 0).to(1000, 1000));
+            info.tag = Some((0, 1));
             builder.push_rect(&info, ColorF::new(1.0, 1.0, 1.0, 1.0));
 
             // let's make a 50x50 blue square as a visual reference
-            let info = LayoutPrimitiveInfo::new((0, 0).to(50, 50));
+            let mut info = LayoutPrimitiveInfo::new((0, 0).to(50, 50));
+            info.tag = Some((0, 2));
             builder.push_rect(&info, ColorF::new(0.0, 0.0, 1.0, 1.0));
 
             // and a 50x50 green square next to it with an offset clip
             // to see what that looks like
-            let info =
+            let mut info =
                 LayoutPrimitiveInfo::with_clip_rect((50, 0).to(100, 50), (60, 10).to(110, 60));
+            info.tag = Some((0, 3));
             builder.push_rect(&info, ColorF::new(0.0, 1.0, 0.0, 1.0));
 
             // Below the above rectangles, set up a nested scrollbox. It's still in
@@ -92,12 +101,14 @@ impl Example for App {
 
             // give it a giant gray background just to distinguish it and to easily
             // visually identify the nested scrollbox
-            let info = LayoutPrimitiveInfo::new((-1000, -1000).to(5000, 5000));
+            let mut info = LayoutPrimitiveInfo::new((-1000, -1000).to(5000, 5000));
+            info.tag = Some((0, 4));
             builder.push_rect(&info, ColorF::new(0.5, 0.5, 0.5, 1.0));
 
             // add a teal square to visualize the scrolling/clipping behaviour
             // as you scroll the nested scrollbox
-            let info = LayoutPrimitiveInfo::new((0, 200).to(50, 250));
+            let mut info = LayoutPrimitiveInfo::new((0, 200).to(50, 250));
+            info.tag = Some((0, 5));
             builder.push_rect(&info, ColorF::new(0.0, 1.0, 1.0, 1.0));
 
             // Add a sticky frame. It will "stick" twice while scrolling, once
@@ -105,29 +116,23 @@ impl Example for App {
             // and once at a margin of 10px from the top, for 60 pixels of
             // scrolling.
             let sticky_id = builder.define_sticky_frame(
-                None,
                 (50, 350).by(50, 50),
-                StickyFrameInfo::new(
-                    Some(StickySideConstraint {
-                        margin: 10.0,
-                        max_offset: 60.0,
-                    }),
-                    None,
-                    Some(StickySideConstraint {
-                        margin: 10.0,
-                        max_offset: -40.0,
-                    }),
-                    None,
-                ),
+                SideOffsets2D::new(Some(10.0), None, Some(10.0), None),
+                StickyOffsetBounds::new(-40.0, 60.0),
+                StickyOffsetBounds::new(0.0, 0.0),
+                LayoutVector2D::new(0.0, 0.0)
             );
+
             builder.push_clip_id(sticky_id);
-            let info = LayoutPrimitiveInfo::new((50, 350).by(50, 50));
+            let mut info = LayoutPrimitiveInfo::new((50, 350).by(50, 50));
+            info.tag = Some((0, 6));
             builder.push_rect(&info, ColorF::new(0.5, 0.5, 1.0, 1.0));
             builder.pop_clip_id(); // sticky_id
 
             // just for good measure add another teal square further down and to
             // the right, which can be scrolled into view by the user
-            let info = LayoutPrimitiveInfo::new((250, 350).to(300, 400));
+            let mut info = LayoutPrimitiveInfo::new((250, 350).to(300, 400));
+            info.tag = Some((0, 7));
             builder.push_rect(&info, ColorF::new(0.0, 1.0, 1.0, 1.0));
 
             builder.pop_clip_id(); // nested_clip_id
@@ -139,47 +144,63 @@ impl Example for App {
         builder.pop_stacking_context();
     }
 
-    fn on_event(&mut self, event: glutin::Event, api: &RenderApi, document_id: DocumentId) -> bool {
+    fn on_event(&mut self, event: winit::WindowEvent, api: &RenderApi, document_id: DocumentId) -> bool {
+        let mut txn = Transaction::new();
         match event {
-            glutin::Event::KeyboardInput(glutin::ElementState::Pressed, _, Some(key)) => {
+            winit::WindowEvent::KeyboardInput {
+                input: winit::KeyboardInput {
+                    state: winit::ElementState::Pressed,
+                    virtual_keycode: Some(key),
+                    ..
+                },
+                ..
+            } => {
                 let offset = match key {
-                    glutin::VirtualKeyCode::Down => (0.0, -10.0),
-                    glutin::VirtualKeyCode::Up => (0.0, 10.0),
-                    glutin::VirtualKeyCode::Right => (-10.0, 0.0),
-                    glutin::VirtualKeyCode::Left => (10.0, 0.0),
+                    winit::VirtualKeyCode::Down => (0.0, -10.0),
+                    winit::VirtualKeyCode::Up => (0.0, 10.0),
+                    winit::VirtualKeyCode::Right => (-10.0, 0.0),
+                    winit::VirtualKeyCode::Left => (10.0, 0.0),
                     _ => return false,
                 };
 
-                api.scroll(
-                    document_id,
+                txn.scroll(
                     ScrollLocation::Delta(LayoutVector2D::new(offset.0, offset.1)),
                     self.cursor_position,
-                    ScrollEventPhase::Start,
                 );
             }
-            glutin::Event::MouseMoved(x, y) => {
+            winit::WindowEvent::CursorMoved { position: (x, y), .. } => {
                 self.cursor_position = WorldPoint::new(x as f32, y as f32);
             }
-            glutin::Event::MouseWheel(delta, _, event_cursor_position) => {
-                if let Some((x, y)) = event_cursor_position {
-                    self.cursor_position = WorldPoint::new(x as f32, y as f32);
-                }
-
+            winit::WindowEvent::MouseWheel { delta, .. } => {
                 const LINE_HEIGHT: f32 = 38.0;
                 let (dx, dy) = match delta {
-                    glutin::MouseScrollDelta::LineDelta(dx, dy) => (dx, dy * LINE_HEIGHT),
-                    glutin::MouseScrollDelta::PixelDelta(dx, dy) => (dx, dy),
+                    winit::MouseScrollDelta::LineDelta(dx, dy) => (dx, dy * LINE_HEIGHT),
+                    winit::MouseScrollDelta::PixelDelta(dx, dy) => (dx, dy),
                 };
 
-                api.scroll(
-                    document_id,
+                txn.scroll(
                     ScrollLocation::Delta(LayoutVector2D::new(dx, dy)),
                     self.cursor_position,
-                    ScrollEventPhase::Start,
                 );
+            }
+            winit::WindowEvent::MouseInput { .. } => {
+                let results = api.hit_test(
+                    document_id,
+                    None,
+                    self.cursor_position,
+                    HitTestFlags::FIND_ALL
+                );
+
+                println!("Hit test results:");
+                for item in &results.items {
+                    println!("  • {:?}", item);
+                }
+                println!("");
             }
             _ => (),
         }
+
+        api.send_transaction(document_id, txn);
 
         false
     }

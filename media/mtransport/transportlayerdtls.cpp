@@ -389,8 +389,8 @@ nsresult TransportLayerDtls::InitInternal() {
     return rv;
   }
 
-  timer_ = do_CreateInstance(NS_TIMER_CONTRACTID, &rv);
-  if (NS_FAILED(rv)) {
+  timer_ = NS_NewTimer();
+  if (!timer_) {
     MOZ_MTLOG(ML_ERROR, "Couldn't get timer");
     return rv;
   }
@@ -635,7 +635,7 @@ bool TransportLayerDtls::Setup() {
     MOZ_MTLOG(ML_ERROR, "Couldn't reset handshake");
     return false;
   }
-  ssl_fd_ = Move(ssl_fd);
+  ssl_fd_ = std::move(ssl_fd);
 
   // Finally, get ready to receive data
   downward_->SignalStateChange.connect(this, &TransportLayerDtls::StateChange);

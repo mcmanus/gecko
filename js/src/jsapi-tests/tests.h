@@ -15,11 +15,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "jsalloc.h"
-#include "jscntxt.h"
-#include "jsgc.h"
-
+#include "gc/GC.h"
+#include "js/AllocPolicy.h"
 #include "js/Vector.h"
+#include "vm/JSContext.h"
 
 /* Note: Aborts on OOM. */
 class JSAPITestString {
@@ -33,6 +32,7 @@ class JSAPITestString {
     const char* begin() const { return chars.begin(); }
     const char* end() const { return chars.end(); }
     size_t length() const { return chars.length(); }
+    void clear() { chars.clearAndFree(); }
 
     JSAPITestString& operator +=(const char* s) {
         if (!chars.append(s, strlen(s)))
@@ -73,9 +73,8 @@ class JSAPITest
     JS::PersistentRootedObject global;
     bool knownFail;
     JSAPITestString msgs;
-    JSCompartment* oldCompartment;
 
-    JSAPITest() : cx(nullptr), knownFail(false), oldCompartment(nullptr) {
+    JSAPITest() : cx(nullptr), knownFail(false) {
         next = list;
         list = this;
     }
@@ -152,10 +151,6 @@ class JSAPITest
     JSAPITestString toSource(JSAtom* v) {
         JS::RootedValue val(cx, JS::StringValue((JSString*)v));
         return jsvalToSource(val);
-    }
-
-    JSAPITestString toSource(JSVersion v) {
-        return JSAPITestString(JS_VersionToString(v));
     }
 
     // Note that in some still-supported GCC versions (we think anything before
@@ -445,6 +440,33 @@ class TestJSPrincipals : public JSPrincipals
     }
 };
 
+// A class that simulates externally memory-managed data, for testing with
+// array buffers.
+class ExternalData {
+    char* contents_;
+    size_t len_;
+
+  public:
+    explicit ExternalData(const char* str) : contents_(strdup(str)), len_(strlen(str) + 1) { }
+
+    size_t len() const { return len_; }
+    void* contents() const { return contents_; }
+    char* asString() const { return contents_; }
+    bool wasFreed() const { return !contents_; }
+
+    void free() {
+        MOZ_ASSERT(!wasFreed());
+        ::free(contents_);
+        contents_ = nullptr;
+    }
+
+    static void freeCallback(void* contents, void* userData) {
+        auto self = static_cast<ExternalData*>(userData);
+        MOZ_ASSERT(self->contents() == contents);
+        self->free();
+    }
+};
+
 #ifdef JS_GC_ZEAL
 /*
  * Temporarily disable the GC zeal setting. This is only useful in tests that
@@ -462,9 +484,10 @@ class AutoLeaveZeal
         JS_GetGCZealBits(cx_, &zealBits_, &frequency_, &dummy);
         JS_SetGCZeal(cx_, 0, 0);
         JS::PrepareForFullGC(cx_);
-        JS::GCForReason(cx_, GC_SHRINK, JS::gcreason::DEBUG_GC);
+        JS::NonIncrementalGC(cx_, GC_SHRINK, JS::gcreason::DEBUG_GC);
     }
     ~AutoLeaveZeal() {
+        JS_SetGCZeal(cx_, 0, 0);
         for (size_t i = 0; i < sizeof(zealBits_) * 8; i++) {
             if (zealBits_ & (1 << i))
                 JS_SetGCZeal(cx_, i, frequency_);

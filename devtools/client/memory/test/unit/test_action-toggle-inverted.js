@@ -8,8 +8,8 @@
 const { censusDisplays } = require("devtools/client/memory/constants");
 const { setCensusDisplay } = require("devtools/client/memory/actions/census-display");
 
-add_task(function* () {
-  let store = Store();
+add_task(async function() {
+  const store = Store();
   const { getState, dispatch } = store;
 
   dispatch(setCensusDisplay(censusDisplays.allocationStack));

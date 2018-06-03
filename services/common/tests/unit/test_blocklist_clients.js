@@ -1,24 +1,20 @@
 const { Constructor: CC } = Components;
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://testing-common/httpd.js");
-Cu.import("resource://gre/modules/Timer.jsm");
-const { FileUtils } = Cu.import("resource://gre/modules/FileUtils.jsm", {});
-const { OS } = Cu.import("resource://gre/modules/osfile.jsm", {});
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://testing-common/httpd.js");
+const { FileUtils } = ChromeUtils.import("resource://gre/modules/FileUtils.jsm", {});
+const { OS } = ChromeUtils.import("resource://gre/modules/osfile.jsm", {});
 
-const BlocklistClients = Cu.import("resource://services-common/blocklist-clients.js", {});
-const { UptakeTelemetry } = Cu.import("resource://services-common/uptake-telemetry.js", {});
+const BlocklistClients = ChromeUtils.import("resource://services-common/blocklist-clients.js", {});
 
 const BinaryInputStream = CC("@mozilla.org/binaryinputstream;1",
   "nsIBinaryInputStream", "setInputStream");
 
-const gBlocklistClients = [
-  {client: BlocklistClients.AddonBlocklistClient, testData: ["i808", "i720", "i539"]},
-  {client: BlocklistClients.PluginBlocklistClient, testData: ["p1044", "p32", "p28"]},
-  {client: BlocklistClients.GfxBlocklistClient, testData: ["g204", "g200", "g36"]},
-];
+const IS_ANDROID = AppConstants.platform == "android";
 
 
+let gBlocklistClients;
 let server;
 
 async function readJSON(filepath) {
@@ -33,9 +29,8 @@ async function clear_state() {
     Services.prefs.clearUserPref(client.lastCheckTimePref);
 
     // Clear local DB.
-    await client.openCollection(async (collection) => {
-      await collection.clear();
-    });
+    const collection = await client.openCollection();
+    await collection.clear();
 
     // Remove JSON dumps folders in profile dir.
     const dumpFile = OS.Path.join(OS.Constants.Path.profileDir, client.filename);
@@ -53,6 +48,18 @@ function run_test() {
   // Point the blocklist clients to use this local HTTP server.
   Services.prefs.setCharPref("services.settings.server",
                              `http://localhost:${server.identity.primaryPort}/v1`);
+  // Ensure that signature verification is disabled to prevent interference
+  // with basic certificate sync tests
+  Services.prefs.setBoolPref("services.settings.verify_signature", false);
+
+  // This will initialize the remote settings clients for blocklists.
+  BlocklistClients.initialize();
+
+  gBlocklistClients = [
+    {client: BlocklistClients.AddonBlocklistClient, testData: ["i808", "i720", "i539"]},
+    {client: BlocklistClients.PluginBlocklistClient, testData: ["p1044", "p32", "p28"]},
+    {client: BlocklistClients.GfxBlocklistClient, testData: ["g204", "g200", "g36"]},
+  ];
 
   // Setup server fake responses.
   function handleResponse(request, response) {
@@ -61,20 +68,20 @@ function run_test() {
       if (!sample) {
         do_throw(`unexpected ${request.method} request for ${request.path}?${request.queryString}`);
       }
+      const { status: { status, statusText }, sampleHeaders, responseBody } = sample;
 
-      response.setStatusLine(null, sample.status.status,
-                             sample.status.statusText);
+      response.setStatusLine(null, status, statusText);
       // send the headers
-      for (let headerLine of sample.sampleHeaders) {
-        let headerElements = headerLine.split(":");
+      for (const headerLine of sampleHeaders) {
+        const headerElements = headerLine.split(":");
         response.setHeader(headerElements[0], headerElements[1].trimLeft());
       }
       response.setHeader("Date", (new Date()).toUTCString());
 
-      response.write(sample.responseBody);
+      response.write(responseBody);
       response.finish();
     } catch (e) {
-      do_print(e);
+      info(e);
     }
   }
   const configPath = "/v1/";
@@ -89,51 +96,50 @@ function run_test() {
 
   run_next_test();
 
-  do_register_cleanup(function() {
+  registerCleanupFunction(function() {
     server.stop(() => { });
   });
 }
 
 add_task(async function test_initial_dump_is_loaded_as_synced_when_collection_is_empty() {
+  const november2016 = 1480000000000;
+
   for (let {client} of gBlocklistClients) {
+    if (IS_ANDROID && client.collectionName != BlocklistClients.AddonBlocklistClient.collectionName) {
+      // On Android we don't ship the dumps of plugins and gfx.
+      continue;
+    }
+
     // Test an empty db populates, but don't reach server (specified timestamp <= dump).
     await client.maybeSync(1, Date.now());
 
-    // Open the collection, verify the loaded data has status to synced:
-    await client.openCollection(async (collection) => {
-      const list = await collection.list();
-      equal(list.data[0]._status, "synced");
-    });
+    // Verify the loaded data has status to synced:
+    const collection = await client.openCollection();
+    const { data: list } = await collection.list();
+    equal(list[0]._status, "synced");
+
+    // Verify that the internal timestamp was updated.
+    const timestamp = await collection.db.getLastModified();
+    ok(timestamp > november2016, `Loaded dump of ${client.collectionName} has timestamp ${timestamp}`);
   }
 });
 add_task(clear_state);
 
-add_task(async function test_records_obtained_from_server_are_stored_in_db() {
+add_task(async function test_initial_dump_is_loaded_when_using_get_on_empty_collection() {
   for (let {client} of gBlocklistClients) {
-    // Test an empty db populates
-    await client.maybeSync(2000, Date.now(), {loadDump: false});
+    if (IS_ANDROID && client.collectionName != BlocklistClients.AddonBlocklistClient.collectionName) {
+      // On Android we don't ship the dumps of plugins and gfx.
+      continue;
+    }
+    // Internal database is empty.
+    const collection = await client.openCollection();
+    const { data: list } = await collection.list();
+    equal(list.length, 0);
 
-    // Open the collection, verify it's been populated:
-    // Our test data has a single record; it should be in the local collection
-    await client.openCollection(async (collection) => {
-      const list = await collection.list();
-      equal(list.data.length, 1);
-    });
+    // Calling .get() will load the dump.
+    const afterLoaded = await client.get();
+    ok(afterLoaded.length > 0, `Loaded dump of ${client.collectionName} has ${afterLoaded.length} records`);
   }
-});
-add_task(clear_state);
-
-add_task(async function test_records_changes_are_overwritten_by_server_changes() {
-  const {client} = gBlocklistClients[0];
-
-  // Create some local conflicting data, and make sure it syncs without error.
-  await client.openCollection(async (collection) => {
-    await collection.create({
-      "versionRange": [],
-      "id": "9d500963-d80e-3a91-6e74-66f3811b99cc"
-    }, { useRecordId: true });
-  });
-  await client.maybeSync(2000, Date.now(), {loadDump: false});
 });
 add_task(clear_state);
 
@@ -154,6 +160,9 @@ add_task(clear_state);
 
 add_task(async function test_current_server_time_is_saved_in_pref() {
   for (let {client} of gBlocklistClients) {
+    // The lastCheckTimePref was customized:
+    ok(/services\.blocklist\.(\w+)\.checked/.test(client.lastCheckTimePref), client.lastCheckTimePref);
+
     const serverTime = Date.now();
     await client.maybeSync(2000, serverTime);
     const after = Services.prefs.getIntPref(client.lastCheckTimePref);
@@ -187,7 +196,7 @@ add_task(async function test_sends_reload_message_when_blocklist_has_changes() {
   for (let {client} of gBlocklistClients) {
     let received = await new Promise((resolve, reject) => {
       Services.ppmm.addMessageListener("Blocklist:reload-from-disk", {
-        receiveMessage(aMsg) { resolve(aMsg) }
+        receiveMessage(aMsg) { resolve(aMsg); }
       });
 
       client.maybeSync(2000, Date.now() - 1000, {loadDump: false});
@@ -198,101 +207,89 @@ add_task(async function test_sends_reload_message_when_blocklist_has_changes() {
 });
 add_task(clear_state);
 
-add_task(async function test_telemetry_reports_up_to_date() {
+add_task(async function test_sync_event_data_is_filtered_for_target() {
+  // Here we will synchronize 4 times, the first two to initialize the local DB and
+  // the last two about event filtered data.
+  const timestamp1 = 2000;
+  const timestamp2 = 3000;
+  const timestamp3 = 4000;
+  const timestamp4 = 5000;
+  // Fake a date value obtained from server (used to store a pref, useless here).
+  const fakeServerTime = Date.now();
+
   for (let {client} of gBlocklistClients) {
-    await client.maybeSync(2000, Date.now() - 1000, {loadDump: false});
-    const filePath = OS.Path.join(OS.Constants.Path.profileDir, client.filename);
-    const profFile = new FileUtils.File(filePath);
-    const fileLastModified = profFile.lastModifiedTime = profFile.lastModifiedTime - 1000;
-    const serverTime = Date.now();
-    const startHistogram = getUptakeTelemetrySnapshot(client.identifier);
+    // Initialize the collection with some data (local is empty, thus no ?_since)
+    await client.maybeSync(timestamp1, fakeServerTime - 30, {loadDump: false});
+    // This will pick the data with ?_since=3000.
+    await client.maybeSync(timestamp2 + 1, fakeServerTime - 20);
 
-    await client.maybeSync(3000, serverTime);
+    // In ?_since=4000 entries, no target matches. The sync event is not called.
+    let called = false;
+    client.on("sync", e => called = true);
+    await client.maybeSync(timestamp3 + 1, fakeServerTime - 10);
+    equal(called, false, `shouldn't have sync event for ${client.collectionName}`);
 
-    // File was not updated.
-    equal(fileLastModified, profFile.lastModifiedTime);
-    // Server time was updated.
-    const after = Services.prefs.getIntPref(client.lastCheckTimePref);
-    equal(after, Math.round(serverTime / 1000));
-    // No Telemetry was sent.
-    const endHistogram = getUptakeTelemetrySnapshot(client.identifier);
-    const expectedIncrements = {[UptakeTelemetry.STATUS.UP_TO_DATE]: 1};
-    checkUptakeTelemetry(startHistogram, endHistogram, expectedIncrements);
+    // In ?_since=5000 entries, only one entry matches.
+    let syncEventData;
+    client.on("sync", e => syncEventData = e.data);
+    await client.maybeSync(timestamp4 + 1, fakeServerTime);
+    const { current, created, updated, deleted } = syncEventData;
+    equal(created.length + updated.length + deleted.length, 1, `event filtered data for ${client.collectionName}`);
+
+    // Since we had entries whose target does not match, the internal storage list
+    // and the event current data should differ.
+    const collection = await client.openCollection();
+    const { data: internalData } = await collection.list();
+    ok(internalData.length > current.length, `event current data for ${client.collectionName}`);
   }
 });
 add_task(clear_state);
 
-add_task(async function test_telemetry_if_sync_succeeds() {
-  // We test each client because Telemetry requires preleminary declarations.
+add_task(async function test_entries_are_filtered_when_jexl_filter_expression_is_present() {
+  const records = [{
+      willMatch: true,
+    }, {
+      willMatch: true,
+      filter_expression: null
+    }, {
+      willMatch: true,
+      filter_expression: "1 == 1"
+    }, {
+      willMatch: false,
+      filter_expression: "1 == 2"
+    }, {
+      willMatch: true,
+      filter_expression: "1 == 1",
+      versionRange: [{
+        targetApplication: [{
+          guid: "some-guid"
+        }],
+      }]
+    }, {
+      willMatch: false,  // jexl prevails over versionRange.
+      filter_expression: "1 == 2",
+      versionRange: [{
+        targetApplication: [{
+          guid: "xpcshell@tests.mozilla.org",
+          minVersion: "0",
+          maxVersion: "*",
+        }],
+      }]
+    }
+  ];
   for (let {client} of gBlocklistClients) {
-    const serverTime = Date.now();
-    const startHistogram = getUptakeTelemetrySnapshot(client.identifier);
-
-    await client.maybeSync(2000, serverTime, {loadDump: false});
-
-    const endHistogram = getUptakeTelemetrySnapshot(client.identifier);
-    const expectedIncrements = {[UptakeTelemetry.STATUS.SUCCESS]: 1};
-    checkUptakeTelemetry(startHistogram, endHistogram, expectedIncrements);
+    const collection = await client.openCollection();
+    for (const record of records) {
+      await collection.create(record);
+    }
+    await collection.db.saveLastModified(42); // Prevent from loading JSON dump.
+    const list = await client.get();
+    equal(list.length, 4);
+    ok(list.every(e => e.willMatch));
   }
 });
 add_task(clear_state);
 
-add_task(async function test_telemetry_reports_if_application_fails() {
-  const {client} = gBlocklistClients[0];
-  const serverTime = Date.now();
-  const startHistogram = getUptakeTelemetrySnapshot(client.identifier);
-  const backup = client.processCallback;
-  client.processCallback = () => { throw new Error("boom"); };
-
-  try {
-    await client.maybeSync(2000, serverTime, {loadDump: false});
-  } catch (e) {}
-
-  client.processCallback = backup;
-
-  const endHistogram = getUptakeTelemetrySnapshot(client.identifier);
-  const expectedIncrements = {[UptakeTelemetry.STATUS.APPLY_ERROR]: 1};
-  checkUptakeTelemetry(startHistogram, endHistogram, expectedIncrements);
-});
-add_task(clear_state);
-
-add_task(async function test_telemetry_reports_if_sync_fails() {
-  const {client} = gBlocklistClients[0];
-  const serverTime = Date.now();
-
-  await client.openCollection(async (collection) => {
-    await collection.db.saveLastModified(9999);
-  });
-
-  const startHistogram = getUptakeTelemetrySnapshot(client.identifier);
-
-  try {
-    await client.maybeSync(10000, serverTime);
-  } catch (e) {}
-
-  const endHistogram = getUptakeTelemetrySnapshot(client.identifier);
-  const expectedIncrements = {[UptakeTelemetry.STATUS.SYNC_ERROR]: 1};
-  checkUptakeTelemetry(startHistogram, endHistogram, expectedIncrements);
-});
-add_task(clear_state);
-
-add_task(async function test_telemetry_reports_unknown_errors() {
-  const {client} = gBlocklistClients[0];
-  const serverTime = Date.now();
-  const backup = client.openCollection;
-  client.openCollection = () => { throw new Error("Internal"); };
-  const startHistogram = getUptakeTelemetrySnapshot(client.identifier);
-
-  try {
-    await client.maybeSync(2000, serverTime);
-  } catch (e) {}
-
-  client.openCollection = backup;
-  const endHistogram = getUptakeTelemetrySnapshot(client.identifier);
-  const expectedIncrements = {[UptakeTelemetry.STATUS.UNKNOWN_ERROR]: 1};
-  checkUptakeTelemetry(startHistogram, endHistogram, expectedIncrements);
-});
-add_task(clear_state);
 
 // get a response for a given request from sample data
 function getSampleResponse(req, port) {
@@ -308,7 +305,7 @@ function getSampleResponse(req, port) {
       "status": {status: 200, statusText: "OK"},
       "responseBody": "null"
     },
-    "GET:/v1/?": {
+    "GET:/v1/": {
       "sampleHeaders": [
         "Access-Control-Allow-Origin: *",
         "Access-Control-Expose-Headers: Retry-After, Content-Length, Alert, Backoff",
@@ -441,7 +438,7 @@ function getSampleResponse(req, port) {
         "versionRange": [{
           "targetApplication": [],
           "minVersion": "11.2.202.509",
-          "maxVersion": "11.2.202.539",
+          "maxVersion": "*",
           "severity": "0",
           "vulnerabilityStatus": "1"
         }],
@@ -455,7 +452,6 @@ function getSampleResponse(req, port) {
         "versionRange": [{
           "targetApplication": [{
             "minVersion": "3.0",
-            "guid": "{ec8030f7-c20a-464f-9b0e-13a3a9e97384}",
             "maxVersion": "*"
           }]
         }]
@@ -490,22 +486,166 @@ function getSampleResponse(req, port) {
         "featureStatus": "BLOCKED_DEVICE"
       }]})
     },
-    "GET:/v1/buckets/blocklists/collections/addons/records?_sort=-last_modified&_since=9999": {
+    "GET:/v1/buckets/blocklists/collections/addons/records?_sort=-last_modified&_since=4000": {
       "sampleHeaders": [
         "Access-Control-Allow-Origin: *",
         "Access-Control-Expose-Headers: Retry-After, Content-Length, Alert, Backoff",
         "Content-Type: application/json; charset=UTF-8",
         "Server: waitress",
+        "Etag: \"5000\""
       ],
-      "status": {status: 503, statusText: "Service Unavailable"},
-      "responseBody": JSON.stringify({
-        code: 503,
-        errno: 999,
-        error: "Service Unavailable",
-      })
+      "status": {status: 200, statusText: "OK"},
+      "responseBody": JSON.stringify({"data": [{
+        "last_modified": 4001,
+        "versionRange": [{
+          "targetApplication": [{
+            "guid": "some-guid"
+          }],
+        }],
+        "id": "8f03b264-57b7-4263-9b15-ad91b033a034"
+      }]})
+    },
+    "GET:/v1/buckets/blocklists/collections/plugins/records?_sort=-last_modified&_since=4000": {
+      "sampleHeaders": [
+        "Access-Control-Allow-Origin: *",
+        "Access-Control-Expose-Headers: Retry-After, Content-Length, Alert, Backoff",
+        "Content-Type: application/json; charset=UTF-8",
+        "Server: waitress",
+        "Etag: \"5000\""
+      ],
+      "status": {status: 200, statusText: "OK"},
+      "responseBody": JSON.stringify({"data": [{
+        "last_modified": 4001,
+        "versionRange": [{
+          "targetApplication": [{
+            "guid": "xpcshell@tests.mozilla.org",
+            "minVersion": "0",
+            "maxVersion": "57.*"
+          }]
+        }],
+        "id": "cd3ea0b2-1ba8-4fb6-b242-976a87626116"
+      }]})
+    },
+    "GET:/v1/buckets/blocklists/collections/gfx/records?_sort=-last_modified&_since=4000": {
+      "sampleHeaders": [
+        "Access-Control-Allow-Origin: *",
+        "Access-Control-Expose-Headers: Retry-After, Content-Length, Alert, Backoff",
+        "Content-Type: application/json; charset=UTF-8",
+        "Server: waitress",
+        "Etag: \"5000\""
+      ],
+      "status": {status: 200, statusText: "OK"},
+      "responseBody": JSON.stringify({"data": [{
+        "last_modified": 4001,
+        "versionRange": [{
+          "targetApplication": [{
+            "guid": "xpcshell@tests.mozilla.org",
+            "maxVersion": "20"
+          }],
+        }],
+        "id": "86771771-e803-4006-95e9-c9275d58b3d1"
+      }]})
+    },
+    "GET:/v1/buckets/blocklists/collections/addons/records?_sort=-last_modified&_since=5000": {
+      "sampleHeaders": [
+        "Access-Control-Allow-Origin: *",
+        "Access-Control-Expose-Headers: Retry-After, Content-Length, Alert, Backoff",
+        "Content-Type: application/json; charset=UTF-8",
+        "Server: waitress",
+        "Etag: \"6000\""
+      ],
+      "status": {status: 200, statusText: "OK"},
+      "responseBody": JSON.stringify({"data": [{
+        // delete an entry with non matching target (see above)
+        "last_modified": 5001,
+        "deleted": true,
+        "id": "8f03b264-57b7-4263-9b15-ad91b033a034"
+      }, {
+        // delete entry with matching target (see above)
+        "last_modified": 5002,
+        "deleted": true,
+        "id": "9ccfac91-e463-c30c-f0bd-14143794a8dd"
+      }, {
+        // create an extra non matching
+        "last_modified": 5003,
+        "id": "75b36589-435a-48d4-8ee4-bacee3fb6119",
+        "versionRange": [{
+          "targetApplication": [{
+            "guid": "xpcshell@tests.mozilla.org",
+            "minVersion": "0",
+            "maxVersion": "57.*"
+          }]
+        }],
+      }]})
+    },
+    "GET:/v1/buckets/blocklists/collections/plugins/records?_sort=-last_modified&_since=5000": {
+      "sampleHeaders": [
+        "Access-Control-Allow-Origin: *",
+        "Access-Control-Expose-Headers: Retry-After, Content-Length, Alert, Backoff",
+        "Content-Type: application/json; charset=UTF-8",
+        "Server: waitress",
+        "Etag: \"6000\""
+      ],
+      "status": {status: 200, statusText: "OK"},
+      "responseBody": JSON.stringify({"data": [{
+        // entry with non matching target (see above)
+        "newAttribute": 42,
+        "versionRange": [{
+          "targetApplication": [{
+            "guid": "xpcshell@tests.mozilla.org",
+            "minVersion": "0",
+            "maxVersion": "57.*"
+          }]
+        }],
+        "id": "cd3ea0b2-1ba8-4fb6-b242-976a87626116"
+      }, {
+        // entry with matching target (see above)
+        "newAttribute": 42,
+        "matchFilename": "npViewpoint.dll",
+        "blockID": "p32",
+        "id": "1f48af42-c508-b8ef-b8d5-609d48e4f6c9",
+        "last_modified": 3500,
+        "versionRange": [{
+          "targetApplication": [{
+            "guid": "xpcshell@tests.mozilla.org",
+            "minVersion": "3.0",
+            "maxVersion": "*"
+          }]
+        }]
+      }]})
+    },
+    "GET:/v1/buckets/blocklists/collections/gfx/records?_sort=-last_modified&_since=5000": {
+      "sampleHeaders": [
+        "Access-Control-Allow-Origin: *",
+        "Access-Control-Expose-Headers: Retry-After, Content-Length, Alert, Backoff",
+        "Content-Type: application/json; charset=UTF-8",
+        "Server: waitress",
+        "Etag: \"6000\""
+      ],
+      "status": {status: 200, statusText: "OK"},
+      "responseBody": JSON.stringify({"data": [{
+        "versionRange": [{
+          "targetApplication": [{
+            "guid": "xpcshell@tests.mozilla.org",
+            "minVersion": "0",
+            "maxVersion": "*"
+          }]
+        }],
+        "id": "43031a81-5f36-4eef-9b35-52f0bbeba363"
+      }, {
+        "versionRange": [{
+          "targetApplication": [{
+            "guid": "xpcshell@tests.mozilla.org",
+            "minVersion": "0",
+            "maxVersion": "3"
+          }]
+        }],
+        "id": "75a06bd3-f906-427d-a448-02092ee589fc"
+      }]})
     }
   };
   return responses[`${req.method}:${req.path}?${req.queryString}`] ||
+         responses[`${req.method}:${req.path}`] ||
          responses[req.method];
 
 }

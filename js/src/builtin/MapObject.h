@@ -7,10 +7,9 @@
 #ifndef builtin_MapObject_h
 #define builtin_MapObject_h
 
-#include "jsobj.h"
-
 #include "builtin/SelfHostingDefines.h"
 #include "vm/GlobalObject.h"
+#include "vm/JSObject.h"
 #include "vm/NativeObject.h"
 #include "vm/PIC.h"
 #include "vm/Runtime.h"
@@ -108,7 +107,7 @@ class MapObject : public NativeObject {
 
     enum { NurseryKeysSlot, HasNurseryMemorySlot, SlotCount };
 
-    static MOZ_MUST_USE bool getKeysAndValuesInterleaved(JSContext* cx, HandleObject obj,
+    static MOZ_MUST_USE bool getKeysAndValuesInterleaved(HandleObject obj,
                                             JS::MutableHandle<GCVector<JS::Value>> entries);
     static MOZ_MUST_USE bool entries(JSContext* cx, unsigned argc, Value* vp);
     static MOZ_MUST_USE bool has(JSContext* cx, unsigned argc, Value* vp);
@@ -257,7 +256,7 @@ class SetObject : public NativeObject {
     static bool is(HandleValue v);
     static bool is(HandleObject o);
 
-    static bool isBuiltinAdd(HandleValue add, JSContext* cx);
+    static bool isBuiltinAdd(HandleValue add);
 
     static MOZ_MUST_USE bool iterator_impl(JSContext* cx, const CallArgs& args, IteratorKind kind);
 
@@ -305,7 +304,7 @@ class SetIteratorObject : public NativeObject
 };
 
 using SetInitGetPrototypeOp = NativeObject* (*)(JSContext*, Handle<GlobalObject*>);
-using SetInitIsBuiltinOp = bool (*)(HandleValue, JSContext*);
+using SetInitIsBuiltinOp = bool (*)(HandleValue);
 
 template <SetInitGetPrototypeOp getPrototypeOp, SetInitIsBuiltinOp isBuiltinOp>
 static MOZ_MUST_USE bool
@@ -336,7 +335,7 @@ IsOptimizableInitForSet(JSContext* cx, HandleObject setObject, HandleValue itera
 
     // Get the referred value, ensure it holds the canonical add function.
     RootedValue add(cx, setProto->getSlot(addShape->slot()));
-    if (!isBuiltinOp(add, cx))
+    if (!isBuiltinOp(add))
         return true;
 
     ForOfPIC::Chain* stubChain = ForOfPIC::getOrCreate(cx);

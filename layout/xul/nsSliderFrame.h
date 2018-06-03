@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,7 +18,7 @@
 class nsITimer;
 class nsSliderFrame;
 
-nsIFrame* NS_NewSliderFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
+nsIFrame* NS_NewSliderFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle);
 
 class nsSliderMediator final : public nsIDOMEventListener
 {
@@ -31,7 +32,7 @@ public:
 
   virtual void SetSlider(nsSliderFrame* aSlider) { mSlider = aSlider; }
 
-  NS_IMETHOD HandleEvent(nsIDOMEvent* aEvent) override;
+  NS_DECL_NSIDOMEVENTLISTENER
 
 protected:
   virtual ~nsSliderMediator() {}
@@ -45,7 +46,7 @@ public:
 
   friend class nsSliderMediator;
 
-  explicit nsSliderFrame(nsStyleContext* aContext);
+  explicit nsSliderFrame(ComputedStyle* aStyle);
   virtual ~nsSliderFrame();
 
 #ifdef DEBUG_FRAME_DUMP
@@ -60,7 +61,7 @@ public:
   NS_IMETHOD DoXULLayout(nsBoxLayoutState& aBoxLayoutState) override;
 
   // nsIFrame overrides
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
   virtual void BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
                                            const nsDisplayListSet& aLists) override;
@@ -92,7 +93,7 @@ public:
   virtual void RemoveFrame(ChildListID     aListID,
                            nsIFrame*       aOldFrame) override;
 
-  nsresult StartDrag(nsIDOMEvent* aEvent);
+  nsresult StartDrag(mozilla::dom::Event* aEvent);
   nsresult StopDrag();
 
   void StartAPZDrag(mozilla::WidgetGUIEvent* aEvent);
@@ -138,6 +139,9 @@ public:
   void AsyncScrollbarDragRejected();
 
   bool OnlySystemGroupDispatch(mozilla::EventMessage aMessage) const override;
+
+  // Returns the associated scrollframe that contains this slider if any.
+  nsIScrollableFrame* GetScrollFrame();
 
 private:
 

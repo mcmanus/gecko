@@ -3,24 +3,18 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const {actionTypes: at} = Components.utils.import("resource://activity-stream/common/Actions.jsm", {});
+const {actionTypes: at} = ChromeUtils.import("resource://activity-stream/common/Actions.jsm", {});
+const {Dedupe} = ChromeUtils.import("resource://activity-stream/common/Dedupe.jsm", {});
 
-// Locales that should be displayed RTL
-const RTL_LIST = ["ar", "he", "fa", "ur"];
+const TOP_SITES_DEFAULT_ROWS = 1;
+const TOP_SITES_MAX_SITES_PER_ROW = 8;
 
-const TOP_SITES_DEFAULT_LENGTH = 6;
-const TOP_SITES_SHOWMORE_LENGTH = 12;
+const dedupe = new Dedupe(site => site && site.url);
 
 const INITIAL_STATE = {
   App: {
     // Have we received real data from the app yet?
     initialized: false,
-    // The locale of the browser
-    locale: "",
-    // Localized strings with defaults
-    strings: null,
-    // The text direction for the locale
-    textDirection: "",
     // The version of the system-addon
     version: null
   },
@@ -30,40 +24,25 @@ const INITIAL_STATE = {
     initialized: false,
     // The history (and possibly default) links
     rows: [],
-    // Used in content only to dispatch action from
-    // context menu to TopSitesEdit.
-    editForm: {
-      visible: false,
-      site: null
-    }
+    // Used in content only to dispatch action to TopSiteForm.
+    editForm: null
   },
   Prefs: {
     initialized: false,
     values: {}
   },
+  Theme: {className: ""},
   Dialog: {
     visible: false,
     data: {}
   },
-  Sections: [],
-  PreferencesPane: {visible: false}
+  Sections: []
 };
 
 function App(prevState = INITIAL_STATE.App, action) {
   switch (action.type) {
     case at.INIT:
       return Object.assign({}, prevState, action.data || {}, {initialized: true});
-    case at.LOCALE_UPDATED: {
-      if (!action.data) {
-        return prevState;
-      }
-      let {locale, strings} = action.data;
-      return Object.assign({}, prevState, {
-        locale,
-        strings,
-        textDirection: RTL_LIST.indexOf(locale.split("-")[0]) >= 0 ? "rtl" : "ltr"
-      });
-    }
     default:
       return prevState;
   }
@@ -107,14 +86,53 @@ function TopSites(prevState = INITIAL_STATE.TopSites, action) {
   let newRows;
   switch (action.type) {
     case at.TOP_SITES_UPDATED:
-      if (!action.data) {
+      if (!action.data || !action.data.links) {
         return prevState;
       }
-      return Object.assign({}, prevState, {initialized: true, rows: action.data});
+      return Object.assign({}, prevState, {initialized: true, rows: action.data.links}, action.data.pref ? {pref: action.data.pref} : {});
+    case at.TOP_SITES_PREFS_UPDATED:
+      return Object.assign({}, prevState, {pref: action.data.pref});
     case at.TOP_SITES_EDIT:
-      return Object.assign({}, prevState, {editForm: {visible: true, site: action.data}});
+      return Object.assign({}, prevState, {
+        editForm: {
+          index: action.data.index,
+          previewResponse: null
+        }
+      });
     case at.TOP_SITES_CANCEL_EDIT:
-      return Object.assign({}, prevState, {editForm: {visible: false}});
+      return Object.assign({}, prevState, {editForm: null});
+    case at.PREVIEW_RESPONSE:
+      if (!prevState.editForm || action.data.url !== prevState.editForm.previewUrl) {
+        return prevState;
+      }
+      return Object.assign({}, prevState, {
+        editForm: {
+          index: prevState.editForm.index,
+          previewResponse: action.data.preview,
+          previewUrl: action.data.url
+        }
+      });
+    case at.PREVIEW_REQUEST:
+      if (!prevState.editForm) {
+        return prevState;
+      }
+      return Object.assign({}, prevState, {
+        editForm: {
+          index: prevState.editForm.index,
+          previewResponse: null,
+          previewUrl: action.data.url
+        }
+      });
+    case at.PREVIEW_REQUEST_CANCEL:
+      if (!prevState.editForm) {
+        return prevState;
+      }
+      return Object.assign({}, prevState, {
+        editForm: {
+          index: prevState.editForm.index,
+          previewResponse: null
+        }
+      });
     case at.SCREENSHOT_UPDATED:
       newRows = prevState.rows.map(row => {
         if (row && row.url === action.data.url) {
@@ -151,12 +169,11 @@ function TopSites(prevState = INITIAL_STATE.TopSites, action) {
         return site;
       });
       return Object.assign({}, prevState, {rows: newRows});
-    case at.BLOCK_URL:
-    case at.DELETE_HISTORY_URL:
-      // Optimistically update the UI by responding to the context menu action
-      // events and removing the site that was blocked/deleted with an empty slot.
-      // Once refresh() finishes, we update the UI again with a new site
-      newRows = prevState.rows.filter(val => val && val.url !== action.data.url);
+    case at.PLACES_LINK_DELETED:
+      if (!action.data) {
+        return prevState;
+      }
+      newRows = prevState.rows.filter(site => action.data.url !== site.url);
       return Object.assign({}, prevState, {rows: newRows});
     default:
       return prevState;
@@ -205,40 +222,58 @@ function Sections(prevState = INITIAL_STATE.Sections, action) {
         }
         return section;
       });
-
-      // Invariant: Sections array sorted in increasing order of property `order`.
-      // If section doesn't exist in prevState, create a new section object. If
-      // the section has an order, insert it at the correct place in the array.
-      // Otherwise, prepend it and set the order to be minimal.
+      // Otherwise, append it
       if (!hasMatch) {
         const initialized = !!(action.data.rows && action.data.rows.length > 0);
-        let order;
-        let index;
-        if (prevState.length > 0) {
-          order = action.data.order !== undefined ? action.data.order : prevState[0].order - 1;
-          index = newState.findIndex(section => section.order >= order);
-          if (index === -1) {
-            index = newState.length;
-          }
-        } else {
-          order = action.data.order !== undefined ? action.data.order : 0;
-          index = 0;
-        }
-
-        const section = Object.assign({title: "", rows: [], order, enabled: false}, action.data, {initialized});
-        newState.splice(index, 0, section);
+        const section = Object.assign({title: "", rows: [], enabled: false}, action.data, {initialized});
+        newState.push(section);
       }
       return newState;
     case at.SECTION_UPDATE:
-      return prevState.map(section => {
+      newState = prevState.map(section => {
         if (section && section.id === action.data.id) {
           // If the action is updating rows, we should consider initialized to be true.
           // This can be overridden if initialized is defined in the action.data
           const initialized = action.data.rows ? {initialized: true} : {};
+
+          // Make sure pinned cards stay at their current position when rows are updated.
+          // Disabling a section (SECTION_UPDATE with empty rows) does not retain pinned cards.
+          if (action.data.rows && action.data.rows.length > 0 && section.rows.find(card => card.pinned)) {
+            const rows = Array.from(action.data.rows);
+            section.rows.forEach((card, index) => {
+              if (card.pinned) {
+                rows.splice(index, 0, card);
+              }
+            });
+            return Object.assign({}, section, initialized, Object.assign({}, action.data, {rows}));
+          }
+
           return Object.assign({}, section, initialized, action.data);
         }
         return section;
       });
+
+      if (!action.data.dedupeConfigurations) {
+        return newState;
+      }
+
+      action.data.dedupeConfigurations.forEach(dedupeConf => {
+        newState = newState.map(section => {
+          if (section.id === dedupeConf.id) {
+            const dedupedRows = dedupeConf.dedupeFrom.reduce((rows, dedupeSectionId) => {
+              const dedupeSection = newState.find(s => s.id === dedupeSectionId);
+              const [, newRows] = dedupe.group(dedupeSection.rows, rows);
+              return newRows;
+            }, section.rows);
+
+            return Object.assign({}, section, {rows: dedupedRows});
+          }
+
+          return section;
+        });
+      });
+
+      return newState;
     case at.SECTION_UPDATE_CARD:
       return prevState.map(section => {
         if (section && section.id === action.data.id && section.rows) {
@@ -261,10 +296,29 @@ function Sections(prevState = INITIAL_STATE.Sections, action) {
           // find the item within the rows that is attempted to be bookmarked
           if (item.url === action.data.url) {
             const {bookmarkGuid, bookmarkTitle, dateAdded} = action.data;
-            Object.assign(item, {bookmarkGuid, bookmarkTitle, bookmarkDateCreated: dateAdded});
-            if (!item.type || item.type === "history") {
-              item.type = "bookmark";
-            }
+            return Object.assign({}, item, {
+              bookmarkGuid,
+              bookmarkTitle,
+              bookmarkDateCreated: dateAdded,
+              type: "bookmark"
+            });
+          }
+          return item;
+        })
+      }));
+    case at.PLACES_SAVED_TO_POCKET:
+      if (!action.data) {
+        return prevState;
+      }
+      return prevState.map(section => Object.assign({}, section, {
+        rows: section.rows.map(item => {
+          if (item.url === action.data.url) {
+            return Object.assign({}, item, {
+              open_url: action.data.open_url,
+              pocket_id: action.data.pocket_id,
+              title: action.data.title,
+              type: "pocket"
+            });
           }
           return item;
         })
@@ -289,12 +343,17 @@ function Sections(prevState = INITIAL_STATE.Sections, action) {
           return item;
         })
       }));
-    case at.PLACES_LINKS_DELETED:
-      return prevState.map(section => Object.assign({}, section,
-        {rows: section.rows.filter(site => !action.data.includes(site.url))}));
+    case at.PLACES_LINK_DELETED:
     case at.PLACES_LINK_BLOCKED:
+      if (!action.data) {
+        return prevState;
+      }
       return prevState.map(section =>
         Object.assign({}, section, {rows: section.rows.filter(site => site.url !== action.data.url)}));
+    case at.DELETE_FROM_POCKET:
+    case at.ARCHIVE_FROM_POCKET:
+      return prevState.map(section =>
+        Object.assign({}, section, {rows: section.rows.filter(site => site.pocket_id !== action.data.pocket_id)}));
     default:
       return prevState;
   }
@@ -304,6 +363,10 @@ function Snippets(prevState = INITIAL_STATE.Snippets, action) {
   switch (action.type) {
     case at.SNIPPETS_DATA:
       return Object.assign({}, prevState, {initialized: true}, action.data);
+    case at.SNIPPET_BLOCKED:
+      return Object.assign({}, prevState, {blockList: prevState.blockList.concat(action.data)});
+    case at.SNIPPETS_BLOCKLIST_CLEARED:
+      return Object.assign({}, prevState, {blockList: []});
     case at.SNIPPETS_RESET:
       return INITIAL_STATE.Snippets;
     default:
@@ -311,22 +374,19 @@ function Snippets(prevState = INITIAL_STATE.Snippets, action) {
   }
 }
 
-function PreferencesPane(prevState = INITIAL_STATE.PreferencesPane, action) {
+function Theme(prevState = INITIAL_STATE.Theme, action) {
   switch (action.type) {
-    case at.SETTINGS_OPEN:
-      return Object.assign({}, prevState, {visible: true});
-    case at.SETTINGS_CLOSE:
-      return Object.assign({}, prevState, {visible: false});
+    case at.THEME_UPDATE:
+      return Object.assign({}, prevState, action.data);
     default:
       return prevState;
   }
 }
 
 this.INITIAL_STATE = INITIAL_STATE;
-this.TOP_SITES_DEFAULT_LENGTH = TOP_SITES_DEFAULT_LENGTH;
-this.TOP_SITES_SHOWMORE_LENGTH = TOP_SITES_SHOWMORE_LENGTH;
+this.TOP_SITES_DEFAULT_ROWS = TOP_SITES_DEFAULT_ROWS;
+this.TOP_SITES_MAX_SITES_PER_ROW = TOP_SITES_MAX_SITES_PER_ROW;
 
-this.reducers = {TopSites, App, Snippets, Prefs, Dialog, Sections, PreferencesPane};
-this.insertPinned = insertPinned;
+this.reducers = {TopSites, App, Snippets, Prefs, Dialog, Sections, Theme};
 
-this.EXPORTED_SYMBOLS = ["reducers", "INITIAL_STATE", "insertPinned", "TOP_SITES_DEFAULT_LENGTH", "TOP_SITES_SHOWMORE_LENGTH"];
+const EXPORTED_SYMBOLS = ["reducers", "INITIAL_STATE", "insertPinned", "TOP_SITES_DEFAULT_ROWS", "TOP_SITES_MAX_SITES_PER_ROW"];

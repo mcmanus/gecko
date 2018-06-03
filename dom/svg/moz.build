@@ -30,6 +30,7 @@ EXPORTS.mozilla.dom += [
     'SVGAnimatedInteger.h',
     'SVGAnimatedLength.h',
     'SVGAnimatedNumber.h',
+    'SVGAnimatedPathSegList.h',
     'SVGAnimatedRect.h',
     'SVGAnimatedString.h',
     'SVGAnimatedTransformList.h',
@@ -272,5 +273,5 @@ LOCAL_INCLUDES += [
     '/layout/xul',
 ]
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

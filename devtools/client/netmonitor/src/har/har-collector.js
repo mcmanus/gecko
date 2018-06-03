@@ -8,7 +8,7 @@ const Services = require("Services");
 
 // Helper tracer. Should be generic sharable by other modules (bug 1171927)
 const trace = {
-  log: function (...args) {
+  log: function(...args) {
   }
 };
 
@@ -36,19 +36,19 @@ function HarCollector(options) {
 HarCollector.prototype = {
   // Connection
 
-  start: function () {
+  start: function() {
     this.debuggerClient.addListener("networkEvent", this.onNetworkEvent);
     this.debuggerClient.addListener("networkEventUpdate",
       this.onNetworkEventUpdate);
   },
 
-  stop: function () {
+  stop: function() {
     this.debuggerClient.removeListener("networkEvent", this.onNetworkEvent);
     this.debuggerClient.removeListener("networkEventUpdate",
       this.onNetworkEventUpdate);
   },
 
-  clear: function () {
+  clear: function() {
     // Any pending requests events will be ignored (they turn
     // into zombies, since not present in the files array).
     this.files = new Map();
@@ -58,7 +58,7 @@ HarCollector.prototype = {
     this.requests = [];
   },
 
-  waitForHarLoad: function () {
+  waitForHarLoad: function() {
     // There should be yet another timeout e.g.:
     // 'devtools.netmonitor.har.pageLoadTimeout'
     // that should force export even if page isn't fully loaded.
@@ -70,7 +70,7 @@ HarCollector.prototype = {
     });
   },
 
-  waitForResponses: function () {
+  waitForResponses: function() {
     trace.log("HarCollector.waitForResponses; " + this.requests.length);
 
     // All requests for additional data must be received to have complete
@@ -104,11 +104,11 @@ HarCollector.prototype = {
    * of time. The time is set in preferences:
    * 'devtools.netmonitor.har.pageLoadedTimeout'
    */
-  waitForTimeout: function () {
+  waitForTimeout: function() {
     // The auto-export is not done if the timeout is set to zero (or less).
     // This is useful in cases where the export is done manually through
     // API exposed to the content.
-    let timeout = Services.prefs.getIntPref(
+    const timeout = Services.prefs.getIntPref(
       "devtools.netmonitor.har.pageLoadedTimeout");
 
     trace.log("HarCollector.waitForTimeout; " + timeout);
@@ -125,7 +125,7 @@ HarCollector.prototype = {
     });
   },
 
-  resetPageLoadTimeout: function () {
+  resetPageLoadTimeout: function() {
     // Remove the current timeout.
     if (this.pageLoadTimeout) {
       trace.log("HarCollector.resetPageLoadTimeout;");
@@ -143,17 +143,17 @@ HarCollector.prototype = {
 
   // Collected Data
 
-  getFile: function (actorId) {
+  getFile: function(actorId) {
     return this.files.get(actorId);
   },
 
-  getItems: function () {
+  getItems: function() {
     return this.items;
   },
 
   // Event Handlers
 
-  onNetworkEvent: function (type, packet) {
+  onNetworkEvent: function(type, packet) {
     // Skip events from different console actors.
     if (packet.from != this.webConsoleClient.actor) {
       return;
@@ -161,8 +161,8 @@ HarCollector.prototype = {
 
     trace.log("HarCollector.onNetworkEvent; " + type, packet);
 
-    let { actor, startedDateTime, method, url, isXHR } = packet.eventActor;
-    let startTime = Date.parse(startedDateTime);
+    const { actor, startedDateTime, method, url, isXHR } = packet.eventActor;
+    const startTime = Date.parse(startedDateTime);
 
     if (this.firstRequestStart == -1) {
       this.firstRequestStart = startTime;
@@ -193,14 +193,14 @@ HarCollector.prototype = {
     this.items.push(file);
   },
 
-  onNetworkEventUpdate: function (type, packet) {
-    let actor = packet.from;
+  onNetworkEventUpdate: function(type, packet) {
+    const actor = packet.from;
 
     // Skip events from unknown actors (not in the list).
     // It can happen when there are zombie requests received after
     // the target is closed or multiple tabs are attached through
     // one connection (one DebuggerClient object).
-    let file = this.getFile(packet.from);
+    const file = this.getFile(packet.from);
     if (!file) {
       return;
     }
@@ -208,7 +208,7 @@ HarCollector.prototype = {
     trace.log("HarCollector.onNetworkEventUpdate; " +
       packet.updateType, packet);
 
-    let includeResponseBodies = Services.prefs.getBoolPref(
+    const includeResponseBodies = Services.prefs.getBoolPref(
       "devtools.netmonitor.har.includeResponseBodies");
 
     let request;
@@ -261,14 +261,14 @@ HarCollector.prototype = {
     this.resetPageLoadTimeout();
   },
 
-  getData: function (actor, method, callback) {
+  getData: function(actor, method, callback) {
     return new Promise((resolve) => {
       if (!this.webConsoleClient[method]) {
         console.error("HarCollector.getData: ERROR Unknown method!");
         resolve();
       }
 
-      let file = this.getFile(actor);
+      const file = this.getFile(actor);
 
       trace.log("HarCollector.getData; REQUEST " + method +
         ", " + file.url, file);
@@ -288,8 +288,8 @@ HarCollector.prototype = {
    * @param object response
    *        The message received from the server.
    */
-  onRequestHeaders: function (response) {
-    let file = this.getFile(response.from);
+  onRequestHeaders: function(response) {
+    const file = this.getFile(response.from);
     file.requestHeaders = response;
 
     this.getLongHeaders(response.headers);
@@ -301,8 +301,8 @@ HarCollector.prototype = {
    * @param object response
    *        The message received from the server.
    */
-  onRequestCookies: function (response) {
-    let file = this.getFile(response.from);
+  onRequestCookies: function(response) {
+    const file = this.getFile(response.from);
     file.requestCookies = response;
 
     this.getLongHeaders(response.cookies);
@@ -314,14 +314,14 @@ HarCollector.prototype = {
    * @param object response
    *        The message received from the server.
    */
-  onRequestPostData: function (response) {
+  onRequestPostData: function(response) {
     trace.log("HarCollector.onRequestPostData;", response);
 
-    let file = this.getFile(response.from);
+    const file = this.getFile(response.from);
     file.requestPostData = response;
 
     // Resolve long string
-    let text = response.postData.text;
+    const text = response.postData.text;
     if (typeof text == "object") {
       this.getString(text).then(value => {
         response.postData.text = value;
@@ -335,8 +335,8 @@ HarCollector.prototype = {
    * @param object response
    *        The message received from the server.
    */
-  onResponseHeaders: function (response) {
-    let file = this.getFile(response.from);
+  onResponseHeaders: function(response) {
+    const file = this.getFile(response.from);
     file.responseHeaders = response;
 
     this.getLongHeaders(response.headers);
@@ -348,8 +348,8 @@ HarCollector.prototype = {
    * @param object response
    *        The message received from the server.
    */
-  onResponseCookies: function (response) {
-    let file = this.getFile(response.from);
+  onResponseCookies: function(response) {
+    const file = this.getFile(response.from);
     file.responseCookies = response;
 
     this.getLongHeaders(response.cookies);
@@ -361,12 +361,12 @@ HarCollector.prototype = {
    * @param object response
    *        The message received from the server.
    */
-  onResponseContent: function (response) {
-    let file = this.getFile(response.from);
+  onResponseContent: function(response) {
+    const file = this.getFile(response.from);
     file.responseContent = response;
 
     // Resolve long string
-    let text = response.content.text;
+    const text = response.content.text;
     if (typeof text == "object") {
       this.getString(text).then(value => {
         response.content.text = value;
@@ -380,19 +380,16 @@ HarCollector.prototype = {
    * @param object response
    *        The message received from the server.
    */
-  onEventTimings: function (response) {
-    let file = this.getFile(response.from);
+  onEventTimings: function(response) {
+    const file = this.getFile(response.from);
     file.eventTimings = response;
-
-    let totalTime = response.totalTime;
-    file.totalTime = totalTime;
-    file.endedMillis = file.startedMillis + totalTime;
+    file.totalTime = response.totalTime;
   },
 
   // Helpers
 
-  getLongHeaders: function (headers) {
-    for (let header of headers) {
+  getLongHeaders: function(headers) {
+    for (const header of headers) {
       if (typeof header.value == "object") {
         try {
           this.getString(header.value).then(value => {
@@ -416,8 +413,8 @@ HarCollector.prototype = {
    *         A promise that is resolved when the full string contents
    *         are available, or rejected if something goes wrong.
    */
-  getString: function (stringGrip) {
-    let promise = this.webConsoleClient.getString(stringGrip);
+  getString: function(stringGrip) {
+    const promise = this.webConsoleClient.getString(stringGrip);
     this.requests.push(promise);
     return promise;
   }
@@ -433,7 +430,7 @@ HarCollector.prototype = {
  */
 function waitForAll(promises) {
   // Remove all from the original array and get clone of it.
-  let clone = promises.splice(0, promises.length);
+  const clone = promises.splice(0, promises.length);
 
   // Wait for all promises in the given array.
   return Promise.all(clone).then(() => {

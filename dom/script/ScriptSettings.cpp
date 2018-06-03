@@ -8,6 +8,7 @@
 #include "mozilla/ThreadLocal.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/CycleCollectedJSContext.h"
+#include "mozilla/dom/WorkerPrivate.h"
 
 #include "jsapi.h"
 #include "xpcpublic.h"
@@ -21,7 +22,6 @@
 #include "nsTArray.h"
 #include "nsJSUtils.h"
 #include "nsDOMJSUtils.h"
-#include "WorkerPrivate.h"
 
 namespace mozilla {
 namespace dom {
@@ -214,15 +214,6 @@ GetEntryDocument()
   nsIGlobalObject* global = GetEntryGlobal();
   nsCOMPtr<nsPIDOMWindowInner> entryWin = do_QueryInterface(global);
 
-  // If our entry global isn't a window, see if it's an addon scope associated
-  // with a window. If it is, the caller almost certainly wants that rather
-  // than null.
-  if (!entryWin && global) {
-    if (auto* win = xpc::AddonWindowOrNull(global->GetGlobalJSObject())) {
-      entryWin = win->AsInner();
-    }
-  }
-
   return entryWin ? entryWin->GetExtantDoc() : nullptr;
 }
 
@@ -234,7 +225,7 @@ GetIncumbentGlobal()
   // manipulated the stack. If it's null, that means that there
   // must be no entry global on the stack, and therefore no incumbent
   // global either.
-  JSContext* cx = nsContentUtils::GetCurrentJSContextForThread();
+  JSContext* cx = nsContentUtils::GetCurrentJSContext();
   if (!cx) {
     MOZ_ASSERT(ScriptSettingsStack::EntryGlobal() == nullptr);
     return nullptr;
@@ -256,7 +247,7 @@ GetIncumbentGlobal()
 nsIGlobalObject*
 GetCurrentGlobal()
 {
-  JSContext* cx = nsContentUtils::GetCurrentJSContextForThread();
+  JSContext* cx = nsContentUtils::GetCurrentJSContext();
   if (!cx) {
     return nullptr;
   }
@@ -366,7 +357,7 @@ AutoJSAPI::InitInternal(nsIGlobalObject* aGlobalObject, JSObject* aGlobal,
   if (aGlobal) {
     JS::ExposeObjectToActiveJS(aGlobal);
   }
-  mAutoNullableCompartment.emplace(mCx, aGlobal);
+  mAutoNullableRealm.emplace(mCx, aGlobal);
 
   ScriptSettingsStack::Push(this);
 
@@ -388,7 +379,7 @@ AutoJSAPI::InitInternal(nsIGlobalObject* aGlobalObject, JSObject* aGlobal,
       // particular, we do not expose this data to anyone, which is very
       // important; otherwise it could be a cross-origin information leak.
       exnObj = js::UncheckedUnwrap(exnObj);
-      JSAutoCompartment ac(aCx, exnObj);
+      JSAutoRealm ar(aCx, exnObj);
 
       nsAutoJSString stack, filename, name, message;
       int32_t line;
@@ -505,23 +496,23 @@ AutoJSAPI::Init(JSObject* aObject)
 bool
 AutoJSAPI::Init(nsPIDOMWindowInner* aWindow, JSContext* aCx)
 {
-  return Init(nsGlobalWindow::Cast(aWindow), aCx);
+  return Init(nsGlobalWindowInner::Cast(aWindow), aCx);
 }
 
 bool
 AutoJSAPI::Init(nsPIDOMWindowInner* aWindow)
 {
-  return Init(nsGlobalWindow::Cast(aWindow));
+  return Init(nsGlobalWindowInner::Cast(aWindow));
 }
 
 bool
-AutoJSAPI::Init(nsGlobalWindow* aWindow, JSContext* aCx)
+AutoJSAPI::Init(nsGlobalWindowInner* aWindow, JSContext* aCx)
 {
   return Init(static_cast<nsIGlobalObject*>(aWindow), aCx);
 }
 
 bool
-AutoJSAPI::Init(nsGlobalWindow* aWindow)
+AutoJSAPI::Init(nsGlobalWindowInner* aWindow)
 {
   return Init(static_cast<nsIGlobalObject*>(aWindow));
 }
@@ -544,7 +535,7 @@ WarningOnlyErrorReporter(JSContext* aCx, JSErrorReport* aRep)
     // That said, it feels like we should be able to short-circuit things a bit
     // here by posting an appropriate runnable to the main thread directly...
     // Worth looking into sometime.
-    workers::WorkerPrivate* worker = workers::GetWorkerPrivateFromContext(aCx);
+    WorkerPrivate* worker = GetWorkerPrivateFromContext(aCx);
     MOZ_ASSERT(worker);
 
     worker->ReportError(aCx, JS::ConstUTF8CharsZ(), aRep);
@@ -552,13 +543,7 @@ WarningOnlyErrorReporter(JSContext* aCx, JSErrorReport* aRep)
   }
 
   RefPtr<xpc::ErrorReport> xpcReport = new xpc::ErrorReport();
-  nsGlobalWindow* win = xpc::CurrentWindowOrNull(aCx);
-  if (!win) {
-    // We run addons in a separate privileged compartment, but if we're in an
-    // addon compartment we should log warnings to the console of the associated
-    // DOM Window.
-    win = xpc::AddonWindowOrNull(JS::CurrentGlobalOrNull(aCx));
-  }
+  nsGlobalWindowInner* win = xpc::CurrentWindowOrNull(aCx);
   xpcReport->Init(aRep, nullptr, nsContentUtils::IsSystemCaller(aCx),
                   win ? win->AsInner()->WindowID() : 0);
   xpcReport->LogToConsole();
@@ -571,20 +556,19 @@ AutoJSAPI::ReportException()
     return;
   }
 
-  // AutoJSAPI uses a JSAutoNullableCompartment, and may be in a null
-  // compartment when the destructor is called. However, the JS engine
-  // requires us to be in a compartment when we fetch the pending exception.
-  // In this case, we enter the privileged junk scope and don't dispatch any
-  // error events.
+  // AutoJSAPI uses a JSAutoNullableRealm, and may be in a null realm
+  // when the destructor is called. However, the JS engine requires us
+  // to be in a realm when we fetch the pending exception. In this case,
+  // we enter the privileged junk scope and don't dispatch any error events.
   JS::Rooted<JSObject*> errorGlobal(cx(), JS::CurrentGlobalOrNull(cx()));
   if (!errorGlobal) {
     if (mIsMainThread) {
       errorGlobal = xpc::PrivilegedJunkScope();
     } else {
-      errorGlobal = workers::GetCurrentThreadWorkerGlobal();
+      errorGlobal = GetCurrentThreadWorkerGlobal();
     }
   }
-  JSAutoCompartment ac(cx(), errorGlobal);
+  JSAutoRealm ar(cx(), errorGlobal);
   JS::Rooted<JS::Value> exn(cx());
   js::ErrorReport jsReport(cx());
   if (StealException(&exn) &&
@@ -592,12 +576,7 @@ AutoJSAPI::ReportException()
     if (mIsMainThread) {
       RefPtr<xpc::ErrorReport> xpcReport = new xpc::ErrorReport();
 
-      RefPtr<nsGlobalWindow> win = xpc::WindowGlobalOrNull(errorGlobal);
-      if (!win) {
-        // We run addons in a separate privileged compartment, but they still
-        // expect to trigger the onerror handler of their associated DOM Window.
-        win = xpc::AddonWindowOrNull(errorGlobal);
-      }
+      RefPtr<nsGlobalWindowInner> win = xpc::WindowGlobalOrNull(errorGlobal);
       nsPIDOMWindowInner* inner = win ? win->AsInner() : nullptr;
       bool isChrome = nsContentUtils::IsSystemPrincipal(
         nsContentUtils::ObjectPrincipal(errorGlobal));
@@ -617,7 +596,7 @@ AutoJSAPI::ReportException()
       // bother with xpc::ErrorReport.  This will ensure that all the right
       // events (which are a lot more complicated than in the window case) get
       // fired.
-      workers::WorkerPrivate* worker = workers::GetCurrentThreadWorkerPrivate();
+      WorkerPrivate* worker = GetCurrentThreadWorkerPrivate();
       MOZ_ASSERT(worker);
       MOZ_ASSERT(worker->GetJSContext() == cx());
       // Before invoking ReportError, put the exception back on the context,
@@ -639,7 +618,7 @@ AutoJSAPI::PeekException(JS::MutableHandle<JS::Value> aVal)
 {
   MOZ_ASSERT_IF(mIsMainThread, IsStackTop());
   MOZ_ASSERT(HasException());
-  MOZ_ASSERT(js::GetContextCompartment(cx()));
+  MOZ_ASSERT(js::GetContextRealm(cx()));
   if (!JS_GetPendingException(cx(), aVal)) {
     return false;
   }
@@ -768,7 +747,7 @@ AutoEntryScript::DocshellEntryMonitor::Exit(JSContext* aCx)
 
 AutoIncumbentScript::AutoIncumbentScript(nsIGlobalObject* aGlobalObject)
   : ScriptSettingsStackEntry(aGlobalObject, eIncumbentScript)
-  , mCallerOverride(nsContentUtils::GetCurrentJSContextForThread())
+  , mCallerOverride(nsContentUtils::GetCurrentJSContext())
 {
   ScriptSettingsStack::Push(this);
 }
@@ -830,8 +809,6 @@ AutoSafeJSContext::AutoSafeJSContext(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM_IN_IMP
 AutoSlowOperation::AutoSlowOperation(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM_IN_IMPL)
   : AutoJSAPI()
 {
-  MOZ_ASSERT(NS_IsMainThread());
-
   MOZ_GUARD_OBJECT_NOTIFIER_INIT;
 
   Init();
@@ -840,9 +817,12 @@ AutoSlowOperation::AutoSlowOperation(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM_IN_IMP
 void
 AutoSlowOperation::CheckForInterrupt()
 {
-  // JS_CheckForInterrupt expects us to be in a compartment.
-  JSAutoCompartment ac(cx(), xpc::UnprivilegedJunkScope());
-  JS_CheckForInterrupt(cx());
+  // For now we support only main thread!
+  if (mIsMainThread) {
+    // JS_CheckForInterrupt expects us to be in a realm.
+    JSAutoRealm ar(cx(), xpc::UnprivilegedJunkScope());
+    JS_CheckForInterrupt(cx());
+  }
 }
 
 } // namespace mozilla

@@ -25,7 +25,7 @@
 #include "nsError.h"
 #include "nsIContentSecurityPolicy.h"
 #include "nsNetCID.h"
-#include "jswrapper.h"
+#include "js/Wrapper.h"
 
 #include "mozilla/dom/nsCSPContext.h"
 #include "mozilla/dom/ScriptSettings.h"
@@ -35,18 +35,6 @@
 #include "mozilla/HashFunctions.h"
 
 using namespace mozilla;
-
-static bool gCodeBasePrincipalSupport = false;
-
-static bool URIIsImmutable(nsIURI* aURI)
-{
-  nsCOMPtr<nsIMutable> mutableObj(do_QueryInterface(aURI));
-  bool isMutable;
-  return
-    mutableObj &&
-    NS_SUCCEEDED(mutableObj->GetMutable(&isMutable)) &&
-    !isMutable;
-}
 
 static inline ExtensionPolicyService&
 EPS()
@@ -63,19 +51,8 @@ NS_IMPL_CI_INTERFACE_GETTER(ContentPrincipal,
                             nsIPrincipal,
                             nsISerializable)
 
-// Called at startup:
-/* static */ void
-ContentPrincipal::InitializeStatics()
-{
-  Preferences::AddBoolVarCache(&gCodeBasePrincipalSupport,
-                               "signed.applets.codebase_principal_support",
-                               false);
-}
-
 ContentPrincipal::ContentPrincipal()
   : BasePrincipal(eCodebasePrincipal)
-  , mCodebaseImmutable(false)
-  , mDomainImmutable(false)
 {
 }
 
@@ -107,9 +84,7 @@ ContentPrincipal::Init(nsIURI *aCodebase,
                                        &hasFlag)) &&
       !hasFlag);
 
-  mCodebase = NS_TryToMakeImmutable(aCodebase);
-  mCodebaseImmutable = URIIsImmutable(mCodebase);
-
+  mCodebase = aCodebase;
   FinishInit(aOriginNoSuffix, aOriginAttributes);
 
   return NS_OK;
@@ -289,17 +264,8 @@ ContentPrincipal::SubsumesInternal(nsIPrincipal* aOther,
 NS_IMETHODIMP
 ContentPrincipal::GetURI(nsIURI** aURI)
 {
-  if (mCodebaseImmutable) {
-    NS_ADDREF(*aURI = mCodebase);
-    return NS_OK;
-  }
-
-  if (!mCodebase) {
-    *aURI = nullptr;
-    return NS_OK;
-  }
-
-  return NS_EnsureSafeToReturn(mCodebase, aURI);
+  NS_ADDREF(*aURI = mCodebase);
+  return NS_OK;
 }
 
 bool
@@ -341,7 +307,7 @@ ContentPrincipal::MayLoadInternal(nsIURI* aURI)
 NS_IMETHODIMP
 ContentPrincipal::GetHashValue(uint32_t* aValue)
 {
-  NS_PRECONDITION(mCodebase, "Need a codebase");
+  MOZ_ASSERT(mCodebase, "Need a codebase");
 
   *aValue = nsScriptSecurityManager::HashPrincipalByOrigin(this);
   return NS_OK;
@@ -355,19 +321,14 @@ ContentPrincipal::GetDomain(nsIURI** aDomain)
     return NS_OK;
   }
 
-  if (mDomainImmutable) {
-    NS_ADDREF(*aDomain = mDomain);
-    return NS_OK;
-  }
-
-  return NS_EnsureSafeToReturn(mDomain, aDomain);
+  NS_ADDREF(*aDomain = mDomain);
+  return NS_OK;
 }
 
 NS_IMETHODIMP
 ContentPrincipal::SetDomain(nsIURI* aDomain)
 {
-  mDomain = NS_TryToMakeImmutable(aDomain);
-  mDomainImmutable = URIIsImmutable(mDomain);
+  mDomain = aDomain;
   SetHasExplicitDomain();
 
   // Recompute all wrappers between compartments using this principal and other
@@ -459,6 +420,14 @@ ContentPrincipal::Read(nsIObjectInputStream* aStream)
   }
 
   codebase = do_QueryInterface(supports);
+  // Enforce re-parsing about: URIs so that if they change, we continue to use
+  // their new principals correctly.
+  bool isAbout = false;
+  if (NS_SUCCEEDED(codebase->SchemeIs("about", &isAbout)) && isAbout) {
+    nsAutoCString spec;
+    codebase->GetSpec(spec);
+    NS_ENSURE_SUCCESS(NS_NewURI(getter_AddRefs(codebase), spec), NS_ERROR_FAILURE);
+  }
 
   nsCOMPtr<nsIURI> domain;
   rv = NS_ReadOptionalObject(aStream, true, getter_AddRefs(supports));
@@ -526,9 +495,6 @@ ContentPrincipal::Write(nsIObjectOutputStream* aStream)
   if (NS_FAILED(rv)) {
     return rv;
   }
-
-  // mCodebaseImmutable and mDomainImmutable will be recomputed based
-  // on the deserialized URIs in Read().
 
   return NS_OK;
 }

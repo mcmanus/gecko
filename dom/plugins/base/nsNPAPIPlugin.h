@@ -14,17 +14,6 @@
 #include "mozilla/PluginLibrary.h"
 #include "mozilla/RefCounted.h"
 
-#if defined(XP_WIN)
-#define NS_NPAPIPLUGIN_CALLBACK(_type, _name) _type (__stdcall * _name)
-#else
-#define NS_NPAPIPLUGIN_CALLBACK(_type, _name) _type (* _name)
-#endif
-
-typedef NS_NPAPIPLUGIN_CALLBACK(NPError, NP_GETENTRYPOINTS) (NPPluginFuncs* pCallbacks);
-typedef NS_NPAPIPLUGIN_CALLBACK(NPError, NP_PLUGININIT) (const NPNetscapeFuncs* pCallbacks);
-typedef NS_NPAPIPLUGIN_CALLBACK(NPError, NP_PLUGINUNIXINIT) (const NPNetscapeFuncs* pCallbacks, NPPluginFuncs* fCallbacks);
-typedef NS_NPAPIPLUGIN_CALLBACK(NPError, NP_PLUGINSHUTDOWN) ();
-
 // nsNPAPIPlugin is held alive both by active nsPluginTag instances and
 // by active nsNPAPIPluginInstance.
 class nsNPAPIPlugin final
@@ -55,8 +44,6 @@ public:
   // minidump was written.
   void PluginCrashed(const nsAString& pluginDumpID,
                      const nsAString& browserDumpID);
-
-  static bool RunPluginOOP(const nsPluginTag *aPluginTag);
 
   nsresult Shutdown();
 
@@ -291,13 +278,6 @@ _useragent(NPP npp);
 
 void*
 _memalloc (uint32_t size);
-
-// Deprecated entry points for the old Java plugin.
-void* /* OJI type: JRIEnv* */
-_getJavaEnv();
-
-void* /* OJI type: jref */
-_getJavaPeer(NPP npp);
 
 void
 _urlredirectresponse(NPP instance, void* notifyData, NPBool allow);

@@ -10,11 +10,10 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Result.h"
 
-#include "jscntxt.h"
-#include "jscompartment.h"
-
 #include "jit/CompileWrappers.h"
 #include "jit/JitOptions.h"
+#include "vm/JSCompartment.h"
+#include "vm/JSContext.h"
 
 namespace js {
 namespace jit {
@@ -50,31 +49,30 @@ static_assert(sizeof(AbortReasonOr<bool>) <= sizeof(uintptr_t),
 
 // A JIT context is needed to enter into either an JIT method or an instance
 // of a JIT compiler. It points to a temporary allocator and the active
-// JSContext, either of which may be nullptr, and the active compartment, which
+// JSContext, either of which may be nullptr, and the active realm, which
 // will not be nullptr.
 
 class JitContext
 {
   public:
     JitContext(JSContext* cx, TempAllocator* temp);
-    JitContext(CompileRuntime* rt, CompileCompartment* comp, TempAllocator* temp);
-    JitContext(CompileRuntime* rt, TempAllocator* temp);
-    explicit JitContext(CompileRuntime* rt);
+    JitContext(CompileRuntime* rt, CompileRealm* realm, TempAllocator* temp);
     explicit JitContext(TempAllocator* temp);
     JitContext();
     ~JitContext();
 
-    // Running context when executing on the active thread. Not available during
+    // Running context when executing on the main thread. Not available during
     // compilation.
     JSContext* cx;
 
     // Allocator for temporary memory during compilation.
     TempAllocator* temp;
 
-    // Wrappers with information about the current runtime/compartment for use
+    // Wrappers with information about the current runtime/realm for use
     // during compilation.
     CompileRuntime* runtime;
-    CompileCompartment* compartment;
+    CompileRealm* realm;
+    CompileZone* zone;
 
     int getNextAssemblerId() {
         return assemblerCount_++;
@@ -93,11 +91,12 @@ JitContext* MaybeGetJitContext();
 
 void SetJitContext(JitContext* ctx);
 
-bool CanIonCompileScript(JSContext* cx, JSScript* script, bool osr);
+bool CanIonCompileScript(JSContext* cx, JSScript* script);
+bool CanIonInlineScript(JSScript* script);
 
 MOZ_MUST_USE bool IonCompileScriptForBaseline(JSContext* cx, BaselineFrame* frame, jsbytecode* pc);
 
-MethodStatus CanEnter(JSContext* cx, RunState& state);
+MethodStatus CanEnterIon(JSContext* cx, RunState& state);
 
 MethodStatus
 Recompile(JSContext* cx, HandleScript script, BaselineFrame* osrFrame, jsbytecode* osrPc,
@@ -125,11 +124,6 @@ IsErrorStatus(JitExecStatus status)
 
 struct EnterJitData;
 
-MOZ_MUST_USE bool SetEnterJitData(JSContext* cx, EnterJitData& data, RunState& state,
-                                  MutableHandle<GCVector<Value>> vals);
-
-JitExecStatus IonCannon(JSContext* cx, RunState& state);
-
 // Walk the stack and invalidate active Ion frames for the invalid scripts.
 void Invalidate(TypeZone& types, FreeOp* fop,
                 const RecompileInfoVector& invalid, bool resetUses = true,
@@ -143,19 +137,20 @@ class IonBuilder;
 class MIRGenerator;
 class LIRGraph;
 class CodeGenerator;
+class LazyLinkExitFrameLayout;
 
 MOZ_MUST_USE bool OptimizeMIR(MIRGenerator* mir);
 LIRGraph* GenerateLIR(MIRGenerator* mir);
 CodeGenerator* GenerateCode(MIRGenerator* mir, LIRGraph* lir);
 CodeGenerator* CompileBackEnd(MIRGenerator* mir);
 
-void AttachFinishedCompilations(ZoneGroup* group, JSContext* maybecx);
+void AttachFinishedCompilations(JSContext* cx);
 void FinishOffThreadBuilder(JSRuntime* runtime, IonBuilder* builder,
                             const AutoLockHelperThreadState& lock);
 void FreeIonBuilder(IonBuilder* builder);
 
 void LinkIonScript(JSContext* cx, HandleScript calleescript);
-uint8_t* LazyLinkTopActivation();
+uint8_t* LazyLinkTopActivation(JSContext* cx, LazyLinkExitFrameLayout* frame);
 
 static inline bool
 IsIonEnabled(JSContext* cx)

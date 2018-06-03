@@ -18,7 +18,6 @@
 #include "nsReadableUtils.h"
 #include "nsServiceManagerUtils.h"
 #include "nsUnicharUtils.h"
-#include "mozilla/net/ReferrerPolicy.h"
 
 using namespace mozilla;
 
@@ -61,69 +60,11 @@ static const uint32_t kHashSourceValidFnsLen = 3;
 static const char* const kStyle    = "style";
 static const char* const kScript   = "script";
 
-/* ===== nsCSPTokenizer ==================== */
-
-nsCSPTokenizer::nsCSPTokenizer(const char16_t* aStart,
-                               const char16_t* aEnd)
-  : mCurChar(aStart)
-  , mEndChar(aEnd)
-{
-  CSPPARSERLOG(("nsCSPTokenizer::nsCSPTokenizer"));
-}
-
-nsCSPTokenizer::~nsCSPTokenizer()
-{
-  CSPPARSERLOG(("nsCSPTokenizer::~nsCSPTokenizer"));
-}
-
-void
-nsCSPTokenizer::generateNextToken()
-{
-  skipWhiteSpaceAndSemicolon();
-  while (!atEnd() &&
-         !nsContentUtils::IsHTMLWhitespace(*mCurChar) &&
-         *mCurChar != SEMICOLON) {
-    mCurToken.Append(*mCurChar++);
-  }
-  CSPPARSERLOG(("nsCSPTokenizer::generateNextToken: %s", NS_ConvertUTF16toUTF8(mCurToken).get()));
-}
-
-void
-nsCSPTokenizer::generateTokens(cspTokens& outTokens)
-{
-  CSPPARSERLOG(("nsCSPTokenizer::generateTokens"));
-
-  // dirAndSrcs holds one set of [ name, src, src, src, ... ]
-  nsTArray <nsString> dirAndSrcs;
-
-  while (!atEnd()) {
-    generateNextToken();
-    dirAndSrcs.AppendElement(mCurToken);
-    skipWhiteSpace();
-    if (atEnd() || accept(SEMICOLON)) {
-      outTokens.AppendElement(dirAndSrcs);
-      dirAndSrcs.Clear();
-    }
-  }
-}
-
-void
-nsCSPTokenizer::tokenizeCSPPolicy(const nsAString &aPolicyString,
-                                  cspTokens& outTokens)
-{
-  CSPPARSERLOG(("nsCSPTokenizer::tokenizeCSPPolicy"));
-
-  nsCSPTokenizer tokenizer(aPolicyString.BeginReading(),
-                           aPolicyString.EndReading());
-
-  tokenizer.generateTokens(outTokens);
-}
-
 /* ===== nsCSPParser ==================== */
 bool nsCSPParser::sCSPExperimentalEnabled = false;
 bool nsCSPParser::sStrictDynamicEnabled = false;
 
-nsCSPParser::nsCSPParser(cspTokens& aTokens,
+nsCSPParser::nsCSPParser(policyTokens& aTokens,
                          nsIURI* aSelfURI,
                          nsCSPContext* aCSPContext,
                          bool aDeliveredViaMetaTag)
@@ -134,6 +75,8 @@ nsCSPParser::nsCSPParser(cspTokens& aTokens,
  , mUnsafeInlineKeywordSrc(nullptr)
  , mChildSrc(nullptr)
  , mFrameSrc(nullptr)
+ , mWorkerSrc(nullptr)
+ , mScriptSrc(nullptr)
  , mParsingFrameAncestorsDir(false)
  , mTokens(aTokens)
  , mSelfURI(aSelfURI)
@@ -552,7 +495,7 @@ nsCSPParser::keywordSource()
       return nullptr;
     }
     mStrictDynamic = true;
-    return new nsCSPKeywordSrc(CSP_KeywordToEnum(mCurToken));
+    return new nsCSPKeywordSrc(CSP_UTF16KeywordToEnum(mCurToken));
   }
 
   if (CSP_IsKeyword(mCurToken, CSP_UNSAFE_INLINE)) {
@@ -571,7 +514,8 @@ nsCSPParser::keywordSource()
     }
     // cache if we encounter 'unsafe-inline' so we can invalidate (ignore) it in
     // case that script-src directive also contains hash- or nonce-.
-    mUnsafeInlineKeywordSrc = new nsCSPKeywordSrc(CSP_KeywordToEnum(mCurToken));
+    mUnsafeInlineKeywordSrc =
+      new nsCSPKeywordSrc(CSP_UTF16KeywordToEnum(mCurToken));
     return mUnsafeInlineKeywordSrc;
   }
 
@@ -581,7 +525,7 @@ nsCSPParser::keywordSource()
     if (doc) {
       doc->SetHasUnsafeEvalCSP(true);
     }
-    return new nsCSPKeywordSrc(CSP_KeywordToEnum(mCurToken));
+    return new nsCSPKeywordSrc(CSP_UTF16KeywordToEnum(mCurToken));
   }
   return nullptr;
 }
@@ -665,7 +609,8 @@ nsCSPParser::nonceSource()
                NS_ConvertUTF16toUTF8(mCurValue).get()));
 
   // Check if mCurToken begins with "'nonce-" and ends with "'"
-  if (!StringBeginsWith(mCurToken, NS_ConvertUTF8toUTF16(CSP_EnumToKeyword(CSP_NONCE)),
+  if (!StringBeginsWith(mCurToken,
+                        nsDependentString(CSP_EnumToUTF16Keyword(CSP_NONCE)),
                         nsASCIICaseInsensitiveStringComparator()) ||
       mCurToken.Last() != SINGLEQUOTE) {
     return nullptr;
@@ -861,49 +806,11 @@ nsCSPParser::sourceList(nsTArray<nsCSPBaseSrc*>& outSrcs)
     }
     // Otherwise, we ignore 'none' and report a warning
     else {
-      NS_ConvertUTF8toUTF16 unicodeNone(CSP_EnumToKeyword(CSP_NONE));
-      const char16_t* params[] = { unicodeNone.get() };
+      const char16_t* params[] = { CSP_EnumToUTF16Keyword(CSP_NONE) };
       logWarningErrorToConsole(nsIScriptError::warningFlag, "ignoringUnknownOption",
                                params, ArrayLength(params));
     }
   }
-}
-
-void
-nsCSPParser::referrerDirectiveValue(nsCSPDirective* aDir)
-{
-  // directive-value   = "none" / "none-when-downgrade" / "origin" / "origin-when-cross-origin" / "unsafe-url"
-  // directive name is token 0, we need to examine the remaining tokens (and
-  // there should only be one token in the value).
-  CSPPARSERLOG(("nsCSPParser::referrerDirectiveValue"));
-
-  if (mCurDir.Length() != 2) {
-    CSPPARSERLOG(("Incorrect number of tokens in referrer directive, got %zu expected 1",
-                 mCurDir.Length() - 1));
-    delete aDir;
-    return;
-  }
-
-  if (!mozilla::net::IsValidReferrerPolicy(mCurDir[1])) {
-    CSPPARSERLOG(("invalid value for referrer directive: %s",
-                  NS_ConvertUTF16toUTF8(mCurDir[1]).get()));
-    delete aDir;
-    return;
-  }
-
-  //referrer-directive deprecation warning
-  const char16_t* params[] = { mCurDir[1].get() };
-  logWarningErrorToConsole(nsIScriptError::warningFlag, "deprecatedReferrerDirective",
-                             params, ArrayLength(params));
-
-  // the referrer policy is valid, so go ahead and use it.
-  nsWeakPtr ctx = mCSPContext->GetLoadingContext();
-  nsCOMPtr<nsIDocument> doc = do_QueryReferent(ctx);
-  if (doc) {
-    doc->SetHasReferrerPolicyCSP(true);
-  }
-  mPolicy->setReferrerPolicy(&mCurDir[1]);
-  mPolicy->addDirective(aDir);
 }
 
 void
@@ -1109,19 +1016,35 @@ nsCSPParser::directiveName()
     return new nsUpgradeInsecureDirective(CSP_StringToCSPDirective(mCurToken));
   }
 
-  // child-src has it's own class to handle frame-src if necessary
+  // child-src by itself is deprecatd but will be enforced
+  //   * for workers (if worker-src is not explicitly specified)
+  //   * for frames  (if frame-src is not explicitly specified)
   if (CSP_IsDirective(mCurToken, nsIContentSecurityPolicy::CHILD_SRC_DIRECTIVE)) {
+    const char16_t* params[] = { mCurToken.get() };
+    logWarningErrorToConsole(nsIScriptError::warningFlag,
+                             "deprecatedChildSrcDirective",
+                             params, ArrayLength(params));
     mChildSrc = new nsCSPChildSrcDirective(CSP_StringToCSPDirective(mCurToken));
     return mChildSrc;
   }
 
-  // if we have a frame-src, cache it so we can decide whether to use child-src
+  // if we have a frame-src, cache it so we can discard child-src for frames
   if (CSP_IsDirective(mCurToken, nsIContentSecurityPolicy::FRAME_SRC_DIRECTIVE)) {
-    const char16_t* params[] = { mCurToken.get(), u"child-src" };
-    logWarningErrorToConsole(nsIScriptError::warningFlag, "deprecatedDirective",
-                             params, ArrayLength(params));
     mFrameSrc = new nsCSPDirective(CSP_StringToCSPDirective(mCurToken));
     return mFrameSrc;
+  }
+
+  // if we have a worker-src, cache it so we can discard child-src for workers
+  if (CSP_IsDirective(mCurToken, nsIContentSecurityPolicy::WORKER_SRC_DIRECTIVE)) {
+    mWorkerSrc = new nsCSPDirective(CSP_StringToCSPDirective(mCurToken));
+    return mWorkerSrc;
+  }
+
+  // if we have a script-src, cache it as a fallback for worker-src
+  // in case child-src is not present
+  if (CSP_IsDirective(mCurToken, nsIContentSecurityPolicy::SCRIPT_SRC_DIRECTIVE)) {
+    mScriptSrc = new nsCSPScriptSrcDirective(CSP_StringToCSPDirective(mCurToken));
+    return mScriptSrc;
   }
 
   if (CSP_IsDirective(mCurToken, nsIContentSecurityPolicy::REQUIRE_SRI_FOR)) {
@@ -1149,6 +1072,10 @@ nsCSPParser::directive()
     const char16_t* params[] = { u"directive missing" };
     logWarningErrorToConsole(nsIScriptError::warningFlag, "failedToParseUnrecognizedSource",
                              params, ArrayLength(params));
+    return;
+  }
+
+  if (CSP_IsEmptyDirective(mCurValue, mCurToken)) {
     return;
   }
 
@@ -1191,13 +1118,6 @@ nsCSPParser::directive()
   // are well-defined tokens but are not sources
   if (cspDir->equals(nsIContentSecurityPolicy::REQUIRE_SRI_FOR)) {
     requireSRIForDirectiveValue(static_cast<nsRequireSRIForDirective*>(cspDir));
-    return;
-  }
-
-  // special case handling of the referrer directive (since it doesn't contain
-  // source lists)
-  if (cspDir->equals(nsIContentSecurityPolicy::REFERRER_DIRECTIVE)) {
-    referrerDirectiveValue(cspDir);
     return;
   }
 
@@ -1252,10 +1172,10 @@ nsCSPParser::directive()
       // Even though we invalidate all of the srcs internally, we don't want to log
       // messages for the srcs: (1) strict-dynamic, (2) unsafe-inline,
       // (3) nonces, and (4) hashes
-      if (!srcStr.EqualsASCII(CSP_EnumToKeyword(CSP_STRICT_DYNAMIC)) &&
-          !srcStr.EqualsASCII(CSP_EnumToKeyword(CSP_UNSAFE_EVAL)) &&
-          !StringBeginsWith(NS_ConvertUTF16toUTF8(srcStr), NS_LITERAL_CSTRING("'nonce-")) &&
-          !StringBeginsWith(NS_ConvertUTF16toUTF8(srcStr), NS_LITERAL_CSTRING("'sha")))
+      if (!srcStr.EqualsASCII(CSP_EnumToUTF8Keyword(CSP_STRICT_DYNAMIC)) &&
+          !srcStr.EqualsASCII(CSP_EnumToUTF8Keyword(CSP_UNSAFE_EVAL)) &&
+          !StringBeginsWith(srcStr, nsDependentString(CSP_EnumToUTF16Keyword(CSP_NONCE))) &&
+          !StringBeginsWith(srcStr, NS_LITERAL_STRING("'sha")))
       {
         const char16_t* params[] = { srcStr.get() };
         logWarningErrorToConsole(nsIScriptError::warningFlag, "ignoringSrcForStrictDynamic",
@@ -1300,9 +1220,22 @@ nsCSPParser::policy()
     directive();
   }
 
-  if (mChildSrc && !mFrameSrc) {
-    // if we have a child-src, it handles frame-src too, unless frame-src is set
-    mChildSrc->setHandleFrameSrc();
+  if (mChildSrc) {
+    if (!mFrameSrc) {
+      // if frame-src is specified explicitly for that policy than child-src should
+      // not restrict frames; if not, than child-src needs to restrict frames.
+      mChildSrc->setRestrictFrames();
+    }
+    if (!mWorkerSrc) {
+      // if worker-src is specified explicitly for that policy than child-src should
+      // not restrict workers; if not, than child-src needs to restrict workers.
+      mChildSrc->setRestrictWorkers();
+    }
+  }
+  // if script-src is specified, but not worker-src and also no child-src, then
+  // script-src has to govern workers.
+  if (mScriptSrc && !mWorkerSrc && !mChildSrc) {
+    mScriptSrc->setRestrictWorkers();
   }
 
   return mPolicy;
@@ -1334,7 +1267,7 @@ nsCSPParser::parseContentSecurityPolicy(const nsAString& aPolicyString,
   // are detected in the parser itself.
 
   nsTArray< nsTArray<nsString> > tokens;
-  nsCSPTokenizer::tokenizeCSPPolicy(aPolicyString, tokens);
+  PolicyTokenizer::tokenizePolicy(aPolicyString, tokens);
 
   nsCSPParser parser(tokens, aSelfURI, aCSPContext, aDeliveredViaMetaTag);
 

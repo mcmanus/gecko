@@ -6,6 +6,7 @@
 
 from __future__ import absolute_import, print_function, unicode_literals
 
+import functools
 import json
 import time
 import yaml
@@ -14,7 +15,7 @@ from datetime import datetime
 from mozbuild.util import ReadOnlyDict, memoize
 from mozversioncontrol import get_repository_object
 
-from . import GECKO
+from . import APP_VERSION_PATH, GECKO, VERSION_PATH
 
 
 class ParameterMismatch(Exception):
@@ -26,11 +27,25 @@ def get_head_ref():
     return get_repository_object(GECKO).head_ref
 
 
+def get_contents(path):
+    with open(path, "r") as fh:
+        contents = fh.readline().rstrip()
+    return contents
+
+
+get_version = functools.partial(get_contents, VERSION_PATH)
+get_app_version = functools.partial(get_contents, APP_VERSION_PATH)
+
+
 # Please keep this list sorted and in sync with taskcluster/docs/parameters.rst
 # Parameters are of the form: {name: default}
 PARAMETERS = {
+    'app_version': get_app_version(),
     'base_repository': 'https://hg.mozilla.org/mozilla-unified',
     'build_date': lambda: int(time.time()),
+    'build_number': 1,
+    'do_not_optimize': [],
+    'existing_tasks': {},
     'filters': ['check_servo', 'target_tasks_method'],
     'head_ref': get_head_ref,
     'head_repository': 'https://hg.mozilla.org/mozilla-central',
@@ -39,16 +54,33 @@ PARAMETERS = {
     'level': '3',
     'message': '',
     'moz_build_date': lambda: datetime.now().strftime("%Y%m%d%H%M%S"),
+    'next_version': None,
     'optimize_target_tasks': True,
     'owner': 'nobody@mozilla.com',
     'project': 'mozilla-central',
     'pushdate': lambda: int(time.time()),
     'pushlog_id': '0',
+    'release_enable_emefree': False,
+    'release_enable_partners': False,
+    'release_eta': '',
     'release_history': {},
+    'release_partners': None,
+    'release_partner_config': None,
+    'release_partner_build_number': 1,
+    'release_type': '',
+    'release_product': None,
     'target_tasks_method': 'default',
     'try_mode': None,
     'try_options': None,
     'try_task_config': None,
+    'version': get_version(),
+}
+
+COMM_PARAMETERS = {
+    'comm_base_repository': 'https://hg.mozilla.org/comm-central',
+    'comm_head_ref': None,
+    'comm_head_repository': 'https://hg.mozilla.org/comm-central',
+    'comm_head_rev': None,
 }
 
 
@@ -66,11 +98,19 @@ class Parameters(ReadOnlyDict):
                         default = default()
                     kwargs[name] = default
 
+            if set(kwargs) & set(COMM_PARAMETERS.keys()):
+                for name, default in COMM_PARAMETERS.items():
+                    if name not in kwargs:
+                        if callable(default):
+                            default = default()
+                        kwargs[name] = default
+
         ReadOnlyDict.__init__(self, **kwargs)
 
     def check(self):
         names = set(self)
         valid = set(PARAMETERS.keys())
+        valid_comm = set(COMM_PARAMETERS.keys())
         msg = []
 
         missing = valid - names
@@ -78,6 +118,14 @@ class Parameters(ReadOnlyDict):
             msg.append("missing parameters: " + ", ".join(missing))
 
         extra = names - valid
+
+        if extra & set(valid_comm):
+            # If any comm_* parameters are specified, ensure all of them are specified.
+            missing = valid_comm - extra
+            if missing:
+                msg.append("missing parameters: " + ", ".join(missing))
+            extra = extra - valid_comm
+
         if extra and self.strict:
             msg.append("extra parameters: " + ", ".join(extra))
 
@@ -85,12 +133,37 @@ class Parameters(ReadOnlyDict):
             raise ParameterMismatch("; ".join(msg))
 
     def __getitem__(self, k):
-        if k not in PARAMETERS.keys():
+        if not (k in PARAMETERS.keys() or k in COMM_PARAMETERS.keys()):
             raise KeyError("no such parameter {!r}".format(k))
         try:
             return super(Parameters, self).__getitem__(k)
         except KeyError:
             raise KeyError("taskgraph parameter {!r} not found".format(k))
+
+    def is_try(self):
+        """
+        Determine whether this graph is being built on a try project.
+        """
+        return 'try' in self['project']
+
+    def file_url(self, path):
+        """
+        Determine the VCS URL for viewing a file in the tree, suitable for
+        viewing by a human.
+
+        :param basestring path: The path, relative to the root of the repository.
+
+        :return basestring: The URL displaying the given path.
+        """
+        if path.startswith('comm/'):
+            path = path[len('comm/'):]
+            repo = self['comm_head_repository']
+            rev = self['comm_head_rev']
+        else:
+            repo = self['head_repository']
+            rev = self['head_rev']
+
+        return '{}/file/{}/{}'.format(repo, rev, path)
 
 
 def load_parameters_file(filename, strict=True):
@@ -116,7 +189,9 @@ def load_parameters_file(filename, strict=True):
         if filename.startswith("task-id="):
             task_id = filename.split("=")[1]
         elif filename.startswith("project="):
-            index = "gecko.v2.{}.latest.firefox.decision".format(filename.split("=")[1])
+            index = "gecko.v2.{project}.latest.taskgraph.decision".format(
+                project=filename.split("=")[1],
+            )
             task_id = find_task_id(index)
 
         if task_id:

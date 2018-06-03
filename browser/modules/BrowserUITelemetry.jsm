@@ -4,26 +4,18 @@
 
 "use strict";
 
-this.EXPORTED_SYMBOLS = ["BrowserUITelemetry"];
+var EXPORTED_SYMBOLS = ["BrowserUITelemetry"];
 
-const {interfaces: Ci, utils: Cu} = Components;
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
-  "resource://gre/modules/AppConstants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "UITelemetry",
-  "resource://gre/modules/UITelemetry.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
-  "resource:///modules/RecentWindow.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "CustomizableUI",
-  "resource:///modules/CustomizableUI.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "UITour",
-  "resource:///modules/UITour.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
+  CustomizableUI: "resource:///modules/CustomizableUI.jsm",
+});
 XPCOMUtils.defineLazyGetter(this, "Timer", function() {
   let timer = {};
-  Cu.import("resource://gre/modules/Timer.jsm", timer);
+  ChromeUtils.import("resource://gre/modules/Timer.jsm", timer);
   return timer;
 });
 
@@ -132,8 +124,7 @@ XPCOMUtils.defineLazyGetter(this, "ALL_BUILTIN_ITEMS", function() {
     "BMB_bookmarksToolbarPopup",
     "search-go-button",
     "soundplaying-icon",
-    "restore-tabs-button",
-  ]
+  ];
   return DEFAULT_ITEMS.concat(PALETTE_ITEMS)
                       .concat(SPECIAL_CASES);
 });
@@ -166,20 +157,8 @@ const BUCKET_PREFIX = "bucket_";
 // as primary name and the time step string.
 const BUCKET_SEPARATOR = "|";
 
-this.BrowserUITelemetry = {
+var BrowserUITelemetry = {
   init() {
-    UITelemetry.addSimpleMeasureFunction("toolbars",
-                                         this.getToolbarMeasures.bind(this));
-    UITelemetry.addSimpleMeasureFunction("contextmenu",
-                                         this.getContextMenuInfo.bind(this));
-    // Ensure that UITour.jsm remains lazy-loaded, yet always registers its
-    // simple measure function with UITelemetry.
-    UITelemetry.addSimpleMeasureFunction("UITour",
-                                         () => UITour.getTelemetry());
-
-    UITelemetry.addSimpleMeasureFunction("syncstate",
-                                         this.getSyncState.bind(this));
-
     Services.obs.addObserver(this, "autocomplete-did-enter-text");
     CustomizableUI.addListener(this);
 
@@ -283,7 +262,7 @@ this.BrowserUITelemetry = {
     // probably been closed, since the vast majority of saved-session
     // pings are gathered during shutdown.
     Services.search.init(rv => {
-      let win = RecentWindow.getMostRecentBrowserWindow({
+      let win = BrowserWindowTracker.getTopWindow({
         private: false,
         allowPopups: false,
       });
@@ -408,7 +387,7 @@ this.BrowserUITelemetry = {
 
   _menubarMouseUp(aEvent) {
     let target = aEvent.originalTarget;
-    let tag = target.localName
+    let tag = target.localName;
     let result = (tag == "menu" || tag == "menuitem") ? tag : "other";
     this._countMouseUpEvent("click-menubar", result, aEvent.button);
   },
@@ -512,19 +491,19 @@ this.BrowserUITelemetry = {
       let items = CustomizableUI.getWidgetIdsInArea(areaID);
       for (let item of items) {
         // Is this a default item?
-        if (DEFAULT_ITEMS.indexOf(item) != -1) {
+        if (DEFAULT_ITEMS.includes(item)) {
           // Ok, it's a default item - but is it in its default
           // toolbar? We use Array.isArray instead of checking for
           // toolbarID in DEFAULT_AREA_PLACEMENTS because an add-on might
           // be clever and give itself the id of "toString" or something.
           if (Array.isArray(DEFAULT_AREA_PLACEMENTS[areaID]) &&
-              DEFAULT_AREA_PLACEMENTS[areaID].indexOf(item) != -1) {
+              DEFAULT_AREA_PLACEMENTS[areaID].includes(item)) {
             // The item is in its default toolbar
             defaultKept.push(item);
           } else {
             defaultMoved.push(item);
           }
-        } else if (PALETTE_ITEMS.indexOf(item) != -1) {
+        } else if (PALETTE_ITEMS.includes(item)) {
           // It's a palette item that's been moved into a toolbar
           nondefaultAdded.push(item);
         }
@@ -538,7 +517,7 @@ this.BrowserUITelemetry = {
       CustomizableUI.getUnusedWidgets(aWindow.gNavToolbox.palette);
     let defaultRemoved = [];
     for (let item of paletteItems) {
-      if (DEFAULT_ITEMS.indexOf(item.id) != -1) {
+      if (DEFAULT_ITEMS.includes(item.id)) {
         defaultRemoved.push(item.id);
       }
     }
@@ -552,7 +531,7 @@ this.BrowserUITelemetry = {
     let addonToolbars = 0;
     let toolbars = document.querySelectorAll("toolbar[customizable=true]");
     for (let toolbar of toolbars) {
-      if (DEFAULT_AREAS.indexOf(toolbar.id) == -1) {
+      if (!DEFAULT_AREAS.includes(toolbar.id)) {
         addonToolbars++;
       }
     }
@@ -710,7 +689,7 @@ this.BrowserUITelemetry = {
     "spell-add-dictionaries-main", "spell-dictionaries",
     "spell-dictionaries-menu", "spell-add-dictionaries",
     "bidi-text-direction-toggle", "bidi-page-direction-toggle", "inspect",
-    "media-eme-learn-more"
+    "inspect-a11y", "media-eme-learn-more"
   ]),
 
   _contextMenuInteractions: {},
@@ -859,7 +838,7 @@ this.BrowserUITelemetry = {
     function reduce(aUnitLength, aSymbol) {
       if (aTimeMS >= aUnitLength) {
         let units = Math.floor(aTimeMS / aUnitLength);
-        aTimeMS = aTimeMS - (units * aUnitLength)
+        aTimeMS = aTimeMS - (units * aUnitLength);
         timeStr += units + aSymbol;
       }
     }

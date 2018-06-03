@@ -17,6 +17,7 @@
 #include "mozilla/dom/cache/CacheChild.h"
 #include "mozilla/dom/cache/CacheWorkerHolder.h"
 #include "mozilla/dom/cache/ReadStream.h"
+#include "mozilla/dom/DOMPrefs.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Unused.h"
@@ -26,8 +27,6 @@ namespace mozilla {
 namespace dom {
 namespace cache {
 
-using mozilla::dom::workers::GetCurrentThreadWorkerPrivate;
-using mozilla::dom::workers::WorkerPrivate;
 using mozilla::ipc::PBackgroundChild;
 
 namespace {
@@ -118,7 +117,7 @@ public:
                nsTArray<RefPtr<Request>>&& aRequestList, Promise* aPromise)
     : mWorkerHolder(aWorkerHolder)
     , mCache(aCache)
-    , mRequestList(Move(aRequestList))
+    , mRequestList(std::move(aRequestList))
     , mPromise(aPromise)
   {
     MOZ_ASSERT_IF(!NS_IsMainThread(), mWorkerHolder);
@@ -195,7 +194,7 @@ public:
         return;
       }
 
-      responseList.AppendElement(Move(response));
+      responseList.AppendElement(std::move(response));
     }
 
     MOZ_DIAGNOSTIC_ASSERT(mRequestList.Length() == responseList.Length());
@@ -364,8 +363,8 @@ Cache::Add(JSContext* aContext, const RequestOrUSVString& aRequest,
     return nullptr;
   }
 
-  requestList.AppendElement(Move(request));
-  return AddAll(global, Move(requestList), aCallerType, aRv);
+  requestList.AppendElement(std::move(request));
+  return AddAll(global, std::move(requestList), aCallerType, aRv);
 }
 
 already_AddRefed<Promise>
@@ -412,10 +411,10 @@ Cache::AddAll(JSContext* aContext,
       return nullptr;
     }
 
-    requestList.AppendElement(Move(request));
+    requestList.AppendElement(std::move(request));
   }
 
-  return AddAll(global, Move(requestList), aCallerType, aRv);
+  return AddAll(global, std::move(requestList), aCallerType, aRv);
 }
 
 already_AddRefed<Promise>
@@ -515,29 +514,6 @@ Cache::Keys(JSContext* aCx, const Optional<RequestOrUSVString>& aRequest,
   }
 
   return ExecuteOp(args, aRv);
-}
-
-// static
-bool
-Cache::PrefEnabled(JSContext* aCx, JSObject* aObj)
-{
-  using mozilla::dom::workers::WorkerPrivate;
-  using mozilla::dom::workers::GetWorkerPrivateFromContext;
-
-  // If we're on the main thread, then check the pref directly.
-  if (NS_IsMainThread()) {
-    bool enabled = false;
-    Preferences::GetBool("dom.caches.enabled", &enabled);
-    return enabled;
-  }
-
-  // Otherwise check the pref via the work private helper
-  WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(aCx);
-  if (!workerPrivate) {
-    return false;
-  }
-
-  return workerPrivate->DOMCachesEnabled();
 }
 
 nsISupports*
@@ -642,7 +618,7 @@ Cache::AddAll(const GlobalObject& aGlobal,
       return nullptr;
     }
 
-    fetchList.AppendElement(Move(fetch));
+    fetchList.AppendElement(std::move(fetch));
   }
 
   RefPtr<Promise> promise = Promise::Create(mGlobal, aRv);
@@ -652,9 +628,9 @@ Cache::AddAll(const GlobalObject& aGlobal,
 
   RefPtr<FetchHandler> handler =
     new FetchHandler(mActor->GetWorkerHolder(), this,
-                     Move(aRequestList), promise);
+                     std::move(aRequestList), promise);
 
-  RefPtr<Promise> fetchPromise = Promise::All(aGlobal, fetchList, aRv);
+  RefPtr<Promise> fetchPromise = Promise::All(aGlobal.Context(), fetchList, aRv);
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
   }

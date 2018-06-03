@@ -26,6 +26,7 @@ public class Server15RepositorySession extends RepositorySession {
     super(repository);
     this.serverRepository = (Server15Repository) repository;
     this.downloader = new BatchingDownloader(
+            this.fetchWorkQueue,
             this.serverRepository.authHeaderProvider,
             Uri.parse(this.serverRepository.collectionURI().toString()),
             this.serverRepository.getSyncDeadline(),
@@ -43,7 +44,7 @@ public class Server15RepositorySession extends RepositorySession {
     this.uploader = new BatchingUploader(
             this, storeWorkQueue, storeDelegate, Uri.parse(serverRepository.collectionURI.toString()),
             serverRepository.getCollectionLastModified(), serverRepository.getInfoConfiguration(),
-            serverRepository.authHeaderProvider);
+            serverRepository.authHeaderProvider, serverRepository.getAbortOnStoreFailure());
   }
 
   private void fetchSince(long timestamp, RepositorySessionFetchRecordsDelegate delegate) {

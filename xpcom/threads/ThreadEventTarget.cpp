@@ -8,7 +8,9 @@
 #include "mozilla/ThreadEventQueue.h"
 
 #include "LeakRefPtr.h"
+#include "mozilla/TimeStamp.h"
 #include "nsComponentManagerUtils.h"
+#include "nsITimer.h"
 #include "nsThreadManager.h"
 #include "nsThreadSyncDispatch.h"
 #include "nsThreadUtils.h"
@@ -42,15 +44,9 @@ public:
 
   nsresult Init()
   {
-    nsresult rv;
-    mTimer = do_CreateInstance(NS_TIMER_CONTRACTID, &rv);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    MOZ_ASSERT(mTimer);
-    rv = mTimer->SetTarget(mTarget);
-
-    NS_ENSURE_SUCCESS(rv, rv);
-    return mTimer->InitWithCallback(this, mDelay, nsITimer::TYPE_ONE_SHOT);
+    return NS_NewTimerWithCallback(getter_AddRefs(mTimer),
+                                   this, mDelay, nsITimer::TYPE_ONE_SHOT,
+                                   mTarget);
   }
 
   nsresult DoRun()
@@ -127,7 +123,7 @@ ThreadEventTarget::Dispatch(already_AddRefed<nsIRunnable> aEvent, uint32_t aFlag
 {
   // We want to leak the reference when we fail to dispatch it, so that
   // we won't release the event in a wrong thread.
-  LeakRefPtr<nsIRunnable> event(Move(aEvent));
+  LeakRefPtr<nsIRunnable> event(std::move(aEvent));
   if (NS_WARN_IF(!event)) {
     return NS_ERROR_INVALID_ARG;
   }
@@ -187,7 +183,7 @@ ThreadEventTarget::DelayedDispatch(already_AddRefed<nsIRunnable> aEvent, uint32_
   NS_ENSURE_TRUE(!!aDelayMs, NS_ERROR_UNEXPECTED);
 
   RefPtr<DelayedRunnable> r = new DelayedRunnable(do_AddRef(this),
-                                                  Move(aEvent),
+                                                  std::move(aEvent),
                                                   aDelayMs);
   nsresult rv = r->Init();
   NS_ENSURE_SUCCESS(rv, rv);

@@ -4,10 +4,6 @@
 
 %include ../../shared/customizableui/panelUI.inc.css
 
-.panel-subviews {
-  background-color: hsla(0,0%,100%,.97);
-}
-
 .restoreallitem > .toolbarbutton-icon {
   display: none;
 }
@@ -16,10 +12,15 @@
   padding-inline-start: 18px;
 }
 
-photonpanelmultiview .toolbaritem-combined-buttons > label {
-  padding-inline-start: 42px; /* 18px toolbarbutton padding + 16px icon + 8px label padding start */
+.subviewbutton.download {
+  padding-inline-start: 14px;
 }
 
+panelmultiview .toolbaritem-combined-buttons > spacer.before-label {
+  width: 42px; /* 18px toolbarbutton padding + 16px icon + 8px label padding start */
+}
+
+#appMenu-addon-banners > .addon-banner-item,
 #appMenu-mainView > .panel-subview-body > .panel-banner-item {
   padding-inline-start: 18px;
 }
@@ -34,30 +35,28 @@ photonpanelmultiview .toolbaritem-combined-buttons > label {
   margin-inline-start: 18px;
 }
 
-.subviewbutton[checked="true"] {
-  background-position: top 7px left 4px;
-}
-
-.subviewbutton[checked="true"]:-moz-locale-dir(rtl) {
-  background-position: top 7px right 4px;
-}
-
 .subviewbutton:not(:-moz-any([image],[targetURI],.cui-withicon, .bookmark-item)) > .menu-iconic-left {
   display: none;
 }
 
-/* Override OSX-specific toolkit styles for the bookmarks panel */
-menu.subviewbutton > .menu-right {
-  margin-inline-end: 0;
+#BMB_bookmarksPopup menupopup[placespopup=true]:-moz-lwtheme {
   -moz-appearance: none;
+  background: transparent;
 }
 
-menu.subviewbutton > .menu-right > image {
- /* We don't want the arrow to highlight when the .subviewbutton is hovered,
-  * so we set the -moz-appearance rule on the image
-  * (which doesn't inherit the _moz-menuactive attribute) instead.
-  */
-  -moz-appearance: menuarrow;
+#BMB_bookmarksPopup menupopup[placespopup=true] > hbox:-moz-lwtheme {
+  background: var(--arrowpanel-background);
+  border-radius: var(--arrowpanel-border-radius);
+  box-shadow: 0 0 0 1px var(--arrowpanel-border-color);
+  color: var(--arrowpanel-color);
+  border: none;
+  margin: 1px;
+}
+
+/* Override OSX-specific toolkit styles for the bookmarks panel */
+menu.subviewbutton > .menu-right {
+  margin-inline-end: -4px;
+  -moz-appearance: none;
 }
 
 .PanelUI-subView menuseparator,

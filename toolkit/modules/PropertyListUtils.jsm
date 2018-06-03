@@ -55,25 +55,21 @@
 
 "use strict";
 
-this.EXPORTED_SYMBOLS = ["PropertyListUtils"];
+var EXPORTED_SYMBOLS = ["PropertyListUtils"];
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cu = Components.utils;
+Cu.importGlobalProperties(["DOMParser", "File", "FileReader"]);
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.importGlobalProperties(["File", "FileReader"]);
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "ctypes",
+                               "resource://gre/modules/ctypes.jsm");
+ChromeUtils.defineModuleGetter(this, "Services",
+                               "resource://gre/modules/Services.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "ctypes",
-                                  "resource://gre/modules/ctypes.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
-                                  "resource://gre/modules/Services.jsm");
-
-this.PropertyListUtils = Object.freeze({
+var PropertyListUtils = Object.freeze({
   /**
    * Asynchronously reads a file as a property list.
    *
-   * @param aFile (nsIDOMBlob/nsIFile)
+   * @param aFile (Blob/nsIFile)
    *        the file to be read as a property list.
    * @param aCallback
    *        If the property list is read successfully, aPropertyListRoot is set
@@ -105,7 +101,7 @@ this.PropertyListUtils = Object.freeze({
           } finally {
             aCallback(root);
           }
-        }
+        };
         fileReader.addEventListener("loadend", onLoadEnd);
         fileReader.readAsArrayBuffer(aFile);
       }
@@ -139,12 +135,10 @@ this.PropertyListUtils = Object.freeze({
       return new BinaryPropertyListReader(aBuffer).root;
 
     // Convert the buffer into an XML tree.
-    let domParser = Cc["@mozilla.org/xmlextras/domparser;1"].
-                    createInstance(Ci.nsIDOMParser);
+    let domParser = new DOMParser();
     let bytesView = new Uint8Array(aBuffer);
     try {
-      let doc = domParser.parseFromBuffer(bytesView, bytesView.length,
-                                          "application/xml");
+      let doc = domParser.parseFromBuffer(bytesView, "application/xml");
       return new XMLPropertyListReader(doc).root;
     } catch (ex) {
       throw new Error("aBuffer cannot be parsed as a DOM document: " + ex);
@@ -816,5 +810,5 @@ function LazyMapProxyHandler() {
           return target[name];
       }
     }
-  }
+  };
 }

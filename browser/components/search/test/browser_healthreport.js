@@ -3,7 +3,7 @@
 
 "use strict";
 
-var Preferences = Cu.import("resource://gre/modules/Preferences.jsm", {}).Preferences;
+var Preferences = ChromeUtils.import("resource://gre/modules/Preferences.jsm", {}).Preferences;
 
 function test() {
   waitForExplicitFinish();
@@ -47,7 +47,7 @@ function test() {
         Services.search.removeEngine(fooEngine);
       }
 
-      EventUtils.synthesizeKey("VK_RETURN", {});
+      EventUtils.synthesizeKey("KEY_Enter");
       executeSoon(() => executeSoon(afterSearch));
   }
 
@@ -69,16 +69,14 @@ function test() {
 
       case "engine-removed":
         Services.obs.removeObserver(observer, "browser-search-engine-modified");
+        gCUITestUtils.removeSearchBar();
         finish();
         break;
     }
   }
 
   Services.obs.addObserver(observer, "browser-search-engine-modified");
-  SpecialPowers.pushPrefEnv({set: [
-    ["toolkit.telemetry.enabled", true],
-    ["browser.search.widget.inNavBar", true],
-  ]}).then(function() {
+  gCUITestUtils.addSearchBar().then(function() {
     Services.search.addEngine("http://mochi.test:8888/browser/browser/components/search/test/testEngine.xml",
                               null, "data:image/x-icon,%00", false);
   });

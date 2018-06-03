@@ -20,18 +20,20 @@ class HTMLMenuElement final : public nsGenericHTMLElement
 public:
   explicit HTMLMenuElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
 
-  NS_IMPL_FROMCONTENT_HTML_WITH_TAG(HTMLMenuElement, menu)
+  NS_IMPL_FROMNODE_HTML_WITH_TAG(HTMLMenuElement, menu)
 
   // nsISupports
-  NS_DECL_ISUPPORTS_INHERITED
+  NS_INLINE_DECL_REFCOUNTING_INHERITED(HTMLMenuElement, nsGenericHTMLElement)
 
   virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
                                 const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
                                 bool aNotify) override;
   virtual bool ParseAttribute(int32_t aNamespaceID,
                                 nsAtom* aAttribute,
                                 const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 nsAttrValue& aResult) override;
 
   virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,

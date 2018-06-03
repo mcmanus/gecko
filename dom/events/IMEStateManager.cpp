@@ -19,6 +19,7 @@
 #include "mozilla/TextEvents.h"
 #include "mozilla/Unused.h"
 #include "mozilla/dom/HTMLFormElement.h"
+#include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/dom/TabParent.h"
 
 #include "HTMLInputElement.h"
@@ -28,13 +29,11 @@
 #include "nsContentUtils.h"
 #include "nsIContent.h"
 #include "nsIDocument.h"
-#include "nsIDOMMouseEvent.h"
 #include "nsIForm.h"
 #include "nsIFormControl.h"
 #include "nsINode.h"
 #include "nsIObserverService.h"
 #include "nsIPresShell.h"
-#include "nsISelection.h"
 #include "nsISupports.h"
 #include "nsPresContext.h"
 
@@ -845,7 +844,7 @@ IMEStateManager::OnClickInEditor(nsPresContext* aPresContext,
   }
 
   InputContextAction::Cause cause =
-    aMouseEvent->inputSource == nsIDOMMouseEvent::MOZ_SOURCE_TOUCH ?
+    aMouseEvent->inputSource == MouseEventBinding::MOZ_SOURCE_TOUCH ?
       InputContextAction::CAUSE_TOUCH : InputContextAction::CAUSE_MOUSE;
 
   InputContextAction action(cause, InputContextAction::FOCUS_NOT_CHANGED);
@@ -1279,6 +1278,9 @@ IMEStateManager::SetIMEState(const IMEState& aState,
   context.mMayBeIMEUnaware = context.mIMEState.IsEditable() &&
     sCheckForIMEUnawareWebApps && MayBeIMEUnawareWebApp(aContent);
 
+  context.mHasHandledUserInput =
+    aPresContext && aPresContext->PresShell()->HasHandledUserInput();
+
   context.mInPrivateBrowsing =
     aPresContext &&
     nsContentUtils::IsInPrivateBrowsing(aPresContext->Document());
@@ -1290,17 +1292,17 @@ IMEStateManager::SetIMEState(const IMEState& aState,
       // that gets focus whenever anyone tries to focus the number control. We
       // need to check if aContent is one of those anonymous text controls and,
       // if so, use the number control instead:
-      nsIContent* content = aContent;
+      Element* element = aContent->AsElement();
       HTMLInputElement* inputElement =
-        HTMLInputElement::FromContentOrNull(aContent);
+        HTMLInputElement::FromNodeOrNull(aContent);
       if (inputElement) {
         HTMLInputElement* ownerNumberControl =
           inputElement->GetOwnerNumberControl();
         if (ownerNumberControl) {
-          content = ownerNumberControl; // an <input type=number>
+          element = ownerNumberControl; // an <input type=number>
         }
       }
-      content->GetAttr(kNameSpaceID_None, nsGkAtoms::type,
+      element->GetAttr(kNameSpaceID_None, nsGkAtoms::type,
                        context.mHTMLInputType);
     } else {
       context.mHTMLInputType.Assign(nsGkAtoms::textarea->GetUTF16String());
@@ -1308,8 +1310,8 @@ IMEStateManager::SetIMEState(const IMEState& aState,
 
     if (sInputModeSupported ||
         nsContentUtils::IsChromeDoc(aContent->OwnerDoc())) {
-      aContent->GetAttr(kNameSpaceID_None, nsGkAtoms::inputmode,
-                        context.mHTMLInputInputmode);
+      aContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::inputmode,
+                                     context.mHTMLInputInputmode);
       if (context.mHTMLInputInputmode.EqualsLiteral("mozAwesomebar") &&
           !nsContentUtils::IsChromeDoc(aContent->OwnerDoc())) {
         // mozAwesomebar should be allowed only in chrome
@@ -1317,8 +1319,9 @@ IMEStateManager::SetIMEState(const IMEState& aState,
       }
     }
 
-    aContent->GetAttr(kNameSpaceID_None, nsGkAtoms::moz_action_hint,
-                      context.mActionHint);
+    aContent->AsElement()->GetAttr(kNameSpaceID_None,
+                                   nsGkAtoms::moz_action_hint,
+                                   context.mActionHint);
 
     // Get the input content corresponding to the focused node,
     // which may be an anonymous child of the input content.
@@ -1363,6 +1366,14 @@ IMEStateManager::SetIMEState(const IMEState& aState,
   if (aAction.mCause == InputContextAction::CAUSE_UNKNOWN &&
       !XRE_IsContentProcess()) {
     aAction.mCause = InputContextAction::CAUSE_UNKNOWN_CHROME;
+  }
+
+  if ((aAction.mCause == InputContextAction::CAUSE_UNKNOWN ||
+       aAction.mCause == InputContextAction::CAUSE_UNKNOWN_CHROME) &&
+      EventStateManager::IsHandlingUserInput()) {
+    aAction.mCause = EventStateManager::IsHandlingKeyboardInput() ?
+      InputContextAction::CAUSE_UNKNOWN_DURING_KEYBOARD_INPUT :
+      InputContextAction::CAUSE_UNKNOWN_DURING_NON_KEYBOARD_INPUT;
   }
 
   SetInputContext(aWidget, context, aAction);
@@ -1937,7 +1948,7 @@ IMEStateManager::CreateIMEContentObserver(EditorBase* aEditorBase)
 
 // static
 nsresult
-IMEStateManager::GetFocusSelectionAndRoot(nsISelection** aSelection,
+IMEStateManager::GetFocusSelectionAndRoot(Selection** aSelection,
                                           nsIContent** aRootContent)
 {
   if (!sActiveIMEContentObserver) {

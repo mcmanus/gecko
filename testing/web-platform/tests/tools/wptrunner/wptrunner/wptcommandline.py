@@ -4,6 +4,7 @@ import os
 import sys
 from collections import OrderedDict
 from distutils.spawn import find_executable
+from datetime import datetime, timedelta
 
 import config
 import wpttest
@@ -28,7 +29,7 @@ def require_arg(kwargs, name, value_func=None):
     if value_func is None:
         value_func = lambda x: x is not None
 
-    if not name in kwargs or not value_func(kwargs[name]):
+    if name not in kwargs or not value_func(kwargs[name]):
         print >> sys.stderr, "Missing required argument %s" % name
         sys.exit(1)
 
@@ -51,6 +52,8 @@ scheme host and port.""")
                         help="Regenerate the test manifest.")
     parser.add_argument("--no-manifest-update", action="store_false", dest="manifest_update",
                         help="Prevent regeneration of the test manifest.")
+    parser.add_argument("--manifest-download", action="store_true", default=None,
+                        help="Attempt to download a preexisting manifest when updating.")
 
     parser.add_argument("--timeout-multiplier", action="store", type=float, default=None,
                         help="Multiplier relative to standard test timeout to use")
@@ -63,6 +66,10 @@ scheme host and port.""")
 
     parser.add_argument("--no-capture-stdio", action="store_true", default=False,
                         help="Don't capture stdio and write to logging")
+    parser.add_argument("--no-fail-on-unexpected", action="store_false",
+                        default=True,
+                        dest="fail_on_unexpected",
+                        help="Exit with status code 0 when test expectations are violated")
 
     mode_group = parser.add_argument_group("Mode")
     mode_group.add_argument("--list-test-groups", action="store_true",
@@ -74,6 +81,42 @@ scheme host and port.""")
     mode_group.add_argument("--list-tests", action="store_true",
                             default=False,
                             help="List all tests that will run")
+    mode_group.add_argument("--verify", action="store_true",
+                            default=False,
+                            help="Run a stability check on the selected tests")
+    mode_group.add_argument("--verify-log-full", action="store_true",
+                            default=False,
+                            help="Output per-iteration test results when running verify")
+    mode_group.add_argument("--verify-repeat-loop", action="store",
+                            default=10,
+                            help="Number of iterations for a run that reloads each test without restart.",
+                            type=int)
+    mode_group.add_argument("--verify-repeat-restart", action="store",
+                            default=5,
+                            help="Number of iterations, for a run that restarts the runner between each iteration",
+                            type=int)
+    chaos_mode_group = mode_group.add_mutually_exclusive_group()
+    chaos_mode_group.add_argument("--verify-no-chaos-mode", action="store_false",
+                                  default=True,
+                                  dest="verify_chaos_mode",
+                                  help="Disable chaos mode when running on Firefox")
+    chaos_mode_group.add_argument("--verify-chaos-mode", action="store_true",
+                                  default=True,
+                                  dest="verify_chaos_mode",
+                                  help="Enable chaos mode when running on Firefox")
+    mode_group.add_argument("--verify-max-time", action="store",
+                            default=None,
+                            help="The maximum number of minutes for the job to run",
+                            type=lambda x: timedelta(minutes=float(x)))
+    output_results_group = mode_group.add_mutually_exclusive_group()
+    output_results_group.add_argument("--verify-no-output-results", action="store_false",
+                                      dest="verify_output_results",
+                                      default=True,
+                                      help="Prints individuals test results and messages")
+    output_results_group.add_argument("--verify-output-results", action="store_true",
+                                      dest="verify_output_results",
+                                      default=True,
+                                      help="Disable printing individuals test results and messages")
 
     test_selection_group = parser.add_argument_group("Test Selection")
     test_selection_group.add_argument("--test-types", action="store",
@@ -86,15 +129,20 @@ scheme host and port.""")
                                       help="URL prefix to exclude")
     test_selection_group.add_argument("--include-manifest", type=abs_path,
                                       help="Path to manifest listing tests to include")
+    test_selection_group.add_argument("--skip-timeout", action="store_true",
+                                      help="Skip tests that are expected to time out")
     test_selection_group.add_argument("--tag", action="append", dest="tags",
-                                      help="Labels applied to tests to include in the run. Labels starting dir: are equivalent to top-level directories.")
+                                      help="Labels applied to tests to include in the run. "
+                                           "Labels starting dir: are equivalent to top-level directories.")
 
     debugging_group = parser.add_argument_group("Debugging")
     debugging_group.add_argument('--debugger', const="__default__", nargs="?",
                                  help="run under a debugger, e.g. gdb or valgrind")
     debugging_group.add_argument('--debugger-args', help="arguments to the debugger")
+    debugging_group.add_argument("--rerun", action="store", type=int, default=1,
+                                 help="Number of times to re run each test without restarts")
     debugging_group.add_argument("--repeat", action="store", type=int, default=1,
-                                 help="Number of times to run the tests")
+                                 help="Number of times to run the tests, restarting between each run")
     debugging_group.add_argument("--repeat-until-unexpected", action="store_true", default=None,
                                  help="Run tests in a loop until one returns an unexpected result")
     debugging_group.add_argument('--pause-after-test', action="store_true", default=None,
@@ -132,6 +180,8 @@ scheme host and port.""")
                               help="Path to root directory containing test metadata"),
     config_group.add_argument("--tests", action="store", type=abs_path, dest="tests_root",
                               help="Path to root directory containing test files"),
+    config_group.add_argument("--manifest", action="store", type=abs_path, dest="manifest_path",
+                              help="Path to test manifest (default is ${metadata_root}/MANIFEST.json)")
     config_group.add_argument("--run-info", action="store", type=abs_path,
                               help="Path to directory containing extra json files to add to run info")
     config_group.add_argument("--product", action="store", choices=product_choices,
@@ -199,6 +249,11 @@ scheme host and port.""")
     gecko_group.add_argument("--reftest-screenshot", dest="reftest_screenshot", action="store",
                              choices=["always", "fail", "unexpected"], default="unexpected",
                              help="With --reftest-internal, when to take a screenshot")
+    gecko_group.add_argument("--chaos", dest="chaos_mode_flags", action="store",
+                             nargs="?", const=0xFFFFFFFF, type=int,
+                             help="Enable chaos mode with the specified feature flag "
+                             "(see http://searchfox.org/mozilla-central/source/mfbt/ChaosMode.h for "
+                             "details). If no value is supplied, all features are activated")
 
     servo_group = parser.add_argument_group("Servo-specific")
     servo_group.add_argument("--user-stylesheet",
@@ -226,6 +281,10 @@ scheme host and port.""")
     sauce_group.add_argument("--sauce-connect-binary",
                              dest="sauce_connect_binary",
                              help="Path to Sauce Connect binary")
+
+    webkit_group = parser.add_argument_group("WebKit-specific")
+    webkit_group.add_argument("--webkit-port", dest="webkit_port",
+                             help="WebKit port")
 
     parser.add_argument("test_list", nargs="*",
                         help="List of URLs for tests to run, or paths including tests to run. "
@@ -279,8 +338,15 @@ def set_from_config(kwargs):
             kwargs["test_paths"]["/"] = {}
         kwargs["test_paths"]["/"]["metadata_path"] = kwargs["metadata_root"]
 
+    if kwargs.get("manifest_path"):
+        if "/" not in kwargs["test_paths"]:
+            kwargs["test_paths"]["/"] = {}
+        kwargs["test_paths"]["/"]["manifest_path"] = kwargs["manifest_path"]
+
     kwargs["suite_name"] = kwargs["config"].get("web-platform-tests", {}).get("name", "web-platform-tests")
 
+
+    check_paths(kwargs)
 
 def get_test_paths(config):
     # Set up test_paths
@@ -292,7 +358,10 @@ def get_test_paths(config):
             url_base = manifest_opts.get("url_base", "/")
             test_paths[url_base] = {
                 "tests_path": manifest_opts.get_path("tests"),
-                "metadata_path": manifest_opts.get_path("metadata")}
+                "metadata_path": manifest_opts.get_path("metadata"),
+            }
+            if "manifest" in manifest_opts:
+                test_paths[url_base]["manifest_path"] = manifest_opts.get_path("manifest")
 
     return test_paths
 
@@ -302,20 +371,28 @@ def exe_path(name):
         return
 
     path = find_executable(name)
-    if os.access(path, os.X_OK):
+    if path and os.access(path, os.X_OK):
         return path
+    else:
+        return None
 
 
-def check_args(kwargs):
-    set_from_config(kwargs)
-
+def check_paths(kwargs):
     for test_paths in kwargs["test_paths"].itervalues():
         if not ("tests_path" in test_paths and
                 "metadata_path" in test_paths):
             print "Fatal: must specify both a test path and metadata path"
             sys.exit(1)
+        if "manifest_path" not in test_paths:
+            test_paths["manifest_path"] = os.path.join(test_paths["metadata_path"],
+                                                       "MANIFEST.json")
         for key, path in test_paths.iteritems():
             name = key.split("_", 1)[0]
+
+            if name == "manifest":
+                # For the manifest we can create it later, so just check the path
+                # actually exists
+                path = os.path.dirname(path)
 
             if not os.path.exists(path):
                 print "Fatal: %s path %s does not exist" % (name, path)
@@ -324,6 +401,10 @@ def check_args(kwargs):
             if not os.path.isdir(path):
                 print "Fatal: %s path %s is not a directory" % (name, path)
                 sys.exit(1)
+
+
+def check_args(kwargs):
+    set_from_config(kwargs)
 
     if kwargs["product"] is None:
         kwargs["product"] = "firefox"
@@ -391,7 +472,7 @@ def check_args(kwargs):
             sys.exit(1)
         kwargs["openssl_binary"] = path
 
-    if kwargs["ssl_type"] != "none" and kwargs["product"] == "firefox":
+    if kwargs["ssl_type"] != "none" and kwargs["product"] == "firefox" and kwargs["certutil_binary"]:
         path = exe_path(kwargs["certutil_binary"])
         if path is None:
             print >> sys.stderr, "certutil-binary argument missing or not a valid executable"
@@ -447,6 +528,8 @@ def create_parser_update(product_choices=None):
                         help="Path to the folder containing test metadata"),
     parser.add_argument("--tests", action="store", type=abs_path, dest="tests_root",
                         help="Path to web-platform-tests"),
+    parser.add_argument("--manifest", action="store", type=abs_path, dest="manifest_path",
+                        help="Path to test manifest (default is ${metadata_root}/MANIFEST.json)")
     parser.add_argument("--sync-path", action="store", type=abs_path,
                         help="Path to store git checkout of web-platform-tests during update"),
     parser.add_argument("--remote_url", action="store",
@@ -460,7 +543,8 @@ def create_parser_update(product_choices=None):
                         help="Don't create a VCS commit containing the changes.")
     parser.add_argument("--sync", dest="sync", action="store_true", default=False,
                         help="Sync the tests with the latest from upstream (implies --patch)")
-    parser.add_argument("--ignore-existing", action="store_true", help="When updating test results only consider results from the logfiles provided, not existing expectations.")
+    parser.add_argument("--ignore-existing", action="store_true",
+                        help="When updating test results only consider results from the logfiles provided, not existing expectations.")
     parser.add_argument("--stability", nargs="?", action="store", const="unstable", default=None,
         help=("Reason for disabling tests. When updating test results, disable tests that have "
               "inconsistent results across many runs with the given reason."))
@@ -470,6 +554,8 @@ def create_parser_update(product_choices=None):
                         help="List of glob-style paths to exclude when syncing tests")
     parser.add_argument("--include", action="store", nargs="*",
                         help="List of glob-style paths to include which would otherwise be excluded when syncing tests")
+    parser.add_argument("--extra-property", action="append", default=[],
+                        help="Extra property from run_info.json to use in metadata update")
     # Should make this required iff run=logfile
     parser.add_argument("run_log", nargs="*", type=abs_path,
                         help="Log file from run of tests")

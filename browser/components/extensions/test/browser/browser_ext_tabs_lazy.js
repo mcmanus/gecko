@@ -1,16 +1,20 @@
 "use strict";
 
+const {Utils} = ChromeUtils.import("resource://gre/modules/sessionstore/Utils.jsm", {});
+const triggeringPrincipal_base64 = Utils.SERIALIZED_SYSTEMPRINCIPAL;
+
 const SESSION = {
   windows: [{
     tabs: [
-      {entries: [{url: "about:blank"}]},
-      {entries: [{url: "https://example.com/"}]},
+      {entries: [{url: "about:blank", triggeringPrincipal_base64}]},
+      {entries: [{url: "https://example.com/", triggeringPrincipal_base64}]},
     ],
   }],
 };
 
 add_task(async function() {
   SessionStore.setBrowserState(JSON.stringify(SESSION));
+  await promiseWindowRestored(window);
   const tab = gBrowser.tabs[1];
 
   is(tab.getAttribute("pending"), "true", "The tab is pending restore");
@@ -36,5 +40,5 @@ add_task(async function() {
   is(tab.getAttribute("pending"), "true", "The tab is still pending restore");
   is(tab.linkedBrowser.isConnected, false, "The tab is still lazy");
 
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });

@@ -41,7 +41,7 @@ int send_close = 0;
 int connected = 0;
 
 static int accept_new_connection(mozquic_connection_t *nc);
-static void respond(mozquic_stream_t *stream, char *uri, int uriLen);
+static void respond(mozquic_stream_t *stream, char *uri, unsigned int uriLen);
 
 #ifdef OSX
 void readBinaryData();
@@ -66,7 +66,7 @@ int close_connection(mozquic_connection_t *c)
 }
 
 static void do09(struct closure_t *data, int idx, mozquic_stream_t *stream,
-                 const char *buf, int len)
+                 const char *buf, unsigned int len)
 {
   if (data->accum[idx] + len > sizeof(data->buf[idx])) {
     return;
@@ -236,7 +236,7 @@ int main(int argc, char **argv)
   uint32_t i = 0;
   uint32_t delay = 1000;
   struct mozquic_config_t config;
-  mozquic_connection_t *c, *hrr;
+  mozquic_connection_t *c, *c6, *hrr, *hrr6;
 
   if (has_arg(argc, argv, "-quiet", &argVal)) {
     fclose(stderr);
@@ -276,18 +276,33 @@ int main(int argc, char **argv)
   assert(mozquic_unstable_api1(&config, "sabotageVN", 0, 0) == MOZQUIC_OK);
   assert(mozquic_unstable_api1(&config, "forceAddressValidation", 0, 0) == MOZQUIC_OK);
   assert(mozquic_unstable_api1(&config, "streamWindow", 4906, 0) == MOZQUIC_OK);
-  assert(mozquic_unstable_api1(&config, "connWindowKB", 8, 0) == MOZQUIC_OK);
+  assert(mozquic_unstable_api1(&config, "connWindow", 8192, 0) == MOZQUIC_OK);
+  assert(mozquic_unstable_api1(&config, "enable0RTT", 1, 0) == MOZQUIC_OK);
 
+  // assert(mozquic_unstable_api1(&config, "dropRate", 5, 0) == MOZQUIC_OK);
+
+  config.ipv6 = 0;
   mozquic_new_connection(&c, &config);
   mozquic_set_event_callback(c, connEventCB);
   mozquic_start_server(c);
 
+  config.ipv6 = 1;
+  mozquic_new_connection(&c6, &config);
+  mozquic_set_event_callback(c6, connEventCB);
+  mozquic_start_server(c6);
+  
   config.originPort = SERVER_PORT + 1;
+  config.ipv6 = 0;
   assert(mozquic_unstable_api1(&config, "forceAddressValidation", 1, 0) == MOZQUIC_OK);
   mozquic_new_connection(&hrr, &config);
   mozquic_set_event_callback(hrr, connEventCB);
   mozquic_start_server(hrr);
   fprintf(stderr,"server using certificate (HRR) for %s on port %d\n", config.originName, config.originPort);
+
+  config.ipv6 = 1;
+  mozquic_new_connection(&hrr6, &config);
+  mozquic_set_event_callback(hrr6, connEventCB);
+  mozquic_start_server(hrr6);
 
   do {
     usleep (delay); // this is for handleio todo
@@ -302,7 +317,9 @@ int main(int argc, char **argv)
       }
     }
     mozquic_IO(c);
+    mozquic_IO(c6);
     mozquic_IO(hrr);
+    mozquic_IO(hrr6);
   } while (1);
 
 #ifdef OSX
@@ -368,7 +385,7 @@ static void respondWith(mozquic_stream_t *stream,
   mozquic_send(stream, (void *) start, end - start, 1);
 }
 
-static void respond(mozquic_stream_t *stream, char *uri, int uriLen)
+static void respond(mozquic_stream_t *stream, char *uri, unsigned int uriLen)
 {
   if (uriLen == strlen(js) && !memcmp(js, uri, uriLen) ) {
     respondWith(stream, _binary_sample_main_js_start, _binary_sample_main_js_end);

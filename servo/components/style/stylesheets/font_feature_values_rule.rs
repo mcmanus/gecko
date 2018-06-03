@@ -7,20 +7,22 @@
 //! [font-feature-values]: https://drafts.csswg.org/css-fonts-3/#at-font-feature-values-rule
 
 use Atom;
-use computed_values::font_family::FamilyName;
-use cssparser::{AtRuleParser, AtRuleType, BasicParseError, DeclarationListParser, DeclarationParser, Parser};
-use cssparser::{CowRcStr, RuleListParser, SourceLocation, QualifiedRuleParser, Token, serialize_identifier};
+use cssparser::{AtRuleParser, AtRuleType, BasicParseErrorKind, CowRcStr};
+use cssparser::{DeclarationListParser, DeclarationParser, Parser};
+use cssparser::{QualifiedRuleParser, RuleListParser, SourceLocation, Token};
 use error_reporting::{ContextualParseError, ParseErrorReporter};
 #[cfg(feature = "gecko")]
 use gecko_bindings::bindings::Gecko_AppendFeatureValueHashEntry;
 #[cfg(feature = "gecko")]
 use gecko_bindings::structs::{self, gfxFontFeatureValueSet, nsTArray};
-use parser::{ParserContext, ParserErrorContext, Parse};
-use selectors::parser::SelectorParseError;
+use parser::{Parse, ParserContext, ParserErrorContext};
 use shared_lock::{SharedRwLockReadGuard, ToCssWithGuard};
-use std::fmt;
-use style_traits::{ParseError, StyleParseError, ToCss};
+use std::fmt::{self, Write};
+use str::CssStringWriter;
+use style_traits::{CssWriter, ParseError, StyleParseErrorKind, ToCss};
 use stylesheets::CssRuleType;
+use values::computed::font::FamilyName;
+use values::serialize_atom_identifier;
 
 /// A @font-feature-values block declaration.
 /// It is `<ident>: <integer>+`.
@@ -37,8 +39,11 @@ pub struct FFVDeclaration<T> {
 }
 
 impl<T: ToCss> ToCss for FFVDeclaration<T> {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        serialize_identifier(&self.name.to_string(), dest)?;
+    fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
+    where
+        W: Write,
+    {
+        serialize_atom_identifier(&self.name, dest)?;
         dest.write_str(": ")?;
         self.value.to_css(dest)?;
         dest.write_str(";")
@@ -53,64 +58,69 @@ pub trait ToGeckoFontFeatureValues {
 }
 
 /// A @font-feature-values block declaration value that keeps one value.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, ToCss)]
 pub struct SingleValue(pub u32);
 
 impl Parse for SingleValue {
-    fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>)
-                     -> Result<SingleValue, ParseError<'i>> {
+    fn parse<'i, 't>(
+        _context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<SingleValue, ParseError<'i>> {
+        let location = input.current_source_location();
         match *input.next()? {
-            Token::Number { int_value: Some(v), .. } if v >= 0 => Ok(SingleValue(v as u32)),
-            ref t => Err(BasicParseError::UnexpectedToken(t.clone()).into()),
+            Token::Number {
+                int_value: Some(v), ..
+            } if v >= 0 =>
+            {
+                Ok(SingleValue(v as u32))
+            },
+            ref t => Err(location.new_unexpected_token_error(t.clone())),
         }
-    }
-}
-
-impl ToCss for SingleValue {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        self.0.to_css(dest)
     }
 }
 
 #[cfg(feature = "gecko")]
 impl ToGeckoFontFeatureValues for SingleValue {
     fn to_gecko_font_feature_values(&self, array: &mut nsTArray<u32>) {
-        unsafe { array.set_len_pod(1); }
+        unsafe {
+            array.set_len_pod(1);
+        }
         array[0] = self.0 as u32;
     }
 }
 
 /// A @font-feature-values block declaration value that keeps one or two values.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, ToCss)]
 pub struct PairValues(pub u32, pub Option<u32>);
 
 impl Parse for PairValues {
-    fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>)
-                     -> Result<PairValues, ParseError<'i>> {
+    fn parse<'i, 't>(
+        _context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<PairValues, ParseError<'i>> {
+        let location = input.current_source_location();
         let first = match *input.next()? {
-            Token::Number { int_value: Some(a), .. } if a >= 0 => a as u32,
-            ref t => return Err(BasicParseError::UnexpectedToken(t.clone()).into()),
+            Token::Number {
+                int_value: Some(a), ..
+            } if a >= 0 =>
+            {
+                a as u32
+            },
+            ref t => return Err(location.new_unexpected_token_error(t.clone())),
         };
+        let location = input.current_source_location();
         match input.next() {
-            Ok(&Token::Number { int_value: Some(b), .. }) if b >= 0 => {
+            Ok(&Token::Number {
+                int_value: Some(b), ..
+            }) if b >= 0 =>
+            {
                 Ok(PairValues(first, Some(b as u32)))
-            }
+            },
             // It can't be anything other than number.
-            Ok(t) => Err(BasicParseError::UnexpectedToken(t.clone()).into()),
+            Ok(t) => Err(location.new_unexpected_token_error(t.clone())),
             // It can be just one value.
-            Err(_) => Ok(PairValues(first, None))
+            Err(_) => Ok(PairValues(first, None)),
         }
-    }
-}
-
-impl ToCss for PairValues {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        self.0.to_css(dest)?;
-        if let Some(second) = self.1 {
-            dest.write_char(' ')?;
-            second.to_css(dest)?;
-        }
-        Ok(())
     }
 }
 
@@ -119,7 +129,9 @@ impl ToGeckoFontFeatureValues for PairValues {
     fn to_gecko_font_feature_values(&self, array: &mut nsTArray<u32>) {
         let len = if self.1.is_some() { 2 } else { 1 };
 
-        unsafe { array.set_len_pod(len); }
+        unsafe {
+            array.set_len_pod(len);
+        }
         array[0] = self.0 as u32;
         if let Some(second) = self.1 {
             array[1] = second as u32;
@@ -128,51 +140,44 @@ impl ToGeckoFontFeatureValues for PairValues {
 }
 
 /// A @font-feature-values block declaration value that keeps a list of values.
-#[derive(Clone, Debug, PartialEq)]
-pub struct VectorValues(pub Vec<u32>);
+#[derive(Clone, Debug, PartialEq, ToCss)]
+pub struct VectorValues(#[css(iterable)] pub Vec<u32>);
 
 impl Parse for VectorValues {
-    fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>)
-                     -> Result<VectorValues, ParseError<'i>> {
+    fn parse<'i, 't>(
+        _context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<VectorValues, ParseError<'i>> {
         let mut vec = vec![];
         loop {
+            let location = input.current_source_location();
             match input.next() {
-                Ok(&Token::Number { int_value: Some(a), .. }) if a >= 0 => {
+                Ok(&Token::Number {
+                    int_value: Some(a), ..
+                }) if a >= 0 =>
+                {
                     vec.push(a as u32);
-                },
+                }
                 // It can't be anything other than number.
-                Ok(t) => return Err(BasicParseError::UnexpectedToken(t.clone()).into()),
+                Ok(t) => return Err(location.new_unexpected_token_error(t.clone())),
                 Err(_) => break,
             }
         }
 
         if vec.len() == 0 {
-            return Err(BasicParseError::EndOfInput.into());
+            return Err(input.new_error(BasicParseErrorKind::EndOfInput));
         }
 
         Ok(VectorValues(vec))
     }
 }
 
-impl ToCss for VectorValues {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        let mut iter = self.0.iter();
-        let first = iter.next();
-        if let Some(first) = first {
-            first.to_css(dest)?;
-            for value in iter {
-                dest.write_char(' ')?;
-                value.to_css(dest)?;
-            }
-        }
-        Ok(())
-    }
-}
-
 #[cfg(feature = "gecko")]
 impl ToGeckoFontFeatureValues for VectorValues {
     fn to_gecko_font_feature_values(&self, array: &mut nsTArray<u32>) {
-        unsafe { array.set_len_pod(self.0.len() as u32); }
+        unsafe {
+            array.set_len_pod(self.0.len() as u32);
+        }
         for (dest, value) in array.iter_mut().zip(self.0.iter()) {
             *dest = *value;
         }
@@ -180,9 +185,13 @@ impl ToGeckoFontFeatureValues for VectorValues {
 }
 
 /// Parses a list of `FamilyName`s.
-pub fn parse_family_name_list<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                                  -> Result<Vec<FamilyName>, ParseError<'i>> {
-    input.parse_comma_separated(|i| FamilyName::parse(context, i)).map_err(|e| e.into())
+pub fn parse_family_name_list<'i, 't>(
+    context: &ParserContext,
+    input: &mut Parser<'i, 't>,
+) -> Result<Vec<FamilyName>, ParseError<'i>> {
+    input
+        .parse_comma_separated(|i| FamilyName::parse(context, i))
+        .map_err(|e| e.into())
 }
 
 /// @font-feature-values inside block parser. Parses a list of `FFVDeclaration`.
@@ -197,17 +206,21 @@ impl<'a, 'b, 'i, T> AtRuleParser<'i> for FFVDeclarationsParser<'a, 'b, T> {
     type PreludeNoBlock = ();
     type PreludeBlock = ();
     type AtRule = ();
-    type Error = SelectorParseError<'i, StyleParseError<'i>>;
+    type Error = StyleParseErrorKind<'i>;
 }
 
 impl<'a, 'b, 'i, T> DeclarationParser<'i> for FFVDeclarationsParser<'a, 'b, T>
-    where T: Parse
+where
+    T: Parse,
 {
     type Declaration = ();
-    type Error = SelectorParseError<'i, StyleParseError<'i>>;
+    type Error = StyleParseErrorKind<'i>;
 
-    fn parse_value<'t>(&mut self, name: CowRcStr<'i>, input: &mut Parser<'i, 't>)
-                       -> Result<(), ParseError<'i>> {
+    fn parse_value<'t>(
+        &mut self,
+        name: CowRcStr<'i>,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<(), ParseError<'i>> {
         let value = input.parse_entirely(|i| T::parse(self.context, i))?;
         let new = FFVDeclaration {
             name: Atom::from(&*name),
@@ -271,9 +284,10 @@ macro_rules! font_feature_values_blocks {
                         rule: &mut rule,
                     });
                     while let Some(result) = iter.next() {
-                        if let Err(err) = result {
-                            let error = ContextualParseError::UnsupportedRule(err.slice, err.error);
-                            context.log_css_error(error_context, err.location, error);
+                        if let Err((error, slice)) = result {
+                            let location = error.location;
+                            let error = ContextualParseError::UnsupportedRule(slice, error);
+                            context.log_css_error(error_context, location, error);
                         }
                     }
                 }
@@ -281,7 +295,13 @@ macro_rules! font_feature_values_blocks {
             }
 
             /// Prints font family names.
-            pub fn font_family_to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+            pub fn font_family_to_css<W>(
+                &self,
+                dest: &mut CssWriter<W>,
+            ) -> fmt::Result
+            where
+                W: Write,
+            {
                 let mut iter = self.family_names.iter();
                 iter.next().unwrap().to_css(dest)?;
                 for val in iter {
@@ -292,7 +312,10 @@ macro_rules! font_feature_values_blocks {
             }
 
             /// Prints inside of `@font-feature-values` block.
-            pub fn value_to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+            pub fn value_to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
+            where
+                W: Write,
+            {
                 $(
                     if self.$ident.len() > 0 {
                         dest.write_str(concat!("@", $name, " {\n"))?;
@@ -343,13 +366,11 @@ macro_rules! font_feature_values_blocks {
         }
 
         impl ToCssWithGuard for FontFeatureValuesRule {
-            fn to_css<W>(&self, _guard: &SharedRwLockReadGuard, dest: &mut W) -> fmt::Result
-                where W: fmt::Write
-            {
+            fn to_css(&self, _guard: &SharedRwLockReadGuard, dest: &mut CssStringWriter) -> fmt::Result {
                 dest.write_str("@font-feature-values ")?;
-                self.font_family_to_css(dest)?;
+                self.font_family_to_css(&mut CssWriter::new(dest))?;
                 dest.write_str(" {\n")?;
-                self.value_to_css(dest)?;
+                self.value_to_css(&mut CssWriter::new(dest))?;
                 dest.write_str("}")
             }
         }
@@ -387,24 +408,24 @@ macro_rules! font_feature_values_blocks {
         impl<'a, 'i, R: ParseErrorReporter> QualifiedRuleParser<'i> for FontFeatureValuesRuleParser<'a, R> {
             type Prelude = ();
             type QualifiedRule = ();
-            type Error = SelectorParseError<'i, StyleParseError<'i>>;
+            type Error = StyleParseErrorKind<'i>;
         }
 
         impl<'a, 'i, R: ParseErrorReporter> AtRuleParser<'i> for FontFeatureValuesRuleParser<'a, R> {
             type PreludeNoBlock = ();
             type PreludeBlock = BlockType;
             type AtRule = ();
-            type Error = SelectorParseError<'i, StyleParseError<'i>>;
+            type Error = StyleParseErrorKind<'i>;
 
             fn parse_prelude<'t>(&mut self,
                                  name: CowRcStr<'i>,
-                                 _input: &mut Parser<'i, 't>)
+                                 input: &mut Parser<'i, 't>)
                                  -> Result<AtRuleType<(), BlockType>, ParseError<'i>> {
                 match_ignore_ascii_case! { &*name,
                     $(
                         $name => Ok(AtRuleType::WithBlock(BlockType::$ident_camel)),
                     )*
-                    _ => Err(BasicParseError::AtRuleBodyInvalid.into()),
+                    _ => Err(input.new_error(BasicParseErrorKind::AtRuleBodyInvalid)),
                 }
             }
 
@@ -424,10 +445,12 @@ macro_rules! font_feature_values_blocks {
 
                             let mut iter = DeclarationListParser::new(input, parser);
                             while let Some(declaration) = iter.next() {
-                                if let Err(err) = declaration {
+                                if let Err((error, slice)) = declaration {
+                                    let location = error.location;
                                     let error = ContextualParseError::UnsupportedKeyframePropertyDeclaration(
-                                        err.slice, err.error);
-                                    self.context.log_css_error(self.error_context, err.location, error);
+                                        slice, error
+                                    );
+                                    self.context.log_css_error(self.error_context, location, error);
                                 }
                             }
                         },

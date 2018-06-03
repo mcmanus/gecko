@@ -31,6 +31,19 @@ Interface members const/method/attribute conform to the following pattern:
 """
 
 
+# XXX(nika): Fix the IDL files which do this so we can remove this list?
+def rustBlacklistedForward(s):
+    """These types are foward declared as interfaces, but never actually defined
+    in IDL files. We don't want to generate references to them in rust for that
+    reason."""
+    blacklisted = [
+        "nsIFrame",
+        "nsIObjectFrame",
+        "nsSubDocumentFrame",
+    ]
+    return s in blacklisted
+
+
 def attlistToIDL(attlist):
     if len(attlist) == 0:
         return ''
@@ -102,23 +115,28 @@ class Builtin(object):
     kind = 'builtin'
     location = BuiltinLocation
 
-    def __init__(self, name, nativename, signed=False, maybeConst=False):
+    def __init__(self, name, nativename, rustname, signed=False, maybeConst=False):
         self.name = name
         self.nativename = nativename
+        self.rustname = rustname
         self.signed = signed
         self.maybeConst = maybeConst
 
     def isScriptable(self):
         return True
 
+    def isPointer(self):
+        """Check if this type is a pointer type - this will control how pointers act"""
+        return self.nativename.endswith('*')
+
     def nativeType(self, calltype, shared=False, const=False):
         if const:
             print >>sys.stderr, IDLError("[const] doesn't make sense on builtin types.", self.location, warning=True)
             const = 'const '
-        elif calltype == 'in' and self.nativename.endswith('*'):
+        elif calltype == 'in' and self.isPointer():
             const = 'const '
         elif shared:
-            if not self.nativename.endswith('*'):
+            if not self.isPointer():
                 raise IDLError("[shared] not applicable to non-pointer types.", self.location)
             const = 'const '
         else:
@@ -126,22 +144,32 @@ class Builtin(object):
         return "%s%s %s" % (const, self.nativename,
                             calltype != 'in' and '*' or '')
 
+    def rustType(self, calltype, shared=False, const=False):
+        # We want to rewrite any *mut pointers to *const pointers if constness
+        # was requested.
+        const = const or (calltype == 'in' and self.isPointer()) or shared
+        rustname = self.rustname
+        if const and self.isPointer():
+            rustname = self.rustname.replace("*mut", "*const")
+
+        return "%s%s" % (calltype != 'in' and '*mut ' or '', rustname)
+
 builtinNames = [
-    Builtin('boolean', 'bool'),
-    Builtin('void', 'void'),
-    Builtin('octet', 'uint8_t'),
-    Builtin('short', 'int16_t', True, True),
-    Builtin('long', 'int32_t', True, True),
-    Builtin('long long', 'int64_t', True, False),
-    Builtin('unsigned short', 'uint16_t', False, True),
-    Builtin('unsigned long', 'uint32_t', False, True),
-    Builtin('unsigned long long', 'uint64_t', False, False),
-    Builtin('float', 'float', True, False),
-    Builtin('double', 'double', True, False),
-    Builtin('char', 'char', True, False),
-    Builtin('string', 'char *', False, False),
-    Builtin('wchar', 'char16_t', False, False),
-    Builtin('wstring', 'char16_t *', False, False),
+    Builtin('boolean', 'bool', 'bool'),
+    Builtin('void', 'void', 'libc::c_void'),
+    Builtin('octet', 'uint8_t', 'libc::uint8_t'),
+    Builtin('short', 'int16_t', 'libc::int16_t', True, True),
+    Builtin('long', 'int32_t', 'libc::int32_t', True, True),
+    Builtin('long long', 'int64_t', 'libc::int64_t', True, False),
+    Builtin('unsigned short', 'uint16_t', 'libc::uint16_t', False, True),
+    Builtin('unsigned long', 'uint32_t', 'libc::uint32_t', False, True),
+    Builtin('unsigned long long', 'uint64_t', 'libc::uint64_t', False, False),
+    Builtin('float', 'float', 'libc::c_float', True, False),
+    Builtin('double', 'double', 'libc::c_double', True, False),
+    Builtin('char', 'char', 'libc::c_char', True, False),
+    Builtin('string', 'char *', '*const libc::c_char', False, False),
+    Builtin('wchar', 'char16_t', 'libc::int16_t', False, False),
+    Builtin('wstring', 'char16_t *', '*const libc::int16_t', False, False),
 ]
 
 builtinMap = {}
@@ -231,6 +259,15 @@ class NameMap(object):
             raise IDLError("Name '%s' not found", location)
 
 
+class RustNoncompat(Exception):
+    """Thie exception is raised when a particular type or function cannot be safely exposed to rust code"""
+    def __init__(self, reason):
+        self.reason = reason
+
+    def __str__(self):
+        return self.reason
+
+
 class IDLError(Exception):
     def __init__(self, message, location, warning=False):
         self.message = message
@@ -263,7 +300,7 @@ class Include(object):
                 continue
 
             self.IDL = parent.parser.parse(open(file).read(), filename=file)
-            self.IDL.resolve(parent.incdirs, parent.parser)
+            self.IDL.resolve(parent.incdirs, parent.parser, parent.webidlconfig)
             for type in self.IDL.getNames():
                 parent.setName(type)
             parent.deps.extend(self.IDL.deps)
@@ -295,10 +332,11 @@ class IDL(object):
     def __str__(self):
         return "".join([str(p) for p in self.productions])
 
-    def resolve(self, incdirs, parser):
+    def resolve(self, incdirs, parser, webidlconfig):
         self.namemap = NameMap()
         self.incdirs = incdirs
         self.parser = parser
+        self.webidlconfig = webidlconfig
         for p in self.productions:
             p.resolve(self)
 
@@ -355,6 +393,10 @@ class Typedef(object):
         return "%s %s" % (self.name,
                           calltype != 'in' and '*' or '')
 
+    def rustType(self, calltype):
+        return "%s%s" % (calltype != 'in' and '*mut ' or '',
+                         self.name)
+
     def __str__(self):
         return "typedef %s %s\n" % (self.type, self.name)
 
@@ -391,6 +433,12 @@ class Forward(object):
         return "%s %s" % (self.name,
                           calltype != 'in' and '* *' or '*')
 
+    def rustType(self, calltype):
+        if rustBlacklistedForward(self.name):
+            raise RustNoncompat("forward declaration %s is unsupported" % self.name)
+        return "%s*const %s" % (calltype != 'in' and '*mut ' or '',
+                                self.name)
+
     def __str__(self):
         return "forward-declared %s\n" % self.name
 
@@ -407,8 +455,22 @@ class Native(object):
         'utf8string': 'nsACString',
         'cstring': 'nsACString',
         'astring': 'nsAString',
-        'jsval': 'JS::Value'
-        }
+        'jsval': 'JS::Value',
+        'promise': '::mozilla::dom::Promise',
+    }
+
+    # Mappings from C++ native name types to rust native names. Types which
+    # aren't listed here are incompatible with rust code.
+    rust_nativenames = {
+        'void': "libc::c_void",
+        'char': "u8",
+        'char16_t': "u16",
+        'nsID': "nsID",
+        'nsIID': "nsIID",
+        'nsCID': "nsCID",
+        'nsAString': "::nsstring::nsAString",
+        'nsACString': "::nsstring::nsACString",
+    }
 
     def __init__(self, name, nativename, attlist, location):
         self.name = name
@@ -444,6 +506,9 @@ class Native(object):
         if self.specialtype is None:
             return False
 
+        if self.specialtype == 'promise':
+            return self.modifier == 'ptr'
+
         if self.specialtype == 'nsid':
             return self.modifier is not None
 
@@ -461,7 +526,7 @@ class Native(object):
                 raise IDLError("[shared] only applies to out parameters.")
             const = True
 
-        if self.specialtype is not None and calltype == 'in':
+        if self.specialtype not in [None, 'promise'] and calltype == 'in':
             const = True
 
         if self.specialtype == 'jsval':
@@ -477,8 +542,75 @@ class Native(object):
             m = calltype != 'in' and '*' or ''
         return "%s%s %s" % (const and 'const ' or '', self.nativename, m)
 
+    def rustType(self, calltype, const=False, shared=False):
+        if shared:
+            if calltype != 'out':
+                raise IDLError("[shared] only applies to out parameters.")
+            const = True
+
+        if self.specialtype is not None and calltype == 'in':
+            const = True
+
+        if self.nativename not in self.rust_nativenames:
+            raise RustNoncompat("native type %s is unsupported" % self.nativename)
+        name = self.rust_nativenames[self.nativename]
+
+        if self.isRef(calltype):
+            m = const and '&' or '&mut '
+        elif self.isPtr(calltype):
+            m = (const and '*const ' or '*mut ')
+            if self.modifier == 'ptr' and calltype != 'in':
+                m += '*mut '
+        else:
+            m = calltype != 'in' and '*mut ' or ''
+        return "%s%s" % (m, name)
+
     def __str__(self):
         return "native %s(%s)\n" % (self.name, self.nativename)
+
+
+class WebIDL(object):
+    kind = 'webidl'
+
+    def __init__(self, name, location):
+        self.name = name
+        self.location = location
+
+    def __eq__(self, other):
+        return other.kind == 'webidl' and self.name == other.name
+
+    def resolve(self, parent):
+        # XXX(nika): We don't handle _every_ kind of webidl object here (as that
+        # would be hard). For example, we don't support nsIDOM*-defaulting
+        # interfaces.
+        # TODO: More explicit compile-time checks?
+
+        assert parent.webidlconfig is not None, \
+            "WebIDL declarations require passing webidlconfig to resolve."
+
+        # Resolve our native name according to the WebIDL configs.
+        config = parent.webidlconfig.get(self.name, {})
+        self.native = config.get('nativeType')
+        if self.native is None:
+            self.native = "mozilla::dom::%s" % self.name
+        self.headerFile = config.get('headerFile')
+        if self.headerFile is None:
+            self.headerFile = self.native.replace('::', '/') + '.h'
+
+        parent.setName(self)
+
+    def isScriptable(self):
+        return True  # All DOM objects are script exposed.
+
+    def nativeType(self, calltype):
+        return "%s %s" % (self.native, calltype != 'in' and '* *' or '*')
+
+    def rustType(self, calltype):
+        # Just expose the type as a void* - we can't do any better.
+        return "%s*const libc::c_void" % (calltype != 'in' and '*mut ' or '')
+
+    def __str__(self):
+        return "webidl %s\n" % self.name
 
 
 class Interface(object):
@@ -493,10 +625,19 @@ class Interface(object):
         self.namemap = NameMap()
         self.doccomments = doccomments
         self.nativename = name
+        self.implicit_builtinclass = False
 
         for m in members:
             if not isinstance(m, CDATA):
                 self.namemap.set(m)
+
+            if m.kind == 'method' and m.notxpcom and name != 'nsISupports':
+                # An interface cannot be implemented by JS if it has a
+                # notxpcom method. Such a type is an "implicit builtinclass".
+                #
+                # XXX(nika): Why does nostdcall not imply builtinclass?
+                # It could screw up the shims as well...
+                self.implicit_builtinclass = True
 
     def __eq__(self, other):
         return self.name == other.name and self.location == other.location
@@ -534,6 +675,9 @@ class Interface(object):
             if self.attributes.scriptable and realbase.attributes.builtinclass and not self.attributes.builtinclass:
                 raise IDLError("interface '%s' is not builtinclass but derives from builtinclass '%s'" % (self.name, self.base), self.location)
 
+            if realbase.implicit_builtinclass:
+                self.implicit_builtinclass = True # Inherit implicit builtinclass from base
+
         for member in self.members:
             member.resolve(self)
 
@@ -554,6 +698,10 @@ class Interface(object):
         return "%s%s %s" % (const and 'const ' or '',
                             self.name,
                             calltype != 'in' and '* *' or '*')
+
+    def rustType(self, calltype):
+        return "%s*const %s" % (calltype != 'in' and '*mut ' or '',
+                                self.name)
 
     def __str__(self):
         l = ["interface %s\n" % self.name]
@@ -604,6 +752,8 @@ class InterfaceAttributes(object):
     function = False
     noscript = False
     main_process_scriptable_only = False
+    shim = None
+    shimfile = None
 
     def setuuid(self, value):
         self.uuid = value.lower()
@@ -623,6 +773,12 @@ class InterfaceAttributes(object):
     def setmain_process_scriptable_only(self):
         self.main_process_scriptable_only = True
 
+    def setshim(self, value):
+        self.shim = value
+
+    def setshimfile(self, value):
+        self.shimfile = value
+
     actions = {
         'uuid':       (True, setuuid),
         'scriptable': (False, setscriptable),
@@ -631,6 +787,8 @@ class InterfaceAttributes(object):
         'noscript':   (False, setnoscript),
         'object':     (False, lambda self: True),
         'main_process_scriptable_only': (False, setmain_process_scriptable_only),
+        'shim':    (True, setshim),
+        'shimfile': (True, setshimfile),
         }
 
     def __init__(self, attlist, location):
@@ -667,6 +825,10 @@ class InterfaceAttributes(object):
             l.append("\tfunction\n")
         if self.main_process_scriptable_only:
             l.append("\tmain_process_scriptable_only\n")
+        if self.shim:
+            l.append("\tshim: %s\n" % self.shim)
+        if self.shimfile:
+            l.append("\tshimfile: %s\n" % self.shimfile)
         return "".join(l)
 
 
@@ -778,8 +940,8 @@ class Attribute(object):
                 getBuiltinOrNativeTypeName(self.realtype) != '[domstring]'):
             raise IDLError("'Undefined' attribute can only be used on DOMString",
                            self.location)
-        if self.infallible and not self.realtype.kind == 'builtin':
-            raise IDLError('[infallible] only works on builtin types '
+        if self.infallible and not self.realtype.kind in ['builtin', 'interface', 'forward', 'webidl']:
+            raise IDLError('[infallible] only works on interfaces, domobjects, and builtin types '
                            '(numbers, booleans, and raw char types)',
                            self.location)
         if self.infallible and not iface.attributes.builtinclass:
@@ -1002,6 +1164,20 @@ class Param(object):
         except TypeError, e:
             raise IDLError("Unexpected parameter attribute", self.location)
 
+    def rustType(self):
+        kwargs = {}
+        if self.shared:
+            kwargs['shared'] = True
+        if self.const:
+            kwargs['const'] = True
+
+        try:
+            return self.realtype.rustType(self.paramtype, **kwargs)
+        except IDLError, e:
+            raise IDLError(e.message, self.location)
+        except TypeError, e:
+            raise IDLError("Unexpected parameter attribute", self.location)
+
     def toIDL(self):
         return "%s%s %s %s" % (paramAttlistToIDL(self.attlist),
                                self.paramtype,
@@ -1020,6 +1196,10 @@ class Array(object):
         return "%s%s*" % (const and 'const ' or '',
                           self.type.nativeType(calltype))
 
+    def rustType(self, calltype, const=False):
+        return "%s %s" % (const and '*const' or '*mut',
+                          self.type.rustType(calltype))
+
 
 class IDLParser(object):
     keywords = {
@@ -1033,6 +1213,7 @@ class IDLParser(object):
         'readonly': 'READONLY',
         'native': 'NATIVE',
         'typedef': 'TYPEDEF',
+        'webidl': 'WEBIDL',
         }
 
     tokens = [
@@ -1147,7 +1328,8 @@ class IDLParser(object):
     def p_productions_interface(self, p):
         """productions : interface productions
                        | typedef productions
-                       | native productions"""
+                       | native productions
+                       | webidl productions"""
         p[0] = list(p[2])
         p[0].insert(0, p[1])
 
@@ -1170,6 +1352,10 @@ class IDLParser(object):
         # this is a place marker: we switch the lexer into literal identifier
         # mode here, to slurp up everything until the closeparen
         self.lexer.begin('nativeid')
+
+    def p_webidl(self, p):
+        """webidl : WEBIDL IDENTIFIER ';'"""
+        p[0] = WebIDL(name=p[2], location=self.getLocation(p, 2))
 
     def p_anyident(self, p):
         """anyident : IDENTIFIER

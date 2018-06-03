@@ -7,16 +7,6 @@
 #ifndef vm_PIC_h
 #define vm_PIC_h
 
-#include "jsapi.h"
-#include "jscntxt.h"
-#include "jsfriendapi.h"
-#include "jsobj.h"
-
-#include "gc/Barrier.h"
-#include "gc/Heap.h"
-#include "gc/Marking.h"
-
-#include "js/Value.h"
 #include "vm/GlobalObject.h"
 
 namespace js {
@@ -240,7 +230,7 @@ struct ForOfPIC
         bool hasMatchingStub(ArrayObject* obj);
 
         // Reset the PIC and all info associated with it.
-        void reset(JSContext* cx);
+        void reset();
 
         // Erase the stub chain.
         void eraseChain();
@@ -252,7 +242,7 @@ struct ForOfPIC
     static NativeObject* createForOfPICObject(JSContext* cx, Handle<GlobalObject*> global);
 
     static inline Chain* fromJSObject(NativeObject* obj) {
-        MOZ_ASSERT(js::GetObjectClass(obj) == &ForOfPIC::class_);
+        MOZ_ASSERT(obj->getClass() == &ForOfPIC::class_);
         return (ForOfPIC::Chain*) obj->getPrivate();
     }
     static inline Chain* getOrCreate(JSContext* cx) {

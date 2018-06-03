@@ -54,6 +54,8 @@ public:
   nsresult SuspendForDiversion() override;
   nsresult SuspendMessageDiversion() override;
   nsresult ResumeMessageDiversion() override;
+  nsresult CancelDiversion() override;
+
 
   // Calls OnStartRequest for "DivertTo" listener, then notifies child channel
   // that it should divert OnDataAvailable and OnStopRequest calls to this
@@ -78,7 +80,8 @@ protected:
   bool DoAsyncOpen(const URIParams& aURI, const uint64_t& aStartPos,
                    const nsCString& aEntityID,
                    const OptionalIPCStream& aUploadStream,
-                   const OptionalLoadInfoArgs& aLoadInfoArgs);
+                   const OptionalLoadInfoArgs& aLoadInfoArgs,
+                   const uint32_t& aLoadFlags);
 
   // used to connect redirected-to channel in parent with just created
   // ChildChannel.  Used during HTTP->FTP redirects.
@@ -103,8 +106,7 @@ protected:
   virtual mozilla::ipc::IPCResult RecvDivertOnStopRequest(const nsresult& statusCode) override;
   virtual mozilla::ipc::IPCResult RecvDivertComplete() override;
 
-  nsresult SuspendChannel();
-  nsresult ResumeChannel();
+  nsresult ResumeChannelInternalIfPossible();
 
   virtual void ActorDestroy(ActorDestroyReason why) override;
 

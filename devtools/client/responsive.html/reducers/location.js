@@ -8,7 +8,7 @@ const { CHANGE_LOCATION } = require("../actions/index");
 
 const INITIAL_LOCATION = "about:blank";
 
-let reducers = {
+const reducers = {
 
   [CHANGE_LOCATION](_, action) {
     return action.location;
@@ -16,8 +16,8 @@ let reducers = {
 
 };
 
-module.exports = function (location = INITIAL_LOCATION, action) {
-  let reducer = reducers[action.type];
+module.exports = function(location = INITIAL_LOCATION, action) {
+  const reducer = reducers[action.type];
   if (!reducer) {
     return location;
   }

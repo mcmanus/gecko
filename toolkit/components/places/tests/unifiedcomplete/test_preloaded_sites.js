@@ -22,7 +22,7 @@ autocompleteObject.populatePreloadedSiteStorage([
 ]);
 
 async function assert_feature_works(condition) {
-  do_print("List Results do appear " + condition);
+  info("List Results do appear " + condition);
   await check_autocomplete({
     search: "ooo",
     matches: [
@@ -31,7 +31,7 @@ async function assert_feature_works(condition) {
     ],
   });
 
-  do_print("Autofill does appear " + condition);
+  info("Autofill does appear " + condition);
   await check_autocomplete({
     search: "gooo",
     autofilled: "gooogle.com/", // Will fail without trailing slash
@@ -40,13 +40,13 @@ async function assert_feature_works(condition) {
 }
 
 async function assert_feature_does_not_appear(condition) {
-  do_print("List Results don't appear " + condition);
+  info("List Results don't appear " + condition);
   await check_autocomplete({
     search: "ooo",
     matches: [],
   });
 
-  do_print("Autofill doesn't appear " + condition);
+  info("Autofill doesn't appear " + condition);
   // "search" is what you type,
   // "autofilled" is what you get in response in the url bar,
   // "completed" is what you get there when you hit enter.
@@ -83,7 +83,7 @@ add_task(async function test_sorting_against_bookmark() {
   Services.prefs.setBoolPref(PREF_FEATURE_ENABLED, true);
   Services.prefs.setIntPref(PREF_FEATURE_EXPIRE_DAYS, 14);
 
-  do_print("Preloaded Top Sites are placed lower than Bookmarks");
+  info("Preloaded Top Sites are placed lower than Bookmarks");
   await check_autocomplete({
     checkSorting: true,
     search: "ooo",
@@ -104,7 +104,7 @@ add_task(async function test_sorting_against_history() {
   Services.prefs.setBoolPref(PREF_FEATURE_ENABLED, true);
   Services.prefs.setIntPref(PREF_FEATURE_EXPIRE_DAYS, 14);
 
-  do_print("Preloaded Top Sites are placed lower than History entries");
+  info("Preloaded Top Sites are placed lower than History entries");
   await check_autocomplete({
     checkSorting: true,
     search: "ooo",
@@ -129,15 +129,15 @@ add_task(async function test_scheme_and_www() {
     ["https://www.bar.com/", "Tile"],
   ];
 
-  let titlesMap = new Map(sites)
+  let titlesMap = new Map(sites);
 
   autocompleteObject.populatePreloadedSiteStorage(sites);
 
   let tests =
   [
     // User typed,
-    // Inline autofill,
-    // Substitute after enter is pressed,
+    // Inline autofill (`autofilled`),
+    // Substitute after enter is pressed (`completed`),
     //   [List matches, with sorting]
     //   not tested if omitted
     //   !!! first one is always an autofill entry !!!
@@ -149,114 +149,110 @@ add_task(async function test_scheme_and_www() {
       []
     ],
 
-    [// "www." by itself doesn't match anything
+    [
     "www.",
-    "www.",
-    "www.",
-      []
+    "www.ooops-https-www.com/",
+    "https://www.ooops-https-www.com/",
+      [
+        ["www.ooops-https-www.com/", "https://www.ooops-https-www.com"],
+        "HTTP://www.ooops-HTTP-www.com/",
+        "https://www.bar.com/",
+      ]
     ],
 
-    [// Protocol with "www." by itself doesn't match anything
+    [
     "http://www.",
-    "http://www.",
-    "http://www.",
-      []
+    "http://www.ooops-http-www.com/",
+    "http://www.ooops-http-www.com/",
+      [
+        ["http://www.ooops-http-www.com/", "www.ooops-http-www.com"],
+      ]
     ],
 
-    [// ftp: - ignore
+    [
     "ftp://ooops",
     "ftp://ooops",
     "ftp://ooops",
       []
     ],
 
-    [// Edge case: no "www." in search string, autofill and list entries with "www."
+    [
     "ww",
     "www.ooops-https-www.com/",
-    "https://www.ooops-https-www.com/", // 2nd in list, but has priority as strict
+    "https://www.ooops-https-www.com/",
       [
-      ["https://www.ooops-https-www.com/", "https://www.ooops-https-www.com"],
-      "HTTP://www.ooops-HTTP-www.com/",
-      ["https://foo.com/", "Title with www", ["preloaded-top-site"]],
-      "https://www.bar.com/",
+        ["www.ooops-https-www.com/", "https://www.ooops-https-www.com"],
+        "HTTP://www.ooops-HTTP-www.com/",
+        ["https://foo.com/", "Title with www", ["preloaded-top-site"]],
+        "https://www.bar.com/",
       ]
     ],
 
-    [// Strict match, no "www."
+    [
     "ooops",
-    "ooops-https.com/",
-    "https://ooops-https.com/", // 2nd in list, but has priority as strict
-      [// List entries are not sorted (initial sorting preserved)
-       // except autofill entry is on top as always
-      ["https://ooops-https.com/", "https://ooops-https.com"],
-      "https://www.ooops-https-www.com/",
-      "HTTP://ooops-HTTP.com/",
-      "HTTP://www.ooops-HTTP-www.com/",
+    "ooops-https-www.com/",
+    "https://www.ooops-https-www.com/",
+      [
+        ["ooops-https-www.com/", "https://www.ooops-https-www.com"],
+        "https://ooops-https.com/",
+        "HTTP://ooops-HTTP.com/",
+        "HTTP://www.ooops-HTTP-www.com/",
       ]
     ],
 
-    [// Strict match with "www."
+    [
     "www.ooops",
     "www.ooops-https-www.com/",
     "https://www.ooops-https-www.com/",
-      [// Matches with "www." sorted on top
-      ["https://www.ooops-https-www.com/", "https://www.ooops-https-www.com"],
-      "HTTP://www.ooops-HTTP-www.com/",
-      "https://ooops-https.com/",
-      "HTTP://ooops-HTTP.com/",
+      [
+        ["www.ooops-https-www.com/", "https://www.ooops-https-www.com"],
+        "HTTP://www.ooops-HTTP-www.com/",
       ]
     ],
 
-    [// Loose match: search no "www.", result with "www."
+    [
     "ooops-https-www",
     "ooops-https-www.com/",
     "https://www.ooops-https-www.com/",
       [
-      ["https://www.ooops-https-www.com/", "https://www.ooops-https-www.com"],
+        ["ooops-https-www.com/", "https://www.ooops-https-www.com"],
       ]
     ],
 
-    [// Loose match: search "www.", no-www site gets "www."
+    [
     "www.ooops-https.",
-    "www.ooops-https.com/",
-    "https://www.ooops-https.com/",
-      [// Only autofill entry gets "www."
-      ["https://www.ooops-https.com/", "https://www.ooops-https.com"],
-      "https://ooops-https.com/", // List entry with preloaded top URL for match site
-      ]
+    "www.ooops-https.",
+    "www.ooops-https.",
+      []
     ],
 
-    [// Explicit protocol, no "www."
+    [
     "https://ooops",
-    "https://ooops-https.com/",
-    "https://ooops-https.com/",
+    "https://ooops-https-www.com/",
+    "https://www.ooops-https-www.com/",
       [
-      ["https://ooops-https.com/", "https://ooops-https.com"],
-      "https://www.ooops-https-www.com/",
+        ["https://ooops-https-www.com/", "https://www.ooops-https-www.com"],
+        "https://ooops-https.com/",
       ]
     ],
 
-    [// Explicit protocol, with "www."
+    [
     "https://www.ooops",
     "https://www.ooops-https-www.com/",
     "https://www.ooops-https-www.com/",
       [
-      ["https://www.ooops-https-www.com/", "https://www.ooops-https-www.com"],
-      "https://ooops-https.com/",
+        ["https://www.ooops-https-www.com/", "https://www.ooops-https-www.com"],
       ]
     ],
 
-    [// Explicit HTTP protocol, no-www site gets "www."
+    [
     "http://www.ooops-http.",
-    "http://www.ooops-http.com/",
-    "http://www.ooops-http.com/",
-      [
-      ["HTTP://www.ooops-HTTP.com/", "www.ooops-http.com"],
-      "HTTP://ooops-HTTP.com/",
-      ]
+    "http://www.ooops-http.",
+    "http://www.ooops-http.",
+      []
     ],
 
-    [// Wrong protocol
+    [
     "http://ooops-https",
     "http://ooops-https",
     "http://ooops-https",
@@ -267,8 +263,8 @@ add_task(async function test_scheme_and_www() {
   function toMatch(entry, index) {
     if (Array.isArray(entry)) {
       return {
-        uri: NetUtil.newURI(entry[0]),
-        title: entry[1],
+        value: entry[0],
+        comment: entry[1],
         style: entry[2] || ["autofill", "heuristic", "preloaded-top-site"],
       };
     }
@@ -281,7 +277,7 @@ add_task(async function test_scheme_and_www() {
 
   for (let test of tests) {
     let matches = test[3] ? test[3].map(toMatch) : null;
-    do_print("User types: " + test[0]);
+    info("User types: " + test[0]);
     await check_autocomplete({
       checkSorting: true,
       search: test[0],
@@ -297,24 +293,44 @@ add_task(async function test_scheme_and_www() {
 add_task(async function test_data_file() {
   let response = await fetch("chrome://global/content/unifiedcomplete-top-urls.json");
 
-  do_print("Source file is supplied and fetched OK");
+  info("Source file is supplied and fetched OK");
   Assert.ok(response.ok);
 
-  do_print("The JSON is parsed");
+  info("The JSON is parsed");
   let sites = await response.json();
 
-  do_print("Storage is populated");
+  info("Storage is populated");
   autocompleteObject.populatePreloadedSiteStorage(sites);
 
   let lastSite = sites.pop();
   let uri = NetUtil.newURI(lastSite[0]);
 
-  do_print("Storage is populated from JSON correctly");
+  info("Storage is populated from JSON correctly");
   await check_autocomplete({
     search: uri.host,
     autofilled: uri.host + "/",
     completed: uri.spec,
   });
 
+  await cleanup();
+});
+
+add_task(async function test_partial_scheme() {
+  // "tt" should not result in a match of "ttps://whatever.com/".
+  autocompleteObject.populatePreloadedSiteStorage([
+    ["http://www.ttt.com/", "Test"],
+  ]);
+  await check_autocomplete({
+    search: "tt",
+    autofilled: "ttt.com/",
+    completed: "http://www.ttt.com/",
+    matches: [
+      {
+        value: "ttt.com/",
+        comment: "www.ttt.com",
+        style: ["autofill", "heuristic", "preloaded-top-site"],
+      },
+    ],
+  });
   await cleanup();
 });

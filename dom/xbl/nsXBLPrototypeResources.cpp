@@ -4,7 +4,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsIStyleRuleProcessor.h"
 #include "nsIDocument.h"
 #include "nsIContent.h"
 #include "nsIServiceManager.h"
@@ -15,10 +14,10 @@
 #include "mozilla/css/Loader.h"
 #include "nsIURI.h"
 #include "nsLayoutCID.h"
-#include "nsCSSRuleProcessor.h"
-#include "nsStyleSet.h"
 #include "mozilla/dom/URL.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/ServoBindings.h"
+#include "mozilla/ServoStyleRuleMap.h"
 #include "mozilla/StyleSheet.h"
 #include "mozilla/StyleSheetInlines.h"
 
@@ -37,9 +36,6 @@ nsXBLPrototypeResources::~nsXBLPrototypeResources()
   MOZ_COUNT_DTOR(nsXBLPrototypeResources);
   if (mLoader) {
     mLoader->mResources = nullptr;
-  }
-  if (mServoStyleSet) {
-    mServoStyleSet->Shutdown();
   }
 }
 
@@ -111,7 +107,11 @@ nsXBLPrototypeResources::FlushSkinSheets()
     mStyleSheetList.AppendElement(newSheet);
   }
 
-  GatherRuleProcessor();
+  // There may be no shell during unlink.
+  if (auto* shell = doc->GetShell()) {
+    MOZ_ASSERT(shell->GetPresContext());
+    ComputeServoStyles(*shell->StyleSet());
+  }
 
   return NS_OK;
 }
@@ -130,7 +130,6 @@ nsXBLPrototypeResources::Traverse(nsCycleCollectionTraversalCallback &cb)
   NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "proto mResources mLoader");
   cb.NoteXPCOMChild(mLoader);
 
-  CycleCollectionNoteChild(cb, mRuleProcessor.get(), "mRuleProcessor");
   ImplCycleCollectionTraverse(cb, mStyleSheetList, "mStyleSheetList");
 }
 
@@ -138,7 +137,6 @@ void
 nsXBLPrototypeResources::Unlink()
 {
   mStyleSheetList.Clear();
-  mRuleProcessor = nullptr;
 }
 
 void
@@ -147,34 +145,37 @@ nsXBLPrototypeResources::ClearLoader()
   mLoader = nullptr;
 }
 
+
 void
-nsXBLPrototypeResources::GatherRuleProcessor()
+nsXBLPrototypeResources::SyncServoStyles()
 {
-  nsTArray<RefPtr<CSSStyleSheet>> sheets(mStyleSheetList.Length());
-  for (StyleSheet* sheet : mStyleSheetList) {
-    MOZ_ASSERT(sheet->IsGecko(),
-               "GatherRuleProcessor must only be called for "
-               "nsXBLPrototypeResources objects with Gecko-flavored style "
-               "backends");
-    sheets.AppendElement(sheet->AsGecko());
+  mStyleRuleMap.reset(nullptr);
+  mServoStyles.reset(Servo_AuthorStyles_Create());
+  for (auto& sheet : mStyleSheetList) {
+    Servo_AuthorStyles_AppendStyleSheet(mServoStyles.get(), sheet);
   }
-  mRuleProcessor = new nsCSSRuleProcessor(Move(sheets),
-                                          SheetType::Doc,
-                                          nullptr,
-                                          mRuleProcessor);
 }
 
 void
-nsXBLPrototypeResources::ComputeServoStyleSet(nsPresContext* aPresContext)
+nsXBLPrototypeResources::ComputeServoStyles(const ServoStyleSet& aMasterStyleSet)
 {
-  nsTArray<RefPtr<ServoStyleSheet>> sheets(mStyleSheetList.Length());
-  for (StyleSheet* sheet : mStyleSheetList) {
-    MOZ_ASSERT(sheet->IsServo(),
-               "This should only be called with Servo-flavored style backend!");
-    sheets.AppendElement(sheet->AsServo());
+  SyncServoStyles();
+  Servo_AuthorStyles_Flush(mServoStyles.get(), aMasterStyleSet.RawSet());
+}
+
+ServoStyleRuleMap*
+nsXBLPrototypeResources::GetServoStyleRuleMap()
+{
+  if (!HasStyleSheets() || !mServoStyles) {
+    return nullptr;
   }
 
-  mServoStyleSet = ServoStyleSet::CreateXBLServoStyleSet(aPresContext, sheets);
+  if (!mStyleRuleMap) {
+    mStyleRuleMap = MakeUnique<ServoStyleRuleMap>();
+  }
+
+  mStyleRuleMap->EnsureTable(*this);
+  return mStyleRuleMap.get();
 }
 
 void
@@ -195,27 +196,33 @@ nsXBLPrototypeResources::InsertStyleSheetAt(size_t aIndex, StyleSheet* aSheet)
   mStyleSheetList.InsertElementAt(aIndex, aSheet);
 }
 
-StyleSheet*
-nsXBLPrototypeResources::StyleSheetAt(size_t aIndex) const
-{
-  return mStyleSheetList[aIndex];
-}
-
-size_t
-nsXBLPrototypeResources::SheetCount() const
-{
-  return mStyleSheetList.Length();
-}
-
-bool
-nsXBLPrototypeResources::HasStyleSheets() const
-{
-  return !mStyleSheetList.IsEmpty();
-}
-
 void
 nsXBLPrototypeResources::AppendStyleSheetsTo(
                                       nsTArray<StyleSheet*>& aResult) const
 {
   aResult.AppendElements(mStyleSheetList);
+}
+
+MOZ_DEFINE_MALLOC_SIZE_OF(ServoAuthorStylesMallocSizeOf)
+MOZ_DEFINE_MALLOC_ENCLOSING_SIZE_OF(ServoAuthorStylesMallocEnclosingSizeOf)
+
+size_t
+nsXBLPrototypeResources::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
+{
+  size_t n = aMallocSizeOf(this);
+  n += mStyleSheetList.ShallowSizeOfExcludingThis(aMallocSizeOf);
+  for (const auto& sheet : mStyleSheetList) {
+    n += sheet->SizeOfIncludingThis(aMallocSizeOf);
+  }
+  n += mServoStyles ? Servo_AuthorStyles_SizeOfIncludingThis(
+      ServoAuthorStylesMallocSizeOf,
+      ServoAuthorStylesMallocEnclosingSizeOf,
+      mServoStyles.get()) : 0;
+  n += mStyleRuleMap ? mStyleRuleMap->SizeOfIncludingThis(aMallocSizeOf) : 0;
+
+  // Measurement of the following members may be added later if DMD finds it
+  // is worthwhile:
+  // - mLoader
+
+  return n;
 }

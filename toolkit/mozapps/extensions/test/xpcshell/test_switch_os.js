@@ -2,7 +2,7 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
-Components.utils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
 
 const ID = "bootstrap1@tests.mozilla.org";
 
@@ -14,22 +14,22 @@ profileDir.append("extensions");
 createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "1.9.2");
 
 add_task(async function() {
-  startupManager();
+  await promiseStartupManager();
 
   await promiseInstallFile(do_get_addon("test_bootstrap1_1"));
 
   let addon = await promiseAddonByID(ID);
-  do_check_neq(addon, null);
+  Assert.notEqual(addon, null);
 
   BootstrapMonitor.checkAddonStarted(ID);
-  do_check_false(addon.userDisabled);
-  do_check_true(addon.isActive);
+  Assert.ok(!addon.userDisabled);
+  Assert.ok(addon.isActive);
 
   await promiseShutdownManager();
 
   BootstrapMonitor.checkAddonNotStarted(ID);
 
-  let jData = loadJSON(gExtensionsJSON);
+  let jData = await loadJSON(gExtensionsJSON.path);
 
   for (let addonInstance of jData.addons) {
     if (addonInstance.id == ID) {
@@ -38,14 +38,14 @@ add_task(async function() {
     }
   }
 
-  saveJSON(jData, gExtensionsJSON);
+  await saveJSON(jData, gExtensionsJSON.path);
 
-  startupManager();
+  await promiseStartupManager();
 
   addon = await promiseAddonByID(ID);
-  do_check_neq(addon, null);
+  Assert.notEqual(addon, null);
 
   BootstrapMonitor.checkAddonStarted(ID);
-  do_check_false(addon.userDisabled);
-  do_check_true(addon.isActive);
+  Assert.ok(!addon.userDisabled);
+  Assert.ok(addon.isActive);
 });

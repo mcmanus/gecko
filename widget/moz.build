@@ -38,8 +38,6 @@ toolkit = CONFIG['MOZ_WIDGET_TOOLKIT']
 
 if toolkit in ('cocoa', 'android', 'uikit'):
     DIRS += [toolkit]
-if toolkit in ('android', 'cocoa', 'gtk2', 'gtk3'):
-    EXPORTS += ['nsIPrintDialogService.h']
 
 if toolkit == 'windows':
     DIRS += ['windows']
@@ -61,6 +59,7 @@ if toolkit == 'windows':
 elif toolkit == 'cocoa':
     XPIDL_SOURCES += [
         'nsIMacDockSupport.idl',
+        'nsIMacSharingService.idl',
         'nsIMacWebAppUtils.idl',
         'nsIStandaloneNativeMenu.idl',
         'nsISystemStatusBar.idl',
@@ -86,13 +85,16 @@ if 'gtk' in CONFIG['MOZ_WIDGET_TOOLKIT']:
     if CONFIG['MOZ_X11']:
         DIRS += ['gtkxtbin']
 
+    XPIDL_SOURCES += [
+        'nsIGtkTaskbarProgress.idl',
+        'nsITaskbarProgress.idl',
+    ]
+
 XPIDL_SOURCES += [
     'nsIAppShell.idl',
     'nsIBaseWindow.idl',
     'nsIBidiKeyboard.idl',
     'nsIClipboard.idl',
-    'nsIClipboardDragDropHookList.idl',
-    'nsIClipboardDragDropHooks.idl',
     'nsIClipboardHelper.idl',
     'nsIClipboardOwner.idl',
     'nsIColorPicker.idl',
@@ -127,6 +129,7 @@ EXPORTS += [
     'nsIDeviceContextSpec.h',
     'nsIKeyEventInPluginCallback.h',
     'nsIPluginWidget.h',
+    'nsIPrintDialogService.h',
     'nsIRollupListener.h',
     'nsIWidget.h',
     'nsIWidgetListener.h',
@@ -174,7 +177,6 @@ UNIFIED_SOURCES += [
     'GfxDriverInfo.cpp',
     'GfxInfoBase.cpp',
     'GfxInfoCollector.cpp',
-    'GfxInfoWebGL.cpp',
     'InProcessCompositorWidget.cpp',
     'InputData.cpp',
     'nsAutoRollup.cpp',
@@ -191,6 +193,7 @@ UNIFIED_SOURCES += [
     'nsIWidgetListener.cpp',
     'nsPrimitiveHelpers.cpp',
     'nsPrintSettingsImpl.cpp',
+    'nsSoundProxy.cpp',
     'nsTransferable.cpp',
     'nsXPLookAndFeel.cpp',
     'PuppetBidiKeyboard.cpp',
@@ -215,12 +218,12 @@ if CONFIG['OS_ARCH'] == 'Linux':
 if CONFIG['MOZ_XUL'] and CONFIG['NS_PRINTING']:
     EXPORTS += [
         'nsDeviceContextSpecProxy.h',
-        'nsPrintOptionsImpl.h',
+        'nsPrintSettingsService.h',
     ]
     UNIFIED_SOURCES += [
         'nsDeviceContextSpecProxy.cpp',
-        'nsPrintOptionsImpl.cpp',
         'nsPrintSession.cpp',
+        'nsPrintSettingsService.cpp',
     ]
 
 # nsBaseWidget.cpp needs to be built separately because of name clashes in the OS X headers
@@ -260,13 +263,13 @@ if toolkit in ('cocoa', 'windows'):
         'nsBaseClipboard.cpp',
     ]
 
-if toolkit in {'gtk2', 'gtk3', 'cocoa', 'windows',
+if toolkit in {'gtk3', 'cocoa', 'windows',
                'android', 'uikit'}:
     UNIFIED_SOURCES += [
         'nsBaseFilePicker.cpp',
     ]
 
-if toolkit in ('gtk2', 'gtk3', 'windows', 'cocoa', 'android'):
+if toolkit in ('gtk3', 'windows', 'cocoa', 'android'):
     UNIFIED_SOURCES += [
         'nsNativeTheme.cpp',
     ]
@@ -312,8 +315,7 @@ else:
     ]
 
 widget_dir = toolkit
-if widget_dir in ('gtk3', 'gtk2'):
-    # gtk3 shares includes with gtk2
+if widget_dir == 'gtk3':
     widget_dir = 'gtk'
 
 LOCAL_INCLUDES += [

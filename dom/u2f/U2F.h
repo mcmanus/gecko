@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,16 +12,18 @@
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/Nullable.h"
 #include "mozilla/dom/U2FBinding.h"
+#include "mozilla/dom/WebAuthnManagerBase.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/MozPromise.h"
 #include "nsProxyRelease.h"
 #include "nsWrapperCache.h"
 #include "U2FAuthenticator.h"
 
-class nsISerialEventTarget;
-
 namespace mozilla {
 namespace dom {
+
+class WebAuthnMakeCredentialResult;
+class WebAuthnGetAssertionResult;
 
 class U2FRegisterCallback;
 class U2FSignCallback;
@@ -30,15 +32,61 @@ class U2FSignCallback;
 struct RegisterRequest;
 struct RegisteredKey;
 
-// The U2F Class is used by the JS engine to initiate U2F operations.
-class U2F final : public nsISupports
+class U2FTransaction
+{
+  typedef Variant<nsMainThreadPtrHandle<U2FRegisterCallback>,
+                  nsMainThreadPtrHandle<U2FSignCallback>> U2FCallback;
+
+public:
+  explicit U2FTransaction(const U2FCallback&& aCallback)
+    : mCallback(std::move(aCallback))
+    , mId(NextId())
+  {
+    MOZ_ASSERT(mId > 0);
+  }
+
+  bool HasRegisterCallback() {
+    return mCallback.is<nsMainThreadPtrHandle<U2FRegisterCallback>>();
+  }
+
+  auto& GetRegisterCallback() {
+    return mCallback.as<nsMainThreadPtrHandle<U2FRegisterCallback>>();
+  }
+
+  bool HasSignCallback() {
+    return mCallback.is<nsMainThreadPtrHandle<U2FSignCallback>>();
+  }
+
+  auto& GetSignCallback() {
+    return mCallback.as<nsMainThreadPtrHandle<U2FSignCallback>>();
+  }
+
+  // The callback passed to the API.
+  U2FCallback mCallback;
+
+  // Unique transaction id.
+  uint64_t mId;
+
+private:
+  // Generates a unique id for new transactions. This doesn't have to be unique
+  // forever, it's sufficient to differentiate between temporally close
+  // transactions, where messages can intersect. Can overflow.
+  static uint64_t NextId() {
+    static uint64_t id = 0;
+    return ++id;
+  }
+};
+
+class U2F final : public WebAuthnManagerBase
                 , public nsWrapperCache
 {
 public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(U2F)
 
-  explicit U2F(nsPIDOMWindowInner* aParent);
+  explicit U2F(nsPIDOMWindowInner* aParent)
+    : WebAuthnManagerBase(aParent)
+  { }
 
   nsPIDOMWindowInner*
   GetParentObject() const
@@ -68,18 +116,40 @@ public:
        const Optional<Nullable<int32_t>>& opt_aTimeoutSeconds,
        ErrorResult& aRv);
 
-private:
+  // WebAuthnManagerBase
+
   void
-  Cancel();
+  FinishMakeCredential(const uint64_t& aTransactionId,
+                       const WebAuthnMakeCredentialResult& aResult) override;
+
+  void
+  FinishGetAssertion(const uint64_t& aTransactionId,
+                     const WebAuthnGetAssertionResult& aResult) override;
+
+  void
+  RequestAborted(const uint64_t& aTransactionId,
+                 const nsresult& aError) override;
+
+protected:
+  // Cancels the current transaction (by sending a Cancel message to the
+  // parent) and rejects it by calling RejectTransaction().
+  void CancelTransaction(const nsresult& aError) override;
+
+private:
+  ~U2F();
+
+  template<typename T, typename C>
+  void ExecuteCallback(T& aResp, nsMainThreadPtrHandle<C>& aCb);
+
+  // Clears all information we have about the current transaction.
+  void ClearTransaction();
+  // Rejects the current transaction and clears it.
+  void RejectTransaction(const nsresult& aError);
 
   nsString mOrigin;
-  nsCOMPtr<nsPIDOMWindowInner> mParent;
-  nsCOMPtr<nsISerialEventTarget> mEventTarget;
-  Maybe<nsMainThreadPtrHandle<U2FRegisterCallback>> mRegisterCallback;
-  Maybe<nsMainThreadPtrHandle<U2FSignCallback>> mSignCallback;
-  MozPromiseRequestHolder<U2FPromise> mPromiseHolder;
 
-  ~U2F();
+  // The current transaction, if any.
+  Maybe<U2FTransaction> mTransaction;
 };
 
 } // namespace dom

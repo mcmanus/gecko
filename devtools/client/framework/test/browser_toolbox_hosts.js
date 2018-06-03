@@ -11,129 +11,129 @@ var toolbox, target;
 
 const URL = "data:text/html;charset=utf8,test for opening toolbox in different hosts";
 
-add_task(function* runTest() {
+add_task(async function runTest() {
   info("Create a test tab and open the toolbox");
-  let tab = yield addTab(URL);
+  const tab = await addTab(URL);
   target = TargetFactory.forTab(tab);
-  toolbox = yield gDevTools.showToolbox(target, "webconsole");
+  toolbox = await gDevTools.showToolbox(target, "webconsole");
 
-  yield testBottomHost();
-  yield testSidebarHost();
-  yield testWindowHost();
-  yield testToolSelect();
-  yield testDestroy();
-  yield testRememberHost();
-  yield testPreviousHost();
+  await testBottomHost();
+  await testSidebarHost();
+  await testWindowHost();
+  await testToolSelect();
+  await testDestroy();
+  await testRememberHost();
+  await testPreviousHost();
 
-  yield toolbox.destroy();
+  await toolbox.destroy();
 
   toolbox = target = null;
   gBrowser.removeCurrentTab();
 });
 
-function* testBottomHost() {
+function testBottomHost() {
   checkHostType(toolbox, BOTTOM);
 
   // test UI presence
-  let nbox = gBrowser.getNotificationBox();
-  let iframe = document.getAnonymousElementByAttribute(nbox, "class", "devtools-toolbox-bottom-iframe");
+  const nbox = gBrowser.getNotificationBox();
+  const iframe = document.getAnonymousElementByAttribute(nbox, "class", "devtools-toolbox-bottom-iframe");
   ok(iframe, "toolbox bottom iframe exists");
 
   checkToolboxLoaded(iframe);
 }
 
-function* testSidebarHost() {
-  yield toolbox.switchHost(SIDE);
+async function testSidebarHost() {
+  await toolbox.switchHost(SIDE);
   checkHostType(toolbox, SIDE);
 
   // test UI presence
-  let nbox = gBrowser.getNotificationBox();
-  let bottom = document.getAnonymousElementByAttribute(nbox, "class", "devtools-toolbox-bottom-iframe");
+  const nbox = gBrowser.getNotificationBox();
+  const bottom = document.getAnonymousElementByAttribute(nbox, "class", "devtools-toolbox-bottom-iframe");
   ok(!bottom, "toolbox bottom iframe doesn't exist");
 
-  let iframe = document.getAnonymousElementByAttribute(nbox, "class", "devtools-toolbox-side-iframe");
+  const iframe = document.getAnonymousElementByAttribute(nbox, "class", "devtools-toolbox-side-iframe");
   ok(iframe, "toolbox side iframe exists");
 
   checkToolboxLoaded(iframe);
 }
 
-function* testWindowHost() {
-  yield toolbox.switchHost(WINDOW);
+async function testWindowHost() {
+  await toolbox.switchHost(WINDOW);
   checkHostType(toolbox, WINDOW);
 
-  let nbox = gBrowser.getNotificationBox();
-  let sidebar = document.getAnonymousElementByAttribute(nbox, "class", "devtools-toolbox-side-iframe");
+  const nbox = gBrowser.getNotificationBox();
+  const sidebar = document.getAnonymousElementByAttribute(nbox, "class", "devtools-toolbox-side-iframe");
   ok(!sidebar, "toolbox sidebar iframe doesn't exist");
 
-  let win = Services.wm.getMostRecentWindow("devtools:toolbox");
+  const win = Services.wm.getMostRecentWindow("devtools:toolbox");
   ok(win, "toolbox separate window exists");
 
-  let iframe = win.document.getElementById("toolbox-iframe");
+  const iframe = win.document.getElementById("toolbox-iframe");
   checkToolboxLoaded(iframe);
 }
 
-function* testToolSelect() {
+async function testToolSelect() {
   // make sure we can load a tool after switching hosts
-  yield toolbox.selectTool("inspector");
+  await toolbox.selectTool("inspector");
 }
 
-function* testDestroy() {
-  yield toolbox.destroy();
+async function testDestroy() {
+  await toolbox.destroy();
   target = TargetFactory.forTab(gBrowser.selectedTab);
-  toolbox = yield gDevTools.showToolbox(target);
+  toolbox = await gDevTools.showToolbox(target);
 }
 
-function* testRememberHost() {
+function testRememberHost() {
   // last host was the window - make sure it's the same when re-opening
   is(toolbox.hostType, WINDOW, "host remembered");
 
-  let win = Services.wm.getMostRecentWindow("devtools:toolbox");
+  const win = Services.wm.getMostRecentWindow("devtools:toolbox");
   ok(win, "toolbox separate window exists");
 }
 
-function* testPreviousHost() {
+async function testPreviousHost() {
   // last host was the window - make sure it's the same when re-opening
   is(toolbox.hostType, WINDOW, "host remembered");
 
   info("Switching to side");
-  yield toolbox.switchHost(SIDE);
+  await toolbox.switchHost(SIDE);
   checkHostType(toolbox, SIDE, WINDOW);
 
   info("Switching to bottom");
-  yield toolbox.switchHost(BOTTOM);
+  await toolbox.switchHost(BOTTOM);
   checkHostType(toolbox, BOTTOM, SIDE);
 
   info("Switching from bottom to side");
-  yield toolbox.switchToPreviousHost();
+  await toolbox.switchToPreviousHost();
   checkHostType(toolbox, SIDE, BOTTOM);
 
   info("Switching from side to bottom");
-  yield toolbox.switchToPreviousHost();
+  await toolbox.switchToPreviousHost();
   checkHostType(toolbox, BOTTOM, SIDE);
 
   info("Switching to window");
-  yield toolbox.switchHost(WINDOW);
+  await toolbox.switchHost(WINDOW);
   checkHostType(toolbox, WINDOW, BOTTOM);
 
   info("Switching from window to bottom");
-  yield toolbox.switchToPreviousHost();
+  await toolbox.switchToPreviousHost();
   checkHostType(toolbox, BOTTOM, WINDOW);
 
   info("Forcing the previous host to match the current (bottom)");
   Services.prefs.setCharPref("devtools.toolbox.previousHost", BOTTOM);
 
   info("Switching from bottom to side (since previous=current=bottom");
-  yield toolbox.switchToPreviousHost();
+  await toolbox.switchToPreviousHost();
   checkHostType(toolbox, SIDE, BOTTOM);
 
   info("Forcing the previous host to match the current (side)");
   Services.prefs.setCharPref("devtools.toolbox.previousHost", SIDE);
   info("Switching from side to bottom (since previous=current=side");
-  yield toolbox.switchToPreviousHost();
+  await toolbox.switchToPreviousHost();
   checkHostType(toolbox, BOTTOM, SIDE);
 }
 
 function checkToolboxLoaded(iframe) {
-  let tabs = iframe.contentDocument.querySelector(".toolbox-tabs");
+  const tabs = iframe.contentDocument.querySelector(".toolbox-tabs");
   ok(tabs, "toolbox UI has been loaded into iframe");
 }

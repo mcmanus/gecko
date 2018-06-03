@@ -12,13 +12,6 @@ const { EventEmitter } = require("devtools-modules");
 const { Services: { appinfo, pref } } = require("devtools-modules");
 const { bootstrap } = require("devtools-launchpad");
 
-try {
-  const Perf = require("react-addons-perf");
-  window.Perf = Perf;
-} catch (e) {
-  // Perf addon is only available in development builds
-}
-
 EventEmitter.decorate(window);
 
 require("../../themes/widgets.css");
@@ -28,7 +21,7 @@ require("../../themes/light-theme.css");
 require("../../shared/components/reps/reps.css");
 require("../../shared/components/tabs/Tabs.css");
 require("../../shared/components/tabs/TabBar.css");
-require("../../netmonitor/src/assets/styles/netmonitor.css");
+require("../../netmonitor/src/assets/styles/httpi.css");
 
 pref("devtools.debugger.remote-timeout", 10000);
 pref("devtools.hud.loglimit", 10000);
@@ -44,14 +37,14 @@ pref("devtools.webconsole.ui.filterbar", false);
 pref("devtools.webconsole.inputHistoryCount", 50);
 pref("devtools.webconsole.persistlog", false);
 pref("devtools.webconsole.timestampMessages", false);
-pref("devtools.webconsole.autoMultiline", true);
+pref("devtools.webconsole.sidebarToggle", true);
 
-const NewConsoleOutputWrapper = require("../new-console-output/new-console-output-wrapper");
-const NewWebConsoleFrame = require("../new-webconsole").NewWebConsoleFrame;
+const WebConsoleOutputWrapper = require("../webconsole-output-wrapper");
+const WebConsoleFrame = require("../webconsole-frame").WebConsoleFrame;
 
 // Copied from netmonitor/index.js:
 window.addEventListener("DOMContentLoaded", () => {
-  for (let link of document.head.querySelectorAll("link")) {
+  for (const link of document.head.querySelectorAll("link")) {
     link.href = link.href.replace(/(resource|chrome)\:\/\//, "/");
   }
 
@@ -87,18 +80,18 @@ function onConnect(connection) {
     getInspectorSelection: () => { },
     target: connection.tabConnection.tabTarget,
     _browserConsole: false,
-    NewConsoleOutputWrapper,
+    WebConsoleOutputWrapper,
   };
-  consoleFrame = new NewWebConsoleFrame(owner);
-  consoleFrame.init().then(function () {
-    console.log("NewWebConsoleFrame initialized");
+  consoleFrame = new WebConsoleFrame(owner);
+  consoleFrame.init().then(function() {
+    console.log("WebConsoleFrame initialized");
   });
 }
 
 // This is just a hack until the local dev environment includes jsterm
-window.evaluateJS = function (input) {
-  consoleFrame.webConsoleClient.evaluateJSAsync(`${input}`, function (r) {
-    consoleFrame.newConsoleOutput.dispatchMessageAdd(r);
+window.evaluateJS = function(input) {
+  consoleFrame.webConsoleClient.evaluateJSAsync(`${input}`, function(r) {
+    consoleFrame.consoleOutput.dispatchMessageAdd(r);
   }, {});
 };
 

@@ -8,14 +8,8 @@ with Files('**'):
     BUG_COMPONENT = ('Firefox for Android', 'Build Config & IDE Support')
     SCHEDULES.exclusive = ['android']
 
-with Files('bouncer/**'):
-    BUG_COMPONENT = ('Firefox for Android', 'Distributions')
-
 with Files('branding/**'):
     BUG_COMPONENT = ('Firefox for Android', 'General')
-
-with Files('build/**'):
-    BUG_COMPONENT = ('Firefox for Android', 'Build Config & IDE Support')
 
 with Files('config/**'):
     BUG_COMPONENT = ('Firefox for Android', 'Build Config & IDE Support')
@@ -38,9 +32,6 @@ with Files('geckoview_example/**'):
 with Files('gradle/**'):
     BUG_COMPONENT = ('Firefox for Android', 'Build Config & IDE Support')
 
-with Files('search/**'):
-    BUG_COMPONENT = ('Firefox for Android', 'Search Activity')
-
 with Files('services/**'):
     BUG_COMPONENT = ('Android Background Services', 'Android Sync')
 
@@ -57,9 +48,6 @@ DIRS += [
     'locales',
 ]
 
-if CONFIG['MOZ_ANDROID_MLS_STUMBLER']:
-    DIRS += ['stumbler']
-
 DIRS += [
     'base',
     'chrome',
@@ -72,11 +60,11 @@ DIRS += [
     'fonts',
 ]
 
-if CONFIG['MOZ_ANDROID_PACKAGE_INSTALL_BOUNCER']:
-    DIRS += ['bouncer'] # No ordering implied with respect to base.
-
 TEST_DIRS += [
     'tests',
 ]
 
 SPHINX_TREES['fennec'] = 'docs'
+
+with Files('docs/**'):
+    SCHEDULES.exclusive = ['docs']

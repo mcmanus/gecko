@@ -7,15 +7,14 @@
 #ifndef vm_EnvironmentObject_h
 #define vm_EnvironmentObject_h
 
-#include "jscntxt.h"
-#include "jsobj.h"
-#include "jsweakmap.h"
-
 #include "builtin/ModuleObject.h"
 #include "frontend/NameAnalysisTypes.h"
 #include "gc/Barrier.h"
+#include "gc/WeakMap.h"
 #include "js/GCHashTable.h"
 #include "vm/ArgumentsObject.h"
+#include "vm/JSContext.h"
+#include "vm/JSObject.h"
 #include "vm/ProxyObject.h"
 #include "vm/Scope.h"
 
@@ -179,33 +178,51 @@ EnvironmentCoordinateFunctionScript(JSScript* script, jsbytecode* pc);
  *
  * A. Component loading
  *
- * Components may be loaded in "reuse loader global" mode, where to save on
- * memory, all JSMs and JS-implemented XPCOM modules are loaded into a single
- * global. Each individual JSMs are compiled as functions with their own
- * FakeBackstagePass. They have the following env chain:
+ * Components may be loaded in a shared global mode where most JSMs share a
+ * single global in order to save on memory and avoid CCWs. To support this, a
+ * NonSyntacticVariablesObject is used for each JSM to provide a basic form of
+ * isolation. They have the following env chain:
  *
  *   BackstagePass global
  *       |
- *   Global lexical scope
+ *   LexicalEnvironmentObject[this=global]
  *       |
- *   WithEnvironmentObject wrapping FakeBackstagePass
+ *   NonSyntacticVariablesObject
  *       |
- *   LexicalEnvironmentObject
+ *   LexicalEnvironmentObject[this=nsvo]
  *
- * B. Subscript loading
+ * B.1 Subscript loading
  *
- * Subscripts may be loaded into a target object. They have the following
- * env chain:
+ * Subscripts may be loaded into a target object and it's associated global.
+ * They have the following env chain:
  *
- *   Loader global
+ *   Target object's global
  *       |
- *   Global lexical scope
+ *   LexicalEnvironmentObject[this=global]
  *       |
  *   WithEnvironmentObject wrapping target
  *       |
- *   LexicalEnvironmentObject
+ *   LexicalEnvironmentObject[this=target]
  *
- * C. Frame scripts
+ * B.2 Subscript loading (Shared-global JSM)
+ *
+ * The target object of a subscript load may be in a JSM with a shared global,
+ * in which case we will also have the NonSyntacticVariablesObject on the
+ * chain.
+ *
+ *   Target object's global
+ *       |
+ *   LexicalEnvironmentObject[this=global]
+ *       |
+ *   NonSyntacticVariablesObject
+ *       |
+ *   LexicalEnvironmentObject[this=nsvo]
+ *       |
+ *   WithEnvironmentObject wrapping target
+ *       |
+ *   LexicalEnvironmentObject[this=target]
+ *
+ * D. Frame scripts
  *
  * XUL frame scripts are always loaded with a NonSyntacticVariablesObject as a
  * "polluting global". This is done exclusively in
@@ -213,23 +230,21 @@ EnvironmentCoordinateFunctionScript(JSScript* script, jsbytecode* pc);
  *
  *   Loader global
  *       |
- *   Global lexical scope
+ *   LexicalEnvironmentObject[this=global]
  *       |
  *   NonSyntacticVariablesObject
  *       |
- *   LexicalEnvironmentObject
+ *   LexicalEnvironmentObject[this=global]
  *
  * D. XBL and DOM event handlers
  *
  * XBL methods are compiled as functions with XUL elements on the env chain,
  * and DOM event handlers are compiled as functions with HTML elements on the
- * env chain. For a chain of elements e0,...,eN:
+ * env chain. For a chain of elements e0,e1,...:
  *
  *      ...
  *       |
- *   WithEnvironmentObject wrapping eN
- *       |
- *      ...
+ *   WithEnvironmentObject wrapping e1
  *       |
  *   WithEnvironmentObject wrapping e0
  *       |
@@ -908,6 +923,9 @@ class DebugEnvironmentProxy : public ProxyObject
     static DebugEnvironmentProxy* create(JSContext* cx, EnvironmentObject& env,
                                          HandleObject enclosing);
 
+    // NOTE: The environment may be a debug hollow with invalid
+    // enclosingEnvironment. Always use the enclosingEnvironment accessor on
+    // the DebugEnvironmentProxy in order to walk the environment chain.
     EnvironmentObject& environment() const;
     JSObject& enclosingEnvironment() const;
 
@@ -925,7 +943,7 @@ class DebugEnvironmentProxy : public ProxyObject
                                       HandleId id, MutableHandleValue vp);
 
     // Returns true iff this is a function environment with its own this-binding
-    // (all functions except arrow functions and generator expression lambdas).
+    // (all functions except arrow functions).
     bool isFunctionEnvironmentWithThis();
 
     // Does this debug environment not have a real counterpart or was never
@@ -934,7 +952,7 @@ class DebugEnvironmentProxy : public ProxyObject
     bool isOptimizedOut() const;
 };
 
-/* Maintains per-compartment debug environment bookkeeping information. */
+/* Maintains per-realm debug environment bookkeeping information. */
 class DebugEnvironments
 {
     Zone* zone_;
@@ -975,17 +993,17 @@ class DebugEnvironments
   private:
     bool init();
 
-    static DebugEnvironments* ensureCompartmentData(JSContext* cx);
+    static DebugEnvironments* ensureRealmData(JSContext* cx);
 
     template <typename Environment, typename Scope>
     static void onPopGeneric(JSContext* cx, const EnvironmentIter& ei);
 
   public:
     void trace(JSTracer* trc);
-    void sweep(JSRuntime* rt);
+    void sweep();
     void finish();
 #ifdef JS_GC_ZEAL
-    void checkHashTablesAfterMovingGC(JSRuntime* rt);
+    void checkHashTablesAfterMovingGC();
 #endif
 
     // If a live frame has a synthesized entry in missingEnvs, make sure it's not
@@ -1026,7 +1044,7 @@ class DebugEnvironments
     static void onPopLexical(JSContext* cx, const EnvironmentIter& ei);
     static void onPopLexical(JSContext* cx, AbstractFramePtr frame, jsbytecode* pc);
     static void onPopWith(AbstractFramePtr frame);
-    static void onCompartmentUnsetIsDebuggee(JSCompartment* c);
+    static void onRealmUnsetIsDebuggee(Realm* realm);
 };
 
 }  /* namespace js */
@@ -1147,6 +1165,8 @@ CreateObjectsForEnvironmentChain(JSContext* cx, AutoObjectVector& chain,
                                  HandleObject terminatingEnv,
                                  MutableHandleObject envObj);
 
+ModuleObject* GetModuleObjectForScript(JSScript* script);
+
 ModuleEnvironmentObject* GetModuleEnvironmentForScript(JSScript* script);
 
 MOZ_MUST_USE bool
@@ -1190,13 +1210,5 @@ AnalyzeEntrainedVariables(JSContext* cx, HandleScript script);
 #endif
 
 } // namespace js
-
-namespace JS {
-
-template <>
-struct DeletePolicy<js::DebugEnvironments> : public js::GCManagedDeletePolicy<js::DebugEnvironments>
-{};
-
-} // namespace JS
 
 #endif /* vm_EnvironmentObject_h */

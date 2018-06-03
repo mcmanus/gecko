@@ -10,9 +10,13 @@
 #include "IPCBlobInputStreamParent.h"
 #include "IPCBlobInputStreamStorage.h"
 #include "mozilla/dom/IPCBlob.h"
-#include "mozilla/dom/nsIContentParent.h"
 #include "mozilla/ipc/BackgroundParent.h"
+#include "mozilla/ipc/PBackgroundParent.h"
+#include "mozilla/ipc/PBackgroundChild.h"
+#include "mozilla/dom/ContentParent.h"
+#include "mozilla/dom/ContentChild.h"
 #include "mozilla/ipc/IPCStreamUtils.h"
+#include "mozilla/ipc/ProtocolUtils.h"
 #include "StreamBlobImpl.h"
 #include "prtime.h"
 
@@ -85,13 +89,34 @@ SerializeInputStreamParent(nsIInputStream* aInputStream, uint64_t aSize,
   // Parent to Child we always send a IPCBlobInputStream.
   MOZ_ASSERT(XRE_IsParentProcess());
 
+  nsCOMPtr<nsIInputStream> stream = aInputStream;
+
+  // In case this is a IPCBlobInputStream, we don't want to create a loop:
+  // IPCBlobInputStreamParent -> IPCBlobInputStream ->
+  // IPCBlobInputStreamParent. Let's use the underlying inputStream instead.
+  nsCOMPtr<nsIIPCBlobInputStream> ipcBlobInputStream =
+    do_QueryInterface(aInputStream);
+  if (ipcBlobInputStream) {
+    stream = ipcBlobInputStream->GetInternalStream();
+    // If we don't have an underlying stream, it's better to terminate here
+    // instead of sending an 'empty' IPCBlobInputStream actor on the other side,
+    // unable to be used.
+    if (NS_WARN_IF(!stream)) {
+      return NS_ERROR_FAILURE;
+    }
+  }
+
   nsresult rv;
-  IPCBlobInputStreamParent* parentActor =
-    IPCBlobInputStreamParent::Create(aInputStream, aSize, aChildID, &rv,
-                                     aManager);
+  RefPtr<IPCBlobInputStreamParent> parentActor =
+    IPCBlobInputStreamParent::Create(stream, aSize, aChildID, &rv, aManager);
   if (!parentActor) {
     return rv;
   }
+
+  // We need manually to increase the reference for this actor because the
+  // IPC allocator method is not triggered. The Release() is called by IPDL
+  // when the actor is deleted.
+  parentActor.get()->AddRef();
 
   if (!aManager->SendPIPCBlobInputStreamConstructor(parentActor,
                                                     parentActor->ID(),
@@ -259,6 +284,83 @@ Serialize(BlobImpl* aBlobImpl, PBackgroundParent* aManager, IPCBlob& aIPCBlob)
   return SerializeInternal(aBlobImpl, aManager, aIPCBlob);
 }
 
+nsresult
+SerializeUntyped(BlobImpl* aBlobImpl, IProtocol* aActor, IPCBlob& aIPCBlob)
+{
+  // We always want to act on the toplevel protocol.
+  IProtocol* manager = aActor;
+  while (manager->Manager()) {
+    manager = manager->Manager();
+  }
+
+  // We always need the toplevel protocol
+  switch(manager->GetProtocolTypeId()) {
+  case PBackgroundMsgStart:
+    if (manager->GetSide() == mozilla::ipc::ParentSide) {
+      return SerializeInternal(aBlobImpl,
+                               static_cast<PBackgroundParent*>(manager),
+                               aIPCBlob);
+    } else {
+      return SerializeInternal(aBlobImpl,
+                               static_cast<PBackgroundChild*>(manager),
+                               aIPCBlob);
+    }
+  case PContentMsgStart:
+    if (manager->GetSide() == mozilla::ipc::ParentSide) {
+      return SerializeInternal(aBlobImpl,
+                               static_cast<ContentParent*>(manager),
+                               aIPCBlob);
+    } else {
+      return SerializeInternal(aBlobImpl,
+                               static_cast<ContentChild*>(manager),
+                               aIPCBlob);
+    }
+  default:
+    MOZ_CRASH("Unsupported protocol passed to BlobImpl serialize");
+  }
+}
+
 } // IPCBlobUtils namespace
 } // dom namespace
+
+namespace ipc {
+void
+IPDLParamTraits<mozilla::dom::BlobImpl>::Write(
+  IPC::Message* aMsg, IProtocol* aActor,
+  mozilla::dom::BlobImpl* aParam)
+{
+  nsresult rv;
+  mozilla::dom::IPCBlob ipcblob;
+  if (aParam) {
+    rv = mozilla::dom::IPCBlobUtils::SerializeUntyped(aParam, aActor, ipcblob);
+  }
+  if (!aParam || NS_WARN_IF(NS_FAILED(rv))) {
+    WriteIPDLParam(aMsg, aActor, false);
+  } else {
+    WriteIPDLParam(aMsg, aActor, true);
+    WriteIPDLParam(aMsg, aActor, ipcblob);
+  }
+}
+
+bool
+IPDLParamTraits<mozilla::dom::BlobImpl>::Read(
+  const IPC::Message* aMsg, PickleIterator* aIter,
+  IProtocol* aActor, RefPtr<mozilla::dom::BlobImpl>* aResult)
+{
+  *aResult = nullptr;
+
+  bool notnull = false;
+  if (!ReadIPDLParam(aMsg, aIter, aActor, &notnull)) {
+    return false;
+  }
+  if (notnull) {
+    mozilla::dom::IPCBlob ipcblob;
+    if (!ReadIPDLParam(aMsg, aIter, aActor, &ipcblob)) {
+      return false;
+    }
+    *aResult = mozilla::dom::IPCBlobUtils::Deserialize(ipcblob);
+  }
+  return true;
+}
+} // ipc namespace
 } // mozilla namespace

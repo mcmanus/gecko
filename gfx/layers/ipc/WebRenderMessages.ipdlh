@@ -5,16 +5,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+include "mozilla/layers/WebRenderMessageUtils.h";
+
 include LayersSurfaces;
 include LayersMessages;
 include protocol PTexture;
 
-using mozilla::wr::ByteBuffer from "mozilla/webrender/WebRenderTypes.h";
+using mozilla::layers::CompositableHandle from "mozilla/layers/LayersTypes.h";
 using mozilla::wr::LayoutSize from "mozilla/webrender/webrender_ffi.h";
 using mozilla::wr::ImageDescriptor from "mozilla/webrender/webrender_ffi.h";
 using mozilla::wr::ImageRendering from "mozilla/webrender/webrender_ffi.h";
 using mozilla::wr::MixBlendMode from "mozilla/webrender/webrender_ffi.h";
-using mozilla::wr::MaybeImageMask from "mozilla/webrender/WebRenderTypes.h";
 using mozilla::wr::ExternalImageId from "mozilla/webrender/WebRenderTypes.h";
 using mozilla::wr::MaybeFontInstanceOptions from "mozilla/webrender/WebRenderTypes.h";
 using mozilla::wr::MaybeFontInstancePlatformOptions from "mozilla/webrender/WebRenderTypes.h";
@@ -23,13 +24,17 @@ using mozilla::wr::FontKey from "mozilla/webrender/WebRenderTypes.h";
 using mozilla::wr::ImageKey from "mozilla/webrender/WebRenderTypes.h";
 using mozilla::wr::PipelineId from "mozilla/webrender/WebRenderTypes.h";
 using mozilla::gfx::MaybeIntSize from "mozilla/gfx/Point.h";
-using mozilla::LayerPoint from "Units.h";
-using mozilla::layers::MaybeLayerRect from "mozilla/layers/LayersTypes.h";
+using mozilla::LayoutDeviceRect from "Units.h";
+using mozilla::ImageIntRect from "Units.h";
 using class mozilla::gfx::Matrix4x4 from "mozilla/gfx/Matrix.h";
 using struct mozilla::void_t from "ipc/IPCMessageUtils.h";
 
 namespace mozilla {
 namespace layers {
+
+struct RefCountedShmem {
+  Shmem buffer;
+};
 
 union OptionalTransform {
   Matrix4x4;
@@ -48,13 +53,30 @@ struct OpAddExternalImage {
 
 struct OpAddCompositorAnimations {
   CompositorAnimations data;
-  OptionalTransform transform;
-  OptionalOpacity opacity;
+};
+
+struct OpAddPipelineIdForCompositable {
+  PipelineId pipelineId;
+  CompositableHandle handle;
+  bool isAsync;
+};
+
+struct OpRemovePipelineIdForCompositable {
+  PipelineId pipelineId;
+};
+
+struct OpAddExternalImageIdForCompositable {
+  ExternalImageId externalImageId;
+  CompositableHandle handle;
+};
+
+struct OpRemoveExternalImageId {
+  ExternalImageId externalImageId;
 };
 
 struct OpUpdateAsyncImagePipeline {
   PipelineId pipelineId;
-  LayerRect scBounds;
+  LayoutDeviceRect scBounds;
   Matrix4x4 scTransform;
   MaybeIntSize scaleToSize;
   ImageRendering filter;
@@ -62,6 +84,10 @@ struct OpUpdateAsyncImagePipeline {
 };
 
 union WebRenderParentCommand {
+  OpAddPipelineIdForCompositable;
+  OpRemovePipelineIdForCompositable;
+  OpAddExternalImageIdForCompositable;
+  OpRemoveExternalImageId;
   OpUpdateAsyncImagePipeline;
   CompositableOperation;
   OpAddCompositorAnimations;
@@ -97,6 +123,7 @@ struct OpUpdateBlobImage {
   ImageDescriptor descriptor;
   OffsetRange bytes;
   ImageKey key;
+  ImageIntRect dirtyRect;
 };
 
 struct OpDeleteImage {
@@ -104,6 +131,12 @@ struct OpDeleteImage {
 };
 
 struct OpAddRawFont {
+  OffsetRange bytes;
+  uint32_t fontIndex;
+  FontKey key;
+};
+
+struct OpAddFontDescriptor {
   OffsetRange bytes;
   uint32_t fontIndex;
   FontKey key;
@@ -133,6 +166,7 @@ union OpUpdateResource {
   OpUpdateBlobImage;
   OpDeleteImage;
   OpAddRawFont;
+  OpAddFontDescriptor;
   OpDeleteFont;
   OpAddFontInstance;
   OpDeleteFontInstance;

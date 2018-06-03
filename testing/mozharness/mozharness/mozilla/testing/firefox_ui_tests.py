@@ -125,7 +125,7 @@ class FirefoxUITests(TestingMixin, VCSToolsScript, CodeCoverageMixin):
             default_actions=default_actions or actions,
             *args, **kwargs)
 
-        # Code which doesn't run on buildbot has to include the following properties
+        # Code which runs in automation has to include the following properties
         self.binary_path = self.config.get('binary_path')
         self.installer_path = self.config.get('installer_path')
         self.installer_url = self.config.get('installer_url')
@@ -150,7 +150,10 @@ class FirefoxUITests(TestingMixin, VCSToolsScript, CodeCoverageMixin):
                         'firefox-ui/*',
                         'marionette/*',
                         'mozbase/*',
+                        'tools/mozterm/*',
                         'tools/wptserve/*',
+                        'mozpack/*',
+                        'mozbuild/*',
                         ]
         super(FirefoxUITests, self).download_and_extract(extract_dirs=extract_dirs)
 
@@ -162,9 +165,13 @@ class FirefoxUITests(TestingMixin, VCSToolsScript, CodeCoverageMixin):
         abs_tests_install_dir = os.path.join(abs_dirs['abs_work_dir'], 'tests')
 
         dirs = {
-            'abs_blob_upload_dir': os.path.join(abs_dirs['abs_work_dir'], 'blobber_upload_dir'),
+            'abs_blob_upload_dir': os.path.join(
+                abs_dirs['abs_work_dir'], 'blobber_upload_dir'),
+            'abs_fxui_dir': os.path.join(
+                abs_tests_install_dir, 'firefox-ui'),
+            'abs_fxui_manifest_dir': os.path.join(
+                abs_tests_install_dir, 'firefox-ui', 'tests', 'testing', 'firefox-ui', 'tests'),
             'abs_test_install_dir': abs_tests_install_dir,
-            'abs_fxui_dir': os.path.join(abs_tests_install_dir, 'firefox-ui'),
         }
 
         for key in dirs:
@@ -244,7 +251,7 @@ class FirefoxUITests(TestingMixin, VCSToolsScript, CodeCoverageMixin):
                                         strict=False)
 
         # Add the default tests to run
-        tests = [os.path.join(dirs['abs_fxui_dir'], 'tests', test) for test in self.default_tests]
+        tests = [os.path.join(dirs['abs_fxui_manifest_dir'], t) for t in self.default_tests]
         cmd.extend(tests)
 
         # Set further environment settings
@@ -266,13 +273,13 @@ class FirefoxUITests(TestingMixin, VCSToolsScript, CodeCoverageMixin):
             env['MOZ_ACCELERATED'] = '1'
 
         return_code = self.run_command(cmd,
-                                       cwd=dirs['abs_work_dir'],
+                                       cwd=dirs['abs_fxui_dir'],
                                        output_timeout=1000,
                                        output_parser=parser,
                                        env=env)
 
-        tbpl_status, log_level = parser.evaluate_parser(return_code)
-        self.buildbot_status(tbpl_status, level=log_level)
+        tbpl_status, log_level, summary = parser.evaluate_parser(return_code)
+        self.record_status(tbpl_status, level=log_level)
 
         return return_code
 

@@ -1,6 +1,7 @@
-const { Services } = Components.utils.import('resource://gre/modules/Services.jsm', {});
-const { MessageContext } = Components.utils.import("resource://gre/modules/MessageContext.jsm", {});
-Components.utils.importGlobalProperties(["fetch"]); /* globals fetch */
+const { AppConstants } = ChromeUtils.import("resource://gre/modules/AppConstants.jsm", {});
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm", {});
+const { MessageContext } = ChromeUtils.import("resource://gre/modules/MessageContext.jsm", {});
+Cu.importGlobalProperties(["fetch"]);
 
 /**
  * L10nRegistry is a localization resource management system for Gecko.
@@ -78,6 +79,7 @@ Components.utils.importGlobalProperties(["fetch"]); /* globals fetch */
 const L10nRegistry = {
   sources: new Map(),
   ctxCache: new Map(),
+  bootstrap: null,
 
   /**
    * Based on the list of requested languages and resource Ids,
@@ -87,7 +89,10 @@ const L10nRegistry = {
    * @param {Array} resourceIds
    * @returns {AsyncIterator<MessageContext>}
    */
-  async * generateContexts(requestedLangs, resourceIds) {
+  async* generateContexts(requestedLangs, resourceIds) {
+    if (this.bootstrap !== null) {
+      await this.bootstrap;
+    }
     const sourcesOrder = Array.from(this.sources.keys()).reverse();
     for (const locale of requestedLangs) {
       yield * generateContextsForLocale(locale, sourcesOrder, resourceIds);
@@ -104,7 +109,7 @@ const L10nRegistry = {
       throw new Error(`Source with name "${source.name}" already registered.`);
     }
     this.sources.set(source.name, source);
-    Services.obs.notifyObservers(null, 'l10n:available-locales-changed', null);
+    Services.locale.setAvailableLocales(this.getAvailableLocales());
   },
 
   /**
@@ -121,7 +126,7 @@ const L10nRegistry = {
     }
     this.sources.set(source.name, source);
     this.ctxCache.clear();
-    Services.obs.notifyObservers(null, 'l10n:available-locales-changed', null);
+    Services.locale.setAvailableLocales(this.getAvailableLocales());
   },
 
   /**
@@ -131,7 +136,7 @@ const L10nRegistry = {
    */
   removeSource(sourceName) {
     this.sources.delete(sourceName);
-    Services.obs.notifyObservers(null, 'l10n:available-locales-changed', null);
+    Services.locale.setAvailableLocales(this.getAvailableLocales());
   },
 
   /**
@@ -162,8 +167,8 @@ const L10nRegistry = {
  * @returns {String}
  */
 function generateContextID(locale, sourcesOrder, resourceIds) {
-  const sources = sourcesOrder.join(',');
-  const ids = resourceIds.join(',');
+  const sources = sourcesOrder.join(",");
+  const ids = resourceIds.join(",");
   return `${locale}|${sources}|${ids}`;
 }
 
@@ -206,13 +211,38 @@ async function* generateContextsForLocale(locale, sourcesOrder, resourceIds, res
       if (ctx !== null) {
         yield ctx;
       }
-    } else {
+    } else if (resolvedLength < resourcesLength) {
       // otherwise recursively load another generator that walks over the
       // partially resolved list of sources.
       yield * generateContextsForLocale(locale, sourcesOrder, resourceIds, order);
     }
   }
 }
+
+const MSG_CONTEXT_OPTIONS = {
+  // Temporarily disable bidi isolation due to Microsoft not supporting FSI/PDI.
+  // See bug 1439018 for details.
+  useIsolating: Services.prefs.getBoolPref("intl.l10n.enable-bidi-marks", false),
+  functions: {
+    /**
+     * PLATFORM is a built-in allowing localizers to differentiate message
+     * variants depending on the target platform.
+     */
+    PLATFORM: () => {
+      switch (AppConstants.platform) {
+        case "linux":
+        case "android":
+          return AppConstants.platform;
+        case "win":
+          return "windows";
+        case "macosx":
+          return "macos";
+        default:
+          return "other";
+      }
+    }
+  }
+};
 
 /**
  * Generates a single MessageContext by loading all resources
@@ -240,7 +270,7 @@ function generateContext(locale, sourcesOrder, resourceIds) {
 
   const ctxPromise = Promise.all(fetchPromises).then(
     dataSets => {
-      const ctx = new MessageContext(locale);
+      const ctx = new MessageContext(locale, MSG_CONTEXT_OPTIONS);
       for (const data of dataSets) {
         if (data === null) {
           return null;
@@ -295,6 +325,11 @@ class FileSource {
   }
 
   getPath(locale, path) {
+    // This is a special case for the only not BCP47-conformant locale
+    // code we have resources for.
+    if (locale === "ja-JP-macos") {
+      locale = "ja-JP-mac";
+    }
     return (this.prePath + path).replace(/\{locale\}/g, locale);
   }
 
@@ -330,11 +365,9 @@ class FileSource {
       if (this.cache[fullPath].then) {
         return this.cache[fullPath];
       }
-    } else {
-      if (this.indexed) {
+    } else if (this.indexed) {
         return Promise.reject(`The source has no resources for path "${fullPath}"`);
       }
-    }
     return this.cache[fullPath] = L10nRegistry.load(fullPath).then(
       data => {
         return this.cache[fullPath] = data;
@@ -387,7 +420,7 @@ L10nRegistry.load = function(url) {
     if (!response.ok) {
       return Promise.reject(response.statusText);
     }
-    return response.text()
+    return response.text();
   });
 };
 
@@ -395,4 +428,4 @@ this.L10nRegistry = L10nRegistry;
 this.FileSource = FileSource;
 this.IndexedFileSource = IndexedFileSource;
 
-this.EXPORTED_SYMBOLS = ['L10nRegistry', 'FileSource', 'IndexedFileSource'];
+var EXPORTED_SYMBOLS = ["L10nRegistry", "FileSource", "IndexedFileSource"];

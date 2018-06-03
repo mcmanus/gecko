@@ -4,7 +4,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const {Cc, Ci, Cu} = require("chrome");
 const Services = require("Services");
 const defer = require("devtools/shared/defer");
 
@@ -14,12 +13,14 @@ const L10N = new LocalizationHelper("devtools/client/locales/toolbox.properties"
 function handleThreadState(toolbox, event, packet) {
   // Suppress interrupted events by default because the thread is
   // paused/resumed a lot for various actions.
-  if (event !== "paused" || packet.why.type !== "interrupted") {
-    // TODO: Bug 1225492, we continue emitting events on the target
-    // like we used to, but we should emit these only on the
-    // threadClient now.
-    toolbox.target.emit("thread-" + event);
+  if (event === "paused" && packet.why.type === "interrupted") {
+    return;
   }
+
+  // TODO: Bug 1225492, we continue emitting events on the target
+  // like we used to, but we should emit these only on the
+  // threadClient now.
+  toolbox.target.emit("thread-" + event);
 
   if (event === "paused") {
     toolbox.highlightTool("jsdebugger");
@@ -28,7 +29,7 @@ function handleThreadState(toolbox, event, packet) {
        packet.why.type === "breakpoint" ||
        packet.why.type === "exception") {
       toolbox.raise();
-      toolbox.selectTool("jsdebugger");
+      toolbox.selectTool("jsdebugger", packet.why.type);
     }
   } else if (event === "resumed") {
     toolbox.unhighlightTool("jsdebugger");
@@ -36,10 +37,10 @@ function handleThreadState(toolbox, event, packet) {
 }
 
 function attachThread(toolbox) {
-  let deferred = defer();
+  const deferred = defer();
 
-  let target = toolbox.target;
-  let { form: { chromeDebugger, actor } } = target;
+  const target = toolbox.target;
+  const { form: { chromeDebugger, actor } } = target;
 
   // Sourcemaps are always turned off when using the new debugger
   // frontend. This is because it does sourcemapping on the
@@ -48,16 +49,16 @@ function attachThread(toolbox) {
   let autoBlackBox = false;
   let ignoreFrameEnvironment = false;
   const newDebuggerEnabled = Services.prefs.getBoolPref("devtools.debugger.new-debugger-frontend");
-  if(!newDebuggerEnabled) {
+  if (!newDebuggerEnabled) {
     useSourceMaps = Services.prefs.getBoolPref("devtools.debugger.source-maps-enabled");
     autoBlackBox = Services.prefs.getBoolPref("devtools.debugger.auto-black-box");
   } else {
     ignoreFrameEnvironment = true;
   }
 
-  let threadOptions = { useSourceMaps, autoBlackBox, ignoreFrameEnvironment };
+  const threadOptions = { useSourceMaps, autoBlackBox, ignoreFrameEnvironment };
 
-  let handleResponse = (res, threadClient) => {
+  const handleResponse = (res, threadClient) => {
     if (res.error) {
       deferred.reject(new Error("Couldn't attach to thread: " + res.error));
       return;
@@ -103,7 +104,7 @@ function attachThread(toolbox) {
     target.client.attachAddon(actor, res => {
       target.client.attachThread(res.threadActor, handleResponse);
     });
-  }  else {
+  } else {
     // Attaching an old browser debugger or a content process.
     target.client.attachThread(chromeDebugger, handleResponse);
   }

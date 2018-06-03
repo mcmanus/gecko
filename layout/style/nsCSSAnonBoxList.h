@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -22,7 +23,8 @@
  *
  * CSS_NON_INHERITING_ANON_BOX is used for anon boxes that never inherit style
  * from anything.  This means all their property values are the initial values
- * of those properties.
+ * of those properties.  These ones must come first!  Code relies on this.
+ * If this macro is not defined, it will default to CSS_ANON_BOX.
  *
  * CSS_WRAPPER_ANON_BOX is used for anon boxes that are used as wrappers around
  * other frames during frametree fixup (e.g. table anonymous boxes, ruby
@@ -50,13 +52,33 @@
 #  define DEFINED_CSS_WRAPPER_ANON_BOX
 #endif /* CSS_WRAPPER_ANON_BOX */
 
-// ::-moz-text, ::-moz-oof-placeholder, and ::-moz-first-letter-continuation are
-// non-elements which no rule will match.
-CSS_ANON_BOX(mozText, ":-moz-text")
-// placeholder frames for out of flows.  Note that :-moz-placeholder is used for
+//---------------------------------------------------------------------------
+// Non-inheriting ones, which must come first
+//---------------------------------------------------------------------------
+
+// Placeholder frames for out of flows.  Note that :-moz-placeholder is used for
 // the pseudo-element that represents the placeholder text in <input
 // placeholder="foo">, so we need a different string here.
 CSS_NON_INHERITING_ANON_BOX(oofPlaceholder, ":-moz-oof-placeholder")
+
+// Framesets
+CSS_NON_INHERITING_ANON_BOX(horizontalFramesetBorder, ":-moz-hframeset-border")
+CSS_NON_INHERITING_ANON_BOX(verticalFramesetBorder, ":-moz-vframeset-border")
+
+CSS_NON_INHERITING_ANON_BOX(framesetBlank, ":-moz-frameset-blank")
+
+CSS_NON_INHERITING_ANON_BOX(tableColGroup, ":-moz-table-column-group")
+CSS_NON_INHERITING_ANON_BOX(tableCol, ":-moz-table-column")
+
+CSS_NON_INHERITING_ANON_BOX(pageBreak, ":-moz-pagebreak")
+
+//---------------------------------------------------------------------------
+// Other ones
+//---------------------------------------------------------------------------
+
+// ::-moz-text, ::-moz-oof-placeholder, and ::-moz-first-letter-continuation are
+// non-elements which no rule will match.
+CSS_ANON_BOX(mozText, ":-moz-text")
 // nsFirstLetterFrames for content outside the ::first-letter.
 CSS_ANON_BOX(firstLetterContinuation, ":-moz-first-letter-continuation")
 
@@ -64,31 +86,23 @@ CSS_ANON_BOX(mozBlockInsideInlineWrapper, ":-moz-block-inside-inline-wrapper")
 CSS_WRAPPER_ANON_BOX(mozMathMLAnonymousBlock, ":-moz-mathml-anonymous-block")
 CSS_ANON_BOX(mozXULAnonymousBlock, ":-moz-xul-anonymous-block")
 
-// Framesets
-CSS_NON_INHERITING_ANON_BOX(horizontalFramesetBorder, ":-moz-hframeset-border")
-CSS_NON_INHERITING_ANON_BOX(verticalFramesetBorder, ":-moz-vframeset-border")
-
 CSS_ANON_BOX(mozLineFrame, ":-moz-line-frame")
 
 CSS_ANON_BOX(buttonContent, ":-moz-button-content")
 CSS_ANON_BOX(cellContent, ":-moz-cell-content")
 CSS_ANON_BOX(dropDownList, ":-moz-dropdown-list")
 CSS_ANON_BOX(fieldsetContent, ":-moz-fieldset-content")
-CSS_NON_INHERITING_ANON_BOX(framesetBlank, ":-moz-frameset-blank")
 CSS_ANON_BOX(mozDisplayComboboxControlFrame, ":-moz-display-comboboxcontrol-frame")
 CSS_ANON_BOX(htmlCanvasContent, ":-moz-html-canvas-content")
 
 CSS_WRAPPER_ANON_BOX(inlineTable, ":-moz-inline-table")
 CSS_WRAPPER_ANON_BOX(table, ":-moz-table")
 CSS_WRAPPER_ANON_BOX(tableCell, ":-moz-table-cell")
-CSS_NON_INHERITING_ANON_BOX(tableColGroup, ":-moz-table-column-group")
-CSS_NON_INHERITING_ANON_BOX(tableCol, ":-moz-table-column")
 CSS_ANON_BOX(tableWrapper, ":-moz-table-wrapper")
 CSS_WRAPPER_ANON_BOX(tableRowGroup, ":-moz-table-row-group")
 CSS_WRAPPER_ANON_BOX(tableRow, ":-moz-table-row")
 
 CSS_ANON_BOX(canvas, ":-moz-canvas")
-CSS_NON_INHERITING_ANON_BOX(pageBreak, ":-moz-pagebreak")
 CSS_ANON_BOX(page, ":-moz-page")
 CSS_ANON_BOX(pageContent, ":-moz-pagecontent")
 CSS_ANON_BOX(pageSequence, ":-moz-page-sequence")
@@ -124,7 +138,6 @@ CSS_ANON_BOX(mozTreeTwisty, ":-moz-tree-twisty")
 CSS_ANON_BOX(mozTreeImage, ":-moz-tree-image")
 CSS_ANON_BOX(mozTreeCellText, ":-moz-tree-cell-text")
 CSS_ANON_BOX(mozTreeCheckbox, ":-moz-tree-checkbox")
-CSS_ANON_BOX(mozTreeProgressmeter, ":-moz-tree-progressmeter")
 CSS_ANON_BOX(mozTreeDropFeedback, ":-moz-tree-drop-feedback")
 #endif
 

@@ -1,6 +1,4 @@
 config = {
-    'src_mozconfig': 'browser/config/mozconfigs/win64/devedition',
-    'force_clobber': True,
+    'mozconfig_variant': 'devedition',
     'stage_platform': 'win64-devedition',
-    'stage_product': 'devedition',
 }

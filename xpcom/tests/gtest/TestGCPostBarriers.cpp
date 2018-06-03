@@ -95,13 +95,12 @@ CreateGlobalAndRunTest(JSContext* cx)
     &GlobalClassOps
   };
 
-  JS::CompartmentOptions options;
-  options.behaviors().setVersion(JSVERSION_DEFAULT);
+  JS::RealmOptions options;
   JS::PersistentRootedObject global(cx);
   global = JS_NewGlobalObject(cx, &GlobalClass, nullptr, JS::FireOnNewGlobalHook, options);
   ASSERT_TRUE(global != nullptr);
 
-  JSCompartment *oldCompartment = JS_EnterCompartment(cx, global);
+  JS::Realm* oldRealm = JS::EnterRealm(cx, global);
 
   typedef Heap<JSObject*> ElementT;
 
@@ -122,7 +121,7 @@ CreateGlobalAndRunTest(JSContext* cx)
     RunTest(cx, &array);
   }
 
-  JS_LeaveCompartment(cx, oldCompartment);
+  JS::LeaveRealm(cx, oldRealm);
 }
 
 TEST(GCPostBarriers, nsTArray) {

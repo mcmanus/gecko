@@ -31,7 +31,7 @@ function RulersHighlighter(highlighterEnv) {
   this.markup = new CanvasFrameAnonymousContentHelper(highlighterEnv,
     this._buildMarkup.bind(this));
 
-  let { pageListenerTarget } = highlighterEnv;
+  const { pageListenerTarget } = highlighterEnv;
   pageListenerTarget.addEventListener("scroll", this);
   pageListenerTarget.addEventListener("pagehide", this);
 }
@@ -41,9 +41,9 @@ RulersHighlighter.prototype = {
 
   ID_CLASS_PREFIX: "rulers-highlighter-",
 
-  _buildMarkup: function () {
-    let { window } = this.env;
-    let prefix = this.ID_CLASS_PREFIX;
+  _buildMarkup: function() {
+    const { window } = this.env;
+    const prefix = this.ID_CLASS_PREFIX;
 
     function createRuler(axis, size) {
       let width, height;
@@ -61,7 +61,7 @@ RulersHighlighter.prototype = {
           `Invalid type of axis given; expected "x" or "y" but got "${axis}"`);
       }
 
-      let g = createSVGNode(window, {
+      const g = createSVGNode(window, {
         nodeType: "g",
         attributes: {
           id: `${axis}-axis`
@@ -80,7 +80,7 @@ RulersHighlighter.prototype = {
         parent: g
       });
 
-      let gRule = createSVGNode(window, {
+      const gRule = createSVGNode(window, {
         nodeType: "g",
         attributes: {
           id: `${axis}-axis-ruler`
@@ -89,7 +89,7 @@ RulersHighlighter.prototype = {
         prefix
       });
 
-      let pathGraduations = createSVGNode(window, {
+      const pathGraduations = createSVGNode(window, {
         nodeType: "path",
         attributes: {
           "class": "ruler-graduations",
@@ -100,7 +100,7 @@ RulersHighlighter.prototype = {
         prefix
       });
 
-      let pathMarkers = createSVGNode(window, {
+      const pathMarkers = createSVGNode(window, {
         nodeType: "path",
         attributes: {
           "class": "ruler-markers",
@@ -111,7 +111,7 @@ RulersHighlighter.prototype = {
         prefix
       });
 
-      let gText = createSVGNode(window, {
+      const gText = createSVGNode(window, {
         nodeType: "g",
         attributes: {
           id: `${axis}-axis-text`,
@@ -163,11 +163,11 @@ RulersHighlighter.prototype = {
       return g;
     }
 
-    let container = createNode(window, {
+    const container = createNode(window, {
       attributes: {"class": "highlighter-container"}
     });
 
-    let root = createNode(window, {
+    const root = createNode(window, {
       parent: container,
       attributes: {
         "id": "root",
@@ -176,7 +176,7 @@ RulersHighlighter.prototype = {
       prefix
     });
 
-    let svg = createSVGNode(window, {
+    const svg = createSVGNode(window, {
       nodeType: "svg",
       parent: root,
       attributes: {
@@ -192,10 +192,20 @@ RulersHighlighter.prototype = {
     createRuler("x", RULERS_MAX_X_AXIS);
     createRuler("y", RULERS_MAX_Y_AXIS);
 
+    createNode(window, {
+      parent: container,
+      attributes: {
+        "class": "viewport-infobar-container",
+        "id": "viewport-infobar-container",
+        "position": "top"
+      },
+      prefix
+    });
+
     return container;
   },
 
-  handleEvent: function (event) {
+  handleEvent: function(event) {
     switch (event.type) {
       case "scroll":
         this._onScroll(event);
@@ -210,9 +220,9 @@ RulersHighlighter.prototype = {
     }
   },
 
-  _onScroll: function (event) {
-    let prefix = this.ID_CLASS_PREFIX;
-    let { scrollX, scrollY } = event.view;
+  _onScroll: function(event) {
+    const prefix = this.ID_CLASS_PREFIX;
+    const { scrollX, scrollY } = event.view;
 
     this.markup.getElement(`${prefix}x-axis-ruler`)
                         .setAttribute("transform", `translate(${-scrollX})`);
@@ -224,51 +234,61 @@ RulersHighlighter.prototype = {
                         .setAttribute("transform", `translate(0, ${-scrollY})`);
   },
 
-  _update: function () {
-    let { window } = this.env;
+  _update: function() {
+    const { window } = this.env;
 
     setIgnoreLayoutChanges(true);
 
-    let zoom = getCurrentZoom(window);
-    let isZoomChanged = zoom !== this._zoom;
+    const zoom = getCurrentZoom(window);
+    const isZoomChanged = zoom !== this._zoom;
 
     if (isZoomChanged) {
       this._zoom = zoom;
       this.updateViewport();
     }
 
+    this.updateViewportInfobar();
+
     setIgnoreLayoutChanges(false, window.document.documentElement);
 
     this._rafID = window.requestAnimationFrame(() => this._update());
   },
 
-  _cancelUpdate: function () {
+  _cancelUpdate: function() {
     if (this._rafID) {
       this.env.window.cancelAnimationFrame(this._rafID);
       this._rafID = 0;
     }
   },
-  updateViewport: function () {
-    let { devicePixelRatio } = this.env.window;
+  updateViewport: function() {
+    const { devicePixelRatio } = this.env.window;
 
     // Because `devicePixelRatio` is affected by zoom (see bug 809788),
     // in order to get the "real" device pixel ratio, we need divide by `zoom`
-    let pixelRatio = devicePixelRatio / this._zoom;
+    const pixelRatio = devicePixelRatio / this._zoom;
 
     // The "real" device pixel ratio is used to calculate the max stroke
     // width we can actually assign: on retina, for instance, it would be 0.5,
     // where on non high dpi monitor would be 1.
-    let minWidth = 1 / pixelRatio;
-    let strokeWidth = Math.min(minWidth, minWidth / this._zoom);
+    const minWidth = 1 / pixelRatio;
+    const strokeWidth = Math.min(minWidth, minWidth / this._zoom);
 
     this.markup.getElement(this.ID_CLASS_PREFIX + "root").setAttribute("style",
       `stroke-width:${strokeWidth};`);
   },
 
-  destroy: function () {
+  updateViewportInfobar: function() {
+    const { window } = this.env;
+    const { innerHeight, innerWidth } = window;
+    const infobarId = this.ID_CLASS_PREFIX + "viewport-infobar-container";
+    const textContent = innerHeight + "px \u00D7 " + innerWidth + "px";
+    this.markup.getElement(infobarId).setTextContent(textContent);
+  },
+
+  destroy: function() {
     this.hide();
 
-    let { pageListenerTarget } = this.env;
+    const { pageListenerTarget } = this.env;
 
     if (pageListenerTarget) {
       pageListenerTarget.removeEventListener("scroll", this);
@@ -280,7 +300,7 @@ RulersHighlighter.prototype = {
     EventEmitter.emit(this, "destroy");
   },
 
-  show: function () {
+  show: function() {
     this.markup.removeAttributeForElement(this.ID_CLASS_PREFIX + "elements",
       "hidden");
 
@@ -289,7 +309,7 @@ RulersHighlighter.prototype = {
     return true;
   },
 
-  hide: function () {
+  hide: function() {
     this.markup.setAttributeForElement(this.ID_CLASS_PREFIX + "elements",
       "hidden", "true");
 

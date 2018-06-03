@@ -16,14 +16,12 @@ add_task(async function() {
 
   AddonTestUtils.manuallyInstall(do_get_addon("test_cache_certdb"), profileDir, ID);
 
-  startupManager();
+  await promiseStartupManager();
 
   // Force a rescan of signatures
-  const { XPIProvider } = Components.utils.import("resource://gre/modules/addons/XPIProvider.jsm", {});
-  await XPIProvider.verifySignatures();
+  const { XPIDatabase } = ChromeUtils.import("resource://gre/modules/addons/XPIDatabase.jsm", {});
+  await XPIDatabase.verifySignatures();
 
   let addon = await AddonManager.getAddonByID(ID);
-  do_check_eq(addon.signedState, AddonManager.SIGNEDSTATE_MISSING);
-  do_check_false(addon.isActive);
-  do_check_true(addon.appDisabled);
+  Assert.equal(addon, null, "Unsigned extensions should not be installed at startup");
 });

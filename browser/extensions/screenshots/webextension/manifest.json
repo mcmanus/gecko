@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Firefox Screenshots",
-  "version": "19.1.0",
+  "version": "32.1.0",
   "description": "__MSG_addonDescription__",
   "author": "__MSG_addonAuthorsList__",
   "homepage_url": "https://github.com/mozilla-services/screenshots",
@@ -30,13 +30,18 @@
       ]
     }
   ],
+  "icons": {
+    "32": "icons/icon-v2.svg"
+  },
   "web_accessible_resources": [
     "blank.html",
     "icons/cancel.svg",
     "icons/download.svg",
+    "icons/copy.svg",
     "icons/icon-256.png",
     "icons/back.svg",
     "icons/back-highlight.svg",
+    "icons/help-16.svg",
     "icons/menu-fullpage.svg",
     "icons/menu-visible.svg",
     "icons/menu-myshot.svg",
@@ -56,6 +61,7 @@
     "notifications",
     "clipboardWrite",
     "contextMenus",
+    "mozillaAddons",
     "<all_urls>",
     "https://screenshots.firefox.com/"
   ]

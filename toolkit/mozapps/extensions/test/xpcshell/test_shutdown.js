@@ -10,7 +10,7 @@ const IGNORE = ["getPreferredIconURL", "escapeAddonURI",
                 "addAddonListener", "removeAddonListener",
                 "addInstallListener", "removeInstallListener",
                 "addManagerListener", "removeManagerListener",
-                "mapURIToAddonID", "shutdown", "init",
+                "shutdown", "init",
                 "stateToString", "errorToString", "getUpgradeListener",
                 "addUpgradeListener", "removeUpgradeListener"];
 
@@ -24,11 +24,11 @@ const IGNORE_PRIVATE = ["AddonAuthor", "AddonCompatibilityOverride",
                         "setTelemetryDetails", "getTelemetryDetails",
                         "callNoUpdateListeners", "backgroundUpdateTimerHandler",
                         "hasUpgradeListener", "getUpgradeListener",
-                        "isDBLoaded", "BOOTSTRAP_REASONS"];
+                        "isDBLoaded", "recordTiming", "BOOTSTRAP_REASONS"];
 
 async function test_functions() {
   for (let prop in AddonManager) {
-    if (IGNORE.indexOf(prop) != -1)
+    if (IGNORE.includes(prop))
       continue;
     if (typeof AddonManager[prop] != "function")
       continue;
@@ -54,27 +54,27 @@ async function test_functions() {
     }
 
     try {
-      do_print("AddonManager." + prop);
+      info("AddonManager." + prop);
       await AddonManager[prop](...args);
       do_throw(prop + " did not throw an exception");
     } catch (e) {
-      if (e.result != Components.results.NS_ERROR_NOT_INITIALIZED)
+      if (e.result != Cr.NS_ERROR_NOT_INITIALIZED)
         do_throw(prop + " threw an unexpected exception: " + e);
     }
   }
 
   for (let prop in AddonManagerPrivate) {
-    if (IGNORE_PRIVATE.indexOf(prop) != -1)
+    if (IGNORE_PRIVATE.includes(prop))
       continue;
     if (typeof AddonManagerPrivate[prop] != "function")
       continue;
 
     try {
-      do_print("AddonManagerPrivate." + prop);
+      info("AddonManagerPrivate." + prop);
       AddonManagerPrivate[prop]();
       do_throw(prop + " did not throw an exception");
     } catch (e) {
-      if (e.result != Components.results.NS_ERROR_NOT_INITIALIZED)
+      if (e.result != Cr.NS_ERROR_NOT_INITIALIZED)
         do_throw(prop + " threw an unexpected exception: " + e);
     }
   }
@@ -82,8 +82,8 @@ async function test_functions() {
 
 add_task(async function() {
   await test_functions();
-  startupManager();
-  shutdownManager();
+  await promiseStartupManager();
+  await promiseShutdownManager();
   await test_functions();
 });
 

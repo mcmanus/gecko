@@ -9,8 +9,8 @@ const { changeDisplayPixelRatio } =
   require("devtools/client/responsive.html/actions/display-pixel-ratio");
 const NEW_PIXEL_RATIO = 5.5;
 
-add_task(function* () {
-  let store = Store();
+add_task(async function() {
+  const store = Store();
   const { getState, dispatch } = store;
 
   equal(getState().displayPixelRatio, 0,

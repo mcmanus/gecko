@@ -48,11 +48,11 @@
       this.invoke = function removeChildSpan_invoke() {
         // remove HTML span, a first child of the node
         this.DOMNode.firstChild.remove();
-      }
+      };
 
       this.getID = function removeChildSpan_getID() {
         return "Remove inaccessible span containing accessible nodes" + prettyName(aID);
-      }
+      };
     }
 
     /**
@@ -64,34 +64,34 @@
       this.invoke = function insertChildSpan_invoke() {
         // <span><span>333</span><span>22</span></span>
         if (aInsertAllTogether) {
-          var topSpan = document.createElement("span");
-          var fSpan = document.createElement("span");
+          let topSpan = document.createElement("span");
+          let fSpan = document.createElement("span");
           fSpan.textContent = "333";
           topSpan.appendChild(fSpan);
-          var sSpan = document.createElement("span");
+          let sSpan = document.createElement("span");
           sSpan.textContent = "22";
           topSpan.appendChild(sSpan);
 
           this.DOMNode.insertBefore(topSpan, this.DOMNode.childNodes[0]);
 
         } else {
-          var topSpan = document.createElement("span");
+          let topSpan = document.createElement("span");
           this.DOMNode.insertBefore(topSpan, this.DOMNode.childNodes[0]);
 
-          var fSpan = document.createElement("span");
+          let fSpan = document.createElement("span");
           fSpan.textContent = "333";
           topSpan.appendChild(fSpan);
 
-          var sSpan = document.createElement("span");
+          let sSpan = document.createElement("span");
           sSpan.textContent = "22";
           topSpan.appendChild(sSpan);
         }
-      }
+      };
 
       this.getID = function insertChildSpan_getID() {
        return "Insert inaccessible span containing accessibles" +
           prettyName(aID);
-      }
+      };
     }
 
     /**
@@ -108,12 +108,12 @@
         getAccessible(childDiv);
 
         this.DOMNode.removeChild(childDiv);
-      }
+      };
 
       this.getID = function removeChildDiv_getID() {
         return "Remove accessible div from the middle of text accessible " +
           prettyName(aID);
-      }
+      };
     }
 
     /**
@@ -125,12 +125,12 @@
       this.invoke = function insertChildDiv_invoke() {
         var childDiv = document.createElement("div");
         this.DOMNode.insertBefore(childDiv, this.DOMNode.childNodes[1]);
-      }
+      };
 
       this.getID = function insertChildDiv_getID() {
         return "Insert accessible div into the middle of text accessible " +
           prettyName(aID);
-      }
+      };
     }
 
     /**
@@ -148,12 +148,12 @@
           while (this.DOMNode.firstChild)
             this.DOMNode.firstChild.remove();
         }
-      }
+      };
 
       this.getID = function removeChildren_getID() {
         return "remove children of " + prettyName(aID) +
           (aLastToFirst ? " from last to first" : " from first to last");
-      }
+      };
     }
 
     /**
@@ -169,13 +169,13 @@
         this.DOMNode.focus();
         this.DOMNode.setSelectionRange(aStart, aEnd);
 
-        synthesizeKey("VK_DELETE", {});
-      }
+        synthesizeKey("KEY_Delete");
+      };
 
       this.getID = function removeTextFromInput_getID() {
         return "Remove text from " + aStart + " to " + aEnd + " for " +
           prettyName(aID);
-      }
+      };
     }
 
     /**
@@ -189,12 +189,12 @@
 
       this.invoke = function insertTextIntoInput_invoke() {
         this.DOMNode.focus();
-        synthesizeKey("a", {});
-      }
+        sendString("a");
+      };
 
       this.getID = function insertTextIntoInput_getID() {
         return "Insert text to " + aStart + " for " + prettyName(aID);
-      }
+      };
     }
 
     /**
@@ -212,13 +212,13 @@
         range.setEnd(this.textNode, aEnd);
         selection.addRange(range);
 
-        synthesizeKey("VK_DELETE", {});
-      }
+        synthesizeKey("KEY_Delete");
+      };
 
       this.getID = function removeTextFromEditable_getID() {
         return "Remove text from " + aStart + " to " + aEnd + " for " +
           prettyName(aID);
-      }
+      };
 
       this.textNode = getNode(aTextNode);
     }

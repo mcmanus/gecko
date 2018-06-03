@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -6,6 +7,7 @@
 /* rendering object for css3 multi-column layout */
 
 #include "mozilla/Unused.h"
+#include "gfxPrefs.h"
 #include "nsColumnSetFrame.h"
 #include "nsCSSRendering.h"
 
@@ -34,15 +36,10 @@ public:
                            bool* aSnap) const override
   {
     *aSnap = false;
-    return static_cast<nsColumnSetFrame*>(mFrame)->CalculateBounds(ToReferenceFrame());
+    return static_cast<nsColumnSetFrame*>(mFrame)->
+      CalculateColumnRuleBounds(ToReferenceFrame());
   }
 
-  virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
-                                   LayerManager* aManager,
-                                   const ContainerLayerParameters& aParameters) override;
-  virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
-                                             LayerManager* aManager,
-                                             const ContainerLayerParameters& aContainerParameters) override;
   virtual bool CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
                                        mozilla::wr::IpcResourceUpdateQueue& aResources,
                                        const StackingContextHelper& aSc,
@@ -62,45 +59,11 @@ nsDisplayColumnRule::Paint(nsDisplayListBuilder* aBuilder,
                            gfxContext* aCtx)
 {
   static_cast<nsColumnSetFrame*>(mFrame)->
-    CreateBorderRenderers(mBorderRenderers, aCtx, mVisibleRect, ToReferenceFrame());
+    CreateBorderRenderers(mBorderRenderers, aCtx, GetPaintRect(), ToReferenceFrame());
 
   for (auto iter = mBorderRenderers.begin(); iter != mBorderRenderers.end(); iter++) {
     iter->DrawBorders();
   }
-}
-LayerState
-nsDisplayColumnRule::GetLayerState(nsDisplayListBuilder* aBuilder,
-                                   LayerManager* aManager,
-                                   const ContainerLayerParameters& aParameters)
-{
-  if (!gfxPrefs::LayersAllowColumnRuleLayers()) {
-    return LAYER_NONE;
-  }
-  RefPtr<gfxContext> screenRefCtx = gfxContext::CreateOrNull(
-    gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget().get());
-
-  static_cast<nsColumnSetFrame*>(mFrame)->
-    CreateBorderRenderers(mBorderRenderers, screenRefCtx, mVisibleRect, ToReferenceFrame());
-
-  if (mBorderRenderers.IsEmpty()) {
-    return LAYER_NONE;
-  }
-
-  for (auto iter = mBorderRenderers.begin(); iter != mBorderRenderers.end(); iter++) {
-    if (!iter->CanCreateWebRenderCommands()) {
-      return LAYER_NONE;
-    }
-  }
-
-  return LAYER_ACTIVE;
-}
-
-already_AddRefed<Layer>
-nsDisplayColumnRule::BuildLayer(nsDisplayListBuilder* aBuilder,
-                                LayerManager* aManager,
-                                const ContainerLayerParameters& aContainerParameters)
-{
-  return BuildDisplayItemLayer(aBuilder, aManager, aContainerParameters);
 }
 
 bool
@@ -114,20 +77,14 @@ nsDisplayColumnRule::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aB
     gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget().get());
 
   static_cast<nsColumnSetFrame*>(mFrame)->
-    CreateBorderRenderers(mBorderRenderers, screenRefCtx, mVisibleRect, ToReferenceFrame());
+    CreateBorderRenderers(mBorderRenderers, screenRefCtx, GetPaintRect(), ToReferenceFrame());
 
   if (mBorderRenderers.IsEmpty()) {
-    return false;
+    return true;
   }
 
-  for (auto iter = mBorderRenderers.begin(); iter != mBorderRenderers.end(); iter++) {
-    if (!iter->CanCreateWebRenderCommands()) {
-      return false;
-    }
-  }
-
-  for (auto iter = mBorderRenderers.begin(); iter != mBorderRenderers.end(); iter++) {
-    iter->CreateWebRenderCommands(aBuilder, aResources, aSc);
+  for (auto& renderer : mBorderRenderers) {
+    renderer.CreateWebRenderCommands(this, aBuilder, aResources, aSc);
   }
 
   return true;
@@ -142,24 +99,24 @@ nsDisplayColumnRule::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aB
  * XXX should we support CSS columns applied to table elements?
  */
 nsContainerFrame*
-NS_NewColumnSetFrame(nsIPresShell* aPresShell, nsStyleContext* aContext, nsFrameState aStateFlags)
+NS_NewColumnSetFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle, nsFrameState aStateFlags)
 {
-  nsColumnSetFrame* it = new (aPresShell) nsColumnSetFrame(aContext);
+  nsColumnSetFrame* it = new (aPresShell) nsColumnSetFrame(aStyle);
   it->AddStateBits(aStateFlags | NS_BLOCK_MARGIN_ROOT);
   return it;
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsColumnSetFrame)
 
-nsColumnSetFrame::nsColumnSetFrame(nsStyleContext* aContext)
-  : nsContainerFrame(aContext, kClassID)
+nsColumnSetFrame::nsColumnSetFrame(ComputedStyle* aStyle)
+  : nsContainerFrame(aStyle, kClassID)
   , mLastBalanceBSize(NS_INTRINSICSIZE)
 {
 }
 
 void
-nsColumnSetFrame::ForEachColumn(const std::function<void(const nsRect& lineRect)>& aSetLineRect,
-                                const nsPoint& aPt)
+nsColumnSetFrame::ForEachColumnRule(const std::function<void(const nsRect& lineRect)>& aSetLineRect,
+                                    const nsPoint& aPt)
 {
   nsIFrame* child = mFrames.FirstChild();
   if (!child)
@@ -178,9 +135,7 @@ nsColumnSetFrame::ForEachColumn(const std::function<void(const nsRect& lineRect)
   bool isVertical = wm.IsVertical();
   bool isRTL = !wm.IsBidiLTR();
 
-  // Get our content rect as an absolute coordinate, not relative to
-  // our parent (which is what the X and Y normally is)
-  nsRect contentRect = GetContentRect() - GetRect().TopLeft() + aPt;
+  nsRect contentRect = GetContentRectRelativeToSelf() + aPt;
   nsSize ruleSize = isVertical ? nsSize(contentRect.width, ruleWidth)
                                : nsSize(ruleWidth, contentRect.height);
 
@@ -216,13 +171,13 @@ nsColumnSetFrame::ForEachColumn(const std::function<void(const nsRect& lineRect)
 }
 
 nsRect
-nsColumnSetFrame::CalculateBounds(const nsPoint& aOffset)
+nsColumnSetFrame::CalculateColumnRuleBounds(const nsPoint& aOffset)
 {
   nsRect combined;
-  ForEachColumn([&combined](const nsRect& aLineRect)
-                {
-                  combined = combined.Union(aLineRect);
-                }, aOffset);
+  ForEachColumnRule([&combined](const nsRect& aLineRect)
+                    {
+                      combined = combined.Union(aLineRect);
+                    }, aOffset);
   return combined;
 }
 
@@ -274,24 +229,35 @@ nsColumnSetFrame::CreateBorderRenderers(nsTArray<nsCSSBorderRenderer>& aBorderRe
     skipSides |= mozilla::eSideBitsTopBottom;
     skipSides |= mozilla::eSideBitsRight;
   }
+  // If we use box-decoration-break: slice (the default), the border
+  // renderers will require clipping if we have continuations (see the
+  // aNeedsClip parameter to ConstructBorderRenderer in nsCSSRendering).
+  //
+  // Since it doesn't matter which box-decoration-break we use since
+  // we're only drawing borders (and not border-images), use 'clone'.
+  border.mBoxDecorationBreak = StyleBoxDecorationBreak::Clone;
 
-  ForEachColumn([&]
-                (const nsRect& aLineRect)
-                {
-                  // Assert that we're not drawing a border-image here; if we were, we
-                  // couldn't ignore the DrawResult that PaintBorderWithStyleBorder returns.
-                  MOZ_ASSERT(border.mBorderImageSource.GetType() == eStyleImageType_Null);
+  ForEachColumnRule([&]
+                    (const nsRect& aLineRect)
+                    {
+                      // Assert that we're not drawing a border-image here; if we were, we
+                      // couldn't ignore the ImgDrawResult that PaintBorderWithStyleBorder returns.
+                      MOZ_ASSERT(border.mBorderImageSource.GetType() == eStyleImageType_Null);
 
-                  gfx::DrawTarget* dt = aCtx ? aCtx->GetDrawTarget() : nullptr;
-                  Maybe<nsCSSBorderRenderer> br =
-                    nsCSSRendering::CreateBorderRendererWithStyleBorder(presContext, dt,
-                                                                        this, aDirtyRect,
-                                                                        aLineRect, border,
-                                                                        StyleContext(), skipSides);
-                  if (br.isSome()) {
-                    aBorderRenderers.AppendElement(br.value());
-                  }
-                }, aPt);
+                      gfx::DrawTarget* dt = aCtx ? aCtx->GetDrawTarget() : nullptr;
+                      bool borderIsEmpty = false;
+                      Maybe<nsCSSBorderRenderer> br =
+                        nsCSSRendering::CreateBorderRendererWithStyleBorder(presContext, dt,
+                                                                            this, aDirtyRect,
+                                                                            aLineRect, border,
+                                                                            Style(),
+                                                                            &borderIsEmpty,
+                                                                            skipSides);
+                      if (br.isSome()) {
+                        MOZ_ASSERT(!borderIsEmpty);
+                        aBorderRenderers.AppendElement(br.value());
+                      }
+                    }, aPt);
 }
 
 static nscoord
@@ -322,19 +288,14 @@ nsColumnSetFrame::GetAvailableContentBSize(const ReflowInput& aReflowInput)
 }
 
 static nscoord
-GetColumnGap(nsColumnSetFrame*    aFrame,
-             const nsStyleColumn* aColStyle)
+GetColumnGap(nsColumnSetFrame* aFrame,
+             nscoord           aPercentageBasis)
 {
-  if (eStyleUnit_Normal == aColStyle->mColumnGap.GetUnit())
+  const auto& columnGap = aFrame->StylePosition()->mColumnGap;
+  if (columnGap.GetUnit() == eStyleUnit_Normal) {
     return aFrame->StyleFont()->mFont.size;
-  if (eStyleUnit_Coord == aColStyle->mColumnGap.GetUnit()) {
-    nscoord colGap = aColStyle->mColumnGap.GetCoordValue();
-    NS_ASSERTION(colGap >= 0, "negative column gap");
-    return colGap;
   }
-
-  NS_NOTREACHED("Unknown gap type");
-  return 0;
+  return nsLayoutUtils::ResolveGapToLength(columnGap, aPercentageBasis);
 }
 
 nsColumnSetFrame::ReflowConfig
@@ -368,7 +329,7 @@ nsColumnSetFrame::ChooseColumnStrategy(const ReflowInput& aReflowInput,
     colBSize = std::min(colBSize, aReflowInput.ComputedMaxBSize());
   }
 
-  nscoord colGap = GetColumnGap(this, colStyle);
+  nscoord colGap = GetColumnGap(this, aReflowInput.ComputedISize());
   int32_t numColumns = colStyle->mColumnCount;
 
   // If column-fill is set to 'balance', then we want to balance the columns.
@@ -552,7 +513,7 @@ nsColumnSetFrame::GetMinISize(gfxContext *aRenderingContext)
     // include n-1 column gaps.
     colISize = iSize;
     iSize *= colStyle->mColumnCount;
-    nscoord colGap = GetColumnGap(this, colStyle);
+    nscoord colGap = GetColumnGap(this, NS_UNCONSTRAINEDSIZE);
     iSize += colGap * (colStyle->mColumnCount - 1);
     // The multiplication above can make 'width' negative (integer overflow),
     // so use std::max to protect against that.
@@ -573,7 +534,7 @@ nsColumnSetFrame::GetPrefISize(gfxContext *aRenderingContext)
   nscoord result = 0;
   DISPLAY_PREF_WIDTH(this, result);
   const nsStyleColumn* colStyle = StyleColumn();
-  nscoord colGap = GetColumnGap(this, colStyle);
+  nscoord colGap = GetColumnGap(this, NS_UNCONSTRAINEDSIZE);
 
   nscoord colISize;
   if (colStyle->mColumnWidth.GetUnit() == eStyleUnit_Coord) {
@@ -1280,7 +1241,7 @@ nsColumnSetFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 
   if (IsVisibleForPainting(aBuilder)) {
     aLists.BorderBackground()->
-      AppendNewToTop(new (aBuilder) nsDisplayColumnRule(aBuilder, this));
+      AppendToTop(MakeDisplayItem<nsDisplayColumnRule>(aBuilder, this));
   }
 
   // Our children won't have backgrounds so it doesn't matter where we put them.
@@ -1300,7 +1261,7 @@ nsColumnSetFrame::AppendDirectlyOwnedAnonBoxes(nsTArray<OwnedAnonBox>& aResult)
     return;
   }
 
-  MOZ_ASSERT(column->StyleContext()->GetPseudo() ==
+  MOZ_ASSERT(column->Style()->GetPseudo() ==
                nsCSSAnonBoxes::columnContent,
              "What sort of child is this?");
   aResult.AppendElement(OwnedAnonBox(column));

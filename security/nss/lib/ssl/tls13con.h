@@ -10,11 +10,7 @@
 #define __tls13con_h_
 
 #include "sslexp.h"
-
-typedef enum {
-    StaticSharedSecret,
-    EphemeralSharedSecret
-} SharedSecretType;
+#include "sslspec.h"
 
 typedef enum {
     tls13_extension_allowed,
@@ -22,10 +18,17 @@ typedef enum {
     tls13_extension_unknown
 } tls13ExtensionStatus;
 
+typedef enum {
+    update_not_requested = 0,
+    update_requested = 1
+} tls13KeyUpdateRequest;
+
 #define TLS13_MAX_FINISHED_SIZE 64
 
 SECStatus tls13_UnprotectRecord(
-    sslSocket *ss, SSL3Ciphertext *cText, sslBuffer *plaintext,
+    sslSocket *ss, ssl3CipherSpec *spec,
+    SSL3Ciphertext *cText, sslBuffer *plaintext,
+    SSL3ContentType *innerType,
     SSL3AlertDescription *alert);
 
 #if defined(WIN32)
@@ -80,15 +83,12 @@ SECStatus tls13_ConstructHelloRetryRequest(sslSocket *ss,
                                            PRUint8 *cookie,
                                            unsigned int cookieLen,
                                            sslBuffer *buffer);
-SECStatus tls13_HandleHelloRetryRequest(sslSocket *ss, PRUint8 *b,
+SECStatus tls13_HandleHelloRetryRequest(sslSocket *ss, const PRUint8 *b,
                                         PRUint32 length);
 void tls13_DestroyKeyShareEntry(TLS13KeyShareEntry *entry);
 void tls13_DestroyKeyShares(PRCList *list);
 SECStatus tls13_CreateKeyShare(sslSocket *ss, const sslNamedGroupDef *groupDef);
 void tls13_DestroyEarlyData(PRCList *list);
-void tls13_CipherSpecAddRef(ssl3CipherSpec *spec);
-void tls13_CipherSpecRelease(ssl3CipherSpec *spec);
-void tls13_DestroyCipherSpecs(PRCList *list);
 SECStatus tls13_SetAlertCipherSpec(sslSocket *ss);
 tls13ExtensionStatus tls13_ExtensionStatus(PRUint16 extension,
                                            SSLHandshakeType message);
@@ -102,18 +102,23 @@ PRInt32 tls13_Read0RttData(sslSocket *ss, void *buf, PRInt32 len);
 SECStatus tls13_HandleEarlyApplicationData(sslSocket *ss, sslBuffer *origBuf);
 PRBool tls13_ClientAllow0Rtt(const sslSocket *ss, const sslSessionID *sid);
 PRUint16 tls13_EncodeDraftVersion(SSL3ProtocolVersion version);
-PRUint16 tls13_EncodeAltDraftVersion(SSL3ProtocolVersion version);
+SECStatus tls13_ClientReadSupportedVersion(sslSocket *ss);
 SECStatus tls13_NegotiateVersion(sslSocket *ss,
                                  const TLSExtension *supported_versions);
 
 PRBool tls13_IsReplay(const sslSocket *ss, const sslSessionID *sid);
 void tls13_AntiReplayRollover(PRTime now);
+
 SECStatus SSLExp_SetupAntiReplay(PRTime window, unsigned int k,
                                  unsigned int bits);
 
 SECStatus SSLExp_HelloRetryRequestCallback(PRFileDesc *fd,
                                            SSLHelloRetryRequestCallback cb,
                                            void *arg);
-SECStatus SSLExp_UseAltServerHelloType(PRFileDesc *fd, PRBool enable);
+SECStatus tls13_SendKeyUpdate(sslSocket *ss, tls13KeyUpdateRequest request,
+                              PRBool buffer);
+SECStatus SSLExp_KeyUpdate(PRFileDesc *fd, PRBool requestUpdate);
+PRBool tls13_MaybeTls13(sslSocket *ss);
+void tls13_SetSpecRecordVersion(sslSocket *ss, ssl3CipherSpec *spec);
 
 #endif /* __tls13con_h_ */

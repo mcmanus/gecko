@@ -26,7 +26,7 @@ add_task(async function setup() {
   // Create our JSON backup from bookmarks.glue.json.
   create_JSON_backup("bookmarks.glue.json");
 
-  do_register_cleanup(function() {
+  registerCleanupFunction(function() {
     remove_bookmarks_html();
     remove_all_JSON_backups();
 
@@ -35,7 +35,7 @@ add_task(async function setup() {
 });
 
 function simulatePlacesInit() {
-  do_print("Simulate Places init");
+  info("Simulate Places init");
   // Force nsBrowserGlue::_initPlaces().
   bg.observe(null, TOPIC_BROWSERGLUE_TEST, TOPICDATA_FORCE_PLACES_INIT);
   return promiseTopicObserved("places-browser-init-complete");
@@ -52,12 +52,14 @@ add_task(async function test_checkPreferences() {
   // Ensure preferences status.
   Assert.ok(!Services.prefs.getBoolPref(PREF_AUTO_EXPORT_HTML));
 
-  Assert.throws(() => Services.prefs.getBoolPref(PREF_IMPORT_BOOKMARKS_HTML));
-  Assert.throws(() => Services.prefs.getBoolPref(PREF_RESTORE_DEFAULT_BOOKMARKS));
+  Assert.throws(() => Services.prefs.getBoolPref(PREF_IMPORT_BOOKMARKS_HTML),
+    /NS_ERROR_UNEXPECTED/);
+  Assert.throws(() => Services.prefs.getBoolPref(PREF_RESTORE_DEFAULT_BOOKMARKS),
+    /NS_ERROR_UNEXPECTED/);
 });
 
 add_task(async function test_import() {
-  do_print("Import from bookmarks.html if importBookmarksHTML is true.");
+  info("Import from bookmarks.html if importBookmarksHTML is true.");
 
   await PlacesUtils.bookmarks.eraseEverything();
 
@@ -85,8 +87,8 @@ add_task(async function test_import() {
 });
 
 add_task(async function test_import_noSmartBookmarks() {
-  do_print("import from bookmarks.html, but don't create smart bookmarks " +
-              "if they are disabled");
+  info("import from bookmarks.html, but don't create smart bookmarks " +
+          "if they are disabled");
 
   await PlacesUtils.bookmarks.eraseEverything();
 
@@ -115,8 +117,8 @@ add_task(async function test_import_noSmartBookmarks() {
 });
 
 add_task(async function test_import_autoExport_updatedSmartBookmarks() {
-  do_print("Import from bookmarks.html, but don't create smart bookmarks " +
-              "if autoExportHTML is true and they are at latest version");
+  info("Import from bookmarks.html, but don't create smart bookmarks " +
+          "if autoExportHTML is true and they are at latest version");
 
   await PlacesUtils.bookmarks.eraseEverything();
 
@@ -148,8 +150,8 @@ add_task(async function test_import_autoExport_updatedSmartBookmarks() {
 });
 
 add_task(async function test_import_autoExport_oldSmartBookmarks() {
-  do_print("Import from bookmarks.html, and create smart bookmarks if " +
-              "autoExportHTML is true and they are not at latest version.");
+  info("Import from bookmarks.html, and create smart bookmarks if " +
+          "autoExportHTML is true and they are not at latest version.");
 
   await PlacesUtils.bookmarks.eraseEverything();
 
@@ -181,8 +183,8 @@ add_task(async function test_import_autoExport_oldSmartBookmarks() {
 });
 
 add_task(async function test_restore() {
-  do_print("restore from default bookmarks.html if " +
-              "restore_default_bookmarks is true.");
+  info("restore from default bookmarks.html if " +
+          "restore_default_bookmarks is true.");
 
   await PlacesUtils.bookmarks.eraseEverything();
 
@@ -208,8 +210,8 @@ add_task(async function test_restore() {
 });
 
 add_task(async function test_restore_import() {
-  do_print("setting both importBookmarksHTML and " +
-              "restore_default_bookmarks should restore defaults.");
+  info("setting both importBookmarksHTML and " +
+          "restore_default_bookmarks should restore defaults.");
 
   await PlacesUtils.bookmarks.eraseEverything();
 

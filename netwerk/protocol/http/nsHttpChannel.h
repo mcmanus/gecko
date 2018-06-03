@@ -29,7 +29,6 @@
 #include "nsISupportsPrimitives.h"
 #include "nsICorsPreflightCallback.h"
 #include "AlternateServices.h"
-#include "nsIHstsPrimingCallback.h"
 #include "nsIRaceCacheWithNetwork.h"
 #include "mozilla/extensions/PStreamFilterParent.h"
 #include "mozilla/Mutex.h"
@@ -74,7 +73,6 @@ class nsHttpChannel final : public HttpBaseChannel
                           , public nsICacheEntryOpenCallback
                           , public nsITransportEventSink
                           , public nsIProtocolProxyCallback
-                          , public nsIInputAvailableCallback
                           , public nsIHttpAuthenticableChannel
                           , public nsIApplicationCacheChannel
                           , public nsIAsyncVerifyRedirectCallback
@@ -84,7 +82,6 @@ class nsHttpChannel final : public HttpBaseChannel
                           , public nsSupportsWeakReference
                           , public nsICorsPreflightCallback
                           , public nsIChannelWithDivertableParentListener
-                          , public nsIHstsPrimingCallback
                           , public nsIRaceCacheWithNetwork
                           , public nsIRequestTailUnblockCallback
                           , public nsITimerCallback
@@ -99,12 +96,10 @@ public:
     NS_DECL_NSICACHEENTRYOPENCALLBACK
     NS_DECL_NSITRANSPORTEVENTSINK
     NS_DECL_NSIPROTOCOLPROXYCALLBACK
-    NS_DECL_NSIINPUTAVAILABLECALLBACK
     NS_DECL_NSIPROXIEDCHANNEL
     NS_DECL_NSIAPPLICATIONCACHECONTAINER
     NS_DECL_NSIAPPLICATIONCACHECHANNEL
     NS_DECL_NSIASYNCVERIFYREDIRECTCALLBACK
-    NS_DECL_NSIHSTSPRIMINGCALLBACK
     NS_DECL_NSITHREADRETARGETABLEREQUEST
     NS_DECL_NSIDNSLISTENER
     NS_DECL_NSICHANNELWITHDIVERTABLEPARENTLISTENER
@@ -165,7 +160,6 @@ public:
     NS_IMETHOD GetEncodedBodySize(uint64_t *aEncodedBodySize) override;
     // nsIHttpChannelInternal
     NS_IMETHOD SetupFallbackChannel(const char *aFallbackKey) override;
-    NS_IMETHOD ForceIntercepted(uint64_t aInterceptionID) override;
     NS_IMETHOD SetChannelIsForDownload(bool aChannelIsForDownload) override;
     // nsISupportsPriority
     NS_IMETHOD SetPriority(int32_t value) override;
@@ -183,6 +177,7 @@ public:
     NS_IMETHOD GetDomainLookupStart(mozilla::TimeStamp *aDomainLookupStart) override;
     NS_IMETHOD GetDomainLookupEnd(mozilla::TimeStamp *aDomainLookupEnd) override;
     NS_IMETHOD GetConnectStart(mozilla::TimeStamp *aConnectStart) override;
+    NS_IMETHOD GetTcpConnectEnd(mozilla::TimeStamp *aTcpConnectEnd) override;
     NS_IMETHOD GetSecureConnectionStart(mozilla::TimeStamp *aSecureConnectionStart) override;
     NS_IMETHOD GetConnectEnd(mozilla::TimeStamp *aConnectEnd) override;
     NS_IMETHOD GetRequestStart(mozilla::TimeStamp *aRequestStart) override;
@@ -201,39 +196,16 @@ public:
     HttpChannelSecurityWarningReporter* GetWarningReporter();
 public: /* internal necko use only */
 
-    using InitLocalBlockListCallback = std::function<void(bool)>;
-
-    void InternalSetUploadStream(nsIInputStream *uploadStream)
-      { mUploadStream = uploadStream; }
-    void SetUploadStreamHasHeaders(bool hasHeaders)
-      { mUploadStreamHasHeaders = hasHeaders; }
-
-    MOZ_MUST_USE nsresult
-    SetReferrerWithPolicyInternal(nsIURI *referrer, uint32_t referrerPolicy) {
-        nsAutoCString spec;
-        nsresult rv = referrer->GetAsciiSpec(spec);
-        if (NS_FAILED(rv)) return rv;
-        mReferrer = referrer;
-        mReferrerPolicy = referrerPolicy;
-        rv = mRequestHead.SetHeader(nsHttp::Referer, spec);
-        return rv;
-    }
-
-    MOZ_MUST_USE nsresult SetTopWindowURI(nsIURI* aTopWindowURI) {
-        mTopWindowURI = aTopWindowURI;
-        return NS_OK;
-    }
-
     uint32_t GetRequestTime() const
     {
         return mRequestTime;
     }
 
     MOZ_MUST_USE nsresult OpenCacheEntry(bool usingSSL);
+    MOZ_MUST_USE nsresult OpenCacheEntryInternal(bool isHttps,
+                                                 nsIApplicationCache *applicationCache,
+                                                 bool noAppCache);
     MOZ_MUST_USE nsresult ContinueConnect();
-
-    // If the load is mixed-content, build and send an HSTS priming request.
-    MOZ_MUST_USE nsresult TryHSTSPriming();
 
     MOZ_MUST_USE nsresult StartRedirectChannelToURI(nsIURI *, uint32_t);
 
@@ -285,7 +257,6 @@ public: /* internal necko use only */
       uint32_t mKeep : 2;
     };
 
-    void MarkIntercepted();
     NS_IMETHOD GetResponseSynthesized(bool* aSynthesized) override;
     bool AwaitingCacheCallbacks();
     void SetCouldBeSynthesized();
@@ -360,8 +331,6 @@ private:
 
     void OnClassOfServiceUpdated();
 
-    bool InitLocalBlockList(const InitLocalBlockListCallback& aCallback);
-
     // redirection specific methods
     void     HandleAsyncRedirect();
     void     HandleAsyncAPIRedirect();
@@ -427,8 +396,6 @@ private:
     MOZ_MUST_USE nsresult StartRedirectChannelToHttps();
     MOZ_MUST_USE nsresult ContinueAsyncRedirectChannelToURI(nsresult rv);
     MOZ_MUST_USE nsresult OpenRedirectChannel(nsresult rv);
-
-    void DetermineContentLength();
 
     /**
      * A function that takes care of reading STS and PKP headers and enforcing
@@ -516,9 +483,14 @@ private:
 
     void SetLoadGroupUserAgentOverride();
 
+    void SetOriginHeader();
     void SetDoNotTrack();
 
     already_AddRefed<nsChannelClassifier> GetOrCreateChannelClassifier();
+
+    // Start an internal redirect to a new InterceptedHttpChannel which will
+    // resolve in firing a ServiceWorker FetchEvent.
+    MOZ_MUST_USE nsresult RedirectToInterceptedChannel();
 
 private:
     // this section is for main-thread-only object
@@ -568,26 +540,16 @@ private:
     uint32_t                          mOfflineCacheLastModifiedTime;
 
     mozilla::TimeStamp                mOnStartRequestTimestamp;
-    // Timestamp of the time the cnannel was suspended.
+    // Timestamp of the time the channel was suspended.
     mozilla::TimeStamp                mSuspendTimestamp;
     mozilla::TimeStamp                mOnCacheEntryCheckTimestamp;
+#ifdef MOZ_GECKO_PROFILER
+    // For the profiler markers
+    mozilla::TimeStamp                mLastStatusReported;
+#endif
     // Total time the channel spent suspended. This value is reported to
     // telemetry in nsHttpChannel::OnStartRequest().
     uint32_t                          mSuspendTotalTime;
-
-    // States of channel interception
-    enum {
-        DO_NOT_INTERCEPT,  // no interception will occur
-        MAYBE_INTERCEPT,   // interception in progress, but can be cancelled
-        INTERCEPTED,       // a synthesized response has been provided
-    } mInterceptCache;
-    // ID of this channel for the interception purposes. Unique unless this
-    // channel is replacing an intercepted one via an redirection.
-    uint64_t mInterceptionID;
-
-    bool PossiblyIntercepted() {
-        return mInterceptCache != DO_NOT_INTERCEPT;
-    }
 
     // If the channel is associated with a cache, and the URI matched
     // a fallback namespace, this will hold the key for the fallback
@@ -749,6 +711,8 @@ protected:
     // Override ReleaseListeners() because mChannelClassifier only exists
     // in nsHttpChannel and it will be released in ReleaseListeners().
     virtual void ReleaseListeners() override;
+
+    virtual void DoAsyncAbort(nsresult aStatus) override;
 
 private: // cache telemetry
     bool mDidReval;

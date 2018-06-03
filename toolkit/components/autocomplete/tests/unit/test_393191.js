@@ -50,24 +50,12 @@ AutoCompleteInput.prototype = {
     invalidate() {},
 
     // nsISupports implementation
-    QueryInterface(iid) {
-      if (iid.equals(Ci.nsISupports) ||
-          iid.equals(Ci.nsIAutoCompletePopup))
-        return this;
-
-      throw Components.results.NS_ERROR_NO_INTERFACE;
-    }
+    QueryInterface: ChromeUtils.generateQI(["nsIAutoCompletePopup"])
   },
 
   // nsISupports implementation
-  QueryInterface(iid) {
-    if (iid.equals(Ci.nsISupports) ||
-        iid.equals(Ci.nsIAutoCompleteInput))
-      return this;
-
-    throw Components.results.NS_ERROR_NO_INTERFACE;
-  }
-}
+  QueryInterface: ChromeUtils.generateQI(["nsIAutoCompleteInput"])
+};
 
 
 
@@ -129,14 +117,8 @@ AutoCompleteResult.prototype = {
   removeValueAt(aRowIndex, aRemoveFromDb) {},
 
   // nsISupports implementation
-  QueryInterface(iid) {
-    if (iid.equals(Ci.nsISupports) ||
-        iid.equals(Ci.nsIAutoCompleteResult))
-      return this;
-
-    throw Components.results.NS_ERROR_NO_INTERFACE;
-  }
-}
+  QueryInterface: ChromeUtils.generateQI(["nsIAutoCompleteResult"])
+};
 
 
 
@@ -171,20 +153,13 @@ AutoCompleteSearch.prototype = {
   stopSearch() {},
 
   // nsISupports implementation
-  QueryInterface(iid) {
-    if (iid.equals(Ci.nsISupports) ||
-        iid.equals(Ci.nsIFactory) ||
-        iid.equals(Ci.nsIAutoCompleteSearch))
-      return this;
-
-    throw Components.results.NS_ERROR_NO_INTERFACE;
-  },
+  QueryInterface: ChromeUtils.generateQI(["nsIFactory", "nsIAutoCompleteSearch"]),
 
   // nsIFactory implementation
   createInstance(outer, iid) {
     return this.QueryInterface(iid);
   }
-}
+};
 
 
 
@@ -234,8 +209,8 @@ function run_test() {
   // Register search so AutoCompleteController can find them
   registerAutoCompleteSearch(emptySearch);
 
-  var controller = Components.classes["@mozilla.org/autocomplete/controller;1"].
-                   getService(Components.interfaces.nsIAutoCompleteController);
+  var controller = Cc["@mozilla.org/autocomplete/controller;1"].
+                   getService(Ci.nsIAutoCompleteController);
 
   // Make an AutoCompleteInput that uses our search
   // and confirms results on search complete
@@ -244,16 +219,16 @@ function run_test() {
 
   input.onSearchBegin = function() {
     numSearchesStarted++;
-    do_check_eq(numSearchesStarted, 1);
+    Assert.equal(numSearchesStarted, 1);
   };
 
   input.onSearchComplete = function() {
 
-    do_check_eq(numSearchesStarted, 1);
+    Assert.equal(numSearchesStarted, 1);
 
-    do_check_eq(controller.searchStatus,
-                Ci.nsIAutoCompleteController.STATUS_COMPLETE_NO_MATCH);
-    do_check_eq(controller.matchCount, 0);
+    Assert.equal(controller.searchStatus,
+                 Ci.nsIAutoCompleteController.STATUS_COMPLETE_NO_MATCH);
+    Assert.equal(controller.matchCount, 0);
 
     // Unregister searches
     unregisterAutoCompleteSearch(emptySearch);

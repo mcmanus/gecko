@@ -28,7 +28,6 @@ const blacklist = {
     "resource://gre/modules/InlineSpellCheckerContent.jsm",
     "resource://gre/modules/Promise.jsm",
     "resource://gre/modules/Task.jsm",
-    "resource://gre/modules/debug.js",
     "resource://gre/modules/osfile.jsm",
   ]),
   services: new Set([
@@ -49,9 +48,9 @@ add_task(async function() {
   // Load a custom frame script to avoid using ContentTask which loads Task.jsm
   mm.loadFrameScript("data:text/javascript,(" + function() {
     /* eslint-env mozilla/frame-script */
-    const {classes: Cc, interfaces: Ci, manager: Cm, utils: Cu} = Components;
+    const Cm = Components.manager;
     Cm.QueryInterface(Ci.nsIServiceManager);
-    Cu.import("resource://gre/modules/AppConstants.jsm");
+    ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
     let collectStacks = AppConstants.NIGHTLY_BUILD || AppConstants.DEBUG;
     let loader = Cc["@mozilla.org/moz/jsloader;1"].getService(Ci.xpcIJSModuleLoader);
     let components = {};
@@ -91,5 +90,5 @@ add_task(async function() {
     }
   }
 
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });

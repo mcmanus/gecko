@@ -2,14 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-this.EXPORTED_SYMBOLS = ["ContextualIdentityService"];
+var EXPORTED_SYMBOLS = ["ContextualIdentityService"];
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-
-const DEFAULT_TAB_COLOR = "#909090";
 const SAVE_DELAY_MS = 1500;
 const CONTEXTUAL_IDENTITY_ENABLED_PREF = "privacy.userContext.enabled";
 
@@ -25,14 +22,16 @@ XPCOMUtils.defineLazyGetter(this, "gTextEncoder", function() {
   return new TextEncoder();
 });
 
-XPCOMUtils.defineLazyModuleGetter(this, "AsyncShutdown",
-                                  "resource://gre/modules/AsyncShutdown.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "OS",
-                                  "resource://gre/modules/osfile.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "DeferredTask",
-                                  "resource://gre/modules/DeferredTask.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
-                                  "resource://gre/modules/FileUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "AsyncShutdown",
+                               "resource://gre/modules/AsyncShutdown.jsm");
+ChromeUtils.defineModuleGetter(this, "OS",
+                               "resource://gre/modules/osfile.jsm");
+ChromeUtils.defineModuleGetter(this, "DeferredTask",
+                               "resource://gre/modules/DeferredTask.jsm");
+ChromeUtils.defineModuleGetter(this, "FileUtils",
+                               "resource://gre/modules/FileUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "NetUtil",
+                               "resource://gre/modules/NetUtil.jsm");
 
 function _TabRemovalObserver(resolver, tabParentIds) {
   this._resolver = resolver;
@@ -44,7 +43,7 @@ _TabRemovalObserver.prototype = {
   _resolver: null,
   _tabParentIds: null,
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIObserver]),
 
   observe(subject, topic, data) {
     let tabParent = subject.QueryInterface(Ci.nsITabParent);
@@ -119,13 +118,14 @@ _ContextualIdentityService.prototype = {
     Services.prefs.addObserver(CONTEXTUAL_IDENTITY_ENABLED_PREF, this);
   },
 
-  // observe() is only used to listen to container enabling pref
-  async observe() {
-    const contextualIdentitiesEnabled = Services.prefs.getBoolPref(CONTEXTUAL_IDENTITY_ENABLED_PREF);
-    if (!contextualIdentitiesEnabled) {
-      await this.closeContainerTabs();
-      this.notifyAllContainersCleared();
-      this.resetDefault();
+  async observe(aSubject, aTopic) {
+    if (aTopic === "nsPref:changed") {
+      const contextualIdentitiesEnabled = Services.prefs.getBoolPref(CONTEXTUAL_IDENTITY_ENABLED_PREF);
+      if (!contextualIdentitiesEnabled) {
+        await this.closeContainerTabs();
+        this.notifyAllContainersCleared();
+        this.resetDefault();
+      }
     }
   },
 
@@ -137,20 +137,7 @@ _ContextualIdentityService.prototype = {
       }
 
       try {
-        let data = JSON.parse(gTextDecoder.decode(bytes));
-        if (data.version == 1) {
-          this.resetDefault();
-        }
-        if (data.version != 2) {
-          dump("ERROR - ContextualIdentityService - Unknown version found in " + this._path + "\n");
-          this.loadError(null);
-          return;
-        }
-
-        this._identities = data.identities;
-        this._lastUserContextId = data.lastUserContextId;
-
-        this._dataReady = true;
+        this.parseData(bytes);
       } catch (error) {
         this.loadError(error);
       }
@@ -169,6 +156,10 @@ _ContextualIdentityService.prototype = {
     this._openedIdentities = new Set();
 
     this._dataReady = true;
+
+    // Let's delete all the data of any userContextId. 1 is the first valid
+    // userContextId value.
+    this.deleteContainerData();
 
     this.saveSoon();
   },
@@ -211,7 +202,7 @@ _ContextualIdentityService.prototype = {
     this._saverCallback = null;
 
     let object = {
-      version: 2,
+      version: 3,
       lastUserContextId: this._lastUserContextId,
       identities: this._identities
     };
@@ -291,6 +282,37 @@ _ContextualIdentityService.prototype = {
     return {wrappedJSObject};
   },
 
+  parseData(bytes) {
+    let data = JSON.parse(gTextDecoder.decode(bytes));
+    if (data.version == 1) {
+      this.resetDefault();
+      return;
+    }
+
+    let saveNeeded = false;
+
+    if (data.version == 2) {
+      data = this.migrate2to3(data);
+      saveNeeded = true;
+    }
+
+    if (data.version != 3) {
+      dump("ERROR - ContextualIdentityService - Unknown version found in " + this._path + "\n");
+      this.loadError(null);
+      return;
+    }
+
+    this._identities = data.identities;
+    this._lastUserContextId = data.lastUserContextId;
+
+    // If we had a migration, let's force the saving of the file.
+    if (saveNeeded) {
+      this.saveSoon();
+    }
+
+    this._dataReady = true;
+  },
+
   ensureDataReady() {
     if (this._dataReady) {
       return;
@@ -303,13 +325,8 @@ _ContextualIdentityService.prototype = {
       inputStream.init(new FileUtils.File(this._path),
                        FileUtils.MODE_RDONLY, FileUtils.PERMS_FILE, 0);
       try {
-        let json = Cc["@mozilla.org/dom/json;1"].createInstance(Ci.nsIJSON);
-        let data = json.decodeFromStream(inputStream,
-                                         inputStream.available());
-        this._identities = data.identities;
-        this._lastUserContextId = data.lastUserContextId;
-
-        this._dataReady = true;
+        let bytes = NetUtil.readInputStream(inputStream, inputStream.available());
+        this.parseData(bytes);
       } finally {
         inputStream.close();
       }
@@ -441,7 +458,32 @@ _ContextualIdentityService.prototype = {
   createNewInstanceForTesting(path) {
     return new _ContextualIdentityService(path);
   },
+
+  deleteContainerData() {
+    let minUserContextId = 1;
+    let maxUserContextId = minUserContextId;
+    const enumerator = Services.cookies.enumerator;
+    while (enumerator.hasMoreElements()) {
+      const cookie = enumerator.getNext().QueryInterface(Ci.nsICookie);
+      if (cookie.originAttributes.userContextId > maxUserContextId) {
+        maxUserContextId = cookie.originAttributes.userContextId;
+      }
+    }
+
+    for (let i = minUserContextId; i <= maxUserContextId; ++i) {
+      Services.obs.notifyObservers(null, "clear-origin-attributes-data",
+                                   JSON.stringify({ userContextId: i }));
+    }
+  },
+
+  migrate2to3(data) {
+    // migrating from 2 to 3 is basically just increasing the version id.
+    // This migration was needed for bug 1419591. See bug 1419591 to know more.
+    data.version = 3;
+
+    return data;
+  },
 };
 
 let path = OS.Path.join(OS.Constants.Path.profileDir, "containers.json");
-this.ContextualIdentityService = new _ContextualIdentityService(path);
+var ContextualIdentityService = new _ContextualIdentityService(path);

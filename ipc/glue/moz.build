@@ -6,7 +6,6 @@
 include('/media/webrtc/webrtc.mozbuild')
 
 EXPORTS += [
-    'nsIIPCBackgroundChildCreateCallback.h',
     'nsIIPCSerializableInputStream.h',
     'nsIIPCSerializableURI.h',
 ]
@@ -16,11 +15,13 @@ EXPORTS.mozilla.ipc += [
     'BackgroundParent.h',
     'BackgroundUtils.h',
     'BrowserProcessSubThread.h',
+    'ByteBuf.h',
     'CrashReporterClient.h',
     'CrashReporterHost.h',
     'CrashReporterMetadataShmem.h',
     'CrossProcessMutex.h',
     'CrossProcessSemaphore.h',
+    'EnvironmentMap.h',
     'FileDescriptor.h',
     'FileDescriptorSetChild.h',
     'FileDescriptorSetParent.h',
@@ -32,6 +33,7 @@ EXPORTS.mozilla.ipc += [
     'IPCStreamDestination.h',
     'IPCStreamSource.h',
     'IPCStreamUtils.h',
+    'IPDLParamTraits.h',
     'MessageChannel.h',
     'MessageLink.h',
     'Neutering.h',
@@ -46,10 +48,6 @@ EXPORTS.mozilla.ipc += [
     'URIUtils.h',
     'WindowsMessageLoop.h',
 ]
-
-if CONFIG['FUZZING'] == '1':
-    EXPORTS.mozilla.ipc += ['Faulty.h']
-    SOURCES += ['Faulty.cpp']
 
 if CONFIG['OS_ARCH'] == 'WINNT':
     EXPORTS.mozilla.ipc += [
@@ -178,7 +176,7 @@ else:
         'GeckoChildProcessHost.cpp',
     ]
 
-if CONFIG['_MSC_VER']:
+if CONFIG['CC_TYPE'] in ('msvc', 'clang-cl'):
     # This is intended as a temporary hack to support building with VS2015.
     # 'reinterpret_cast': conversion from 'DWORD' to 'HANDLE' of greater size
     SOURCES['BackgroundChildImpl.cpp'].flags += ['-wd4312']
@@ -189,7 +187,6 @@ LOCAL_INCLUDES += [
     '/dom/broadcastchannel',
     '/dom/indexedDB',
     '/dom/storage',
-    '/dom/workers',
     '/media/webrtc/trunk',
     '/xpcom/build',
 ]
@@ -218,8 +215,8 @@ include('/ipc/chromium/chromium-config.mozbuild')
 
 FINAL_LIBRARY = 'xul'
 
-for var in ('MOZ_CHILD_PROCESS_NAME', 'MOZ_CHILD_PROCESS_NAME_PIE',
-            'MOZ_CHILD_PROCESS_BUNDLE', 'DLL_PREFIX', 'DLL_SUFFIX'):
+for var in ('MOZ_CHILD_PROCESS_NAME', 'MOZ_CHILD_PROCESS_BUNDLE',
+            'DLL_PREFIX', 'DLL_SUFFIX'):
     DEFINES[var] = '"%s"' % CONFIG[var]
 
 if CONFIG['MOZ_SANDBOX'] and CONFIG['OS_ARCH'] == 'WINNT':
@@ -229,5 +226,8 @@ if CONFIG['MOZ_SANDBOX'] and CONFIG['OS_ARCH'] == 'WINNT':
         '/security/sandbox/win/src/sandboxbroker',
     ]
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-shadow']
+
+if CONFIG['NIGHTLY_BUILD']:
+    DEFINES['ASYNC_CONTENTPROC_LAUNCH'] = True

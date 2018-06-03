@@ -54,26 +54,10 @@ exports.baseModules = [
  * modules that are *not* owned by a tool.
  */
 exports.devtoolsModules = [
-  "devtools/shared/gcli/commands/addon",
-  "devtools/shared/gcli/commands/appcache",
-  "devtools/shared/gcli/commands/calllog",
-  "devtools/shared/gcli/commands/cmd",
-  "devtools/shared/gcli/commands/cookie",
-  "devtools/shared/gcli/commands/csscoverage",
-  "devtools/shared/gcli/commands/folder",
-  "devtools/shared/gcli/commands/highlight",
-  "devtools/shared/gcli/commands/inject",
-  "devtools/shared/gcli/commands/jsb",
-  "devtools/shared/gcli/commands/listen",
   "devtools/shared/gcli/commands/measure",
-  "devtools/shared/gcli/commands/media",
-  "devtools/shared/gcli/commands/pagemod",
   "devtools/shared/gcli/commands/paintflashing",
-  "devtools/shared/gcli/commands/qsa",
-  "devtools/shared/gcli/commands/restart",
   "devtools/shared/gcli/commands/rulers",
   "devtools/shared/gcli/commands/screenshot",
-  "devtools/shared/gcli/commands/security",
 ];
 
 /**
@@ -106,14 +90,11 @@ try {
 /**
  * Add modules to a system for use in a content process (but don't call load)
  */
-exports.addAllItemsByModule = function (system) {
+exports.addAllItemsByModule = function(system) {
   system.addItemsByModule(exports.baseModules, { delayedLoad: true });
   system.addItemsByModule(exports.devtoolsModules, { delayedLoad: true });
   system.addItemsByModule(exports.devtoolsToolModules, { delayedLoad: true });
   system.addItemsByModule(exports.devtoolsButtonModules, { delayedLoad: true });
-
-  const { mozDirLoader } = require("devtools/shared/gcli/commands/cmd");
-  system.addItemsByModule("mozcmd", { delayedLoad: true, loader: mozDirLoader });
 };
 
 /**
@@ -132,7 +113,7 @@ var customProperties = [ "buttonId", "buttonClass", "tooltipText" ];
  * Create a system which connects to a GCLI in a remote target
  * @return Promise<System> for the given target
  */
-exports.getSystem = function (target) {
+exports.getSystem = function(target) {
   const existingLinks = linksForTarget.get(target);
   if (existingLinks != null) {
     existingLinks.refs++;
@@ -163,7 +144,7 @@ exports.getSystem = function (target) {
  * Someone that called getSystem doesn't need it any more, so decrement the
  * count of users of the system for that target, and destroy if needed
  */
-exports.releaseSystem = function (target) {
+exports.releaseSystem = function(target) {
   const links = linksForTarget.get(target);
   if (links == null) {
     throw new Error("releaseSystem called for unknown target");

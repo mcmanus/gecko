@@ -1,16 +1,15 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 "use strict";
 
-this.EXPORTED_SYMBOLS = ["NativeApp"];
+var EXPORTED_SYMBOLS = ["NativeApp"];
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-const {EventEmitter} = Cu.import("resource://gre/modules/EventEmitter.jsm", {});
+const {EventEmitter} = ChromeUtils.import("resource://gre/modules/EventEmitter.jsm", {});
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   AppConstants: "resource://gre/modules/AppConstants.jsm",
@@ -46,7 +45,7 @@ const PREF_MAX_WRITE = "webextensions.native-messaging.max-output-message-bytes"
 
 const global = this;
 
-this.NativeApp = class extends EventEmitter {
+var NativeApp = class extends EventEmitter {
   /**
    * @param {BaseContext} context The context that initiated the native app.
    * @param {string} application The identifier of the native app.
@@ -108,7 +107,7 @@ this.NativeApp = class extends EventEmitter {
    * @param {BaseContext} context The context associated with the port.
    * @param {nsIMessageSender} messageManager The message manager used to send
    *     and receive messages from the port's creator.
-   * @param {string} portId A unique internal ID that identifies the port.
+   * @param {number} portId A unique internal ID that identifies the port.
    * @param {object} sender The object describing the creator of the connection
    *     request.
    * @param {string} application The name of the native messaging host.

@@ -19,6 +19,7 @@
 #include "nsIStringBundle.h"
 #include "nsIPrefService.h"
 #include "nsIPrompt.h"
+#include "nsIURIMutator.h"
 #include "nsNetUtil.h"
 #include "nsContentSecurityManager.h"
 #include "nsExternalHelperAppService.h"
@@ -85,7 +86,7 @@ NS_INTERFACE_MAP_BEGIN(nsExtProtocolChannel)
    NS_INTERFACE_MAP_ENTRY(nsIParentChannel)
    NS_INTERFACE_MAP_ENTRY(nsIStreamListener)
    NS_INTERFACE_MAP_ENTRY(nsIRequestObserver)
-NS_INTERFACE_MAP_END_THREADSAFE
+NS_INTERFACE_MAP_END
 
 nsExtProtocolChannel::nsExtProtocolChannel(nsIURI* aURI,
                                            nsILoadInfo* aLoadInfo)
@@ -404,7 +405,7 @@ NS_IMETHODIMP nsExtProtocolChannel::CompleteRedirectSetup(nsIStreamListener *lis
 // From nsIParentChannel (derives from nsIStreamListener)
 //////////////////////////////////////////////////////////////////////
 
-NS_IMETHODIMP nsExtProtocolChannel::SetParentListener(HttpChannelParentListener* aListener)
+NS_IMETHODIMP nsExtProtocolChannel::SetParentListener(mozilla::net::HttpChannelParentListener* aListener)
 {
   // This is called as part of the connect parent operation from
   // ContentParent::RecvExtProtocolChannelConnectParent.  Setting
@@ -490,7 +491,7 @@ NS_INTERFACE_MAP_BEGIN(nsExternalProtocolHandler)
    NS_INTERFACE_MAP_ENTRY(nsIProtocolHandler)
    NS_INTERFACE_MAP_ENTRY(nsIExternalProtocolHandler)
    NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
-NS_INTERFACE_MAP_END_THREADSAFE
+NS_INTERFACE_MAP_END
 
 NS_IMETHODIMP nsExternalProtocolHandler::GetScheme(nsACString &aScheme)
 {
@@ -541,15 +542,9 @@ NS_IMETHODIMP nsExternalProtocolHandler::NewURI(const nsACString &aSpec,
                                                 nsIURI *aBaseURI,
                                                 nsIURI **_retval)
 {
-  nsresult rv;
-  nsCOMPtr<nsIURI> uri = do_CreateInstance(NS_SIMPLEURI_CONTRACTID, &rv);
-  NS_ENSURE_SUCCESS(rv, rv);
-  
-  rv = uri->SetSpec(aSpec);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  NS_ADDREF(*_retval = uri);
-  return NS_OK;
+  return NS_MutateURI(NS_SIMPLEURIMUTATOR_CONTRACTID)
+           .SetSpec(aSpec)
+           .Finalize(_retval);
 }
 
 NS_IMETHODIMP

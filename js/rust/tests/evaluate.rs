@@ -5,7 +5,7 @@
 #[macro_use]
 extern crate js;
 
-use js::jsapi::root::JS::CompartmentOptions;
+use js::jsapi::root::JS::RealmOptions;
 use js::jsapi::root::JS_NewGlobalObject;
 use js::jsapi::root::JS::OnNewGlobalHookOption;
 use js::jsval::UndefinedValue;
@@ -15,7 +15,7 @@ use std::ptr;
 
 #[test]
 fn evaluate() {
-    let rt = Runtime::new().unwrap();
+    let rt = Runtime::new(false).unwrap();
     let cx = rt.cx();
 
     unsafe {
@@ -23,7 +23,7 @@ fn evaluate() {
         rooted!(in(cx) let global =
             JS_NewGlobalObject(cx, &SIMPLE_GLOBAL_CLASS, ptr::null_mut(),
                                OnNewGlobalHookOption::FireOnNewGlobalHook,
-                               &CompartmentOptions::default())
+                               &RealmOptions::default())
         );
         rooted!(in(cx) let mut rval = UndefinedValue());
         assert!(rt.evaluate_script(global.handle(), "1 + 1",

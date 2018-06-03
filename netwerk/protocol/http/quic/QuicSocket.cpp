@@ -165,7 +165,7 @@ QuicSocket::NewStream()
     return nullptr;
   }
   mozquic_stream_t *stream;
-  int code = mozquic_start_new_stream(&stream, mSession, nullptr, 0, 0);
+  int code = mozquic_start_new_stream(&stream, mSession, 0, 0, nullptr, 0, 0);
   if (code != MOZQUIC_OK) {
     return nullptr;
   }
@@ -238,7 +238,7 @@ QuicSocket::DriveHandshake()
       return NS_ERROR_FAILURE;
     }
 
-    uint32_t code = mozquic_handshake_complete(mSession, MOZQUIC_OK, &handshakeinfo);
+    DebugOnly<uint32_t> code = mozquic_handshake_complete(mSession, MOZQUIC_OK, &handshakeinfo);
     MOZ_ASSERT(code == MOZQUIC_OK);
     mHandshakeCompleteCode = MOZQUIC_OK;
   }
@@ -304,7 +304,9 @@ QuicSocket::MozQuicEventCallback(void *closure, uint32_t event, void *param)
     break;
 
   case MOZQUIC_EVENT_NEW_STREAM_DATA:
-    self->mConnection->ForceRecv();
+    if (NS_FAILED(self->mConnection->ForceRecv())) {
+      return MOZQUIC_ERR_IO;
+    }
     break;
 
   default:
@@ -652,6 +654,24 @@ NS_IMETHODIMP QuicSocket::GetEarlyDataAccepted(bool *aEarlyDataAccepted)
   // todo
   *aEarlyDataAccepted = false;
   return NS_OK;
+}
+
+NS_IMETHODIMP
+QuicSocket::GetDenyClientCert(bool* aDenyClientCert)
+{
+  /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+QuicSocket::SetDenyClientCert(bool aDenyClientCert)
+{
+  /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+QuicSocket::GetClientCertSent(bool* arg)
+{
+  /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 /* [infallible] readonly attribute short SSLVersionOffered; */

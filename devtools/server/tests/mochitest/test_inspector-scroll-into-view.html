@@ -13,7 +13,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=901250
   <script type="application/javascript">
 "use strict";
 
-window.onload = function () {
+window.onload = function() {
   SimpleTest.waitForExplicitFinish();
   runNextTest();
 };
@@ -22,11 +22,11 @@ let gInspectee = null;
 let gWalker = null;
 
 addTest(function setup() {
-  let url = document.getElementById("inspectorContent").href;
-  attachURL(url, function (err, client, tab, doc) {
+  const url = document.getElementById("inspectorContent").href;
+  attachURL(url, function(err, client, tab, doc) {
     gInspectee = doc;
-    let {InspectorFront} = require("devtools/shared/fronts/inspector");
-    let inspector = InspectorFront(client, tab);
+    const {InspectorFront} = require("devtools/shared/fronts/inspector");
+    const inspector = InspectorFront(client, tab);
     promiseDone(inspector.getWalker().then(walker => {
       ok(walker, "getWalker() should return an actor.");
       gWalker = walker;
@@ -34,10 +34,10 @@ addTest(function setup() {
   });
 });
 
-addTest(Task.async(function* testScrollIntoView() {
-  let id = "#scroll-into-view";
+addTest(async function testScrollIntoView() {
+  const id = "#scroll-into-view";
   let rect = gInspectee.querySelector(id).getBoundingClientRect();
-  let nodeFront = yield gWalker.querySelector(gWalker.rootNode, id);
+  const nodeFront = await gWalker.querySelector(gWalker.rootNode, id);
   let inViewport = rect.x >= 0 &&
                    rect.y >= 0 &&
                    rect.y <= gInspectee.defaultView.innerHeight &&
@@ -45,7 +45,7 @@ addTest(Task.async(function* testScrollIntoView() {
 
   ok(!inViewport, "Element is not in viewport.");
 
-  yield nodeFront.scrollIntoView();
+  await nodeFront.scrollIntoView();
 
   SimpleTest.executeSoon(() => {
     rect = gInspectee.querySelector(id).getBoundingClientRect();
@@ -58,7 +58,7 @@ addTest(Task.async(function* testScrollIntoView() {
 
     runNextTest();
   });
-}));
+});
 
 addTest(function cleanup() {
   gWalker = null;

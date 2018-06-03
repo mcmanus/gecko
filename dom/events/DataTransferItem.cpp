@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -108,7 +109,7 @@ DataTransferItem::KindFromData(nsIVariant* aData)
   nsresult rv = aData->GetAsISupports(getter_AddRefs(supports));
   if (NS_SUCCEEDED(rv) && supports) {
     // Check if we have one of the supported file data formats
-    if (nsCOMPtr<nsIDOMBlob>(do_QueryInterface(supports)) ||
+    if (RefPtr<Blob>(do_QueryObject(supports)) ||
         nsCOMPtr<BlobImpl>(do_QueryInterface(supports)) ||
         nsCOMPtr<nsIFile>(do_QueryInterface(supports))) {
       return KIND_FILE;
@@ -291,8 +292,7 @@ DataTransferItem::GetAsFile(nsIPrincipal& aSubjectPrincipal,
       return nullptr;
     }
 
-    if (nsCOMPtr<nsIDOMBlob> domBlob = do_QueryInterface(supports)) {
-      Blob* blob = static_cast<Blob*>(domBlob.get());
+    if (RefPtr<Blob> blob = do_QueryObject(supports)) {
       mCachedFile = blob->ToFile();
     } else if (nsCOMPtr<BlobImpl> blobImpl = do_QueryInterface(supports)) {
       MOZ_ASSERT(blobImpl->IsFile());
@@ -325,10 +325,9 @@ DataTransferItem::GetAsEntry(nsIPrincipal& aSubjectPrincipal,
   if (target) {
     global = target->GetOwnerGlobal();
   } else {
-    nsCOMPtr<nsIDOMEvent> event =
-      do_QueryInterface(mDataTransfer->GetParentObject());
+    RefPtr<Event> event = do_QueryObject(mDataTransfer->GetParentObject());
     if (event) {
-      global = event->InternalDOMEvent()->GetParentObject();
+      global = event->GetParentObject();
     }
   }
 
@@ -396,13 +395,8 @@ DataTransferItem::CreateFileFromInputStream(nsIInputStream* aStream)
   }
 
   uint64_t available;
-  rv = aStream->Available(&available);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return nullptr;
-  }
-
   void* data = nullptr;
-  rv = NS_ReadInputStreamToBuffer(aStream, &data, available);
+  rv = NS_ReadInputStreamToBuffer(aStream, &data, -1, &available);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return nullptr;
   }
@@ -473,8 +467,8 @@ DataTransferItem::GetAsString(FunctionStringCallback* aCallback,
   if (parent && !global) {
     if (nsCOMPtr<dom::EventTarget> target = do_QueryInterface(parent)) {
       global = target->GetOwnerGlobal();
-    } else if (nsCOMPtr<nsIDOMEvent> event = do_QueryInterface(parent)) {
-      global = event->InternalDOMEvent()->GetParentObject();
+    } else if (RefPtr<Event> event = do_QueryObject(parent)) {
+      global = event->GetParentObject();
     }
   }
   if (global) {
@@ -552,12 +546,7 @@ DataTransferItem::Data(nsIPrincipal* aPrincipal, ErrorResult& aRv)
   if (NS_SUCCEEDED(rv) && data) {
     nsCOMPtr<EventTarget> pt = do_QueryInterface(data);
     if (pt) {
-      nsIScriptContext* c = pt->GetContextForEventHandlers(&rv);
-      if (NS_WARN_IF(NS_FAILED(rv) || !c)) {
-        return nullptr;
-      }
-
-      nsIGlobalObject* go = c->GetGlobalObject();
+      nsIGlobalObject* go = pt->GetOwnerGlobal();
       if (NS_WARN_IF(!go)) {
         return nullptr;
       }

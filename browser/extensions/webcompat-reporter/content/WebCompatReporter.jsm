@@ -2,22 +2,43 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-this.EXPORTED_SYMBOLS = ["WebCompatReporter"];
+var EXPORTED_SYMBOLS = ["WebCompatReporter"];
 
-let { classes: Cc, interfaces: Ci, utils: Cu } = Components;
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-const PREF_STYLO_ENABLED = "layout.css.servo.enabled";
-
-XPCOMUtils.defineLazyModuleGetter(this, "PageActions",
+ChromeUtils.defineModuleGetter(this, "PageActions",
   "resource:///modules/PageActions.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "wcStrings", function() {
   return Services.strings.createBundle(
     "chrome://webcompat-reporter/locale/webcompat.properties");
 });
+
+// Gather values for interesting details we want to appear in reports.
+let details = {};
+XPCOMUtils.defineLazyPreferenceGetter(details, "gfx.webrender.all", "gfx.webrender.all", false);
+XPCOMUtils.defineLazyPreferenceGetter(details, "gfx.webrender.blob-images", "gfx.webrender.blob-images", true);
+XPCOMUtils.defineLazyPreferenceGetter(details, "gfx.webrender.enabled", "gfx.webrender.enabled", false);
+XPCOMUtils.defineLazyPreferenceGetter(details, "image.mem.shared", "image.mem.shared", true);
+details.buildID = Services.appinfo.appBuildID;
+details.channel = AppConstants.MOZ_UPDATE_CHANNEL;
+
+Object.defineProperty(details, "blockList", {
+  // We don't want this property to end up in the stringified details
+  enumerable: false,
+  get() {
+    let trackingTable = Services.prefs.getCharPref("urlclassifier.trackingTable");
+    // If content-track-digest256 is in the tracking table,
+    // the user has enabled the strict list.
+    return trackingTable.includes("content") ? "strict" : "basic";
+  }
+});
+
+if (AppConstants.platform == "linux") {
+  XPCOMUtils.defineLazyPreferenceGetter(details, "layers.acceleration.force-enabled", "layers.acceleration.force-enabled", false);
+}
 
 let WebCompatReporter = {
   get endpoint() {
@@ -32,7 +53,7 @@ let WebCompatReporter = {
       iconURL: "chrome://webcompat-reporter/skin/lightbulb.svg",
       labelForHistogram: "webcompat",
       onCommand: (e) => this.reportIssue(e.target.ownerGlobal),
-      onShowingInPanel: (buttonNode) => this.onShowingInPanel(buttonNode)
+      onLocationChange: (window) => this.onLocationChange(window)
     }));
   },
 
@@ -41,19 +62,17 @@ let WebCompatReporter = {
     action.remove();
   },
 
-  onShowingInPanel(buttonNode) {
-    let browser = buttonNode.ownerGlobal.gBrowser;
-    let scheme = browser.currentURI.scheme;
-    if (["http", "https"].includes(scheme)) {
-      buttonNode.removeAttribute("disabled");
-    } else {
-      buttonNode.setAttribute("disabled", "true");
-    }
+  onLocationChange(window) {
+    let action = PageActions.actionForID("webcompat-reporter-button");
+    let scheme = window.gBrowser.currentURI.scheme;
+    let isReportable = ["http", "https"].includes(scheme);
+    action.setDisabled(!isReportable, window);
   },
 
   // This method injects a framescript that should send back a screenshot blob
-  // of the top-level window of the currently selected tab, resolved as a
-  // Promise.
+  // of the top-level window of the currently selected tab, and some other details
+  // about the tab (url, tracking protection + mixed content blocking status)
+  // resolved as a Promise.
   getScreenshot(gBrowser) {
     const FRAMESCRIPT = "chrome://webcompat-reporter/content/tab-frame.js";
     const TABDATA_MESSAGE = "WebCompat:SendTabData";
@@ -82,14 +101,26 @@ let WebCompatReporter = {
     const FRAMESCRIPT = "chrome://webcompat-reporter/content/wc-frame.js";
     let win = Services.wm.getMostRecentWindow("navigator:browser");
     const WEBCOMPAT_ORIGIN = new win.URL(WebCompatReporter.endpoint).origin;
-    let styloEnabled = Services.prefs.getBoolPref(PREF_STYLO_ENABLED, false);
+
+    // Grab the relevant tab environment details that might change per site
+    details["mixed active content blocked"] = tabData.hasMixedActiveContentBlocked;
+    details["mixed passive content blocked"] = tabData.hasMixedDisplayContentBlocked;
+    details["tracking content blocked"] = tabData.hasTrackingContentBlocked ?
+      `true (${details.blockList})` : "false";
+
+      // question: do i add a label for basic vs strict?
 
     let params = new URLSearchParams();
     params.append("url", `${tabData.url}`);
     params.append("src", "desktop-reporter");
-    if (styloEnabled) {
-        params.append("details", "layout.css.servo.enabled: true");
-        params.append("label", "type-stylo");
+    params.append("details", JSON.stringify(details));
+
+    if (details["gfx.webrender.all"] || details["gfx.webrender.enabled"]) {
+      params.append("label", "type-webrender-enabled");
+    }
+
+    if (tabData.hasTrackingContentBlocked) {
+      params.append("label", `type-tracking-protection-${details.blockList}`);
     }
 
     let tab = gBrowser.loadOneTab(
@@ -101,7 +132,7 @@ let WebCompatReporter = {
     if (tabData && tabData.blob) {
       let browser = gBrowser.getBrowserForTab(tab);
       let loadedListener = {
-        QueryInterface: XPCOMUtils.generateQI(["nsIWebProgressListener",
+        QueryInterface: ChromeUtils.generateQI(["nsIWebProgressListener",
           "nsISupportsWeakReference"]),
         onStateChange(webProgress, request, flags, status) {
           let isStopped = flags & Ci.nsIWebProgressListener.STATE_STOP;

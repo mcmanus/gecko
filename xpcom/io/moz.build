@@ -16,6 +16,7 @@ XPIDL_SOURCES += [
     'nsIDirectoryService.idl',
     'nsIFile.idl',
     'nsIInputStream.idl',
+    'nsIInputStreamLength.idl',
     'nsIInputStreamTee.idl',
     'nsIIOUtil.idl',
     'nsILineInputStream.idl',
@@ -78,12 +79,15 @@ EXPORTS += [
     'nsStringStream.h',
     'nsUnicharInputStream.h',
     'nsWildCard.h',
-    'SlicedInputStream.h',
     'SpecialSystemDirectory.h',
 ]
 
 EXPORTS.mozilla += [
     'Base64.h',
+    'InputStreamLengthHelper.h',
+    'InputStreamLengthWrapper.h',
+    'NonBlockingAsyncInputStream.h',
+    'SlicedInputStream.h',
     'SnappyCompressOutputStream.h',
     'SnappyFrameUtils.h',
     'SnappyUncompressInputStream.h',
@@ -93,10 +97,12 @@ UNIFIED_SOURCES += [
     'Base64.cpp',
     'crc32c.c',
     'FileDescriptorFile.cpp',
+    'InputStreamLengthHelper.cpp',
+    'InputStreamLengthWrapper.cpp',
+    'NonBlockingAsyncInputStream.cpp',
     'nsAnonymousTemporaryFile.cpp',
     'nsAppFileLocationProvider.cpp',
     'nsBinaryStream.cpp',
-    'nsDirectoryService.cpp',
     'nsEscape.cpp',
     'nsInputStreamTee.cpp',
     'nsIOUtil.cpp',
@@ -120,6 +126,13 @@ UNIFIED_SOURCES += [
     'SpecialSystemDirectory.cpp',
 ]
 
+SOURCES += [
+    'nsDirectoryService.cpp',
+]
+if CONFIG['CC_TYPE'] == 'msvc':
+    # Needed for gDirectoryAtoms.
+    SOURCES['nsDirectoryService.cpp'].flags += ['-Zc:externConstexpr']
+
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
     SOURCES += [
         'CocoaFileUtils.mm',
@@ -137,7 +150,7 @@ LOCAL_INCLUDES += [
     '../build',
 ]
 
-if CONFIG['_MSC_VER']:
+if CONFIG['CC_TYPE'] in ('msvc', 'clang-cl'):
     # This is intended as a temporary hack to support building with VS2015.
     # '_snwprintf' : format string '%s' requires an argument of type 'wchar_t *',
     # but variadic argument 3 has type 'char16ptr_t'

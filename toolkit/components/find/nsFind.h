@@ -11,12 +11,12 @@
 
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
-#include "nsIDOMNode.h"
-#include "nsIDOMRange.h"
+#include "nsINode.h"
 #include "nsIContentIterator.h"
-#include "nsIWordBreaker.h"
+#include "mozilla/intl/WordBreaker.h"
 
 class nsIContent;
+class nsRange;
 
 #define NS_FIND_CONTRACTID "@mozilla.org/embedcomp/rangefind;1"
 
@@ -38,43 +38,36 @@ protected:
   virtual ~nsFind();
 
   // Parameters set from the interface:
-  //nsCOMPtr<nsIDOMRange> mRange;   // search only in this range
   bool mFindBackward;
   bool mCaseSensitive;
 
   // Use "find entire words" mode by setting to a word breaker or null, to
   // disable "entire words" mode.
-  nsCOMPtr<nsIWordBreaker> mWordBreaker;
+  RefPtr<mozilla::intl::WordBreaker> mWordBreaker;
 
   int32_t mIterOffset;
-  nsCOMPtr<nsIDOMNode> mIterNode;
+  nsCOMPtr<nsINode> mIterNode;
 
   // Last block parent, so that we will notice crossing block boundaries:
-  nsCOMPtr<nsIDOMNode> mLastBlockParent;
-  nsresult GetBlockParent(nsIDOMNode* aNode, nsIDOMNode** aParent);
-
-  // Utility routines:
-  bool IsTextNode(nsIDOMNode* aNode);
-  bool IsBlockNode(nsIContent* aNode);
-  bool SkipNode(nsIContent* aNode);
-  bool IsVisibleNode(nsIDOMNode* aNode);
+  nsCOMPtr<nsINode> mLastBlockParent;
+  nsresult GetBlockParent(nsINode* aNode, nsINode** aParent);
 
   // Move in the right direction for our search:
-  nsresult NextNode(nsIDOMRange* aSearchRange,
-                    nsIDOMRange* aStartPoint, nsIDOMRange* aEndPoint,
+  nsresult NextNode(nsRange* aSearchRange,
+                    nsRange* aStartPoint, nsRange* aEndPoint,
                     bool aContinueOk);
 
   // Get the first character from the next node (last if mFindBackward).
-  char16_t PeekNextChar(nsIDOMRange* aSearchRange,
-                        nsIDOMRange* aStartPoint,
-                        nsIDOMRange* aEndPoint);
+  char16_t PeekNextChar(nsRange* aSearchRange,
+                        nsRange* aStartPoint,
+                        nsRange* aEndPoint);
 
   // Reset variables before returning -- don't hold any references.
   void ResetAll();
 
   // The iterator we use to move through the document:
-  nsresult InitIterator(nsIDOMNode* aStartNode, int32_t aStartOffset,
-                        nsIDOMNode* aEndNode, int32_t aEndOffset);
+  nsresult InitIterator(nsINode* aStartNode, int32_t aStartOffset,
+                        nsINode* aEndNode, int32_t aEndOffset);
   RefPtr<nsFindContentIterator> mIterator;
 
   friend class PeekNextCharRestoreState;

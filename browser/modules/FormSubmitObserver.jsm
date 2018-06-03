@@ -5,19 +5,19 @@
 /*
  * Handles the validation callback from nsIFormFillController and
  * the display of the help panel on invalid elements.
+ *
+ * FormSubmitObserver implements the nsIFormSubmitObserver interface
+ * to get notifications about invalid forms. See HTMLFormElement
+ * for details.
  */
 
 "use strict";
 
-var Cc = Components.classes;
-var Ci = Components.interfaces;
-var Cu = Components.utils;
+var EXPORTED_SYMBOLS = [ "FormSubmitObserver" ];
 
-this.EXPORTED_SYMBOLS = [ "FormSubmitObserver" ];
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/BrowserUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/BrowserUtils.jsm");
 
 function FormSubmitObserver(aWindow, aTabChildGlobal) {
   this.init(aWindow, aTabChildGlobal);
@@ -44,15 +44,11 @@ FormSubmitObserver.prototype =
                    .QueryInterface(Ci.nsIInterfaceRequestor)
                    .getInterface(Ci.nsIContentFrameMessageManager);
 
-    // nsIFormSubmitObserver callback about invalid forms. See HTMLFormElement
-    // for details.
-    Services.obs.addObserver(this, "invalidformsubmit");
     this._tab.addEventListener("pageshow", this);
     this._tab.addEventListener("unload", this);
   },
 
   uninit() {
-    Services.obs.removeObserver(this, "invalidformsubmit");
     this._content.removeEventListener("pageshow", this);
     this._content.removeEventListener("unload", this);
     this._mm = null;
@@ -231,5 +227,5 @@ FormSubmitObserver.prototype =
             (target.ownerDocument && target.ownerDocument == this._content.document));
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIFormSubmitObserver])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIFormSubmitObserver, Ci.nsISupportsWeakReference])
 };

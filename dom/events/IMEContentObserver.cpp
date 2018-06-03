@@ -22,21 +22,22 @@
 #include "nsAtom.h"
 #include "nsIContent.h"
 #include "nsIDocument.h"
-#include "nsIDOMDocument.h"
-#include "nsIDOMRange.h"
 #include "nsIFrame.h"
 #include "nsINode.h"
 #include "nsIPresShell.h"
 #include "nsISelectionController.h"
-#include "nsISelectionPrivate.h"
 #include "nsISupports.h"
 #include "nsIWidget.h"
 #include "nsPresContext.h"
+#include "nsRange.h"
 #include "nsRefreshDriver.h"
 #include "nsWeakReference.h"
 #include "WritingModes.h"
 
 namespace mozilla {
+
+typedef ContentEventHandler::NodePosition NodePosition;
+typedef ContentEventHandler::NodePositionBefore NodePositionBefore;
 
 using namespace widget;
 
@@ -184,13 +185,11 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(IMEContentObserver)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(IMEContentObserver)
- NS_INTERFACE_MAP_ENTRY(nsISelectionListener)
  NS_INTERFACE_MAP_ENTRY(nsIMutationObserver)
  NS_INTERFACE_MAP_ENTRY(nsIReflowObserver)
  NS_INTERFACE_MAP_ENTRY(nsIScrollObserver)
  NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
- NS_INTERFACE_MAP_ENTRY(nsIEditorObserver)
- NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsISelectionListener)
+ NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIReflowObserver)
 NS_INTERFACE_MAP_END
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(IMEContentObserver)
@@ -331,9 +330,8 @@ IMEContentObserver::InitWithEditor(nsPresContext* aPresContext,
 
   // get selection and root content
   nsCOMPtr<nsISelectionController> selCon;
-  if (mEditableNode->IsNodeOfType(nsINode::eCONTENT)) {
-    nsIFrame* frame =
-      static_cast<nsIContent*>(mEditableNode.get())->GetPrimaryFrame();
+  if (mEditableNode->IsContent()) {
+    nsIFrame* frame = mEditableNode->AsContent()->GetPrimaryFrame();
     if (NS_WARN_IF(!frame)) {
       return false;
     }
@@ -349,14 +347,13 @@ IMEContentObserver::InitWithEditor(nsPresContext* aPresContext,
     return false;
   }
 
-  selCon->GetSelection(nsISelectionController::SELECTION_NORMAL,
-                       getter_AddRefs(mSelection));
+  mSelection =
+    selCon->GetSelection(nsISelectionController::SELECTION_NORMAL);
   if (NS_WARN_IF(!mSelection)) {
     return false;
   }
 
-  auto selection = static_cast<mozilla::dom::Selection*>(mSelection.get());
-  if (nsRange* selRange = selection->GetRangeAt(0)) {
+  if (nsRange* selRange = mSelection->GetRangeAt(0)) {
     if (NS_WARN_IF(!selRange->GetStartContainer())) {
       return false;
     }
@@ -366,7 +363,7 @@ IMEContentObserver::InitWithEditor(nsPresContext* aPresContext,
   } else {
     mRootContent = mEditableNode->GetSelectionRootContent(presShell);
   }
-  if (!mRootContent && mEditableNode->IsNodeOfType(nsINode::eDOCUMENT)) {
+  if (!mRootContent && mEditableNode->IsDocument()) {
     // The document node is editable, but there are no contents, this document
     // is not editable.
     return false;
@@ -405,8 +402,8 @@ IMEContentObserver::InitWithPlugin(nsPresContext* aPresContext,
   if (NS_WARN_IF(!selCon)) {
     return false;
   }
-  selCon->GetSelection(nsISelectionController::SELECTION_NORMAL,
-                       getter_AddRefs(mSelection));
+  mSelection =
+    selCon->GetSelection(nsISelectionController::SELECTION_NORMAL);
   if (NS_WARN_IF(!mSelection)) {
     return false;
   }
@@ -473,17 +470,10 @@ IMEContentObserver::ObserveEditableNode()
 
   mIsObserving = true;
   if (mEditorBase) {
-    mEditorBase->AddEditorObserver(this);
+    mEditorBase->SetIMEContentObserver(this);
   }
 
   if (!WasInitializedWithPlugin()) {
-    // Add selection change listener only when this starts to observe
-    // non-plugin content since we cannot detect selection changes in
-    // plugins.
-    nsCOMPtr<nsISelectionPrivate> selPrivate(do_QueryInterface(mSelection));
-    NS_ENSURE_TRUE_VOID(selPrivate);
-    nsresult rv = selPrivate->AddSelectionListener(this);
-    NS_ENSURE_SUCCESS_VOID(rv);
     // Add text change observer only when this starts to observe
     // non-plugin content since we cannot detect text changes in
     // plugins.
@@ -552,14 +542,10 @@ IMEContentObserver::UnregisterObservers()
   mIsObserving = false;
 
   if (mEditorBase) {
-    mEditorBase->RemoveEditorObserver(this);
+    mEditorBase->SetIMEContentObserver(nullptr);
   }
 
   if (mSelection) {
-    nsCOMPtr<nsISelectionPrivate> selPrivate(do_QueryInterface(mSelection));
-    if (selPrivate) {
-      selPrivate->RemoveSelectionListener(this);
-    }
     mSelectionData.Clear();
     mFocusedWidget = nullptr;
   }
@@ -709,7 +695,7 @@ IMEContentObserver::IsEditorComposing() const
 }
 
 nsresult
-IMEContentObserver::GetSelectionAndRoot(nsISelection** aSelection,
+IMEContentObserver::GetSelectionAndRoot(dom::Selection** aSelection,
                                         nsIContent** aRootContent) const
 {
   if (!mEditableNode || !mSelection) {
@@ -722,15 +708,14 @@ IMEContentObserver::GetSelectionAndRoot(nsISelection** aSelection,
   return NS_OK;
 }
 
-nsresult
-IMEContentObserver::NotifySelectionChanged(nsIDOMDocument* aDOMDocument,
-                                           nsISelection* aSelection,
-                                           int16_t aReason)
+void
+IMEContentObserver::OnSelectionChange(Selection& aSelection)
 {
-  int32_t count = 0;
-  nsresult rv = aSelection->GetRangeCount(&count);
-  NS_ENSURE_SUCCESS(rv, rv);
-  if (count > 0 && mWidget) {
+  if (!mIsObserving) {
+    return;
+  }
+
+  if (aSelection.RangeCount() && mWidget) {
     bool causedByComposition = IsEditorHandlingEventForComposition();
     bool causedBySelectionEvent = TextComposition::IsHandlingSelectionEvent();
     bool duringComposition = IsEditorComposing();
@@ -738,7 +723,6 @@ IMEContentObserver::NotifySelectionChanged(nsIDOMDocument* aDOMDocument,
                                     causedBySelectionEvent,
                                     duringComposition);
   }
-  return NS_OK;
 }
 
 void
@@ -940,17 +924,17 @@ IMEContentObserver::OnMouseButtonEvent(nsPresContext* aPresContext,
 }
 
 void
-IMEContentObserver::CharacterDataWillChange(nsIDocument* aDocument,
-                                            nsIContent* aContent,
-                                            CharacterDataChangeInfo* aInfo)
+IMEContentObserver::CharacterDataWillChange(nsIContent* aContent,
+                                            const CharacterDataChangeInfo& aInfo)
 {
-  NS_ASSERTION(aContent->IsNodeOfType(nsINode::eTEXT),
+  NS_ASSERTION(aContent->IsText(),
                "character data changed for non-text node");
   MOZ_ASSERT(mPreCharacterDataChangeLength < 0,
              "CharacterDataChanged() should've reset "
              "mPreCharacterDataChangeLength");
 
-  if (!NeedsTextChangeNotification()) {
+  if (!NeedsTextChangeNotification() ||
+      !nsContentUtils::IsInSameAnonymousTree(mRootContent, aContent)) {
     return;
   }
 
@@ -964,22 +948,22 @@ IMEContentObserver::CharacterDataWillChange(nsIDocument* aDocument,
   MaybeNotifyIMEOfAddedTextDuringDocumentChange();
 
   mPreCharacterDataChangeLength =
-    ContentEventHandler::GetNativeTextLength(aContent, aInfo->mChangeStart,
-                                             aInfo->mChangeEnd);
+    ContentEventHandler::GetNativeTextLength(aContent, aInfo.mChangeStart,
+                                             aInfo.mChangeEnd);
   MOZ_ASSERT(mPreCharacterDataChangeLength >=
-               aInfo->mChangeEnd - aInfo->mChangeStart,
+               aInfo.mChangeEnd - aInfo.mChangeStart,
              "The computed length must be same as or larger than XP length");
 }
 
 void
-IMEContentObserver::CharacterDataChanged(nsIDocument* aDocument,
-                                         nsIContent* aContent,
-                                         CharacterDataChangeInfo* aInfo)
+IMEContentObserver::CharacterDataChanged(nsIContent* aContent,
+                                         const CharacterDataChangeInfo& aInfo)
 {
-  NS_ASSERTION(aContent->IsNodeOfType(nsINode::eTEXT),
+  NS_ASSERTION(aContent->IsText(),
                "character data changed for non-text node");
 
-  if (!NeedsTextChangeNotification()) {
+  if (!NeedsTextChangeNotification() ||
+      !nsContentUtils::IsInSameAnonymousTree(mRootContent, aContent)) {
     return;
   }
 
@@ -1000,16 +984,16 @@ IMEContentObserver::CharacterDataChanged(nsIDocument* aDocument,
   nsresult rv =
     ContentEventHandler::GetFlatTextLengthInRange(
                            NodePosition(mRootContent, 0),
-                           NodePosition(aContent, aInfo->mChangeStart),
+                           NodePosition(aContent, aInfo.mChangeStart),
                            mRootContent, &offset, LINE_BREAK_TYPE_NATIVE);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return;
   }
 
   uint32_t newLength =
-    ContentEventHandler::GetNativeTextLength(aContent, aInfo->mChangeStart,
-                                             aInfo->mChangeStart +
-                                               aInfo->mReplaceLength);
+    ContentEventHandler::GetNativeTextLength(aContent, aInfo.mChangeStart,
+                                             aInfo.mChangeStart +
+                                               aInfo.mReplaceLength);
 
   uint32_t oldEnd = offset + static_cast<uint32_t>(removedLength);
   uint32_t newEnd = offset + newLength;
@@ -1025,7 +1009,8 @@ IMEContentObserver::NotifyContentAdded(nsINode* aContainer,
                                        nsIContent* aFirstContent,
                                        nsIContent* aLastContent)
 {
-  if (!NeedsTextChangeNotification()) {
+  if (!NeedsTextChangeNotification() ||
+      !nsContentUtils::IsInSameAnonymousTree(mRootContent, aFirstContent)) {
     return;
   }
 
@@ -1119,39 +1104,33 @@ IMEContentObserver::NotifyContentAdded(nsINode* aContainer,
 }
 
 void
-IMEContentObserver::ContentAppended(nsIDocument* aDocument,
-                                    nsIContent* aContainer,
-                                    nsIContent* aFirstNewContent)
+IMEContentObserver::ContentAppended(nsIContent* aFirstNewContent)
 {
-  NotifyContentAdded(NODE_FROM(aContainer, aDocument),
-                     aFirstNewContent, aContainer->GetLastChild());
+  nsIContent* parent = aFirstNewContent->GetParent();
+  MOZ_ASSERT(parent);
+  NotifyContentAdded(parent, aFirstNewContent, parent->GetLastChild());
 }
 
 void
-IMEContentObserver::ContentInserted(nsIDocument* aDocument,
-                                    nsIContent* aContainer,
-                                    nsIContent* aChild)
+IMEContentObserver::ContentInserted(nsIContent* aChild)
 {
   MOZ_ASSERT(aChild);
-  NotifyContentAdded(NODE_FROM(aContainer, aDocument),
-                     aChild, aChild);
+  NotifyContentAdded(aChild->GetParentNode(), aChild, aChild);
 }
 
 void
-IMEContentObserver::ContentRemoved(nsIDocument* aDocument,
-                                   nsIContent* aContainer,
-                                   nsIContent* aChild,
+IMEContentObserver::ContentRemoved(nsIContent* aChild,
                                    nsIContent* aPreviousSibling)
 {
-  if (!NeedsTextChangeNotification()) {
+  if (!NeedsTextChangeNotification() ||
+      !nsContentUtils::IsInSameAnonymousTree(mRootContent, aChild)) {
     return;
   }
 
   mEndOfAddedTextCache.Clear();
   MaybeNotifyIMEOfAddedTextDuringDocumentChange();
 
-  nsINode* containerNode = NODE_FROM(aContainer, aDocument);
-
+  nsINode* containerNode = aChild->GetParentNode();
   MOZ_ASSERT(containerNode);
 
   uint32_t offset = 0;
@@ -1176,7 +1155,7 @@ IMEContentObserver::ContentRemoved(nsIDocument* aDocument,
 
   // get offset at the end of the deleted node
   uint32_t textLength = 0;
-  if (aChild->IsNodeOfType(nsINode::eTEXT)) {
+  if (aChild->IsText()) {
     textLength = ContentEventHandler::GetNativeTextLength(aChild);
   } else {
     uint32_t nodeLength = static_cast<int32_t>(aChild->GetChildCount());
@@ -1202,8 +1181,7 @@ IMEContentObserver::ContentRemoved(nsIDocument* aDocument,
 }
 
 void
-IMEContentObserver::AttributeWillChange(nsIDocument* aDocument,
-                                        dom::Element* aElement,
+IMEContentObserver::AttributeWillChange(dom::Element* aElement,
                                         int32_t aNameSpaceID,
                                         nsAtom* aAttribute,
                                         int32_t aModType,
@@ -1218,8 +1196,7 @@ IMEContentObserver::AttributeWillChange(nsIDocument* aDocument,
 }
 
 void
-IMEContentObserver::AttributeChanged(nsIDocument* aDocument,
-                                     dom::Element* aElement,
+IMEContentObserver::AttributeChanged(dom::Element* aElement,
                                      int32_t aNameSpaceID,
                                      nsAtom* aAttribute,
                                      int32_t aModType,
@@ -1265,23 +1242,6 @@ IMEContentObserver::ClearAddedNodesDuringDocumentChange()
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
     ("0x%p IMEContentObserver::ClearAddedNodesDuringDocumentChange()"
      ", finished storing consecutive nodes", this));
-}
-
-// static
-nsIContent*
-IMEContentObserver::GetChildNode(nsINode* aParent, int32_t aOffset)
-{
-  if (!aParent->HasChildren() || aOffset < 0 ||
-      aOffset >= static_cast<int32_t>(aParent->Length())) {
-    return nullptr;
-  }
-  if (!aOffset) {
-    return aParent->GetFirstChild();
-  }
-  if (aOffset == static_cast<int32_t>(aParent->Length() - 1)) {
-    return aParent->GetLastChild();
-  }
-  return aParent->GetChildAt(aOffset);
 }
 
 bool
@@ -1427,8 +1387,8 @@ IMEContentObserver::UnsuppressNotifyingIME()
   FlushMergeableNotifications();
 }
 
-NS_IMETHODIMP
-IMEContentObserver::EditAction()
+void
+IMEContentObserver::OnEditActionHandled()
 {
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
     ("0x%p IMEContentObserver::EditAction()", this));
@@ -1436,10 +1396,9 @@ IMEContentObserver::EditAction()
   mEndOfAddedTextCache.Clear();
   mStartOfRemovingTextRangeCache.Clear();
   FlushMergeableNotifications();
-  return NS_OK;
 }
 
-NS_IMETHODIMP
+void
 IMEContentObserver::BeforeEditAction()
 {
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
@@ -1447,10 +1406,9 @@ IMEContentObserver::BeforeEditAction()
 
   mEndOfAddedTextCache.Clear();
   mStartOfRemovingTextRangeCache.Clear();
-  return NS_OK;
 }
 
-NS_IMETHODIMP
+void
 IMEContentObserver::CancelEditAction()
 {
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
@@ -1459,7 +1417,6 @@ IMEContentObserver::CancelEditAction()
   mEndOfAddedTextCache.Clear();
   mStartOfRemovingTextRangeCache.Clear();
   FlushMergeableNotifications();
-  return NS_OK;
 }
 
 void
@@ -1686,7 +1643,7 @@ IMEContentObserver::IsSafeToNotifyIME() const
   }
 
   // If we're in handling an edit action, this method will be called later.
-  if (mEditorBase && mEditorBase->IsInEditAction()) {
+  if (mEditorBase && mEditorBase->IsInEditSubAction()) {
     return false;
   }
 
@@ -2335,13 +2292,9 @@ IMEContentObserver::DocumentObserver::Destroy()
 }
 
 void
-IMEContentObserver::DocumentObserver::BeginUpdate(nsIDocument* aDocument,
-                                                  nsUpdateType aUpdateType)
+IMEContentObserver::DocumentObserver::BeginUpdate(nsIDocument* aDocument)
 {
   if (NS_WARN_IF(Destroyed()) || NS_WARN_IF(!IsObserving())) {
-    return;
-  }
-  if (!(aUpdateType & UPDATE_CONTENT_MODEL)) {
     return;
   }
   mDocumentUpdating++;
@@ -2349,14 +2302,10 @@ IMEContentObserver::DocumentObserver::BeginUpdate(nsIDocument* aDocument,
 }
 
 void
-IMEContentObserver::DocumentObserver::EndUpdate(nsIDocument* aDocument,
-                                                nsUpdateType aUpdateType)
+IMEContentObserver::DocumentObserver::EndUpdate(nsIDocument* aDocument)
 {
   if (NS_WARN_IF(Destroyed()) || NS_WARN_IF(!IsObserving()) ||
       NS_WARN_IF(!IsUpdating())) {
-    return;
-  }
-  if (!(aUpdateType & UPDATE_CONTENT_MODEL)) {
     return;
   }
   mDocumentUpdating--;

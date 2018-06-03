@@ -78,7 +78,7 @@ ProxyAccessible::RelationByType(RelationType aType) const
     if (ProxyAccessible* proxy = mDoc->GetAccessible(targetIDs[i]))
       targets.AppendElement(proxy);
 
-  return Move(targets);
+  return std::move(targets);
 }
 
 void
@@ -106,7 +106,7 @@ ProxyAccessible::Relations(nsTArray<RelationType>* aTypes,
     if (targets.IsEmpty())
       continue;
 
-    aTargetSets->AppendElement(Move(targets));
+    aTargetSets->AppendElement(std::move(targets));
     aTypes->AppendElement(static_cast<RelationType>(type));
   }
 }
@@ -1010,6 +1010,16 @@ ProxyAccessible::Bounds()
   Unused << mDoc->SendExtents(mID, false,
                               &(rect.x), &(rect.y),
                               &(rect.width), &(rect.height));
+  return rect;
+}
+
+nsIntRect
+ProxyAccessible::BoundsInCSSPixels()
+{
+  nsIntRect rect;
+  Unused << mDoc->SendExtentsInCSSPixels(mID,
+                                         &rect.x, &rect.y,
+                                         &rect.width, &rect.height);
   return rect;
 }
 

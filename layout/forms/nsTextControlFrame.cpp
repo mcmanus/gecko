@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,7 +16,6 @@
 #include "nsGenericHTMLElement.h"
 #include "nsIEditor.h"
 #include "nsTextFragment.h"
-#include "nsIDOMHTMLTextAreaElement.h"
 #include "nsNameSpaceManager.h"
 #include "nsCheckboxRadioFrame.h" //for registering accesskeys
 
@@ -23,29 +23,26 @@
 #include "nsPresContext.h"
 #include "nsGkAtoms.h"
 #include "nsLayoutUtils.h"
-#include "nsIDOMElement.h"
-#include "nsIDOMHTMLElement.h"
 #include "nsIPresShell.h"
 
 #include <algorithm>
-#include "nsIDOMNodeList.h" //for selection setting helper func
-#include "nsIDOMRange.h" //for selection setting helper func
+#include "nsRange.h" //for selection setting helper func
+#include "nsINode.h"
 #include "nsPIDOMWindow.h" //needed for notify selection changed to update the menus ect.
-#include "nsIDOMNode.h"
+#include "nsQueryObject.h"
+#include "nsILayoutHistoryState.h"
 
-#include "nsIDOMText.h" //for multiline getselection
 #include "nsFocusManager.h"
-#include "nsPresState.h"
+#include "mozilla/PresState.h"
 #include "nsAttrValueInlines.h"
 #include "mozilla/dom/Selection.h"
 #include "mozilla/TextEditRules.h"
 #include "nsContentUtils.h"
 #include "nsTextNode.h"
-#include "mozilla/StyleSetHandle.h"
-#include "mozilla/StyleSetHandleInlines.h"
 #include "mozilla/dom/HTMLInputElement.h"
 #include "mozilla/dom/HTMLTextAreaElement.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "mozilla/dom/Text.h"
 #include "mozilla/MathAlgorithms.h"
 #include "nsFrameSelection.h"
 
@@ -55,9 +52,9 @@ using namespace mozilla;
 using namespace mozilla::dom;
 
 nsIFrame*
-NS_NewTextControlFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewTextControlFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsTextControlFrame(aContext);
+  return new (aPresShell) nsTextControlFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsTextControlFrame)
@@ -118,8 +115,8 @@ private:
   nsTextControlFrame& mFrame;
 };
 
-nsTextControlFrame::nsTextControlFrame(nsStyleContext* aContext)
-  : nsContainerFrame(aContext, kClassID)
+nsTextControlFrame::nsTextControlFrame(ComputedStyle* aStyle)
+  : nsContainerFrame(aStyle, kClassID)
   , mFirstBaseline(NS_INTRINSIC_WIDTH_UNKNOWN)
   , mEditorHasBeenInitialized(false)
   , mIsProcessing(false)
@@ -135,7 +132,7 @@ nsTextControlFrame::~nsTextControlFrame()
 }
 
 void
-nsTextControlFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsTextControlFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   mScrollEvent.Revoke();
 
@@ -155,11 +152,11 @@ nsTextControlFrame::DestroyFrom(nsIFrame* aDestructRoot)
   }
 
   // FIXME(emilio, bug 1400618): Do this after the child frames are destroyed.
-  DestroyAnonymousContent(mRootNode.forget());
-  DestroyAnonymousContent(mPlaceholderDiv.forget());
-  DestroyAnonymousContent(mPreviewDiv.forget());
+  aPostDestroyData.AddAnonymousContent(mRootNode.forget());
+  aPostDestroyData.AddAnonymousContent(mPlaceholderDiv.forget());
+  aPostDestroyData.AddAnonymousContent(mPreviewDiv.forget());
 
-  nsContainerFrame::DestroyFrom(aDestructRoot);
+  nsContainerFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 LogicalSize
@@ -177,8 +174,11 @@ nsTextControlFrame::CalcIntrinsicSize(gfxContext* aRenderingContext,
     nsLayoutUtils::GetFontMetricsForFrame(this, aFontSizeInflation);
 
   lineHeight =
-    ReflowInput::CalcLineHeight(GetContent(), StyleContext(),
-                                      NS_AUTOHEIGHT, aFontSizeInflation);
+    ReflowInput::CalcLineHeight(GetContent(),
+                                Style(),
+                                PresContext(),
+                                NS_AUTOHEIGHT,
+                                aFontSizeInflation);
   charWidth = fontMet->AveCharWidth();
   charMaxAdvance = fontMet->MaxAdvance();
 
@@ -345,7 +345,7 @@ CreateEmptyDiv(const nsTextControlFrame& aOwnerFrame)
   RefPtr<mozilla::dom::NodeInfo> nodeInfo =
     doc->NodeInfoManager()->GetNodeInfo(nsGkAtoms::div, nullptr,
                                         kNameSpaceID_XHTML,
-                                        nsIDOMNode::ELEMENT_NODE);
+                                        nsINode::ELEMENT_NODE);
 
   RefPtr<Element> element = NS_NewHTMLDivElement(nodeInfo.forget());
   return element.forget();
@@ -422,7 +422,7 @@ nsTextControlFrame::ShouldInitializeEagerly() const
   }
 
   // So do input text controls with spellcheck=true
-  if (auto* htmlElement = nsGenericHTMLElement::FromContent(mContent)) {
+  if (auto* htmlElement = nsGenericHTMLElement::FromNode(mContent)) {
     if (htmlElement->Spellcheck()) {
       return true;
     }
@@ -451,6 +451,7 @@ nsTextControlFrame::CreateRootNode()
   MOZ_ASSERT(!mRootNode);
 
   mRootNode = CreateEmptyDiv(*this);
+  mRootNode->SetIsNativeAnonymousRoot();
 
   mMutationObserver = new nsAnonDivObserver(*this);
   mRootNode->AddMutationObserver(mMutationObserver);
@@ -463,9 +464,6 @@ nsTextControlFrame::CreateRootNode()
   // sheet and is still applied even if author styles are disabled.
   nsAutoString classValue;
   classValue.AppendLiteral("anonymous-div");
-  if (GetWrapCols() > 0) {
-    classValue.AppendLiteral(" wrap");
-  }
 
   if (!IsSingleLineTextControl()) {
     // We can't just inherit the overflow because setting visible overflow will
@@ -493,8 +491,13 @@ nsTextControlFrame::CreatePlaceholderIfNeeded()
 
   // Do we need a placeholder node?
   nsAutoString placeholderTxt;
-  mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::placeholder, placeholderTxt);
-  nsContentUtils::RemoveNewlines(placeholderTxt);
+  mContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::placeholder,
+                                 placeholderTxt);
+  if (IsTextArea()) { // <textarea>s preserve newlines...
+    nsContentUtils::PlatformToDOMLineBreaks(placeholderTxt);
+  } else { // ...<input>s don't
+    nsContentUtils::RemoveNewlines(placeholderTxt);
+  }
 
   if (placeholderTxt.IsEmpty()) {
     return;
@@ -503,7 +506,7 @@ nsTextControlFrame::CreatePlaceholderIfNeeded()
   mPlaceholderDiv = CreateEmptyDivWithTextNode(*this);
   // Associate ::placeholder pseudo-element with the placeholder node.
   mPlaceholderDiv->SetPseudoElementType(CSSPseudoElementType::placeholder);
-  mPlaceholderDiv->GetFirstChild()->SetText(placeholderTxt, false);
+  mPlaceholderDiv->GetFirstChild()->AsText()->SetText(placeholderTxt, false);
 }
 
 void
@@ -630,8 +633,11 @@ nsTextControlFrame::Reflow(nsPresContext*   aPresContext,
   nscoord lineHeight = aReflowInput.ComputedBSize();
   float inflation = nsLayoutUtils::FontSizeInflationFor(this);
   if (!IsSingleLineTextControl()) {
-    lineHeight = ReflowInput::CalcLineHeight(GetContent(), StyleContext(),
-                                             NS_AUTOHEIGHT, inflation);
+    lineHeight = ReflowInput::CalcLineHeight(GetContent(),
+                                             Style(),
+                                             PresContext(),
+                                             NS_AUTOHEIGHT,
+                                             inflation);
   }
   RefPtr<nsFontMetrics> fontMet =
     nsLayoutUtils::GetFontMetricsForFrame(this, inflation);
@@ -749,20 +755,24 @@ void nsTextControlFrame::SetFocus(bool aOn, bool aRepaint)
   }
 
   nsISelectionController* selCon = txtCtrl->GetSelectionController();
-  if (!selCon)
+  if (!selCon) {
     return;
+  }
 
-  nsCOMPtr<nsISelection> ourSel;
-  selCon->GetSelection(nsISelectionController::SELECTION_NORMAL,
-    getter_AddRefs(ourSel));
-  if (!ourSel) return;
+  RefPtr<Selection> ourSel =
+    selCon->GetSelection(nsISelectionController::SELECTION_NORMAL);
+  if (!ourSel) {
+    return;
+  }
 
   nsIPresShell* presShell = PresContext()->GetPresShell();
   RefPtr<nsCaret> caret = presShell->GetCaret();
-  if (!caret) return;
+  if (!caret) {
+    return;
+  }
 
   // Scroll the current selection into view
-  nsISelection *caretSelection = caret->GetSelection();
+  Selection* caretSelection = caret->GetSelection();
   const bool isFocusedRightNow = ourSel == caretSelection;
   if (!isFocusedRightNow) {
     // Don't scroll the current selection if we've been focused using the mouse.
@@ -779,7 +789,7 @@ void nsTextControlFrame::SetFocus(bool aOn, bool aRepaint)
       nsresult rv = mContent->OwnerDoc()->Dispatch(TaskCategory::Other,
                                                    do_AddRef(event));
       if (NS_SUCCEEDED(rv)) {
-        mScrollEvent = Move(event);
+        mScrollEvent = std::move(event);
       }
     }
   }
@@ -792,15 +802,15 @@ void nsTextControlFrame::SetFocus(bool aOn, bool aRepaint)
   // document since the focus is now on our independent selection.
 
   nsCOMPtr<nsISelectionController> selcon = do_QueryInterface(presShell);
-  nsCOMPtr<nsISelection> docSel;
-  selcon->GetSelection(nsISelectionController::SELECTION_NORMAL,
-    getter_AddRefs(docSel));
-  if (!docSel) return;
+  RefPtr<Selection> docSel =
+    selcon->GetSelection(nsISelectionController::SELECTION_NORMAL);
+  if (!docSel) {
+    return;
+  }
 
-  bool isCollapsed = false;
-  docSel->GetIsCollapsed(&isCollapsed);
-  if (!isCollapsed)
-    docSel->RemoveAllRanges();
+  if (!docSel->IsCollapsed()) {
+    docSel->RemoveAllRanges(IgnoreErrors());
+  }
 }
 
 nsresult nsTextControlFrame::SetFormProperty(nsAtom* aName, const nsAString& aValue)
@@ -843,9 +853,9 @@ nsTextControlFrame::GetTextEditor()
 }
 
 nsresult
-nsTextControlFrame::SetSelectionInternal(nsIDOMNode *aStartNode,
+nsTextControlFrame::SetSelectionInternal(nsINode* aStartNode,
                                          uint32_t aStartOffset,
-                                         nsIDOMNode *aEndNode,
+                                         nsINode* aEndNode,
                                          uint32_t aEndOffset,
                                          nsITextControlFrame::SelectionDirection aDirection)
 {
@@ -856,14 +866,13 @@ nsTextControlFrame::SetSelectionInternal(nsIDOMNode *aStartNode,
   RefPtr<nsRange> range = new nsRange(mContent);
   // Be careful to use internal nsRange methods which do not check to make sure
   // we have access to the node.
-  nsCOMPtr<nsINode> start = do_QueryInterface(aStartNode);
-  nsCOMPtr<nsINode> end = do_QueryInterface(aEndNode);
   // XXXbz nsRange::SetStartAndEnd takes int32_t (and ranges generally work on
   // int32_t), but we're passing uint32_t.  The good news is that at this point
   // our endpoints should really be within our length, so not really that big.
   // And if they _are_ that big, SetStartAndEnd() will simply error out, which
   // is not too bad for a case we don't expect to happen.
-  nsresult rv = range->SetStartAndEnd(start, aStartOffset, end, aEndOffset);
+  nsresult rv = range->SetStartAndEnd(aStartNode, aStartOffset,
+				      aEndNode, aEndOffset);
   NS_ENSURE_SUCCESS(rv, rv);
 
   // Get the selection, clear it and add the new range to it!
@@ -872,28 +881,30 @@ nsTextControlFrame::SetSelectionInternal(nsIDOMNode *aStartNode,
   nsISelectionController* selCon = txtCtrl->GetSelectionController();
   NS_ENSURE_TRUE(selCon, NS_ERROR_FAILURE);
 
-  nsCOMPtr<nsISelection> selection;
-  selCon->GetSelection(nsISelectionController::SELECTION_NORMAL, getter_AddRefs(selection));
+  RefPtr<Selection> selection =
+    selCon->GetSelection(nsISelectionController::SELECTION_NORMAL);
   NS_ENSURE_TRUE(selection, NS_ERROR_FAILURE);
-
-  nsCOMPtr<nsISelectionPrivate> selPriv = do_QueryInterface(selection, &rv);
-  NS_ENSURE_SUCCESS(rv, rv);
 
   nsDirection direction;
   if (aDirection == eNone) {
     // Preserve the direction
-    direction = selPriv->GetSelectionDirection();
+    direction = selection->GetDirection();
   } else {
     direction = (aDirection == eBackward) ? eDirPrevious : eDirNext;
   }
 
-  rv = selection->RemoveAllRanges();
-  NS_ENSURE_SUCCESS(rv, rv);
+  ErrorResult err;
+  selection->RemoveAllRanges(err);
+  if (NS_WARN_IF(err.Failed())) {
+    return err.StealNSResult();
+  }
 
-  rv = selection->AddRange(range);  // NOTE: can destroy the world
-  NS_ENSURE_SUCCESS(rv, rv);
+  selection->AddRange(*range, err);  // NOTE: can destroy the world
+  if (NS_WARN_IF(err.Failed())) {
+    return err.StealNSResult();
+  }
 
-  selPriv->SetSelectionDirection(direction);
+  selection->SetDirection(direction);
   return rv;
 }
 
@@ -914,43 +925,37 @@ nsTextControlFrame::ScrollSelectionIntoView()
 }
 
 nsresult
-nsTextControlFrame::GetRootNodeAndInitializeEditor(nsIDOMElement **aRootElement)
-{
-  NS_ENSURE_ARG_POINTER(aRootElement);
-
-  RefPtr<TextEditor> textEditor = GetTextEditor();
-  if (!textEditor) {
-    return NS_OK;
-  }
-  return textEditor->GetRootElement(aRootElement);
-}
-
-nsresult
 nsTextControlFrame::SelectAllOrCollapseToEndOfText(bool aSelect)
 {
-  nsCOMPtr<nsIDOMElement> rootElement;
-  nsresult rv = GetRootNodeAndInitializeEditor(getter_AddRefs(rootElement));
-  NS_ENSURE_SUCCESS(rv, rv);
+  nsresult rv = EnsureEditorInitialized();
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
 
-  nsCOMPtr<nsIContent> rootContent = do_QueryInterface(rootElement);
-  nsCOMPtr<nsIDOMNode> rootNode(do_QueryInterface(rootElement));
+  nsCOMPtr<nsINode> rootNode;
+  rootNode= mRootNode;
 
-  NS_ENSURE_TRUE(rootNode && rootContent, NS_ERROR_FAILURE);
+  NS_ENSURE_TRUE(rootNode, NS_ERROR_FAILURE);
 
-  int32_t numChildren = rootContent->GetChildCount();
+  int32_t numChildren = mRootNode->GetChildCount();
 
   if (numChildren > 0) {
     // We never want to place the selection after the last
     // br under the root node!
-    nsIContent *child = rootContent->GetChildAt(numChildren - 1);
+    nsIContent *child = mRootNode->GetLastChild();
     if (child) {
-      if (child->IsHTMLElement(nsGkAtoms::br))
+      if (child->IsHTMLElement(nsGkAtoms::br)) {
+        child = child->GetPreviousSibling();
         --numChildren;
+      } else if (child->IsText() && !child->Length()) {
+        // Editor won't remove text node when empty value.
+        --numChildren;
+      }
     }
     if (!aSelect && numChildren) {
-      child = rootContent->GetChildAt(numChildren - 1);
-      if (child && child->IsNodeOfType(nsINode::eTEXT)) {
-        rootNode = do_QueryInterface(child);
+      child = child->GetPreviousSibling();
+      if (child && child->IsText()) {
+        rootNode = child;
         const nsTextFragment* fragment = child->GetText();
         numChildren = fragment ? fragment->GetLength() : 0;
       }
@@ -973,7 +978,7 @@ nsTextControlFrame::SetSelectionEndPoints(uint32_t aSelStart, uint32_t aSelEnd,
   if (aSelStart > aSelEnd)
     return NS_ERROR_FAILURE;
 
-  nsCOMPtr<nsIDOMNode> startNode, endNode;
+  nsCOMPtr<nsINode> startNode, endNode;
   uint32_t startOffset, endOffset;
 
   // Calculate the selection start point.
@@ -1019,7 +1024,7 @@ nsTextControlFrame::SetSelectionRange(uint32_t aSelStart, uint32_t aSelEnd,
 
 nsresult
 nsTextControlFrame::OffsetToDOMPoint(uint32_t aOffset,
-                                     nsIDOMNode** aResult,
+                                     nsINode** aResult,
                                      uint32_t* aPosition)
 {
   NS_ENSURE_ARG_POINTER(aResult && aPosition);
@@ -1027,49 +1032,39 @@ nsTextControlFrame::OffsetToDOMPoint(uint32_t aOffset,
   *aResult = nullptr;
   *aPosition = 0;
 
-  nsCOMPtr<nsIDOMElement> rootElement;
-  nsresult rv = GetRootNodeAndInitializeEditor(getter_AddRefs(rootElement));
-  NS_ENSURE_SUCCESS(rv, rv);
-  nsCOMPtr<nsIDOMNode> rootNode(do_QueryInterface(rootElement));
+  nsresult rv = EnsureEditorInitialized();
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
 
+  RefPtr<Element> rootNode = mRootNode;
   NS_ENSURE_TRUE(rootNode, NS_ERROR_FAILURE);
 
-  nsCOMPtr<nsIDOMNodeList> nodeList;
-
-  rv = rootNode->GetChildNodes(getter_AddRefs(nodeList));
-  NS_ENSURE_SUCCESS(rv, rv);
-  NS_ENSURE_TRUE(nodeList, NS_ERROR_FAILURE);
-
-  uint32_t length = 0;
-
-  rv = nodeList->GetLength(&length);
-  NS_ENSURE_SUCCESS(rv, rv);
+  nsCOMPtr<nsINodeList> nodeList = rootNode->ChildNodes();
+  uint32_t length = nodeList->Length();
 
   NS_ASSERTION(length <= 2, "We should have one text node and one mozBR at most");
 
-  nsCOMPtr<nsIDOMNode> firstNode;
-  rv = nodeList->Item(0, getter_AddRefs(firstNode));
-  NS_ENSURE_SUCCESS(rv, rv);
-  nsCOMPtr<nsIDOMText> textNode = do_QueryInterface(firstNode);
+  nsCOMPtr<nsINode> firstNode = nodeList->Item(0);
+  Text* textNode = firstNode ? firstNode->GetAsText() : nullptr;
 
   if (length == 0) {
-    NS_IF_ADDREF(*aResult = rootNode);
+    rootNode.forget(aResult);
     *aPosition = 0;
   } else if (textNode) {
-    uint32_t textLength = 0;
-    textNode->GetLength(&textLength);
+    uint32_t textLength = textNode->Length();
     if (length == 2 && aOffset == textLength) {
       // If we're at the end of the text node and we have a trailing BR node,
       // set the selection on the BR node.
-      NS_IF_ADDREF(*aResult = rootNode);
+      rootNode.forget(aResult);
       *aPosition = 1;
     } else {
       // Otherwise, set the selection on the textnode itself.
-      NS_IF_ADDREF(*aResult = firstNode);
+      firstNode.forget(aResult);
       *aPosition = std::min(aOffset, textLength);
     }
   } else {
-    NS_IF_ADDREF(*aResult = rootNode);
+    rootNode.forget(aResult);
     *aPosition = 0;
   }
 
@@ -1161,22 +1156,20 @@ nsTextControlFrame::AttributeChanged(int32_t         aNameSpaceID,
 }
 
 
-nsresult
+void
 nsTextControlFrame::GetText(nsString& aText)
 {
-  nsresult rv = NS_OK;
   nsCOMPtr<nsITextControlElement> txtCtrl = do_QueryInterface(GetContent());
   NS_ASSERTION(txtCtrl, "Content not a text control element");
   if (IsSingleLineTextControl()) {
     // There will be no line breaks so we can ignore the wrap property.
     txtCtrl->GetTextEditorValue(aText, true);
   } else {
-    nsCOMPtr<nsIDOMHTMLTextAreaElement> textArea = do_QueryInterface(mContent);
+    HTMLTextAreaElement* textArea = HTMLTextAreaElement::FromNode(mContent);
     if (textArea) {
-      rv = textArea->GetValue(aText);
+      textArea->GetValue(aText);
     }
   }
-  return rv;
 }
 
 
@@ -1188,7 +1181,7 @@ nsTextControlFrame::GetMaxLength(int32_t* aSize)
 {
   *aSize = -1;
 
-  nsGenericHTMLElement *content = nsGenericHTMLElement::FromContent(mContent);
+  nsGenericHTMLElement *content = nsGenericHTMLElement::FromNode(mContent);
   if (content) {
     const nsAttrValue* attr = content->GetParsedAttr(nsGkAtoms::maxlength);
     if (attr && attr->Type() == nsAttrValue::eInteger) {
@@ -1227,9 +1220,9 @@ nsTextControlFrame::SetInitialChildList(ChildListID     aListID,
       // div, do it here!
       nsIStatefulFrame* statefulFrame = do_QueryFrame(first);
       NS_ASSERTION(statefulFrame, "unexpected type of frame for the anonymous div");
-      nsPresState fakePresState;
-      fakePresState.SetScrollState(*contentScrollPos);
-      statefulFrame->RestoreState(&fakePresState);
+      UniquePtr<PresState> fakePresState = NewPresState();
+      fakePresState->scrollState() = *contentScrollPos;
+      statefulFrame->RestoreState(fakePresState.get());
       RemoveProperty(ContentScrollPos());
       delete contentScrollPos;
     }
@@ -1239,8 +1232,10 @@ nsTextControlFrame::SetInitialChildList(ChildListID     aListID,
 void
 nsTextControlFrame::SetValueChanged(bool aValueChanged)
 {
-  nsCOMPtr<nsITextControlElement> txtCtrl =
-    GetContent()->GetAsTextControlElement();
+  nsCOMPtr<nsITextControlElement> txtCtrl = HTMLInputElement::FromNode(GetContent());
+  if (!txtCtrl) {
+    txtCtrl = HTMLTextAreaElement::FromNode(GetContent());
+  }
   MOZ_ASSERT(txtCtrl, "Content not a text control element");
 
   if (mPlaceholderDiv) {
@@ -1263,12 +1258,13 @@ nsTextControlFrame::UpdateValueDisplay(bool aNotify,
   if (!IsSingleLineTextControl()) // textareas don't use this
     return NS_OK;
 
-  NS_PRECONDITION(mRootNode, "Must have a div content\n");
-  NS_PRECONDITION(!mEditorHasBeenInitialized,
-                  "Do not call this after editor has been initialized");
+  MOZ_ASSERT(mRootNode, "Must have a div content\n");
+  MOZ_ASSERT(!mEditorHasBeenInitialized,
+             "Do not call this after editor has been initialized");
 
-  nsIContent* textContent = mRootNode->GetChildAt(0);
-  if (!textContent) {
+  nsIContent* childContent = mRootNode->GetFirstChild();
+  Text* textContent;
+  if (!childContent) {
     // Set up a textnode with our value
     RefPtr<nsTextNode> textNode =
       new nsTextNode(mContent->NodeInfo()->NodeInfoManager());
@@ -1276,6 +1272,8 @@ nsTextControlFrame::UpdateValueDisplay(bool aNotify,
 
     mRootNode->AppendChildTo(textNode, aNotify);
     textContent = textNode;
+  } else {
+    textContent = childContent->AsText();
   }
 
   NS_ENSURE_TRUE(textContent, NS_ERROR_UNEXPECTED);
@@ -1301,7 +1299,10 @@ nsTextControlFrame::UpdateValueDisplay(bool aNotify,
   }
 
   if (aBeforeEditorInit && value.IsEmpty()) {
-    mRootNode->RemoveChildAt(0, true);
+    nsIContent* node = mRootNode->GetFirstChild();
+    if (node) {
+      mRootNode->RemoveChildNode(node, true);
+    }
     return NS_OK;
   }
 
@@ -1334,40 +1335,30 @@ nsTextControlFrame::GetOwnedFrameSelection()
   return txtCtrl->GetConstFrameSelection();
 }
 
-NS_IMETHODIMP
-nsTextControlFrame::SaveState(nsPresState** aState)
+UniquePtr<PresState>
+nsTextControlFrame::SaveState()
 {
-  NS_ENSURE_ARG_POINTER(aState);
-
-  *aState = nullptr;
-
-  nsCOMPtr<nsITextControlElement> txtCtrl = do_QueryInterface(GetContent());
-  NS_ASSERTION(txtCtrl, "Content not a text control element");
-
-  nsIContent* rootNode = txtCtrl->GetRootEditorNode();
-  if (rootNode) {
+  if (mRootNode) {
     // Query the nsIStatefulFrame from the HTMLScrollFrame
-    nsIStatefulFrame* scrollStateFrame = do_QueryFrame(rootNode->GetPrimaryFrame());
+    nsIStatefulFrame* scrollStateFrame =
+      do_QueryFrame(mRootNode->GetPrimaryFrame());
     if (scrollStateFrame) {
-      return scrollStateFrame->SaveState(aState);
+      return scrollStateFrame->SaveState();
     }
   }
 
-  return NS_OK;
+  return nullptr;
 }
 
 NS_IMETHODIMP
-nsTextControlFrame::RestoreState(nsPresState* aState)
+nsTextControlFrame::RestoreState(PresState* aState)
 {
   NS_ENSURE_ARG_POINTER(aState);
 
-  nsCOMPtr<nsITextControlElement> txtCtrl = do_QueryInterface(GetContent());
-  NS_ASSERTION(txtCtrl, "Content not a text control element");
-
-  nsIContent* rootNode = txtCtrl->GetRootEditorNode();
-  if (rootNode) {
+  if (mRootNode) {
     // Query the nsIStatefulFrame from the HTMLScrollFrame
-    nsIStatefulFrame* scrollStateFrame = do_QueryFrame(rootNode->GetPrimaryFrame());
+    nsIStatefulFrame* scrollStateFrame =
+      do_QueryFrame(mRootNode->GetPrimaryFrame());
     if (scrollStateFrame) {
       return scrollStateFrame->RestoreState(aState);
     }
@@ -1376,7 +1367,7 @@ nsTextControlFrame::RestoreState(nsPresState* aState)
   // Most likely, we don't have our anonymous content constructed yet, which
   // would cause us to end up here.  In this case, we'll just store the scroll
   // pos ourselves, and forward it to the scroll frame later when it's created.
-  SetProperty(ContentScrollPos(), new nsPoint(aState->GetScrollPosition()));
+  SetProperty(ContentScrollPos(), new nsPoint(aState->scrollState()));
   return NS_OK;
 }
 
@@ -1413,25 +1404,14 @@ nsTextControlFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   while (kid) {
     // If the frame is the placeholder or preview frame, we should only show
     // it if it has to be visible.
-    if (!((kid->GetContent() == txtCtrl->GetPlaceholderNode() &&
+    if (!((kid->GetContent() == mPlaceholderDiv &&
            !txtCtrl->GetPlaceholderVisibility()) ||
-          (kid->GetContent() == txtCtrl->GetPreviewNode() &&
+          (kid->GetContent() == mPreviewDiv &&
            !txtCtrl->GetPreviewVisibility()))) {
       BuildDisplayListForChild(aBuilder, kid, set, 0);
     }
     kid = kid->GetNextSibling();
   }
-}
-
-mozilla::dom::Element*
-nsTextControlFrame::GetPseudoElement(CSSPseudoElementType aType)
-{
-  if (aType == CSSPseudoElementType::placeholder) {
-    nsCOMPtr<nsITextControlElement> txtCtrl = do_QueryInterface(GetContent());
-    return txtCtrl->GetPlaceholderNode();
-  }
-
-  return nsContainerFrame::GetPseudoElement(aType);
 }
 
 NS_IMETHODIMP
@@ -1466,35 +1446,27 @@ NS_IMPL_ISUPPORTS(nsTextControlFrame::nsAnonDivObserver, nsIMutationObserver)
 
 void
 nsTextControlFrame::nsAnonDivObserver::CharacterDataChanged(
-  nsIDocument* aDocument,
   nsIContent* aContent,
-  CharacterDataChangeInfo* aInfo)
+  const CharacterDataChangeInfo&)
 {
   mFrame.ClearCachedValue();
 }
 
 void
 nsTextControlFrame::nsAnonDivObserver::ContentAppended(
-  nsIDocument* aDocument,
-  nsIContent* aContainer,
   nsIContent* aFirstNewContent)
 {
   mFrame.ClearCachedValue();
 }
 
 void
-nsTextControlFrame::nsAnonDivObserver::ContentInserted(
-  nsIDocument* aDocument,
-  nsIContent* aContainer,
-  nsIContent* aChild)
+nsTextControlFrame::nsAnonDivObserver::ContentInserted(nsIContent* aChild)
 {
   mFrame.ClearCachedValue();
 }
 
 void
 nsTextControlFrame::nsAnonDivObserver::ContentRemoved(
-  nsIDocument* aDocument,
-  nsIContent* aContainer,
   nsIContent* aChild,
   nsIContent* aPreviousSibling)
 {

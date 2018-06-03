@@ -3,12 +3,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // Process each item in the "constants hash" to add to "global" and give a name
-this.EXPORTED_SYMBOLS = [];
+var EXPORTED_SYMBOLS = [];
 for (let [key, val] of Object.entries({
 
 // Don't manually modify this line, as it is automatically replaced on merge day
 // by the gecko_migration.py script.
-WEAVE_VERSION: "1.60.0",
+WEAVE_VERSION: "1.64.0",
 
 // Sync Server API version that the client supports.
 SYNC_API_VERSION:                      "1.5",
@@ -18,12 +18,6 @@ SYNC_API_VERSION:                      "1.5",
 // the per-engine cleartext formats.
 STORAGE_VERSION:                       5,
 PREFS_BRANCH:                          "services.sync.",
-
-// Host "key" to access Weave Identity in the password manager
-PWDMGR_HOST:                           "chrome://weave",
-PWDMGR_PASSWORD_REALM:                 "Mozilla Services Password",
-PWDMGR_PASSPHRASE_REALM:               "Mozilla Services Encryption Passphrase",
-PWDMGR_KEYBUNDLE_REALM:                "Mozilla Services Key Bundles",
 
 // Put in [] because those aren't allowed in a collection name.
 DEFAULT_KEYBUNDLE_NAME:                "[default]",
@@ -54,12 +48,6 @@ MASTER_PASSWORD_LOCKED_RETRY_INTERVAL: 15 * 60 * 1000,   // 15 minutes
 // identifiers are shorter.
 DEFAULT_GUID_FETCH_BATCH_SIZE:         50,
 
-// Default batch size for applying incoming records.
-DEFAULT_STORE_BATCH_SIZE:              1,
-HISTORY_STORE_BATCH_SIZE:              50,
-FORMS_STORE_BATCH_SIZE:                50,
-PASSWORDS_STORE_BATCH_SIZE:            50,
-
 // Default batch size for download batching
 // (how many records are fetched at a time from the server when batching is used).
 DEFAULT_DOWNLOAD_BATCH_SIZE:           1000,
@@ -88,9 +76,6 @@ URI_LENGTH_MAX:                        65536,
 
 MAX_HISTORY_UPLOAD:                    5000,
 MAX_HISTORY_DOWNLOAD:                  5000,
-
-// TTL of the message sent to another device when sending a tab
-NOTIFY_TAB_SENT_TTL_SECS:              1 * 3600, // 1 hour
 
 // Top-level statuses:
 STATUS_OK:                             "success.status_ok",
@@ -121,7 +106,6 @@ CREDENTIALS_CHANGED:                   "error.sync.reason.credentials_changed",
 ABORT_SYNC_COMMAND:                    "aborting sync, process commands said so",
 NO_SYNC_NODE_FOUND:                    "error.sync.reason.no_node_found",
 OVER_QUOTA:                            "error.sync.reason.over_quota",
-PROLONGED_SYNC_FAILURE:                "error.sync.prolonged_failure",
 SERVER_MAINTENANCE:                    "error.sync.reason.serverMaintenance",
 
 RESPONSE_OVER_QUOTA:                   "14",
@@ -134,12 +118,6 @@ ENGINE_APPLY_FAIL:                     "error.engine.reason.apply_fail",
 // an upload failure where the batch was interrupted with a 412
 ENGINE_BATCH_INTERRUPTED:              "error.engine.reason.batch_interrupted",
 
-// info types for Service.getStorageInfo
-INFO_COLLECTIONS:                      "collections",
-INFO_COLLECTION_USAGE:                 "collection_usage",
-INFO_COLLECTION_COUNTS:                "collection_counts",
-INFO_QUOTA:                            "quota",
-
 // Ways that a sync can be disabled (messages only to be printed in debug log)
 kSyncMasterPasswordLocked:             "User elected to leave Master Password locked",
 kSyncWeaveDisabled:                    "Weave is disabled",
@@ -147,6 +125,7 @@ kSyncNetworkOffline:                   "Network is offline",
 kSyncBackoffNotMet:                    "Trying to sync before the server said it's okay",
 kFirstSyncChoiceNotMade:               "User has not selected an action for first sync",
 kSyncNotConfigured:                    "Sync is not configured",
+kFirefoxShuttingDown:                  "Firefox is about to shut down",
 
 DEVICE_TYPE_DESKTOP:                   "desktop",
 DEVICE_TYPE_MOBILE:                    "mobile",

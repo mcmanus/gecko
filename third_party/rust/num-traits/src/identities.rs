@@ -1,5 +1,5 @@
-use std::ops::{Add, Mul};
-use std::num::Wrapping;
+use core::ops::{Add, Mul};
+use core::num::Wrapping;
 
 /// Defines an additive identity element for `Self`.
 pub trait Zero: Sized + Add<Self, Output = Self> {
@@ -120,19 +120,19 @@ impl<T: One> One for Wrapping<T> where Wrapping<T>: Mul<Output=Wrapping<T>> {
 #[inline(always)] pub fn one<T: One>() -> T { One::one() }
 
 
-macro_rules! test_wrapping_identities {
-    ($($t:ty)+) => {
-        $(
-            assert_eq!(zero::<$t>(), zero::<Wrapping<$t>>().0);
-            assert_eq!(one::<$t>(), one::<Wrapping<$t>>().0);
-            assert_eq!((0 as $t).is_zero(), Wrapping(0 as $t).is_zero());
-            assert_eq!((1 as $t).is_zero(), Wrapping(1 as $t).is_zero());
-        )+   
-    };
-}
-
 #[test]
 fn wrapping_identities() {
+    macro_rules! test_wrapping_identities {
+        ($($t:ty)+) => {
+            $(
+                assert_eq!(zero::<$t>(), zero::<Wrapping<$t>>().0);
+                assert_eq!(one::<$t>(), one::<Wrapping<$t>>().0);
+                assert_eq!((0 as $t).is_zero(), Wrapping(0 as $t).is_zero());
+                assert_eq!((1 as $t).is_zero(), Wrapping(1 as $t).is_zero());
+            )+
+        };
+    }
+
     test_wrapping_identities!(isize i8 i16 i32 i64 usize u8 u16 u32 u64);
 }
 

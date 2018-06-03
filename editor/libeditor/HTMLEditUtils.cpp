@@ -13,12 +13,11 @@
 #include "nsAString.h"                  // for nsAString::IsEmpty
 #include "nsCOMPtr.h"                   // for nsCOMPtr, operator==, etc.
 #include "nsCaseTreatment.h"
-#include "nsDebug.h"                    // for NS_PRECONDITION, etc.
+#include "nsDebug.h"                    // for NS_ASSERTION, etc.
 #include "nsError.h"                    // for NS_SUCCEEDED
 #include "nsGkAtoms.h"                  // for nsGkAtoms, nsGkAtoms::a, etc.
 #include "nsHTMLTags.h"
 #include "nsAtom.h"                    // for nsAtom
-#include "nsIDOMNode.h"                 // for nsIDOMNode
 #include "nsNameSpaceManager.h"        // for kNameSpaceID_None
 #include "nsLiteralString.h"            // for NS_LITERAL_STRING
 #include "nsString.h"                   // for nsAutoString
@@ -29,14 +28,6 @@ namespace mozilla {
 /**
  * IsInlineStyle() returns true if aNode is an inline style.
  */
-bool
-HTMLEditUtils::IsInlineStyle(nsIDOMNode* aNode)
-{
-  MOZ_ASSERT(aNode);
-  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-  return node && IsInlineStyle(node);
-}
-
 bool
 HTMLEditUtils::IsInlineStyle(nsINode* aNode)
 {
@@ -58,14 +49,6 @@ HTMLEditUtils::IsInlineStyle(nsINode* aNode)
  * IsFormatNode() returns true if aNode is a format node.
  */
 bool
-HTMLEditUtils::IsFormatNode(nsIDOMNode* aNode)
-{
-  MOZ_ASSERT(aNode);
-  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-  return node && IsFormatNode(node);
-}
-
-bool
 HTMLEditUtils::IsFormatNode(nsINode* aNode)
 {
   MOZ_ASSERT(aNode);
@@ -85,17 +68,16 @@ HTMLEditUtils::IsFormatNode(nsINode* aNode)
  * blockquote.
  */
 bool
-HTMLEditUtils::IsNodeThatCanOutdent(nsIDOMNode* aNode)
+HTMLEditUtils::IsNodeThatCanOutdent(nsINode* aNode)
 {
   MOZ_ASSERT(aNode);
-  RefPtr<nsAtom> nodeAtom = EditorBase::GetTag(aNode);
-  return (nodeAtom == nsGkAtoms::ul)
-      || (nodeAtom == nsGkAtoms::ol)
-      || (nodeAtom == nsGkAtoms::dl)
-      || (nodeAtom == nsGkAtoms::li)
-      || (nodeAtom == nsGkAtoms::dd)
-      || (nodeAtom == nsGkAtoms::dt)
-      || (nodeAtom == nsGkAtoms::blockquote);
+  return aNode->IsAnyOfHTMLElements(nsGkAtoms::ul,
+                                    nsGkAtoms::ol,
+                                    nsGkAtoms::dl,
+                                    nsGkAtoms::li,
+                                    nsGkAtoms::dd,
+                                    nsGkAtoms::dt,
+                                    nsGkAtoms::blockquote);
 }
 
 /**
@@ -112,35 +94,9 @@ HTMLEditUtils::IsHeader(nsINode& aNode)
                                    nsGkAtoms::h6);
 }
 
-bool
-HTMLEditUtils::IsHeader(nsIDOMNode* aNode)
-{
-  MOZ_ASSERT(aNode);
-  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-  MOZ_ASSERT(node);
-  return IsHeader(*node);
-}
-
-/**
- * IsParagraph() returns true if aNode is an html paragraph.
- */
-bool
-HTMLEditUtils::IsParagraph(nsIDOMNode* aNode)
-{
-  return EditorBase::NodeIsType(aNode, nsGkAtoms::p);
-}
-
 /**
  * IsListItem() returns true if aNode is an html list item.
  */
-bool
-HTMLEditUtils::IsListItem(nsIDOMNode* aNode)
-{
-  MOZ_ASSERT(aNode);
-  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-  return node && IsListItem(node);
-}
-
 bool
 HTMLEditUtils::IsListItem(nsINode* aNode)
 {
@@ -153,14 +109,6 @@ HTMLEditUtils::IsListItem(nsINode* aNode)
 /**
  * IsTableElement() returns true if aNode is an html table, td, tr, ...
  */
-bool
-HTMLEditUtils::IsTableElement(nsIDOMNode* aNode)
-{
-  MOZ_ASSERT(aNode);
-  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-  return node && IsTableElement(node);
-}
-
 bool
 HTMLEditUtils::IsTableElement(nsINode* aNode)
 {
@@ -180,14 +128,6 @@ HTMLEditUtils::IsTableElement(nsINode* aNode)
  * (doesn't include table)
  */
 bool
-HTMLEditUtils::IsTableElementButNotTable(nsIDOMNode* aNode)
-{
-  MOZ_ASSERT(aNode);
-  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-  return node && IsTableElementButNotTable(node);
-}
-
-bool
 HTMLEditUtils::IsTableElementButNotTable(nsINode* aNode)
 {
   MOZ_ASSERT(aNode);
@@ -204,12 +144,6 @@ HTMLEditUtils::IsTableElementButNotTable(nsINode* aNode)
  * IsTable() returns true if aNode is an html table.
  */
 bool
-HTMLEditUtils::IsTable(nsIDOMNode* aNode)
-{
-  return EditorBase::NodeIsType(aNode, nsGkAtoms::table);
-}
-
-bool
 HTMLEditUtils::IsTable(nsINode* aNode)
 {
   return aNode && aNode->IsHTMLElement(nsGkAtoms::table);
@@ -219,22 +153,14 @@ HTMLEditUtils::IsTable(nsINode* aNode)
  * IsTableRow() returns true if aNode is an html tr.
  */
 bool
-HTMLEditUtils::IsTableRow(nsIDOMNode* aNode)
+HTMLEditUtils::IsTableRow(nsINode* aNode)
 {
-  return EditorBase::NodeIsType(aNode, nsGkAtoms::tr);
+  return aNode && aNode->IsHTMLElement(nsGkAtoms::tr);
 }
 
 /**
  * IsTableCell() returns true if aNode is an html td or th.
  */
-bool
-HTMLEditUtils::IsTableCell(nsIDOMNode* aNode)
-{
-  MOZ_ASSERT(aNode);
-  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-  return node && IsTableCell(node);
-}
-
 bool
 HTMLEditUtils::IsTableCell(nsINode* aNode)
 {
@@ -256,14 +182,6 @@ HTMLEditUtils::IsTableCellOrCaption(nsINode& aNode)
  * IsList() returns true if aNode is an html list.
  */
 bool
-HTMLEditUtils::IsList(nsIDOMNode* aNode)
-{
-  MOZ_ASSERT(aNode);
-  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-  return node && IsList(node);
-}
-
-bool
 HTMLEditUtils::IsList(nsINode* aNode)
 {
   MOZ_ASSERT(aNode);
@@ -273,40 +191,12 @@ HTMLEditUtils::IsList(nsINode* aNode)
 }
 
 /**
- * IsOrderedList() returns true if aNode is an html ordered list.
- */
-bool
-HTMLEditUtils::IsOrderedList(nsIDOMNode* aNode)
-{
-  return EditorBase::NodeIsType(aNode, nsGkAtoms::ol);
-}
-
-
-/**
- * IsUnorderedList() returns true if aNode is an html unordered list.
- */
-bool
-HTMLEditUtils::IsUnorderedList(nsIDOMNode* aNode)
-{
-  return EditorBase::NodeIsType(aNode, nsGkAtoms::ul);
-}
-
-/**
- * IsBlockquote() returns true if aNode is an html blockquote node.
- */
-bool
-HTMLEditUtils::IsBlockquote(nsIDOMNode* aNode)
-{
-  return EditorBase::NodeIsType(aNode, nsGkAtoms::blockquote);
-}
-
-/**
  * IsPre() returns true if aNode is an html pre node.
  */
 bool
-HTMLEditUtils::IsPre(nsIDOMNode* aNode)
+HTMLEditUtils::IsPre(nsINode* aNode)
 {
-  return EditorBase::NodeIsType(aNode, nsGkAtoms::pre);
+  return aNode && aNode->IsHTMLElement(nsGkAtoms::pre);
 }
 
 /**
@@ -319,19 +209,6 @@ HTMLEditUtils::IsImage(nsINode* aNode)
 }
 
 bool
-HTMLEditUtils::IsImage(nsIDOMNode* aNode)
-{
-  return EditorBase::NodeIsType(aNode, nsGkAtoms::img);
-}
-
-bool
-HTMLEditUtils::IsLink(nsIDOMNode *aNode)
-{
-  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-  return node && IsLink(node);
-}
-
-bool
 HTMLEditUtils::IsLink(nsINode* aNode)
 {
   MOZ_ASSERT(aNode);
@@ -340,7 +217,7 @@ HTMLEditUtils::IsLink(nsINode* aNode)
     return false;
   }
 
-  RefPtr<HTMLAnchorElement> anchor = HTMLAnchorElement::FromContentOrNull(aNode->AsContent());
+  RefPtr<HTMLAnchorElement> anchor = HTMLAnchorElement::FromNodeOrNull(aNode->AsContent());
   if (!anchor) {
     return false;
   }
@@ -348,13 +225,6 @@ HTMLEditUtils::IsLink(nsINode* aNode)
   nsAutoString tmpText;
   anchor->GetHref(tmpText);
   return !tmpText.IsEmpty();
-}
-
-bool
-HTMLEditUtils::IsNamedAnchor(nsIDOMNode *aNode)
-{
-  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-  return node && IsNamedAnchor(node);
 }
 
 bool
@@ -371,42 +241,19 @@ HTMLEditUtils::IsNamedAnchor(nsINode* aNode)
 }
 
 /**
- * IsDiv() returns true if aNode is an html div node.
- */
-bool
-HTMLEditUtils::IsDiv(nsIDOMNode* aNode)
-{
-  return EditorBase::NodeIsType(aNode, nsGkAtoms::div);
-}
-
-/**
  * IsMozDiv() returns true if aNode is an html div node with |type = _moz|.
  */
-bool
-HTMLEditUtils::IsMozDiv(nsIDOMNode* aNode)
-{
-  return IsDiv(aNode) && TextEditUtils::HasMozAttr(aNode);
-}
-
 bool
 HTMLEditUtils::IsMozDiv(nsINode* aNode)
 {
   MOZ_ASSERT(aNode);
   return aNode->IsHTMLElement(nsGkAtoms::div) &&
-         TextEditUtils::HasMozAttr(GetAsDOMNode(aNode));
+         TextEditUtils::HasMozAttr(aNode);
 }
 
 /**
  * IsMailCite() returns true if aNode is an html blockquote with |type=cite|.
  */
-bool
-HTMLEditUtils::IsMailCite(nsIDOMNode* aNode)
-{
-  MOZ_ASSERT(aNode);
-  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-  return node && IsMailCite(node);
-}
-
 bool
 HTMLEditUtils::IsMailCite(nsINode* aNode)
 {
@@ -434,14 +281,6 @@ HTMLEditUtils::IsMailCite(nsINode* aNode)
 /**
  * IsFormWidget() returns true if aNode is a form widget of some kind.
  */
-bool
-HTMLEditUtils::IsFormWidget(nsIDOMNode* aNode)
-{
-  MOZ_ASSERT(aNode);
-  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-  return node && IsFormWidget(node);
-}
-
 bool
 HTMLEditUtils::IsFormWidget(nsINode* aNode)
 {
@@ -502,8 +341,8 @@ HTMLEditUtils::SupportsAlignAttr(nsINode& aNode)
 // rt, rtc, ruby, samp, strong, var
 #define GROUP_PHRASE           (1 << 4)
 
-// a, applet, basefont, bdo, br, font, iframe, img, map, meter, object, output,
-// picture, progress, q, script, span, sub, sup
+// a, applet, basefont, bdi, bdo, br, font, iframe, img, map, meter, object,
+// output, picture, progress, q, script, span, sub, sup
 #define GROUP_SPECIAL          (1 << 5)
 
 // button, form, input, label, select, textarea
@@ -613,6 +452,7 @@ static const ElementInfo kElements[eHTMLTag_userdefined] = {
   ELEM(b, true, true, GROUP_FONTSTYLE, GROUP_INLINE_ELEMENT),
   ELEM(base, false, false, GROUP_HEAD_CONTENT, GROUP_NONE),
   ELEM(basefont, false, false, GROUP_SPECIAL, GROUP_NONE),
+  ELEM(bdi, true, true, GROUP_SPECIAL, GROUP_INLINE_ELEMENT),
   ELEM(bdo, true, true, GROUP_SPECIAL, GROUP_INLINE_ELEMENT),
   ELEM(bgsound, false, false, GROUP_NONE, GROUP_NONE),
   ELEM(big, true, true, GROUP_FONTSTYLE, GROUP_INLINE_ELEMENT),
@@ -631,7 +471,6 @@ static const ElementInfo kElements[eHTMLTag_userdefined] = {
        GROUP_TABLE_CONTENT | GROUP_COLGROUP_CONTENT,
        GROUP_NONE),
   ELEM(colgroup, true, false, GROUP_NONE, GROUP_COLGROUP_CONTENT),
-  ELEM(content, true, false, GROUP_NONE, GROUP_INLINE_ELEMENT),
   ELEM(data, true, false, GROUP_PHRASE, GROUP_INLINE_ELEMENT),
   ELEM(datalist,
        true,
@@ -832,6 +671,32 @@ HTMLEditUtils::IsContainer(int32_t aTag)
                "aTag out of range!");
 
   return kElements[aTag - 1].mIsContainer;
+}
+
+bool
+HTMLEditUtils::IsNonListSingleLineContainer(nsINode& aNode)
+{
+  return aNode.IsAnyOfHTMLElements(nsGkAtoms::address,
+                                   nsGkAtoms::div,
+                                   nsGkAtoms::h1,
+                                   nsGkAtoms::h2,
+                                   nsGkAtoms::h3,
+                                   nsGkAtoms::h4,
+                                   nsGkAtoms::h5,
+                                   nsGkAtoms::h6,
+                                   nsGkAtoms::listing,
+                                   nsGkAtoms::p,
+                                   nsGkAtoms::pre,
+                                   nsGkAtoms::xmp);
+}
+
+bool
+HTMLEditUtils::IsSingleLineContainer(nsINode& aNode)
+{
+  return IsNonListSingleLineContainer(aNode) ||
+         aNode.IsAnyOfHTMLElements(nsGkAtoms::li,
+                                   nsGkAtoms::dt,
+                                   nsGkAtoms::dd);
 }
 
 } // namespace mozilla

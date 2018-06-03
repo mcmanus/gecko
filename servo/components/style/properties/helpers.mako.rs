@@ -8,7 +8,8 @@
 %>
 
 <%def name="predefined_type(name, type, initial_value, parse_method='parse',
-            needs_context=True, vector=False, computed_type=None, initial_specified_value=None,
+            needs_context=True, vector=False,
+            computed_type=None, initial_specified_value=None,
             allow_quirks=False, allow_empty=False, **kwargs)">
     <%def name="predefined_type_inner(name, type, initial_value, parse_method)">
         #[allow(unused_imports)]
@@ -35,9 +36,10 @@
         % endif
         #[allow(unused_variables)]
         #[inline]
-        pub fn parse<'i, 't>(context: &ParserContext,
-                             input: &mut Parser<'i, 't>)
-                             -> Result<SpecifiedValue, ParseError<'i>> {
+        pub fn parse<'i, 't>(
+            context: &ParserContext,
+            input: &mut Parser<'i, 't>,
+        ) -> Result<SpecifiedValue, ParseError<'i>> {
             % if allow_quirks:
             specified::${type}::${parse_method}_quirky(context, input, AllowQuirks::Yes)
             % elif needs_context:
@@ -76,14 +78,14 @@
     We assume that the default/initial value is an empty vector for these.
     `initial_value` need not be defined for these.
 </%doc>
-<%def name="vector_longhand(name, animation_value_type=None, allow_empty=False, separator='Comma',
-                            need_animatable=False, **kwargs)">
+<%def name="vector_longhand(name, animation_value_type=None,
+                            vector_animation_type=None, allow_empty=False,
+                            separator='Comma',
+                            **kwargs)">
     <%call expr="longhand(name, animation_value_type=animation_value_type, vector=True,
-                          need_animatable=need_animatable, **kwargs)">
+                          **kwargs)">
         #[allow(unused_imports)]
         use smallvec::SmallVec;
-        use std::fmt;
-        use style_traits::{Separator, ToCss};
 
         pub mod single_value {
             #[allow(unused_imports)]
@@ -93,9 +95,9 @@
             #[allow(unused_imports)]
             use properties::ShorthandId;
             #[allow(unused_imports)]
-            use selectors::parser::SelectorParseError;
+            use selectors::parser::SelectorParseErrorKind;
             #[allow(unused_imports)]
-            use style_traits::{ParseError, StyleParseError};
+            use style_traits::{ParseError, StyleParseErrorKind};
             #[allow(unused_imports)]
             use values::computed::{Context, ToComputedValue};
             #[allow(unused_imports)]
@@ -116,29 +118,71 @@
             % endif
             use values::computed::ComputedVecIter;
 
-            /// The computed value, effectively a list of single values.
-            #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
-            #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-            #[derive(Clone, Debug, PartialEq)]
-            % if need_animatable or animation_value_type == "ComputedValue":
-            #[derive(Animate, ComputeSquaredDistance)]
+            /// The generic type defining the value for this property.
+            ///
+            /// Making this type generic allows the compiler to figure out the
+            /// animated value for us, instead of having to implement it
+            /// manually for every type we care about.
+            % if separator == "Comma":
+            #[css(comma)]
             % endif
-            pub struct T(
-                % if allow_empty and allow_empty != "NotInitial":
-                pub Vec<single_value::T>,
+            #[derive(Clone, Debug, MallocSizeOf, PartialEq, ToAnimatedValue,
+                     ToCss)]
+            pub struct List<T>(
+                % if not allow_empty:
+                #[css(iterable)]
                 % else:
-                pub SmallVec<[single_value::T; 1]>,
+                #[css(if_empty = "none", iterable)]
+                % endif
+                % if allow_empty and allow_empty != "NotInitial":
+                pub Vec<T>,
+                % else:
+                pub SmallVec<[T; 1]>,
                 % endif
             );
 
-            % if need_animatable or animation_value_type == "ComputedValue":
-                use values::animated::{ToAnimatedZero};
 
-                impl ToAnimatedZero for T {
-                    #[inline]
-                    fn to_animated_zero(&self) -> Result<Self, ()> { Err(()) }
-                }
+            /// The computed value, effectively a list of single values.
+            % if vector_animation_type:
+            % if not animation_value_type:
+                Sorry, this is stupid but needed for now.
             % endif
+
+            use properties::animated_properties::ListAnimation;
+            use values::animated::{Animate, ToAnimatedValue, ToAnimatedZero, Procedure};
+            use values::distance::{SquaredDistance, ComputeSquaredDistance};
+
+            // FIXME(emilio): For some reason rust thinks that this alias is
+            // unused, even though it's clearly used below?
+            #[allow(unused)]
+            type AnimatedList = <List<single_value::T> as ToAnimatedValue>::AnimatedValue;
+
+            impl ToAnimatedZero for AnimatedList {
+                fn to_animated_zero(&self) -> Result<Self, ()> { Err(()) }
+            }
+
+            impl Animate for AnimatedList {
+                fn animate(
+                    &self,
+                    other: &Self,
+                    procedure: Procedure,
+                ) -> Result<Self, ()> {
+                    Ok(List(
+                        self.0.animate_${vector_animation_type}(&other.0, procedure)?
+                    ))
+                }
+            }
+            impl ComputeSquaredDistance for AnimatedList {
+                fn compute_squared_distance(
+                    &self,
+                    other: &Self,
+                ) -> Result<SquaredDistance, ()> {
+                    self.0.squared_distance_${vector_animation_type}(&other.0)
+                }
+            }
+            % endif
+
+            pub type T = List<single_value::T>;
 
             pub type Iter<'a, 'cx, 'cx_a> = ComputedVecIter<'a, 'cx, 'cx_a, super::single_value::SpecifiedValue>;
 
@@ -155,68 +199,34 @@
             }
         }
 
-        impl ToCss for computed_value::T {
-            fn to_css<W>(&self, dest: &mut W) -> fmt::Result
-                where W: fmt::Write,
-            {
-                let mut iter = self.0.iter();
-                if let Some(val) = iter.next() {
-                    val.to_css(dest)?;
-                } else {
-                    % if allow_empty:
-                        dest.write_str("none")?;
-                    % else:
-                        warn!("Found empty value for property ${name}");
-                    % endif
-                }
-                for i in iter {
-                    dest.write_str(::style_traits::${separator}::separator())?;
-                    i.to_css(dest)?;
-                }
-                Ok(())
-            }
-        }
-
         /// The specified value of ${name}.
-        #[derive(Clone, Debug, PartialEq)]
-        #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub struct SpecifiedValue(pub Vec<single_value::SpecifiedValue>);
-
-        impl ToCss for SpecifiedValue {
-            fn to_css<W>(&self, dest: &mut W) -> fmt::Result
-                where W: fmt::Write,
-            {
-                let mut iter = self.0.iter();
-                if let Some(val) = iter.next() {
-                    val.to_css(dest)?;
-                } else {
-                    % if allow_empty:
-                        dest.write_str("none")?;
-                    % else:
-                        warn!("Found empty value for property ${name}");
-                    % endif
-                }
-                for i in iter {
-                    dest.write_str(::style_traits::${separator}::separator())?;
-                    i.to_css(dest)?;
-                }
-                Ok(())
-            }
-        }
+        % if separator == "Comma":
+        #[css(comma)]
+        % endif
+        #[derive(Clone, Debug, MallocSizeOf, PartialEq, SpecifiedValueInfo, ToCss)]
+        pub struct SpecifiedValue(
+            % if not allow_empty:
+            #[css(iterable)]
+            % else:
+            #[css(if_empty = "none", iterable)]
+            % endif
+            pub Vec<single_value::SpecifiedValue>,
+        );
 
         pub fn get_initial_value() -> computed_value::T {
             % if allow_empty and allow_empty != "NotInitial":
-                computed_value::T(vec![])
+                computed_value::List(vec![])
             % else:
                 let mut v = SmallVec::new();
                 v.push(single_value::get_initial_value());
-                computed_value::T(v)
+                computed_value::List(v)
             % endif
         }
 
-        pub fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                                -> Result<SpecifiedValue, ParseError<'i>> {
+        pub fn parse<'i, 't>(
+            context: &ParserContext,
+            input: &mut Parser<'i, 't>,
+        ) -> Result<SpecifiedValue, ParseError<'i>> {
             use style_traits::Separator;
 
             % if allow_empty:
@@ -233,8 +243,10 @@
         pub use self::single_value::SpecifiedValue as SingleSpecifiedValue;
 
         impl SpecifiedValue {
-            pub fn compute_iter<'a, 'cx, 'cx_a>(&'a self, context: &'cx Context<'cx_a>)
-                -> computed_value::Iter<'a, 'cx, 'cx_a> {
+            pub fn compute_iter<'a, 'cx, 'cx_a>(
+                &'a self,
+                context: &'cx Context<'cx_a>,
+            ) -> computed_value::Iter<'a, 'cx, 'cx_a> {
                 computed_value::Iter::new(context, &self.0)
             }
         }
@@ -244,7 +256,7 @@
 
             #[inline]
             fn to_computed_value(&self, context: &Context) -> computed_value::T {
-                computed_value::T(self.compute_iter(context).collect())
+                computed_value::List(self.compute_iter(context).collect())
             }
 
             #[inline]
@@ -264,14 +276,12 @@
     %>
     /// ${property.spec}
     pub mod ${property.ident} {
-        % if not property.derived_from:
-            #[allow(unused_imports)]
-            use cssparser::{Parser, BasicParseError, Token};
-            #[allow(unused_imports)]
-            use parser::{Parse, ParserContext};
-            #[allow(unused_imports)]
-            use properties::{UnparsedValue, ShorthandId};
-        % endif
+        #[allow(unused_imports)]
+        use cssparser::{Parser, BasicParseError, Token};
+        #[allow(unused_imports)]
+        use parser::{Parse, ParserContext};
+        #[allow(unused_imports)]
+        use properties::{UnparsedValue, ShorthandId};
         #[allow(unused_imports)]
         use values::{Auto, Either, None_, Normal};
         #[allow(unused_imports)]
@@ -285,11 +295,11 @@
         #[allow(unused_imports)]
         use properties::style_structs;
         #[allow(unused_imports)]
-        use selectors::parser::SelectorParseError;
+        use selectors::parser::SelectorParseErrorKind;
         #[allow(unused_imports)]
         use servo_arc::Arc;
         #[allow(unused_imports)]
-        use style_traits::{ParseError, StyleParseError};
+        use style_traits::{ParseError, StyleParseErrorKind};
         #[allow(unused_imports)]
         use values::computed::{Context, ToComputedValue};
         #[allow(unused_imports)]
@@ -306,9 +316,9 @@
                 PropertyDeclaration::${property.camel_case}(ref value) => {
                     DeclaredValue::Value(value)
                 },
-                PropertyDeclaration::CSSWideKeyword(id, value) => {
-                    debug_assert!(id == LonghandId::${property.camel_case});
-                    DeclaredValue::CSSWideKeyword(value)
+                PropertyDeclaration::CSSWideKeyword(ref declaration) => {
+                    debug_assert_eq!(declaration.id, LonghandId::${property.camel_case});
+                    DeclaredValue::CSSWideKeyword(declaration.keyword)
                 },
                 PropertyDeclaration::WithVariables(..) => {
                     panic!("variables should already have been substituted")
@@ -323,107 +333,95 @@
                     Some(LonghandId::${property.camel_case});
                 % endif
 
-            % if not property.derived_from:
-                match value {
-                    DeclaredValue::Value(specified_value) => {
-                        % if property.ident in SYSTEM_FONT_LONGHANDS and product == "gecko":
-                            if let Some(sf) = specified_value.get_system() {
-                                longhands::system_font::resolve_system_font(sf, context);
-                            }
-                        % endif
-                        % if not property.style_struct.inherited and property.logical:
-                            context.rule_cache_conditions.borrow_mut()
-                                .set_writing_mode_dependency(context.builder.writing_mode);
-                        % endif
-                        % if property.is_vector:
-                            // In the case of a vector property we want to pass
-                            // down an iterator so that this can be computed
-                            // without allocation
-                            //
-                            // However, computing requires a context, but the
-                            // style struct being mutated is on the context. We
-                            // temporarily remove it, mutate it, and then put it
-                            // back. Vector longhands cannot touch their own
-                            // style struct whilst computing, else this will
-                            // panic.
-                            let mut s =
-                                context.builder.take_${data.current_style_struct.name_lower}();
-                            {
-                                let iter = specified_value.compute_iter(context);
-                                s.set_${property.ident}(iter);
-                            }
-                            context.builder.put_${data.current_style_struct.name_lower}(s);
-                        % else:
-                            % if property.boxed:
-                            let computed = (**specified_value).to_computed_value(context);
-                            % else:
-                            let computed = specified_value.to_computed_value(context);
-                            % endif
-                            % if property.ident == "font_size":
-                                 longhands::font_size::cascade_specified_font_size(
-                                     context,
-                                     &specified_value,
-                                     computed,
-                                 );
-                            % else:
-                                context.builder.set_${property.ident}(computed)
-                            % endif
-                        % endif
-                    }
-                    DeclaredValue::WithVariables(_) => unreachable!(),
-                    DeclaredValue::CSSWideKeyword(keyword) => match keyword {
-                        % if not data.current_style_struct.inherited:
-                        CSSWideKeyword::Unset |
-                        % endif
-                        CSSWideKeyword::Initial => {
-                            % if property.ident == "font_size":
-                                longhands::font_size::cascade_initial_font_size(context);
-                            % else:
-                                context.builder.reset_${property.ident}();
-                            % endif
-                        },
-                        % if data.current_style_struct.inherited:
-                        CSSWideKeyword::Unset |
-                        % endif
-                        CSSWideKeyword::Inherit => {
-                            % if not property.style_struct.inherited:
-                                context.rule_cache_conditions.borrow_mut().set_uncacheable();
-                            % endif
-                            % if property.ident == "font_size":
-                                longhands::font_size::cascade_inherit_font_size(context);
-                            % else:
-                                context.builder.inherit_${property.ident}();
-                            % endif
+            match value {
+                DeclaredValue::Value(specified_value) => {
+                    % if property.ident in SYSTEM_FONT_LONGHANDS and product == "gecko":
+                        if let Some(sf) = specified_value.get_system() {
+                            longhands::system_font::resolve_system_font(sf, context);
                         }
+                    % endif
+                    % if not property.style_struct.inherited and property.logical:
+                        context.rule_cache_conditions.borrow_mut()
+                            .set_writing_mode_dependency(context.builder.writing_mode);
+                    % endif
+                    % if property.is_vector:
+                        // In the case of a vector property we want to pass
+                        // down an iterator so that this can be computed
+                        // without allocation
+                        //
+                        // However, computing requires a context, but the
+                        // style struct being mutated is on the context. We
+                        // temporarily remove it, mutate it, and then put it
+                        // back. Vector longhands cannot touch their own
+                        // style struct whilst computing, else this will
+                        // panic.
+                        let mut s =
+                            context.builder.take_${data.current_style_struct.name_lower}();
+                        {
+                            let iter = specified_value.compute_iter(context);
+                            s.set_${property.ident}(iter);
+                        }
+                        context.builder.put_${data.current_style_struct.name_lower}(s);
+                    % else:
+                        % if property.boxed:
+                        let computed = (**specified_value).to_computed_value(context);
+                        % else:
+                        let computed = specified_value.to_computed_value(context);
+                        % endif
+                        % if property.ident == "font_size":
+                             specified::FontSize::cascade_specified_font_size(
+                                 context,
+                                 &specified_value,
+                                 computed,
+                             );
+                        % else:
+                            context.builder.set_${property.ident}(computed)
+                        % endif
+                    % endif
+                }
+                DeclaredValue::WithVariables(_) => unreachable!(),
+                DeclaredValue::CSSWideKeyword(keyword) => match keyword {
+                    % if not data.current_style_struct.inherited:
+                    CSSWideKeyword::Unset |
+                    % endif
+                    CSSWideKeyword::Initial => {
+                        % if property.ident == "font_size":
+                            computed::FontSize::cascade_initial_font_size(context);
+                        % else:
+                            context.builder.reset_${property.ident}();
+                        % endif
+                    },
+                    % if data.current_style_struct.inherited:
+                    CSSWideKeyword::Unset |
+                    % endif
+                    CSSWideKeyword::Inherit => {
+                        % if not property.style_struct.inherited:
+                            context.rule_cache_conditions.borrow_mut().set_uncacheable();
+                        % endif
+                        % if property.ident == "font_size":
+                            computed::FontSize::cascade_inherit_font_size(context);
+                        % else:
+                            context.builder.inherit_${property.ident}();
+                        % endif
                     }
                 }
-
-                % if property.custom_cascade:
-                    cascade_property_custom(declaration, context);
-                % endif
-            % else:
-                // Do not allow stylesheets to set derived properties.
-            % endif
+            }
         }
-        % if not property.derived_from:
-            pub fn parse_specified<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                % if property.boxed:
-                                   -> Result<Box<SpecifiedValue>, ParseError<'i>> {
-                    parse(context, input).map(|result| Box::new(result))
-                % else:
-                                   -> Result<SpecifiedValue, ParseError<'i>> {
-                    % if property.allow_quirks:
-                        parse_quirky(context, input, specified::AllowQuirks::Yes)
-                    % else:
-                        parse(context, input)
-                    % endif
-                % endif
-            }
-            pub fn parse_declared<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                                          -> Result<PropertyDeclaration, ParseError<'i>> {
-                parse_specified(context, input).map(PropertyDeclaration::${property.camel_case})
-            }
-        % endif
+
+        pub fn parse_declared<'i, 't>(
+            context: &ParserContext,
+            input: &mut Parser<'i, 't>,
+        ) -> Result<PropertyDeclaration, ParseError<'i>> {
+            % if property.allow_quirks:
+                parse_quirky(context, input, specified::AllowQuirks::Yes)
+            % else:
+                parse(context, input)
+            % endif
+            % if property.boxed:
+                .map(Box::new)
+            % endif
+                .map(PropertyDeclaration::${property.camel_case})
+        }
     }
 </%def>
 
@@ -440,29 +438,23 @@
         use properties::longhands::system_font::SystemFont;
 
         pub mod computed_value {
-            use cssparser::Parser;
-            use parser::{Parse, ParserContext};
-
-            use style_traits::{ToCss, ParseError};
-            define_css_keyword_enum! { T:
-                % for value in keyword.values_for(product):
-                    "${value}" => ${to_rust_ident(value)},
-                % endfor
-            }
-
-            impl Parse for T {
-                fn parse<'i, 't>(_: &ParserContext, input: &mut Parser<'i, 't>) -> Result<Self, ParseError<'i>> {
-                    T::parse(input)
-                }
+            #[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
+            #[derive(Clone, Copy, Debug, Eq, Hash, MallocSizeOf, Parse,
+                     PartialEq, SpecifiedValueInfo, ToCss)]
+            pub enum T {
+            % for value in keyword.values_for(product):
+                ${to_camel_case(value)},
+            % endfor
             }
 
             ${gecko_keyword_conversion(keyword, keyword.values_for(product), type="T", cast_to="i32")}
         }
 
         #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
-        #[derive(Clone, Copy, Debug, Eq, PartialEq, ToCss)]
+        #[derive(Clone, Copy, Debug, Eq, PartialEq, SpecifiedValueInfo, ToCss)]
         pub enum SpecifiedValue {
             Keyword(computed_value::T),
+            #[css(skip)]
             System(SystemFont),
         }
 
@@ -491,11 +483,11 @@
 
         #[inline]
         pub fn get_initial_value() -> computed_value::T {
-            computed_value::T::${to_rust_ident(values.split()[0])}
+            computed_value::T::${to_camel_case(values.split()[0])}
         }
         #[inline]
         pub fn get_initial_specified_value() -> SpecifiedValue {
-            SpecifiedValue::Keyword(computed_value::T::${to_rust_ident(values.split()[0])})
+            SpecifiedValue::Keyword(computed_value::T::${to_camel_case(values.split()[0])})
         }
 
         impl SpecifiedValue {
@@ -507,31 +499,6 @@
                     Some(s)
                 } else {
                     None
-                }
-            }
-        }
-    </%call>
-</%def>
-
-<%def name="single_keyword(name, values, vector=False, **kwargs)">
-    <%call expr="single_keyword_computed(name, values, vector, **kwargs)">
-        impl ToComputedValue for SpecifiedValue {
-            type ComputedValue = computed_value::T;
-
-            #[inline]
-            fn to_computed_value(&self, _context: &Context) -> computed_value::T {
-                match *self {
-                    % for value in data.longhands_by_name[name].keyword.values_for(product):
-                        SpecifiedValue::${to_rust_ident(value)} => computed_value::T::${to_rust_ident(value)},
-                    % endfor
-                }
-            }
-            #[inline]
-            fn from_computed_value(computed: &computed_value::T) -> Self {
-                match *computed {
-                    % for value in data.longhands_by_name[name].keyword.values_for(product):
-                        computed_value::T::${to_rust_ident(value)} => SpecifiedValue::${to_rust_ident(value)},
-                    % endfor
                 }
             }
         }
@@ -559,9 +526,9 @@
             % endfor
             match kw ${maybe_cast} {
                 % for value in values:
-                    ${to_rust_ident(value).upper()} => ${type}::${to_rust_ident(value)},
+                    ${to_rust_ident(value).upper()} => ${type}::${to_camel_case(value)},
                 % endfor
-                x => panic!("Found unexpected value in style struct for ${keyword.name} property: {:?}", x),
+                _ => panic!("Found unexpected value in style struct for ${keyword.name} property"),
             }
         }
     }
@@ -605,7 +572,7 @@
     }
 </%def>
 
-<%def name="single_keyword_computed(name, values, vector=False,
+<%def name="single_keyword(name, values, vector=False,
             extra_specified=None, needs_conversion=False, **kwargs)">
     <%
         keyword_kwargs = {a: kwargs.pop(a, None) for a in [
@@ -617,50 +584,54 @@
     %>
 
     <%def name="inner_body(keyword, extra_specified=None, needs_conversion=False)">
-        % if extra_specified or keyword.aliases_for(product):
-            use style_traits::ToCss;
-            define_css_keyword_enum! { SpecifiedValue:
-                values {
-                    % for value in keyword.values_for(product) + (extra_specified or "").split():
-                        "${value}" => ${to_rust_ident(value)},
-                    % endfor
-                }
-                aliases {
-                    % for alias, value in keyword.aliases_for(product).iteritems():
-                        "${alias}" => ${to_rust_ident(value)},
-                    % endfor
-                }
+        <%def name="variants(variants, include_aliases)">
+            % for variant in variants:
+            % if include_aliases:
+            <%
+                aliases = []
+                for alias, v in keyword.aliases_for(product).iteritems():
+                    if variant == v:
+                        aliases.append(alias)
+            %>
+            % if aliases:
+            #[css(aliases = "${','.join(aliases)}")]
+            % endif
+            % endif
+            ${to_camel_case(variant)},
+            % endfor
+        </%def>
+        % if extra_specified:
+            #[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
+            #[derive(Clone, Copy, Debug, Eq, MallocSizeOf, Parse, PartialEq,
+                     SpecifiedValueInfo, ToCss)]
+            pub enum SpecifiedValue {
+                ${variants(keyword.values_for(product) + extra_specified.split(), bool(extra_specified))}
             }
         % else:
             pub use self::computed_value::T as SpecifiedValue;
         % endif
         pub mod computed_value {
-            use style_traits::ToCss;
-            define_css_keyword_enum! { T:
-                % for value in data.longhands_by_name[name].keyword.values_for(product):
-                    "${value}" => ${to_rust_ident(value)},
-                % endfor
+            #[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
+            #[derive(Clone, Copy, Debug, Eq, MallocSizeOf, PartialEq, ToCss)]
+            % if not extra_specified:
+            #[derive(Parse, SpecifiedValueInfo, ToComputedValue)]
+            % endif
+            pub enum T {
+                ${variants(data.longhands_by_name[name].keyword.values_for(product), not extra_specified)}
             }
         }
         #[inline]
         pub fn get_initial_value() -> computed_value::T {
-            computed_value::T::${to_rust_ident(values.split()[0])}
+            computed_value::T::${to_camel_case(values.split()[0])}
         }
         #[inline]
         pub fn get_initial_specified_value() -> SpecifiedValue {
-            SpecifiedValue::${to_rust_ident(values.split()[0])}
+            SpecifiedValue::${to_camel_case(values.split()[0])}
         }
         #[inline]
         pub fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>)
                              -> Result<SpecifiedValue, ParseError<'i>> {
             SpecifiedValue::parse(input)
-        }
-        impl Parse for SpecifiedValue {
-            #[inline]
-            fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>)
-                             -> Result<SpecifiedValue, ParseError<'i>> {
-                SpecifiedValue::parse(input)
-            }
         }
 
         % if needs_conversion:
@@ -676,21 +647,29 @@
     % if vector:
         <%call expr="vector_longhand(name, keyword=Keyword(name, values, **keyword_kwargs), **kwargs)">
             ${inner_body(Keyword(name, values, **keyword_kwargs))}
+            % if caller:
             ${caller.body()}
+            % endif
         </%call>
     % else:
         <%call expr="longhand(name, keyword=Keyword(name, values, **keyword_kwargs), **kwargs)">
             ${inner_body(Keyword(name, values, **keyword_kwargs),
                          extra_specified=extra_specified, needs_conversion=needs_conversion)}
+            % if caller:
             ${caller.body()}
+            % endif
         </%call>
     % endif
 </%def>
 
-<%def name="shorthand(name, sub_properties, experimental=False, derive_serialize=False, **kwargs)">
+<%def name="shorthand(name, sub_properties, derive_serialize=False,
+                      derive_value_info=True, **kwargs)">
 <%
-    shorthand = data.declare_shorthand(name, sub_properties.split(), experimental=experimental,
-                                       **kwargs)
+    shorthand = data.declare_shorthand(name, sub_properties.split(), **kwargs)
+    # mako doesn't accept non-string value in parameters with <% %> form, so
+    # we have to workaround it this way.
+    if not isinstance(derive_value_info, bool):
+        derive_value_info = eval(derive_value_info)
 %>
     % if shorthand:
     /// ${shorthand.spec}
@@ -699,14 +678,17 @@
         use parser::ParserContext;
         use properties::{PropertyDeclaration, SourcePropertyDeclaration, MaybeBoxed, longhands};
         #[allow(unused_imports)]
-        use selectors::parser::SelectorParseError;
+        use selectors::parser::SelectorParseErrorKind;
         #[allow(unused_imports)]
-        use std::fmt;
+        use std::fmt::{self, Write};
         #[allow(unused_imports)]
-        use style_traits::{ParseError, StyleParseError};
+        use style_traits::{ParseError, StyleParseErrorKind};
         #[allow(unused_imports)]
-        use style_traits::ToCss;
+        use style_traits::{CssWriter, KeywordsCollectFn, SpecifiedValueInfo, ToCss};
 
+        % if derive_value_info:
+        #[derive(SpecifiedValueInfo)]
+        % endif
         pub struct Longhands {
             % for sub_property in shorthand.sub_properties:
                 pub ${sub_property.ident}:
@@ -729,7 +711,13 @@
         pub struct LonghandsToSerialize<'a> {
             % for sub_property in shorthand.sub_properties:
                 pub ${sub_property.ident}:
+                % if sub_property.may_be_disabled_in(shorthand, product):
+                    Option<
+                % endif
                     &'a longhands::${sub_property.ident}::SpecifiedValue,
+                % if sub_property.may_be_disabled_in(shorthand, product):
+                    >,
+                % endif
             % endfor
         }
 
@@ -737,7 +725,8 @@
             /// Tries to get a serializable set of longhands given a set of
             /// property declarations.
             pub fn from_iter<I>(iter: I) -> Result<Self, ()>
-                where I: Iterator<Item=&'a PropertyDeclaration>,
+            where
+                I: Iterator<Item=&'a PropertyDeclaration>,
             {
                 // Define all of the expected variables that correspond to the shorthand
                 % for sub_property in shorthand.sub_properties:
@@ -765,12 +754,16 @@
 
                     (
                     % for sub_property in shorthand.sub_properties:
+                        % if sub_property.may_be_disabled_in(shorthand, product):
+                        ${sub_property.ident},
+                        % else:
                         Some(${sub_property.ident}),
+                        % endif
                     % endfor
                     ) =>
                     Ok(LonghandsToSerialize {
                         % for sub_property in shorthand.sub_properties:
-                            ${sub_property.ident}: ${sub_property.ident},
+                            ${sub_property.ident},
                         % endfor
                     }),
                     _ => Err(())
@@ -780,14 +773,24 @@
 
         /// Parse the given shorthand and fill the result into the
         /// `declarations` vector.
-        pub fn parse_into<'i, 't>(declarations: &mut SourcePropertyDeclaration,
-                                  context: &ParserContext, input: &mut Parser<'i, 't>)
-                                  -> Result<(), ParseError<'i>> {
+        pub fn parse_into<'i, 't>(
+            declarations: &mut SourcePropertyDeclaration,
+            context: &ParserContext,
+            input: &mut Parser<'i, 't>,
+        ) -> Result<(), ParseError<'i>> {
+            #[allow(unused_imports)]
+            use properties::{NonCustomPropertyId, LonghandId};
             input.parse_entirely(|input| parse_value(context, input)).map(|longhands| {
                 % for sub_property in shorthand.sub_properties:
+                % if sub_property.may_be_disabled_in(shorthand, product):
+                if NonCustomPropertyId::from(LonghandId::${sub_property.camel_case}).allowed_in(context) {
+                % endif
                     declarations.push(PropertyDeclaration::${sub_property.camel_case}(
                         longhands.${sub_property.ident}
                     ));
+                % if sub_property.may_be_disabled_in(shorthand, product):
+                }
+                % endif
                 % endfor
             })
         }
@@ -799,7 +802,7 @@
 
 <%def name="four_sides_shorthand(name, sub_property_pattern, parser_function,
                                  needs_context=True, allow_quirks=False, **kwargs)">
-    <% sub_properties=' '.join(sub_property_pattern % side for side in ['top', 'right', 'bottom', 'left']) %>
+    <% sub_properties=' '.join(sub_property_pattern % side for side in PHYSICAL_SIDES) %>
     <%call expr="self.shorthand(name, sub_properties=sub_properties, **kwargs)">
         #[allow(unused_imports)]
         use parser::Parse;
@@ -825,7 +828,10 @@
         }
 
         impl<'a> ToCss for LonghandsToSerialize<'a> {
-            fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+            fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
+            where
+                W: Write,
+            {
                 let rect = Rect::new(
                     % for side in ["top", "right", "bottom", "left"]:
                     &self.${to_rust_ident(sub_property_pattern % side)},
@@ -919,117 +925,3 @@
     </%self:logical_setter_helper>
     }
 </%def>
-
-<%def name="alias_to_nscsspropertyid(alias)">
-    <%
-        return "nsCSSPropertyID::eCSSPropertyAlias_%s" % to_camel_case(alias)
-    %>
-</%def>
-
-<%def name="to_nscsspropertyid(ident)">
-    <%
-        if ident == "float":
-            ident = "float_"
-        return "nsCSSPropertyID::eCSSProperty_%s" % ident
-    %>
-</%def>
-
-// Define property that supports prefixed intrinsic size keyword values for gecko.
-// E.g. -moz-max-content, -moz-min-content, etc.
-<%def name="gecko_size_type(name, length_type, initial_value, logical, **kwargs)">
-    <%call expr="longhand(name,
-                          predefined_type=length_type,
-                          logical=logical,
-                          **kwargs)">
-        % if not logical:
-            use values::specified::AllowQuirks;
-        % endif
-        use values::specified::${length_type};
-
-        pub mod computed_value {
-            pub type T = ::values::computed::${length_type};
-        }
-
-        #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        #[derive(Clone, Debug, PartialEq, ToCss)]
-        pub struct SpecifiedValue(pub ${length_type});
-
-        % if length_type == "MozLength":
-        impl SpecifiedValue {
-            /// Returns the `auto` value.
-            pub fn auto() -> Self {
-                use values::specified::length::LengthOrPercentageOrAuto;
-                SpecifiedValue(MozLength::LengthOrPercentageOrAuto(LengthOrPercentageOrAuto::Auto))
-            }
-
-            /// Returns a value representing a `0` length.
-            pub fn zero() -> Self {
-                use values::specified::length::LengthOrPercentageOrAuto;
-                SpecifiedValue(MozLength::LengthOrPercentageOrAuto(LengthOrPercentageOrAuto::zero()))
-            }
-
-            /// Returns a value representing a `0%` length.
-            pub fn zero_percent() -> Self {
-                use values::specified::length::LengthOrPercentageOrAuto;
-                SpecifiedValue(MozLength::LengthOrPercentageOrAuto(LengthOrPercentageOrAuto::zero_percent()))
-            }
-        }
-        % endif
-
-        #[inline]
-        pub fn get_initial_value() -> computed_value::T {
-            use values::computed::${length_type};
-            ${length_type}::${initial_value}
-        }
-        fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                         -> Result<SpecifiedValue, ParseError<'i>> {
-            % if logical:
-            let ret = ${length_type}::parse(context, input);
-            % else:
-            let ret = ${length_type}::parse_quirky(context, input, AllowQuirks::Yes);
-            % endif
-            // Keyword values don't make sense in the block direction; don't parse them
-            % if "block" in name:
-                if let Ok(${length_type}::ExtremumLength(..)) = ret {
-                    return Err(StyleParseError::UnspecifiedError.into())
-                }
-            % endif
-            ret.map(SpecifiedValue)
-        }
-
-        impl ToComputedValue for SpecifiedValue {
-            type ComputedValue = computed_value::T;
-            #[inline]
-            fn to_computed_value(&self, context: &Context) -> computed_value::T {
-                % if not logical or "block" in name:
-                    use values::computed::${length_type};
-                % endif
-                let computed = self.0.to_computed_value(context);
-
-                // filter out keyword values in the block direction
-                % if logical:
-                    % if "block" in name:
-                        if let ${length_type}::ExtremumLength(..) = computed {
-                            return get_initial_value()
-                        }
-                    % endif
-                % else:
-                    if let ${length_type}::ExtremumLength(..) = computed {
-                        <% is_height = "true" if "height" in name else "false" %>
-                        if ${is_height} != context.builder.writing_mode.is_vertical() {
-                            return get_initial_value()
-                        }
-                    }
-                % endif
-                computed
-            }
-
-            #[inline]
-            fn from_computed_value(computed: &computed_value::T) -> Self {
-                SpecifiedValue(ToComputedValue::from_computed_value(computed))
-            }
-        }
-    </%call>
-</%def>
-

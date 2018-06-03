@@ -19,6 +19,8 @@
 #ifndef wasm_validate_h
 #define wasm_validate_h
 
+#include "mozilla/TypeTraits.h"
+
 #include "wasm/WasmCode.h"
 #include "wasm/WasmTypes.h"
 
@@ -32,6 +34,13 @@ struct SectionRange
 {
     uint32_t start;
     uint32_t size;
+
+    uint32_t end() const {
+        return start + size;
+    }
+    bool operator==(const SectionRange& rhs) const {
+        return start == rhs.start && size == rhs.size;
+    }
 };
 
 typedef Maybe<SectionRange> MaybeSectionRange;
@@ -49,11 +58,10 @@ struct ModuleEnvironment
     // Constant parameters for the entire compilation:
     const DebugEnabled        debug;
     const ModuleKind          kind;
-
-    // Constant parameters determined no later than at the start of the code
-    // section:
-    CompileMode               mode_;
-    Tier                      tier_;
+    const CompileMode         mode;
+    const Shareable           sharedMemoryEnabled;
+    const HasGcTypes          gcTypesEnabled;
+    const Tier                tier;
 
     // Module fields decoded from the module environment (or initialized while
     // validating an asm.js module) and immutable during compilation:
@@ -74,38 +82,26 @@ struct ModuleEnvironment
     // Fields decoded as part of the wasm module tail:
     ElemSegmentVector         elemSegments;
     DataSegmentVector         dataSegments;
+    Maybe<NameInBytecode>     moduleName;
     NameInBytecodeVector      funcNames;
     CustomSectionVector       customSections;
 
-    static const CompileMode UnknownMode = (CompileMode)-1;
-    static const Tier        UnknownTier = (Tier)-1;
-
-    explicit ModuleEnvironment(CompileMode mode = CompileMode::Once,
-                               Tier tier = Tier::Ion,
-                               DebugEnabled debug = DebugEnabled::False,
+    explicit ModuleEnvironment(CompileMode mode,
+                               Tier tier,
+                               DebugEnabled debug,
+                               HasGcTypes hasGcTypes,
+                               Shareable sharedMemoryEnabled,
                                ModuleKind kind = ModuleKind::Wasm)
       : debug(debug),
         kind(kind),
-        mode_(mode),
-        tier_(tier),
+        mode(mode),
+        sharedMemoryEnabled(sharedMemoryEnabled),
+        gcTypesEnabled(hasGcTypes),
+        tier(tier),
         memoryUsage(MemoryUsage::None),
         minMemoryLength(0)
     {}
 
-    CompileMode mode() const {
-        MOZ_ASSERT(mode_ != UnknownMode);
-        return mode_;
-    }
-    Tier tier() const {
-        MOZ_ASSERT(tier_ != UnknownTier);
-        return tier_;
-    }
-    void setModeAndTier(CompileMode mode, Tier tier) {
-        MOZ_ASSERT(mode_ == UnknownMode);
-        MOZ_ASSERT(tier_ == UnknownTier);
-        mode_ = mode;
-        tier_ = tier;
-    }
     size_t numTables() const {
         return tables.length();
     }
@@ -122,7 +118,10 @@ struct ModuleEnvironment
         return funcSigs.length() - funcImportGlobalDataOffsets.length();
     }
     bool usesMemory() const {
-        return UsesMemory(memoryUsage);
+        return memoryUsage != MemoryUsage::None;
+    }
+    bool usesSharedMemory() const {
+        return memoryUsage == MemoryUsage::Shared;
     }
     bool isAsmJS() const {
         return kind == ModuleKind::AsmJS;
@@ -270,8 +269,8 @@ class Encoder
     }
     MOZ_MUST_USE bool writeValType(ValType type) {
         static_assert(size_t(TypeCode::Limit) <= UINT8_MAX, "fits");
-        MOZ_ASSERT(size_t(type) < size_t(TypeCode::Limit));
-        return writeFixedU8(uint8_t(type));
+        MOZ_ASSERT(size_t(type.bitsUnsafe()) < size_t(TypeCode::Limit));
+        return writeFixedU8(uint8_t(type.bitsUnsafe()));
     }
     MOZ_MUST_USE bool writeBlockType(ExprType type) {
         static_assert(size_t(TypeCode::Limit) <= UINT8_MAX, "fits");
@@ -282,6 +281,18 @@ class Encoder
         static_assert(size_t(Op::Limit) == 256, "fits");
         MOZ_ASSERT(size_t(op) < size_t(Op::Limit));
         return writeFixedU8(uint8_t(op));
+    }
+    MOZ_MUST_USE bool writeOp(MiscOp op) {
+        static_assert(size_t(MiscOp::Limit) <= 256, "fits");
+        MOZ_ASSERT(size_t(op) < size_t(MiscOp::Limit));
+        return writeFixedU8(uint8_t(Op::MiscPrefix)) &&
+               writeFixedU8(uint8_t(op));
+    }
+    MOZ_MUST_USE bool writeOp(ThreadOp op) {
+        static_assert(size_t(ThreadOp::Limit) <= 256, "fits");
+        MOZ_ASSERT(size_t(op) < size_t(ThreadOp::Limit));
+        return writeFixedU8(uint8_t(Op::ThreadPrefix)) &&
+               writeFixedU8(uint8_t(op));
     }
     MOZ_MUST_USE bool writeOp(MozOp op) {
         static_assert(size_t(MozOp::Limit) <= 256, "fits");
@@ -344,6 +355,7 @@ class Decoder
     const uint8_t* cur_;
     const size_t offsetInModule_;
     UniqueChars* error_;
+    UniqueCharsVector* warnings_;
     bool resilientMode_;
 
     template <class T>
@@ -373,6 +385,7 @@ class Decoder
 
     template <typename UInt>
     MOZ_MUST_USE bool readVarU(UInt* out) {
+        DebugOnly<const uint8_t*> before = cur_;
         const unsigned numBits = sizeof(UInt) * CHAR_BIT;
         const unsigned remainderBits = numBits % 7;
         const unsigned numBitsInSevens = numBits - remainderBits;
@@ -392,11 +405,13 @@ class Decoder
         if (!readFixedU8(&byte) || (byte & (unsigned(-1) << remainderBits)))
             return false;
         *out = u | (UInt(byte) << numBitsInSevens);
+        MOZ_ASSERT_IF(sizeof(UInt) == 4, unsigned(cur_ - before) <= MaxVarU32DecodedBytes);
         return true;
     }
 
     template <typename SInt>
     MOZ_MUST_USE bool readVarS(SInt* out) {
+        using UInt = typename mozilla::MakeUnsigned<SInt>::Type;
         const unsigned numBits = sizeof(SInt) * CHAR_BIT;
         const unsigned remainderBits = numBits % 7;
         const unsigned numBitsInSevens = numBits - remainderBits;
@@ -410,7 +425,7 @@ class Decoder
             shift += 7;
             if (!(byte & 0x80)) {
                 if (byte & 0x40)
-                    s |= SInt(-1) << shift;
+                    s |= UInt(-1) << shift;
                 *out = s;
                 return true;
             }
@@ -420,34 +435,38 @@ class Decoder
         uint8_t mask = 0x7f & (uint8_t(-1) << remainderBits);
         if ((byte & mask) != ((byte & (1 << (remainderBits - 1))) ? mask : 0))
             return false;
-        *out = s | SInt(byte) << shift;
+        *out = s | UInt(byte) << shift;
         return true;
     }
 
   public:
     Decoder(const uint8_t* begin, const uint8_t* end, size_t offsetInModule, UniqueChars* error,
-            bool resilientMode = false)
+            UniqueCharsVector* warnings = nullptr, bool resilientMode = false)
       : beg_(begin),
         end_(end),
         cur_(begin),
         offsetInModule_(offsetInModule),
         error_(error),
+        warnings_(warnings),
         resilientMode_(resilientMode)
     {
         MOZ_ASSERT(begin <= end);
     }
-    explicit Decoder(const Bytes& bytes, UniqueChars* error = nullptr)
+    explicit Decoder(const Bytes& bytes, size_t offsetInModule = 0, UniqueChars* error = nullptr,
+                     UniqueCharsVector* warnings = nullptr)
       : beg_(bytes.begin()),
         end_(bytes.end()),
         cur_(bytes.begin()),
-        offsetInModule_(0),
+        offsetInModule_(offsetInModule),
         error_(error),
+        warnings_(warnings),
         resilientMode_(false)
     {}
 
     // These convenience functions use currentOffset() as the errorOffset.
     bool fail(const char* msg) { return fail(currentOffset(), msg); }
     bool failf(const char* msg, ...) MOZ_FORMAT_PRINTF(2, 3);
+    void warnf(const char* msg, ...) MOZ_FORMAT_PRINTF(2, 3);
 
     // Report an error at the given offset (relative to the whole module).
     bool fail(size_t errorOffset, const char* msg);
@@ -565,6 +584,8 @@ class Decoder
 
     // See "section" description in Encoder.
 
+    MOZ_MUST_USE bool readSectionHeader(uint8_t* id, SectionRange* range);
+
     MOZ_MUST_USE bool startSection(SectionId id,
                                    ModuleEnvironment* env,
                                    MaybeSectionRange* range,
@@ -579,6 +600,7 @@ class Decoder
                                          size_t expectedLength,
                                          ModuleEnvironment* env,
                                          MaybeSectionRange* range);
+
     template <size_t NameSizeWith0>
     MOZ_MUST_USE bool startCustomSection(const char (&name)[NameSizeWith0],
                                          ModuleEnvironment* env,
@@ -587,13 +609,17 @@ class Decoder
         MOZ_ASSERT(name[NameSizeWith0 - 1] == '\0');
         return startCustomSection(name, NameSizeWith0 - 1, env, range);
     }
-    void finishCustomSection(const SectionRange& range);
+
+    void finishCustomSection(const char* name, const SectionRange& range);
+    void skipAndFinishCustomSection(const SectionRange& range);
+
     MOZ_MUST_USE bool skipCustomSection(ModuleEnvironment* env);
 
     // The Name section has its own optional subsections.
 
     MOZ_MUST_USE bool startNameSubsection(NameType nameType, Maybe<uint32_t>* endOffset);
     MOZ_MUST_USE bool finishNameSubsection(uint32_t endOffset);
+    MOZ_MUST_USE bool skipNameSubsection();
 
     // The infallible "unchecked" decoding functions can be used when we are
     // sure that the bytes are well-formed (by construction or due to previous
@@ -646,7 +672,7 @@ class Decoder
         return i64;
     }
     ValType uncheckedReadValType() {
-        return (ValType)uncheckedReadFixedU8();
+        return ValType::fromTypeCode(uncheckedReadFixedU8());
     }
     Op uncheckedReadOp() {
         static_assert(size_t(Op::Limit) == 256, "fits");
@@ -684,7 +710,17 @@ MOZ_MUST_USE bool
 EncodeLocalEntries(Encoder& d, const ValTypeVector& locals);
 
 MOZ_MUST_USE bool
-DecodeLocalEntries(Decoder& d, ModuleKind kind, ValTypeVector* locals);
+DecodeLocalEntries(Decoder& d, ModuleKind kind, HasGcTypes gcTypesEnabled, ValTypeVector* locals);
+
+// Returns whether the given [begin, end) prefix of a module's bytecode starts a
+// code section and, if so, returns the SectionRange of that code section.
+// Note that, even if this function returns 'false', [begin, end) may actually
+// be a valid module in the special case when there are no function defs and the
+// code section is not present. Such modules can be valid so the caller must
+// handle this special case.
+
+MOZ_MUST_USE bool
+StartsCodeSection(const uint8_t* begin, const uint8_t* end, SectionRange* range);
 
 // Calling DecodeModuleEnvironment decodes all sections up to the code section
 // and performs full validation of all those sections. The client must then
@@ -708,7 +744,7 @@ DecodeModuleTail(Decoder& d, ModuleEnvironment* env);
 //  - otherwise, there was a legitimate error described by *error
 
 MOZ_MUST_USE bool
-Validate(const ShareableBytes& bytecode, UniqueChars* error);
+Validate(JSContext* cx, const ShareableBytes& bytecode, UniqueChars* error);
 
 }  // namespace wasm
 }  // namespace js

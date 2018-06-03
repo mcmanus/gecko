@@ -10,51 +10,9 @@ const {parseDeclarations} = require("devtools/shared/css/parsing-utils");
 const promise = require("promise");
 const {getCSSLexer} = require("devtools/shared/css/lexer");
 const {KeyCodes} = require("devtools/client/shared/keycodes");
+const {throttle} = require("devtools/shared/throttle");
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
-
-/**
- * Create a child element with a set of attributes.
- *
- * @param {Element} parent
- *        The parent node.
- * @param {string} tagName
- *        The tag name.
- * @param {object} attributes
- *        A set of attributes to set on the node.
- */
-function createChild(parent, tagName, attributes = {}) {
-  let elt = parent.ownerDocument.createElementNS(HTML_NS, tagName);
-  for (let attr in attributes) {
-    if (attributes.hasOwnProperty(attr)) {
-      if (attr === "textContent") {
-        elt.textContent = attributes[attr];
-      } else if (attr === "child") {
-        elt.appendChild(attributes[attr]);
-      } else {
-        elt.setAttribute(attr, attributes[attr]);
-      }
-    }
-  }
-  parent.appendChild(elt);
-  return elt;
-}
-
-exports.createChild = createChild;
-
-/**
- * Append a text node to an element.
- *
- * @param {Element} parent
- *        The parent node.
- * @param {string} text
- *        The text content for the text node.
- */
-function appendText(parent, text) {
-  parent.appendChild(parent.ownerDocument.createTextNode(text));
-}
-
-exports.appendText = appendText;
 
 /**
  * Called when a character is typed in a value editor.  This decides
@@ -82,9 +40,9 @@ function advanceValidate(keyCode, value, insertionPoint) {
   // value.  Otherwise it's been inserted in some spot where it has a
   // valid meaning, like a comment or string.
   value = value.slice(0, insertionPoint) + ";" + value.slice(insertionPoint);
-  let lexer = getCSSLexer(value);
+  const lexer = getCSSLexer(value);
   while (true) {
-    let token = lexer.nextToken();
+    const token = lexer.nextToken();
     if (token.endOffset > insertionPoint) {
       if (token.tokenType === "symbol" && token.text === ";") {
         // The ";" is a terminator.
@@ -97,56 +55,17 @@ function advanceValidate(keyCode, value, insertionPoint) {
   return false;
 }
 
-exports.advanceValidate = advanceValidate;
-
 /**
- * From underscore's `_.throttle`
- * http://underscorejs.org
- * (c) 2009-2014 Jeremy Ashkenas, DocumentCloud and Investigative Reporters & Editors
- * Underscore may be freely distributed under the MIT license.
+ * Append a text node to an element.
  *
- * Returns a function, that, when invoked, will only be triggered at most once during a
- * given window of time. The throttled function will run as much as it can, without ever
- * going more than once per wait duration.
- *
- * @param  {Function} func
- *         The function to throttle
- * @param  {number} wait
- *         The wait period
- * @param  {Object} scope
- *         The scope to use for func
- * @return {Function} The throttled function
+ * @param {Element} parent
+ *        The parent node.
+ * @param {string} text
+ *        The text content for the text node.
  */
-function throttle(func, wait, scope) {
-  let args, result;
-  let timeout = null;
-  let previous = 0;
-
-  let later = function () {
-    previous = Date.now();
-    timeout = null;
-    result = func.apply(scope, args);
-    args = null;
-  };
-
-  return function () {
-    let now = Date.now();
-    let remaining = wait - (now - previous);
-    args = arguments;
-    if (remaining <= 0) {
-      clearTimeout(timeout);
-      timeout = null;
-      previous = now;
-      result = func.apply(scope, args);
-      args = null;
-    } else if (!timeout) {
-      timeout = setTimeout(later, remaining);
-    }
-    return result;
-  };
+function appendText(parent, text) {
+  parent.appendChild(parent.ownerDocument.createTextNode(text));
 }
-
-exports.throttle = throttle;
 
 /**
  * Event handler that causes a blur on the target if the input has
@@ -155,7 +74,7 @@ exports.throttle = throttle;
 function blurOnMultipleProperties(cssProperties) {
   return (e) => {
     setTimeout(() => {
-      let props = parseDeclarations(cssProperties.isKnown, e.target.value);
+      const props = parseDeclarations(cssProperties.isKnown, e.target.value);
       if (props.length > 1) {
         e.target.blur();
       }
@@ -163,7 +82,32 @@ function blurOnMultipleProperties(cssProperties) {
   };
 }
 
-exports.blurOnMultipleProperties = blurOnMultipleProperties;
+/**
+ * Create a child element with a set of attributes.
+ *
+ * @param {Element} parent
+ *        The parent node.
+ * @param {string} tagName
+ *        The tag name.
+ * @param {object} attributes
+ *        A set of attributes to set on the node.
+ */
+function createChild(parent, tagName, attributes = {}) {
+  const elt = parent.ownerDocument.createElementNS(HTML_NS, tagName);
+  for (const attr in attributes) {
+    if (attributes.hasOwnProperty(attr)) {
+      if (attr === "textContent") {
+        elt.textContent = attributes[attr];
+      } else if (attr === "child") {
+        elt.appendChild(attributes[attr]);
+      } else {
+        elt.setAttribute(attr, attributes[attr]);
+      }
+    }
+  }
+  parent.appendChild(elt);
+  return elt;
+}
 
 /**
  * Log the provided error to the console and return a rejected Promise for
@@ -178,4 +122,44 @@ function promiseWarn(error) {
   return promise.reject(error);
 }
 
+/**
+ * While waiting for a reps fix in https://github.com/devtools-html/reps/issues/92,
+ * translate nodeFront to a grip-like object that can be used with an ElementNode rep.
+ *
+ * @params  {NodeFront} nodeFront
+ *          The NodeFront for which we want to create a grip-like object.
+ * @returns {Object} a grip-like object that can be used with Reps.
+ */
+function translateNodeFrontToGrip(nodeFront) {
+  const { attributes } = nodeFront;
+
+  // The main difference between NodeFront and grips is that attributes are treated as
+  // a map in grips and as an array in NodeFronts.
+  const attributesMap = {};
+  for (const {name, value} of attributes) {
+    attributesMap[name] = value;
+  }
+
+  return {
+    actor: nodeFront.actorID,
+    preview: {
+      attributes: attributesMap,
+      attributesLength: attributes.length,
+      isAfterPseudoElement: nodeFront.isAfterPseudoElement,
+      isBeforePseudoElement: nodeFront.isBeforePseudoElement,
+      // All the grid containers are assumed to be in the DOM tree.
+      isConnected: true,
+      // nodeName is already lowerCased in Node grips
+      nodeName: nodeFront.nodeName.toLowerCase(),
+      nodeType: nodeFront.nodeType,
+    }
+  };
+}
+
+exports.advanceValidate = advanceValidate;
+exports.appendText = appendText;
+exports.blurOnMultipleProperties = blurOnMultipleProperties;
+exports.createChild = createChild;
 exports.promiseWarn = promiseWarn;
+exports.throttle = throttle;
+exports.translateNodeFrontToGrip = translateNodeFrontToGrip;

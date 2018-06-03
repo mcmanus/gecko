@@ -6,19 +6,18 @@ extern crate gleam;
 extern crate glutin;
 extern crate rayon;
 extern crate webrender;
+extern crate winit;
 
 #[path = "common/boilerplate.rs"]
 mod boilerplate;
 
 use boilerplate::{Example, HandyDandyRectBuilder};
-use rayon::Configuration as ThreadPoolConfig;
-use rayon::ThreadPool;
+use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
-use std::sync::mpsc::{channel, Receiver, Sender};
-use webrender::api::{self, DisplayListBuilder, DocumentId, LayoutSize, PipelineId, RenderApi,
-                     ResourceUpdates};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use webrender::api::{self, DisplayListBuilder, DocumentId, PipelineId, RenderApi, Transaction};
 
 // This example shows how to implement a very basic BlobImageRenderer that can only render
 // a checkerboard pattern.
@@ -26,8 +25,8 @@ use webrender::api::{self, DisplayListBuilder, DocumentId, LayoutSize, PipelineI
 // The deserialized command list internally used by this example is just a color.
 type ImageRenderingCommands = api::ColorU;
 
-// Serialize/deserialze the blob.
-// Ror real usecases you should probably use serde rather than doing it by hand.
+// Serialize/deserialize the blob.
+// For real usecases you should probably use serde rather than doing it by hand.
 
 fn serialize_blob(color: api::ColorU) -> Vec<u8> {
     vec![color.r, color.g, color.b, color.a]
@@ -53,7 +52,7 @@ fn render_blob(
 
     // Allocate storage for the result. Right now the resource cache expects the
     // tiles to have have no stride or offset.
-    let mut texels = Vec::with_capacity((descriptor.width * descriptor.height * 4) as usize);
+    let mut texels = Vec::with_capacity((descriptor.size.width * descriptor.size.height * 4) as usize);
 
     // Generate a per-tile pattern to see it in the demo. For a real use case it would not
     // make sense for the rendered content to depend on its tile.
@@ -62,8 +61,8 @@ fn render_blob(
         None => true,
     };
 
-    for y in 0 .. descriptor.height {
-        for x in 0 .. descriptor.width {
+    for y in 0 .. descriptor.size.height {
+        for x in 0 .. descriptor.size.width {
             // Apply the tile's offset. This is important: all drawing commands should be
             // translated by this offset to give correct results with tiled blob images.
             let x2 = x + descriptor.offset.x as u32;
@@ -75,7 +74,7 @@ fn render_blob(
             } else {
                 0
             };
-            // ..nested in the per-tile cherkerboard pattern
+            // ..nested in the per-tile checkerboard pattern
             let tc = if tile_checker { 0 } else { (1 - checker) * 40 };
 
             match descriptor.format {
@@ -85,12 +84,12 @@ fn render_blob(
                     texels.push(color.r * checker + tc);
                     texels.push(color.a * checker + tc);
                 }
-                api::ImageFormat::A8 => {
+                api::ImageFormat::R8 => {
                     texels.push(color.a * checker + tc);
                 }
                 _ => {
                     return Err(api::BlobImageError::Other(
-                        format!("Usupported image format {:?}", descriptor.format),
+                        format!("Unsupported image format"),
                     ));
                 }
             }
@@ -99,8 +98,7 @@ fn render_blob(
 
     Ok(api::RasterizedBlobImage {
         data: texels,
-        width: descriptor.width,
-        height: descriptor.height,
+        size: descriptor.size,
     })
 }
 
@@ -140,12 +138,12 @@ impl CheckerboardRenderer {
 }
 
 impl api::BlobImageRenderer for CheckerboardRenderer {
-    fn add(&mut self, key: api::ImageKey, cmds: api::BlobImageData, _: Option<api::TileSize>) {
+    fn add(&mut self, key: api::ImageKey, cmds: Arc<api::BlobImageData>, _: Option<api::TileSize>) {
         self.image_cmds
             .insert(key, Arc::new(deserialize_blob(&cmds[..]).unwrap()));
     }
 
-    fn update(&mut self, key: api::ImageKey, cmds: api::BlobImageData) {
+    fn update(&mut self, key: api::ImageKey, cmds: Arc<api::BlobImageData>, _dirty_rect: Option<api::DeviceUintRect>) {
         // Here, updating is just replacing the current version of the commands with
         // the new one (no incremental updates).
         self.image_cmds
@@ -180,7 +178,7 @@ impl api::BlobImageRenderer for CheckerboardRenderer {
         // Add None in the map of rendered images. This makes it possible to differentiate
         // between commands that aren't finished yet (entry in the map is equal to None) and
         // keys that have never been requested (entry not in the map), which would cause deadlocks
-        // if we were to block upon receing their result in resolve!
+        // if we were to block upon receiving their result in resolve!
         self.rendered_images.insert(request, None);
     }
 
@@ -217,6 +215,7 @@ impl api::BlobImageRenderer for CheckerboardRenderer {
     }
     fn delete_font(&mut self, _font: api::FontKey) {}
     fn delete_font_instance(&mut self, _instance: api::FontInstanceKey) {}
+    fn clear_namespace(&mut self, _namespace: api::IdNamespace) {}
 }
 
 struct App {}
@@ -226,37 +225,38 @@ impl Example for App {
         &mut self,
         api: &RenderApi,
         builder: &mut DisplayListBuilder,
-        resources: &mut ResourceUpdates,
-        layout_size: LayoutSize,
+        txn: &mut Transaction,
+        _framebuffer_size: api::DeviceUintSize,
         _pipeline_id: PipelineId,
         _document_id: DocumentId,
     ) {
         let blob_img1 = api.generate_image_key();
-        resources.add_image(
+        txn.add_image(
             blob_img1,
-            api::ImageDescriptor::new(500, 500, api::ImageFormat::BGRA8, true),
+            api::ImageDescriptor::new(500, 500, api::ImageFormat::BGRA8, true, false),
             api::ImageData::new_blob_image(serialize_blob(api::ColorU::new(50, 50, 150, 255))),
             Some(128),
         );
 
         let blob_img2 = api.generate_image_key();
-        resources.add_image(
+        txn.add_image(
             blob_img2,
-            api::ImageDescriptor::new(200, 200, api::ImageFormat::BGRA8, true),
+            api::ImageDescriptor::new(200, 200, api::ImageFormat::BGRA8, true, false),
             api::ImageData::new_blob_image(serialize_blob(api::ColorU::new(50, 150, 50, 255))),
             None,
         );
 
-        let bounds = api::LayoutRect::new(api::LayoutPoint::zero(), layout_size);
+        let bounds = api::LayoutRect::new(api::LayoutPoint::zero(), builder.content_size());
         let info = api::LayoutPrimitiveInfo::new(bounds);
         builder.push_stacking_context(
             &info,
-            api::ScrollPolicy::Scrollable,
+            None,
             None,
             api::TransformStyle::Flat,
             None,
             api::MixBlendMode::Normal,
             Vec::new(),
+            api::GlyphRasterSpace::Screen,
         );
 
         let info = api::LayoutPrimitiveInfo::new((30, 30).by(500, 500));
@@ -265,6 +265,7 @@ impl Example for App {
             api::LayoutSize::new(500.0, 500.0),
             api::LayoutSize::new(0.0, 0.0),
             api::ImageRendering::Auto,
+            api::AlphaType::PremultipliedAlpha,
             blob_img1,
         );
 
@@ -274,27 +275,20 @@ impl Example for App {
             api::LayoutSize::new(200.0, 200.0),
             api::LayoutSize::new(0.0, 0.0),
             api::ImageRendering::Auto,
+            api::AlphaType::PremultipliedAlpha,
             blob_img2,
         );
 
         builder.pop_stacking_context();
     }
-
-    fn on_event(
-        &mut self,
-        _event: glutin::Event,
-        _api: &RenderApi,
-        _document_id: DocumentId,
-    ) -> bool {
-        false
-    }
 }
 
 fn main() {
-    let worker_config =
-        ThreadPoolConfig::new().thread_name(|idx| format!("WebRender:Worker#{}", idx));
+    let workers =
+        ThreadPoolBuilder::new().thread_name(|idx| format!("WebRender:Worker#{}", idx))
+                                .build();
 
-    let workers = Arc::new(ThreadPool::new(worker_config).unwrap());
+    let workers = Arc::new(workers.unwrap());
 
     let opts = webrender::RendererOptions {
         workers: Some(Arc::clone(&workers)),

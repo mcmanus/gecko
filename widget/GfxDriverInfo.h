@@ -10,9 +10,9 @@
 
 // Macros for adding a blocklist item to the static list.
 #define APPEND_TO_DRIVER_BLOCKLIST(os, vendor, devices, feature, featureStatus, driverComparator, driverVersion, ruleId, suggestedVersion) \
-    mDriverInfo->AppendElement(GfxDriverInfo(os, vendor, devices, feature, featureStatus, driverComparator, driverVersion, ruleId, suggestedVersion))
+    sDriverInfo->AppendElement(GfxDriverInfo(os, vendor, devices, feature, featureStatus, driverComparator, driverVersion, ruleId, suggestedVersion))
 #define APPEND_TO_DRIVER_BLOCKLIST2(os, vendor, devices, feature, featureStatus, driverComparator, driverVersion, ruleId) \
-    mDriverInfo->AppendElement(GfxDriverInfo(os, vendor, devices, feature, featureStatus, driverComparator, driverVersion, ruleId))
+    sDriverInfo->AppendElement(GfxDriverInfo(os, vendor, devices, feature, featureStatus, driverComparator, driverVersion, ruleId))
 
 #define APPEND_TO_DRIVER_BLOCKLIST_RANGE(os, vendor, devices, feature, featureStatus, driverComparator, driverVersion, driverVersionMax, ruleId, suggestedVersion) \
     do { \
@@ -21,7 +21,7 @@
                  driverComparator == DRIVER_BETWEEN_INCLUSIVE_START); \
       GfxDriverInfo info(os, vendor, devices, feature, featureStatus, driverComparator, driverVersion, ruleId, suggestedVersion); \
       info.mDriverVersionMax = driverVersionMax; \
-      mDriverInfo->AppendElement(info); \
+      sDriverInfo->AppendElement(info); \
     } while (false)
 
 #define APPEND_TO_DRIVER_BLOCKLIST_RANGE_GPU2(os, vendor, devices, feature, featureStatus, driverComparator, driverVersion, driverVersionMax, ruleId, suggestedVersion) \
@@ -31,7 +31,7 @@
                  driverComparator == DRIVER_BETWEEN_INCLUSIVE_START); \
       GfxDriverInfo info(os, vendor, devices, feature, featureStatus, driverComparator, driverVersion, ruleId, suggestedVersion, false, true); \
       info.mDriverVersionMax = driverVersionMax; \
-      mDriverInfo->AppendElement(info); \
+      sDriverInfo->AppendElement(info); \
     } while (false)
 
 
@@ -86,6 +86,7 @@ enum DeviceFamily {
   IntelGMAX3000,
   IntelGMAX4500HD,
   IntelHDGraphicsToSandyBridge,
+  IntelHDGraphicsToHaswell,
   IntelHD3000,
   IntelMobileHDGraphics,
   NvidiaBlockD3D9Layers,
@@ -97,16 +98,19 @@ enum DeviceFamily {
   Bug1116812,
   Bug1155608,
   Bug1207665,
+  Bug1447141,
   DeviceFamilyMax
 };
 
 enum DeviceVendor {
-  VendorAll,
+  VendorAll, // There is an assumption that this is the first enum
   VendorIntel,
   VendorNVIDIA,
   VendorAMD,
   VendorATI,
   VendorMicrosoft,
+  VendorParallels,
+  VendorQualcomm,
   DeviceVendorMax
 };
 
@@ -157,10 +161,10 @@ struct GfxDriverInfo
   nsCString mRuleId;
 
   static const GfxDeviceFamily* GetDeviceFamily(DeviceFamily id);
-  static GfxDeviceFamily* mDeviceFamilies[DeviceFamilyMax];
+  static GfxDeviceFamily* sDeviceFamilies[DeviceFamilyMax];
 
   static const nsAString& GetDeviceVendor(DeviceVendor id);
-  static nsAString* mDeviceVendors[DeviceVendorMax];
+  static nsAString* sDeviceVendors[DeviceVendorMax];
 
   nsString mModel, mHardware, mProduct, mManufacturer;
 

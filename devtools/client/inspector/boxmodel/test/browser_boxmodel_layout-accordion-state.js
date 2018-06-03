@@ -18,21 +18,21 @@ const TEST_URI = `
 
 const BOXMODEL_OPENED_PREF = "devtools.layout.boxmodel.opened";
 
-add_task(function* () {
-  yield addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
-  let { inspector, boxmodel, toolbox } = yield openLayoutView();
-  let { document: doc } = boxmodel;
+add_task(async function() {
+  await addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
+  const { inspector, boxmodel, toolbox } = await openLayoutView();
+  const { document: doc } = boxmodel;
 
-  yield testAccordionStateAfterClickingHeader(doc);
-  yield testAccordionStateAfterSwitchingSidebars(inspector, doc);
-  yield testAccordionStateAfterReopeningLayoutView(toolbox);
+  await testAccordionStateAfterClickingHeader(doc);
+  await testAccordionStateAfterSwitchingSidebars(inspector, doc);
+  await testAccordionStateAfterReopeningLayoutView(toolbox);
 
   Services.prefs.clearUserPref(BOXMODEL_OPENED_PREF);
 });
 
-function* testAccordionStateAfterClickingHeader(doc) {
-  let header = doc.querySelector("#layout-container .box-model-pane ._header");
-  let bContent = doc.querySelector("#layout-container .box-model-pane ._content");
+function testAccordionStateAfterClickingHeader(doc) {
+  const header = doc.querySelector("#layout-container .box-model-pane ._header");
+  const bContent = doc.querySelector("#layout-container .box-model-pane ._content");
 
   info("Checking initial state of the box model panel.");
   is(bContent.style.display, "block", "The box model panel content is 'display: block'.");
@@ -48,10 +48,10 @@ function* testAccordionStateAfterClickingHeader(doc) {
     `${BOXMODEL_OPENED_PREF} is pref off.`);
 }
 
-function* testAccordionStateAfterSwitchingSidebars(inspector, doc) {
+function testAccordionStateAfterSwitchingSidebars(inspector, doc) {
   info("Checking the box model accordion state is persistent after switching sidebars.");
 
-  let bContent = doc.querySelector("#layout-container .box-model-pane ._content");
+  const bContent = doc.querySelector("#layout-container .box-model-pane ._content");
 
   info("Selecting the computed view.");
   inspector.sidebar.select("computedview");
@@ -65,17 +65,17 @@ function* testAccordionStateAfterSwitchingSidebars(inspector, doc) {
     `${BOXMODEL_OPENED_PREF} is pref off.`);
 }
 
-function* testAccordionStateAfterReopeningLayoutView(toolbox) {
+async function testAccordionStateAfterReopeningLayoutView(toolbox) {
   info("Checking the box model accordion state is persistent after closing and "
   + "re-opening the layout view.");
 
   info("Closing the toolbox.");
-  yield toolbox.destroy();
+  await toolbox.destroy();
 
   info("Re-opening the layout view.");
-  let { boxmodel } = yield openLayoutView();
-  let { document: doc } = boxmodel;
-  let bContent = doc.querySelector("#layout-container .box-model-pane ._content");
+  const { boxmodel } = await openLayoutView();
+  const { document: doc } = boxmodel;
+  const bContent = doc.querySelector("#layout-container .box-model-pane ._content");
 
   info("Checking the state of the box model panel.");
   ok(!bContent, "The box model panel content is not rendered.");

@@ -1,9 +1,8 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-const { interfaces: Ci, utils: Cu } = Components;
-Cu.import("resource://gre/modules/PlacesUtils.jsm");
-Cu.import("resource://gre/modules/NetUtil.jsm");
+ChromeUtils.import("resource://gre/modules/PlacesUtils.jsm");
+ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
 
 function test() {
   waitForExplicitFinish();
@@ -17,11 +16,6 @@ function test() {
   });
 
   SpecialPowers.pushPrefEnv({set: [
-    ["browser.cache.offline.enable", false],
-    ["browser.cache.disk.enable", false],
-    ["browser.cache.memory.enable", false],
-    ["browser.storageManager.enabled", true],
-    ["browser.preferences.offlineGroup.enabled", true],
     ["privacy.userContext.ui.enabled", true]
   ]}).then(() => open_preferences(runTest));
 }
@@ -35,9 +29,6 @@ function runTest(win) {
   // Test if privacy pane is opened correctly
   win.gotoPref("panePrivacy");
   for (let element of elements) {
-    if (element.nodeName == "preferences") {
-      continue;
-    }
     let attributeValue = element.getAttribute("data-category");
     if (attributeValue == "panePrivacy") {
       is_element_visible(element, `Privacy element of id=${element.id} should be visible`);

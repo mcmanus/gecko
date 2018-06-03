@@ -17,6 +17,7 @@
 #include <stdint.h>
 
 #ifdef XP_WIN
+#include "mozilla/WindowsVersion.h"
 #include "mozilla/layers/D3D11YCbCrImage.h"
 #endif
 
@@ -95,9 +96,10 @@ AudioData::TransferAndUpdateTimestampAndDuration(AudioData* aOther,
                                       aTimestamp,
                                       aDuration,
                                       aOther->mFrames,
-                                      Move(aOther->mAudioData),
+                                      std::move(aOther->mAudioData),
                                       aOther->mChannels,
-                                      aOther->mRate);
+                                      aOther->mRate,
+                                      aOther->mChannelMap);
   return v.forget();
 }
 
@@ -107,7 +109,7 @@ ValidatePlane(const VideoData::YCbCrBuffer::Plane& aPlane)
   return aPlane.mWidth <= PlanarYCbCrImage::MAX_DIMENSION &&
          aPlane.mHeight <= PlanarYCbCrImage::MAX_DIMENSION &&
          aPlane.mWidth * aPlane.mHeight < MAX_VIDEO_WIDTH * MAX_VIDEO_HEIGHT &&
-         aPlane.mStride > 0;
+         aPlane.mStride > 0 && aPlane.mWidth <= aPlane.mStride;
 }
 
 static bool ValidateBufferAndPicture(const VideoData::YCbCrBuffer& aBuffer,
@@ -176,7 +178,7 @@ VideoData::SetListener(UniquePtr<Listener> aListener)
   MOZ_ASSERT(!mSentToCompositor,
              "Listener should be registered before sending data");
 
-  mListener = Move(aListener);
+  mListener = std::move(aListener);
 }
 
 void
@@ -319,8 +321,10 @@ VideoData::CreateAndCopyData(const VideoInfo& aInfo,
   // Currently our decoder only knows how to output to ImageFormat::PLANAR_YCBCR
   // format.
 #if XP_WIN
-  if (aAllocator && aAllocator->GetCompositorBackendType()
-                    == layers::LayersBackend::LAYERS_D3D11) {
+  // We disable this code path on Windows version earlier of Windows 8 due to
+  // intermittent crashes with old drivers. See bug 1405110.
+  if (IsWin8OrLater() && !XRE_IsParentProcess() &&
+      aAllocator && aAllocator->SupportsD3D11()) {
     RefPtr<layers::D3D11YCbCrImage> d3d11Image = new layers::D3D11YCbCrImage();
     PlanarYCbCrData data = ConstructPlanarYCbCrData(aInfo, aBuffer, aPicture);
     if (d3d11Image->SetData(layers::ImageBridgeChild::GetSingleton()
@@ -497,10 +501,11 @@ MediaRawData::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
   return size;
 }
 
-MediaRawDataWriter*
+UniquePtr<MediaRawDataWriter>
 MediaRawData::CreateWriter()
 {
-  return new MediaRawDataWriter(this);
+  UniquePtr<MediaRawDataWriter> p(new MediaRawDataWriter(this));
+  return p;
 }
 
 MediaRawDataWriter::MediaRawDataWriter(MediaRawData* aMediaRawData)
@@ -543,6 +548,12 @@ size_t
 MediaRawDataWriter::Size()
 {
   return mTarget->Size();
+}
+
+void
+MediaRawDataWriter::PopFront(size_t aSize)
+{
+  mTarget->mBuffer.PopFront(aSize);
 }
 
 } // namespace mozilla

@@ -75,24 +75,19 @@ static WindowsDllInterceptor sUser32Intercept;
 static HWND sWinlessPopupSurrogateHWND = nullptr;
 static User32TrackPopupMenu sUser32TrackPopupMenuStub = nullptr;
 
-typedef HIMC (WINAPI *Imm32ImmGetContext)(HWND hWND);
-typedef BOOL (WINAPI *Imm32ImmReleaseContext)(HWND hWND, HIMC hIMC);
-typedef LONG (WINAPI *Imm32ImmGetCompositionString)(HIMC hIMC,
-                                                    DWORD dwIndex,
-                                                    LPVOID lpBuf,
-                                                    DWORD dwBufLen);
-typedef BOOL (WINAPI *Imm32ImmSetCandidateWindow)(HIMC hIMC,
-                                                  LPCANDIDATEFORM lpCandidate);
-typedef BOOL (WINAPI *Imm32ImmNotifyIME)(HIMC hIMC, DWORD dwAction,
-                                        DWORD dwIndex, DWORD dwValue);
 static WindowsDllInterceptor sImm32Intercept;
-static Imm32ImmGetContext sImm32ImmGetContextStub = nullptr;
-static Imm32ImmReleaseContext sImm32ImmReleaseContextStub = nullptr;
-static Imm32ImmGetCompositionString sImm32ImmGetCompositionStringStub = nullptr;
-static Imm32ImmSetCandidateWindow sImm32ImmSetCandidateWindowStub = nullptr;
-static Imm32ImmNotifyIME sImm32ImmNotifyIME = nullptr;
+static decltype(ImmGetContext)* sImm32ImmGetContextStub = nullptr;
+static decltype(ImmGetCompositionStringW)* sImm32ImmGetCompositionStringStub =
+                                             nullptr;
+static decltype(ImmSetCandidateWindow)* sImm32ImmSetCandidateWindowStub =
+                                          nullptr;
+static decltype(ImmNotifyIME)* sImm32ImmNotifyIME = nullptr;
+static decltype(ImmAssociateContextEx)* sImm32ImmAssociateContextExStub =
+                                          nullptr;
 static PluginInstanceChild* sCurrentPluginInstance = nullptr;
 static const HIMC sHookIMC = (const HIMC)0xefefefef;
+static bool sPopupMenuHookSet;
+static bool sSetWindowLongHookSet;
 
 using mozilla::gfx::SharedDIB;
 
@@ -182,6 +177,7 @@ PluginInstanceChild::PluginInstanceChild(const NPPluginFuncs* aPluginIface,
     , mDestroyed(false)
 #ifdef XP_WIN
     , mLastKeyEventConsumed(false)
+    , mLastEnableIMEState(true)
 #endif // #ifdef XP_WIN
     , mStackDepth(0)
 {
@@ -755,8 +751,7 @@ PluginInstanceChild::AnswerNPP_GetValue_NPPVpluginNativeAccessibleAtkPlugId(
 
 #else
 
-    NS_RUNTIMEABORT("shouldn't be called on non-ATK platforms");
-    return IPC_FAIL_NO_REASON(this);
+    MOZ_CRASH("shouldn't be called on non-ATK platforms");
 
 #endif
 }
@@ -1075,8 +1070,7 @@ PluginInstanceChild::AnswerNPP_HandleEvent_IOSurface(const NPRemoteEvent& event,
                                                      const uint32_t &surfaceid,
                                                      int16_t* handled)
 {
-    NS_RUNTIMEABORT("NPP_HandleEvent_IOSurface is a OSX-only message");
-    return IPC_FAIL_NO_REASON(this);
+    MOZ_CRASH("NPP_HandleEvent_IOSurface is a OSX-only message");
 }
 #endif
 
@@ -1090,8 +1084,7 @@ PluginInstanceChild::RecvWindowPosChanged(const NPRemoteEvent& event)
     int16_t dontcare;
     return AnswerNPP_HandleEvent(event, &dontcare);
 #else
-    NS_RUNTIMEABORT("WindowPosChanged is a windows-only message");
-    return IPC_FAIL_NO_REASON(this);
+    MOZ_CRASH("WindowPosChanged is a windows-only message");
 #endif
 }
 
@@ -1110,8 +1103,7 @@ PluginInstanceChild::RecvContentsScaleFactorChanged(const double& aContentsScale
 #endif
     return IPC_OK();
 #else
-    NS_RUNTIMEABORT("ContentsScaleFactorChanged is an Windows or OSX only message");
-    return IPC_FAIL_NO_REASON(this);
+    MOZ_CRASH("ContentsScaleFactorChanged is an Windows or OSX only message");
 #endif
 }
 
@@ -1907,8 +1899,15 @@ PluginInstanceChild::SetWindowLongWHook(HWND hWnd,
 void
 PluginInstanceChild::HookSetWindowLongPtr()
 {
-    if (!(GetQuirks() & QUIRK_FLASH_HOOK_SETLONGPTR))
+    if (!(GetQuirks() & QUIRK_FLASH_HOOK_SETLONGPTR)) {
         return;
+    }
+
+    // Only pass through here once
+    if (sSetWindowLongHookSet) {
+        return;
+    }
+    sSetWindowLongHookSet = true;
 
     sUser32Intercept.Init("user32.dll");
 #ifdef _WIN64
@@ -1988,19 +1987,23 @@ PluginInstanceChild::TrackPopupHookProc(HMENU hMenu,
 void
 PluginInstanceChild::InitPopupMenuHook()
 {
-    if (!(GetQuirks() & QUIRK_WINLESS_TRACKPOPUP_HOOK) ||
-        sUser32TrackPopupMenuStub)
+    if (!(GetQuirks() & QUIRK_WINLESS_TRACKPOPUP_HOOK)) {
         return;
+    }
+
+    // Only pass through here once
+    if (sPopupMenuHookSet) {
+        return;
+    }
+    sPopupMenuHookSet = true;
 
     // Note, once WindowsDllInterceptor is initialized for a module,
     // it remains initialized for that particular module for it's
     // lifetime. Additional instances are needed if other modules need
     // to be hooked.
-    if (!sUser32TrackPopupMenuStub) {
-        sUser32Intercept.Init("user32.dll");
-        sUser32Intercept.AddHook("TrackPopupMenu", reinterpret_cast<intptr_t>(TrackPopupHookProc),
-                                 (void**) &sUser32TrackPopupMenuStub);
-    }
+    sUser32Intercept.Init("user32.dll");
+    sUser32Intercept.AddHook("TrackPopupMenu", reinterpret_cast<intptr_t>(TrackPopupHookProc),
+                             (void**) &sUser32TrackPopupMenuStub);
 }
 
 void
@@ -2037,17 +2040,6 @@ PluginInstanceChild::ImmGetContextProc(HWND aWND)
     }
 
     return sHookIMC;
-}
-
-// static
-BOOL
-PluginInstanceChild::ImmReleaseContextProc(HWND aWND, HIMC aIMC)
-{
-    if (aIMC == sHookIMC) {
-        return TRUE;
-    }
-
-    return sImm32ImmReleaseContextStub(aWND, aIMC);
 }
 
 // static
@@ -2122,6 +2114,30 @@ PluginInstanceChild::ImmNotifyIME(HIMC aIMC, DWORD aAction, DWORD aIndex,
     return TRUE;
 }
 
+// static
+BOOL
+PluginInstanceChild::ImmAssociateContextExProc(HWND hWND, HIMC hImc,
+                                               DWORD dwFlags)
+{
+    PluginInstanceChild* self = sCurrentPluginInstance;
+    if (!self) {
+        // If ImmAssociateContextEx calls unexpected window message,
+        // we can use child instance object from window property if available.
+        self = reinterpret_cast<PluginInstanceChild*>(
+                   GetProp(hWND, kFlashThrottleProperty));
+        NS_WARNING_ASSERTION(self, "Cannot find PluginInstanceChild");
+    }
+
+    // HIMC is always nullptr on Flash's windowless
+    if (!hImc && self) {
+        // Store the last IME state since Flash may call ImmAssociateContextEx
+        // before taking focus.
+        self->mLastEnableIMEState = !!(dwFlags & IACE_DEFAULT);
+        self->SendEnableIME(self->mLastEnableIMEState);
+    }
+    return sImm32ImmAssociateContextExStub(hWND, hImc, dwFlags);
+}
+
 void
 PluginInstanceChild::InitImm32Hook()
 {
@@ -2134,16 +2150,15 @@ PluginInstanceChild::InitImm32Hook()
     }
 
     // When using windowless plugin, IMM API won't work due ot OOP.
+    //
+    // ImmReleaseContext on Windows 7+ just returns TRUE only, so we don't
+    // need to hook this.
 
     sImm32Intercept.Init("imm32.dll");
     sImm32Intercept.AddHook(
         "ImmGetContext",
         reinterpret_cast<intptr_t>(ImmGetContextProc),
         (void**)&sImm32ImmGetContextStub);
-    sImm32Intercept.AddHook(
-        "ImmReleaseContext",
-        reinterpret_cast<intptr_t>(ImmReleaseContextProc),
-        (void**)&sImm32ImmReleaseContextStub);
     sImm32Intercept.AddHook(
         "ImmGetCompositionStringW",
         reinterpret_cast<intptr_t>(ImmGetCompositionStringProc),
@@ -2156,6 +2171,10 @@ PluginInstanceChild::InitImm32Hook()
         "ImmNotifyIME",
         reinterpret_cast<intptr_t>(ImmNotifyIME),
         (void**)&sImm32ImmNotifyIME);
+    sImm32Intercept.AddHook(
+        "ImmAssociateContextEx",
+        reinterpret_cast<intptr_t>(ImmAssociateContextExProc),
+        (void**)&sImm32ImmAssociateContextExStub);
 }
 
 void
@@ -2194,6 +2213,7 @@ PluginInstanceChild::WinlessHandleEvent(NPEvent& event)
     AutoRestore<PluginInstanceChild *> pluginInstance(sCurrentPluginInstance);
     if (event.event == WM_IME_STARTCOMPOSITION ||
         event.event == WM_IME_COMPOSITION ||
+        event.event == WM_LBUTTONDOWN ||
         event.event == WM_KILLFOCUS) {
       sCurrentPluginInstance = this;
     }
@@ -2207,6 +2227,27 @@ PluginInstanceChild::WinlessHandleEvent(NPEvent& event)
 
     if (IsWindow(focusHwnd)) {
       SetFocus(focusHwnd);
+    }
+
+    // This is hack of Flash's behaviour.
+    //
+    // When moving focus from chrome to plugin by mouse click, Gecko sends
+    // mouse message (such as WM_LBUTTONDOWN etc) at first, then sends
+    // WM_SETFOCUS. But Flash will call ImmAssociateContextEx on WM_LBUTTONDOWN
+    // even if it doesn't receive WM_SETFOCUS.
+    //
+    // In this situation, after sending mouse message, content process will be
+    // activated and set input context with PLUGIN.  So after activating
+    // content process, we have to set current IME state again.
+
+    if (event.event == WM_SETFOCUS) {
+        // When focus is changed from chrome process to plugin process,
+        // Flash may call ImmAssociateContextEx before receiving WM_SETFOCUS.
+        SendEnableIME(mLastEnableIMEState);
+    } else if (event.event == WM_KILLFOCUS) {
+        // Flash always calls ImmAssociateContextEx by taking focus.
+        // Although this flag doesn't have to be reset, I add it for safety.
+        mLastEnableIMEState = true;
     }
 
     return handled;
@@ -3309,10 +3350,14 @@ PluginInstanceChild::UpdateWindowAttributes(bool aForceSetWindow)
     // window.x/y passed to NPP_SetWindow
 
     if (mPluginIface->event) {
+        // width and height are stored as units, but narrow to ints here
+        MOZ_RELEASE_ASSERT(mWindow.width <= INT_MAX);
+        MOZ_RELEASE_ASSERT(mWindow.height <= INT_MAX);
+
         WINDOWPOS winpos = {
             0, 0,
             mWindow.x, mWindow.y,
-            mWindow.width, mWindow.height,
+            (int32_t)mWindow.width, (int32_t)mWindow.height,
             0
         };
         NPEvent pluginEvent = {
@@ -3379,7 +3424,7 @@ PluginInstanceChild::PaintRectToPlatformSurface(const nsIntRect& aRect,
     NPEvent paintEvent = {
         WM_PAINT,
         uintptr_t(mWindow.window),
-        uintptr_t(&rect)
+        intptr_t(&rect)
     };
 
     ::SetViewportOrgEx((HDC) mWindow.window, -mWindow.x, -mWindow.y, nullptr);

@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "Prevziať"
   },
+  "downloadOnlyNotice": {
+    "message": "Ste v režime len na prevzatie."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots automaticky prejde do režimu len na prevzatie v nasledujúcich situáciách:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "Ste v režime Súkromné prehliadanie."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Máte zakázané cookies tretích strán."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "Máte úplne zakázané ukladanie histórie prehliadania."
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "Používate Firefox ESR."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "Nahrávanie bolo zakázané."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Odkaz bol skopírovaný"
   },
@@ -36,6 +57,28 @@
     "message": "Odkaz na vašu snímku bol skopírovaný do schránky. Stlačením $META_KEY$-V ho prilepíte.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Kopírovať"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Snímka bola skopírovaná"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Vaša snímka bola skopírovaná do schránky. Stlačením $META_KEY$-V ju prilepíte.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Tento obrázok bol orezaný na $PIXELS$ px.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }

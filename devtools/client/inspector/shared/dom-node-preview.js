@@ -3,9 +3,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const {Task} = require("devtools/shared/task");
-const EventEmitter = require("devtools/shared/old-event-emitter");
-const {createNode} = require("devtools/client/animationinspector/utils");
+const EventEmitter = require("devtools/shared/event-emitter");
+const {createNode} = require("devtools/client/inspector/animation-old/utils");
 const { LocalizationHelper } = require("devtools/shared/l10n");
 
 const STRINGS_URI = "devtools/client/locales/inspector.properties";
@@ -38,8 +37,8 @@ function DomNodePreview(inspector, options = {}) {
 exports.DomNodePreview = DomNodePreview;
 
 DomNodePreview.prototype = {
-  init: function (containerEl) {
-    let document = containerEl.ownerDocument;
+  init: function(containerEl) {
+    const document = containerEl.ownerDocument;
 
     // Init the markup for displaying the target node.
     this.el = createNode({
@@ -172,7 +171,7 @@ DomNodePreview.prototype = {
     this.startListeners();
   },
 
-  startListeners: function () {
+  startListeners: function() {
     // Init events for highlighting and selecting the node.
     this.previewEl.addEventListener("mouseover", this.onPreviewMouseOver);
     this.previewEl.addEventListener("mouseout", this.onPreviewMouseOut);
@@ -186,7 +185,7 @@ DomNodePreview.prototype = {
     HighlighterLock.on("highlighted", this.onHighlighterLocked);
   },
 
-  stopListeners: function () {
+  stopListeners: function() {
     HighlighterLock.off("highlighted", this.onHighlighterLocked);
     this.inspector.off("markupmutation", this.onMarkupMutations);
     this.previewEl.removeEventListener("mouseover", this.onPreviewMouseOver);
@@ -195,7 +194,7 @@ DomNodePreview.prototype = {
     this.highlightNodeEl.removeEventListener("click", this.onHighlightElClick);
   },
 
-  destroy: function () {
+  destroy: function() {
     HighlighterLock.unhighlight().catch(console.error);
 
     this.stopListeners();
@@ -213,7 +212,7 @@ DomNodePreview.prototype = {
     return null;
   },
 
-  onPreviewMouseOver: function () {
+  onPreviewMouseOver: function() {
     if (!this.nodeFront || !this.highlighterUtils) {
       return;
     }
@@ -221,7 +220,7 @@ DomNodePreview.prototype = {
                          .catch(console.error);
   },
 
-  onPreviewMouseOut: function () {
+  onPreviewMouseOut: function() {
     if (!this.nodeFront || !this.highlighterUtils) {
       return;
     }
@@ -229,18 +228,18 @@ DomNodePreview.prototype = {
                          .catch(console.error);
   },
 
-  onSelectElClick: function () {
+  onSelectElClick: function() {
     if (!this.nodeFront) {
       return;
     }
-    this.inspector.selection.setNodeFront(this.nodeFront, "dom-node-preview");
+    this.inspector.selection.setNodeFront(this.nodeFront, { reason: "dom-node-preview" });
   },
 
-  onHighlightElClick: function (e) {
+  onHighlightElClick: function(e) {
     e.stopPropagation();
 
-    let classList = this.highlightNodeEl.classList;
-    let isHighlighted = classList.contains("selected");
+    const classList = this.highlightNodeEl.classList;
+    const isHighlighted = classList.contains("selected");
 
     if (isHighlighted) {
       classList.remove("selected");
@@ -255,18 +254,18 @@ DomNodePreview.prototype = {
     }
   },
 
-  onHighlighterLocked: function (e, domNodePreview) {
+  onHighlighterLocked: function(domNodePreview) {
     if (domNodePreview !== this) {
       this.highlightNodeEl.classList.remove("selected");
     }
   },
 
-  onMarkupMutations: function (e, mutations) {
+  onMarkupMutations: function(mutations) {
     if (!this.nodeFront) {
       return;
     }
 
-    for (let {target} of mutations) {
+    for (const {target} of mutations) {
       if (target === this.nodeFront) {
         // Re-render with the same nodeFront to update the output.
         this.render(this.nodeFront);
@@ -275,9 +274,9 @@ DomNodePreview.prototype = {
     }
   },
 
-  render: function (nodeFront) {
+  render: function(nodeFront) {
     this.nodeFront = nodeFront;
-    let {displayName, attributes} = nodeFront;
+    const {displayName, attributes} = nodeFront;
 
     if (nodeFront.isPseudoElement) {
       this.pseudoEl.textContent = nodeFront.isBeforePseudoElement
@@ -291,7 +290,7 @@ DomNodePreview.prototype = {
       this.tagNameEl.style.display = "inline";
     }
 
-    let idIndex = attributes.findIndex(({name}) => name === "id");
+    const idIndex = attributes.findIndex(({name}) => name === "id");
     if (idIndex > -1 && attributes[idIndex].value) {
       this.idEl.querySelector(".attribute-value").textContent =
         attributes[idIndex].value;
@@ -300,7 +299,7 @@ DomNodePreview.prototype = {
       this.idEl.style.display = "none";
     }
 
-    let classIndex = attributes.findIndex(({name}) => name === "class");
+    const classIndex = attributes.findIndex(({name}) => name === "class");
     if (classIndex > -1 && attributes[classIndex].value) {
       let value = attributes[classIndex].value;
       if (this.options.compact) {
@@ -327,26 +326,26 @@ var HighlighterLock = {
   highlighter: null,
   isShown: false,
 
-  highlight: Task.async(function* (animationTargetNode) {
+  async highlight(animationTargetNode) {
     if (!this.highlighter) {
-      let util = animationTargetNode.inspector.toolbox.highlighterUtils;
-      this.highlighter = yield util.getHighlighterByType("BoxModelHighlighter");
+      const util = animationTargetNode.inspector.toolbox.highlighterUtils;
+      this.highlighter = await util.getHighlighterByType("BoxModelHighlighter");
     }
 
-    yield this.highlighter.show(animationTargetNode.nodeFront);
+    await this.highlighter.show(animationTargetNode.nodeFront);
     this.isShown = true;
     this.emit("highlighted", animationTargetNode);
-  }),
+  },
 
-  unhighlight: Task.async(function* () {
+  async unhighlight() {
     if (!this.highlighter || !this.isShown) {
       return;
     }
 
-    yield this.highlighter.hide();
+    await this.highlighter.hide();
     this.isShown = false;
     this.emit("unhighlighted");
-  })
+  }
 };
 
 EventEmitter.decorate(HighlighterLock);

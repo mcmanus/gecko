@@ -9,8 +9,9 @@
 #include "nsIIPCSerializableInputStream.h"
 
 #include "mozilla/Assertions.h"
-#include "mozilla/dom/nsIContentChild.h"
-#include "mozilla/dom/PContentParent.h"
+#include "mozilla/InputStreamLengthHelper.h"
+#include "mozilla/dom/ContentChild.h"
+#include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/File.h"
 #include "mozilla/ipc/FileDescriptorSetChild.h"
 #include "mozilla/ipc/FileDescriptorSetParent.h"
@@ -137,6 +138,14 @@ SerializeInputStream(nsIInputStream* aStream, IPCStream& aValue, M* aManager,
   MOZ_ASSERT(aStream);
   MOZ_ASSERT(aManager);
 
+  // Let's try to take the length using InputStreamLengthHelper. If the length
+  // cannot be taken synchronously, and its length is needed, the stream needs
+  // to be fully copied in memory on the deserialization side.
+  int64_t length;
+  if (!InputStreamLengthHelper::GetSyncLength(aStream, &length)) {
+    length = -1;
+  }
+
   // As a fallback, attempt to stream the data across using a IPCStream
   // actor. For blocking streams, create a nonblocking pipe instead,
   nsCOMPtr<nsIAsyncInputStream> asyncStream = do_QueryInterface(aStream);
@@ -168,6 +177,7 @@ SerializeInputStream(nsIInputStream* aStream, IPCStream& aValue, M* aManager,
   IPCRemoteStream remoteStream;
   remoteStream.delayedStart() = aDelayedStart;
   remoteStream.stream() = IPCStreamSource::Create(asyncStream, aManager);
+  remoteStream.length() = length;
   aValue = remoteStream;
 
   return true;
@@ -274,7 +284,7 @@ CleanupIPCStream(IPCStream& aValue, bool aConsumedByIPC, bool aDelayedStart)
       fdSetActor->ForgetFileDescriptors(fds);
 
       if (!aConsumedByIPC) {
-        Unused << fdSetActor->Send__delete__(fdSetActor);
+        Unused << FileDescriptorSetChild::Send__delete__(fdSetActor);
       }
 
     } else if (streamWithFds.optionalFds().type() ==
@@ -292,7 +302,7 @@ CleanupIPCStream(IPCStream& aValue, bool aConsumedByIPC, bool aDelayedStart)
       fdSetActor->ForgetFileDescriptors(fds);
 
       if (!aConsumedByIPC) {
-        Unused << fdSetActor->Send__delete__(fdSetActor);
+        Unused << FileDescriptorSetParent::Send__delete__(fdSetActor);
       }
     }
 
@@ -379,6 +389,7 @@ DeserializeIPCStream(const IPCStream& aValue)
     }
 
     destinationStream->SetDelayedStart(remoteStream.delayedStart());
+    destinationStream->SetLength(remoteStream.length());
     return destinationStream->TakeReader();
   }
 
@@ -400,7 +411,7 @@ DeserializeIPCStream(const IPCStream& aValue)
     fdSetActor->ForgetFileDescriptors(fds);
     MOZ_ASSERT(!fds.IsEmpty());
 
-    if (!fdSetActor->Send__delete__(fdSetActor)) {
+    if (!FileDescriptorSetParent::Send__delete__(fdSetActor)) {
       // child process is gone, warn and allow actor to clean up normally
       NS_WARNING("Failed to delete fd set actor.");
     }
@@ -414,7 +425,7 @@ DeserializeIPCStream(const IPCStream& aValue)
     fdSetActor->ForgetFileDescriptors(fds);
     MOZ_ASSERT(!fds.IsEmpty());
 
-    Unused << fdSetActor->Send__delete__(fdSetActor);
+    Unused << FileDescriptorSetChild::Send__delete__(fdSetActor);
   }
 
   return InputStreamHelper::DeserializeInputStream(streamWithFds.stream(), fds);
@@ -623,6 +634,70 @@ AutoIPCStream::TakeOptionalValue()
   mTaken = true;
   AssertValidValueToTake(*mOptionalValue);
   return *mOptionalValue;
+}
+
+void
+IPDLParamTraits<nsIInputStream>::Write(IPC::Message* aMsg,
+                                       IProtocol* aActor,
+                                       nsIInputStream* aParam)
+{
+  mozilla::ipc::AutoIPCStream autoStream;
+  bool ok = false;
+  bool found = false;
+
+  // We can only serialize our nsIInputStream if it's going to be sent over one
+  // of the protocols we support, or a protocol which is managed by one of the
+  // protocols we support.
+  IProtocol* actor = aActor;
+  while (!found && actor) {
+    switch (actor->GetProtocolTypeId()) {
+      case PContentMsgStart:
+        if (actor->GetSide() == mozilla::ipc::ParentSide) {
+          ok = autoStream.Serialize(
+            aParam, static_cast<mozilla::dom::ContentParent*>(actor));
+        } else {
+          MOZ_RELEASE_ASSERT(actor->GetSide() == mozilla::ipc::ChildSide);
+          ok = autoStream.Serialize(
+            aParam, static_cast<mozilla::dom::ContentChild*>(actor));
+        }
+        found = true;
+        break;
+      case PBackgroundMsgStart:
+        if (actor->GetSide() == mozilla::ipc::ParentSide) {
+          ok = autoStream.Serialize(
+            aParam, static_cast<mozilla::ipc::PBackgroundParent*>(actor));
+        } else {
+          MOZ_RELEASE_ASSERT(actor->GetSide() == mozilla::ipc::ChildSide);
+          ok = autoStream.Serialize(
+            aParam, static_cast<mozilla::ipc::PBackgroundChild*>(actor));
+        }
+        found = true;
+        break;
+    }
+
+    // Try the actor's manager.
+    actor = actor->Manager();
+  }
+
+  if (!found) {
+    aActor->FatalError("Attempt to send nsIInputStream over an unsupported ipdl protocol");
+  }
+  MOZ_RELEASE_ASSERT(ok, "Failed to serialize nsIInputStream");
+
+  WriteIPDLParam(aMsg, aActor, autoStream.TakeOptionalValue());
+}
+
+bool
+IPDLParamTraits<nsIInputStream>::Read(const IPC::Message* aMsg, PickleIterator* aIter,
+                                      IProtocol* aActor, RefPtr<nsIInputStream>* aResult)
+{
+  mozilla::ipc::OptionalIPCStream ipcStream;
+  if (!ReadIPDLParam(aMsg, aIter, aActor, &ipcStream)) {
+    return false;
+  }
+
+  *aResult = mozilla::ipc::DeserializeIPCStream(ipcStream);
+  return true;
 }
 
 } // namespace ipc

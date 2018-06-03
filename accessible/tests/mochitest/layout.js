@@ -60,12 +60,24 @@ function testOffsetAtPoint(aHyperTextID, aX, aY, aCoordType, aExpectedOffset) {
  */
 function zoomDocument(aDocument, aZoom) {
   var docShell = aDocument.defaultView.
-    QueryInterface(Components.interfaces.nsIInterfaceRequestor).
-    getInterface(Components.interfaces.nsIWebNavigation).
-    QueryInterface(Components.interfaces.nsIDocShell);
+    QueryInterface(Ci.nsIInterfaceRequestor).
+    getInterface(Ci.nsIWebNavigation).
+    QueryInterface(Ci.nsIDocShell);
   var docViewer = docShell.contentViewer;
 
   docViewer.fullZoom = aZoom;
+}
+
+/**
+ * Set the relative resolution of this document. This is what apz does.
+ * On non-mobile platforms you won't see a visible change.
+ */
+function setResolution(aDocument, aZoom) {
+  var windowUtils = aDocument.defaultView.
+    QueryInterface(Ci.nsIInterfaceRequestor).
+    getInterface(Ci.nsIDOMWindowUtils);
+
+  windowUtils.setResolutionAndScaleTo(aZoom);
 }
 
 /**
@@ -187,12 +199,33 @@ function getPos(aID) {
 
 /**
  * Return the accessible coordinates and size relative to the screen in device
- * pixels.
+ * pixels. This methods also retrieves coordinates in CSS pixels and ensures that they
+ * match Dev pixels with a given device pixel ratio.
  */
-function getBounds(aID) {
-  var accessible = getAccessible(aID);
-  var x = {}, y = {}, width = {}, height = {};
+function getBounds(aID, aDPR = window.devicePixelRatio) {
+  const accessible = getAccessible(aID);
+  let x = {}, y = {}, width = {}, height = {};
+  let xInCSS = {}, yInCSS = {}, widthInCSS = {}, heightInCSS = {};
   accessible.getBounds(x, y, width, height);
+  accessible.getBoundsInCSSPixels(xInCSS, yInCSS, widthInCSS, heightInCSS);
+
+  isWithin(x.value / aDPR, xInCSS.value, 1,
+    "Heights in CSS pixels is calculated correctly");
+  isWithin(y.value / aDPR, yInCSS.value, 1,
+    "Heights in CSS pixels is calculated correctly");
+  isWithin(width.value / aDPR, widthInCSS.value, 1,
+    "Heights in CSS pixels is calculated correctly");
+  isWithin(height.value / aDPR, heightInCSS.value, 1,
+    "Heights in CSS pixels is calculated correctly");
+
+  return [x.value, y.value, width.value, height.value];
+}
+
+function getRangeExtents(aID, aStartOffset, aEndOffset, aCoordOrigin) {
+  var hyperText = getAccessible(aID, [nsIAccessibleText]);
+  var x = {}, y = {}, width = {}, height = {};
+  hyperText.getRangeExtents(aStartOffset, aEndOffset,
+                            x, y, width, height, aCoordOrigin);
   return [x.value, y.value, width.value, height.value];
 }
 
@@ -215,13 +248,13 @@ function getBoundsForDOMElm(aID) {
     var areaWidth = parseInt(areaCoords[2]) - areaX;
     var areaHeight = parseInt(areaCoords[3]) - areaY;
 
-    var rect = img.getBoundingClientRect();
+    let rect = img.getBoundingClientRect();
     x = rect.left + areaX;
     y = rect.top + areaY;
     width = areaWidth;
     height = areaHeight;
   } else {
-    var rect = elm.getBoundingClientRect();
+    let rect = elm.getBoundingClientRect();
     x = rect.left;
     y = rect.top;
     width = rect.width;
@@ -238,8 +271,8 @@ function getBoundsForDOMElm(aID) {
 
 function CSSToDevicePixels(aWindow, aX, aY, aWidth, aHeight) {
   var winUtil = aWindow.
-    QueryInterface(Components.interfaces.nsIInterfaceRequestor).
-    getInterface(Components.interfaces.nsIDOMWindowUtils);
+    QueryInterface(Ci.nsIInterfaceRequestor).
+    getInterface(Ci.nsIDOMWindowUtils);
 
   var ratio = winUtil.screenPixelsPerCSSPixel;
 

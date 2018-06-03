@@ -6,8 +6,6 @@
  * Server side http server script for application update tests.
  */
 
-const { classes: Cc, interfaces: Ci } = Components;
-
 function getTestDataFile(aFilename) {
   let file = Cc["@mozilla.org/file/directory_service;1"].
             getService(Ci.nsIProperties).get("CurWorkD", Ci.nsIFile);
@@ -22,7 +20,7 @@ function getTestDataFile(aFilename) {
 }
 
 function loadHelperScript(aScriptFile) {
-  let io = Cc["@mozilla.org/network/io-service;1"].getService(Ci.nsIIOService2);
+  let io = Cc["@mozilla.org/network/io-service;1"].getService(Ci.nsIIOService);
   let scriptSpec = io.newFileURI(aScriptFile).spec;
   let scriptloader = Cc["@mozilla.org/moz/jssubscript-loader;1"].
                      getService(Ci.mozIJSSubScriptLoader);

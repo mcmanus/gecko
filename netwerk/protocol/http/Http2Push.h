@@ -34,7 +34,7 @@ public:
                     Http2Stream *aAssociatedStream,
                     uint32_t aID,
                     uint64_t aCurrentForegroundTabOuterContentWindowId);
-  virtual ~Http2PushedStream() {}
+  virtual ~Http2PushedStream() = default;
 
   bool GetPushComplete();
 
@@ -68,6 +68,7 @@ public:
 
   // overload of Http2Stream
   virtual bool HasSink() override { return !!mConsumerStream; }
+  virtual void SetPushComplete() override { mPushCompleted = true; }
 
   nsCString &GetRequestString() { return mRequestString; }
 

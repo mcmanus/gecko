@@ -46,7 +46,7 @@ class MemoryMonitor extends BroadcastReceiver implements ComponentCallbacks2 {
     private static final String ACTION_MEMORY_DUMP = "org.mozilla.gecko.MEMORY_DUMP";
     private static final String ACTION_FORCE_PRESSURE = "org.mozilla.gecko.FORCE_MEMORY_PRESSURE";
 
-    // Memory pressure levels. Keep these in sync with those in AndroidJavaWrappers.h
+    // Memory pressure levels.
     private static final int MEMORY_PRESSURE_NONE = 0;
     private static final int MEMORY_PRESSURE_CLEANUP = 1;
     private static final int MEMORY_PRESSURE_LOW = 2;
@@ -205,16 +205,28 @@ class MemoryMonitor extends BroadcastReceiver implements ComponentCallbacks2 {
         return mStoragePressure;
     }
 
+    @WrapForJNI
+    private static native void dispatchMemoryPressureStop();
+
+    /**
+     * @return False if we have decremented all the way down to {@code MEMORY_PRESSURE_NONE}.
+     */
     private boolean decreaseMemoryPressure() {
         int newLevel;
         synchronized (this) {
-            if (mMemoryPressure <= 0) {
+            if (mMemoryPressure <= MEMORY_PRESSURE_NONE) {
                 return false;
+            } else {
+                newLevel = --mMemoryPressure;
             }
-
-            newLevel = --mMemoryPressure;
         }
         Log.d(LOGTAG, "Decreased memory pressure to " + newLevel);
+
+        if (newLevel == MEMORY_PRESSURE_NONE) {
+            if (GeckoThread.isRunning()) {
+                dispatchMemoryPressureStop();
+            }
+        }
 
         return true;
     }

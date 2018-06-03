@@ -8,13 +8,13 @@
 
 #include "mozilla/ServoStyleRule.h"
 
-#include "mozilla/DeclarationBlockInlines.h"
+#include "mozilla/DeclarationBlock.h"
 #include "mozilla/ServoBindings.h"
-#include "mozilla/ServoDeclarationBlock.h"
 #include "mozilla/dom/CSSStyleRuleBinding.h"
-#include "nsCSSPseudoClasses.h"
 
 #include "mozAutoDocUpdate.h"
+
+using namespace mozilla::dom;
 
 namespace mozilla {
 
@@ -22,12 +22,13 @@ namespace mozilla {
 
 ServoStyleRuleDeclaration::ServoStyleRuleDeclaration(
   already_AddRefed<RawServoDeclarationBlock> aDecls)
-  : mDecls(new ServoDeclarationBlock(Move(aDecls)))
+  : mDecls(new DeclarationBlock(std::move(aDecls)))
 {
 }
 
 ServoStyleRuleDeclaration::~ServoStyleRuleDeclaration()
 {
+  mDecls->SetOwningRule(nullptr);
 }
 
 // QueryInterface implementation for ServoStyleRuleDeclaration
@@ -47,17 +48,16 @@ NS_IMPL_RELEASE_USING_AGGREGATOR(ServoStyleRuleDeclaration, Rule())
 
 /* nsDOMCSSDeclaration implementation */
 
-NS_IMETHODIMP
-ServoStyleRuleDeclaration::GetParentRule(nsIDOMCSSRule** aParent)
+css::Rule*
+ServoStyleRuleDeclaration::GetParentRule()
 {
-  *aParent = do_AddRef(Rule()).take();
-  return NS_OK;
+  return Rule();
 }
 
 nsINode*
 ServoStyleRuleDeclaration::GetParentObject()
 {
-  return Rule()->GetDocument();
+  return Rule()->GetParentObject();
 }
 
 DeclarationBlock*
@@ -70,19 +70,15 @@ nsresult
 ServoStyleRuleDeclaration::SetCSSDeclaration(DeclarationBlock* aDecl)
 {
   ServoStyleRule* rule = Rule();
-  if (RefPtr<ServoStyleSheet> sheet = rule->GetStyleSheet()->AsServo()) {
-    nsCOMPtr<nsIDocument> doc = sheet->GetAssociatedDocument();
-    mozAutoDocUpdate updateBatch(doc, UPDATE_STYLE, true);
+  if (RefPtr<StyleSheet> sheet = rule->GetStyleSheet()) {
     if (aDecl != mDecls) {
       mDecls->SetOwningRule(nullptr);
-      RefPtr<ServoDeclarationBlock> decls = aDecl->AsServo();
+      RefPtr<DeclarationBlock> decls = aDecl;
       Servo_StyleRule_SetStyle(rule->Raw(), decls->Raw());
       mDecls = decls.forget();
       mDecls->SetOwningRule(rule);
     }
-    if (doc) {
-      doc->StyleRuleChanged(sheet, rule);
-    }
+    sheet->RuleChanged(rule);
   }
   return NS_OK;
 }
@@ -93,19 +89,11 @@ ServoStyleRuleDeclaration::DocToUpdate()
   return nullptr;
 }
 
-void
-ServoStyleRuleDeclaration::GetCSSParsingEnvironment(
-  CSSParsingEnvironment& aCSSParseEnv)
+nsDOMCSSDeclaration::ParsingEnvironment
+ServoStyleRuleDeclaration::GetParsingEnvironment(
+  nsIPrincipal* aSubjectPrincipal) const
 {
-  MOZ_ASSERT_UNREACHABLE("GetCSSParsingEnvironment "
-                         "shouldn't be calling for a Servo rule");
-  GetCSSParsingEnvironmentForRule(Rule(), aCSSParseEnv);
-}
-
-nsDOMCSSDeclaration::ServoCSSParsingEnvironment
-ServoStyleRuleDeclaration::GetServoCSSParsingEnvironment() const
-{
-  return GetServoCSSParsingEnvironmentForRule(Rule());
+  return GetParsingEnvironmentForRule(Rule());
 }
 
 // -- ServoStyleRule --------------------------------------------------
@@ -118,14 +106,7 @@ ServoStyleRule::ServoStyleRule(already_AddRefed<RawServoStyleRule> aRawRule,
 {
 }
 
-// QueryInterface implementation for ServoStyleRule
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ServoStyleRule)
-  NS_INTERFACE_MAP_ENTRY(nsICSSStyleRuleDOMWrapper)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMCSSStyleRule)
-NS_INTERFACE_MAP_END_INHERITING(css::Rule)
-
-NS_IMPL_ADDREF_INHERITED(ServoStyleRule, css::Rule)
-NS_IMPL_RELEASE_INHERITED(ServoStyleRule, css::Rule)
+NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED_0(ServoStyleRule, css::Rule)
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(ServoStyleRule)
 
@@ -161,16 +142,6 @@ ServoStyleRule::IsCCLeaf() const
   return !mDecls.PreservingWrapper();
 }
 
-already_AddRefed<css::Rule>
-ServoStyleRule::Clone() const
-{
-  // Rule::Clone is only used when CSSStyleSheetInner is cloned in
-  // preparation of being mutated. However, ServoStyleSheet never clones
-  // anything, so this method should never be called.
-  MOZ_ASSERT_UNREACHABLE("Shouldn't be cloning ServoStyleRule");
-  return nullptr;
-}
-
 size_t
 ServoStyleRule::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
 {
@@ -197,25 +168,10 @@ ServoStyleRule::List(FILE* out, int32_t aIndent) const
 }
 #endif
 
-/* nsICSSStyleRuleDOMWrapper implementation */
-
-NS_IMETHODIMP
-ServoStyleRule::GetCSSStyleRule(BindingStyleRule **aResult)
-{
-  NS_ADDREF(*aResult = this);
-  return NS_OK;
-}
-
 /* CSSRule implementation */
 
-uint16_t
-ServoStyleRule::Type() const
-{
-  return nsIDOMCSSRule::STYLE_RULE;
-}
-
 void
-ServoStyleRule::GetCssTextImpl(nsAString& aCssText) const
+ServoStyleRule::GetCssText(nsAString& aCssText) const
 {
   Servo_StyleRule_GetCssText(mRawRule, &aCssText);
 }
@@ -228,27 +184,26 @@ ServoStyleRule::Style()
 
 /* CSSStyleRule implementation */
 
-NS_IMETHODIMP
+void
 ServoStyleRule::GetSelectorText(nsAString& aSelectorText)
 {
   Servo_StyleRule_GetSelectorText(mRawRule, &aSelectorText);
-  return NS_OK;
 }
 
-NS_IMETHODIMP
+void
 ServoStyleRule::SetSelectorText(const nsAString& aSelectorText)
 {
-  // XXX We need to implement this... But Gecko doesn't have this either
-  //     so it's probably okay to leave it unimplemented currently?
-  //     See bug 37468 and mozilla::css::StyleRule::SetSelectorText.
-  return NS_OK;
-}
+  if (RefPtr<StyleSheet> sheet = GetStyleSheet()) {
+    // StyleRule lives inside of the Inner, it is unsafe to call WillDirty
+    // if sheet does not already have a unique Inner.
+    sheet->AssertHasUniqueInner();
+    sheet->WillDirty();
 
-NS_IMETHODIMP
-ServoStyleRule::GetStyle(nsIDOMCSSStyleDeclaration** aStyle)
-{
-  *aStyle = do_AddRef(&mDecls).take();
-  return NS_OK;
+    const RawServoStyleSheetContents* contents = sheet->RawContents();
+    if (Servo_StyleRule_SetSelectorText(contents, mRawRule, &aSelectorText)) {
+      sheet->RuleChanged(this);
+    }
+  }
 }
 
 uint32_t
@@ -256,7 +211,6 @@ ServoStyleRule::GetSelectorCount()
 {
   uint32_t aCount;
   Servo_StyleRule_GetSelectorCount(mRawRule, &aCount);
-
   return aCount;
 }
 
@@ -296,6 +250,12 @@ ServoStyleRule::SelectorMatchesElement(Element* aElement,
                                                      aSelectorIndex, pseudoType);
 
   return NS_OK;
+}
+
+NotNull<DeclarationBlock*>
+ServoStyleRule::GetDeclarationBlock() const
+{
+  return WrapNotNull(mDecls.mDecls);
 }
 
 } // namespace mozilla

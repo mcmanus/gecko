@@ -1,5 +1,4 @@
-var Cc = Components.classes;
-var Ci = Components.interfaces;
+/* global __LOCATION__ */
 
 function run_test() {
   // skip this test on Windows
@@ -22,6 +21,6 @@ function run_test() {
     process.init(ln);
     var args = ["-s", targetFile.path, link.path];
     process.run(true, args, args.length);
-    do_check_true(link.isSymlink());
+    Assert.ok(link.isSymlink());
   }
 }

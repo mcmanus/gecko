@@ -9,18 +9,22 @@ set -e
 
 # Detect OS.
 if [ -f /etc/lsb-release ]; then
+    # Disabled so linting works on Mac
+    # shellcheck disable=SC1091
     . /etc/lsb-release
 
-    if [ "${DISTRIB_ID}" = "Ubuntu" -a "${DISTRIB_RELEASE}" = "16.04" ]; then
+    if [ "${DISTRIB_ID}" = "Ubuntu" ] && [[ "${DISTRIB_RELEASE}" = "16.04" || "${DISTRIB_RELEASE}" = "17.10" || "${DISTRIB_RELEASE}" = "18.04" ]]
+    then
         HG_DEB=1
-        HG_DIGEST=dd4dd7759fe73985b6a0424b34a3036d130c26defdd866a9fdd7302e40c7417433b93f020497ceb40593eaead8e86be55e48340887015645202b47ff7b0d7ac6
-        HG_SIZE=181722
-        HG_FILENAME=mercurial_4.3.1_amd64.deb
+        HG_DIGEST=e58ecb78fb6856161f8af1b7a50a024f1d6aa6efe50e18666aae0368ee1a44eead2f0c52e5088304b4c0e89dd74a058128e9bd184efab0142275a228aa8e0f45
+        HG_SIZE=193382
+        HG_FILENAME=mercurial_4.5.2_amd64.deb
 
-        HG_COMMON_DIGEST=045f7e07f1e2e0fef767b2f50a7e9ab37d5da0bfead5ddf473ae044b61a4566aed2d6f2706f52d227947d713ef8e89eb9a269288f08e52924e4de88a39cd7ac0
-        HG_COMMON_SIZE=2017628
-        HG_COMMON_FILENAME=mercurial-common_4.3.1_all.deb
-    elif [ "${DISTRIB_ID}" = "Ubuntu" -a "${DISTRIB_RELEASE}" = "12.04" ]; then
+        HG_COMMON_DIGEST=b69d94c91ad78a26318e3bbd2f0fda7eb3f3295755a727cde677bf143312c5dfc27ac47e800772d624ea88c6f2576fa2f585c1b8b9930ba83ddc8356661627b8
+        HG_COMMON_SIZE=2141554
+        HG_COMMON_FILENAME=mercurial-common_4.5.2_all.deb
+    elif [ "${DISTRIB_ID}" = "Ubuntu" ] && [ "${DISTRIB_RELEASE}" = "12.04" ]
+    then
         echo "Ubuntu 12.04 not supported"
         exit 1
     fi
@@ -28,13 +32,18 @@ if [ -f /etc/lsb-release ]; then
     CERT_PATH=/etc/ssl/certs/ca-certificates.crt
 
 elif [ -f /etc/os-release ]; then
+    # Disabled so linting works on Mac
+    # shellcheck disable=SC1091
     . /etc/os-release
 
-    if [ "${ID}" = "debian" -a "${VERSION_ID}" = "9" ]; then
+    if [ "${ID}" = "debian" ]; then
         if [ -f /usr/bin/pip2 ]; then
             PIP_PATH=/usr/bin/pip2
+        elif [ -f /usr/bin/pip ]; then
+            # Versions of debian that don't have pip2 have pip pointing to the python2 version.
+            PIP_PATH=/usr/bin/pip
         else
-            echo "We currently require Python 2.7 and /usr/bin/pip2 to run Mercurial"
+            echo "We currently require Python 2.7 and pip to run Mercurial"
             exit 1
         fi
     else
@@ -45,7 +54,7 @@ elif [ -f /etc/os-release ]; then
     CERT_PATH=/etc/ssl/certs/ca-certificates.crt
 
 elif [ -f /etc/centos-release ]; then
-    CENTOS_VERSION=`rpm -q --queryformat '%{VERSION}' centos-release`
+    CENTOS_VERSION="$(rpm -q --queryformat '%{VERSION}' centos-release)"
     if [ "${CENTOS_VERSION}" = "6" ]; then
         if [ -f /usr/bin/pip2.7 ]; then
             PIP_PATH=/usr/bin/pip2.7
@@ -97,15 +106,15 @@ elif [ -n "${PIP_PATH}" ]; then
 tooltool_fetch <<EOF
 [
   {
-    "size": 5475042,
-    "digest": "4c42d06b7f111a3e825dd927704a30f88f0b2225cf87ab8954bf53a7fbc0edf561374dd49b13d9c10140d98ff5853a64acb5a744349727abae81d32da401922b",
+    "size": 5779915,
+    "digest": "f70e40cba72b7955f0ecec9c1f53ffffac26f206188617cb182e22ce4f43dc8b970ce46d12c516ef88480c3fa076a59afcddd736dffb642d8e23befaf45b4941",
     "algorithm": "sha512",
-    "filename": "mercurial-4.3.1.tar.gz"
+    "filename": "mercurial-4.5.2.tar.gz"
   }
 ]
 EOF
 
-   ${PIP_PATH} install mercurial-4.3.1.tar.gz
+   ${PIP_PATH} install mercurial-4.5.2.tar.gz
 else
     echo "Do not know how to install Mercurial on this OS"
     exit 1
@@ -113,43 +122,9 @@ fi
 
 chmod 644 /usr/local/mercurial/robustcheckout.py
 
-mkdir -p /etc/mercurial
-cat >/etc/mercurial/hgrc <<EOF
-# By default the progress bar starts after 3s and updates every 0.1s. We
-# change this so it shows and updates every 1.0s.
-# We also tell progress to assume a TTY is present so updates are printed
-# even if there is no known TTY.
-[progress]
-delay = 1.0
-refresh = 1.0
-assume-tty = true
-
+cat >/etc/mercurial/hgrc.d/cacerts.rc <<EOF
 [web]
 cacerts = ${CERT_PATH}
-
-[extensions]
-sparse =
-robustcheckout = /usr/local/mercurial/robustcheckout.py
-
-[hostsecurity]
-# When running a modern Python, Mercurial will default to TLS 1.1+.
-# When running on a legacy Python, Mercurial will default to TLS 1.0+.
-# There is no good reason we shouldn't be running a modern Python
-# capable of speaking TLS 1.2. And the only Mercurial servers we care
-# about should be running TLS 1.2. So make TLS 1.2 the minimum.
-minimumprotocol = tls1.2
-
-# Settings to make 1-click loaners more useful.
-[extensions]
-histedit =
-rebase =
-
-[diff]
-git = 1
-showfunc = 1
-
-[pager]
-pager = LESS=FRSXQ less
 EOF
 
-chmod 644 /etc/mercurial/hgrc
+chmod 644 /etc/mercurial/hgrc.d/cacerts.rc

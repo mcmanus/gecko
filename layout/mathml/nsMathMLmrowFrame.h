@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -19,7 +20,7 @@ class nsMathMLmrowFrame : public nsMathMLContainerFrame {
 public:
   NS_DECL_FRAMEARENA_HELPERS(nsMathMLmrowFrame)
 
-  friend nsIFrame* NS_NewMathMLmrowFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
+  friend nsIFrame* NS_NewMathMLmrowFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle);
 
   virtual nsresult
   AttributeChanged(int32_t  aNameSpaceID,
@@ -47,8 +48,8 @@ public:
   }
 
 protected:
-  explicit nsMathMLmrowFrame(nsStyleContext* aContext)
-    : nsMathMLContainerFrame(aContext, kClassID) {}
+  explicit nsMathMLmrowFrame(ComputedStyle* aStyle)
+    : nsMathMLContainerFrame(aStyle, kClassID) {}
   virtual ~nsMathMLmrowFrame();
 };
 

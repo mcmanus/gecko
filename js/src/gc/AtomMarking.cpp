@@ -6,9 +6,10 @@
 
 #include "gc/AtomMarking-inl.h"
 
-#include "jscompartment.h"
+#include "gc/PublicIterators.h"
+#include "vm/JSCompartment.h"
 
-#include "jsgcinlines.h"
+#include "gc/GC-inl.h"
 #include "gc/Heap-inl.h"
 
 namespace js {
@@ -45,12 +46,11 @@ namespace gc {
 // single Cell.
 
 void
-AtomMarkingRuntime::registerArena(Arena* arena)
+AtomMarkingRuntime::registerArena(Arena* arena, const AutoLockGC& lock)
 {
     MOZ_ASSERT(arena->getThingSize() != 0);
     MOZ_ASSERT(arena->getThingSize() % CellAlignBytes == 0);
     MOZ_ASSERT(arena->zone->isAtomsZone());
-    MOZ_ASSERT(arena->zone->runtimeFromAnyThread()->currentThreadHasExclusiveAccess());
 
     // We need to find a range of bits from the atoms bitmap for this arena.
 
@@ -66,7 +66,7 @@ AtomMarkingRuntime::registerArena(Arena* arena)
 }
 
 void
-AtomMarkingRuntime::unregisterArena(Arena* arena)
+AtomMarkingRuntime::unregisterArena(Arena* arena, const AutoLockGC& lock)
 {
     MOZ_ASSERT(arena->zone->isAtomsZone());
 
@@ -77,12 +77,13 @@ AtomMarkingRuntime::unregisterArena(Arena* arena)
 bool
 AtomMarkingRuntime::computeBitmapFromChunkMarkBits(JSRuntime* runtime, DenseBitmap& bitmap)
 {
-    MOZ_ASSERT(runtime->currentThreadHasExclusiveAccess());
+    MOZ_ASSERT(CurrentThreadIsPerformingGC());
+    MOZ_ASSERT(!runtime->hasHelperThreadZones());
 
     if (!bitmap.ensureSpace(allocatedWords))
         return false;
 
-    Zone* atomsZone = runtime->unsafeAtomsCompartment()->zone();
+    Zone* atomsZone = runtime->unsafeAtomsZone();
     for (auto thingKind : AllAllocKinds()) {
         for (ArenaIter aiter(atomsZone, thingKind); !aiter.done(); aiter.next()) {
             Arena* arena = aiter.get();
@@ -116,7 +117,7 @@ AddBitmapToChunkMarkBits(JSRuntime* runtime, Bitmap& bitmap)
     static_assert(ArenaBitmapBits == ArenaBitmapWords * JS_BITS_PER_WORD,
                   "ArenaBitmapWords must evenly divide ArenaBitmapBits");
 
-    Zone* atomsZone = runtime->unsafeAtomsCompartment()->zone();
+    Zone* atomsZone = runtime->unsafeAtomsZone();
     for (auto thingKind : AllAllocKinds()) {
         for (ArenaIter aiter(atomsZone, thingKind); !aiter.done(); aiter.next()) {
             Arena* arena = aiter.get();
@@ -129,7 +130,8 @@ AddBitmapToChunkMarkBits(JSRuntime* runtime, Bitmap& bitmap)
 void
 AtomMarkingRuntime::updateChunkMarkBits(JSRuntime* runtime)
 {
-    MOZ_ASSERT(runtime->currentThreadHasExclusiveAccess());
+    MOZ_ASSERT(CurrentThreadIsPerformingGC());
+    MOZ_ASSERT(!runtime->hasHelperThreadZones());
 
     // Try to compute a simple union of the zone atom bitmaps before updating
     // the chunk mark bitmaps. If this allocation fails then fall back to
@@ -188,13 +190,17 @@ AtomMarkingRuntime::markAtomValue(JSContext* cx, const Value& value)
         markAtom(cx, value.toSymbol());
         return;
     }
-    MOZ_ASSERT_IF(value.isGCThing(), value.isObject() || value.isPrivateGCThing());
+    MOZ_ASSERT_IF(value.isGCThing(),
+                  value.isObject() ||
+                  value.isPrivateGCThing() ||
+                  IF_BIGINT(value.isBigInt(), false));
 }
 
 void
 AtomMarkingRuntime::adoptMarkedAtoms(Zone* target, Zone* source)
 {
-    MOZ_ASSERT(target->runtimeFromAnyThread()->currentThreadHasExclusiveAccess());
+    MOZ_ASSERT(CurrentThreadCanAccessZone(source));
+    MOZ_ASSERT(CurrentThreadCanAccessZone(target));
     target->markedAtoms().bitwiseOrWith(source->markedAtoms());
 }
 
@@ -217,13 +223,7 @@ AtomMarkingRuntime::atomIsMarked(Zone* zone, T* thing)
     if (ThingIsPermanent(thing))
         return true;
 
-    if (mozilla::IsSame<T, JSAtom>::value) {
-        JSAtom* atom = reinterpret_cast<JSAtom*>(thing);
-        if (AtomIsPinnedInRuntime(zone->runtimeFromAnyThread(), atom))
-            return true;
-    }
-
-    size_t bit = GetAtomBit(thing);
+    size_t bit = GetAtomBit(&thing->asTenured());
     return zone->markedAtoms().getBit(bit);
 }
 
@@ -237,15 +237,16 @@ AtomMarkingRuntime::atomIsMarked(Zone* zone, TenuredCell* thing)
     if (!thing)
         return true;
 
-    JS::TraceKind kind = thing->getTraceKind();
-    if (kind == JS::TraceKind::String) {
-        JSString* str = static_cast<JSString*>(thing);
-        if (str->isAtom())
-            return atomIsMarked(zone, &str->asAtom());
-        return true;
+    if (thing->is<JSString>()) {
+        JSString* str = thing->as<JSString>();
+        if (!str->isAtom())
+            return true;
+        return atomIsMarked(zone, &str->asAtom());
     }
-    if (kind == JS::TraceKind::Symbol)
-        return atomIsMarked(zone, static_cast<JS::Symbol*>(thing));
+
+    if (thing->is<JS::Symbol>())
+        return atomIsMarked(zone, thing->as<JS::Symbol>());
+
     return true;
 }
 
@@ -274,7 +275,10 @@ AtomMarkingRuntime::valueIsMarked(Zone* zone, const Value& value)
     if (value.isSymbol())
         return atomIsMarked(zone, value.toSymbol());
 
-    MOZ_ASSERT_IF(value.isGCThing(), value.isObject() || value.isPrivateGCThing());
+    MOZ_ASSERT_IF(value.isGCThing(),
+                  value.isObject() ||
+                  value.isPrivateGCThing() ||
+                  IF_BIGINT(value.isBigInt(), false));
     return true;
 }
 

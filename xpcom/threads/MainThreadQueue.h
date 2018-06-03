@@ -23,15 +23,15 @@ CreateMainThread(nsIIdlePeriod* aIdlePeriod, SynchronizedQueueT** aSynchronizedQ
   using MainThreadQueueT = PrioritizedEventQueue<InnerQueueT>;
 
   auto queue = MakeUnique<MainThreadQueueT>(
-    MakeUnique<InnerQueueT>(),
-    MakeUnique<InnerQueueT>(),
-    MakeUnique<InnerQueueT>(),
-    MakeUnique<InnerQueueT>(),
+    MakeUnique<InnerQueueT>(EventPriority::High),
+    MakeUnique<InnerQueueT>(EventPriority::Input),
+    MakeUnique<InnerQueueT>(EventPriority::Normal),
+    MakeUnique<InnerQueueT>(EventPriority::Idle),
     do_AddRef(aIdlePeriod));
 
   MainThreadQueueT* prioritized = queue.get();
 
-  RefPtr<SynchronizedQueueT> synchronizedQueue = new SynchronizedQueueT(Move(queue));
+  RefPtr<SynchronizedQueueT> synchronizedQueue = new SynchronizedQueueT(std::move(queue));
 
   prioritized->SetMutexRef(synchronizedQueue->MutexRef());
 

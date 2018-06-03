@@ -5,6 +5,7 @@
 <panel id="identity-popup"
        type="arrow"
        hidden="true"
+       photon="true"
        role="alertdialog"
        onpopupshown="gIdentityHandler.onPopupShown(event);"
        onpopuphidden="gIdentityHandler.onPopupHidden(event);"
@@ -17,11 +18,11 @@
 
   <panelmultiview id="identity-popup-multiView"
                   mainViewId="identity-popup-mainView">
-    <panelview id="identity-popup-mainView" flex="1"
+    <panelview id="identity-popup-mainView"
                descriptionheightworkaround="true">
       <!-- Security Section -->
       <hbox id="identity-popup-security" class="identity-popup-section">
-        <vbox id="identity-popup-security-content" flex="1">
+        <vbox class="identity-popup-security-content" flex="1">
           <label class="plain">
             <label class="identity-popup-headline identity-popup-host"></label>
             <label class="identity-popup-headline identity-popup-hostless" crop="end"/>
@@ -48,7 +49,7 @@
         <button id="identity-popup-security-expander"
                 class="identity-popup-expander"
                 when-connection="not-secure secure secure-ev secure-cert-user-overridden"
-                oncommand="gIdentityHandler.toggleSubView('security', this)"/>
+                oncommand="gIdentityHandler.showSecuritySubView();"/>
       </hbox>
 
       <!-- Tracking Protection Section -->
@@ -94,12 +95,23 @@
           <description id="identity-popup-permission-empty-hint">&identity.permissionsEmpty;</description>
         </vbox>
       </hbox>
+
+      <!-- Clear Site Data Button -->
+      <vbox hidden="true"
+            id="identity-popup-clear-sitedata-footer"
+            class="identity-popup-footer">
+        <button class="subviewkeynav"
+                id="identity-popup-clear-sitedata-button"
+                label="&identity.clearSiteData;"
+                oncommand="gIdentityHandler.clearSiteData(event);"/>
+      </vbox>
     </panelview>
 
     <!-- Security SubView -->
     <panelview id="identity-popup-securityView"
+               title="&identity.securityView.label;"
                descriptionheightworkaround="true">
-      <vbox id="identity-popup-securityView-header">
+      <vbox class="identity-popup-security-content">
         <label class="plain">
           <label class="identity-popup-headline identity-popup-host"></label>
           <label class="identity-popup-headline identity-popup-hostless" crop="end"/>
@@ -124,6 +136,7 @@
 
         <!-- Remove Certificate Exception -->
         <button when-connection="secure-cert-user-overridden"
+                class="subviewkeynav"
                 label="&identity.removeCertException.label;"
                 accesskey="&identity.removeCertException.accesskey;"
                 oncommand="gIdentityHandler.removeCertException()"/>
@@ -165,19 +178,20 @@
                      and-when-loginforms="insecure">&identity.description.activeLoaded; <label observes="identity-popup-mcb-learn-more"/></description>
 
         <!-- Buttons to enable/disable mixed content blocking. -->
-        <button when-mixedcontent="active-blocked"
+        <button when-mixedcontent="active-blocked" class="subviewkeynav"
                 label="&identity.disableMixedContentBlocking.label;"
                 accesskey="&identity.disableMixedContentBlocking.accesskey;"
                 oncommand="gIdentityHandler.disableMixedContentProtection()"/>
-        <button when-mixedcontent="active-loaded"
+        <button when-mixedcontent="active-loaded" class="subviewkeynav"
                 label="&identity.enableMixedContentBlocking.label;"
                 accesskey="&identity.enableMixedContentBlocking.accesskey;"
                 oncommand="gIdentityHandler.enableMixedContentProtection()"/>
       </vbox>
 
-      <vbox id="identity-popup-securityView-footer">
+      <vbox id="identity-popup-more-info-footer" class="identity-popup-footer">
         <!-- More Security Information -->
-        <button label="&identity.moreInfoLinkText2;"
+        <button id="identity-popup-more-info"  class="subviewkeynav"
+                label="&identity.moreInfoLinkText2;"
                 oncommand="gIdentityHandler.handleMoreInfoClick(event);"/>
       </vbox>
 

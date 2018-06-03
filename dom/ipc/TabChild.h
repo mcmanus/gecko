@@ -7,6 +7,7 @@
 #ifndef mozilla_dom_TabChild_h
 #define mozilla_dom_TabChild_h
 
+#include "mozilla/dom/ContentFrameMessageManager.h"
 #include "mozilla/dom/PBrowserChild.h"
 #include "nsIWebNavigation.h"
 #include "nsCOMPtr.h"
@@ -41,8 +42,8 @@
 #include "AudioChannelService.h"
 #include "PuppetWidget.h"
 #include "mozilla/layers/GeckoContentController.h"
+#include "nsDeque.h"
 #include "nsISHistoryListener.h"
-#include "nsIPartialSHistoryListener.h"
 
 class nsIDOMWindowUtils;
 class nsIHttpChannel;
@@ -63,6 +64,7 @@ class APZEventState;
 class AsyncDragMetrics;
 class IAPZCTreeManager;
 class ImageCompositeNotification;
+class PCompositorBridgeChild;
 } // namespace layers
 
 namespace widget {
@@ -77,7 +79,7 @@ class ClonedMessageData;
 class CoalescedMouseData;
 class CoalescedWheelData;
 
-class TabChildGlobal : public DOMEventTargetHelper,
+class TabChildGlobal : public ContentFrameMessageManager,
                        public nsIContentFrameMessageManager,
                        public nsIScriptObjectPrincipal,
                        public nsIGlobalObject,
@@ -88,73 +90,33 @@ public:
   void Init();
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(TabChildGlobal, DOMEventTargetHelper)
-  NS_FORWARD_SAFE_NSIMESSAGELISTENERMANAGER(mMessageManager)
+
+  void MarkForCC();
+
+  virtual JSObject* WrapObject(JSContext* aCx,
+                               JS::Handle<JSObject*> aGivenProto) override
+  {
+    MOZ_CRASH("We should never get here!");
+  }
+  bool WrapGlobalObject(JSContext* aCx,
+                        JS::RealmOptions& aOptions,
+                        JS::MutableHandle<JSObject*> aReflector);
+
+  virtual already_AddRefed<nsPIDOMWindowOuter> GetContent(ErrorResult& aError) override;
+  virtual already_AddRefed<nsIDocShell> GetDocShell(ErrorResult& aError) override;
+  virtual already_AddRefed<nsIEventTarget> GetTabEventTarget() override;
+
   NS_FORWARD_SAFE_NSIMESSAGESENDER(mMessageManager)
-  NS_FORWARD_SAFE_NSIMESSAGEMANAGERGLOBAL(mMessageManager)
-  NS_IMETHOD SendSyncMessage(const nsAString& aMessageName,
-                             JS::Handle<JS::Value> aObject,
-                             JS::Handle<JS::Value> aRemote,
-                             nsIPrincipal* aPrincipal,
-                             JSContext* aCx,
-                             uint8_t aArgc,
-                             JS::MutableHandle<JS::Value> aRetval) override
-  {
-    return mMessageManager
-      ? mMessageManager->SendSyncMessage(aMessageName, aObject, aRemote,
-                                         aPrincipal, aCx, aArgc, aRetval)
-      : NS_ERROR_NULL_POINTER;
-  }
-  NS_IMETHOD SendRpcMessage(const nsAString& aMessageName,
-                            JS::Handle<JS::Value> aObject,
-                            JS::Handle<JS::Value> aRemote,
-                            nsIPrincipal* aPrincipal,
-                            JSContext* aCx,
-                            uint8_t aArgc,
-                            JS::MutableHandle<JS::Value> aRetval) override
-  {
-    return mMessageManager
-      ? mMessageManager->SendRpcMessage(aMessageName, aObject, aRemote,
-                                        aPrincipal, aCx, aArgc, aRetval)
-      : NS_ERROR_NULL_POINTER;
-  }
-  NS_IMETHOD GetContent(mozIDOMWindowProxy** aContent) override;
-  NS_IMETHOD GetDocShell(nsIDocShell** aDocShell) override;
-  NS_IMETHOD GetTabEventTarget(nsIEventTarget** aTarget) override;
+  NS_DECL_NSICONTENTFRAMEMESSAGEMANAGER
 
-  nsresult AddEventListener(const nsAString& aType,
-                            nsIDOMEventListener* aListener,
-                            bool aUseCapture)
-  {
-    // By default add listeners only for trusted events!
-    return DOMEventTargetHelper::AddEventListener(aType, aListener,
-                                                  aUseCapture, false, 2);
-  }
-  using DOMEventTargetHelper::AddEventListener;
-  NS_IMETHOD AddEventListener(const nsAString& aType,
-                              nsIDOMEventListener* aListener,
-                              bool aUseCapture, bool aWantsUntrusted,
-                              uint8_t optional_argc) override
-  {
-    return DOMEventTargetHelper::AddEventListener(aType, aListener,
-                                                  aUseCapture,
-                                                  aWantsUntrusted,
-                                                  optional_argc);
-  }
-
-  nsresult
+  void
   GetEventTargetParent(EventChainPreVisitor& aVisitor) override
   {
     aVisitor.mForceContentDispatch = true;
-    return NS_OK;
   }
 
   virtual nsIPrincipal* GetPrincipal() override;
   virtual JSObject* GetGlobalJSObject() override;
-
-  virtual JSObject* WrapObject(JSContext* cx, JS::Handle<JSObject*> aGivenProto) override
-  {
-    MOZ_CRASH("TabChildGlobal doesn't use DOM bindings!");
-  }
 
   // Dispatch a runnable related to the global.
   virtual nsresult Dispatch(mozilla::TaskCategory aCategory,
@@ -166,7 +128,6 @@ public:
   virtual AbstractThread*
   AbstractMainThreadFor(mozilla::TaskCategory aCategory) override;
 
-  nsCOMPtr<nsIContentFrameMessageManager> mMessageManager;
   RefPtr<TabChild> mTabChild;
 
 protected:
@@ -181,29 +142,6 @@ public:
   NS_DECL_NSIDOMEVENTLISTENER
 protected:
   ~ContentListener() {}
-  TabChild* mTabChild;
-};
-
-/**
- * Listens on session history change, and sends NotifySessionHistoryChange to
- * parent process.
- */
-class TabChildSHistoryListener final : public nsISHistoryListener,
-                                       public nsIPartialSHistoryListener,
-                                       public nsSupportsWeakReference
-{
-public:
-  explicit TabChildSHistoryListener(TabChild* aTabChild) : mTabChild(aTabChild) {}
-  void ClearTabChild() { mTabChild = nullptr; }
-
-  NS_DECL_ISUPPORTS
-  NS_DECL_NSISHISTORYLISTENER
-  NS_DECL_NSIPARTIALSHISTORYLISTENER
-
-private:
-  nsresult SHistoryDidUpdate(bool aTruncate = false);
-
-  ~TabChildSHistoryListener() {}
   TabChild* mTabChild;
 };
 
@@ -223,6 +161,13 @@ public:
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(TabChildBase)
+
+  virtual bool WrapGlobalObject(JSContext* aCx,
+                                JS::RealmOptions& aOptions,
+                                JS::MutableHandle<JSObject*> aReflector) override
+  {
+    return mTabChildGlobal->WrapGlobalObject(aCx, aOptions, aReflector);
+  }
 
   virtual nsIWebNavigation* WebNavigation() const = 0;
   virtual PuppetWidget* WebWidget() = 0;
@@ -279,6 +224,7 @@ class TabChild final : public TabChildBase,
   typedef mozilla::layout::RenderFrameChild RenderFrameChild;
   typedef mozilla::layers::APZEventState APZEventState;
   typedef mozilla::layers::SetAllowedTouchBehaviorCallback SetAllowedTouchBehaviorCallback;
+  typedef mozilla::layers::TouchBehaviorFlags TouchBehaviorFlags;
 
 public:
   /**
@@ -328,7 +274,14 @@ public:
   NS_DECL_NSIOBSERVER
   NS_DECL_NSITOOLTIPLISTENER
 
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(TabChild, TabChildBase)
+
   FORWARD_SHMEM_ALLOCATOR_TO(PBrowserChild)
+
+  TabChildGlobal* GetMessageManager()
+  {
+    return mTabChildGlobal;
+  }
 
   /**
    * MessageManagerCallback methods that we override.
@@ -362,7 +315,7 @@ public:
 
   virtual mozilla::ipc::IPCResult
   RecvInitRendering(const TextureFactoryIdentifier& aTextureFactoryIdentifier,
-                    const uint64_t& aLayersId,
+                    const layers::LayersId& aLayersId,
                     const mozilla::layers::CompositorOptions& aCompositorOptions,
                     const bool& aLayersConnected,
                     PRenderFrameChild* aRenderFrame) override;
@@ -376,6 +329,7 @@ public:
 
   mozilla::ipc::IPCResult RecvDeactivate();
 
+  MOZ_CAN_RUN_SCRIPT
   virtual mozilla::ipc::IPCResult RecvMouseEvent(const nsString& aType,
                                                  const float& aX,
                                                  const float& aY,
@@ -411,7 +365,8 @@ public:
 
   virtual mozilla::ipc::IPCResult RecvRealDragEvent(const WidgetDragEvent& aEvent,
                                                     const uint32_t& aDragAction,
-                                                    const uint32_t& aDropEffect) override;
+                                                    const uint32_t& aDropEffect,
+                                                    const nsCString& aPrincipalURISpec) override;
 
   virtual mozilla::ipc::IPCResult
   RecvRealKeyEvent(const mozilla::WidgetKeyboardEvent& aEvent) override;
@@ -451,12 +406,6 @@ public:
                                        const uint64_t& aInputBlockId,
                                        const nsEventStatus& aApzResponse) override;
 
-  virtual mozilla::ipc::IPCResult RecvKeyEvent(const nsString& aType,
-                                               const int32_t& aKeyCode,
-                                               const int32_t& aCharCode,
-                                               const int32_t& aModifiers,
-                                               const bool& aPreventDefault) override;
-
   virtual mozilla::ipc::IPCResult RecvNativeSynthesisResponse(const uint64_t& aObserverId,
                                                               const nsCString& aResponse) override;
 
@@ -479,7 +428,8 @@ public:
   virtual mozilla::ipc::IPCResult
   RecvPasteTransferable(const IPCDataTransfer& aDataTransfer,
                         const bool& aIsPrivateData,
-                        const IPC::Principal& aRequestingPrincipal) override;
+                        const IPC::Principal& aRequestingPrincipal,
+                        const uint32_t& aContentPolicyType) override;
 
   virtual mozilla::ipc::IPCResult
   RecvActivateFrameEvent(const nsString& aType, const bool& aCapture) override;
@@ -499,27 +449,6 @@ public:
                            const uint32_t&, const IAccessibleHolder&) override;
 
   virtual bool DeallocPDocAccessibleChild(PDocAccessibleChild*) override;
-
-  virtual PDocumentRendererChild*
-  AllocPDocumentRendererChild(const nsRect& aDocumentRect,
-                              const gfx::Matrix& aTransform,
-                              const nsString& aBggcolor,
-                              const uint32_t& aRenderFlags,
-                              const bool& aFlushLayout,
-                              const nsIntSize& arenderSize) override;
-
-  virtual bool
-  DeallocPDocumentRendererChild(PDocumentRendererChild* aCctor) override;
-
-  virtual mozilla::ipc::IPCResult
-  RecvPDocumentRendererConstructor(PDocumentRendererChild* aActor,
-                                   const nsRect& aDocumentRect,
-                                   const gfx::Matrix& aTransform,
-                                   const nsString& aBgcolor,
-                                   const uint32_t& aRenderFlags,
-                                   const bool& aFlushLayout,
-                                   const nsIntSize& aRenderSize) override;
-
 
   virtual PColorPickerChild*
   AllocPColorPickerChild(const nsString& aTitle,
@@ -575,6 +504,7 @@ public:
    */
   void MakeVisible();
   void MakeHidden();
+  bool IsVisible();
 
   nsIContentChild* Manager() const { return mManager; }
 
@@ -606,12 +536,12 @@ public:
   }
 
   static TabChild* GetFrom(nsIPresShell* aPresShell);
-  static TabChild* GetFrom(uint64_t aLayersId);
+  static TabChild* GetFrom(layers::LayersId aLayersId);
 
-  uint64_t LayersId() { return mLayersId; }
-  bool IsLayersConnected() { return mLayersConnected; }
+  layers::LayersId GetLayersId() { return mLayersId; }
+  Maybe<bool> IsLayersConnected() { return mLayersConnected; }
 
-  void DidComposite(uint64_t aTransactionId,
+  void DidComposite(mozilla::layers::TransactionId aTransactionId,
                     const TimeStamp& aCompositeStart,
                     const TimeStamp& aCompositeEnd);
 
@@ -622,8 +552,6 @@ public:
   void InvalidateLayers();
   void ReinitRendering();
   void ReinitRenderingForDeviceReset();
-  void CompositorUpdated(const TextureFactoryIdentifier& aNewIdentifier,
-                         uint64_t aDeviceResetSeqNo);
 
   static inline TabChild* GetFrom(nsIDOMWindow* aWindow)
   {
@@ -672,7 +600,7 @@ public:
   DeallocPPaymentRequestChild(PPaymentRequestChild* aActor) override;
 
   LayoutDeviceIntPoint GetClientOffset() const { return mClientOffset; }
-  LayoutDeviceIntPoint GetChromeDisplacement() const { return mChromeDisp; };
+  LayoutDeviceIntPoint GetChromeOffset() const { return mChromeOffset; };
 
   bool IPCOpen() const { return mIPCOpen; }
 
@@ -681,13 +609,14 @@ public:
     return mParentIsActive;
   }
 
+  const mozilla::layers::CompositorOptions& GetCompositorOptions() const;
   bool AsyncPanZoomEnabled() const;
 
   virtual ScreenIntSize GetInnerSize() override;
 
   // Call RecvShow(nsIntSize(0, 0)) and block future calls to RecvShow().
   void DoFakeShow(const TextureFactoryIdentifier& aTextureFactoryIdentifier,
-                  const uint64_t& aLayersId,
+                  const layers::LayersId& aLayersId,
                   const mozilla::layers::CompositorOptions& aCompositorOptions,
                   PRenderFrameChild* aRenderFrame,
                   const ShowInfo& aShowInfo);
@@ -697,12 +626,14 @@ public:
                                  bool aPreventDefault) const;
   void SetTargetAPZC(uint64_t aInputBlockId,
                     const nsTArray<ScrollableLayerGuid>& aTargets) const;
+  MOZ_CAN_RUN_SCRIPT
   mozilla::ipc::IPCResult RecvHandleTap(const layers::GeckoContentController::TapType& aType,
                                         const LayoutDevicePoint& aPoint,
                                         const Modifiers& aModifiers,
                                         const ScrollableLayerGuid& aGuid,
                                         const uint64_t& aInputBlockId) override;
 
+  MOZ_CAN_RUN_SCRIPT
   mozilla::ipc::IPCResult
   RecvNormalPriorityHandleTap(const layers::GeckoContentController::TapType& aType,
                               const LayoutDevicePoint& aPoint,
@@ -724,7 +655,8 @@ public:
                   const uint32_t& aFlags);
 
   // Request that the docshell be marked as active.
-  void ForcePaint(uint64_t aLayerObserverEpoch);
+  void PaintWhileInterruptingJS(uint64_t aLayerObserverEpoch,
+                                bool aForceRepaint);
 
 #if defined(XP_WIN) && defined(ACCESSIBILITY)
   uintptr_t GetNativeWindowHandle() const { return mNativeWindowHandle; }
@@ -734,8 +666,6 @@ public:
   // Large-Allocation header.
   bool StopAwaitingLargeAlloc();
   bool IsAwaitingLargeAlloc();
-
-  already_AddRefed<nsISHistory> GetRelatedSHistory();
 
   mozilla::dom::TabGroup* TabGroup();
 
@@ -760,23 +690,32 @@ public:
     return mWidgetNativeData;
   }
 
+  // Prepare to dispatch all coalesced mousemove events. We'll move all data
+  // in mCoalescedMouseData to a nsDeque; then we start processing them. We
+  // can't fetch the coalesced event one by one and dispatch it because we may
+  // reentry the event loop and access to the same hashtable. It's called when
+  // dispatching some mouse events other than mousemove.
+  void FlushAllCoalescedMouseData();
+  void ProcessPendingCoalescedMouseDataAndDispatchEvents();
 
-  void MaybeDispatchCoalescedMouseMoveEvents();
+  void HandleRealMouseButtonEvent(const WidgetMouseEvent& aEvent,
+                                  const ScrollableLayerGuid& aGuid,
+                                  const uint64_t& aInputBlockId);
 
-  static bool HasActiveTabs()
+  static bool HasVisibleTabs()
   {
-    return sActiveTabs && !sActiveTabs->IsEmpty();
+    return sVisibleTabs && !sVisibleTabs->IsEmpty();
   }
 
-  // Returns the set of TabChilds that are currently in the foreground. There
-  // can be multiple foreground TabChilds if Firefox has multiple windows
-  // open. There can also be zero foreground TabChilds if the foreground tab is
-  // in a different content process. Note that this function should only be
-  // called if HasActiveTabs() returns true.
-  static const nsTHashtable<nsPtrHashKey<TabChild>>& GetActiveTabs()
+  // Returns the set of TabChilds that are currently rendering layers. There
+  // can be multiple TabChilds in this state if Firefox has multiple windows
+  // open or is warming tabs up. There can also be zero TabChilds in this
+  // state. Note that this function should only be called if HasVisibleTabs()
+  // returns true.
+  static const nsTHashtable<nsPtrHashKey<TabChild>>& GetVisibleTabs()
   {
-    MOZ_ASSERT(HasActiveTabs());
-    return *sActiveTabs;
+    MOZ_ASSERT(HasVisibleTabs());
+    return *sVisibleTabs;
   }
 
 protected:
@@ -788,9 +727,9 @@ protected:
 
   virtual mozilla::ipc::IPCResult RecvDestroy() override;
 
-  virtual mozilla::ipc::IPCResult RecvSetDocShellIsActive(const bool& aIsActive,
-                                                          const bool& aIsHidden,
-                                                          const uint64_t& aLayerObserverEpoch) override;
+  virtual mozilla::ipc::IPCResult RecvSetDocShellIsActive(const bool& aIsActive) override;
+
+  virtual mozilla::ipc::IPCResult RecvRenderLayers(const bool& aEnabled, const bool& aForce, const uint64_t& aLayerObserverEpoch) override;
 
   virtual mozilla::ipc::IPCResult RecvNavigateByKey(const bool& aForward,
                                                     const bool& aForDocumentNavigation) override;
@@ -805,13 +744,6 @@ protected:
                                                             const UIStateChangeType& aShowFocusRings) override;
 
   virtual mozilla::ipc::IPCResult RecvStopIMEStateManagement() override;
-
-  virtual mozilla::ipc::IPCResult RecvNotifyAttachGroupedSHistory(const uint32_t& aOffset) override;
-
-  virtual mozilla::ipc::IPCResult RecvNotifyPartialSHistoryActive(const uint32_t& aGlobalLength,
-                                                                  const uint32_t& aTargetLocalIndex) override;
-
-  virtual mozilla::ipc::IPCResult RecvNotifyPartialSHistoryDeactive() override;
 
   virtual mozilla::ipc::IPCResult RecvAwaitLargeAlloc() override;
 
@@ -841,7 +773,7 @@ private:
   bool InitTabChildGlobal();
 
   void InitRenderingState(const TextureFactoryIdentifier& aTextureFactoryIdentifier,
-                          const uint64_t& aLayersId,
+                          const layers::LayersId& aLayersId,
                           const mozilla::layers::CompositorOptions& aCompositorOptions,
                           PRenderFrameChild* aRenderFrame);
   void InitAPZState();
@@ -881,8 +813,9 @@ private:
                           const ScrollableLayerGuid& aGuid,
                           const uint64_t& aInputBlockId);
 
-  void InternalSetDocShellIsActive(bool aIsActive,
-                                   bool aPreserveLayers);
+  void InternalSetDocShellIsActive(bool aIsActive);
+
+  bool CreateRemoteLayerManager(mozilla::layers::PCompositorBridgeChild* aCompositorChild);
 
   class DelayedDeleteRunnable;
 
@@ -893,15 +826,14 @@ private:
   nsCOMPtr<nsIURI> mLastURI;
   RenderFrameChild* mRemoteFrame;
   RefPtr<nsIContentChild> mManager;
-  RefPtr<TabChildSHistoryListener> mHistoryListener;
   uint32_t mChromeFlags;
   uint32_t mMaxTouchPoints;
   int32_t mActiveSuppressDisplayport;
-  uint64_t mLayersId;
+  layers::LayersId mLayersId;
   int64_t mBeforeUnloadListeners;
   CSSRect mUnscaledOuterRect;
   nscolor mLastBackgroundColor;
-  bool mLayersConnected;
+  Maybe<bool> mLayersConnected;
   bool mDidFakeShow;
   bool mNotified;
   bool mTriedBrowserInit;
@@ -915,7 +847,7 @@ private:
   // Position of client area relative to the outer window
   LayoutDeviceIntPoint mClientOffset;
   // Position of tab, relative to parent widget (typically the window)
-  LayoutDeviceIntPoint mChromeDisp;
+  LayoutDeviceIntPoint mChromeOffset;
   TabId mUniqueId;
 
   // Holds the compositor options for the compositor rendering this tab,
@@ -945,7 +877,12 @@ private:
   // takes time, some repeated events can be skipped to not flood child process.
   mozilla::TimeStamp mLastWheelProcessedTimeFromParent;
   mozilla::TimeDuration mLastWheelProcessingDuration;
-  CoalescedMouseData mCoalescedMouseData;
+
+  // Hash table to track coalesced mousemove events for different pointers.
+  nsClassHashtable<nsUint32HashKey, CoalescedMouseData> mCoalescedMouseData;
+
+  nsDeque mToBeDispatchedMouseData;
+
   CoalescedWheelData mCoalescedWheelData;
   RefPtr<CoalescedMouseMoveFlusher> mCoalescedMouseEventFlusher;
 
@@ -964,18 +901,29 @@ private:
 #endif
   bool mCoalesceMouseMoveEvents;
 
+  // In some circumstances, a DocShell might be in a state where it is
+  // "blocked", and we should not attempt to change its active state or
+  // the underlying PresShell state until the DocShell becomes unblocked.
+  // It is possible, however, for the parent process to send commands to
+  // change those states while the DocShell is blocked. We store those
+  // states temporarily as "pending", and only apply them once the DocShell
+  // is no longer blocked.
   bool mPendingDocShellIsActive;
-  bool mPendingDocShellPreserveLayers;
   bool mPendingDocShellReceivedMessage;
+  bool mPendingRenderLayers;
+  bool mPendingRenderLayersReceivedMessage;
+  uint64_t mPendingLayerObserverEpoch;
+  // When mPendingDocShellBlockers is greater than 0, the DocShell is blocked,
+  // and once it reaches 0, it is no longer blocked.
   uint32_t mPendingDocShellBlockers;
 
   WindowsHandle mWidgetNativeData;
 
-  // This state is used to keep track of the current active tabs (the ones in
-  // the foreground). There may be more than one if there are multiple browser
-  // windows open. There may be none if this process does not host any
-  // foreground tabs.
-  static nsTHashtable<nsPtrHashKey<TabChild>>* sActiveTabs;
+  // This state is used to keep track of the current visible tabs (the ones rendering
+  // layers). There may be more than one if there are multiple browser windows open, or
+  // tabs are being warmed up. There may be none if this process does not host any
+  // visible or warming tabs.
+  static nsTHashtable<nsPtrHashKey<TabChild>>* sVisibleTabs;
 
   DISALLOW_EVIL_CONSTRUCTORS(TabChild);
 };

@@ -2,7 +2,7 @@
 <html>
   <head>
     <title>searchbox multiline true</title>
-    <link rel="stylesheet" href="/resources/testharness.css">
+    <meta content="text/html; charset=utf-8" http-equiv="Content-Type"/>
     <link rel="stylesheet" href="/wai-aria/scripts/manual.css">
     <script src="/resources/testharness.js"></script>
     <script src="/resources/testharnessreport.js"></script>
@@ -99,21 +99,21 @@
             "UIA" : [
                [
                   "property",
-                  "Control Type",
+                  "ControlType",
                   "is",
                   "Edit"
                ],
                [
                   "property",
-                  "Localized Control Type",
+                  "LocalizedControlType",
                   "is",
                   "search box"
                ],
                [
                   "property",
-                  "AriaProperties",
-                  "contains",
-                  "multiline:true"
+                  "AriaProperties.multiline",
+                  "is",
+                  "true"
                ]
             ]
          },
@@ -136,4 +136,3 @@
   <div id="ATTAmessages"></div>
   </body>
 </html>
-

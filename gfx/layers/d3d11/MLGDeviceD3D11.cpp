@@ -1,7 +1,8 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-* This Source Code Form is subject to the terms of the Mozilla Public
-* License, v. 2.0. If a copy of the MPL was not distributed with this
-* file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "MLGDeviceD3D11.h"
 #include "mozilla/ArrayUtils.h"
@@ -397,7 +398,7 @@ MLGSwapChainD3D11::UpdateBackBufferContents(ID3D11Texture2D* aBack)
   for (auto iter = frontValid.RectIter(); !iter.Done(); iter.Next()) {
     const IntRect& rect = iter.Get();
     D3D11_BOX box = RectToBox(rect);
-    context->CopySubresourceRegion(aBack, 0, rect.x, rect.y, 0, front, 0, &box);
+    context->CopySubresourceRegion(aBack, 0, rect.X(), rect.Y(), 0, front, 0, &box);
   }
 
   // The back and front buffers are now in sync.
@@ -453,8 +454,8 @@ MLGSwapChainD3D11::Present()
     size_t i = 0;
     for (auto iter = mBackBufferInvalid.RectIter(); !iter.Done(); iter.Next()) {
       const IntRect& rect = iter.Get();
-      rects[i].left = rect.x;
-      rects[i].top = rect.y;
+      rects[i].left = rect.X();
+      rects[i].top = rect.Y();
       rects[i].bottom = rect.YMost();
       rects[i].right = rect.XMost();
       i++;
@@ -575,7 +576,7 @@ MLGSwapChainD3D11::CopyBackbuffer(gfx::DrawTarget* aTarget, const gfx::IntRect& 
   aTarget->CopySurface(
     source,
     IntRect(0, 0, bbDesc.Width, bbDesc.Height),
-    IntPoint(-aBounds.x, -aBounds.y));
+    IntPoint(-aBounds.X(), -aBounds.Y()));
   aTarget->Flush();
 
   context->Unmap(temp, 0);
@@ -1416,8 +1417,8 @@ MLGDeviceD3D11::SetViewport(const gfx::IntRect& aViewport)
   D3D11_VIEWPORT vp;
   vp.MaxDepth = 1.0f;
   vp.MinDepth = 0.0f;
-  vp.TopLeftX = aViewport.x;
-  vp.TopLeftY = aViewport.y;
+  vp.TopLeftX = aViewport.X();
+  vp.TopLeftY = aViewport.Y();
   vp.Width = aViewport.Width();
   vp.Height = aViewport.Height();
   mCtx->RSSetViewports(1, &vp);
@@ -1427,8 +1428,8 @@ static inline D3D11_RECT
 ToD3D11Rect(const gfx::IntRect& aRect)
 {
   D3D11_RECT rect;
-  rect.left = aRect.x;
-  rect.top = aRect.y;
+  rect.left = aRect.X();
+  rect.top = aRect.Y();
   rect.right = aRect.XMost();
   rect.bottom = aRect.YMost();
   return rect;
@@ -1962,6 +1963,27 @@ MLGDeviceD3D11::CopyTexture(MLGTexture* aDest,
   MLGTextureD3D11* dest = aDest->AsD3D11();
   MLGTextureD3D11* source = aSource->AsD3D11();
 
+  // We check both the source and destination copy regions, because
+  // CopySubresourceRegion is documented as causing a device reset if
+  // the operation is out-of-bounds. And it's not lying.
+  IntRect sourceBounds(IntPoint(0, 0), aSource->GetSize());
+  if (!sourceBounds.Contains(aRect)) {
+    gfxWarning() << "Attempt to read out-of-bounds in CopySubresourceRegion: " <<
+      Stringify(sourceBounds) <<
+      ", " <<
+      Stringify(aRect);
+    return;
+  }
+
+  IntRect destBounds(IntPoint(0, 0), aDest->GetSize());
+  if (!destBounds.Contains(IntRect(aTarget, aRect.Size()))) {
+    gfxWarning() << "Attempt to write out-of-bounds in CopySubresourceRegion: " <<
+      Stringify(destBounds) <<
+      ", " <<
+      Stringify(aTarget) << ", " << Stringify(aRect.Size());
+    return;
+  }
+
   D3D11_BOX box = RectToBox(aRect);
   mCtx->CopySubresourceRegion(
     dest->GetTexture(), 0,
@@ -2100,8 +2122,8 @@ RectToBox(const gfx::IntRect& aRect)
   D3D11_BOX box;
   box.front = 0;
   box.back = 1;
-  box.left = aRect.x;
-  box.top = aRect.y;
+  box.left = aRect.X();
+  box.top = aRect.Y();
   box.right = aRect.XMost();
   box.bottom = aRect.YMost();
   return box;

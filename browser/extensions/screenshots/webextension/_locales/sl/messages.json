@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "Prenesi"
   },
+  "downloadOnlyNotice": {
+    "message": "Trenutno ste v načinu samo za prenos."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots se samodejno preklopi v način samo za prenos v naslednjih primerih:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "V oknu zasebnega brskanja."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Ko so piškotki tretjih strani onemogočeni."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "Ko je Firefox nastavljen, naj ne shranjuje zgodovine."
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "Uporabljate Firefox ESR."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "Nalaganje je onemogočeno."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Povezava kopirana"
   },
@@ -36,6 +57,28 @@
     "message": "Povezava do vašega posnetka zaslona je bila kopirana v odložišče. Pritisnite $META_KEY$-V, da jo prilepite.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Kopiraj"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Posnetek kopiran"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Posnetek zaslona je bil kopiran na odložišče. Pritisnite $META_KEY$-V, da ga prilepite.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Ta slika je bila obrezana na $PIXELS$ pikslov.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }

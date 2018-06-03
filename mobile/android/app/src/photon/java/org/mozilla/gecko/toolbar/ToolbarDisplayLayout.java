@@ -19,8 +19,6 @@ import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.Tabs;
 import org.mozilla.gecko.animation.PropertyAnimator;
 import org.mozilla.gecko.animation.ViewHelper;
-import org.mozilla.gecko.Experiments;
-import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.StringUtils;
 import org.mozilla.gecko.util.ViewUtil;
 import org.mozilla.gecko.widget.themed.ThemedImageButton;
@@ -31,7 +29,6 @@ import android.content.Context;
 import android.support.annotation.NonNull;
 import android.text.Editable;
 import android.text.Spannable;
-import android.text.SpannableString;
 import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
 import android.text.TextWatcher;
@@ -42,9 +39,6 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.Button;
 import android.widget.HorizontalScrollView;
-
-import org.mozilla.gecko.switchboard.SwitchBoard;
-import org.mozilla.gecko.widget.themed.ThemedView;
 
 /**
 * {@code ToolbarDisplayLayout} is the UI for when the toolbar is in
@@ -103,7 +97,7 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
     private boolean mIsAttached;
 
     private final ThemedTextView mTitle;
-    private final ThemedView mTitleBackground;
+    private final ThemedLinearLayout mThemeBackground;
     private final int mTitlePadding;
     private final HorizontalScrollView mTitleScroll;
     private final int mMinUrlScrollMargin;
@@ -119,27 +113,12 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
     private final SiteIdentityPopup mSiteIdentityPopup;
     private int mSecurityImageLevel;
 
-    // Security level constants, which map to the icons / levels defined in:
-    // http://dxr.mozilla.org/mozilla-central/source/mobile/android/base/java/org/mozilla/gecko/resources/drawable/site_security_level.xml
-    // Default level (unverified pages) - globe icon:
-    private static final int LEVEL_DEFAULT_GLOBE = 0;
-    // Levels for displaying Mixed Content state icons.
-    private static final int LEVEL_WARNING_MINOR = 3;
-    private static final int LEVEL_LOCK_DISABLED = 4;
-    // Levels for displaying Tracking Protection state icons.
-    private static final int LEVEL_SHIELD_ENABLED = 5;
-    private static final int LEVEL_SHIELD_DISABLED = 6;
-    // Icon used for about:home
-    private static final int LEVEL_SEARCH_ICON = 999;
-
     private final ForegroundColorSpan mUrlColorSpan;
     private final ForegroundColorSpan mPrivateUrlColorSpan;
     private final ForegroundColorSpan mBlockedColorSpan;
     private final ForegroundColorSpan mPrivateBlockedColorSpan;
     private final ForegroundColorSpan mDomainColorSpan;
     private final ForegroundColorSpan mPrivateDomainColorSpan;
-    private final ForegroundColorSpan mCertificateOwnerColorSpan;
-    private final ForegroundColorSpan mPrivateCertificateOwnerColorSpan;
 
     public ToolbarDisplayLayout(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -150,7 +129,7 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
         LayoutInflater.from(context).inflate(R.layout.toolbar_display_layout, this);
 
         mTitle = (ThemedTextView) findViewById(R.id.url_bar_title);
-        mTitleBackground = (ThemedView) findViewById(R.id.url_bar_title_bg);
+        mThemeBackground = (ThemedLinearLayout) findViewById(R.id.url_bar_title_bg);
         mTitlePadding = mTitle.getPaddingRight();
         mTitleScroll = (HorizontalScrollView) findViewById(R.id.url_bar_title_scroll_view);
 
@@ -179,8 +158,6 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
         mPrivateBlockedColorSpan = new ForegroundColorSpan(ContextCompat.getColor(context, R.color.url_bar_blockedtext_private));
         mDomainColorSpan = new ForegroundColorSpan(ContextCompat.getColor(context, R.color.url_bar_domaintext));
         mPrivateDomainColorSpan = new ForegroundColorSpan(ContextCompat.getColor(context, R.color.url_bar_domaintext_private));
-        mCertificateOwnerColorSpan = new ForegroundColorSpan(ContextCompat.getColor(context, R.color.url_bar_certificate_owner));
-        mPrivateCertificateOwnerColorSpan = new ForegroundColorSpan(ContextCompat.getColor(context, R.color.url_bar_certificate_owner_private));
 
         mSiteSecurity = (ThemedImageButton) findViewById(R.id.site_security);
 
@@ -199,7 +176,7 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
         mStop.setPrivateMode(isPrivate);
         mPageActionLayout.setPrivateMode(isPrivate);
         mTitle.setPrivateMode(isPrivate);
-        mTitleBackground.setPrivateMode(isPrivate);
+        mThemeBackground.setPrivateMode(isPrivate);
     }
 
     @Override
@@ -277,7 +254,7 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
 
         if (flags.contains(UpdateFlags.PRIVATE_MODE)) {
             mTitle.setPrivateMode(tab.isPrivate());
-            mTitleBackground.setPrivateMode(tab.isPrivate());
+            mThemeBackground.setPrivateMode(tab.isPrivate());
         }
     }
 
@@ -333,8 +310,6 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
 
         String strippedURL = stripAboutReaderURL(url);
 
-        final boolean isHttpOrHttps = StringUtils.isHttpOrHttps(strippedURL);
-
         if (mPrefs.shouldTrimUrls()) {
             strippedURL = StringUtils.stripCommonSubdomains(StringUtils.stripScheme(strippedURL));
         }
@@ -349,36 +324,8 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
         // will read the content description to obtain the full URL for performing assertions.
         setContentDescription(strippedURL);
 
-        final SiteIdentity siteIdentity = tab.getSiteIdentity();
-        if (siteIdentity.hasOwner() && SwitchBoard.isInExperiment(mActivity, Experiments.URLBAR_SHOW_EV_CERT_OWNER)) {
-            // Show Owner of EV certificate as title
-            updateTitleFromSiteIdentity(siteIdentity, tab.isPrivate());
-        } else if (isHttpOrHttps && !HardwareUtils.isTablet() && !TextUtils.isEmpty(baseDomain)
-                && SwitchBoard.isInExperiment(mActivity, Experiments.URLBAR_SHOW_ORIGIN_ONLY)) {
-            // Show just the base domain as title
-            setTitle(baseDomain);
-        } else {
-            // Display full URL with base domain highlighted as title
-            updateAndColorTitleFromFullURL(strippedURL, baseDomain, tab.isPrivate());
-        }
-    }
-
-    private void updateTitleFromSiteIdentity(SiteIdentity siteIdentity, boolean isPrivate) {
-        final String title;
-
-        if (siteIdentity.hasCountry()) {
-            title = String.format("%s (%s)", siteIdentity.getOwner(), siteIdentity.getCountry());
-        } else {
-            title = siteIdentity.getOwner();
-        }
-
-        final SpannableString spannable = new SpannableString(title);
-        final ForegroundColorSpan colorSpan = isPrivate
-                ? mPrivateCertificateOwnerColorSpan
-                : mCertificateOwnerColorSpan;
-        spannable.setSpan(colorSpan, 0, title.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-
-        setTitle(spannable);
+        // Display full URL with base domain highlighted as title
+        updateAndColorTitleFromFullURL(strippedURL, baseDomain, tab.isPrivate());
     }
 
     private void updateAndColorTitleFromFullURL(String url, String baseDomain, boolean isPrivate) {
@@ -413,7 +360,7 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
     private void updateSiteIdentity(@NonNull Tab tab) {
         final SiteIdentity siteIdentity = tab.getSiteIdentity();
         final SecurityModeUtil.IconType type = SecurityModeUtil.resolve(siteIdentity, tab.getURL());
-        final int imageLevel = SecurityModeUtil.getImageLevel(type);
+        final int imageLevel = type.getImageLevel();
 
         mSiteIdentityPopup.setSiteIdentity(siteIdentity);
         mTrackingProtectionEnabled = SecurityModeUtil.isTrackingProtectionEnabled(siteIdentity);

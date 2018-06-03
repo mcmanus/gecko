@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -10,6 +11,7 @@
 #include "gfxPrefs.h"
 #include "LayersLogging.h"  // For Stringify
 #include "mozilla/dom/Element.h"
+#include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/dom/TabParent.h"
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/layers/LayerTransactionChild.h"
@@ -516,7 +518,7 @@ APZCCallbackHelper::DispatchSynthesizedMouseEvent(EventMessage aMsg,
   event.mRefPoint = LayoutDeviceIntPoint::Truncate(aRefPoint.x, aRefPoint.y);
   event.mTime = aTime;
   event.button = WidgetMouseEvent::eLeftButton;
-  event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
+  event.inputSource = dom::MouseEventBinding::MOZ_SOURCE_TOUCH;
   if (aMsg == eMouseLongTap) {
     event.mFlags.mOnlyChromeDispatch = true;
   }
@@ -612,7 +614,7 @@ UpdateRootFrameForTouchTargetDocument(nsIFrame* aRootFrame)
   // Re-target so that the hit test is performed relative to the frame for the
   // Root Content Document instead of the Root Document which are different in
   // Android. See bug 1229752 comment 16 for an explanation of why this is necessary.
-  if (nsIDocument* doc = aRootFrame->PresContext()->PresShell()->GetPrimaryContentDocument()) {
+  if (nsIDocument* doc = aRootFrame->PresShell()->GetPrimaryContentDocument()) {
     if (nsIPresShell* shell = doc->GetShell()) {
       if (nsIFrame* frame = shell->GetRootFrame()) {
         return frame;
@@ -647,7 +649,7 @@ PrepareForSetTargetAPZCNotification(nsIWidget* aWidget,
     nsLayoutUtils::GetFrameForPoint(aRootFrame, point, flags);
   nsIScrollableFrame* scrollAncestor = target
     ? nsLayoutUtils::GetAsyncScrollableAncestorFrame(target)
-    : aRootFrame->PresContext()->PresShell()->GetRootScrollFrameAsScrollable();
+    : aRootFrame->PresShell()->GetRootScrollFrameAsScrollable();
 
   // Assuming that if there's no scrollAncestor, there's already a displayPort.
   nsCOMPtr<dom::Element> dpElement = scrollAncestor
@@ -673,18 +675,12 @@ PrepareForSetTargetAPZCNotification(nsIWidget* aWidget,
   }
 
   if (!scrollAncestor) {
-    MOZ_ASSERT(false);  // If you hit this, please file a bug with STR.
-
-    // Attempt some sort of graceful handling based on a theory as to why we
-    // reach this point...
-    // If we get here, the document element is non-null, valid, but doesn't have
-    // a displayport. It's possible that the init code in ChromeProcessController
-    // failed for some reason, or the document element got swapped out at some
-    // later time. In this case let's try to set a displayport on the document
-    // element again and bail out on this operation.
+    // This can happen if the document element gets swapped out after ChromeProcessController
+    // runs InitializeRootDisplayport. In this case let's try to set a displayport again and
+    // bail out on this operation.
     APZCCH_LOG("Widget %p's document element %p didn't have a displayport\n",
         aWidget, dpElement.get());
-    APZCCallbackHelper::InitializeRootDisplayport(aRootFrame->PresContext()->PresShell());
+    APZCCallbackHelper::InitializeRootDisplayport(aRootFrame->PresShell());
     return false;
   }
 
@@ -748,7 +744,7 @@ public:
     }
 
     APZCCH_LOG("Got refresh, sending target APZCs for input block %" PRIu64 "\n", mInputBlockId);
-    SendLayersDependentApzcTargetConfirmation(mPresShell, mInputBlockId, Move(mTargets));
+    SendLayersDependentApzcTargetConfirmation(mPresShell, mInputBlockId, std::move(mTargets));
 
     if (!mPresShell->RemovePostRefreshObserver(this)) {
       MOZ_ASSERT_UNREACHABLE("Unable to unregister post-refresh observer! Leaking it instead of leaving garbage registered");
@@ -779,7 +775,7 @@ SendSetTargetAPZCNotificationHelper(nsIWidget* aWidget,
   if (waitForRefresh) {
     APZCCH_LOG("At least one target got a new displayport, need to wait for refresh\n");
     waitForRefresh = aShell->AddPostRefreshObserver(
-      new DisplayportSetListener(aShell, aInputBlockId, Move(aTargets)));
+      new DisplayportSetListener(aShell, aInputBlockId, std::move(aTargets)));
   }
   if (!waitForRefresh) {
     APZCCH_LOG("Sending target APZCs for input block %" PRIu64 "\n", aInputBlockId);
@@ -835,7 +831,7 @@ APZCCallbackHelper::SendSetTargetAPZCNotification(nsIWidget* aWidget,
           aWidget,
           shell,
           aInputBlockId,
-          Move(targets),
+          std::move(targets),
           waitForRefresh);
       }
 
@@ -863,7 +859,7 @@ APZCCallbackHelper::SendSetAllowedTouchBehaviorNotification(
           TouchActionHelper::GetAllowedTouchBehavior(aWidget,
                 rootFrame, aEvent.mTouches[i]->mRefPoint));
       }
-      aCallback(aInputBlockId, Move(flags));
+      aCallback(aInputBlockId, std::move(flags));
     }
   }
 }
@@ -897,7 +893,7 @@ APZCCallbackHelper::NotifyFlushComplete(nsIPresShell* aShell)
   // so we ensure that we kick off a paint when an APZ flush is done. Note that
   // only chrome/testing code can trigger this behaviour.
   if (aShell && aShell->GetRootFrame()) {
-    aShell->GetRootFrame()->SchedulePaint();
+    aShell->GetRootFrame()->SchedulePaint(nsIFrame::PAINT_DEFAULT, false);
   }
 
   nsCOMPtr<nsIObserverService> observerService = mozilla::services::GetObserverService();
@@ -965,7 +961,7 @@ APZCCallbackHelper::NotifyAsyncScrollbarDragRejected(const FrameMetrics::ViewID&
 }
 
 /* static */ void
-APZCCallbackHelper::NotifyAutoscrollHandledByAPZ(const FrameMetrics::ViewID& aScrollId)
+APZCCallbackHelper::NotifyAsyncAutoscrollRejected(const FrameMetrics::ViewID& aScrollId)
 {
   MOZ_ASSERT(NS_IsMainThread());
   nsCOMPtr<nsIObserverService> observerService = mozilla::services::GetObserverService();
@@ -973,7 +969,7 @@ APZCCallbackHelper::NotifyAutoscrollHandledByAPZ(const FrameMetrics::ViewID& aSc
 
   nsAutoString data;
   data.AppendInt(aScrollId);
-  observerService->NotifyObservers(nullptr, "autoscroll-handled-by-apz", data.get());
+  observerService->NotifyObservers(nullptr, "autoscroll-rejected-by-apz", data.get());
 }
 
 /* static */ void

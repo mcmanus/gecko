@@ -14,17 +14,16 @@
 
 #include <stdarg.h>
 
-#include "jscntxt.h"
-#include "jscompartment.h"
-
 #include "jit/CompileInfo.h"
 #include "jit/JitAllocPolicy.h"
-#include "jit/JitCompartment.h"
+#include "jit/JitRealm.h"
 #include "jit/MIR.h"
 #ifdef JS_ION_PERF
 # include "jit/PerfSpewer.h"
 #endif
 #include "jit/RegisterSets.h"
+#include "vm/JSCompartment.h"
+#include "vm/JSContext.h"
 
 namespace js {
 namespace jit {
@@ -35,7 +34,7 @@ class OptimizationInfo;
 class MIRGenerator
 {
   public:
-    MIRGenerator(CompileCompartment* compartment, const JitCompileOptions& options,
+    MIRGenerator(CompileRealm* realm, const JitCompileOptions& options,
                  TempAllocator* alloc, MIRGraph* graph,
                  const CompileInfo* info, const OptimizationInfo* optimizationInfo);
 
@@ -109,6 +108,10 @@ class MIRGenerator
                !JitOptions.disableOptimizationTracking;
     }
 
+    bool stringsCanBeInNursery() const {
+        return stringsCanBeInNursery_;
+    }
+
     bool safeForMinorGC() const {
         return safeForMinorGC_;
     }
@@ -116,7 +119,7 @@ class MIRGenerator
         safeForMinorGC_ = false;
     }
 
-    // Whether the active thread is trying to cancel this build.
+    // Whether the main thread is trying to cancel this build.
     bool shouldCancel(const char* why) {
         return cancelBuild_;
     }
@@ -172,7 +175,7 @@ class MIRGenerator
     }
 
   public:
-    CompileCompartment* compartment;
+    CompileRealm* realm;
     CompileRuntime* runtime;
 
   protected:
@@ -198,6 +201,7 @@ class MIRGenerator
     bool instrumentedProfiling_;
     bool instrumentedProfilingIsCached_;
     bool safeForMinorGC_;
+    bool stringsCanBeInNursery_;
 
     void addAbortedPreliminaryGroup(ObjectGroup* group);
 

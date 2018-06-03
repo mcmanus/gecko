@@ -200,13 +200,8 @@ var ignoreFunctions = {
 
     // These are a little overzealous -- these destructors *can* GC if they end
     // up wrapping a pending exception. See bug 898815 for the heavyweight fix.
-    "void js::AutoCompartment::~AutoCompartment(int32)" : true,
-    "void JSAutoCompartment::~JSAutoCompartment(int32)" : true,
-
-    // The nsScriptNameSpaceManager functions can't actually GC.  They
-    // just use a PLDHashTable which has function pointers, which makes the
-    // analysis think maybe they can.
-    "nsGlobalNameStruct* nsScriptNameSpaceManager::LookupName(nsAString*, uint16**)": true,
+    "void js::AutoRealm::~AutoRealm(int32)" : true,
+    "void JSAutoRealm::~JSAutoRealm(int32)" : true,
 
     // Similar to heap snapshot mock classes, and GTests below. This posts a
     // synchronous runnable when a GTest fails, and we are pretty sure that the
@@ -219,11 +214,14 @@ var ignoreFunctions = {
 
     "float64 JS_GetCurrentEmbedderTime()" : true,
 
-    "uint64 js::TenuringTracer::moveObjectToTenured(JSObject*, JSObject*, int32)" : true,
-    "uint32 js::TenuringTracer::moveObjectToTenured(JSObject*, JSObject*, int32)" : true,
+    // This calls any JSObjectMovedOp for the tenured object via an indirect call.
+    "JSObject* js::TenuringTracer::moveToTenuredSlow(JSObject*)" : true,
+
     "void js::Nursery::freeMallocedBuffers()" : true,
 
     "void js::AutoEnterOOMUnsafeRegion::crash(uint64, int8*)" : true,
+
+    "void mozilla::dom::WorkerPrivate::AssertIsOnWorkerThread() const" : true,
 
     // It would be cool to somehow annotate that nsTHashtable<T> will use
     // nsTHashtable<T>::s_MatchEntry for its matchEntry function pointer, but
@@ -301,8 +299,10 @@ function ignoreGCFunction(mangled)
     if (fun.includes("js::WeakMap<Key, Value, HashPolicy>::getDelegate("))
         return true;
 
-    // XXX modify refillFreeList<NoGC> to not need data flow analysis to understand it cannot GC.
-    if (/refillFreeList/.test(fun) && /\(js::AllowGC\)0u/.test(fun))
+    // TODO: modify refillFreeList<NoGC> to not need data flow analysis to
+    // understand it cannot GC. As of gcc 6, the same problem occurs with
+    // tryNewTenuredThing, tryNewNurseryObject, and others.
+    if (/refillFreeList|tryNew/.test(fun) && /\(js::AllowGC\)0u/.test(fun))
         return true;
     return false;
 }
@@ -329,10 +329,11 @@ function extraRootedPointers()
         // These are not actually rooted, but are only used in the context of
         // AutoKeepAtoms.
         'js::frontend::TokenStream',
-        'js::frontend::TokenStream::Position',
+        'js::frontend::TokenStreamAnyChars',
 
         'mozilla::ErrorResult',
         'mozilla::IgnoredErrorResult',
+        'mozilla::IgnoreErrors',
         'mozilla::dom::binding_detail::FastErrorResult',
     ];
 }
@@ -399,6 +400,8 @@ function isOverridableField(initialCSU, csu, field)
     if (field == "GetGlobalJSObject")
         return false;
     if (field == "GetIsMainThread")
+        return false;
+    if (field == "GetThreadFromPRThread")
         return false;
     if (initialCSU == 'nsIXPConnectJSObjectHolder' && field == 'GetJSObject')
         return false;

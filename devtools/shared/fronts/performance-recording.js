@@ -19,7 +19,7 @@ loader.lazyRequireGetter(this, "RecordingUtils",
  */
 const PerformanceRecordingFront = FrontClassWithSpec(performanceRecordingSpec,
 Object.assign({
-  form: function (form, detail) {
+  form: function(form, detail) {
     if (detail === "actorid") {
       this.actorID = form;
       return;
@@ -51,7 +51,7 @@ Object.assign({
     }
   },
 
-  initialize: function (client, form, config) {
+  initialize: function(client, form, config) {
     Front.prototype.initialize.call(this, client, form);
     this._markers = [];
     this._frames = [];
@@ -60,7 +60,7 @@ Object.assign({
     this._allocations = { sites: [], timestamps: [], frames: [], sizes: [] };
   },
 
-  destroy: function () {
+  destroy: function() {
     Front.prototype.destroy.call(this);
   },
 
@@ -70,16 +70,16 @@ Object.assign({
    * @param nsIFile file
    *        The file to stream the data into.
    */
-  exportRecording: function (file) {
-    let recordingData = this.getAllData();
+  exportRecording: function(file) {
+    const recordingData = this.getAllData();
     return PerformanceIO.saveRecordingToFile(recordingData, file);
   },
 
   /**
    * Fired whenever the PerformanceFront emits markers, memory or ticks.
    */
-  _addTimelineData: function (eventName, data) {
-    let config = this.getConfiguration();
+  _addTimelineData: function(eventName, data) {
+    const config = this.getConfiguration();
 
     switch (eventName) {
       // Accumulate timeline markers into an array. Furthermore, the timestamps
@@ -88,7 +88,7 @@ Object.assign({
         if (!config.withMarkers) {
           break;
         }
-        let { markers } = data;
+        const { markers } = data;
         RecordingUtils.offsetMarkerTimes(markers, this._startTime);
         RecordingUtils.pushAll(this._markers, markers);
         break;
@@ -98,7 +98,7 @@ Object.assign({
         if (!config.withMarkers) {
           break;
         }
-        let { frames } = data;
+        const { frames } = data;
         RecordingUtils.pushAll(this._frames, frames);
         break;
       }
@@ -108,7 +108,7 @@ Object.assign({
         if (!config.withMemory) {
           break;
         }
-        let { delta, measurement } = data;
+        const { delta, measurement } = data;
         this._memory.push({
           delta: delta - this._startTime,
           value: measurement.total / 1024 / 1024
@@ -120,7 +120,7 @@ Object.assign({
         if (!config.withTicks) {
           break;
         }
-        let { timestamps } = data;
+        const { timestamps } = data;
         this._ticks = timestamps;
         break;
       }
@@ -129,7 +129,7 @@ Object.assign({
         if (!config.withAllocations) {
           break;
         }
-        let {
+        const {
           allocations: sites,
           allocationsTimestamps: timestamps,
           allocationSizes: sizes,

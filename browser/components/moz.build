@@ -38,8 +38,10 @@ DIRS += [
     'customizableui',
     'dirprovider',
     'downloads',
+    'enterprisepolicies',
     'extensions',
     'feeds',
+    'library',
     'migration',
     'newtab',
     'originattributes',
@@ -50,7 +52,6 @@ DIRS += [
     'search',
     'sessionstore',
     'shell',
-    'selfsupport',
     'syncedtabs',
     'uitour',
     'translation',
@@ -58,8 +59,10 @@ DIRS += [
 
 DIRS += ['build']
 
+if CONFIG['NIGHTLY_BUILD']:
+    DIRS += ['payments']
+
 XPIDL_SOURCES += [
-    'nsIBrowserGlue.idl',
     'nsIBrowserHandler.idl',
 ]
 

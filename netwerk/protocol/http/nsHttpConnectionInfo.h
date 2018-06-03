@@ -32,7 +32,7 @@ namespace mozilla { namespace net {
 
 extern LazyLogModule gHttpLog;
 
-class nsHttpConnectionInfo: public ARefBase
+class nsHttpConnectionInfo final : public ARefBase
 {
 public:
     nsHttpConnectionInfo(const nsACString &originHost,
@@ -73,11 +73,6 @@ public:
     const nsCString &GetRoutedHost() const { return mRoutedHost; }
     const char      *RoutedHost() const { return mRoutedHost.get(); }
     int32_t          RoutedPort() const { return mRoutedPort; }
-
-    // With overhead rebuilding the hash key. The initial
-    // network interface is empty. So you can reduce one call
-    // if there's no explicit route after ctor.
-    void SetNetworkInterfaceId(const nsACString& aNetworkInterfaceId);
 
     // OK to treat these as an infalible allocation
     nsHttpConnectionInfo* Clone() const;
@@ -125,9 +120,8 @@ public:
     void          SetTlsFlags(uint32_t aTlsFlags);
     uint32_t      GetTlsFlags() const { return mTlsFlags; }
 
-    const nsCString &GetNetworkInterfaceId() const { return mNetworkInterfaceId; }
-
     const nsCString &GetALPNToken() { return mALPNToken; }
+
     const nsCString &GetUsername() { return mUsername; }
 
     const OriginAttributes &GetOriginAttributes() { return mOriginAttributes; }
@@ -169,7 +163,6 @@ private:
     int32_t                mRoutedPort;
 
     nsCString              mHashKey;
-    nsCString              mNetworkInterfaceId;
     nsCString              mUsername;
     nsCOMPtr<nsProxyInfo>  mProxyInfo;
     bool                   mUsingHttpProxy;
@@ -182,7 +175,7 @@ private:
     uint32_t               mTlsFlags;
 
 // for RefPtr
-    NS_INLINE_DECL_THREADSAFE_REFCOUNTING(nsHttpConnectionInfo)
+    NS_INLINE_DECL_THREADSAFE_REFCOUNTING(nsHttpConnectionInfo, override)
 };
 
 } // namespace net

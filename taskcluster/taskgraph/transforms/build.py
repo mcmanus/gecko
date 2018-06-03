@@ -9,6 +9,7 @@ kind.
 from __future__ import absolute_import, print_function, unicode_literals
 
 from taskgraph.transforms.base import TransformSequence
+from taskgraph.util.schema import resolve_keyed_by
 from taskgraph.util.workertypes import worker_type_implementation
 
 transforms = TransformSequence()
@@ -22,35 +23,37 @@ def set_defaults(config, jobs):
         job['treeherder'].setdefault('tier', 1)
         _, worker_os = worker_type_implementation(job['worker-type'])
         worker = job.setdefault('worker', {})
+        worker.setdefault('env', {})
         if worker_os == "linux":
-            worker.setdefault('docker-image', {'in-tree': 'desktop-build'})
+            worker.setdefault('docker-image', {'in-tree': 'debian7-amd64-build'})
             worker['chain-of-trust'] = True
-            extra = job.setdefault('extra', {})
-            extra.setdefault('chainOfTrust', {})
-            extra['chainOfTrust'].setdefault('inputs', {})
-            if 'in-tree' in worker['docker-image']:
-                extra['chainOfTrust']['inputs']['docker-image'] = {
-                    "task-reference": "<docker-image>"
-                }
         elif worker_os == "windows":
-            worker.setdefault('env', {})
             worker['chain-of-trust'] = True
-        elif worker_os == "macosx":
-            worker.setdefault('env', {})
 
+        yield job
+
+
+@transforms.add
+def stub_installer(config, jobs):
+    for job in jobs:
+        job.setdefault('attributes', {})
+        if job.get('stub-installer'):
+            resolve_keyed_by(
+                job, 'stub-installer', item_name=job['name'], project=config.params['project']
+            )
+            job['attributes']['stub-installer'] = job['stub-installer']
+            del job['stub-installer']
+            job['worker']['env'].update({"USE_STUB_INSTALLER": "1"})
         yield job
 
 
 @transforms.add
 def set_env(config, jobs):
     """Set extra environment variables from try command line."""
-    env = {}
+    env = []
     if config.params['try_mode'] == 'try_option_syntax':
-        env = config.params['try_options']['env'] or {}
+        env = config.params['try_options']['env'] or []
     for job in jobs:
         if env:
-            job_env = {}
-            if 'worker' in job:
-                job_env = job['worker']['env']
-            job_env.update(dict(x.split('=') for x in env))
+            job['worker']['env'].update(dict(x.split('=') for x in env))
         yield job

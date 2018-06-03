@@ -21,29 +21,28 @@ exports.items = [
     tooltipText: l10n.lookupFormat("splitconsoleTooltip2", ["Esc"]),
     isRemoteSafe: true,
     state: {
-      isChecked: function (target) {
-        let toolbox = gDevTools.getToolbox(target);
+      isChecked: function(target) {
+        const toolbox = gDevTools.getToolbox(target);
         return !!(toolbox && toolbox.splitConsole);
       },
-      onChange: function (target, changeHandler) {
+      onChange: function(target, changeHandler) {
         // Register handlers for when a change event should be fired
         // (which resets the checked state of the button).
-        let toolbox = gDevTools.getToolbox(target);
-        let callback = changeHandler.bind(null, "changed", { target: target });
-
+        const toolbox = gDevTools.getToolbox(target);
         if (!toolbox) {
           return;
         }
 
+        const callback = changeHandler.bind(null, { target });
         toolbox.on("split-console", callback);
         toolbox.once("destroyed", () => {
           toolbox.off("split-console", callback);
         });
       }
     },
-    exec: function (args, context) {
-      let target = context.environment.target;
-      let toolbox = gDevTools.getToolbox(target);
+    exec: function(args, context) {
+      const target = context.environment.target;
+      const toolbox = gDevTools.getToolbox(target);
 
       if (!toolbox) {
         return gDevTools.showToolbox(target, "inspector").then((newToolbox) => {
@@ -63,18 +62,18 @@ exports.items = [
     runAt: "client",
     name: "console clear",
     description: l10n.lookup("consoleclearDesc"),
-    exec: function (args, context) {
-      let toolbox = gDevTools.getToolbox(context.environment.target);
+    exec: function(args, context) {
+      const toolbox = gDevTools.getToolbox(context.environment.target);
       if (toolbox == null) {
         return null;
       }
 
-      let panel = toolbox.getPanel("webconsole");
+      const panel = toolbox.getPanel("webconsole");
       if (panel == null) {
         return null;
       }
 
-      let onceMessagesCleared = panel.hud.jsterm.once("messages-cleared");
+      const onceMessagesCleared = panel.hud.jsterm.once("messages-cleared");
       panel.hud.jsterm.clearOutput();
       return onceMessagesCleared;
     }
@@ -84,7 +83,7 @@ exports.items = [
     runAt: "client",
     name: "console close",
     description: l10n.lookup("consolecloseDesc"),
-    exec: function (args, context) {
+    exec: function(args, context) {
       // Don't return a value to GCLI
       return gDevTools.closeToolbox(context.environment.target).then(() => {});
     }
@@ -94,7 +93,7 @@ exports.items = [
     runAt: "client",
     name: "console open",
     description: l10n.lookup("consoleopenDesc"),
-    exec: function (args, context) {
+    exec: function(args, context) {
       const target = context.environment.target;
       // Don't return a value to GCLI
       return gDevTools.showToolbox(target, "webconsole").then(() => {});

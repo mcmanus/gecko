@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=99: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,6 +8,7 @@
 #endif
 #include "GPUParent.h"
 #include "gfxConfig.h"
+#include "gfxCrashReporterUtils.h"
 #include "gfxPlatform.h"
 #include "gfxPrefs.h"
 #include "GPUProcessHost.h"
@@ -21,8 +22,9 @@
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/ipc/CrashReporterClient.h"
 #include "mozilla/ipc/ProcessChild.h"
+#include "mozilla/layers/APZInputBridgeParent.h"
 #include "mozilla/layers/APZThreadUtils.h"
-#include "mozilla/layers/APZCTreeManager.h"
+#include "mozilla/layers/APZUtils.h"    // for apz::InitializeGlobalState
 #include "mozilla/layers/CompositorBridgeParent.h"
 #include "mozilla/layers/CompositorManagerParent.h"
 #include "mozilla/layers/CompositorThread.h"
@@ -31,12 +33,16 @@
 #include "mozilla/layers/UiCompositorControllerParent.h"
 #include "mozilla/layers/MemoryReportingMLGPU.h"
 #include "mozilla/webrender/RenderThread.h"
+#include "mozilla/webrender/WebRenderAPI.h"
+#include "mozilla/HangDetails.h"
 #include "nsDebugImpl.h"
+#include "nsIGfxInfo.h"
 #include "nsThreadManager.h"
 #include "prenv.h"
 #include "ProcessUtils.h"
 #include "VRManager.h"
 #include "VRManagerParent.h"
+#include "VRThread.h"
 #include "VsyncBridgeParent.h"
 #if defined(XP_WIN)
 # include "mozilla/gfx/DeviceManagerDx.h"
@@ -77,6 +83,7 @@ GPUParent::GetSingleton()
 
 bool
 GPUParent::Init(base::ProcessId aParentPid,
+                const char* aParentBuildID,
                 MessageLoop* aIOLoop,
                 IPC::Channel* aChannel)
 {
@@ -93,15 +100,18 @@ GPUParent::Init(base::ProcessId aParentPid,
 
   nsDebugImpl::SetMultiprocessMode("GPU");
 
-  // This must be sent before any IPDL message, which may hit sentinel
+  // This must be checked before any IPDL message, which may hit sentinel
   // errors due to parent and content processes having different
   // versions.
-  GetIPCChannel()->SendBuildID();
+  MessageChannel* channel = GetIPCChannel();
+  if (channel && !channel->SendBuildIDsMatchMessage(aParentBuildID)) {
+    // We need to quit this process if the buildID doesn't match the parent's.
+    // This can occur when an update occurred in the background.
+    ProcessChild::QuickExit();
+  }
 
-#ifdef MOZ_CRASHREPORTER
   // Init crash reporter support.
   CrashReporterClient::InitSingleton(this);
-#endif
 
   // Ensure gfxPrefs are initialized.
   gfxPrefs::GetSingleton();
@@ -120,8 +130,10 @@ GPUParent::Init(base::ProcessId aParentPid,
   }
 
   CompositorThreadHolder::Start();
-  APZThreadUtils::SetControllerThread(CompositorThreadHolder::Loop());
-  APZCTreeManager::InitializeGlobalState();
+  // TODO: Bug 1406327, Start VRListenerThreadHolder when loading VR content.
+  VRListenerThreadHolder::Start();
+  APZThreadUtils::SetControllerThread(MessageLoop::current());
+  apz::InitializeGlobalState();
   LayerTreeOwnerTracker::Initialize();
   mozilla::ipc::SetThisProcessName("GPU Process");
 #ifdef XP_WIN
@@ -157,6 +169,22 @@ GPUParent::NotifyDeviceReset()
   Unused << SendNotifyDeviceReset(data);
 }
 
+PAPZInputBridgeParent*
+GPUParent::AllocPAPZInputBridgeParent(const LayersId& aLayersId)
+{
+  APZInputBridgeParent* parent = new APZInputBridgeParent(aLayersId);
+  parent->AddRef();
+  return parent;
+}
+
+bool
+GPUParent::DeallocPAPZInputBridgeParent(PAPZInputBridgeParent* aActor)
+{
+  APZInputBridgeParent* parent = static_cast<APZInputBridgeParent*>(aActor);
+  parent->Release();
+  return true;
+}
+
 mozilla::ipc::IPCResult
 GPUParent::RecvInit(nsTArray<GfxPrefSetting>&& prefs,
                     nsTArray<GfxVarUpdate>&& vars,
@@ -179,6 +207,14 @@ GPUParent::RecvInit(nsTArray<GfxPrefSetting>&& prefs,
   gfxConfig::Inherit(Feature::ADVANCED_LAYERS, devicePrefs.advancedLayers());
   gfxConfig::Inherit(Feature::DIRECT2D, devicePrefs.useD2D1());
 
+  { // Let the crash reporter know if we've got WR enabled or not. For other
+    // processes this happens in gfxPlatform::InitWebRenderConfig.
+    ScopedGfxFeatureReporter reporter("WR", gfxPlatform::WebRenderPrefEnabled());
+    if (gfxVars::UseWebRender()) {
+      reporter.SetSuccessful();
+    }
+  }
+
   for (const LayerTreeIdMapping& map : aMappings) {
     LayerTreeOwnerTracker::Get()->Map(map.layersId(), map.ownerId());
   }
@@ -188,6 +224,11 @@ GPUParent::RecvInit(nsTArray<GfxPrefSetting>&& prefs,
     DeviceManagerDx::Get()->CreateCompositorDevices();
   }
   if (gfxVars::UseWebRender()) {
+    DeviceManagerDx::Get()->CreateDirectCompositionDevice();
+    // Ensure to initialize GfxInfo
+    nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
+    Unused << gfxInfo;
+
     Factory::EnsureDWriteFactory();
   }
 #endif
@@ -210,6 +251,15 @@ GPUParent::RecvInit(nsTArray<GfxPrefSetting>&& prefs,
   } else {
     gtk_init(nullptr, nullptr);
   }
+
+  // Ensure we have an FT library for font instantiation.
+  // This would normally be set by gfxPlatform::Init().
+  // Since we bypass that, we must do it here instead.
+  if (gfxVars::UseWebRender()) {
+    FT_Library library = Factory::NewFTLibrary();
+    MOZ_ASSERT(library);
+    Factory::SetFTLibrary(library);
+  }
 #endif
 
   // Make sure to do this *after* we update gfxVars above.
@@ -230,35 +280,35 @@ GPUParent::RecvInit(nsTArray<GfxPrefSetting>&& prefs,
 mozilla::ipc::IPCResult
 GPUParent::RecvInitCompositorManager(Endpoint<PCompositorManagerParent>&& aEndpoint)
 {
-  CompositorManagerParent::Create(Move(aEndpoint));
+  CompositorManagerParent::Create(std::move(aEndpoint));
   return IPC_OK();
 }
 
 mozilla::ipc::IPCResult
 GPUParent::RecvInitVsyncBridge(Endpoint<PVsyncBridgeParent>&& aVsyncEndpoint)
 {
-  mVsyncBridge = VsyncBridgeParent::Start(Move(aVsyncEndpoint));
+  mVsyncBridge = VsyncBridgeParent::Start(std::move(aVsyncEndpoint));
   return IPC_OK();
 }
 
 mozilla::ipc::IPCResult
 GPUParent::RecvInitImageBridge(Endpoint<PImageBridgeParent>&& aEndpoint)
 {
-  ImageBridgeParent::CreateForGPUProcess(Move(aEndpoint));
+  ImageBridgeParent::CreateForGPUProcess(std::move(aEndpoint));
   return IPC_OK();
 }
 
 mozilla::ipc::IPCResult
 GPUParent::RecvInitVRManager(Endpoint<PVRManagerParent>&& aEndpoint)
 {
-  VRManagerParent::CreateForGPUProcess(Move(aEndpoint));
+  VRManagerParent::CreateForGPUProcess(std::move(aEndpoint));
   return IPC_OK();
 }
 
 mozilla::ipc::IPCResult
-GPUParent::RecvInitUiCompositorController(const uint64_t& aRootLayerTreeId, Endpoint<PUiCompositorControllerParent>&& aEndpoint)
+GPUParent::RecvInitUiCompositorController(const LayersId& aRootLayerTreeId, Endpoint<PUiCompositorControllerParent>&& aEndpoint)
 {
-  UiCompositorControllerParent::Start(aRootLayerTreeId, Move(aEndpoint));
+  UiCompositorControllerParent::Start(aRootLayerTreeId, std::move(aEndpoint));
   return IPC_OK();
 }
 
@@ -266,7 +316,7 @@ mozilla::ipc::IPCResult
 GPUParent::RecvInitProfiler(Endpoint<PProfilerChild>&& aEndpoint)
 {
 #ifdef MOZ_GECKO_PROFILER
-  mProfilerController = ChildProfilerController::Create(Move(aEndpoint));
+  mProfilerController = ChildProfilerController::Create(std::move(aEndpoint));
 #endif
   return IPC_OK();
 }
@@ -328,16 +378,27 @@ GPUParent::RecvGetDeviceStatus(GPUDeviceData* aOut)
 }
 
 mozilla::ipc::IPCResult
+GPUParent::RecvSimulateDeviceReset(GPUDeviceData* aOut)
+{
+#if defined(XP_WIN)
+  DeviceManagerDx::Get()->ForceDeviceReset(ForcedDeviceResetReason::COMPOSITOR_UPDATED);
+  DeviceManagerDx::Get()->MaybeResetAndReacquireDevices();
+#endif
+  RecvGetDeviceStatus(aOut);
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
 GPUParent::RecvNewContentCompositorManager(Endpoint<PCompositorManagerParent>&& aEndpoint)
 {
-  CompositorManagerParent::Create(Move(aEndpoint));
+  CompositorManagerParent::Create(std::move(aEndpoint));
   return IPC_OK();
 }
 
 mozilla::ipc::IPCResult
 GPUParent::RecvNewContentImageBridge(Endpoint<PImageBridgeParent>&& aEndpoint)
 {
-  if (!ImageBridgeParent::CreateForContent(Move(aEndpoint))) {
+  if (!ImageBridgeParent::CreateForContent(std::move(aEndpoint))) {
     return IPC_FAIL_NO_REASON(this);
   }
   return IPC_OK();
@@ -346,7 +407,7 @@ GPUParent::RecvNewContentImageBridge(Endpoint<PImageBridgeParent>&& aEndpoint)
 mozilla::ipc::IPCResult
 GPUParent::RecvNewContentVRManager(Endpoint<PVRManagerParent>&& aEndpoint)
 {
-  if (!VRManagerParent::CreateForContent(Move(aEndpoint))) {
+  if (!VRManagerParent::CreateForContent(std::move(aEndpoint))) {
     return IPC_FAIL_NO_REASON(this);
   }
   return IPC_OK();
@@ -355,7 +416,7 @@ GPUParent::RecvNewContentVRManager(Endpoint<PVRManagerParent>&& aEndpoint)
 mozilla::ipc::IPCResult
 GPUParent::RecvNewContentVideoDecoderManager(Endpoint<PVideoDecoderManagerParent>&& aEndpoint)
 {
-  if (!dom::VideoDecoderManagerParent::CreateForContent(Move(aEndpoint))) {
+  if (!dom::VideoDecoderManagerParent::CreateForContent(std::move(aEndpoint))) {
     return IPC_FAIL_NO_REASON(this);
   }
   return IPC_OK();
@@ -431,7 +492,10 @@ GPUParent::ActorDestroy(ActorDestroyReason aWhy)
   }
   dom::VideoDecoderManagerParent::ShutdownVideoBridge();
   CompositorThreadHolder::Shutdown();
-  if (gfxVars::UseWebRender()) {
+  VRListenerThreadHolder::Shutdown();
+  // There is a case that RenderThread exists when gfxVars::UseWebRender() is false.
+  // This could happen when WebRender was fallbacked to compositor.
+  if (wr::RenderThread::Get()) {
     wr::RenderThread::ShutDown();
   }
   Factory::ShutDown();
@@ -442,9 +506,7 @@ GPUParent::ActorDestroy(ActorDestroyReason aWhy)
   gfxVars::Shutdown();
   gfxConfig::Shutdown();
   gfxPrefs::DestroySingleton();
-#ifdef MOZ_CRASHREPORTER
   CrashReporterClient::DestroySingleton();
-#endif
   XRE_ShutdownChildProcess();
 }
 

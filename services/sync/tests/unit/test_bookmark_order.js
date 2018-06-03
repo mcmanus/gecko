@@ -2,21 +2,18 @@
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
 _("Making sure after processing incoming bookmarks, they show up in the right order");
-Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://services-sync/engines/bookmarks.js");
-Cu.import("resource://services-sync/main.js");
-Cu.import("resource://services-sync/service.js");
-Cu.import("resource://services-sync/util.js");
-Cu.import("resource://testing-common/services/sync/utils.js");
-
-Svc.Prefs.set("log.logger.engine.bookmarks", "Trace");
-initTestLogging("Trace");
-Log.repository.getLogger("Sqlite").level = Log.Level.Info;
+ChromeUtils.import("resource://gre/modules/Log.jsm");
+ChromeUtils.import("resource://services-sync/engines/bookmarks.js");
+ChromeUtils.import("resource://services-sync/main.js");
+ChromeUtils.import("resource://services-sync/service.js");
+ChromeUtils.import("resource://services-sync/util.js");
 
 async function serverForFoo(engine) {
   await generateNewKeys(Service.collectionKeys);
 
   let clientsEngine = Service.clientsEngine;
+  let clientsSyncID = await clientsEngine.resetLocalSyncID();
+  let engineSyncID = await engine.resetLocalSyncID();
   return serverForUsers({"foo": "password"}, {
     meta: {
       global: {
@@ -25,11 +22,11 @@ async function serverForFoo(engine) {
         engines: {
           clients: {
             version: clientsEngine.version,
-            syncID: clientsEngine.syncID,
+            syncID: clientsSyncID,
           },
           [engine.name]: {
             version: engine.version,
-            syncID: engine.syncID,
+            syncID: engineSyncID,
           },
         },
       },
@@ -148,8 +145,13 @@ async function resolveConflict(engine, collection, timestamp, buildTree,
     expectedTree, message);
 }
 
+add_task(async function setup() {
+  await Service.engineManager.unregister("bookmarks");
+});
+
 add_task(async function test_local_order_newer() {
-  let engine = Service.engineManager.get("bookmarks");
+  let engine = new BookmarksEngine(Service);
+  await engine.initialize();
 
   let server = await serverForFoo(engine);
   await SyncTestingInfrastructure(server);
@@ -190,11 +192,13 @@ add_task(async function test_local_order_newer() {
     await engine.wipeClient();
     await Service.startOver();
     await promiseStopServer(server);
+    await engine.finalize();
   }
 });
 
 add_task(async function test_remote_order_newer() {
-  let engine = Service.engineManager.get("bookmarks");
+  let engine = new BookmarksEngine(Service);
+  await engine.initialize();
 
   let server = await serverForFoo(engine);
   await SyncTestingInfrastructure(server);
@@ -235,6 +239,7 @@ add_task(async function test_remote_order_newer() {
     await engine.wipeClient();
     await Service.startOver();
     await promiseStopServer(server);
+    await engine.finalize();
   }
 });
 
@@ -728,6 +733,7 @@ add_task(async function test_bookmark_order() {
     index: 4,
   }], "Move 20 back to front -> update 20, f30");
 
-  engine.resetClient();
+  await engine.wipeClient();
+  await Service.startOver();
   await engine.finalize();
 });

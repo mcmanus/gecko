@@ -8,7 +8,9 @@
 
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/EditorBase.h"         // for EditorBase
+#include "mozilla/ErrorResult.h"
 #include "mozilla/HTMLEditor.h"         // for HTMLEditor
+#include "mozilla/dom/Element.h"
 #include "nsAString.h"
 #include "nsCOMPtr.h"                   // for nsCOMPtr, do_QueryInterface, etc
 #include "nsComponentManagerUtils.h"    // for do_CreateInstance
@@ -20,7 +22,6 @@
 #include "nsIClipboard.h"               // for nsIClipboard, etc
 #include "nsICommandParams.h"           // for nsICommandParams, etc
 #include "nsID.h"
-#include "nsIDOMElement.h"              // for nsIDOMElement
 #include "nsIEditor.h"                  // for nsIEditor
 #include "nsIHTMLEditor.h"              // for nsIHTMLEditor, etc
 #include "nsLiteralString.h"            // for NS_LITERAL_STRING
@@ -29,6 +30,8 @@
 #include "nsStringFwd.h"                // for nsString
 
 class nsISupports;
+using mozilla::dom::Element;
+using mozilla::ErrorResult;
 
 //prototype
 nsresult GetListState(mozilla::HTMLEditor* aHTMLEditor,
@@ -70,8 +73,6 @@ nsBaseStateUpdatingCommand::nsBaseStateUpdatingCommand(nsAtom* aTagName)
 nsBaseStateUpdatingCommand::~nsBaseStateUpdatingCommand()
 {
 }
-
-NS_IMPL_ISUPPORTS_INHERITED0(nsBaseStateUpdatingCommand, nsBaseComposerCommand)
 
 NS_IMETHODIMP
 nsBaseStateUpdatingCommand::IsCommandEnabled(const char *aCommandName,
@@ -206,7 +207,7 @@ nsStyleUpdatingCommand::GetCurrentState(mozilla::HTMLEditor* aHTMLEditor,
   bool anyOfSelectionHasProp = false;
   bool allOfSelectionHasProp = false;
 
-  nsresult rv = aHTMLEditor->GetInlineProperty(mTagName, EmptyString(),
+  nsresult rv = aHTMLEditor->GetInlineProperty(mTagName, nullptr,
                                                EmptyString(),
                                                &firstOfSelectionHasProp,
                                                &anyOfSelectionHasProp,
@@ -581,8 +582,6 @@ nsMultiStateCommand::~nsMultiStateCommand()
 {
 }
 
-NS_IMPL_ISUPPORTS_INHERITED0(nsMultiStateCommand, nsBaseComposerCommand)
-
 NS_IMETHODIMP
 nsMultiStateCommand::IsCommandEnabled(const char * aCommandName,
                                       nsISupports *refCon,
@@ -721,25 +720,23 @@ nsFontFaceStateCommand::SetState(mozilla::HTMLEditor* aHTMLEditor,
 
   if (newState.EqualsLiteral("tt")) {
     // The old "teletype" attribute
-    nsresult rv = aHTMLEditor->SetInlineProperty(nsGkAtoms::tt, EmptyString(),
+    nsresult rv = aHTMLEditor->SetInlineProperty(nsGkAtoms::tt, nullptr,
                                                  EmptyString());
     NS_ENSURE_SUCCESS(rv, rv);
     // Clear existing font face
-    return aHTMLEditor->RemoveInlineProperty(nsGkAtoms::font,
-                                             NS_LITERAL_STRING("face"));
+    return aHTMLEditor->RemoveInlineProperty(nsGkAtoms::font, nsGkAtoms::face);
   }
 
   // Remove any existing TT nodes
-  nsresult rv = aHTMLEditor->RemoveInlineProperty(nsGkAtoms::tt, EmptyString());
+  nsresult rv = aHTMLEditor->RemoveInlineProperty(nsGkAtoms::tt, nullptr);
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (newState.IsEmpty() || newState.EqualsLiteral("normal")) {
-    return aHTMLEditor->RemoveInlineProperty(nsGkAtoms::font,
-                                             NS_LITERAL_STRING("face"));
+    return aHTMLEditor->RemoveInlineProperty(nsGkAtoms::font, nsGkAtoms::face);
   }
 
-  return aHTMLEditor->SetInlineProperty(nsGkAtoms::font,
-                                        NS_LITERAL_STRING("face"), newState);
+  return aHTMLEditor->SetInlineProperty(nsGkAtoms::font, nsGkAtoms::face,
+                                        newState);
 }
 
 nsFontSizeStateCommand::nsFontSizeStateCommand()
@@ -759,7 +756,7 @@ nsFontSizeStateCommand::GetCurrentState(mozilla::HTMLEditor* aHTMLEditor,
   bool firstHas, anyHas, allHas;
   nsresult rv = aHTMLEditor->GetInlinePropertyWithAttrValue(
                                nsGkAtoms::font,
-                               NS_LITERAL_STRING("size"),
+                               nsGkAtoms::size,
                                EmptyString(),
                                &firstHas, &anyHas, &allHas,
                                outStateString);
@@ -796,18 +793,18 @@ nsFontSizeStateCommand::SetState(mozilla::HTMLEditor* aHTMLEditor,
       !newState.EqualsLiteral("normal") &&
       !newState.EqualsLiteral("medium")) {
     return aHTMLEditor->SetInlineProperty(nsGkAtoms::font,
-                                          NS_LITERAL_STRING("size"), newState);
+                                          nsGkAtoms::size, newState);
   }
 
   // remove any existing font size, big or small
   nsresult rv = aHTMLEditor->RemoveInlineProperty(nsGkAtoms::font,
-                                                  NS_LITERAL_STRING("size"));
+                                                  nsGkAtoms::size);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  rv = aHTMLEditor->RemoveInlineProperty(nsGkAtoms::big, EmptyString());
+  rv = aHTMLEditor->RemoveInlineProperty(nsGkAtoms::big, nullptr);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  return aHTMLEditor->RemoveInlineProperty(nsGkAtoms::small, EmptyString());
+  return aHTMLEditor->RemoveInlineProperty(nsGkAtoms::small, nullptr);
 }
 
 nsFontColorStateCommand::nsFontColorStateCommand()
@@ -845,11 +842,11 @@ nsFontColorStateCommand::SetState(mozilla::HTMLEditor* aHTMLEditor,
 
   if (newState.IsEmpty() || newState.EqualsLiteral("normal")) {
     return aHTMLEditor->RemoveInlineProperty(nsGkAtoms::font,
-                                             NS_LITERAL_STRING("color"));
+                                             nsGkAtoms::color);
   }
 
-  return aHTMLEditor->SetInlineProperty(nsGkAtoms::font,
-                                        NS_LITERAL_STRING("color"), newState);
+  return aHTMLEditor->SetInlineProperty(nsGkAtoms::font, nsGkAtoms::color,
+                                        newState);
 }
 
 nsHighlightColorStateCommand::nsHighlightColorStateCommand()
@@ -887,11 +884,11 @@ nsHighlightColorStateCommand::SetState(mozilla::HTMLEditor* aHTMLEditor,
 
   if (newState.IsEmpty() || newState.EqualsLiteral("normal")) {
     return aHTMLEditor->RemoveInlineProperty(nsGkAtoms::font,
-                                             NS_LITERAL_STRING("bgcolor"));
+                                             nsGkAtoms::bgcolor);
   }
 
   return aHTMLEditor->SetInlineProperty(nsGkAtoms::font,
-                                        NS_LITERAL_STRING("bgcolor"),
+                                        nsGkAtoms::bgcolor,
                                         newState);
 }
 
@@ -1043,19 +1040,10 @@ nsAbsolutePositioningCommand::GetCurrentState(mozilla::HTMLEditor* aHTMLEditor,
     return NS_OK;
   }
 
-  nsCOMPtr<nsINode> container;
-  nsresult rv =
-    aHTMLEditor->GetAbsolutelyPositionedSelectionContainer(
-                   getter_AddRefs(container));
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  nsAutoString outStateString;
-  if (container) {
-    outStateString.AssignLiteral("absolute");
-  }
-
-  aParams->SetBooleanValue(STATE_MIXED,false);
-  aParams->SetCStringValue(STATE_ATTRIBUTE, NS_ConvertUTF16toUTF8(outStateString).get());
+  RefPtr<Element> container =
+    aHTMLEditor->GetAbsolutelyPositionedSelectionContainer();
+  aParams->SetBooleanValue(STATE_MIXED,  false);
+  aParams->SetCStringValue(STATE_ATTRIBUTE, container ? "absolute" : "");
   return NS_OK;
 }
 
@@ -1066,13 +1054,9 @@ nsAbsolutePositioningCommand::ToggleState(mozilla::HTMLEditor* aHTMLEditor)
     return NS_ERROR_INVALID_ARG;
   }
 
-  nsCOMPtr<nsINode> container;
-  nsresult rv =
-    aHTMLEditor->GetAbsolutelyPositionedSelectionContainer(
-                   getter_AddRefs(container));
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  return aHTMLEditor->AbsolutePositionSelection(!container);
+  RefPtr<Element> container =
+    aHTMLEditor->GetAbsolutelyPositionedSelectionContainer();
+  return aHTMLEditor->SetSelectionToAbsoluteOrStatic(!container);
 }
 
 
@@ -1100,11 +1084,7 @@ nsDecreaseZIndexCommand::IsCommandEnabled(const char * aCommandName,
     return NS_OK;
   }
 
-  int32_t z;
-  nsresult rv = htmlEditor->GetElementZIndex(positionedElement, &z);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  int32_t z = htmlEditor->GetZIndex(*positionedElement);
   *outCmdEnabled = (z > 0);
   return NS_OK;
 }
@@ -1121,7 +1101,7 @@ nsDecreaseZIndexCommand::DoCommand(const char *aCommandName,
   if (NS_WARN_IF(!htmlEditor)) {
     return NS_ERROR_FAILURE;
   }
-  return htmlEditor->RelativeChangeZIndex(-1);
+  return htmlEditor->AddZIndex(-1);
 }
 
 NS_IMETHODIMP
@@ -1181,7 +1161,7 @@ nsIncreaseZIndexCommand::DoCommand(const char *aCommandName,
   if (NS_WARN_IF(!htmlEditor)) {
     return NS_ERROR_FAILURE;
   }
-  return htmlEditor->RelativeChangeZIndex(1);
+  return htmlEditor->AddZIndex(1);
 }
 
 NS_IMETHODIMP
@@ -1431,8 +1411,6 @@ nsInsertHTMLCommand::GetCommandStateParams(const char *aCommandName,
   return aParams->SetBooleanValue(STATE_ENABLED, outCmdEnabled);
 }
 
-NS_IMPL_ISUPPORTS_INHERITED0(nsInsertTagCommand, nsBaseComposerCommand)
-
 nsInsertTagCommand::nsInsertTagCommand(nsAtom* aTagName)
 : nsBaseComposerCommand()
 , mTagName(aTagName)
@@ -1476,12 +1454,12 @@ nsInsertTagCommand::DoCommand(const char *aCmdName, nsISupports *refCon)
     return NS_ERROR_FAILURE;
   }
 
-  nsCOMPtr<nsIDOMElement> domElem;
+  RefPtr<Element> newElement;
   nsresult rv = htmlEditor->CreateElementWithDefaults(
-    nsDependentAtomString(mTagName), getter_AddRefs(domElem));
+    nsDependentAtomString(mTagName), getter_AddRefs(newElement));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  return htmlEditor->InsertElementAtSelection(domElem, true);
+  return htmlEditor->InsertElementAtSelection(newElement, true);
 }
 
 NS_IMETHODIMP
@@ -1527,19 +1505,22 @@ nsInsertTagCommand::DoCommandParams(const char *aCommandName,
     return NS_ERROR_NOT_IMPLEMENTED;
   }
 
-  nsCOMPtr<nsIDOMElement> domElem;
+  RefPtr<Element> elem;
   rv = htmlEditor->CreateElementWithDefaults(nsDependentAtomString(mTagName),
-                                             getter_AddRefs(domElem));
+                                             getter_AddRefs(elem));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  rv = domElem->SetAttribute(attributeType, attrib);
-  NS_ENSURE_SUCCESS(rv, rv);
+  ErrorResult err;
+  elem->SetAttribute(attributeType, attrib, err);
+  if (NS_WARN_IF(err.Failed())) {
+    return err.StealNSResult();
+  }
 
   // do actual insertion
   if (mTagName == nsGkAtoms::a) {
-    return htmlEditor->InsertLinkAroundSelection(domElem);
+    return htmlEditor->InsertLinkAroundSelection(elem);
   }
-  return htmlEditor->InsertElementAtSelection(domElem, true);
+  return htmlEditor->InsertElementAtSelection(elem, true);
 }
 
 NS_IMETHODIMP
@@ -1599,7 +1580,7 @@ RemoveOneProperty(mozilla::HTMLEditor* aHTMLEditor,
   RefPtr<nsAtom> styleAtom = NS_Atomize(aProp);
   NS_ENSURE_TRUE(styleAtom, NS_ERROR_OUT_OF_MEMORY);
 
-  return aHTMLEditor->RemoveInlineProperty(styleAtom, EmptyString());
+  return aHTMLEditor->RemoveInlineProperty(styleAtom, nullptr);
 }
 
 
@@ -1630,6 +1611,5 @@ SetTextProperty(mozilla::HTMLEditor* aHTMLEditor,
   RefPtr<nsAtom> styleAtom = NS_Atomize(aProp);
   NS_ENSURE_TRUE(styleAtom, NS_ERROR_OUT_OF_MEMORY);
 
-  return aHTMLEditor->SetInlineProperty(styleAtom,
-                                        EmptyString(), EmptyString());
+  return aHTMLEditor->SetInlineProperty(styleAtom, nullptr, EmptyString());
 }

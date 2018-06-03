@@ -7,6 +7,7 @@
 #if !defined(PlatformDecoderModule_h_)
 #define PlatformDecoderModule_h_
 
+#include "DecoderDoctorLogger.h"
 #include "GMPCrashHelper.h"
 #include "MediaEventSource.h"
 #include "MediaInfo.h"
@@ -123,7 +124,10 @@ private:
   void Set(VideoFrameRate aRate) { mRate = aRate; }
   void Set(layers::KnowsCompositor* aKnowsCompositor)
   {
-    mKnowsCompositor = aKnowsCompositor;
+    if (aKnowsCompositor) {
+      mKnowsCompositor = aKnowsCompositor;
+      MOZ_ASSERT(aKnowsCompositor->IsThreadSafe());
+    }
   }
   void Set(TrackInfo::TrackType aType)
   {
@@ -168,13 +172,16 @@ public:
   virtual bool
   SupportsMimeType(const nsACString& aMimeType,
                    DecoderDoctorDiagnostics* aDiagnostics) const = 0;
+
   virtual bool
   Supports(const TrackInfo& aTrackInfo,
            DecoderDoctorDiagnostics* aDiagnostics) const
   {
-    // By default, fall back to SupportsMimeType with just the MIME string.
-    // (So PDMs do not need to override this method -- yet.)
-    return SupportsMimeType(aTrackInfo.mMimeType, aDiagnostics);
+    if (!SupportsMimeType(aTrackInfo.mMimeType, aDiagnostics)) {
+      return false;
+    }
+    const auto videoInfo = aTrackInfo.GetAsVideoInfo();
+    return !videoInfo || SupportsBitDepth(videoInfo->mBitDepth, aDiagnostics);
   }
 
 protected:
@@ -185,6 +192,14 @@ protected:
   friend class PDMFactory;
   friend class dom::RemoteDecoderModule;
   friend class EMEDecoderModule;
+
+  // Indicates if the PlatformDecoderModule supports decoding of aBitDepth.
+  // Should override this method when the platform can support bitDepth != 8.
+  virtual bool SupportsBitDepth(const uint8_t aBitDepth,
+                                DecoderDoctorDiagnostics* aDiagnostics) const
+  {
+    return aBitDepth == 8;
+  }
 
   // Creates a Video decoder. The layers backend is passed in so that
   // decoders can determine whether hardware accelerated decoding can be used.
@@ -212,6 +227,8 @@ protected:
   CreateAudioDecoder(const CreateDecoderParams& aParams) = 0;
 };
 
+DDLoggedTypeDeclName(MediaDataDecoder);
+
 // MediaDataDecoder is the interface exposed by decoders created by the
 // PlatformDecoderModule's Create*Decoder() functions. The type of
 // media data that the decoder accepts as valid input and produces as
@@ -229,7 +246,7 @@ protected:
 // TaskQueue passed into the PlatformDecoderModules's Create*Decoder()
 // function. This may not be necessary for platforms with async APIs
 // for decoding.
-class MediaDataDecoder
+class MediaDataDecoder : public DecoderDoctorLifeLogger<MediaDataDecoder>
 {
 protected:
   virtual ~MediaDataDecoder() { }

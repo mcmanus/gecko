@@ -20,6 +20,7 @@ import org.mozilla.gecko.db.BrowserDB;
 import org.mozilla.gecko.db.URLMetadata;
 import org.mozilla.gecko.db.URLImageDataTable;
 import org.mozilla.gecko.sync.Utils;
+import org.mozilla.gecko.util.StringUtils;
 
 import android.content.ContentProviderOperation;
 import android.content.ContentProviderResult;
@@ -195,7 +196,7 @@ public class testBrowserProvider extends ContentProviderTest {
 
         faviconEntry.put(BrowserContract.Favicons.PAGE_URL, pageUrl);
         faviconEntry.put(BrowserContract.Favicons.URL, pageUrl + "/favicon.ico");
-        faviconEntry.put(BrowserContract.Favicons.DATA, data.getBytes("UTF8"));
+        faviconEntry.put(BrowserContract.Favicons.DATA, data.getBytes(StringUtils.UTF_8));
 
         return faviconEntry;
     }
@@ -204,7 +205,7 @@ public class testBrowserProvider extends ContentProviderTest {
         ContentValues thumbnailEntry = new ContentValues();
 
         thumbnailEntry.put(BrowserContract.Thumbnails.URL, pageUrl);
-        thumbnailEntry.put(BrowserContract.Thumbnails.DATA, data.getBytes("UTF8"));
+        thumbnailEntry.put(BrowserContract.Thumbnails.DATA, data.getBytes(StringUtils.UTF_8));
 
         return thumbnailEntry;
     }
@@ -1168,9 +1169,9 @@ public class testBrowserProvider extends ContentProviderTest {
     }
 
     private class TestUpdateOrInsertHistory extends TestCase {
-        private final String TEST_URL_1 = "http://example.com";
-        private final String TEST_URL_2 = "http://example.org";
-        private final String TEST_TITLE = "Example";
+        private static final String TEST_URL_1 = "http://example.com";
+        private static final String TEST_URL_2 = "http://example.org";
+        private static final String TEST_TITLE = "Example";
 
         private long getHistoryEntryIdByUrl(String url) {
             Cursor c = mProvider.query(BrowserContract.History.CONTENT_URI,
@@ -1449,8 +1450,8 @@ public class testBrowserProvider extends ContentProviderTest {
             testRetrievalViaUrlMetadata();
         }
 
-        final String url1 = "http://mozilla.org";
-        final String url2 = "http://hello.org";
+        static final String url1 = "http://mozilla.org";
+        static final String url2 = "http://hello.org";
 
         private void testInsertionViaContentProvider() throws Exception {
             final String tileImage = "http://mozilla.org/tileImage.png";

@@ -4,11 +4,8 @@
 
 "use strict";
 
-const {
-  addons,
-  createClass, createFactory,
-  PropTypes,
-} = require("devtools/client/shared/vendor/react");
+const { createFactory, PureComponent } = require("devtools/client/shared/vendor/react");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
 
 const { REPS, MODE } = require("devtools/client/shared/components/reps/reps");
 const { Rep } = REPS;
@@ -19,24 +16,22 @@ const TreeView = createFactory(TreeViewClass);
  * The ObjectTreeView React Component is used in the ExtensionSidebar component to provide
  * a UI viewMode which shows a tree view of the passed JavaScript object.
  */
-const ObjectTreeView = createClass({
-  displayName: "ObjectTreeView",
-
-  propTypes: {
-    object: PropTypes.object.isRequired,
-  },
-
-  mixins: [ addons.PureRenderMixin ],
+class ObjectTreeView extends PureComponent {
+  static get propTypes() {
+    return {
+      object: PropTypes.object.isRequired,
+    };
+  }
 
   render() {
     const { object } = this.props;
 
-    let columns = [{
+    const columns = [{
       "id": "value",
     }];
 
     // Render the node value (omitted on the root element if it has children).
-    let renderValue = props => {
+    const renderValue = props => {
       if (props.member.level === 0 && props.member.hasChildren) {
         return undefined;
       }
@@ -55,7 +50,7 @@ const ObjectTreeView = createClass({
         maxLevel: 1, maxNodes: 1,
       }),
     });
-  },
-});
+  }
+}
 
 module.exports = ObjectTreeView;

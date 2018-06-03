@@ -4,12 +4,10 @@
 
 "use strict";
 
-this.EXPORTED_SYMBOLS = ["RemotePages", "RemotePageManager", "PageListener"];
+var EXPORTED_SYMBOLS = ["RemotePages", "RemotePageManager", "PageListener"];
 
-const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 function MessageListener() {
   this.listeners = new Map();
@@ -52,7 +50,7 @@ MessageListener.prototype = {
 
     this.listeners.get(name).delete(callback);
   },
-}
+};
 
 
 /**
@@ -61,7 +59,7 @@ MessageListener.prototype = {
  * object for every page loaded. Message listeners added to this object receive
  * messages from all loaded pages from the requested urls.
  */
-this.RemotePages = function(urls) {
+var RemotePages = function(urls) {
   this.urls = Array.isArray(urls) ? urls : [urls];
   this.messagePorts = new Set();
   this.listener = new MessageListener();
@@ -73,7 +71,7 @@ this.RemotePages = function(urls) {
   for (const url of this.urls) {
     RemotePageManager.addRemotePageListener(url, this.portCreated);
   }
-}
+};
 
 RemotePages.prototype = {
   urls: null,
@@ -161,7 +159,7 @@ RemotePages.prototype = {
 
     if (!this.listener.has(name)) {
       for (let port of this.messagePorts.values()) {
-        this.registerPortListener(port, name)
+        this.registerPortListener(port, name);
       }
     }
 
@@ -352,7 +350,7 @@ ChromeMessagePort.prototype.swapBrowsers = function({ detail: newBrowser }) {
   this.swapMessageManager(newBrowser.messageManager);
 
   this._browser.addEventListener("SwapDocShells", this.swapBrowsers);
-}
+};
 
 // Called when a message manager has been disconnected indicating that the
 // tab has closed or crashed
@@ -467,7 +465,7 @@ ChildMessagePort.prototype.message = function({ data: messagedata }) {
 ChildMessagePort.prototype.destroy = function() {
   this.window = null;
   MessagePort.prototype.destroy.call(this);
-}
+};
 
 // Allows callers to register to connect to specific content pages. Registration
 // is done through the addRemotePageListener method
@@ -535,7 +533,7 @@ if (Services.appinfo.processType == Ci.nsIXULRuntime.PROCESS_TYPE_DEFAULT)
   RemotePageManagerInternal.init();
 
 // The public API for the above object
-this.RemotePageManager = {
+var RemotePageManager = {
   addRemotePageListener: RemotePageManagerInternal.addRemotePageListener.bind(RemotePageManagerInternal),
   removeRemotePageListener: RemotePageManagerInternal.removeRemotePageListener.bind(RemotePageManagerInternal),
 };

@@ -6,7 +6,6 @@
 
 #include "WaiveXrayWrapper.h"
 #include "FilteringWrapper.h"
-#include "AddonWrapper.h"
 #include "XrayWrapper.h"
 #include "AccessCheck.h"
 #include "XPCWrapper.h"
@@ -74,7 +73,7 @@ WrapperFactory::CreateXrayWaiver(JSContext* cx, HandleObject obj)
     MOZ_ASSERT(!GetXrayWaiver(obj));
     XPCWrappedNativeScope* scope = ObjectScope(obj);
 
-    JSAutoCompartment ac(cx, obj);
+    JSAutoRealm ar(cx, obj);
     JSObject* waiver = Wrapper::New(cx, obj, &XrayWaiver);
     if (!waiver)
         return nullptr;
@@ -229,7 +228,7 @@ WrapperFactory::PrepareForWrapping(JSContext* cx, HandleObject scope,
 
     XPCWrappedNative* wn = XPCWrappedNative::Get(obj);
 
-    JSAutoCompartment ac(cx, obj);
+    JSAutoRealm ar(cx, obj);
     XPCCallContext ccx(cx, obj);
     RootedObject wrapScope(cx, scope);
 
@@ -429,31 +428,6 @@ SelectWrapper(bool securityWrapper, XrayType xrayType, bool waiveXrays, JSObject
     return &FilteringWrapper<CrossCompartmentSecurityWrapper, Opaque>::singleton;
 }
 
-static const Wrapper*
-SelectAddonWrapper(JSContext* cx, HandleObject obj, const Wrapper* wrapper)
-{
-    JSAddonId* originAddon = JS::AddonIdOfObject(obj);
-    JSAddonId* targetAddon = JS::AddonIdOfObject(JS::CurrentGlobalOrNull(cx));
-
-    MOZ_ASSERT(AccessCheck::isChrome(JS::CurrentGlobalOrNull(cx)));
-    MOZ_ASSERT(targetAddon);
-
-    if (targetAddon == originAddon)
-        return wrapper;
-
-    // Add-on interposition only supports certain wrapper types, so we check if
-    // we would have used one of the supported ones.
-    if (wrapper == &CrossCompartmentWrapper::singleton)
-        return &AddonWrapper<CrossCompartmentWrapper>::singleton;
-    else if (wrapper == &PermissiveXrayXPCWN::singleton)
-        return &AddonWrapper<PermissiveXrayXPCWN>::singleton;
-    else if (wrapper == &PermissiveXrayDOM::singleton)
-        return &AddonWrapper<PermissiveXrayDOM>::singleton;
-
-    // |wrapper| is not supported for interposition, so we don't do it.
-    return wrapper;
-}
-
 JSObject*
 WrapperFactory::Rewrap(JSContext* cx, HandleObject existing, HandleObject obj)
 {
@@ -558,11 +532,6 @@ WrapperFactory::Rewrap(JSContext* cx, HandleObject existing, HandleObject obj)
                           HasWaiveXrayFlag(obj);
 
         wrapper = SelectWrapper(securityWrapper, xrayType, waiveXrays, obj);
-
-        // If we want to apply add-on interposition in the target compartment,
-        // then we try to "upgrade" the wrapper to an interposing one.
-        if (targetCompartmentPrivate->hasInterposition)
-            wrapper = SelectAddonWrapper(cx, obj, wrapper);
     }
 
     if (!targetSubsumesOrigin &&
@@ -679,6 +648,28 @@ TransplantObject(JSContext* cx, JS::HandleObject origobj, JS::HandleObject targe
 
     if (!FixWaiverAfterTransplant(cx, oldWaiver, newIdentity))
         return nullptr;
+    return newIdentity;
+}
+
+JSObject*
+TransplantObjectRetainingXrayExpandos(JSContext* cx, JS::HandleObject origobj,
+                                      JS::HandleObject target)
+{
+    // Save the chain of objects that carry origobj's Xray expando properties
+    // (from all compartments). TransplantObject will blow this away; we'll
+    // restore it manually afterwards.
+    RootedObject expandoChain(cx, GetXrayTraits(origobj)->detachExpandoChain(origobj));
+
+    RootedObject newIdentity(cx, TransplantObject(cx, origobj, target));
+
+    // Copy Xray expando properties to the new wrapper.
+    if (!GetXrayTraits(newIdentity)->cloneExpandoChain(cx, newIdentity, expandoChain)) {
+        // Failure here means some expandos were not copied over. The object graph
+        // and the Xray machinery are left in a consistent state, but mysteriously
+        // losing these expandos is too weird to allow.
+        MOZ_CRASH();
+    }
+
     return newIdentity;
 }
 

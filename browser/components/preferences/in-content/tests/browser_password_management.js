@@ -4,19 +4,17 @@ const PM_URL = "chrome://passwordmgr/content/passwordManager.xul";
 var passwordsDialog;
 
 add_task(async function test_setup() {
-  let pwmgr = Cc["@mozilla.org/login-manager;1"].
-                getService(Ci.nsILoginManager);
-  pwmgr.removeAllLogins();
+  Services.logins.removeAllLogins();
 
   // add login data
   let nsLoginInfo = new Components.Constructor("@mozilla.org/login-manager/loginInfo;1",
                                                  Ci.nsILoginInfo, "init");
   let login = new nsLoginInfo("http://example.com/", "http://example.com/", null,
                               "user", "password", "u1", "p1");
-  pwmgr.addLogin(login);
+  Services.logins.addLogin(login);
 
   registerCleanupFunction(async function() {
-    pwmgr.removeAllLogins();
+    Services.logins.removeAllLogins();
   });
 });
 
@@ -61,12 +59,12 @@ add_task(async function test_deletePasswordWithKey() {
   tree.view.selection.select(0);
 
   if (AppConstants.platform == "macosx") {
-    EventUtils.synthesizeKey("VK_BACK_SPACE", {});
+    EventUtils.synthesizeKey("KEY_Backspace");
   } else {
-    EventUtils.synthesizeKey("VK_DELETE", {});
+    EventUtils.synthesizeKey("KEY_Delete");
   }
 
-  await waitForCondition(() => tree.view.rowCount == 0);
+  await TestUtils.waitForCondition(() => tree.view.rowCount == 0);
 
   is_element_visible(content.gSubDialog._dialogs[0]._box,
     "Subdialog is visible after deleting an element");

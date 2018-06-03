@@ -1,6 +1,5 @@
-Cu.import("resource://gre/modules/Preferences.jsm");
-Cu.import("resource://testing-common/services/sync/utils.js");
-let {telemetryHelper} = Cu.import("resource://services-sync/browserid_identity.js", {});
+ChromeUtils.import("resource://gre/modules/Preferences.jsm");
+let {telemetryHelper} = ChromeUtils.import("resource://services-sync/browserid_identity.js", {});
 
 const prefs = new Preferences("services.sync.");
 

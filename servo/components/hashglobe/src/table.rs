@@ -182,7 +182,7 @@ pub struct GapThenFull<K, V, M> {
 
 /// A hash that is not zero, since we use a hash of zero to represent empty
 /// buckets.
-#[derive(PartialEq, Copy, Clone, Debug)]
+#[derive(PartialEq, Copy, Clone)]
 pub struct SafeHash {
     hash: HashUint,
 }
@@ -757,7 +757,7 @@ impl<K, V> RawTable<K, V> {
                                                                         align_of::<(K, V)>());
 
         if oflo {
-            return Err(FailedAllocationError { reason: "capacity overflow when allocating RawTable" });
+            return Err(FailedAllocationError::new("capacity overflow when allocating RawTable" ));
         }
 
         // One check for overflow that covers calculation and rounding of size.
@@ -767,25 +767,23 @@ impl<K, V> RawTable<K, V> {
 
         if let Some(cap_bytes) = cap_bytes {
             if size < cap_bytes {
-                return Err(FailedAllocationError { reason: "capacity overflow when allocating RawTable" });
+                return Err(FailedAllocationError::new("capacity overflow when allocating RawTable"));
             }
         } else {
-            
-            return Err(FailedAllocationError { reason: "capacity overflow when allocating RawTable" });
+            return Err(FailedAllocationError::new("capacity overflow when allocating RawTable"));
         }
-
 
 
         // FORK NOTE: Uses alloc shim instead of Heap.alloc
-        let buffer: *mut u8 = alloc(size, alignment);
-        
-        if buffer.is_null() {
-            
-            return Err(FailedAllocationError { reason: "out of memory when allocating RawTable" });
-        }
+        let buffer = alloc(size, alignment);
 
-        // FORK NOTE: poison the entire buffer rather than leaving it uninitialized.
-        ptr::write_bytes(buffer, 0xe7, size);
+        if buffer.is_null() {
+            use AllocationInfo;
+            return Err(FailedAllocationError {
+                reason: "out of memory when allocating RawTable",
+                allocation_info: Some(AllocationInfo { size, alignment }),
+            });
+        }
 
         let hashes = buffer.offset(hash_offset as isize) as *mut HashUint;
 
@@ -814,12 +812,6 @@ impl<K, V> RawTable<K, V> {
                 _marker: marker::PhantomData,
             }
         }
-    }
-
-    /// Returns a raw pointer to the table's buffer.
-    #[inline]
-    pub fn raw_buffer(&self) -> *const u8 {
-        self.hashes.ptr() as *const u8
     }
 
     /// Creates a new raw table from a given capacity. All buckets are

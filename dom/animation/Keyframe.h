@@ -27,20 +27,14 @@ struct PropertyValuePair
 {
   explicit PropertyValuePair(nsCSSPropertyID aProperty)
     : mProperty(aProperty) { }
-  PropertyValuePair(nsCSSPropertyID aProperty, nsCSSValue&& aValue)
-    : mProperty(aProperty), mValue(Move(aValue)) { }
   PropertyValuePair(nsCSSPropertyID aProperty,
                     RefPtr<RawServoDeclarationBlock>&& aValue)
-    : mProperty(aProperty), mServoDeclarationBlock(Move(aValue))
+    : mProperty(aProperty), mServoDeclarationBlock(std::move(aValue))
   {
     MOZ_ASSERT(mServoDeclarationBlock, "Should be valid property value");
   }
 
   nsCSSPropertyID mProperty;
-  // The specified value for the property. For shorthand property values,
-  // we store the specified property value as a token stream (string).
-  // If this is uninitialized, we use the underlying value.
-  nsCSSValue mValue;
 
   // The specified value when using the Servo backend.
   RefPtr<RawServoDeclarationBlock> mServoDeclarationBlock;
@@ -66,7 +60,7 @@ struct PropertyValuePair
  * overlapping shorthands/longhands, convert specified CSS values to computed
  * values, etc.
  *
- * When the target element or style context changes, however, we rebuild these
+ * When the target element or computed style changes, however, we rebuild these
  * per-property arrays from the original list of keyframes objects. As a result,
  * these objects represent the master definition of the effect's values.
  */
@@ -76,7 +70,7 @@ struct Keyframe
   Keyframe(const Keyframe& aOther) = default;
   Keyframe(Keyframe&& aOther)
   {
-    *this = Move(aOther);
+    *this = std::move(aOther);
   }
 
   Keyframe& operator=(const Keyframe& aOther) = default;
@@ -84,9 +78,9 @@ struct Keyframe
   {
     mOffset         = aOther.mOffset;
     mComputedOffset = aOther.mComputedOffset;
-    mTimingFunction = Move(aOther.mTimingFunction);
-    mComposite      = Move(aOther.mComposite);
-    mPropertyValues = Move(aOther.mPropertyValues);
+    mTimingFunction = std::move(aOther.mTimingFunction);
+    mComposite      = std::move(aOther.mComposite);
+    mPropertyValues = std::move(aOther.mPropertyValues);
     return *this;
   }
 

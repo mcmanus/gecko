@@ -217,6 +217,12 @@ interface nsIHttpChannelInternal : nsISupports
     [must_use] attribute boolean beConservative;
 
     /**
+     * True if channel is used by the internal trusted recursive resolver
+     * This flag places data for the request in a cache segment specific to TRR
+     */
+    [noscript, must_use] attribute boolean trr;
+
+    /**
      * An opaque flags for non-standard behavior of the TLS system.
      * It is unlikely this will need to be set outside of telemetry studies
      * relating to the TLS implementation.
@@ -224,13 +230,6 @@ interface nsIHttpChannelInternal : nsISupports
     [must_use] attribute unsigned long tlsFlags;
 
     [must_use] readonly attribute PRTime lastModifiedTime;
-
-    /**
-     * Force a channel that has not been AsyncOpen'ed to skip any check for possible
-     * interception and proceed immediately to open a previously-synthesized cache
-     * entry using the provided ID.
-     */
-    [must_use] void forceIntercepted(in uint64_t aInterceptionID);
 
     [must_use] readonly attribute boolean responseSynthesized;
 
@@ -286,11 +285,6 @@ interface nsIHttpChannelInternal : nsISupports
     [must_use] void setTopWindowURIIfUnknown(in nsIURI topWindowURI);
 
     /**
-     * The network interface id that's associated with this channel.
-     */
-    [must_use] attribute ACString networkInterfaceId;
-
-    /**
      * Read the proxy URI, which, if non-null, will be used to resolve
      * proxies for this channel.
      */
@@ -302,6 +296,9 @@ interface nsIHttpChannelInternal : nsISupports
      */
     [noscript, notxpcom, nostdcall]
     void setCorsPreflightParameters(in StringArrayRef unsafeHeaders);
+
+    [noscript, notxpcom, nostdcall]
+    void setAltDataForChild(in boolean aIsForChild);
 
     /**
      * When set to true, the channel will not pop any authentication prompts up

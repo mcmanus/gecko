@@ -11,8 +11,8 @@ use std::os::unix::prelude::*;
 
 use consts::CID_BROADCAST;
 use platform::hidraw;
-use util::{from_unix_result, to_io_err};
 use u2ftypes::U2FDevice;
+use util::from_unix_result;
 
 #[derive(Debug)]
 pub struct Device {
@@ -23,7 +23,7 @@ pub struct Device {
 
 impl Device {
     pub fn new(path: OsString) -> io::Result<Self> {
-        let cstr = CString::new(path.as_bytes()).map_err(to_io_err)?;
+        let cstr = CString::new(path.as_bytes())?;
         let fd = unsafe { libc::open(cstr.as_ptr(), libc::O_RDWR) };
         let fd = from_unix_result(fd)?;
         Ok(Self {

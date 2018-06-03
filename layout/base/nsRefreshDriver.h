@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set shiftwidth=2 tabstop=8 autoindent cindent expandtab: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -24,23 +24,28 @@
 #include "nsHashKeys.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/Maybe.h"
-#include "GeckoProfiler.h"
 #include "mozilla/layers/TransactionIdAllocator.h"
 
 class nsPresContext;
 class nsIPresShell;
 class nsIDocument;
 class imgIRequest;
-class nsIDOMEvent;
 class nsINode;
 class nsIRunnable;
 
 namespace mozilla {
+class AnimationEventDispatcher;
 class RefreshDriverTimer;
 class Runnable;
+
 namespace layout {
 class VsyncChild;
 } // namespace layout
+
+namespace dom {
+class Event;
+} // namespace dom
+
 } // namespace mozilla
 
 /**
@@ -74,6 +79,8 @@ public:
 class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
                               public nsARefreshObserver
 {
+  using TransactionId = mozilla::layers::TransactionId;
+
 public:
   explicit nsRefreshDriver(nsPresContext *aPresContext);
   ~nsRefreshDriver();
@@ -155,48 +162,50 @@ public:
   void RemoveImageRequest(imgIRequest* aRequest);
 
   /**
+   * Add / remove presshells which have pending resize event.
+   */
+  void AddResizeEventFlushObserver(nsIPresShell* aShell)
+  {
+    MOZ_DIAGNOSTIC_ASSERT(!mResizeEventFlushObservers.Contains(aShell),
+                          "Double-adding resize event flush observer");
+    mResizeEventFlushObservers.AppendElement(aShell);
+    EnsureTimerStarted();
+  }
+
+  void RemoveResizeEventFlushObserver(nsIPresShell* aShell)
+  {
+    mResizeEventFlushObservers.RemoveElement(aShell);
+  }
+
+  /**
    * Add / remove presshells that we should flush style and layout on
    */
-  bool AddStyleFlushObserver(nsIPresShell* aShell) {
-    NS_ASSERTION(!mStyleFlushObservers.Contains(aShell),
-                 "Double-adding style flush observer");
-    // We only get the cause for the first observer each frame because capturing
-    // a stack is expensive. This is still useful if (1) you're trying to remove
-    // all flushes for a particial frame or (2) the costly flush is triggered
-    // near the call site where the first observer is triggered.
-#ifdef MOZ_GECKO_PROFILER
-    if (!mStyleCause) {
-      mStyleCause = profiler_get_backtrace();
-    }
-#endif
-    bool appended = mStyleFlushObservers.AppendElement(aShell) != nullptr;
+  void AddStyleFlushObserver(nsIPresShell* aShell)
+  {
+    MOZ_DIAGNOSTIC_ASSERT(!mStyleFlushObservers.Contains(aShell),
+                          "Double-adding style flush observer");
+    mStyleFlushObservers.AppendElement(aShell);
     EnsureTimerStarted();
-
-    return appended;
   }
-  void RemoveStyleFlushObserver(nsIPresShell* aShell) {
+
+  void RemoveStyleFlushObserver(nsIPresShell* aShell)
+  {
     mStyleFlushObservers.RemoveElement(aShell);
   }
-  bool AddLayoutFlushObserver(nsIPresShell* aShell) {
-    NS_ASSERTION(!IsLayoutFlushObserver(aShell),
-                 "Double-adding layout flush observer");
-#ifdef MOZ_GECKO_PROFILER
-    // We only get the cause for the first observer each frame because capturing
-    // a stack is expensive. This is still useful if (1) you're trying to remove
-    // all flushes for a particial frame or (2) the costly flush is triggered
-    // near the call site where the first observer is triggered.
-    if (!mReflowCause) {
-      mReflowCause = profiler_get_backtrace();
-    }
-#endif
-    bool appended = mLayoutFlushObservers.AppendElement(aShell) != nullptr;
+  void AddLayoutFlushObserver(nsIPresShell* aShell)
+  {
+    MOZ_DIAGNOSTIC_ASSERT(!IsLayoutFlushObserver(aShell),
+                          "Double-adding layout flush observer");
+    mLayoutFlushObservers.AppendElement(aShell);
     EnsureTimerStarted();
-    return appended;
   }
-  void RemoveLayoutFlushObserver(nsIPresShell* aShell) {
+  void RemoveLayoutFlushObserver(nsIPresShell* aShell)
+  {
     mLayoutFlushObservers.RemoveElement(aShell);
   }
-  bool IsLayoutFlushObserver(nsIPresShell* aShell) {
+
+  bool IsLayoutFlushObserver(nsIPresShell* aShell)
+  {
     return mLayoutFlushObservers.Contains(aShell);
   }
 
@@ -238,13 +247,31 @@ public:
   /**
    * Queue a new event to dispatch in next tick before the style flush
    */
-  void ScheduleEventDispatch(nsINode* aTarget, nsIDOMEvent* aEvent);
+  void ScheduleEventDispatch(nsINode* aTarget, mozilla::dom::Event* aEvent);
 
   /**
    * Cancel all pending events scheduled by ScheduleEventDispatch which
    * targets any node in aDocument.
    */
   void CancelPendingEvents(nsIDocument* aDocument);
+
+  /**
+   * Queue new animation events to dispatch in next tick.
+   */
+  void ScheduleAnimationEventDispatch(
+    mozilla::AnimationEventDispatcher* aDispatcher)
+  {
+    NS_ASSERTION(!mAnimationEventFlushObservers.Contains(aDispatcher),
+                 "Double-adding animation event flush observer");
+    mAnimationEventFlushObservers.AppendElement(aDispatcher);
+    EnsureTimerStarted();
+  }
+
+  /**
+   * Cancel all pending animation events associated with |aDispatcher|.
+   */
+  void CancelPendingAnimationEvents(
+    mozilla::AnimationEventDispatcher* aDispatcher);
 
   /**
    * Schedule a frame visibility update "soon", subject to the heuristics and
@@ -328,12 +355,12 @@ public:
   static bool GetJankLevels(mozilla::Vector<uint64_t>& aJank);
 
   // mozilla::layers::TransactionIdAllocator
-  uint64_t GetTransactionId(bool aThrottle) override;
-  uint64_t LastTransactionId() const override;
-  void NotifyTransactionCompleted(uint64_t aTransactionId) override;
-  void RevokeTransactionId(uint64_t aTransactionId) override;
+  TransactionId GetTransactionId(bool aThrottle) override;
+  TransactionId LastTransactionId() const override;
+  void NotifyTransactionCompleted(TransactionId aTransactionId) override;
+  void RevokeTransactionId(TransactionId aTransactionId) override;
   void ClearPendingTransactions() override;
-  void ResetInitialTransactionId(uint64_t aTransactionId) override;
+  void ResetInitialTransactionId(TransactionId aTransactionId) override;
   mozilla::TimeStamp GetTransactionStart() override;
 
   bool IsWaitingForPaint(mozilla::TimeStamp aTime);
@@ -366,10 +393,7 @@ public:
                                             uint32_t aDelay);
   static void CancelIdleRunnable(nsIRunnable* aRunnable);
 
-  bool SkippedPaints() const
-  {
-    return mSkippedPaints;
-  }
+  void NotifyDOMContentLoaded();
 
 private:
   typedef nsTObserverArray<nsARefreshObserver*> ObserverArray;
@@ -388,6 +412,7 @@ private:
   void DispatchPendingEvents();
   void DispatchAnimationEvents();
   void RunFrameRequestCallbacks(mozilla::TimeStamp aNowTime);
+  void UpdateIntersectionObservations();
   void Tick(int64_t aNowEpoch, mozilla::TimeStamp aNowTime);
 
   enum EnsureTimerStartedFlags {
@@ -399,14 +424,14 @@ private:
   void EnsureTimerStarted(EnsureTimerStartedFlags aFlags = eNone);
   void StopTimer();
 
+  bool HasObservers() const;
   uint32_t ObserverCount() const;
-  uint32_t ImageRequestCount() const;
+  bool HasImageRequests() const;
   ObserverArray& ArrayFor(mozilla::FlushType aFlushType);
   // Trigger a refresh immediately, if haven't been disconnected or frozen.
   void DoRefresh();
 
-  double GetRefreshTimerInterval() const;
-  double GetRegularTimerInterval(bool *outIsDefault = nullptr) const;
+  double GetRegularTimerInterval() const;
   static double GetThrottledTimerInterval();
 
   static mozilla::TimeDuration GetMinRecomputeVisibilityInterval();
@@ -420,20 +445,15 @@ private:
   mozilla::RefreshDriverTimer* ChooseTimer() const;
   mozilla::RefreshDriverTimer* mActiveTimer;
 
-#ifdef MOZ_GECKO_PROFILER
-  UniqueProfilerBacktrace mReflowCause;
-  UniqueProfilerBacktrace mStyleCause;
-#endif
-
   // nsPresContext passed in constructor and unset in Disconnect.
   mozilla::WeakPtr<nsPresContext> mPresContext;
 
   RefPtr<nsRefreshDriver> mRootRefresh;
 
   // The most recently allocated transaction id.
-  uint64_t mPendingTransaction;
+  TransactionId mPendingTransaction;
   // The most recently completed transaction id.
-  uint64_t mCompletedTransaction;
+  TransactionId mCompletedTransaction;
 
   uint32_t mFreezeCount;
 
@@ -471,6 +491,9 @@ private:
   // start of every tick.
   bool mResizeSuppressed;
 
+  // True if the next tick should notify DOMContentFlushed.
+  bool mNotifyDOMContentFlushed;
+
   int64_t mMostRecentRefreshEpochTime;
   // Number of seconds that the refresh driver is blocked waiting for a compositor
   // transaction to be completed before we append a note to the gfx critical log.
@@ -491,9 +514,10 @@ private:
 
   struct PendingEvent {
     nsCOMPtr<nsINode> mTarget;
-    nsCOMPtr<nsIDOMEvent> mEvent;
+    RefPtr<mozilla::dom::Event> mEvent;
   };
 
+  AutoTArray<nsIPresShell*, 16> mResizeEventFlushObservers;
   AutoTArray<nsIPresShell*, 16> mStyleFlushObservers;
   AutoTArray<nsIPresShell*, 16> mLayoutFlushObservers;
   // nsTArray on purpose, because we want to be able to swap.
@@ -501,6 +525,8 @@ private:
   nsTArray<nsIDocument*> mThrottledFrameRequestCallbackDocs;
   nsTObserverArray<nsAPostRefreshObserver*> mPostRefreshObservers;
   nsTArray<PendingEvent> mPendingEvents;
+  AutoTArray<mozilla::AnimationEventDispatcher*, 16>
+    mAnimationEventFlushObservers;
 
   void BeginRefreshingImages(RequestTable& aEntries,
                              mozilla::TimeStamp aDesired);

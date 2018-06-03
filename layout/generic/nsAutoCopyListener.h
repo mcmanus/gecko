@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,8 +8,8 @@
 #define nsAutoCopyListener_h_
 
 #include "nsISelectionListener.h"
-#include "nsISelectionPrivate.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/dom/Selection.h"
 
 class nsAutoCopyListener final : public nsISelectionListener
 {
@@ -20,7 +21,7 @@ public:
     : mCachedClipboard(aClipboardID)
   {}
 
-  void Listen(nsISelectionPrivate *aSelection)
+  void Listen(mozilla::dom::Selection *aSelection)
   {
       NS_ASSERTION(aSelection, "Null selection passed to Listen()");
       aSelection->AddSelectionListener(this);

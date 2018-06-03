@@ -18,6 +18,7 @@
 #include "nsHashKeys.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/Attributes.h"
+#include "TRRService.h"
 
 class nsAuthSSPI;
 
@@ -34,7 +35,7 @@ public:
 
     nsDNSService();
 
-    static nsIDNSService* GetXPCOMSingleton();
+    static already_AddRefed<nsIDNSService> GetXPCOMSingleton();
 
     size_t SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
 
@@ -47,11 +48,11 @@ protected:
                                    uint32_t flags,
                                    const mozilla::OriginAttributes &aOriginAttributes,
                                    nsIDNSRecord **result);
-
 private:
     ~nsDNSService();
 
-    static nsDNSService* GetSingleton();
+    nsresult ReadPrefs(const char *name);
+    static already_AddRefed<nsDNSService> GetSingleton();
 
     uint16_t GetAFForLookup(const nsACString &host, uint32_t flags);
 
@@ -79,11 +80,17 @@ private:
     bool                                      mDisableIPv6;
     bool                                      mDisablePrefetch;
     bool                                      mBlockDotOnion;
-    bool                                      mFirstTime;
     bool                                      mNotifyResolution;
     bool                                      mOfflineLocalhost;
     bool                                      mForceResolveOn;
+    uint32_t                                  mProxyType;
     nsTHashtable<nsCStringHashKey>            mLocalDomains;
+    RefPtr<mozilla::net::TRRService>          mTrrService;
+
+    uint32_t                                  mResCacheEntries;
+    uint32_t                                  mResCacheExpiration;
+    uint32_t                                  mResCacheGrace;
+    bool                                      mResolverPrefsUpdated;
 };
 
 #endif //nsDNSService2_h__

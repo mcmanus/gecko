@@ -7,7 +7,7 @@
 #include "mozilla/BasePrincipal.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsIBrowserDOMWindow.h"
-#include "nsIFrameLoader.h"
+#include "nsIFrameLoaderOwner.h"
 #include "nsString.h"
 
 namespace mozilla {
@@ -30,5 +30,6 @@ private:
   mozilla::OriginAttributes mOpenerOriginAttributes;
   nsCOMPtr<nsIFrameLoaderOwner> mOpenerBrowser;
   nsString mReferrer;
+  uint32_t mReferrerPolicy;
   nsCOMPtr<nsIPrincipal> mTriggeringPrincipal;
 };

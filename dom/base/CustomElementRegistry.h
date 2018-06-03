@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,6 +12,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/dom/BindingDeclarations.h"
+#include "mozilla/dom/CustomElementRegistryBinding.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/FunctionBinding.h"
 #include "mozilla/dom/WebComponentsBinding.h"
@@ -29,6 +30,7 @@ struct CustomElementData;
 struct ElementDefinitionOptions;
 class CallbackFunction;
 class CustomElementReaction;
+class DocGroup;
 class Function;
 class Promise;
 
@@ -51,8 +53,7 @@ class CustomElementCallback
 public:
   CustomElementCallback(Element* aThisObject,
                         nsIDocument::ElementCallbackType aCallbackType,
-                        CallbackFunction* aCallback,
-                        CustomElementData* aOwnerData);
+                        CallbackFunction* aCallback);
   void Traverse(nsCycleCollectionTraversalCallback& aCb) const;
   void Call();
   void SetArgs(LifecycleCallbackArgs& aArgs)
@@ -79,9 +80,6 @@ private:
   // used by the attribute changed callback.
   LifecycleCallbackArgs mArgs;
   LifecycleAdoptedCallbackArgs mAdoptedCallbackArgs;
-  // CustomElementData that contains this callback in the
-  // callback queue.
-  CustomElementData* mOwnerData;
 };
 
 class CustomElementConstructor final : public CallbackFunction
@@ -114,14 +112,7 @@ struct CustomElementData
 
   explicit CustomElementData(nsAtom* aType);
   CustomElementData(nsAtom* aType, State aState);
-  // Custom element type, for <button is="x-button"> or <x-button>
-  // this would be x-button.
-  RefPtr<nsAtom> mType;
-  // Element is being created flag as described in the custom elements spec.
-  bool mElementIsBeingCreated;
-  // Flag to determine if the created callback has been invoked, thus it
-  // determines if other callbacks can be enqueued.
-  bool mCreatedCallbackInvoked;
+
   // Custom element state as described in the custom element spec.
   State mState;
   // custom element reaction queue as described in the custom element spec.
@@ -132,27 +123,23 @@ struct CustomElementData
   // e.g., create an element, insert a node.
   AutoTArray<UniquePtr<CustomElementReaction>, 3> mReactionQueue;
 
-  RefPtr<CustomElementDefinition> mCustomElementDefinition;
+  void SetCustomElementDefinition(CustomElementDefinition* aDefinition);
+  CustomElementDefinition* GetCustomElementDefinition();
+  nsAtom* GetCustomElementType();
 
-  void
-  SetCustomElementDefinition(CustomElementDefinition* aDefinition)
-  {
-    MOZ_ASSERT(!mCustomElementDefinition);
-
-    mCustomElementDefinition = aDefinition;
-  }
-
-  CustomElementDefinition*
-  GetCustomElementDefinition()
-  {
-    return mCustomElementDefinition;
-  }
+  void Traverse(nsCycleCollectionTraversalCallback& aCb) const;
+  void Unlink();
 
 private:
   virtual ~CustomElementData() {}
+
+  // Custom element type, for <button is="x-button"> or <x-button>
+  // this would be x-button.
+  RefPtr<nsAtom> mType;
+  RefPtr<CustomElementDefinition> mCustomElementDefinition;
 };
 
-#define ALEADY_CONSTRUCTED_MARKER nullptr
+#define ALREADY_CONSTRUCTED_MARKER nullptr
 
 // The required information for a custom element as defined in:
 // https://html.spec.whatwg.org/multipage/scripting.html#custom-element-definition
@@ -165,11 +152,10 @@ struct CustomElementDefinition
                           nsAtom* aLocalName,
                           Function* aConstructor,
                           nsTArray<RefPtr<nsAtom>>&& aObservedAttributes,
-                          JSObject* aPrototype,
-                          mozilla::dom::LifecycleCallbacks* aCallbacks,
-                          uint32_t aDocOrder);
+                          UniquePtr<LifecycleCallbacks>&& aCallbacks);
 
-  // The type (name) for this custom element.
+  // The type (name) for this custom element, for <button is="x-foo"> or <x-foo>
+  // this would be x-foo.
   RefPtr<nsAtom> mType;
 
   // The localname to (e.g. <button is=type> -- this would be button).
@@ -181,17 +167,11 @@ struct CustomElementDefinition
   // The list of attributes that this custom element observes.
   nsTArray<RefPtr<nsAtom>> mObservedAttributes;
 
-  // The prototype to use for new custom elements of this type.
-  JS::Heap<JSObject *> mPrototype;
-
   // The lifecycle callbacks to call for this custom element.
-  UniquePtr<mozilla::dom::LifecycleCallbacks> mCallbacks;
+  UniquePtr<LifecycleCallbacks> mCallbacks;
 
   // A construction stack. Use nullptr to represent an "already constructed marker".
-  nsTArray<RefPtr<nsGenericHTMLElement>> mConstructionStack;
-
-  // The document custom element order.
-  uint32_t mDocOrder;
+  nsTArray<RefPtr<Element>> mConstructionStack;
 
   bool IsCustomBuiltIn()
   {
@@ -214,51 +194,17 @@ private:
 class CustomElementReaction
 {
 public:
-  explicit CustomElementReaction(CustomElementDefinition* aDefinition)
-    : mDefinition(aDefinition)
-  {
-  }
-
   virtual ~CustomElementReaction() = default;
   virtual void Invoke(Element* aElement, ErrorResult& aRv) = 0;
-  virtual void Traverse(nsCycleCollectionTraversalCallback& aCb) const
+  virtual void Traverse(nsCycleCollectionTraversalCallback& aCb) const = 0;
+
+  bool IsUpgradeReaction()
   {
+    return mIsUpgradeReaction;
   }
 
 protected:
-  CustomElementDefinition* mDefinition;
-};
-
-class CustomElementUpgradeReaction final : public CustomElementReaction
-{
-public:
-  explicit CustomElementUpgradeReaction(CustomElementDefinition* aDefinition)
-    : CustomElementReaction(aDefinition)
-  {
-  }
-
-private:
-   virtual void Invoke(Element* aElement, ErrorResult& aRv) override;
-};
-
-class CustomElementCallbackReaction final : public CustomElementReaction
-{
-  public:
-    CustomElementCallbackReaction(CustomElementDefinition* aDefinition,
-                                  UniquePtr<CustomElementCallback> aCustomElementCallback)
-      : CustomElementReaction(aDefinition)
-      , mCustomElementCallback(Move(aCustomElementCallback))
-    {
-    }
-
-    virtual void Traverse(nsCycleCollectionTraversalCallback& aCb) const override
-    {
-      mCustomElementCallback->Traverse(aCb);
-    }
-
-  private:
-    virtual void Invoke(Element* aElement, ErrorResult& aRv) override;
-    UniquePtr<CustomElementCallback> mCustomElementCallback;
+  bool mIsUpgradeReaction = false;
 };
 
 // https://html.spec.whatwg.org/multipage/scripting.html#custom-element-reactions-stack
@@ -269,6 +215,8 @@ public:
 
   CustomElementReactionsStack()
     : mIsBackupQueueProcessing(false)
+    , mRecursionDepth(0)
+    , mIsElementQueuePushedForCurrentRecursionDepth(false)
   {
   }
 
@@ -276,8 +224,9 @@ public:
   // before the reactions in its reaction queue are invoked.
   // The element reaction queues are stored in CustomElementData.
   // We need to lookup ElementReactionQueueMap again to get relevant reaction queue.
-  // The choice of 1 for the auto size here is based on gut feeling.
-  typedef AutoTArray<RefPtr<Element>, 1> ElementQueue;
+  // The choice of 3 for the auto size here is based on running Custom Elements
+  // wpt tests.
+  typedef AutoTArray<RefPtr<Element>, 3> ElementQueue;
 
   /**
    * Enqueue a custom element upgrade reaction
@@ -291,20 +240,68 @@ public:
    * https://html.spec.whatwg.org/multipage/scripting.html#enqueue-a-custom-element-callback-reaction
    */
   void EnqueueCallbackReaction(Element* aElement,
-                               CustomElementDefinition* aDefinition,
                                UniquePtr<CustomElementCallback> aCustomElementCallback);
 
-  // [CEReactions] Before executing the algorithm's steps
-  // Push a new element queue onto the custom element reactions stack.
-  void CreateAndPushElementQueue();
+  /**
+   * [CEReactions] Before executing the algorithm's steps.
+   * Increase the current recursion depth, and the element queue is pushed
+   * lazily when we really enqueue reactions.
+   *
+   * @return true if the element queue is pushed for "previous" recursion depth.
+   */
+  bool EnterCEReactions()
+  {
+    bool temp = mIsElementQueuePushedForCurrentRecursionDepth;
+    mRecursionDepth++;
+    // The is-element-queue-pushed flag is initially false when entering a new
+    // recursion level. The original value will be cached in AutoCEReaction
+    // and restored after leaving this recursion level.
+    mIsElementQueuePushedForCurrentRecursionDepth = false;
+    return temp;
+  }
 
-  // [CEReactions] After executing the algorithm's steps
-  // Pop the element queue from the custom element reactions stack,
-  // and invoke custom element reactions in that queue.
-  void PopAndInvokeElementQueue();
+  /**
+   * [CEReactions] After executing the algorithm's steps.
+   * Pop and invoke the element queue if it is created and pushed for current
+   * recursion depth, then decrease the current recursion depth.
+   *
+   * @param aCx JSContext used for handling exception thrown by algorithm's
+   *            steps, this could be a nullptr.
+   *        aWasElementQueuePushed used for restoring status after leaving
+   *                               current recursion.
+   */
+  void LeaveCEReactions(JSContext* aCx, bool aWasElementQueuePushed)
+  {
+    MOZ_ASSERT(mRecursionDepth);
+
+    if (mIsElementQueuePushedForCurrentRecursionDepth) {
+      Maybe<JS::AutoSaveExceptionState> ases;
+      if (aCx) {
+        ases.emplace(aCx);
+      }
+      PopAndInvokeElementQueue();
+    }
+    mRecursionDepth--;
+    // Restore the is-element-queue-pushed flag cached in AutoCEReaction when
+    // leaving the recursion level.
+    mIsElementQueuePushedForCurrentRecursionDepth = aWasElementQueuePushed;
+
+    MOZ_ASSERT_IF(!mRecursionDepth, mReactionsStack.IsEmpty());
+  }
 
 private:
   ~CustomElementReactionsStack() {};
+
+  /**
+   * Push a new element queue onto the custom element reactions stack.
+   */
+  void CreateAndPushElementQueue();
+
+  /**
+   * Pop the element queue from the custom element reactions stack, and invoke
+   * custom element reactions in that queue.
+   */
+  void PopAndInvokeElementQueue();
 
   // The choice of 8 for the auto size here is based on gut feeling.
   AutoTArray<UniquePtr<ElementQueue>, 8> mReactionsStack;
@@ -322,13 +319,19 @@ private:
 
   void Enqueue(Element* aElement, CustomElementReaction* aReaction);
 
+  // Current [CEReactions] recursion depth.
+  uint32_t mRecursionDepth;
+  // True if the element queue is pushed into reaction stack for current
+  // recursion depth. This will be cached in AutoCEReaction when entering a new
+  // CEReaction recursion and restored after leaving the recursion.
+  bool mIsElementQueuePushedForCurrentRecursionDepth;
+
 private:
-  class ProcessBackupQueueRunnable : public mozilla::Runnable {
+  class BackupQueueMicroTask final : public mozilla::MicroTaskRunnable {
     public:
-      explicit ProcessBackupQueueRunnable(
+      explicit BackupQueueMicroTask(
         CustomElementReactionsStack* aReactionStack)
-        : Runnable(
-            "dom::CustomElementReactionsStack::ProcessBackupQueueRunnable")
+        : MicroTaskRunnable()
         , mReactionStack(aReactionStack)
       {
         MOZ_ASSERT(!mReactionStack->mIsBackupQueueProcessing,
@@ -336,11 +339,10 @@ private:
         mReactionStack->mIsBackupQueueProcessing = true;
       }
 
-      NS_IMETHOD Run() override
+      virtual void Run(AutoSlowOperation& aAso) override
       {
         mReactionStack->InvokeBackupQueue();
         mReactionStack->mIsBackupQueueProcessing = false;
-        return NS_OK;
       }
 
     private:
@@ -359,31 +361,41 @@ public:
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(CustomElementRegistry)
 
 public:
-  static bool IsCustomElementEnabled(JSContext* aCx = nullptr,
-                                     JSObject* aObject = nullptr)
-  {
-    return nsContentUtils::IsCustomElementsEnabled() ||
-           nsContentUtils::IsWebComponentsEnabled();
-  }
+  static bool IsCustomElementEnabled(JSContext* aCx, JSObject* aObject);
+  static bool IsCustomElementEnabled(nsIDocument* aDoc);
 
   explicit CustomElementRegistry(nsPIDOMWindowInner* aWindow);
 
+private:
+  class RunCustomElementCreationCallback : public mozilla::Runnable
+  {
+  public:
+    NS_DECL_NSIRUNNABLE
+    explicit RunCustomElementCreationCallback(CustomElementRegistry* aRegistry,
+                                              nsAtom* aAtom,
+                                              CustomElementCreationCallback* aCallback)
+      : mozilla::Runnable("CustomElementRegistry::RunCustomElementCreationCallback")
+      , mRegistry(aRegistry)
+      , mAtom(aAtom)
+      , mCallback(aCallback)
+    {
+    }
+    private:
+      RefPtr<CustomElementRegistry> mRegistry;
+      RefPtr<nsAtom> mAtom;
+      RefPtr<CustomElementCreationCallback> mCallback;
+  };
+
+public:
   /**
    * Looking up a custom element definition.
    * https://html.spec.whatwg.org/#look-up-a-custom-element-definition
    */
   CustomElementDefinition* LookupCustomElementDefinition(
-    const nsAString& aLocalName, const nsAString* aIs = nullptr) const;
+    nsAtom* aNameAtom, nsAtom* aTypeAtom);
 
   CustomElementDefinition* LookupCustomElementDefinition(
     JSContext* aCx, JSObject *aConstructor) const;
-
-  /**
-   * Enqueue created callback or register upgrade candidate for
-   * newly created custom elements, possibly extending an existing type.
-   * ex. <x-button>, <button is="x-button> (type extension)
-   */
-  void SetupCustomElement(Element* aElement, const nsAString* aTypeExtension);
 
   static void EnqueueLifecycleCallback(nsIDocument::ElementCallbackType aType,
                                        Element* aCustomElement,
@@ -391,18 +403,59 @@ public:
                                        LifecycleAdoptedCallbackArgs* aAdoptedCallbackArgs,
                                        CustomElementDefinition* aDefinition);
 
-  void GetCustomPrototype(nsAtom* aAtom,
-                          JS::MutableHandle<JSObject*> aPrototype);
-
-  void SyncInvokeReactions(nsIDocument::ElementCallbackType aType,
-                           Element* aCustomElement,
-                           CustomElementDefinition* aDefinition);
-
   /**
    * Upgrade an element.
    * https://html.spec.whatwg.org/multipage/scripting.html#upgrades
    */
   static void Upgrade(Element* aElement, CustomElementDefinition* aDefinition, ErrorResult& aRv);
+
+  /**
+   * Registers an unresolved custom element that is a candidate for
+   * upgrade. |aTypeName| is the name of the custom element type, if it is not
+   * provided, then element name is used. |aTypeName| should be provided
+   * when registering a custom element that extends an existing
+   * element. e.g. <button is="x-button">.
+   */
+  void RegisterUnresolvedElement(Element* aElement,
+                                 nsAtom* aTypeName = nullptr);
+
+  /**
+   * Unregister an unresolved custom element that is a candidate for
+   * upgrade when a custom element is removed from tree.
+   */
+  void UnregisterUnresolvedElement(Element* aElement,
+                                   nsAtom* aTypeName = nullptr);
+
+  /**
+   * Register an element to be upgraded when the custom element creation
+   * callback is executed.
+   *
+   * To be used when LookupCustomElementDefinition() didn't return a definition,
+   * but with the callback scheduled to be run.
+   */
+  inline void RegisterCallbackUpgradeElement(Element* aElement,
+                                             nsAtom* aTypeName = nullptr)
+  {
+    if (mElementCreationCallbacksUpgradeCandidatesMap.IsEmpty()) {
+      return;
+    }
+
+    RefPtr<nsAtom> typeName = aTypeName;
+    if (!typeName) {
+      typeName = aElement->NodeInfo()->NameAtom();
+    }
+
+    nsTHashtable<nsRefPtrHashKey<nsIWeakReference>>* elements =
+      mElementCreationCallbacksUpgradeCandidatesMap.Get(typeName);
+
+    // If there isn't a table, there won't be a definition added by the callback.
+    if (!elements) {
+      return;
+    }
+
+    nsWeakPtr elem = do_GetWeakReference(aElement);
+    elements->PutEntry(elem);
+  }
 
 private:
   ~CustomElementRegistry();
@@ -413,24 +466,16 @@ private:
     LifecycleAdoptedCallbackArgs* aAdoptedCallbackArgs,
     CustomElementDefinition* aDefinition);
 
-  /**
-   * Registers an unresolved custom element that is a candidate for
-   * upgrade when the definition is registered via registerElement.
-   * |aTypeName| is the name of the custom element type, if it is not
-   * provided, then element name is used. |aTypeName| should be provided
-   * when registering a custom element that extends an existing
-   * element. e.g. <button is="x-button">.
-   */
-  void RegisterUnresolvedElement(Element* aElement,
-                                 nsAtom* aTypeName = nullptr);
-
   void UpgradeCandidates(nsAtom* aKey,
                          CustomElementDefinition* aDefinition,
                          ErrorResult& aRv);
 
   typedef nsRefPtrHashtable<nsRefPtrHashKey<nsAtom>, CustomElementDefinition>
     DefinitionMap;
-  typedef nsClassHashtable<nsRefPtrHashKey<nsAtom>, nsTArray<nsWeakPtr>>
+  typedef nsRefPtrHashtable<nsRefPtrHashKey<nsAtom>, CustomElementCreationCallback>
+    ElementCreationCallbackMap;
+  typedef nsClassHashtable<nsRefPtrHashKey<nsAtom>,
+                           nsTHashtable<nsRefPtrHashKey<nsIWeakReference>>>
     CandidateMap;
   typedef JS::GCHashMap<JS::Heap<JSObject*>,
                         RefPtr<nsAtom>,
@@ -438,9 +483,14 @@ private:
                         js::SystemAllocPolicy> ConstructorMap;
 
   // Hashtable for custom element definitions in web components.
-  // Custom prototypes are stored in the compartment where
-  // registerElement was called.
+  // Custom prototypes are stored in the compartment where definition was
+  // defined.
   DefinitionMap mCustomDefinitions;
+
+  // Hashtable for chrome-only callbacks that is called *before* we return
+  // a CustomElementDefinition, when the typeAtom matches.
+  // The callbacks are registered with the setElementCreationCallback method.
+  ElementCreationCallbackMap mElementCreationCallbacks;
 
   // Hashtable for looking up definitions by using constructor as key.
   // Custom elements' name are stored here and we need to lookup
@@ -455,6 +505,10 @@ private:
   // namespace id and local name to a list of elements to upgrade if that
   // element is registered as a custom element.
   CandidateMap mCandidatesMap;
+
+  // If an element creation callback is found, the nsTHashtable for the
+  // type is created here, and elements will later be upgraded.
+  CandidateMap mElementCreationCallbacksUpgradeCandidatesMap;
 
   nsCOMPtr<nsPIDOMWindowInner> mWindow;
 
@@ -480,56 +534,50 @@ private:
       CustomElementRegistry* mRegistry;
   };
 
-  class SyncInvokeReactionRunnable : public mozilla::Runnable {
-    public:
-      SyncInvokeReactionRunnable(
-        UniquePtr<CustomElementReaction> aReaction, Element* aCustomElement)
-        : Runnable(
-            "dom::CustomElementRegistry::SyncInvokeReactionRunnable")
-        , mReaction(Move(aReaction))
-        , mCustomElement(aCustomElement)
-      {
-      }
-
-      NS_IMETHOD Run() override
-      {
-        // It'll never throw exceptions, because all the exceptions are handled
-        // by Lifecycle*Callback::Call function.
-        ErrorResult rv;
-        mReaction->Invoke(mCustomElement, rv);
-        return NS_OK;
-      }
-
-    private:
-      UniquePtr<CustomElementReaction> mReaction;
-      Element* mCustomElement;
-  };
-
 public:
   nsISupports* GetParentObject() const;
 
+  DocGroup* GetDocGroup() const;
+
   virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
-  void Define(const nsAString& aName, Function& aFunctionConstructor,
+  void Define(JSContext* aCx, const nsAString& aName,
+              Function& aFunctionConstructor,
               const ElementDefinitionOptions& aOptions, ErrorResult& aRv);
 
   void Get(JSContext* cx, const nsAString& name,
            JS::MutableHandle<JS::Value> aRetVal);
 
   already_AddRefed<Promise> WhenDefined(const nsAString& aName, ErrorResult& aRv);
+
+  // Chrome-only method that give JS an opportunity to only load the custom
+  // element definition script when needed.
+  void SetElementCreationCallback(const nsAString& aName, CustomElementCreationCallback& aCallback, ErrorResult& aRv);
 };
 
 class MOZ_RAII AutoCEReaction final {
   public:
-    explicit AutoCEReaction(CustomElementReactionsStack* aReactionsStack)
-      : mReactionsStack(aReactionsStack) {
-      mReactionsStack->CreateAndPushElementQueue();
+    // JSContext is allowed to be a nullptr if we are guaranteeing that we're
+    // not doing something that might throw but not finish reporting a JS
+    // exception during the lifetime of the AutoCEReaction.
+    AutoCEReaction(CustomElementReactionsStack* aReactionsStack, JSContext* aCx)
+      : mReactionsStack(aReactionsStack)
+      , mCx(aCx)
+    {
+      mIsElementQueuePushedForPreviousRecursionDepth =
+        mReactionsStack->EnterCEReactions();
     }
-    ~AutoCEReaction() {
-      mReactionsStack->PopAndInvokeElementQueue();
+
+    ~AutoCEReaction()
+    {
+      mReactionsStack->LeaveCEReactions(
+        mCx, mIsElementQueuePushedForPreviousRecursionDepth);
     }
+
   private:
     RefPtr<CustomElementReactionsStack> mReactionsStack;
+    JSContext* mCx;
+    bool mIsElementQueuePushedForPreviousRecursionDepth;
 };
 
 } // namespace dom

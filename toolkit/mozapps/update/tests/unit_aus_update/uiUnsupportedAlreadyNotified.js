@@ -7,7 +7,7 @@ const WindowWatcher = {
     check_showUpdateAvailable();
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIWindowWatcher])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIWindowWatcher])
 };
 
 const WindowMediator = {
@@ -15,7 +15,7 @@ const WindowMediator = {
     return null;
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIWindowMediator])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIWindowMediator])
 };
 
 function run_test() {
@@ -36,7 +36,7 @@ function run_test() {
   let windowMediatorCID =
     MockRegistrar.register("@mozilla.org/appshell/window-mediator;1",
                            WindowMediator);
-  do_register_cleanup(() => {
+  registerCleanupFunction(() => {
     MockRegistrar.unregister(windowWatcherCID);
     MockRegistrar.unregister(windowMediatorCID);
   });
@@ -53,12 +53,12 @@ function run_test() {
                                             "detailsURL=\"" + URL_HOST +
                                             "\"></update>\n");
   gAUS.notify(null);
-  do_execute_soon(check_test);
+  executeSoon(check_test);
 }
 
 function check_test() {
   if (Services.prefs.prefHasUserValue(PREF_APP_UPDATE_BACKGROUNDERRORS)) {
-    do_execute_soon(check_test);
+    executeSoon(check_test);
     return;
   }
   Assert.ok(true,

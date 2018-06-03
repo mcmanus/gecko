@@ -40,10 +40,10 @@ public:
                     nsContainerFrame* aParent,
                     nsIFrame*         aPrevInFlow) override;
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
-  /** @see nsIFrame::DidSetStyleContext */
-  virtual void DidSetStyleContext(nsStyleContext* aOldStyleContext) override;
+  /** @see nsIFrame::DidSetComputedStyle */
+  virtual void DidSetComputedStyle(ComputedStyle* aOldComputedStyle) override;
 
   virtual void AppendFrames(ChildListID     aListID,
                             nsFrameList&    aFrameList) override;
@@ -59,7 +59,7 @@ public:
     * @return           the frame that was created
     */
   friend nsTableRowFrame* NS_NewTableRowFrame(nsIPresShell* aPresShell,
-                                              nsStyleContext* aContext);
+                                              ComputedStyle* aStyle);
 
   nsTableRowGroupFrame* GetTableRowGroupFrame() const
   {
@@ -80,7 +80,9 @@ public:
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                 const nsDisplayListSet& aLists) override;
 
-  nsTableCellFrame* GetFirstCell() ;
+  // Implemented in nsTableCellFrame.h, because it needs to know about the
+  // nsTableCellFrame class, but we can't include nsTableCellFrame.h here.
+  inline nsTableCellFrame* GetFirstCell() const;
 
   /** calls Reflow for all of its child cells.
     * Cells with rowspan=1 are all set to the same height and stacked horizontally.
@@ -240,8 +242,8 @@ public:
     return nsContainerFrame::IsFrameOfType(aFlags & ~(nsIFrame::eTablePart));
   }
 
-  virtual void InvalidateFrame(uint32_t aDisplayItemKey = 0) override;
-  virtual void InvalidateFrameWithRect(const nsRect& aRect, uint32_t aDisplayItemKey = 0) override;
+  virtual void InvalidateFrame(uint32_t aDisplayItemKey = 0, bool aRebuildDisplayItems = true) override;
+  virtual void InvalidateFrameWithRect(const nsRect& aRect, uint32_t aDisplayItemKey = 0, bool aRebuildDisplayItems = true) override;
   virtual void InvalidateFrameForRemoval() override { InvalidateFrameSubtree(); }
 
 #ifdef ACCESSIBILITY
@@ -253,7 +255,7 @@ protected:
   /** protected constructor.
     * @see NewFrame
     */
-  explicit nsTableRowFrame(nsStyleContext* aContext, ClassID aID = kClassID);
+  explicit nsTableRowFrame(ComputedStyle* aStyle, ClassID aID = kClassID);
 
   void InitChildReflowInput(nsPresContext&              aPresContext,
                             const mozilla::LogicalSize& aAvailSize,

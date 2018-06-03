@@ -1,7 +1,8 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-* This Source Code Form is subject to the terms of the Mozilla Public
-* License, v. 2.0. If a copy of the MPL was not distributed with this
-* file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "LayerManagerMLGPU.h"
 #include "RenderPassMLGPU.h"
@@ -77,7 +78,7 @@ LayerMLGPU::AssignToView(FrameBuilder* aBuilder,
                          RenderViewMLGPU* aView,
                          Maybe<gfx::Polygon>&& aGeometry)
 {
-  AddBoundsToView(aBuilder, aView, Move(aGeometry));
+  AddBoundsToView(aBuilder, aView, std::move(aGeometry));
 }
 
 void
@@ -86,7 +87,7 @@ LayerMLGPU::AddBoundsToView(FrameBuilder* aBuilder,
                             Maybe<gfx::Polygon>&& aGeometry)
 {
   IntRect bounds = GetClippedBoundingBox(aView, aGeometry);
-  aView->AddItem(this, bounds, Move(aGeometry));
+  aView->AddItem(this, bounds, std::move(aGeometry));
 }
 
 IntRect
@@ -125,9 +126,9 @@ LayerMLGPU::IsContentOpaque()
 }
 
 void
-LayerMLGPU::SetRegionToRender(LayerIntRegion&& aRegion)
+LayerMLGPU::SetRenderRegion(LayerIntRegion&& aRegion)
 {
-  SetShadowVisibleRegion(Move(aRegion));
+  mRenderRegion = std::move(aRegion);
 }
 
 void

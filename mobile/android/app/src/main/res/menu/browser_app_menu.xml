@@ -81,10 +81,13 @@
                   android:title="@string/contextmenu_pin_to_top_sites"/>
 
             <item android:id="@+id/add_to_launcher"
-                  android:title="@string/contextmenu_add_to_launcher"/>
+                  android:title="@string/contextmenu_add_page_shortcut"/>
 
             <item android:id="@+id/set_as_homepage"
                   android:title="@string/contextmenu_set_as_homepage"/>
+
+            <item android:id="@+id/view_page_source"
+                  android:title="@string/view_page_source"/>
 
         </menu>
 

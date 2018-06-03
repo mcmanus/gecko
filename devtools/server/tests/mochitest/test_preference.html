@@ -15,29 +15,26 @@ Bug 943251 - Allow accessing about:config from WebIDE
 "use strict";
 
 function runTests() {
-  let Cu = Components.utils;
-  let Ci = Components.interfaces;
-
-  let {require} = Cu.import("resource://devtools/shared/Loader.jsm", {});
-  let {DebuggerClient} = require("devtools/shared/client/debugger-client");
-  let {DebuggerServer} = require("devtools/server/main");
-  let Services = require("Services");
+  const {require} = ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
+  const {DebuggerClient} = require("devtools/shared/client/debugger-client");
+  const {DebuggerServer} = require("devtools/server/main");
+  const Services = require("Services");
 
   SimpleTest.waitForExplicitFinish();
 
-  let {getPreferenceFront} = require("devtools/shared/fronts/preference");
+  const {getPreferenceFront} = require("devtools/shared/fronts/preference");
 
   DebuggerServer.init();
-  DebuggerServer.addBrowserActors();
+  DebuggerServer.registerAllActors();
 
-  let client = new DebuggerClient(DebuggerServer.connectPipe());
+  const client = new DebuggerClient(DebuggerServer.connectPipe());
   client.connect().then(function onConnect() {
-    client.listTabs(function onListTabs(response) {
-      let p = getPreferenceFront(client, response);
+    client.listTabs().then(function onListTabs(response) {
+      const p = getPreferenceFront(client, response);
 
-      let prefs = {};
+      const prefs = {};
 
-      let localPref = {
+      const localPref = {
         boolPref: true,
         intPref: 0x1234,
         charPref: "Hello World",
@@ -48,7 +45,7 @@ function runTests() {
         is(prefs.intPref, localPref.intPref, "read/write int pref");
         is(prefs.charPref, localPref.charPref, "read/write string pref");
 
-        ["test.all.bool", "test.all.int", "test.all.string"].forEach(function (key) {
+        ["test.all.bool", "test.all.int", "test.all.string"].forEach(function(key) {
           let expectedValue;
           switch (Services.prefs.getPrefType(key)) {
             case Ci.nsIPrefBranch.PREF_STRING:
@@ -71,7 +68,7 @@ function runTests() {
              "valid hasUserValue (" + key + ")");
         });
 
-        ["test.bool", "test.int", "test.string"].forEach(function (key) {
+        ["test.bool", "test.int", "test.string"].forEach(function(key) {
           ok(!prefs.allPrefs.hasOwnProperty(key), "expect no pref (" + key + ")");
           is(Services.prefs.getPrefType(key), Ci.nsIPrefBranch.PREF_INVALID,
              "pref (" + key + ") is clear");
@@ -84,7 +81,7 @@ function runTests() {
       }
 
       function updatePrefsProperty(key) {
-        return function (value) {
+        return function(value) {
           prefs[key] = value;
         };
       }
@@ -104,7 +101,7 @@ function runTests() {
   });
 }
 
-window.onload = function () {
+window.onload = function() {
   SpecialPowers.pushPrefEnv({
     "set": [
       ["devtools.debugger.forbid-certified-apps", false],

@@ -181,6 +181,7 @@ HASH_ResultLenByOidTag
 HASH_Update
 NSSBase64_EncodeItem_Util
 NSS_CMSContentInfo_GetContent
+NSS_CMSContentInfo_GetContentTypeTag
 NSS_CMSContentInfo_SetContent_Data
 NSS_CMSContentInfo_SetContent_EnvelopedData
 NSS_CMSContentInfo_SetContent_SignedData
@@ -274,6 +275,9 @@ NSSSMIME_GetVersion
 NSS_SMIMESignerInfo_SaveSMIMEProfile
 NSS_SMIMEUtil_FindBulkAlgForRecipients
 NSSSSL_GetVersion
+#ifdef XP_WIN
+_NSSUTIL_Access
+#endif
 NSSUTIL_ArgDecodeNumber
 NSSUTIL_ArgFetchValue
 NSSUTIL_ArgGetLabel
@@ -295,6 +299,9 @@ NSSUTIL_MkModuleSpec
 NSSUTIL_MkNSSString
 NSSUTIL_MkSlotString
 NSSUTIL_Quote
+#ifdef XP_WIN
+_NSSUTIL_UTF8ToWide
+#endif
 PK11_AlgtagToMechanism
 PK11_Authenticate
 PK11_ChangePW
@@ -383,6 +390,7 @@ PK11_ImportCert
 PK11_ImportCertForKey
 PK11_ImportCRL
 PK11_ImportDERPrivateKeyInfoAndReturnKey
+PK11_ImportEncryptedPrivateKeyInfoAndReturnKey
 PK11_ImportPublicKey
 PK11_ImportSymKey
 PK11_InitPin
@@ -391,6 +399,7 @@ PK11_IsFIPS
 PK11_IsFriendly
 PK11_IsHW
 PK11_IsInternal
+PK11_IsInternalKeySlot
 PK11_IsLoggedIn
 PK11_IsPresent
 PK11_IsReadOnly
@@ -570,6 +579,7 @@ SECMOD_ReferenceModule
 SECMOD_ReleaseReadLock
 SECMOD_UnloadUserModule
 SECMOD_UpdateModule
+SECMOD_UpdateSlotList
 SECMOD_WaitForAnyTokenEvent
 SEC_NullTemplate_Util @DATA@
 SEC_ObjectIDTemplate_Util @DATA@
@@ -716,6 +726,9 @@ __PK11_SetCertificateNickname
 NSS_SecureMemcmpZero
 PORT_ZAllocAlignedOffset_Util
 CERT_FindCertByNicknameOrEmailAddrCX
+SECKEY_GetPrivateKeyType
+SEC_DerSignDataWithAlgorithmID
+SEC_CreateSignatureAlgorithmParameters
 # These symbols are not used by Firefox itself, but are used by Java's security
 # libraries, which in turn are used by Java applets/plugins/etc.  Provide them
 # to make Java code happy.

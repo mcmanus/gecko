@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,7 +14,6 @@
 #include "nsContainerFrame.h"
 #include "nsCSSRendering.h"
 #include "nsPresContext.h"
-#include "nsStyleContext.h"
 #include "nsGkAtoms.h"
 #include "nsIFrameInlines.h"
 #include "nsIPresShell.h"
@@ -22,6 +22,7 @@
 #include "nsFrameManager.h"
 #include "gfxPlatform.h"
 #include "nsPrintfCString.h"
+#include "mozilla/ComputedStyle.h"
 #include "mozilla/dom/AnonymousContent.h"
 #include "mozilla/layers/StackingContextHelper.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
@@ -41,9 +42,9 @@ using namespace mozilla::gfx;
 using namespace mozilla::layers;
 
 nsCanvasFrame*
-NS_NewCanvasFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewCanvasFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsCanvasFrame(aContext);
+  return new (aPresShell) nsCanvasFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsCanvasFrame)
@@ -92,7 +93,14 @@ nsCanvasFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
                                        reinterpret_cast<void*>(true));
 #endif // DEBUG
 
+  mCustomContentContainer->SetProperty(nsGkAtoms::docLevelNativeAnonymousContent,
+                                       reinterpret_cast<void*>(true));
+
   aElements.AppendElement(mCustomContentContainer);
+
+  // Do not create an accessible object for the container.
+  mCustomContentContainer->SetAttr(kNameSpaceID_None, nsGkAtoms::role,
+                                   NS_LITERAL_STRING("presentation"), false);
 
   // XXX add :moz-native-anonymous or will that be automatically set?
   rv = mCustomContentContainer->SetAttr(kNameSpaceID_None, nsGkAtoms::_class,
@@ -131,7 +139,7 @@ nsCanvasFrame::AppendAnonymousContentTo(nsTArray<nsIContent*>& aElements, uint32
 }
 
 void
-nsCanvasFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsCanvasFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   nsIScrollableFrame* sf =
     PresContext()->GetPresShell()->GetRootScrollFrameAsScrollable();
@@ -154,9 +162,9 @@ nsCanvasFrame::DestroyFrom(nsIFrame* aDestructRoot)
       content->SetContentNode(clonedElement->AsElement());
     }
   }
-  DestroyAnonymousContent(mCustomContentContainer.forget());
+  aPostDestroyData.AddAnonymousContent(mCustomContentContainer.forget());
 
-  nsContainerFrame::DestroyFrom(aDestructRoot);
+  nsContainerFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 void
@@ -164,7 +172,7 @@ nsCanvasFrame::ScrollPositionWillChange(nscoord aX, nscoord aY)
 {
   if (mDoPaintFocus) {
     mDoPaintFocus = false;
-    PresContext()->FrameManager()->GetRootFrame()->InvalidateFrameSubtree();
+    PresShell()->GetRootFrame()->InvalidateFrameSubtree();
   }
 }
 
@@ -173,7 +181,7 @@ nsCanvasFrame::SetHasFocus(bool aHasFocus)
 {
   if (mDoPaintFocus != aHasFocus) {
     mDoPaintFocus = aHasFocus;
-    PresContext()->FrameManager()->GetRootFrame()->InvalidateFrameSubtree();
+    PresShell()->GetRootFrame()->InvalidateFrameSubtree();
 
     if (!mAddedScrollPositionListener) {
       nsIScrollableFrame* sf =
@@ -279,10 +287,6 @@ nsDisplayCanvasBackgroundColor::BuildLayer(nsDisplayListBuilder* aBuilder,
     return nullptr;
   }
 
-  if (aManager->GetBackendType() == layers::LayersBackend::LAYERS_WR) {
-    return BuildDisplayItemLayer(aBuilder, aManager, aContainerParameters);
-  }
-
   RefPtr<ColorLayer> layer = static_cast<ColorLayer*>
     (aManager->GetLayerBuilder()->GetLeafLayerFor(aBuilder, this));
   if (!layer) {
@@ -314,9 +318,6 @@ nsDisplayCanvasBackgroundColor::CreateWebRenderCommands(mozilla::wr::DisplayList
                                                         nsDisplayListBuilder* aDisplayListBuilder)
 {
   ContainerLayerParameters parameter;
-  if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
-    return false;
-  }
 
   nsCanvasFrame *frame = static_cast<nsCanvasFrame *>(mFrame);
   nsPoint offset = ToReferenceFrame();
@@ -326,9 +327,9 @@ nsDisplayCanvasBackgroundColor::CreateWebRenderCommands(mozilla::wr::DisplayList
   LayoutDeviceRect rect = LayoutDeviceRect::FromAppUnits(
           bgClipRect, appUnitsPerDevPixel);
 
-  wr::LayoutRect transformedRect = aSc.ToRelativeLayoutRect(rect);
-  aBuilder.PushRect(transformedRect,
-                    transformedRect,
+  wr::LayoutRect roundedRect = wr::ToRoundedLayoutRect(rect);
+  aBuilder.PushRect(roundedRect,
+                    roundedRect,
                     !BackfaceIsHidden(),
                     wr::ToColorF(ToDeviceColor(mColor)));
   return true;
@@ -346,16 +347,6 @@ nsDisplayCanvasBackgroundColor::WriteDebugInfo(std::stringstream& aStream)
 }
 #endif
 
-#ifndef MOZ_GFX_OPTIMIZE_MOBILE
-static void BlitSurface(DrawTarget* aDest, const gfxRect& aRect, DrawTarget* aSource)
-{
-  RefPtr<SourceSurface> source = aSource->Snapshot();
-  aDest->DrawSurface(source,
-                     Rect(aRect.x, aRect.y, aRect.width, aRect.height),
-                     Rect(0, 0, aRect.width, aRect.height));
-}
-#endif
-
 void
 nsDisplayCanvasBackgroundImage::Paint(nsDisplayListBuilder* aBuilder,
                                       gfxContext* aCtx)
@@ -364,40 +355,7 @@ nsDisplayCanvasBackgroundImage::Paint(nsDisplayListBuilder* aBuilder,
   nsPoint offset = ToReferenceFrame();
   nsRect bgClipRect = frame->CanvasArea() + offset;
 
-#ifndef MOZ_GFX_OPTIMIZE_MOBILE
-  RefPtr<gfxContext> dest = aCtx;
-  gfxRect destRect;
-  if (IsSingleFixedPositionImage(aBuilder, bgClipRect, &destRect) &&
-      aBuilder->IsPaintingToWindow() && !aBuilder->IsCompositingCheap() &&
-      !dest->CurrentMatrix().HasNonIntegerTranslation()) {
-    // Snap image rectangle to nearest pixel boundaries. This is the right way
-    // to snap for this context, because we checked HasNonIntegerTranslation
-    // above.
-    destRect.Round();
-    RefPtr<DrawTarget> dt =
-      Frame()->GetProperty(nsIFrame::CachedBackgroundImageDT());
-    DrawTarget* destDT = dest->GetDrawTarget();
-    if (dt) {
-      BlitSurface(destDT, destRect, dt);
-      return;
-    }
-
-    dt = destDT->CreateSimilarDrawTarget(IntSize::Ceil(destRect.width,
-                                                       destRect.height),
-                                         SurfaceFormat::B8G8R8A8);
-    if (dt && dt->IsValid()) {
-      RefPtr<gfxContext> ctx = gfxContext::CreateOrNull(dt);
-      MOZ_ASSERT(ctx); // already checked draw target above
-      ctx->SetMatrix(ctx->CurrentMatrix().PreTranslate(-destRect.x, -destRect.y));
-      PaintInternal(aBuilder, ctx, bgClipRect, &bgClipRect);
-      BlitSurface(dest->GetDrawTarget(), destRect, dt);
-      frame->SetProperty(nsIFrame::CachedBackgroundImageDT(),
-                              dt.forget().take());
-      return;
-    }
-  }
-#endif
-  PaintInternal(aBuilder, aCtx, mVisibleRect, &bgClipRect);
+  PaintInternal(aBuilder, aCtx, GetPaintRect(), &bgClipRect);
 }
 
 bool
@@ -408,16 +366,16 @@ nsDisplayCanvasBackgroundImage::IsSingleFixedPositionImage(nsDisplayListBuilder*
   if (!mBackgroundStyle)
     return false;
 
-  if (mBackgroundStyle->mImage.mLayers.Length() != 1)
+  if (mBackgroundStyle->StyleBackground()->mImage.mLayers.Length() != 1)
     return false;
 
 
   nsPresContext* presContext = mFrame->PresContext();
   uint32_t flags = aBuilder->GetBackgroundPaintFlags();
   nsRect borderArea = nsRect(ToReferenceFrame(), mFrame->GetSize());
-  const nsStyleImageLayers::Layer &layer = mBackgroundStyle->mImage.mLayers[mLayer];
+  const nsStyleImageLayers::Layer &layer = mBackgroundStyle->StyleBackground()->mImage.mLayers[mLayer];
 
-  if (layer.mAttachment != NS_STYLE_IMAGELAYER_ATTACHMENT_FIXED)
+  if (layer.mAttachment != StyleImageLayerAttachment::Fixed)
     return false;
 
    nsBackgroundLayerState state =
@@ -444,7 +402,7 @@ nsDisplayCanvasThemedBackground::Paint(nsDisplayListBuilder* aBuilder,
   nsPoint offset = ToReferenceFrame();
   nsRect bgClipRect = frame->CanvasArea() + offset;
 
-  PaintInternal(aBuilder, aCtx, mVisibleRect, &bgClipRect);
+  PaintInternal(aBuilder, aCtx, GetPaintRect(), &bgClipRect);
 }
 
 /**
@@ -498,18 +456,21 @@ nsCanvasFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   // the overflow area, so just add nsDisplayCanvasBackground instead of
   // calling DisplayBorderBackgroundOutline.
   if (IsVisibleForPainting(aBuilder)) {
-    nsStyleContext* bgSC;
-    const nsStyleBackground* bg = nullptr;
+    ComputedStyle* bg = nullptr;
+    nsIFrame* dependentFrame = nullptr;
     bool isThemed = IsThemed();
-    if (!isThemed && nsCSSRendering::FindBackground(this, &bgSC)) {
-      bg = bgSC->StyleBackground();
+    if (!isThemed && nsCSSRendering::FindBackgroundFrame(this, &dependentFrame)) {
+      bg = dependentFrame->Style();
+      if (dependentFrame == this) {
+        dependentFrame = nullptr;
+      }
     }
-    aLists.BorderBackground()->AppendNewToTop(
-        new (aBuilder) nsDisplayCanvasBackgroundColor(aBuilder, this));
+    aLists.BorderBackground()->AppendToTop(
+        MakeDisplayItem<nsDisplayCanvasBackgroundColor>(aBuilder, this));
 
     if (isThemed) {
-      aLists.BorderBackground()->AppendNewToTop(
-        new (aBuilder) nsDisplayCanvasThemedBackground(aBuilder, this));
+      aLists.BorderBackground()->AppendToTop(
+        MakeDisplayItem<nsDisplayCanvasThemedBackground>(aBuilder, this));
       return;
     }
 
@@ -524,7 +485,7 @@ nsCanvasFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     nsDisplayListBuilder::AutoContainerASRTracker contASRTracker(aBuilder);
 
     // Create separate items for each background layer.
-    const nsStyleImageLayers& layers = bg->mImage;
+    const nsStyleImageLayers& layers = bg->StyleBackground()->mImage;
     NS_FOR_VISIBLE_IMAGE_LAYERS_BACK_TO_FRONT(i, layers) {
       if (layers.mLayers[i].mImage.IsEmpty()) {
         continue;
@@ -538,19 +499,19 @@ nsCanvasFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       const ActiveScrolledRoot* thisItemASR = asr;
       nsDisplayList thisItemList;
       nsDisplayBackgroundImage::InitData bgData =
-        nsDisplayBackgroundImage::GetInitData(aBuilder, this, i, bgRect, bg,
-                                              nsDisplayBackgroundImage::LayerizeFixed::ALWAYS_LAYERIZE_FIXED_BACKGROUND);
+        nsDisplayBackgroundImage::GetInitData(aBuilder, this, i, bgRect, bg);
 
       if (bgData.shouldFixToViewport) {
 
         auto* displayData = aBuilder->GetCurrentFixedBackgroundDisplayData();
         nsDisplayListBuilder::AutoBuildingDisplayList
-          buildingDisplayList(aBuilder, this, aBuilder->GetDirtyRect(), false);
+          buildingDisplayList(aBuilder, this, aBuilder->GetVisibleRect(), aBuilder->GetDirtyRect(), false);
 
         DisplayListClipState::AutoSaveRestore clipState(aBuilder);
         nsDisplayListBuilder::AutoCurrentActiveScrolledRootSetter asrSetter(aBuilder);
         if (displayData) {
           nsPoint offset = GetOffsetTo(PresContext()->GetPresShell()->GetRootFrame());
+          aBuilder->SetVisibleRect(displayData->mVisibleRect + offset);
           aBuilder->SetDirtyRect(displayData->mDirtyRect + offset);
 
           clipState.SetClipChainForContainingBlockDescendants(
@@ -563,22 +524,24 @@ nsCanvasFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
         {
           DisplayListClipState::AutoSaveRestore bgImageClip(aBuilder);
           bgImageClip.Clear();
-          bgItem = new (aBuilder) nsDisplayCanvasBackgroundImage(bgData);
+          bgItem = MakeDisplayItem<nsDisplayCanvasBackgroundImage>(aBuilder, bgData);
+          bgItem->SetDependentFrame(aBuilder, dependentFrame);
         }
-        thisItemList.AppendNewToTop(
+        thisItemList.AppendToTop(
           nsDisplayFixedPosition::CreateForFixedBackground(aBuilder, this, bgItem, i));
 
       } else {
-        thisItemList.AppendNewToTop(new (aBuilder) nsDisplayCanvasBackgroundImage(bgData));
+        nsDisplayCanvasBackgroundImage* bgItem = MakeDisplayItem<nsDisplayCanvasBackgroundImage>(aBuilder, bgData);
+        bgItem->SetDependentFrame(aBuilder, dependentFrame);
+        thisItemList.AppendToTop(bgItem);
       }
 
       if (layers.mLayers[i].mBlendMode != NS_STYLE_BLEND_NORMAL) {
         DisplayListClipState::AutoSaveRestore blendClip(aBuilder);
-        blendClip.ClearUpToASR(thisItemASR);
-        thisItemList.AppendNewToTop(
-          new (aBuilder) nsDisplayBlendMode(aBuilder, this, &thisItemList,
-                                            layers.mLayers[i].mBlendMode,
-                                            thisItemASR, i + 1));
+        thisItemList.AppendToTop(
+          MakeDisplayItem<nsDisplayBlendMode>(aBuilder, this, &thisItemList,
+                                              layers.mLayers[i].mBlendMode,
+                                              thisItemASR, i + 1));
       }
       aLists.BorderBackground()->AppendToTop(&thisItemList);
     }
@@ -586,8 +549,7 @@ nsCanvasFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     if (needBlendContainer) {
       const ActiveScrolledRoot* containerASR = contASRTracker.GetContainerASR();
       DisplayListClipState::AutoSaveRestore blendContainerClip(aBuilder);
-      blendContainerClip.ClearUpToASR(containerASR);
-      aLists.BorderBackground()->AppendNewToTop(
+      aLists.BorderBackground()->AppendToTop(
         nsDisplayBlendContainer::CreateForBackgroundBlendMode(aBuilder, this,
                                                               aLists.BorderBackground(),
                                                               containerASR));
@@ -625,8 +587,8 @@ nsCanvasFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   if (!StyleVisibility()->IsVisible())
     return;
 
-  aLists.Outlines()->AppendNewToTop(new (aBuilder)
-    nsDisplayCanvasFocus(aBuilder, this));
+  aLists.Outlines()->AppendToTop(
+    MakeDisplayItem<nsDisplayCanvasFocus>(aBuilder, this));
 }
 
 void

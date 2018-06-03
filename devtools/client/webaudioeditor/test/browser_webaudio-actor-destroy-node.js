@@ -5,10 +5,10 @@
  * Test `destroy-node` event on WebAudioActor.
  */
 
-add_task(function* () {
-  let { target, front } = yield initBackend(DESTROY_NODES_URL);
+add_task(async function() {
+  const { target, front } = await initBackend(DESTROY_NODES_URL);
 
-  let [, , created] = yield Promise.all([
+  const [, , created] = await Promise.all([
     front.setup({ reload: true }),
     once(front, "start-context"),
     // Should create dest, gain, and oscillator node and 10
@@ -16,12 +16,12 @@ add_task(function* () {
     getN(front, "create-node", 13)
   ]);
 
-  let waitUntilDestroyed = getN(front, "destroy-node", 10);
+  const waitUntilDestroyed = getN(front, "destroy-node", 10);
 
   // Force CC so we can ensure it's run to clear out dead AudioNodes
   forceNodeCollection();
 
-  let destroyed = yield waitUntilDestroyed;
+  const destroyed = await waitUntilDestroyed;
 
   destroyed.forEach((node, i) => {
     ok(node.type, "AudioBufferSourceNode", "Only buffer nodes are destroyed");
@@ -29,13 +29,14 @@ add_task(function* () {
       "`destroy-node` called only on AudioNodes in current document.");
   });
 
-  yield removeTab(target.tab);
+  await removeTab(target.tab);
 });
 
 function actorIsInList(list, actor) {
   for (let i = 0; i < list.length; i++) {
-    if (list[i].actorID === actor.actorID)
+    if (list[i].actorID === actor.actorID) {
       return list[i];
+    }
   }
   return null;
 }

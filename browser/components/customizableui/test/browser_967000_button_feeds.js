@@ -5,7 +5,7 @@
 "use strict";
 
 const TEST_PAGE = "http://mochi.test:8888/browser/browser/components/customizableui/test/support/feeds_test_page.html";
-const TEST_FEED = "http://mochi.test:8888/browser/browser/components/customizableui/test/support/test-feed.xml"
+const TEST_FEED = "http://mochi.test:8888/browser/browser/components/customizableui/test/support/test-feed.xml";
 
 var newTab = null;
 var initialLocation = gBrowser.currentURI.spec;
@@ -33,7 +33,7 @@ add_task(async function() {
   newTab = gBrowser.selectedTab;
   await promiseTabLoadEvent(newTab, TEST_PAGE);
 
-  await PanelUI.show();
+  await gCUITestUtils.openMainMenu();
 
   await waitForCondition(() => !feedButton.hasAttribute("disabled"));
   ok(!feedButton.hasAttribute("disabled"), "The Subscribe button gets enabled");

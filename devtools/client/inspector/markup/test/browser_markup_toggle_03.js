@@ -9,23 +9,23 @@
 
 const TEST_URL = URL_ROOT + "doc_markup_toggle.html";
 
-add_task(function* () {
-  let {inspector} = yield openInspectorForURL(TEST_URL);
+add_task(async function() {
+  const {inspector} = await openInspectorForURL(TEST_URL);
 
   info("Getting the container for the UL parent element");
-  let container = yield getContainerForSelector("ul", inspector);
+  const container = await getContainerForSelector("ul", inspector);
 
   info("Alt-clicking on collapsed expander should expand all children");
-  let onUpdated = inspector.once("inspector-updated");
+  const onUpdated = inspector.once("inspector-updated");
   EventUtils.synthesizeMouseAtCenter(container.expander, {altKey: true},
     inspector.markup.doc.defaultView);
-  yield onUpdated;
-  yield waitForMultipleChildrenUpdates(inspector);
+  await onUpdated;
+  await waitForMultipleChildrenUpdates(inspector);
 
   info("Checking that all nodes exist and are expanded");
-  let nodeFronts = yield getNodeFronts(inspector);
-  for (let nodeFront of nodeFronts) {
-    let nodeContainer = getContainerForNodeFront(nodeFront, inspector);
+  let nodeFronts = await getNodeFronts(inspector);
+  for (const nodeFront of nodeFronts) {
+    const nodeContainer = getContainerForNodeFront(nodeFront, inspector);
     ok(nodeContainer, "Container for node " + nodeFront.tagName + " exists");
     ok(nodeContainer.expanded,
       "Container for node " + nodeFront.tagName + " is expanded");
@@ -34,20 +34,20 @@ add_task(function* () {
   info("Alt-clicking on expanded expander should collapse all children");
   EventUtils.synthesizeMouseAtCenter(container.expander, {altKey: true},
     inspector.markup.doc.defaultView);
-  yield waitForMultipleChildrenUpdates(inspector);
+  await waitForMultipleChildrenUpdates(inspector);
   // No need to wait for inspector-updated here since we are not retrieving new nodes.
 
   info("Checking that all nodes are collapsed");
-  nodeFronts = yield getNodeFronts(inspector);
-  for (let nodeFront of nodeFronts) {
-    let nodeContainer = getContainerForNodeFront(nodeFront, inspector);
+  nodeFronts = await getNodeFronts(inspector);
+  for (const nodeFront of nodeFronts) {
+    const nodeContainer = getContainerForNodeFront(nodeFront, inspector);
     ok(!nodeContainer.expanded,
       "Container for node " + nodeFront.tagName + " is collapsed");
   }
 });
 
-function* getNodeFronts(inspector) {
-  let nodeList = yield inspector.walker.querySelectorAll(
+async function getNodeFronts(inspector) {
+  const nodeList = await inspector.walker.querySelectorAll(
     inspector.walker.rootNode, "ul, li, span, em");
   return nodeList.items();
 }

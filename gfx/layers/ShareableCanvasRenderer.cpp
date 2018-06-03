@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -50,7 +51,6 @@ ShareableCanvasRenderer::Initialize(const CanvasInitializeData& aData)
     MOZ_ASSERT(screen);
     caps = screen->mCaps;
   }
-  MOZ_ASSERT(caps.alpha == aData.mHasAlpha);
 
   auto forwarder = GetForwarder();
 
@@ -65,14 +65,14 @@ ShareableCanvasRenderer::Initialize(const CanvasInitializeData& aData)
   if (mGLFrontbuffer) {
     // We're using a source other than the one in the default screen.
     // (SkiaGL)
-    mFactory = Move(factory);
+    mFactory = std::move(factory);
     if (!mFactory) {
       // Absolutely must have a factory here, so create a basic one
       mFactory = MakeUnique<gl::SurfaceFactory_Basic>(mGLContext, caps, mFlags);
     }
   } else {
     if (factory)
-      screen->Morph(Move(factory));
+      screen->Morph(std::move(factory));
   }
 }
 
@@ -225,7 +225,7 @@ ShareableCanvasRenderer::UpdateCompositableClient()
 
   FirePreTransactionCallback();
   if (mBufferProvider && mBufferProvider->GetTextureClient()) {
-    if (!mBufferProvider->SetForwarder(GetForwarder()->AsLayerForwarder())) {
+    if (!mBufferProvider->SetKnowsCompositor(GetForwarder())) {
       gfxCriticalNote << "BufferProvider::SetForwarder failed";
       return;
     }

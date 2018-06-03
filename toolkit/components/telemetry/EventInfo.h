@@ -25,19 +25,19 @@ struct CommonEventInfo {
   uint32_t extra_index;
   uint32_t extra_count;
 
-  // The day since UNIX epoch that this probe expires on.
-  uint32_t expiration_day;
-
   // The dataset this event is recorded in.
   uint32_t dataset;
 
   // Which processes to record this event in.
   mozilla::Telemetry::Common::RecordedProcessType record_in_processes;
 
+  // Which products to record this event on.
+  mozilla::Telemetry::Common::SupportedProduct products;
+
   // Convenience functions for accessing event strings.
-  const nsCString expiration_version() const;
-  const nsCString category() const;
-  const nsCString extra_key(uint32_t index) const;
+  const nsDependentCString expiration_version() const;
+  const nsDependentCString category() const;
+  const nsDependentCString extra_key(uint32_t index) const;
 };
 
 struct EventInfo {
@@ -48,8 +48,8 @@ struct EventInfo {
   uint32_t method_offset;
   uint32_t object_offset;
 
-  const nsCString method() const;
-  const nsCString object() const;
+  const nsDependentCString method() const;
+  const nsDependentCString object() const;
 };
 
 } // namespace

@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -105,12 +106,10 @@ public:
   virtual already_AddRefed<CanvasLayer> CreateCanvasLayer() override;
   virtual already_AddRefed<ReadbackLayer> CreateReadbackLayer() override;
   virtual already_AddRefed<ColorLayer> CreateColorLayer() override;
-  virtual already_AddRefed<TextLayer> CreateTextLayer() override;
   virtual already_AddRefed<BorderLayer> CreateBorderLayer() override;
   virtual already_AddRefed<RefLayer> CreateRefLayer() override;
 
-  virtual void UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier,
-											  uint64_t aDeviceResetSeqNo) override;
+  virtual void UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier) override;
   virtual TextureFactoryIdentifier GetTextureFactoryIdentifier() override
   {
     return AsShadowForwarder()->GetTextureFactoryIdentifier();
@@ -159,7 +158,7 @@ public:
   bool IsRepeatTransaction() { return mIsRepeatTransaction; }
 
   void SetTransactionIncomplete() { mTransactionIncomplete = true; }
-  void SetNeedTextureSyncOnPaintThread() { mTextureSyncOnPaintThread = true; }
+  void SetQueuedAsyncPaints() { mQueuedAsyncPaints = true; }
 
   bool HasShadowTarget() { return !!mShadowTarget; }
 
@@ -177,9 +176,6 @@ public:
 
   virtual CompositorBridgeChild* GetCompositorBridgeChild() override;
 
-  // Disable component alpha layers with the software compositor.
-  virtual bool ShouldAvoidComponentAlphaLayers() override { return !IsCompositingCheap(); }
-
   bool InConstruction() { return mPhase == PHASE_CONSTRUCTION; }
 #ifdef DEBUG
   bool InDrawing() { return mPhase == PHASE_DRAWING; }
@@ -196,12 +192,11 @@ public:
   virtual void ScheduleComposite() override;
   virtual void GetFrameUniformity(FrameUniformityData* aFrameUniformityData) override;
 
-  virtual void DidComposite(uint64_t aTransactionId,
+  virtual void DidComposite(TransactionId aTransactionId,
                             const mozilla::TimeStamp& aCompositeStart,
                             const mozilla::TimeStamp& aCompositeEnd) override;
 
   virtual bool AreComponentAlphaLayersEnabled() override;
-  virtual bool SupportsBackdropCopyForComponentAlpha() override;
 
   // Log APZ test data for the current paint. We supply the paint sequence
   // number ourselves, and take care of calling APZTestData::StartNewPaint()
@@ -242,7 +237,7 @@ public:
 
   virtual void SetTransactionIdAllocator(TransactionIdAllocator* aAllocator) override;
 
-  virtual uint64_t GetLastTransactionId() override { return mLatestTransactionId; }
+  virtual TransactionId GetLastTransactionId() override { return mLatestTransactionId; }
 
   float RequestProperty(const nsAString& aProperty) override;
 
@@ -315,6 +310,8 @@ private:
                               void* aCallbackData,
                               EndTransactionFlags);
 
+  void FlushAsyncPaints();
+
   LayerRefArray mKeepAlive;
 
   nsIWidget* mWidget;
@@ -335,7 +332,7 @@ private:
   RefPtr<gfxContext> mShadowTarget;
 
   RefPtr<TransactionIdAllocator> mTransactionIdAllocator;
-  uint64_t mLatestTransactionId;
+  TransactionId mLatestTransactionId;
   TimeDuration mLastPaintTime;
 
   // Sometimes we draw to targets that don't natively support
@@ -351,15 +348,11 @@ private:
   bool mTransactionIncomplete;
   bool mCompositorMightResample;
   bool mNeedsComposite;
-  bool mTextureSyncOnPaintThread;
+  bool mQueuedAsyncPaints;
 
   // An incrementing sequence number for paints.
   // Incremented in BeginTransaction(), but not for repeat transactions.
   uint32_t mPaintSequenceNumber;
-
-  // A sequence number for checking whether we have not yet acknowledged
-  // a device reset.
-  uint64_t mDeviceResetSequenceNumber;
 
   APZTestData mApzTestData;
 

@@ -21,6 +21,7 @@ from .graph import Graph
 from . import files_changed
 from .taskgraph import TaskGraph
 from .util.seta import is_low_value_task
+from .util.perfile import perfile_number_of_chunks
 from .util.taskcluster import find_task_id
 from .util.parameterization import resolve_task_references
 from mozbuild.util import memoize
@@ -294,9 +295,16 @@ class OnlyIfDependenciesRun(OptimizationStrategy):
 
 
 class IndexSearch(OptimizationStrategy):
-    def should_remove_task(self, task, params, index_paths):
-        "If this task has no dependencies, don't run it.."
-        return True
+
+    # A task with no dependencies remaining after optimization will be replaced
+    # if artifacts exist for the corresponding index_paths.
+    # Otherwise, we're in one of the following cases:
+    # - the task has un-optimized dependencies
+    # - the artifacts have expired
+    # - some changes altered the index_paths and new artifacts need to be
+    # created.
+    # In every of those cases, we need to run the task to create or refresh
+    # artifacts.
 
     def should_replace_task(self, task, params, index_paths):
         "Look for a task with one of the given index paths"
@@ -315,22 +323,14 @@ class IndexSearch(OptimizationStrategy):
 
 class SETA(OptimizationStrategy):
     def should_remove_task(self, task, params, _):
-        bbb_task = False
-
-        # for bbb tasks we need to send in the buildbot buildername
-        if task.task.get('provisionerId', '') == 'buildbot-bridge':
-            label = task.task.get('payload').get('buildername')
-            bbb_task = True
-        else:
-            label = task.label
+        label = task.label
 
         # we would like to return 'False, None' while it's high_value_task
         # and we wouldn't optimize it. Otherwise, it will return 'True, None'
         if is_low_value_task(label,
                              params.get('project'),
                              params.get('pushlog_id'),
-                             params.get('pushdate'),
-                             bbb_task):
+                             params.get('pushdate')):
             # Always optimize away low-value tasks
             return True
         else:
@@ -379,4 +379,18 @@ class SkipUnlessSchedules(OptimizationStrategy):
         if conditions & scheduled:
             return False
 
+        return True
+
+
+class TestVerify(OptimizationStrategy):
+    def should_remove_task(self, task, params, _):
+        # we would like to return 'False, None' while it's high_value_task
+        # and we wouldn't optimize it. Otherwise, it will return 'True, None'
+        env = params.get('try_task_config', {}) or {}
+        env = env.get('templates', {}).get('env', {})
+        if perfile_number_of_chunks(env.get('MOZHARNESS_TEST_PATHS', ''),
+                                    params.get('head_repository', ''),
+                                    params.get('head_rev', ''),
+                                    task):
+            return False
         return True

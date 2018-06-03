@@ -100,7 +100,7 @@ VRDisplay::UpdateVRDisplays(nsTArray<RefPtr<VRDisplay>>& aDisplays, nsPIDOMWindo
       RefPtr<gfx::VRDisplayClient> display = updatedDisplays[i];
       bool isNewDisplay = true;
       for (size_t j = 0; j < aDisplays.Length(); j++) {
-        if (aDisplays[j]->GetClient()->GetDisplayInfo() == display->GetDisplayInfo()) {
+        if (aDisplays[j]->GetClient()->GetDisplayInfo().GetDisplayID() == display->GetDisplayInfo().GetDisplayID()) {
           displays.AppendElement(aDisplays[j]);
           isNewDisplay = false;
         }
@@ -393,7 +393,7 @@ VRDisplay::LastRelease()
 already_AddRefed<VREyeParameters>
 VRDisplay::GetEyeParameters(VREye aEye)
 {
-  gfx::VRDisplayInfo::Eye eye = aEye == VREye::Left ? gfx::VRDisplayInfo::Eye_Left : gfx::VRDisplayInfo::Eye_Right;
+  gfx::VRDisplayState::Eye eye = aEye == VREye::Left ? gfx::VRDisplayState::Eye_Left : gfx::VRDisplayState::Eye_Right;
   RefPtr<VREyeParameters> params =
     new VREyeParameters(GetParentObject(),
                         mClient->GetDisplayInfo().GetEyeTranslation(eye),
@@ -658,6 +658,11 @@ VRDisplay::SubmitFrame()
 {
   AUTO_PROFILER_TRACING("VR", "SubmitFrameAtVRDisplay");
 
+  if (mClient && !mClient->IsPresentationGenerationCurrent()) {
+    mPresentation = nullptr;
+    mClient->MakePresentationGenerationCurrent();
+  }
+
   if (mPresentation) {
     mPresentation->SubmitFrame();
   }
@@ -903,39 +908,18 @@ VRFrameInfo::Update(const gfx::VRDisplayInfo& aInfo,
   }
   mVRState.timestamp = aState.timestamp + mTimeStampOffset;
 
-  gfx::Quaternion qt;
-  if (mVRState.flags & gfx::VRDisplayCapabilityFlags::Cap_Orientation) {
-    qt.x = mVRState.orientation[0];
-    qt.y = mVRState.orientation[1];
-    qt.z = mVRState.orientation[2];
-    qt.w = mVRState.orientation[3];
-  }
-  gfx::Point3D pos;
-  if (mVRState.flags & gfx::VRDisplayCapabilityFlags::Cap_Position) {
-    pos.x = -mVRState.position[0];
-    pos.y = -mVRState.position[1];
-    pos.z = -mVRState.position[2];
-  }
-  gfx::Matrix4x4 matHead;
-  matHead.SetRotationFromQuaternion(qt);
-  matHead.PreTranslate(pos);
-
-  mLeftView = matHead;
-  mLeftView.PostTranslate(-aInfo.mEyeTranslation[gfx::VRDisplayInfo::Eye_Left]);
-
-  mRightView = matHead;
-  mRightView.PostTranslate(-aInfo.mEyeTranslation[gfx::VRDisplayInfo::Eye_Right]);
-
   // Avoid division by zero within ConstructProjectionMatrix
   const float kEpsilon = 0.00001f;
   if (fabs(aDepthFar - aDepthNear) < kEpsilon) {
     aDepthFar = aDepthNear + kEpsilon;
   }
 
-  const gfx::VRFieldOfView leftFOV = aInfo.mEyeFOV[gfx::VRDisplayInfo::Eye_Left];
+  const gfx::VRFieldOfView leftFOV = aInfo.mDisplayState.mEyeFOV[gfx::VRDisplayState::Eye_Left];
   mLeftProjection = leftFOV.ConstructProjectionMatrix(aDepthNear, aDepthFar, true);
-  const gfx::VRFieldOfView rightFOV = aInfo.mEyeFOV[gfx::VRDisplayInfo::Eye_Right];
+  const gfx::VRFieldOfView rightFOV = aInfo.mDisplayState.mEyeFOV[gfx::VRDisplayState::Eye_Right];
   mRightProjection = rightFOV.ConstructProjectionMatrix(aDepthNear, aDepthFar, true);
+  memcpy(mLeftView.components, aState.leftViewMatrix, sizeof(aState.leftViewMatrix));
+  memcpy(mRightView.components, aState.rightViewMatrix, sizeof(aState.rightViewMatrix));
 }
 
 VRFrameInfo::VRFrameInfo()

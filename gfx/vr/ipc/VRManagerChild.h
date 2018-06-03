@@ -1,6 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: sw=2 ts=8 et :
- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -26,7 +25,6 @@ class VRMockDisplay;
 } // namespace dom
 namespace layers {
 class SyncObjectClient;
-class TextureClient;
 }
 namespace gfx {
 class VRLayerChild;
@@ -78,8 +76,9 @@ public:
   void FireDOMVRDisplayConnectEvent(uint32_t aDisplayID);
   void FireDOMVRDisplayDisconnectEvent(uint32_t aDisplayID);
   void FireDOMVRDisplayPresentChangeEvent(uint32_t aDisplayID);
+  void FireDOMVRDisplayConnectEventsForLoad(dom::VREventObserver* aObserver);
 
-  virtual void HandleFatalError(const char* aName, const char* aMsg) const override;
+  virtual void HandleFatalError(const char* aMsg) const override;
 
 protected:
   explicit VRManagerChild();
@@ -92,8 +91,6 @@ protected:
   virtual bool DeallocPVRLayerChild(PVRLayerChild* actor) override;
 
   virtual mozilla::ipc::IPCResult RecvUpdateDisplayInfo(nsTArray<VRDisplayInfo>&& aDisplayUpdates) override;
-
-  virtual mozilla::ipc::IPCResult RecvParentAsyncMessages(InfallibleTArray<AsyncParentMessageData>&& aMessages) override;
 
   virtual mozilla::ipc::IPCResult RecvDispatchSubmitFrameResult(const uint32_t& aDisplayID, const VRSubmitFrameResultInfo& aResult) override;
   virtual mozilla::ipc::IPCResult RecvGamepadUpdate(const GamepadChangeEvent& aGamepadEvent) override;
@@ -116,11 +113,8 @@ private:
   void FireDOMVRDisplayConnectEventInternal(uint32_t aDisplayID);
   void FireDOMVRDisplayDisconnectEventInternal(uint32_t aDisplayID);
   void FireDOMVRDisplayPresentChangeEventInternal(uint32_t aDisplayID);
-  /**
-  * Notify id of Texture When host side end its use. Transaction id is used to
-  * make sure if there is no newer usage.
-  */
-  void NotifyNotUsed(uint64_t aTextureId, uint64_t aFwdTransactionId);
+  void FireDOMVRDisplayConnectEventsForLoadInternal(uint32_t aDisplayID,
+                                                    dom::VREventObserver* aObserver);
 
   nsTArray<RefPtr<VRDisplayClient> > mDisplays;
   bool mDisplaysInitialized;
@@ -139,15 +133,9 @@ private:
 
   nsTArray<RefPtr<dom::VREventObserver>> mListeners;
 
-  /**
-  * Hold TextureClients refs until end of their usages on host side.
-  * It defer calling of TextureClient recycle callback.
-  */
-  nsDataHashtable<nsUint64HashKey, RefPtr<layers::TextureClient> > mTexturesWaitingRecycled;
-
   layers::LayersBackend mBackend;
   RefPtr<layers::SyncObjectClient> mSyncObject;
-  nsRefPtrHashtable<nsUint32HashKey, dom::Promise> mGamepadPromiseList; // TODO: check if it can merge into one list?
+  nsRefPtrHashtable<nsUint32HashKey, dom::Promise> mGamepadPromiseList;
   uint32_t mPromiseID;
   nsRefPtrHashtable<nsUint32HashKey, dom::Promise> mPromiseList;
   RefPtr<dom::VRMockDisplay> mVRMockDisplay;

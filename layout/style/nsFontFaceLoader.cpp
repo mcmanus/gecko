@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim:cindent:ts=2:et:sw=2:
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,7 +14,7 @@
 #include "nsError.h"
 #include "nsContentUtils.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/StylePrefs.h"
+#include "mozilla/StaticPrefs.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/Unused.h"
 #include "FontFaceSet.h"
@@ -89,16 +89,13 @@ nsFontFaceLoader::StartedLoading(nsIStreamLoader* aStreamLoader)
   }
 
   if (loadTimeout > 0) {
-    mLoadTimer = do_CreateInstance("@mozilla.org/timer;1");
-    if (mLoadTimer) {
-      mLoadTimer->SetTarget(
-        mFontFaceSet->Document()->EventTargetFor(TaskCategory::Other));
-      mLoadTimer->InitWithNamedFuncCallback(LoadTimerCallback,
-                                            static_cast<void*>(this),
-                                            loadTimeout,
-                                            nsITimer::TYPE_ONE_SHOT,
-                                            "LoadTimerCallback");
-    }
+    NS_NewTimerWithFuncCallback(getter_AddRefs(mLoadTimer),
+                                LoadTimerCallback,
+                                static_cast<void*>(this),
+                                loadTimeout,
+                                nsITimer::TYPE_ONE_SHOT,
+                                "LoadTimerCallback",
+                                mFontFaceSet->Document()->EventTargetFor(TaskCategory::Other));
   } else {
     mUserFontEntry->mFontDataLoadingState = gfxUserFontEntry::LOADING_SLOWLY;
   }
@@ -341,7 +338,7 @@ uint8_t
 nsFontFaceLoader::GetFontDisplay()
 {
   uint8_t fontDisplay = NS_FONT_DISPLAY_AUTO;
-  if (StylePrefs::sFontDisplayEnabled) {
+  if (StaticPrefs::layout_css_font_display_enabled()) {
     fontDisplay = mUserFontEntry->GetFontDisplay();
   }
   return fontDisplay;

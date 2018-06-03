@@ -9,7 +9,7 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/HTMLMediaElement.h"
-#include "MediaPrefs.h"
+#include "mozilla/StaticPrefs.h"
 
 namespace mozilla {
 
@@ -27,17 +27,18 @@ public:
 
   explicit HTMLVideoElement(already_AddRefed<NodeInfo>& aNodeInfo);
 
-  NS_IMPL_FROMCONTENT_HTML_WITH_TAG(HTMLVideoElement, video)
+  NS_IMPL_FROMNODE_HTML_WITH_TAG(HTMLVideoElement, video)
 
   using HTMLMediaElement::GetPaused;
 
-  NS_IMETHOD_(bool) IsVideo() override {
+  virtual bool IsVideo() const override {
     return true;
   }
 
   virtual bool ParseAttribute(int32_t aNamespaceID,
                               nsAtom* aAttribute,
                               const nsAString& aValue,
+                              nsIPrincipal* aMaybeScriptedPrincipal,
                               nsAttrValue& aResult) override;
   NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* aAttribute) const override;
 
@@ -137,7 +138,7 @@ public:
 
   bool MozOrientationLockEnabled() const
   {
-    return MediaPrefs::VideoOrientationLockEnabled();
+    return StaticPrefs::MediaVideocontrolsLockVideoOrientation();
   }
 
   bool MozIsOrientationLocked() const

@@ -4,34 +4,39 @@
 
 <%namespace name="helpers" file="/helpers.mako.rs" />
 
-<%helpers:shorthand name="overflow" sub_properties="overflow-x overflow-y"
-                    spec="https://drafts.csswg.org/css-overflow/#propdef-overflow">
+<%helpers:shorthand
+    name="overflow"
+    sub_properties="overflow-x overflow-y"
+    spec="https://drafts.csswg.org/css-overflow/#propdef-overflow"
+>
     use properties::longhands::overflow_x::parse as parse_overflow;
     % if product == "gecko":
         use properties::longhands::overflow_x::SpecifiedValue;
     % endif
 
-    pub fn parse_value<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                               -> Result<Longhands, ParseError<'i>> {
+    pub fn parse_value<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Longhands, ParseError<'i>> {
         % if product == "gecko":
-            let moz_kw_found = input.try(|i| {
-                try_match_ident_ignore_ascii_case! { i.expect_ident()?,
+            let moz_kw_found = input.try(|input| {
+                try_match_ident_ignore_ascii_case! { input,
                     "-moz-scrollbars-horizontal" => {
                         Ok(expanded! {
-                            overflow_x: SpecifiedValue::scroll,
-                            overflow_y: SpecifiedValue::hidden,
+                            overflow_x: SpecifiedValue::Scroll,
+                            overflow_y: SpecifiedValue::Hidden,
                         })
                     }
                     "-moz-scrollbars-vertical" => {
                         Ok(expanded! {
-                            overflow_x: SpecifiedValue::hidden,
-                            overflow_y: SpecifiedValue::scroll,
+                            overflow_x: SpecifiedValue::Hidden,
+                            overflow_y: SpecifiedValue::Scroll,
                         })
                     }
                     "-moz-scrollbars-none" => {
                         Ok(expanded! {
-                            overflow_x: SpecifiedValue::hidden,
-                            overflow_y: SpecifiedValue::hidden,
+                            overflow_x: SpecifiedValue::Hidden,
+                            overflow_y: SpecifiedValue::Hidden,
                         })
                     }
                 }
@@ -40,37 +45,70 @@
                 return moz_kw_found
             }
         % endif
-        let overflow = parse_overflow(context, input)?;
+        let overflow_x = parse_overflow(context, input)?;
+        let overflow_y =
+            input.try(|i| parse_overflow(context, i)).unwrap_or(overflow_x);
         Ok(expanded! {
-            overflow_x: overflow,
-            overflow_y: overflow,
+            overflow_x: overflow_x,
+            overflow_y: overflow_y,
         })
     }
 
     impl<'a> ToCss for LonghandsToSerialize<'a>  {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            if self.overflow_x == self.overflow_y {
-                self.overflow_x.to_css(dest)
-            } else {
-                Ok(())
+        fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result where W: fmt::Write {
+            self.overflow_x.to_css(dest)?;
+            if self.overflow_x != self.overflow_y {
+                dest.write_char(' ')?;
+                self.overflow_y.to_css(dest)?;
             }
+            Ok(())
+        }
+    }
+</%helpers:shorthand>
+
+<%helpers:shorthand
+    name="overflow-clip-box"
+    sub_properties="overflow-clip-box-block overflow-clip-box-inline"
+    enabled_in="ua"
+    gecko_pref="layout.css.overflow-clip-box.enabled"
+    spec="Internal, may be standardized in the future "
+         "(https://developer.mozilla.org/en-US/docs/Web/CSS/overflow-clip-box)"
+    products="gecko"
+>
+    use values::specified::OverflowClipBox;
+    pub fn parse_value<'i, 't>(
+        _: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Longhands, ParseError<'i>> {
+        let block_value = OverflowClipBox::parse(input)?;
+        let inline_value =
+            input.try(|input| OverflowClipBox::parse(input)).unwrap_or(block_value);
+
+        Ok(expanded! {
+          overflow_clip_box_block: block_value,
+          overflow_clip_box_inline: inline_value,
+        })
+    }
+
+    impl<'a> ToCss for LonghandsToSerialize<'a>  {
+        fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result where W: fmt::Write {
+            self.overflow_clip_box_block.to_css(dest)?;
+
+            if self.overflow_clip_box_block != self.overflow_clip_box_inline {
+                dest.write_str(" ")?;
+                self.overflow_clip_box_inline.to_css(dest)?;
+            }
+
+            Ok(())
         }
     }
 </%helpers:shorthand>
 
 macro_rules! try_parse_one {
-    ($input: expr, $var: ident, $prop_module: ident) => {
-        if $var.is_none() {
-            if let Ok(value) = $input.try($prop_module::SingleSpecifiedValue::parse) {
-                $var = Some(value);
-                continue;
-            }
-        }
-    };
     ($context: expr, $input: expr, $var: ident, $prop_module: ident) => {
         if $var.is_none() {
             if let Ok(value) = $input.try(|i| {
-                $prop_module::SingleSpecifiedValue::parse($context, i)
+                $prop_module::single_value::parse($context, i)
             }) {
                 $var = Some(value);
                 continue;
@@ -79,18 +117,20 @@ macro_rules! try_parse_one {
     };
 }
 
-<%helpers:shorthand name="transition" extra_prefixes="moz webkit"
+<%helpers:shorthand name="transition"
+                    extra_prefixes="moz:layout.css.prefixes.transitions webkit"
                     sub_properties="transition-property transition-duration
                                     transition-timing-function
                                     transition-delay"
                     spec="https://drafts.csswg.org/css-transitions/#propdef-transition">
-    use parser::Parse;
     % for prop in "delay duration property timing_function".split():
     use properties::longhands::transition_${prop};
     % endfor
 
-    pub fn parse_value<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                               -> Result<Longhands, ParseError<'i>> {
+    pub fn parse_value<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Longhands, ParseError<'i>> {
         struct SingleTransition {
             % for prop in "duration timing_function delay".split():
             transition_${prop}: transition_${prop}::SingleSpecifiedValue,
@@ -100,8 +140,10 @@ macro_rules! try_parse_one {
             transition_property: Option<transition_property::SingleSpecifiedValue>,
         }
 
-        fn parse_one_transition<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                                        -> Result<SingleTransition,ParseError<'i>> {
+        fn parse_one_transition<'i, 't>(
+            context: &ParserContext,
+            input: &mut Parser<'i, 't>,
+        ) -> Result<SingleTransition,ParseError<'i>> {
             % for prop in "property duration timing_function delay".split():
             let mut ${prop} = None;
             % endfor
@@ -141,7 +183,7 @@ macro_rules! try_parse_one {
                         Some(transition_property::single_value::get_initial_specified_value())),
                 })
             } else {
-                Err(StyleParseError::UnspecifiedError.into())
+                Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
             }
         }
 
@@ -158,7 +200,7 @@ macro_rules! try_parse_one {
                 // If there is more than one item, and any of transitions has 'none',
                 // then it's invalid. Othersize, leave propertys to be empty (which
                 // means "transition-property: none");
-                return Err(StyleParseError::UnspecifiedError.into());
+                return Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError));
             }
 
             % for prop in "duration timing_function delay".split():
@@ -174,7 +216,7 @@ macro_rules! try_parse_one {
     }
 
     impl<'a> ToCss for LonghandsToSerialize<'a>  {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+        fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result where W: fmt::Write {
             let property_len = self.transition_property.0.len();
 
             // There are two cases that we can do shorthand serialization:
@@ -216,7 +258,8 @@ macro_rules! try_parse_one {
     }
 </%helpers:shorthand>
 
-<%helpers:shorthand name="animation" extra_prefixes="moz webkit"
+<%helpers:shorthand name="animation"
+                    extra_prefixes="moz:layout.css.prefixes.animations webkit"
                     sub_properties="animation-name animation-duration
                                     animation-timing-function animation-delay
                                     animation-iteration-count animation-direction
@@ -227,21 +270,24 @@ macro_rules! try_parse_one {
         props = "name duration timing_function delay iteration_count \
                  direction fill_mode play_state".split()
     %>
-    use parser::Parse;
     % for prop in props:
     use properties::longhands::animation_${prop};
     % endfor
 
-    pub fn parse_value<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                               -> Result<Longhands, ParseError<'i>> {
+    pub fn parse_value<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Longhands, ParseError<'i>> {
         struct SingleAnimation {
             % for prop in props:
             animation_${prop}: animation_${prop}::SingleSpecifiedValue,
             % endfor
         }
 
-        fn parse_one_animation<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                                       -> Result<SingleAnimation,ParseError<'i>> {
+        fn parse_one_animation<'i, 't>(
+            context: &ParserContext,
+            input: &mut Parser<'i, 't>,
+        ) -> Result<SingleAnimation, ParseError<'i>> {
             % for prop in props:
             let mut ${prop} = None;
             % endfor
@@ -258,9 +304,9 @@ macro_rules! try_parse_one {
                 try_parse_one!(context, input, timing_function, animation_timing_function);
                 try_parse_one!(context, input, delay, animation_delay);
                 try_parse_one!(context, input, iteration_count, animation_iteration_count);
-                try_parse_one!(input, direction, animation_direction);
-                try_parse_one!(input, fill_mode, animation_fill_mode);
-                try_parse_one!(input, play_state, animation_play_state);
+                try_parse_one!(context, input, direction, animation_direction);
+                try_parse_one!(context, input, fill_mode, animation_fill_mode);
+                try_parse_one!(context, input, play_state, animation_play_state);
                 try_parse_one!(context, input, name, animation_name);
 
                 parsed -= 1;
@@ -269,7 +315,7 @@ macro_rules! try_parse_one {
 
             // If nothing is parsed, this is an invalid entry.
             if parsed == 0 {
-                Err(StyleParseError::UnspecifiedError.into())
+                Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
             } else {
                 Ok(SingleAnimation {
                     % for prop in props:
@@ -299,7 +345,7 @@ macro_rules! try_parse_one {
     }
 
     impl<'a> ToCss for LonghandsToSerialize<'a>  {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+        fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result where W: fmt::Write {
             let len = self.animation_name.0.len();
             // There should be at least one declared value
             if len == 0 {
@@ -331,12 +377,15 @@ macro_rules! try_parse_one {
 </%helpers:shorthand>
 
 <%helpers:shorthand name="scroll-snap-type" products="gecko"
+                    gecko_pref="layout.css.scroll-snap.enabled"
                     sub_properties="scroll-snap-type-x scroll-snap-type-y"
                     spec="https://drafts.csswg.org/css-scroll-snap/#propdef-scroll-snap-type">
     use properties::longhands::scroll_snap_type_x;
 
-    pub fn parse_value<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                               -> Result<Longhands, ParseError<'i>> {
+    pub fn parse_value<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Longhands, ParseError<'i>> {
         let result = scroll_snap_type_x::parse(context, input)?;
         Ok(expanded! {
             scroll_snap_type_x: result,
@@ -345,9 +394,9 @@ macro_rules! try_parse_one {
     }
 
     impl<'a> ToCss for LonghandsToSerialize<'a>  {
-        // Serializes into the single keyword value if both scroll-snap-type and scroll-snap-type-y are same.
+        // Serializes into the single keyword value if both scroll-snap-type-x and scroll-snap-type-y are same.
         // Otherwise into an empty string. This is done to match Gecko's behaviour.
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+        fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result where W: fmt::Write {
             if self.scroll_snap_type_x == self.scroll_snap_type_y {
                 self.scroll_snap_type_x.to_css(dest)
             } else {
@@ -357,18 +406,33 @@ macro_rules! try_parse_one {
     }
 </%helpers:shorthand>
 
-
-<%helpers:shorthand name="-moz-transform" products="gecko"
-                    sub_properties="transform"
-                    flags="SHORTHAND_ALIAS_PROPERTY"
-                    derive_serialize="True"
-                    spec="Non-standard: https://developer.mozilla.org/en-US/docs/Web/CSS/transform">
-    use properties::longhands::transform;
-
-    pub fn parse_value<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                               -> Result<Longhands, ParseError<'i>> {
+<%helpers:shorthand name="overscroll-behavior" products="gecko"
+                    gecko_pref="layout.css.overscroll-behavior.enabled"
+                    sub_properties="overscroll-behavior-x overscroll-behavior-y"
+                    spec="https://wicg.github.io/overscroll-behavior/#overscroll-behavior-properties">
+    pub fn parse_value<'i, 't>(
+        _: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Longhands, ParseError<'i>> {
+        use values::specified::OverscrollBehavior;
+        let behavior_x = OverscrollBehavior::parse(input)?;
+        let behavior_y = input.try(OverscrollBehavior::parse).unwrap_or(behavior_x);
         Ok(expanded! {
-            transform: transform::parse_prefixed(context, input)?,
+            overscroll_behavior_x: behavior_x,
+            overscroll_behavior_y: behavior_y,
         })
+    }
+
+    impl<'a> ToCss for LonghandsToSerialize<'a> {
+        // Serializes into the single keyword value if both overscroll-behavior-x and overscroll-behavior-y are same.
+        // Otherwise into two values separated by a space.
+        fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result where W: fmt::Write {
+            self.overscroll_behavior_x.to_css(dest)?;
+            if self.overscroll_behavior_y != self.overscroll_behavior_x {
+                dest.write_str(" ")?;
+                self.overscroll_behavior_y.to_css(dest)?;
+            }
+            Ok(())
+        }
     }
 </%helpers:shorthand>

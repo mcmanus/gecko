@@ -146,11 +146,14 @@ ErrorIsOverridable(PRErrorCode code)
   switch (code)
   {
     // Overridable errors.
+    case mozilla::pkix::MOZILLA_PKIX_ERROR_ADDITIONAL_POLICY_CONSTRAINT_FAILED:
     case mozilla::pkix::MOZILLA_PKIX_ERROR_CA_CERT_USED_AS_END_ENTITY:
     case mozilla::pkix::MOZILLA_PKIX_ERROR_EMPTY_ISSUER_NAME:
     case mozilla::pkix::MOZILLA_PKIX_ERROR_INADEQUATE_KEY_SIZE:
+    case mozilla::pkix::MOZILLA_PKIX_ERROR_MITM_DETECTED:
     case mozilla::pkix::MOZILLA_PKIX_ERROR_NOT_YET_VALID_CERTIFICATE:
     case mozilla::pkix::MOZILLA_PKIX_ERROR_NOT_YET_VALID_ISSUER_CERTIFICATE:
+    case mozilla::pkix::MOZILLA_PKIX_ERROR_SELF_SIGNED_CERT:
     case mozilla::pkix::MOZILLA_PKIX_ERROR_V1_CERT_USED_AS_CA:
     case SEC_ERROR_CA_CERT_INVALID:
     case SEC_ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED:

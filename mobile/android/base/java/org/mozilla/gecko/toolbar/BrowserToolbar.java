@@ -13,6 +13,7 @@ import android.graphics.Rect;
 import android.support.annotation.Nullable;
 import android.support.v4.content.ContextCompat;
 import org.mozilla.gecko.BrowserApp;
+import org.mozilla.gecko.Clipboard;
 import org.mozilla.gecko.GeckoSharedPrefs;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Tab;
@@ -32,7 +33,6 @@ import org.mozilla.gecko.tabs.TabHistoryController;
 import org.mozilla.gecko.toolbar.ToolbarDisplayLayout.OnStopListener;
 import org.mozilla.gecko.toolbar.ToolbarDisplayLayout.OnTitleChangeListener;
 import org.mozilla.gecko.toolbar.ToolbarDisplayLayout.UpdateFlags;
-import org.mozilla.gecko.util.Clipboard;
 import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.MenuUtils;
 import org.mozilla.gecko.util.WindowUtil;
@@ -86,7 +86,7 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
     private static final String LOGTAG = "GeckoToolbar";
 
     private static final int LIGHTWEIGHT_THEME_INVERT_ALPHA_START = 204; // 255 - alpha = invert_alpha
-    private static final int LIGHTWEIGHT_THEME_INVERT_ALPHA_END = 102;
+    private static final int LIGHTWEIGHT_THEME_INVERT_ALPHA_END = 179;
     public static final int LIGHTWEIGHT_THEME_INVERT_ALPHA_TABLET = 51;
 
     public interface OnActivateListener {
@@ -94,7 +94,7 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
     }
 
     public interface OnCommitListener {
-        public void onCommit();
+        public void onCommitByKey();
     }
 
     public interface OnDismissListener {
@@ -251,7 +251,7 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
                 MenuInflater inflater = activity.getMenuInflater();
                 inflater.inflate(R.menu.titlebar_contextmenu, menu);
 
-                String clipboard = Clipboard.getText();
+                String clipboard = Clipboard.getText(context);
                 if (TextUtils.isEmpty(clipboard)) {
                     menu.findItem(R.id.pasteandgo).setVisible(false);
                     menu.findItem(R.id.paste).setVisible(false);
@@ -435,6 +435,7 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
     }
 
     @Override
+    @SuppressWarnings("fallthrough")
     public void onTabChanged(@Nullable Tab tab, Tabs.TabEvents msg, String data) {
         Log.d(LOGTAG, "onTabChanged: " + msg);
         final Tabs tabs = Tabs.getInstance();
@@ -464,23 +465,27 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
             // Progress-related handling
             switch (msg) {
                 case START:
-                    updateProgressVisibility(tab, Tab.LOAD_PROGRESS_INIT);
-                    break;
-                case ADDED:
-                case LOCATION_CHANGE:
-                case LOAD_ERROR:
-                case LOADED:
-                case STOP:
                     flags.add(UpdateFlags.PROGRESS);
+                    updateProgressBarState(tab, Tab.LOAD_PROGRESS_INIT);
+                    break;
+
+                case LOAD_ERROR:
+                case STOP:
                     if (progressBar.getVisibility() == View.VISIBLE) {
+                        // Animate the progress bar to completion before it'll get hidden below.
                         progressBar.setProgress(tab.getLoadProgress());
                     }
-                    updateProgressVisibility();
+                    // Fall through.
+                case ADDED:
+                case LOCATION_CHANGE:
+                case LOADED:
+                    flags.add(UpdateFlags.PROGRESS);
+                    updateProgressBarState();
                     break;
 
                 case SELECTED:
                     flags.add(UpdateFlags.PROGRESS);
-                    updateProgressVisibility();
+                    updateProgressBarState();
                     break;
             }
 
@@ -537,16 +542,29 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
         }
     }
 
-    private void updateProgressVisibility() {
+    public void onLocaleReady(final String locale) {
+        final Tabs tabs = Tabs.getInstance();
+        tabsCounter.setCount(tabs.getDisplayCount());
+    }
+
+    /**
+     * Updates the progress bar percentage and hides/shows it depending on the loading state of the
+     * currently selected tab.
+     */
+    private void updateProgressBarState() {
         final Tab selectedTab = Tabs.getInstance().getSelectedTab();
         // The selected tab may be null if GeckoApp (and thus the
         // selected tab) are not yet initialized (bug 1090287).
         if (selectedTab != null) {
-            updateProgressVisibility(selectedTab, selectedTab.getLoadProgress());
+            updateProgressBarState(selectedTab, selectedTab.getLoadProgress());
         }
     }
 
-    private void updateProgressVisibility(Tab selectedTab, int progress) {
+    /**
+     * Updates the progress bar to the given <code>progress</code> percentage and hides/shows it
+     * depending on the loading state of the tab passed as <code>selectedTab</code>.
+     */
+    private void updateProgressBarState(Tab selectedTab, int progress) {
         if (!isEditing() && selectedTab.getState() == Tab.STATE_LOADING) {
             progressBar.setProgress(progress);
             progressBar.setPrivateMode(selectedTab.isPrivate());
@@ -804,7 +822,7 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
 
         setUIMode(UIMode.EDIT);
 
-        updateProgressVisibility();
+        updateProgressBarState();
 
         if (startEditingListener != null) {
             startEditingListener.onStartEditing();
@@ -852,7 +870,7 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
             stopEditingListener.onStopEditing();
         }
 
-        updateProgressVisibility();
+        updateProgressBarState();
         triggerStopEditingTransition();
 
         return url;

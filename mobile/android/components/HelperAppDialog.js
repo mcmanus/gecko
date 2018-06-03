@@ -5,8 +5,6 @@
 
 /* globals ContentAreaUtils */
 
-const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
-
 const APK_MIME_TYPE = "application/vnd.android.package-archive";
 
 const OMA_DOWNLOAD_DESCRIPTOR_MIME_TYPE = "application/vnd.oma.dd+xml";
@@ -17,18 +15,19 @@ const OMA_DRM_RIGHTS_MIME = "application/vnd.oma.drm.rights+wbxml";
 const PREF_BD_USEDOWNLOADDIR = "browser.download.useDownloadDir";
 const URI_GENERIC_ICON_DOWNLOAD = "drawable://alert_download";
 
-Cu.import("resource://gre/modules/Downloads.jsm");
-Cu.import("resource://gre/modules/FileUtils.jsm");
-Cu.import("resource://gre/modules/HelperApps.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/NetUtil.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "RuntimePermissions", "resource://gre/modules/RuntimePermissions.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "EventDispatcher", "resource://gre/modules/Messaging.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Snackbars", "resource://gre/modules/Snackbars.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "JNI", "resource://gre/modules/JNI.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  Downloads: "resource://gre/modules/Downloads.jsm",
+  EventDispatcher: "resource://gre/modules/Messaging.jsm",
+  FileUtils: "resource://gre/modules/FileUtils.jsm",
+  HelperApps: "resource://gre/modules/HelperApps.jsm",
+  NetUtil: "resource://gre/modules/NetUtil.jsm",
+  RuntimePermissions: "resource://gre/modules/RuntimePermissions.jsm",
+  Services: "resource://gre/modules/Services.jsm",
+  Snackbars: "resource://gre/modules/Snackbars.jsm",
+  Task: "resource://gre/modules/Task.jsm",
+});
 
 // -----------------------------------------------------------------------
 // HelperApp Launcher Dialog
@@ -44,7 +43,7 @@ function HelperAppLauncherDialog() { }
 
 HelperAppLauncherDialog.prototype = {
   classID: Components.ID("{e9d277a0-268a-4ec2-bb8c-10fdf3e44611}"),
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIHelperAppLauncherDialog]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIHelperAppLauncherDialog]),
 
   /**
    * Returns false if `url` represents a local or special URL that we don't
@@ -127,7 +126,7 @@ HelperAppLauncherDialog.prototype = {
       OMA_DRM_MESSAGE_MIME,
       OMA_DRM_CONTENT_MIME,
       OMA_DRM_RIGHTS_MIME
-    ].indexOf(mimeType) != -1;
+    ].includes(mimeType);
   },
 
   show: function hald_show(aLauncher, aContext, aReason) {
@@ -142,9 +141,9 @@ HelperAppLauncherDialog.prototype = {
           let hasPermission = yield RuntimePermissions.waitForPermissions(RuntimePermissions.WRITE_EXTERNAL_STORAGE);
           if (hasPermission) {
             this._downloadWithAndroidDownloadManager(aLauncher);
-            aLauncher.cancel(Cr.NS_BINDING_ABORTED);
           }
         } finally {
+          aLauncher.cancel(Cr.NS_BINDING_ABORTED);
         }
       }.bind(this)).catch(Cu.reportError);
       return;
@@ -152,7 +151,6 @@ HelperAppLauncherDialog.prototype = {
 
     let bundle = Services.strings.createBundle("chrome://browser/locale/browser.properties");
 
-    let defaultHandler = new Object();
     let apps = HelperApps.getAppsForUri(aLauncher.source, {
       mimeType: aLauncher.MIMEInfo.MIMEType,
     });
@@ -186,7 +184,7 @@ HelperAppLauncherDialog.prototype = {
         // get run in the saveToDisk case.
         aLauncher.cancel(Cr.NS_BINDING_ABORTED);
       }
-    }
+    };
 
     // See if the user already marked something as the default for this mimetype,
     // and if that app is still installed.
@@ -225,6 +223,7 @@ HelperAppLauncherDialog.prototype = {
       doubleTapButton: newButtonOrder ? 1 : 0
     }, (data) => {
       if (data.button < 0) {
+        aLauncher.cancel(Cr.NS_BINDING_ABORTED);
         return;
       }
 
@@ -241,25 +240,7 @@ HelperAppLauncherDialog.prototype = {
    * around starting from Lollipop.
    */
   _useNewButtonOrder: function() {
-    let useNewButtonOrder = true;
-    let jenv = null;
-
-    try {
-      jenv = JNI.GetForThread();
-      let jAppConstants = JNI.LoadClass(jenv, "org.mozilla.gecko.AppConstants$Versions", {
-        static_fields: [
-          { name: "feature21Plus", sig: "Z" }
-        ],
-      });
-
-      useNewButtonOrder = jAppConstants.feature21Plus;
-    } finally {
-      if (jenv) {
-        JNI.UnloadClasses(jenv);
-      }
-    }
-
-    return useNewButtonOrder;
+    return Services.sysinfo.getPropertyAsUint32("version") >= 21;
   },
 
   _refuseDownload: function(aLauncher) {

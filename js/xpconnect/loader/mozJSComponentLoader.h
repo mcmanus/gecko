@@ -37,6 +37,10 @@ namespace mozilla {
     { 0xbb, 0xef, 0xf0, 0xcc, 0xb5, 0xfa, 0x64, 0xb6 }}
 #define MOZJSCOMPONENTLOADER_CONTRACTID "@mozilla.org/moz/jsloader;1"
 
+#if defined(NIGHTLY_BUILD) || defined(MOZ_DEV_EDITION) || defined(DEBUG)
+#define STARTUP_RECORDER_ENABLED
+#endif
+
 class mozJSComponentLoader final : public mozilla::ModuleLoader,
                                    public xpcIJSModuleLoader,
                                    public nsIObserver
@@ -54,10 +58,18 @@ class mozJSComponentLoader final : public mozilla::ModuleLoader,
     void FindTargetObject(JSContext* aCx,
                           JS::MutableHandleObject aTargetObject);
 
+    static already_AddRefed<mozJSComponentLoader> GetOrCreate();
+
     static mozJSComponentLoader* Get() { return sSelf; }
 
-    nsresult Import(const nsACString& aResourceURI, JS::HandleValue aTargetObj,
-                    JSContext* aCx, uint8_t aArgc, JS::MutableHandleValue aRetval);
+    nsresult ImportInto(const nsACString& aResourceURI, JS::HandleValue aTargetObj,
+                        JSContext* aCx, uint8_t aArgc, JS::MutableHandleValue aRetval);
+
+    nsresult Import(JSContext* aCx, const nsACString& aResourceURI,
+                    JS::MutableHandleObject aModuleGlobal,
+                    JS::MutableHandleObject aModuleExports,
+                    bool aIgnoreExports = false);
+
     nsresult Unload(const nsACString& aResourceURI);
     nsresult IsModuleLoaded(const nsACString& aResourceURI, bool* aRetval);
     bool IsLoaderGlobal(JSObject* aObj) {
@@ -65,6 +77,14 @@ class mozJSComponentLoader final : public mozilla::ModuleLoader,
     }
 
     size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf);
+
+    /**
+     * Temporary diagnostic function for startup crashes in bug 1403348:
+     *
+     * Annotate the crash report with the contents of the async shutdown
+     * module/component scripts.
+     */
+    nsresult AnnotateCrashReport();
 
  protected:
     virtual ~mozJSComponentLoader();
@@ -86,10 +106,9 @@ class mozJSComponentLoader final : public mozilla::ModuleLoader,
 
     void CreateLoaderGlobal(JSContext* aCx,
                             const nsACString& aLocation,
-                            JSAddonId* aAddonID,
                             JS::MutableHandleObject aGlobal);
 
-    bool ReuseGlobal(bool aIsAddon, nsIURI* aComponent);
+    bool ReuseGlobal(nsIURI* aComponent);
 
     JSObject* GetSharedGlobal(JSContext* aCx);
 
@@ -118,7 +137,8 @@ class mozJSComponentLoader final : public mozilla::ModuleLoader,
     {
     public:
         explicit ModuleEntry(JS::RootingContext* aRootingCx)
-          : mozilla::Module(), obj(aRootingCx), thisObjectKey(aRootingCx)
+          : mozilla::Module(), obj(aRootingCx), exports(aRootingCx),
+            thisObjectKey(aRootingCx)
         {
             mVersion = mozilla::Module::kVersion;
             mCIDs = nullptr;
@@ -140,7 +160,7 @@ class mozJSComponentLoader final : public mozilla::ModuleLoader,
 
             if (obj) {
                 mozilla::AutoJSContext cx;
-                JSAutoCompartment ac(cx, obj);
+                JSAutoRealm ar(cx, obj);
 
                 if (JS_HasExtensibleLexicalEnvironment(obj)) {
                     JS_SetAllNonReservedSlotsToUndefined(cx, JS_ExtensibleLexicalEnvironment(obj));
@@ -156,7 +176,7 @@ class mozJSComponentLoader final : public mozilla::ModuleLoader,
             obj = nullptr;
             thisObjectKey = nullptr;
             location = nullptr;
-#if defined(NIGHTLY_BUILD) || defined(DEBUG)
+#ifdef STARTUP_RECORDER_ENABLED
             importStack.Truncate();
 #endif
         }
@@ -168,13 +188,18 @@ class mozJSComponentLoader final : public mozilla::ModuleLoader,
 
         nsCOMPtr<xpcIJSGetFactory> getfactoryobj;
         JS::PersistentRootedObject obj;
+        JS::PersistentRootedObject exports;
         JS::PersistentRootedScript thisObjectKey;
         char* location;
         nsCString resolvedURL;
-#if defined(NIGHTLY_BUILD) || defined(DEBUG)
+#ifdef STARTUP_RECORDER_ENABLED
         nsCString importStack;
 #endif
     };
+
+    nsresult ExtractExports(JSContext* aCx, ComponentLoaderInfo& aInfo,
+                            ModuleEntry* aMod,
+                            JS::MutableHandleObject aExports);
 
     static size_t DataEntrySizeOfExcludingThis(const nsACString& aKey, ModuleEntry* const& aData,
                                                mozilla::MallocSizeOf aMallocSizeOf, void* arg);

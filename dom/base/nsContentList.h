@@ -7,7 +7,7 @@
 /*
  * nsBaseContentList is a basic list of content nodes; nsContentList
  * is a commonly used NodeList implementation (used for
- * getElementsByTagName, some properties on nsIDOMHTMLDocument, etc).
+ * getElementsByTagName, some properties on HTMLDocument/Document, etc).
  */
 
 #ifndef nsContentList_h___
@@ -19,7 +19,6 @@
 #include "nsTArray.h"
 #include "nsString.h"
 #include "nsIHTMLCollection.h"
-#include "nsIDOMNodeList.h"
 #include "nsINodeList.h"
 #include "nsStubMutationObserver.h"
 #include "nsAtom.h"
@@ -42,14 +41,11 @@ class nsBaseContentList : public nsINodeList
 public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
 
-  // nsIDOMNodeList
-  NS_DECL_NSIDOMNODELIST
-
   // nsINodeList
   virtual int32_t IndexOf(nsIContent* aContent) override;
   virtual nsIContent* Item(uint32_t aIndex) override;
 
-  uint32_t Length() const {
+  uint32_t Length() override {
     return mElements.Length();
   }
 
@@ -141,8 +137,8 @@ private:
 
 // Used for returning lists that will always be empty, such as the applets list
 // in HTML Documents
-class nsEmptyContentList: public nsBaseContentList,
-                          public nsIHTMLCollection
+class nsEmptyContentList final : public nsBaseContentList,
+                                 public nsIHTMLCollection
 {
 public:
   explicit nsEmptyContentList(nsINode* aRoot) : nsBaseContentList(),
@@ -150,11 +146,9 @@ public:
   {
   }
 
-  // nsIDOMHTMLCollection
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(nsEmptyContentList,
                                            nsBaseContentList)
-  NS_DECL_NSIDOMHTMLCOLLECTION
 
   virtual nsINode* GetParentObject() override
   {
@@ -172,6 +166,10 @@ public:
     nsWrapperCache::PreserveWrapper(aScriptObjectHolder);
   }
 
+  uint32_t Length() final
+  {
+    return 0;
+  }
   virtual nsIContent* Item(uint32_t aIndex) override;
   virtual mozilla::dom::Element* GetElementAt(uint32_t index) override;
   virtual mozilla::dom::Element*
@@ -331,9 +329,6 @@ protected:
   }
 public:
 
-  // nsIDOMHTMLCollection
-  NS_DECL_NSIDOMHTMLCOLLECTION
-
   // nsBaseContentList overrides
   virtual int32_t IndexOf(nsIContent *aContent, bool aDoFlush) override;
   virtual int32_t IndexOf(nsIContent* aContent) override;
@@ -342,7 +337,11 @@ public:
     return mRootNode;
   }
 
-  virtual nsIContent* Item(uint32_t aIndex) override;
+  uint32_t Length() final
+  {
+    return Length(true);
+  }
+  nsIContent* Item(uint32_t aIndex) final;
   virtual mozilla::dom::Element* GetElementAt(uint32_t index) override;
   virtual mozilla::dom::Element*
   GetFirstNamedElement(const nsAString& aName, bool& aFound) override
@@ -388,8 +387,8 @@ public:
     // most common namespace id is kNameSpaceID_Unknown.  So check the
     // string first.  Cases in which whether our root's ownerDocument
     // is HTML changes are extremely rare, so check those last.
-    NS_PRECONDITION(mXMLMatchAtom,
-                    "How did we get here with a null match atom on our list?");
+    MOZ_ASSERT(mXMLMatchAtom,
+               "How did we get here with a null match atom on our list?");
     return
       mXMLMatchAtom->Equals(aKey.mTagname) &&
       mRootNode == aKey.mRootNode &&
@@ -434,8 +433,11 @@ protected:
    *
    * @param aNeededLength the length the list should have when we are
    *        done (unless it exhausts the document)
+   * @param aExpectedElementsIfDirty is for debugging only to
+   *        assert that mElements has expected number of entries.
    */
-  virtual void PopulateSelf(uint32_t aNeededLength);
+  virtual void PopulateSelf(uint32_t aNeededLength,
+                            uint32_t aExpectedElementsIfDirty = 0);
 
   /**
    * @param  aContainer a content node which must be a descendant of
@@ -685,7 +687,10 @@ private:
   *
   * @param aNeededLength The list of length should have when we are
   *                      done (unless it exhausts the document).
+  * @param aExpectedElementsIfDirty is for debugging only to
+  *        assert that mElements has expected number of entries.
   */
-  void PopulateSelf(uint32_t aNeededLength) override;
+  void PopulateSelf(uint32_t aNeededLength,
+                    uint32_t aExpectedElementsIfDirty = 0) override;
 };
 #endif // nsContentList_h___

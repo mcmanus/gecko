@@ -9,7 +9,7 @@ If you want to build the Network Monitor inside of the DevTools toolbox (Firefox
 If you would like to run the Network Monitor in the browser tab (experimental), you need following packages:
 
 * [node](https://nodejs.org/) >= 6.9.x JavaScript runtime.
-* [yarn](https://yarnpkg.com/docs/install) >= 0.21.x the pacakage dependency management tool.
+* [yarn](https://yarnpkg.com/docs/install) >= 0.21.x the package dependency management tool.
 * [Firefox](https://www.mozilla.org/firefox/new/) any version or build from the source code.
 
 ## Quick Setup
@@ -65,13 +65,13 @@ Open `localhost:8000` in any browser to see the [launchpad](https://github.com/d
 
 ### Develop with related modules
 
-When working on make the Network Monitor running in the browser tab, you may need to work on external modules. Besides the third party modules, here are modules required for the Network Monitor and is hosted under `devtools-html` (modules shared accross Devtools):
+When working on make the Network Monitor running in the browser tab, you may need to work on external modules. Besides the third party modules, here are modules required for the Network Monitor and is hosted under `devtools-html` (modules shared across Devtools):
 
 * [devtools-config](https://github.com/devtools-html/devtools-core/blob/master/packages/devtools-config/#readme) config used in dev server
 * [devtools-launchpad](https://github.com/devtools-html/devtools-core/blob/master/packages/devtools-launchpad/#readme) provide the dev server, landing page and the bootstrap functions to run devtools in the browser tab.
 * [devtools-modules](https://github.com/devtools-html/devtools-core/blob/master/packages/devtools-modules/#readme) Devtools shared and shim modules.
 * [devtools-source-editor](https://github.com/devtools-html/devtools-core/blob/master/packages/devtools-source-editor/#readme) Source Editor component.
-* [devtools-reps](https://github.com/devtools-html/devtools-core/blob/master/packages/devtools-reps/#readme) remote object formatter for variables representation.
+* [devtools-reps](https://github.com/devtools-html/debugger.html/blob/master/packages/devtools-reps/#readme) remote object formatter for variables representation.
 
 Do `yarn link` modules in related module directory, then do `yarn link [module-name]` after `yarn install` modules.
 
@@ -95,7 +95,7 @@ Files used to run the Network Monitor in the browser tab
 
 * `bin/` files to launch test server.
 * `configs/` dev configs.
-* `index.js` the entry point, equivalent to `index.html`.
+* `launchpad.js` the entry point, equivalent to `index.html`.
 * `webpack.config.js` the webpack config file, including plenty of module alias map to shims and polyfills.
 * `package.json` declare every required packages and available commands.
 
@@ -105,11 +105,11 @@ To run in the browser tab, the Network Monitor needs to get some dependencies fr
 
 The Network Monitor UI is built using [React](http://searchfox.org/mozilla-central/source/devtools/docs/frontend/react.md) components (in `src/components/`).
 
-* **MonitorPanel** in `monitor-panel.js` is the root element.
+* **MonitorPanel** in `MonitorPanel.js` is the root element.
 * Three major container components are
   - **Toolbar** Panel related functions.
   - **RequestList** Show each request information.
-  - **NetworkDetailsPanel** Show detailed infomation per request.
+  - **NetworkDetailsPanel** Show detailed information per request.
   - **StatusBar** Show statistics while loading.
 * `src/assets` Styles that affect the Network Monitor panel.
 
@@ -126,4 +126,4 @@ Besides the UI, the Network Monitor manages the app state via [Redux](http://sea
 * `src/reducers/` for all reducers that change the state.
 * `src/selectors/` functions that return a formatted version of parts of the app state.
 
-We use [immutable.js](http://facebook.github.io/immutable-js/) and [reselect](https://github.com/reactjs/reselect) libraries to return a new state object efficiently.
+We use [reselect](https://github.com/reactjs/reselect) library to perform state calculations efficiently.

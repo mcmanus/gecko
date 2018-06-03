@@ -71,30 +71,30 @@ const testCasesUserContextId = [
  * Test that the desired number of tree items are present
  */
 function testTree(tests) {
-  let doc = gPanelWindow.document;
-  for (let [item] of tests) {
+  const doc = gPanelWindow.document;
+  for (const [item] of tests) {
     ok(doc.querySelector("[data-id='" + JSON.stringify(item) + "']"),
-       "Tree item " + item[0] + " should be present in the storage tree");
+      `Tree item ${item.toSource()} should be present in the storage tree`);
   }
 }
 
 /**
  * Test that correct table entries are shown for each of the tree item
  */
-function* testTables(tests) {
-  let doc = gPanelWindow.document;
+async function testTables(tests) {
+  const doc = gPanelWindow.document;
   // Expand all nodes so that the synthesized click event actually works
   gUI.tree.expandAll();
 
   // First tree item is already selected so no clicking and waiting for update
-  for (let id of tests[0][1]) {
+  for (const id of tests[0][1]) {
     ok(doc.querySelector(".table-widget-cell[data-id='" + id + "']"),
        "Table item " + id + " should be present");
   }
 
   // Click rest of the tree items and wait for the table to be updated
-  for (let [treeItem, items] of tests.slice(1)) {
-    yield selectTreeItem(treeItem);
+  for (const [treeItem, items] of tests.slice(1)) {
+    await selectTreeItem(treeItem);
 
     // Check whether correct number of items are present in the table
     is(doc.querySelectorAll(
@@ -102,19 +102,19 @@ function* testTables(tests) {
        ).length, items.length, "Number of items in table is correct");
 
     // Check if all the desired items are present in the table
-    for (let id of items) {
+    for (const id of items) {
       ok(doc.querySelector(".table-widget-cell[data-id='" + id + "']"),
          "Table item " + id + " should be present");
     }
   }
 }
 
-add_task(function* () {
-  yield openTabAndSetupStorage(MAIN_DOMAIN + "storage-listings-usercontextid.html",
+add_task(async function() {
+  await openTabAndSetupStorage(MAIN_DOMAIN + "storage-listings-usercontextid.html",
                                {userContextId: 1});
 
   testTree(testCasesUserContextId);
-  yield testTables(testCasesUserContextId);
+  await testTables(testCasesUserContextId);
 
-  yield finishTests();
+  await finishTests();
 });

@@ -20,38 +20,39 @@ const TEST_URI =
     <div class=test></div>
   </div>`;
 
-add_task(function* () {
-  yield addTab("data:text/html," + encodeURIComponent(TEST_URI));
-  let {inspector, view, testActor} = yield openBoxModelView();
+add_task(async function() {
+  await addTab("data:text/html," + encodeURIComponent(TEST_URI));
+  const {inspector, boxmodel, testActor} = await openLayoutView();
 
-  yield selectNode(".test", inspector);
+  await selectNode(".test", inspector);
 
   // No margin-top defined.
   info("Test that margins are not impacted by a pseudo element");
-  is((yield getStyle(testActor, ".test", "margin-top")), "", "margin-top is correct");
-  yield checkValueInBoxModel(".boxmodel-margin.boxmodel-top", "0", view.document);
+  is((await getStyle(testActor, ".test", "margin-top")), "", "margin-top is correct");
+  await checkValueInBoxModel(".boxmodel-margin.boxmodel-top", "0", boxmodel.document);
 
   // No padding-top defined.
   info("Test that paddings are not impacted by a pseudo element");
-  is((yield getStyle(testActor, ".test", "padding-top")), "", "padding-top is correct");
-  yield checkValueInBoxModel(".boxmodel-padding.boxmodel-top", "0", view.document);
+  is((await getStyle(testActor, ".test", "padding-top")), "", "padding-top is correct");
+  await checkValueInBoxModel(".boxmodel-padding.boxmodel-top", "0", boxmodel.document);
 
   // Width should be driven by the parent div.
   info("Test that dimensions are not impacted by a pseudo element");
-  is((yield getStyle(testActor, ".test", "width")), "", "width is correct");
-  yield checkValueInBoxModel(".boxmodel-content.boxmodel-width", "200", view.document);
+  is((await getStyle(testActor, ".test", "width")), "", "width is correct");
+  await checkValueInBoxModel(".boxmodel-content.boxmodel-width", "200",
+    boxmodel.document);
 });
 
-function* checkValueInBoxModel(selector, expectedValue, doc) {
-  let span = doc.querySelector(selector + " > span");
+async function checkValueInBoxModel(selector, expectedValue, doc) {
+  const span = doc.querySelector(selector + " > span");
   is(span.textContent, expectedValue, "Should have the right value in the box model.");
 
   EventUtils.synthesizeMouseAtCenter(span, {}, doc.defaultView);
-  let editor = doc.querySelector(".styleinspector-propertyeditor");
+  const editor = doc.querySelector(".styleinspector-propertyeditor");
   ok(editor, "Should have opened the editor.");
   is(editor.value, expectedValue, "Should have the right value in the editor.");
 
-  let onBlur = once(editor, "blur");
+  const onBlur = once(editor, "blur");
   EventUtils.synthesizeKey("VK_RETURN", {}, doc.defaultView);
-  yield onBlur;
+  await onBlur;
 }

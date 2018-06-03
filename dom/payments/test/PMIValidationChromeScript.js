@@ -3,9 +3,7 @@
    http://creativecommons.org/publicdomain/zero/1.0/ */
 "use strict";
 
-const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
-
-const { XPCOMUtils } = Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+const { XPCOMUtils } = ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 const paymentSrv = Cc["@mozilla.org/dom/payments/payment-request-service;1"].getService(Ci.nsIPaymentRequestService);
 
@@ -41,7 +39,7 @@ const UIService = {
                       "");                        // payer phone
     paymentSrv.respondPayment(showResponse.QueryInterface(Ci.nsIPaymentActionResponse));
   },
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIPaymentUIService]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIPaymentUIService]),
 };
 
 function emitTestFail(message) {

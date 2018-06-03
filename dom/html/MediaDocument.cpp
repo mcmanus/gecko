@@ -110,7 +110,7 @@ const char* const MediaDocument::sFormatNames[4] =
 
 MediaDocument::MediaDocument()
     : nsHTMLDocument(),
-      mDocumentElementInserted(false)
+      mDidInitialDocumentSetup(false)
 {
 }
 MediaDocument::~MediaDocument()
@@ -187,28 +187,28 @@ MediaDocument::StartDocumentLoad(const char*         aCommand,
 }
 
 void
-MediaDocument::BecomeInteractive()
+MediaDocument::InitialSetupDone()
 {
-  // Even though our readyState code isn't really reliable, here we pretend
-  // that it is and conclude that we are restoring from the b/f cache if
-  // GetReadyStateEnum() == nsIDocument::READYSTATE_COMPLETE.
-  if (GetReadyStateEnum() != nsIDocument::READYSTATE_COMPLETE) {
-    MOZ_ASSERT(GetReadyStateEnum() == nsIDocument::READYSTATE_LOADING,
-               "Bad readyState");
-    SetReadyStateInternal(nsIDocument::READYSTATE_INTERACTIVE);
-  }
+  MOZ_ASSERT(GetReadyStateEnum() == nsIDocument::READYSTATE_LOADING,
+             "Bad readyState: we should still be doing our initial load");
+  mDidInitialDocumentSetup = true;
+  nsContentUtils::AddScriptRunner(
+    new nsDocElementCreatedNotificationRunner(this));
+  SetReadyStateInternal(nsIDocument::READYSTATE_INTERACTIVE);
 }
 
 nsresult
 MediaDocument::CreateSyntheticDocument()
 {
+  MOZ_ASSERT(!InitialSetupHasBeenDone());
+
   // Synthesize an empty html document
   nsresult rv;
 
   RefPtr<mozilla::dom::NodeInfo> nodeInfo;
   nodeInfo = mNodeInfoManager->GetNodeInfo(nsGkAtoms::html, nullptr,
                                            kNameSpaceID_XHTML,
-                                           nsIDOMNode::ELEMENT_NODE);
+                                           nsINode::ELEMENT_NODE);
 
   RefPtr<nsGenericHTMLElement> root = NS_NewHTMLHtmlElement(nodeInfo.forget());
   NS_ENSURE_TRUE(root, NS_ERROR_OUT_OF_MEMORY);
@@ -219,7 +219,7 @@ MediaDocument::CreateSyntheticDocument()
 
   nodeInfo = mNodeInfoManager->GetNodeInfo(nsGkAtoms::head, nullptr,
                                            kNameSpaceID_XHTML,
-                                           nsIDOMNode::ELEMENT_NODE);
+                                           nsINode::ELEMENT_NODE);
 
   // Create a <head> so our title has somewhere to live
   RefPtr<nsGenericHTMLElement> head = NS_NewHTMLHeadElement(nodeInfo.forget());
@@ -227,7 +227,7 @@ MediaDocument::CreateSyntheticDocument()
 
   nodeInfo = mNodeInfoManager->GetNodeInfo(nsGkAtoms::meta, nullptr,
                                            kNameSpaceID_XHTML,
-                                           nsIDOMNode::ELEMENT_NODE);
+                                           nsINode::ELEMENT_NODE);
 
   RefPtr<nsGenericHTMLElement> metaContent = NS_NewHTMLMetaElement(nodeInfo.forget());
   NS_ENSURE_TRUE(metaContent, NS_ERROR_OUT_OF_MEMORY);
@@ -244,7 +244,7 @@ MediaDocument::CreateSyntheticDocument()
 
   nodeInfo = mNodeInfoManager->GetNodeInfo(nsGkAtoms::body, nullptr,
                                            kNameSpaceID_XHTML,
-                                           nsIDOMNode::ELEMENT_NODE);
+                                           nsINode::ELEMENT_NODE);
 
   RefPtr<nsGenericHTMLElement> body = NS_NewHTMLBodyElement(nodeInfo.forget());
   NS_ENSURE_TRUE(body, NS_ERROR_OUT_OF_MEMORY);
@@ -262,8 +262,7 @@ MediaDocument::StartLayout()
   // Don't mess with the presshell if someone has already handled
   // its initial reflow.
   if (shell && !shell->DidInitialize()) {
-    nsRect visibleArea = shell->GetPresContext()->GetVisibleArea();
-    nsresult rv = shell->Initialize(visibleArea.width, visibleArea.height);
+    nsresult rv = shell->Initialize();
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
@@ -320,7 +319,7 @@ MediaDocument::LinkStylesheet(const nsAString& aStylesheet)
   RefPtr<mozilla::dom::NodeInfo> nodeInfo;
   nodeInfo = mNodeInfoManager->GetNodeInfo(nsGkAtoms::link, nullptr,
                                            kNameSpaceID_XHTML,
-                                           nsIDOMNode::ELEMENT_NODE);
+                                           nsINode::ELEMENT_NODE);
 
   RefPtr<nsGenericHTMLElement> link = NS_NewHTMLLinkElement(nodeInfo.forget());
   NS_ENSURE_TRUE(link, NS_ERROR_OUT_OF_MEMORY);
@@ -340,7 +339,7 @@ MediaDocument::LinkScript(const nsAString& aScript)
   RefPtr<mozilla::dom::NodeInfo> nodeInfo;
   nodeInfo = mNodeInfoManager->GetNodeInfo(nsGkAtoms::script, nullptr,
                                            kNameSpaceID_XHTML,
-                                           nsIDOMNode::ELEMENT_NODE);
+                                           nsINode::ELEMENT_NODE);
 
   RefPtr<nsGenericHTMLElement> script = NS_NewHTMLScriptElement(nodeInfo.forget());
   NS_ENSURE_TRUE(script, NS_ERROR_OUT_OF_MEMORY);
@@ -405,7 +404,8 @@ MediaDocument::UpdateTitleAndCharset(const nsACString& aTypeStr,
 
   // set it on the document
   if (aStatus.IsEmpty()) {
-    SetTitle(title);
+    IgnoredErrorResult ignored;
+    SetTitle(title, ignored);
   }
   else {
     nsAutoString titleWithStatus;
@@ -413,19 +413,9 @@ MediaDocument::UpdateTitleAndCharset(const nsACString& aTypeStr,
     const char16_t *formatStrings[2] = {title.get(), status.get()};
     mStringBundle->FormatStringFromName("TitleWithStatus", formatStrings,
                                         2, titleWithStatus);
-    SetTitle(titleWithStatus);
+    IgnoredErrorResult ignored;
+    SetTitle(titleWithStatus, ignored);
   }
-}
-
-void
-MediaDocument::SetScriptGlobalObject(nsIScriptGlobalObject* aGlobalObject)
-{
-    nsHTMLDocument::SetScriptGlobalObject(aGlobalObject);
-    if (!mDocumentElementInserted && aGlobalObject) {
-        mDocumentElementInserted = true;
-        nsContentUtils::AddScriptRunner(
-            new nsDocElementCreatedNotificationRunner(this));
-    }
 }
 
 } // namespace dom

@@ -8,9 +8,6 @@ interface LoadContext;
 interface TabParent;
 interface URI;
 interface nsIDocShell;
-interface nsIGroupedSHistory;
-interface nsIMessageSender;
-interface nsIPartialSHistory;
 interface nsIPrintSettings;
 interface nsIWebBrowserPersistDocumentReceiver;
 interface nsIWebProgressListener;
@@ -37,47 +34,10 @@ interface FrameLoader {
   readonly attribute LoadContext loadContext;
 
   /**
-   * Start loading the frame. This method figures out what to load
-   * from the owner content in the frame loader.
+   * Get the ParentSHistory for the nsFrameLoader. May return null if this
+   * frameloader is not for a toplevel frame.
    */
-  [Throws]
-  void loadFrame();
-
-  /**
-   * Loads the specified URI in this frame. Behaves identically to loadFrame,
-   * except that this method allows specifying the URI to load.
-   */
-  [Throws]
-  void loadURI(URI aURI);
-
-  /**
-   * Puts the frameloader in prerendering mode.
-   */
-  [Throws]
-  void setIsPrerendered();
-
-  /**
-   * Make the prerendered frameloader being active (and clear isPrerendered flag).
-   */
-  [Throws]
-  void makePrerenderedLoaderActive();
-
-  /**
-   * Append partial session history from another frame loader.
-   *
-   * @return A promise which will be resolved when the navigation is complete.
-   */
-  [Throws]
-  Promise<void> appendPartialSHistoryAndSwap(FrameLoader aOther);
-
-  /**
-   * If grouped session history is applied, use this function to navigate to
-   * an entry of session history object of another frameloader.
-   *
-   * @return A promise which will be resolved when the navigation is complete.
-   */
-  [Throws]
-  Promise<void> requestGroupedHistoryNavigation(unsigned long aGlobalIndex);
+  readonly attribute ParentSHistory? parentSHistory;
 
   /**
    * Adds a blocking promise for the current cross process navigation.
@@ -86,13 +46,6 @@ interface FrameLoader {
    */
   [Throws]
   void addProcessChangeBlockingPromise(Promise<any> aPromise);
-
-  /**
-   * Destroy the frame loader and everything inside it. This will
-   * clear the weak owner content reference.
-   */
-  [Throws]
-  void destroy();
 
   /**
    * Find out whether the loader's frame is at too great a depth in
@@ -135,24 +88,13 @@ interface FrameLoader {
   void activateFrameEvent(DOMString aType, boolean capture);
 
   // Note, when frameloaders are swapped, also messageManagers are swapped.
-  readonly attribute nsIMessageSender? messageManager;
-
-  /**
-   * @see nsIDOMWindowUtils sendKeyEvent.
-   */
-  [Throws]
-  void sendCrossProcessKeyEvent(DOMString aType,
-                                long aKeyCode,
-                                long aCharCode,
-                                long aModifiers,
-                                optional boolean aPreventDefault = false);
+  readonly attribute MessageSender? messageManager;
 
   /**
    * Request that the next time a remote layer transaction has been
    * received by the Compositor, a MozAfterRemoteFrame event be sent
    * to the window.
    */
-  [Throws]
   void requestNotifyAfterRemotePaint();
 
   /**
@@ -160,6 +102,12 @@ interface FrameLoader {
    */
   [Throws]
   void requestFrameLoaderClose();
+
+  /**
+   * Force a remote browser to recompute its dimension and screen position.
+   */
+  [Throws]
+  void requestUpdatePosition();
 
   /**
    * Print the current document.
@@ -172,32 +120,7 @@ interface FrameLoader {
   [Throws]
   void print(unsigned long long aOuterWindowID,
              nsIPrintSettings aPrintSettings,
-             nsIWebProgressListener aProgressListener);
-
-  /**
-   * Ensure that the current nsIFrameLoader has a GroupedSHistory.
-   */
-  [Throws]
-  nsIGroupedSHistory ensureGroupedSHistory();
-
-  /**
-   * The default event mode automatically forwards the events
-   * handled in EventStateManager::HandleCrossProcessEvent to
-   * the child content process when these events are targeted to
-   * the remote browser element.
-   *
-   * Used primarly for input events (mouse, keyboard)
-   */
-  const unsigned long EVENT_MODE_NORMAL_DISPATCH = 0x00000000;
-
-  /**
-   * With this event mode, it's the application's responsability to
-   * convert and forward events to the content process
-   */
-  const unsigned long EVENT_MODE_DONT_FORWARD_TO_CHILD = 0x00000001;
-
-  [Pure]
-  attribute unsigned long eventMode;
+             optional nsIWebProgressListener? aProgressListener = null);
 
   /**
    * If false, then the subdocument is not clipped to its CSS viewport, and the
@@ -256,23 +179,35 @@ interface FrameLoader {
   readonly attribute unsigned long lazyHeight;
 
   /**
-   * The partial session history.
-   */
-  readonly attribute nsIPartialSHistory? partialSHistory;
-
-  /**
-   * The grouped session history composed of multiple session history objects
-   * across root docshells.
-   */
-  readonly attribute nsIGroupedSHistory? groupedSHistory;
-
-  /**
    * Is `true` if the frameloader is dead (destroy has been called on it)
    */
   [Pure]
   readonly attribute boolean isDead;
 };
 
+/**
+ * Interface for objects which represent a document that can be
+ * serialized with nsIWebBrowserPersist.  This interface is
+ * asynchronous because the actual document can be in another process
+ * (e.g., if this object is a FrameLoader for an out-of-process
+ * frame).
+ *
+ * XXXbz This method should really just return a Promise...
+ *
+ * @see nsIWebBrowserPersistDocumentReceiver
+ * @see nsIWebBrowserPersistDocument
+ * @see nsIWebBrowserPersist
+ *
+ * @param aOuterWindowID
+ *        The outer window ID of the subframe we'd like to persist.
+ *        If set at 0, WebBrowserPersistable will attempt to persist
+ *        the top-level document. If the outer window ID is for a subframe
+ *        that does not exist, or is not held beneath the WebBrowserPersistable,
+ *        aRecv's onError method will be called with NS_ERROR_NO_CONTENT.
+ * @param aRecv
+ *        The nsIWebBrowserPersistDocumentReceiver is a callback that
+ *        will be fired once the document is ready for persisting.
+ */
 [NoInterfaceObject]
 interface WebBrowserPersistable
 {

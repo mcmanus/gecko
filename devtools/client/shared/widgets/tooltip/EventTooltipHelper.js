@@ -28,7 +28,7 @@ const CONTAINER_WIDTH = 500;
  *        Toolbox used to select debugger panel
  */
 function setEventTooltip(tooltip, eventListenerInfos, toolbox) {
-  let eventTooltip = new EventTooltip(tooltip, eventListenerInfos, toolbox);
+  const eventTooltip = new EventTooltip(tooltip, eventListenerInfos, toolbox);
   eventTooltip.init();
 }
 
@@ -48,8 +48,8 @@ function EventTooltip(tooltip, eventListenerInfos, toolbox) {
 }
 
 EventTooltip.prototype = {
-  init: function () {
-    let config = {
+  init: function() {
+    const config = {
       mode: Editor.modes.js,
       lineNumbers: false,
       lineWrapping: true,
@@ -59,7 +59,7 @@ EventTooltip.prototype = {
       theme: "mozilla markup-view"
     };
 
-    let doc = this._tooltip.doc;
+    const doc = this._tooltip.doc;
     this.container = doc.createElementNS(XHTML_NS, "div");
     this.container.className = "devtools-tooltip-events-container";
 
@@ -67,41 +67,27 @@ EventTooltip.prototype = {
 
     const Bubbling = L10N.getStr("eventsTooltip.Bubbling");
     const Capturing = L10N.getStr("eventsTooltip.Capturing");
-    for (let listener of this._eventListenerInfos) {
-      let phase = listener.capturing ? Capturing : Bubbling;
-      let level = listener.DOM0 ? "DOM0" : "DOM2";
+    for (const listener of this._eventListenerInfos) {
+      const phase = listener.capturing ? Capturing : Bubbling;
+      const level = listener.DOM0 ? "DOM0" : "DOM2";
 
       // Create this early so we can refer to it from a closure, below.
-      let content = doc.createElementNS(XHTML_NS, "div");
+      const content = doc.createElementNS(XHTML_NS, "div");
 
       // Header
-      let header = doc.createElementNS(XHTML_NS, "div");
+      const header = doc.createElementNS(XHTML_NS, "div");
       header.className = "event-header devtools-toolbar";
       this.container.appendChild(header);
 
-      if (!listener.hide.debugger) {
-        let debuggerIcon = doc.createElementNS(XHTML_NS, "img");
-        debuggerIcon.className = "event-tooltip-debugger-icon";
-        debuggerIcon.setAttribute("src",
-          "chrome://devtools/skin/images/tool-debugger.svg");
-        let openInDebugger = L10N.getStr("eventsTooltip.openInDebugger");
-        debuggerIcon.setAttribute("title", openInDebugger);
-        header.appendChild(debuggerIcon);
-      } else {
-        let debuggerDiv = doc.createElementNS(XHTML_NS, "div");
-        debuggerDiv.className = "event-tooltip-debugger-spacer";
-        header.appendChild(debuggerDiv);
-      }
-
       if (!listener.hide.type) {
-        let eventTypeLabel = doc.createElementNS(XHTML_NS, "span");
+        const eventTypeLabel = doc.createElementNS(XHTML_NS, "span");
         eventTypeLabel.className = "event-tooltip-event-type";
         eventTypeLabel.textContent = listener.type;
         eventTypeLabel.setAttribute("title", listener.type);
         header.appendChild(eventTypeLabel);
       }
 
-      let filename = doc.createElementNS(XHTML_NS, "span");
+      const filename = doc.createElementNS(XHTML_NS, "span");
       filename.className = "event-tooltip-filename devtools-monospace";
 
       let text = listener.origin;
@@ -112,17 +98,17 @@ EventTooltip.prototype = {
       } else {
         const location = this._parseLocation(text);
         if (location) {
-          let callback = (enabled, url, line, column) => {
+          const callback = (enabled, url, line, column) => {
             // Do nothing if the tooltip was destroyed while we were
             // waiting for a response.
             if (this._tooltip) {
               const newUrl = enabled ? url : location.url;
               const newLine = enabled ? line : location.line;
 
-              let newURI = newUrl + ":" + newLine;
+              const newURI = newUrl + ":" + newLine;
               filename.textContent = newURI;
               filename.setAttribute("title", newURI);
-              let eventEditor = this._eventEditors.get(content);
+              const eventEditor = this._eventEditors.get(content);
               eventEditor.uri = newURI;
 
               // This is emitted for testing.
@@ -143,16 +129,26 @@ EventTooltip.prototype = {
       filename.setAttribute("title", title);
       header.appendChild(filename);
 
-      let attributesContainer = doc.createElementNS(XHTML_NS, "div");
+      if (!listener.hide.debugger) {
+        const debuggerIcon = doc.createElementNS(XHTML_NS, "img");
+        debuggerIcon.className = "event-tooltip-debugger-icon";
+        debuggerIcon.setAttribute("src",
+          "chrome://devtools/skin/images/jump-definition.svg");
+        const openInDebugger = L10N.getStr("eventsTooltip.openInDebugger");
+        debuggerIcon.setAttribute("title", openInDebugger);
+        header.appendChild(debuggerIcon);
+      }
+
+      const attributesContainer = doc.createElementNS(XHTML_NS, "div");
       attributesContainer.className = "event-tooltip-attributes-container";
       header.appendChild(attributesContainer);
 
       if (!listener.hide.capturing) {
-        let attributesBox = doc.createElementNS(XHTML_NS, "div");
+        const attributesBox = doc.createElementNS(XHTML_NS, "div");
         attributesBox.className = "event-tooltip-attributes-box";
         attributesContainer.appendChild(attributesBox);
 
-        let capturing = doc.createElementNS(XHTML_NS, "span");
+        const capturing = doc.createElementNS(XHTML_NS, "span");
         capturing.className = "event-tooltip-attributes";
         capturing.textContent = phase;
         capturing.setAttribute("title", phase);
@@ -160,12 +156,12 @@ EventTooltip.prototype = {
       }
 
       if (listener.tags) {
-        for (let tag of listener.tags.split(",")) {
-          let attributesBox = doc.createElementNS(XHTML_NS, "div");
+        for (const tag of listener.tags.split(",")) {
+          const attributesBox = doc.createElementNS(XHTML_NS, "div");
           attributesBox.className = "event-tooltip-attributes-box";
           attributesContainer.appendChild(attributesBox);
 
-          let tagBox = doc.createElementNS(XHTML_NS, "span");
+          const tagBox = doc.createElementNS(XHTML_NS, "span");
           tagBox.className = "event-tooltip-attributes";
           tagBox.textContent = tag;
           tagBox.setAttribute("title", tag);
@@ -174,18 +170,18 @@ EventTooltip.prototype = {
       }
 
       if (!listener.hide.dom0) {
-        let attributesBox = doc.createElementNS(XHTML_NS, "div");
+        const attributesBox = doc.createElementNS(XHTML_NS, "div");
         attributesBox.className = "event-tooltip-attributes-box";
         attributesContainer.appendChild(attributesBox);
 
-        let dom0 = doc.createElementNS(XHTML_NS, "span");
+        const dom0 = doc.createElementNS(XHTML_NS, "span");
         dom0.className = "event-tooltip-attributes";
         dom0.textContent = level;
         attributesBox.appendChild(dom0);
       }
 
       // Content
-      let editor = new Editor(config);
+      const editor = new Editor(config);
       this._eventEditors.set(content, {
         editor: editor,
         handler: listener.handler,
@@ -205,27 +201,28 @@ EventTooltip.prototype = {
     this._tooltip.on("hidden", this.destroy);
   },
 
-  _addContentListeners: function (header) {
+  _addContentListeners: function(header) {
     header.addEventListener("click", this._headerClicked);
   },
 
-  _headerClicked: function (event) {
+  _headerClicked: function(event) {
     if (event.target.classList.contains("event-tooltip-debugger-icon")) {
       this._debugClicked(event);
       event.stopPropagation();
       return;
     }
 
-    let doc = this._tooltip.doc;
-    let header = event.currentTarget;
-    let content = header.nextElementSibling;
+    const doc = this._tooltip.doc;
+    const header = event.currentTarget;
+    const content = header.nextElementSibling;
+    header.classList.toggle("content-expanded");
 
     if (content.hasAttribute("open")) {
       content.removeAttribute("open");
     } else {
-      let contentNodes = doc.querySelectorAll(".event-tooltip-content-box");
+      const contentNodes = doc.querySelectorAll(".event-tooltip-content-box");
 
-      for (let node of contentNodes) {
+      for (const node of contentNodes) {
         if (node !== content) {
           node.removeAttribute("open");
         }
@@ -233,24 +230,24 @@ EventTooltip.prototype = {
 
       content.setAttribute("open", "");
 
-      let eventEditor = this._eventEditors.get(content);
+      const eventEditor = this._eventEditors.get(content);
 
       if (eventEditor.appended) {
         return;
       }
 
-      let {editor, handler} = eventEditor;
+      const {editor, handler} = eventEditor;
 
-      let iframe = doc.createElementNS(XHTML_NS, "iframe");
+      const iframe = doc.createElementNS(XHTML_NS, "iframe");
       iframe.setAttribute("style", "width: 100%; height: 100%; border-style: none;");
 
       editor.appendTo(content, iframe).then(() => {
-        let tidied = beautify.js(handler, { "indent_size": 2 });
+        const tidied = beautify.js(handler, { "indent_size": 2 });
         editor.setText(tidied);
 
         eventEditor.appended = true;
 
-        let container = header.parentElement.getBoundingClientRect();
+        const container = header.parentElement.getBoundingClientRect();
         if (header.getBoundingClientRect().top < container.top) {
           header.scrollIntoView(true);
         } else if (content.getBoundingClientRect().bottom > container.bottom) {
@@ -262,16 +259,16 @@ EventTooltip.prototype = {
     }
   },
 
-  _debugClicked: function (event) {
-    let header = event.currentTarget;
-    let content = header.nextElementSibling;
+  _debugClicked: function(event) {
+    const header = event.currentTarget;
+    const content = header.nextElementSibling;
 
-    let {uri} = this._eventEditors.get(content);
+    const {uri} = this._eventEditors.get(content);
 
-    let location = this._parseLocation(uri);
+    const location = this._parseLocation(uri);
     if (location) {
       // Save a copy of toolbox as it will be set to null when we hide the tooltip.
-      let toolbox = this._toolbox;
+      const toolbox = this._toolbox;
 
       this._tooltip.hide();
 
@@ -282,11 +279,11 @@ EventTooltip.prototype = {
   /**
    * Parse URI and return {url, line}; or return null if it can't be parsed.
    */
-  _parseLocation: function (uri) {
+  _parseLocation: function(uri) {
     if (uri && uri !== "?") {
       uri = uri.replace(/"/g, "");
 
-      let matches = uri.match(/(.*):(\d+$)/);
+      const matches = uri.match(/(.*):(\d+$)/);
 
       if (matches) {
         return {
@@ -299,14 +296,14 @@ EventTooltip.prototype = {
     return null;
   },
 
-  destroy: function () {
+  destroy: function() {
     if (this._tooltip) {
       this._tooltip.off("hidden", this.destroy);
 
-      let boxes = this.container.querySelectorAll(".event-tooltip-content-box");
+      const boxes = this.container.querySelectorAll(".event-tooltip-content-box");
 
-      for (let box of boxes) {
-        let {editor} = this._eventEditors.get(box);
+      for (const box of boxes) {
+        const {editor} = this._eventEditors.get(box);
         editor.destroy();
       }
 
@@ -314,19 +311,19 @@ EventTooltip.prototype = {
       this._tooltip.eventTooltip = null;
     }
 
-    let headerNodes = this.container.querySelectorAll(".event-header");
+    const headerNodes = this.container.querySelectorAll(".event-header");
 
-    for (let node of headerNodes) {
+    for (const node of headerNodes) {
       node.removeEventListener("click", this._headerClicked);
     }
 
-    let sourceNodes = this.container.querySelectorAll(".event-tooltip-debugger-icon");
-    for (let node of sourceNodes) {
+    const sourceNodes = this.container.querySelectorAll(".event-tooltip-debugger-icon");
+    for (const node of sourceNodes) {
       node.removeEventListener("click", this._debugClicked);
     }
 
     const sourceMapService = this._toolbox.sourceMapURLService;
-    for (let subscription of this._subscriptions) {
+    for (const subscription of this._subscriptions) {
       sourceMapService.unsubscribe(subscription.url, subscription.line, null,
                                    subscription.callback);
     }

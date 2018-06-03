@@ -28,7 +28,6 @@
 #include "nsAppRunner.h"
 #include "nsContentUtils.h"
 #include "nsChromeRegistry.h"
-#include "nsIAddonInterposition.h"
 #include "nsIDOMWindowUtils.h" // for nsIJSRAIIHelper
 #include "nsIFileURL.h"
 #include "nsIIOService.h"
@@ -65,7 +64,6 @@ AddonManagerStartup::GetSingleton()
 }
 
 AddonManagerStartup::AddonManagerStartup()
-  : mInitialized(false)
 {}
 
 
@@ -147,18 +145,24 @@ EncodeLZ4(const nsACString& data, const T& magicNumber)
   result.Append(magic);
 
   auto off = result.Length();
-  result.SetLength(off + 4);
+  if (!result.SetLength(off + 4, fallible)) {
+    return Err(NS_ERROR_OUT_OF_MEMORY);
+  }
 
   LittleEndian::writeUint32(result.BeginWriting() + off, data.Length());
   off += 4;
 
   auto size = LZ4::maxCompressedSize(data.Length());
-  result.SetLength(off + size);
+  if (!result.SetLength(off + size, fallible)) {
+    return Err(NS_ERROR_OUT_OF_MEMORY);
+  }
 
   size = LZ4::compress(data.BeginReading(), data.Length(),
                        result.BeginWriting() + off);
 
-  result.SetLength(off + size);
+  if (!result.SetLength(off + size, fallible)) {
+    return Err(NS_ERROR_OUT_OF_MEMORY);
+  }
   return result;
 }
 
@@ -208,7 +212,7 @@ GetJarCache()
   nsCOMPtr<nsIZipReaderCache> zipCache;
   MOZ_TRY(jar->GetJARCache(getter_AddRefs(zipCache)));
 
-  return Move(zipCache);
+  return std::move(zipCache);
 }
 
 static Result<FileLocation, nsresult>
@@ -239,7 +243,7 @@ GetFileLocation(nsIURI* uri)
     location.Init(file, entry.get());
   }
 
-  return Move(location);
+  return std::move(location);
 }
 
 
@@ -409,14 +413,10 @@ public:
 
   bool Enabled() { return GetBool("enabled"); }
 
-  bool ShimsEnabled() { return GetBool("enableShims"); }
-
   double LastModifiedTime() { return GetNumber("lastModifiedTime"); }
 
 
   Result<nsCOMPtr<nsIFile>, nsresult> FullPath();
-
-  NSLocationType LocationType();
 
   Result<bool, nsresult> UpdateLastModifiedTime();
 
@@ -434,24 +434,14 @@ Addon::FullPath()
   // First check for an absolute path, in case we have a proxy file.
   nsCOMPtr<nsIFile> file;
   if (NS_SUCCEEDED(NS_NewLocalFile(path, false, getter_AddRefs(file)))) {
-    return Move(file);
+    return std::move(file);
   }
 
   // If not an absolute path, fall back to a relative path from the location.
   MOZ_TRY(NS_NewLocalFile(mLocation.Path(), false, getter_AddRefs(file)));
 
   MOZ_TRY(file->AppendRelativePath(path));
-  return Move(file);
-}
-
-NSLocationType
-Addon::LocationType()
-{
-  nsString type = GetString("type", "extension");
-  if (type.LowerCaseEqualsLiteral("theme")) {
-    return NS_SKIN_LOCATION;
-  }
-  return NS_EXTENSION_LOCATION;
+  return std::move(file);
 }
 
 Result<bool, nsresult>
@@ -511,47 +501,6 @@ InstallLocation::InstallLocation(JSContext* cx, const JS::Value& value)
  * XPC interfacing
  *****************************************************************************/
 
-static void
-EnableShims(const nsAString& addonId)
-{
-  NS_ConvertUTF16toUTF8 id(addonId);
-
-  nsCOMPtr<nsIAddonInterposition> interposition =
-     do_GetService("@mozilla.org/addons/multiprocess-shims;1");
-
-  if (!interposition || !xpc::SetAddonInterposition(id, interposition)) {
-    return;
-  }
-
-  Unused << xpc::AllowCPOWsInAddon(id, true);
-}
-
-Result<Ok, nsresult>
-AddonManagerStartup::AddInstallLocation(Addon& addon)
-{
-  nsCOMPtr<nsIFile> file;
-  MOZ_TRY_VAR(file, addon.FullPath());
-
-  nsString path;
-  MOZ_TRY(file->GetPath(path));
-
-  auto type = addon.LocationType();
-
-  if (type == NS_SKIN_LOCATION) {
-    mThemePaths.AppendElement(file);
-  } else {
-    mExtensionPaths.AppendElement(file);
-  }
-
-  if (StringTail(path, 4).LowerCaseEqualsLiteral(".xpi")) {
-    XRE_AddJarManifestLocation(type, file);
-  } else {
-    nsCOMPtr<nsIFile> manifest = CloneAndAppend(file, "chrome.manifest");
-    XRE_AddManifestLocation(type, manifest);
-  }
-  return Ok();
-}
-
 nsresult
 AddonManagerStartup::ReadStartupData(JSContext* cx, JS::MutableHandleValue locations)
 {
@@ -600,40 +549,6 @@ AddonManagerStartup::ReadStartupData(JSContext* cx, JS::MutableHandleValue locat
 }
 
 nsresult
-AddonManagerStartup::InitializeExtensions(JS::HandleValue locations, JSContext* cx)
-{
-  NS_ENSURE_FALSE(mInitialized, NS_ERROR_UNEXPECTED);
-  NS_ENSURE_TRUE(locations.isObject(), NS_ERROR_INVALID_ARG);
-
-  mInitialized = true;
-
-  if (!Preferences::GetBool("extensions.defaultProviders.enabled", true)) {
-    return NS_OK;
-  }
-
-  bool enableInterpositions = Preferences::GetBool("extensions.interposition.enabled", false);
-
-  JS::RootedObject locs(cx, &locations.toObject());
-  for (auto e1 : PropertyIter(cx, locs)) {
-    InstallLocation loc(e1);
-
-    for (auto e2 : loc.Addons()) {
-      Addon addon(e2);
-
-      if (addon.Enabled() && !addon.Bootstrapped()) {
-        Unused << AddInstallLocation(addon);
-
-        if (enableInterpositions && addon.ShimsEnabled()) {
-          EnableShims(addon.Id());
-        }
-      }
-    }
-  }
-
-  return NS_OK;
-}
-
-nsresult
 AddonManagerStartup::EncodeBlob(JS::HandleValue value, JSContext* cx, JS::MutableHandleValue result)
 {
   StructuredCloneData holder;
@@ -646,12 +561,10 @@ AddonManagerStartup::EncodeBlob(JS::HandleValue value, JSContext* cx, JS::Mutabl
 
   nsAutoCString scData;
 
-  auto& data = holder.Data();
-  auto iter = data.Iter();
-  while (!iter.Done()) {
-    scData.Append(nsDependentCSubstring(iter.Data(), iter.RemainingInSegment()));
-    iter.Advance(data, iter.RemainingInSegment());
-  }
+  holder.Data().ForEachDataChunk([&](const char* aData, size_t aSize) {
+      scData.Append(nsDependentCSubstring(aData, aSize));
+      return true;
+  });
 
   nsCString lz4;
   MOZ_TRY_VAR(lz4, EncodeLZ4(scData, STRUCTURED_CLONE_MAGIC));
@@ -733,19 +646,6 @@ AddonManagerStartup::EnumerateZipFile(nsIFile* file, const nsACString& pattern,
 }
 
 nsresult
-AddonManagerStartup::Reset()
-{
-  MOZ_RELEASE_ASSERT(xpc::IsInAutomation());
-
-  mInitialized = false;
-
-  mExtensionPaths.Clear();
-  mThemePaths.Clear();
-
-  return NS_OK;
-}
-
-nsresult
 AddonManagerStartup::InitializeURLPreloader()
 {
   MOZ_RELEASE_ASSERT(xpc::IsInAutomation());
@@ -774,8 +674,8 @@ public:
 
   RegistryEntries(FileLocation& location, nsTArray<Override>&& overrides, nsTArray<Locale>&& locales)
     : mLocation(location)
-    , mOverrides(Move(overrides))
-    , mLocales(Move(locales))
+    , mOverrides(std::move(overrides))
+    , mLocales(std::move(locales))
   {}
 
   void Register();
@@ -895,8 +795,8 @@ AddonManagerStartup::RegisterChrome(nsIURI* manifestURI, JS::HandleValue locatio
   }
 
   auto entry = MakeRefPtr<RegistryEntries>(location,
-                                           Move(overrides),
-                                           Move(locales));
+                                           std::move(overrides),
+                                           std::move(locales));
 
   entry->Register();
   GetRegistryEntries().insertBack(entry);

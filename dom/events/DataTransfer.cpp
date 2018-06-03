@@ -6,10 +6,10 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/BasicEvents.h"
+#include "mozilla/CheckedInt.h"
 
 #include "DataTransfer.h"
 
-#include "nsIDOMDocument.h"
 #include "nsISupportsPrimitives.h"
 #include "nsIScriptSecurityManager.h"
 #include "mozilla/dom/DOMStringList.h"
@@ -19,8 +19,8 @@
 #include "nsIClipboard.h"
 #include "nsContentUtils.h"
 #include "nsIContent.h"
-#include "nsIBinaryInputStream.h"
-#include "nsIBinaryOutputStream.h"
+#include "nsIObjectInputStream.h"
+#include "nsIObjectOutputStream.h"
 #include "nsIStorageStream.h"
 #include "nsStringStream.h"
 #include "nsCRT.h"
@@ -66,8 +66,7 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(DataTransfer)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(DataTransfer)
   NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
   NS_INTERFACE_MAP_ENTRY(mozilla::dom::DataTransfer)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMDataTransfer)
-  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIDOMDataTransfer)
+  NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
 
 // the size of the array
@@ -223,16 +222,7 @@ DataTransfer::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
   return DataTransferBinding::Wrap(aCx, this, aGivenProto);
 }
 
-NS_IMETHODIMP
-DataTransfer::GetDropEffect(nsAString& aDropEffect)
-{
-  nsString dropEffect;
-  GetDropEffect(dropEffect);
-  aDropEffect = dropEffect;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
+void
 DataTransfer::SetDropEffect(const nsAString& aDropEffect)
 {
   // the drop effect can only be 'none', 'copy', 'move' or 'link'.
@@ -246,25 +236,14 @@ DataTransfer::SetDropEffect(const nsAString& aDropEffect)
       break;
     }
   }
-
-  return NS_OK;
 }
 
-NS_IMETHODIMP
-DataTransfer::GetEffectAllowed(nsAString& aEffectAllowed)
-{
-  nsString effectAllowed;
-  GetEffectAllowed(effectAllowed);
-  aEffectAllowed = effectAllowed;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
+void
 DataTransfer::SetEffectAllowed(const nsAString& aEffectAllowed)
 {
   if (aEffectAllowed.EqualsLiteral("uninitialized")) {
     mEffectAllowed = nsIDragService::DRAGDROP_ACTION_UNINITIALIZED;
-    return NS_OK;
+    return;
   }
 
   static_assert(nsIDragService::DRAGDROP_ACTION_NONE == 0,
@@ -282,69 +261,26 @@ DataTransfer::SetEffectAllowed(const nsAString& aEffectAllowed)
       break;
     }
   }
-
-  return NS_OK;
 }
 
-NS_IMETHODIMP
-DataTransfer::GetDropEffectInt(uint32_t* aDropEffect)
+void
+DataTransfer::GetMozTriggeringPrincipalURISpec(nsAString& aPrincipalURISpec)
 {
-  *aDropEffect = mDropEffect;
-  return  NS_OK;
-}
+  nsCOMPtr<nsIDragSession> dragSession = nsContentUtils::GetDragSession();
+  if (!dragSession) {
+    aPrincipalURISpec.Truncate(0);
+    return;
+  }
 
-NS_IMETHODIMP
-DataTransfer::SetDropEffectInt(uint32_t aDropEffect)
-{
-  mDropEffect = aDropEffect;
-  return  NS_OK;
-}
-
-NS_IMETHODIMP
-DataTransfer::GetEffectAllowedInt(uint32_t* aEffectAllowed)
-{
-  *aEffectAllowed = mEffectAllowed;
-  return  NS_OK;
-}
-
-NS_IMETHODIMP
-DataTransfer::SetEffectAllowedInt(uint32_t aEffectAllowed)
-{
-  mEffectAllowed = aEffectAllowed;
-  return  NS_OK;
-}
-
-NS_IMETHODIMP
-DataTransfer::GetMozUserCancelled(bool* aUserCancelled)
-{
-  *aUserCancelled = MozUserCancelled();
-  return NS_OK;
+  nsCString principalURISpec;
+  dragSession->GetTriggeringPrincipalURISpec(principalURISpec);
+  CopyUTF8toUTF16(principalURISpec, aPrincipalURISpec);
 }
 
 already_AddRefed<FileList>
-DataTransfer::GetFiles(nsIPrincipal& aSubjectPrincipal,
-                       ErrorResult& aRv)
+DataTransfer::GetFiles(nsIPrincipal& aSubjectPrincipal)
 {
   return mItems->Files(&aSubjectPrincipal);
-}
-
-NS_IMETHODIMP
-DataTransfer::GetFiles(nsIDOMFileList** aFileList)
-{
-  if (!aFileList) {
-    return NS_ERROR_FAILURE;
-  }
-
-  // The XPCOM interface is only avaliable to system code, and thus we can
-  // assume the system principal. This is consistent with the previous behavour
-  // of this function, which also assumed the system principal.
-  //
-  // This code is also called from C++ code, which expects it to have a System
-  // Principal, and thus the SubjectPrincipal cannot be used.
-  RefPtr<FileList> files = mItems->Files(nsContentUtils::GetSystemPrincipal());
-
-  files.forget(aFileList);
-  return NS_OK;
 }
 
 void
@@ -480,29 +416,11 @@ DataTransfer::ClearData(const Optional<nsAString>& aFormat,
   }
 }
 
-NS_IMETHODIMP
-DataTransfer::GetMozItemCount(uint32_t* aCount)
-{
-  *aCount = MozItemCount();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-DataTransfer::GetMozCursor(nsAString& aCursorState)
-{
-  nsString cursor;
-  GetMozCursor(cursor);
-  aCursorState = cursor;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
+void
 DataTransfer::SetMozCursor(const nsAString& aCursorState)
 {
   // Lock the cursor to an arrow during the drag.
   mCursorState = aCursorState.EqualsLiteral("default");
-
-  return NS_OK;
 }
 
 already_AddRefed<nsINode>
@@ -513,27 +431,14 @@ DataTransfer::GetMozSourceNode()
     return nullptr;
   }
 
-  nsCOMPtr<nsIDOMNode> sourceNode;
+  nsCOMPtr<nsINode> sourceNode;
   dragSession->GetSourceNode(getter_AddRefs(sourceNode));
-  nsCOMPtr<nsINode> node = do_QueryInterface(sourceNode);
-  if (node && !nsContentUtils::LegacyIsCallerNativeCode()
-      && !nsContentUtils::CanCallerAccess(node)) {
+  if (sourceNode && !nsContentUtils::LegacyIsCallerNativeCode()
+      && !nsContentUtils::CanCallerAccess(sourceNode)) {
     return nullptr;
   }
 
-  return node.forget();
-}
-
-NS_IMETHODIMP
-DataTransfer::GetMozSourceNode(nsIDOMNode** aSourceNode)
-{
-  nsCOMPtr<nsINode> sourceNode = GetMozSourceNode();
-  if (!sourceNode) {
-    *aSourceNode = nullptr;
-    return NS_OK;
-  }
-
-  return CallQueryInterface(sourceNode, aSourceNode);
+  return sourceNode.forget();
 }
 
 already_AddRefed<DOMStringList>
@@ -829,16 +734,6 @@ DataTransfer::SetDragImage(Element& aImage, int32_t aX, int32_t aY)
   }
 }
 
-NS_IMETHODIMP
-DataTransfer::SetDragImage(nsIDOMElement* aImage, int32_t aX, int32_t aY)
-{
-  nsCOMPtr<Element> image = do_QueryInterface(aImage);
-  if (image) {
-    SetDragImage(*image, aX, aY);
-  }
-  return NS_OK;
-}
-
 void
 DataTransfer::UpdateDragImage(Element& aImage, int32_t aX, int32_t aY)
 {
@@ -848,7 +743,7 @@ DataTransfer::UpdateDragImage(Element& aImage, int32_t aX, int32_t aY)
 
   nsCOMPtr<nsIDragSession> dragSession = nsContentUtils::GetDragSession();
   if (dragSession) {
-    dragSession->UpdateDragImage(aImage.AsDOMNode(), aX, aY);
+    dragSession->UpdateDragImage(&aImage, aX, aY);
   }
 }
 
@@ -910,19 +805,6 @@ DataTransfer::AddElement(Element& aElement, ErrorResult& aRv)
   mDragTarget = &aElement;
 }
 
-NS_IMETHODIMP
-DataTransfer::AddElement(nsIDOMElement* aElement)
-{
-  NS_ENSURE_TRUE(aElement, NS_ERROR_NULL_POINTER);
-
-  nsCOMPtr<Element> element = do_QueryInterface(aElement);
-  NS_ENSURE_TRUE(element, NS_ERROR_INVALID_ARG);
-
-  ErrorResult rv;
-  AddElement(*element, rv);
-  return rv.StealNSResult();
-}
-
 nsresult
 DataTransfer::Clone(nsISupports* aParent, EventMessage aEventMessage,
                     bool aUserCancelled, bool aIsCrossDomainSubFrameDrop,
@@ -939,16 +821,11 @@ DataTransfer::Clone(nsISupports* aParent, EventMessage aEventMessage,
 }
 
 already_AddRefed<nsIArray>
-DataTransfer::GetTransferables(nsIDOMNode* aDragTarget)
+DataTransfer::GetTransferables(nsINode* aDragTarget)
 {
   MOZ_ASSERT(aDragTarget);
 
-  nsCOMPtr<nsINode> dragNode = do_QueryInterface(aDragTarget);
-  if (!dragNode) {
-    return nullptr;
-  }
-
-  nsIDocument* doc = dragNode->GetComposedDoc();
+  nsIDocument* doc = aDragTarget->GetComposedDoc();
   if (!doc) {
     return nullptr;
   }
@@ -968,7 +845,7 @@ DataTransfer::GetTransferables(nsILoadContext* aLoadContext)
   for (uint32_t i = 0; i < count; i++) {
     nsCOMPtr<nsITransferable> transferable = GetTransferable(i, aLoadContext);
     if (transferable) {
-      transArray->AppendElement(transferable, /*weak =*/ false);
+      transArray->AppendElement(transferable);
     }
   }
 
@@ -996,7 +873,7 @@ DataTransfer::GetTransferable(uint32_t aIndex, nsILoadContext* aLoadContext)
   transferable->Init(aLoadContext);
 
   nsCOMPtr<nsIStorageStream> storageStream;
-  nsCOMPtr<nsIBinaryOutputStream> stream;
+  nsCOMPtr<nsIObjectOutputStream> stream;
 
   bool added = false;
   bool handlingCustomFormats = true;
@@ -1015,7 +892,7 @@ DataTransfer::GetTransferable(uint32_t aIndex, nsILoadContext* aLoadContext)
     kPNGImageMime, kJPEGImageMime, kGIFImageMime, kNativeImageMime,
     kFileMime, kFilePromiseMime, kFilePromiseURLMime,
     kFilePromiseDestFilename, kFilePromiseDirectoryMime,
-    kMozTextInternal, kHTMLContext, kHTMLInfo };
+    kMozTextInternal, kHTMLContext, kHTMLInfo, kImageRequestMime };
 
   /*
    * Two passes are made here to iterate over all of the types. First, look for
@@ -1087,8 +964,7 @@ DataTransfer::GetTransferable(uint32_t aIndex, nsILoadContext* aLoadContext)
               nsCOMPtr<nsIOutputStream> outputStream;
               storageStream->GetOutputStream(0, getter_AddRefs(outputStream));
 
-              stream = do_CreateInstance("@mozilla.org/binaryoutputstream;1");
-              stream->SetOutputStream(outputStream);
+              stream = NS_NewObjectOutputStream(outputStream);
             }
 
             CheckedInt<uint32_t> formatLength =
@@ -1320,7 +1196,8 @@ nsresult
 DataTransfer::SetDataWithPrincipal(const nsAString& aFormat,
                                    nsIVariant* aData,
                                    uint32_t aIndex,
-                                   nsIPrincipal* aPrincipal)
+                                   nsIPrincipal* aPrincipal,
+                                   bool aHidden)
 {
   nsAutoString format;
   GetRealFormat(aFormat, format);
@@ -1329,7 +1206,7 @@ DataTransfer::SetDataWithPrincipal(const nsAString& aFormat,
   RefPtr<DataTransferItem> item =
     mItems->SetDataWithPrincipal(format, aData, aIndex, aPrincipal,
                                  /* aInsertOnly = */ false,
-                                 /* aHidden= */ false,
+                                 aHidden,
                                  rv);
   return rv.StealNSResult();
 }
@@ -1587,20 +1464,17 @@ DataTransfer::FillInExternalCustomTypes(nsIVariant* aData, uint32_t aIndex,
     return;
   }
 
-  nsAutoCString str;
-  str.Adopt(chrs, len);
-
-  nsCOMPtr<nsIInputStream> stringStream;
-  NS_NewCStringInputStream(getter_AddRefs(stringStream), str);
-
-  nsCOMPtr<nsIBinaryInputStream> stream =
-    do_CreateInstance("@mozilla.org/binaryinputstream;1");
-  if (!stream) {
+  CheckedInt<int32_t> checkedLen(len);
+  if (!checkedLen.isValid()) {
     return;
   }
 
-  rv = stream->SetInputStream(stringStream);
-  NS_ENSURE_SUCCESS_VOID(rv);
+  nsCOMPtr<nsIInputStream> stringStream;
+  NS_NewByteInputStream(getter_AddRefs(stringStream), chrs, checkedLen.value(),
+                        NS_ASSIGNMENT_ADOPT);
+
+  nsCOMPtr<nsIObjectInputStream> stream =
+    NS_NewObjectInputStream(stringStream);
 
   uint32_t type;
   do {

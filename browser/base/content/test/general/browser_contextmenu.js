@@ -57,6 +57,8 @@ add_task(async function test_xul_text_link_label() {
 // Below are test cases for HTML element
 
 add_task(async function test_setup_html() {
+  await pushPrefs(["dom.webcomponents.shadowdom.enabled", true]);
+
   let url = example_base + "subtst_contextmenu.html";
 
   await BrowserTestUtils.openNewForegroundTab(gBrowser, url);
@@ -128,6 +130,31 @@ add_task(async function test_link() {
      "---", null,
      "context-sendlinktodevice", true, [], null,
     ]
+  );
+});
+
+add_task(async function test_link_in_shadow_dom() {
+  await test_contextmenu("#shadow-host",
+    ["context-openlinkintab", true,
+     ...(hasContainers ? ["context-openlinkinusercontext-menu", true] : []),
+     // We need a blank entry here because the containers submenu is
+     // dynamically generated with no ids.
+     ...(hasContainers ? ["", null] : []),
+     "context-openlink",      true,
+     "context-openlinkprivate", true,
+     "---",                   null,
+     "context-bookmarklink",  true,
+     "context-savelink",      true,
+     ...(hasPocket ? ["context-savelinktopocket", true] : []),
+     "context-copylink",      true,
+     "context-searchselect",  true,
+     "---", null,
+     "context-sendlinktodevice", true, [], null,
+    ],
+    {
+      offsetX: 6,
+      offsetY: 6
+    }
   );
 });
 
@@ -620,7 +647,7 @@ add_task(async function test_dom_full_screen() {
       async preCheckContextMenuFn() {
         await pushPrefs(["full-screen-api.allow-trusted-requests-only", false],
                         ["full-screen-api.transition-duration.enter", "0 0"],
-                        ["full-screen-api.transition-duration.leave", "0 0"])
+                        ["full-screen-api.transition-duration.leave", "0 0"]);
         await ContentTask.spawn(gBrowser.selectedBrowser, null, async function() {
           let doc = content.document;
           let win = doc.defaultView;
@@ -965,6 +992,65 @@ add_task(async function test_svg_link() {
   );
 
   await test_contextmenu("#svg-with-link3 > a",
+    ["context-openlinkintab", true,
+     ...(hasContainers ? ["context-openlinkinusercontext-menu", true] : []),
+     // We need a blank entry here because the containers submenu is
+     // dynamically generated with no ids.
+     ...(hasContainers ? ["", null] : []),
+     "context-openlink",      true,
+     "context-openlinkprivate", true,
+     "---",                   null,
+     "context-bookmarklink",  true,
+     "context-savelink",      true,
+     ...(hasPocket ? ["context-savelinktopocket", true] : []),
+     "context-copylink",      true,
+     "context-searchselect",  true,
+     "---",                   null,
+     "context-sendlinktodevice", true, [], null,
+    ]
+  );
+});
+
+add_task(async function test_svg_relative_link() {
+  await test_contextmenu("#svg-with-relative-link > a",
+    ["context-openlinkintab", true,
+     ...(hasContainers ? ["context-openlinkinusercontext-menu", true] : []),
+     // We need a blank entry here because the containers submenu is
+     // dynamically generated with no ids.
+     ...(hasContainers ? ["", null] : []),
+     "context-openlink",      true,
+     "context-openlinkprivate", true,
+     "---",                   null,
+     "context-bookmarklink",  true,
+     "context-savelink",      true,
+     ...(hasPocket ? ["context-savelinktopocket", true] : []),
+     "context-copylink",      true,
+     "context-searchselect",  true,
+     "---",                   null,
+     "context-sendlinktodevice", true, [], null,
+    ]
+  );
+
+  await test_contextmenu("#svg-with-relative-link2 > a",
+    ["context-openlinkintab", true,
+     ...(hasContainers ? ["context-openlinkinusercontext-menu", true] : []),
+     // We need a blank entry here because the containers submenu is
+     // dynamically generated with no ids.
+     ...(hasContainers ? ["", null] : []),
+     "context-openlink",      true,
+     "context-openlinkprivate", true,
+     "---",                   null,
+     "context-bookmarklink",  true,
+     "context-savelink",      true,
+     ...(hasPocket ? ["context-savelinktopocket", true] : []),
+     "context-copylink",      true,
+     "context-searchselect",  true,
+     "---",                   null,
+     "context-sendlinktodevice", true, [], null,
+    ]
+  );
+
+  await test_contextmenu("#svg-with-relative-link3 > a",
     ["context-openlinkintab", true,
      ...(hasContainers ? ["context-openlinkinusercontext-menu", true] : []),
      // We need a blank entry here because the containers submenu is

@@ -8,12 +8,22 @@
 
 #include "mozilla/TelemetryScalarEnums.h"
 #include "mozilla/TelemetryProcessEnums.h"
-#include "ipc/TelemetryComms.h"
 
 // This module is internal to Telemetry. It encapsulates Telemetry's
 // scalar accumulation and storage logic. It should only be used by
 // Telemetry.cpp. These functions should not be used anywhere else.
 // For the public interface to Telemetry functionality, see Telemetry.h.
+
+namespace mozilla {
+// This is only used for the GeckoView persistence.
+class JSONWriter;
+namespace Telemetry {
+  struct ScalarAction;
+  struct KeyedScalarAction;
+  struct DiscardedData;
+  struct DynamicScalarDefinition;
+} // namespace Telemetry
+} // namespace mozilla
 
 namespace TelemetryScalar {
 
@@ -56,7 +66,11 @@ void Set(mozilla::Telemetry::ScalarID aId, const nsAString& aKey, bool aValue);
 void SetMaximum(mozilla::Telemetry::ScalarID aId, const nsAString& aKey, uint32_t aValue);
 
 nsresult RegisterScalars(const nsACString& aCategoryName, JS::Handle<JS::Value> aScalarData,
-                         JSContext* cx);
+                         bool aBuiltin, JSContext* cx);
+
+// Event Summary
+void SummarizeEvent(const nsCString& aUniqueEventName,
+                    mozilla::Telemetry::ProcessID aProcessType, bool aDynamic);
 
 // Only to be used for testing.
 void ClearScalars();
@@ -76,6 +90,17 @@ void RecordDiscardedData(mozilla::Telemetry::ProcessID aProcessType,
 void GetDynamicScalarDefinitions(nsTArray<mozilla::Telemetry::DynamicScalarDefinition>&);
 void AddDynamicScalarDefinitions(const nsTArray<mozilla::Telemetry::DynamicScalarDefinition>&);
 
+// They are responsible for updating in-memory probes with the data persisted
+// on the disk and vice-versa.
+nsresult SerializeScalars(mozilla::JSONWriter &aWriter);
+nsresult SerializeKeyedScalars(mozilla::JSONWriter &aWriter);
+nsresult DeserializePersistedScalars(JSContext* aCx, JS::HandleValue aData);
+nsresult DeserializePersistedKeyedScalars(JSContext* aCx, JS::HandleValue aData);
+// Mark deserialization as in progress.
+// After this, all scalar operations are recorded into the pending operations list.
+void DeserializationStarted();
+// Apply all operations from the pending operations list and mark deserialization finished afterwards.
+void ApplyPendingOperations();
 } // namespace TelemetryScalar
 
 #endif // TelemetryScalar_h__

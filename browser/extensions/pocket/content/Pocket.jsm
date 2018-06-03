@@ -3,17 +3,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 "use strict";
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
-this.EXPORTED_SYMBOLS = ["Pocket"];
+var EXPORTED_SYMBOLS = ["Pocket"];
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
+ChromeUtils.defineModuleGetter(this, "BrowserUtils",
   "resource://gre/modules/BrowserUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ReaderMode",
-  "resource://gre/modules/ReaderMode.jsm");
 
 var Pocket = {
   get site() { return Services.prefs.getCharPref("extensions.pocket.site"); },
@@ -26,7 +23,7 @@ var Pocket = {
     if (where == "current" && !win.isTabEmpty(win.gBrowser.selectedTab)) {
       where = "tab";
     }
-    win.openUILinkIn(this.listURL, where);
+    win.openTrustedLinkIn(this.listURL, where);
   },
 
   /**

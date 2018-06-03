@@ -499,7 +499,7 @@ fn robin_hood<'a, K: 'a, V: 'a>(bucket: FullBucketMut<'a, K, V>,
         loop {
             displacement += 1;
             let probe = bucket.next();
-            debug_assert!(probe.index() != idx_end);
+            debug_assert_ne!(probe.index(), idx_end);
 
             let full_bucket = match probe.peek() {
                 Empty(bucket) => {
@@ -534,7 +534,7 @@ impl<K, V, S> HashMap<K, V, S>
     where K: Eq + Hash,
           S: BuildHasher
 {
-    pub fn make_hash<X: ?Sized>(&self, x: &X) -> SafeHash
+    fn make_hash<X: ?Sized>(&self, x: &X) -> SafeHash
         where X: Hash
     {
         table::make_hash(&self.hash_builder, x)
@@ -578,7 +578,7 @@ impl<K, V, S> HashMap<K, V, S>
                 Full(b) => b.into_bucket(),
             };
             buckets.next();
-            debug_assert!(buckets.index() != start_index);
+            debug_assert_ne!(buckets.index(), start_index);
         }
     }
 }
@@ -683,15 +683,8 @@ impl<K, V, S> HashMap<K, V, S>
 
     /// Returns the hash map's raw capacity.
     #[inline]
-    pub fn raw_capacity(&self) -> usize {
+    fn raw_capacity(&self) -> usize {
         self.table.capacity()
-    }
-
-    /// Returns a raw pointer to the table's buffer.
-    #[inline]
-    pub fn raw_buffer(&self) -> *const u8 {
-        assert!(self.len() != 0);
-        self.table.raw_buffer()
     }
 
     /// Reserves capacity for at least `additional` more elements to be inserted
@@ -2652,7 +2645,7 @@ mod test_map {
         m2.insert(1, 2);
         m2.insert(2, 3);
 
-        assert!(m1 != m2);
+        assert_ne!(m1, m2);
 
         m2.insert(3, 4);
 

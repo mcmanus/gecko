@@ -34,7 +34,6 @@
 #include "nsIStreamListener.h"
 
 #include "nsIFrame.h"
-#include "nsIDOMNode.h"
 
 #include "nsContentUtils.h"
 #include "nsLayoutUtils.h"
@@ -135,6 +134,10 @@ nsImageLoadingContent::Notify(imgIRequest* aRequest,
                               int32_t aType,
                               const nsIntRect* aData)
 {
+  MOZ_ASSERT(aRequest, "no request?");
+  MOZ_ASSERT(aRequest == mCurrentRequest || aRequest == mPendingRequest,
+             "Forgot to cancel a previous request?");
+
   if (aType == imgINotificationObserver::IS_ANIMATED) {
     return OnImageIsAnimated(aRequest);
   }
@@ -142,14 +145,6 @@ nsImageLoadingContent::Notify(imgIRequest* aRequest,
   if (aType == imgINotificationObserver::UNLOCKED_DRAW) {
     OnUnlockedDraw();
     return NS_OK;
-  }
-
-  if (aType == imgINotificationObserver::LOAD_COMPLETE) {
-    // We should definitely have a request here
-    MOZ_ASSERT(aRequest, "no request?");
-
-    NS_PRECONDITION(aRequest == mCurrentRequest || aRequest == mPendingRequest,
-                    "Unknown request");
   }
 
   {
@@ -331,26 +326,18 @@ nsImageLoadingContent::OnImageIsAnimated(imgIRequest *aRequest)
  * nsIImageLoadingContent impl
  */
 
-NS_IMETHODIMP
-nsImageLoadingContent::GetLoadingEnabled(bool *aLoadingEnabled)
-{
-  *aLoadingEnabled = mLoadingEnabled;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
+void
 nsImageLoadingContent::SetLoadingEnabled(bool aLoadingEnabled)
 {
   if (nsContentUtils::GetImgLoaderForChannel(nullptr, nullptr)) {
     mLoadingEnabled = aLoadingEnabled;
   }
-  return NS_OK;
 }
 
 NS_IMETHODIMP
 nsImageLoadingContent::GetImageBlockingStatus(int16_t* aStatus)
 {
-  NS_PRECONDITION(aStatus, "Null out param");
+  MOZ_ASSERT(aStatus, "Null out param");
   *aStatus = ImageBlockingStatus();
   return NS_OK;
 }
@@ -388,10 +375,12 @@ ReplayImageStatus(imgIRequest* aRequest, imgINotificationObserver* aObserver)
   }
 }
 
-NS_IMETHODIMP
+void
 nsImageLoadingContent::AddNativeObserver(imgINotificationObserver* aObserver)
 {
-  NS_ENSURE_ARG_POINTER(aObserver);
+  if (NS_WARN_IF(!aObserver)) {
+    return;
+  }
 
   if (!mObserverList.mObserver) {
     // Don't touch the linking of the list!
@@ -400,7 +389,7 @@ nsImageLoadingContent::AddNativeObserver(imgINotificationObserver* aObserver)
     ReplayImageStatus(mCurrentRequest, aObserver);
     ReplayImageStatus(mPendingRequest, aObserver);
 
-    return NS_OK;
+    return;
   }
 
   // otherwise we have to create a new entry
@@ -413,19 +402,19 @@ nsImageLoadingContent::AddNativeObserver(imgINotificationObserver* aObserver)
   observer->mNext = new ImageObserver(aObserver);
   ReplayImageStatus(mCurrentRequest, aObserver);
   ReplayImageStatus(mPendingRequest, aObserver);
-
-  return NS_OK;
 }
 
-NS_IMETHODIMP
+void
 nsImageLoadingContent::RemoveNativeObserver(imgINotificationObserver* aObserver)
 {
-  NS_ENSURE_ARG_POINTER(aObserver);
+  if (NS_WARN_IF(!aObserver)) {
+    return;
+  }
 
   if (mObserverList.mObserver == aObserver) {
     mObserverList.mObserver = nullptr;
     // Don't touch the linking of the list!
-    return NS_OK;
+    return;
   }
 
   // otherwise have to find it and splice it out
@@ -448,13 +437,14 @@ nsImageLoadingContent::RemoveNativeObserver(imgINotificationObserver* aObserver)
     NS_WARNING("Asked to remove nonexistent observer");
   }
 #endif
-  return NS_OK;
 }
 
-NS_IMETHODIMP
+void
 nsImageLoadingContent::AddObserver(imgINotificationObserver* aObserver)
 {
-  NS_ENSURE_ARG_POINTER(aObserver);
+  if (NS_WARN_IF(!aObserver)) {
+    return;
+  }
 
   nsresult rv = NS_OK;
   RefPtr<imgRequestProxy> currentReq;
@@ -464,7 +454,7 @@ nsImageLoadingContent::AddObserver(imgINotificationObserver* aObserver)
     // to dispatch notifications from the correct scheduler group.
     rv = mCurrentRequest->Clone(aObserver, nullptr, getter_AddRefs(currentReq));
     if (NS_FAILED(rv)) {
-      return rv;
+      return;
     }
   }
 
@@ -474,22 +464,23 @@ nsImageLoadingContent::AddObserver(imgINotificationObserver* aObserver)
     rv = mPendingRequest->Clone(aObserver, nullptr, getter_AddRefs(pendingReq));
     if (NS_FAILED(rv)) {
       mCurrentRequest->CancelAndForgetObserver(NS_BINDING_ABORTED);
-      return rv;
+      return;
     }
   }
 
   mScriptedObservers.AppendElement(
-    new ScriptedImageObserver(aObserver, Move(currentReq), Move(pendingReq)));
-  return rv;
+    new ScriptedImageObserver(aObserver, std::move(currentReq), std::move(pendingReq)));
 }
 
-NS_IMETHODIMP
+void
 nsImageLoadingContent::RemoveObserver(imgINotificationObserver* aObserver)
 {
-  NS_ENSURE_ARG_POINTER(aObserver);
+  if (NS_WARN_IF(!aObserver)) {
+    return;
+  }
 
   if (NS_WARN_IF(mScriptedObservers.IsEmpty())) {
-    return NS_OK;
+    return;
   }
 
   RefPtr<ScriptedImageObserver> observer;
@@ -497,20 +488,19 @@ nsImageLoadingContent::RemoveObserver(imgINotificationObserver* aObserver)
   do {
     --i;
     if (mScriptedObservers[i]->mObserver == aObserver) {
-      observer = Move(mScriptedObservers[i]);
+      observer = std::move(mScriptedObservers[i]);
       mScriptedObservers.RemoveElementAt(i);
       break;
     }
   } while(i > 0);
 
   if (NS_WARN_IF(!observer)) {
-    return NS_OK;
+    return;
   }
 
   // If the cancel causes a mutation, it will be harmless, because we have
   // already removed the observer from the list.
   observer->CancelRequests();
-  return NS_OK;
 }
 
 void
@@ -528,10 +518,10 @@ nsImageLoadingContent::ClearScriptedRequests(int32_t aRequestType, nsresult aRea
     RefPtr<imgRequestProxy> req;
     switch (aRequestType) {
     case CURRENT_REQUEST:
-      req = Move(observers[i]->mCurrentRequest);
+      req = std::move(observers[i]->mCurrentRequest);
       break;
     case PENDING_REQUEST:
-      req = Move(observers[i]->mPendingRequest);
+      req = std::move(observers[i]->mPendingRequest);
       break;
     default:
       NS_ERROR("Unknown request type");
@@ -598,7 +588,7 @@ nsImageLoadingContent::MakePendingScriptedRequestsCurrent()
     if (observer->mCurrentRequest) {
       observer->mCurrentRequest->CancelAndForgetObserver(NS_BINDING_ABORTED);
     }
-    observer->mCurrentRequest = Move(observer->mPendingRequest);
+    observer->mCurrentRequest = std::move(observer->mPendingRequest);
   } while (i > 0);
 }
 
@@ -632,12 +622,6 @@ nsImageLoadingContent::GetRequest(int32_t aRequestType,
   *aRequest = GetRequest(aRequestType, result).take();
 
   return result.StealNSResult();
-}
-
-NS_IMETHODIMP_(bool)
-nsImageLoadingContent::CurrentRequestHasSize()
-{
-  return HaveSize(mCurrentRequest);
 }
 
 NS_IMETHODIMP_(void)
@@ -724,7 +708,7 @@ NS_IMETHODIMP
 nsImageLoadingContent::GetRequestType(imgIRequest* aRequest,
                                       int32_t* aRequestType)
 {
-  NS_PRECONDITION(aRequestType, "Null out param");
+  MOZ_ASSERT(aRequestType, "Null out param");
 
   ErrorResult result;
   *aRequestType = GetRequestType(aRequest, result);
@@ -737,11 +721,8 @@ nsImageLoadingContent::GetCurrentURI(ErrorResult& aError)
   nsCOMPtr<nsIURI> uri;
   if (mCurrentRequest) {
     mCurrentRequest->GetURI(getter_AddRefs(uri));
-  } else if (mCurrentURI) {
-    nsresult rv = NS_EnsureSafeToReturn(mCurrentURI, getter_AddRefs(uri));
-    if (NS_FAILED(rv)) {
-      aError.Throw(rv);
-    }
+  } else {
+    uri = mCurrentURI;
   }
 
   return uri.forget();
@@ -755,6 +736,17 @@ nsImageLoadingContent::GetCurrentURI(nsIURI** aURI)
   ErrorResult result;
   *aURI = GetCurrentURI(result).take();
   return result.StealNSResult();
+}
+
+already_AddRefed<nsIURI>
+nsImageLoadingContent::GetCurrentRequestFinalURI()
+{
+  nsCOMPtr<nsIURI> uri;
+  if (mCurrentRequest) {
+    mCurrentRequest->GetFinalURI(getter_AddRefs(uri));
+  }
+
+  return uri.forget();
 }
 
 NS_IMETHODIMP
@@ -804,8 +796,7 @@ nsImageLoadingContent::LoadImageWithChannel(nsIChannel* aChannel,
 }
 
 void
-nsImageLoadingContent::ForceReload(const mozilla::dom::Optional<bool>& aNotify,
-                                   mozilla::ErrorResult& aError)
+nsImageLoadingContent::ForceReload(bool aNotify, ErrorResult& aError)
 {
   nsCOMPtr<nsIURI> currentURI;
   GetCurrentURI(getter_AddRefs(currentURI));
@@ -814,79 +805,16 @@ nsImageLoadingContent::ForceReload(const mozilla::dom::Optional<bool>& aNotify,
     return;
   }
 
-  // defaults to true
-  bool notify = !aNotify.WasPassed() || aNotify.Value();
-
   // We keep this flag around along with the old URI even for failed requests
   // without a live request object
   ImageLoadType loadType = \
     (mCurrentRequestFlags & REQUEST_IS_IMAGESET) ? eImageLoadType_Imageset
                                                  : eImageLoadType_Normal;
-  nsresult rv = LoadImage(currentURI, true, notify, loadType, true, nullptr,
+  nsresult rv = LoadImage(currentURI, true, aNotify, loadType, true, nullptr,
                           nsIRequest::VALIDATE_ALWAYS);
   if (NS_FAILED(rv)) {
     aError.Throw(rv);
   }
-}
-
-NS_IMETHODIMP
-nsImageLoadingContent::ForceReload(bool aNotify /* = true */,
-                                   uint8_t aArgc)
-{
-  mozilla::dom::Optional<bool> notify;
-  if (aArgc >= 1) {
-    notify.Construct() = aNotify;
-  }
-
-  ErrorResult result;
-  ForceReload(notify, result);
-  return result.StealNSResult();
-}
-
-NS_IMETHODIMP
-nsImageLoadingContent::BlockOnload(imgIRequest* aRequest)
-{
-  if (aRequest == mCurrentRequest) {
-    NS_ASSERTION(!(mCurrentRequestFlags & REQUEST_BLOCKS_ONLOAD),
-                 "Double BlockOnload!?");
-    mCurrentRequestFlags |= REQUEST_BLOCKS_ONLOAD;
-  } else if (aRequest == mPendingRequest) {
-    NS_ASSERTION(!(mPendingRequestFlags & REQUEST_BLOCKS_ONLOAD),
-                 "Double BlockOnload!?");
-    mPendingRequestFlags |= REQUEST_BLOCKS_ONLOAD;
-  } else {
-    return NS_OK;
-  }
-
-  nsIDocument* doc = GetOurCurrentDoc();
-  if (doc) {
-    doc->BlockOnload();
-  }
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsImageLoadingContent::UnblockOnload(imgIRequest* aRequest)
-{
-  if (aRequest == mCurrentRequest) {
-    NS_ASSERTION(mCurrentRequestFlags & REQUEST_BLOCKS_ONLOAD,
-                 "Double UnblockOnload!?");
-    mCurrentRequestFlags &= ~REQUEST_BLOCKS_ONLOAD;
-  } else if (aRequest == mPendingRequest) {
-    NS_ASSERTION(mPendingRequestFlags & REQUEST_BLOCKS_ONLOAD,
-                 "Double UnblockOnload!?");
-    mPendingRequestFlags &= ~REQUEST_BLOCKS_ONLOAD;
-  } else {
-    return NS_OK;
-  }
-
-  nsIDocument* doc = GetOurCurrentDoc();
-  if (doc) {
-    doc->UnblockOnload(false);
-  }
-
-  return NS_OK;
 }
 
 /*
@@ -897,7 +825,8 @@ nsresult
 nsImageLoadingContent::LoadImage(const nsAString& aNewURI,
                                  bool aForce,
                                  bool aNotify,
-                                 ImageLoadType aImageLoadType)
+                                 ImageLoadType aImageLoadType,
+                                 nsIPrincipal* aTriggeringPrincipal)
 {
   // First, get a document (needed for security checks and the like)
   nsIDocument* doc = GetOurOwnerDoc();
@@ -929,9 +858,8 @@ nsImageLoadingContent::LoadImage(const nsAString& aNewURI,
   NS_ENSURE_SUCCESS(rv, rv);
   // XXXbiesi fire onerror if that failed?
 
-  NS_TryToSetImmutable(imageURI);
-
-  return LoadImage(imageURI, aForce, aNotify, aImageLoadType, false, doc);
+  return LoadImage(imageURI, aForce, aNotify, aImageLoadType, false, doc,
+                   nsIRequest::LOAD_NORMAL, aTriggeringPrincipal);
 }
 
 nsresult
@@ -941,7 +869,8 @@ nsImageLoadingContent::LoadImage(nsIURI* aNewURI,
                                  ImageLoadType aImageLoadType,
                                  bool aLoadStart,
                                  nsIDocument* aDocument,
-                                 nsLoadFlags aLoadFlags)
+                                 nsLoadFlags aLoadFlags,
+                                 nsIPrincipal* aTriggeringPrincipal)
 {
   MOZ_ASSERT(!mIsStartingImageLoad, "some evil code is reentering LoadImage.");
   if (mIsStartingImageLoad) {
@@ -982,6 +911,11 @@ nsImageLoadingContent::LoadImage(nsIURI* aNewURI,
 
   // Data documents, or documents from DOMParser shouldn't perform image loading.
   if (aDocument->IsLoadedAsData()) {
+    // This is the only codepath on which we can reach SetBlockedRequest while
+    // our pending request exists.  Just clear it out here if we do have one.
+    ClearPendingRequest(NS_BINDING_ABORTED,
+                        Some(OnNonvisible::DISCARD_IMAGES));
+
     SetBlockedRequest(nsIContentPolicy::REJECT_REQUEST);
 
     FireEvent(NS_LITERAL_STRING("error"));
@@ -1018,13 +952,9 @@ nsImageLoadingContent::LoadImage(nsIURI* aNewURI,
              "Principal mismatch?");
 #endif
 
-  nsLoadFlags loadFlags = aLoadFlags;
-  int32_t corsmode = GetCORSMode();
-  if (corsmode == CORS_ANONYMOUS) {
-    loadFlags |= imgILoader::LOAD_CORS_ANONYMOUS;
-  } else if (corsmode == CORS_USE_CREDENTIALS) {
-    loadFlags |= imgILoader::LOAD_CORS_USE_CREDENTIALS;
-  }
+  nsLoadFlags loadFlags = aLoadFlags |
+                          nsContentUtils::CORSModeToLoadImageFlags(
+                            GetCORSMode());
 
   // get document wide referrer policy
   // if referrer attributes are enabled in preferences, load img referrer attribute
@@ -1039,12 +969,12 @@ nsImageLoadingContent::LoadImage(nsIURI* aNewURI,
   nsCOMPtr<nsIContent> content =
       do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
 
-  nsCOMPtr<nsIPrincipal> loadingPrincipal;
+  nsCOMPtr<nsIPrincipal> triggeringPrincipal;
   bool result =
-    nsContentUtils::GetLoadingPrincipalForXULNode(content,
-                                                  getter_AddRefs(loadingPrincipal));
+    nsContentUtils::QueryTriggeringPrincipal(content, aTriggeringPrincipal,
+                                             getter_AddRefs(triggeringPrincipal));
 
-  // If result is true, which means this node has specified 'loadingprincipal'
+  // If result is true, which means this node has specified 'triggeringprincipal'
   // attribute on it, so we use favicon as the policy type.
   nsContentPolicyType policyType = result ?
                                      nsIContentPolicy::TYPE_INTERNAL_IMAGE_FAVICON:
@@ -1055,7 +985,7 @@ nsImageLoadingContent::LoadImage(nsIURI* aNewURI,
   nsresult rv = nsContentUtils::LoadImage(aNewURI,
                                           thisNode,
                                           aDocument,
-                                          loadingPrincipal,
+                                          triggeringPrincipal,
                                           0,
                                           aDocument->GetDocumentURI(),
                                           referrerPolicy,
@@ -1112,13 +1042,12 @@ nsImageLoadingContent::LoadImage(nsIURI* aNewURI,
   return NS_OK;
 }
 
-nsresult
+void
 nsImageLoadingContent::ForceImageState(bool aForce,
                                        EventStates::InternalType aState)
 {
   mIsImageStateForced = aForce;
   mForcedImageState = EventStates(aState);
-  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -1294,8 +1223,8 @@ nsImageLoadingContent::StringToURI(const nsAString& aSpec,
                                    nsIDocument* aDocument,
                                    nsIURI** aURI)
 {
-  NS_PRECONDITION(aDocument, "Must have a document");
-  NS_PRECONDITION(aURI, "Null out param");
+  MOZ_ASSERT(aDocument, "Must have a document");
+  MOZ_ASSERT(aURI, "Null out param");
 
   // (1) Get the base URI
   nsIContent* thisContent = AsContent();
@@ -1388,13 +1317,13 @@ nsImageLoadingContent::PrepareNextRequest(ImageLoadType aImageLoadType)
            PrepareCurrentRequest(aImageLoadType);
 }
 
-nsresult
+void
 nsImageLoadingContent::SetBlockedRequest(int16_t aContentDecision)
 {
   // If this is not calling from LoadImage, for example, from ServiceWorker,
   // bail out.
   if (!mIsStartingImageLoad) {
-    return NS_OK;
+    return;
   }
 
   // Sanity
@@ -1410,8 +1339,6 @@ nsImageLoadingContent::SetBlockedRequest(int16_t aContentDecision)
   } else {
     mImageBlockingStatus = aContentDecision;
   }
-
-  return NS_OK;
 }
 
 RefPtr<imgRequestProxy>&
@@ -1604,9 +1531,6 @@ nsImageLoadingContent::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
 
   TrackImage(mCurrentRequest);
   TrackImage(mPendingRequest);
-
-  if (mCurrentRequestFlags & REQUEST_BLOCKS_ONLOAD)
-    aDocument->BlockOnload();
 }
 
 void
@@ -1619,9 +1543,6 @@ nsImageLoadingContent::UnbindFromTree(bool aDeep, bool aNullParent)
 
   UntrackImage(mCurrentRequest);
   UntrackImage(mPendingRequest);
-
-  if (mCurrentRequestFlags & REQUEST_BLOCKS_ONLOAD)
-    doc->UnblockOnload(false);
 }
 
 void
@@ -1811,4 +1732,4 @@ mozilla::net::ReferrerPolicy
 nsImageLoadingContent::GetImageReferrerPolicy()
 {
   return mozilla::net::RP_Unset;
-};
+}

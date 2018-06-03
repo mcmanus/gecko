@@ -41,7 +41,7 @@ public:
   MOZ_MUST_USE nsresult CollectSubstitutions(InfallibleTArray<SubstitutionMapping>& aResources);
 
 protected:
-  virtual ~SubstitutingProtocolHandler() {}
+  virtual ~SubstitutingProtocolHandler() = default;
   void ConstructInternal();
 
   MOZ_MUST_USE nsresult SendSubstitution(const nsACString& aRoot, nsIURI* aBaseURI, uint32_t aFlags);
@@ -84,9 +84,7 @@ private:
     {
     }
 
-    ~SubstitutionEntry()
-    {
-    }
+    ~SubstitutionEntry() = default;
 
     nsCOMPtr<nsIURI> baseURI;
     uint32_t flags;
@@ -122,10 +120,43 @@ private:
 class SubstitutingURL : public nsStandardURL
 {
 public:
-  SubstitutingURL() : nsStandardURL(true) {}
-  virtual nsStandardURL* StartClone();
-  virtual MOZ_MUST_USE nsresult EnsureFile();
-  NS_IMETHOD GetClassIDNoAlloc(nsCID *aCID);
+  virtual nsStandardURL* StartClone() override;
+  virtual MOZ_MUST_USE nsresult EnsureFile() override;
+  NS_IMETHOD GetClassIDNoAlloc(nsCID *aCID) override;
+
+private:
+  explicit SubstitutingURL() : nsStandardURL(true) {}
+  explicit SubstitutingURL(bool aSupportsFileURL) : nsStandardURL(true) { MOZ_ASSERT(aSupportsFileURL); }
+
+public:
+  class Mutator
+    : public TemplatedMutator<SubstitutingURL>
+  {
+    NS_DECL_ISUPPORTS
+  public:
+    explicit Mutator() = default;
+  private:
+    virtual ~Mutator() = default;
+
+    SubstitutingURL* Create() override
+    {
+      return new SubstitutingURL();
+    }
+  };
+
+  NS_IMETHOD Mutate(nsIURIMutator** aMutator) override
+  {
+    RefPtr<SubstitutingURL::Mutator> mutator = new SubstitutingURL::Mutator();
+    nsresult rv = mutator->InitFromURI(this);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+    mutator.forget(aMutator);
+    return NS_OK;
+  }
+
+  friend BaseURIMutator<SubstitutingURL>;
+  friend TemplatedMutator<SubstitutingURL>;
 };
 
 } // namespace net

@@ -11,22 +11,43 @@ add_task(async function testWindowGetAll() {
                                 subject => subject == raisedWin);
 
   let extension = ExtensionTestUtils.loadExtension({
-    background: function() {
-      browser.windows.getAll((wins) => {
-        browser.test.assertEq(wins.length, 2, "Expect two windows");
+    background: async function() {
+      let wins = await browser.windows.getAll();
+      browser.test.assertEq(2, wins.length, "Expect two windows");
 
-        browser.test.assertEq(false, wins[0].alwaysOnTop,
-                              "Expect first window not to be always on top");
-        browser.test.assertEq(true, wins[1].alwaysOnTop,
-                              "Expect first window to be always on top");
+      browser.test.assertEq(false, wins[0].alwaysOnTop,
+                            "Expect first window not to be always on top");
+      browser.test.assertEq(true, wins[1].alwaysOnTop,
+                            "Expect first window to be always on top");
 
-        browser.test.notifyPass("alwaysOnTop");
-      });
+      let win = await browser.windows.create({url: "http://example.com", type: "popup"});
+
+      wins = await browser.windows.getAll();
+      browser.test.assertEq(3, wins.length, "Expect three windows");
+
+      wins = await browser.windows.getAll({windowTypes: ["popup"]});
+      browser.test.assertEq(1, wins.length, "Expect one window");
+      browser.test.assertEq("popup", wins[0].type,
+                            "Expect type to be popup");
+
+      wins = await browser.windows.getAll({windowTypes: ["normal"]});
+      browser.test.assertEq(2, wins.length, "Expect two windows");
+      browser.test.assertEq("normal", wins[0].type,
+                            "Expect type to be normal");
+      browser.test.assertEq("normal", wins[1].type,
+                            "Expect type to be normal");
+
+      wins = await browser.windows.getAll({windowTypes: ["popup", "normal"]});
+      browser.test.assertEq(3, wins.length, "Expect three windows");
+
+      await browser.windows.remove(win.id);
+
+      browser.test.notifyPass("getAll");
     },
   });
 
   await extension.startup();
-  await extension.awaitFinish("alwaysOnTop");
+  await extension.awaitFinish("getAll");
   await extension.unload();
 
   await BrowserTestUtils.closeWindow(raisedWin);
@@ -49,14 +70,14 @@ add_task(async function testWindowTitle() {
       if (msg === "update") {
         let win = await browser.windows.get(windowId);
         browser.test.assertTrue(win.title.startsWith(expected.before.preface),
-                              "Window has the expected title preface before update.");
+                                "Window has the expected title preface before update.");
         browser.test.assertTrue(win.title.includes(expected.before.text),
-                              "Window has the expected title text before update.");
+                                "Window has the expected title text before update.");
         win = await browser.windows.update(windowId, options);
         browser.test.assertTrue(win.title.startsWith(expected.after.preface),
-                              "Window has the expected title preface after update.");
+                                "Window has the expected title preface after update.");
         browser.test.assertTrue(win.title.includes(expected.after.text),
-                              "Window has the expected title text after update.");
+                                "Window has the expected title text after update.");
         browser.test.sendMessage("updated", win);
       }
     });
@@ -70,10 +91,10 @@ add_task(async function testWindowTitle() {
   });
 
   await extension.startup();
-  let {Management: {global: {windowTracker}}} = Cu.import("resource://gre/modules/Extension.jsm", {});
+  let {Management: {global: {windowTracker}}} = ChromeUtils.import("resource://gre/modules/Extension.jsm", {});
 
   async function createApiWin(options) {
-    let promiseLoaded = BrowserTestUtils.waitForNewWindow(true, START_URL);
+    let promiseLoaded = BrowserTestUtils.waitForNewWindow({url: START_URL});
     extension.sendMessage("create", options);
     let apiWin = await extension.awaitMessage("created");
     let realWin = windowTracker.getWindow(apiWin.id);
@@ -139,6 +160,41 @@ add_task(async function testWindowTitle() {
   };
   await updateWindow({titlePreface: PREFACE2}, apiWin, expected);
 
+  // Create a window with a preface.
+  apiWin = await createApiWin({url: START_URL, titlePreface: PREFACE1});
+  realWin = windowTracker.getWindow(apiWin.id);
+
+  // Update the titlePreface of the window with an empty string.
+  expected = {
+    before: {
+      preface: PREFACE1,
+      text: START_TITLE,
+    },
+    after: {
+      preface: "",
+      text: START_TITLE,
+    },
+  };
+  await updateWindow({titlePreface: ""}, apiWin, expected);
+  ok(!realWin.document.title.startsWith(expected.before.preface), "Updated window has the expected empty title preface.");
+
+  // Create a window with a preface.
+  apiWin = await createApiWin({url: START_URL, titlePreface: PREFACE1});
+  realWin = windowTracker.getWindow(apiWin.id);
+
+  // Update the window without a titlePreface.
+  expected = {
+    before: {
+      preface: PREFACE1,
+      text: START_TITLE,
+    },
+    after: {
+      preface: PREFACE1,
+      text: START_TITLE,
+    },
+  };
+  await updateWindow({}, apiWin, expected);
+
   await extension.unload();
 });
 
@@ -190,7 +246,7 @@ add_task(async function testWindowTitlePermissions() {
 
   await extension.unload();
 
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });
 
 add_task(async function testInvalidWindowId() {

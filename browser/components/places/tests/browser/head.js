@@ -1,24 +1,9 @@
-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
+ChromeUtils.defineModuleGetter(this, "NetUtil",
   "resource://gre/modules/NetUtil.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesTestUtils",
+ChromeUtils.defineModuleGetter(this, "PlacesTestUtils",
   "resource://testing-common/PlacesTestUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "TestUtils",
+ChromeUtils.defineModuleGetter(this, "TestUtils",
   "resource://testing-common/TestUtils.jsm");
-
-// We need to cache this before test runs...
-var cachedLeftPaneFolderIdGetter;
-var getter = PlacesUIUtils.__lookupGetter__("leftPaneFolderId");
-if (!cachedLeftPaneFolderIdGetter && typeof(getter) == "function") {
-  cachedLeftPaneFolderIdGetter = getter;
-}
-
-// ...And restore it when test ends.
-registerCleanupFunction(function() {
-  let updatedGetter = PlacesUIUtils.__lookupGetter__("leftPaneFolderId");
-  if (cachedLeftPaneFolderIdGetter && typeof(updatedGetter) != "function") {
-    PlacesUIUtils.__defineGetter__("leftPaneFolderId", cachedLeftPaneFolderIdGetter);
-  }
-});
 
 function openLibrary(callback, aLeftPaneRoot) {
   let library = window.openDialog("chrome://browser/content/places/places.xul",
@@ -56,7 +41,7 @@ function promiseLibraryClosed(organizer) {
   return new Promise(resolve => {
     // Wait for the Organizer window to actually be closed
     organizer.addEventListener("unload", function() {
-      resolve();
+      executeSoon(resolve);
     }, {once: true});
 
     // Close Library window.
@@ -80,43 +65,6 @@ function promiseClipboard(aPopulateClipboardFn, aFlavor) {
   });
 }
 
-/**
- * Waits for all pending async statements on the default connection, before
- * proceeding with aCallback.
- *
- * @param aCallback
- *        Function to be called when done.
- * @param aScope
- *        Scope for the callback.
- * @param aArguments
- *        Arguments array for the callback.
- *
- * @note The result is achieved by asynchronously executing a query requiring
- *       a write lock.  Since all statements on the same connection are
- *       serialized, the end of this write operation means that all writes are
- *       complete.  Note that WAL makes so that writers don't block readers, but
- *       this is a problem only across different connections.
- */
-function waitForAsyncUpdates(aCallback, aScope, aArguments) {
-  let scope = aScope || this;
-  let args = aArguments || [];
-  let db = PlacesUtils.history.QueryInterface(Ci.nsPIPlacesDatabase)
-                              .DBConnection;
-  let begin = db.createAsyncStatement("BEGIN EXCLUSIVE");
-  begin.executeAsync();
-  begin.finalize();
-
-  let commit = db.createAsyncStatement("COMMIT");
-  commit.executeAsync({
-    handleResult() {},
-    handleError() {},
-    handleCompletion(aReason) {
-      aCallback.apply(scope, args);
-    }
-  });
-  commit.finalize();
-}
-
 function synthesizeClickOnSelectedTreeCell(aTree, aOptions) {
   let tbo = aTree.treeBoxObject;
   if (tbo.view.selection.count != 1)
@@ -133,69 +81,6 @@ function synthesizeClickOnSelectedTreeCell(aTree, aOptions) {
   // Simulate the click.
   EventUtils.synthesizeMouse(aTree.body, x, y, aOptions || {},
                              aTree.ownerGlobal);
-}
-
-/**
- * Asynchronously check a url is visited.
- *
- * @param aURI The URI.
- * @return {Promise}
- * @resolves When the check has been added successfully.
- * @rejects JavaScript exception.
- */
-function promiseIsURIVisited(aURI) {
-  return new Promise(resolve => {
-
-    PlacesUtils.asyncHistory.isURIVisited(aURI, function(unused, aIsVisited) {
-      resolve(aIsVisited);
-    });
-
-  });
-}
-
-function promiseBookmarksNotification(notification, conditionFn) {
-  info(`promiseBookmarksNotification: waiting for ${notification}`);
-  return new Promise((resolve) => {
-    let proxifiedObserver = new Proxy({}, {
-      get: (target, name) => {
-        if (name == "QueryInterface")
-          return XPCOMUtils.generateQI([ Ci.nsINavBookmarkObserver ]);
-        info(`promiseBookmarksNotification: got ${name} notification`);
-        if (name == notification)
-          return (...args) => {
-            if (conditionFn.apply(this, args)) {
-              PlacesUtils.bookmarks.removeObserver(proxifiedObserver, false);
-              executeSoon(resolve);
-            } else {
-              info(`promiseBookmarksNotification: skip cause condition doesn't apply to ${JSON.stringify(args)}`);
-            }
-          }
-        return () => {};
-      }
-    });
-    PlacesUtils.bookmarks.addObserver(proxifiedObserver);
-  });
-}
-
-function promiseHistoryNotification(notification, conditionFn) {
-  info(`Waiting for ${notification}`);
-  return new Promise((resolve) => {
-    let proxifiedObserver = new Proxy({}, {
-      get: (target, name) => {
-        if (name == "QueryInterface")
-          return XPCOMUtils.generateQI([ Ci.nsINavHistoryObserver ]);
-        if (name == notification)
-          return (...args) => {
-            if (conditionFn.apply(this, args)) {
-              PlacesUtils.history.removeObserver(proxifiedObserver, false);
-              executeSoon(resolve);
-            }
-          }
-        return () => {};
-      }
-    });
-    PlacesUtils.history.addObserver(proxifiedObserver);
-  });
 }
 
 /**
@@ -287,7 +172,7 @@ var withBookmarksDialog = async function(autoCancel, openFn, taskFn, closeFn,
         let win = subject.QueryInterface(Ci.nsIDOMWindow);
         win.addEventListener("load", function() {
           ok(win.location.href.startsWith(dialogUrl),
-             "The bookmark properties dialog is open");
+             "The bookmark properties dialog is open: " + win.location.href);
           // This is needed for the overlay.
           waitForFocus(() => {
             resolve(win);
@@ -333,19 +218,14 @@ var withBookmarksDialog = async function(autoCancel, openFn, taskFn, closeFn,
   try {
     await taskFn(dialogWin);
   } finally {
-    if (!closed && !autoCancel) {
-      // Give the dialog a little time to close itself in the manually closing
-      // case.
-      await BrowserTestUtils.waitForCondition(() => closed,
-        "The test should have closed the dialog!");
-    }
-    if (!closed) {
+    if (!closed && autoCancel) {
       info("withBookmarksDialog: canceling the dialog");
-
       doc.documentElement.cancelDialog();
-
       await closePromise;
     }
+    // Give the dialog a little time to close itself.
+    await BrowserTestUtils.waitForCondition(() => closed,
+                                            "The dialog should be closed!");
   }
 };
 
@@ -364,13 +244,13 @@ var openContextMenuForContentSelector = async function(browser, selector) {
                                                      "popupshown");
   await ContentTask.spawn(browser, { selector }, async function(args) {
     let doc = content.document;
-    let elt = doc.querySelector(args.selector)
+    let elt = doc.querySelector(args.selector);
     dump(`openContextMenuForContentSelector: found ${elt}\n`);
 
     /* Open context menu so chrome can access the element */
     const domWindowUtils =
-      content.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
-             .getInterface(Components.interfaces.nsIDOMWindowUtils);
+      content.QueryInterface(Ci.nsIInterfaceRequestor)
+             .getInterface(Ci.nsIDOMWindowUtils);
     let rect = elt.getBoundingClientRect();
     let left = rect.left + rect.width / 2;
     let top = rect.top + rect.height / 2;
@@ -429,8 +309,12 @@ function fillBookmarkTextField(id, text, win, blur = true) {
   let elt = win.document.getElementById(id);
   elt.focus();
   elt.select();
-  for (let c of text.split("")) {
-    EventUtils.synthesizeKey(c, {}, win);
+  if (!text) {
+    EventUtils.synthesizeKey("VK_DELETE", {}, win);
+  } else {
+    for (let c of text.split("")) {
+      EventUtils.synthesizeKey(c, {}, win);
+    }
   }
   if (blur)
     elt.blur();
@@ -451,7 +335,7 @@ var withSidebarTree = async function(type, taskFn) {
   info("withSidebarTree: waiting sidebar load");
   let sidebarLoadedPromise = new Promise(resolve => {
     sidebar.addEventListener("load", function() {
-      resolve();
+      executeSoon(resolve);
     }, {capture: true, once: true});
   });
   let sidebarId = type == "bookmarks" ? "viewBookmarksSidebar"
@@ -476,10 +360,47 @@ function promisePlacesInitComplete() {
   const gBrowserGlue = Cc["@mozilla.org/browser/browserglue;1"]
                          .getService(Ci.nsIObserver);
 
-  let placesInitCompleteObserved = TestUtils.topicObserved("places-browser-init-complete")
+  let placesInitCompleteObserved = TestUtils.topicObserved("places-browser-init-complete");
 
   gBrowserGlue.observe(null, "browser-glue-test",
     "places-browser-init-complete");
 
   return placesInitCompleteObserved;
+}
+
+// Function copied from browser/base/content/test/general/head.js.
+function promisePopupShown(popup) {
+  return new Promise(resolve => {
+    if (popup.state == "open") {
+      resolve();
+    } else {
+      let onPopupShown = event => {
+        popup.removeEventListener("popupshown", onPopupShown);
+        resolve();
+      };
+      popup.addEventListener("popupshown", onPopupShown);
+    }
+  });
+}
+
+// Function copied from browser/base/content/test/general/head.js.
+function promisePopupHidden(popup) {
+  return new Promise(resolve => {
+    let onPopupHidden = event => {
+      popup.removeEventListener("popuphidden", onPopupHidden);
+      resolve();
+    };
+    popup.addEventListener("popuphidden", onPopupHidden);
+  });
+}
+
+// Identify a bookmark node in the Bookmarks Toolbar by its guid.
+function getToolbarNodeForItemGuid(itemGuid) {
+  let children = document.getElementById("PlacesToolbarItems").childNodes;
+  for (let child of children) {
+    if (itemGuid === child._placesNode.bookmarkGuid) {
+      return child;
+    }
+  }
+  return null;
 }

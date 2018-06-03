@@ -11,13 +11,7 @@ function DummyCompleter() {
 
 DummyCompleter.prototype =
 {
-QueryInterface(iid) {
-  if (!iid.equals(Ci.nsISupports) &&
-      !iid.equals(Ci.nsIUrlClassifierHashCompleter)) {
-    throw Cr.NS_ERROR_NO_INTERFACE;
-  }
-  return this;
-},
+QueryInterface: ChromeUtils.generateQI(["nsIUrlClassifierHashCompleter"]),
 
 complete(partialHash, gethashUrl, tableName, cb) {
   this.queries.push(partialHash);
@@ -36,8 +30,8 @@ complete(partialHash, gethashUrl, tableName, cb) {
         }
       }
     cb.completionFinished(0);
-  }
-  do_execute_soon(doCallback);
+  };
+  executeSoon(doCallback);
 },
 
 getHash(fragment) {
@@ -78,11 +72,11 @@ compareQueries(fragments) {
   for (let i = 0; i < fragments.length; i++) {
     expectedQueries.push(this.getHash(fragments[i]).slice(0, 4));
   }
-  do_check_eq(this.queries.length, expectedQueries.length);
+  Assert.equal(this.queries.length, expectedQueries.length);
   expectedQueries.sort();
   this.queries.sort();
   for (let i = 0; i < this.queries.length; i++) {
-    do_check_eq(this.queries[i], expectedQueries[i]);
+    Assert.equal(this.queries[i], expectedQueries[i]);
   }
 }
 };
@@ -125,7 +119,7 @@ gAssertions.completerQueried = function(data, cb) {
   var completer = data[0];
   completer.compareQueries(data[1]);
   cb();
-}
+};
 
 function doTest(updates, assertions) {
   doUpdateTest(updates, assertions, runNextTest, updateError);
@@ -518,7 +512,7 @@ function testCachedResultsWithSub() {
       var assertions = {
         "urlsDontExist": ["foo.com/a"],
         "completerQueried": [newCompleter, []]
-      }
+      };
 
       doTest([removeUpdate], assertions);
     });
@@ -537,7 +531,7 @@ function testCachedResultsWithExpire() {
       var assertions = {
         "urlsDontExist": ["foo.com/a"],
         "completerQueried": [newCompleter, []]
-      }
+      };
       doTest([expireUpdate], assertions);
     });
 }

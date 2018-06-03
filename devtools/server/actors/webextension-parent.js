@@ -64,7 +64,7 @@ const WebExtensionParentActor = protocol.ActorClassWithSpec(webExtensionSpec, {
   },
 
   form() {
-    let policy = ExtensionParent.WebExtensionPolicy.getByID(this.id);
+    const policy = ExtensionParent.WebExtensionPolicy.getByID(this.id);
     return {
       actor: this.actorID,
       id: this.id,
@@ -73,7 +73,9 @@ const WebExtensionParentActor = protocol.ActorClassWithSpec(webExtensionSpec, {
       iconURL: this.addon.iconURL,
       debuggable: this.addon.isDebuggable,
       temporarilyInstalled: this.addon.temporarilyInstalled,
-      isWebExtension: true,
+      type: this.addon.type,
+      isWebExtension: this.addon.isWebExtension,
+      isAPIExtension: this.addon.isAPIExtension,
       manifestURL: policy && policy.getURL("manifest.json"),
       warnings: ExtensionParent.DebugUtils.getExtensionManifestWarnings(this.id),
     };
@@ -84,7 +86,7 @@ const WebExtensionParentActor = protocol.ActorClassWithSpec(webExtensionSpec, {
       return this._childFormPromise;
     }
 
-    let proxy = new ProxyChildActor(this.conn, this);
+    const proxy = new ProxyChildActor(this.conn, this);
     this._childFormPromise = proxy.connect().then(form => {
       // Merge into the child actor form, some addon metadata
       // (e.g. the addon name shown in the addon debugger window title).
@@ -159,7 +161,7 @@ ProxyChildActor.prototype = {
 
     this._browser = await ExtensionParent.DebugUtils.getExtensionProcessBrowser(this);
 
-    this._form = await DebuggerServer.connectToChild(this._conn, this._browser, onDestroy,
+    this._form = await DebuggerServer.connectToFrame(this._conn, this._browser, onDestroy,
                                                      {addonId: this.addonId});
 
     this._childActorID = this._form.actor;

@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "הורדה"
   },
+  "downloadOnlyNotice": {
+    "message": "הינך כרגע במצב הורדה בלבד."
+  },
+  "downloadOnlyDetails": {
+    "message": "‏Firefox Screenshots משתנה אוטומטית למצב הורדה בלבד במקרים הבאים:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "בחלון גלישה פרטית."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "כשעוגיות צד שלישי מנוטרלות."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "„לא לזכור היסטוריה” פעיל."
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "הגרסה שלך היא Firefox ESR."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "ההעלאות הושבתו."
+  },
   "notificationLinkCopiedTitle": {
     "message": "הקישור הועתק"
   },
@@ -36,6 +57,28 @@
     "message": "הקישור לתמונה שלך הועתק ללוח. נא ללחוץ על $META_KEY$-V כדי להדביק.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "העתקה"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "צילום המסך הועתק"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "צילום המסך שלך הועתק ללוח העריכה. יש ללחוץ על $META_KEY$-V כדי להדביק.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "תמונה זו נחתכה לגודל של $PIXELS$ פיקסלים.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -67,6 +110,12 @@
   "emptySelectionErrorTitle": {
     "message": "הבחירה שלך קטנה מידי"
   },
+  "privateWindowErrorTitle": {
+    "message": "‏Screenshots מנוטרל במצב גלישה פרטית"
+  },
+  "privateWindowErrorDetails": {
+    "message": "מצטערים על אי הנוחות. אנחנו עובדים על תכונה זו בגרסאות עתידיות."
+  },
   "genericErrorTitle": {
     "message": "אויש! Firefox Screenshots ירד מהפסים."
   },
@@ -75,6 +124,12 @@
   },
   "tourBodyIntro": {
     "message": "צילום, שמירה ושיתוף של צילומי מסך מבלי לעזוב את Firefox."
+  },
+  "tourHeaderPageAction": {
+    "message": "דרך חדשה לשמירה"
+  },
+  "tourBodyPageAction": {
+    "message": "יש לפתוח את תפריט פעולות הדף בסרגל הכתובת בכל פעם שברצונך לצלם את המסך."
   },
   "tourHeaderClickAndDrag": {
     "message": "לצלם רק את מה שנחוץ לך"
@@ -106,13 +161,24 @@
   "tourDone": {
     "message": "סיום"
   },
-  "termsAndPrivacyNoticeCloudServices": {
-    "message": "מעצם השימוש ב־Firefox Screenshots הכללים של שירותי הענן של Firefox‏ {termsAndPrivacyNoticeTermsLink} ו{termsAndPrivacyNoticePrivacyLink} מוסכמים עליך."
+  "termsAndPrivacyNotice2": {
+    "message": "השימוש ב־Firefox Screenshots מהווה הסכמה ל$TERMSANDPRIVACYNOTICETERMSLINK$ ול$TERMSANDPRIVACYNOTICEPRIVACYLINK$ שלנו.",
+    "placeholders": {
+      "termsandprivacynoticetermslink": {
+        "content": "$1"
+      },
+      "termsandprivacynoticeprivacylink": {
+        "content": "$2"
+      }
+    }
   },
   "termsAndPrivacyNoticeTermsLink": {
     "message": "תנאים"
   },
   "termsAndPrivacyNoticyPrivacyLink": {
     "message": "הצהרת פרטיות"
+  },
+  "libraryLabel": {
+    "message": "צילומי מסך"
   }
 }

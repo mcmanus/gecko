@@ -26,6 +26,13 @@ static const JSClass global_class = {
     &global_classOps
 };
 
+static volatile int dontOptimizeMeAway = 0;
+
+void
+usePointer(const void* ptr) {
+    dontOptimizeMeAway++;
+}
+
 template<typename T>
 static inline T*
 checkPtr(T* ptr)
@@ -75,15 +82,13 @@ main(int argc, const char** argv)
     checkBool(JS::InitSelfHostedCode(cx));
     JS::SetWarningReporter(cx, reportWarning);
 
-    JSAutoRequest ar(cx);
+    JSAutoRequest areq(cx);
 
     /* Create the global object. */
-    JS::CompartmentOptions options;
-    options.behaviors().setVersion(JSVERSION_DEFAULT);
-
+    JS::RealmOptions options;
     RootedObject global(cx, checkPtr(JS_NewGlobalObject(cx, &global_class,
                         nullptr, JS::FireOnNewGlobalHook, options)));
-    JSAutoCompartment ac(cx, global);
+    JSAutoRealm ar(cx, global);
 
     /* Populate the global object with the standard globals,
        like Object and Array. */

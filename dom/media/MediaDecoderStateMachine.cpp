@@ -4,61 +4,38 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifdef XP_WIN
-// Include Windows headers required for enabling high precision timers.
-#include "windows.h"
-#include "mmsystem.h"
-#endif
-
 #include <algorithm>
 #include <stdint.h>
-
-#include "gfx2DGlue.h"
+#include <utility>
 
 #include "mediasink/AudioSink.h"
 #include "mediasink/AudioSinkWrapper.h"
 #include "mediasink/DecodedStream.h"
 #include "mediasink/OutputStreamManager.h"
 #include "mediasink/VideoSink.h"
-#include "mozilla/DebugOnly.h"
-#include "mozilla/IndexSequence.h"
 #include "mozilla/Logging.h"
-#include "mozilla/mozalloc.h"
 #include "mozilla/MathAlgorithms.h"
-#include "mozilla/Preferences.h"
+#include "mozilla/NotNull.h"
 #include "mozilla/SharedThreadPool.h"
 #include "mozilla/Sprintf.h"
+#include "mozilla/StaticPrefs.h"
+#include "mozilla/Telemetry.h"
 #include "mozilla/TaskQueue.h"
 #include "mozilla/Tuple.h"
-
-#include "nsComponentManagerUtils.h"
-#include "nsContentUtils.h"
-#include "nsIEventTarget.h"
 #include "nsIMemoryReporter.h"
-#include "nsITimer.h"
 #include "nsPrintfCString.h"
 #include "nsTArray.h"
-#include "nsDeque.h"
-#include "prenv.h"
-
-#include "AudioSegment.h"
-#include "DOMMediaStream.h"
 #include "ImageContainer.h"
 #include "MediaDecoder.h"
 #include "MediaDecoderStateMachine.h"
 #include "MediaShutdownManager.h"
-#include "MediaPrefs.h"
 #include "MediaTimer.h"
 #include "ReaderProxy.h"
 #include "TimeUnits.h"
-#include "VideoSegment.h"
 #include "VideoUtils.h"
-#include "gfxPrefs.h"
 
 namespace mozilla {
 
-using namespace mozilla::dom;
-using namespace mozilla::layers;
 using namespace mozilla::media;
 
 #define NS_DispatchToMainThread(...) CompileError_UseAbstractThreadDispatchInstead
@@ -68,19 +45,39 @@ using namespace mozilla::media;
 #undef LOG
 #undef LOGV
 #undef LOGW
+#undef LOGE
 #undef SFMT
 #undef SLOG
 #undef SLOGW
+#undef SLOGE
 
 #define FMT(x, ...) "Decoder=%p " x, mDecoderID, ##__VA_ARGS__
-#define LOG(x, ...) MOZ_LOG(gMediaDecoderLog, LogLevel::Debug,   (FMT(x, ##__VA_ARGS__)))
-#define LOGV(x, ...) MOZ_LOG(gMediaDecoderLog, LogLevel::Verbose, (FMT(x, ##__VA_ARGS__)))
+#define LOG(x, ...)                                                            \
+  DDMOZ_LOG(gMediaDecoderLog,                                                  \
+            LogLevel::Debug,                                                   \
+            "Decoder=%p " x,                                                   \
+            mDecoderID,                                                        \
+            ##__VA_ARGS__)
+#define LOGV(x, ...)                                                           \
+  DDMOZ_LOG(gMediaDecoderLog,                                                  \
+            LogLevel::Verbose,                                                 \
+            "Decoder=%p " x,                                                   \
+            mDecoderID,                                                        \
+            ##__VA_ARGS__)
 #define LOGW(x, ...) NS_WARNING(nsPrintfCString(FMT(x, ##__VA_ARGS__)).get())
+#define LOGE(x, ...) NS_DebugBreak(NS_DEBUG_WARNING, nsPrintfCString(FMT(x, ##__VA_ARGS__)).get(), nullptr, __FILE__, __LINE__)
 
 // Used by StateObject and its sub-classes
 #define SFMT(x, ...) "Decoder=%p state=%s " x, mMaster->mDecoderID, ToStateStr(GetState()), ##__VA_ARGS__
-#define SLOG(x, ...) MOZ_LOG(gMediaDecoderLog, LogLevel::Debug, (SFMT(x, ##__VA_ARGS__)))
+#define SLOG(x, ...)                                                           \
+  DDMOZ_LOGEX(mMaster,                                                         \
+              gMediaDecoderLog,                                                \
+              LogLevel::Debug,                                                 \
+              "state=%s " x,                                                   \
+              ToStateStr(GetState()),                                          \
+              ##__VA_ARGS__)
 #define SLOGW(x, ...) NS_WARNING(nsPrintfCString(SFMT(x, ##__VA_ARGS__)).get())
+#define SLOGE(x, ...) NS_DebugBreak(NS_DEBUG_WARNING, nsPrintfCString(SFMT(x, ##__VA_ARGS__)).get(), nullptr, __FILE__, __LINE__)
 
 // Certain constants get stored as member variables and then adjusted by various
 // scale factors on a per-decoder basis. We want to make sure to avoid using these
@@ -103,12 +100,6 @@ static constexpr auto AMPLE_AUDIO_THRESHOLD = TimeUnit::FromMicroseconds(AMPLE_A
 // we're not "prerolling video", we'll skip the video up to the next keyframe
 // which is at or after the current playback position.
 static const uint32_t LOW_VIDEO_FRAMES = 2;
-
-// Threshold that used to check if we are low on decoded video.
-// If the last video frame's end time |mDecodedVideoEndTime| is more than
-// |LOW_VIDEO_THRESHOLD*mPlaybackRate| after the current clock in
-// Advanceframe(), the video decode is lagging, and we skip to next keyframe.
-static constexpr auto LOW_VIDEO_THRESHOLD = TimeUnit::FromMicroseconds(60000);
 
 // Arbitrary "frame duration" when playing only audio.
 static const int AUDIO_DURATION_USECS = 40000;
@@ -168,7 +159,7 @@ static TimeDuration
 SuspendBackgroundVideoDelay()
 {
   return TimeDuration::FromMilliseconds(
-    MediaPrefs::MDSMSuspendBackgroundVideoDelay());
+    StaticPrefs::MediaSuspendBkgndVideoDelayMs());
 }
 
 class MediaDecoderStateMachine::StateObject
@@ -266,10 +257,10 @@ protected:
   auto
   CallEnterMemberFunction(S* aS,
                           Tuple<Args...>& aTuple,
-                          IndexSequence<Indexes...>)
+                          std::index_sequence<Indexes...>)
     -> decltype(ReturnTypeHelper(&S::Enter))
   {
-    return aS->Enter(Move(Get<Indexes>(aTuple))...);
+    return aS->Enter(std::move(Get<Indexes>(aTuple))...);
   }
 
   // Note this function will delete the current state object.
@@ -286,8 +277,7 @@ protected:
     // the elements of the Tuple into the final function call.
     auto copiedArgs = MakeTuple(Forward<Ts>(aArgs)...);
 
-    // keep mMaster in a local object because mMaster will become invalid after
-    // the current state object is deleted.
+    // Copy mMaster which will reset to null.
     auto master = mMaster;
 
     auto* s = new S(master);
@@ -299,9 +289,17 @@ protected:
 
     Exit();
 
+    // Delete the old state asynchronously to avoid UAF if the caller tries to
+    // access its members after SetState() returns.
+    master->OwnerThread()->DispatchDirectTask(
+      NS_NewRunnableFunction("MDSM::StateObject::DeleteOldState",
+                             [toDelete = std::move(master->mStateObj)](){}));
+    // Also reset mMaster to catch potentail UAF.
+    mMaster = nullptr;
+
     master->mStateObj.reset(s);
     return CallEnterMemberFunction(s, copiedArgs,
-                                   typename IndexSequenceFor<Ts...>::Type());
+                                   std::index_sequence_for<Ts...>{});
   }
 
   RefPtr<MediaDecoder::SeekPromise>
@@ -336,7 +334,7 @@ public:
     Reader()->ReadMetadata()
       ->Then(OwnerThread(), __func__,
         [this] (MetadataHolder&& aMetadata) {
-          OnMetadataRead(Move(aMetadata));
+          OnMetadataRead(std::move(aMetadata));
         },
         [this] (const MediaResult& aError) {
           OnMetadataNotRead(aError);
@@ -371,7 +369,7 @@ private:
   void OnMetadataNotRead(const MediaResult& aError)
   {
     mMetadataRequest.Complete();
-    SLOGW("Decode metadata failed, shutting down decoder");
+    SLOGE("Decode metadata failed, shutting down decoder");
     mMaster->DecodeError(aError);
   }
 
@@ -399,6 +397,7 @@ public:
     // Calculate the position to seek to when exiting dormant.
     auto t = mMaster->mMediaSink->IsStarted()
       ? mMaster->GetClock() : mMaster->GetMediaTime();
+    Reader()->AdjustByLooping(t);
     mPendingSeek.mTarget.emplace(t, SeekTarget::Accurate);
     // SeekJob asserts |mTarget.IsValid() == !mPromise.IsEmpty()| so we
     // need to create the promise even it is not used at all.
@@ -610,27 +609,7 @@ public:
     mOnVideoPopped.DisconnectIfExists();
   }
 
-  void Step() override
-  {
-    if (mMaster->mPlayState != MediaDecoder::PLAY_STATE_PLAYING &&
-        mMaster->IsPlaying()) {
-      // We're playing, but the element/decoder is in paused state. Stop
-      // playing!
-      mMaster->StopPlayback();
-    }
-
-    // Start playback if necessary so that the clock can be properly queried.
-    if (!mIsPrerolling) {
-      mMaster->MaybeStartPlayback();
-    }
-
-    mMaster->UpdatePlaybackPositionPeriodically();
-
-    MOZ_ASSERT(!mMaster->IsPlaying() || mMaster->IsStateMachineScheduled(),
-               "Must have timer scheduled");
-
-    MaybeStartBuffering();
-  }
+  void Step() override;
 
   State GetState() const override
   {
@@ -701,7 +680,7 @@ public:
     }
 
     mMaster->mVideoDecodeSuspended = true;
-    mMaster->mOnPlaybackEvent.Notify(MediaEventType::EnterVideoSuspend);
+    mMaster->mOnPlaybackEvent.Notify(MediaPlaybackEvent::EnterVideoSuspend);
     Reader()->SetVideoBlankDecode(true);
   }
 
@@ -781,7 +760,7 @@ private:
       return;
     }
 
-    auto timeout = MediaPrefs::DormantOnPauseTimeout();
+    auto timeout = StaticPrefs::MediaDormantOnPauseTimeoutMs();
     if (timeout < 0) {
       // Disabled when timeout is negative.
       return;
@@ -846,17 +825,8 @@ public:
   RefPtr<MediaDecoder::SeekPromise> Enter(SeekJob&& aSeekJob,
                                           EventVisibility aVisibility)
   {
-    mSeekJob = Move(aSeekJob);
+    mSeekJob = std::move(aSeekJob);
     mVisibility = aVisibility;
-
-    // Always switch off the blank decoder otherwise we might become visible
-    // in the middle of seeking and won't have a valid video frame to show
-    // when seek is done.
-    if (mMaster->mVideoDecodeSuspended) {
-      mMaster->mVideoDecodeSuspended = false;
-      mMaster->mOnPlaybackEvent.Notify(MediaEventType::ExitVideoSuspend);
-      Reader()->SetVideoBlankDecode(false);
-    }
 
     // Suppressed visibility comes from two cases: (1) leaving dormant state,
     // and (2) resuming suspended video decoder. We want both cases to be
@@ -868,8 +838,8 @@ public:
       // playback should has been stopped.
       mMaster->StopPlayback();
       mMaster->UpdatePlaybackPositionInternal(mSeekJob.mTarget->GetTime());
-      mMaster->mOnPlaybackEvent.Notify(MediaEventType::SeekStarted);
-      mMaster->UpdateNextFrameStatus(
+      mMaster->mOnPlaybackEvent.Notify(MediaPlaybackEvent::SeekStarted);
+      mMaster->mOnNextFrameStatus.Notify(
         MediaDecoderOwner::NEXT_FRAME_UNAVAILABLE_SEEKING);
     }
 
@@ -900,8 +870,7 @@ public:
 
   void HandleResumeVideoDecoding(const TimeUnit&) override
   {
-    // We set mVideoDecodeSuspended to false in Enter().
-    MOZ_ASSERT(false, "Shouldn't have suspended video decoding.");
+    // Do nothing. We will resume video decoding in the decoding state.
   }
 
 protected:
@@ -926,7 +895,7 @@ public:
   {
     MOZ_ASSERT(aSeekJob.mTarget->IsAccurate() || aSeekJob.mTarget->IsFast());
     mCurrentTimeBeforeSeek = mMaster->GetMediaTime();
-    return SeekingState::Enter(Move(aSeekJob), aVisibility);
+    return SeekingState::Enter(std::move(aSeekJob), aVisibility);
   }
 
   void Exit() override
@@ -1008,9 +977,7 @@ public:
 
   void HandleEndOfAudio() override
   {
-    MOZ_ASSERT(!mDoneAudioSeeking);
-    AudioQueue().Finish();
-    mDoneAudioSeeking = true;
+    HandleEndOfAudioInternal();
     MaybeFinishSeek();
   }
 
@@ -1028,14 +995,7 @@ public:
 
   void HandleEndOfVideo() override
   {
-    MOZ_ASSERT(!mDoneVideoSeeking);
-    if (mFirstVideoFrameAfterSeek) {
-      // Hit the end of stream. Move mFirstVideoFrameAfterSeek into
-      // mSeekedVideoData so we have something to display after seeking.
-      mMaster->PushVideo(mFirstVideoFrameAfterSeek);
-    }
-    VideoQueue().Finish();
-    mDoneVideoSeeking = true;
+    HandleEndOfVideoInternal();
     MaybeFinishSeek();
   }
 
@@ -1144,8 +1104,9 @@ protected:
       MOZ_ASSERT_IF(aReject.mType == MediaData::VIDEO_DATA, !mMaster->IsWaitingVideoData());
 
       // Fire 'waiting' to notify the player that we are waiting for data.
-      mMaster->UpdateNextFrameStatus(
+      mMaster->mOnNextFrameStatus.Notify(
         MediaDecoderOwner::NEXT_FRAME_UNAVAILABLE_SEEKING);
+
       Reader()
         ->WaitForData(aReject.mType)
         ->Then(OwnerThread(), __func__,
@@ -1164,8 +1125,13 @@ protected:
     }
 
     if (aReject.mError == NS_ERROR_DOM_MEDIA_END_OF_STREAM) {
-      HandleEndOfAudio();
-      HandleEndOfVideo();
+      if (!mDoneAudioSeeking) {
+        HandleEndOfAudioInternal();
+      }
+      if (!mDoneVideoSeeking) {
+        HandleEndOfVideoInternal();
+      }
+      MaybeFinishSeek();
       return;
     }
 
@@ -1248,7 +1214,7 @@ protected:
     if (framesToPrune.value() > aAudio->mFrames) {
       // We've messed up somehow. Don't try to trim frames, the |frames|
       // variable below will overflow.
-      SLOGW("Can't prune more frames that we have!");
+      SLOGE("Can't prune more frames that we have!");
       return NS_ERROR_FAILURE;
     }
     uint32_t frames = aAudio->mFrames - uint32_t(framesToPrune.value());
@@ -1267,8 +1233,8 @@ protected:
     }
     RefPtr<AudioData> data(new AudioData(
       aAudio->mOffset, mSeekJob.mTarget->GetTime(),
-      duration, frames, Move(audioData), channels,
-      aAudio->mRate));
+      duration, frames, std::move(audioData), channels,
+      aAudio->mRate, aAudio->mChannelMap));
     MOZ_ASSERT(AudioQueue().GetSize() == 0,
                "Should be the 1st sample after seeking");
     mMaster->PushAudio(data);
@@ -1315,6 +1281,25 @@ protected:
     }
 
     return NS_OK;
+  }
+
+  void HandleEndOfAudioInternal()
+  {
+    MOZ_ASSERT(!mDoneAudioSeeking);
+    AudioQueue().Finish();
+    mDoneAudioSeeking = true;
+  }
+
+  void HandleEndOfVideoInternal()
+  {
+    MOZ_ASSERT(!mDoneVideoSeeking);
+    if (mFirstVideoFrameAfterSeek) {
+      // Hit the end of stream. Move mFirstVideoFrameAfterSeek into
+      // mSeekedVideoData so we have something to display after seeking.
+      mMaster->PushVideo(mFirstVideoFrameAfterSeek);
+    }
+    VideoQueue().Finish();
+    mDoneVideoSeeking = true;
   }
 
   void MaybeFinishSeek()
@@ -1380,7 +1365,7 @@ public:
     MOZ_ASSERT(aSeekJob.mTarget->IsNextFrame());
     mCurrentTime = mMaster->GetMediaTime();
     mDuration = mMaster->Duration();
-    return SeekingState::Enter(Move(aSeekJob), aVisibility);
+    return SeekingState::Enter(std::move(aSeekJob), aVisibility);
   }
 
   void Exit() override
@@ -1501,7 +1486,9 @@ public:
     // seek is actually performed, the ThenValue of SeekPromise has already
     // been set so that it won't be postponed.
     RefPtr<Runnable> r = mAsyncSeekTask = new AysncNextFrameSeekTask(this);
-    OwnerThread()->Dispatch(r.forget());
+    nsresult rv = OwnerThread()->Dispatch(r.forget());
+    MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+    Unused << rv;
   }
 
 private:
@@ -1599,9 +1586,9 @@ public:
   RefPtr<MediaDecoder::SeekPromise> Enter(SeekJob&& aCurrentSeekJob,
                                           SeekJob&& aFutureSeekJob)
   {
-    mFutureSeekJob = Move(aFutureSeekJob);
+    mFutureSeekJob = std::move(aFutureSeekJob);
 
-    AccurateSeekingState::Enter(Move(aCurrentSeekJob),
+    AccurateSeekingState::Enter(std::move(aCurrentSeekJob),
                                 EventVisibility::Suppressed);
 
     // Once seekToNextFrame() is called, we assume the user is likely to keep
@@ -1625,7 +1612,7 @@ private:
   // instead, we transition to NextFrameSeekingState.
   void GoToNextState() override
   {
-    SetState<NextFrameSeekingState>(Move(mFutureSeekJob),
+    SetState<NextFrameSeekingState>(std::move(mFutureSeekJob),
                                     EventVisibility::Observable);
   }
 };
@@ -1643,11 +1630,11 @@ public:
     MOZ_ASSERT(aVisibility == EventVisibility::Suppressed);
 
     RefPtr<MediaDecoder::SeekPromise> p =
-      AccurateSeekingState::Enter(Move(aSeekJob), aVisibility);
+      AccurateSeekingState::Enter(std::move(aSeekJob), aVisibility);
 
     // Dispatch a mozvideoonlyseekbegin event to indicate UI for corresponding
     // changes.
-    mMaster->mOnPlaybackEvent.Notify(MediaEventType::VideoOnlySeekBegin);
+    mMaster->mOnPlaybackEvent.Notify(MediaPlaybackEvent::VideoOnlySeekBegin);
 
     return p.forget();
   }
@@ -1657,7 +1644,8 @@ public:
     // We are completing or discarding this video-only seek operation now,
     // dispatch an event so that the UI can change in response to the end
     // of video-only seek.
-    mMaster->mOnPlaybackEvent.Notify(MediaEventType::VideoOnlySeekCompleted);
+    mMaster->mOnPlaybackEvent.Notify(
+      MediaPlaybackEvent::VideoOnlySeekCompleted);
 
     AccurateSeekingState::Exit();
   }
@@ -1766,7 +1754,7 @@ MediaDecoderStateMachine::DormantState::HandleSeek(SeekTarget aTarget)
     SeekJob seekJob;
     seekJob.mTarget = Some(aTarget);
     return StateObject::SetState<NextFrameSeekingFromDormantState>(
-      Move(mPendingSeek), Move(seekJob));
+      std::move(mPendingSeek), std::move(seekJob));
   }
 
   return StateObject::HandleSeek(aTarget);
@@ -1795,7 +1783,7 @@ public:
 
     mBufferingStart = TimeStamp::Now();
     mMaster->ScheduleStateMachineIn(TimeUnit::FromMicroseconds(USECS_PER_S));
-    mMaster->UpdateNextFrameStatus(
+    mMaster->mOnNextFrameStatus.Notify(
       MediaDecoderOwner::NEXT_FRAME_UNAVAILABLE_BUFFERING);
   }
 
@@ -1863,7 +1851,7 @@ public:
     }
 
     mMaster->mVideoDecodeSuspended = true;
-    mMaster->mOnPlaybackEvent.Notify(MediaEventType::EnterVideoSuspend);
+    mMaster->mOnPlaybackEvent.Notify(MediaPlaybackEvent::EnterVideoSuspend);
     Reader()->SetVideoBlankDecode(true);
   }
 
@@ -1901,7 +1889,7 @@ public:
     bool hasNextFrame = (!mMaster->HasAudio() || !mMaster->mAudioCompleted) &&
                         (!mMaster->HasVideo() || !mMaster->mVideoCompleted);
 
-    mMaster->UpdateNextFrameStatus(
+    mMaster->mOnNextFrameStatus.Notify(
       hasNextFrame ? MediaDecoderOwner::NEXT_FRAME_AVAILABLE
                    : MediaDecoderOwner::NEXT_FRAME_UNAVAILABLE);
 
@@ -1940,13 +1928,23 @@ public:
     if (!mSentPlaybackEndedEvent) {
       auto clockTime =
         std::max(mMaster->AudioEndTime(), mMaster->VideoEndTime());
+      // Correct the time over the end once looping was turned on.
+      Reader()->AdjustByLooping(clockTime);
       if (mMaster->mDuration.Ref()->IsInfinite()) {
         // We have a finite duration when playback reaches the end.
         mMaster->mDuration = Some(clockTime);
+        DDLOGEX(mMaster,
+                DDLogCategory::Property,
+                "duration_us",
+                mMaster->mDuration.Ref()->ToMicroseconds());
       }
       mMaster->UpdatePlaybackPosition(clockTime);
 
-      mMaster->mOnPlaybackEvent.Notify(MediaEventType::PlaybackEnded);
+      // Ensure readyState is updated before firing the 'ended' event.
+      mMaster->mOnNextFrameStatus.Notify(
+        MediaDecoderOwner::NEXT_FRAME_UNAVAILABLE);
+
+      mMaster->mOnPlaybackEvent.Notify(MediaPlaybackEvent::PlaybackEnded);
 
       mSentPlaybackEndedEvent = true;
 
@@ -2047,7 +2045,7 @@ StateObject::HandleSeek(SeekTarget aTarget)
   SLOG("Changed state to SEEKING (to %" PRId64 ")", aTarget.GetTime().ToMicroseconds());
   SeekJob seekJob;
   seekJob.mTarget = Some(aTarget);
-  return SetSeekingState(Move(seekJob), EventVisibility::Observable);
+  return SetSeekingState(std::move(seekJob), EventVisibility::Observable);
 }
 
 RefPtr<ShutdownPromise>
@@ -2104,6 +2102,10 @@ StateObject::HandleResumeVideoDecoding(const TimeUnit& aTarget)
 {
   MOZ_ASSERT(mMaster->mVideoDecodeSuspended);
 
+  mMaster->mVideoDecodeSuspended = false;
+  mMaster->mOnPlaybackEvent.Notify(MediaPlaybackEvent::ExitVideoSuspend);
+  Reader()->SetVideoBlankDecode(false);
+
   // Start counting recovery time from right now.
   TimeStamp start = TimeStamp::Now();
 
@@ -2131,7 +2133,7 @@ StateObject::HandleResumeVideoDecoding(const TimeUnit& aTarget)
   // invalid after the current state object is deleted in SetState();
   RefPtr<AbstractThread> mainThread = mMaster->mAbstractMainThread;
 
-  SetSeekingState(Move(seekJob), EventVisibility::Suppressed)->Then(
+  SetSeekingState(std::move(seekJob), EventVisibility::Suppressed)->Then(
     mainThread, __func__,
     [start, info, hw](){ ReportRecoveryTelemetry(start, info, hw); },
     [](){});
@@ -2143,13 +2145,13 @@ StateObject::SetSeekingState(SeekJob&& aSeekJob, EventVisibility aVisibility)
 {
   if (aSeekJob.mTarget->IsAccurate() || aSeekJob.mTarget->IsFast()) {
     if (aSeekJob.mTarget->IsVideoOnly()) {
-      return SetState<VideoOnlySeekingState>(Move(aSeekJob), aVisibility);
+      return SetState<VideoOnlySeekingState>(std::move(aSeekJob), aVisibility);
     }
-    return SetState<AccurateSeekingState>(Move(aSeekJob), aVisibility);
+    return SetState<AccurateSeekingState>(std::move(aSeekJob), aVisibility);
   }
 
   if (aSeekJob.mTarget->IsNextFrame()) {
-    return SetState<NextFrameSeekingState>(Move(aSeekJob), aVisibility);
+    return SetState<NextFrameSeekingState>(std::move(aSeekJob), aVisibility);
   }
 
   MOZ_ASSERT_UNREACHABLE("Unknown SeekTarget::Type.");
@@ -2181,6 +2183,11 @@ DecodeMetadataState::OnMetadataRead(MetadataHolder&& aMetadata)
     mMaster->mDuration = Some(TimeUnit::FromInfinity());
   }
 
+  DDLOGEX(mMaster,
+          DDLogCategory::Property,
+          "duration_us",
+          mMaster->mDuration.Ref()->ToMicroseconds());
+
   if (mMaster->HasVideo()) {
     SLOG("Video decode HWAccel=%d videoQueueSize=%d",
          Reader()->VideoIsHardwareAccelerated(),
@@ -2190,9 +2197,16 @@ DecodeMetadataState::OnMetadataRead(MetadataHolder&& aMetadata)
   MOZ_ASSERT(mMaster->mDuration.Ref().isSome());
 
   mMaster->mMetadataLoadedEvent.Notify(
-    Move(aMetadata.mInfo),
-    Move(aMetadata.mTags),
+    std::move(aMetadata.mInfo),
+    std::move(aMetadata.mTags),
     MediaDecoderEventVisibility::Observable);
+
+  // Check whether the media satisfies the requirement of seamless looing.
+  // (Before checking the media is audio only, we need to get metadata first.)
+  mMaster->mSeamlessLoopingAllowed = StaticPrefs::MediaSeamlessLooping() &&
+                                     mMaster->HasAudio() &&
+                                     !mMaster->HasVideo();
+  mMaster->LoopingChanged();
 
   SetState<DecodingFirstFrameState>();
 }
@@ -2204,7 +2218,7 @@ DormantState::HandlePlayStateChanged(MediaDecoder::PlayState aPlayState)
   if (aPlayState == MediaDecoder::PLAY_STATE_PLAYING) {
     // Exit dormant when the user wants to play.
     MOZ_ASSERT(mMaster->mSentFirstFrameLoadedEvent);
-    SetSeekingState(Move(mPendingSeek), EventVisibility::Suppressed);
+    SetSeekingState(std::move(mPendingSeek), EventVisibility::Suppressed);
   }
 }
 
@@ -2242,7 +2256,7 @@ DecodingFirstFrameState::MaybeFinishDecodeFirstFrame()
 
   mMaster->FinishDecodeFirstFrame();
   if (mPendingSeek.Exists()) {
-    SetSeekingState(Move(mPendingSeek), EventVisibility::Observable);
+    SetSeekingState(std::move(mPendingSeek), EventVisibility::Observable);
   } else {
     SetState<DecodingState>();
   }
@@ -2253,6 +2267,12 @@ MediaDecoderStateMachine::
 DecodingState::Enter()
 {
   MOZ_ASSERT(mMaster->mSentFirstFrameLoadedEvent);
+
+  if (mMaster->mVideoDecodeSuspended &&
+      mMaster->mVideoDecodeMode == VideoDecodeMode::Normal) {
+    StateObject::HandleResumeVideoDecoding(mMaster->GetMediaTime());
+    return;
+  }
 
   if (mMaster->mVideoDecodeMode == VideoDecodeMode::Suspend &&
       !mMaster->mVideoDecodeSuspendTimer.IsScheduled() &&
@@ -2281,7 +2301,7 @@ DecodingState::Enter()
     }
   });
 
-  mMaster->UpdateNextFrameStatus(MediaDecoderOwner::NEXT_FRAME_AVAILABLE);
+  mMaster->mOnNextFrameStatus.Notify(MediaDecoderOwner::NEXT_FRAME_AVAILABLE);
 
   mDecodeStartTime = TimeStamp::Now();
 
@@ -2296,6 +2316,57 @@ DecodingState::Enter()
   if (mMaster->mPlayState == MediaDecoder::PLAY_STATE_PAUSED) {
     StartDormantTimer();
   }
+}
+
+void
+MediaDecoderStateMachine::
+DecodingState::Step()
+{
+  if (mMaster->mPlayState != MediaDecoder::PLAY_STATE_PLAYING &&
+      mMaster->IsPlaying()) {
+    // We're playing, but the element/decoder is in paused state. Stop
+    // playing!
+    mMaster->StopPlayback();
+  }
+
+  // Start playback if necessary so that the clock can be properly queried.
+  if (!mIsPrerolling) {
+    mMaster->MaybeStartPlayback();
+  }
+
+  TimeUnit before = mMaster->GetMediaTime();
+  mMaster->UpdatePlaybackPositionPeriodically();
+
+  // Fire the `seeking` and `seeked` events to meet the HTML spec
+  // when the media is looped back from the end to the beginning.
+  if (before > mMaster->GetMediaTime()) {
+    MOZ_ASSERT(mMaster->mLooping);
+    mMaster->mOnPlaybackEvent.Notify(MediaPlaybackEvent::Loop);
+  // After looping is cancelled, the time won't be corrected, and therefore we
+  // can check it to see if the end of the media track is reached. Make sure
+  // the media is started before comparing the time, or it's meaningless.
+  // Without checking IsStarted(), the media will be terminated immediately
+  // after seeking forward. When the state is just transited from seeking state,
+  // GetClock() is smaller than GetMediaTime(), since GetMediaTime() is updated
+  // upon seek is completed while GetClock() will be updated after the media is
+  // started again.
+  } else if (mMaster->mMediaSink->IsStarted() && !mMaster->mLooping) {
+    TimeUnit adjusted = mMaster->GetClock();
+    Reader()->AdjustByLooping(adjusted);
+    if (adjusted < before) {
+      mMaster->StopPlayback();
+      mMaster->mAudioDataRequest.DisconnectIfExists();
+      AudioQueue().Finish();
+      mMaster->mAudioCompleted = true;
+      SetState<CompletedState>();
+      return;
+    }
+  }
+
+  MOZ_ASSERT(!mMaster->IsPlaying() || mMaster->IsStateMachineScheduled(),
+             "Must have timer scheduled");
+
+  MaybeStartBuffering();
 }
 
 void
@@ -2450,7 +2521,7 @@ SeekingState::SeekCompleted()
 
   if (mMaster->VideoQueue().PeekFront()) {
     mMaster->mMediaSink->Redraw(Info().mVideo);
-    mMaster->mOnPlaybackEvent.Notify(MediaEventType::Invalidate);
+    mMaster->mOnPlaybackEvent.Notify(MediaPlaybackEvent::Invalidate);
   }
 
   GoToNextState();
@@ -2573,9 +2644,7 @@ ShutdownState::Enter()
   master->mMediaPrincipalHandle.DisconnectIfConnected();
 
   master->mDuration.DisconnectAll();
-  master->mNextFrameStatus.DisconnectAll();
   master->mCurrentPosition.DisconnectAll();
-  master->mPlaybackOffset.DisconnectAll();
   master->mIsAudioDataAudible.DisconnectAll();
 
   // Shut down the watch manager to stop further notifications.
@@ -2605,7 +2674,7 @@ MediaDecoderStateMachine::MediaDecoderStateMachine(MediaDecoder* aDecoder,
     "MDSM::mTaskQueue", /* aSupportsTailDispatch = */ true)),
   mWatchManager(this, mTaskQueue),
   mDispatchedStateMachine(false),
-  mDelayedScheduler(mTaskQueue),
+  mDelayedScheduler(mTaskQueue, true /*aFuzzy*/),
   mCurrentFrameID(0),
   mReader(new ReaderProxy(mTaskQueue, aReader)),
   mPlaybackRate(1.0),
@@ -2618,6 +2687,7 @@ MediaDecoderStateMachine::MediaDecoderStateMachine(MediaDecoder* aDecoder,
   mOutputStreamManager(new OutputStreamManager()),
   mVideoDecodeMode(VideoDecodeMode::Normal),
   mIsMSE(aDecoder->IsMSE()),
+  mSeamlessLoopingAllowed(false),
   INIT_MIRROR(mBuffered, TimeIntervals()),
   INIT_MIRROR(mPlayState, MediaDecoder::PLAY_STATE_LOADING),
   INIT_MIRROR(mVolume, 1.0),
@@ -2626,18 +2696,15 @@ MediaDecoderStateMachine::MediaDecoderStateMachine(MediaDecoder* aDecoder,
   INIT_MIRROR(mSameOriginMedia, false),
   INIT_MIRROR(mMediaPrincipalHandle, PRINCIPAL_HANDLE_NONE),
   INIT_CANONICAL(mDuration, NullableTimeUnit()),
-  INIT_CANONICAL(mNextFrameStatus, MediaDecoderOwner::NEXT_FRAME_UNAVAILABLE),
   INIT_CANONICAL(mCurrentPosition, TimeUnit::Zero()),
-  INIT_CANONICAL(mPlaybackOffset, 0),
   INIT_CANONICAL(mIsAudioDataAudible, false)
-#ifdef XP_WIN
-  , mShouldUseHiResTimers(Preferences::GetBool("media.hi-res-timers.enabled", true))
-#endif
 {
   MOZ_COUNT_CTOR(MediaDecoderStateMachine);
   NS_ASSERTION(NS_IsMainThread(), "Should be on main thread.");
 
   InitVideoQueuePrefs();
+
+  DDLINKCHILD("reader", aReader);
 }
 
 #undef INIT_WATCHABLE
@@ -2648,10 +2715,6 @@ MediaDecoderStateMachine::~MediaDecoderStateMachine()
 {
   MOZ_ASSERT(NS_IsMainThread(), "Should be on main thread.");
   MOZ_COUNT_DTOR(MediaDecoderStateMachine);
-
-#ifdef XP_WIN
-  MOZ_ASSERT(!mHiResTimersRequested);
-#endif
 }
 
 void
@@ -2675,6 +2738,7 @@ MediaDecoderStateMachine::InitializationTask(MediaDecoder* aDecoder)
   mWatchManager.Watch(mPreservesPitch,
                       &MediaDecoderStateMachine::PreservesPitchChanged);
   mWatchManager.Watch(mPlayState, &MediaDecoderStateMachine::PlayStateChanged);
+  mWatchManager.Watch(mLooping, &MediaDecoderStateMachine::LoopingChanged);
 
   MOZ_ASSERT(!mStateObj);
   auto* s = new DecodeMetadataState(this);
@@ -2773,14 +2837,14 @@ void
 MediaDecoderStateMachine::OnAudioPopped(const RefPtr<AudioData>& aSample)
 {
   MOZ_ASSERT(OnTaskQueue());
-  mPlaybackOffset = std::max(mPlaybackOffset.Ref(), aSample->mOffset);
+  mPlaybackOffset = std::max(mPlaybackOffset, aSample->mOffset);
 }
 
 void
 MediaDecoderStateMachine::OnVideoPopped(const RefPtr<VideoData>& aSample)
 {
   MOZ_ASSERT(OnTaskQueue());
-  mPlaybackOffset = std::max(mPlaybackOffset.Ref(), aSample->mOffset);
+  mPlaybackOffset = std::max(mPlaybackOffset, aSample->mOffset);
 }
 
 bool
@@ -2846,17 +2910,11 @@ MediaDecoderStateMachine::StopPlayback()
   MOZ_ASSERT(OnTaskQueue());
   LOG("StopPlayback()");
 
-  mOnPlaybackEvent.Notify(MediaEventType::PlaybackStopped);
-
   if (IsPlaying()) {
+    mOnPlaybackEvent.Notify(MediaPlaybackEvent{
+      MediaPlaybackEvent::PlaybackStopped, mPlaybackOffset });
     mMediaSink->SetPlaying(false);
     MOZ_ASSERT(!IsPlaying());
-#ifdef XP_WIN
-    if (mHiResTimersRequested) {
-      mHiResTimersRequested = false;
-      timeEndPeriod(1);
-    }
-#endif
   }
 }
 
@@ -2877,27 +2935,15 @@ void MediaDecoderStateMachine::MaybeStartPlayback()
   }
 
   LOG("MaybeStartPlayback() starting playback");
-  mOnPlaybackEvent.Notify(MediaEventType::PlaybackStarted);
   StartMediaSink();
-
-#ifdef XP_WIN
-  if (!mHiResTimersRequested && mShouldUseHiResTimers) {
-    mHiResTimersRequested = true;
-    // Ensure high precision timers are enabled on Windows, otherwise the state
-    // machine isn't woken up at reliable intervals to set the next frame, and we
-    // drop frames while painting. Note that each call must be matched by a
-    // corresponding timeEndPeriod() call. Enabling high precision timers causes
-    // the CPU to wake up more frequently on Windows 7 and earlier, which causes
-    // more CPU load and battery use. So we only enable high precision timers
-    // when we're actually playing.
-    timeBeginPeriod(1);
-  }
-#endif
 
   if (!IsPlaying()) {
     mMediaSink->SetPlaying(true);
     MOZ_ASSERT(IsPlaying());
   }
+
+  mOnPlaybackEvent.Notify(
+    MediaPlaybackEvent{ MediaPlaybackEvent::PlaybackStarted, mPlaybackOffset });
 }
 
 void
@@ -2909,7 +2955,12 @@ MediaDecoderStateMachine::UpdatePlaybackPositionInternal(const TimeUnit& aTime)
   mCurrentPosition = aTime;
   NS_ASSERTION(mCurrentPosition.Ref() >= TimeUnit::Zero(),
                "CurrentTime should be positive!");
-  mDuration = Some(std::max(mDuration.Ref().ref(), mCurrentPosition.Ref()));
+  if (mDuration.Ref().ref() < mCurrentPosition.Ref()) {
+    mDuration = Some(mCurrentPosition.Ref());
+    DDLOG(DDLogCategory::Property,
+          "duration_us",
+          mDuration.Ref()->ToMicroseconds());
+  }
 }
 
 void
@@ -2995,8 +3046,13 @@ void MediaDecoderStateMachine::SetVideoDecodeModeInternal(VideoDecodeMode aMode)
 {
   MOZ_ASSERT(OnTaskQueue());
 
+  LOG("SetVideoDecodeModeInternal(), VideoDecodeMode=(%s->%s), mVideoDecodeSuspended=%c",
+      mVideoDecodeMode == VideoDecodeMode::Normal ? "Normal" : "Suspend",
+      aMode == VideoDecodeMode::Normal ? "Normal" : "Suspend",
+      mVideoDecodeSuspended ? 'T' : 'F');
+
   // Should not suspend decoding if we don't turn on the pref.
-  if (!MediaPrefs::MDSMSuspendBackgroundVideoEnabled() &&
+  if (!StaticPrefs::MediaSuspendBkgndVideoEnabled() &&
       aMode == VideoDecodeMode::Suspend) {
     LOG("SetVideoDecodeModeInternal(), early return because preference off and set to Suspend");
     return;
@@ -3006,11 +3062,6 @@ void MediaDecoderStateMachine::SetVideoDecodeModeInternal(VideoDecodeMode aMode)
     LOG("SetVideoDecodeModeInternal(), early return because the mode does not change");
     return;
   }
-
-  LOG("SetVideoDecodeModeInternal(), VideoDecodeMode=(%s->%s), mVideoDecodeSuspended=%c",
-      mVideoDecodeMode == VideoDecodeMode::Normal ? "Normal" : "Suspend",
-      aMode == VideoDecodeMode::Normal ? "Normal" : "Suspend",
-      mVideoDecodeSuspended ? 'T' : 'F');
 
   // Set new video decode mode.
   mVideoDecodeMode = aMode;
@@ -3023,7 +3074,7 @@ void MediaDecoderStateMachine::SetVideoDecodeModeInternal(VideoDecodeMode aMode)
     mVideoDecodeSuspendTimer.Ensure(target,
                                     [=]() { self->OnSuspendTimerResolved(); },
                                     [] () { MOZ_DIAGNOSTIC_ASSERT(false); });
-    mOnPlaybackEvent.Notify(MediaEventType::StartVideoSuspendTimer);
+    mOnPlaybackEvent.Notify(MediaPlaybackEvent::StartVideoSuspendTimer);
     return;
   }
 
@@ -3062,6 +3113,9 @@ void MediaDecoderStateMachine::BufferedRangeUpdated()
   if (mDuration.Ref().isNothing() || mDuration.Ref()->IsInfinite() ||
       end > mDuration.Ref().ref()) {
     mDuration = Some(end);
+    DDLOG(DDLogCategory::Property,
+          "duration_us",
+          mDuration.Ref()->ToMicroseconds());
   }
 }
 
@@ -3256,6 +3310,14 @@ MediaDecoderStateMachine::StartMediaSink()
         &MediaDecoderStateMachine::OnMediaSinkVideoError)
       ->Track(mMediaSinkVideoPromise);
     }
+    // Remember the initial offset when playback starts. This will be used
+    // to calculate the rate at which bytes are consumed as playback moves on.
+    RefPtr<MediaData> sample = mAudioQueue.PeekFront();
+    mPlaybackOffset = sample ? sample->mOffset : 0;
+    sample = mVideoQueue.PeekFront();
+    if (sample && sample->mOffset > mPlaybackOffset) {
+      mPlaybackOffset = sample->mOffset;
+    }
   }
 }
 
@@ -3346,7 +3408,7 @@ void
 MediaDecoderStateMachine::DecodeError(const MediaResult& aError)
 {
   MOZ_ASSERT(OnTaskQueue());
-  LOGW("Decode error");
+  LOGE("Decode error: %s", aError.Description().get());
   // Notify the decode error and MediaDecoder will shut down MDSM.
   mOnPlaybackErrorEvent.Notify(aError);
 }
@@ -3434,8 +3496,6 @@ MediaDecoderStateMachine::ResetDecode(TrackSet aTracks)
     mAudioWaitRequest.DisconnectIfExists();
   }
 
-  mPlaybackOffset = 0;
-
   mReader->ResetDecode(aTracks);
 }
 
@@ -3462,7 +3522,13 @@ MediaDecoderStateMachine::UpdatePlaybackPositionPeriodically()
   // advance the clock to after the media end time.
   if (VideoEndTime() > TimeUnit::Zero() || AudioEndTime() > TimeUnit::Zero()) {
 
-    const auto clockTime = GetClock();
+    auto clockTime = GetClock();
+
+    // Once looping was turned on, the time is probably larger than the duration
+    // of the media track, so the time over the end should be corrected.
+    mReader->AdjustByLooping(clockTime);
+    bool loopback = clockTime < GetMediaTime() && mLooping;
+
     // Skip frames up to the frame at the playback position, and figure out
     // the time remaining until it's time to display the next frame and drop
     // the current frame.
@@ -3474,7 +3540,7 @@ MediaDecoderStateMachine::UpdatePlaybackPositionPeriodically()
     auto t = std::min(clockTime, maxEndTime);
     // FIXME: Bug 1091422 - chained ogg files hit this assertion.
     //MOZ_ASSERT(t >= GetMediaTime());
-    if (t > GetMediaTime()) {
+    if (loopback || t > GetMediaTime()) {
       UpdatePlaybackPosition(t);
     }
   }
@@ -3485,34 +3551,14 @@ MediaDecoderStateMachine::UpdatePlaybackPositionPeriodically()
 
   int64_t delay = std::max<int64_t>(1, AUDIO_DURATION_USECS / mPlaybackRate);
   ScheduleStateMachineIn(TimeUnit::FromMicroseconds(delay));
-}
 
-/* static */ const char*
-MediaDecoderStateMachine::ToStr(NextFrameStatus aStatus)
-{
-  switch (aStatus) {
-    case MediaDecoderOwner::NEXT_FRAME_AVAILABLE:
-      return "NEXT_FRAME_AVAILABLE";
-    case MediaDecoderOwner::NEXT_FRAME_UNAVAILABLE:
-      return "NEXT_FRAME_UNAVAILABLE";
-    case MediaDecoderOwner::NEXT_FRAME_UNAVAILABLE_BUFFERING:
-      return "NEXT_FRAME_UNAVAILABLE_BUFFERING";
-    case MediaDecoderOwner::NEXT_FRAME_UNAVAILABLE_SEEKING:
-      return "NEXT_FRAME_UNAVAILABLE_SEEKING";
-    case MediaDecoderOwner::NEXT_FRAME_UNINITIALIZED:
-      return "NEXT_FRAME_UNINITIALIZED";
-  }
-  return "UNKNOWN";
-}
-
-void
-MediaDecoderStateMachine::UpdateNextFrameStatus(NextFrameStatus aStatus)
-{
-  MOZ_ASSERT(OnTaskQueue());
-  if (aStatus != mNextFrameStatus) {
-    LOG("Changed mNextFrameStatus to %s", ToStr(aStatus));
-    mNextFrameStatus = aStatus;
-  }
+  // Notify the listener as we progress in the playback offset. Note it would
+  // be too intensive to send notifications for each popped audio/video sample.
+  // It is good enough to send 'PlaybackProgressed' events every 40us (defined
+  // by AUDIO_DURATION_USECS), and we ensure 'PlaybackProgressed' events are
+  // always sent after 'PlaybackStarted' and before 'PlaybackStopped'.
+  mOnPlaybackEvent.Notify(MediaPlaybackEvent{
+    MediaPlaybackEvent::PlaybackProgressed, mPlaybackOffset });
 }
 
 void
@@ -3524,10 +3570,13 @@ MediaDecoderStateMachine::ScheduleStateMachine()
   }
   mDispatchedStateMachine = true;
 
-  OwnerThread()->Dispatch(
-    NewRunnableMethod("MediaDecoderStateMachine::RunStateMachine",
-                      this,
-                      &MediaDecoderStateMachine::RunStateMachine));
+  nsresult rv =
+    OwnerThread()->Dispatch(
+      NewRunnableMethod("MediaDecoderStateMachine::RunStateMachine",
+                        this,
+                        &MediaDecoderStateMachine::RunStateMachine));
+  MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
 }
 
 void
@@ -3584,6 +3633,15 @@ void MediaDecoderStateMachine::PreservesPitchChanged()
   mMediaSink->SetPreservesPitch(mPreservesPitch);
 }
 
+void
+MediaDecoderStateMachine::LoopingChanged()
+{
+  MOZ_ASSERT(OnTaskQueue());
+  if (mSeamlessLoopingAllowed) {
+    mReader->SetSeamlessLoopingEnabled(mLooping);
+  }
+}
+
 TimeUnit
 MediaDecoderStateMachine::AudioEndTime() const
 {
@@ -3621,7 +3679,7 @@ MediaDecoderStateMachine::OnMediaSinkVideoError()
 {
   MOZ_ASSERT(OnTaskQueue());
   MOZ_ASSERT(HasVideo());
-  LOGW("[%s]", __func__);
+  LOGE("[%s]", __func__);
 
   mMediaSinkVideoPromise.Complete();
   mVideoCompleted = true;
@@ -3651,7 +3709,7 @@ void MediaDecoderStateMachine::OnMediaSinkAudioError(nsresult aResult)
 {
   MOZ_ASSERT(OnTaskQueue());
   MOZ_ASSERT(HasAudio());
-  LOGW("[%s]", __func__);
+  LOGE("[%s]", __func__);
 
   mMediaSinkAudioPromise.Complete();
   mAudioCompleted = true;
@@ -3721,22 +3779,34 @@ nsCString
 MediaDecoderStateMachine::GetDebugInfo()
 {
   MOZ_ASSERT(OnTaskQueue());
-  return nsPrintfCString(
-           "MediaDecoderStateMachine State: GetMediaTime=%" PRId64 " GetClock="
-           "%" PRId64 " mMediaSink=%p state=%s mPlayState=%d "
-           "mSentFirstFrameLoadedEvent=%d IsPlaying=%d mAudioStatus=%s "
-           "mVideoStatus=%s mDecodedAudioEndTime=%" PRId64
-           " mDecodedVideoEndTime=%" PRId64 "mAudioCompleted=%d "
-           "mVideoCompleted=%d",
-           GetMediaTime().ToMicroseconds(),
-           mMediaSink->IsStarted() ? GetClock().ToMicroseconds() : -1,
-           mMediaSink.get(), ToStateStr(), mPlayState.Ref(),
-           mSentFirstFrameLoadedEvent, IsPlaying(), AudioRequestStatus(),
-           VideoRequestStatus(), mDecodedAudioEndTime.ToMicroseconds(),
-           mDecodedVideoEndTime.ToMicroseconds(),
-           mAudioCompleted, mVideoCompleted)
-         + mStateObj->GetDebugInfo() + nsCString("\n")
-         + mMediaSink->GetDebugInfo();
+  int64_t duration =
+    mDuration.Ref() ? mDuration.Ref().ref().ToMicroseconds() : -1;
+  auto str = nsPrintfCString(
+    "MDSM: duration=%" PRId64 " GetMediaTime=%" PRId64 " GetClock="
+    "%" PRId64 " mMediaSink=%p state=%s mPlayState=%d "
+    "mSentFirstFrameLoadedEvent=%d IsPlaying=%d mAudioStatus=%s "
+    "mVideoStatus=%s mDecodedAudioEndTime=%" PRId64
+    " mDecodedVideoEndTime=%" PRId64 " mAudioCompleted=%d "
+    "mVideoCompleted=%d %s",
+    duration,
+    GetMediaTime().ToMicroseconds(),
+    mMediaSink->IsStarted() ? GetClock().ToMicroseconds() : -1,
+    mMediaSink.get(),
+    ToStateStr(),
+    mPlayState.Ref(),
+    mSentFirstFrameLoadedEvent,
+    IsPlaying(),
+    AudioRequestStatus(),
+    VideoRequestStatus(),
+    mDecodedAudioEndTime.ToMicroseconds(),
+    mDecodedVideoEndTime.ToMicroseconds(),
+    mAudioCompleted,
+    mVideoCompleted,
+    mStateObj->GetDebugInfo().get());
+
+  AppendStringIfNotEmpty(str, mMediaSink->GetDebugInfo());
+
+  return std::move(str);
 }
 
 RefPtr<MediaDecoder::DebugInfoPromise>
@@ -3745,12 +3815,13 @@ MediaDecoderStateMachine::RequestDebugInfo()
   using PromiseType = MediaDecoder::DebugInfoPromise;
   RefPtr<PromiseType::Private> p = new PromiseType::Private(__func__);
   RefPtr<MediaDecoderStateMachine> self = this;
-  OwnerThread()->Dispatch(
+  nsresult rv = OwnerThread()->Dispatch(
     NS_NewRunnableFunction(
       "MediaDecoderStateMachine::RequestDebugInfo",
       [self, p]() { p->Resolve(self->GetDebugInfo(), __func__); }),
-    AbstractThread::AssertDispatchSuccess,
     AbstractThread::TailDispatch);
+  MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
   return p.forget();
 }
 
@@ -3765,7 +3836,9 @@ void MediaDecoderStateMachine::AddOutputStream(ProcessedMediaStream* aStream,
                             this,
                             &MediaDecoderStateMachine::SetAudioCaptured,
                             true);
-  OwnerThread()->Dispatch(r.forget());
+  nsresult rv = OwnerThread()->Dispatch(r.forget());
+  MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
 }
 
 void MediaDecoderStateMachine::RemoveOutputStream(MediaStream* aStream)
@@ -3779,7 +3852,9 @@ void MediaDecoderStateMachine::RemoveOutputStream(MediaStream* aStream)
                               this,
                               &MediaDecoderStateMachine::SetAudioCaptured,
                               false);
-    OwnerThread()->Dispatch(r.forget());
+    nsresult rv = OwnerThread()->Dispatch(r.forget());
+    MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+    Unused << rv;
   }
 }
 
@@ -3793,7 +3868,7 @@ public:
 
   MOZ_DEFINE_MALLOC_SIZE_OF(MallocSizeOf);
 
-  virtual void operator()(void* aObject)
+  virtual void operator()(void* aObject) override
   {
     const VideoData* v = static_cast<const VideoData*>(aObject);
     mSize += v->SizeOfIncludingThis(MallocSizeOf);
@@ -3812,7 +3887,7 @@ public:
 
   MOZ_DEFINE_MALLOC_SIZE_OF(MallocSizeOf);
 
-  virtual void operator()(void* aObject)
+  virtual void operator()(void* aObject) override
   {
     const AudioData* audioData = static_cast<const AudioData*>(aObject);
     mSize += audioData->SizeOfIncludingThis(MallocSizeOf);
@@ -3891,7 +3966,7 @@ MediaDecoderStateMachine::CancelSuspendTimer()
       mVideoDecodeSuspendTimer.IsScheduled() ? 'T' : 'F');
   MOZ_ASSERT(OnTaskQueue());
   if (mVideoDecodeSuspendTimer.IsScheduled()) {
-    mOnPlaybackEvent.Notify(MediaEventType::CancelVideoSuspendTimer);
+    mOnPlaybackEvent.Notify(MediaPlaybackEvent::CancelVideoSuspendTimer);
   }
   mVideoDecodeSuspendTimer.Reset();
 }
@@ -3902,5 +3977,7 @@ MediaDecoderStateMachine::CancelSuspendTimer()
 #undef LOG
 #undef LOGV
 #undef LOGW
+#undef LOGE
 #undef SLOGW
+#undef SLOGE
 #undef NS_DispatchToMainThread

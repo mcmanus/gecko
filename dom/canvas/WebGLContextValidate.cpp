@@ -6,7 +6,7 @@
 #include "WebGLContext.h"
 
 #include <algorithm>
-#include "angle/ShaderLang.h"
+#include "GLSLANG/ShaderLang.h"
 #include "CanvasUtils.h"
 #include "gfxPrefs.h"
 #include "GLContext.h"
@@ -78,7 +78,7 @@ const uint32_t kCommonMaxViewportDims = 4096;
 const float kCommonAliasedPointSizeRangeMin =  1;
 const float kCommonAliasedPointSizeRangeMax = 63;
 const float kCommonAliasedLineWidthRangeMin =  1;
-const float kCommonAliasedLineWidthRangeMax =  5;
+const float kCommonAliasedLineWidthRangeMax =  1;
 
 template<class T>
 static bool
@@ -366,43 +366,6 @@ WebGLContext::ValidateAttribIndex(GLuint index, const char* info)
 }
 
 bool
-WebGLContext::ValidateStencilParamsForDrawCall()
-{
-    const char msg[] = "%s set different front and back stencil %s. Drawing in"
-                       " this configuration is not allowed.";
-
-    if (mStencilRefFront != mStencilRefBack) {
-        ErrorInvalidOperation(msg, "stencilFuncSeparate", "reference values");
-        return false;
-    }
-
-    if (mStencilValueMaskFront != mStencilValueMaskBack) {
-        ErrorInvalidOperation(msg, "stencilFuncSeparate", "value masks");
-        return false;
-    }
-
-    if (mStencilWriteMaskFront != mStencilWriteMaskBack) {
-        ErrorInvalidOperation(msg, "stencilMaskSeparate", "write masks");
-        return false;
-    }
-
-    return true;
-}
-
-static inline int32_t
-FloorPOT(int32_t x)
-{
-    MOZ_ASSERT(x > 0);
-    int32_t pot = 1;
-    while (pot < 0x40000000) {
-        if (x < pot*2)
-            break;
-        pot *= 2;
-    }
-    return pot;
-}
-
-bool
 WebGLContext::InitAndValidateGL(FailureReason* const out_failReason)
 {
     MOZ_RELEASE_ASSERT(gl, "GFX: GL not initialized");
@@ -433,15 +396,13 @@ WebGLContext::InitAndValidateGL(FailureReason* const out_failReason)
 
     // These are the default values, see 6.2 State tables in the
     // OpenGL ES 2.0.25 spec.
-    mColorWriteMask[0] = 1;
-    mColorWriteMask[1] = 1;
-    mColorWriteMask[2] = 1;
-    mColorWriteMask[3] = 1;
-    mDepthWriteMask = 1;
+    mColorWriteMask = 0x0f;
+    mDriverColorMask = mColorWriteMask;
     mColorClearValue[0] = 0.f;
     mColorClearValue[1] = 0.f;
     mColorClearValue[2] = 0.f;
     mColorClearValue[3] = 0.f;
+    mDepthWriteMask = true;
     mDepthClearValue = 1.f;
     mStencilClearValue = 0;
     mStencilRefFront = 0;
@@ -474,13 +435,18 @@ WebGLContext::InitAndValidateGL(FailureReason* const out_failReason)
     mDitherEnabled = true;
     mRasterizerDiscardEnabled = false;
     mScissorTestEnabled = false;
+
     mDepthTestEnabled = 0;
+    mDriverDepthTest = false;
     mStencilTestEnabled = 0;
+    mDriverStencilTest = false;
+
     mGenerateMipmapHint = LOCAL_GL_DONT_CARE;
 
     // Bindings, etc.
     mActiveTexture = 0;
     mDefaultFB_DrawBuffer0 = LOCAL_GL_BACK;
+    mDefaultFB_ReadBuffer = LOCAL_GL_BACK;
 
     mEmitContextLostErrorOnce = true;
     mWebGLError = LOCAL_GL_NO_ERROR;
@@ -499,8 +465,6 @@ WebGLContext::InitAndValidateGL(FailureReason* const out_failReason)
     mBoundReadFramebuffer = nullptr;
     mBoundRenderbuffer = nullptr;
 
-    MakeContextCurrent();
-
     gl->GetUIntegerv(LOCAL_GL_MAX_VERTEX_ATTRIBS, &mGLMaxVertexAttribs);
 
     if (mGLMaxVertexAttribs < 8) {
@@ -513,10 +477,10 @@ WebGLContext::InitAndValidateGL(FailureReason* const out_failReason)
     // Note: GL_MAX_TEXTURE_UNITS is fixed at 4 for most desktop hardware,
     // even though the hardware supports much more.  The
     // GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS value is the accurate value.
-    gl->GetUIntegerv(LOCAL_GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &mGLMaxTextureUnits);
-    mGLMaxCombinedTextureImageUnits = mGLMaxTextureUnits;
+    mGLMaxCombinedTextureImageUnits = gl->GetIntAs<GLuint>(LOCAL_GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS);
+    mGLMaxTextureUnits = mGLMaxCombinedTextureImageUnits;
 
-    if (mGLMaxTextureUnits < 8) {
+    if (mGLMaxCombinedTextureImageUnits < 8) {
         const nsPrintfCString reason("GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS: %u is < 8!",
                                      mGLMaxTextureUnits);
         *out_failReason = { "FEATURE_FAILURE_WEBGL_T_UNIT", reason };
@@ -691,7 +655,7 @@ WebGLContext::InitAndValidateGL(FailureReason* const out_failReason)
     mBypassShaderValidation = gfxPrefs::WebGLBypassShaderValidator();
 
     // initialize shader translator
-    if (!ShInitialize()) {
+    if (!sh::Initialize()) {
         *out_failReason = { "FEATURE_FAILURE_WEBGL_GLSL",
                             "GLSL translator initialization failed!" };
         return false;
@@ -766,6 +730,7 @@ WebGLContext::InitAndValidateGL(FailureReason* const out_failReason)
 
     mGenericVertexAttribTypes.reset(new GLenum[mGLMaxVertexAttribs]);
     std::fill_n(mGenericVertexAttribTypes.get(), mGLMaxVertexAttribs, LOCAL_GL_FLOAT);
+    mGenericVertexAttribTypeInvalidator.InvalidateCaches();
 
     static const float kDefaultGenericVertexAttribData[4] = { 0, 0, 0, 1 };
     memcpy(mGenericVertexAttrib0Data, kDefaultGenericVertexAttribData,
@@ -774,8 +739,16 @@ WebGLContext::InitAndValidateGL(FailureReason* const out_failReason)
     mFakeVertexAttrib0BufferObject = 0;
 
     mNeedsIndexValidation = !gl->IsSupported(gl::GLFeature::robust_buffer_access_behavior);
-    if (gfxPrefs::WebGLForceIndexValidation()) {
+    switch (gfxPrefs::WebGLForceIndexValidation()) {
+    case -1:
+        mNeedsIndexValidation = false;
+        break;
+    case 1:
         mNeedsIndexValidation = true;
+        break;
+    default:
+        MOZ_ASSERT(gfxPrefs::WebGLForceIndexValidation() == 0);
+        break;
     }
 
     return true;

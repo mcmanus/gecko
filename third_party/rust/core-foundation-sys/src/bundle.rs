@@ -7,7 +7,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use libc::c_void;
+use std::os::raw::c_void;
 
 use base::{CFTypeID, CFAllocatorRef};
 use url::CFURLRef;
@@ -17,7 +17,7 @@ use string::CFStringRef;
 #[repr(C)]
 pub struct __CFBundle(c_void);
 
-pub type CFBundleRef = *const __CFBundle;
+pub type CFBundleRef = *mut __CFBundle;
 
 extern {
     /*

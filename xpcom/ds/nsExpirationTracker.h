@@ -445,26 +445,22 @@ private:
     if (mTimer || !mTimerPeriod) {
       return NS_OK;
     }
-    mTimer = do_CreateInstance("@mozilla.org/timer;1");
-    if (!mTimer) {
-      return NS_ERROR_OUT_OF_MEMORY;
-    }
-    if (mEventTarget) {
-      mTimer->SetTarget(mEventTarget);
-    } else if (!NS_IsMainThread()) {
+    nsCOMPtr<nsIEventTarget> target = mEventTarget;
+    if (!target && !NS_IsMainThread()) {
       // TimerCallback should always be run on the main thread to prevent races
       // to the destruction of the tracker.
-      nsCOMPtr<nsIEventTarget> target = do_GetMainThread();
+      target = do_GetMainThread();
       NS_ENSURE_STATE(target);
-      mTimer->SetTarget(target);
     }
-    mTimer->InitWithNamedFuncCallback(
+
+    return NS_NewTimerWithFuncCallback(
+      getter_AddRefs(mTimer),
       TimerCallback,
       this,
       mTimerPeriod,
       nsITimer::TYPE_REPEATING_SLACK_LOW_PRIORITY,
-      mName);
-    return NS_OK;
+      mName,
+      target);
   }
 };
 
@@ -518,8 +514,8 @@ class nsExpirationTracker : protected ::detail::SingleThreadedExpirationTracker<
    * we mark them as final with the hope that the compiler can optimize the
    * method calls out entirely.
    */
-  void NotifyHandlerEndLocked(const AutoLock&) final override { }
-  void NotifyHandlerEnd() final override { }
+  void NotifyHandlerEndLocked(const AutoLock&) final { }
+  void NotifyHandlerEnd() final { }
 
 protected:
   virtual void NotifyExpired(T* aObj) = 0;

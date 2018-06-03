@@ -7,6 +7,8 @@
 
 const DESCRIPTION_ANNO = "bookmarkProperties/description";
 
+Cu.importGlobalProperties(["XMLHttpRequest"]);
+
 add_task(async function() {
   // Removes bookmarks.html if the file already exists.
   let HTMLFile = OS.Path.join(OS.Constants.Path.profileDir, "bookmarks.html");
@@ -22,7 +24,7 @@ add_task(async function() {
     url,
     title: unescaped
   });
-  await PlacesUtils.keywords.insert({ url, keyword: unescaped, postData: unescaped })
+  await PlacesUtils.keywords.insert({ url, keyword: unescaped, postData: unescaped });
   let uri = Services.io.newURI(url);
   PlacesUtils.tagging.tagURI(uri, [unescaped]);
   await PlacesUtils.setCharsetForURI(uri, unescaped);
@@ -36,8 +38,7 @@ add_task(async function() {
 
   // Check there are no unescaped entities in the html file.
   let xml = await new Promise((resolve, reject) => {
-    let xhr = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"]
-                .createInstance(Ci.nsIXMLHttpRequest);
+    let xhr = new XMLHttpRequest();
     xhr.onload = () => {
       try {
         resolve(xhr.responseXML);
@@ -58,9 +59,9 @@ add_task(async function() {
   for (let current = xml; current;
     current = current.firstChild || current.nextSibling || current.parentNode.nextSibling) {
     switch (current.nodeType) {
-      case Ci.nsIDOMNode.ELEMENT_NODE:
+      case current.ELEMENT_NODE:
         for (let {name, value} of current.attributes) {
-          do_print("Found attribute: " + name);
+          info("Found attribute: " + name);
           // Check tags, keyword, postData and charSet.
           if (["tags", "last_charset", "shortcuturl", "post_data"].includes(name)) {
             Assert.equal(value, unescaped, `Attribute ${name} should be complete`);
@@ -68,14 +69,14 @@ add_task(async function() {
           }
         }
         break;
-      case Ci.nsIDOMNode.TEXT_NODE:
+      case current.TEXT_NODE:
         // Check Title and description.
-        if (!current.data.startsWith("\n") && !current.data.includes("Bookmarks")) {
+        if (!current.data.startsWith("\n") && current.data.includes("test")) {
           Assert.equal(current.data.trim(), unescaped, "Text node should be complete");
           checksCount--;
         }
         break;
     }
   }
-  Assert.equal(checksCount, 0, "All the checks ran")
+  Assert.equal(checksCount, 0, "All the checks ran");
 });

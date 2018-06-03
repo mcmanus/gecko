@@ -1,30 +1,6 @@
-taskgraph-tests:
-    description: taskcluster/taskgraph unit tests
+job-defaults:
     platform: linux64/opt
-    treeherder:
-        symbol: py(tg)
-        kind: test
-        tier: 2
-    worker-type: aws-provisioner-v1/gecko-t-linux-xlarge
-    worker:
-        docker-image: {in-tree: "lint"}
-        max-run-time: 1800
-    run:
-        using: mach
-        mach: python-test --subsuite taskgraph
-    when:
-        files-changed:
-            - 'taskcluster/**/*.py'
-            - 'config/mozunit.py'
-            - 'python/mach/**/*.py'
-
-marionette-harness:
-    description: testing/marionette/harness unit tests
-    platform: linux64/opt
-    treeherder:
-        symbol: py(mnh)
-        kind: test
-        tier: 2
+    always-target: true
     worker-type:
         by-platform:
             linux64.*: aws-provisioner-v1/gecko-t-linux-xlarge
@@ -33,16 +9,39 @@ marionette-harness:
             linux64.*:
                 docker-image: {in-tree: "lint"}
                 max-run-time: 3600
+    treeherder:
+        kind: test
+        tier: 2
     run:
         using: mach
+    when:
+        files-changed:
+            - 'config/mozunit/**'
+            - 'python/mach_commands.py'
+
+taskgraph-tests:
+    description: taskcluster/taskgraph unit tests
+    treeherder:
+        symbol: py(tg)
+    run:
+        mach: python-test --subsuite taskgraph
+    when:
+        files-changed:
+            - 'taskcluster/**/*.py'
+            - 'python/mach/**/*.py'
+
+marionette-harness:
+    description: testing/marionette/harness unit tests
+    treeherder:
+        symbol: py(mnh)
+    run:
         mach: python-test --subsuite marionette-harness
     when:
         files-changed:
-          - 'testing/marionette/harness/**'
-          - 'testing/mozbase/mozlog/mozlog/**'
-          - 'testing/mozbase/mozlog/setup.py'
-          - 'testing/mozbase/packages.txt'
-          - 'python/mach_commands.py'
+            - 'testing/marionette/harness/**'
+            - 'testing/mozbase/mozlog/mozlog/**'
+            - 'testing/mozbase/mozlog/setup.py'
+            - 'testing/mozbase/packages.txt'
 
 mochitest-harness:
     description: testing/mochitest unittests
@@ -51,13 +50,9 @@ mochitest-harness:
         - linux64/debug
         - linux64-asan/opt
     require-build: true
+    always-target: false
     treeherder:
         symbol: py(mch)
-        kind: test
-        tier: 2
-    worker-type:
-        by-platform:
-            linux64.*: aws-provisioner-v1/gecko-t-linux-xlarge
     worker:
         by-platform:
             linux64.*:
@@ -65,58 +60,45 @@ mochitest-harness:
                 max-run-time: 3600
     run:
         using: run-task
+        use-artifacts:
+            build:
+                - target.tar.bz2
+                - target.common.tests.zip
+                - target.mochitest.tests.zip
         command: >
             source /builds/worker/scripts/xvfb.sh &&
             start_xvfb '1600x1200x24' 0 &&
+            cd $USE_ARTIFACT_PATH/build &&
+            tar -xf target.tar.bz2 &&
+            unzip -q -d tests target.common.tests.zip &&
+            unzip -q -d tests target.mochitest.tests.zip &&
+            export GECKO_BINARY_PATH=$USE_ARTIFACT_PATH/build/firefox/firefox &&
+            export TEST_HARNESS_ROOT=$USE_ARTIFACT_PATH/build/tests &&
             cd /builds/worker/checkouts/gecko &&
             ./mach python-test --subsuite mochitest
     when:
         files-changed:
-            - 'config/mozunit.py'
-            - 'python/mach_commands.py'
             - 'testing/mochitest/**'
             - 'testing/mozbase/moztest/moztest/selftest/**'
             - 'testing/mozharness/mozharness/base/log.py'
             - 'testing/mozharness/mozharness/mozilla/structuredlog.py'
             - 'testing/mozharness/mozharness/mozilla/testing/errors.py'
-            - 'testing/profiles/prefs_general.js'
+            - 'testing/profiles/**'
 
 mozbase:
     description: testing/mozbase unit tests
-    platform:
-        - linux64/opt
     treeherder:
         symbol: py(mb)
-        kind: test
-        tier: 2
-    worker-type:
-        by-platform:
-            linux64.*: aws-provisioner-v1/gecko-t-linux-xlarge
-    worker:
-        by-platform:
-            linux64.*:
-                docker-image: {in-tree: "lint"}
-                max-run-time: 3600
     run:
-        using: mach
         mach: python-test --subsuite mozbase
     when:
         files-changed:
             - 'testing/mozbase/**'
-            - 'config/mozunit.py'
-            - 'python/mach_commands.py'
 
 mozharness:
     description: mozharness integration tests
-    platform: linux64/opt
     treeherder:
         symbol: py(mh)
-        kind: test
-        tier: 2
-    worker-type: aws-provisioner-v1/gecko-t-linux-xlarge
-    worker:
-        docker-image: {in-tree: "lint"}
-        max-run-time: 1800
     run:
         using: run-task
         cache-dotcache: true
@@ -129,49 +111,44 @@ mozharness:
 
 mozlint:
     description: python/mozlint unit tests
-    platform: linux64/opt
     treeherder:
         symbol: py(ml)
-        kind: test
-        tier: 2
-    worker-type:
-        by-platform:
-            linux64.*: aws-provisioner-v1/gecko-t-linux-xlarge
-    worker:
-        by-platform:
-            linux64.*:
-                docker-image: {in-tree: "lint"}
-                max-run-time: 3600
     run:
-        using: mach
         mach: python-test --subsuite mozlint
     when:
         files-changed:
             - 'python/mozlint/**'
-            - 'python/mach_commands.py'
+            - 'tools/lint/**'
+
+mozterm:
+    description: python/mozterm unit tests
+    treeherder:
+        symbol: py(term)
+    run:
+        mach: python-test --subsuite mozterm
+    when:
+        files-changed:
+            - 'python/mozterm/**'
 
 mozversioncontrol:
     description: python/mozversioncontrol unit tests
-    platform: linux64/opt
     treeherder:
         symbol: py(vcs)
-        kind: test
-        tier: 2
-    worker-type:
-        by-platform:
-            linux64.*: aws-provisioner-v1/gecko-t-linux-xlarge
-    worker:
-        by-platform:
-            linux64.*:
-                docker-image: {in-tree: "lint"}
-                max-run-time: 3600
     run:
-        using: mach
         mach: python-test --subsuite mozversioncontrol
     when:
         files-changed:
             - 'python/mozversioncontrol/**'
-            - 'python/mach_commands.py'
+
+raptor:
+    description: testing/raptor unit tests
+    treeherder:
+        symbol: py(rap)
+    run:
+        mach: python-test --subsuite raptor
+    when:
+        files-changed:
+            - 'testing/raptor/**'
 
 reftest-harness:
     description: layout/tools/reftest unittests
@@ -180,13 +157,9 @@ reftest-harness:
         - linux64/debug
         - linux64-asan/opt
     require-build: true
+    always-target: false
     treeherder:
         symbol: py(ref)
-        kind: test
-        tier: 2
-    worker-type:
-        by-platform:
-            linux64.*: aws-provisioner-v1/gecko-t-linux-xlarge
     worker:
         by-platform:
             linux64.*:
@@ -194,17 +167,36 @@ reftest-harness:
                 max-run-time: 3600
     run:
         using: run-task
+        use-artifacts:
+            build:
+                - target.tar.bz2
+                - target.common.tests.zip
+                - target.reftest.tests.zip
         command: >
             source /builds/worker/scripts/xvfb.sh &&
             start_xvfb '1600x1200x24' 0 &&
+            cd $USE_ARTIFACT_PATH/build &&
+            tar -xf target.tar.bz2 &&
+            unzip -q -d tests target.common.tests.zip &&
+            unzip -q -d tests target.reftest.tests.zip &&
+            export GECKO_BINARY_PATH=$USE_ARTIFACT_PATH/build/firefox/firefox &&
+            export TEST_HARNESS_ROOT=$USE_ARTIFACT_PATH/build/tests &&
             cd /builds/worker/checkouts/gecko &&
             ./mach python-test --subsuite reftest
     when:
         files-changed:
-            - 'config/mozunit.py'
             - 'layout/tools/reftest/**'
-            - 'python/mach_commands.py'
             - 'testing/mozbase/moztest/moztest/selftest/**'
             - 'testing/mozharness/mozharness/base/log.py'
             - 'testing/mozharness/mozharness/mozilla/structuredlog.py'
             - 'testing/mozharness/mozharness/mozilla/testing/errors.py'
+
+tryselect:
+    description: tools/tryselect unit tests
+    treeherder:
+        symbol: py(try)
+    run:
+        mach: python-test --subsuite try
+    when:
+        files-changed:
+            - 'tools/tryselect/**'

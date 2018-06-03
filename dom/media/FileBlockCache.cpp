@@ -6,13 +6,13 @@
 
 #include "FileBlockCache.h"
 #include "MediaCache.h"
-#include "MediaPrefs.h"
-#include "mozilla/SharedThreadPool.h"
 #include "VideoUtils.h"
 #include "prio.h"
 #include <algorithm>
 #include "nsAnonymousTemporaryFile.h"
+#include "nsIThreadManager.h"
 #include "mozilla/dom/ContentChild.h"
+#include "mozilla/StaticPrefs.h"
 #include "mozilla/SystemGroup.h"
 #include "nsXULAppAPI.h"
 
@@ -82,7 +82,7 @@ FileBlockCache::Init()
   nsresult rv = NS_NewNamedThread("FileBlockCache",
                                   getter_AddRefs(mThread),
                                   nullptr,
-                                  SharedThreadPool::kStackSize);
+                                  nsIThreadManager::kThreadPoolStackSize);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -140,7 +140,7 @@ FileBlockCache::GetMaxBlocks() const
   // We look up the cache size every time. This means dynamic changes
   // to the pref are applied.
   const uint32_t cacheSizeKb =
-    std::min(MediaPrefs::MediaCacheSizeKb(), uint32_t(INT32_MAX) * 2);
+    std::min(StaticPrefs::MediaCacheSize(), uint32_t(INT32_MAX) * 2);
   // Ensure we can divide BLOCK_SIZE by 1024.
   static_assert(MediaCacheStream::BLOCK_SIZE % 1024 == 0,
                 "BLOCK_SIZE should be a multiple of 1024");
@@ -454,7 +454,10 @@ nsresult FileBlockCache::Read(int64_t aOffset,
     // If the block is not yet written to file, we can just read from
     // the memory buffer, otherwise we need to read from file.
     int32_t bytesRead = 0;
-    RefPtr<BlockChange> change = mBlockChanges[blockIndex];
+    MOZ_ASSERT(!mBlockChanges.IsEmpty());
+    MOZ_ASSERT(blockIndex >= 0 &&
+               static_cast<uint32_t>(blockIndex) < mBlockChanges.Length());
+    RefPtr<BlockChange> change = mBlockChanges.SafeElementAt(blockIndex);
     if (change && change->IsWrite()) {
       // Block isn't yet written to file. Read from memory buffer.
       const uint8_t* blockData = change->mData.get();
@@ -468,7 +471,7 @@ nsresult FileBlockCache::Read(int64_t aOffset,
         // is resolved when MoveBlock() is called, and the move's source's
         // block could be have itself been subject to a move (or write)
         // which happened *after* this move was recorded.
-        blockIndex = mBlockChanges[blockIndex]->mSourceBlockIndex;
+        blockIndex = change->mSourceBlockIndex;
       }
       // Block has been written to file, either as the source block of a move,
       // or as a stable (all changes made) block. Read the data directly

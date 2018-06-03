@@ -65,7 +65,7 @@ namespace {
  */
 already_AddRefed<nsPIDOMWindowOuter>
 GetPrivateWindow(JSContext* cx) {
-  nsGlobalWindow* win = xpc::CurrentWindowOrNull(cx);
+  nsGlobalWindowInner* win = xpc::CurrentWindowOrNull(cx);
   if (!win) {
     return nullptr;
   }
@@ -465,7 +465,7 @@ nsPerformanceSnapshot::GetComponentsData(nsIArray * *aComponents)
   nsCOMPtr<nsIMutableArray> components = do_CreateInstance(NS_ARRAY_CONTRACTID);
   for (size_t i = 0; i < length; ++i) {
     nsCOMPtr<nsIPerformanceStats> stats = mComponentsData[i];
-    mozilla::DebugOnly<nsresult> rv = components->AppendElement(stats, false);
+    mozilla::DebugOnly<nsresult> rv = components->AppendElement(stats);
     MOZ_ASSERT(NS_SUCCEEDED(rv));
   }
   components.forget(aComponents);
@@ -603,7 +603,7 @@ PendingAlertsCollector::Start(uint32_t timerDelayMS) {
   }
 
   if (!mTimer) {
-    mTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
+    mTimer = NS_NewTimer();
   }
 
   nsresult rv = mTimer->InitWithCallback(this, timerDelayMS, nsITimer::TYPE_ONE_SHOT);
@@ -1305,7 +1305,7 @@ nsPerformanceStatsService::NotifyJankObservers(const mozilla::Vector<uint64_t>& 
 
   // The move operation is generally constant time, unless
   // `mPendingAlerts.length()` is very small, in which case it's fast anyway.
-  GroupVector alerts(Move(mPendingAlerts));
+  GroupVector alerts(std::move(mPendingAlerts));
   mPendingAlerts = GroupVector(); // Reconstruct after `Move`.
 
   if (!mPendingAlertsCollector) {

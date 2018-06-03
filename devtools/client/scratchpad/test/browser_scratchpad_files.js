@@ -11,23 +11,21 @@ var gFile;
 // The temporary file content.
 var gFileContent = "hello.world('bug636725');";
 
-function test()
-{
+function test() {
   waitForExplicitFinish();
 
   gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
-  gBrowser.selectedBrowser.addEventListener("load", function () {
+  BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser).then(function() {
     openScratchpad(runTests);
-  }, {capture: true, once: true});
+  });
 
-  content.location = "data:text/html,<p>test file open and save in Scratchpad";
+  gBrowser.loadURI("data:text/html,<p>test file open and save in Scratchpad");
 }
 
-function runTests()
-{
+function runTests() {
   gScratchpad = gScratchpadWindow.Scratchpad;
 
-  createTempFile("fileForBug636725.tmp", gFileContent, function (aStatus, aFile) {
+  createTempFile("fileForBug636725.tmp", gFileContent, function(aStatus, aFile) {
     ok(Components.isSuccessCode(aStatus),
       "The temporary file was saved successfully");
 
@@ -37,8 +35,7 @@ function runTests()
   });
 }
 
-function fileImported(aStatus, aFileContent)
-{
+function fileImported(aStatus, aFileContent) {
   ok(Components.isSuccessCode(aStatus),
      "the temporary file was imported successfully with Scratchpad");
 
@@ -59,20 +56,19 @@ function fileImported(aStatus, aFileContent)
                           fileExported);
 }
 
-function fileExported(aStatus)
-{
+function fileExported(aStatus) {
   ok(Components.isSuccessCode(aStatus),
      "the temporary file was exported successfully with Scratchpad");
 
-  let oldContent = gFileContent;
+  const oldContent = gFileContent;
 
   // Attempt another file save, with confirmation which returns false.
   gFileContent += "// omg, saved twice!";
   gScratchpad.editor.setText(gFileContent);
 
-  let oldConfirm = gScratchpadWindow.confirm;
+  const oldConfirm = gScratchpadWindow.confirm;
   let askedConfirmation = false;
-  gScratchpadWindow.confirm = function () {
+  gScratchpadWindow.confirm = function() {
     askedConfirmation = true;
     return false;
   };
@@ -86,7 +82,7 @@ function fileExported(aStatus)
 
   gFileContent = oldContent;
 
-  let channel = NetUtil.newChannel({
+  const channel = NetUtil.newChannel({
     uri: NetUtil.newURI(gFile),
     loadUsingSystemPrincipal: true});
   channel.contentType = "application/javascript";
@@ -95,17 +91,15 @@ function fileExported(aStatus)
   NetUtil.asyncFetch(channel, fileRead);
 }
 
-function fileExported2()
-{
+function fileExported2() {
   ok(false, "exportToFile() did not cancel file overwrite");
 }
 
-function fileRead(aInputStream, aStatus)
-{
+function fileRead(aInputStream, aStatus) {
   ok(Components.isSuccessCode(aStatus),
      "the temporary file was read back successfully");
 
-  let updatedContent =
+  const updatedContent =
     NetUtil.readInputStreamToString(aInputStream, aInputStream.available());
 
   is(updatedContent, gFileContent, "file properly updated");

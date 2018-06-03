@@ -6,37 +6,23 @@
 /**
  * Tests reset column menu item
  */
-
-add_task(function* () {
-  let { monitor } = yield initNetMonitor(SIMPLE_URL);
+add_task(async function() {
+  const { monitor } = await initNetMonitor(SIMPLE_URL);
   info("Starting test... ");
 
-  let { document, parent, windowRequire } = monitor.panelWin;
-  let { Prefs } = windowRequire("devtools/client/netmonitor/src/utils/prefs");
+  const { document, parent, windowRequire } = monitor.panelWin;
+  const { Prefs } = windowRequire("devtools/client/netmonitor/src/utils/prefs");
 
-  let prefBefore = Prefs.visibleColumns;
+  const prefBefore = Prefs.visibleColumns;
 
-  hideColumn("status");
-  hideColumn("waterfall");
+  await hideColumn(monitor, "status");
+  await hideColumn(monitor, "waterfall");
 
   EventUtils.sendMouseEvent({ type: "contextmenu" },
     document.querySelector("#requests-list-contentSize-button"));
 
   parent.document.querySelector("#request-list-header-reset-columns").click();
 
-  is(JSON.stringify(prefBefore), JSON.stringify(Prefs.visibleColumns),
+  ok(JSON.stringify(prefBefore) === JSON.stringify(Prefs.visibleColumns),
      "Reset columns item should reset columns pref");
-
-  function* hideColumn(column) {
-    info(`Clicking context-menu item for ${column}`);
-    EventUtils.sendMouseEvent({ type: "contextmenu" },
-      document.querySelector("#requests-list-contentSize-button"));
-
-    let onHeaderRemoved = waitForDOM(document, `#requests-list-${column}-button`, 0);
-    parent.document.querySelector(`#request-list-header-${column}-toggle`).click();
-
-    yield onHeaderRemoved;
-    ok(!document.querySelector(`#requests-list-${column}-button`),
-       `Column ${column} should be hidden`);
-  }
 });

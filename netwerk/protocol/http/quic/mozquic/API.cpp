@@ -9,6 +9,7 @@ static int mozQuicInit = 0;
 #include "MozQuic.h"
 #include "MozQuicInternal.h"
 #include "NSSHelper.h"
+#include "Sender.h"
 #include "Streams.h"
 
 #include <assert.h>
@@ -26,11 +27,16 @@ struct mozquic_internal_config_t
   unsigned int tolerateNoTransportParams; // flag
   unsigned int sabotageVN; // flag
   unsigned int forceAddressValidation; // flag
+  unsigned int enable0RTT; // flag
+  unsigned int reject0RTTData; // flag
   uint64_t streamWindow;
-  uint64_t connWindowKB;
+  uint64_t connWindowBytes;
+  uint64_t dropRate;
+  int clientPort;
+  uint16_t maxSizeAllowed;
 };
   
-uint32_t mozquic_unstable_api1(struct mozquic_config_t *c, const char *name, uint64_t arg1, uint64_t arg2)
+uint32_t mozquic_unstable_api1(struct mozquic_config_t *c, const char *name, uint64_t arg1, void *arg2)
 {
   assert(sizeof(mozquic_internal_config_t) <= sizeof(c->reservedInternally));
   mozquic_internal_config_t *internal = (mozquic_internal_config_t *) c->reservedInternally + 0;
@@ -47,10 +53,20 @@ uint32_t mozquic_unstable_api1(struct mozquic_config_t *c, const char *name, uin
     internal->sabotageVN = arg1;
   } else if (!strcasecmp(name, "forceAddressValidation")) {
     internal->forceAddressValidation = arg1;
+  } else if (!strcasecmp(name, "enable0RTT")) {
+    internal->enable0RTT = arg1;
+  } else if (!strcasecmp(name, "reject0RTTData")) {
+    internal->reject0RTTData = arg1;
   } else if (!strcasecmp(name, "streamWindow")) {
     internal->streamWindow = arg1;
-  } else if (!strcasecmp(name, "connWindowKB")) {
-    internal->connWindowKB = arg1;
+  } else if (!strcasecmp(name, "connWindow")) {
+    internal->connWindowBytes = arg1;
+  } else if (!strcasecmp(name, "dropRate")) {
+    internal->dropRate = arg1;
+  } else if (!strcasecmp(name, "clientPort")) {
+    internal->clientPort = arg1;
+  } else if (!strcasecmp(name, "maxSizeAllowed")) {
+    internal->maxSizeAllowed = arg1;
   } else {
     return MOZQUIC_ERR_GENERAL;
   }
@@ -58,9 +74,19 @@ uint32_t mozquic_unstable_api1(struct mozquic_config_t *c, const char *name, uin
   return MOZQUIC_OK;
 }
 
-uint32_t mozquic_unstable_api2(mozquic_connection_t *c, const char *name, uint64_t, uint64_t)
+uint32_t mozquic_unstable_api2(mozquic_connection_t *conn, const char *name, uint64_t arg1, void *arg2)
 {
-  return MOZQUIC_ERR_GENERAL;
+  mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
+  
+  if (!strcasecmp(name, "pingWithData")) {
+    // no longer implemented
+    return MOZQUIC_ERR_GENERAL;
+  } else if (!strcasecmp(name, "recvd0RTT")) {
+    ((char *)arg2)[0] = self->Processed0RTT();
+  } else {
+    return MOZQUIC_ERR_GENERAL;
+  }
+  return MOZQUIC_OK;
 }
   
 int mozquic_new_connection(mozquic_connection_t **outConnection,
@@ -107,11 +133,20 @@ int mozquic_new_connection(mozquic_connection_t **outConnection,
   if (internal->forceAddressValidation) {
     q->SetForceAddressValidation();
   }
+  if (internal->enable0RTT) {
+    q->SetEnable0RTT();
+  }
+  if (internal->reject0RTTData) {
+    q->SetReject0RTTData();
+  }
   if (inConfig->appHandlesSendRecv) {
     q->SetAppHandlesSendRecv();
   }
   if (inConfig->appHandlesLogging) {
     q->SetAppHandlesLogging();
+  }
+  if (inConfig->ipv6) {
+    q->SetV6();
   }
   if (internal->ignorePKI) {
     q->SetIgnorePKI();
@@ -119,8 +154,17 @@ int mozquic_new_connection(mozquic_connection_t **outConnection,
   if (internal->streamWindow) {
     q->SetStreamWindow(internal->streamWindow);
   }
-    if (internal->connWindowKB) {
-    q->SetConnWindowKB(internal->connWindowKB);
+  if (internal->connWindowBytes) {
+    q->SetConnWindowBytes(internal->connWindowBytes);
+  }
+  if (internal->dropRate) {
+    q->SetDropRate(internal->dropRate);
+  }
+  if (internal->clientPort) {
+    q->SetClientPort(internal->clientPort);
+  }
+  if (internal->maxSizeAllowed) {
+    q->SetMaxSizeAllowed(internal->maxSizeAllowed);
   }
   
   unsigned char empty[128];
@@ -136,6 +180,13 @@ int mozquic_destroy_connection(mozquic_connection_t *conn)
 {
   mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
   self->Destroy(0, "");
+  return MOZQUIC_OK;
+}
+
+int mozquic_shutdown_connection(mozquic_connection_t *conn)
+{
+  mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
+  self->Shutdown(0, "");
   return MOZQUIC_OK;
 }
 
@@ -166,13 +217,13 @@ int mozquic_release_backpressure(mozquic_connection_t *conn)
 }
   
 int mozquic_start_new_stream(mozquic_stream_t **outStream,
-                             mozquic_connection_t *conn, void *data,
-                             uint32_t amount,
-                             int fin)
+                             mozquic_connection_t *conn,
+                             uint8_t uni, uint8_t no_replay,
+                             void *data, uint32_t amount, int fin)
 {
   mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
   mozquic::StreamPair *stream;
-  int rv = self->StartNewStream(&stream, data, amount, fin);
+  int rv = self->StartNewStream(&stream, uni, no_replay, data, amount, fin);
   if (!rv) {
     *outStream = (void *)stream;
   }
@@ -201,7 +252,7 @@ int mozquic_end_stream(mozquic_stream_t *stream)
 int mozquic_reset_stream(mozquic_stream_t *stream)
 {
   mozquic::StreamPair *self(reinterpret_cast<mozquic::StreamPair *>(stream));
-  int rv = self->RstStream(mozquic::ERROR_CANCELLED);
+  int rv = self->RstStream(mozquic::HTTP_REQUEST_CANCELLED);
   self->mMozQuic->MaybeDeleteStream(self);
   return rv;
 }
@@ -209,7 +260,7 @@ int mozquic_reset_stream(mozquic_stream_t *stream)
 int mozquic_stop_sending(mozquic_stream_t *stream)
 {
   mozquic::StreamPair *self(reinterpret_cast<mozquic::StreamPair *>(stream));
-  int rv = self->StopSending(mozquic::ERROR_CANCELLED);
+  int rv = self->StopSending(mozquic::HTTP_REQUEST_CANCELLED);
   self->mMozQuic->MaybeDeleteStream(self);
   return rv;
 }
@@ -242,6 +293,11 @@ int mozquic_set_event_callback_closure(mozquic_connection_t *conn,
   mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
   self->SetClosure(closure);
   return MOZQUIC_OK;
+}
+
+int mozquic_next_timer()
+{
+  return mozquic::Timer::NextTimerInMsec();
 }
 
 int mozquic_IO(mozquic_connection_t *conn)
@@ -305,6 +361,12 @@ int mozquic_check_peer(mozquic_connection_t *conn, uint32_t deadlineMs)
 int mozquic_get_streamid(mozquic_stream_t *stream)
 {
   return (reinterpret_cast<mozquic::StreamPair *>(stream))->mStreamID;
+}
+
+int mozquic_get_allacked(mozquic_connection_t *conn)
+{
+  mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
+  return self->IsAllAcked();
 }
 
 namespace mozquic  {

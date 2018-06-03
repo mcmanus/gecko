@@ -269,7 +269,7 @@ nsSMILAnimationFunction::ComposeResult(const nsISMILAttr& aSMILAttr,
 
   // If additive animation isn't required or isn't supported, set the value.
   if (!isAdditive || NS_FAILED(aResult.SandwichAdd(result))) {
-    aResult = Move(result);
+    aResult = std::move(result);
   }
 }
 
@@ -707,19 +707,19 @@ nsSMILAnimationFunction::ScaleIntervalProgress(double aProgress,
 bool
 nsSMILAnimationFunction::HasAttr(nsAtom* aAttName) const
 {
-  return mAnimationElement->HasAnimAttr(aAttName);
+  return mAnimationElement->HasAttr(aAttName);
 }
 
 const nsAttrValue*
 nsSMILAnimationFunction::GetAttr(nsAtom* aAttName) const
 {
-  return mAnimationElement->GetAnimAttr(aAttName);
+  return mAnimationElement->GetParsedAttr(aAttName);
 }
 
 bool
 nsSMILAnimationFunction::GetAttr(nsAtom* aAttName, nsAString& aResult) const
 {
-  return mAnimationElement->GetAnimAttr(aAttName, aResult);
+  return mAnimationElement->GetAttr(aAttName, aResult);
 }
 
 /*

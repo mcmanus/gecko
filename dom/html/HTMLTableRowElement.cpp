@@ -66,12 +66,12 @@ HTMLTableRowElement::GetTable() const
   }
 
   // We may not be in a section
-  HTMLTableElement* table = HTMLTableElement::FromContent(parent);
+  HTMLTableElement* table = HTMLTableElement::FromNode(parent);
   if (table) {
     return table;
   }
 
-  return HTMLTableElement::FromContentOrNull(parent->GetParent());
+  return HTMLTableElement::FromNodeOrNull(parent->GetParent());
 }
 
 int32_t
@@ -221,6 +221,7 @@ bool
 HTMLTableRowElement::ParseAttribute(int32_t aNamespaceID,
                                     nsAtom* aAttribute,
                                     const nsAString& aValue,
+                                    nsIPrincipal* aMaybeScriptedPrincipal,
                                     nsAttrValue& aResult)
 {
   /*
@@ -254,7 +255,7 @@ HTMLTableRowElement::ParseAttribute(int32_t aNamespaceID,
                                                         aAttribute, aValue,
                                                         aResult) ||
          nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                              aResult);
+                                              aMaybeScriptedPrincipal, aResult);
 }
 
 void

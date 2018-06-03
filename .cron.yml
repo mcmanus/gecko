@@ -12,11 +12,9 @@ jobs:
           target-tasks-method: nightly_desktop
       run-on-projects:
           - mozilla-central
-          - date
       when:
           by-project:
               # Match buildbot starts for now
-              date: [{hour: 15, minute: 0}]
               mozilla-central: [{hour: 10, minute: 0}, {hour: 22, minute: 0}]
               # No default
 
@@ -27,7 +25,6 @@ jobs:
           target-tasks-method: nightly_linux
       run-on-projects:
           - mozilla-central
-          - date
       when: []  # never (hook only)
 
     - name: nightly-desktop-osx
@@ -37,7 +34,6 @@ jobs:
           target-tasks-method: nightly_macosx
       run-on-projects:
           - mozilla-central
-          - date
       when: []  # never (hook only)
 
     - name: nightly-desktop-win32
@@ -47,7 +43,6 @@ jobs:
           target-tasks-method: nightly_win32
       run-on-projects:
           - mozilla-central
-          - date
       when: []  # never (hook only)
 
     - name: nightly-desktop-win64
@@ -57,7 +52,6 @@ jobs:
           target-tasks-method: nightly_win64
       run-on-projects:
           - mozilla-central
-          - date
       when: []  # never (hook only)
 
     - name: nightly-android
@@ -67,11 +61,9 @@ jobs:
           target-tasks-method: nightly_fennec
       run-on-projects:
           - mozilla-central
-          - date
       when:
           by-project:
               # Match buildbot starts for now
-              date: [{hour: 15, minute: 0}]
               mozilla-central: [{hour: 10, minute: 0}]
               # No default
 
@@ -98,6 +90,18 @@ jobs:
               mozilla-central: [{hour: 10, minute: 0}]
               # No default
 
+    - name: searchfox-index
+      job:
+          type: decision-task
+          treeherder-symbol: Searchfox
+          target-tasks-method: searchfox_index
+      run-on-projects:
+          - mozilla-central
+      when:
+          by-project:
+              mozilla-central: [{hour: 10, minute: 30}]
+              # No default
+
     - name: periodic-update
       job:
           type: decision-task
@@ -109,6 +113,8 @@ jobs:
           by-project:
               # No default branch
               mozilla-central:
-                  # Buildbot start time is 10:02am UTC, until we are able to
-                  # disable buildbot scheduling, use +12h
-                  - {hour: 22, minute: 0}
+                  - {weekday: 'Monday', hour: 10, minute: 0}
+                  - {weekday: 'Thursday', hour: 10, minute: 0}
+              mozilla-esr60:
+                  - {weekday: 'Monday', hour: 10, minute: 0}
+                  - {weekday: 'Thursday', hour: 10, minute: 0}

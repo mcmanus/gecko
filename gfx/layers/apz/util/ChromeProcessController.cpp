@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,6 +12,7 @@
 #include "mozilla/layers/CompositorBridgeParent.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "mozilla/layers/APZEventState.h"
+#include "mozilla/layers/APZThreadUtils.h"
 #include "mozilla/layers/IAPZCTreeManager.h"
 #include "mozilla/layers/DoubleTapToZoom.h"
 #include "nsIDocument.h"
@@ -66,7 +68,7 @@ ChromeProcessController::RequestContentRepaint(const FrameMetrics& aFrameMetrics
 void
 ChromeProcessController::PostDelayedTask(already_AddRefed<Runnable> aTask, int aDelayMs)
 {
-  MessageLoop::current()->PostDelayedTask(Move(aTask), aDelayMs);
+  MessageLoop::current()->PostDelayedTask(std::move(aTask), aDelayMs);
 }
 
 bool
@@ -78,7 +80,7 @@ ChromeProcessController::IsRepaintThread()
 void
 ChromeProcessController::DispatchToRepaintThread(already_AddRefed<Runnable> aTask)
 {
-  NS_DispatchToMainThread(Move(aTask));
+  NS_DispatchToMainThread(std::move(aTask));
 }
 
 void
@@ -157,8 +159,14 @@ ChromeProcessController::HandleDoubleTap(const mozilla::CSSPoint& aPoint,
   FrameMetrics::ViewID viewId;
   if (APZCCallbackHelper::GetOrCreateScrollIdentifiers(
       document->GetDocumentElement(), &presShellId, &viewId)) {
-    mAPZCTreeManager->ZoomToRect(
-      ScrollableLayerGuid(aGuid.mLayersId, presShellId, viewId), zoomToRect);
+    APZThreadUtils::RunOnControllerThread(
+      NewRunnableMethod<ScrollableLayerGuid, CSSRect, uint32_t>(
+        "IAPZCTreeManager::ZoomToRect",
+        mAPZCTreeManager,
+        &IAPZCTreeManager::ZoomToRect,
+        ScrollableLayerGuid(aGuid.mLayersId, presShellId, viewId),
+        zoomToRect,
+        ZoomToRectBehavior::DEFAULT_BEHAVIOR));
   }
 }
 
@@ -310,18 +318,18 @@ ChromeProcessController::NotifyAsyncScrollbarDragRejected(const FrameMetrics::Vi
 }
 
 void
-ChromeProcessController::NotifyAutoscrollHandledByAPZ(const FrameMetrics::ViewID& aScrollId)
+ChromeProcessController::NotifyAsyncAutoscrollRejected(const FrameMetrics::ViewID& aScrollId)
 {
   if (MessageLoop::current() != mUILoop) {
     mUILoop->PostTask(NewRunnableMethod<FrameMetrics::ViewID>(
-      "layers::ChromeProcessController::NotifyAutoscrollHandledByAPZ",
+      "layers::ChromeProcessController::NotifyAsyncAutoscrollRejected",
       this,
-      &ChromeProcessController::NotifyAutoscrollHandledByAPZ,
+      &ChromeProcessController::NotifyAsyncAutoscrollRejected,
       aScrollId));
     return;
   }
 
-  APZCCallbackHelper::NotifyAutoscrollHandledByAPZ(aScrollId);
+  APZCCallbackHelper::NotifyAsyncAutoscrollRejected(aScrollId);
 }
 
 void

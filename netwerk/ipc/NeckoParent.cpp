@@ -35,7 +35,7 @@
 #include "mozilla/dom/network/TCPSocketParent.h"
 #include "mozilla/dom/network/TCPServerSocketParent.h"
 #include "mozilla/dom/network/UDPSocketParent.h"
-#include "mozilla/dom/workers/ServiceWorkerManager.h"
+#include "mozilla/dom/ServiceWorkerManager.h"
 #include "mozilla/LoadContext.h"
 #include "mozilla/MozPromise.h"
 #include "nsPrintfCString.h"
@@ -53,6 +53,7 @@
 using mozilla::OriginAttributes;
 using mozilla::dom::ChromeUtils;
 using mozilla::dom::ContentParent;
+using mozilla::dom::ServiceWorkerManager;
 using mozilla::dom::TabContext;
 using mozilla::dom::TabParent;
 using mozilla::net::PTCPSocketParent;
@@ -61,8 +62,6 @@ using mozilla::net::PTCPServerSocketParent;
 using mozilla::dom::TCPServerSocketParent;
 using mozilla::net::PUDPSocketParent;
 using mozilla::dom::UDPSocketParent;
-using mozilla::dom::workers::ServiceWorkerManager;
-using mozilla::ipc::AutoIPCStream;
 using mozilla::ipc::OptionalPrincipalInfo;
 using mozilla::ipc::PrincipalInfo;
 using mozilla::ipc::LoadInfoArgsToLoadInfo;
@@ -88,10 +87,6 @@ NeckoParent::NeckoParent()
                                  "network.disable.ipc.security");
     registeredBool = true;
   }
-}
-
-NeckoParent::~NeckoParent()
-{
 }
 
 static PBOverrideStatus
@@ -356,11 +351,12 @@ NeckoParent::DeallocPStunAddrsRequestParent(PStunAddrsRequestParent* aActor)
 PAltDataOutputStreamParent*
 NeckoParent::AllocPAltDataOutputStreamParent(
         const nsCString& type,
+        const int64_t& predictedSize,
         PHttpChannelParent* channel)
 {
   HttpChannelParent* chan = static_cast<HttpChannelParent*>(channel);
   nsCOMPtr<nsIOutputStream> stream;
-  nsresult rv = chan->OpenAlternativeOutputStream(type, getter_AddRefs(stream));
+  nsresult rv = chan->OpenAlternativeOutputStream(type, predictedSize, getter_AddRefs(stream));
   AltDataOutputStreamParent* parent = new AltDataOutputStreamParent(stream);
   parent->AddRef();
   // If the return value was not NS_OK, the error code will be sent
@@ -653,8 +649,7 @@ NeckoParent::DeallocPUDPSocketParent(PUDPSocketParent* actor)
 PDNSRequestParent*
 NeckoParent::AllocPDNSRequestParent(const nsCString& aHost,
                                     const OriginAttributes& aOriginAttributes,
-                                    const uint32_t& aFlags,
-                                    const nsCString& aNetworkInterface)
+                                    const uint32_t& aFlags)
 {
   DNSRequestParent *p = new DNSRequestParent();
   p->AddRef();
@@ -665,13 +660,11 @@ mozilla::ipc::IPCResult
 NeckoParent::RecvPDNSRequestConstructor(PDNSRequestParent* aActor,
                                         const nsCString& aHost,
                                         const OriginAttributes& aOriginAttributes,
-                                        const uint32_t& aFlags,
-                                        const nsCString& aNetworkInterface)
+                                        const uint32_t& aFlags)
 {
   static_cast<DNSRequestParent*>(aActor)->DoAsyncResolve(aHost,
                                                          aOriginAttributes,
-                                                         aFlags,
-                                                         aNetworkInterface);
+                                                         aFlags);
   return IPC_OK();
 }
 
@@ -966,26 +959,22 @@ NeckoParent::RecvGetExtensionStream(const URIParams& aURI,
   // validating the request. Specifically, only URI's for local files that
   // an extension is allowed to access via moz-extension URI's should be
   // accepted.
-  AutoIPCStream autoStream;
   nsCOMPtr<nsIInputStream> inputStream;
   bool terminateSender = true;
   auto inputStreamOrReason = ph->NewStream(deserializedURI, &terminateSender);
   if (inputStreamOrReason.isOk()) {
     inputStream = inputStreamOrReason.unwrap();
-    ContentParent* contentParent = static_cast<ContentParent*>(Manager());
-    Unused << autoStream.Serialize(inputStream, contentParent);
   }
 
   // If NewStream failed, we send back an invalid stream to the child so
   // it can handle the error. MozPromise rejection is reserved for channel
   // errors/disconnects.
-  aResolve(autoStream.TakeOptionalValue());
+  aResolve(inputStream);
 
   if (terminateSender) {
     return IPC_FAIL_NO_REASON(this);
-  } else {
-    return IPC_OK();
   }
+  return IPC_OK();
 }
 
 mozilla::ipc::IPCResult

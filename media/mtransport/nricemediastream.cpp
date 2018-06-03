@@ -166,6 +166,8 @@ static bool ToNrIceCandidate(const nr_ice_candidate& candc,
   out->type = type;
   out->tcp_type = tcp_type;
   out->codeword = candc.codeword;
+  out->label = candc.label;
+  out->trickled = candc.trickled;
   return true;
 }
 
@@ -227,7 +229,7 @@ nsresult NrIceMediaStream::ParseAttributes(std::vector<std::string>&
     return NS_ERROR_FAILURE;
 
   std::vector<char *> attributes_in;
-
+  attributes_in.reserve(attributes.size());
   for (auto& attribute : attributes) {
     attributes_in.push_back(const_cast<char *>(attribute.c_str()));
   }
@@ -309,9 +311,9 @@ nsresult NrIceMediaStream::GetActivePair(int component,
     return NS_ERROR_FAILURE;
 
   if (localp)
-    *localp = Move(local);
+    *localp = std::move(local);
   if (remotep)
-    *remotep = Move(remote);
+    *remotep = std::move(remote);
 
   return NS_OK;
 }
@@ -402,6 +404,8 @@ nsresult NrIceMediaStream::GetCandidatePairs(std::vector<NrIceCandidatePair>*
 
     pair.priority = p1->priority;
     pair.nominated = p1->peer_nominated || p1->nominated;
+    pair.component_id = p1->remote->component->component_id;
+
     // As discussed with drno: a component's can_send field (set to true
     // by ICE consent) is a very close approximation for writable and
     // readable. Note: the component for the local candidate never has

@@ -7,22 +7,27 @@
 #include "mozilla/LoadInfo.h"
 
 #include "mozilla/Assertions.h"
+#include "mozilla/dom/ClientIPCTypes.h"
+#include "mozilla/dom/ClientSource.h"
+#include "mozilla/dom/PerformanceStorage.h"
+#include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/ToJSValue.h"
 #include "mozIThirdPartyUtil.h"
 #include "nsFrameLoader.h"
 #include "nsIContentSecurityPolicy.h"
 #include "nsIDocShell.h"
 #include "nsIDocument.h"
-#include "nsIDOMDocument.h"
-#include "nsIFrameLoader.h"
+#include "nsIFrameLoaderOwner.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsISupportsImpl.h"
 #include "nsISupportsUtils.h"
 #include "nsContentUtils.h"
 #include "nsDocShell.h"
 #include "nsGlobalWindow.h"
+#include "nsMixedContentBlocker.h"
 #include "NullPrincipal.h"
 #include "nsRedirectHistoryEntry.h"
+#include "LoadInfo.h"
 
 using namespace mozilla::dom;
 
@@ -43,20 +48,30 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
                    nsIPrincipal* aTriggeringPrincipal,
                    nsINode* aLoadingContext,
                    nsSecurityFlags aSecurityFlags,
-                   nsContentPolicyType aContentPolicyType)
+                   nsContentPolicyType aContentPolicyType,
+                   const Maybe<mozilla::dom::ClientInfo>& aLoadingClientInfo,
+                   const Maybe<mozilla::dom::ServiceWorkerDescriptor>& aController)
   : mLoadingPrincipal(aLoadingContext ?
                         aLoadingContext->NodePrincipal() : aLoadingPrincipal)
   , mTriggeringPrincipal(aTriggeringPrincipal ?
                            aTriggeringPrincipal : mLoadingPrincipal.get())
   , mPrincipalToInherit(nullptr)
+  , mClientInfo(aLoadingClientInfo)
+  , mController(aController)
   , mLoadingContext(do_GetWeakReference(aLoadingContext))
   , mContextForTopLevelLoad(nullptr)
   , mSecurityFlags(aSecurityFlags)
   , mInternalContentPolicyType(aContentPolicyType)
   , mTainting(LoadTainting::Basic)
   , mUpgradeInsecureRequests(false)
+  , mBrowserUpgradeInsecureRequests(false)
+  , mBrowserWouldUpgradeInsecureRequests(false)
   , mVerifySignedContent(false)
   , mEnforceSRI(false)
+  , mForceAllowDataURI(false)
+  , mAllowInsecureRedirectToDataURI(false)
+  , mSkipContentPolicyCheckForWebRequest(false)
+  , mOriginalFrameSrcLoad(false)
   , mForceInheritPrincipalDropped(false)
   , mInnerWindowID(0)
   , mOuterWindowID(0)
@@ -66,12 +81,11 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
   , mEnforceSecurity(false)
   , mInitialSecurityCheckDone(false)
   , mIsThirdPartyContext(false)
+  , mIsDocshellReload(false)
   , mForcePreflight(false)
   , mIsPreflight(false)
-  , mForceHSTSPriming(false)
-  , mMixedContentWouldBlock(false)
-  , mIsHSTSPriming(false)
-  , mIsHSTSPrimingUpgrade(false)
+  , mLoadTriggeredFromExternal(false)
+  , mServiceWorkerTaintingSynthesized(false)
 {
   MOZ_ASSERT(mLoadingPrincipal);
   MOZ_ASSERT(mTriggeringPrincipal);
@@ -86,8 +100,13 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
 
   // This constructor shouldn't be used for TYPE_DOCUMENT loads that don't
   // have a loadingPrincipal
-  MOZ_ASSERT(skipContentTypeCheck ||
+  MOZ_ASSERT(skipContentTypeCheck || mLoadingPrincipal ||
              mInternalContentPolicyType != nsIContentPolicy::TYPE_DOCUMENT);
+
+  // We should only get an explicit controller for subresource requests.
+  MOZ_DIAGNOSTIC_ASSERT(
+    aController.isNothing() ||
+    !nsContentUtils::IsNonSubresourceInternalPolicyType(mInternalContentPolicyType));
 
   // TODO(bug 1259873): Above, we initialize mIsThirdPartyContext to false meaning
   // that consumers of LoadInfo that don't pass a context or pass a context from
@@ -108,6 +127,22 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
   }
 
   if (aLoadingContext) {
+    // Ensure that all network requests for a window client have the ClientInfo
+    // properly set.  Workers must currently pass the loading ClientInfo explicitly.
+    // We allow main thread requests to explicitly pass the value as well.
+    if (mClientInfo.isNothing()) {
+      mClientInfo = aLoadingContext->OwnerDoc()->GetClientInfo();
+    }
+
+    // For subresource loads set the service worker based on the calling
+    // context's controller.  Workers must currently pass the controller in
+    // explicitly.  We allow main thread requests to explicitly pass the value
+    // as well, but otherwise extract from the loading context here.
+    if (mController.isNothing() &&
+        !nsContentUtils::IsNonSubresourceInternalPolicyType(mInternalContentPolicyType)) {
+      mController = aLoadingContext->OwnerDoc()->GetController();
+    }
+
     nsCOMPtr<nsPIDOMWindowOuter> contextOuter = aLoadingContext->OwnerDoc()->GetWindow();
     if (contextOuter) {
       ComputeIsThirdPartyContext(contextOuter);
@@ -118,6 +153,9 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
     }
 
     mInnerWindowID = aLoadingContext->OwnerDoc()->InnerWindowID();
+    mAncestorPrincipals = aLoadingContext->OwnerDoc()->AncestorPrincipals();
+    mAncestorOuterWindowIDs = aLoadingContext->OwnerDoc()->AncestorOuterWindowIDs();
+    MOZ_DIAGNOSTIC_ASSERT(mAncestorPrincipals.Length() == mAncestorOuterWindowIDs.Length());
 
     // When the element being loaded is a frame, we choose the frame's window
     // for the window ID and the frame element's window as the parent
@@ -128,11 +166,11 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
     // any other non-document-loading element.
     nsCOMPtr<nsIFrameLoaderOwner> frameLoaderOwner =
       do_QueryInterface(aLoadingContext);
-    nsCOMPtr<nsIFrameLoader> fl = frameLoaderOwner ?
+    RefPtr<nsFrameLoader> fl = frameLoaderOwner ?
       frameLoaderOwner->GetFrameLoader() : nullptr;
     if (fl) {
-      nsCOMPtr<nsIDocShell> docShell;
-      if (NS_SUCCEEDED(fl->GetDocShell(getter_AddRefs(docShell))) && docShell) {
+      nsCOMPtr<nsIDocShell> docShell = fl->GetDocShell(IgnoreErrors());
+      if (docShell) {
         nsCOMPtr<nsPIDOMWindowOuter> outerWindow = do_GetInterface(docShell);
         if (outerWindow) {
           mFrameOuterWindowID = outerWindow->WindowID();
@@ -148,6 +186,24 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
       (nsContentUtils::IsPreloadType(mInternalContentPolicyType) &&
        aLoadingContext->OwnerDoc()->GetUpgradeInsecureRequests(true));
 
+    uint32_t externalType =
+      nsContentUtils::InternalContentPolicyTypeToExternal(mInternalContentPolicyType);
+    if (nsContentUtils::IsUpgradableDisplayType(externalType)) {
+      nsCOMPtr<nsIURI> uri;
+      mLoadingPrincipal->GetURI(getter_AddRefs(uri));
+      if (uri) {
+        // Checking https not secure context as http://localhost can't be upgraded
+        bool isHttpsScheme;
+        nsresult rv = uri->SchemeIs("https", &isHttpsScheme);
+        if (NS_SUCCEEDED(rv) && isHttpsScheme) {
+          if (nsMixedContentBlocker::ShouldUpgradeMixedDisplayContent()) {
+            mBrowserUpgradeInsecureRequests = true;
+          } else {
+            mBrowserWouldUpgradeInsecureRequests = true;
+          }
+        }
+      }
+    }
     // if owner doc has content signature, we enforce SRI
     nsCOMPtr<nsIChannel> channel = aLoadingContext->OwnerDoc()->GetChannel();
     if (channel) {
@@ -234,8 +290,14 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow,
   , mInternalContentPolicyType(nsIContentPolicy::TYPE_DOCUMENT)
   , mTainting(LoadTainting::Basic)
   , mUpgradeInsecureRequests(false)
+  , mBrowserUpgradeInsecureRequests(false)
+  , mBrowserWouldUpgradeInsecureRequests(false)
   , mVerifySignedContent(false)
   , mEnforceSRI(false)
+  , mForceAllowDataURI(false)
+  , mAllowInsecureRedirectToDataURI(false)
+  , mSkipContentPolicyCheckForWebRequest(false)
+  , mOriginalFrameSrcLoad(false)
   , mForceInheritPrincipalDropped(false)
   , mInnerWindowID(0)
   , mOuterWindowID(0)
@@ -245,12 +307,11 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow,
   , mEnforceSecurity(false)
   , mInitialSecurityCheckDone(false)
   , mIsThirdPartyContext(false) // NB: TYPE_DOCUMENT implies not third-party.
+  , mIsDocshellReload(false)
   , mForcePreflight(false)
   , mIsPreflight(false)
-  , mForceHSTSPriming(false)
-  , mMixedContentWouldBlock(false)
-  , mIsHSTSPriming(false)
-  , mIsHSTSPrimingUpgrade(false)
+  , mLoadTriggeredFromExternal(false)
+  , mServiceWorkerTaintingSynthesized(false)
 {
   // Top-level loads are never third-party
   // Grab the information we can out of the window.
@@ -277,6 +338,9 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow,
   nsCOMPtr<nsIDocShell> docShell = aOuterWindow->GetDocShell();
   MOZ_ASSERT(docShell);
   mOriginAttributes = nsDocShell::Cast(docShell)->GetOriginAttributes();
+  mAncestorPrincipals = nsDocShell::Cast(docShell)->AncestorPrincipals();
+  mAncestorOuterWindowIDs = nsDocShell::Cast(docShell)->AncestorOuterWindowIDs();
+  MOZ_DIAGNOSTIC_ASSERT(mAncestorPrincipals.Length() == mAncestorOuterWindowIDs.Length());
 
 #ifdef DEBUG
   if (docShell->ItemType() == nsIDocShellTreeItem::typeChrome) {
@@ -292,14 +356,26 @@ LoadInfo::LoadInfo(const LoadInfo& rhs)
   , mPrincipalToInherit(rhs.mPrincipalToInherit)
   , mSandboxedLoadingPrincipal(rhs.mSandboxedLoadingPrincipal)
   , mResultPrincipalURI(rhs.mResultPrincipalURI)
+  , mClientInfo(rhs.mClientInfo)
+  // mReservedClientSource must be handled specially during redirect
+  // mReservedClientInfo must be handled specially during redirect
+  // mInitialClientInfo must be handled specially during redirect
+  , mController(rhs.mController)
+  , mPerformanceStorage(rhs.mPerformanceStorage)
   , mLoadingContext(rhs.mLoadingContext)
   , mContextForTopLevelLoad(rhs.mContextForTopLevelLoad)
   , mSecurityFlags(rhs.mSecurityFlags)
   , mInternalContentPolicyType(rhs.mInternalContentPolicyType)
   , mTainting(rhs.mTainting)
   , mUpgradeInsecureRequests(rhs.mUpgradeInsecureRequests)
+  , mBrowserUpgradeInsecureRequests(rhs.mBrowserUpgradeInsecureRequests)
+  , mBrowserWouldUpgradeInsecureRequests(rhs.mBrowserWouldUpgradeInsecureRequests)
   , mVerifySignedContent(rhs.mVerifySignedContent)
   , mEnforceSRI(rhs.mEnforceSRI)
+  , mForceAllowDataURI(rhs.mForceAllowDataURI)
+  , mAllowInsecureRedirectToDataURI(rhs.mAllowInsecureRedirectToDataURI)
+  , mSkipContentPolicyCheckForWebRequest(rhs.mSkipContentPolicyCheckForWebRequest)
+  , mOriginalFrameSrcLoad(rhs.mOriginalFrameSrcLoad)
   , mForceInheritPrincipalDropped(rhs.mForceInheritPrincipalDropped)
   , mInnerWindowID(rhs.mInnerWindowID)
   , mOuterWindowID(rhs.mOuterWindowID)
@@ -309,17 +385,18 @@ LoadInfo::LoadInfo(const LoadInfo& rhs)
   , mEnforceSecurity(rhs.mEnforceSecurity)
   , mInitialSecurityCheckDone(rhs.mInitialSecurityCheckDone)
   , mIsThirdPartyContext(rhs.mIsThirdPartyContext)
+  , mIsDocshellReload(rhs.mIsDocshellReload)
   , mOriginAttributes(rhs.mOriginAttributes)
   , mRedirectChainIncludingInternalRedirects(
       rhs.mRedirectChainIncludingInternalRedirects)
   , mRedirectChain(rhs.mRedirectChain)
+  , mAncestorPrincipals(rhs.mAncestorPrincipals)
+  , mAncestorOuterWindowIDs(rhs.mAncestorOuterWindowIDs)
   , mCorsUnsafeHeaders(rhs.mCorsUnsafeHeaders)
   , mForcePreflight(rhs.mForcePreflight)
   , mIsPreflight(rhs.mIsPreflight)
-  , mForceHSTSPriming(rhs.mForceHSTSPriming)
-  , mMixedContentWouldBlock(rhs.mMixedContentWouldBlock)
-  , mIsHSTSPriming(rhs.mIsHSTSPriming)
-  , mIsHSTSPrimingUpgrade(rhs.mIsHSTSPrimingUpgrade)
+  , mLoadTriggeredFromExternal(rhs.mLoadTriggeredFromExternal)
+  , mServiceWorkerTaintingSynthesized(rhs.mServiceWorkerTaintingSynthesized)
 {
 }
 
@@ -328,12 +405,21 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
                    nsIPrincipal* aPrincipalToInherit,
                    nsIPrincipal* aSandboxedLoadingPrincipal,
                    nsIURI* aResultPrincipalURI,
+                   const Maybe<ClientInfo>& aClientInfo,
+                   const Maybe<ClientInfo>& aReservedClientInfo,
+                   const Maybe<ClientInfo>& aInitialClientInfo,
+                   const Maybe<ServiceWorkerDescriptor>& aController,
                    nsSecurityFlags aSecurityFlags,
                    nsContentPolicyType aContentPolicyType,
                    LoadTainting aTainting,
                    bool aUpgradeInsecureRequests,
+                   bool aBrowserUpgradeInsecureRequests,
+                   bool aBrowserWouldUpgradeInsecureRequests,
                    bool aVerifySignedContent,
                    bool aEnforceSRI,
+                   bool aForceAllowDataURI,
+                   bool aAllowInsecureRedirectToDataURI,
+                   bool aSkipContentPolicyCheckForWebRequest,
                    bool aForceInheritPrincipalDropped,
                    uint64_t aInnerWindowID,
                    uint64_t aOuterWindowID,
@@ -343,26 +429,37 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
                    bool aEnforceSecurity,
                    bool aInitialSecurityCheckDone,
                    bool aIsThirdPartyContext,
+                   bool aIsDocshellReload,
                    const OriginAttributes& aOriginAttributes,
                    RedirectHistoryArray& aRedirectChainIncludingInternalRedirects,
                    RedirectHistoryArray& aRedirectChain,
+                   nsTArray<nsCOMPtr<nsIPrincipal>>&& aAncestorPrincipals,
+                   const nsTArray<uint64_t>& aAncestorOuterWindowIDs,
                    const nsTArray<nsCString>& aCorsUnsafeHeaders,
                    bool aForcePreflight,
                    bool aIsPreflight,
-                   bool aForceHSTSPriming,
-                   bool aMixedContentWouldBlock,
-                   bool aIsHSTSPriming,
-                   bool aIsHSTSPrimingUpgrade)
+                   bool aLoadTriggeredFromExternal,
+                   bool aServiceWorkerTaintingSynthesized)
   : mLoadingPrincipal(aLoadingPrincipal)
   , mTriggeringPrincipal(aTriggeringPrincipal)
   , mPrincipalToInherit(aPrincipalToInherit)
   , mResultPrincipalURI(aResultPrincipalURI)
+  , mClientInfo(aClientInfo)
+  , mReservedClientInfo(aReservedClientInfo)
+  , mInitialClientInfo(aInitialClientInfo)
+  , mController(aController)
   , mSecurityFlags(aSecurityFlags)
   , mInternalContentPolicyType(aContentPolicyType)
   , mTainting(aTainting)
   , mUpgradeInsecureRequests(aUpgradeInsecureRequests)
+  , mBrowserUpgradeInsecureRequests(aBrowserUpgradeInsecureRequests)
+  , mBrowserWouldUpgradeInsecureRequests(aBrowserWouldUpgradeInsecureRequests)
   , mVerifySignedContent(aVerifySignedContent)
   , mEnforceSRI(aEnforceSRI)
+  , mForceAllowDataURI(aForceAllowDataURI)
+  , mAllowInsecureRedirectToDataURI(aAllowInsecureRedirectToDataURI)
+  , mSkipContentPolicyCheckForWebRequest(aSkipContentPolicyCheckForWebRequest)
+  , mOriginalFrameSrcLoad(false)
   , mForceInheritPrincipalDropped(aForceInheritPrincipalDropped)
   , mInnerWindowID(aInnerWindowID)
   , mOuterWindowID(aOuterWindowID)
@@ -372,14 +469,15 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
   , mEnforceSecurity(aEnforceSecurity)
   , mInitialSecurityCheckDone(aInitialSecurityCheckDone)
   , mIsThirdPartyContext(aIsThirdPartyContext)
+  , mIsDocshellReload(aIsDocshellReload)
   , mOriginAttributes(aOriginAttributes)
+  , mAncestorPrincipals(std::move(aAncestorPrincipals))
+  , mAncestorOuterWindowIDs(aAncestorOuterWindowIDs)
   , mCorsUnsafeHeaders(aCorsUnsafeHeaders)
   , mForcePreflight(aForcePreflight)
   , mIsPreflight(aIsPreflight)
-  , mForceHSTSPriming (aForceHSTSPriming)
-  , mMixedContentWouldBlock(aMixedContentWouldBlock)
-  , mIsHSTSPriming(aIsHSTSPriming)
-  , mIsHSTSPrimingUpgrade(aIsHSTSPrimingUpgrade)
+  , mLoadTriggeredFromExternal(aLoadTriggeredFromExternal)
+  , mServiceWorkerTaintingSynthesized(aServiceWorkerTaintingSynthesized)
 {
   // Only top level TYPE_DOCUMENT loads can have a null loadingPrincipal
   MOZ_ASSERT(mLoadingPrincipal || aContentPolicyType == nsIContentPolicy::TYPE_DOCUMENT);
@@ -389,10 +487,6 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
     aRedirectChainIncludingInternalRedirects);
 
   mRedirectChain.SwapElements(aRedirectChain);
-}
-
-LoadInfo::~LoadInfo()
-{
 }
 
 void
@@ -490,6 +584,22 @@ LoadInfo::PrincipalToInherit()
   return mPrincipalToInherit;
 }
 
+nsIPrincipal*
+LoadInfo::FindPrincipalToInherit(nsIChannel* aChannel)
+{
+  if (mPrincipalToInherit) {
+    return mPrincipalToInherit;
+  }
+
+  nsCOMPtr<nsIURI> uri = mResultPrincipalURI;
+  if (!uri) {
+    Unused << aChannel->GetOriginalURI(getter_AddRefs(uri));
+  }
+
+  auto prin = BasePrincipal::Cast(mTriggeringPrincipal);
+  return prin->PrincipalToInherit(uri);
+}
+
 NS_IMETHODIMP
 LoadInfo::GetSandboxedLoadingPrincipal(nsIPrincipal** aPrincipal)
 {
@@ -515,11 +625,11 @@ LoadInfo::GetSandboxedLoadingPrincipal(nsIPrincipal** aPrincipal)
 }
 
 NS_IMETHODIMP
-LoadInfo::GetLoadingDocument(nsIDOMDocument** aResult)
+LoadInfo::GetLoadingDocument(nsIDocument** aResult)
 {
   nsCOMPtr<nsINode> node = do_QueryReferent(mLoadingContext);
   if (node) {
-    nsCOMPtr<nsIDOMDocument> context = do_QueryInterface(node->OwnerDoc());
+    nsCOMPtr<nsIDocument> context = node->OwnerDoc();
     context.forget(aResult);
   }
   return NS_OK;
@@ -532,7 +642,7 @@ LoadInfo::LoadingNode()
   return node;
 }
 
-nsISupports*
+already_AddRefed<nsISupports>
 LoadInfo::ContextForTopLevelLoad()
 {
   // Most likely you want to query LoadingNode() instead of
@@ -540,7 +650,28 @@ LoadInfo::ContextForTopLevelLoad()
   MOZ_ASSERT(mInternalContentPolicyType == nsIContentPolicy::TYPE_DOCUMENT,
             "should only query this context for top level document loads");
   nsCOMPtr<nsISupports> context = do_QueryReferent(mContextForTopLevelLoad);
-  return context;
+  return context.forget();
+}
+
+already_AddRefed<nsISupports>
+LoadInfo::GetLoadingContext()
+{
+  nsCOMPtr<nsISupports> context;
+  if (mInternalContentPolicyType == nsIContentPolicy::TYPE_DOCUMENT) {
+    context = ContextForTopLevelLoad();
+  }
+  else {
+    context = LoadingNode();
+  }
+  return context.forget();
+}
+
+NS_IMETHODIMP
+LoadInfo::GetLoadingContextXPCOM(nsISupports** aResult)
+{
+  nsCOMPtr<nsISupports> context = GetLoadingContext();
+  context.forget(aResult);
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -664,6 +795,20 @@ LoadInfo::GetLoadErrorPage(bool* aResult)
 }
 
 NS_IMETHODIMP
+LoadInfo::GetIsDocshellReload(bool* aResult)
+{
+  *aResult = mIsDocshellReload;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::SetIsDocshellReload(bool aValue)
+{
+  mIsDocshellReload = aValue;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 LoadInfo::GetExternalContentPolicyType(nsContentPolicyType* aResult)
 {
   *aResult = nsContentUtils::InternalContentPolicyTypeToExternal(mInternalContentPolicyType);
@@ -680,6 +825,20 @@ NS_IMETHODIMP
 LoadInfo::GetUpgradeInsecureRequests(bool* aResult)
 {
   *aResult = mUpgradeInsecureRequests;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetBrowserUpgradeInsecureRequests(bool* aResult)
+{
+  *aResult = mBrowserUpgradeInsecureRequests;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetBrowserWouldUpgradeInsecureRequests(bool* aResult)
+{
+  *aResult = mBrowserWouldUpgradeInsecureRequests;
   return NS_OK;
 }
 
@@ -710,6 +869,65 @@ NS_IMETHODIMP
 LoadInfo::GetEnforceSRI(bool* aResult)
 {
   *aResult = mEnforceSRI;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::SetForceAllowDataURI(bool aForceAllowDataURI)
+{
+  MOZ_ASSERT(!mForceAllowDataURI ||
+             mInternalContentPolicyType == nsIContentPolicy::TYPE_DOCUMENT,
+             "can only allow data URI navigation for TYPE_DOCUMENT");
+  mForceAllowDataURI = aForceAllowDataURI;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetForceAllowDataURI(bool* aForceAllowDataURI)
+{
+  *aForceAllowDataURI = mForceAllowDataURI;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::SetAllowInsecureRedirectToDataURI(bool aAllowInsecureRedirectToDataURI)
+{
+  mAllowInsecureRedirectToDataURI = aAllowInsecureRedirectToDataURI;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetAllowInsecureRedirectToDataURI(bool* aAllowInsecureRedirectToDataURI)
+{
+  *aAllowInsecureRedirectToDataURI = mAllowInsecureRedirectToDataURI;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::SetSkipContentPolicyCheckForWebRequest(bool aSkip)
+{
+  mSkipContentPolicyCheckForWebRequest = aSkip;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetSkipContentPolicyCheckForWebRequest(bool* aSkip)
+{
+  *aSkip = mSkipContentPolicyCheckForWebRequest;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::SetOriginalFrameSrcLoad(bool aOriginalFrameSrcLoad)
+{
+  mOriginalFrameSrcLoad = aOriginalFrameSrcLoad;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetOriginalFrameSrcLoad(bool* aOriginalFrameSrcLoad)
+{
+  *aOriginalFrameSrcLoad = mOriginalFrameSrcLoad;
   return NS_OK;
 }
 
@@ -914,6 +1132,18 @@ LoadInfo::RedirectChain()
   return mRedirectChain;
 }
 
+const nsTArray<nsCOMPtr<nsIPrincipal>>&
+LoadInfo::AncestorPrincipals()
+{
+  return mAncestorPrincipals;
+}
+
+const nsTArray<uint64_t>&
+LoadInfo::AncestorOuterWindowIDs()
+{
+  return mAncestorOuterWindowIDs;
+}
+
 void
 LoadInfo::SetCorsPreflightInfo(const nsTArray<nsCString>& aHeaders,
                                bool aForcePreflight)
@@ -951,6 +1181,18 @@ LoadInfo::SetUpgradeInsecureRequests()
   mUpgradeInsecureRequests = true;
 }
 
+void
+LoadInfo::SetBrowserUpgradeInsecureRequests()
+{
+  mBrowserUpgradeInsecureRequests = true;
+}
+
+void
+LoadInfo::SetBrowserWouldUpgradeInsecureRequests()
+{
+  mBrowserWouldUpgradeInsecureRequests = true;
+}
+
 NS_IMETHODIMP
 LoadInfo::GetIsPreflight(bool* aIsPreflight)
 {
@@ -959,62 +1201,27 @@ LoadInfo::GetIsPreflight(bool* aIsPreflight)
 }
 
 NS_IMETHODIMP
-LoadInfo::GetForceHSTSPriming(bool* aForceHSTSPriming)
+LoadInfo::SetLoadTriggeredFromExternal(bool aLoadTriggeredFromExternal)
 {
-  *aForceHSTSPriming = mForceHSTSPriming;
+  MOZ_ASSERT(!aLoadTriggeredFromExternal ||
+             mInternalContentPolicyType == nsIContentPolicy::TYPE_DOCUMENT,
+             "can only set load triggered from external for TYPE_DOCUMENT");
+  mLoadTriggeredFromExternal = aLoadTriggeredFromExternal;
   return NS_OK;
 }
 
 NS_IMETHODIMP
-LoadInfo::GetMixedContentWouldBlock(bool *aMixedContentWouldBlock)
+LoadInfo::GetLoadTriggeredFromExternal(bool* aLoadTriggeredFromExternal)
 {
-  *aMixedContentWouldBlock = mMixedContentWouldBlock;
-  return NS_OK;
-}
-
-void
-LoadInfo::SetHSTSPriming(bool aMixedContentWouldBlock)
-{
-  mForceHSTSPriming = true;
-  mMixedContentWouldBlock = aMixedContentWouldBlock;
-}
-
-void
-LoadInfo::ClearHSTSPriming()
-{
-  mForceHSTSPriming = false;
-  mMixedContentWouldBlock = false;
-}
-
-NS_IMETHODIMP
-LoadInfo::SetIsHSTSPriming(bool aIsHSTSPriming)
-{
-  MOZ_ASSERT(aIsHSTSPriming);
-  mIsHSTSPriming = aIsHSTSPriming;
+  *aLoadTriggeredFromExternal = mLoadTriggeredFromExternal;
   return NS_OK;
 }
 
 NS_IMETHODIMP
-LoadInfo::GetIsHSTSPriming(bool* aIsHSTSPriming)
+LoadInfo::GetServiceWorkerTaintingSynthesized(bool* aServiceWorkerTaintingSynthesized)
 {
-  MOZ_ASSERT(aIsHSTSPriming);
-  *aIsHSTSPriming = mIsHSTSPriming;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-LoadInfo::SetIsHSTSPrimingUpgrade(bool aIsHSTSPrimingUpgrade)
-{
-  MOZ_ASSERT(aIsHSTSPrimingUpgrade);
-  mIsHSTSPrimingUpgrade = aIsHSTSPrimingUpgrade;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-LoadInfo::GetIsHSTSPrimingUpgrade(bool* aIsHSTSPrimingUpgrade)
-{
-  MOZ_ASSERT(aIsHSTSPrimingUpgrade);
-  *aIsHSTSPrimingUpgrade = mIsHSTSPrimingUpgrade;
+  MOZ_ASSERT(aServiceWorkerTaintingSynthesized);
+  *aServiceWorkerTaintingSynthesized = mServiceWorkerTaintingSynthesized;
   return NS_OK;
 }
 
@@ -1030,6 +1237,12 @@ NS_IMETHODIMP
 LoadInfo::MaybeIncreaseTainting(uint32_t aTainting)
 {
   NS_ENSURE_ARG(aTainting <= TAINTING_OPAQUE);
+
+  // Skip if the tainting has been set by the service worker.
+  if (mServiceWorkerTaintingSynthesized) {
+    return NS_OK;
+  }
+
   LoadTainting tainting = static_cast<LoadTainting>(aTainting);
   if (tainting > mTainting) {
     mTainting = tainting;
@@ -1042,6 +1255,9 @@ LoadInfo::SynthesizeServiceWorkerTainting(LoadTainting aTainting)
 {
   MOZ_DIAGNOSTIC_ASSERT(aTainting <= LoadTainting::Opaque);
   mTainting = aTainting;
+
+  // Flag to prevent the tainting from being increased.
+  mServiceWorkerTaintingSynthesized = true;
 }
 
 NS_IMETHODIMP
@@ -1064,6 +1280,94 @@ LoadInfo::SetResultPrincipalURI(nsIURI *aURI)
 {
   mResultPrincipalURI = aURI;
   return NS_OK;
+}
+
+void
+LoadInfo::SetClientInfo(const ClientInfo& aClientInfo)
+{
+  mClientInfo.emplace(aClientInfo);
+}
+
+const Maybe<ClientInfo>&
+LoadInfo::GetClientInfo()
+{
+  return mClientInfo;
+}
+
+void
+LoadInfo::GiveReservedClientSource(UniquePtr<ClientSource>&& aClientSource)
+{
+  MOZ_DIAGNOSTIC_ASSERT(aClientSource);
+  mReservedClientSource = std::move(aClientSource);
+  SetReservedClientInfo(mReservedClientSource->Info());
+}
+
+UniquePtr<ClientSource>
+LoadInfo::TakeReservedClientSource()
+{
+  if (mReservedClientSource) {
+    // If the reserved ClientInfo was set due to a ClientSource being present,
+    // then clear that info object when the ClientSource is taken.
+    mReservedClientInfo.reset();
+  }
+  return std::move(mReservedClientSource);
+}
+
+void
+LoadInfo::SetReservedClientInfo(const ClientInfo& aClientInfo)
+{
+  MOZ_DIAGNOSTIC_ASSERT(mInitialClientInfo.isNothing());
+  mReservedClientInfo.emplace(aClientInfo);
+}
+
+const Maybe<ClientInfo>&
+LoadInfo::GetReservedClientInfo()
+{
+  return mReservedClientInfo;
+}
+
+void
+LoadInfo::SetInitialClientInfo(const ClientInfo& aClientInfo)
+{
+  MOZ_DIAGNOSTIC_ASSERT(!mReservedClientSource);
+  MOZ_DIAGNOSTIC_ASSERT(mReservedClientInfo.isNothing());
+  mInitialClientInfo.emplace(aClientInfo);
+}
+
+const Maybe<ClientInfo>&
+LoadInfo::GetInitialClientInfo()
+{
+  return mInitialClientInfo;
+}
+
+void
+LoadInfo::SetController(const ServiceWorkerDescriptor& aServiceWorker)
+{
+  mController.emplace(aServiceWorker);
+}
+
+void
+LoadInfo::ClearController()
+{
+  mController.reset();
+}
+
+const Maybe<ServiceWorkerDescriptor>&
+LoadInfo::GetController()
+{
+  return mController;
+}
+
+void
+LoadInfo::SetPerformanceStorage(PerformanceStorage* aPerformanceStorage)
+{
+  mPerformanceStorage = aPerformanceStorage;
+}
+
+PerformanceStorage*
+LoadInfo::GetPerformanceStorage()
+{
+  return mPerformanceStorage;
 }
 
 } // namespace net

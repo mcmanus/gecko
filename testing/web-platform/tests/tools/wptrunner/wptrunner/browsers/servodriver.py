@@ -1,8 +1,11 @@
 import os
+import shutil
 import subprocess
 import tempfile
 
 from mozprocess import ProcessHandler
+
+from serve.serve import make_hosts_file
 
 from .base import Browser, require_arg, get_free_port, browser_command, ExecutorBrowser
 from ..executors import executor_kwargs as base_executor_kwargs
@@ -26,14 +29,6 @@ __wptrunner__ = {
     "update_properties": "update_properties",
 }
 
-hosts_text = """127.0.0.1 web-platform.test
-127.0.0.1 www.web-platform.test
-127.0.0.1 www1.web-platform.test
-127.0.0.1 www2.web-platform.test
-127.0.0.1 xn--n8j6ds53lwwkrqhv28a.web-platform.test
-127.0.0.1 xn--lve-6lad.web-platform.test
-"""
-
 
 def check_args(**kwargs):
     require_arg(kwargs, "binary")
@@ -49,7 +44,7 @@ def browser_kwargs(test_type, run_info_data, **kwargs):
 
 def executor_kwargs(test_type, server_config, cache_manager, run_info_data, **kwargs):
     rv = base_executor_kwargs(test_type, server_config,
-                              cache_manager, **kwargs)
+                              cache_manager, run_info_data, **kwargs)
     return rv
 
 
@@ -58,9 +53,7 @@ def env_extras(**kwargs):
 
 
 def env_options():
-    return {"host": "127.0.0.1",
-            "external_host": "web-platform.test",
-            "bind_hostname": "true",
+    return {"server_host": "127.0.0.1",
             "testharnessreport": "testharnessreport-servodriver.js",
             "supports_debugger": True}
 
@@ -69,10 +62,10 @@ def update_properties():
     return ["debug", "os", "version", "processor", "bits"], None
 
 
-def make_hosts_file():
+def write_hosts_file(config):
     hosts_fd, hosts_path = tempfile.mkstemp()
     with os.fdopen(hosts_fd, "w") as f:
-        f.write(hosts_text)
+        f.write(make_hosts_file(config, "127.0.0.1"))
     return hosts_path
 
 
@@ -87,7 +80,7 @@ class ServoWebDriverBrowser(Browser):
         self.webdriver_port = None
         self.proc = None
         self.debug_info = debug_info
-        self.hosts_path = make_hosts_file()
+        self.hosts_path = write_hosts_file()
         self.command = None
         self.user_stylesheets = user_stylesheets if user_stylesheets else []
 
@@ -158,6 +151,7 @@ class ServoWebDriverBrowser(Browser):
 
     def cleanup(self):
         self.stop()
+        shutil.rmtree(os.path.dirname(self.hosts_file))
 
     def executor_browser(self):
         assert self.webdriver_port is not None

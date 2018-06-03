@@ -12,6 +12,7 @@
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsString.h"
+#include "mozilla/Unused.h"
 
 using namespace mozilla;
 namespace mozilla {
@@ -40,10 +41,10 @@ GetFilePathViaSpecialDirectory(const char* aSpecialDirName,
                                                       aFileName);
   NS_ENSURE_TRUE(file, NS_ERROR_FAILURE);
 
-  nsAutoCString path;
-  nsresult rv  = file->GetNativePath(path);
+  nsAutoString path;
+  nsresult rv  = file->GetPath(path);
   if (NS_SUCCEEDED(rv)) {
-    aPath = NS_ConvertUTF8toUTF16(path);
+    aPath = path;
   }
   return rv;
 }
@@ -85,7 +86,7 @@ GetFileContents(const nsAutoString& aFile, Vector<char>& aBuf)
     return 0;
   }
 
-  aBuf.initCapacity(size);
+  Unused << aBuf.initCapacity(size);
   uint32_t len = static_cast<uint32_t>(size);
   uint32_t read = 0;
   uint32_t haveRead = 0;
@@ -123,12 +124,18 @@ public:
 protected:
   virtual bool CreatePDFiumEngineIfNeed() override {
     if (!mPDFiumEngine) {
-    #ifdef _WIN64
-      nsAutoCString externalDll("pdfium_ref_x64.dll");
-    #else
-      nsAutoCString externalDll("pdfium_ref_x86.dll");
-    #endif
-      mPDFiumEngine = PDFiumEngineShim::GetInstanceOrNull(externalDll);
+#ifdef _WIN64
+#define PDFIUM_FILENAME "pdfium_ref_x64.dll"
+#else
+#define PDFIUM_FILENAME "pdfium_ref_x86.dll"
+#endif
+      nsAutoString pdfiumPath;
+      MOZ_RELEASE_ASSERT(NS_SUCCEEDED(GetFilePathViaSpecialDirectory(
+                                        NS_OS_CURRENT_WORKING_DIR,
+                                        PDFIUM_FILENAME,
+                                        pdfiumPath)));
+      mPDFiumEngine = PDFiumEngineShim::GetInstanceOrNull(pdfiumPath);
+      MOZ_RELEASE_ASSERT(mPDFiumEngine);
     }
 
     return !!mPDFiumEngine;
@@ -151,7 +158,7 @@ TEST(TestEMFConversion, CompareEMFWithReference)
   ASSERT_TRUE(NS_SUCCEEDED(GetFilePathViaSpecialDirectory(NS_OS_TEMP_DIR,
                                                         "gtest.emf",
                                                         emfPath)));
-  ASSERT_TRUE(PDFHelper->DrawPageToFile(emfPath.get(), 0,
+  ASSERT_TRUE(PDFHelper->SavePageToFile(emfPath.get(), 0,
                                         pageWidth, pageHeight));
   PDFHelper->CloseDocument();
 #ifdef _WIN64
@@ -165,7 +172,7 @@ TEST(TestEMFConversion, CompareEMFWithReference)
                                                           "gtestRef.emf",
                                                           emfPathRef)));
 
-  ASSERT_TRUE(ExtHelper->DrawPageToFile(emfPathRef.get(), 0,
+  ASSERT_TRUE(ExtHelper->SavePageToFile(emfPathRef.get(), 0,
                                         pageWidth, pageHeight));
   ExtHelper->CloseDocument();
 
@@ -193,8 +200,8 @@ TEST(TestEMFConversion, TestInsufficientWidthAndHeight)
                                                          "gtest.emf",
                                                           emfPath)));
 
-  ASSERT_FALSE(PDFHelper->DrawPageToFile(emfPath.get(), 0, 0, 0));
-  ASSERT_FALSE(PDFHelper->DrawPageToFile(emfPath.get(), 0, 100, -1));
+  ASSERT_FALSE(PDFHelper->SavePageToFile(emfPath.get(), 0, 0, 0));
+  ASSERT_FALSE(PDFHelper->SavePageToFile(emfPath.get(), 0, 100, -1));
 
   PDFHelper->CloseDocument();
 }

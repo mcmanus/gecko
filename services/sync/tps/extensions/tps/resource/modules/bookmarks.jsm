@@ -10,17 +10,14 @@
 var EXPORTED_SYMBOLS = ["PlacesItem", "Bookmark", "Separator", "Livemark",
                         "BookmarkFolder", "DumpBookmarks"];
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
-
-Cu.import("resource://gre/modules/PlacesBackups.jsm");
-Cu.import("resource://gre/modules/PlacesSyncUtils.jsm");
-Cu.import("resource://gre/modules/PlacesUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://services-common/async.js");
-Cu.import("resource://tps/logger.jsm");
+ChromeUtils.import("resource://gre/modules/PlacesBackups.jsm");
+ChromeUtils.import("resource://gre/modules/PlacesSyncUtils.jsm");
+ChromeUtils.import("resource://gre/modules/PlacesUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://tps/logger.jsm");
 
 async function DumpBookmarks() {
-  let [bookmarks, ] = await PlacesBackups.getBookmarksTree()
+  let [bookmarks, ] = await PlacesBackups.getBookmarksTree();
   Logger.logInfo("Dumping Bookmarks...\n" + JSON.stringify(bookmarks, undefined, 2) + "\n\n");
 }
 
@@ -83,6 +80,7 @@ PlacesItem.prototype = {
     "tags": PlacesUtils.bookmarks.tagsGuid,
     "unfiled": PlacesUtils.bookmarks.unfiledGuid,
     "toolbar": PlacesUtils.bookmarks.toolbarGuid,
+    "mobile": PlacesUtils.bookmarks.mobileGuid,
   },
 
   _typeMap: new Map([
@@ -100,7 +98,7 @@ PlacesItem.prototype = {
         var ret = [];
         for (var i in props) {
           if (that.props[props[i]]) {
-            ret.push(props[i] + ": " + that.props[props[i]])
+            ret.push(props[i] + ": " + that.props[props[i]]);
           }
         }
         return ret;
@@ -457,13 +455,13 @@ Bookmark.prototype = {
    */
   async SetLoadInSidebar(loadInSidebar) {
     let itemId = await PlacesUtils.promiseItemId(this.props.guid);
-    if (loadInSidebar == true)
+    if (loadInSidebar)
       PlacesUtils.annotations.setItemAnnotation(itemId,
                                     "bookmarkProperties/loadInSidebar",
                                     true,
                                     0,
                                     PlacesUtils.annotations.EXPIRE_NEVER);
-    else if (loadInSidebar == false)
+    else if (!loadInSidebar)
       PlacesUtils.annotations.removeItemAnnotation(itemId,
                                        "bookmarkProperties/loadInSidebar");
   },
@@ -480,7 +478,7 @@ Bookmark.prototype = {
   async SetUri(uri) {
     if (uri) {
       let url = Services.io.newURI(uri);
-      await PlacesUtils.bookmarks.update({guid: this.props.guid, url})
+      await PlacesUtils.bookmarks.update({guid: this.props.guid, url});
     }
   },
 
@@ -927,8 +925,8 @@ Separator.prototype = {
     } else {
       expected_pos = this.props.last_item_pos + 1;
     }
-    // Note these are syncIDs instead of GUIDs, but that's ok here.
-    let children = await PlacesSyncUtils.bookmarks.fetchChildSyncIds(this.props.parentGuid);
+    // Note these are IDs instead of GUIDs.
+    let children = await PlacesSyncUtils.bookmarks.fetchChildRecordIds(this.props.parentGuid);
     this.props.guid = children[expected_pos];
     if (this.props.guid == null) {
       Logger.logPotentialError("No separator found at position " + expected_pos);

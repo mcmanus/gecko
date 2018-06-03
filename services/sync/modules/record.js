@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-this.EXPORTED_SYMBOLS = [
+var EXPORTED_SYMBOLS = [
   "WBORecord",
   "RecordManager",
   "CryptoWrapper",
@@ -10,28 +10,23 @@ this.EXPORTED_SYMBOLS = [
   "Collection",
 ];
 
-var Cc = Components.classes;
-var Ci = Components.interfaces;
-var Cr = Components.results;
-var Cu = Components.utils;
-
 const CRYPTO_COLLECTION = "crypto";
 const KEYS_WBO = "keys";
 
-Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://services-sync/constants.js");
-Cu.import("resource://services-sync/keys.js");
-Cu.import("resource://services-sync/main.js");
-Cu.import("resource://services-sync/resource.js");
-Cu.import("resource://services-sync/util.js");
-Cu.import("resource://services-common/async.js");
-Cu.import("resource://services-common/utils.js");
+ChromeUtils.import("resource://gre/modules/Log.jsm");
+ChromeUtils.import("resource://services-sync/constants.js");
+ChromeUtils.import("resource://services-sync/keys.js");
+ChromeUtils.import("resource://services-sync/main.js");
+ChromeUtils.import("resource://services-sync/resource.js");
+ChromeUtils.import("resource://services-sync/util.js");
+ChromeUtils.import("resource://services-common/async.js");
+ChromeUtils.import("resource://services-common/utils.js");
 
-this.WBORecord = function WBORecord(collection, id) {
+function WBORecord(collection, id) {
   this.data = {};
   this.payload = {};
-  this.collection = collection;      // Optional.
-  this.id = id;                      // Optional.
+  this.collection = collection; // Optional.
+  this.id = id; // Optional.
 }
 WBORecord.prototype = {
   _logName: "Sync.Record.WBO",
@@ -51,7 +46,7 @@ WBORecord.prototype = {
 
     let r = await resource.get();
     if (r.success) {
-      this.deserialize(r);   // Warning! Muffles exceptions!
+      this.deserialize(r.obj); // Warning! Muffles exceptions!
     }
     this.response = r;
     return this;
@@ -77,8 +72,10 @@ WBORecord.prototype = {
   },
 
   deserialize: function deserialize(json) {
-    this.data = json.constructor.toString() == String ? JSON.parse(json) : json;
-
+    if (!json || typeof json !== "object") {
+      throw new TypeError("Can't deserialize record from: " + json);
+    }
+    this.data = json;
     try {
       // The payload is likely to be JSON, but if not, keep it as a string
       this.payload = JSON.parse(this.payload);
@@ -108,7 +105,7 @@ WBORecord.prototype = {
 
 Utils.deferGetSet(WBORecord, "data", ["id", "modified", "sortindex", "payload"]);
 
-this.CryptoWrapper = function CryptoWrapper(collection, id) {
+function CryptoWrapper(collection, id) {
   this.cleartext = {};
   WBORecord.call(this, collection, id);
   this.ciphertext = null;
@@ -124,7 +121,7 @@ CryptoWrapper.prototype = {
       throw new Error("Cannot compute HMAC without an HMAC key.");
     }
 
-    return CommonUtils.bytesAsHex(Utils.digestUTF8(this.ciphertext, hasher));
+    return CommonUtils.bytesAsHex(Utils.digestBytes(this.ciphertext, hasher));
   },
 
   /*
@@ -221,7 +218,7 @@ Utils.deferGetSet(CryptoWrapper, "cleartext", "deleted");
 /**
  * An interface and caching layer for records.
  */
-this.RecordManager = function RecordManager(service) {
+function RecordManager(service) {
   this.service = service;
 
   this._log = Log.repository.getLogger(this._logName);
@@ -243,7 +240,7 @@ RecordManager.prototype = {
         return null;
 
       let record = new this._recordType(url);
-      record.deserialize(this.response);
+      record.deserialize(this.response.obj);
 
       return this.set(url, record);
     } catch (ex) {
@@ -289,7 +286,7 @@ RecordManager.prototype = {
  * You can update this thing simply by giving it /info/collections. It'll
  * use the last modified time to bring itself up to date.
  */
-this.CollectionKeyManager = function CollectionKeyManager(lastModified, default_, collections) {
+function CollectionKeyManager(lastModified, default_, collections) {
   this.lastModified = lastModified || 0;
   this._default = default_ || null;
   this._collections = collections || {};
@@ -455,7 +452,7 @@ CollectionKeyManager.prototype = {
     const newKeys = Object.assign({}, this._collections);
     for (let c of collections) {
       if (newKeys[c]) {
-        continue;  // don't replace existing keys
+        continue; // don't replace existing keys
       }
 
       const b = new BulkKeyBundle(c);
@@ -580,9 +577,9 @@ CollectionKeyManager.prototype = {
     log.info("Collection keys updated.");
     return r;
   }
-}
+};
 
-this.Collection = function Collection(uri, recordObj, service) {
+function Collection(uri, recordObj, service) {
   if (!service) {
     throw new Error("Collection constructor requires a service.");
   }
@@ -618,27 +615,37 @@ Collection.prototype = {
     this.uri.QueryInterface(Ci.nsIURL);
 
     let args = [];
-    if (this.older)
+    if (this.older) {
       args.push("older=" + this.older);
-    else if (this.newer) {
+    }
+    if (this.newer) {
       args.push("newer=" + this.newer);
     }
-    if (this.full)
+    if (this.full) {
       args.push("full=1");
-    if (this.sort)
+    }
+    if (this.sort) {
       args.push("sort=" + this.sort);
-    if (this.ids != null)
+    }
+    if (this.ids != null) {
       args.push("ids=" + this.ids);
-    if (this.limit > 0 && this.limit != Infinity)
+    }
+    if (this.limit > 0 && this.limit != Infinity) {
       args.push("limit=" + this.limit);
-    if (this._batch)
+    }
+    if (this._batch) {
       args.push("batch=" + encodeURIComponent(this._batch));
-    if (this._commit)
+    }
+    if (this._commit) {
       args.push("commit=true");
-    if (this._offset)
+    }
+    if (this._offset) {
       args.push("offset=" + encodeURIComponent(this._offset));
+    }
 
-    this.uri.query = (args.length > 0) ? "?" + args.join("&") : "";
+    this.uri = this.uri.mutate()
+                       .setQuery((args.length > 0) ? "?" + args.join("&") : "")
+                       .finalize();
   },
 
   // get full items
@@ -682,6 +689,10 @@ Collection.prototype = {
   // index
   get sort() { return this._sort; },
   set sort(value) {
+    if (value && value != "oldest" && value != "newest" && value != "index") {
+      throw new TypeError(
+        `Illegal value for sort: "${value}" (should be "oldest", "newest", or "index").`);
+    }
     this._sort = value;
     this._rebuildURL();
   },
@@ -721,7 +732,7 @@ Collection.prototype = {
       throw new Error("getBatched is unimplemented for guid-only GETs");
     }
 
-    // _onComplete and _onProgress are reset after each `get` by AsyncResource.
+    // _onComplete and _onProgress are reset after each `get` by Resource.
     let { _onComplete, _onProgress } = this;
     let recordBuffer = [];
     let resp;
@@ -756,7 +767,7 @@ Collection.prototype = {
         } else if (lastModified != lastModifiedTime) {
           // Should be impossible -- We'd get a 412 in this case.
           throw new Error("X-Last-Modified changed in the middle of a download batch! " +
-                          `${lastModified} => ${lastModifiedTime}`)
+                          `${lastModified} => ${lastModifiedTime}`);
         }
 
         // If this is missing, we're finished.
@@ -789,7 +800,7 @@ Collection.prototype = {
         this.setHeader(header, value);
       }
       return Resource.prototype.post.call(this, data);
-    }
+    };
     return new PostQueue(poster, timestamp,
       this._service.serverConfiguration || {}, log, postCallback);
   },
@@ -1089,4 +1100,4 @@ PostQueue.prototype = {
 
     await this.postCallback(response, true);
   },
-}
+};

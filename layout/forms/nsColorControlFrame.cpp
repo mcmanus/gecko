@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -10,10 +11,7 @@
 #include "nsCSSPseudoElements.h"
 #include "nsCheckboxRadioFrame.h"
 #include "nsGkAtoms.h"
-#include "nsIDOMNode.h"
 #include "nsIFormControl.h"
-#include "mozilla/StyleSetHandle.h"
-#include "mozilla/StyleSetHandleInlines.h"
 #include "mozilla/dom/HTMLInputElement.h"
 #include "nsIDocument.h"
 
@@ -21,15 +19,15 @@ using mozilla::dom::Element;
 using mozilla::dom::HTMLInputElement;
 using mozilla::dom::CallerType;
 
-nsColorControlFrame::nsColorControlFrame(nsStyleContext* aContext)
-  : nsHTMLButtonControlFrame(aContext, kClassID)
+nsColorControlFrame::nsColorControlFrame(ComputedStyle* aStyle)
+  : nsHTMLButtonControlFrame(aStyle, kClassID)
 {
 }
 
 nsIFrame*
-NS_NewColorControlFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewColorControlFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsColorControlFrame(aContext);
+  return new (aPresShell) nsColorControlFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsColorControlFrame)
@@ -40,11 +38,11 @@ NS_QUERYFRAME_HEAD(nsColorControlFrame)
 NS_QUERYFRAME_TAIL_INHERITING(nsHTMLButtonControlFrame)
 
 
-void nsColorControlFrame::DestroyFrom(nsIFrame* aDestructRoot)
+void nsColorControlFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   nsCheckboxRadioFrame::RegUnRegAccessKey(static_cast<nsIFrame*>(this), false);
-  DestroyAnonymousContent(mColorContent.forget());
-  nsHTMLButtonControlFrame::DestroyFrom(aDestructRoot);
+  aPostDestroyData.AddAnonymousContent(mColorContent.forget());
+  nsHTMLButtonControlFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 #ifdef DEBUG_FRAME_DUMP
@@ -92,7 +90,7 @@ nsColorControlFrame::UpdateColor()
   // Get the color from the "value" property of our content; it will return the
   // default color (through the sanitization algorithm) if the value is empty.
   nsAutoString color;
-  HTMLInputElement* elt = HTMLInputElement::FromContent(mContent);
+  HTMLInputElement* elt = HTMLInputElement::FromNode(mContent);
   elt->GetValue(color, CallerType::System);
 
   if (color.IsEmpty()) {
@@ -140,14 +138,4 @@ nsContainerFrame*
 nsColorControlFrame::GetContentInsertionFrame()
 {
   return this;
-}
-
-Element*
-nsColorControlFrame::GetPseudoElement(CSSPseudoElementType aType)
-{
-  if (aType == CSSPseudoElementType::mozColorSwatch) {
-    return mColorContent;
-  }
-
-  return nsContainerFrame::GetPseudoElement(aType);
 }

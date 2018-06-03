@@ -62,6 +62,9 @@ enum class TypeCode
     // A function pointer with any signature
     AnyFunc                              = 0x70,  // SLEB128(-0x10)
 
+    // A reference to any type.
+    AnyRef                               = 0x6f,
+
     // Type constructor for function types
     Func                                 = 0x60,  // SLEB128(-0x20)
 
@@ -71,27 +74,9 @@ enum class TypeCode
     Limit                                = 0x80
 };
 
-enum class ValType
-{
-    I32                                  = uint8_t(TypeCode::I32),
-    I64                                  = uint8_t(TypeCode::I64),
-    F32                                  = uint8_t(TypeCode::F32),
-    F64                                  = uint8_t(TypeCode::F64),
+// The representation of a null reference value throughout the compiler.
 
-    // ------------------------------------------------------------------------
-    // The rest of these types are currently only emitted internally when
-    // compiling asm.js and are rejected by wasm validation.
-
-    I8x16                                = uint8_t(TypeCode::I8x16),
-    I16x8                                = uint8_t(TypeCode::I16x8),
-    I32x4                                = uint8_t(TypeCode::I32x4),
-    F32x4                                = uint8_t(TypeCode::F32x4),
-    B8x16                                = uint8_t(TypeCode::B8x16),
-    B16x8                                = uint8_t(TypeCode::B16x8),
-    B32x4                                = uint8_t(TypeCode::B32x4)
-};
-
-typedef Vector<ValType, 8, SystemAllocPolicy> ValTypeVector;
+static const intptr_t NULLREF_VALUE = intptr_t((void*)nullptr);
 
 enum class DefinitionKind
 {
@@ -109,7 +94,15 @@ enum class GlobalTypeImmediate
 
 enum class MemoryTableFlags
 {
-    Default                              = 0x0
+    Default                              = 0x0,
+    HasMaximum                           = 0x1,
+    IsShared                             = 0x2
+};
+
+enum class MemoryMasks
+{
+    AllowUnshared                        = 0x1,
+    AllowShared                          = 0x3
 };
 
 enum class Op
@@ -306,7 +299,7 @@ enum class Op
     F32ReinterpretI32                    = 0xbe,
     F64ReinterpretI64                    = 0xbf,
 
-#ifdef ENABLE_WASM_THREAD_OPS
+#ifdef ENABLE_WASM_SIGNEXTEND_OPS
     // Sign extension
     I32Extend8S                          = 0xc0,
     I32Extend16S                         = 0xc1,
@@ -315,7 +308,13 @@ enum class Op
     I64Extend32S                         = 0xc4,
 #endif
 
-    AtomicPrefix                         = 0xfe,
+    // GC ops
+    RefNull                              = 0xd0,
+    RefIsNull                            = 0xd1,
+
+    FirstPrefix                          = 0xfc,
+    MiscPrefix                           = 0xfc,
+    ThreadPrefix                         = 0xfe,
     MozPrefix                            = 0xff,
 
     Limit                                = 0x100
@@ -324,8 +323,124 @@ enum class Op
 inline bool
 IsPrefixByte(uint8_t b)
 {
-    return b >= uint8_t(Op::AtomicPrefix);
+    return b >= uint8_t(Op::FirstPrefix);
 }
+
+// Opcodes in the "miscellaneous" opcode space.
+enum class MiscOp
+{
+    // Saturating float-to-int conversions
+    I32TruncSSatF32                      = 0x00,
+    I32TruncUSatF32                      = 0x01,
+    I32TruncSSatF64                      = 0x02,
+    I32TruncUSatF64                      = 0x03,
+    I64TruncSSatF32                      = 0x04,
+    I64TruncUSatF32                      = 0x05,
+    I64TruncSSatF64                      = 0x06,
+    I64TruncUSatF64                      = 0x07,
+
+    // Bulk memory operations.  Note, these are unofficial.
+    MemCopy                              = 0x40,
+    MemFill                              = 0x41,
+
+    Limit
+};
+
+// Opcodes from threads proposal as of June 30, 2017
+enum class ThreadOp
+{
+    // Wait and wake
+    Wake                                 = 0x00,
+    I32Wait                              = 0x01,
+    I64Wait                              = 0x02,
+
+    // Load and store
+    I32AtomicLoad                        = 0x10,
+    I64AtomicLoad                        = 0x11,
+    I32AtomicLoad8U                      = 0x12,
+    I32AtomicLoad16U                     = 0x13,
+    I64AtomicLoad8U                      = 0x14,
+    I64AtomicLoad16U                     = 0x15,
+    I64AtomicLoad32U                     = 0x16,
+    I32AtomicStore                       = 0x17,
+    I64AtomicStore                       = 0x18,
+    I32AtomicStore8U                     = 0x19,
+    I32AtomicStore16U                    = 0x1a,
+    I64AtomicStore8U                     = 0x1b,
+    I64AtomicStore16U                    = 0x1c,
+    I64AtomicStore32U                    = 0x1d,
+
+    // Read-modify-write operations
+    I32AtomicAdd                         = 0x1e,
+    I64AtomicAdd                         = 0x1f,
+    I32AtomicAdd8U                       = 0x20,
+    I32AtomicAdd16U                      = 0x21,
+    I64AtomicAdd8U                       = 0x22,
+    I64AtomicAdd16U                      = 0x23,
+    I64AtomicAdd32U                      = 0x24,
+
+    I32AtomicSub                         = 0x25,
+    I64AtomicSub                         = 0x26,
+    I32AtomicSub8U                       = 0x27,
+    I32AtomicSub16U                      = 0x28,
+    I64AtomicSub8U                       = 0x29,
+    I64AtomicSub16U                      = 0x2a,
+    I64AtomicSub32U                      = 0x2b,
+
+    I32AtomicAnd                         = 0x2c,
+    I64AtomicAnd                         = 0x2d,
+    I32AtomicAnd8U                       = 0x2e,
+    I32AtomicAnd16U                      = 0x2f,
+    I64AtomicAnd8U                       = 0x30,
+    I64AtomicAnd16U                      = 0x31,
+    I64AtomicAnd32U                      = 0x32,
+
+    I32AtomicOr                          = 0x33,
+    I64AtomicOr                          = 0x34,
+    I32AtomicOr8U                        = 0x35,
+    I32AtomicOr16U                       = 0x36,
+    I64AtomicOr8U                        = 0x37,
+    I64AtomicOr16U                       = 0x38,
+    I64AtomicOr32U                       = 0x39,
+
+    I32AtomicXor                         = 0x3a,
+    I64AtomicXor                         = 0x3b,
+    I32AtomicXor8U                       = 0x3c,
+    I32AtomicXor16U                      = 0x3d,
+    I64AtomicXor8U                       = 0x3e,
+    I64AtomicXor16U                      = 0x3f,
+    I64AtomicXor32U                      = 0x40,
+
+    I32AtomicXchg                        = 0x41,
+    I64AtomicXchg                        = 0x42,
+    I32AtomicXchg8U                      = 0x43,
+    I32AtomicXchg16U                     = 0x44,
+    I64AtomicXchg8U                      = 0x45,
+    I64AtomicXchg16U                     = 0x46,
+    I64AtomicXchg32U                     = 0x47,
+
+    // CompareExchange
+    I32AtomicCmpXchg                     = 0x48,
+    I64AtomicCmpXchg                     = 0x49,
+    I32AtomicCmpXchg8U                   = 0x4a,
+    I32AtomicCmpXchg16U                  = 0x4b,
+    I64AtomicCmpXchg8U                   = 0x4c,
+    I64AtomicCmpXchg16U                  = 0x4d,
+    I64AtomicCmpXchg32U                  = 0x4e,
+
+    Limit
+};
+
+// Opcodes from Bulk Memory Operations proposal as at 2 Feb 2018.  Note,
+// the opcodes are not actually assigned in that proposal.  This is just
+// an interim assignment.
+enum class CopyOrFillOp
+{
+    Copy                                 = 0x01,
+    Fill                                 = 0x02,
+
+    Limit
+};
 
 enum class MozOp
 {
@@ -468,23 +583,14 @@ struct OpBytes
     OpBytes() = default;
 };
 
-static const char NameSectionName[]      = "name";
+static const char NameSectionName[]             = "name";
 static const char SourceMappingURLSectionName[] = "sourceMappingURL";
 
 enum class NameType
 {
-    Module                               = 0,
-    Function                             = 1,
-    Local                                = 2
-};
-
-// Telemetry sample values for the JS_AOT_USAGE key, indicating whether asm.js
-// or WebAssembly is used.
-
-enum class Telemetry
-{
-    ASMJS = 0,
-    WASM = 1
+    Module   = 0,
+    Function = 1,
+    Local    = 2
 };
 
 // These limits are agreed upon with other engines for consistency.
@@ -503,13 +609,18 @@ static const unsigned MaxParams              =     1000;
 static const unsigned MaxBrTableElems        =  1000000;
 static const unsigned MaxMemoryInitialPages  = 16384;
 static const unsigned MaxMemoryMaximumPages  = 65536;
-static const unsigned MaxModuleBytes         = 1024 * 1024 * 1024;
-static const unsigned MaxFunctionBytes       =         128 * 1024;
+static const unsigned MaxCodeSectionBytes    = 1024 * 1024 * 1024;
+static const unsigned MaxModuleBytes         = MaxCodeSectionBytes;
+static const unsigned MaxFunctionBytes       =  7654321;
 
 // A magic value of the FramePointer to indicate after a return to the entry
 // stub that an exception has been caught and that we should throw.
 
 static const unsigned FailFP = 0xbad;
+
+// Asserted by Decoder::readVarU32.
+
+static const unsigned MaxVarU32DecodedBytes = 5;
 
 } // namespace wasm
 } // namespace js

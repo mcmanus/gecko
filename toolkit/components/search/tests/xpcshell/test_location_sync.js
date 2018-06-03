@@ -9,19 +9,11 @@ function getCountryCodePref() {
   }
 }
 
-function getIsUSPref() {
-  try {
-    return Services.prefs.getBoolPref("browser.search.isUS");
-  } catch (_) {
-    return undefined;
-  }
-}
-
 // A console listener so we can listen for a log message from nsSearchService.
 function promiseTimezoneMessage() {
   return new Promise(resolve => {
     let listener = {
-      QueryInterface: XPCOMUtils.generateQI([Ci.nsIConsoleListener]),
+      QueryInterface: ChromeUtils.generateQI([Ci.nsIConsoleListener]),
       observe(msg) {
         if (msg.message.startsWith("getIsUS() fell back to a timezone check with the result=")) {
           Services.console.unregisterListener(listener);
@@ -33,17 +25,10 @@ function promiseTimezoneMessage() {
   });
 }
 
-function run_test() {
-  installTestEngine();
-
-  run_next_test();
-}
-
 // Force a sync init and ensure the right thing happens (ie, that no xhr
 // request is made and we fall back to the timezone-only trick)
 add_task(async function test_simple() {
   deepEqual(getCountryCodePref(), undefined, "no countryCode pref");
-  deepEqual(getIsUSPref(), undefined, "no isUS pref");
 
   // Still set a geoip pref so we can (indirectly) check it wasn't used.
   Services.prefs.setCharPref("browser.search.geoip.url", 'data:application/json,{"country_code": "AU"}');

@@ -10,11 +10,11 @@
 #include "nsIContentPolicy.h"
 #include "nsIContentSecurityPolicy.h"
 #include "nsIDocShell.h"
-#include "nsIDOMDocument.h"
 #include "nsIHttpChannel.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsIInputStreamPump.h"
 #include "nsIIOService.h"
+#include "nsIOService.h"
 #include "nsIProtocolHandler.h"
 #include "nsIScriptError.h"
 #include "nsIScriptSecurityManager.h"
@@ -29,6 +29,7 @@
 #include "nsContentPolicyUtils.h"
 #include "nsContentUtils.h"
 #include "nsDocShellCID.h"
+#include "nsHostObjectProtocolHandler.h"
 #include "nsISupportsPrimitives.h"
 #include "nsNetUtil.h"
 #include "nsIPipe.h"
@@ -50,16 +51,20 @@
 #include "mozilla/dom/cache/Cache.h"
 #include "mozilla/dom/cache/CacheStorage.h"
 #include "mozilla/dom/ChannelInfo.h"
+#include "mozilla/dom/ClientChannelHelper.h"
+#include "mozilla/dom/ClientInfo.h"
 #include "mozilla/dom/Exceptions.h"
 #include "mozilla/dom/InternalResponse.h"
 #include "mozilla/dom/nsCSPService.h"
 #include "mozilla/dom/nsCSPUtils.h"
+#include "mozilla/dom/PerformanceStorage.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/PromiseNativeHandler.h"
 #include "mozilla/dom/Response.h"
 #include "mozilla/dom/ScriptLoader.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/SRILogHelper.h"
+#include "mozilla/dom/ServiceWorkerBinding.h"
 #include "mozilla/UniquePtr.h"
 #include "Principal.h"
 #include "WorkerHolder.h"
@@ -69,13 +74,12 @@
 
 #define MAX_CONCURRENT_SCRIPTS 1000
 
-USING_WORKERS_NAMESPACE
-
-using namespace mozilla;
-using namespace mozilla::dom;
 using mozilla::dom::cache::Cache;
 using mozilla::dom::cache::CacheStorage;
 using mozilla::ipc::PrincipalInfo;
+
+namespace mozilla {
+namespace dom {
 
 namespace {
 
@@ -107,10 +111,13 @@ nsresult
 ChannelFromScriptURL(nsIPrincipal* principal,
                      nsIURI* baseURI,
                      nsIDocument* parentDoc,
+                     WorkerPrivate* aWorkerPrivate,
                      nsILoadGroup* loadGroup,
                      nsIIOService* ios,
                      nsIScriptSecurityManager* secMan,
                      const nsAString& aScriptURL,
+                     const Maybe<ClientInfo>& aClientInfo,
+                     const Maybe<ServiceWorkerDescriptor>& aController,
                      bool aIsMainScript,
                      WorkerScriptType aWorkerScriptType,
                      nsContentPolicyType aMainScriptContentPolicyType,
@@ -147,6 +154,18 @@ ChannelFromScriptURL(nsIPrincipal* principal,
   uint32_t secFlags = aIsMainScript ? nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED
                                     : nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_INHERITS;
 
+  bool inheritAttrs = nsContentUtils::ChannelShouldInheritPrincipal(
+    principal, uri, true /* aInheritForAboutBlank */, false /* aForceInherit */);
+
+  bool isData = false;
+  rv = uri->SchemeIs("data", &isData);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  bool isURIUniqueOrigin = net::nsIOService::IsDataURIUniqueOpaqueOrigin() && isData;
+  if (inheritAttrs && !isURIUniqueOrigin) {
+    secFlags |= nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL;
+  }
+
   if (aWorkerScriptType == DebuggerScript) {
     // A DebuggerScript needs to be a local resource like chrome: or resource:
     bool isUIResource = false;
@@ -165,14 +184,24 @@ ChannelFromScriptURL(nsIPrincipal* principal,
 
   // Note: this is for backwards compatibility and goes against spec.
   // We should find a better solution.
-  bool isData = false;
-  if (aIsMainScript && NS_SUCCEEDED(uri->SchemeIs("data", &isData)) && isData) {
+  if (aIsMainScript && isData) {
     secFlags = nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL;
   }
 
   nsContentPolicyType contentPolicyType =
     aIsMainScript ? aMainScriptContentPolicyType
                   : nsIContentPolicy::TYPE_INTERNAL_WORKER_IMPORT_SCRIPTS;
+
+  // The main service worker script should never be loaded over the network
+  // in this path.  It should always be offlined by ServiceWorkerScriptCache.
+  // We assert here since this error should also be caught by the runtime
+  // check in CacheScriptLoader.
+  //
+  // Note, if we ever allow service worker scripts to be loaded from network
+  // here we need to configure the channel properly.  For example, it must
+  // not allow redirects.
+  MOZ_DIAGNOSTIC_ASSERT(contentPolicyType !=
+                        nsIContentPolicy::TYPE_INTERNAL_SERVICE_WORKER);
 
   nsCOMPtr<nsIChannel> channel;
   // If we have the document, use it. Unfortunately, for dedicated workers
@@ -185,6 +214,7 @@ ChannelFromScriptURL(nsIPrincipal* principal,
                        parentDoc,
                        secFlags,
                        contentPolicyType,
+                       nullptr, // aPerformanceStorage
                        loadGroup,
                        nullptr, // aCallbacks
                        aLoadFlags,
@@ -195,15 +225,36 @@ ChannelFromScriptURL(nsIPrincipal* principal,
     MOZ_ASSERT(loadGroup);
     MOZ_ASSERT(NS_LoadGroupMatchesPrincipal(loadGroup, principal));
 
-    rv = NS_NewChannel(getter_AddRefs(channel),
-                       uri,
-                       principal,
-                       secFlags,
-                       contentPolicyType,
-                       loadGroup,
-                       nullptr, // aCallbacks
-                       aLoadFlags,
-                       ios);
+    RefPtr<PerformanceStorage> performanceStorage;
+    if (aWorkerPrivate && !aIsMainScript) {
+      performanceStorage = aWorkerPrivate->GetPerformanceStorage();
+    }
+
+    if (aClientInfo.isSome()) {
+      rv = NS_NewChannel(getter_AddRefs(channel),
+                         uri,
+                         principal,
+                         aClientInfo.ref(),
+                         aController,
+                         secFlags,
+                         contentPolicyType,
+                         performanceStorage,
+                         loadGroup,
+                         nullptr, // aCallbacks
+                         aLoadFlags,
+                         ios);
+    } else {
+      rv = NS_NewChannel(getter_AddRefs(channel),
+                         uri,
+                         principal,
+                         secFlags,
+                         contentPolicyType,
+                         performanceStorage,
+                         loadGroup,
+                         nullptr, // aCallbacks
+                         aLoadFlags,
+                         ios);
+    }
   }
 
   NS_ENSURE_SUCCESS(rv, rv);
@@ -259,6 +310,7 @@ struct ScriptLoadInfo
   nsCOMPtr<nsIInputStream> mCacheReadStream;
 
   nsCOMPtr<nsIChannel> mChannel;
+  Maybe<ClientInfo> mReservedClientInfo;
   char16_t* mScriptTextBuf;
   size_t mScriptTextLength;
 
@@ -435,6 +487,7 @@ public:
     , mRunnable(aRunnable)
     , mIsWorkerScript(aIsWorkerScript)
     , mFailed(false)
+    , mState(aWorkerPrivate->GetServiceWorkerDescriptor().State())
   {
     MOZ_ASSERT(aWorkerPrivate);
     MOZ_ASSERT(aWorkerPrivate->IsServiceWorker());
@@ -467,6 +520,7 @@ private:
   RefPtr<ScriptLoaderRunnable> mRunnable;
   bool mIsWorkerScript;
   bool mFailed;
+  const ServiceWorkerState mState;
   nsCOMPtr<nsIInputStreamPump> mPump;
   nsCOMPtr<nsIURI> mBaseURI;
   mozilla::dom::ChannelInfo mChannelInfo;
@@ -567,6 +621,8 @@ class ScriptLoaderRunnable final : public nsIRunnable,
   nsCOMPtr<nsIEventTarget> mSyncLoopTarget;
   nsTArray<ScriptLoadInfo> mLoadInfos;
   RefPtr<CacheCreator> mCacheCreator;
+  Maybe<ClientInfo> mClientInfo;
+  Maybe<ServiceWorkerDescriptor> mController;
   bool mIsMainScript;
   WorkerScriptType mWorkerScriptType;
   bool mCanceled;
@@ -579,10 +635,13 @@ public:
   ScriptLoaderRunnable(WorkerPrivate* aWorkerPrivate,
                        nsIEventTarget* aSyncLoopTarget,
                        nsTArray<ScriptLoadInfo>& aLoadInfos,
+                       const Maybe<ClientInfo>& aClientInfo,
+                       const Maybe<ServiceWorkerDescriptor>& aController,
                        bool aIsMainScript,
                        WorkerScriptType aWorkerScriptType,
                        ErrorResult& aRv)
   : mWorkerPrivate(aWorkerPrivate), mSyncLoopTarget(aSyncLoopTarget),
+    mClientInfo(aClientInfo), mController(aController),
     mIsMainScript(aIsMainScript), mWorkerScriptType(aWorkerScriptType),
     mCanceled(false), mCanceledMainThread(false), mRv(aRv)
   {
@@ -719,7 +778,7 @@ private:
       return rv;
     }
 
-    ir->SetPrincipalInfo(Move(principalInfo));
+    ir->SetPrincipalInfo(std::move(principalInfo));
     ir->Headers()->FillResponseHeaders(loadInfo.mChannel);
 
     RefPtr<mozilla::dom::Response> response =
@@ -756,7 +815,7 @@ private:
   }
 
   bool
-  Notify(Status aStatus)
+  Notify(WorkerStatus aStatus)
   {
     mWorkerPrivate->AssertIsOnWorkerThread();
 
@@ -966,8 +1025,11 @@ private:
       // Only top level workers' main script use the document charset for the
       // script uri encoding. Otherwise, default encoding (UTF-8) is applied.
       bool useDefaultEncoding = !(!parentWorker && IsMainWorkerScript());
-      rv = ChannelFromScriptURL(principal, baseURI, parentDoc, loadGroup, ios,
-                                secMan, loadInfo.mURL, IsMainWorkerScript(),
+      rv = ChannelFromScriptURL(principal, baseURI, parentDoc, mWorkerPrivate,
+                                loadGroup, ios,
+                                secMan, loadInfo.mURL,
+                                mClientInfo, mController,
+                                IsMainWorkerScript(),
                                 mWorkerScriptType,
                                 mWorkerPrivate->ContentPolicyType(), loadFlags,
                                 useDefaultEncoding,
@@ -987,6 +1049,17 @@ private:
     rv = NS_NewStreamLoader(getter_AddRefs(loader), listener);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
+    }
+
+    if (IsMainWorkerScript()) {
+      MOZ_DIAGNOSTIC_ASSERT(loadInfo.mReservedClientInfo.isSome());
+      rv = AddClientChannelHelper(channel,
+                                  std::move(loadInfo.mReservedClientInfo),
+                                  Maybe<ClientInfo>(),
+                                  mWorkerPrivate->HybridEventTarget());
+      if (NS_WARN_IF(NS_FAILED(rv))) {
+        return rv;
+      }
     }
 
     if (loadInfo.mCacheStatus != ScriptLoadInfo::ToBeCached) {
@@ -1067,6 +1140,20 @@ private:
       MOZ_ASSERT(parentWorker, "Must have a parent!");
       principal = parentWorker->GetPrincipal();
     }
+
+#ifdef DEBUG
+    if (IsMainWorkerScript()) {
+      nsCOMPtr<nsIPrincipal> loadingPrincipal =
+        mWorkerPrivate->GetLoadingPrincipal();
+      // if we are not in a ServiceWorker, and the principal is not null, then the
+      // loading principal must subsume the worker principal if it is not a
+      // nullPrincipal (sandbox).
+      MOZ_ASSERT(!loadingPrincipal ||
+                 loadingPrincipal->GetIsNullPrincipal() ||
+                 principal->GetIsNullPrincipal() ||
+                 loadingPrincipal->Subsumes(principal));
+    }
+#endif
 
     // We don't mute the main worker script becase we've already done
     // same-origin checks on them so we should be able to see their errors.
@@ -1170,9 +1257,12 @@ private:
       // Store the channel info if needed.
       mWorkerPrivate->InitChannelInfo(channel);
 
-      // Our final channel principal should match the original principal
-      // in terms of the origin.
-      MOZ_DIAGNOSTIC_ASSERT(mWorkerPrivate->FinalChannelPrincipalIsValid(channel));
+      // Our final channel principal should match the loading principal
+      // in terms of the origin.  This used to be an assert, but it seems
+      // there are some rare cases where this check can fail in practice.
+      // Perhaps some browser script setting nsIChannel.owner, etc.
+      NS_ENSURE_TRUE(mWorkerPrivate->FinalChannelPrincipalIsValid(channel),
+                     NS_ERROR_FAILURE);
 
       // However, we must still override the principal since the nsIPrincipal
       // URL may be different due to same-origin redirects.  Unfortunately this
@@ -1201,6 +1291,22 @@ private:
       if (parent) {
         // XHR Params Allowed
         mWorkerPrivate->SetXHRParamsAllowed(parent->XHRParamsAllowed());
+      }
+
+      if (chanLoadInfo) {
+        mController = chanLoadInfo->GetController();
+      }
+
+      // If we are loading a blob URL we must inherit the controller
+      // from the parent.  This is a bit odd as the blob URL may have
+      // been created in a different context with a different controller.
+      // For now, though, this is what the spec says.  See:
+      //
+      // https://github.com/w3c/ServiceWorker/issues/1261
+      //
+      if (IsBlobURI(mWorkerPrivate->GetBaseURI())) {
+        MOZ_DIAGNOSTIC_ASSERT(mController.isNothing());
+        mController = mWorkerPrivate->GetParentController();
       }
     }
 
@@ -1371,13 +1477,14 @@ class MOZ_STACK_CLASS ScriptLoaderHolder final : public WorkerHolder
 
 public:
   explicit ScriptLoaderHolder(ScriptLoaderRunnable* aRunnable)
-    : mRunnable(aRunnable)
+    : WorkerHolder("ScriptLoaderHolder")
+    , mRunnable(aRunnable)
   {
     MOZ_ASSERT(aRunnable);
   }
 
   virtual bool
-  Notify(Status aStatus) override
+  Notify(WorkerStatus aStatus) override
   {
     mRunnable->Notify(aStatus);
     return true;
@@ -1565,8 +1672,7 @@ CacheCreator::DeleteCache()
   if (mCacheStorage) {
     // It's safe to do this while Cache::Match() and Cache::Put() calls are
     // running.
-    IgnoredErrorResult rv;
-    RefPtr<Promise> promise = mCacheStorage->Delete(mCacheName, rv);
+    RefPtr<Promise> promise = mCacheStorage->Delete(mCacheName, IgnoreErrors());
 
     // We don't care to know the result of the promise object.
   }
@@ -1676,7 +1782,20 @@ CacheScriptLoader::ResolvedCallback(JSContext* aCx,
 
   nsresult rv;
 
+  // The ServiceWorkerScriptCache will store data for any scripts it
+  // it knows about.  This is always at least the top level script.
+  // Depending on if a previous version of the service worker has
+  // been installed or not it may also know about importScripts().  We
+  // must handle loading and offlining new importScripts() here, however.
   if (aValue.isUndefined()) {
+    // If this is the main script or we're not loading a new service worker
+    // then this is an error.  The storage was probably wiped without
+    // removing the service worker registration.
+    if (NS_WARN_IF(mIsWorkerScript || mState != ServiceWorkerState::Parsed)) {
+      Fail(NS_ERROR_DOM_INVALID_STATE_ERR);
+      return;
+    }
+
     mLoadInfo.mCacheStatus = ScriptLoadInfo::ToBeCached;
     rv = mRunnable->LoadScript(mIndex);
     if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -1697,13 +1816,12 @@ CacheScriptLoader::ResolvedCallback(JSContext* aCx,
 
   InternalHeaders* headers = response->GetInternalHeaders();
 
-  IgnoredErrorResult ignored;
   headers->Get(NS_LITERAL_CSTRING("content-security-policy"),
-               mCSPHeaderValue, ignored);
+               mCSPHeaderValue, IgnoreErrors());
   headers->Get(NS_LITERAL_CSTRING("content-security-policy-report-only"),
-               mCSPReportOnlyHeaderValue, ignored);
+               mCSPReportOnlyHeaderValue, IgnoreErrors());
   headers->Get(NS_LITERAL_CSTRING("referrer-policy"),
-               mReferrerPolicyHeaderValue, ignored);
+               mReferrerPolicyHeaderValue, IgnoreErrors());
 
   nsCOMPtr<nsIInputStream> inputStream;
   response->GetBody(getter_AddRefs(inputStream));
@@ -1716,7 +1834,7 @@ CacheScriptLoader::ResolvedCallback(JSContext* aCx,
   if (!inputStream) {
     mLoadInfo.mCacheStatus = ScriptLoadInfo::Cached;
     mRunnable->DataReceivedFromCache(mIndex, (uint8_t*)"", 0, mChannelInfo,
-                                     Move(mPrincipalInfo), mCSPHeaderValue,
+                                     std::move(mPrincipalInfo), mCSPHeaderValue,
                                      mCSPReportOnlyHeaderValue,
                                      mReferrerPolicyHeaderValue);
     return;
@@ -1724,7 +1842,7 @@ CacheScriptLoader::ResolvedCallback(JSContext* aCx,
 
   MOZ_ASSERT(!mPump);
   rv = NS_NewInputStreamPump(getter_AddRefs(mPump),
-                             inputStream,
+                             inputStream.forget(),
                              0, /* default segsize */
                              0, /* default segcount */
                              false, /* default closeWhenDone */
@@ -1783,7 +1901,7 @@ CacheScriptLoader::OnStreamComplete(nsIStreamLoader* aLoader, nsISupports* aCont
 
   MOZ_ASSERT(mPrincipalInfo);
   mRunnable->DataReceivedFromCache(mIndex, aString, aStringLen, mChannelInfo,
-                                   Move(mPrincipalInfo), mCSPHeaderValue,
+                                   std::move(mPrincipalInfo), mCSPHeaderValue,
                                    mCSPReportOnlyHeaderValue,
                                    mReferrerPolicyHeaderValue);
   return NS_OK;
@@ -1792,6 +1910,7 @@ CacheScriptLoader::OnStreamComplete(nsIStreamLoader* aLoader, nsISupports* aCont
 class ChannelGetterRunnable final : public WorkerMainThreadRunnable
 {
   const nsAString& mScriptURL;
+  const ClientInfo mClientInfo;
   WorkerLoadInfo& mLoadInfo;
   nsresult mResult;
 
@@ -1802,6 +1921,9 @@ public:
     : WorkerMainThreadRunnable(aParentWorker,
                                NS_LITERAL_CSTRING("ScriptLoader :: ChannelGetter"))
     , mScriptURL(aScriptURL)
+    // ClientInfo should always be present since this should not be called
+    // if parent's status is greater than Running.
+    , mClientInfo(aParentWorker->GetClientInfo().ref())
     , mLoadInfo(aLoadInfo)
     , mResult(NS_ERROR_FAILURE)
   {
@@ -1818,8 +1940,10 @@ public:
     // before doing anything else.  Normally we do this in the WorkerPrivate
     // Constructor, but we can't do so off the main thread when creating
     // a nested worker.  So do it here instead.
-    mLoadInfo.mPrincipal = mWorkerPrivate->GetPrincipal();
-    MOZ_ASSERT(mLoadInfo.mPrincipal);
+    mLoadInfo.mLoadingPrincipal = mWorkerPrivate->GetPrincipal();
+    MOZ_DIAGNOSTIC_ASSERT(mLoadInfo.mLoadingPrincipal);
+
+    mLoadInfo.mPrincipal = mLoadInfo.mLoadingPrincipal;
 
     // Figure out our base URI.
     nsCOMPtr<nsIURI> baseURI = mWorkerPrivate->GetBaseURI();
@@ -1830,17 +1954,21 @@ public:
 
     mLoadInfo.mLoadGroup = mWorkerPrivate->GetLoadGroup();
 
+    Maybe<ClientInfo> clientInfo;
+    clientInfo.emplace(mClientInfo);
+
     nsCOMPtr<nsIChannel> channel;
-    mResult =
-      scriptloader::ChannelFromScriptURLMainThread(mLoadInfo.mPrincipal,
-                                                   baseURI, parentDoc,
-                                                   mLoadInfo.mLoadGroup,
-                                                   mScriptURL,
-                                                   // Nested workers are always dedicated.
-                                                   nsIContentPolicy::TYPE_INTERNAL_WORKER,
-                                                   // Nested workers use default uri encoding.
-                                                   true,
-                                                   getter_AddRefs(channel));
+    mResult = workerinternals::
+      ChannelFromScriptURLMainThread(mLoadInfo.mLoadingPrincipal,
+                                     baseURI, parentDoc,
+                                     mLoadInfo.mLoadGroup,
+                                     mScriptURL,
+                                     clientInfo,
+                                     // Nested workers are always dedicated.
+                                     nsIContentPolicy::TYPE_INTERNAL_WORKER,
+                                     // Nested workers use default uri encoding.
+                                     true,
+                                     getter_AddRefs(channel));
     NS_ENSURE_SUCCESS(mResult, true);
 
     mResult = mLoadInfo.SetPrincipalFromChannel(channel);
@@ -1957,13 +2085,18 @@ ScriptExecutorRunnable::WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
     MOZ_ASSERT(!mScriptLoader.mRv.Failed(), "Who failed it and why?");
     mScriptLoader.mRv.MightThrowJSException();
     if (NS_FAILED(loadInfo.mLoadResult)) {
-      scriptloader::ReportLoadError(mScriptLoader.mRv,
-                                    loadInfo.mLoadResult, loadInfo.mURL);
-      // Top level scripts only!
-      if (mIsWorkerScript) {
-        aWorkerPrivate->MaybeDispatchLoadFailedRunnable();
-      }
+      workerinternals::ReportLoadError(mScriptLoader.mRv,
+                                       loadInfo.mLoadResult, loadInfo.mURL);
       return true;
+    }
+
+    // If this is a top level script that succeeded, then mark the
+    // Client execution ready and possible controlled by a service worker.
+    if (mIsWorkerScript) {
+      if (mScriptLoader.mController.isSome()) {
+        aWorkerPrivate->Control(mScriptLoader.mController.ref());
+      }
+      aWorkerPrivate->ExecutionReady();
     }
 
     NS_ConvertUTF16toUTF8 filename(loadInfo.mURL);
@@ -1971,10 +2104,6 @@ ScriptExecutorRunnable::WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
     JS::CompileOptions options(aCx);
     options.setFileAndLine(filename.get(), 1)
            .setNoScriptRval(true);
-
-    if (mScriptLoader.mWorkerScriptType == DebuggerScript) {
-      options.setVersion(JSVERSION_DEFAULT);
-    }
 
     MOZ_ASSERT(loadInfo.mMutedErrorFlag.isSome());
     options.setMutedErrors(loadInfo.mMutedErrorFlag.valueOr(true));
@@ -2127,8 +2256,16 @@ LoadAllScripts(WorkerPrivate* aWorkerPrivate,
     return;
   }
 
+  Maybe<ClientInfo> clientInfo;
+  Maybe<ServiceWorkerDescriptor> controller;
+  if (!aIsMainScript) {
+    clientInfo = aWorkerPrivate->GetClientInfo();
+    controller = aWorkerPrivate->GetController();
+  }
+
   RefPtr<ScriptLoaderRunnable> loader =
     new ScriptLoaderRunnable(aWorkerPrivate, syncLoopTarget, aLoadInfos,
+                             clientInfo, controller,
                              aIsMainScript, aWorkerScriptType, aRv);
 
   NS_ASSERTION(aLoadInfos.IsEmpty(), "Should have swapped!");
@@ -2151,9 +2288,7 @@ LoadAllScripts(WorkerPrivate* aWorkerPrivate,
 
 } /* anonymous namespace */
 
-BEGIN_WORKERS_NAMESPACE
-
-namespace scriptloader {
+namespace workerinternals {
 
 nsresult
 ChannelFromScriptURLMainThread(nsIPrincipal* aPrincipal,
@@ -2161,6 +2296,7 @@ ChannelFromScriptURLMainThread(nsIPrincipal* aPrincipal,
                                nsIDocument* aParentDoc,
                                nsILoadGroup* aLoadGroup,
                                const nsAString& aScriptURL,
+                               const Maybe<ClientInfo>& aClientInfo,
                                nsContentPolicyType aMainScriptContentPolicyType,
                                bool aDefaultURIEncoding,
                                nsIChannel** aChannel)
@@ -2172,9 +2308,10 @@ ChannelFromScriptURLMainThread(nsIPrincipal* aPrincipal,
   nsIScriptSecurityManager* secMan = nsContentUtils::GetSecurityManager();
   NS_ASSERTION(secMan, "This should never be null!");
 
-  return ChannelFromScriptURL(aPrincipal, aBaseURI, aParentDoc, aLoadGroup,
-                              ios, secMan, aScriptURL, true, WorkerScript,
-                              aMainScriptContentPolicyType,
+  return ChannelFromScriptURL(aPrincipal, aBaseURI, aParentDoc, nullptr,
+                              aLoadGroup, ios, secMan, aScriptURL, aClientInfo,
+                              Maybe<ServiceWorkerDescriptor>(),
+                              true, WorkerScript, aMainScriptContentPolicyType,
                               nsIRequest::LOAD_NORMAL, aDefaultURIEncoding,
                               aChannel);
 }
@@ -2264,6 +2401,10 @@ LoadMainScript(WorkerPrivate* aWorkerPrivate,
   info->mURL = aScriptURL;
   info->mLoadFlags = aWorkerPrivate->GetLoadFlags();
 
+  // We are loading the main script, so the worker's Client must be
+  // reserved.
+  info->mReservedClientInfo = aWorkerPrivate->GetClientInfo();
+
   LoadAllScripts(aWorkerPrivate, loadInfos, true, aWorkerScriptType, aRv);
 }
 
@@ -2294,6 +2435,7 @@ Load(WorkerPrivate* aWorkerPrivate,
   LoadAllScripts(aWorkerPrivate, loadInfos, false, aWorkerScriptType, aRv);
 }
 
-} // namespace scriptloader
+} // namespace workerinternals
 
-END_WORKERS_NAMESPACE
+} // dom namespace
+} // mozilla namespace

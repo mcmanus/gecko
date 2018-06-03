@@ -7,10 +7,9 @@
 "use strict";
 
 const {Cc, Ci} = require("chrome");
+const Services = require("Services");
 const clipboardHelper = Cc["@mozilla.org/widget/clipboardhelper;1"]
       .getService(Ci.nsIClipboardHelper);
-const clipboardService = Cc["@mozilla.org/widget/clipboard;1"]
-      .getService(Ci.nsIClipboard);
 
 function copyString(string) {
   clipboardHelper.copyString(string);
@@ -22,9 +21,9 @@ function copyString(string) {
  * @return {String} Clipboard text content, null if no text clipboard data is available.
  */
 function getText() {
-  let flavor = "text/unicode";
+  const flavor = "text/unicode";
 
-  let xferable = Cc["@mozilla.org/widget/transferable;1"]
+  const xferable = Cc["@mozilla.org/widget/transferable;1"]
                  .createInstance(Ci.nsITransferable);
 
   if (!xferable) {
@@ -36,12 +35,12 @@ function getText() {
   xferable.addDataFlavor(flavor);
 
   // Get the data into our transferable.
-  clipboardService.getData(
+  Services.clipboard.getData(
     xferable,
-    clipboardService.kGlobalClipboard
+    Services.clipboard.kGlobalClipboard
   );
 
-  let data = {};
+  const data = {};
   try {
     xferable.getTransferData(flavor, data, {});
   } catch (e) {

@@ -19,7 +19,7 @@
 #include "jsapi.h"
 #include "jsfriendapi.h"
 #include "xpcprivate.h" // For xpc::OptionsBase
-#include "jswrapper.h"
+#include "js/Wrapper.h"
 
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/ToJSValue.h"
@@ -30,7 +30,7 @@
 #include "mozilla/scache/StartupCacheUtils.h"
 #include "mozilla/Unused.h"
 #include "nsContentUtils.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 #include "nsCycleCollectionParticipant.h"
 #include "GeckoProfiler.h"
 
@@ -52,7 +52,7 @@ public:
         , wantReturnValue(false)
     { }
 
-    virtual bool Parse() {
+    virtual bool Parse() override {
       return ParseObject("target", &target) &&
              ParseString("charset", charset) &&
              ParseBoolean("ignoreCache", &ignoreCache) &&
@@ -94,13 +94,11 @@ NS_IMPL_ISUPPORTS(mozJSSubScriptLoader, mozIJSSubScriptLoader)
 static void
 SubscriptCachePath(JSContext* cx, nsIURI* uri, JS::HandleObject targetObj, nsACString& cachePath)
 {
-    // StartupCache must distinguish between non-syntactic vs global, as well as
-    // javascript version when computing the cache key.
+    // StartupCache must distinguish between non-syntactic vs global when
+    // computing the cache key.
     bool hasNonSyntacticScope = !JS_IsGlobalObject(targetObj);
-    JSVersion version = JS_GetVersion(cx);
     cachePath.Assign(hasNonSyntacticScope ? JSSUB_CACHE_PREFIX("non-syntactic")
                                           : JSSUB_CACHE_PREFIX("global"));
-    cachePath.AppendPrintf("/%d", version);
     PathifyURI(uri, cachePath);
 }
 
@@ -147,7 +145,6 @@ PrepareScript(nsIURI* uri,
 {
     JS::CompileOptions options(cx);
     options.setFileAndLine(uriStr, 1)
-           .setVersion(JSVERSION_DEFAULT)
            .setNoScriptRval(!wantReturnValue);
     if (!charset.IsVoid()) {
         char16_t* scriptBuf = nullptr;
@@ -232,7 +229,7 @@ EvalScript(JSContext* cx,
         }
     }
 
-    JSAutoCompartment rac(cx, targetObj);
+    JSAutoRealm rar(cx, targetObj);
     if (!JS_WrapValue(cx, retval)) {
         return false;
     }
@@ -267,7 +264,7 @@ EvalScript(JSContext* cx,
         }
 
         if (startupCache) {
-            JSAutoCompartment ac(cx, script);
+            JSAutoRealm ar(cx, script);
             WriteCachedScript(StartupCache::GetSingleton(), cachePath, cx, script);
         }
     }
@@ -470,6 +467,7 @@ mozJSSubScriptLoader::ReadScriptAsync(nsIURI* uri,
                        nsContentUtils::GetSystemPrincipal(),
                        nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                        nsIContentPolicy::TYPE_OTHER,
+                       nullptr,  // aPerformanceStorage
                        nullptr,  // aLoadGroup
                        nullptr,  // aCallbacks
                        nsIRequest::LOAD_NORMAL,
@@ -520,6 +518,7 @@ mozJSSubScriptLoader::ReadScript(nsIURI* uri,
                        nsContentUtils::GetSystemPrincipal(),
                        nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                        nsIContentPolicy::TYPE_OTHER,
+                       nullptr,  // PerformanceStorage
                        nullptr,  // aLoadGroup
                        nullptr,  // aCallbacks
                        nsIRequest::LOAD_NORMAL,
@@ -633,7 +632,7 @@ mozJSSubScriptLoader::DoLoadSubScriptWithOptions(const nsAString& url,
         return NS_ERROR_FAILURE;
     }
 
-    JSAutoCompartment ac(cx, targetObj);
+    JSAutoRealm ar(cx, targetObj);
 
     nsCOMPtr<nsIIOService> serv = do_GetService(NS_IOSERVICE_CONTRACTID);
     if (!serv) {
@@ -641,10 +640,9 @@ mozJSSubScriptLoader::DoLoadSubScriptWithOptions(const nsAString& url,
         return NS_OK;
     }
 
-    const nsCString& asciiUrl = NS_LossyConvertUTF16toASCII(url);
-    AUTO_PROFILER_LABEL_DYNAMIC(
-        "mozJSSubScriptLoader::DoLoadSubScriptWithOptions", OTHER,
-        asciiUrl.get());
+    NS_LossyConvertUTF16toASCII asciiUrl(url);
+    AUTO_PROFILER_LABEL_DYNAMIC_NSCSTRING(
+        "mozJSSubScriptLoader::DoLoadSubScriptWithOptions", OTHER, asciiUrl);
 
     // Make sure to explicitly create the URI, since we'll need the
     // canonicalized spec.

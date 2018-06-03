@@ -6,7 +6,7 @@
 
 this.EXPORTED_SYMBOLS = ["Census"];
 
-this.Census = (function () {
+this.Census = (function() {
   const Census = {};
 
   function dumpn(msg) {
@@ -37,7 +37,7 @@ this.Census = (function () {
   function walk(subject, name, walker, count) {
     if (typeof subject === "object") {
       dumpn(name);
-      for (let prop in subject) {
+      for (const prop in subject) {
         count = walk(subject[prop],
                      name + "[" + uneval(prop) + "]",
                      walker.enter(prop),
@@ -95,7 +95,7 @@ this.Census = (function () {
   function makeBasisChecker({compare, missing, extra}) {
     return function makeWalker(basis) {
       if (typeof basis === "object") {
-        let unvisited = new Set(Object.getOwnPropertyNames(basis));
+        const unvisited = new Set(Object.getOwnPropertyNames(basis));
         return {
           enter: prop => {
             unvisited.delete(prop);
@@ -164,7 +164,7 @@ this.Census = (function () {
 
   // Return a walker that checks that the subject census has within |fudge|
   // items of each category of the count in |basis|.
-  Census.assertAllWithin = function (fudge, basis) {
+  Census.assertAllWithin = function(fudge, basis) {
     return makeBasisChecker({
       compare: (subject, base) => ok(Math.abs(subject - base) <= fudge),
       missing: missingProp,

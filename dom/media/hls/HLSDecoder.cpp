@@ -15,10 +15,11 @@
 #include "MediaContainerType.h"
 #include "MediaDecoderStateMachine.h"
 #include "MediaFormatReader.h"
-#include "MediaPrefs.h"
 #include "MediaShutdownManager.h"
 #include "nsContentUtils.h"
 #include "nsNetUtil.h"
+#include "nsThreadUtils.h"
+#include "mozilla/StaticPrefs.h"
 
 using namespace mozilla::java;
 
@@ -33,49 +34,72 @@ public:
   using NativeCallbacks::DisposeNative;
   using NativeCallbacks::AttachNative;
 
-  HLSResourceCallbacksSupport(HLSDecoder* aResource);
+  explicit HLSResourceCallbacksSupport(HLSDecoder* aResource);
   void Detach();
   void OnDataArrived();
   void OnError(int aErrorCode);
 
 private:
   ~HLSResourceCallbacksSupport() {}
+  Mutex mMutex;
   HLSDecoder* mDecoder;
 };
 
 HLSResourceCallbacksSupport::HLSResourceCallbacksSupport(HLSDecoder* aDecoder)
+  : mMutex("HLSResourceCallbacksSupport")
+  , mDecoder(aDecoder)
 {
-  MOZ_ASSERT(aDecoder);
-  mDecoder = aDecoder;
+  MOZ_ASSERT(mDecoder);
 }
 
 void
 HLSResourceCallbacksSupport::Detach()
 {
-  MOZ_ASSERT(NS_IsMainThread());
+  MutexAutoLock lock(mMutex);
   mDecoder = nullptr;
 }
 
 void
 HLSResourceCallbacksSupport::OnDataArrived()
 {
-  MOZ_ASSERT(NS_IsMainThread());
-  if (mDecoder) {
-    HLS_DEBUG("HLSResourceCallbacksSupport", "OnDataArrived");
-    mDecoder->NotifyDataArrived();
-  }
+  HLS_DEBUG("HLSResourceCallbacksSupport", "OnDataArrived.");
+  MutexAutoLock lock(mMutex);
+  if (!mDecoder) { return; }
+  RefPtr<HLSResourceCallbacksSupport> self = this;
+  NS_DispatchToMainThread(
+    NS_NewRunnableFunction(
+      "HLSResourceCallbacksSupport::OnDataArrived",
+      [self]() -> void {
+        MutexAutoLock lock(self->mMutex);
+        if (self->mDecoder) {
+          self->mDecoder->NotifyDataArrived();
+        }
+      }
+    )
+  );
 }
 
 void
 HLSResourceCallbacksSupport::OnError(int aErrorCode)
 {
-  MOZ_ASSERT(NS_IsMainThread());
-  if (mDecoder) {
-    HLS_DEBUG("HLSResourceCallbacksSupport", "onError(%d)", aErrorCode);
-    // Since HLS source should be from the Internet, we treat all resource errors
-    // from GeckoHlsPlayer as network errors.
-    mDecoder->NetworkError();
-  }
+  HLS_DEBUG("HLSResourceCallbacksSupport", "onError(%d)", aErrorCode);
+  MutexAutoLock lock(mMutex);
+  if (!mDecoder) { return; }
+  RefPtr<HLSResourceCallbacksSupport> self = this;
+  NS_DispatchToMainThread(
+    NS_NewRunnableFunction(
+      "HLSResourceCallbacksSupport::OnDataArrived",
+      [self]() -> void {
+        MutexAutoLock lock(self->mMutex);
+        if (self->mDecoder) {
+          // Since HLS source should be from the Internet, we treat all resource errors
+          // from GeckoHlsPlayer as network errors.
+          self->mDecoder->NetworkError(
+            MediaResult(NS_ERROR_FAILURE, "HLS error"));
+        }
+      }
+    )
+  );
 }
 
 HLSDecoder::HLSDecoder(MediaDecoderInit& aInit)
@@ -103,7 +127,7 @@ HLSDecoder::CreateStateMachine()
 bool
 HLSDecoder::IsEnabled()
 {
-  return MediaPrefs::HLSEnabled() && (jni::GetAPIVersion() >= 16);
+  return StaticPrefs::MediaHlsEnabled() && (jni::GetAPIVersion() >= 16);
 }
 
 bool
@@ -117,6 +141,7 @@ nsresult
 HLSDecoder::Load(nsIChannel* aChannel)
 {
   MOZ_ASSERT(NS_IsMainThread());
+  AbstractThread::AutoEnter context(AbstractMainThread());
 
   nsresult rv = NS_GetFinalChannelURI(aChannel, getter_AddRefs(mURI));
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -142,6 +167,8 @@ HLSDecoder::Load(nsIChannel* aChannel)
   SetStateMachine(CreateStateMachine());
   NS_ENSURE_TRUE(GetStateMachine(), NS_ERROR_FAILURE);
 
+  GetStateMachine()->DispatchIsLiveStream(false);
+
   return InitializeStateMachine();
 }
 
@@ -165,7 +192,7 @@ HLSDecoder::GetCurrentPrincipal()
   return principal.forget();
 }
 
-nsresult
+void
 HLSDecoder::Play()
 {
   MOZ_ASSERT(NS_IsMainThread());
@@ -205,7 +232,6 @@ HLSDecoder::Shutdown()
   HLS_DEBUG("HLSDecoder", "Shutdown");
   if (mCallbackSupport) {
     mCallbackSupport->Detach();
-    mCallbackSupport = nullptr;
   }
   if (mHLSResourceWrapper) {
     mHLSResourceWrapper->Destroy();
@@ -216,6 +242,16 @@ HLSDecoder::Shutdown()
     mJavaCallbacks = nullptr;
   }
   MediaDecoder::Shutdown();
+}
+
+void
+HLSDecoder::NotifyDataArrived()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_DIAGNOSTIC_ASSERT(!IsShutdown());
+  AbstractThread::AutoEnter context(AbstractMainThread());
+  NotifyReaderDataArrived();
+  GetOwner()->DownloadProgressed();
 }
 
 } // namespace mozilla

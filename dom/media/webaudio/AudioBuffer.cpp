@@ -171,7 +171,7 @@ AudioBuffer::AudioBuffer(nsPIDOMWindowInner* aWindow,
       aSampleRate > WebAudioUtils::MaxSampleRate ||
       aNumberOfChannels > WebAudioUtils::MaxChannelCount ||
       !aLength || aLength > INT32_MAX) {
-    aRv.Throw(NS_ERROR_DOM_INDEX_SIZE_ERR);
+    aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
     return;
   }
 
@@ -194,7 +194,7 @@ AudioBuffer::Constructor(const GlobalObject& aGlobal,
                          ErrorResult& aRv)
 {
   if (!aOptions.mNumberOfChannels) {
-    aRv.Throw(NS_ERROR_DOM_INDEX_SIZE_ERR);
+    aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
     return nullptr;
   }
 
@@ -222,7 +222,6 @@ AudioBuffer::SetSharedChannels(
     mSharedChannels.mChannelData[i] = buffer->GetData(i);
   }
   mSharedChannels.mBuffer = buffer.forget();
-  mSharedChannels.mVolume = 1.0f;
   mSharedChannels.mBufferFormat = AUDIO_FORMAT_FLOAT32;
 }
 
@@ -260,7 +259,7 @@ AudioBuffer::Create(nsPIDOMWindowInner* aWindow, float aSampleRate,
   if (rv.Failed()) {
     return nullptr;
   }
-  buffer->mSharedChannels = Move(aInitialContents);
+  buffer->mSharedChannels = std::move(aInitialContents);
 
   return buffer.forget();
 }
@@ -316,8 +315,7 @@ AudioBuffer::RestoreJSChannelData(JSContext* aJSContext)
     mJSChannels[i] = array;
   }
 
-  mSharedChannels.mBuffer = nullptr;
-  mSharedChannels.mChannelData.Clear();
+  mSharedChannels.SetNull(Length());
 
   return true;
 }
@@ -408,7 +406,7 @@ AudioBuffer::GetChannelData(JSContext* aJSContext, uint32_t aChannel,
                             ErrorResult& aRv)
 {
   if (aChannel >= NumberOfChannels()) {
-    aRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
+    aRv.Throw(NS_ERROR_DOM_INDEX_SIZE_ERR);
     return;
   }
 

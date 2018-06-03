@@ -4,19 +4,13 @@
 
 "use strict";
 
-var Cc = Components.classes;
-var Ci = Components.interfaces;
-var Cu = Components.utils;
+var EXPORTED_SYMBOLS = [ "ContentLinkHandler" ];
 
-this.EXPORTED_SYMBOLS = [ "ContentLinkHandler" ];
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "Feeds",
+ChromeUtils.defineModuleGetter(this, "Feeds",
   "resource:///modules/Feeds.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
-  "resource://gre/modules/BrowserUtils.jsm");
 
 const SIZES_TELEMETRY_ENUM = {
   NO_SIZES: 0,
@@ -27,6 +21,9 @@ const SIZES_TELEMETRY_ENUM = {
 
 const FAVICON_PARSING_TIMEOUT = 100;
 const FAVICON_RICH_ICON_MIN_WIDTH = 96;
+
+const TYPE_ICO = "image/x-icon";
+const TYPE_SVG = "image/svg+xml";
 
 /*
  * Create a nsITimer.
@@ -93,7 +90,7 @@ function getLinkIconURI(aLink) {
   let targetDoc = aLink.ownerDocument;
   let uri = Services.io.newURI(aLink.href, targetDoc.characterSet);
   try {
-    uri.userPass = "";
+    uri = uri.mutate().setUserPass("").finalize();
   } catch (e) {
     // some URIs are immutable
   }
@@ -119,6 +116,30 @@ function setIconForLink(aIconInfo, aChromeGlobal) {
     });
 }
 
+/**
+ * Guess a type for an icon based on its declared type or file extension.
+ */
+function guessType(icon) {
+  // No type with no icon
+  if (!icon) {
+    return "";
+  }
+
+  // Use the file extension to guess at a type we're interested in
+  if (!icon.type) {
+    let extension = icon.iconUri.filePath.split(".").pop();
+    switch (extension) {
+      case "ico":
+        return TYPE_ICO;
+      case "svg":
+        return TYPE_SVG;
+    }
+  }
+
+  // Fuzzily prefer the type or fall back to the declared type
+  return icon.type == "image/vnd.microsoft.icon" ? TYPE_ICO : icon.type || "";
+}
+
 /*
  * Timeout callback function for loading favicon.
  *
@@ -135,8 +156,9 @@ function faviconTimeoutCallback(aFaviconLoads, aPageUrl, aChromeGlobal) {
   if (!load)
     return;
 
-  // SVG and ico are the preferred icons
   let preferredIcon;
+  let preferredWidth = 16 * Math.ceil(aChromeGlobal.content.devicePixelRatio);
+  let bestSizedIcon;
   // Other links with the "icon" tag are the default icons
   let defaultIcon;
   // Rich icons are either apple-touch or fluid icons, or the ones of the
@@ -144,11 +166,24 @@ function faviconTimeoutCallback(aFaviconLoads, aPageUrl, aChromeGlobal) {
   let largestRichIcon;
 
   for (let icon of load.iconInfos) {
-    if (icon.type === "image/svg+xml" ||
-      icon.type === "image/x-icon" ||
-      icon.type === "image/vnd.microsoft.icon") {
-      preferredIcon = icon;
-      continue;
+    if (!icon.isRichIcon) {
+      // First check for svg. If it's not available check for an icon with a
+      // size adapt to the current resolution. If both are not available, prefer
+      // ico files. When multiple icons are in the same set, the latest wins.
+      if (guessType(icon) == TYPE_SVG) {
+        preferredIcon = icon;
+      } else if (icon.width == preferredWidth && guessType(preferredIcon) != TYPE_SVG) {
+        preferredIcon = icon;
+      } else if (guessType(icon) == TYPE_ICO && (!preferredIcon || guessType(preferredIcon) == TYPE_ICO)) {
+        preferredIcon = icon;
+      }
+
+      // Check for an icon larger yet closest to preferredWidth, that can be
+      // downscaled efficiently.
+      if (icon.width >= preferredWidth &&
+          (!bestSizedIcon || bestSizedIcon.width >= icon.width)) {
+        bestSizedIcon = icon;
+      }
     }
 
     // Note that some sites use hi-res icons without specifying them as
@@ -164,7 +199,8 @@ function faviconTimeoutCallback(aFaviconLoads, aPageUrl, aChromeGlobal) {
 
   // Now set the favicons for the page in the following order:
   // 1. Set the best rich icon if any.
-  // 2. Set the preferred one if any, otherwise use the default one.
+  // 2. Set the preferred one if any, otherwise check if there's a better
+  //    sized fit.
   // This order allows smaller icon frames to eventually override rich icon
   // frames.
   if (largestRichIcon) {
@@ -172,6 +208,8 @@ function faviconTimeoutCallback(aFaviconLoads, aPageUrl, aChromeGlobal) {
   }
   if (preferredIcon) {
     setIconForLink(preferredIcon, aChromeGlobal);
+  } else if (bestSizedIcon) {
+    setIconForLink(bestSizedIcon, aChromeGlobal);
   } else if (defaultIcon) {
     setIconForLink(defaultIcon, aChromeGlobal);
   }
@@ -223,7 +261,7 @@ function handleFaviconLink(aLink, aIsRichIcon, aChromeGlobal, aFaviconLoads) {
 
   if (aFaviconLoads.has(pageUrl)) {
     let load = aFaviconLoads.get(pageUrl);
-    load.iconInfos.push(iconInfo)
+    load.iconInfos.push(iconInfo);
     // Re-initialize the timer
     load.timer.delay = FAVICON_PARSING_TIMEOUT;
   } else {
@@ -235,7 +273,7 @@ function handleFaviconLink(aLink, aIsRichIcon, aChromeGlobal, aFaviconLoads) {
   return true;
 }
 
-this.ContentLinkHandler = {
+var ContentLinkHandler = {
   init(chromeGlobal) {
     const faviconLoads = new Map();
     chromeGlobal.addEventListener("DOMLinkAdded", event => {
@@ -307,6 +345,10 @@ this.ContentLinkHandler = {
           iconAdded = handleFaviconLink(link, isRichIcon, chromeGlobal, faviconLoads);
           break;
         case "search":
+          if (Services.policies &&
+              !Services.policies.isAllowed("installSearchEngine")) {
+            break;
+          }
           if (!searchAdded && event.type == "DOMLinkAdded") {
             var type = link.type && link.type.toLowerCase();
             type = type.replace(/^\s+|\s*(?:;.*)?$/g, "");

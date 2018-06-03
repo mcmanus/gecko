@@ -95,7 +95,7 @@ nsThreadPool::PutEvent(already_AddRefed<nsIRunnable> aEvent, uint32_t aFlags)
       spawnThread = true;
     }
 
-    mEvents.PutEvent(Move(aEvent), EventPriority::Normal, lock);
+    mEvents.PutEvent(std::move(aEvent), EventPriority::Normal, lock);
     mEventsAvailable.Notify();
     stackSize = mStackSize;
   }
@@ -163,7 +163,7 @@ nsThreadPool::Run()
   bool shutdownThreadOnExit = false;
   bool exitThread = false;
   bool wasIdle = false;
-  PRIntervalTime idleSince;
+  TimeStamp idleSince;
 
   nsCOMPtr<nsIThreadPoolListener> listener;
   {
@@ -182,8 +182,8 @@ nsThreadPool::Run()
 
       event = mEvents.GetEvent(nullptr, lock);
       if (!event) {
-        PRIntervalTime now     = PR_IntervalNow();
-        PRIntervalTime timeout = PR_MillisecondsToInterval(mIdleThreadTimeout);
+        TimeStamp now = TimeStamp::Now();
+        TimeDuration timeout = TimeDuration::FromMilliseconds(mIdleThreadTimeout);
 
         // If we are shutting down, then don't keep any idle threads
         if (mShutdown) {
@@ -213,8 +213,9 @@ nsThreadPool::Run()
           }
           shutdownThreadOnExit = mThreads.RemoveObject(current);
         } else {
-          PRIntervalTime delta = timeout - (now - idleSince);
-          LOG(("THRD-P(%p) %s waiting [%d]\n", this, mName.BeginReading(), delta));
+          TimeDuration delta = timeout - (now - idleSince);
+          LOG(("THRD-P(%p) %s waiting [%f]\n", this, mName.BeginReading(),
+               delta.ToMilliseconds()));
           mEventsAvailable.Wait(delta);
           LOG(("THRD-P(%p) done waiting\n", this));
         }
@@ -265,7 +266,7 @@ nsThreadPool::Dispatch(already_AddRefed<nsIRunnable> aEvent, uint32_t aFlags)
     }
 
     RefPtr<nsThreadSyncDispatch> wrapper =
-      new nsThreadSyncDispatch(thread.forget(), Move(aEvent));
+      new nsThreadSyncDispatch(thread.forget(), std::move(aEvent));
     PutEvent(wrapper);
 
     SpinEventLoopUntil([&, wrapper]() -> bool {
@@ -274,7 +275,7 @@ nsThreadPool::Dispatch(already_AddRefed<nsIRunnable> aEvent, uint32_t aFlags)
   } else {
     NS_ASSERTION(aFlags == NS_DISPATCH_NORMAL ||
                  aFlags == NS_DISPATCH_AT_END, "unexpected dispatch flags");
-    PutEvent(Move(aEvent), aFlags);
+    PutEvent(std::move(aEvent), aFlags);
   }
   return NS_OK;
 }

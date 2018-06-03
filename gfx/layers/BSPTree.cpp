@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -34,7 +35,7 @@ BSPTree::BuildDrawOrder(BSPTreeNode* aNode,
     MOZ_ASSERT(layer.geometry);
 
     if (layer.geometry->GetPoints().Length() >= 3) {
-      aLayers.AppendElement(Move(layer));
+      aLayers.AppendElement(std::move(layer));
     }
   }
 
@@ -49,7 +50,7 @@ BSPTree::BuildTree(BSPTreeNode* aRoot,
 {
   MOZ_ASSERT(!aLayers.empty());
 
-  aRoot->layers.push_back(Move(aLayers.front()));
+  aRoot->layers.push_back(std::move(aLayers.front()));
   aLayers.pop_front();
 
   if (aLayers.empty()) {
@@ -73,15 +74,15 @@ BSPTree::BuildTree(BSPTreeNode* aRoot,
 
     // Back polygon
     if (pos == 0 && neg > 0) {
-      backLayers.push_back(Move(layerPolygon));
+      backLayers.push_back(std::move(layerPolygon));
     }
     // Front polygon
     else if (pos > 0 && neg == 0) {
-      frontLayers.push_back(Move(layerPolygon));
+      frontLayers.push_back(std::move(layerPolygon));
     }
     // Coplanar polygon
     else if (pos == 0 && neg == 0) {
-      aRoot->layers.push_back(Move(layerPolygon));
+      aRoot->layers.push_back(std::move(layerPolygon));
     }
     // Polygon intersects with the splitting plane.
     else if (pos > 0 && neg > 0) {
@@ -95,11 +96,11 @@ BSPTree::BuildTree(BSPTreeNode* aRoot,
       Layer* layer = layerPolygon.layer;
 
       if (backPoints.Length() >= 3) {
-        backLayers.emplace_back(layer, Move(backPoints), normal);
+        backLayers.emplace_back(layer, std::move(backPoints), normal);
       }
 
       if (frontPoints.Length() >= 3) {
-        frontLayers.emplace_back(layer, Move(frontPoints), normal);
+        frontLayers.emplace_back(layer, std::move(frontPoints), normal);
       }
     }
   }

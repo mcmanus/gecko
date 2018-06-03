@@ -101,7 +101,7 @@ FTPChannelParent::Init(const FTPChannelCreationArgs& aArgs)
   {
     const FTPChannelOpenArgs& a = aArgs.get_FTPChannelOpenArgs();
     return DoAsyncOpen(a.uri(), a.startPos(), a.entityID(), a.uploadStream(),
-                       a.loadInfo());
+                       a.loadInfo(), a.loadFlags());
   }
   case FTPChannelCreationArgs::TFTPChannelConnectArgs:
   {
@@ -119,7 +119,8 @@ FTPChannelParent::DoAsyncOpen(const URIParams& aURI,
                               const uint64_t& aStartPos,
                               const nsCString& aEntityID,
                               const OptionalIPCStream& aUploadStream,
-                              const OptionalLoadInfoArgs& aLoadInfoArgs)
+                              const OptionalLoadInfoArgs& aLoadInfoArgs,
+                              const uint32_t& aLoadFlags)
 {
   nsresult rv;
 
@@ -152,8 +153,8 @@ FTPChannelParent::DoAsyncOpen(const URIParams& aURI,
 
   nsCOMPtr<nsIChannel> chan;
   rv = NS_NewChannelInternal(getter_AddRefs(chan), uri, loadInfo,
-                             nullptr, nullptr,
-                             nsIRequest::LOAD_NORMAL, ios);
+                             nullptr, nullptr, nullptr,
+                             aLoadFlags, ios);
 
   if (NS_FAILED(rv))
     return SendFailedAsyncOpen(rv);
@@ -226,7 +227,7 @@ mozilla::ipc::IPCResult
 FTPChannelParent::RecvSuspend()
 {
   if (mChannel) {
-    SuspendChannel();
+    mChannel->Suspend();
   }
   return IPC_OK();
 }
@@ -235,7 +236,7 @@ mozilla::ipc::IPCResult
 FTPChannelParent::RecvResume()
 {
   if (mChannel) {
-    ResumeChannel();
+    mChannel->Resume();
   }
   return IPC_OK();
 }
@@ -254,7 +255,7 @@ public:
   {
   }
 
-  void Run()
+  void Run() override
   {
     mParent->DivertOnDataAvailable(mData, mOffset, mCount);
   }
@@ -341,7 +342,8 @@ public:
   {
   }
 
-  void Run() {
+  void Run() override
+  {
     mParent->DivertOnStopRequest(mStatusCode);
   }
 
@@ -399,7 +401,8 @@ public:
   {
   }
 
-  void Run() {
+  void Run() override
+  {
     mParent->DivertComplete();
   }
 
@@ -460,10 +463,13 @@ FTPChannelParent::OnStartRequest(nsIRequest* aRequest, nsISupports* aContext)
 
   // Send down any permissions which are relevant to this URL if we are
   // performing a document load.
-  PContentParent* pcp = Manager()->Manager();
-  DebugOnly<nsresult> rv =
-    static_cast<ContentParent*>(pcp)->AboutToLoadHttpFtpWyciwygDocumentForChild(chan);
-  MOZ_ASSERT(NS_SUCCEEDED(rv));
+  if (!mIPCClosed) {
+    PContentParent* pcp = Manager()->Manager();
+    MOZ_ASSERT(pcp, "We should have a manager if our IPC isn't closed");
+    DebugOnly<nsresult> rv =
+      static_cast<ContentParent*>(pcp)->AboutToLoadHttpFtpWyciwygDocumentForChild(chan);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+  }
 
   int64_t contentLength;
   chan->GetContentLength(&contentLength);
@@ -484,8 +490,7 @@ FTPChannelParent::OnStartRequest(nsIRequest* aRequest, nsISupports* aContext)
   }
   nsCOMPtr<nsIHttpChannelInternal> httpChan = do_QueryInterface(aRequest);
   if (httpChan) {
-    DebugOnly<nsresult> rv = httpChan->GetLastModifiedTime(&lastModified);
-    MOZ_ASSERT(NS_SUCCEEDED(rv));
+    Unused << httpChan->GetLastModifiedTime(&lastModified);
   }
 
   URIParams uriparam;
@@ -629,27 +634,14 @@ FTPChannelParent::GetInterface(const nsIID& uuid, void** result)
 }
 
 nsresult
-FTPChannelParent::SuspendChannel()
-{
-  nsCOMPtr<nsIChannelWithDivertableParentListener> chan =
-    do_QueryInterface(mChannel);
-  if (chan) {
-    return chan->SuspendInternal();
-  } else {
-    return mChannel->Suspend();
-  }
-}
-
-nsresult
-FTPChannelParent::ResumeChannel()
+FTPChannelParent::ResumeChannelInternalIfPossible()
 {
   nsCOMPtr<nsIChannelWithDivertableParentListener> chan =
     do_QueryInterface(mChannel);
   if (chan) {
     return chan->ResumeInternal();
-  } else {
-    return mChannel->Resume();
   }
+  return mChannel->Resume();
 }
 
 //-----------------------------------------------------------------------------
@@ -664,21 +656,36 @@ FTPChannelParent::SuspendForDiversion()
     return NS_ERROR_UNEXPECTED;
   }
 
+  // MessageDiversionStarted call will suspend mEventQ as many times as the
+  // channel has been suspended, so that channel and this queue are in sync.
+  nsCOMPtr<nsIChannelWithDivertableParentListener> chan =
+    do_QueryInterface(mChannel);
+  if (chan) {
+    chan->MessageDiversionStarted(this);
+  }
+
+  // We need to suspend only nsHttp/FTPChannel (i.e. we should not suspend
+  // mEventQ). Therefore we call mChannel->SuspendInternal() and not
+  // mChannel->Suspend().
+  // We are suspending only nsHttp/FTPChannel here because we want to stop
+  // OnDataAvailable until diversion is over. At the same time we should
+  // send the diverted OnDataAvailable-s to the listeners and not queue them
+  // in mEventQ.
   // Try suspending the channel. Allow it to fail, since OnStopRequest may have
   // been called and thus the channel may not be pending.
-  nsresult rv = SuspendChannel();
+  nsresult rv;
+  if (chan) {
+    rv = chan->SuspendInternal();
+  } else {
+    rv = mChannel->Suspend();
+  }
+
   MOZ_ASSERT(NS_SUCCEEDED(rv) || rv == NS_ERROR_NOT_AVAILABLE);
   mSuspendedForDiversion = NS_SUCCEEDED(rv);
 
   // Once this is set, no more OnStart/OnData/OnStop callbacks should be sent
   // to the child.
   mDivertingFromChild = true;
-
-  nsCOMPtr<nsIChannelWithDivertableParentListener> chan =
-    do_QueryInterface(mChannel);
-  if (chan) {
-    chan->MessageDiversionStarted(this);
-  }
 
   return NS_OK;
 }
@@ -702,7 +709,7 @@ FTPChannelParent::ResumeForDiversion()
   }
 
   if (mSuspendedForDiversion) {
-    nsresult rv = ResumeChannel();
+    nsresult rv = ResumeChannelInternalIfPossible();
     if (NS_WARN_IF(NS_FAILED(rv))) {
       FailDiversion(NS_ERROR_UNEXPECTED, true);
       return rv;
@@ -732,6 +739,15 @@ FTPChannelParent::ResumeMessageDiversion()
 {
   // This only need to resumes message queue.
   mEventQ->Resume();
+  return NS_OK;
+}
+
+nsresult
+FTPChannelParent::CancelDiversion()
+{
+  // Only HTTP channels can have child-process-sourced-data that's long-lived
+  // so this isn't currently relevant for FTP channels and there is nothing to
+  // do.
   return NS_OK;
 }
 
@@ -857,7 +873,7 @@ FTPChannelParent::NotifyDiversionFailed(nsresult aErrorCode,
 
   // Resume only we suspended earlier.
   if (mSuspendedForDiversion) {
-    ResumeChannel();
+    ResumeChannelInternalIfPossible();
   }
   // Channel has already sent OnStartRequest to the child, so ensure that we
   // call it here if it hasn't already been called.
@@ -919,4 +935,3 @@ FTPChannelParent::SetErrorMsg(const char *aMsg, bool aUseUTF8)
 //---------------------
 } // namespace net
 } // namespace mozilla
-

@@ -6,26 +6,24 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 const EDIT_ADDRESS_URL = "chrome://formautofill/content/editAddress.xhtml";
 const EDIT_CREDIT_CARD_URL = "chrome://formautofill/content/editCreditCard.xhtml";
-const AUTOFILL_BUNDLE_URI = "chrome://formautofill/locale/formautofill.properties";
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://formautofill/FormAutofillUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://formautofill/FormAutofillUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "profileStorage",
-                                  "resource://formautofill/ProfileStorage.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "MasterPassword",
-                                  "resource://formautofill/MasterPassword.jsm");
+ChromeUtils.defineModuleGetter(this, "formAutofillStorage",
+                               "resource://formautofill/FormAutofillStorage.jsm");
+ChromeUtils.defineModuleGetter(this, "MasterPassword",
+                               "resource://formautofill/MasterPassword.jsm");
 
 this.log = null;
 FormAutofillUtils.defineLazyLogGetter(this, "manageAddresses");
 
 class ManageRecords {
   constructor(subStorageName, elements) {
-    this._storageInitPromise = profileStorage.initialize();
+    this._storageInitPromise = formAutofillStorage.initialize();
     this._subStorageName = subStorageName;
     this._elements = elements;
     this._newRequest = false;
@@ -49,7 +47,8 @@ class ManageRecords {
   }
 
   localizeDocument() {
-    FormAutofillUtils.localizeMarkup(AUTOFILL_BUNDLE_URI, document);
+    document.documentElement.style.minWidth = FormAutofillUtils.stringBundle.GetStringFromName("manageDialogsWidth");
+    FormAutofillUtils.localizeMarkup(document);
   }
 
   /**
@@ -67,7 +66,7 @@ class ManageRecords {
    */
   async getStorage() {
     await this._storageInitPromise;
-    return profileStorage[this._subStorageName];
+    return formAutofillStorage[this._subStorageName];
   }
 
   /**
@@ -206,6 +205,10 @@ class ManageRecords {
         this.handleKeyPress(event);
         break;
       }
+      case "contextmenu": {
+        event.preventDefault();
+        break;
+      }
     }
   }
 
@@ -234,6 +237,9 @@ class ManageRecords {
     if (event.keyCode == KeyEvent.DOM_VK_ESCAPE) {
       window.close();
     }
+    if (event.keyCode == KeyEvent.DOM_VK_DELETE) {
+      this.removeRecords(this._selectedOptions);
+    }
   }
 
   observe(subject, topic, data) {
@@ -250,6 +256,7 @@ class ManageRecords {
   attachEventListeners() {
     window.addEventListener("unload", this, {once: true});
     window.addEventListener("keypress", this);
+    window.addEventListener("contextmenu", this);
     this._elements.records.addEventListener("change", this);
     this._elements.records.addEventListener("click", this);
     this._elements.controlsContainer.addEventListener("click", this);
@@ -261,6 +268,7 @@ class ManageRecords {
    */
   detachEventListeners() {
     window.removeEventListener("keypress", this);
+    window.removeEventListener("contextmenu", this);
     this._elements.records.removeEventListener("change", this);
     this._elements.records.removeEventListener("click", this);
     this._elements.controlsContainer.removeEventListener("click", this);
@@ -285,45 +293,8 @@ class ManageAddresses extends ManageRecords {
     this.prefWin.gSubDialog.open(EDIT_ADDRESS_URL, null, address);
   }
 
-  /**
-   * Get address display label. It should display up to two pieces of
-   * information, separated by a comma.
-   *
-   * @param  {object} address
-   * @returns {string}
-   */
   getLabel(address) {
-    // TODO: Implement a smarter way for deciding what to display
-    //       as option text. Possibly improve the algorithm in
-    //       ProfileAutoCompleteResult.jsm and reuse it here.
-    const fieldOrder = [
-      "name",
-      "-moz-street-address-one-line",  // Street address
-      "address-level2",  // City/Town
-      "organization",    // Company or organization name
-      "address-level1",  // Province/State (Standardized code if possible)
-      "country-name",    // Country name
-      "postal-code",     // Postal code
-      "tel",             // Phone number
-      "email",           // Email address
-    ];
-
-    let parts = [];
-    if (address["street-address"]) {
-      address["-moz-street-address-one-line"] = FormAutofillUtils.toOneLineAddress(
-        address["street-address"]
-      );
-    }
-    for (const fieldName of fieldOrder) {
-      let string = address[fieldName];
-      if (string) {
-        parts.push(string);
-      }
-      if (parts.length == 2) {
-        break;
-      }
-    }
-    return parts.join(", ");
+    return FormAutofillUtils.getAddressLabel(address);
   }
 }
 
@@ -348,8 +319,13 @@ class ManageCreditCards extends ManageRecords {
   async openEditDialog(creditCard) {
     // If master password is set, ask for password if user is trying to edit an
     // existing credit card.
-    if (!this._hasMasterPassword || !creditCard || await MasterPassword.prompt()) {
-      this.prefWin.gSubDialog.open(EDIT_CREDIT_CARD_URL, null, creditCard);
+    if (!creditCard || !this._hasMasterPassword || await MasterPassword.ensureLoggedIn(true)) {
+      let decryptedCCNumObj = {};
+      if (creditCard) {
+        decryptedCCNumObj["cc-number"] = await MasterPassword.decrypt(creditCard["cc-number-encrypted"]);
+      }
+      let decryptedCreditCard = Object.assign({}, creditCard, decryptedCCNumObj);
+      this.prefWin.gSubDialog.open(EDIT_CREDIT_CARD_URL, "resizable=no", decryptedCreditCard);
     }
   }
 
@@ -363,21 +339,12 @@ class ManageCreditCards extends ManageRecords {
    * @returns {string}
    */
   async getLabel(creditCard, showCreditCards = false) {
-    let parts = [];
-    if (creditCard["cc-number"]) {
-      let ccLabel;
-      if (showCreditCards) {
-        ccLabel = await MasterPassword.decrypt(creditCard["cc-number-encrypted"]);
-      } else {
-        let {affix, label} = FormAutofillUtils.fmtMaskedCreditCardLabel(creditCard["cc-number"]);
-        ccLabel = `${affix} ${label}`;
-      }
-      parts.push(ccLabel);
+    let patchObj = {};
+    if (creditCard["cc-number"] && showCreditCards) {
+      patchObj["cc-number-decrypted"] = await MasterPassword.decrypt(creditCard["cc-number-encrypted"]);
     }
-    if (creditCard["cc-name"]) {
-      parts.push(creditCard["cc-name"]);
-    }
-    return parts.join(", ");
+
+    return FormAutofillUtils.getCreditCardLabel({...creditCard, ...patchObj}, showCreditCards);
   }
 
   async toggleShowHideCards(options) {
@@ -412,8 +379,8 @@ class ManageCreditCards extends ManageRecords {
       this._elements.showHideCreditCards.setAttribute("disabled", true);
     }
     this._elements.showHideCreditCards.textContent =
-      this._isDecrypted ? FormAutofillUtils.stringBundle.GetStringFromName("hideCreditCards") :
-                          FormAutofillUtils.stringBundle.GetStringFromName("showCreditCards");
+      this._isDecrypted ? FormAutofillUtils.stringBundle.GetStringFromName("hideCreditCardsBtnLabel") :
+                          FormAutofillUtils.stringBundle.GetStringFromName("showCreditCardsBtnLabel");
   }
 
   handleClick(event) {

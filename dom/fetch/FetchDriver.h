@@ -8,6 +8,7 @@
 #define mozilla_dom_FetchDriver_h
 
 #include "nsIChannelEventSink.h"
+#include "nsICacheInfoChannel.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIStreamListener.h"
 #include "nsIThreadRetargetableStreamListener.h"
@@ -31,6 +32,7 @@ namespace dom {
 
 class InternalRequest;
 class InternalResponse;
+class PerformanceStorage;
 
 /**
  * Provides callbacks to be called when response is available or on error.
@@ -68,6 +70,13 @@ public:
 
   virtual void FlushConsoleReport() = 0;
 
+  // Called in OnStartRequest() to determine if the OnDataAvailable() method
+  // needs to be called.  Invoking that method may generate additional main
+  // thread runnables.
+  virtual bool NeedOnDataAvailable() = 0;
+
+  // Called once when the first byte of data is received iff
+  // NeedOnDataAvailable() returned true when called in OnStartRequest().
   virtual void OnDataAvailable() = 0;
 
 protected:
@@ -81,6 +90,8 @@ private:
   bool mGotResponseAvailable;
 };
 
+class AlternativeDataStreamListener;
+
 class FetchDriver final : public nsIStreamListener,
                           public nsIChannelEventSink,
                           public nsIInterfaceRequestor,
@@ -88,7 +99,7 @@ class FetchDriver final : public nsIStreamListener,
                           public AbortFollower
 {
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIREQUESTOBSERVER
   NS_DECL_NSISTREAMLISTENER
   NS_DECL_NSICHANNELEVENTSINK
@@ -99,6 +110,7 @@ public:
               nsIPrincipal* aPrincipal,
               nsILoadGroup* aLoadGroup,
               nsIEventTarget* aMainThreadEventTarget,
+              PerformanceStorage* aPerformanceStorage,
               bool aIsTrackingFetch);
 
   nsresult Fetch(AbortSignal* aSignal,
@@ -106,6 +118,12 @@ public:
 
   void
   SetDocument(nsIDocument* aDocument);
+
+  void
+  SetClientInfo(const ClientInfo& aClientInfo);
+
+  void
+  SetController(const Maybe<ServiceWorkerDescriptor>& aController);
 
   void
   SetWorkerScript(const nsACString& aWorkerScirpt)
@@ -126,33 +144,53 @@ private:
   nsCOMPtr<nsIOutputStream> mPipeOutputStream;
   RefPtr<FetchDriverObserver> mObserver;
   nsCOMPtr<nsIDocument> mDocument;
+  Maybe<ClientInfo> mClientInfo;
+  Maybe<ServiceWorkerDescriptor> mController;
   nsCOMPtr<nsIChannel> mChannel;
   nsAutoPtr<SRICheckDataVerifier> mSRIDataVerifier;
   nsCOMPtr<nsIEventTarget> mMainThreadEventTarget;
+
+  // This is set only when Fetch is used in workers.
+  RefPtr<PerformanceStorage> mPerformanceStorage;
+
   SRIMetadata mSRIMetadata;
   nsCString mWorkerScript;
+
+  // This is written once in OnStartRequest on the main thread and then
+  // written/read in OnDataAvailable() on any thread.  Necko guarantees
+  // that these do not overlap.
+  bool mNeedToObserveOnDataAvailable;
+
   bool mIsTrackingFetch;
+
+  RefPtr<AlternativeDataStreamListener> mAltDataListener;
+  bool mOnStopRequestCalled;
 
 #ifdef DEBUG
   bool mResponseAvailableCalled;
   bool mFetchCalled;
 #endif
 
+  friend class AlternativeDataStreamListener;
+
   FetchDriver() = delete;
   FetchDriver(const FetchDriver&) = delete;
   FetchDriver& operator=(const FetchDriver&) = delete;
   ~FetchDriver();
 
-  nsresult HttpFetch();
+
+  nsresult HttpFetch(const nsACString& aPreferredAlternativeDataType = EmptyCString());
   // Returns the filtered response sent to the observer.
   already_AddRefed<InternalResponse>
   BeginAndGetFilteredResponse(InternalResponse* aResponse,
                               bool aFoundOpaqueRedirect);
   // Utility since not all cases need to do any post processing of the filtered
   // response.
-  void FailWithNetworkError();
+  void FailWithNetworkError(nsresult rv);
 
   void SetRequestHeaders(nsIHttpChannel* aChannel) const;
+
+  nsresult FinishOnStopRequest(AlternativeDataStreamListener* aAltDataListener);
 };
 
 } // namespace dom

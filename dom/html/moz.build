@@ -34,6 +34,7 @@ EXPORTS += [
     'nsGenericHTMLElement.h',
     'nsGenericHTMLFrameElement.h',
     'nsHTMLDNSPrefetch.h',
+    'nsHTMLDocument.h',
     'nsIConstraintValidation.h',
     'nsIForm.h',
     'nsIFormControl.h',
@@ -46,6 +47,10 @@ EXPORTS += [
     'nsTextEditorState.h',
 ]
 
+EXPORTS.mozilla += [
+    'TextInputListener.h',
+]
+
 EXPORTS.mozilla.dom += [
     'HTMLAllCollection.h',
     'HTMLAnchorElement.h',
@@ -55,7 +60,6 @@ EXPORTS.mozilla.dom += [
     'HTMLBRElement.h',
     'HTMLButtonElement.h',
     'HTMLCanvasElement.h',
-    'HTMLContentElement.h',
     'HTMLDataElement.h',
     'HTMLDataListElement.h',
     'HTMLDetailsElement.h',
@@ -119,6 +123,7 @@ EXPORTS.mozilla.dom += [
     'ImageDocument.h',
     'MediaError.h',
     'nsBrowserElement.h',
+    'PlayPromise.h',
     'RadioNodeList.h',
     'TextTrackManager.h',
     'TimeRanges.h',
@@ -134,7 +139,6 @@ UNIFIED_SOURCES += [
     'HTMLBRElement.cpp',
     'HTMLButtonElement.cpp',
     'HTMLCanvasElement.cpp',
-    'HTMLContentElement.cpp',
     'HTMLDataElement.cpp',
     'HTMLDataListElement.cpp',
     'HTMLDetailsElement.cpp',
@@ -209,6 +213,7 @@ UNIFIED_SOURCES += [
     'nsIConstraintValidation.cpp',
     'nsRadioVisitor.cpp',
     'nsTextEditorState.cpp',
+    'PlayPromise.cpp',
     'RadioNodeList.cpp',
     'TextTrackManager.cpp',
     'TimeRanges.cpp',
@@ -238,7 +243,6 @@ LOCAL_INCLUDES += [
     '/dom/security',
     '/dom/xbl',
     '/dom/xul',
-    '/editor/txmgr',
     '/image',
     '/layout/forms',
     '/layout/generic',
@@ -253,5 +257,5 @@ FINAL_LIBRARY = 'xul'
 if CONFIG['MOZ_ANDROID_HLS_SUPPORT']:
     DEFINES['MOZ_ANDROID_HLS_SUPPORT'] = True
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

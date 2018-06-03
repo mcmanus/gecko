@@ -10,12 +10,16 @@
 #include "nsCOMPtr.h"
 #include "mozilla/dom/SVGFilterElement.h"
 #include "mozilla/dom/SVGFilterElementBinding.h"
+#include "mozilla/dom/SVGLengthBinding.h"
+#include "mozilla/dom/SVGUnitTypesBinding.h"
 #include "nsSVGUtils.h"
 
 NS_IMPL_NS_NEW_NAMESPACED_SVG_ELEMENT(Filter)
 
 namespace mozilla {
 namespace dom {
+
+using namespace SVGUnitTypesBinding;
 
 JSObject*
 SVGFilterElement::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto)
@@ -25,10 +29,10 @@ SVGFilterElement::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto)
 
 nsSVGElement::LengthInfo SVGFilterElement::sLengthInfo[4] =
 {
-  { &nsGkAtoms::x, -10, nsIDOMSVGLength::SVG_LENGTHTYPE_PERCENTAGE, SVGContentUtils::X },
-  { &nsGkAtoms::y, -10, nsIDOMSVGLength::SVG_LENGTHTYPE_PERCENTAGE, SVGContentUtils::Y },
-  { &nsGkAtoms::width, 120, nsIDOMSVGLength::SVG_LENGTHTYPE_PERCENTAGE, SVGContentUtils::X },
-  { &nsGkAtoms::height, 120, nsIDOMSVGLength::SVG_LENGTHTYPE_PERCENTAGE, SVGContentUtils::Y },
+  { &nsGkAtoms::x, -10, SVGLengthBinding::SVG_LENGTHTYPE_PERCENTAGE, SVGContentUtils::X },
+  { &nsGkAtoms::y, -10, SVGLengthBinding::SVG_LENGTHTYPE_PERCENTAGE, SVGContentUtils::Y },
+  { &nsGkAtoms::width, 120, SVGLengthBinding::SVG_LENGTHTYPE_PERCENTAGE, SVGContentUtils::X },
+  { &nsGkAtoms::height, 120, SVGLengthBinding::SVG_LENGTHTYPE_PERCENTAGE, SVGContentUtils::Y },
 };
 
 nsSVGElement::EnumInfo SVGFilterElement::sEnumInfo[2] =
@@ -58,7 +62,7 @@ SVGFilterElement::SVGFilterElement(already_AddRefed<mozilla::dom::NodeInfo>& aNo
 }
 
 //----------------------------------------------------------------------
-// nsIDOMNode methods
+// nsINode methods
 
 
 NS_IMPL_ELEMENT_CLONE_WITH_INIT(SVGFilterElement)
@@ -117,6 +121,7 @@ NS_IMETHODIMP_(bool)
 SVGFilterElement::IsAttributeMapped(const nsAtom* name) const
 {
   static const MappedAttributeEntry* const map[] = {
+    sColorMap,
     sFEFloodMap,
     sFiltersMap,
     sFontSpecificationMap,

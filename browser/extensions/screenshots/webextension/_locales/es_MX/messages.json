@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "Descarga"
   },
+  "downloadOnlyNotice": {
+    "message": "Estás en modo de Solo-Descargas."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots automáticamente cambia al modo Solo-Descarga en estas situaciones:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "En una ventana de navegación privada."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Cookies de terceros están desactivadas."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "“Nunca recordar el historial” está habilitado."
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "Estás usando Firefox ESR."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "Las cargas de archivos están deshabilitadas."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Enlace copiado"
   },
@@ -36,6 +57,28 @@
     "message": "El enlace que has capturado ha sido copiado al portapapeles. Presiona $META_KEY$-V para pegar.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Copiar"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Captura copiada"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Tu captura ha sido copiada al portapapeles. Presiona $META_KEY$-V para pegar.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Esta imagen ha sido recortada a $PIXELS$px.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -81,6 +124,12 @@
   },
   "tourBodyIntro": {
     "message": "Toma, guarda y comparte capturas de pantalla sin dejar Firefox."
+  },
+  "tourHeaderPageAction": {
+    "message": "Una nueva forma de guardar"
+  },
+  "tourBodyPageAction": {
+    "message": "Expande el menú de acciones de la página en la barra de direcciones en cualquier momento que quieras tomar una captura de pantalla."
   },
   "tourHeaderClickAndDrag": {
     "message": "Captura sólo lo que necesitas"

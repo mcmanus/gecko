@@ -1,31 +1,35 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-const {AddonManager, AddonManagerPrivate} = Cu.import("resource://gre/modules/AddonManager.jsm", {});
-Cu.import("resource://gre/modules/TelemetryEnvironment.jsm", this);
-Cu.import("resource://gre/modules/ObjectUtils.jsm");
-Cu.import("resource://gre/modules/Preferences.jsm", this);
-Cu.import("resource://gre/modules/PromiseUtils.jsm", this);
-Cu.import("resource://gre/modules/Timer.jsm", this);
-Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
-Cu.import("resource://testing-common/AddonManagerTesting.jsm");
-Cu.import("resource://testing-common/httpd.js");
-Cu.import("resource://testing-common/MockRegistrar.jsm", this);
-Cu.import("resource://gre/modules/FileUtils.jsm");
+const {AddonManager, AddonManagerPrivate} = ChromeUtils.import("resource://gre/modules/AddonManager.jsm", {});
+ChromeUtils.import("resource://gre/modules/TelemetryEnvironment.jsm", this);
+ChromeUtils.import("resource://gre/modules/ObjectUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Preferences.jsm", this);
+ChromeUtils.import("resource://gre/modules/PromiseUtils.jsm", this);
+ChromeUtils.import("resource://gre/modules/Timer.jsm", this);
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+ChromeUtils.import("resource://testing-common/httpd.js");
+ChromeUtils.import("resource://testing-common/MockRegistrar.jsm", this);
+ChromeUtils.import("resource://gre/modules/FileUtils.jsm");
 
 // AttributionCode is only needed for Firefox
-XPCOMUtils.defineLazyModuleGetter(this, "AttributionCode",
-                                  "resource:///modules/AttributionCode.jsm");
+ChromeUtils.defineModuleGetter(this, "AttributionCode",
+                               "resource:///modules/AttributionCode.jsm");
 
 // Lazy load |LightweightThemeManager|.
-XPCOMUtils.defineLazyModuleGetter(this, "LightweightThemeManager",
-                                  "resource://gre/modules/LightweightThemeManager.jsm");
+ChromeUtils.defineModuleGetter(this, "LightweightThemeManager",
+                               "resource://gre/modules/LightweightThemeManager.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "ProfileAge",
-                                  "resource://gre/modules/ProfileAge.jsm");
+ChromeUtils.defineModuleGetter(this, "ProfileAge",
+                               "resource://gre/modules/ProfileAge.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "ExtensionTestUtils",
-                                  "resource://testing-common/ExtensionXPCShellUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "ExtensionTestUtils",
+                               "resource://testing-common/ExtensionXPCShellUtils.jsm");
+
+async function installXPIFromURL(url) {
+  let install = await AddonManager.getInstallForURL(url, "application/x-xpinstall");
+  return install.install();
+}
 
 // The webserver hosting the addons.
 var gHttpServer = null;
@@ -38,7 +42,6 @@ const PLATFORM_VERSION = "1.9.2";
 const APP_VERSION = "1";
 const APP_ID = "xpcshell@tests.mozilla.org";
 const APP_NAME = "XPCShell";
-const APP_HOTFIX_VERSION = "2.3.4a";
 
 const DISTRIBUTION_ID = "distributor-id";
 const DISTRIBUTION_VERSION = "4.5.6b";
@@ -80,10 +83,20 @@ const SYSTEM_ADDON_INSTALL_DATE = Date.now();
 // Valid attribution code to write so that settings.attribution can be tested.
 const ATTRIBUTION_CODE = "source%3Dgoogle.com";
 
+const pluginHost = Cc["@mozilla.org/plugin/host;1"].getService(Ci.nsIPluginHost);
+
 /**
  * Used to mock plugin tags in our fake plugin host.
  */
 function PluginTag(aName, aDescription, aVersion, aEnabled) {
+  this.pluginTag = pluginHost.createFakePlugin({
+    handlerURI: "resource://fake-plugin/${Math.random()}.xhtml",
+    mimeEntries: this.mimeTypes.map(type => ({type})),
+    name: aName,
+    description: aDescription,
+    fileName: `${aName}.so`,
+    version: aVersion,
+  });
   this.name = aName;
   this.description = aDescription;
   this.version = aVersion;
@@ -96,9 +109,15 @@ PluginTag.prototype = {
   version: null,
   filename: null,
   fullpath: null,
-  disabled: false,
   blocklisted: false,
   clicktoplay: true,
+
+  get disabled() {
+    return this.pluginTag.enabledState == Ci.nsIPluginTag.STATE_DISABLED;
+  },
+  set disabled(val) {
+    this.pluginTag.enabledState = Ci.nsIPluginTag[val ? "STATE_DISABLED" : "STATE_CLICKTOPLAY"];
+  },
 
   mimeTypes: [ PLUGIN_MIME_TYPE1, PLUGIN_MIME_TYPE2 ],
 
@@ -118,17 +137,11 @@ var gInstalledPlugins = [
 var PluginHost = {
   getPluginTags(countRef) {
     countRef.value = gInstalledPlugins.length;
-    return gInstalledPlugins;
+    return gInstalledPlugins.map(plugin => plugin.pluginTag);
   },
 
-  QueryInterface(iid) {
-    if (iid.equals(Ci.nsIPluginHost)
-     || iid.equals(Ci.nsISupports))
-      return this;
-
-    throw Components.results.NS_ERROR_NO_INTERFACE;
-  }
-}
+  QueryInterface: ChromeUtils.generateQI(["nsIPluginHost"])
+};
 
 function registerFakePluginHost() {
   MockRegistrar.register("@mozilla.org/plugin/host;1", PluginHost);
@@ -157,13 +170,7 @@ var SysInfo = {
     return this._genuine.get(name);
   },
 
-  QueryInterface(iid) {
-    if (iid.equals(Ci.nsIPropertyBag2)
-     || iid.equals(Ci.nsISupports))
-      return this;
-
-    throw Cr.NS_ERROR_NO_INTERFACE;
-  }
+  QueryInterface: ChromeUtils.generateQI(["nsIPropertyBag2"])
 };
 
 function registerFakeSysInfo() {
@@ -252,8 +259,8 @@ function createMockAddonProvider(aName) {
       AddonManagerPrivate.callAddonListeners("onInstalled", new MockAddonWrapper(aAddon));
     },
 
-    getAddonsByTypes(aTypes, aCallback) {
-      aCallback(this._addons.map(a => new MockAddonWrapper(a)));
+    async getAddonsByTypes(aTypes) {
+      return this._addons.map(a => new MockAddonWrapper(a));
     },
 
     shutdown() {
@@ -391,10 +398,8 @@ function checkBuildSection(data) {
     Assert.equal(data.build[f], expectedInfo[f], f + " must have the correct value.");
   }
 
-  // Make sure architecture and hotfixVersion are in the environment.
+  // Make sure architecture is in the environment.
   Assert.ok(checkString(data.build.architecture));
-  Assert.ok(checkString(data.build.hotfixVersion));
-  Assert.equal(data.build.hotfixVersion, APP_HOTFIX_VERSION);
 
   if (gIsMac) {
     let macUtils = Cc["@mozilla.org/xpcom/mac-utils;1"].getService(Ci.nsIMacUtils);
@@ -411,7 +416,6 @@ function checkSettingsSection(data) {
   const EXPECTED_FIELDS_TYPES = {
     blocklistEnabled: "boolean",
     e10sEnabled: "boolean",
-    e10sCohort: "string",
     telemetryEnabled: "boolean",
     locale: "string",
     update: "object",
@@ -512,7 +516,8 @@ function checkGfxAdapter(data) {
 }
 
 function checkSystemSection(data) {
-  const EXPECTED_FIELDS = [ "memoryMB", "cpu", "os", "hdd", "gfx" ];
+  const EXPECTED_FIELDS = [ "memoryMB", "cpu", "os", "hdd", "gfx",
+                            "appleModelId" ];
   const EXPECTED_HDD_FIELDS = [ "profile", "binary", "system" ];
 
   Assert.ok("system" in data, "There must be a system section in Environment.");
@@ -562,15 +567,6 @@ function checkSystemSection(data) {
   let cpuData = data.system.cpu;
   Assert.ok(Number.isFinite(cpuData.count), "CPU count must be a number.");
   Assert.ok(Array.isArray(cpuData.extensions), "CPU extensions must be available.");
-
-  // Device data is only available on Android.
-  if (gIsAndroid) {
-    let deviceData = data.system.device;
-    Assert.ok(checkNullOrString(deviceData.model));
-    Assert.ok(checkNullOrString(deviceData.manufacturer));
-    Assert.ok(checkNullOrString(deviceData.hardware));
-    Assert.ok(checkNullOrBool(deviceData.isTablet));
-  }
 
   let osData = data.system.os;
   Assert.ok(checkNullOrString(osData.name));
@@ -660,6 +656,31 @@ function checkSystemSection(data) {
     Assert.equal(features.opengl, gfxData.features.opengl);
     Assert.equal(features.webgl, gfxData.features.webgl);
   } catch (e) {}
+
+  if (gIsMac) {
+    Assert.ok(checkString(data.system.appleModelId));
+  } else {
+    Assert.ok(checkNullOrString(data.system.appleModelId));
+  }
+
+  // This feature is only available on Windows 8+
+  if (AppConstants.isPlatformAndVersionAtLeast("win", "6.2")) {
+    Assert.ok("sec" in data.system, "sec must be available under data.system");
+
+    let SEC_FIELDS = ["antivirus", "antispyware", "firewall"];
+    for (let f of SEC_FIELDS) {
+      Assert.ok(f in data.system.sec, f + " must be available under data.system.sec");
+
+      let value = data.system.sec[f];
+      // value is null on Windows Server
+      Assert.ok(value === null || Array.isArray(value), f + " must be either null or an array");
+      if (Array.isArray(value)) {
+        for (let product of value) {
+          Assert.equal(typeof product, "string", "Each element of " + f + " must be a string");
+        }
+      }
+    }
+  }
 }
 
 function checkActiveAddon(data, partialRecord) {
@@ -730,7 +751,6 @@ function checkPlugin(data) {
 }
 
 function checkTheme(data) {
-  // "hasBinaryComponents" is not available when testing.
   const EXPECTED_THEME_FIELDS_TYPES = {
     id: "string",
     blocklisted: "boolean",
@@ -765,7 +785,7 @@ function checkActiveGMPlugin(data) {
 
 function checkAddonsSection(data, expectBrokenAddons, partialAddonsRecords) {
   const EXPECTED_FIELDS = [
-    "activeAddons", "theme", "activePlugins", "activeGMPlugins", "activeExperiment",
+    "activeAddons", "theme", "activePlugins", "activeGMPlugins",
     "persona",
   ];
 
@@ -799,13 +819,6 @@ function checkAddonsSection(data, expectBrokenAddons, partialAddonsRecords) {
     checkActiveGMPlugin(activeGMPlugins[gmPlugin]);
   }
 
-  // Check the active Experiment
-  let experiment = data.addons.activeExperiment;
-  if (Object.keys(experiment).length !== 0) {
-    Assert.ok(checkString(experiment.id));
-    Assert.ok(checkString(experiment.branch));
-  }
-
   // Check persona
   Assert.ok(checkNullOrString(data.addons.persona));
 }
@@ -822,7 +835,7 @@ function checkExperimentsSection(data) {
 
     // Check that we have valid experiment info.
     let experimentData = experiments[id];
-    Assert.ok("branch" in experimentData, "The experiment must have branch data.")
+    Assert.ok("branch" in experimentData, "The experiment must have branch data.");
     Assert.ok(checkString(experimentData.branch), "The experiment data must be valid.");
     if ("type" in experimentData) {
       Assert.ok(checkString(experimentData.type));
@@ -842,7 +855,6 @@ function checkEnvironmentData(data, options = {}) {
   checkPartnerSection(data, isInitial);
   checkSystemSection(data);
   checkAddonsSection(data, expectBrokenAddons);
-  checkExperimentsSection(data);
 }
 
 add_task(async function setup() {
@@ -871,6 +883,7 @@ add_task(async function setup() {
   // restarting the AddonManager.
   await AddonTestUtils.promiseShutdownManager();
   await AddonTestUtils.overrideBuiltIns({"system": []});
+  AddonTestUtils.addonStartup.remove(true);
   await AddonTestUtils.promiseStartupManager();
 
   // Register a fake plugin host for consistent flash version data.
@@ -883,19 +896,13 @@ add_task(async function setup() {
   gHttpRoot = "http://localhost:" + port + "/";
   gDataRoot = gHttpRoot + "data/";
   gHttpServer.registerDirectory("/data/", do_get_cwd());
-  do_register_cleanup(() => gHttpServer.stop(() => {}));
-
-  // Spoof the the hotfixVersion
-  Preferences.set("extensions.hotfix.lastVersion", APP_HOTFIX_VERSION);
-
-  // Allow non-multiprocessCompatible extensions
-  Preferences.set("extensions.allow-non-mpc-extensions", true);
+  registerCleanupFunction(() => gHttpServer.stop(() => {}));
 
   // Create the attribution data file, so that settings.attribution will exist.
   // The attribution functionality only exists in Firefox.
   if (AppConstants.MOZ_BUILD_APP == "browser") {
     spoofAttributionData();
-    do_register_cleanup(cleanupAttributionData);
+    registerCleanupFunction(cleanupAttributionData);
   }
 
   await spoofProfileReset();
@@ -1025,6 +1032,40 @@ add_task(async function test_prefDefault() {
   Assert.strictEqual(TelemetryEnvironment.currentEnvironment.settings.userPrefs[PREF_TEST], expectedValue);
 });
 
+add_task(async function test_prefDefaultState() {
+  const PREF_TEST = "toolkit.telemetry.test.defaultpref2";
+  const expectedValue = "some-test-value";
+
+  const PREFS_TO_WATCH = new Map([
+    [PREF_TEST, {what: TelemetryEnvironment.RECORD_DEFAULTPREF_STATE}],
+  ]);
+
+  TelemetryEnvironment.testWatchPreferences(PREFS_TO_WATCH);
+
+  Assert.equal(PREF_TEST in TelemetryEnvironment.currentEnvironment.settings.userPrefs, false);
+
+  // Set the preference to a default value.
+  Services.prefs.getDefaultBranch(null).setCharPref(PREF_TEST, expectedValue);
+
+  Assert.strictEqual(TelemetryEnvironment.currentEnvironment.settings.userPrefs[PREF_TEST], "<set>");
+});
+
+add_task(async function test_prefInvalid() {
+  const PREF_TEST_1 = "toolkit.telemetry.test.invalid1";
+  const PREF_TEST_2 = "toolkit.telemetry.test.invalid2";
+
+  const PREFS_TO_WATCH = new Map([
+    [PREF_TEST_1, {what: TelemetryEnvironment.RECORD_DEFAULTPREF_VALUE}],
+    [PREF_TEST_2, {what: TelemetryEnvironment.RECORD_DEFAULTPREF_STATE}],
+  ]);
+
+  TelemetryEnvironment.testWatchPreferences(PREFS_TO_WATCH);
+
+  Assert.strictEqual(TelemetryEnvironment.currentEnvironment.settings.userPrefs[PREF_TEST_1], undefined);
+  Assert.strictEqual(TelemetryEnvironment.currentEnvironment.settings.userPrefs[PREF_TEST_2], undefined);
+
+});
+
 add_task(async function test_addonsWatch_InterestingChange() {
   const ADDON_INSTALL_URL = gDataRoot + "restartless.xpi";
   const ADDON_ID = "tel-restartless-webext@tests.mozilla.org";
@@ -1049,28 +1090,28 @@ add_task(async function test_addonsWatch_InterestingChange() {
 
   // Test for receiving one notification after each change.
   let checkpointPromise = registerCheckpointPromise(1);
-  await AddonManagerTesting.installXPIFromURL(ADDON_INSTALL_URL);
+  await installXPIFromURL(ADDON_INSTALL_URL);
   await checkpointPromise;
   assertCheckpoint(1);
   Assert.ok(ADDON_ID in TelemetryEnvironment.currentEnvironment.addons.activeAddons);
 
   checkpointPromise = registerCheckpointPromise(2);
-  let addon = await AddonManagerTesting.getAddonById(ADDON_ID);
-  addon.userDisabled = true;
+  let addon = await AddonManager.getAddonByID(ADDON_ID);
+  await addon.disable();
   await checkpointPromise;
   assertCheckpoint(2);
   Assert.ok(!(ADDON_ID in TelemetryEnvironment.currentEnvironment.addons.activeAddons));
 
   checkpointPromise = registerCheckpointPromise(3);
   let startupPromise = AddonTestUtils.promiseWebExtensionStartup(ADDON_ID);
-  addon.userDisabled = false;
+  await addon.enable();
   await checkpointPromise;
   assertCheckpoint(3);
   Assert.ok(ADDON_ID in TelemetryEnvironment.currentEnvironment.addons.activeAddons);
   await startupPromise;
 
   checkpointPromise = registerCheckpointPromise(4);
-  await AddonManagerTesting.uninstallAddonByID(ADDON_ID);
+  (await AddonManager.getAddonByID(ADDON_ID)).uninstall();
   await checkpointPromise;
   assertCheckpoint(4);
   Assert.ok(!(ADDON_ID in TelemetryEnvironment.currentEnvironment.addons.activeAddons));
@@ -1152,8 +1193,8 @@ add_task(async function test_addonsWatch_NotInterestingChange() {
       deferred.resolve();
     });
 
-  await AddonManagerTesting.installXPIFromURL(DICTIONARY_ADDON_INSTALL_URL);
-  await AddonManagerTesting.installXPIFromURL(INTERESTING_ADDON_INSTALL_URL);
+  let dictionaryAddon = await installXPIFromURL(DICTIONARY_ADDON_INSTALL_URL);
+  let interestingAddon = await installXPIFromURL(INTERESTING_ADDON_INSTALL_URL);
 
   await deferred.promise;
   Assert.ok(!("telemetry-dictionary@tests.mozilla.org" in
@@ -1161,6 +1202,10 @@ add_task(async function test_addonsWatch_NotInterestingChange() {
             "Dictionaries should not appear in active addons.");
 
   TelemetryEnvironment.unregisterChangeListener("testNotInteresting");
+
+  dictionaryAddon.uninstall();
+  await interestingAddon.startupPromise;
+  interestingAddon.uninstall();
 });
 
 add_task(async function test_addonsAndPlugins() {
@@ -1244,7 +1289,7 @@ add_task(async function test_addonsAndPlugins() {
   );
 
   // Install an add-on so we have some data.
-  await AddonManagerTesting.installXPIFromURL(ADDON_INSTALL_URL);
+  let addon = await installXPIFromURL(ADDON_INSTALL_URL);
 
   // Install a webextension as well.
   ExtensionTestUtils.init(this);
@@ -1314,7 +1359,8 @@ add_task(async function test_addonsAndPlugins() {
   Assert.equal(data.addons.persona, PERSONA_ID, "The correct Persona Id must be reported.");
 
   // Uninstall the addon.
-  await AddonManagerTesting.uninstallAddonByID(ADDON_ID);
+  await addon.startupPromise;
+  await addon.uninstall();
 });
 
 add_task(async function test_signedAddon() {
@@ -1343,7 +1389,7 @@ add_task(async function test_signedAddon() {
   TelemetryEnvironment.registerChangeListener("test_signedAddon", deferred.resolve);
 
   // Install the addon.
-  await AddonManagerTesting.installXPIFromURL(ADDON_INSTALL_URL);
+  let addon = await installXPIFromURL(ADDON_INSTALL_URL);
 
   await deferred.promise;
   // Unregister the listener.
@@ -1360,6 +1406,8 @@ add_task(async function test_signedAddon() {
   }
 
   AddonTestUtils.useRealCertChecks = false;
+  await addon.startupPromise;
+  await addon.uninstall();
 });
 
 add_task(async function test_addonsFieldsLimit() {
@@ -1369,7 +1417,7 @@ add_task(async function test_addonsFieldsLimit() {
   // Install the addon and wait for the TelemetryEnvironment to pick it up.
   let deferred = PromiseUtils.defer();
   TelemetryEnvironment.registerChangeListener("test_longFieldsAddon", deferred.resolve);
-  await AddonManagerTesting.installXPIFromURL(ADDON_INSTALL_URL);
+  let addon = await installXPIFromURL(ADDON_INSTALL_URL);
   await deferred.promise;
   TelemetryEnvironment.unregisterChangeListener("test_longFieldsAddon");
 
@@ -1388,6 +1436,9 @@ add_task(async function test_addonsFieldsLimit() {
                "The name string must have been limited");
   Assert.lessOrEqual(targetAddon.description.length, 100,
                "The description string must have been limited");
+
+  await addon.startupPromise;
+  await addon.uninstall();
 });
 
 add_task(async function test_collectionWithbrokenAddonData() {
@@ -1446,7 +1497,7 @@ add_task(async function test_collectionWithbrokenAddonData() {
 
   // Now install an addon which returns the correct information.
   checkpointPromise = registerCheckpointPromise(2);
-  await AddonManagerTesting.installXPIFromURL(ADDON_INSTALL_URL);
+  let addon = await installXPIFromURL(ADDON_INSTALL_URL);
   await checkpointPromise;
   assertCheckpoint(2);
 
@@ -1469,7 +1520,8 @@ add_task(async function test_collectionWithbrokenAddonData() {
   AddonManagerPrivate.unregisterProvider(brokenAddonProvider);
 
   // Uninstall the valid addon.
-  await AddonManagerTesting.uninstallAddonByID(ADDON_ID);
+  await addon.startupPromise;
+  await addon.uninstall();
 });
 
 add_task(async function test_defaultSearchEngine() {
@@ -1554,7 +1606,7 @@ add_task(async function test_defaultSearchEngine() {
     Services.obs.addObserver(function obs(obsSubject, obsTopic, obsData) {
       try {
         let searchEngine = obsSubject.QueryInterface(Ci.nsISearchEngine);
-        do_print("Observed " + obsData + " for " + searchEngine.name);
+        info("Observed " + obsData + " for " + searchEngine.name);
         if (obsData != "engine-added" || searchEngine.name != "engine-telemetry") {
           return;
         }

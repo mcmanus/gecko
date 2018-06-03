@@ -25,6 +25,7 @@ const uint8_t kTlsAlertType = 21;
 const uint8_t kTlsHandshakeType = 22;
 const uint8_t kTlsApplicationDataType = 23;
 const uint8_t kTlsAltHandshakeType = 24;
+const uint8_t kTlsAckType = 25;
 
 const uint8_t kTlsHandshakeClientHello = 1;
 const uint8_t kTlsHandshakeServerHello = 2;
@@ -46,6 +47,7 @@ const uint8_t kTlsAlertUnexpectedMessage = 10;
 const uint8_t kTlsAlertBadRecordMac = 20;
 const uint8_t kTlsAlertRecordOverflow = 22;
 const uint8_t kTlsAlertHandshakeFailure = 40;
+const uint8_t kTlsAlertBadCertificate = 42;
 const uint8_t kTlsAlertIllegalParameter = 47;
 const uint8_t kTlsAlertDecodeError = 50;
 const uint8_t kTlsAlertDecryptError = 51;
@@ -121,6 +123,7 @@ class TlsParser {
   bool Read(uint32_t* val, size_t size);
   // Reads len bytes into dest buffer, overwriting it.
   bool Read(DataBuffer* dest, size_t len);
+  bool ReadFromMark(DataBuffer* val, size_t len, size_t mark);
   // Reads bytes into dest buffer, overwriting it.  The number of bytes is
   // determined by reading from len_size bytes from the stream first.
   bool ReadVariable(DataBuffer* dest, size_t len_size);

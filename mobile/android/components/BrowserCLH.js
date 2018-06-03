@@ -3,9 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   AppConstants: "resource://gre/modules/AppConstants.jsm",
@@ -74,7 +72,7 @@ BrowserCLH.prototype = {
           module: "resource://gre/modules/FormAssistant.jsm",
         });
         Services.obs.addObserver({
-          QueryInterface: XPCOMUtils.generateQI([
+          QueryInterface: ChromeUtils.generateQI([
             Ci.nsIObserver, Ci.nsIFormSubmitObserver,
           ]),
           notifyInvalidSubmit: (form, element) => {
@@ -118,7 +116,7 @@ BrowserCLH.prototype = {
 
       case "chrome-document-interactive":
       case "content-document-interactive": {
-        let contentWin = subject.QueryInterface(Ci.nsIDOMDocument).defaultView;
+        let contentWin = subject.defaultView;
         let win = GeckoViewUtils.getChromeWindow(contentWin);
         let dispatcher = GeckoViewUtils.getDispatcherForWindow(win);
         if (!win || !dispatcher || win !== contentWin) {
@@ -200,20 +198,21 @@ BrowserCLH.prototype = {
     }, options);
 
     aWindow.addEventListener("blur", event => {
-      if (event.target instanceof Ci.nsIDOMHTMLInputElement) {
+      if (ChromeUtils.getClassName(event.target) === "HTMLInputElement") {
         this.LoginManagerContent.onUsernameInput(event);
       }
     }, options);
 
     aWindow.addEventListener("pageshow", event => {
-      if (event.target instanceof Ci.nsIDOMHTMLDocument) {
+      // XXXbz what about non-HTML documents??
+      if (ChromeUtils.getClassName(event.target) == "HTMLDocument") {
         this.LoginManagerContent.onPageShow(event, event.target.defaultView.top);
       }
     }, options);
   },
 
   // QI
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIObserver]),
 
   // XPCOMUtils factory
   classID: Components.ID("{be623d20-d305-11de-8a39-0800200c9a66}")

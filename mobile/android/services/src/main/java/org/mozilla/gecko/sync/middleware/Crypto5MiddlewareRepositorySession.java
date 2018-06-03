@@ -4,7 +4,6 @@
 
 package org.mozilla.gecko.sync.middleware;
 
-import java.io.UnsupportedEncodingException;
 import java.util.concurrent.ExecutorService;
 
 import org.mozilla.gecko.sync.CryptoRecord;
@@ -115,11 +114,6 @@ public class Crypto5MiddlewareRepositorySession extends MiddlewareRepositorySess
     }
 
     @Override
-    public void onBatchCompleted() {
-      next.onBatchCompleted();
-    }
-
-    @Override
     public RepositorySessionFetchRecordsDelegate deferredFetchDelegate(ExecutorService executor) {
       // Synchronously perform *our* work, passing through appropriately.
       RepositorySessionFetchRecordsDelegate deferredNext = next.deferredFetchDelegate(executor);
@@ -166,7 +160,7 @@ public class Crypto5MiddlewareRepositorySession extends MiddlewareRepositorySess
     rec.keyBundle = this.keyBundle;
     try {
       rec.encrypt();
-    } catch (UnsupportedEncodingException | CryptoException e) {
+    } catch (CryptoException e) {
       storeDelegate.onRecordStoreFailed(e, record.guid);
       return;
     }

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -20,7 +21,7 @@ public:
   NS_DECL_FRAMEARENA_HELPERS(nsPageFrame)
 
   friend nsPageFrame* NS_NewPageFrame(nsIPresShell* aPresShell,
-                                      nsStyleContext* aContext);
+                                      ComputedStyle* aStyle);
 
   virtual void Reflow(nsPresContext*      aPresContext,
                       ReflowOutput& aDesiredSize,
@@ -56,7 +57,7 @@ public:
   void AppendDirectlyOwnedAnonBoxes(nsTArray<OwnedAnonBox>& aResult) override;
 
 protected:
-  explicit nsPageFrame(nsStyleContext* aContext);
+  explicit nsPageFrame(ComputedStyle* aStyle);
   virtual ~nsPageFrame();
 
   typedef enum {
@@ -104,7 +105,7 @@ class nsPageBreakFrame final : public nsLeafFrame
 {
   NS_DECL_FRAMEARENA_HELPERS(nsPageBreakFrame)
 
-  explicit nsPageBreakFrame(nsStyleContext* aContext);
+  explicit nsPageBreakFrame(ComputedStyle* aStyle);
   ~nsPageBreakFrame();
 
   virtual void Reflow(nsPresContext* aPresContext,
@@ -124,7 +125,7 @@ protected:
   bool mHaveReflowed;
 
   friend nsIFrame* NS_NewPageBreakFrame(nsIPresShell* aPresShell,
-                                        nsStyleContext* aContext);
+                                        ComputedStyle* aStyle);
 };
 
 #endif /* nsPageFrame_h___ */

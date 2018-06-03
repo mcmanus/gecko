@@ -16,11 +16,9 @@ fn main() {
     env::set_var("MAKEFLAGS", format!("-j{}", num_cpus::get()));
     env::set_current_dir(&js_src).unwrap();
 
-    let variant = if cfg!(feature = "debugmozjs") {
-        "plaindebug"
-    } else {
-        "plain"
-    };
+    let variant = format!("{}{}",
+                          if cfg!(feature = "bigint") { "bigint" } else { "plain" },
+                          if cfg!(feature = "debugmozjs") { "debug" } else { "" });
 
     let python = env::var("PYTHON").unwrap_or("python2.7".into());
     let mut cmd = Command::new(&python);
@@ -31,11 +29,14 @@ fn main() {
                // can swap in instead and everything using a single malloc is
                // good.
                "--no-jemalloc",
+               // Don't try to clobber the output directory. Without
+               // this option, the build will fail because the directory
+               // already exists but wasn't created by autospider.
+               "--dep",
                "--objdir", &out_dir,
-               variant])
+               &variant])
         .env("SOURCE", &js_src)
         .env("PWD", &js_src)
-        .env("AUTOMATION", "1")
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
     println!("Running command: {:?}", cmd);
@@ -50,6 +51,10 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}/dist/bin", out_dir);
     println!("cargo:rustc-link-lib=nspr4");
+
+    if cfg!(feature = "bigint") {
+        println!("cargo:rustc-link-lib=gmp");
+    }
 
     if target.contains("windows") {
         println!("cargo:rustc-link-lib=winmm");

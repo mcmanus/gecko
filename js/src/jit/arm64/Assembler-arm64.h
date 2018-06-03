@@ -9,7 +9,8 @@
 
 #include "jit/arm64/vixl/Assembler-vixl.h"
 
-#include "jit/JitCompartment.h"
+#include "jit/JitRealm.h"
+#include "jit/shared/Disassembler-shared.h"
 
 namespace js {
 namespace jit {
@@ -19,6 +20,9 @@ typedef vixl::Register ARMRegister;
 typedef vixl::FPRegister ARMFPRegister;
 using vixl::ARMBuffer;
 using vixl::Instruction;
+
+using LabelDoc = DisassemblerSpew::LabelDoc;
+using LiteralDoc = DisassemblerSpew::LiteralDoc;
 
 static const uint32_t AlignmentAtPrologue = 0;
 static const uint32_t AlignmentMidPrologue = 8;
@@ -83,7 +87,6 @@ static constexpr Register IntArgReg5 { Registers::x5 };
 static constexpr Register IntArgReg6 { Registers::x6 };
 static constexpr Register IntArgReg7 { Registers::x7 };
 static constexpr Register HeapReg { Registers::x21 };
-static constexpr Register HeapLenReg { Registers::x22 };
 
 // Define unsized Registers.
 #define DEFINE_UNSIZED_REGISTERS(N)  \
@@ -115,20 +118,6 @@ REGISTER_CODE_LIST(IMPORT_VIXL_VREGISTERS)
 #undef IMPORT_VIXL_VREGISTERS
 
 static constexpr ValueOperand JSReturnOperand = ValueOperand(JSReturnReg);
-
-// Registers used in the GenerateFFIIonExit Enable Activation block.
-static constexpr Register WasmIonExitRegCallee = r8;
-static constexpr Register WasmIonExitRegE0 = r0;
-static constexpr Register WasmIonExitRegE1 = r1;
-
-// Registers used in the GenerateFFIIonExit Disable Activation block.
-// None of these may be the second scratch register.
-static constexpr Register WasmIonExitRegReturnData = r2;
-static constexpr Register WasmIonExitRegReturnType = r3;
-static constexpr Register WasmIonExitTlsReg = r17;
-static constexpr Register WasmIonExitRegD0 = r0;
-static constexpr Register WasmIonExitRegD1 = r1;
-static constexpr Register WasmIonExitRegD2 = r4;
 
 // Registerd used in RegExpMatcher instruction (do not use JSReturnOperand).
 static constexpr Register RegExpMatcherRegExpReg = CallTempReg0;
@@ -169,6 +158,7 @@ static_assert(CodeAlignment % SimdMemoryAlignment == 0,
   "alignment for SIMD constants.");
 
 static const uint32_t WasmStackAlignment = SimdMemoryAlignment;
+static const uint32_t WasmTrapInstructionLength = 4;
 
 // Does this architecture support SIMD conversions between Uint32x4 and Float32x4?
 static constexpr bool SupportsUint32x4FloatConversions = false;
@@ -188,16 +178,9 @@ class Assembler : public vixl::Assembler
     typedef vixl::Condition Condition;
 
     void finish();
-    bool appendRawCode(const uint8_t* code, size_t numBytes) {
-        MOZ_CRASH("NYI");
-    }
-    bool reserve(size_t size) {
-        MOZ_CRASH("NYI");
-    }
-    bool swapBuffer(wasm::Bytes& bytes) {
-        MOZ_CRASH("NYI");
-    }
-    void trace(JSTracer* trc);
+    bool appendRawCode(const uint8_t* code, size_t numBytes);
+    bool reserve(size_t size);
+    bool swapBuffer(wasm::Bytes& bytes);
 
     // Emit the jump table, returning the BufferOffset to the first entry in the table.
     BufferOffset emitExtendedJumpTable();
@@ -205,19 +188,17 @@ class Assembler : public vixl::Assembler
     void executableCopy(uint8_t* buffer, bool flushICache = true);
 
     BufferOffset immPool(ARMRegister dest, uint8_t* value, vixl::LoadLiteralOp op,
-                         ARMBuffer::PoolEntry* pe = nullptr);
+                         const LiteralDoc& doc, ARMBuffer::PoolEntry* pe = nullptr);
     BufferOffset immPool64(ARMRegister dest, uint64_t value, ARMBuffer::PoolEntry* pe = nullptr);
     BufferOffset immPool64Branch(RepatchLabel* label, ARMBuffer::PoolEntry* pe, vixl::Condition c);
-    BufferOffset fImmPool(ARMFPRegister dest, uint8_t* value, vixl::LoadLiteralOp op);
+    BufferOffset fImmPool(ARMFPRegister dest, uint8_t* value, vixl::LoadLiteralOp op,
+                          const LiteralDoc& doc);
     BufferOffset fImmPool64(ARMFPRegister dest, double value);
     BufferOffset fImmPool32(ARMFPRegister dest, float value);
 
     void bind(Label* label) { bind(label, nextOffset()); }
     void bind(Label* label, BufferOffset boff);
     void bind(RepatchLabel* label);
-    void bindLater(Label* label, wasm::TrapDesc target) {
-        MOZ_CRASH("NYI");
-    }
 
     bool oom() const {
         return AssemblerShared::oom() ||
@@ -248,14 +229,15 @@ class Assembler : public vixl::Assembler
     }
 
     void processCodeLabels(uint8_t* rawCode) {
-        for (size_t i = 0; i < codeLabels_.length(); i++) {
-            CodeLabel label = codeLabels_[i];
-            Bind(rawCode, *label.patchAt(), *label.target());
+        for (const CodeLabel& label : codeLabels_) {
+            Bind(rawCode, label);
         }
     }
 
-    static void Bind(uint8_t* rawCode, CodeOffset label, CodeOffset address) {
-        *reinterpret_cast<const void**>(rawCode + label.offset()) = rawCode + address.offset();
+    static void Bind(uint8_t* rawCode, const CodeLabel& label) {
+        size_t patchAtOffset = label.patchAt().offset();
+        size_t targetOffset = label.target().offset();
+        *reinterpret_cast<const void**>(rawCode + patchAtOffset) = rawCode + targetOffset;
     }
 
     void retarget(Label* cur, Label* next);
@@ -267,8 +249,9 @@ class Assembler : public vixl::Assembler
     }
 
     void comment(const char* msg) {
-        // This is not implemented because setPrinter() is not implemented.
-        // TODO spew("; %s", msg);
+#ifdef JS_DISASM_ARM64
+        spew_.spew("; %s", msg);
+#endif
     }
 
     int actualIndex(int curOffset) {
@@ -278,7 +261,11 @@ class Assembler : public vixl::Assembler
     static uint8_t* PatchableJumpAddress(JitCode* code, uint32_t index) {
         return code->raw() + index;
     }
+
     void setPrinter(Sprinter* sp) {
+#ifdef JS_DISASM_ARM64
+        spew_.setPrinter(sp);
+#endif
     }
 
     static bool SupportsFloatingPoint() { return true; }
@@ -346,8 +333,13 @@ class Assembler : public vixl::Assembler
     static void TraceJumpRelocations(JSTracer* trc, JitCode* code, CompactBufferReader& reader);
     static void TraceDataRelocations(JSTracer* trc, JitCode* code, CompactBufferReader& reader);
 
-    static void FixupNurseryObjects(JSContext* cx, JitCode* code, CompactBufferReader& reader,
-                                    const ObjectVector& nurseryObjects);
+    void assertNoGCThings() const {
+#ifdef DEBUG
+        MOZ_ASSERT(dataRelocations_.length() == 0);
+        for (auto& j : pendingJumps_)
+            MOZ_ASSERT(j.kind == Relocation::HARDCODED);
+#endif
+    }
 
   public:
     // A Jump table entry is 2 instructions, with 8 bytes of raw data
@@ -368,10 +360,10 @@ class Assembler : public vixl::Assembler
     static const size_t OffsetOfJumpTableEntryPointer = 8;
 
   public:
-    void writeCodePointer(CodeOffset* label) {
+    void writeCodePointer(CodeLabel* label) {
         uintptr_t x = uintptr_t(-1);
         BufferOffset off = EmitData(&x, sizeof(uintptr_t));
-        label->bind(off.getOffset());
+        label->patchAt()->bind(off.getOffset());
     }
 
 
@@ -447,19 +439,25 @@ static constexpr Register ABINonArgReg0 = r8;
 static constexpr Register ABINonArgReg1 = r9;
 static constexpr Register ABINonArgReg2 = r10;
 
+// This register may be volatile or nonvolatile. Avoid d31 which is the
+// ScratchDoubleReg.
+static constexpr FloatRegister ABINonArgDoubleReg = { FloatRegisters::s16, FloatRegisters::Single };
+
 // These registers may be volatile or nonvolatile.
 // Note: these three registers are all guaranteed to be different
 static constexpr Register ABINonArgReturnReg0 = r8;
 static constexpr Register ABINonArgReturnReg1 = r9;
+static constexpr Register ABINonVolatileReg { Registers::x19 };
 
-// This register is guaranteed to be clobberable during the prologue of an ABI
-// call which must preserve both ABI argument and non-volatile registers.
-static constexpr Register NativeABIPrologueClobberable = lr;
+// This register is guaranteed to be clobberable during the prologue and
+// epilogue of an ABI call which must preserve both ABI argument, return
+// and non-volatile registers.
+static constexpr Register ABINonArgReturnVolatileReg = lr;
 
 // TLS pointer argument register for WebAssembly functions. This must not alias
 // any other register used for passing function arguments or return values.
-// Preserved by WebAssembly functions.
-static constexpr Register WasmTlsReg { Registers::x17 };
+// Preserved by WebAssembly functions.  Must be nonvolatile.
+static constexpr Register WasmTlsReg { Registers::x23 };
 
 // Registers used for wasm table calls. These registers must be disjoint
 // from the ABI argument registers, WasmTlsReg and each other.
@@ -517,29 +515,35 @@ Imm64::secondHalf() const
     return hi();
 }
 
-void PatchJump(CodeLocationJump& jump_, CodeLocationLabel label,
-               ReprotectCode reprotect = DontReprotect);
-
-static inline void
-PatchBackedge(CodeLocationJump& jump_, CodeLocationLabel label, JitZoneGroup::BackedgeTarget target)
-{
-    PatchJump(jump_, label);
-}
+void PatchJump(CodeLocationJump& jump_, CodeLocationLabel label);
 
 // Forbids pool generation during a specified interval. Not nestable.
 class AutoForbidPools
 {
     Assembler* asm_;
-
   public:
     AutoForbidPools(Assembler* asm_, size_t maxInst)
       : asm_(asm_)
     {
         asm_->enterNoPool(maxInst);
     }
-
     ~AutoForbidPools() {
         asm_->leaveNoPool();
+    }
+};
+
+// Forbids nop filling for testing purposes. Not nestable.
+class AutoForbidNops
+{
+    Assembler* asm_;
+  public:
+    explicit AutoForbidNops(Assembler* asm_)
+      : asm_(asm_)
+    {
+        asm_->enterNoNops();
+    }
+    ~AutoForbidNops() {
+        asm_->leaveNoNops();
     }
 };
 

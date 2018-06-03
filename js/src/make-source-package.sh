@@ -7,7 +7,7 @@ set -e
 
 : ${MKDIR:=mkdir}
 : ${TAR:=tar}
-: ${AUTOCONF:=autoconf-2.13}
+: ${AUTOCONF:=$(which autoconf-2.13 autoconf2.13 | head -1)}
 : ${SRCDIR:=$(cd $(dirname $0); pwd 2>/dev/null)}
 : ${MOZJS_NAME:=mozjs}
 # The place to gather files to be added to the tarball.
@@ -73,6 +73,7 @@ case $cmd in
        ${TOPSRCDIR}/test.mozbuild \
        ${tgtpath}
 
+    cp -pPR ${TOPSRCDIR}/js/app.mozbuild ${tgtpath}/js
     cp -pPR ${TOPSRCDIR}/js/moz.configure ${tgtpath}/js
     cp -pPR ${TOPSRCDIR}/js/ffi.configure ${tgtpath}/js
 
@@ -150,6 +151,10 @@ case $cmd in
         ${TOPSRCDIR}/toolkit/mozapps/installer/package-name.mk \
         ${TOPSRCDIR}/toolkit/mozapps/installer/upload-files.mk \
         ${tgtpath}/toolkit/mozapps/installer
+    ${MKDIR} -p ${tgtpath}/toolkit/crashreporter/tools
+    cp -pPR \
+        ${TOPSRCDIR}/toolkit/crashreporter/tools/symbolstore.py \
+        ${tgtpath}/toolkit/crashreporter/tools
     ${MKDIR} -p ${tgtpath}/mozglue
     cp -pPR \
         ${TOPSRCDIR}/mozglue/build \
@@ -163,6 +168,13 @@ case $cmd in
         ${TOPSRCDIR}/memory/fallible \
         ${TOPSRCDIR}/memory/mozalloc \
         ${tgtpath}/memory
+    ${MKDIR} -p ${tgtpath}/tools/fuzzing
+    cp -pPR \
+        ${TOPSRCDIR}/tools/fuzzing/moz.build \
+        ${TOPSRCDIR}/tools/fuzzing/interface \
+        ${TOPSRCDIR}/tools/fuzzing/registry \
+        ${TOPSRCDIR}/tools/fuzzing/libfuzzer \
+        ${tgtpath}/tools/fuzzing
 
     # remove *.pyc and *.pyo files if any
     find ${tgtpath} -type f -name "*.pyc" -o -name "*.pyo" |xargs rm -f
@@ -209,11 +221,7 @@ README_EOF
     fi
 
     # copy LICENSE
-    if [ -e ${TOPSRCDIR}/b2g/LICENSE ]; then
-        cp ${TOPSRCDIR}/b2g/LICENSE ${tgtpath}/
-    else
-        cp ${TOPSRCDIR}/LICENSE ${tgtpath}/
-    fi
+    cp ${TOPSRCDIR}/LICENSE ${tgtpath}/
 
     # copy patches dir, if it currently exists in STAGING
     if [ -d ${STAGING}/patches ]; then

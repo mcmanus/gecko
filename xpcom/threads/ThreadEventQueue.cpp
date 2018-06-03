@@ -30,7 +30,7 @@ public:
   bool PutEvent(already_AddRefed<nsIRunnable>&& aEvent,
                 EventPriority aPriority) final
   {
-    return mOwner->PutEventInternal(Move(aEvent), aPriority, this);
+    return mOwner->PutEventInternal(std::move(aEvent), aPriority, this);
   }
 
   void Disconnect(const MutexAutoLock& aProofOfLock) final
@@ -49,7 +49,7 @@ private:
 
 template<class InnerQueueT>
 ThreadEventQueue<InnerQueueT>::ThreadEventQueue(UniquePtr<InnerQueueT> aQueue)
-  : mBaseQueue(Move(aQueue))
+  : mBaseQueue(std::move(aQueue))
   , mLock("ThreadEventQueue")
   , mEventsAvailable(mLock, "EventsAvail")
 {
@@ -68,7 +68,7 @@ bool
 ThreadEventQueue<InnerQueueT>::PutEvent(already_AddRefed<nsIRunnable>&& aEvent,
                                         EventPriority aPriority)
 {
-  return PutEventInternal(Move(aEvent), aPriority, nullptr);
+  return PutEventInternal(std::move(aEvent), aPriority, nullptr);
 }
 
 template<class InnerQueueT>
@@ -79,10 +79,26 @@ ThreadEventQueue<InnerQueueT>::PutEventInternal(already_AddRefed<nsIRunnable>&& 
 {
   // We want to leak the reference when we fail to dispatch it, so that
   // we won't release the event in a wrong thread.
-  LeakRefPtr<nsIRunnable> event(Move(aEvent));
+  LeakRefPtr<nsIRunnable> event(std::move(aEvent));
   nsCOMPtr<nsIThreadObserver> obs;
 
   {
+    // Check if the runnable wants to override the passed-in priority.
+    // Do this outside the lock, so runnables implemented in JS can QI
+    // (and possibly GC) outside of the lock.
+    if (InnerQueueT::SupportsPrioritization) {
+      auto* e = event.get();    // can't do_QueryInterface on LeakRefPtr.
+      if (nsCOMPtr<nsIRunnablePriority> runnablePrio = do_QueryInterface(e)) {
+        uint32_t prio = nsIRunnablePriority::PRIORITY_NORMAL;
+        runnablePrio->GetPriority(&prio);
+        if (prio == nsIRunnablePriority::PRIORITY_HIGH) {
+          aPriority = EventPriority::High;
+        } else if (prio == nsIRunnablePriority::PRIORITY_INPUT) {
+          aPriority = EventPriority::Input;
+        }
+      }
+    }
+
     MutexAutoLock lock(mLock);
 
     if (mEventsAreDoomed) {
@@ -210,7 +226,7 @@ ThreadEventQueue<InnerQueueT>::PushEventQueue()
 
   MutexAutoLock lock(mLock);
 
-  mNestedQueues.AppendElement(NestedQueueItem(Move(queue), eventTarget));
+  mNestedQueues.AppendElement(NestedQueueItem(std::move(queue), eventTarget));
   return eventTarget.forget();
 }
 
@@ -241,7 +257,7 @@ ThreadEventQueue<InnerQueueT>::PopEventQueue(nsIEventTarget* aTarget)
     prevQueue->PutEvent(event.forget(), prio, lock);
   }
 
-  mNestedQueues.RemoveElementAt(mNestedQueues.Length() - 1);
+  mNestedQueues.RemoveLastElement();
 }
 
 template<class InnerQueueT>
@@ -249,14 +265,14 @@ already_AddRefed<nsIThreadObserver>
 ThreadEventQueue<InnerQueueT>::GetObserver()
 {
   MutexAutoLock lock(mLock);
-  return do_AddRef(mObserver.get());
+  return do_AddRef(mObserver);
 }
 
 template<class InnerQueueT>
 already_AddRefed<nsIThreadObserver>
 ThreadEventQueue<InnerQueueT>::GetObserverOnThread()
 {
-  return do_AddRef(mObserver.get());
+  return do_AddRef(mObserver);
 }
 
 template<class InnerQueueT>

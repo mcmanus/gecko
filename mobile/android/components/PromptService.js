@@ -1,16 +1,11 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-const Ci = Components.interfaces;
-const Cc = Components.classes;
-const Cr = Components.results;
-const Cu = Components.utils;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "Prompt",
-                                  "resource://gre/modules/Prompt.jsm");
+ChromeUtils.defineModuleGetter(this, "Prompt",
+                               "resource://gre/modules/Prompt.jsm");
 
 var gPromptService = null;
 
@@ -21,14 +16,14 @@ function PromptService() {
 PromptService.prototype = {
   classID: Components.ID("{9a61149b-2276-4a0a-b79c-be994ad106cf}"),
 
-  QueryInterface: XPCOMUtils.generateQI([
-      Ci.nsIPromptFactory, Ci.nsIPromptService, Ci.nsIPromptService2]),
+  QueryInterface: ChromeUtils.generateQI([
+      Ci.nsIPromptFactory, Ci.nsIPromptService]),
 
   /* ----------  nsIPromptFactory  ---------- */
   // XXX Copied from nsPrompter.js.
   getPrompt: function getPrompt(domWin, iid) {
     // This is still kind of dumb; the C++ code delegated to login manager
-    // here, which in turn calls back into us via nsIPromptService2.
+    // here, which in turn calls back into us via nsIPromptService.
     if (iid.equals(Ci.nsIAuthPrompt2) || iid.equals(Ci.nsIAuthPrompt)) {
       try {
         let pwmgr = Cc["@mozilla.org/passwordmanager/authpromptfactory;1"].getService(Ci.nsIPromptFactory);
@@ -45,7 +40,7 @@ PromptService.prototype = {
 
   /* ----------  private memebers  ---------- */
 
-  // nsIPromptService and nsIPromptService2 methods proxy to our Prompt class
+  // nsIPromptService methods proxy to our Prompt class
   callProxy: function(aMethod, aArguments) {
     let prompt;
     let domWin = aArguments[0];
@@ -83,7 +78,6 @@ PromptService.prototype = {
     return this.callProxy("select", arguments);
   },
 
-  /* ----------  nsIPromptService2  ---------- */
   promptAuth: function() {
     return this.callProxy("promptAuth", arguments);
   },
@@ -99,7 +93,7 @@ function InternalPrompt(aDomWin) {
 InternalPrompt.prototype = {
   _domWin: null,
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIPrompt, Ci.nsIAuthPrompt, Ci.nsIAuthPrompt2]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIPrompt, Ci.nsIAuthPrompt, Ci.nsIAuthPrompt2]),
 
   /* ---------- internal methods ---------- */
   _getPrompt: function _getPrompt(aTitle, aText, aButtons, aCheckMsg, aCheckState) {
@@ -485,7 +479,7 @@ InternalPrompt.prototype = {
         }
         self._doAsyncPrompt();
       }
-    }
+    };
 
     Services.tm.dispatchToMainThread(runnable);
   },
@@ -499,7 +493,7 @@ InternalPrompt.prototype = {
       // this._removeLoginNotifications();
 
       cancelable = {
-        QueryInterface: XPCOMUtils.generateQI([Ci.nsICancelable]),
+        QueryInterface: ChromeUtils.generateQI([Ci.nsICancelable]),
         callback: aCallback,
         context: aContext,
         cancel: function() {
@@ -523,7 +517,7 @@ InternalPrompt.prototype = {
         level: aLevel,
         inProgress: false,
         prompter: this
-      }
+      };
 
       this._asyncPrompts[hashKey] = asyncPrompt;
       this._doAsyncPrompt();
@@ -571,8 +565,7 @@ var PromptUtils = {
   },
 
   get pwmgr() {
-    delete this.pwmgr;
-    return this.pwmgr = Cc["@mozilla.org/login-manager;1"].getService(Ci.nsILoginManager);
+    return Services.logins;
   },
 
   getHostnameAndRealm: function pu_getHostnameAndRealm(aRealmString) {
@@ -591,9 +584,9 @@ var PromptUtils = {
   },
 
   canSaveLogin: function pu_canSaveLogin(aHostname, aSavePassword) {
-    let canSave = !this._inPrivateBrowsing && this.pwmgr.getLoginSavingEnabled(aHostname)
+    let canSave = !this._inPrivateBrowsing && this.pwmgr.getLoginSavingEnabled(aHostname);
     if (aSavePassword)
-      canSave = canSave && (aSavePassword == Ci.nsIAuthPrompt.SAVE_PASSWORD_PERMANENTLY)
+      canSave = canSave && (aSavePassword == Ci.nsIAuthPrompt.SAVE_PASSWORD_PERMANENTLY);
     return canSave;
   },
 
@@ -764,7 +757,7 @@ var PromptUtils = {
     else
       username.value = aAuthInfo.username;
 
-    password.value = aAuthInfo.password
+    password.value = aAuthInfo.password;
 
     return [username, password];
   },
@@ -824,7 +817,7 @@ function AuthPromptAdapterFactory() {
 
 AuthPromptAdapterFactory.prototype = {
   classID: Components.ID("{80dae1e9-e0d2-4974-915f-f97050fa8068}"),
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIAuthPromptAdapterFactory]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIAuthPromptAdapterFactory]),
 
   /* ----------  nsIAuthPromptAdapterFactory ---------- */
 
@@ -841,7 +834,7 @@ function AuthPromptAdapter(aPrompt) {
 }
 
 AuthPromptAdapter.prototype = {
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIAuthPrompt2]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIAuthPrompt2]),
   prompt: null,
 
   /* ----------  nsIAuthPrompt2 ---------- */

@@ -6,55 +6,58 @@
 "use strict";
 
 // Make this available to both AMD and CJS environments
-define(function (require, exports, module) {
-  // ReactJS
-  const React = require("devtools/client/shared/vendor/react");
-  const ReactDOM = require("devtools/client/shared/vendor/react-dom");
+define(function(require, exports, module) {
+  const { Component, createFactory } = require("devtools/client/shared/vendor/react");
+  const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
+  const dom = require("devtools/client/shared/vendor/react-dom-factories");
+  const { findDOMNode } = require("devtools/client/shared/vendor/react-dom");
+  const { tr } = dom;
 
   // Tree
-  const TreeCell = React.createFactory(require("./TreeCell"));
-  const LabelCell = React.createFactory(require("./LabelCell"));
+  const TreeCell = createFactory(require("./TreeCell"));
+  const LabelCell = createFactory(require("./LabelCell"));
 
   // Scroll
   const { scrollIntoViewIfNeeded } = require("devtools/client/shared/scroll");
-
-  // Shortcuts
-  const { tr } = React.DOM;
-  const PropTypes = React.PropTypes;
 
   /**
    * This template represents a node in TreeView component. It's rendered
    * using <tr> element (the entire tree is one big <table>).
    */
-  let TreeRow = React.createClass({
-    displayName: "TreeRow",
-
+  class TreeRow extends Component {
     // See TreeView component for more details about the props and
     // the 'member' object.
-    propTypes: {
-      member: PropTypes.shape({
-        object: PropTypes.obSject,
-        name: PropTypes.sring,
-        type: PropTypes.string.isRequired,
-        rowClass: PropTypes.string.isRequired,
-        level: PropTypes.number.isRequired,
-        hasChildren: PropTypes.bool,
-        value: PropTypes.any,
-        open: PropTypes.bool.isRequired,
-        path: PropTypes.string.isRequired,
-        hidden: PropTypes.bool,
-        selected: PropTypes.bool,
-      }),
-      decorator: PropTypes.object,
-      renderCell: PropTypes.object,
-      renderLabelCell: PropTypes.object,
-      columns: PropTypes.array.isRequired,
-      id: PropTypes.string.isRequired,
-      provider: PropTypes.object.isRequired,
-      onClick: PropTypes.func.isRequired,
-      onMouseOver: PropTypes.func,
-      onMouseOut: PropTypes.func
-    },
+    static get propTypes() {
+      return {
+        member: PropTypes.shape({
+          object: PropTypes.obSject,
+          name: PropTypes.sring,
+          type: PropTypes.string.isRequired,
+          rowClass: PropTypes.string.isRequired,
+          level: PropTypes.number.isRequired,
+          hasChildren: PropTypes.bool,
+          value: PropTypes.any,
+          open: PropTypes.bool.isRequired,
+          path: PropTypes.string.isRequired,
+          hidden: PropTypes.bool,
+          selected: PropTypes.bool,
+        }),
+        decorator: PropTypes.object,
+        renderCell: PropTypes.object,
+        renderLabelCell: PropTypes.object,
+        columns: PropTypes.array.isRequired,
+        id: PropTypes.string.isRequired,
+        provider: PropTypes.object.isRequired,
+        onClick: PropTypes.func.isRequired,
+        onMouseOver: PropTypes.func,
+        onMouseOut: PropTypes.func
+      };
+    }
+
+    constructor(props) {
+      super(props);
+      this.getRowClass = this.getRowClass.bind(this);
+    }
 
     componentWillReceiveProps(nextProps) {
       // I don't like accessing the underlying DOM elements directly,
@@ -64,39 +67,39 @@ define(function (require, exports, module) {
       // The important part is that DOM elements don't need to be
       // re-created when they should appear again.
       if (nextProps.member.hidden != this.props.member.hidden) {
-        let row = ReactDOM.findDOMNode(this);
+        const row = findDOMNode(this);
         row.classList.toggle("hidden");
       }
-    },
+    }
 
     /**
      * Optimize row rendering. If props are the same do not render.
      * This makes the rendering a lot faster!
      */
-    shouldComponentUpdate: function (nextProps) {
-      let props = ["name", "open", "value", "loading", "selected", "hasChildren"];
-      for (let p in props) {
+    shouldComponentUpdate(nextProps) {
+      const props = ["name", "open", "value", "loading", "selected", "hasChildren"];
+      for (const p in props) {
         if (nextProps.member[props[p]] != this.props.member[props[p]]) {
           return true;
         }
       }
 
       return false;
-    },
+    }
 
-    componentDidUpdate: function () {
+    componentDidUpdate() {
       if (this.props.member.selected) {
-        let row = ReactDOM.findDOMNode(this);
+        const row = findDOMNode(this);
         // Because this is called asynchronously, context window might be
         // already gone.
         if (row.ownerDocument.defaultView) {
           scrollIntoViewIfNeeded(row);
         }
       }
-    },
+    }
 
-    getRowClass: function (object) {
-      let decorator = this.props.decorator;
+    getRowClass(object) {
+      const decorator = this.props.decorator;
       if (!decorator || !decorator.getRowClass) {
         return [];
       }
@@ -112,12 +115,12 @@ define(function (require, exports, module) {
       }
 
       return classNames;
-    },
+    }
 
-    render: function () {
-      let member = this.props.member;
-      let decorator = this.props.decorator;
-      let props = {
+    render() {
+      const member = this.props.member;
+      const decorator = this.props.decorator;
+      const props = {
         id: this.props.id,
         role: "treeitem",
         "aria-level": member.level,
@@ -128,7 +131,7 @@ define(function (require, exports, module) {
       };
 
       // Compute class name list for the <tr> element.
-      let classNames = this.getRowClass(member.object) || [];
+      const classNames = this.getRowClass(member.object) || [];
       classNames.push("treeRow");
       classNames.push(member.type + "Row");
 
@@ -160,7 +163,7 @@ define(function (require, exports, module) {
       // the first one, but there might be cases (like in
       // the Memory panel) where the toggling is done
       // in the last column.
-      let cells = [];
+      const cells = [];
 
       // Get components for rendering cells.
       let renderCell = this.props.renderCell || RenderCell;
@@ -172,7 +175,7 @@ define(function (require, exports, module) {
 
       // Render a cell for every column.
       this.props.columns.forEach(col => {
-        let cellProps = Object.assign({}, this.props, {
+        const cellProps = Object.assign({}, this.props, {
           key: col.id,
           id: col.id,
           value: this.props.provider.getValue(member.object, col.id)
@@ -182,7 +185,7 @@ define(function (require, exports, module) {
           renderCell = decorator.renderCell(member.object, col.id);
         }
 
-        let render = (col.id == "default") ? renderLabelCell : renderCell;
+        const render = (col.id == "default") ? renderLabelCell : renderCell;
 
         // Some cells don't have to be rendered. This happens when some
         // other cells span more columns. Note that the label cells contains
@@ -198,15 +201,15 @@ define(function (require, exports, module) {
         tr(props, cells)
       );
     }
-  });
+  }
 
   // Helpers
 
-  let RenderCell = props => {
+  const RenderCell = props => {
     return TreeCell(props);
   };
 
-  let RenderLabelCell = props => {
+  const RenderLabelCell = props => {
     return LabelCell(props);
   };
 

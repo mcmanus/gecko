@@ -9,7 +9,7 @@
 
 #include "NamespaceImports.h"
 
-#include "gc/Heap.h"
+#include "gc/Cell.h"
 #include "gc/StoreBuffer.h"
 #include "js/HeapAPI.h"
 #include "js/Id.h"
@@ -190,14 +190,8 @@
  * is not usually necessary and should be done with caution.
  */
 
-class JSAtom;
-struct JSCompartment;
 class JSFlatString;
 class JSLinearString;
-
-namespace JS {
-class Symbol;
-} // namespace JS
 
 namespace js {
 
@@ -230,6 +224,7 @@ class JitCode;
 } // namespace jit
 
 #ifdef DEBUG
+
 // Barriers can't be triggered during backend Ion compilation, which may run on
 // a helper thread.
 bool
@@ -243,13 +238,21 @@ CurrentThreadIsGCSweeping();
 
 bool
 IsMarkedBlack(JSObject* obj);
+
+bool
+CurrentThreadIsTouchingGrayThings();
+
 #endif
 
-MOZ_ALWAYS_INLINE void
-CheckEdgeIsNotBlackToGray(JSObject* src, const Value& dst)
+struct MOZ_RAII AutoTouchingGrayThings
 {
-    MOZ_ASSERT_IF(IsMarkedBlack(src), JS::ValueIsNotGray(dst));
-}
+#ifdef DEBUG
+    AutoTouchingGrayThings();
+    ~AutoTouchingGrayThings();
+#else
+    AutoTouchingGrayThings() {}
+#endif
+};
 
 template <typename T>
 struct InternalBarrierMethods {};
@@ -264,6 +267,10 @@ struct InternalBarrierMethods<T*>
     static void postBarrier(T** vp, T* prev, T* next) { T::writeBarrierPost(vp, prev, next); }
 
     static void readBarrier(T* v) { T::readBarrier(v); }
+
+#ifdef DEBUG
+    static bool thingIsNotGray(T* v) { return T::thingIsNotGray(v); }
+#endif
 };
 
 template <typename S> struct PreBarrierFunctor : public VoidDefaultAdaptor<S> {
@@ -283,30 +290,34 @@ struct InternalBarrierMethods<Value>
         DispatchTyped(PreBarrierFunctor<Value>(), v);
     }
 
-    static void postBarrier(Value* vp, const Value& prev, const Value& next) {
+    static MOZ_ALWAYS_INLINE void postBarrier(Value* vp, const Value& prev, const Value& next) {
         MOZ_ASSERT(!CurrentThreadIsIonCompiling());
         MOZ_ASSERT(vp);
 
         // If the target needs an entry, add it.
         js::gc::StoreBuffer* sb;
-        if (next.isObject() && (sb = reinterpret_cast<gc::Cell*>(&next.toObject())->storeBuffer())) {
+        if ((next.isObject() || next.isString()) && (sb = next.toGCThing()->storeBuffer())) {
             // If we know that the prev has already inserted an entry, we can
             // skip doing the lookup to add the new entry. Note that we cannot
             // safely assert the presence of the entry because it may have been
             // added via a different store buffer.
-            if (prev.isObject() && reinterpret_cast<gc::Cell*>(&prev.toObject())->storeBuffer())
+            if ((prev.isObject() || prev.isString()) && prev.toGCThing()->storeBuffer())
                 return;
             sb->putValue(vp);
             return;
         }
         // Remove the prev entry if the new value does not need it.
-        if (prev.isObject() && (sb = reinterpret_cast<gc::Cell*>(&prev.toObject())->storeBuffer()))
+        if ((prev.isObject() || prev.isString()) && (sb = prev.toGCThing()->storeBuffer()))
             sb->unputValue(vp);
     }
 
     static void readBarrier(const Value& v) {
         DispatchTyped(ReadBarrierFunctor<Value>(), v);
     }
+
+#ifdef DEBUG
+    static bool thingIsNotGray(const Value& v) { return JS::ValueIsNotGray(v); }
+#endif
 };
 
 template <>
@@ -315,11 +326,25 @@ struct InternalBarrierMethods<jsid>
     static bool isMarkable(jsid id) { return JSID_IS_GCTHING(id); }
     static void preBarrier(jsid id) { DispatchTyped(PreBarrierFunctor<jsid>(), id); }
     static void postBarrier(jsid* idp, jsid prev, jsid next) {}
+#ifdef DEBUG
+    static bool thingIsNotGray(jsid id) { return JS::IdIsNotGray(id); }
+#endif
 };
 
-// Base class of all barrier types.
 template <typename T>
-class BarrieredBase
+static inline void
+CheckTargetIsNotGray(const T& v)
+{
+    MOZ_ASSERT(InternalBarrierMethods<T>::thingIsNotGray(v) ||
+               CurrentThreadIsTouchingGrayThings());
+}
+
+// Base class of all barrier types.
+//
+// This is marked non-memmovable since post barriers added by derived classes
+// can add pointers to class instances to the store buffer.
+template <typename T>
+class MOZ_NON_MEMMOVABLE BarrieredBase
 {
   protected:
     // BarrieredBase is not directly instantiable.
@@ -369,7 +394,7 @@ class WriteBarrieredBase : public BarrieredBase<T>,
 
   protected:
     void pre() { InternalBarrierMethods<T>::preBarrier(this->value); }
-    void post(const T& prev, const T& next) {
+    MOZ_ALWAYS_INLINE void post(const T& prev, const T& next) {
         InternalBarrierMethods<T>::postBarrier(&this->value, prev, next);
     }
 };
@@ -384,7 +409,7 @@ template <class T>
 class PreBarriered : public WriteBarrieredBase<T>
 {
   public:
-    PreBarriered() : WriteBarrieredBase<T>(JS::GCPolicy<T>::initial()) {}
+    PreBarriered() : WriteBarrieredBase<T>(JS::SafelyInitialized<T>()) {}
     /*
      * Allow implicit construction for use in generic contexts, such as
      * DebuggerWeakMap::markKeys.
@@ -407,6 +432,7 @@ class PreBarriered : public WriteBarrieredBase<T>
 
   private:
     void set(const T& v) {
+        CheckTargetIsNotGray(v);
         this->pre();
         this->value = v;
     }
@@ -427,12 +453,12 @@ template <class T>
 class GCPtr : public WriteBarrieredBase<T>
 {
   public:
-    GCPtr() : WriteBarrieredBase<T>(JS::GCPolicy<T>::initial()) {}
+    GCPtr() : WriteBarrieredBase<T>(JS::SafelyInitialized<T>()) {}
     explicit GCPtr(const T& v) : WriteBarrieredBase<T>(v) {
-        this->post(JS::GCPolicy<T>::initial(), v);
+        this->post(JS::SafelyInitialized<T>(), v);
     }
     explicit GCPtr(const GCPtr<T>& v) : WriteBarrieredBase<T>(v) {
-        this->post(JS::GCPolicy<T>::initial(), v);
+        this->post(JS::SafelyInitialized<T>(), v);
     }
 #ifdef DEBUG
     ~GCPtr() {
@@ -445,20 +471,22 @@ class GCPtr : public WriteBarrieredBase<T>
         //
         // Note that when sweeping the wrapped pointer may already have been
         // freed by this point.
-        MOZ_ASSERT(CurrentThreadIsGCSweeping() || this->value == JS::GCPolicy<T>::initial());
-        Poison(this, JS_FREED_HEAP_PTR_PATTERN, sizeof(*this));
+        MOZ_ASSERT(CurrentThreadIsGCSweeping() || this->value == JS::SafelyInitialized<T>());
+        Poison(this, JS_FREED_HEAP_PTR_PATTERN, sizeof(*this), MemCheckKind::MakeNoAccess);
     }
 #endif
 
     void init(const T& v) {
+        CheckTargetIsNotGray(v);
         this->value = v;
-        this->post(JS::GCPolicy<T>::initial(), v);
+        this->post(JS::SafelyInitialized<T>(), v);
     }
 
     DECLARE_POINTER_ASSIGN_OPS(GCPtr, T);
 
   private:
     void set(const T& v) {
+        CheckTargetIsNotGray(v);
         this->pre();
         T tmp = this->value;
         this->value = v;
@@ -501,11 +529,11 @@ template <class T>
 class HeapPtr : public WriteBarrieredBase<T>
 {
   public:
-    HeapPtr() : WriteBarrieredBase<T>(JS::GCPolicy<T>::initial()) {}
+    HeapPtr() : WriteBarrieredBase<T>(JS::SafelyInitialized<T>()) {}
 
     // Implicitly adding barriers is a reasonable default.
     MOZ_IMPLICIT HeapPtr(const T& v) : WriteBarrieredBase<T>(v) {
-        this->post(JS::GCPolicy<T>::initial(), this->value);
+        this->post(JS::SafelyInitialized<T>(), this->value);
     }
 
     /*
@@ -515,17 +543,18 @@ class HeapPtr : public WriteBarrieredBase<T>
      * simply omit the rvalue variant.
      */
     MOZ_IMPLICIT HeapPtr(const HeapPtr<T>& v) : WriteBarrieredBase<T>(v) {
-        this->post(JS::GCPolicy<T>::initial(), this->value);
+        this->post(JS::SafelyInitialized<T>(), this->value);
     }
 
     ~HeapPtr() {
         this->pre();
-        this->post(this->value, JS::GCPolicy<T>::initial());
+        this->post(this->value, JS::SafelyInitialized<T>());
     }
 
     void init(const T& v) {
+        CheckTargetIsNotGray(v);
         this->value = v;
-        this->post(JS::GCPolicy<T>::initial(), this->value);
+        this->post(JS::SafelyInitialized<T>(), this->value);
     }
 
     DECLARE_POINTER_ASSIGN_OPS(HeapPtr, T);
@@ -539,11 +568,13 @@ class HeapPtr : public WriteBarrieredBase<T>
 
   protected:
     void set(const T& v) {
+        CheckTargetIsNotGray(v);
         this->pre();
         postBarrieredSet(v);
     }
 
     void postBarrieredSet(const T& v) {
+        CheckTargetIsNotGray(v);
         T tmp = this->value;
         this->value = v;
         this->post(tmp, this->value);
@@ -580,32 +611,33 @@ class ReadBarriered : public ReadBarrieredBase<T>,
     using ReadBarrieredBase<T>::value;
 
   public:
-    ReadBarriered() : ReadBarrieredBase<T>(JS::GCPolicy<T>::initial()) {}
+    ReadBarriered() : ReadBarrieredBase<T>(JS::SafelyInitialized<T>()) {}
 
     // It is okay to add barriers implicitly.
     MOZ_IMPLICIT ReadBarriered(const T& v) : ReadBarrieredBase<T>(v) {
-        this->post(JS::GCPolicy<T>::initial(), v);
+        this->post(JS::SafelyInitialized<T>(), v);
     }
 
     // The copy constructor creates a new weak edge but the wrapped pointer does
     // not escape, so no read barrier is necessary.
     explicit ReadBarriered(const ReadBarriered& v) : ReadBarrieredBase<T>(v) {
-        this->post(JS::GCPolicy<T>::initial(), v.unbarrieredGet());
+        this->post(JS::SafelyInitialized<T>(), v.unbarrieredGet());
     }
 
     // Move retains the lifetime status of the source edge, so does not fire
     // the read barrier of the defunct edge.
     ReadBarriered(ReadBarriered&& v)
-      : ReadBarrieredBase<T>(mozilla::Move(v))
+      : ReadBarrieredBase<T>(std::move(v))
     {
-        this->post(JS::GCPolicy<T>::initial(), v.value);
+        this->post(JS::SafelyInitialized<T>(), v.value);
     }
 
     ~ReadBarriered() {
-        this->post(this->value, JS::GCPolicy<T>::initial());
+        this->post(this->value, JS::SafelyInitialized<T>());
     }
 
     ReadBarriered& operator=(const ReadBarriered& v) {
+        CheckTargetIsNotGray(v.value);
         T prior = this->value;
         this->value = v.value;
         this->post(prior, v.value);
@@ -635,6 +667,7 @@ class ReadBarriered : public ReadBarrieredBase<T>,
 
     void set(const T& v)
     {
+        CheckTargetIsNotGray(v);
         T tmp = this->value;
         this->value = v;
         this->post(tmp, v);
@@ -657,27 +690,13 @@ class HeapSlot : public WriteBarrieredBase<Value>
         Element = 1
     };
 
-    explicit HeapSlot() = delete;
-
-    explicit HeapSlot(NativeObject* obj, Kind kind, uint32_t slot, const Value& v)
-      : WriteBarrieredBase<Value>(v)
-    {
-        post(obj, kind, slot, v);
-    }
-
-    explicit HeapSlot(NativeObject* obj, Kind kind, uint32_t slot, const HeapSlot& s)
-      : WriteBarrieredBase<Value>(s.value)
-    {
-        post(obj, kind, slot, s);
-    }
-
-    ~HeapSlot() {
-        pre();
-    }
-
     void init(NativeObject* owner, Kind kind, uint32_t slot, const Value& v) {
         value = v;
         post(owner, kind, slot, v);
+    }
+
+    void destroy() {
+        pre();
     }
 
 #ifdef DEBUG
@@ -693,18 +712,13 @@ class HeapSlot : public WriteBarrieredBase<Value>
         post(owner, kind, slot, v);
     }
 
-    /* For users who need to manually barrier the raw types. */
-    static void writeBarrierPost(NativeObject* owner, Kind kind, uint32_t slot, const Value& target) {
-        reinterpret_cast<HeapSlot*>(const_cast<Value*>(&target))->post(owner, kind, slot, target);
-    }
-
   private:
     void post(NativeObject* owner, Kind kind, uint32_t slot, const Value& target) {
 #ifdef DEBUG
         assertPreconditionForWriteBarrierPost(owner, kind, slot, target);
 #endif
-        if (this->value.isObject()) {
-            gc::Cell* cell = reinterpret_cast<gc::Cell*>(&this->value.toObject());
+        if (this->value.isObject() || this->value.isString()) {
+            gc::Cell* cell = this->value.toGCThing();
             if (cell->storeBuffer())
                 cell->storeBuffer()->putSlot(owner, kind, slot, 1);
         }
@@ -794,6 +808,7 @@ class ImmutableTenuredPtr
 
     void init(T ptr) {
         MOZ_ASSERT(ptr->isTenured());
+        CheckTargetIsNotGray(ptr);
         value = ptr;
     }
 

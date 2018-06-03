@@ -10,8 +10,6 @@ import redo
 import logging
 logger = logging.getLogger(__name__)
 
-BALROG_API_ROOT = 'https://aus5.mozilla.org/api/v1'
-
 PLATFORM_RENAMES = {
     'windows2012-32': 'win32',
     'windows2012-64': 'win64',
@@ -28,6 +26,9 @@ BALROG_PLATFORM_MAP = {
     "linux64": [
         "Linux_x86_64-gcc3"
     ],
+    "linux64-asan-reporter": [
+        "Linux_x86_64-gcc3-asan"
+    ],
     "macosx64": [
         "Darwin_x86_64-gcc3-u-i386-x86_64",
         "Darwin_x86-gcc3-u-i386-x86_64",
@@ -43,6 +44,21 @@ BALROG_PLATFORM_MAP = {
         "WINNT_x86_64-msvc",
         "WINNT_x86_64-msvc-x64"
     ]
+}
+
+FTP_PLATFORM_MAP = {
+    "Darwin_x86-gcc3": "mac",
+    "Darwin_x86-gcc3-u-i386-x86_64": "mac",
+    "Darwin_x86_64-gcc3": "mac",
+    "Darwin_x86_64-gcc3-u-i386-x86_64": "mac",
+    "Linux_x86-gcc3": "linux-i686",
+    "Linux_x86_64-gcc3": "linux-x86_64",
+    "Linux_x86_64-gcc3-asan": "linux-x86_64-asan-reporter",
+    "WINNT_x86-msvc": "win32",
+    "WINNT_x86-msvc-x64": "win32",
+    "WINNT_x86-msvc-x86": "win32",
+    "WINNT_x86_64-msvc": "win64",
+    "WINNT_x86_64-msvc-x64": "win64",
 }
 
 
@@ -76,8 +92,16 @@ def get_partials_artifacts(release_history, platform, locale):
 
 def get_partials_artifact_map(release_history, platform, locale):
     platform = _sanitize_platform(platform)
-    return {k: release_history[platform][locale][k]['buildid']
-            for k in release_history.get(platform, {}).get(locale, {})}
+
+    artifact_map = {}
+    for k in release_history.get(platform, {}).get(locale, {}):
+        details = release_history[platform][locale][k]
+        attributes = ('buildid',
+                      'previousBuildNumber',
+                      'previousVersion')
+        artifact_map[k] = {attr: details[attr] for attr in attributes
+                           if attr in details}
+    return artifact_map
 
 
 def _retry_on_http_errors(url, verify, params, errors):
@@ -108,7 +132,7 @@ def get_sorted_releases(product, branch):
     :param branch: branch name, e.g. mozilla-central
     :return: a sorted list of release names, most recent first.
     """
-    url = "{}/releases".format(BALROG_API_ROOT)
+    url = "{}/releases".format(_get_balrog_api_root(branch))
     params = {
         "product": product,
         # Adding -nightly-2 (2 stands for the beginning of build ID
@@ -125,15 +149,40 @@ def get_sorted_releases(product, branch):
     return releases
 
 
-def get_release_builds(release):
-    url = "{}/releases/{}".format(BALROG_API_ROOT, release)
+def get_release_builds(release, branch):
+    url = "{}/releases/{}".format(_get_balrog_api_root(branch), release)
     req = _retry_on_http_errors(
         url=url, verify=True, params=None,
         errors=[500])
     return req.json()
 
 
-def populate_release_history(product, branch, maxbuilds=4, maxsearch=10):
+def _get_balrog_api_root(branch):
+    if branch in ('mozilla-central', 'mozilla-beta', 'mozilla-release') or 'mozilla-esr' in branch:
+        return 'https://aus5.mozilla.org/api/v1'
+    else:
+        return 'https://aus5.stage.mozaws.net/api/v1'
+
+
+def find_localtest(fileUrls):
+    for channel in fileUrls:
+        if "-localtest" in channel:
+            return channel
+
+
+def populate_release_history(product, branch, maxbuilds=4, maxsearch=10,
+                             partial_updates=None):
+    # Assuming we are using release branches when we know the list of previous
+    # releases in advance
+    if partial_updates:
+        return _populate_release_history(
+            product, branch, partial_updates=partial_updates)
+    else:
+        return _populate_nightly_history(
+            product, branch, maxbuilds=maxbuilds, maxsearch=maxsearch)
+
+
+def _populate_nightly_history(product, branch, maxbuilds=4, maxsearch=10):
     """Find relevant releases in Balrog
     Not all releases have all platforms and locales, due
     to Taskcluster migration.
@@ -174,7 +223,7 @@ def populate_release_history(product, branch, maxbuilds=4, maxsearch=10):
             for platform in builds for locale in builds[platform])
         if full:
             break
-        history = get_release_builds(release)
+        history = get_release_builds(release, branch)
 
         for platform in history['platforms']:
             if 'alias' in history['platforms'][platform]:
@@ -192,5 +241,40 @@ def populate_release_history(product, branch, maxbuilds=4, maxsearch=10):
                 builds[platform][locale][partial_mar_tmpl.format(nextkey)] = {
                     'buildid': buildid,
                     'mar_url': url,
+                }
+    return builds
+
+
+def _populate_release_history(product, branch, partial_updates):
+    builds = dict()
+    for version, release in partial_updates.iteritems():
+        prev_release_blob = '{product}-{version}-build{build_number}'.format(
+            product=product, version=version, build_number=release['buildNumber']
+        )
+        partial_mar_key = 'target-{version}.partial.mar'.format(version=version)
+        history = get_release_builds(prev_release_blob, branch)
+        # use one of the localtest channels to avoid relying on bouncer
+        localtest = find_localtest(history['fileUrls'])
+        url_pattern = history['fileUrls'][localtest]['completes']['*']
+
+        for platform in history['platforms']:
+            if 'alias' in history['platforms'][platform]:
+                continue
+            if platform not in builds:
+                builds[platform] = dict()
+            for locale in history['platforms'][platform]['locales']:
+                if locale not in builds[platform]:
+                    builds[platform][locale] = dict()
+                buildid = history['platforms'][platform]['locales'][locale]['buildID']
+                url = url_pattern.replace(
+                    '%OS_FTP%', FTP_PLATFORM_MAP[platform]).replace(
+                    '%LOCALE%', locale
+                )
+                builds[platform][locale][partial_mar_key] = {
+                    'buildid': buildid,
+                    'mar_url': url,
+                    'previousVersion': version,
+                    'previousBuildNumber': release['buildNumber'],
+                    'product': product,
                 }
     return builds

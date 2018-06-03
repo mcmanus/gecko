@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "TimeoutManager.h"
+#include "nsContentUtils.h"
 #include "nsGlobalWindow.h"
 #include "mozilla/Logging.h"
 #include "mozilla/Telemetry.h"
@@ -155,7 +156,7 @@ TimeoutManager::DestroyFiringId(uint32_t aFiringId)
 {
   MOZ_DIAGNOSTIC_ASSERT(!mFiringIdStack.IsEmpty());
   MOZ_DIAGNOSTIC_ASSERT(mFiringIdStack.LastElement() == aFiringId);
-  mFiringIdStack.RemoveElementAt(mFiringIdStack.Length() - 1);
+  mFiringIdStack.RemoveLastElement();
 }
 
 bool
@@ -395,7 +396,7 @@ int32_t gDisableOpenClickDelay;
 
 } // anonymous namespace
 
-TimeoutManager::TimeoutManager(nsGlobalWindow& aWindow)
+TimeoutManager::TimeoutManager(nsGlobalWindowInner& aWindow)
   : mWindow(aWindow),
     mExecutor(new TimeoutExecutor(this)),
     mNormalTimeouts(*this),
@@ -410,8 +411,6 @@ TimeoutManager::TimeoutManager(nsGlobalWindow& aWindow)
     mThrottleTrackingTimeouts(false),
     mBudgetThrottleTimeouts(false)
 {
-  MOZ_DIAGNOSTIC_ASSERT(aWindow.IsInnerWindow());
-
   MOZ_LOG(gLog, LogLevel::Debug,
           ("TimeoutManager %p created, tracking bucketing %s\n",
            this, gAnnotateTrackingChannels ? "enabled" : "disabled"));
@@ -419,7 +418,7 @@ TimeoutManager::TimeoutManager(nsGlobalWindow& aWindow)
 
 TimeoutManager::~TimeoutManager()
 {
-  MOZ_DIAGNOSTIC_ASSERT(mWindow.AsInner()->InnerObjectsFreed());
+  MOZ_DIAGNOSTIC_ASSERT(mWindow.IsDying());
   MOZ_DIAGNOSTIC_ASSERT(!mThrottleTimeoutsTimer);
 
   mExecutor->Shutdown();
@@ -587,7 +586,7 @@ TimeoutManager::SetTimeout(nsITimeoutHandler* aHandler,
   }
 
   if (gRunningTimeoutDepth == 0 &&
-      mWindow.GetPopupControlState() < openBlocked) {
+      nsContentUtils::GetPopupControlState() < openBlocked) {
     // This timeout is *not* set from another timeout and it's set
     // while popups are enabled. Propagate the state to the timeout if
     // its delay (interval) is equal to or less than what
@@ -597,7 +596,7 @@ TimeoutManager::SetTimeout(nsITimeoutHandler* aHandler,
     // because our lower bound for |realInterval| could be pretty high
     // in some cases.
     if (interval <= gDisableOpenClickDelay) {
-      timeout->mPopupState = mWindow.GetPopupControlState();
+      timeout->mPopupState = nsContentUtils::GetPopupControlState();
     }
   }
 
@@ -1194,10 +1193,9 @@ class ThrottleTimeoutsCallback final : public nsITimerCallback
                                      , public nsINamed
 {
 public:
-  explicit ThrottleTimeoutsCallback(nsGlobalWindow* aWindow)
+  explicit ThrottleTimeoutsCallback(nsGlobalWindowInner* aWindow)
     : mWindow(aWindow)
   {
-    MOZ_DIAGNOSTIC_ASSERT(aWindow->IsInnerWindow());
   }
 
   NS_DECL_ISUPPORTS
@@ -1215,7 +1213,7 @@ private:
 private:
   // The strong reference here keeps the Window and hence the TimeoutManager
   // object itself alive.
-  RefPtr<nsGlobalWindow> mWindow;
+  RefPtr<nsGlobalWindowInner> mWindow;
 };
 
 NS_IMPL_ISUPPORTS(ThrottleTimeoutsCallback, nsITimerCallback, nsINamed)
@@ -1299,7 +1297,7 @@ void
 TimeoutManager::MaybeStartThrottleTimeout()
 {
   if (gTimeoutThrottlingDelay <= 0 ||
-      mWindow.AsInner()->InnerObjectsFreed() || mWindow.IsSuspended()) {
+      mWindow.IsDying() || mWindow.IsSuspended()) {
     return;
   }
 
@@ -1309,19 +1307,12 @@ TimeoutManager::MaybeStartThrottleTimeout()
           ("TimeoutManager %p delaying tracking timeout throttling by %dms\n",
            this, gTimeoutThrottlingDelay));
 
-  mThrottleTimeoutsTimer =
-    do_CreateInstance("@mozilla.org/timer;1");
-  if (!mThrottleTimeoutsTimer) {
-    return;
-  }
-
   nsCOMPtr<nsITimerCallback> callback =
     new ThrottleTimeoutsCallback(&mWindow);
 
-  mThrottleTimeoutsTimer->SetTarget(EventTarget());
-
-  mThrottleTimeoutsTimer->InitWithCallback(
-    callback, gTimeoutThrottlingDelay, nsITimer::TYPE_ONE_SHOT);
+  NS_NewTimerWithCallback(getter_AddRefs(mThrottleTimeoutsTimer),
+                          callback, gTimeoutThrottlingDelay, nsITimer::TYPE_ONE_SHOT,
+                          EventTarget());
 }
 
 void

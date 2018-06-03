@@ -374,7 +374,7 @@ ER3(SSL_ERROR_WEAK_SERVER_EPHEMERAL_DH_KEY, (SSL_ERROR_BASE + 115),
     "SSL received a weak ephemeral Diffie-Hellman key in Server Key Exchange handshake message.")
 
 ER3(SSL_ERROR_NEXT_PROTOCOL_DATA_INVALID, (SSL_ERROR_BASE + 116),
-    "SSL received invalid NPN extension data.")
+    "SSL received invalid ALPN extension data.")
 
 ER3(SSL_ERROR_FEATURE_NOT_SUPPORTED_FOR_SSL2, (SSL_ERROR_BASE + 117),
     "SSL feature not supported for SSL 2.0 connections.")
@@ -525,3 +525,30 @@ ER3(SSL_ERROR_APPLICATION_ABORT, (SSL_ERROR_BASE + 165),
 
 ER3(SSL_ERROR_APP_CALLBACK_ERROR, (SSL_ERROR_BASE + 166),
     "An application callback produced an invalid response.")
+
+ER3(SSL_ERROR_NO_TIMERS_ERROR, (SSL_ERROR_BASE + 167),
+    "No timers are currently running.")
+
+ER3(SSL_ERROR_MISSING_COOKIE_EXTENSION, (SSL_ERROR_BASE + 168),
+    "A second ClientHello was received without a cookie extension.")
+
+ER3(SSL_ERROR_RX_UNEXPECTED_KEY_UPDATE, (SSL_ERROR_BASE + 169),
+    "SSL received an unexpected key update message.")
+
+ER3(SSL_ERROR_RX_MALFORMED_KEY_UPDATE, (SSL_ERROR_BASE + 170),
+    "SSL received a malformed key update message.")
+
+ER3(SSL_ERROR_TOO_MANY_KEY_UPDATES, (SSL_ERROR_BASE + 171),
+    "SSL attempted too many key updates.")
+
+ER3(SSL_ERROR_HANDSHAKE_FAILED, (SSL_ERROR_BASE + 172),
+    "SSL handshake has already failed. No more operations possible.")
+
+ER3(SSL_ERROR_BAD_RESUMPTION_TOKEN_ERROR, (SSL_ERROR_BASE + 173),
+    "SSL received an invalid resumption token.")
+
+ER3(SSL_ERROR_RX_MALFORMED_DTLS_ACK, (SSL_ERROR_BASE + 174),
+    "SSL received a malformed DTLS ACK")
+
+ER3(SSL_ERROR_DH_KEY_TOO_LONG, (SSL_ERROR_BASE + 175),
+    "SSL received a DH key share that's too long (>8192 bit).")

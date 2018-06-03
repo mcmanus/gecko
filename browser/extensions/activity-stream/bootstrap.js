@@ -3,18 +3,19 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.importGlobalProperties(["fetch"]);
 
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
+ChromeUtils.defineModuleGetter(this, "Services",
   "resource://gre/modules/Services.jsm");
 
-const ACTIVITY_STREAM_ENABLED_PREF = "browser.newtabpage.activity-stream.enabled";
+XPCOMUtils.defineLazyServiceGetter(this, "resProto",
+                                   "@mozilla.org/network/protocol;1?name=resource",
+                                   "nsISubstitutingProtocolHandler");
+
+const RESOURCE_HOST = "activity-stream";
+
 const BROWSER_READY_NOTIFICATION = "sessionstore-windows-restored";
-const PREF_CHANGED_TOPIC = "nsPref:changed";
-const REASON_SHUTDOWN_ON_PREF_CHANGE = "PREF_OFF";
-const REASON_STARTUP_ON_PREF_CHANGE = "PREF_ON";
 const RESOURCE_BASE = "resource://activity-stream";
 
 const ACTIVITY_STREAM_OPTIONS = {newTabURL: "about:newtab"};
@@ -29,8 +30,15 @@ let waitingForBrowserReady = true;
 XPCOMUtils.defineLazyModuleGetter(this, "ActivityStream",
   "resource://activity-stream/lib/ActivityStream.jsm", null, null, () => {
     // Helper to fetch a resource directory listing and call back with each item
-    const processListing = async(uri, cb) => (await (await fetch(uri)).text())
-      .split("\n").slice(2).forEach(line => cb(line.split(" ").slice(1)));
+    const processListing = async (uri, cb) => {
+      try {
+        (await (await fetch(uri)).text())
+          .split("\n").slice(2).forEach(line => cb(line.split(" ").slice(1)));
+      } catch (e) {
+        // Silently ignore listings that fail to load
+        // probably because the resource: has been unloaded
+      }
+    };
 
     // Look for modules one level deeper than the top resource URI
     processListing(RESOURCE_BASE, ([directory, , , type]) => {
@@ -48,8 +56,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "ActivityStream",
 
 /**
  * init - Initializes an instance of ActivityStream. This could be called by
- *        the startup() function exposed by bootstrap.js, or it could be called
- *        when ACTIVITY_STREAM_ENABLED_PREF is changed from false to true.
+ *        the startup() function exposed by bootstrap.js.
  *
  * @param  {string} reason - Reason for initialization. Could be install, upgrade, or PREF_ON
  */
@@ -69,8 +76,7 @@ function init(reason) {
 
 /**
  * uninit - Uninitializes the activityStream instance, if it exsits.This could be
- *          called by the shutdown() function exposed by bootstrap.js, or it could
- *          be called when ACTIVITY_STREAM_ENABLED_PREF is changed from true to false.
+ *          called by the shutdown() function exposed by bootstrap.js.
  *
  * @param  {type} reason Reason for uninitialization. Could be uninstall, upgrade, or PREF_OFF
  */
@@ -79,18 +85,6 @@ function uninit(reason) {
   if (activityStream) {
     activityStream.uninit(reason);
     activityStream = null;
-  }
-}
-
-/**
- * onPrefChanged - handler for changes to ACTIVITY_STREAM_ENABLED_PREF
- *
- */
-function onPrefChanged() {
-  if (Services.prefs.getBoolPref(ACTIVITY_STREAM_ENABLED_PREF, false)) {
-    init(REASON_STARTUP_ON_PREF_CHANGE);
-  } else {
-    uninit(REASON_SHUTDOWN_ON_PREF_CHANGE);
   }
 }
 
@@ -131,24 +125,27 @@ function migratePref(oldPrefName, cbIfNotDefault) {
  */
 function onBrowserReady() {
   waitingForBrowserReady = false;
-
-  // Listen for changes to the pref that enables Activity Stream
-  Services.prefs.addObserver(ACTIVITY_STREAM_ENABLED_PREF, observe); // eslint-disable-line no-use-before-define
-
-  // Only initialize if the pref is true
-  if (Services.prefs.getBoolPref(ACTIVITY_STREAM_ENABLED_PREF, false)) {
-    init(startupReason);
-  }
+  init(startupReason);
 
   // Do a one time migration of Tiles about:newtab prefs that have been modified
   migratePref("browser.newtabpage.rows", rows => {
     // Just disable top sites if rows are not desired
     if (rows <= 0) {
-      Services.prefs.setBoolPref("browser.newtabpage.activity-stream.showTopSites", false);
+      Services.prefs.setBoolPref("browser.newtabpage.activity-stream.feeds.topsites", false);
     } else {
-      // Assume we want a full row (6 sites per row)
-      Services.prefs.setIntPref("browser.newtabpage.activity-stream.topSitesCount", rows * 6);
+      Services.prefs.setIntPref("browser.newtabpage.activity-stream.topSitesRows", rows);
     }
+  });
+
+  migratePref("browser.newtabpage.activity-stream.showTopSites", value => {
+    if (value === false) {
+      Services.prefs.setBoolPref("browser.newtabpage.activity-stream.feeds.topsites", false);
+    }
+  });
+
+  // Old activity stream topSitesCount pref showed 6 per row
+  migratePref("browser.newtabpage.activity-stream.topSitesCount", count => {
+    Services.prefs.setIntPref("browser.newtabpage.activity-stream.topSitesRows", Math.ceil(count / 6));
   });
 }
 
@@ -162,11 +159,6 @@ function observe(subject, topic, data) {
       // Avoid running synchronously during this event that's used for timing
       Services.tm.dispatchToMainThread(() => onBrowserReady());
       break;
-    case PREF_CHANGED_TOPIC:
-      if (data === ACTIVITY_STREAM_ENABLED_PREF) {
-        onPrefChanged();
-      }
-      break;
   }
 }
 
@@ -175,13 +167,17 @@ function observe(subject, topic, data) {
 this.install = function install(data, reason) {};
 
 this.startup = function startup(data, reason) {
+  resProto.setSubstitutionWithFlags(RESOURCE_HOST,
+                                    Services.io.newURI("chrome/content/", null, data.resourceURI),
+                                    resProto.ALLOW_CONTENT_ACCESS);
+
   // Cache startup data which contains stuff like the version number, etc.
   // so we can use it when we init
   startupData = data;
   startupReason = reason;
 
   // Only start Activity Stream up when the browser UI is ready
-  if (Cc["@mozilla.org/toolkit/app-startup;1"].getService(Ci.nsIAppStartup).startingUp) {
+  if (Services.startup.startingUp) {
     Services.obs.addObserver(observe, BROWSER_READY_NOTIFICATION);
   } else {
     // Handle manual install or automatic install after manual uninstall
@@ -190,6 +186,8 @@ this.startup = function startup(data, reason) {
 };
 
 this.shutdown = function shutdown(data, reason) {
+  resProto.setSubstitution(RESOURCE_HOST, null);
+
   // Uninitialize Activity Stream
   startupData = null;
   startupReason = null;
@@ -198,9 +196,6 @@ this.shutdown = function shutdown(data, reason) {
   // Stop waiting for browser to be ready
   if (waitingForBrowserReady) {
     Services.obs.removeObserver(observe, BROWSER_READY_NOTIFICATION);
-  } else {
-    // Stop listening to the pref that enables Activity Stream
-    Services.prefs.removeObserver(ACTIVITY_STREAM_ENABLED_PREF, observe);
   }
 
   // Unload any add-on modules that might might have been imported

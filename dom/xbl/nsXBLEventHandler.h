@@ -13,11 +13,14 @@
 #include "nsTArray.h"
 
 class nsAtom;
-class nsIDOMKeyEvent;
 class nsXBLPrototypeHandler;
 
 namespace mozilla {
 struct IgnoreModifierState;
+namespace dom {
+class Event;
+class KeyboardEvent;
+} // namespace dom
 } // namespace mozilla
 
 class nsXBLEventHandler : public nsIDOMEventListener
@@ -35,7 +38,7 @@ protected:
 
 private:
   nsXBLEventHandler();
-  virtual bool EventMatched(nsIDOMEvent* aEvent)
+  virtual bool EventMatched(mozilla::dom::Event* aEvent)
   {
     return true;
   }
@@ -48,7 +51,7 @@ public:
   virtual ~nsXBLMouseEventHandler();
 
 private:
-  bool EventMatched(nsIDOMEvent* aEvent) override;
+  bool EventMatched(mozilla::dom::Event* aEvent) override;
 };
 
 class nsXBLKeyEventHandler : public nsIDOMEventListener
@@ -101,7 +104,7 @@ private:
   nsXBLKeyEventHandler();
   virtual ~nsXBLKeyEventHandler();
 
-  bool ExecuteMatchedHandlers(nsIDOMKeyEvent* aEvent, uint32_t aCharCode,
+  bool ExecuteMatchedHandlers(mozilla::dom::KeyboardEvent* aEvent, uint32_t aCharCode,
                               const IgnoreModifierState& aIgnoreModifierState);
 
   nsTArray<nsXBLPrototypeHandler*> mProtoHandlers;

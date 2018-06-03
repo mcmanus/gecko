@@ -176,8 +176,8 @@ exports.items = [
       },
     ],
     returnType: "paintFlashingState",
-    exec: function (args, context) {
-      let { window } = context.environment;
+    exec: function(args, context) {
+      const { window } = context.environment;
 
       return setPaintFlashing(window, args.state);
     }

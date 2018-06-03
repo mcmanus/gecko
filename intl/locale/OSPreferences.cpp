@@ -76,7 +76,7 @@ OSPreferences::Refresh()
   ReadSystemLocales(newLocales);
 
   if (mSystemLocales != newLocales) {
-    mSystemLocales = Move(newLocales);
+    mSystemLocales = std::move(newLocales);
     nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
     if (obs) {
       obs->NotifyObservers(nullptr, "intl:system-locales-changed", nullptr);
@@ -170,7 +170,9 @@ OSPreferences::GetDateTimePatternForStyle(DateTimeFormatStyle aDateStyle,
 
   nsAutoCString locale;
   if (aLocale.IsEmpty()) {
-    LocaleService::GetInstance()->GetAppLocaleAsBCP47(locale);
+    AutoTArray<nsCString, 10> regionalPrefsLocales;
+    LocaleService::GetInstance()->GetRegionalPrefsLocales(regionalPrefsLocales);
+    locale.Assign(regionalPrefsLocales[0]);
   } else {
     locale.Assign(aLocale);
   }

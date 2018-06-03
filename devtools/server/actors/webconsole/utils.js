@@ -27,8 +27,8 @@ var WebConsoleUtils = {
    *
    * @return string
    */
-  getWorkerType: function (message) {
-    let id = message ? message.innerID : null;
+  getWorkerType: function(message) {
+    const id = message ? message.innerID : null;
     return CONSOLE_WORKER_IDS[CONSOLE_WORKER_IDS.indexOf(id)] || null;
   },
 
@@ -48,7 +48,7 @@ var WebConsoleUtils = {
    * @return object
    *         The cloned object.
    */
-  cloneObject: function (object, recursive, filter) {
+  cloneObject: function(object, recursive, filter) {
     if (typeof object != "object") {
       return object;
     }
@@ -57,15 +57,15 @@ var WebConsoleUtils = {
 
     if (Array.isArray(object)) {
       temp = [];
-      Array.forEach(object, function (value, index) {
+      Array.forEach(object, function(value, index) {
         if (!filter || filter(index, value, object)) {
           temp.push(recursive ? WebConsoleUtils.cloneObject(value) : value);
         }
       });
     } else {
       temp = {};
-      for (let key in object) {
-        let value = object[key];
+      for (const key in object) {
+        const value = object[key];
         if (object.hasOwnProperty(key) &&
             (!filter || filter(key, value, object))) {
           temp[key] = recursive ? WebConsoleUtils.cloneObject(value) : value;
@@ -83,7 +83,7 @@ var WebConsoleUtils = {
    * @return integer
    *         Inner ID for the given window.
    */
-  getInnerWindowId: function (window) {
+  getInnerWindowId: function(window) {
     return window.QueryInterface(Ci.nsIInterfaceRequestor)
              .getInterface(Ci.nsIDOMWindowUtils).currentInnerWindowID;
   },
@@ -96,13 +96,13 @@ var WebConsoleUtils = {
    * @return Array
    *         list of inner window ids.
    */
-  getInnerWindowIDsForFrames: function (window) {
-    let innerWindowID = this.getInnerWindowId(window);
+  getInnerWindowIDsForFrames: function(window) {
+    const innerWindowID = this.getInnerWindowId(window);
     let ids = [innerWindowID];
 
     if (window.frames) {
       for (let i = 0; i < window.frames.length; i++) {
-        let frame = window.frames[i];
+        const frame = window.frames[i];
         ids = ids.concat(this.getInnerWindowIDsForFrames(frame));
       }
     }
@@ -120,7 +120,7 @@ var WebConsoleUtils = {
    * @return object
    *         Property descriptor.
    */
-  getPropertyDescriptor: function (object, prop) {
+  getPropertyDescriptor: function(object, prop) {
     let desc = null;
     while (object) {
       try {
@@ -162,7 +162,7 @@ var WebConsoleUtils = {
    * @return mixed
    *         The value grip.
    */
-  createValueGrip: function (value, objectWrapper) {
+  createValueGrip: function(value, objectWrapper) {
     switch (typeof value) {
       case "boolean":
         return value;
@@ -216,7 +216,7 @@ var WebConsoleCommands = {
    *
    * @see WebConsoleCommands.register
    */
-  _registerOriginal: function (name, command) {
+  _registerOriginal: function(name, command) {
     this.register(name, command);
     this._originalCommands.set(name, this.getCommand(name));
   },
@@ -248,7 +248,7 @@ var WebConsoleCommands = {
    *     }
    *   });
    */
-  register: function (name, command) {
+  register: function(name, command) {
     this._registeredCommands.set(name, command);
   },
 
@@ -260,7 +260,7 @@ var WebConsoleCommands = {
    *
    * @param {string} name The name of the command
    */
-  unregister: function (name) {
+  unregister: function(name) {
     this._registeredCommands.delete(name);
     if (this._originalCommands.has(name)) {
       this.register(name, this._originalCommands.get(name));
@@ -274,7 +274,7 @@ var WebConsoleCommands = {
    *
    * @return {(function|object)} The command.
    */
-  getCommand: function (name) {
+  getCommand: function(name) {
     return this._registeredCommands.get(name);
   },
 
@@ -285,7 +285,7 @@ var WebConsoleCommands = {
    *
    * @return {boolean} True if the command is registered.
    */
-  hasCommand: function (name) {
+  hasCommand: function(name) {
     return this._registeredCommands.has(name);
   },
 };
@@ -304,10 +304,10 @@ exports.WebConsoleCommands = WebConsoleCommands;
  *
  * @param string id
  *        The ID of the element you want.
- * @return nsIDOMNode or null
+ * @return Node or null
  *         The result of calling document.querySelector(selector).
  */
-WebConsoleCommands._registerOriginal("$", function (owner, selector) {
+WebConsoleCommands._registerOriginal("$", function(owner, selector) {
   try {
     return owner.window.document.querySelector(selector);
   } catch (err) {
@@ -321,10 +321,10 @@ WebConsoleCommands._registerOriginal("$", function (owner, selector) {
  *
  * @param string selector
  *        A string that is passed to window.document.querySelectorAll.
- * @return nsIDOMNodeList
+ * @return NodeList
  *         Returns the result of document.querySelectorAll(selector).
  */
-WebConsoleCommands._registerOriginal("$$", function (owner, selector) {
+WebConsoleCommands._registerOriginal("$$", function(owner, selector) {
   let nodes;
   try {
     nodes = owner.window.document.querySelectorAll(selector);
@@ -335,7 +335,7 @@ WebConsoleCommands._registerOriginal("$$", function (owner, selector) {
 
   // Calling owner.window.Array.from() doesn't work without accessing the
   // wrappedJSObject, so just loop through the results instead.
-  let result = new owner.window.Array();
+  const result = new owner.window.Array();
   for (let i = 0; i < nodes.length; i++) {
     result.push(nodes[i]);
   }
@@ -349,7 +349,7 @@ WebConsoleCommands._registerOriginal("$$", function (owner, selector) {
  * Returns last console evaluation or undefined
  */
 WebConsoleCommands._registerOriginal("$_", {
-  get: function (owner) {
+  get: function(owner) {
     return owner.consoleActor.getLastConsoleInputEvaluation();
   }
 });
@@ -359,20 +359,20 @@ WebConsoleCommands._registerOriginal("$_", {
  *
  * @param string xPath
  *        xPath search query to execute.
- * @param [optional] nsIDOMNode context
+ * @param [optional] Node context
  *        Context to run the xPath query on. Uses window.document if not set.
- * @return array of nsIDOMNode
+ * @return array of Node
  */
-WebConsoleCommands._registerOriginal("$x", function (owner, xPath, context) {
-  let nodes = new owner.window.Array();
+WebConsoleCommands._registerOriginal("$x", function(owner, xPath, context) {
+  const nodes = new owner.window.Array();
 
   // Not waiving Xrays, since we want the original Document.evaluate function,
   // instead of anything that's been redefined.
-  let doc = owner.window.document;
+  const doc = owner.window.document;
   context = context || doc;
 
-  let results = doc.evaluate(xPath, context, null,
-                             Ci.nsIDOMXPathResult.ANY_TYPE, null);
+  const results = doc.evaluate(xPath, context, null,
+                             owner.window.XPathResult.ANY_TYPE, null);
   let node;
   while ((node = results.iterateNext())) {
     nodes.push(node);
@@ -388,7 +388,7 @@ WebConsoleCommands._registerOriginal("$x", function (owner, xPath, context) {
  *         Inspector, or null if no selection exists.
  */
 WebConsoleCommands._registerOriginal("$0", {
-  get: function (owner) {
+  get: function(owner) {
     return owner.makeDebuggeeValue(owner.selectedNode);
   }
 });
@@ -396,7 +396,7 @@ WebConsoleCommands._registerOriginal("$0", {
 /**
  * Clears the output of the WebConsole.
  */
-WebConsoleCommands._registerOriginal("clear", function (owner) {
+WebConsoleCommands._registerOriginal("clear", function(owner) {
   owner.helperResult = {
     type: "clearOutput",
   };
@@ -405,7 +405,7 @@ WebConsoleCommands._registerOriginal("clear", function (owner) {
 /**
  * Clears the input history of the WebConsole.
  */
-WebConsoleCommands._registerOriginal("clearHistory", function (owner) {
+WebConsoleCommands._registerOriginal("clearHistory", function(owner) {
   owner.helperResult = {
     type: "clearHistory",
   };
@@ -418,7 +418,7 @@ WebConsoleCommands._registerOriginal("clearHistory", function (owner) {
  *        Object to return the property names from.
  * @return array of strings
  */
-WebConsoleCommands._registerOriginal("keys", function (owner, object) {
+WebConsoleCommands._registerOriginal("keys", function(owner, object) {
   // Need to waive Xrays so we can iterate functions and accessor properties
   return Cu.cloneInto(Object.keys(Cu.waiveXrays(object)), owner.window);
 });
@@ -430,13 +430,13 @@ WebConsoleCommands._registerOriginal("keys", function (owner, object) {
  *        Object to display the values from.
  * @return array of string
  */
-WebConsoleCommands._registerOriginal("values", function (owner, object) {
-  let values = [];
+WebConsoleCommands._registerOriginal("values", function(owner, object) {
+  const values = [];
   // Need to waive Xrays so we can iterate functions and accessor properties
-  let waived = Cu.waiveXrays(object);
-  let names = Object.getOwnPropertyNames(waived);
+  const waived = Cu.waiveXrays(object);
+  const names = Object.getOwnPropertyNames(waived);
 
-  for (let name of names) {
+  for (const name of names) {
     values.push(waived[name]);
   }
 
@@ -446,7 +446,7 @@ WebConsoleCommands._registerOriginal("values", function (owner, object) {
 /**
  * Opens a help window in MDN.
  */
-WebConsoleCommands._registerOriginal("help", function (owner) {
+WebConsoleCommands._registerOriginal("help", function(owner) {
   owner.helperResult = { type: "help" };
 });
 
@@ -461,7 +461,7 @@ WebConsoleCommands._registerOriginal("help", function (owner) {
  *        a window object. If you call cd() with no arguments, the current
  *        eval scope is cleared back to its default (the top window).
  */
-WebConsoleCommands._registerOriginal("cd", function (owner, window) {
+WebConsoleCommands._registerOriginal("cd", function(owner, window) {
   if (!window) {
     owner.consoleActor.evalWindow = null;
     owner.helperResult = { type: "cd" };
@@ -471,7 +471,7 @@ WebConsoleCommands._registerOriginal("cd", function (owner, window) {
   if (typeof window == "string") {
     window = owner.window.document.querySelector(window);
   }
-  if (window instanceof Ci.nsIDOMElement && window.contentWindow) {
+  if (Element.isInstance(window) && window.contentWindow) {
     window = window.contentWindow;
   }
   if (!(window instanceof Ci.nsIDOMWindow)) {
@@ -492,9 +492,9 @@ WebConsoleCommands._registerOriginal("cd", function (owner, window) {
  * @param object object
  *        Object to inspect.
  */
-WebConsoleCommands._registerOriginal("inspect", function (owner, object) {
-  let dbgObj = owner.makeDebuggeeValue(object);
-  let grip = owner.createValueGrip(dbgObj);
+WebConsoleCommands._registerOriginal("inspect", function(owner, object) {
+  const dbgObj = owner.makeDebuggeeValue(object);
+  const grip = owner.createValueGrip(dbgObj);
   owner.helperResult = {
     type: "inspectObject",
     input: owner.evalInput,
@@ -509,7 +509,7 @@ WebConsoleCommands._registerOriginal("inspect", function (owner, object) {
  *        Object to print to the output.
  * @return string
  */
-WebConsoleCommands._registerOriginal("pprint", function (owner, object) {
+WebConsoleCommands._registerOriginal("pprint", function(owner, object) {
   if (object === null || object === undefined || object === true ||
       object === false) {
     owner.helperResult = {
@@ -525,21 +525,21 @@ WebConsoleCommands._registerOriginal("pprint", function (owner, object) {
     return object + "\n";
   }
 
-  let output = [];
+  const output = [];
 
-  let obj = object;
-  for (let name in obj) {
-    let desc = WebConsoleUtils.getPropertyDescriptor(obj, name) || {};
+  const obj = object;
+  for (const name in obj) {
+    const desc = WebConsoleUtils.getPropertyDescriptor(obj, name) || {};
     if (desc.get || desc.set) {
       // TODO: Bug 842672 - toolkit/ imports modules from browser/.
-      let getGrip = VariablesView.getGrip(desc.get);
-      let setGrip = VariablesView.getGrip(desc.set);
-      let getString = VariablesView.getString(getGrip);
-      let setString = VariablesView.getString(setGrip);
+      const getGrip = VariablesView.getGrip(desc.get);
+      const setGrip = VariablesView.getGrip(desc.set);
+      const getString = VariablesView.getString(getGrip);
+      const setString = VariablesView.getString(setGrip);
       output.push(name + ":", "  get: " + getString, "  set: " + setString);
     } else {
-      let valueGrip = VariablesView.getGrip(obj[name]);
-      let valueString = VariablesView.getString(valueGrip);
+      const valueGrip = VariablesView.getGrip(obj[name]);
+      const valueString = VariablesView.getString(valueGrip);
       output.push(name + ": " + valueString);
     }
   }
@@ -554,7 +554,7 @@ WebConsoleCommands._registerOriginal("pprint", function (owner, object) {
  *        A value you want to output as a string.
  * @return void
  */
-WebConsoleCommands._registerOriginal("print", function (owner, value) {
+WebConsoleCommands._registerOriginal("print", function(owner, value) {
   owner.helperResult = { rawOutput: true };
   if (typeof value === "symbol") {
     return Symbol.prototype.toString.call(value);
@@ -573,10 +573,10 @@ WebConsoleCommands._registerOriginal("print", function (owner, value) {
  *        A value you want to copy as a string.
  * @return void
  */
-WebConsoleCommands._registerOriginal("copy", function (owner, value) {
+WebConsoleCommands._registerOriginal("copy", function(owner, value) {
   let payload;
   try {
-    if (value instanceof Ci.nsIDOMElement) {
+    if (Element.isInstance(value)) {
       payload = value.outerHTML;
     } else if (typeof value == "string") {
       payload = value;
@@ -602,15 +602,15 @@ WebConsoleCommands._registerOriginal("copy", function (owner, value) {
 function addWebConsoleCommands(owner) {
   // Not supporting extra commands in workers yet.  This should be possible to
   // add one by one as long as they don't require jsm, Cu, etc.
-  let commands = isWorker ? [] : WebConsoleCommands._registeredCommands;
+  const commands = isWorker ? [] : WebConsoleCommands._registeredCommands;
   if (!owner) {
     throw new Error("The owner is required");
   }
-  for (let [name, command] of commands) {
+  for (const [name, command] of commands) {
     if (typeof command === "function") {
       owner.sandbox[name] = command.bind(undefined, owner);
     } else if (typeof command === "object") {
-      let clone = Object.assign({}, command, {
+      const clone = Object.assign({}, command, {
         // We force the enumerability and the configurability (so the
         // WebConsoleActor can reconfigure the property).
         enumerable: true,

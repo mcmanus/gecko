@@ -7,26 +7,28 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use super::{UnknownUnit, Radians};
+use super::{UnknownUnit, Angle};
 use approxeq::ApproxEq;
+use homogen::HomogeneousVector;
 use trig::Trig;
-use point::{TypedPoint2D, TypedPoint3D, point2, point3};
+use point::{TypedPoint2D, TypedPoint3D};
 use vector::{TypedVector2D, TypedVector3D, vec2, vec3};
 use rect::TypedRect;
 use transform2d::TypedTransform2D;
-use scale_factor::ScaleFactor;
+use scale::TypedScale;
 use num::{One, Zero};
 use std::ops::{Add, Mul, Sub, Div, Neg};
 use std::marker::PhantomData;
 use std::fmt;
+use num_traits::NumCast;
 
 define_matrix! {
     /// A 3d transform stored as a 4 by 4 matrix in row-major order in memory.
     ///
     /// Transforms can be parametrized over the source and destination units, to describe a
     /// transformation from a space to another.
-    /// For example, `TypedTransform3D<f32, WordSpace, ScreenSpace>::transform_point3d`
-    /// takes a `TypedPoint3D<f32, WordSpace>` and returns a `TypedPoint3D<f32, ScreenSpace>`.
+    /// For example, `TypedTransform3D<f32, WorldSpace, ScreenSpace>::transform_point3d`
+    /// takes a `TypedPoint3D<f32, WorldSpace>` and returns a `TypedPoint3D<f32, ScreenSpace>`.
     ///
     /// Transforms expose a set of convenience methods for pre- and post-transformations.
     /// A pre-transformation corresponds to adding an operation that is applied before
@@ -40,7 +42,7 @@ define_matrix! {
     }
 }
 
-/// The default 4d transform type with no units.
+/// The default 3d transform type with no units.
 pub type Transform3D<T> = TypedTransform3D<T, UnknownUnit, UnknownUnit>;
 
 impl<T, Src, Dst> TypedTransform3D<T, Src, Dst> {
@@ -116,7 +118,6 @@ where T: Copy + Clone +
          Mul<T, Output=T> +
          Div<T, Output=T> +
          Neg<Output=T> +
-         ApproxEq<T> +
          PartialOrd +
          Trig +
          One + Zero {
@@ -152,9 +153,9 @@ where T: Copy + Clone +
         )
     }
 
-    /// Returns true if this transform can be represented with a TypedTransform2D.
+    /// Returns true if this transform can be represented with a `TypedTransform2D`.
     ///
-    /// See https://drafts.csswg.org/css-transforms/#2d-transform
+    /// See <https://drafts.csswg.org/css-transforms/#2d-transform>
     #[inline]
     pub fn is_2d(&self) -> bool {
         let (_0, _1): (T, T) = (Zero::zero(), One::one());
@@ -165,7 +166,7 @@ where T: Copy + Clone +
         self.m33 == _1 && self.m44 == _1
     }
 
-    /// Create a 2D transform picking the relevent terms from this transform.
+    /// Create a 2D transform picking the relevant terms from this transform.
     ///
     /// This method assumes that self represents a 2d transformation, callers
     /// should check that self.is_2d() returns true beforehand.
@@ -189,7 +190,8 @@ where T: Copy + Clone +
         (m33 * det) < _0
     }
 
-    pub fn approx_eq(&self, other: &Self) -> bool {
+    pub fn approx_eq(&self, other: &Self) -> bool
+    where T : ApproxEq<T> {
         self.m11.approx_eq(&other.m11) && self.m12.approx_eq(&other.m12) &&
         self.m13.approx_eq(&other.m13) && self.m14.approx_eq(&other.m14) &&
         self.m21.approx_eq(&other.m21) && self.m22.approx_eq(&other.m22) &&
@@ -382,7 +384,7 @@ where T: Copy + Clone +
     }
 
     /// Multiplies all of the transform's component by a scalar and returns the result.
-    #[must_use]
+    #[cfg_attr(feature = "unstable", must_use)]
     pub fn mul_s(&self, x: T) -> Self {
         TypedTransform3D::row_major(
             self.m11 * x, self.m12 * x, self.m13 * x, self.m14 * x,
@@ -392,9 +394,24 @@ where T: Copy + Clone +
         )
     }
 
-    /// Convenience function to create a scale transform from a ScaleFactor.
-    pub fn from_scale_factor(scale: ScaleFactor<T, Src, Dst>) -> Self {
+    /// Convenience function to create a scale transform from a `TypedScale`.
+    pub fn from_scale(scale: TypedScale<T, Src, Dst>) -> Self {
         TypedTransform3D::create_scale(scale.get(), scale.get(), scale.get())
+    }
+
+    /// Returns the homogeneous vector corresponding to the transformed 2d point.
+    ///
+    /// The input point must be use the unit Src, and the returned point has the unit Dst.
+    #[inline]
+    pub fn transform_point2d_homogeneous(
+        &self, p: &TypedPoint2D<T, Src>
+    ) -> HomogeneousVector<T, Dst> {
+        let x = p.x * self.m11 + p.y * self.m21 + self.m41;
+        let y = p.x * self.m12 + p.y * self.m22 + self.m42;
+        let z = p.x * self.m13 + p.y * self.m23 + self.m43;
+        let w = p.x * self.m14 + p.y * self.m24 + self.m44;
+
+        HomogeneousVector::new(x, y, z, w)
     }
 
     /// Returns the given 2d point transformed by this transform.
@@ -402,12 +419,14 @@ where T: Copy + Clone +
     /// The input point must be use the unit Src, and the returned point has the unit Dst.
     #[inline]
     pub fn transform_point2d(&self, p: &TypedPoint2D<T, Src>) -> TypedPoint2D<T, Dst> {
+        //Note: could use `transform_point2d_homogeneous()` but it would waste the calculus of `z`
+
         let x = p.x * self.m11 + p.y * self.m21 + self.m41;
         let y = p.x * self.m12 + p.y * self.m22 + self.m42;
-
         let w = p.x * self.m14 + p.y * self.m24 + self.m44;
 
-        point2(x/w, y/w)
+
+        TypedPoint2D::new(x / w, y / w)
     }
 
     /// Returns the given 2d vector transformed by this matrix.
@@ -421,17 +440,27 @@ where T: Copy + Clone +
         )
     }
 
-    /// Returns the given 3d point transformed by this transform.
+    /// Returns the homogeneous vector corresponding to the transformed 3d point.
     ///
     /// The input point must be use the unit Src, and the returned point has the unit Dst.
     #[inline]
-    pub fn transform_point3d(&self, p: &TypedPoint3D<T, Src>) -> TypedPoint3D<T, Dst> {
+    pub fn transform_point3d_homogeneous(
+        &self, p: &TypedPoint3D<T, Src>
+    ) -> HomogeneousVector<T, Dst> {
         let x = p.x * self.m11 + p.y * self.m21 + p.z * self.m31 + self.m41;
         let y = p.x * self.m12 + p.y * self.m22 + p.z * self.m32 + self.m42;
         let z = p.x * self.m13 + p.y * self.m23 + p.z * self.m33 + self.m43;
         let w = p.x * self.m14 + p.y * self.m24 + p.z * self.m34 + self.m44;
 
-        point3(x/w, y/w, z/w)
+        HomogeneousVector::new(x, y, z, w)
+    }
+
+    /// Returns the given 3d point transformed by this transform.
+    ///
+    /// The input point must be use the unit Src, and the returned point has the unit Dst.
+    #[inline]
+    pub fn transform_point3d(&self, p: &TypedPoint3D<T, Src>) -> TypedPoint3D<T, Dst> {
+        self.transform_point3d_homogeneous(p).to_point3d()
     }
 
     /// Returns the given 3d vector transformed by this matrix.
@@ -469,13 +498,13 @@ where T: Copy + Clone +
     }
 
     /// Returns a transform with a translation applied before self's transformation.
-    #[must_use]
+    #[cfg_attr(feature = "unstable", must_use)]
     pub fn pre_translate(&self, v: TypedVector3D<T, Src>) -> Self {
         self.pre_mul(&TypedTransform3D::create_translation(v.x, v.y, v.z))
     }
 
     /// Returns a transform with a translation applied after self's transformation.
-    #[must_use]
+    #[cfg_attr(feature = "unstable", must_use)]
     pub fn post_translate(&self, v: TypedVector3D<T, Dst>) -> Self {
         self.post_mul(&TypedTransform3D::create_translation(v.x, v.y, v.z))
     }
@@ -492,7 +521,7 @@ where T: Copy + Clone +
     }
 
     /// Returns a transform with a scale applied before self's transformation.
-    #[must_use]
+    #[cfg_attr(feature = "unstable", must_use)]
     pub fn pre_scale(&self, x: T, y: T, z: T) -> Self {
         TypedTransform3D::row_major(
             self.m11 * x, self.m12,     self.m13,     self.m14,
@@ -503,14 +532,14 @@ where T: Copy + Clone +
     }
 
     /// Returns a transform with a scale applied after self's transformation.
-    #[must_use]
+    #[cfg_attr(feature = "unstable", must_use)]
     pub fn post_scale(&self, x: T, y: T, z: T) -> Self {
         self.post_mul(&TypedTransform3D::create_scale(x, y, z))
     }
 
     /// Create a 3d rotation transform from an angle / axis.
     /// The supplied axis must be normalized.
-    pub fn create_rotation(x: T, y: T, z: T, theta: Radians<T>) -> Self {
+    pub fn create_rotation(x: T, y: T, z: T, theta: Angle<T>) -> Self {
         let (_0, _1): (T, T) = (Zero::zero(), One::one());
         let _2 = _1 + _1;
 
@@ -546,21 +575,21 @@ where T: Copy + Clone +
     }
 
     /// Returns a transform with a rotation applied after self's transformation.
-    #[must_use]
-    pub fn post_rotate(&self, x: T, y: T, z: T, theta: Radians<T>) -> Self {
+    #[cfg_attr(feature = "unstable", must_use)]
+    pub fn post_rotate(&self, x: T, y: T, z: T, theta: Angle<T>) -> Self {
         self.post_mul(&TypedTransform3D::create_rotation(x, y, z, theta))
     }
 
     /// Returns a transform with a rotation applied before self's transformation.
-    #[must_use]
-    pub fn pre_rotate(&self, x: T, y: T, z: T, theta: Radians<T>) -> Self {
+    #[cfg_attr(feature = "unstable", must_use)]
+    pub fn pre_rotate(&self, x: T, y: T, z: T, theta: Angle<T>) -> Self {
         self.pre_mul(&TypedTransform3D::create_rotation(x, y, z, theta))
     }
 
     /// Create a 2d skew transform.
     ///
-    /// See https://drafts.csswg.org/css-transforms/#funcdef-skew
-    pub fn create_skew(alpha: Radians<T>, beta: Radians<T>) -> Self {
+    /// See <https://drafts.csswg.org/css-transforms/#funcdef-skew>
+    pub fn create_skew(alpha: Angle<T>, beta: Angle<T>) -> Self {
         let (_0, _1): (T, T) = (Zero::zero(), One::one());
         let (sx, sy) = (beta.get().tan(), alpha.get().tan());
         TypedTransform3D::row_major(
@@ -652,6 +681,31 @@ impl<T: Copy, Src, Dst> TypedTransform3D<T, Src, Dst> {
     }
 }
 
+impl<T0: NumCast + Copy, Src, Dst> TypedTransform3D<T0, Src, Dst> {
+    /// Cast from one numeric representation to another, preserving the units.
+    pub fn cast<T1: NumCast + Copy>(&self) -> Option<TypedTransform3D<T1, Src, Dst>> {
+        match (NumCast::from(self.m11), NumCast::from(self.m12),
+               NumCast::from(self.m13), NumCast::from(self.m14),
+               NumCast::from(self.m21), NumCast::from(self.m22),
+               NumCast::from(self.m23), NumCast::from(self.m24),
+               NumCast::from(self.m31), NumCast::from(self.m32),
+               NumCast::from(self.m33), NumCast::from(self.m34),
+               NumCast::from(self.m41), NumCast::from(self.m42),
+               NumCast::from(self.m43), NumCast::from(self.m44)) {
+            (Some(m11), Some(m12), Some(m13), Some(m14),
+             Some(m21), Some(m22), Some(m23), Some(m24),
+             Some(m31), Some(m32), Some(m33), Some(m34),
+             Some(m41), Some(m42), Some(m43), Some(m44)) => {
+                Some(TypedTransform3D::row_major(m11, m12, m13, m14,
+                                                 m21, m22, m23, m24,
+                                                 m31, m32, m33, m34,
+                                                 m41, m42, m43, m44))
+            },
+            _ => None
+        }
+    }
+}
+
 impl<T, Src, Dst> fmt::Debug for TypedTransform3D<T, Src, Dst>
 where T: Copy + fmt::Debug +
          PartialEq +
@@ -669,8 +723,8 @@ where T: Copy + fmt::Debug +
 mod tests {
     use approxeq::ApproxEq;
     use transform2d::Transform2D;
-    use point::{Point2D, Point3D};
-    use Radians;
+    use point::{point2, point3};
+    use Angle;
     use super::*;
 
     use std::f32::consts::{FRAC_PI_2, PI};
@@ -678,7 +732,7 @@ mod tests {
     type Mf32 = Transform3D<f32>;
 
     // For convenience.
-    fn rad(v: f32) -> Radians<f32> { Radians::new(v) }
+    fn rad(v: f32) -> Angle<f32> { Angle::radians(v) }
 
     #[test]
     pub fn test_translation() {
@@ -688,8 +742,8 @@ mod tests {
         assert_eq!(t1, t2);
         assert_eq!(t1, t3);
 
-        assert_eq!(t1.transform_point3d(&Point3D::new(1.0, 1.0, 1.0)), Point3D::new(2.0, 3.0, 4.0));
-        assert_eq!(t1.transform_point2d(&Point2D::new(1.0, 1.0)), Point2D::new(2.0, 3.0));
+        assert_eq!(t1.transform_point3d(&point3(1.0, 1.0, 1.0)), point3(2.0, 3.0, 4.0));
+        assert_eq!(t1.transform_point2d(&point2(1.0, 1.0)), point2(2.0, 3.0));
 
         assert_eq!(t1.post_mul(&t1), Mf32::create_translation(2.0, 4.0, 6.0));
 
@@ -705,8 +759,8 @@ mod tests {
         assert_eq!(r1, r2);
         assert_eq!(r1, r3);
 
-        assert!(r1.transform_point3d(&Point3D::new(1.0, 2.0, 3.0)).approx_eq(&Point3D::new(2.0, -1.0, 3.0)));
-        assert!(r1.transform_point2d(&Point2D::new(1.0, 2.0)).approx_eq(&Point2D::new(2.0, -1.0)));
+        assert!(r1.transform_point3d(&point3(1.0, 2.0, 3.0)).approx_eq(&point3(2.0, -1.0, 3.0)));
+        assert!(r1.transform_point2d(&point2(1.0, 2.0)).approx_eq(&point2(2.0, -1.0)));
 
         assert!(r1.post_mul(&r1).approx_eq(&Mf32::create_rotation(0.0, 0.0, 1.0, rad(FRAC_PI_2*2.0))));
 
@@ -722,8 +776,8 @@ mod tests {
         assert_eq!(s1, s2);
         assert_eq!(s1, s3);
 
-        assert!(s1.transform_point3d(&Point3D::new(2.0, 2.0, 2.0)).approx_eq(&Point3D::new(4.0, 6.0, 8.0)));
-        assert!(s1.transform_point2d(&Point2D::new(2.0, 2.0)).approx_eq(&Point2D::new(4.0, 6.0)));
+        assert!(s1.transform_point3d(&point3(2.0, 2.0, 2.0)).approx_eq(&point3(4.0, 6.0, 8.0)));
+        assert!(s1.transform_point2d(&point2(2.0, 2.0)).approx_eq(&point2(4.0, 6.0)));
 
         assert_eq!(s1.post_mul(&s1), Mf32::create_scale(4.0, 9.0, 16.0));
 
@@ -742,7 +796,6 @@ mod tests {
              0.0,  0.0,        -1.0, 0.0,
             -1.0, -1.22222222, -0.0, 1.0
         );
-        debug!("result={:?} expected={:?}", result, expected);
         assert!(result.approx_eq(&expected));
     }
 
@@ -817,9 +870,9 @@ mod tests {
         let m2 = m1.inverse().unwrap();
         assert!(m1.pre_mul(&m2).approx_eq(&Mf32::identity()));
 
-        let p1 = Point2D::new(1000.0, 2000.0);
+        let p1 = point2(1000.0, 2000.0);
         let p2 = m1.transform_point2d(&p1);
-        assert!(p2.eq(&Point2D::new(1100.0, 2200.0)));
+        assert!(p2.eq(&point2(1100.0, 2200.0)));
 
         let p3 = m2.transform_point2d(&p2);
         assert!(p3.eq(&p1));
@@ -840,14 +893,14 @@ mod tests {
         let r = Mf32::create_rotation(0.0, 0.0, 1.0, rad(FRAC_PI_2));
         let t = Mf32::create_translation(2.0, 3.0, 0.0);
 
-        let a = Point3D::new(1.0, 1.0, 1.0);
+        let a = point3(1.0, 1.0, 1.0);
 
-        assert!(r.post_mul(&t).transform_point3d(&a).approx_eq(&Point3D::new(3.0, 2.0, 1.0)));
-        assert!(t.post_mul(&r).transform_point3d(&a).approx_eq(&Point3D::new(4.0, -3.0, 1.0)));
+        assert!(r.post_mul(&t).transform_point3d(&a).approx_eq(&point3(3.0, 2.0, 1.0)));
+        assert!(t.post_mul(&r).transform_point3d(&a).approx_eq(&point3(4.0, -3.0, 1.0)));
         assert!(t.post_mul(&r).transform_point3d(&a).approx_eq(&r.transform_point3d(&t.transform_point3d(&a))));
 
-        assert!(r.pre_mul(&t).transform_point3d(&a).approx_eq(&Point3D::new(4.0, -3.0, 1.0)));
-        assert!(t.pre_mul(&r).transform_point3d(&a).approx_eq(&Point3D::new(3.0, 2.0, 1.0)));
+        assert!(r.pre_mul(&t).transform_point3d(&a).approx_eq(&point3(4.0, -3.0, 1.0)));
+        assert!(t.pre_mul(&r).transform_point3d(&a).approx_eq(&point3(3.0, 2.0, 1.0)));
         assert!(t.pre_mul(&r).transform_point3d(&a).approx_eq(&t.transform_point3d(&r.transform_point3d(&a))));
     }
 
@@ -869,7 +922,7 @@ mod tests {
                                  1.5, -2.0, 6.0, 0.0,
                                  -2.5, 6.0, 1.0, 1.0);
 
-        let p = Point3D::new(1.0, 3.0, 5.0);
+        let p = point3(1.0, 3.0, 5.0);
         let p1 = m2.pre_mul(&m1).transform_point3d(&p);
         let p2 = m2.transform_point3d(&m1.transform_point3d(&p));
         assert!(p1.approx_eq(&p2));
@@ -915,5 +968,23 @@ mod tests {
         // backface is not visible for non-inverseable matrix
         let r1 = Mf32::create_scale(2.0, 0.0, 2.0);
         assert!(!r1.is_backface_visible());
+    }
+
+    #[test]
+    pub fn test_homogeneous() {
+        let m = Mf32::row_major(
+            1.0, 2.0, 0.5, 5.0,
+            3.0, 4.0, 0.25, 6.0,
+            0.5, -1.0, 1.0, -1.0,
+            -1.0, 1.0, -1.0, 2.0,
+        );
+        assert_eq!(
+            m.transform_point2d_homogeneous(&point2(1.0, 2.0)),
+            HomogeneousVector::new(6.0, 11.0, 0.0, 19.0),
+        );
+        assert_eq!(
+            m.transform_point3d_homogeneous(&point3(1.0, 2.0, 4.0)),
+            HomogeneousVector::new(8.0, 7.0, 4.0, 15.0),
+        );
     }
 }

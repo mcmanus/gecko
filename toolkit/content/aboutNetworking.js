@@ -4,18 +4,16 @@
 
 "use strict";
 
-var Ci = Components.interfaces;
-var Cc = Components.classes;
-var Cu = Components.utils;
-
-Cu.import("resource://gre/modules/Services.jsm");
-const FileUtils = Cu.import("resource://gre/modules/FileUtils.jsm").FileUtils
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+const FileUtils = ChromeUtils.import("resource://gre/modules/FileUtils.jsm").FileUtils;
 const gEnv = Cc["@mozilla.org/process/environment;1"]
                .getService(Ci.nsIEnvironment);
 const gDashboard = Cc["@mozilla.org/network/dashboard;1"]
                      .getService(Ci.nsIDashboard);
 const gDirServ = Cc["@mozilla.org/file/directory_service;1"]
                    .getService(Ci.nsIDirectoryServiceProvider);
+const gNetLinkSvc = Cc["@mozilla.org/network/network-link-service;1"]
+                      .getService(Ci.nsINetworkLinkService);
 
 const gRequestNetworkingData = {
   "http": gDashboard.requestHttpConnections,
@@ -93,6 +91,7 @@ function displayDns(data) {
     let row = document.createElement("tr");
     row.appendChild(col(data.entries[i].hostname));
     row.appendChild(col(data.entries[i].family));
+    row.appendChild(col(data.entries[i].trr));
     let column = document.createElement("td");
 
     for (let j = 0; j < data.entries[i].hostaddr.length; j++) {
@@ -130,6 +129,14 @@ function displayWebsockets(data) {
 
 function displayRcwnStats(data) {
   let status = Services.prefs.getBoolPref("network.http.rcwn.enabled");
+  let linkType = gNetLinkSvc.linkType;
+  if (!(linkType == Ci.nsINetworkLinkService.LINK_TYPE_UNKNOWN ||
+        linkType == Ci.nsINetworkLinkService.LINK_TYPE_ETHERNET ||
+        linkType == Ci.nsINetworkLinkService.LINK_TYPE_USB ||
+        linkType == Ci.nsINetworkLinkService.LINK_TYPE_WIFI)) {
+    status = false;
+  }
+
   let cacheWon = data.rcwnCacheWonCount;
   let netWon = data.rcwnNetWonCount;
   let total = data.totalNetworkRequests;
@@ -155,7 +162,7 @@ function displayRcwnStats(data) {
     "avgShort",
     "avgLong",
     "stddevLong",
-  ]
+  ];
 
   for (let typeIndex in perfStatTypes) {
     for (let statFieldIndex in perfStatFieldNames) {

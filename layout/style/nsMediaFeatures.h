@@ -9,20 +9,20 @@
 #ifndef nsMediaFeatures_h_
 #define nsMediaFeatures_h_
 
-#include "nsCSSProps.h"
-
 class nsAtom;
-class nsPresContext;
+class nsIDocument;
+struct nsCSSKTableEntry;
 class nsCSSValue;
+class nsStaticAtom;
 
 struct nsMediaFeature;
-typedef void (*nsMediaFeatureValueGetter)(nsPresContext* aPresContext,
+typedef void (*nsMediaFeatureValueGetter)(nsIDocument* aDocument,
                                           const nsMediaFeature* aFeature,
                                           nsCSSValue& aResult);
 
 struct nsMediaFeature
 {
-  nsAtom **mName; // extra indirection to point to nsGkAtoms members
+  nsStaticAtom** mName; // extra indirection to point to nsGkAtoms members
 
   enum RangeType { eMinMaxAllowed, eMinMaxNotAllowed };
   RangeType mRangeType;
@@ -70,7 +70,7 @@ struct nsMediaFeature
     const void* mInitializer_;
     // If mValueType == eEnumerated:  const int32_t*: keyword table in
     //   the same format as the keyword tables in nsCSSProps.
-    const nsCSSProps::KTableEntry* mKeywordTable;
+    const nsCSSKTableEntry* mKeywordTable;
     // If mGetter == GetSystemMetric (which implies mValueType ==
     //   eBoolInteger): nsAtom * const *, for the system metric.
     nsAtom * const * mMetric;
@@ -85,6 +85,10 @@ struct nsMediaFeature
 class nsMediaFeatures
 {
 public:
+  static void InitSystemMetrics();
+  static void FreeSystemMetrics();
+  static void Shutdown();
+
   // Terminated with an entry whose mName is null.
   static const nsMediaFeature features[];
 };

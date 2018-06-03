@@ -7,14 +7,19 @@
  * Makes sure Pie Charts have the right internal structure.
  */
 
-add_task(function* () {
-  let { monitor } = yield initNetMonitor(SIMPLE_URL);
+add_task(async function() {
+  const { monitor, tab } = await initNetMonitor(SIMPLE_URL);
+
   info("Starting test... ");
 
-  let { document, windowRequire } = monitor.panelWin;
-  let { Chart } = windowRequire("devtools/client/shared/widgets/Chart");
+  const { document, windowRequire } = monitor.panelWin;
+  const { Chart } = windowRequire("devtools/client/shared/widgets/Chart");
 
-  let pie = Chart.Pie(document, {
+  const wait = waitForNetworkEvents(monitor, 1);
+  tab.linkedBrowser.loadURI(SIMPLE_URL);
+  await wait;
+
+  const pie = Chart.Pie(document, {
     width: 100,
     height: 100,
     data: [{
@@ -29,9 +34,9 @@ add_task(function* () {
     }]
   });
 
-  let node = pie.node;
-  let slices = node.querySelectorAll(".pie-chart-slice.chart-colored-blob");
-  let labels = node.querySelectorAll(".pie-chart-label");
+  const node = pie.node;
+  const slices = node.querySelectorAll(".pie-chart-slice.chart-colored-blob");
+  const labels = node.querySelectorAll(".pie-chart-label");
 
   ok(node.classList.contains("pie-chart-container") &&
      node.classList.contains("generic-chart-container"),
@@ -70,5 +75,5 @@ add_task(function* () {
   is(labels[2].textContent, "foo",
     "The first label's text is correct.");
 
-  yield teardown(monitor);
+  await teardown(monitor);
 });

@@ -38,7 +38,9 @@
     <issue id="ResourceAsColor" severity="warning" />
     <issue id="ResourceType" severity="warning" />
     <issue id="ValidFragment" severity="warning" />
-    <issue id="WrongConstant" severity="warning" />
+
+    <!-- New Android-Gradle lint integration regressed this check. -->
+    <issue id="MissingRegistered" severity="warning" />
 
     <!-- Fixes are in progress but we would like to block future candidates.
          The ** in the path are wildcards. We need these wildcards to not change our code structure.
@@ -48,7 +50,6 @@
         <ignore path="**/mobile/android/base/java/org/mozilla/gecko/dlc/DownloadContentTelemetry.java"/>
         <ignore path="**/mobile/android/base/java/org/mozilla/gecko/preferences/LocaleListPreference.java"/>
         <ignore path="**/mobile/android/base/java/org/mozilla/gecko/media/MediaControlService.java"/>
-        <ignore path="**/mobile/android/base/java/org/mozilla/gecko/db/PerProfileDatabaseProvider.java"/>
         <ignore path="**/mobile/android/base/java/org/mozilla/gecko/PrintHelper.java"/>
         <ignore path="**/mobile/android/base/java/org/mozilla/gecko/animation/PropertyAnimator.java"/>
         <ignore path="**/mobile/android/base/java/org/mozilla/gecko/RemotePresentationService.java"/>
@@ -63,9 +64,31 @@
     </issue>
 
     <!-- We fixed all "Registered" lint errors. However the current gradle plugin has a bug where
-         it ignores @SuppressLint annotations for this check. See CrashReporter class and
+         it ignores @SuppressLint annotations for this check. See CrashReporterActivity class and
          https://code.google.com/p/android/issues/detail?id=204846 -->
     <issue id="Registered" severity="warning" />
+
+    <issue id="ObjectAnimatorBinding" severity="error">
+        <!-- Two animated properties are provided by the underlying
+             View implementation. -->
+        <ignore path="**/mobile/android/base/java/org/mozilla/gecko/firstrun/FirstrunPager.java"/>
+    </issue>
+
+    <!-- Tracked by Bug 1409550. -->
+    <issue id="AppCompatCustomView" severity="error">
+        <ignore path="**/mobile/android/base/java/org/mozilla/gecko/firstrun/FirstrunPager.java"/>
+        <ignore path="**/mobile/android/base/java/org/mozilla/gecko/home/PanelHeaderView.java"/>
+        <ignore path="**/mobile/android/base/java/org/mozilla/gecko/menu/MenuItemDefault.java"/>
+        <ignore path="**/mobile/android/base/java/org/mozilla/gecko/tabs/TabPanelBackButton.java"/>
+        <ignore path="**/mobile/android/base/java/org/mozilla/gecko/widget/AllCapsTextView.java"/>
+        <ignore path="**/mobile/android/base/java/org/mozilla/gecko/widget/ClickableWhenDisabledEditText.java"/>
+        <ignore path="**/mobile/android/base/java/org/mozilla/gecko/widget/EllipsisTextView.java"/>
+        <ignore path="**/mobile/android/base/java/org/mozilla/gecko/widget/SquaredImageView.java"/>
+        <ignore path="**/mobile/android/base/java/org/mozilla/gecko/widget/themed/ThemedEditText.java"/>
+        <ignore path="**/mobile/android/base/java/org/mozilla/gecko/widget/themed/ThemedImageButton.java"/>
+        <ignore path="**/mobile/android/base/java/org/mozilla/gecko/widget/themed/ThemedImageView.java"/>
+        <ignore path="**/mobile/android/base/java/org/mozilla/gecko/widget/themed/ThemedTextView.java"/>
+    </issue>
 
     <!-- WHEN YOU FIX A LINT WARNING, ADD IT TO THIS LIST.
 
@@ -151,7 +174,6 @@
     <issue id="MissingId" severity="error" />
     <issue id="MissingPrefix" severity="error" />
     <issue id="MissingQuantity" severity="error" />
-    <issue id="MissingRegistered" severity="error" />
     <issue id="MissingSuperCall" severity="error" />
     <issue id="MissingTranslation" severity="error" />
     <issue id="MissingVersion" severity="error" />

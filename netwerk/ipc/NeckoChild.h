@@ -19,7 +19,7 @@ class NeckoChild :
   public PNeckoChild
 {
 public:
-  NeckoChild();
+  NeckoChild() = default;
   virtual ~NeckoChild();
 
   static void InitNeckoChild();
@@ -34,7 +34,7 @@ protected:
   virtual bool
     DeallocPStunAddrsRequestChild(PStunAddrsRequestChild* aActor) override;
 
-  virtual PAltDataOutputStreamChild* AllocPAltDataOutputStreamChild(const nsCString& type, PHttpChannelChild* channel) override;
+  virtual PAltDataOutputStreamChild* AllocPAltDataOutputStreamChild(const nsCString& type, const int64_t& predictedSize, PHttpChannelChild* channel) override;
   virtual bool DeallocPAltDataOutputStreamChild(PAltDataOutputStreamChild* aActor) override;
 
   virtual PCookieServiceChild* AllocPCookieServiceChild() override;
@@ -64,8 +64,7 @@ protected:
   virtual bool DeallocPUDPSocketChild(PUDPSocketChild*) override;
   virtual PDNSRequestChild* AllocPDNSRequestChild(const nsCString& aHost,
                                                   const OriginAttributes& aOriginAttributes,
-                                                  const uint32_t& aFlags,
-                                                  const nsCString& aNetworkInterface) override;
+                                                  const uint32_t& aFlags) override;
   virtual bool DeallocPDNSRequestChild(PDNSRequestChild*) override;
   virtual PDataChannelChild* AllocPDataChannelChild(const uint32_t& channelId) override;
   virtual bool DeallocPDataChannelChild(PDataChannelChild* child) override;
@@ -96,6 +95,7 @@ protected:
   virtual mozilla::ipc::IPCResult RecvPredOnPredictDNS(const URIParams& aURI) override;
 
   virtual mozilla::ipc::IPCResult RecvSpeculativeConnectRequest() override;
+  virtual mozilla::ipc::IPCResult RecvNetworkChangeNotification(nsCString const& type) override;
 };
 
 /**

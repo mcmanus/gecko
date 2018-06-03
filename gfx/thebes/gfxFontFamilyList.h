@@ -40,6 +40,7 @@ enum FontFamilyType : uint32_t {
   // special
   eFamily_moz_variable,
   eFamily_moz_fixed,
+  eFamily_moz_emoji,
 
   eFamily_generic_first = eFamily_serif,
   eFamily_generic_last = eFamily_fantasy,
@@ -198,7 +199,7 @@ public:
     }
 
     explicit SharedFontList(nsTArray<FontFamilyName>&& aNames)
-        : mNames(Move(aNames))
+        : mNames(std::move(aNames))
     {
     }
 
@@ -261,26 +262,26 @@ public:
     }
 
     explicit FontFamilyList(FontFamilyType aGenericType)
-        : mFontlist(WrapNotNull(new SharedFontList(aGenericType)))
+        : mFontlist(MakeNotNull<SharedFontList*>(aGenericType))
         , mDefaultFontType(eFamily_none)
     {
     }
 
     FontFamilyList(const nsAString& aFamilyName,
                    QuotedName aQuoted)
-        : mFontlist(WrapNotNull(new SharedFontList(aFamilyName, aQuoted)))
+        : mFontlist(MakeNotNull<SharedFontList*>(aFamilyName, aQuoted))
         , mDefaultFontType(eFamily_none)
     {
     }
 
     explicit FontFamilyList(const FontFamilyName& aName)
-        : mFontlist(WrapNotNull(new SharedFontList(aName)))
+        : mFontlist(MakeNotNull<SharedFontList*>(aName))
         , mDefaultFontType(eFamily_none)
     {
     }
 
     explicit FontFamilyList(nsTArray<FontFamilyName>&& aNames)
-        : mFontlist(WrapNotNull(new SharedFontList(Move(aNames))))
+        : mFontlist(MakeNotNull<SharedFontList*>(std::move(aNames)))
     {
     }
 
@@ -298,7 +299,7 @@ public:
 
     void SetFontlist(nsTArray<FontFamilyName>&& aNames)
     {
-        mFontlist = WrapNotNull(new SharedFontList(Move(aNames)));
+        mFontlist = MakeNotNull<SharedFontList*>(std::move(aNames));
     }
 
     void SetFontlist(NotNull<SharedFontList*> aFontlist)
@@ -359,7 +360,7 @@ public:
                     names.AppendElements(mFontlist->mNames);
                     names.RemoveElementAt(i);
                     names.InsertElementAt(0, name);
-                    SetFontlist(Move(names));
+                    SetFontlist(std::move(names));
                 }
                 return true;
             }
@@ -371,7 +372,7 @@ public:
         nsTArray<FontFamilyName> names;
         names.AppendElements(mFontlist->mNames);
         names.InsertElementAt(0, FontFamilyName(aType));
-        SetFontlist(Move(names));
+        SetFontlist(std::move(names));
     }
 
     void ToString(nsAString& aFamilyList,
@@ -444,6 +445,11 @@ protected:
 inline bool
 operator==(const FontFamilyList& a, const FontFamilyList& b) {
     return a.Equals(b);
+}
+
+inline bool
+operator!=(const FontFamilyList& a, const FontFamilyList& b) {
+    return !a.Equals(b);
 }
 
 } // namespace mozilla

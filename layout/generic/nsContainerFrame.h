@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -59,7 +60,7 @@ public:
 
   virtual const nsFrameList& GetChildList(ChildListID aList) const override;
   virtual void GetChildLists(nsTArray<ChildList>* aLists) const override;
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
   virtual void ChildIsDirty(nsIFrame* aChild) override;
 
   virtual FrameSearchResult PeekOffsetNoAmount(bool aForward, int32_t* aOffset) override;
@@ -544,8 +545,8 @@ public:
 #endif
 
 protected:
-  nsContainerFrame(nsStyleContext* aContext, ClassID aID)
-    : nsSplittableFrame(aContext, aID)
+  nsContainerFrame(ComputedStyle* aStyle, ClassID aID)
+    : nsSplittableFrame(aStyle, aID)
   {}
 
   ~nsContainerFrame();
@@ -556,7 +557,8 @@ protected:
    * Derived classes must do that too, if they destroy such frame lists.
    * See nsBlockFrame::DestroyFrom for an example.
    */
-  void DestroyAbsoluteFrames(nsIFrame* aDestructRoot);
+  void DestroyAbsoluteFrames(nsIFrame*        aDestructRoot,
+                             PostDestroyData& aPostDestroyData);
 
   /**
    * Helper for StealFrame.  Returns true if aChild was removed from its list.
@@ -730,8 +732,9 @@ protected:
    * frame then remove the property and delete the frame list.
    * Nothing happens if the property doesn't exist.
    */
-  void SafelyDestroyFrameListProp(nsIFrame* aDestructRoot,
-                                  nsIPresShell* aPresShell,
+  void SafelyDestroyFrameListProp(nsIFrame*        aDestructRoot,
+                                  PostDestroyData& aPostDestroyData,
+                                  nsIPresShell*    aPresShell,
                                   FrameListPropertyDescriptor aProp);
 
   // ==========================================================================
@@ -863,7 +866,7 @@ public:
    */
   void Skip(nsIFrame* aChild, nsReflowStatus& aReflowStatus)
   {
-    NS_PRECONDITION(aChild, "null ptr");
+    MOZ_ASSERT(aChild, "null ptr");
     if (aChild == mSentry) {
       StepForward();
       if (aReflowStatus.IsComplete()) {
@@ -934,7 +937,7 @@ nsContainerFrame::DestroyOverflowList()
 {
   nsFrameList* list = RemovePropTableFrames(OverflowProperty());
   MOZ_ASSERT(list && list->IsEmpty());
-  list->Delete(PresContext()->PresShell());
+  list->Delete(PresShell());
 }
 
 #endif /* nsContainerFrame_h___ */

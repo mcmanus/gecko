@@ -6,64 +6,30 @@
 
 "use strict";
 
-const {classes: Cc, utils: Cu, interfaces: Ci} = Components;
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Services", // jshint ignore:line
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "Services", // jshint ignore:line
   "resource://gre/modules/Services.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Rect", // jshint ignore:line
+ChromeUtils.defineModuleGetter(this, "Rect", // jshint ignore:line
   "resource://gre/modules/Geometry.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Roles", // jshint ignore:line
+ChromeUtils.defineModuleGetter(this, "Roles", // jshint ignore:line
   "resource://gre/modules/accessibility/Constants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Events", // jshint ignore:line
+ChromeUtils.defineModuleGetter(this, "Events", // jshint ignore:line
   "resource://gre/modules/accessibility/Constants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Relations", // jshint ignore:line
+ChromeUtils.defineModuleGetter(this, "Relations", // jshint ignore:line
   "resource://gre/modules/accessibility/Constants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "States", // jshint ignore:line
+ChromeUtils.defineModuleGetter(this, "States", // jshint ignore:line
   "resource://gre/modules/accessibility/Constants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PluralForm", // jshint ignore:line
+ChromeUtils.defineModuleGetter(this, "PluralForm", // jshint ignore:line
   "resource://gre/modules/PluralForm.jsm");
 
-this.EXPORTED_SYMBOLS = ["Utils", "Logger", "PivotContext", "PrefCache"]; // jshint ignore:line
+var EXPORTED_SYMBOLS = ["Utils", "Logger", "PivotContext", "PrefCache"]; // jshint ignore:line
 
-this.Utils = { // jshint ignore:line
+var Utils = { // jshint ignore:line
   _buildAppMap: {
     "{3c2e2abc-06d4-11e1-ac3b-374f68613e61}": "b2g",
     "{d1bfe7d9-c01e-4237-998b-7b5f960a4314}": "graphene",
     "{ec8030f7-c20a-464f-9b0e-13a3a9e97384}": "browser",
-    "{aa3c5121-dab2-40e2-81ca-7ea25febc110}": "mobile/android",
-    "{a23983c0-fd0e-11dc-95ff-0800200c9a66}": "mobile/xul"
-  },
-
-  init: function Utils_init(aWindow) {
-    if (this._win) {
-      // XXX: only supports attaching to one window now.
-      throw new Error("Only one top-level window could used with AccessFu");
-    }
-    this._win = Cu.getWeakReference(aWindow);
-  },
-
-  uninit: function Utils_uninit() {
-    if (!this._win) {
-      return;
-    }
-    delete this._win;
-  },
-
-  get win() {
-    if (!this._win) {
-      return null;
-    }
-    return this._win.get();
-  },
-
-  get winUtils() {
-    let win = this.win;
-    if (!win) {
-      return null;
-    }
-    return win.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(
-      Ci.nsIDOMWindowUtils);
+    "{aa3c5121-dab2-40e2-81ca-7ea25febc110}": "mobile/android"
   },
 
   get AccService() {
@@ -84,20 +50,6 @@ this.Utils = { // jshint ignore:line
       this._buildApp = this._buildAppMap[Services.appinfo.ID];
     }
     return this._buildApp;
-  },
-
-  get OS() {
-    if (!this._OS) {
-      this._OS = Services.appinfo.OS;
-    }
-    return this._OS;
-  },
-
-  get widgetToolkit() {
-    if (!this._widgetToolkit) {
-      this._widgetToolkit = Services.appinfo.widgetToolkit;
-    }
-    return this._widgetToolkit;
   },
 
   get ScriptName() {
@@ -126,38 +78,14 @@ this.Utils = { // jshint ignore:line
     this._AndroidSdkVersion = value;
   },
 
-  get BrowserApp() {
-    if (!this.win) {
-      return null;
-    }
-    switch (this.MozBuildApp) {
-      case "mobile/android":
-        return this.win.BrowserApp;
-      case "browser":
-        return this.win.gBrowser;
-      case "b2g":
-        return this.win.shell;
-      default:
-        return null;
-    }
+  getCurrentBrowser: function getCurrentBrowser(aWindow) {
+    let win = aWindow ||
+      Services.wm.getMostRecentWindow("navigator:browser") ||
+      Services.wm.getMostRecentWindow("navigator:geckoview");
+    return win.document.querySelector("browser[type=content][primary=true]");
   },
 
-  get CurrentBrowser() {
-    if (!this.BrowserApp) {
-      return null;
-    }
-    if (this.MozBuildApp == "b2g") {
-      return this.BrowserApp.contentBrowser;
-    }
-    return this.BrowserApp.selectedBrowser;
-  },
-
-  get CurrentContentDoc() {
-    let browser = this.CurrentBrowser;
-    return browser ? browser.contentDocument : null;
-  },
-
-  get AllMessageManagers() {
+  getAllMessageManagers: function getAllMessageManagers(aWindow) {
     let messageManagers = new Set();
 
     function collectLeafMessageManagers(mm) {
@@ -172,18 +100,12 @@ this.Utils = { // jshint ignore:line
       }
     }
 
-    collectLeafMessageManagers(this.win.messageManager);
+    collectLeafMessageManagers(aWindow.messageManager);
 
-    let document = this.CurrentContentDoc;
+    let browser = this.getCurrentBrowser(aWindow);
+    let document = browser ? browser.contentDocument : null;
 
     if (document) {
-      if (document.location.host === "b2g") {
-        // The document is a b2g app chrome (ie. Mulet).
-        let contentBrowser = this.win.content.shell.contentBrowser;
-        messageManagers.add(this.getMessageManager(contentBrowser));
-        document = contentBrowser.contentDocument;
-      }
-
       let remoteframes = document.querySelectorAll("iframe");
 
       for (let i = 0; i < remoteframes.length; ++i) {
@@ -251,8 +173,9 @@ this.Utils = { // jshint ignore:line
   },
 
   getMessageManager: function getMessageManager(aBrowser) {
+    let browser = aBrowser || this.getCurrentBrowser();
     try {
-      return aBrowser.frameLoader.messageManager;
+      return browser.frameLoader.messageManager;
     } catch (x) {
       return null;
     }
@@ -304,15 +227,11 @@ this.Utils = { // jshint ignore:line
     return res.value;
   },
 
-  getBounds: function getBounds(aAccessible, aPreserveContentScale) {
+  getBounds: function getBounds(aAccessible) {
     let objX = {}, objY = {}, objW = {}, objH = {};
     aAccessible.getBounds(objX, objY, objW, objH);
 
-    let scale = aPreserveContentScale ? 1 :
-      this.getContentResolution(aAccessible);
-
-    return new Rect(objX.value, objY.value, objW.value, objH.value).scale(
-      scale, scale);
+    return new Rect(objX.value, objY.value, objW.value, objH.value);
   },
 
   getTextBounds: function getTextBounds(aAccessible, aStart, aEnd,
@@ -322,20 +241,7 @@ this.Utils = { // jshint ignore:line
     accText.getRangeExtents(aStart, aEnd, objX, objY, objW, objH,
       Ci.nsIAccessibleCoordinateType.COORDTYPE_SCREEN_RELATIVE);
 
-    let scale = aPreserveContentScale ? 1 :
-      this.getContentResolution(aAccessible);
-
-    return new Rect(objX.value, objY.value, objW.value, objH.value).scale(
-      scale, scale);
-  },
-
-  /**
-   * Get current display DPI.
-   */
-  get dpi() {
-    delete this.dpi;
-    this.dpi = this.winUtils.displayDPI;
-    return this.dpi;
+    return new Rect(objX.value, objY.value, objW.value, objH.value);
   },
 
   isInSubtree: function isInSubtree(aAccessible, aSubTreeRoot) {
@@ -488,29 +394,6 @@ this.Utils = { // jshint ignore:line
       aStaticText.indexInParent === 0;
   },
 
-  dispatchChromeEvent: function dispatchChromeEvent(aType, aDetails) {
-    let details = {
-      type: aType,
-      details: JSON.stringify(
-        typeof aDetails === "string" ? { eventType: aDetails } : aDetails)
-    };
-    let window = this.win;
-    let shell = window.shell || window.content.shell;
-    if (shell) {
-      // On B2G device.
-      shell.sendChromeEvent(details);
-    } else {
-      // Dispatch custom event to have support for desktop and screen reader
-      // emulator add-on.
-      window.dispatchEvent(new window.CustomEvent(aType, {
-        bubbles: true,
-        cancelable: true,
-        detail: details
-      }));
-    }
-
-  },
-
   isActivatableOnFingerUp: function isActivatableOnFingerUp(aAccessible) {
     if (aAccessible.role === Roles.KEY) {
       return true;
@@ -545,7 +428,7 @@ State.prototype = {
   }
 };
 
-this.Logger = { // jshint ignore:line
+var Logger = { // jshint ignore:line
   GESTURE: -1,
   DEBUG: 0,
   INFO: 1,
@@ -703,7 +586,7 @@ this.Logger = { // jshint ignore:line
  * label. In this case the |accessible| field would be the embedded control,
  * and the |accessibleForBounds| field would be the label.
  */
-this.PivotContext = function PivotContext(aAccessible, aOldAccessible, // jshint ignore:line
+function PivotContext(aAccessible, aOldAccessible, // jshint ignore:line
   aStartOffset, aEndOffset, aIgnoreAncestry = false,
   aIncludeInvisible = false) {
   this._accessible = aAccessible;
@@ -714,7 +597,7 @@ this.PivotContext = function PivotContext(aAccessible, aOldAccessible, // jshint
   this.endOffset = aEndOffset;
   this._ignoreAncestry = aIgnoreAncestry;
   this._includeInvisible = aIncludeInvisible;
-};
+}
 
 PivotContext.prototype = {
   get accessible() {
@@ -919,12 +802,12 @@ PivotContext.prototype = {
       if (!aAccessible) {
         return null;
       }
-      if ([
+      if (![
             Roles.CELL,
             Roles.COLUMNHEADER,
             Roles.ROWHEADER,
             Roles.MATHML_CELL
-          ].indexOf(aAccessible.role) < 0) {
+          ].includes(aAccessible.role)) {
           return null;
       }
       try {
@@ -1015,7 +898,7 @@ PivotContext.prototype = {
   }
 };
 
-this.PrefCache = function PrefCache(aName, aCallback, aRunCallbackNow) { // jshint ignore:line
+function PrefCache(aName, aCallback, aRunCallbackNow) { // jshint ignore:line
   this.name = aName;
   this.callback = aCallback;
 
@@ -1031,7 +914,7 @@ this.PrefCache = function PrefCache(aName, aCallback, aRunCallbackNow) { // jshi
   }
 
   branch.addObserver(aName, this, true);
-};
+}
 
 PrefCache.prototype = {
   _getValue: function _getValue(aBranch) {
@@ -1067,6 +950,6 @@ PrefCache.prototype = {
     }
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver,
-                                          Ci.nsISupportsWeakReference])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIObserver,
+                                           Ci.nsISupportsWeakReference])
 };

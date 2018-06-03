@@ -33,7 +33,7 @@ public:
 
   virtual RequestOrReason StartAsyncRead(nsIStreamListener* stream, nsIChannel* channel) = 0;
 
-  virtual ~SimpleChannelCallbacks() {}
+  virtual ~SimpleChannelCallbacks() = default;
 };
 
 template <typename F1, typename F2, typename T>
@@ -46,7 +46,7 @@ public:
     , mContext(context)
   {}
 
-  virtual ~SimpleChannelCallbacksImpl() {}
+  virtual ~SimpleChannelCallbacksImpl() = default;
 
   virtual InputStreamOrReason OpenContentStream(bool async, nsIChannel* channel) override
   {
@@ -88,9 +88,9 @@ NS_NewSimpleChannel(nsIURI* aURI, nsILoadInfo* aLoadInfo, T* context, F1&& aStar
   using namespace mozilla;
 
   auto callbacks = MakeUnique<net::SimpleChannelCallbacksImpl<F1, F2, T>>(
-      Move(aStartAsyncRead), Move(aOpenContentStream), context);
+      std::move(aStartAsyncRead), std::move(aOpenContentStream), context);
 
-  return net::NS_NewSimpleChannelInternal(aURI, aLoadInfo, Move(callbacks));
+  return net::NS_NewSimpleChannelInternal(aURI, aLoadInfo, std::move(callbacks));
 }
 
 template <typename T, typename F1>
@@ -104,7 +104,7 @@ NS_NewSimpleChannel(nsIURI* aURI, nsILoadInfo* aLoadInfo, T* context, F1&& aStar
   };
 
   return NS_NewSimpleChannel(
-      aURI, aLoadInfo, context, Move(aStartAsyncRead), Move(openContentStream));
+      aURI, aLoadInfo, context, std::move(aStartAsyncRead), std::move(openContentStream));
 }
 
 #endif // SimpleChannel_h

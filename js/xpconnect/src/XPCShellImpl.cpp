@@ -7,12 +7,13 @@
 #include "nsXULAppAPI.h"
 #include "jsapi.h"
 #include "jsfriendapi.h"
-#include "jsprf.h"
+#include "js/Printf.h"
 #include "mozilla/ChaosMode.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/Preferences.h"
 #include "nsServiceManagerUtils.h"
 #include "nsComponentManagerUtils.h"
+#include "nsExceptionHandler.h"
 #include "nsIServiceManager.h"
 #include "nsIFile.h"
 #include "nsString.h"
@@ -40,10 +41,12 @@
 #endif
 
 #ifdef XP_WIN
+#include "mozilla/ScopeExit.h"
 #include "mozilla/widget/AudioSession.h"
+#include "mozilla/WinDllServices.h"
 #include <windows.h>
 #if defined(MOZ_SANDBOX)
-#include "SandboxBroker.h"
+#include "sandboxBroker.h"
 #endif
 #endif
 
@@ -59,11 +62,6 @@
 #endif
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>     /* for isatty() */
-#endif
-
-#ifdef MOZ_CRASHREPORTER
-#include "nsExceptionHandler.h"
-#include "nsICrashReporter.h"
 #endif
 
 #ifdef ENABLE_TESTS
@@ -339,11 +337,10 @@ Load(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    JS::Rooted<JSObject*> obj(cx, JS_THIS_OBJECT(cx, vp));
-    if (!obj)
+    JS::RootedObject thisObject(cx);
+    if (!args.computeThis(cx, &thisObject))
         return false;
-
-    if (!JS_IsGlobalObject(obj)) {
+    if (!JS_IsGlobalObject(thisObject)) {
         JS_ReportErrorASCII(cx, "Trying to load() into a non-global object");
         return false;
     }
@@ -383,16 +380,6 @@ Load(JSContext* cx, unsigned argc, Value* vp)
         }
     }
     args.rval().setUndefined();
-    return true;
-}
-
-static bool
-Version(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    args.rval().setInt32(JS_GetVersion(cx));
-    if (args.get(0).isInt32())
-        SetVersionForCurrentRealm(cx, JSVersion(args[0].toInt32()));
     return true;
 }
 
@@ -514,21 +501,21 @@ Options(JSContext* cx, unsigned argc, Value* vp)
 
     UniqueChars names;
     if (oldContextOptions.extraWarnings()) {
-        names = JS_sprintf_append(Move(names), "%s", "strict");
+        names = JS_sprintf_append(std::move(names), "%s", "strict");
         if (!names) {
             JS_ReportOutOfMemory(cx);
             return false;
         }
     }
     if (oldContextOptions.werror()) {
-        names = JS_sprintf_append(Move(names), "%s%s", names ? "," : "", "werror");
+        names = JS_sprintf_append(std::move(names), "%s%s", names ? "," : "", "werror");
         if (!names) {
             JS_ReportOutOfMemory(cx);
             return false;
         }
     }
     if (names && oldContextOptions.strictMode()) {
-        names = JS_sprintf_append(Move(names), "%s%s", names ? "," : "", "strict_mode");
+        names = JS_sprintf_append(std::move(names), "%s%s", names ? "," : "", "strict_mode");
         if (!names) {
             JS_ReportOutOfMemory(cx);
             return false;
@@ -555,7 +542,7 @@ XPCShellInterruptCallback(JSContext* cx)
     if (callback.isUndefined())
         return true;
 
-    JSAutoCompartment ac(cx, &callback.toObject());
+    JSAutoRealm ar(cx, &callback.toObject());
     RootedValue rv(cx);
     if (!JS_CallFunctionValue(cx, nullptr, callback, JS::HandleValueArray::empty(), &rv) ||
         !rv.isBoolean())
@@ -662,7 +649,6 @@ static const JSFunctionSpec glob_functions[] = {
     JS_FN("readline",        ReadLine,       1,0),
     JS_FN("load",            Load,           1,0),
     JS_FN("quit",            Quit,           0,0),
-    JS_FN("version",         Version,        1,0),
     JS_FN("dumpXPC",         DumpXPC,        1,0),
     JS_FN("dump",            Dump,           1,0),
     JS_FN("gc",              GC,             0,0),
@@ -840,7 +826,7 @@ static int
 usage()
 {
     fprintf(gErrFile, "%s\n", JS_GetImplementationVersion());
-    fprintf(gErrFile, "usage: xpcshell [-g gredir] [-a appdir] [-r manifest]... [-WwxiCSsmIp] [-v version] [-f scriptfile] [-e script] [scriptfile] [scriptarg...]\n");
+    fprintf(gErrFile, "usage: xpcshell [-g gredir] [-a appdir] [-r manifest]... [-WwxiCSsmIp] [-f scriptfile] [-e script] [scriptfile] [scriptarg...]\n");
     return 2;
 }
 
@@ -953,12 +939,6 @@ ProcessArgs(AutoJSAPI& jsapi, char** argv, int argc, XPCShellDirProvider* aDirPr
             break;
         }
         switch (argv[i][1]) {
-        case 'v':
-            if (++i == argc) {
-                return printUsageAndSetExitCode();
-            }
-            SetVersionForCurrentRealm(cx, JSVersion(atoi(argv[i])));
-            break;
         case 'W':
             reportWarnings = false;
             break;
@@ -997,7 +977,8 @@ ProcessArgs(AutoJSAPI& jsapi, char** argv, int argc, XPCShellDirProvider* aDirPr
             }
 
             JS::CompileOptions opts(cx);
-            opts.setFileAndLine("-e", 1);
+            opts.setUTF8(true)
+                .setFileAndLine("-e", 1);
             JS::Evaluate(cx, opts, argv[i], strlen(argv[i]), &rval);
 
             isInteractive = false;
@@ -1091,7 +1072,7 @@ XRE_XPCShellMain(int argc, char** argv, char** envp,
 
     NS_LogInit();
 
-    mozilla::LogModule::Init();
+    mozilla::LogModule::Init(argc, argv);
 
 #ifdef MOZ_GECKO_PROFILER
     char aLocal;
@@ -1210,9 +1191,8 @@ XRE_XPCShellMain(int argc, char** argv, char** envp,
             argv += 2;
         }
 
-#ifdef MOZ_CRASHREPORTER
         const char* val = getenv("MOZ_CRASHREPORTER");
-        if (val && *val) {
+        if (val && *val && !CrashReporter::IsDummy()) {
             rv = CrashReporter::SetExceptionHandler(greDir, true);
             if (NS_FAILED(rv)) {
                 printf("CrashReporter::SetExceptionHandler failed!\n");
@@ -1220,7 +1200,6 @@ XRE_XPCShellMain(int argc, char** argv, char** envp,
             }
             MOZ_ASSERT(CrashReporter::GetEnabled());
         }
-#endif
 
         if (argc > 1 && !strcmp(argv[1], "--greomni")) {
             nsCOMPtr<nsIFile> greOmni;
@@ -1303,11 +1282,10 @@ XRE_XPCShellMain(int argc, char** argv, char** envp,
 
         // Make the default XPCShell global use a fresh zone (rather than the
         // System Zone) to improve cross-zone test coverage.
-        JS::CompartmentOptions options;
-        options.creationOptions().setNewZoneInSystemZoneGroup();
+        JS::RealmOptions options;
+        options.creationOptions().setNewZone();
         if (xpc::SharedMemoryEnabled())
             options.creationOptions().setSharedMemoryAndAtomicsEnabled(true);
-        options.behaviors().setVersion(JSVERSION_DEFAULT);
         JS::Rooted<JSObject*> glob(cx);
         rv = xpc::InitClassesWithNewWrappedGlobal(cx,
                                                   static_cast<nsIGlobalObject*>(backstagePass),
@@ -1327,11 +1305,17 @@ XRE_XPCShellMain(int argc, char** argv, char** envp,
         // asynchronized.
         AutoAudioSession audioSession;
 
+        // Ensure that DLL Services are running
+        RefPtr<DllServices> dllSvc(DllServices::Get());
+        auto dllServicesDisable = MakeScopeExit([&dllSvc]() {
+          dllSvc->Disable();
+        });
+
 #if defined(MOZ_SANDBOX)
         // Required for sandboxed child processes.
         if (aShellData->sandboxBrokerServices) {
           SandboxBroker::Initialize(aShellData->sandboxBrokerServices);
-          SandboxBroker::CacheRulesDirectories();
+          SandboxBroker::GeckoDependentInitialize();
         } else {
           NS_WARNING("Failed to initialize broker services, sandboxed "
                      "processes will fail to start.");
@@ -1351,11 +1335,11 @@ XRE_XPCShellMain(int argc, char** argv, char** envp,
             // Even if we're building in a configuration where source is
             // discarded, there's no reason to do that on XPCShell, and doing so
             // might break various automation scripts.
-            JS::CompartmentBehaviorsRef(glob).setDiscardSource(false);
+            JS::RealmBehaviorsRef(glob).setDiscardSource(false);
 
             backstagePass->SetGlobalObject(glob);
 
-            JSAutoCompartment ac(cx, glob);
+            JSAutoRealm ar(cx, glob);
 
             if (!JS_InitReflectParse(cx, glob)) {
                 return 1;
@@ -1413,11 +1397,10 @@ XRE_XPCShellMain(int argc, char** argv, char** envp,
     rv = NS_ShutdownXPCOM( nullptr );
     MOZ_ASSERT(NS_SUCCEEDED(rv), "NS_ShutdownXPCOM failed");
 
-#ifdef MOZ_CRASHREPORTER
     // Shut down the crashreporter service to prevent leaking some strings it holds.
-    if (CrashReporter::GetEnabled())
+    if (CrashReporter::GetEnabled()) {
         CrashReporter::UnsetExceptionHandler();
-#endif
+    }
 
 #ifdef MOZ_GECKO_PROFILER
     // This must precede NS_LogTerm(), otherwise xpcshell return non-zero

@@ -14,7 +14,7 @@ var hs = PU.history;
 
 
 add_task(async function test_getURLsForContainerNode_folder() {
-  do_print("*** TEST: folder");
+  info("*** TEST: folder");
   let bookmarks = await PlacesUtils.bookmarks.insertTree({
     guid: PlacesUtils.bookmarks.toolbarGuid,
     children: [{
@@ -35,13 +35,13 @@ add_task(async function test_getURLsForContainerNode_folder() {
   });
 
   var query = hs.getNewQuery();
-  query.setFolders([PlacesUtils.toolbarFolderId], 1);
+  query.setParents([PlacesUtils.bookmarks.toolbarGuid], 1);
   var options = hs.getNewQueryOptions();
 
-  do_print("Check folder without uri nodes");
+  info("Check folder without uri nodes");
   check_uri_nodes(query, options, 0);
 
-  do_print("Check folder with uri nodes");
+  info("Check folder with uri nodes");
   // Add an uri node, this should be considered.
   await PlacesUtils.bookmarks.insert({
     parentGuid: bookmarks[0].guid,
@@ -54,7 +54,7 @@ add_task(async function test_getURLsForContainerNode_folder() {
 });
 
 add_task(async function test_getURLsForContainerNode_folder_excludeItems() {
-  do_print("*** TEST: folder in an excludeItems root");
+  info("*** TEST: folder in an excludeItems root");
   let bookmarks = await PlacesUtils.bookmarks.insertTree({
     guid: PlacesUtils.bookmarks.toolbarGuid,
     children: [{
@@ -75,14 +75,14 @@ add_task(async function test_getURLsForContainerNode_folder_excludeItems() {
   });
 
   var query = hs.getNewQuery();
-  query.setFolders([PlacesUtils.toolbarFolderId], 1);
+  query.setParents([PlacesUtils.bookmarks.toolbarGuid], 1);
   var options = hs.getNewQueryOptions();
   options.excludeItems = true;
 
-  do_print("Check folder without uri nodes");
+  info("Check folder without uri nodes");
   check_uri_nodes(query, options, 0);
 
-  do_print("Check folder with uri nodes");
+  info("Check folder with uri nodes");
   // Add an uri node, this should be considered.
   await PlacesUtils.bookmarks.insert({
     parentGuid: bookmarks[0].guid,
@@ -95,12 +95,12 @@ add_task(async function test_getURLsForContainerNode_folder_excludeItems() {
 });
 
 add_task(async function test_getURLsForContainerNode_query() {
-  do_print("*** TEST: query");
+  info("*** TEST: query");
   // This is the query we will check for children.
   await PlacesUtils.bookmarks.insert({
     parentGuid: PlacesUtils.bookmarks.toolbarGuid,
     title: "inside query",
-    url: "place:folder=BOOKMARKS_MENU&sort=1",
+    url: `place:parent=${PlacesUtils.bookmarks.menuGuid}&sort=1`,
   });
 
   // Create a folder and a query node inside it, these should not be considered
@@ -118,13 +118,13 @@ add_task(async function test_getURLsForContainerNode_query() {
   });
 
   var query = hs.getNewQuery();
-  query.setFolders([PlacesUtils.toolbarFolderId], 1);
+  query.setParents([PlacesUtils.bookmarks.toolbarGuid], 1);
   var options = hs.getNewQueryOptions();
 
-  do_print("Check query without uri nodes");
+  info("Check query without uri nodes");
   check_uri_nodes(query, options, 0);
 
-  do_print("Check query with uri nodes");
+  info("Check query with uri nodes");
   // Add an uri node, this should be considered.
   await PlacesUtils.bookmarks.insert({
     parentGuid: PlacesUtils.bookmarks.menuGuid,
@@ -137,12 +137,12 @@ add_task(async function test_getURLsForContainerNode_query() {
 });
 
 add_task(async function test_getURLsForContainerNode_query_excludeItems() {
-  do_print("*** TEST: excludeItems Query");
+  info("*** TEST: excludeItems Query");
   // This is the query we will check for children.
   await PlacesUtils.bookmarks.insert({
     parentGuid: PlacesUtils.bookmarks.toolbarGuid,
     title: "inside query",
-    url: "place:folder=BOOKMARKS_MENU&sort=1",
+    url: `place:parent=${PlacesUtils.bookmarks.menuGuid}&sort=1`,
   });
 
   // Create a folder and a query node inside it, these should not be considered
@@ -160,14 +160,14 @@ add_task(async function test_getURLsForContainerNode_query_excludeItems() {
   });
 
   var query = hs.getNewQuery();
-  query.setFolders([PlacesUtils.toolbarFolderId], 1);
+  query.setParents([PlacesUtils.bookmarks.toolbarGuid], 1);
   var options = hs.getNewQueryOptions();
   options.excludeItems = true;
 
-  do_print("Check folder without uri nodes");
+  info("Check folder without uri nodes");
   check_uri_nodes(query, options, 0);
 
-  do_print("Check folder with uri nodes");
+  info("Check folder with uri nodes");
   // Add an uri node, this should be considered.
   await PlacesUtils.bookmarks.insert({
     parentGuid: PlacesUtils.bookmarks.menuGuid,
@@ -180,12 +180,12 @@ add_task(async function test_getURLsForContainerNode_query_excludeItems() {
 });
 
 add_task(async function test_getURLsForContainerNode_query_excludeQueries() {
-  do_print("*** TEST: !expandQueries Query");
+  info("*** TEST: !expandQueries Query");
   // This is the query we will check for children.
   await PlacesUtils.bookmarks.insert({
     parentGuid: PlacesUtils.bookmarks.toolbarGuid,
     title: "inside query",
-    url: "place:folder=BOOKMARKS_MENU&sort=1",
+    url: `place:parent=${PlacesUtils.bookmarks.menuGuid}&sort=1`,
   });
 
   // Create a folder and a query node inside it, these should not be considered
@@ -203,14 +203,14 @@ add_task(async function test_getURLsForContainerNode_query_excludeQueries() {
   });
 
   var query = hs.getNewQuery();
-  query.setFolders([PlacesUtils.toolbarFolderId], 1);
+  query.setParents([PlacesUtils.bookmarks.toolbarGuid], 1);
   var options = hs.getNewQueryOptions();
   options.expandQueries = false;
 
-  do_print("Check folder without uri nodes");
+  info("Check folder without uri nodes");
   check_uri_nodes(query, options, 0);
 
-  do_print("Check folder with uri nodes");
+  info("Check folder with uri nodes");
   // Add an uri node, this should be considered.
   await PlacesUtils.bookmarks.insert({
     parentGuid: PlacesUtils.bookmarks.menuGuid,
@@ -237,7 +237,7 @@ function check_uri_nodes(aQuery, aOptions, aExpectedURINodes) {
   var root = result.root;
   root.containerOpen = true;
   var node = root.getChild(0);
-  do_check_eq(PU.hasChildURIs(node), aExpectedURINodes > 0);
-  do_check_eq(PU.getURLsForContainerNode(node).length, aExpectedURINodes);
+  Assert.equal(PU.hasChildURIs(node), aExpectedURINodes > 0);
+  Assert.equal(PU.getURLsForContainerNode(node).length, aExpectedURINodes);
   root.containerOpen = false;
 }

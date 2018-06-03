@@ -14,6 +14,9 @@ LOCAL_INCLUDES += [
   '/media/webrtc/signaling/src/peerconnection',
 ]
 
+# Add libFuzzer configuration directives
+include('/tools/fuzzing/libfuzzer-config.mozbuild')
+
 SOURCES += [
     'sdp_parser_libfuzz.cpp',
 ]

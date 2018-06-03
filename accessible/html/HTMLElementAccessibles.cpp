@@ -24,7 +24,7 @@ using namespace mozilla::a11y;
 ////////////////////////////////////////////////////////////////////////////////
 
 role
-HTMLHRAccessible::NativeRole()
+HTMLHRAccessible::NativeRole() const
 {
   return roles::SEPARATOR;
 }
@@ -34,19 +34,19 @@ HTMLHRAccessible::NativeRole()
 ////////////////////////////////////////////////////////////////////////////////
 
 role
-HTMLBRAccessible::NativeRole()
+HTMLBRAccessible::NativeRole() const
 {
   return roles::WHITESPACE;
 }
 
 uint64_t
-HTMLBRAccessible::NativeState()
+HTMLBRAccessible::NativeState() const
 {
   return states::READONLY;
 }
 
 ENameValueFlag
-HTMLBRAccessible::NativeName(nsString& aName)
+HTMLBRAccessible::NativeName(nsString& aName) const
 {
   aName = static_cast<char16_t>('\n');    // Newline char
   return eNameOK;
@@ -56,21 +56,19 @@ HTMLBRAccessible::NativeName(nsString& aName)
 // HTMLLabelAccessible
 ////////////////////////////////////////////////////////////////////////////////
 
-NS_IMPL_ISUPPORTS_INHERITED0(HTMLLabelAccessible, HyperTextAccessible)
-
 ENameValueFlag
-HTMLLabelAccessible::NativeName(nsString& aName)
+HTMLLabelAccessible::NativeName(nsString& aName) const
 {
   nsTextEquivUtils::GetNameFromSubtree(this, aName);
   return aName.IsEmpty() ? eNameOK : eNameFromSubtree;
 }
 
 Relation
-HTMLLabelAccessible::RelationByType(RelationType aType)
+HTMLLabelAccessible::RelationByType(RelationType aType) const
 {
   Relation rel = AccessibleWrap::RelationByType(aType);
   if (aType == RelationType::LABEL_FOR) {
-    dom::HTMLLabelElement* label = dom::HTMLLabelElement::FromContent(mContent);
+    dom::HTMLLabelElement* label = dom::HTMLLabelElement::FromNode(mContent);
     rel.AppendTarget(mDoc, label->GetControl());
   }
 
@@ -78,7 +76,7 @@ HTMLLabelAccessible::RelationByType(RelationType aType)
 }
 
 uint8_t
-HTMLLabelAccessible::ActionCount()
+HTMLLabelAccessible::ActionCount() const
 {
   return nsCoreUtils::IsLabelWithControl(mContent) ? 1 : 0;
 }
@@ -93,7 +91,7 @@ HTMLLabelAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName)
 }
 
 bool
-HTMLLabelAccessible::DoAction(uint8_t aIndex)
+HTMLLabelAccessible::DoAction(uint8_t aIndex) const
 {
   if (aIndex != 0)
     return false;
@@ -107,10 +105,8 @@ HTMLLabelAccessible::DoAction(uint8_t aIndex)
 // nsHTMLOuputAccessible
 ////////////////////////////////////////////////////////////////////////////////
 
-NS_IMPL_ISUPPORTS_INHERITED0(HTMLOutputAccessible, HyperTextAccessible)
-
 Relation
-HTMLOutputAccessible::RelationByType(RelationType aType)
+HTMLOutputAccessible::RelationByType(RelationType aType) const
 {
   Relation rel = AccessibleWrap::RelationByType(aType);
   if (aType == RelationType::CONTROLLED_BY)
@@ -131,7 +127,7 @@ HTMLSummaryAccessible::
 }
 
 uint8_t
-HTMLSummaryAccessible::ActionCount()
+HTMLSummaryAccessible::ActionCount() const
 {
   return 1;
 }
@@ -143,7 +139,7 @@ HTMLSummaryAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName)
     return;
   }
 
-  dom::HTMLSummaryElement* summary = dom::HTMLSummaryElement::FromContent(mContent);
+  dom::HTMLSummaryElement* summary = dom::HTMLSummaryElement::FromNode(mContent);
   if (!summary) {
     return;
   }
@@ -161,7 +157,7 @@ HTMLSummaryAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName)
 }
 
 bool
-HTMLSummaryAccessible::DoAction(uint8_t aIndex)
+HTMLSummaryAccessible::DoAction(uint8_t aIndex) const
 {
   if (aIndex != eAction_Click)
     return false;
@@ -171,11 +167,11 @@ HTMLSummaryAccessible::DoAction(uint8_t aIndex)
 }
 
 uint64_t
-HTMLSummaryAccessible::NativeState()
+HTMLSummaryAccessible::NativeState() const
 {
   uint64_t state = HyperTextAccessibleWrap::NativeState();
 
-  dom::HTMLSummaryElement* summary = dom::HTMLSummaryElement::FromContent(mContent);
+  dom::HTMLSummaryElement* summary = dom::HTMLSummaryElement::FromNode(mContent);
   if (!summary) {
     return state;
   }
@@ -208,10 +204,8 @@ HTMLSummaryAccessible::IsWidget() const
 // HTMLHeaderOrFooterAccessible
 ////////////////////////////////////////////////////////////////////////////////
 
-NS_IMPL_ISUPPORTS_INHERITED0(HTMLHeaderOrFooterAccessible, HyperTextAccessible)
-
 role
-HTMLHeaderOrFooterAccessible::NativeRole()
+HTMLHeaderOrFooterAccessible::NativeRole() const
 {
   // Only map header and footer if they are direct descendants of the body tag.
   // If other sectioning or sectioning root elements, they become sections.

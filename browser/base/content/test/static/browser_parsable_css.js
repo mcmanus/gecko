@@ -14,21 +14,14 @@ let whitelist = [
   {sourceName: /codemirror\.css$/i,
    isFromDevTools: true},
   // The debugger uses cross-browser CSS.
-  {sourceName: /devtools\/client\/debugger\/new\/debugger.css/i,
+  {sourceName: /devtools\/client\/debugger\/new\/dist\/debugger.css/i,
    isFromDevTools: true},
    // Reps uses cross-browser CSS.
    {sourceName: /devtools-client-shared\/components\/reps\/reps.css/i,
    isFromDevTools: true},
-  // PDFjs is futureproofing its pseudoselectors, and those rules are dropped.
-  {sourceName: /web\/viewer\.css$/i,
-   errorMessage: /Unknown pseudo-class.*(fullscreen|selection)/i,
-   isFromDevTools: false},
   // PDFjs rules needed for compat with other UAs.
   {sourceName: /web\/viewer\.css$/i,
-   errorMessage: /Unknown property.*appearance/i,
-   isFromDevTools: false},
-  // Tracked in bug 1004428.
-  {sourceName: /aboutaccounts\/(main|normalize)\.css$/i,
+   errorMessage: /Unknown property.*(appearance|user-select)/i,
    isFromDevTools: false},
   // Highlighter CSS uses a UA-only pseudo-class, see bug 985597.
   {sourceName: /highlighters\.css$/i,
@@ -38,6 +31,10 @@ let whitelist = [
   {sourceName: /responsive-ua\.css$/i,
    errorMessage: /Unknown pseudo-class.*moz-dropdown-list/i,
    isFromDevTools: true},
+  // UA-only media features.
+  {sourceName: /\b(autocomplete-item|svg)\.css$/,
+   errorMessage: /Expected media feature name but found \u2018-moz.*/i,
+   isFromDevTools: false},
 
   {sourceName: /\b(contenteditable|EditorOverride|svg|forms|html|mathml|ua)\.css$/i,
    errorMessage: /Unknown pseudo-class.*-moz-/i,
@@ -75,33 +72,72 @@ if (!Services.prefs.getBoolPref("full-screen-api.unprefix.enabled")) {
     sourceName: /(?:res|gre-resources)\/(ua|html)\.css$/i,
     errorMessage: /Unknown pseudo-class .*\bfullscreen\b/i,
     isFromDevTools: false
+  }, {
+    // PDFjs is futureproofing its pseudoselectors, and those rules are dropped.
+    sourceName: /web\/viewer\.css$/i,
+    errorMessage: /Unknown pseudo-class .*\bfullscreen\b/i,
+    isFromDevTools: false
   });
 }
 
-// Platform can be "linux", "macosx" or "win". If omitted, the exception applies to all platforms.
-let allowedImageReferences = [
-  // Bug 1302691
-  {file: "chrome://devtools/skin/images/dock-bottom-minimize@2x.png",
-   from: "chrome://devtools/skin/toolbox.css",
+let propNameWhitelist = [
+  // These are CSS custom properties that we found a definition of but
+  // no reference to.
+  // Bug 1441837
+  {propName: "--in-content-category-text-active",
+   isFromDevTools: false},
+  // Bug 1441929
+  {propName: "--theme-search-overlays-semitransparent",
    isFromDevTools: true},
-  {file: "chrome://devtools/skin/images/dock-bottom-maximize@2x.png",
-   from: "chrome://devtools/skin/toolbox.css",
+  // Bug 1441878
+  {propName: "--theme-codemirror-gutter-background",
    isFromDevTools: true},
-  // Bug 1405539
-  {file: "chrome://global/skin/arrow/panelarrow-vertical@2x.png",
-   from: "resource://activity-stream/data/content/activity-stream.css",
-   isFromDevTools: false,
-   platforms: ["linux", "win"]},
-  {file: "chrome://global/skin/arrow/panelarrow-vertical-themed.svg",
-   from: "resource://activity-stream/data/content/activity-stream.css",
-   isFromDevTools: false,
-   platforms: ["macosx"]},
+  // These custom properties are retrieved directly from CSSOM
+  // in videocontrols.xml to get pre-defined style instead of computed
+  // dimensions, which is why they are not referenced by CSS.
+  {propName: "--clickToPlay-width",
+   isFromDevTools: false},
+  {propName: "--playButton-width",
+   isFromDevTools: false},
+  {propName: "--muteButton-width",
+   isFromDevTools: false},
+  {propName: "--castingButton-width",
+   isFromDevTools: false},
+  {propName: "--closedCaptionButton-width",
+   isFromDevTools: false},
+  {propName: "--fullscreenButton-width",
+   isFromDevTools: false},
+  {propName: "--durationSpan-width",
+   isFromDevTools: false},
+  {propName: "--durationSpan-width-long",
+   isFromDevTools: false},
+  {propName: "--positionDurationBox-width",
+   isFromDevTools: false},
+  {propName: "--positionDurationBox-width-long",
+   isFromDevTools: false},
+  // Used on Linux
+  {propName: "--in-content-box-background-odd",
+   platforms: ["win", "macosx"],
+   isFromDevTools: false},
+
+  // These properties *are* actually referenced. Need to find why
+  // their reference isn't getting counted.
+  {propName: "--bezier-diagonal-color",
+   isFromDevTools: true},
+  {propName: "--bezier-grid-color",
+   isFromDevTools: true},
 ];
 
 // Add suffix to stylesheets' URI so that we always load them here and
 // have them parsed. Add a random number so that even if we run this
 // test multiple times, it would be unlikely to affect each other.
 const kPathSuffix = "?always-parse-css-" + Math.random();
+
+function dumpWhitelistItem(item) {
+  return JSON.stringify(item, (key, value) => {
+    return value instanceof RegExp ? value.toString() : value;
+  });
+}
 
 /**
  * Check if an error should be ignored due to matching one of the whitelist
@@ -113,15 +149,26 @@ const kPathSuffix = "?always-parse-css-" + Math.random();
 function ignoredError(aErrorObject) {
   for (let whitelistItem of whitelist) {
     let matches = true;
+    let catchAll = true;
     for (let prop of ["sourceName", "errorMessage"]) {
-      if (whitelistItem.hasOwnProperty(prop) &&
-          !whitelistItem[prop].test(aErrorObject[prop] || "")) {
-        matches = false;
-        break;
+      if (whitelistItem.hasOwnProperty(prop)) {
+        catchAll = false;
+        if (!whitelistItem[prop].test(aErrorObject[prop] || "")) {
+          matches = false;
+          break;
+        }
       }
+    }
+    if (catchAll) {
+      ok(false, "A whitelist item is catching all errors. " +
+         dumpWhitelistItem(whitelistItem));
+      continue;
     }
     if (matches) {
       whitelistItem.used = true;
+      let {sourceName, errorMessage} = aErrorObject;
+      info(`Ignored error "${errorMessage}" on ${sourceName} ` +
+           "because of whitelist item " + dumpWhitelistItem(whitelistItem));
       return true;
     }
   }
@@ -196,12 +243,12 @@ function messageIsCSSError(msg) {
       ok(false, `Got error message for ${sourceName}: ${msg.errorMessage}`);
       return true;
     }
-    info(`Ignored error for ${sourceName} because of filter.`);
   }
   return false;
 }
 
 let imageURIsToReferencesMap = new Map();
+let customPropsToReferencesMap = new Map();
 
 function processCSSRules(sheet) {
   for (let rule of sheet.cssRules) {
@@ -216,10 +263,13 @@ function processCSSRules(sheet) {
     // Note: CSSStyleRule.cssText always has double quotes around URLs even
     //       when the original CSS file didn't.
     let urls = rule.cssText.match(/url\("[^"]*"\)/g);
-    if (!urls)
+    // Extract props by searching all "--" preceeded by "var(" or a non-word
+    // character.
+    let props = rule.cssText.match(/(var\(|\W)(--[\w\-]+)/g);
+    if (!urls && !props)
       continue;
 
-    for (let url of urls) {
+    for (let url of (urls || [])) {
       // Remove the url(" prefix and the ") suffix.
       url = url.replace(/url\("(.*)"\)/, "$1");
       if (url.startsWith("data:"))
@@ -237,6 +287,21 @@ function processCSSRules(sheet) {
         imageURIsToReferencesMap.get(url).add(baseUrl);
       }
     }
+
+    for (let prop of (props || [])) {
+      if (prop.startsWith("var(")) {
+        prop = prop.substring(4);
+        let prevValue = customPropsToReferencesMap.get(prop) || 0;
+        customPropsToReferencesMap.set(prop, prevValue + 1);
+      } else {
+        // Remove the extra non-word character captured by the regular
+        // expression.
+        prop = prop.substring(1);
+        if (!customPropsToReferencesMap.has(prop)) {
+          customPropsToReferencesMap.set(prop, undefined);
+        }
+      }
+    }
   }
 }
 
@@ -251,7 +316,7 @@ function chromeFileExists(aURI) {
     available = sstream.available();
     sstream.close();
   } catch (e) {
-    if (e.result != Components.results.NS_ERROR_FILE_NOT_FOUND) {
+    if (e.result != Cr.NS_ERROR_FILE_NOT_FOUND) {
       dump("Checking " + aURI + ": " + e + "\n");
       Cu.reportError(e);
     }
@@ -273,7 +338,7 @@ add_task(async function checkAllTheCSS() {
   // Create a clean iframe to load all the files into. This needs to live at a
   // chrome URI so that it's allowed to load and parse any styles.
   let testFile = getRootDirectory(gTestPath) + "dummy_page.html";
-  let HiddenFrame = Cu.import("resource://testing-common/HiddenFrame.jsm", {}).HiddenFrame;
+  let HiddenFrame = ChromeUtils.import("resource://testing-common/HiddenFrame.jsm", {}).HiddenFrame;
   let hiddenFrame = new HiddenFrame();
   let win = await hiddenFrame.get();
   let iframe = win.document.createElementNS("http://www.w3.org/1999/xhtml", "html:iframe");
@@ -282,20 +347,21 @@ add_task(async function checkAllTheCSS() {
   iframe.contentWindow.location = testFile;
   await iframeLoaded;
   let doc = iframe.contentWindow.document;
+  doc.docShell.cssErrorReportingEnabled = true;
 
   // Parse and remove all manifests from the list.
   // NOTE that this must be done before filtering out devtools paths
   // so that all chrome paths can be recorded.
-  let manifestPromises = [];
+  let manifestURIs = [];
   uris = uris.filter(uri => {
     if (uri.pathQueryRef.endsWith(".manifest")) {
-      manifestPromises.push(parseManifest(uri));
+      manifestURIs.push(uri);
       return false;
     }
     return true;
   });
   // Wait for all manifest to be parsed
-  await Promise.all(manifestPromises);
+  await throttledMapPromises(manifestURIs, parseManifest);
 
   // filter out either the devtools paths or the non-devtools paths:
   let isDevtools = SimpleTest.harnessParameters.subsuite == "devtools";
@@ -339,25 +405,33 @@ add_task(async function checkAllTheCSS() {
   }
 
   // Wait for all the files to have actually loaded:
-  allPromises = allPromises.map(loadCSS);
-  await Promise.all(allPromises);
+  await throttledMapPromises(allPromises, loadCSS);
 
   // Check if all the files referenced from CSS actually exist.
   for (let [image, references] of imageURIsToReferencesMap) {
     if (!chromeFileExists(image)) {
       for (let ref of references) {
-        let ignored = false;
-        for (let item of allowedImageReferences) {
-          if (image.endsWith(item.file) && ref.endsWith(item.from) &&
-              isDevtools == item.isFromDevTools &&
-              (!item.platforms || item.platforms.includes(AppConstants.platform))) {
-            item.used = true;
+        ok(false, "missing " + image + " referenced from " + ref);
+      }
+    }
+  }
+
+  // Check if all the properties that are defined are referenced.
+  for (let [prop, refCount] of customPropsToReferencesMap) {
+    if (!refCount) {
+      let ignored = false;
+      for (let item of propNameWhitelist) {
+        if (item.propName == prop &&
+            isDevtools == item.isFromDevTools) {
+          item.used = true;
+          if (!item.platforms || item.platforms.includes(AppConstants.platform)) {
             ignored = true;
-            break;
           }
+          break;
         }
-        if (!ignored)
-          ok(false, "missing " + image + " referenced from " + ref);
+      }
+      if (!ignored) {
+        ok(false, "custom property `" + prop + "` is not referenced");
       }
     }
   }
@@ -369,23 +443,17 @@ add_task(async function checkAllTheCSS() {
   is(errors.length, 0, "All the styles (" + allPromises.length + ") loaded without errors.");
 
   // Confirm that all whitelist rules have been used.
-  for (let item of whitelist) {
-    if (!item.used && isDevtools == item.isFromDevTools && !item.intermittent) {
-      ok(false, "Unused whitelist item. " +
-                (item.sourceName ? " sourceName: " + item.sourceName : "") +
-                (item.errorMessage ? " errorMessage: " + item.errorMessage : ""));
+  function checkWhitelist(list) {
+    for (let item of list) {
+      if (!item.used && isDevtools == item.isFromDevTools &&
+          (!item.platforms || item.platforms.includes(AppConstants.platform)) &&
+          !item.intermittent) {
+        ok(false, "Unused whitelist item: " + dumpWhitelistItem(item));
+      }
     }
   }
-
-  // Confirm that all file whitelist rules have been used.
-  for (let item of allowedImageReferences) {
-    if (!item.used && isDevtools == item.isFromDevTools &&
-        (!item.platforms || item.platforms.includes(AppConstants.platform))) {
-      ok(false, "Unused file whitelist item. " +
-                " file: " + item.file +
-                " from: " + item.from);
-    }
-  }
+  checkWhitelist(whitelist);
+  checkWhitelist(propNameWhitelist);
 
   // Clean up to avoid leaks:
   iframe.remove();
@@ -396,4 +464,5 @@ add_task(async function checkAllTheCSS() {
   hiddenFrame.destroy();
   hiddenFrame = null;
   imageURIsToReferencesMap = null;
+  customPropsToReferencesMap = null;
 });

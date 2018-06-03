@@ -5,9 +5,12 @@
 extern crate gleam;
 extern crate glutin;
 extern crate webrender;
+extern crate winit;
 
 #[path = "common/boilerplate.rs"]
 mod boilerplate;
+#[path = "common/image_helper.rs"]
+mod image_helper;
 
 use boilerplate::{Example, HandyDandyRectBuilder};
 use webrender::api::*;
@@ -21,23 +24,16 @@ impl Example for App {
         &mut self,
         _api: &RenderApi,
         builder: &mut DisplayListBuilder,
-        resources: &mut ResourceUpdates,
-        _layout_size: LayoutSize,
+        txn: &mut Transaction,
+        _framebuffer_size: DeviceUintSize,
         _pipeline_id: PipelineId,
         _document_id: DocumentId,
     ) {
-        let mut image_data = Vec::new();
-        for y in 0 .. 32 {
-            for x in 0 .. 32 {
-                let lum = 255 * (((x & 8) == 0) ^ ((y & 8) == 0)) as u8;
-                image_data.extend_from_slice(&[lum, lum, lum, 0xff]);
-            }
-        }
-
-        resources.add_image(
+        let (image_descriptor, image_data) = image_helper::make_checkerboard(32, 32);
+        txn.add_image(
             self.image_key,
-            ImageDescriptor::new(32, 32, ImageFormat::BGRA8, true),
-            ImageData::new(image_data),
+            image_descriptor,
+            image_data,
             None,
         );
 
@@ -45,12 +41,13 @@ impl Example for App {
         let info = LayoutPrimitiveInfo::new(bounds);
         builder.push_stacking_context(
             &info,
-            ScrollPolicy::Scrollable,
+            None,
             None,
             TransformStyle::Flat,
             None,
             MixBlendMode::Normal,
             Vec::new(),
+            GlyphRasterSpace::Screen,
         );
 
         let image_size = LayoutSize::new(100.0, 100.0);
@@ -64,6 +61,7 @@ impl Example for App {
             image_size,
             LayoutSize::zero(),
             ImageRendering::Auto,
+            AlphaType::PremultipliedAlpha,
             self.image_key,
         );
 
@@ -76,38 +74,42 @@ impl Example for App {
             image_size,
             LayoutSize::zero(),
             ImageRendering::Pixelated,
+            AlphaType::PremultipliedAlpha,
             self.image_key,
         );
 
         builder.pop_stacking_context();
     }
 
-    fn on_event(&mut self, event: glutin::Event, api: &RenderApi, document_id: DocumentId) -> bool {
+    fn on_event(&mut self, event: winit::WindowEvent, api: &RenderApi, document_id: DocumentId) -> bool {
         match event {
-            glutin::Event::KeyboardInput(glutin::ElementState::Pressed, _, Some(key)) => {
-                match key {
-                    glutin::VirtualKeyCode::Space => {
-                        let mut image_data = Vec::new();
-                        for y in 0 .. 64 {
-                            for x in 0 .. 64 {
-                                let r = 255 * ((y & 32) == 0) as u8;
-                                let g = 255 * ((x & 32) == 0) as u8;
-                                image_data.extend_from_slice(&[0, g, r, 0xff]);
-                            }
-                        }
-
-                        let mut updates = ResourceUpdates::new();
-                        updates.update_image(
-                            self.image_key,
-                            ImageDescriptor::new(64, 64, ImageFormat::BGRA8, true),
-                            ImageData::new(image_data),
-                            None,
-                        );
-                        api.update_resources(updates);
-                        api.generate_frame(document_id, None);
+            winit::WindowEvent::KeyboardInput {
+                input: winit::KeyboardInput {
+                    state: winit::ElementState::Pressed,
+                    virtual_keycode: Some(winit::VirtualKeyCode::Space),
+                    ..
+                },
+                ..
+            } => {
+                let mut image_data = Vec::new();
+                for y in 0 .. 64 {
+                    for x in 0 .. 64 {
+                        let r = 255 * ((y & 32) == 0) as u8;
+                        let g = 255 * ((x & 32) == 0) as u8;
+                        image_data.extend_from_slice(&[0, g, r, 0xff]);
                     }
-                    _ => {}
                 }
+
+                let mut txn = Transaction::new();
+                txn.update_image(
+                    self.image_key,
+                    ImageDescriptor::new(64, 64, ImageFormat::BGRA8, true, false),
+                    ImageData::new(image_data),
+                    None,
+                );
+                let mut txn = Transaction::new();
+                txn.generate_frame();
+                api.send_transaction(document_id, txn);
             }
             _ => {}
         }

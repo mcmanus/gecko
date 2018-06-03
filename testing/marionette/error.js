@@ -4,7 +4,7 @@
 
 "use strict";
 
-const {interfaces: Ci, utils: Cu} = Components;
+const {pprint} = ChromeUtils.import("chrome://marionette/content/format.js", {});
 
 const ERRORS = new Set([
   "ElementClickInterceptedError",
@@ -18,7 +18,7 @@ const ERRORS = new Set([
   "InvalidSessionIDError",
   "JavaScriptError",
   "MoveTargetOutOfBoundsError",
-  "NoAlertOpenError",
+  "NoSuchAlertError",
   "NoSuchElementError",
   "NoSuchFrameError",
   "NoSuchWindowError",
@@ -47,7 +47,6 @@ const BUILTIN_ERRORS = new Set([
 
 this.EXPORTED_SYMBOLS = [
   "error",
-  "pprint",
   "stack",
 ].concat(Array.from(ERRORS));
 
@@ -55,21 +54,21 @@ this.EXPORTED_SYMBOLS = [
 this.error = {};
 
 /**
- * Check if |val| is an instance of the |Error| prototype.
+ * Check if ``val`` is an instance of the ``Error`` prototype.
  *
  * Because error objects may originate from different globals, comparing
  * the prototype of the left hand side with the prototype property from
- * the right hand side, which is what |instanceof| does, will not work.
+ * the right hand side, which is what ``instanceof`` does, will not work.
  * If the LHS and RHS come from different globals, this check will always
  * fail because the two objects will not have the same identity.
  *
- * Therefore it is not safe to use |instanceof| in any multi-global
- * situation, e.g. in content across multiple Window objects or anywhere
+ * Therefore it is not safe to use ``instanceof`` in any multi-global
+ * situation, e.g. in content across multiple ``Window`` objects or anywhere
  * in chrome scope.
  *
- * This function also contains a special check if |val| is an XPCOM
- * |nsIException| because they are special snowflakes and may indeed
- * cause Firefox to crash if used with |instanceof|.
+ * This function also contains a special check if ``val`` is an XPCOM
+ * ``nsIException`` because they are special snowflakes and may indeed
+ * cause Firefox to crash if used with ``instanceof``.
  *
  * @param {*} val
  *     Any value that should be undergo the test for errorness.
@@ -93,7 +92,15 @@ error.isError = function(val) {
 };
 
 /**
- * Checks if obj is an object in the WebDriverError prototypal chain.
+ * Checks if ``obj`` is an object in the :js:class:`WebDriverError`
+ * prototypal chain.
+ *
+ * @param {*} obj
+ *     Arbitrary object to test.
+ *
+ * @return {boolean}
+ *     True if ``obj`` is of the WebDriverError prototype chain,
+ *     false otherwise.
  */
 error.isWebDriverError = function(obj) {
   return error.isError(obj) &&
@@ -101,17 +108,17 @@ error.isWebDriverError = function(obj) {
 };
 
 /**
- * Ensures error instance is a WebDriverError.
+ * Ensures error instance is a :js:class:`WebDriverError`.
  *
  * If the given error is already in the WebDriverError prototype
- * chain, |err| is returned unmodified.  If it is not, it is wrapped
- * in UnknownError.
+ * chain, ``err`` is returned unmodified.  If it is not, it is wrapped
+ * in :js:class:`UnknownError`.
  *
  * @param {Error} err
  *     Error to conditionally turn into a WebDriverError.
  *
  * @return {WebDriverError}
- *     If |err| is a WebDriverError, it is returned unmodified.
+ *     If ``err`` is a WebDriverError, it is returned unmodified.
  *     Otherwise an UnknownError type is returned.
  */
 error.wrap = function(err) {
@@ -146,74 +153,6 @@ error.stringify = function(err) {
   } catch (e) {
     return "<unprintable error>";
   }
-};
-
-/**
- * Pretty-print values passed to template strings.
- *
- * Usage:
- *
- *     const {pprint} = Cu.import("chrome://marionette/content/error.js", {});
- *     let bool = {value: true};
- *     pprint`Expected boolean, got ${bool}`;
- *     => 'Expected boolean, got [object Object] {"value": true}'
- *
- *     let htmlElement = document.querySelector("input#foo");
- *     pprint`Expected element ${htmlElement}`;
- *     => 'Expected element <input id="foo" class="bar baz">'
- */
-this.pprint = function(ss, ...values) {
-  function prettyObject(obj) {
-    let proto = Object.prototype.toString.call(obj);
-    let s = "";
-    try {
-      s = JSON.stringify(obj);
-    } catch (e) {
-      if (e instanceof TypeError) {
-        s = `<${e.message}>`;
-      } else {
-        throw e;
-      }
-    }
-    return proto + " " + s;
-  }
-
-  function prettyElement(el) {
-    let ident = [];
-    if (el.id) {
-      ident.push(`id="${el.id}"`);
-    }
-    if (el.classList.length > 0) {
-      ident.push(`class="${el.className}"`);
-    }
-
-    let idents = "";
-    if (ident.length > 0) {
-      idents = " " + ident.join(" ");
-    }
-
-    return `<${el.localName}${idents}>`;
-  }
-
-  let res = [];
-  for (let i = 0; i < ss.length; i++) {
-    res.push(ss[i]);
-    if (i < values.length) {
-      let val = values[i];
-      let s;
-      try {
-        if (val && val.nodeType === 1) {
-          s = prettyElement(val);
-        } else {
-          s = prettyObject(val);
-        }
-      } catch (e) {
-        s = typeof val;
-      }
-      res.push(s);
-    }
-  }
-  return res.join("");
 };
 
 /** Create a stacktrace to the current line in the program. */
@@ -368,6 +307,10 @@ class InvalidArgumentError extends WebDriverError {
   }
 }
 
+/**
+ * An illegal attempt was made to set a cookie under a different
+ * domain than the current page.
+ */
 class InvalidCookieDomainError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -375,6 +318,11 @@ class InvalidCookieDomainError extends WebDriverError {
   }
 }
 
+/**
+ * A command could not be completed because the element is in an
+ * invalid state, e.g. attempting to clear an element that isn't both
+ * editable and resettable.
+ */
 class InvalidElementStateError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -382,6 +330,7 @@ class InvalidElementStateError extends WebDriverError {
   }
 }
 
+/** Argument was an invalid selector. */
 class InvalidSelectorError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -389,6 +338,10 @@ class InvalidSelectorError extends WebDriverError {
   }
 }
 
+/**
+ * Occurs if the given session ID is not in the list of active sessions,
+ * meaning the session either does not exist or that it's not active.
+ */
 class InvalidSessionIDError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -396,58 +349,18 @@ class InvalidSessionIDError extends WebDriverError {
   }
 }
 
-/**
- * Creates a richly annotated error for an error situation that occurred
- * whilst evaluating injected scripts.
- */
+/** An error occurred whilst executing JavaScript supplied by the user. */
 class JavaScriptError extends WebDriverError {
-  /**
-   * @param {(string|Error)} x
-   *     An Error object instance or a string describing the error
-   *     situation.
-   * @param {string=} fnName
-   *     Name of the function to use in the stack trace message.
-   * @param {string=} file
-   *     Filename of the test file on the client.
-   * @param {number=} line
-   *     Line number of |file|.
-   * @param {string=} script
-   *     Script being executed, in text form.
-   */
-  constructor(x,
-      {fnName = null, file = null, line = null, script = null} = {}) {
-    let msg = String(x);
-    let trace = "";
-
-    if (fnName !== null) {
-      trace += fnName;
-      if (file !== null) {
-        trace += ` @${file}`;
-        if (line !== null) {
-          trace += `, line ${line}`;
-        }
-      }
-    }
-
-    if (error.isError(x)) {
-      let jsStack = x.stack.split("\n");
-      let match = jsStack[0].match(/:(\d+):\d+$/);
-      let jsLine = match ? parseInt(match[1]) : 0;
-      if (script !== null) {
-        let src = script.split("\n")[jsLine];
-        trace += "\n" +
-          `inline javascript, line ${jsLine}\n` +
-          `src: "${src}"`;
-      }
-      trace += "\nStack:\n" + x.stack;
-    }
-
-    super(msg);
+  constructor(x) {
+    super(x);
     this.status = "javascript error";
-    this.stack = trace;
   }
 }
 
+/**
+ * The target for mouse interaction is not in the browser's viewport
+ * and cannot be brought into that viewport.
+ */
 class MoveTargetOutOfBoundsError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -455,13 +368,21 @@ class MoveTargetOutOfBoundsError extends WebDriverError {
   }
 }
 
-class NoAlertOpenError extends WebDriverError {
+/**
+ * An attempt was made to operate on a modal dialog when one was
+ * not open.
+ */
+class NoSuchAlertError extends WebDriverError {
   constructor(message) {
     super(message);
     this.status = "no such alert";
   }
 }
 
+/**
+ * An element could not be located on the page using the given
+ * search parameters.
+ */
 class NoSuchElementError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -469,6 +390,10 @@ class NoSuchElementError extends WebDriverError {
   }
 }
 
+/**
+ * A command to switch to a frame could not be satisfied because
+ * the frame could not be found.
+ */
 class NoSuchFrameError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -476,6 +401,10 @@ class NoSuchFrameError extends WebDriverError {
   }
 }
 
+/**
+ * A command to switch to a window could not be satisfied because
+ * the window could not be found.
+ */
 class NoSuchWindowError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -483,6 +412,7 @@ class NoSuchWindowError extends WebDriverError {
   }
 }
 
+/** A script did not complete before its timeout expired. */
 class ScriptTimeoutError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -490,6 +420,7 @@ class ScriptTimeoutError extends WebDriverError {
   }
 }
 
+/** A new session could not be created. */
 class SessionNotCreatedError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -497,6 +428,10 @@ class SessionNotCreatedError extends WebDriverError {
   }
 }
 
+/**
+ * A command failed because the referenced element is no longer
+ * attached to the DOM.
+ */
 class StaleElementReferenceError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -504,6 +439,7 @@ class StaleElementReferenceError extends WebDriverError {
   }
 }
 
+/** An operation did not complete before its timeout expired. */
 class TimeoutError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -511,6 +447,7 @@ class TimeoutError extends WebDriverError {
   }
 }
 
+/** A command to set a cookie's value could not be satisfied. */
 class UnableToSetCookieError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -518,6 +455,7 @@ class UnableToSetCookieError extends WebDriverError {
   }
 }
 
+/** A modal dialog was open, blocking this operation. */
 class UnexpectedAlertOpenError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -525,6 +463,10 @@ class UnexpectedAlertOpenError extends WebDriverError {
   }
 }
 
+/**
+ * A command could not be executed because the remote end is not
+ * aware of it.
+ */
 class UnknownCommandError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -532,6 +474,10 @@ class UnknownCommandError extends WebDriverError {
   }
 }
 
+/**
+ * An unknown error occurred in the remote end while processing
+ * the command.
+ */
 class UnknownError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -539,6 +485,10 @@ class UnknownError extends WebDriverError {
   }
 }
 
+/**
+ * Indicates that a command that should have executed properly
+ * cannot be supported for some reason.
+ */
 class UnsupportedOperationError extends WebDriverError {
   constructor(message) {
     super(message);
@@ -558,7 +508,7 @@ const STATUSES = new Map([
   ["invalid session id", InvalidSessionIDError],
   ["javascript error", JavaScriptError],
   ["move target out of bounds", MoveTargetOutOfBoundsError],
-  ["no alert open", NoAlertOpenError],
+  ["no such alert", NoSuchAlertError],
   ["no such element", NoSuchElementError],
   ["no such frame", NoSuchFrameError],
   ["no such window", NoSuchWindowError],

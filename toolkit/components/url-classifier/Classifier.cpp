@@ -15,6 +15,7 @@
 #include "nsNetCID.h"
 #include "nsPrintfCString.h"
 #include "nsThreadUtils.h"
+#include "mozilla/EndianUtils.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/Logging.h"
@@ -267,6 +268,8 @@ Classifier::Open(nsIFile& aCacheDirectory)
 void
 Classifier::Close()
 {
+  // Close will be called by PreShutdown, so it is important to note that
+  // things put here should not affect an ongoing update thread.
   DropStores();
 }
 
@@ -330,19 +333,12 @@ Classifier::ResetTables(ClearType aType, const nsTArray<nsCString>& aTables)
 void
 Classifier::DeleteTables(nsIFile* aDirectory, const nsTArray<nsCString>& aTables)
 {
-  nsCOMPtr<nsISimpleEnumerator> entries;
+  nsCOMPtr<nsIDirectoryEnumerator> entries;
   nsresult rv = aDirectory->GetDirectoryEntries(getter_AddRefs(entries));
   NS_ENSURE_SUCCESS_VOID(rv);
 
-  bool hasMore;
-  while (NS_SUCCEEDED(rv = entries->HasMoreElements(&hasMore)) && hasMore) {
-    nsCOMPtr<nsISupports> supports;
-    rv = entries->GetNext(getter_AddRefs(supports));
-    NS_ENSURE_SUCCESS_VOID(rv);
-
-    nsCOMPtr<nsIFile> file = do_QueryInterface(supports);
-    NS_ENSURE_TRUE_VOID(file);
-
+  nsCOMPtr<nsIFile> file;
+  while (NS_SUCCEEDED(rv = entries->GetNextFile(getter_AddRefs(file))) && file) {
     // If |file| is a directory, recurse to find its entries as well.
     bool isDirectory;
     if (NS_FAILED(file->IsDirectory(&isDirectory))) {
@@ -357,8 +353,13 @@ Classifier::DeleteTables(nsIFile* aDirectory, const nsTArray<nsCString>& aTables
     rv = file->GetNativeLeafName(leafName);
     NS_ENSURE_SUCCESS_VOID(rv);
 
-    leafName.Truncate(leafName.RFind("."));
-    if (aTables.Contains(leafName)) {
+    // Remove file extension if there's one.
+    int32_t dotPosition = leafName.RFind(".");
+    if (dotPosition >= 0) {
+      leafName.Truncate(dotPosition);
+    }
+
+    if (!leafName.IsEmpty() && aTables.Contains(leafName)) {
       if (NS_FAILED(file->Remove(false))) {
         NS_WARNING(nsPrintfCString("Fail to remove file %s from the disk",
                                    leafName.get()).get());
@@ -924,10 +925,12 @@ Classifier::RegenActiveTables()
 
     LookupCache *lookupCache = GetLookupCache(table);
     if (!lookupCache) {
+      LOG(("Inactive table (no cache): %s", table.get()));
       continue;
     }
 
     if (!lookupCache->IsPrimed()) {
+      LOG(("Inactive table (cache not primed): %s", table.get()));
       continue;
     }
 
@@ -960,18 +963,12 @@ Classifier::RegenActiveTables()
 nsresult
 Classifier::ScanStoreDir(nsIFile* aDirectory, nsTArray<nsCString>& aTables)
 {
-  nsCOMPtr<nsISimpleEnumerator> entries;
+  nsCOMPtr<nsIDirectoryEnumerator> entries;
   nsresult rv = aDirectory->GetDirectoryEntries(getter_AddRefs(entries));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  bool hasMore;
-  while (NS_SUCCEEDED(rv = entries->HasMoreElements(&hasMore)) && hasMore) {
-    nsCOMPtr<nsISupports> supports;
-    rv = entries->GetNext(getter_AddRefs(supports));
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    nsCOMPtr<nsIFile> file = do_QueryInterface(supports);
-
+  nsCOMPtr<nsIFile> file;
+  while (NS_SUCCEEDED(rv = entries->GetNextFile(getter_AddRefs(file))) && file) {
     // If |file| is a directory, recurse to find its entries as well.
     bool isDirectory;
     if (NS_FAILED(file->IsDirectory(&isDirectory))) {
@@ -1428,10 +1425,8 @@ Classifier::UpdateCache(TableUpdate* aUpdate)
 LookupCache *
 Classifier::GetLookupCache(const nsACString& aTable, bool aForUpdate)
 {
-  if (aForUpdate) {
-    MOZ_ASSERT(NS_GetCurrentThread() == mUpdateThread,
-               "GetLookupCache(aForUpdate==true) can only be called on update thread.");
-  }
+  // GetLookupCache(aForUpdate==true) can only be called on update thread.
+  MOZ_ASSERT_IF(aForUpdate, NS_GetCurrentThread() == mUpdateThread);
 
   nsTArray<LookupCache*>& lookupCaches = aForUpdate ? mNewLookupCaches
                                                     : mLookupCaches;
@@ -1442,6 +1437,11 @@ Classifier::GetLookupCache(const nsACString& aTable, bool aForUpdate)
     if (c->TableName().Equals(aTable)) {
       return c;
     }
+  }
+
+  // We don't want to create lookupcache when shutdown is already happening.
+  if (nsUrlClassifierDBService::ShutdownHasStarted()) {
+    return nullptr;
   }
 
   // TODO : Bug 1302600, It would be better if we have a more general non-main
@@ -1551,19 +1551,13 @@ Classifier::ReadNoiseEntries(const Prefix& aPrefix,
 nsresult
 Classifier::LoadMetadata(nsIFile* aDirectory, nsACString& aResult)
 {
-  nsCOMPtr<nsISimpleEnumerator> entries;
+  nsCOMPtr<nsIDirectoryEnumerator> entries;
   nsresult rv = aDirectory->GetDirectoryEntries(getter_AddRefs(entries));
   NS_ENSURE_SUCCESS(rv, rv);
   NS_ENSURE_ARG_POINTER(entries);
 
-  bool hasMore;
-  while (NS_SUCCEEDED(rv = entries->HasMoreElements(&hasMore)) && hasMore) {
-    nsCOMPtr<nsISupports> supports;
-    rv = entries->GetNext(getter_AddRefs(supports));
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    nsCOMPtr<nsIFile> file = do_QueryInterface(supports);
-
+  nsCOMPtr<nsIFile> file;
+  while (NS_SUCCEEDED(rv = entries->GetNextFile(getter_AddRefs(file))) && file) {
     // If |file| is a directory, recurse to find its entries as well.
     bool isDirectory;
     if (NS_FAILED(file->IsDirectory(&isDirectory))) {

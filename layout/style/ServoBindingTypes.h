@@ -8,15 +8,19 @@
 #define mozilla_ServoBindingTypes_h
 
 #include "mozilla/RefPtr.h"
+#include "mozilla/ServoComputedData.h"
 #include "mozilla/ServoTypes.h"
+#include "mozilla/SheetType.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/gfx/Types.h"
 #include "nsCSSPropertyID.h"
 #include "nsStyleAutoArray.h"
 #include "nsTArray.h"
 
+struct RawServoAuthorStyles;
 struct RawServoStyleSet;
 struct RawServoSelectorList;
+struct RawServoSourceSizeList;
 struct RawServoAnimationValueMap;
 struct RustString;
 
@@ -26,7 +30,7 @@ struct RustString;
 
 namespace mozilla {
 class ServoElementSnapshot;
-class ServoStyleContext;
+class ComputedStyle;
 struct StyleAnimation;
 struct URLExtraData;
 namespace dom {
@@ -51,6 +55,7 @@ struct nsFontFaceRuleContainer;
 class nsIDocument;
 class nsINode;
 class nsPresContext;
+class nsSimpleContentList;
 struct nsTimingFunction;
 class nsXBLBinding;
 
@@ -110,14 +115,14 @@ typedef mozilla::dom::StyleChildrenIterator RawGeckoStyleChildrenIterator;
 #include "mozilla/ServoArcTypeList.h"
 #undef SERVO_ARC_TYPE
 
-typedef mozilla::ServoStyleContext const* ServoStyleContextBorrowed;
-typedef mozilla::ServoStyleContext const* ServoStyleContextBorrowedOrNull;
+typedef mozilla::ComputedStyle const* ComputedStyleBorrowed;
+typedef mozilla::ComputedStyle const* ComputedStyleBorrowedOrNull;
 typedef ServoComputedData const* ServoComputedDataBorrowed;
 
-struct MOZ_MUST_USE_TYPE ServoStyleContextStrong
+struct MOZ_MUST_USE_TYPE ComputedStyleStrong
 {
-  mozilla::ServoStyleContext* mPtr;
-  already_AddRefed<mozilla::ServoStyleContext> Consume();
+  mozilla::ComputedStyle* mPtr;
+  already_AddRefed<mozilla::ComputedStyle> Consume();
 };
 
 #define DECL_OWNED_REF_TYPE_FOR(type_)    \
@@ -133,7 +138,8 @@ struct MOZ_MUST_USE_TYPE ServoStyleContextStrong
 // This is a reference to a reference of RawServoDeclarationBlock, which
 // corresponds to Option<&Arc<RawServoDeclarationBlock>> in Servo side.
 DECL_NULLABLE_BORROWED_REF_TYPE_FOR(RawServoDeclarationBlockStrong)
-
+DECL_OWNED_REF_TYPE_FOR(RawServoAuthorStyles)
+DECL_NULLABLE_BORROWED_REF_TYPE_FOR(RawServoAuthorStyles)
 DECL_OWNED_REF_TYPE_FOR(RawServoStyleSet)
 DECL_NULLABLE_BORROWED_REF_TYPE_FOR(RawServoStyleSet)
 DECL_NULLABLE_OWNED_REF_TYPE_FOR(StyleChildrenIterator)
@@ -146,7 +152,6 @@ DECL_OWNED_REF_TYPE_FOR(RawServoAnimationValueMap)
 // it only asks Gecko to do so. In case we wish to in
 // the future, we should ensure that things being mutated
 // are protected from noalias violations by a cell type
-DECL_BORROWED_REF_TYPE_FOR(RawServoSelectorList)
 DECL_BORROWED_REF_TYPE_FOR(RawGeckoNode)
 DECL_NULLABLE_BORROWED_REF_TYPE_FOR(RawGeckoNode)
 DECL_BORROWED_REF_TYPE_FOR(RawGeckoElement)
@@ -168,6 +173,7 @@ DECL_BORROWED_REF_TYPE_FOR(RawGeckoKeyframeList)
 DECL_BORROWED_MUT_REF_TYPE_FOR(RawGeckoPropertyValuePairList)
 DECL_BORROWED_REF_TYPE_FOR(RawGeckoPropertyValuePairList)
 DECL_BORROWED_MUT_REF_TYPE_FOR(RawGeckoComputedKeyframeValuesList)
+DECL_BORROWED_MUT_REF_TYPE_FOR(RawGeckoStyleAnimationList)
 DECL_BORROWED_REF_TYPE_FOR(RawGeckoStyleAnimationList)
 DECL_BORROWED_MUT_REF_TYPE_FOR(nsTimingFunction)
 DECL_BORROWED_REF_TYPE_FOR(nsTimingFunction)
@@ -181,6 +187,9 @@ DECL_BORROWED_REF_TYPE_FOR(nsXBLBinding)
 DECL_BORROWED_MUT_REF_TYPE_FOR(RawGeckoStyleChildrenIterator)
 DECL_OWNED_REF_TYPE_FOR(RawServoSelectorList)
 DECL_BORROWED_REF_TYPE_FOR(RawServoSelectorList)
+DECL_OWNED_REF_TYPE_FOR(RawServoSourceSizeList)
+DECL_BORROWED_REF_TYPE_FOR(RawServoSourceSizeList)
+DECL_NULLABLE_BORROWED_REF_TYPE_FOR(RawServoSourceSizeList)
 
 #undef DECL_ARC_REF_TYPE_FOR
 #undef DECL_OWNED_REF_TYPE_FOR
@@ -223,8 +232,17 @@ DECL_BORROWED_REF_TYPE_FOR(RawServoSelectorList)
   }
 
 DEFINE_BOXED_TYPE(StyleSet, RawServoStyleSet);
+DEFINE_BOXED_TYPE(AuthorStyles, RawServoAuthorStyles);
 DEFINE_BOXED_TYPE(SelectorList, RawServoSelectorList);
+DEFINE_BOXED_TYPE(SourceSizeList, RawServoSourceSizeList);
 
 #undef DEFINE_BOXED_TYPE
+
+// used for associating sheet type with specific @font-face rules
+struct nsFontFaceRuleContainer
+{
+  RefPtr<RawServoFontFaceRule> mRule;
+  mozilla::SheetType mSheetType;
+};
 
 #endif // mozilla_ServoBindingTypes_h

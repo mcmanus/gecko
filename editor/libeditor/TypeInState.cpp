@@ -14,14 +14,18 @@
 #include "nsAString.h"
 #include "nsDebug.h"
 #include "nsGkAtoms.h"
-#include "nsIDOMNode.h"
+#include "nsINode.h"
 #include "nsISupportsBase.h"
 #include "nsISupportsImpl.h"
 #include "nsReadableUtils.h"
 #include "nsStringFwd.h"
 
+// Workaround for windows headers
+#ifdef SetProp
+#undef SetProp
+#endif
+
 class nsAtom;
-class nsIDOMDocument;
 
 namespace mozilla {
 
@@ -31,17 +35,21 @@ using namespace dom;
  * mozilla::TypeInState
  *******************************************************************/
 
-NS_IMPL_CYCLE_COLLECTION(TypeInState, mLastSelectionContainer)
-NS_IMPL_CYCLE_COLLECTING_ADDREF(TypeInState)
-NS_IMPL_CYCLE_COLLECTING_RELEASE(TypeInState)
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(TypeInState)
-  NS_INTERFACE_MAP_ENTRY(nsISelectionListener)
-  NS_INTERFACE_MAP_ENTRY(nsISupports)
-NS_INTERFACE_MAP_END
+NS_IMPL_CYCLE_COLLECTION_CLASS(TypeInState)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(TypeInState)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mLastSelectionPoint)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(TypeInState)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mLastSelectionPoint)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(TypeInState, AddRef)
+NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(TypeInState, Release)
 
 TypeInState::TypeInState()
   : mRelativeFontSize(0)
-  , mLastSelectionOffset(0)
 {
   Reset();
 }
@@ -57,22 +65,26 @@ TypeInState::~TypeInState()
 nsresult
 TypeInState::UpdateSelState(Selection* aSelection)
 {
-  NS_ENSURE_TRUE(aSelection, NS_ERROR_NULL_POINTER);
+  if (NS_WARN_IF(!aSelection)) {
+    return NS_ERROR_INVALID_ARG;
+  }
 
-  if (!aSelection->Collapsed()) {
+  if (!aSelection->IsCollapsed()) {
     return NS_OK;
   }
 
-  return EditorBase::GetStartNodeAndOffset(
-                       aSelection, getter_AddRefs(mLastSelectionContainer),
-                       &mLastSelectionOffset);
+  mLastSelectionPoint = EditorBase::GetStartPoint(aSelection);
+  if (!mLastSelectionPoint.IsSet()) {
+    return NS_ERROR_FAILURE;
+  }
+  // We need to store only offset because referring child may be removed by
+  // we'll check the point later.
+  AutoEditorDOMPointChildInvalidator saveOnlyOffset(mLastSelectionPoint);
+  return NS_OK;
 }
 
-
-NS_IMETHODIMP
-TypeInState::NotifySelectionChanged(nsIDOMDocument* aDOMDocument,
-                                    nsISelection* aSelection,
-                                    int16_t aReason)
+void
+TypeInState::OnSelectionChange(Selection& aSelection)
 {
   // XXX: Selection currently generates bogus selection changed notifications
   // XXX: (bug 140303). It can notify us when the selection hasn't actually
@@ -83,39 +95,28 @@ TypeInState::NotifySelectionChanged(nsIDOMDocument* aDOMDocument,
   // XXX:
   // XXX: This code temporarily fixes the problem where clicking the mouse in
   // XXX: the same location clears the type-in-state.
-  RefPtr<Selection> selection =
-    aSelection ? aSelection->AsSelection() : nullptr;
 
-  if (aSelection) {
-    int32_t rangeCount = selection->RangeCount();
-
-    if (selection->Collapsed() && rangeCount) {
-      nsCOMPtr<nsIDOMNode> selNode;
-      int32_t selOffset = 0;
-
-      nsresult rv =
-        EditorBase::GetStartNodeAndOffset(selection, getter_AddRefs(selNode),
-                                          &selOffset);
-
-      NS_ENSURE_SUCCESS(rv, rv);
-
-      if (selNode &&
-          selNode == mLastSelectionContainer &&
-          selOffset == mLastSelectionOffset) {
-        // We got a bogus selection changed notification!
-        return NS_OK;
-      }
-
-      mLastSelectionContainer = selNode;
-      mLastSelectionOffset = selOffset;
-    } else {
-      mLastSelectionContainer = nullptr;
-      mLastSelectionOffset = 0;
+  if (aSelection.IsCollapsed() && aSelection.RangeCount()) {
+    EditorRawDOMPoint selectionStartPoint(
+                        EditorBase::GetStartPoint(&aSelection));
+    if (NS_WARN_IF(!selectionStartPoint.IsSet())) {
+      return;
     }
+
+    if (mLastSelectionPoint == selectionStartPoint) {
+      // We got a bogus selection changed notification!
+      return;
+    }
+
+    mLastSelectionPoint = selectionStartPoint;
+    // We need to store only offset because referring child may be removed by
+    // we'll check the point later.
+    AutoEditorDOMPointChildInvalidator saveOnlyOffset(mLastSelectionPoint);
+  } else {
+    mLastSelectionPoint.Clear();
   }
 
   Reset();
-  return NS_OK;
 }
 
 void
@@ -134,7 +135,7 @@ TypeInState::Reset()
 
 void
 TypeInState::SetProp(nsAtom* aProp,
-                     const nsAString& aAttr,
+                     nsAtom* aAttr,
                      const nsAString& aValue)
 {
   // special case for big/small, these nest
@@ -166,12 +167,12 @@ void
 TypeInState::ClearAllProps()
 {
   // null prop means "all" props
-  ClearProp(nullptr, EmptyString());
+  ClearProp(nullptr, nullptr);
 }
 
 void
 TypeInState::ClearProp(nsAtom* aProp,
-                       const nsAString& aAttr)
+                       nsAtom* aAttr)
 {
   // if it's already cleared we are done
   if (IsPropCleared(aProp, aAttr)) {
@@ -239,16 +240,8 @@ TypeInState::TakeRelativeFontSize()
 void
 TypeInState::GetTypingState(bool& isSet,
                             bool& theSetting,
-                            nsAtom* aProp)
-{
-  GetTypingState(isSet, theSetting, aProp, EmptyString(), nullptr);
-}
-
-void
-TypeInState::GetTypingState(bool& isSet,
-                            bool& theSetting,
                             nsAtom* aProp,
-                            const nsString& aAttr,
+                            nsAtom* aAttr,
                             nsString* aValue)
 {
   if (IsPropSet(aProp, aAttr, aValue)) {
@@ -264,7 +257,7 @@ TypeInState::GetTypingState(bool& isSet,
 
 void
 TypeInState::RemovePropFromSetList(nsAtom* aProp,
-                                   const nsAString& aAttr)
+                                   nsAtom* aAttr)
 {
   int32_t index;
   if (!aProp) {
@@ -282,7 +275,7 @@ TypeInState::RemovePropFromSetList(nsAtom* aProp,
 
 void
 TypeInState::RemovePropFromClearedList(nsAtom* aProp,
-                                       const nsAString& aAttr)
+                                       nsAtom* aAttr)
 {
   int32_t index;
   if (FindPropInList(aProp, aAttr, nullptr, mClearedArray, index)) {
@@ -293,7 +286,7 @@ TypeInState::RemovePropFromClearedList(nsAtom* aProp,
 
 bool
 TypeInState::IsPropSet(nsAtom* aProp,
-                       const nsAString& aAttr,
+                       nsAtom* aAttr,
                        nsAString* outValue)
 {
   int32_t i;
@@ -302,7 +295,7 @@ TypeInState::IsPropSet(nsAtom* aProp,
 
 bool
 TypeInState::IsPropSet(nsAtom* aProp,
-                       const nsAString& aAttr,
+                       nsAtom* aAttr,
                        nsAString* outValue,
                        int32_t& outIndex)
 {
@@ -324,7 +317,7 @@ TypeInState::IsPropSet(nsAtom* aProp,
 
 bool
 TypeInState::IsPropCleared(nsAtom* aProp,
-                           const nsAString& aAttr)
+                           nsAtom* aAttr)
 {
   int32_t i;
   return IsPropCleared(aProp, aAttr, i);
@@ -333,13 +326,13 @@ TypeInState::IsPropCleared(nsAtom* aProp,
 
 bool
 TypeInState::IsPropCleared(nsAtom* aProp,
-                           const nsAString& aAttr,
+                           nsAtom* aAttr,
                            int32_t& outIndex)
 {
   if (FindPropInList(aProp, aAttr, nullptr, mClearedArray, outIndex)) {
     return true;
   }
-  if (FindPropInList(0, EmptyString(), nullptr, mClearedArray, outIndex)) {
+  if (FindPropInList(nullptr, nullptr, nullptr, mClearedArray, outIndex)) {
     // special case for all props cleared
     outIndex = -1;
     return true;
@@ -349,7 +342,7 @@ TypeInState::IsPropCleared(nsAtom* aProp,
 
 bool
 TypeInState::FindPropInList(nsAtom* aProp,
-                            const nsAString& aAttr,
+                            nsAtom* aAttr,
                             nsAString* outValue,
                             nsTArray<PropItem*>& aList,
                             int32_t& outIndex)
@@ -375,12 +368,13 @@ TypeInState::FindPropInList(nsAtom* aProp,
 
 PropItem::PropItem()
   : tag(nullptr)
+  , attr(nullptr)
 {
   MOZ_COUNT_CTOR(PropItem);
 }
 
 PropItem::PropItem(nsAtom* aTag,
-                   const nsAString& aAttr,
+                   nsAtom* aAttr,
                    const nsAString &aValue)
   : tag(aTag)
   , attr(aAttr)

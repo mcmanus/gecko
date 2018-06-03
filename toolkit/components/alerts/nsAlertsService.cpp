@@ -18,7 +18,6 @@
 #include "nsToolkitCompsCID.h"
 
 #ifdef MOZ_PLACES
-#include "mozIAsyncFavicons.h"
 #include "nsIFaviconService.h"
 #endif // MOZ_PLACES
 
@@ -104,7 +103,7 @@ ShowWithIconBackend(nsIAlertsService* aBackend, nsIAlertNotification* aAlert,
     return NS_ERROR_NOT_IMPLEMENTED;
   }
 
-  nsCOMPtr<mozIAsyncFavicons> favicons(do_GetService(
+  nsCOMPtr<nsIFaviconService> favicons(do_GetService(
     "@mozilla.org/browser/favicon-service;1"));
   NS_ENSURE_TRUE(favicons, NS_ERROR_FAILURE);
 
@@ -169,6 +168,20 @@ bool nsAlertsService::ShouldShowAlert()
   return result;
 }
 
+bool nsAlertsService::ShouldUseSystemBackend()
+{
+  if (!mBackend) {
+    return false;
+  }
+  static bool sAlertsUseSystemBackend;
+  static bool sAlertsUseSystemBackendCached = false;
+  if (!sAlertsUseSystemBackendCached) {
+    sAlertsUseSystemBackendCached = true;
+    Preferences::AddBoolVarCache(&sAlertsUseSystemBackend, "alerts.useSystemBackend", true);
+  }
+  return sAlertsUseSystemBackend;
+}
+
 NS_IMETHODIMP nsAlertsService::ShowAlertNotification(const nsAString & aImageUrl, const nsAString & aAlertTitle,
                                                      const nsAString & aAlertText, bool aAlertTextClickable,
                                                      const nsAString & aAlertCookie,
@@ -221,7 +234,7 @@ NS_IMETHODIMP nsAlertsService::ShowPersistentNotification(const nsAString & aPer
   }
 
   // Check if there is an optional service that handles system-level notifications
-  if (mBackend) {
+  if (ShouldUseSystemBackend()) {
     rv = ShowWithBackend(mBackend, aAlert, aAlertListener, aPersistentData);
     if (NS_SUCCEEDED(rv)) {
       return rv;
@@ -255,7 +268,7 @@ NS_IMETHODIMP nsAlertsService::CloseAlert(const nsAString& aAlertName,
 
   nsresult rv;
   // Try the system notification service.
-  if (mBackend) {
+  if (ShouldUseSystemBackend()) {
     rv = mBackend->CloseAlert(aAlertName, aPrincipal);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       // If the system backend failed to close the alert, fall back to XUL for
@@ -302,8 +315,11 @@ NS_IMETHODIMP nsAlertsService::SetManualDoNotDisturb(bool aDoNotDisturb)
 already_AddRefed<nsIAlertsDoNotDisturb>
 nsAlertsService::GetDNDBackend()
 {
+  nsCOMPtr<nsIAlertsService> backend;
   // Try the system notification service.
-  nsCOMPtr<nsIAlertsService> backend = mBackend;
+  if (ShouldUseSystemBackend()) {
+    backend = mBackend;
+  }
   if (!backend) {
     backend = nsXULAlerts::GetInstance();
   }

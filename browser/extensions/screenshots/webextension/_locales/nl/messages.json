@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "Downloaden"
   },
+  "downloadOnlyNotice": {
+    "message": "U bevindt zich momenteel in Alleen-downloadenmodus."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots wisselt in de volgende situaties automatisch naar Alleen-downloadenmodus:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "In een privénavigatievenster."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Cookies van derden zijn uitgeschakeld."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "‘Nooit geschiedenis onthouden’ is ingeschakeld."
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "U gebruikt Firefox ESR."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "Uploads zijn uitgeschakeld."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Koppeling gekopieerd"
   },
@@ -36,6 +57,28 @@
     "message": "De koppeling naar uw afbeelding is naar het klembord gekopieerd. Druk op $META_KEY$-V om te plakken.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Kopiëren"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Afbeelding gekopieerd"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Uw afbeelding is naar het klembord gekopieerd. Druk op $META_KEY$-V om te plakken.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Deze afbeelding is bijgesneden naar $PIXELS$px.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -104,7 +147,7 @@
     "message": "Zoals u wilt"
   },
   "tourBodyDownloadUpload": {
-    "message": "Sla uw bijgesneden afbeeldingen op op het web voor makkelijker delen, of download ze naar uw computer. U kunt ook op de knop Mijn afbeeldingen klikken om al uw gemaakte afbeeldingen te vinden."
+    "message": "Bewaar uw bijgesneden afbeeldingen op het web voor makkelijker delen, of download ze naar uw computer. U kunt ook op de knop Mijn afbeeldingen klikken om al uw gemaakte afbeeldingen te vinden."
   },
   "tourSkip": {
     "message": "Overslaan"

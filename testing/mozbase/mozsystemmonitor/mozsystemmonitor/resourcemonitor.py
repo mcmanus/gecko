@@ -2,6 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 from contextlib import contextmanager
 import multiprocessing
 import sys
@@ -63,6 +65,9 @@ except Exception:
 def get_disk_io_counters():
     try:
         io_counters = psutil.disk_io_counters()
+
+        if io_counters is None:
+            return PsutilStub().disk_io_counters()
     except RuntimeError:
         io_counters = PsutilStub().disk_io_counters()
 

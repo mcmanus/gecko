@@ -13,7 +13,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=
   <script type="application/javascript">
 "use strict";
 
-window.onload = function () {
+window.onload = function() {
   SimpleTest.waitForExplicitFinish();
   runNextTest();
 };
@@ -21,17 +21,17 @@ window.onload = function () {
 let gInspectee = null;
 let gClient = null;
 let gWalker = null;
-let checkActorIDs = [];
+const checkActorIDs = [];
 
 function assertOwnership() {
   assertOwnershipTrees(gWalker);
 }
 addTest(function setup() {
-  let url = document.getElementById("inspectorContent").href;
-  attachURL(url, function (err, client, tab, doc) {
+  const url = document.getElementById("inspectorContent").href;
+  attachURL(url, function(err, client, tab, doc) {
     gInspectee = doc;
-    let {InspectorFront} = require("devtools/shared/fronts/inspector");
-    let inspector = InspectorFront(client, tab);
+    const {InspectorFront} = require("devtools/shared/fronts/inspector");
+    const inspector = InspectorFront(client, tab);
     promiseDone(inspector.getWalker().then(walker => {
       ok(walker, "getWalker() should return an actor.");
       gClient = client;
@@ -72,7 +72,7 @@ addTest(function testOuterHTML() {
 });
 
 addTest(function testSetOuterHTMLNode() {
-  let newHTML = "<p id=\"edit-html-done\">after edit</p>";
+  const newHTML = "<p id=\"edit-html-done\">after edit</p>";
   promiseDone(gWalker.querySelector(gWalker.rootNode, "#edit-html").then(node => {
     return gWalker.setOuterHTML(node, newHTML);
   }).then(() => {
@@ -144,14 +144,14 @@ addTest(function testQuerySelectors() {
 // Helper to check the response of requests that return hasFirst/hasLast/nodes
 // node lists (like `children` and `siblings`)
 function nodeArrayChecker(first, last, ids) {
-  return function (response) {
+  return function(response) {
     is(response.hasFirst, first,
        "Should " + (first ? "" : "not ") + " have the first node.");
     is(response.hasLast, last, "Should " + (last ? "" : "not ") + " have the last node.");
     is(response.nodes.length, ids.length,
        "Should have " + ids.length + " children listed.");
     let responseIds = "";
-    for (let node of response.nodes) {
+    for (const node of response.nodes) {
       responseIds += node.id;
     }
     is(responseIds, ids, "Correct nodes were returned.");
@@ -191,7 +191,7 @@ addTest(function testLongListTraversal() {
     );
   }).then(() => {
     // maxNodes with a center in the middle of the list should put that item in the middle
-    let center = allChildren[13];
+    const center = allChildren[13];
     is(center.id, "n", "Make sure I know how to count letters.");
     return gWalker.children(longList, { maxNodes: 5, center: center }).then(
       nodeArrayChecker(false, false, "lmnop")
@@ -203,7 +203,7 @@ addTest(function testLongListTraversal() {
     );
   }).then(() => {
     // maxNodes with a start in the middle should start at that node and fetch 5
-    let start = allChildren[13];
+    const start = allChildren[13];
     is(start.id, "n", "Make sure I know how to count letters.");
     return gWalker.children(longList, { maxNodes: 5, start: start }).then(
       nodeArrayChecker(false, false, "nopqr")
@@ -222,19 +222,6 @@ addTest(function testObjectNodeChildren() {
     .then(object => gWalker.children(object))
     .then(nodeArrayChecker(true, true, "1"))
     .then(runNextTest));
-});
-
-addTest(function testSiblings() {
-  promiseDone(gWalker.querySelector(gWalker.rootNode, "#a").then(a => {
-    return gWalker.siblings(a, { maxNodes: 5, center: a })
-           .then(nodeArrayChecker(true, false, "abcde"));
-  }).then(() => {
-    return gWalker.siblings(gWalker.rootNode).then(response => {
-      ok(response.hasFirst && response.hasLast, "Has first and last.");
-      is(response.nodes.length, 1, "Has only the document element.");
-      ok(response.nodes[0] === gWalker.rootNode, "Document element is its own sibling.");
-    });
-  }).then(runNextTest));
 });
 
 addTest(function testNextSibling() {
@@ -265,40 +252,30 @@ addTest(function testFrameTraversal() {
   promiseDone(gWalker.querySelector(gWalker.rootNode, "#childFrame").then(childFrame => {
     return gWalker.children(childFrame);
   }).then(children => {
-    let nodes = children.nodes;
+    const nodes = children.nodes;
     is(nodes.length, 1, "There should be only one child of the iframe");
     is(nodes[0].nodeType, Node.DOCUMENT_NODE, "iframe child should be a document node");
     return gWalker.querySelector(nodes[0], "#z");
-  }).then(childDocumentZ => {
-    return gWalker.parents(childDocumentZ);
-  }).then(parents => {
-    // Expected set of parent tag names for this item:
-    let expectedParents = ["DIV", "BODY", "HTML", "#document", "IFRAME", "BODY", "HTML",
-                           "#document"];
-    for (let parent of parents) {
-      let expected = expectedParents.shift();
-      is(parent.nodeName, expected, "Got expected parent");
-    }
   }).then(runNextTest));
 });
 
 addTest(function testLongValue() {
   const testSummaryLength = 10;
-  const inspector = require("devtools/server/actors/inspector");
+  const WalkerActor = require("devtools/server/actors/inspector/walker");
 
-  inspector.setValueSummaryLength(testSummaryLength);
-  SimpleTest.registerCleanupFunction(function () {
-    inspector.setValueSummaryLength(inspector.DEFAULT_VALUE_SUMMARY_LENGTH);
+  WalkerActor.setValueSummaryLength(testSummaryLength);
+  SimpleTest.registerCleanupFunction(function() {
+    WalkerActor.setValueSummaryLength(WalkerActor.DEFAULT_VALUE_SUMMARY_LENGTH);
   });
 
-  let longstringText = gInspectee.getElementById("longstring").firstChild.nodeValue;
+  const longstringText = gInspectee.getElementById("longstring").firstChild.nodeValue;
 
   promiseDone(gWalker.querySelector(gWalker.rootNode, "#longstring").then(node => {
     ok(!node.inlineTextChild, "Text is too long to be inlined");
     // Now we need to get the text node child...
     return gWalker.children(node, { maxNodes: 1 });
   }).then(children => {
-    let textNode = children.nodes[0];
+    const textNode = children.nodes[0];
     is(textNode.nodeType, Node.TEXT_NODE, "Value should be a text node");
     return textNode;
   }).then(textNode => {
@@ -312,14 +289,14 @@ addTest(function testLongValue() {
 });
 
 addTest(function testShortValue() {
-  let shortstringText = gInspectee.getElementById("shortstring").firstChild.nodeValue;
+  const shortstringText = gInspectee.getElementById("shortstring").firstChild.nodeValue;
 
   promiseDone(gWalker.querySelector(gWalker.rootNode, "#shortstring").then(node => {
     ok(!!node.inlineTextChild, "Text is short enough to be inlined");
     // Now we need to get the text node child...
     return gWalker.children(node, { maxNodes: 1 });
   }).then(children => {
-    let textNode = children.nodes[0];
+    const textNode = children.nodes[0];
     is(textNode.nodeType, Node.TEXT_NODE, "Value should be a text node");
     return textNode;
   }).then(textNode => {
@@ -336,8 +313,8 @@ addTest(function testReleaseWalker() {
   checkActorIDs.push(gWalker.actorID);
 
   promiseDone(gWalker.release().then(() => {
-    let promises = Array.from(checkActorIDs, (id) => checkMissing(gClient, id));
-    return promise.all(promises);
+    const promises = Array.from(checkActorIDs, (id) => checkMissing(gClient, id));
+    return Promise.all(promises);
   }).then(runNextTest));
 });
 

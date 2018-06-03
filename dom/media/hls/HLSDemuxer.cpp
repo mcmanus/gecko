@@ -73,7 +73,7 @@ public:
   using NativeCallbacks::DisposeNative;
   using NativeCallbacks::AttachNative;
 
-  HLSDemuxerCallbacksSupport(HLSDemuxer* aDemuxer)
+  explicit HLSDemuxerCallbacksSupport(HLSDemuxer* aDemuxer)
     : mMutex("HLSDemuxerCallbacksSupport")
     , mDemuxer(aDemuxer)
   {
@@ -86,14 +86,17 @@ public:
     MutexAutoLock lock(mMutex);
     if (!mDemuxer) { return; }
     RefPtr<HLSDemuxerCallbacksSupport> self = this;
-    mDemuxer->GetTaskQueue()->Dispatch(NS_NewRunnableFunction(
-     "HLSDemuxer::HLSDemuxerCallbacksSupport::OnInitialized",
-     [=] () {
-       MutexAutoLock lock(self->mMutex);
-       if (self->mDemuxer) {
-         self->mDemuxer->OnInitialized(aHasAudio, aHasVideo);
-       }
-     }));
+    nsresult rv =
+      mDemuxer->GetTaskQueue()->Dispatch(NS_NewRunnableFunction(
+       "HLSDemuxer::HLSDemuxerCallbacksSupport::OnInitialized",
+       [=] () {
+         MutexAutoLock lock(self->mMutex);
+         if (self->mDemuxer) {
+           self->mDemuxer->OnInitialized(aHasAudio, aHasVideo);
+         }
+       }));
+    MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+    Unused << rv;
   }
 
   void OnError(int aErrorCode)
@@ -102,14 +105,17 @@ public:
     MutexAutoLock lock(mMutex);
     if (!mDemuxer) { return; }
     RefPtr<HLSDemuxerCallbacksSupport> self = this;
-    mDemuxer->GetTaskQueue()->Dispatch(NS_NewRunnableFunction(
-     "HLSDemuxer::HLSDemuxerCallbacksSupport::OnError",
-     [=] () {
-       MutexAutoLock lock(self->mMutex);
-       if (self->mDemuxer) {
-         self->mDemuxer->OnError(aErrorCode);
-       }
-     }));
+    nsresult rv =
+      mDemuxer->GetTaskQueue()->Dispatch(NS_NewRunnableFunction(
+       "HLSDemuxer::HLSDemuxerCallbacksSupport::OnError",
+       [=] () {
+         MutexAutoLock lock(self->mMutex);
+         if (self->mDemuxer) {
+           self->mDemuxer->OnError(aErrorCode);
+         }
+       }));
+    MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+    Unused << rv;
   }
 
   void Detach()
@@ -257,7 +263,7 @@ HLSTrackDemuxer::HLSTrackDemuxer(HLSDemuxer* aParent,
   : mParent(aParent)
   , mType(aType)
   , mMutex("HLSTrackDemuxer")
-  , mTrackInfo(Move(aTrackInfo))
+  , mTrackInfo(std::move(aTrackInfo))
 {
   // Only support audio and video track currently.
   MOZ_ASSERT(mType == TrackInfo::kVideoTrack || mType == TrackInfo::kAudioTrack);
@@ -342,7 +348,7 @@ HLSTrackDemuxer::DoGetSamples(int32_t aNumSamples)
   }
 
   for (auto&& demuxedSample : sampleObjectArray) {
-    java::GeckoHLSSample::LocalRef sample(Move(demuxedSample));
+    java::GeckoHLSSample::LocalRef sample(std::move(demuxedSample));
     if (sample->IsEOS()) {
       HLS_DEBUG("HLSTrackDemuxer", "Met BUFFER_FLAG_END_OF_STREAM.");
       if (samples->mSamples.IsEmpty()) {
@@ -381,7 +387,7 @@ HLSTrackDemuxer::UpdateMediaInfo(int index)
     auto* audioInfo = mTrackInfo->GetAsAudioInfo();
     if (infoObj && audioInfo) {
       HLS_DEBUG("HLSTrackDemuxer", "Update audio info (%d)", index);
-      java::GeckoAudioInfo::LocalRef audioInfoObj(Move(infoObj));
+      java::GeckoAudioInfo::LocalRef audioInfoObj(std::move(infoObj));
       audioInfo->mRate = audioInfoObj->Rate();
       audioInfo->mChannels = audioInfoObj->Channels();
       audioInfo->mProfile = audioInfoObj->Profile();
@@ -397,7 +403,7 @@ HLSTrackDemuxer::UpdateMediaInfo(int index)
     infoObj = mParent->mHLSDemuxerWrapper->GetVideoInfo(index);
     auto* videoInfo = mTrackInfo->GetAsVideoInfo();
     if (infoObj && videoInfo) {
-      java::GeckoVideoInfo::LocalRef videoInfoObj(Move(infoObj));
+      java::GeckoVideoInfo::LocalRef videoInfoObj(std::move(infoObj));
       videoInfo->mStereoMode = getStereoMode(videoInfoObj->StereoMode());
       videoInfo->mRotation = getVideoInfoRotation(videoInfoObj->Rotation());
       videoInfo->mImage.width = videoInfoObj->DisplayWidth();
@@ -593,7 +599,7 @@ HLSTrackDemuxer::DoSkipToNextRandomAccessPoint(
       break;
     }
     parsed++;
-    java::GeckoHLSSample::LocalRef sample(Move(sampleObjectArray[0]));
+    java::GeckoHLSSample::LocalRef sample(std::move(sampleObjectArray[0]));
     if (sample->IsEOS()) {
       result = NS_ERROR_DOM_MEDIA_END_OF_STREAM;
       break;
@@ -636,7 +642,9 @@ HLSTrackDemuxer::BreakCycles()
     [self]() {
       self->mParent = nullptr;
     } );
-  mParent->GetTaskQueue()->Dispatch(task.forget());
+  nsresult rv = mParent->GetTaskQueue()->Dispatch(task.forget());
+  MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
 }
 
 HLSTrackDemuxer::~HLSTrackDemuxer()

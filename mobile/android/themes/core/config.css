@@ -8,7 +8,7 @@ body {
     padding: 0;
     background-color: #ced7de;
     -moz-user-select: none;
-    font-family: "Clear Sans",sans-serif;
+    font-family: sans-serif;
     -moz-text-size-adjust: none;
 }
 
@@ -24,8 +24,7 @@ body {
     background-color: #ced7de;
     color: #000000;
     font-weight: bold;
-    border-bottom: 2px solid;
-    -moz-border-bottom-colors: #ff9100 #f27900;
+    border-bottom: 2px solid #f27900;
 }
 
 .toolbar-container {

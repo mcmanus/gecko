@@ -16,6 +16,8 @@
 #include "mozilla/TemplateLib.h"
 #include "mozilla/TypeTraits.h"
 
+#include <new>
+
 // This data structure supports stacky LIFO allocation (mark/release and
 // LifoAllocScope). It does not maintain one contiguous segment; instead, it
 // maintains a bunch of linked memory segments. In order to prevent malloc/free
@@ -76,7 +78,7 @@ class SingleLinkedList
     }
 
     SingleLinkedList(SingleLinkedList&& other)
-      : head_(mozilla::Move(other.head_)), last_(other.last_)
+      : head_(std::move(other.head_)), last_(other.last_)
     {
         other.last_ = nullptr;
         assertInvariants();
@@ -91,7 +93,7 @@ class SingleLinkedList
     // Move the elements of the |other| list in the current one, and implicitly
     // remove all the elements of the current list.
     SingleLinkedList& operator=(SingleLinkedList&& other) {
-        head_ = mozilla::Move(other.head_);
+        head_ = std::move(other.head_);
         last_ = other.last_;
         other.last_ = nullptr;
         assertInvariants();
@@ -118,10 +120,10 @@ class SingleLinkedList
             return *this;
         }
 
-        bool operator!=(Iterator& other) const {
+        bool operator!=(const Iterator& other) const {
             return current_ != other.current_;
         }
-        bool operator==(Iterator& other) const {
+        bool operator==(const Iterator& other) const {
             return current_ == other.current_;
         }
     };
@@ -140,7 +142,7 @@ class SingleLinkedList
         MOZ_ASSERT(newLast);
         SingleLinkedList result;
         if (newLast->next_) {
-            result.head_ = mozilla::Move(newLast->next_);
+            result.head_ = std::move(newLast->next_);
             result.last_ = last_;
             last_ = newLast;
         }
@@ -152,17 +154,17 @@ class SingleLinkedList
     void pushFront(UniquePtr<T>&& elem) {
         if (!last_)
             last_ = elem.get();
-        elem->next_ = mozilla::Move(head_);
-        head_ = mozilla::Move(elem);
+        elem->next_ = std::move(head_);
+        head_ = std::move(elem);
         assertInvariants();
     }
 
     void append(UniquePtr<T>&& elem) {
         if (last_) {
-            last_->next_ = mozilla::Move(elem);
+            last_->next_ = std::move(elem);
             last_ = last_->next_.get();
         } else {
-            head_ = mozilla::Move(elem);
+            head_ = std::move(elem);
             last_ = head_.get();
         }
         assertInvariants();
@@ -171,9 +173,9 @@ class SingleLinkedList
         if (list.empty())
             return;
         if (last_)
-            last_->next_ = mozilla::Move(list.head_);
+            last_->next_ = std::move(list.head_);
         else
-            head_ = mozilla::Move(list.head_);
+            head_ = std::move(list.head_);
         last_ = list.last_;
         list.last_ = nullptr;
         assertInvariants();
@@ -181,8 +183,8 @@ class SingleLinkedList
     }
     UniquePtr<T> popFirst() {
         MOZ_ASSERT(head_);
-        UniquePtr<T> result = mozilla::Move(head_);
-        head_ = mozilla::Move(result->next_);
+        UniquePtr<T> result = std::move(head_);
+        head_ = std::move(result->next_);
         if (!head_)
             last_ = nullptr;
         assertInvariants();
@@ -216,13 +218,47 @@ class BumpChunk : public SingleLinkedListElement<BumpChunk>
     uint8_t* bump_;
     // Pointer to the last byte available in this chunk.
     const uint8_t* capacity_;
+
+#ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
     // Magic number used to check against poisoned values.
     const uintptr_t magic_;
+    static constexpr uintptr_t magicNumber =
+        sizeof(uintptr_t) == 4 ? uintptr_t(0x4c69666f) : uintptr_t(0x4c69666f42756d70);
+#endif
+
+    // Poison the memory with memset, in order to catch errors due to
+    // use-after-free, with undefinedChunkMemory pattern, or to catch
+    // use-before-init with uninitializedChunkMemory.
+#if defined(DEBUG)
+# define LIFO_HAVE_MEM_CHECKS 1
 
     // Byte used for poisoning unused memory after releasing memory.
     static constexpr int undefinedChunkMemory = 0xcd;
-    static constexpr uintptr_t magicNumber =
-        sizeof(uintptr_t) == 4 ? uintptr_t(0x4c69666f) : uintptr_t(0x4c69666f42756d70);
+    // Byte used for poisoning uninitialized memory after reserving memory.
+    static constexpr int uninitializedChunkMemory = 0xce;
+
+# define LIFO_MAKE_MEM_NOACCESS(addr, size)      \
+    do {                                         \
+        uint8_t* base = (addr);                  \
+        size_t sz = (size);                      \
+        memset(base, undefinedChunkMemory, sz);  \
+        MOZ_MAKE_MEM_NOACCESS(base, sz);         \
+    } while (0)
+
+# define LIFO_MAKE_MEM_UNDEFINED(addr, size)         \
+    do {                                             \
+        uint8_t* base = (addr);                      \
+        size_t sz = (size);                          \
+        MOZ_MAKE_MEM_UNDEFINED(base, sz);            \
+        memset(base, uninitializedChunkMemory, sz);  \
+        MOZ_MAKE_MEM_UNDEFINED(base, sz);            \
+    } while(0)
+
+#elif defined(MOZ_HAVE_MEM_CHECKS)
+# define LIFO_HAVE_MEM_CHECKS 1
+# define LIFO_MAKE_MEM_NOACCESS(addr, size) MOZ_MAKE_MEM_NOACCESS((addr), (size))
+# define LIFO_MAKE_MEM_UNDEFINED(addr, size) MOZ_MAKE_MEM_UNDEFINED((addr), (size))
+#endif
 
     void assertInvariants() {
         MOZ_DIAGNOSTIC_ASSERT(magic_ == magicNumber);
@@ -235,8 +271,10 @@ class BumpChunk : public SingleLinkedListElement<BumpChunk>
 
     explicit BumpChunk(uintptr_t capacity)
       : bump_(begin()),
-        capacity_(base() + capacity),
-        magic_(magicNumber)
+        capacity_(base() + capacity)
+#ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
+      , magic_(magicNumber)
+#endif
     {
         // We cannot bake this value inside the BumpChunk class, because
         // sizeof(BumpChunk) can only be computed after the closing brace of the
@@ -248,6 +286,12 @@ class BumpChunk : public SingleLinkedListElement<BumpChunk>
                    "Checked that the baked-in value correspond to computed value");
 
         assertInvariants();
+#if defined(LIFO_HAVE_MEM_CHECKS)
+        // The memory is freshly allocated and marked as undefined by the
+        // allocator of the BumpChunk. Instead, we mark this memory as
+        // no-access, as it has not been allocated within the BumpChunk.
+        LIFO_MAKE_MEM_NOACCESS(bump_, capacity_ - bump_);
+#endif
     }
 
     // Cast |this| into a uint8_t* pointer.
@@ -269,22 +313,14 @@ class BumpChunk : public SingleLinkedListElement<BumpChunk>
         assertInvariants();
         MOZ_ASSERT(begin() <= newBump);
         MOZ_ASSERT(newBump <= capacity_);
-#if defined(DEBUG) || defined(MOZ_HAVE_MEM_CHECKS)
-        uint8_t* prev = bump_;
+#if defined(LIFO_HAVE_MEM_CHECKS)
+        // Poison/Unpoison memory that we just free'd/allocated.
+        if (bump_ > newBump)
+            LIFO_MAKE_MEM_NOACCESS(newBump, bump_ - newBump);
+        else if (newBump > bump_)
+            LIFO_MAKE_MEM_UNDEFINED(bump_, newBump - bump_);
 #endif
         bump_ = newBump;
-#ifdef DEBUG
-        // Clobber the now-free space.
-        if (prev > bump_)
-            memset(bump_, undefinedChunkMemory, prev - bump_);
-#endif
-#if defined(MOZ_HAVE_MEM_CHECKS)
-        // Poison/Unpoison memory that we just free'd/allocated.
-        if (prev > bump_)
-            MOZ_MAKE_MEM_NOACCESS(bump_, prev - bump_);
-        else if (bump_ > prev)
-            MOZ_MAKE_MEM_UNDEFINED(prev, bump_ - prev);
-#endif
     }
 
   public:
@@ -464,13 +500,13 @@ class LifoAlloc
         for (detail::BumpChunk& bc: otherUnused)
             MOZ_ASSERT(bc.empty());
 #endif
-        unused_.appendAll(mozilla::Move(otherUnused));
+        unused_.appendAll(std::move(otherUnused));
     }
 
     // Append used chunks to the end of this LifoAlloc. We act as if all the
     // chunks in |this| are used, even if they're not, so memory may be wasted.
     void appendUsed(BumpChunkList&& otherChunks) {
-        chunks_.appendAll(mozilla::Move(otherChunks));
+        chunks_.appendAll(std::move(otherChunks));
     }
 
     // Track the amount of space allocated in used and unused chunks.
@@ -516,8 +552,8 @@ class LifoAlloc
 
         // Copy everything from |other| to |this| except for |peakSize_|, which
         // requires some care.
-        chunks_ = mozilla::Move(other->chunks_);
-        unused_ = mozilla::Move(other->unused_);
+        chunks_ = std::move(other->chunks_);
+        unused_ = std::move(other->unused_);
         markCount = other->markCount;
         defaultChunkSize_ = other->defaultChunkSize_;
         curSize_ = other->curSize_;
@@ -559,6 +595,20 @@ class LifoAlloc
         return allocImpl(n);
     }
 
+    template<typename T, typename... Args>
+    MOZ_ALWAYS_INLINE T*
+    allocInSize(size_t n, Args&&... args)
+    {
+        MOZ_ASSERT(n >= sizeof(T), "must request enough space to store a T");
+        static_assert(alignof(T) <= detail::LIFO_ALLOC_ALIGN,
+                      "LifoAlloc must provide enough alignment to store T");
+        void* ptr = alloc(n);
+        if (!ptr)
+            return nullptr;
+
+        return new (ptr) T(mozilla::Forward<Args>(args)...);
+    }
+
     MOZ_ALWAYS_INLINE
     void* allocInfallible(size_t n) {
         AutoEnterOOMUnsafeRegion oomUnsafe;
@@ -591,7 +641,7 @@ class LifoAlloc
         if (!newChunk)
             return false;
         size_t size = newChunk->computedSizeOfIncludingThis();
-        unused_.pushFront(mozilla::Move(newChunk));
+        unused_.pushFront(std::move(newChunk));
         incrementCurSize(size);
         return true;
     }
@@ -659,14 +709,14 @@ class LifoAlloc
         // Move the blocks which are after the mark to the set of unused chunks.
         BumpChunkList released;
         if (!mark.markedChunk())
-            released = mozilla::Move(chunks_);
+            released = std::move(chunks_);
         else
-            released = mozilla::Move(chunks_.splitAfter(mark.markedChunk()));
+            released = std::move(chunks_.splitAfter(mark.markedChunk()));
 
         // Release the content of all the blocks which are after the marks.
         for (detail::BumpChunk& bc : released)
             bc.release();
-        unused_.appendAll(mozilla::Move(released));
+        unused_.appendAll(std::move(released));
 
         // Release everything which follows the mark in the last chunk.
         if (!chunks_.empty())
@@ -677,7 +727,7 @@ class LifoAlloc
         MOZ_ASSERT(!markCount);
         for (detail::BumpChunk& bc : chunks_)
             bc.release();
-        unused_.appendAll(mozilla::Move(chunks_));
+        unused_.appendAll(std::move(chunks_));
     }
 
     // Get the total "used" (occupied bytes) count for the arena chunks.
@@ -690,13 +740,14 @@ class LifoAlloc
 
     // Return true if the LifoAlloc does not currently contain any allocations.
     bool isEmpty() const {
-        return chunks_.empty() || !chunks_.last()->empty();
+        return chunks_.empty() ||
+               (chunks_.begin() == chunks_.last() && chunks_.last()->empty());
     }
 
     // Return the number of bytes remaining to allocate in the current chunk.
     // e.g. How many bytes we can allocate before needing a new block.
     size_t availableInCurrentChunk() const {
-        if (!chunks_.empty())
+        if (chunks_.empty())
             return 0;
         return chunks_.last()->unused();
     }

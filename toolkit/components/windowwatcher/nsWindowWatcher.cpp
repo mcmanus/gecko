@@ -4,8 +4,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-//#define USEWEAKREFS // (haven't quite figured that out yet)
-
 #include "nsWindowWatcher.h"
 #include "nsAutoWindowStateHelper.h"
 
@@ -29,10 +27,8 @@
 #include "nsIDocShellTreeOwner.h"
 #include "nsIDocumentLoader.h"
 #include "nsIDocument.h"
-#include "nsIDOMDocument.h"
 #include "nsIDOMWindow.h"
 #include "nsIDOMChromeWindow.h"
-#include "nsIDOMModalContentWindow.h"
 #include "nsIPrompt.h"
 #include "nsIScriptObjectPrincipal.h"
 #include "nsIScreen.h"
@@ -62,6 +58,7 @@
 #include "nsIPrefBranch.h"
 #include "nsIPrefService.h"
 #include "nsSandboxFlags.h"
+#include "mozilla/CheckedInt.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Storage.h"
@@ -72,10 +69,6 @@
 #include "nsIXULWindow.h"
 #include "nsIXULBrowserWindow.h"
 #include "nsGlobalWindow.h"
-
-#ifdef USEWEAKREFS
-#include "nsIWeakReference.h"
-#endif
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -92,11 +85,7 @@ struct nsWatcherWindowEntry
   nsWatcherWindowEntry(mozIDOMWindowProxy* aWindow, nsIWebBrowserChrome* aChrome)
     : mChrome(nullptr)
   {
-#ifdef USEWEAKREFS
-    mWindow = do_GetWeakReference(aWindow);
-#else
     mWindow = aWindow;
-#endif
     nsCOMPtr<nsISupportsWeakReference> supportsweak(do_QueryInterface(aChrome));
     if (supportsweak) {
       supportsweak->GetWeakReference(getter_AddRefs(mChromeWeak));
@@ -112,11 +101,7 @@ struct nsWatcherWindowEntry
   void Unlink();
   void ReferenceSelf();
 
-#ifdef USEWEAKREFS
-  nsCOMPtr<nsIWeakReference> mWindow;
-#else // still not an owning ref
   mozIDOMWindowProxy* mWindow;
-#endif
   nsIWebBrowserChrome* mChrome;
   nsWeakPtr mChromeWeak;
   // each struct is in a circular, doubly-linked list
@@ -222,23 +207,10 @@ nsWatcherWindowEnumerator::GetNext(nsISupports** aResult)
 
   *aResult = nullptr;
 
-#ifdef USEWEAKREFS
-  while (mCurrentPosition) {
-    CallQueryReferent(mCurrentPosition->mWindow, aResult);
-    if (*aResult) {
-      mCurrentPosition = FindNext();
-      break;
-    } else { // window is gone!
-      mWindowWatcher->RemoveWindow(mCurrentPosition);
-    }
-  }
-  NS_IF_ADDREF(*aResult);
-#else
   if (mCurrentPosition) {
     CallQueryInterface(mCurrentPosition->mWindow, aResult);
     mCurrentPosition = FindNext();
   }
-#endif
   return NS_OK;
 }
 
@@ -330,7 +302,7 @@ ConvertArgsToArray(nsISupports* aArguments)
     do_CreateInstance(NS_ARRAY_CONTRACTID);
   NS_ENSURE_TRUE(singletonArray, nullptr);
 
-  nsresult rv = singletonArray->AppendElement(aArguments, /* aWeak = */ false);
+  nsresult rv = singletonArray->AppendElement(aArguments);
   NS_ENSURE_SUCCESS(rv, nullptr);
 
   return singletonArray.forget();
@@ -853,7 +825,8 @@ nsWindowWatcher::OpenWindowInternal(mozIDOMWindowProxy* aParent,
                                      sizeSpec.PositionSpecified(),
                                      sizeSpec.SizeSpecified(),
                                      uriToLoad, name, features, aForceNoOpener,
-                                     &windowIsNew, getter_AddRefs(newWindow));
+                                     aLoadInfo, &windowIsNew,
+                                     getter_AddRefs(newWindow));
 
         if (NS_SUCCEEDED(rv)) {
           GetWindowTreeItem(newWindow, getter_AddRefs(newDocShellItem));
@@ -1116,7 +1089,7 @@ nsWindowWatcher::OpenWindowInternal(mozIDOMWindowProxy* aParent,
     if (newWindow) {
       newWindow->SetInitialPrincipalToSubject();
       if (aIsPopupSpam) {
-        nsGlobalWindow* globalWin = nsGlobalWindow::Cast(newWindow);
+        nsGlobalWindowOuter* globalWin = nsGlobalWindowOuter::Cast(newWindow);
         MOZ_ASSERT(!globalWin->IsPopupSpamWindow(),
                    "Who marked it as popup spam already???");
         if (!globalWin->IsPopupSpamWindow()) { // Make sure we don't mess up our
@@ -1458,15 +1431,6 @@ nsWindowWatcher::AddWindow(mozIDOMWindowProxy* aWindow, nsIWebBrowserChrome* aCh
     return NS_ERROR_INVALID_ARG;
   }
 
-#ifdef DEBUG
-  {
-    nsCOMPtr<nsPIDOMWindowOuter> win(do_QueryInterface(aWindow));
-
-    NS_ASSERTION(win->IsOuterWindow(),
-                 "Uh, the active window must be an outer window!");
-  }
-#endif
-
   {
     nsWatcherWindowEntry* info;
     MutexAutoLock lock(mListLock);
@@ -1534,29 +1498,9 @@ nsWindowWatcher::FindWindowEntry(mozIDOMWindowProxy* aWindow)
   // find the corresponding nsWatcherWindowEntry
   nsWatcherWindowEntry* info;
   nsWatcherWindowEntry* listEnd;
-#ifdef USEWEAKREFS
-  nsresult rv;
-  bool found;
-#endif
 
   info = mOldestWindow;
   listEnd = 0;
-#ifdef USEWEAKREFS
-  rv = NS_OK;
-  found = false;
-  while (info != listEnd && NS_SUCCEEDED(rv)) {
-    nsCOMPtr<mozIDOMWindowProxy> infoWindow(do_QueryReferent(info->mWindow));
-    if (!infoWindow) { // clean up dangling reference, while we're here
-      rv = RemoveWindow(info);
-    } else if (infoWindow.get() == aWindow) {
-      return info;
-    }
-
-    info = info->mYounger;
-    listEnd = mOldestWindow;
-  }
-  return 0;
-#else
   while (info != listEnd) {
     if (info->mWindow == aWindow) {
       return info;
@@ -1565,7 +1509,6 @@ nsWindowWatcher::FindWindowEntry(mozIDOMWindowProxy* aWindow)
     listEnd = mOldestWindow;
   }
   return 0;
-#endif
 }
 
 nsresult
@@ -1591,16 +1534,8 @@ nsWindowWatcher::RemoveWindow(nsWatcherWindowEntry* aInfo)
   // send notifications.
   nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
   if (os) {
-#ifdef USEWEAKREFS
-    nsCOMPtr<nsISupports> domwin(do_QueryReferent(aInfo->mWindow));
-    if (domwin) {
-      os->NotifyObservers(domwin, "domwindowclosed", 0);
-    }
-    // else bummer. since the window is gone, there's nothing to notify with.
-#else
     nsCOMPtr<nsISupports> domwin(do_QueryInterface(aInfo->mWindow));
     os->NotifyObservers(domwin, "domwindowclosed", 0);
-#endif
   }
 
   delete aInfo;
@@ -1764,9 +1699,12 @@ nsWindowWatcher::CalculateChromeFlagsHelper(uint32_t aInitialFlags,
                                nsIWebBrowserChrome::CHROME_WINDOW_MIN);
 
   // default scrollbar to "on," unless explicitly turned off
-  if (WinHasOption(aFeatures, "scrollbars", 1, &presenceFlag) || !presenceFlag) {
+  bool scrollbarsPresent = false;
+  if (WinHasOption(aFeatures, "scrollbars", 1, &scrollbarsPresent) ||
+      !scrollbarsPresent) {
     chromeFlags |= nsIWebBrowserChrome::CHROME_SCROLLBARS;
   }
+  presenceFlag = presenceFlag || scrollbarsPresent;
 
   return chromeFlags;
 }
@@ -2275,10 +2213,8 @@ nsWindowWatcher::SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
   if (aParent && aOpenerFullZoom.isNothing()) {
     nsCOMPtr<nsPIDOMWindowOuter> piWindow = nsPIDOMWindowOuter::From(aParent);
     if (nsIDocument* doc = piWindow->GetDoc()) {
-      if (nsIPresShell* shell = doc->GetShell()) {
-        if (nsPresContext* presContext = shell->GetPresContext()) {
-          openerZoom = presContext->GetFullZoom();
-        }
+      if (nsPresContext* presContext = doc->GetPresContext()) {
+        openerZoom = presContext->GetFullZoom();
       }
     }
   }
@@ -2435,19 +2371,26 @@ nsWindowWatcher::SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
         }
       }
 
-      if (left + winWidth > screenLeft + screenWidth ||
-          left + winWidth < left) {
+      CheckedInt<decltype(left)> leftPlusWinWidth = left;
+      leftPlusWinWidth += winWidth;
+      if (!leftPlusWinWidth.isValid() ||
+          leftPlusWinWidth.value() > screenLeft + screenWidth) {
         left = screenLeft + screenWidth - winWidth;
       }
       if (left < screenLeft) {
         left = screenLeft;
       }
-      if (top + winHeight > screenTop + screenHeight || top + winHeight < top) {
+
+      CheckedInt<decltype(top)> topPlusWinHeight = top;
+      topPlusWinHeight += winHeight;
+      if (!topPlusWinHeight.isValid() ||
+          topPlusWinHeight.value() > screenTop + screenHeight) {
         top = screenTop + screenHeight - winHeight;
       }
       if (top < screenTop) {
         top = screenTop;
       }
+
       if (top != oldTop || left != oldLeft) {
         positionSpecified = true;
       }

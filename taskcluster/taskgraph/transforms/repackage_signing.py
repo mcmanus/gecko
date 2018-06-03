@@ -10,7 +10,12 @@ from __future__ import absolute_import, print_function, unicode_literals
 from taskgraph.transforms.base import TransformSequence
 from taskgraph.util.attributes import copy_attributes_from_dependent_job
 from taskgraph.util.schema import validate_schema, Schema
-from taskgraph.util.scriptworker import get_signing_cert_scope_per_platform
+from taskgraph.util.scriptworker import (
+    add_scope_prefix,
+    get_signing_cert_scope_per_platform,
+    get_worker_type_for_scope,
+)
+from taskgraph.util.taskcluster import get_artifact_path
 from taskgraph.transforms.task import task_description_schema
 from voluptuous import Required, Optional
 
@@ -25,6 +30,8 @@ repackage_signing_description_schema = Schema({
     Required('depname', default='repackage'): basestring,
     Optional('label'): basestring,
     Optional('treeherder'): task_description_schema['treeherder'],
+    Optional('shipping-product'): task_description_schema['shipping-product'],
+    Optional('shipping-phase'): task_description_schema['shipping-phase'],
 })
 
 
@@ -32,19 +39,24 @@ repackage_signing_description_schema = Schema({
 def validate(config, jobs):
     for job in jobs:
         label = job.get('dependent-task', object).__dict__.get('label', '?no-label?')
-        yield validate_schema(
+        validate_schema(
             repackage_signing_description_schema, job,
             "In repackage-signing ({!r} kind) task for {!r}:".format(config.kind, label))
+        yield job
 
 
 @transforms.add
 def make_repackage_signing_description(config, jobs):
     for job in jobs:
         dep_job = job['dependent-task']
-        attributes = dep_job.attributes
+        attributes = copy_attributes_from_dependent_job(dep_job)
+        attributes['repackage_type'] = 'repackage-signing'
 
         treeherder = job.get('treeherder', {})
-        treeherder.setdefault('symbol', 'tc-rs(N)')
+        if attributes.get('nightly'):
+            treeherder.setdefault('symbol', 'rs(N)')
+        else:
+            treeherder.setdefault('symbol', 'rs(B)')
         dep_th_platform = dep_job.task.get('extra', {}).get(
             'treeherder', {}).get('machine', {}).get('platform', '')
         treeherder.setdefault('platform',
@@ -53,6 +65,21 @@ def make_repackage_signing_description(config, jobs):
         treeherder.setdefault('kind', 'build')
 
         label = job['label']
+
+        dependencies = {"repackage": dep_job.label}
+
+        signing_dependencies = dep_job.dependencies
+        # This is so we get the build task etc in our dependencies to
+        # have better beetmover support.
+        dependencies.update({k: v for k, v in signing_dependencies.items()
+                             if k != 'docker-image'})
+
+        locale_str = ""
+        if dep_job.attributes.get('locale'):
+            treeherder['symbol'] = 'rs({})'.format(dep_job.attributes.get('locale'))
+            attributes['locale'] = dep_job.attributes.get('locale')
+            locale_str = "{}/".format(dep_job.attributes.get('locale'))
+
         description = (
             "Signing of repackaged artifacts for locale '{locale}' for build '"
             "{build_platform}/{build_type}'".format(
@@ -62,33 +89,18 @@ def make_repackage_signing_description(config, jobs):
             )
         )
 
-        dependencies = {"repackage": dep_job.label}
-
-        signing_dependencies = dep_job.dependencies
-        # This is so we get the build task etc in our dependencies to
-        # have better beetmover support.
-        dependencies.update(signing_dependencies)
-        attributes = copy_attributes_from_dependent_job(dep_job)
-        attributes['repackage_type'] = 'repackage-signing'
-
-        locale_str = ""
-        if dep_job.attributes.get('locale'):
-            treeherder['symbol'] = 'tc-rs({})'.format(dep_job.attributes.get('locale'))
-            attributes['locale'] = dep_job.attributes.get('locale')
-            locale_str = "{}/".format(dep_job.attributes.get('locale'))
-
         build_platform = dep_job.attributes.get('build_platform')
         is_nightly = dep_job.attributes.get('nightly')
         signing_cert_scope = get_signing_cert_scope_per_platform(
             build_platform, is_nightly, config
         )
-        scopes = [signing_cert_scope, 'project:releng:signing:format:mar_sha384']
+        scopes = [signing_cert_scope, add_scope_prefix(config, 'signing:format:mar_sha384')]
 
         upstream_artifacts = [{
             "taskId": {"task-reference": "<repackage>"},
             "taskType": "repackage",
             "paths": [
-                "public/build/{}target.complete.mar".format(locale_str),
+                get_artifact_path(dep_job, "{}target.complete.mar".format(locale_str)),
             ],
             "formats": ["mar_sha384"]
         }]
@@ -97,28 +109,30 @@ def make_repackage_signing_description(config, jobs):
                 "taskId": {"task-reference": "<repackage>"},
                 "taskType": "repackage",
                 "paths": [
-                    "public/build/{}target.installer.exe".format(locale_str),
+                    get_artifact_path(dep_job, "{}target.installer.exe".format(locale_str)),
                 ],
                 "formats": ["sha2signcode"]
             })
-            scopes.append("project:releng:signing:format:sha2signcode")
+            scopes.append(add_scope_prefix(config, "signing:format:sha2signcode"))
 
-            # Stub installer is only generated on win32
-            if '32' in build_platform:
+            use_stub = attributes.get('stub-installer')
+            if use_stub:
                 upstream_artifacts.append({
                     "taskId": {"task-reference": "<repackage>"},
                     "taskType": "repackage",
                     "paths": [
-                        "public/build/{}target.stub-installer.exe".format(locale_str),
+                        get_artifact_path(
+                            dep_job, "{}target.stub-installer.exe".format(locale_str)
+                        ),
                     ],
                     "formats": ["sha2signcodestub"]
                 })
-                scopes.append("project:releng:signing:format:sha2signcodestub")
+                scopes.append(add_scope_prefix(config, "signing:format:sha2signcodestub"))
 
         task = {
             'label': label,
             'description': description,
-            'worker-type': _generate_worker_type(signing_cert_scope),
+            'worker-type': get_worker_type_for_scope(config, signing_cert_scope),
             'worker': {'implementation': 'scriptworker-signing',
                        'upstream-artifacts': upstream_artifacts,
                        'max-run-time': 3600},
@@ -130,8 +144,3 @@ def make_repackage_signing_description(config, jobs):
         }
 
         yield task
-
-
-def _generate_worker_type(signing_cert_scope):
-    worker_type = 'depsigning' if 'dep-signing' in signing_cert_scope else 'signing-linux-v1'
-    return 'scriptworker-prov-v1/{}'.format(worker_type)

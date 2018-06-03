@@ -1,19 +1,92 @@
 "use strict";
 
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesTestUtils",
+ChromeUtils.defineModuleGetter(this, "PlacesUtils",
+  "resource://gre/modules/PlacesUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "PlacesTestUtils",
   "resource://testing-common/PlacesTestUtils.jsm");
 
+
 /**
- * Async utility function for ensuring that no unexpected uninterruptible
- * reflows occur during some period of time in a window.
+ * This function can be called if the test needs to trigger frame dirtying
+ * outside of the normal mechanism.
  *
- * @param testFn (async function)
- *        The async function that will exercise the browser activity that is
- *        being tested for reflows.
+ * @param win (dom window)
+ *        The window in which the frame tree needs to be marked as dirty.
+ */
+function dirtyFrame(win) {
+  let dwu = win.QueryInterface(Ci.nsIInterfaceRequestor)
+               .getInterface(Ci.nsIDOMWindowUtils);
+  try {
+    dwu.ensureDirtyRootFrame();
+  } catch (e) {
+    // If this fails, we should probably make note of it, but it's not fatal.
+    info("Note: ensureDirtyRootFrame threw an exception:" + e);
+  }
+}
+
+/**
+ * Async utility function to collect the stacks of uninterruptible reflows
+ * occuring during some period of time in a window.
  *
- *        The testFn will be passed a single argument, which is a frame dirtying
- *        function that can be called if the test needs to trigger frame
- *        dirtying outside of the normal mechanism.
+ * @param testPromise (Promise)
+ *        A promise that is resolved when the data collection should stop.
+ *
+ * @param win (browser window, optional)
+ *        The browser window to monitor. Defaults to the current window.
+ *
+ * @return An array of reflow stacks
+ */
+async function recordReflows(testPromise, win = window) {
+  // Collect all reflow stacks, we'll process them later.
+  let reflows = [];
+
+  let observer = {
+    reflow(start, end) {
+      // Gather information about the current code path.
+      reflows.push(new Error().stack);
+
+      // Just in case, dirty the frame now that we've reflowed.
+      dirtyFrame(win);
+    },
+
+    reflowInterruptible(start, end) {
+      // Interruptible reflows are the reflows caused by the refresh
+      // driver ticking. These are fine.
+    },
+
+    QueryInterface: ChromeUtils.generateQI([Ci.nsIReflowObserver,
+                                            Ci.nsISupportsWeakReference])
+  };
+
+  let docShell = win.QueryInterface(Ci.nsIInterfaceRequestor)
+                    .getInterface(Ci.nsIWebNavigation)
+                    .QueryInterface(Ci.nsIDocShell);
+  docShell.addWeakReflowObserver(observer);
+
+  let dirtyFrameFn = event => {
+    if (event.type != "MozAfterPaint") {
+      dirtyFrame(win);
+    }
+  };
+  Services.els.addListenerForAllEvents(win, dirtyFrameFn, true);
+
+  try {
+    dirtyFrame(win);
+    await testPromise;
+  } finally {
+    Services.els.removeListenerForAllEvents(win, dirtyFrameFn, true);
+    docShell.removeWeakReflowObserver(observer);
+  }
+
+  return reflows;
+}
+
+/**
+ * Utility function to report unexpected reflows.
+ *
+ * @param reflows (Array)
+ *        An array of reflow stacks returned by recordReflows.
+ *
  * @param expectedReflows (Array, optional)
  *        An Array of Objects representing reflows.
  *
@@ -23,8 +96,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "PlacesTestUtils",
  *          {
  *            // This reflow is caused by lorem ipsum.
  *            // Sometimes, due to unpredictable timings, the reflow may be hit
- *            // less times, or not hit at all; in such a case a minTimes
- *            // property can be provided to avoid intermittent failures.
+ *            // less times.
  *            stack: [
  *              "select@chrome://global/content/bindings/textbox.xml",
  *              "focusAndSelectUrlBar@chrome://browser/content/browser.js",
@@ -32,15 +104,13 @@ XPCOMUtils.defineLazyModuleGetter(this, "PlacesTestUtils",
  *              "openUILinkIn@chrome://browser/content/utilityOverlay.js",
  *              "BrowserOpenTab@chrome://browser/content/browser.js",
  *            ],
- *            // We expect this particular reflow to happen 2 times
- *            times: 2,
- *            // Sometimes this is not hit.
- *            minTimes: 0
+ *            // We expect this particular reflow to happen up to 2 times.
+ *            maxCount: 2,
  *          },
  *
  *          {
  *            // This reflow is caused by lorem ipsum. We expect this reflow
- *            // to only happen once, so we can omit the "times" property.
+ *            // to only happen once, so we can omit the "maxCount" property.
  *            stack: [
  *              "get_scrollPosition@chrome://global/content/bindings/scrollbox.xml",
  *              "_fillTrailingGap@chrome://browser/content/tabbrowser.xml",
@@ -55,118 +125,84 @@ XPCOMUtils.defineLazyModuleGetter(this, "PlacesTestUtils",
  *        Order of the reflows doesn't matter. Expected reflows that aren't seen
  *        will cause an assertion failure. When this argument is not passed,
  *        it defaults to the empty Array, meaning no reflows are expected.
- * @param window (browser window, optional)
- *        The browser window to monitor. Defaults to the current window.
  */
-async function withReflowObserver(testFn, expectedReflows = [], win = window) {
-  let dwu = win.QueryInterface(Ci.nsIInterfaceRequestor)
-               .getInterface(Ci.nsIDOMWindowUtils);
-  let dirtyFrameFn = () => {
-    try {
-      dwu.ensureDirtyRootFrame();
-    } catch (e) {
-      // If this fails, we should probably make note of it, but it's not fatal.
-      info("Note: ensureDirtyRootFrame threw an exception.");
-    }
-  };
-
-  let els = Cc["@mozilla.org/eventlistenerservice;1"]
-              .getService(Ci.nsIEventListenerService);
-
-  // We're going to remove the reflows one by one as we see them so that
-  // we can check for expected, unseen reflows, so let's clone the array.
-  // While we're at it, for reflows that omit the "times" property, default
-  // it to 1.
-  expectedReflows = expectedReflows.slice(0);
-  expectedReflows.forEach(r => {
-    r.times = r.times || 1;
+function reportUnexpectedReflows(reflows, expectedReflows = []) {
+  let knownReflows = expectedReflows.map(r => {
+    return {stack: r.stack, path: r.stack.join("|"),
+            count: 0, maxCount: r.maxCount || 1,
+            actualStacks: new Map()};
   });
+  let unexpectedReflows = new Map();
+  for (let stack of reflows) {
+    let path =
+      stack.split("\n").slice(1) // the first frame which is our test code.
+           .map(line => line.replace(/:\d+:\d+$/, "")) // strip line numbers.
+           .join("|");
 
-  let observer = {
-    reflow(start, end) {
-      // Gather information about the current code path, slicing out the current
-      // frame.
-      let path = (new Error().stack).split("\n").slice(1).map(line => {
-        return line.replace(/:\d+:\d+$/, "");
-      }).join("|");
-
-      let pathWithLineNumbers = (new Error().stack).split("\n").slice(1);
-
-      // Just in case, dirty the frame now that we've reflowed.
-      dirtyFrameFn();
-
-      // Stack trace is empty. Reflow was triggered by native code, which
-      // we ignore.
-      if (path === "") {
-        return;
-      }
-
-      // synthesizeKey from EventUtils.js causes us to reflow. That's the test
-      // harness and we don't care about that, so we'll filter that out.
-      if (path.startsWith("synthesizeKey@chrome://mochikit/content/tests/SimpleTest/EventUtils.js")) {
-        return;
-      }
-
-      let index = expectedReflows.findIndex(reflow => path.startsWith(reflow.stack.join("|")));
-
-      if (index != -1) {
-        Assert.ok(true, "expected uninterruptible reflow: '" +
-                  JSON.stringify(pathWithLineNumbers, null, "\t") + "'");
-        if (expectedReflows[index].minTimes) {
-          expectedReflows[index].minTimes--;
-        }
-        if (--expectedReflows[index].times == 0) {
-          expectedReflows.splice(index, 1);
-        }
-      } else {
-        Assert.ok(false, "unexpected uninterruptible reflow \n" +
-                         JSON.stringify(pathWithLineNumbers, null, "\t") + "\n");
-      }
-    },
-
-    reflowInterruptible(start, end) {
-      // We're not interested in interruptible reflows, but might as well take the
-      // opportuntiy to dirty the root frame.
-      dirtyFrameFn();
-    },
-
-    QueryInterface: XPCOMUtils.generateQI([Ci.nsIReflowObserver,
-                                           Ci.nsISupportsWeakReference])
-  };
-
-  let docShell = win.QueryInterface(Ci.nsIInterfaceRequestor)
-                    .getInterface(Ci.nsIWebNavigation)
-                    .QueryInterface(Ci.nsIDocShell);
-  docShell.addWeakReflowObserver(observer);
-
-  els.addListenerForAllEvents(win, dirtyFrameFn, true);
-
-  try {
-    dirtyFrameFn();
-    await testFn(dirtyFrameFn);
-  } finally {
-    for (let remainder of expectedReflows) {
-      if (!Number.isInteger(remainder.minTimes) || remainder.minTimes > 0) {
-        Assert.ok(false,
-                  `Unused expected reflow: ${JSON.stringify(remainder.stack, null, "\t")}\n` +
-                  `This reflow was supposed to be hit ${remainder.minTimes || remainder.times} more time(s).\n` +
-                  "This is probably a good thing - just remove it from the " +
-                  "expected list.");
-      }
+    // Stack trace is empty. Reflow was triggered by native code, which
+    // we ignore.
+    if (path === "") {
+      continue;
     }
 
-    els.removeListenerForAllEvents(win, dirtyFrameFn, true);
-    docShell.removeWeakReflowObserver(observer);
+    // synthesizeKey from EventUtils.js causes us to reflow. That's the test
+    // harness and we don't care about that, so we'll filter that out.
+    if (path.startsWith("synthesizeKey@chrome://mochikit/content/tests/SimpleTest/EventUtils.js")) {
+      continue;
+    }
+
+    let index = knownReflows.findIndex(reflow => path.startsWith(reflow.path));
+    if (index != -1) {
+      let reflow = knownReflows[index];
+      ++reflow.count;
+      reflow.actualStacks.set(stack, (reflow.actualStacks.get(stack) || 0) + 1);
+    } else {
+      unexpectedReflows.set(stack, (unexpectedReflows.get(stack) || 0) + 1);
+    }
   }
+
+  let formatStack = stack =>
+    stack.split("\n").slice(1).map(frame => "  " + frame).join("\n");
+  for (let reflow of knownReflows) {
+    let firstFrame = reflow.stack[0];
+    if (!reflow.count) {
+      Assert.ok(false,
+                `Unused expected reflow at ${firstFrame}:\nStack:\n` +
+                reflow.stack.map(frame => "  " + frame).join("\n") + "\n" +
+                "This is probably a good thing - just remove it from the whitelist.");
+    } else {
+      if (reflow.count > reflow.maxCount) {
+        Assert.ok(false,
+                  `reflow at ${firstFrame} was encountered ${reflow.count} times,\n` +
+                  `it was expected to happen up to ${reflow.maxCount} times.`);
+      } else {
+        todo(false, `known reflow at ${firstFrame} was encountered ${reflow.count} times`);
+      }
+      for (let [stack, count] of reflow.actualStacks) {
+        info("Full stack" + (count > 1 ? ` (hit ${count} times)` : "") + ":\n" +
+             formatStack(stack));
+      }
+    }
+  }
+
+  for (let [stack, count] of unexpectedReflows) {
+    let location = stack.split("\n")[1].replace(/:\d+:\d+$/, "");
+    Assert.ok(false,
+              `unexpected reflow at ${location} hit ${count} times\n` +
+              "Stack:\n" +
+              formatStack(stack));
+  }
+  Assert.ok(!unexpectedReflows.size,
+            unexpectedReflows.size + " unexpected reflows");
 }
 
-async function ensureNoPreloadedBrowser() {
+async function ensureNoPreloadedBrowser(win = window) {
   // If we've got a preloaded browser, get rid of it so that it
   // doesn't interfere with the test if it's loading. We have to
   // do this before we disable preloading or changing the new tab
   // URL, otherwise _getPreloadedBrowser will return null, despite
   // the preloaded browser existing.
-  let preloaded = gBrowser._getPreloadedBrowser();
+  let preloaded = win.gBrowser._getPreloadedBrowser();
   if (preloaded) {
     preloaded.remove();
   }
@@ -185,6 +221,53 @@ async function ensureNoPreloadedBrowser() {
 }
 
 /**
+ * The navigation toolbar is overflowable, meaning that some items
+ * will be moved and held within a sub-panel if the window gets too
+ * small to show their icons. The calculation for hiding those items
+ * occurs after resize events, and is debounced using a DeferredTask.
+ * This utility function allows us to fast-forward to just running
+ * that function for that DeferredTask instead of waiting for the
+ * debounce timeout to occur.
+ */
+function forceImmediateToolbarOverflowHandling(win) {
+  let overflowableToolbar = win.document.getElementById("nav-bar").overflowable;
+  if (overflowableToolbar._lazyResizeHandler && overflowableToolbar._lazyResizeHandler.isArmed) {
+    overflowableToolbar._lazyResizeHandler.disarm();
+    // Ensure the root frame is dirty before resize so that, if we're
+    // in the middle of a reflow test, we record the reflows deterministically.
+    let dwu = win.QueryInterface(Ci.nsIInterfaceRequestor)
+                 .getInterface(Ci.nsIDOMWindowUtils);
+    dwu.ensureDirtyRootFrame();
+    overflowableToolbar._onLazyResize();
+  }
+}
+
+async function prepareSettledWindow() {
+  let win = await BrowserTestUtils.openNewBrowserWindow();
+
+  await ensureNoPreloadedBrowser(win);
+  forceImmediateToolbarOverflowHandling(win);
+  return win;
+}
+
+// Use this function to avoid catching a reflow related to calling focus on the
+// urlbar and changed rects for its dropmarker when opening new tabs.
+async function ensureFocusedUrlbar() {
+  // The switchingtabs attribute prevents the historydropmarker opacity
+  // transition, so if we expect a transitionend event when this attribute
+  // is set, we wait forever. (it's removed off a MozAfterPaint event listener)
+  await BrowserTestUtils.waitForCondition(() =>
+    !gURLBar.hasAttribute("switchingtabs"));
+
+  let dropmarker = document.getAnonymousElementByAttribute(gURLBar, "anonid",
+                                                           "historydropmarker");
+  let opacityPromise = BrowserTestUtils.waitForEvent(dropmarker, "transitionend",
+                                                     false, e => e.propertyName === "opacity");
+  gURLBar.focus();
+  await opacityPromise;
+}
+
+/**
  * Calculate and return how many additional tabs can be fit into the
  * tabstrip without causing it to overflow.
  *
@@ -198,7 +281,7 @@ function computeMaxTabCount() {
     document.getAnonymousElementByAttribute(gBrowser.tabContainer,
                                             "anonid", "tabs-newtab-button");
   let newTabRect = newTabButton.getBoundingClientRect();
-  let tabStripRect = gBrowser.tabContainer.mTabstrip.getBoundingClientRect();
+  let tabStripRect = gBrowser.tabContainer.arrowScrollbox.getBoundingClientRect();
   let availableTabStripWidth = tabStripRect.width - newTabRect.width;
 
   let tabMinWidth =
@@ -248,22 +331,304 @@ async function removeAllButFirstTab() {
 /**
  * Adds some entries to the Places database so that we can
  * do semi-realistic look-ups in the URL bar.
+ *
+ * @param searchStr (string)
+ *        Optional text to add to the search history items.
  */
-async function addDummyHistoryEntries() {
-  await PlacesTestUtils.clearHistory();
+async function addDummyHistoryEntries(searchStr = "") {
+  await PlacesUtils.history.clear();
   const NUM_VISITS = 10;
   let visits = [];
 
   for (let i = 0; i < NUM_VISITS; ++i) {
     visits.push({
       uri: `http://example.com/urlbar-reflows-${i}`,
-      title: `Reflow test for URL bar entry #${i}`,
+      title: `Reflow test for URL bar entry #${i} - ${searchStr}`,
     });
   }
 
   await PlacesTestUtils.addVisits(visits);
 
   registerCleanupFunction(async function() {
-    await PlacesTestUtils.clearHistory();
+    await PlacesUtils.history.clear();
   });
+}
+
+
+/**
+ * Async utility function to capture a screenshot of each painted frame.
+ *
+ * @param testPromise (Promise)
+ *        A promise that is resolved when the data collection should stop.
+ *
+ * @param win (browser window, optional)
+ *        The browser window to monitor. Defaults to the current window.
+ *
+ * @return An array of screenshots
+ */
+async function recordFrames(testPromise, win = window) {
+  let canvas = win.document.createElementNS("http://www.w3.org/1999/xhtml",
+                                            "canvas");
+  canvas.mozOpaque = true;
+  let ctx = canvas.getContext("2d", {alpha: false, willReadFrequently: true});
+
+  let frames = [];
+
+  let afterPaintListener = event => {
+    let width, height;
+    canvas.width = width = win.innerWidth;
+    canvas.height = height = win.innerHeight;
+    ctx.drawWindow(win, 0, 0, width, height, "white",
+                   ctx.DRAWWINDOW_DO_NOT_FLUSH | ctx.DRAWWINDOW_DRAW_VIEW |
+                   ctx.DRAWWINDOW_ASYNC_DECODE_IMAGES |
+                   ctx.DRAWWINDOW_USE_WIDGET_LAYERS);
+    let data = Cu.cloneInto(ctx.getImageData(0, 0, width, height).data, {});
+    if (frames.length) {
+      // Compare this frame with the previous one to avoid storing duplicate
+      // frames and running out of memory.
+      let previous = frames[frames.length - 1];
+      if (previous.width == width && previous.height == height) {
+        let equals = true;
+        for (let i = 0; i < data.length; ++i) {
+          if (data[i] != previous.data[i]) {
+            equals = false;
+            break;
+          }
+        }
+        if (equals) {
+          return;
+        }
+      }
+    }
+    frames.push({data, width, height});
+  };
+  win.addEventListener("MozAfterPaint", afterPaintListener);
+
+  // If the test is using an existing window, capture a frame immediately.
+  if (win.document.readyState == "complete") {
+    afterPaintListener();
+  }
+
+  try {
+    await testPromise;
+  } finally {
+    win.removeEventListener("MozAfterPaint", afterPaintListener);
+  }
+
+  return frames;
+}
+
+// How many identical pixels to accept between 2 rects when deciding to merge
+// them.
+const kMaxEmptyPixels = 3;
+function compareFrames(frame, previousFrame) {
+  // Accessing the Math global is expensive as the test executes in a
+  // non-syntactic scope. Accessing it as a lexical variable is enough
+  // to make the code JIT well.
+  const M = Math;
+
+  function expandRect(x, y, rect) {
+    if (rect.x2 < x)
+      rect.x2 = x;
+    else if (rect.x1 > x)
+      rect.x1 = x;
+    if (rect.y2 < y)
+      rect.y2 = y;
+  }
+
+  function isInRect(x, y, rect) {
+    return (rect.y2 == y || rect.y2 == y - 1) && rect.x1 - 1 <= x && x <= rect.x2 + 1;
+  }
+
+  if (frame.height != previousFrame.height ||
+      frame.width != previousFrame.width) {
+    // If the frames have different sizes, assume the whole window has
+    // been repainted when the window was resized.
+    return [{x1: 0, x2: frame.width, y1: 0, y2: frame.height}];
+  }
+
+  let l = frame.data.length;
+  let different = [];
+  let rects = [];
+  for (let i = 0; i < l; i += 4) {
+    let x = (i / 4) % frame.width;
+    let y = M.floor((i / 4) / frame.width);
+    for (let j = 0; j < 4; ++j) {
+      let index = i + j;
+
+      if (frame.data[index] != previousFrame.data[index]) {
+        let found = false;
+        for (let rect of rects) {
+          if (isInRect(x, y, rect)) {
+            expandRect(x, y, rect);
+            found = true;
+            break;
+          }
+        }
+        if (!found)
+          rects.unshift({x1: x, x2: x, y1: y, y2: y});
+
+        different.push(i);
+        break;
+      }
+    }
+  }
+  rects.reverse();
+
+  // The following code block merges rects that are close to each other
+  // (less than kMaxEmptyPixels away).
+  // This is needed to avoid having a rect for each letter when a label moves.
+  let areRectsContiguous = function(r1, r2) {
+    return r1.y2 >= r2.y1 - 1 - kMaxEmptyPixels &&
+           r2.x1 - 1 - kMaxEmptyPixels <= r1.x2 &&
+           r2.x2 >= r1.x1 - 1 - kMaxEmptyPixels;
+  };
+  let hasMergedRects;
+  do {
+    hasMergedRects = false;
+    for (let r = rects.length - 1; r > 0; --r) {
+      let rr = rects[r];
+      for (let s = r - 1; s >= 0; --s) {
+        let rs = rects[s];
+        if (areRectsContiguous(rs, rr)) {
+          rs.x1 = Math.min(rs.x1, rr.x1);
+          rs.y1 = Math.min(rs.y1, rr.y1);
+          rs.x2 = Math.max(rs.x2, rr.x2);
+          rs.y2 = Math.max(rs.y2, rr.y2);
+          rects.splice(r, 1);
+          hasMergedRects = true;
+          break;
+        }
+      }
+    }
+  } while (hasMergedRects);
+
+  // For convenience, pre-compute the width and height of each rect.
+  rects.forEach(r => {
+    r.w = r.x2 - r.x1 + 1;
+    r.h = r.y2 - r.y1 + 1;
+  });
+
+  return rects;
+}
+
+function dumpFrame({data, width, height}) {
+  let canvas = document.createElementNS("http://www.w3.org/1999/xhtml", "canvas");
+  canvas.mozOpaque = true;
+  canvas.width = width;
+  canvas.height = height;
+
+  canvas.getContext("2d", {alpha: false, willReadFrequently: true})
+        .putImageData(new ImageData(data, width, height), 0, 0);
+
+  info(canvas.toDataURL());
+}
+
+/**
+ * Utility function to report unexpected changed areas on screen.
+ *
+ * @param frames (Array)
+ *        An array of frames captured by recordFrames.
+ *
+ * @param expectations (Object)
+ *        An Object indicating which changes on screen are expected.
+ *        If can contain the following optional fields:
+ *         - filter: a function used to exclude changed rects that are expected.
+ *            It takes the following parameters:
+ *             - rects: an array of changed rects
+ *             - frame: the current frame
+ *             - previousFrame: the previous frame
+ *            It returns an array of rects. This array is typically a copy of
+ *            the rects parameter, from which identified expected changes have
+ *            been excluded.
+ *         - exceptions: an array of objects describing known flicker bugs.
+ *           Example:
+ *             exceptions: [
+ *               {name: "bug 1nnnnnn - the foo icon shouldn't flicker",
+ *                condition: r => r.w == 14 && r.y1 == 0 && ... }
+ *               },
+ *               {name: "bug ...
+ *             ]
+ */
+function reportUnexpectedFlicker(frames, expectations) {
+  info("comparing " + frames.length + " frames");
+
+  let unexpectedRects = 0;
+  for (let i = 1; i < frames.length; ++i) {
+    let frame = frames[i], previousFrame = frames[i - 1];
+    let rects = compareFrames(frame, previousFrame);
+
+    if (expectations.filter) {
+      rects = expectations.filter(rects, frame, previousFrame);
+    }
+
+    rects = rects.filter(rect => {
+      let rectText = `${rect.toSource()}, window width: ${frame.width}`;
+      for (let e of (expectations.exceptions || [])) {
+        if (e.condition(rect)) {
+          todo(false, e.name + ", " + rectText);
+          return false;
+        }
+      }
+
+      ok(false, "unexpected changed rect: " + rectText);
+      return true;
+    });
+
+    if (!rects.length)
+      continue;
+
+    // Before dumping a frame with unexpected differences for the first time,
+    // ensure at least one previous frame has been logged so that it's possible
+    // to see the differences when examining the log.
+    if (!unexpectedRects) {
+      dumpFrame(previousFrame);
+    }
+    unexpectedRects += rects.length;
+    dumpFrame(frame);
+  }
+  is(unexpectedRects, 0, "should have 0 unknown flickering areas");
+}
+
+/**
+ * This is the main function that performance tests in this folder will call.
+ *
+ * The general idea is that individual tests provide a test function (testFn)
+ * that will perform some user interactions we care about (eg. open a tab), and
+ * this withPerfObserver function takes care of setting up and removing the
+ * observers and listener we need to detect common performance issues.
+ *
+ * Once testFn is done, withPerfObserver will analyse the collected data and
+ * report anything unexpected.
+ *
+ * @param testFn (async function)
+ *        An async function that exercises some part of the browser UI.
+ *
+ * @param exceptions (object, optional)
+ *        An Array of Objects representing expectations and known issues.
+ *        It can contain the following fields:
+ *         - expectedReflows: an array of expected reflow stacks.
+ *           (see the comment above reportUnexpectedReflows for an example)
+ *         - frames: an object setting expectations for what will change
+ *           on screen during the test, and the known flicker bugs.
+ *           (see the comment above reportUnexpectedFlicker for an example)
+ */
+async function withPerfObserver(testFn, exceptions = {}, win = window) {
+  let resolveFn, rejectFn;
+  let promiseTestDone = new Promise((resolve, reject) => {
+    resolveFn = resolve;
+    rejectFn = reject;
+  });
+
+  let promiseReflows = recordReflows(promiseTestDone, win);
+  let promiseFrames = recordFrames(promiseTestDone, win);
+
+  testFn().then(resolveFn, rejectFn);
+  await promiseTestDone;
+
+  let reflows = await promiseReflows;
+  reportUnexpectedReflows(reflows, exceptions.expectedReflows);
+
+  let frames = await promiseFrames;
+  reportUnexpectedFlicker(frames, exceptions.frames);
 }

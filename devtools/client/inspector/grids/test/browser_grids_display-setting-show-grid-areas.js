@@ -20,14 +20,14 @@ const TEST_URI = `
 
 const SHOW_GRID_AREAS_PREF = "devtools.gridinspector.showGridAreas";
 
-add_task(function* () {
-  yield addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
-  let { inspector, gridInspector } = yield openLayoutView();
-  let { document: doc } = gridInspector;
-  let { store } = inspector;
+add_task(async function() {
+  await addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
+  const { inspector, gridInspector } = await openLayoutView();
+  const { document: doc } = gridInspector;
+  const { store } = inspector;
 
-  yield selectNode("#grid", inspector);
-  let checkbox = doc.getElementById("grid-setting-show-grid-areas");
+  await selectNode("#grid", inspector);
+  const checkbox = doc.getElementById("grid-setting-show-grid-areas");
 
   ok(!Services.prefs.getBoolPref(SHOW_GRID_AREAS_PREF),
     "'Display grid areas' is pref off by default.");
@@ -36,13 +36,13 @@ add_task(function* () {
   let onCheckboxChange = waitUntilState(store, state =>
     state.highlighterSettings.showGridAreasOverlay);
   checkbox.click();
-  yield onCheckboxChange;
+  await onCheckboxChange;
 
   info("Toggling OFF the 'Display grid areas' setting.");
   onCheckboxChange = waitUntilState(store, state =>
     !state.highlighterSettings.showGridAreasOverlay);
   checkbox.click();
-  yield onCheckboxChange;
+  await onCheckboxChange;
 
   ok(!Services.prefs.getBoolPref(SHOW_GRID_AREAS_PREF),
     "'Display grid areas' is pref off.");

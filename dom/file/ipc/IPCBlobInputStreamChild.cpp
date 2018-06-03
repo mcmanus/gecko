@@ -8,14 +8,11 @@
 #include "IPCBlobInputStreamThread.h"
 
 #include "mozilla/ipc/IPCStreamUtils.h"
-#include "WorkerHolder.h"
-#include "WorkerPrivate.h"
-#include "WorkerRunnable.h"
+#include "mozilla/dom/WorkerCommon.h"
+#include "mozilla/dom/WorkerRef.h"
 
 namespace mozilla {
 namespace dom {
-
-using namespace workers;
 
 namespace {
 
@@ -74,7 +71,7 @@ public:
                       already_AddRefed<nsIInputStream> aCreatedStream)
     : CancelableRunnable("dom::StreamReadyRunnable")
     , mDestinationStream(aDestinationStream)
-    , mCreatedStream(Move(aCreatedStream))
+    , mCreatedStream(std::move(aCreatedStream))
   {
     MOZ_ASSERT(mDestinationStream);
     // mCreatedStream can be null.
@@ -92,40 +89,54 @@ private:
   nsCOMPtr<nsIInputStream> mCreatedStream;
 };
 
-class IPCBlobInputStreamWorkerHolder final : public WorkerHolder
+// This runnable is used in case LengthNeeded() has been called on a non-owning
+// thread.
+class LengthNeededRunnable final : public CancelableRunnable
 {
 public:
-  bool Notify(Status aStatus) override
-  {
-    // We must keep the worker alive until the migration is completed.
-    return true;
-  }
-};
-
-class ReleaseWorkerHolderRunnable final : public CancelableRunnable
-{
-public:
-  explicit ReleaseWorkerHolderRunnable(
-    UniquePtr<workers::WorkerHolder>&& aWorkerHolder)
-    : CancelableRunnable("dom::ReleaseWorkerHolderRunnable")
-    , mWorkerHolder(Move(aWorkerHolder))
+  explicit LengthNeededRunnable(IPCBlobInputStreamChild* aActor)
+    : CancelableRunnable("dom::LengthNeededRunnable")
+    , mActor(aActor)
   {}
 
   NS_IMETHOD
   Run() override
   {
-    mWorkerHolder = nullptr;
+    MOZ_ASSERT(mActor->State() != IPCBlobInputStreamChild::eActiveMigrating &&
+               mActor->State() != IPCBlobInputStreamChild::eInactiveMigrating);
+    if (mActor->State() == IPCBlobInputStreamChild::eActive) {
+      mActor->SendLengthNeeded();
+    }
     return NS_OK;
   }
 
-  nsresult
-  Cancel() override
+private:
+  RefPtr<IPCBlobInputStreamChild> mActor;
+};
+
+// When the stream has been received from the parent, we inform the
+// IPCBlobInputStream.
+class LengthReadyRunnable final : public CancelableRunnable
+{
+public:
+  LengthReadyRunnable(IPCBlobInputStream* aDestinationStream, int64_t aSize)
+    : CancelableRunnable("dom::LengthReadyRunnable")
+    , mDestinationStream(aDestinationStream)
+    , mSize(aSize)
   {
-    return Run();
+    MOZ_ASSERT(mDestinationStream);
+  }
+
+  NS_IMETHOD
+  Run() override
+  {
+    mDestinationStream->LengthReady(mSize);
+    return NS_OK;
   }
 
 private:
-  UniquePtr<workers::WorkerHolder> mWorkerHolder;
+  RefPtr<IPCBlobInputStream> mDestinationStream;
+  int64_t mSize;
 };
 
 } // anonymous
@@ -142,13 +153,18 @@ IPCBlobInputStreamChild::IPCBlobInputStreamChild(const nsID& aID,
   // before the thread is released.
   if (!NS_IsMainThread()) {
     WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
-    if (workerPrivate) {
-      UniquePtr<WorkerHolder> workerHolder(
-        new IPCBlobInputStreamWorkerHolder());
-      if (workerHolder->HoldWorker(workerPrivate, Canceling)) {
-        mWorkerHolder.swap(workerHolder);
-      }
+    if (!workerPrivate) {
+      return;
     }
+
+    RefPtr<StrongWorkerRef> workerRef =
+      StrongWorkerRef::Create(workerPrivate, "IPCBlobInputStreamChild");
+    if (!workerRef) {
+      return;
+    }
+
+    // We must keep the worker alive until the migration is completed.
+    mWorkerRef = new ThreadSafeWorkerRef(workerRef);
   }
 }
 
@@ -162,7 +178,7 @@ IPCBlobInputStreamChild::Shutdown()
 
   RefPtr<IPCBlobInputStreamChild> kungFuDeathGrip = this;
 
-  mWorkerHolder = nullptr;
+  mWorkerRef = nullptr;
   mPendingOperations.Clear();
 
   if (mState == eActive) {
@@ -194,7 +210,7 @@ IPCBlobInputStreamChild::ActorDestroy(IProtocol::ActorDestroyReason aReason)
     return;
   }
 
-  // Let's cleanup the workerHolder and the pending operation queue.
+  // Let's cleanup the workerRef and the pending operation queue.
   Shutdown();
 }
 
@@ -280,6 +296,7 @@ IPCBlobInputStreamChild::StreamNeeded(IPCBlobInputStream* aStream,
   PendingOperation* opt = mPendingOperations.AppendElement();
   opt->mStream = aStream;
   opt->mEventTarget = aEventTarget;
+  opt->mOp = PendingOperation::eStreamNeeded;
 
   if (mState == eActiveMigrating || mState == eInactiveMigrating) {
     // This operation will be continued when the migration is completed.
@@ -312,6 +329,7 @@ IPCBlobInputStreamChild::RecvStreamReady(const OptionalIPCStream& aStream)
 
     pendingStream = mPendingOperations[0].mStream;
     eventTarget = mPendingOperations[0].mEventTarget;
+    MOZ_ASSERT(mPendingOperations[0].mOp == PendingOperation::eStreamNeeded);
 
     mPendingOperations.RemoveElementAt(0);
   }
@@ -333,16 +351,71 @@ IPCBlobInputStreamChild::RecvStreamReady(const OptionalIPCStream& aStream)
 }
 
 void
+IPCBlobInputStreamChild::LengthNeeded(IPCBlobInputStream* aStream,
+                                      nsIEventTarget* aEventTarget)
+{
+  MutexAutoLock lock(mMutex);
+
+  if (mState == eInactive) {
+    return;
+  }
+
+  MOZ_ASSERT(mStreams.Contains(aStream));
+
+  PendingOperation* opt = mPendingOperations.AppendElement();
+  opt->mStream = aStream;
+  opt->mEventTarget = aEventTarget;
+  opt->mOp = PendingOperation::eLengthNeeded;
+
+  if (mState == eActiveMigrating || mState == eInactiveMigrating) {
+    // This operation will be continued when the migration is completed.
+    return;
+  }
+
+  MOZ_ASSERT(mState == eActive);
+
+  if (mOwningEventTarget->IsOnCurrentThread()) {
+    SendLengthNeeded();
+    return;
+  }
+
+  RefPtr<LengthNeededRunnable> runnable = new LengthNeededRunnable(this);
+  mOwningEventTarget->Dispatch(runnable.forget(), NS_DISPATCH_NORMAL);
+}
+
+mozilla::ipc::IPCResult
+IPCBlobInputStreamChild::RecvLengthReady(const int64_t& aLength)
+{
+  RefPtr<IPCBlobInputStream> pendingStream;
+  nsCOMPtr<nsIEventTarget> eventTarget;
+
+  {
+    MutexAutoLock lock(mMutex);
+    MOZ_ASSERT(!mPendingOperations.IsEmpty());
+    MOZ_ASSERT(mState == eActive);
+
+    pendingStream = mPendingOperations[0].mStream;
+    eventTarget = mPendingOperations[0].mEventTarget;
+    MOZ_ASSERT(mPendingOperations[0].mOp == PendingOperation::eLengthNeeded);
+
+    mPendingOperations.RemoveElementAt(0);
+  }
+
+  RefPtr<LengthReadyRunnable> runnable =
+    new LengthReadyRunnable(pendingStream, aLength);
+
+   MOZ_ASSERT(eventTarget);
+  eventTarget->Dispatch(runnable, NS_DISPATCH_NORMAL);
+
+  return IPC_OK();
+}
+void
 IPCBlobInputStreamChild::Migrated()
 {
   MutexAutoLock lock(mMutex);
   MOZ_ASSERT(mState == eInactiveMigrating);
 
-  if (mWorkerHolder) {
-    RefPtr<ReleaseWorkerHolderRunnable> runnable =
-      new ReleaseWorkerHolderRunnable(Move(mWorkerHolder));
-    mOwningEventTarget->Dispatch(runnable, NS_DISPATCH_NORMAL);
-  }
+  mWorkerRef = nullptr;
 
   mOwningEventTarget = GetCurrentThreadSerialEventTarget();
   MOZ_ASSERT(IPCBlobInputStreamThread::IsOnFileEventTarget(mOwningEventTarget));
@@ -359,7 +432,12 @@ IPCBlobInputStreamChild::Migrated()
   // Let's processing the pending operations. We need a stream for each pending
   // operation.
   for (uint32_t i = 0; i < mPendingOperations.Length(); ++i) {
-    SendStreamNeeded();
+    if (mPendingOperations[i].mOp == PendingOperation::eStreamNeeded) {
+      SendStreamNeeded();
+    } else {
+      MOZ_ASSERT(mPendingOperations[i].mOp == PendingOperation::eLengthNeeded);
+      SendLengthNeeded();
+    }
   }
 }
 

@@ -27,41 +27,41 @@
       window.onload = function() {
         SimpleTest.waitForExplicitFinish();
 
-        Task.spawn(function* () {
-          let win = yield openWebIDE();
-          let docProject = getProjectDocument(win);
-          let docRuntime = getRuntimeDocument(win);
+        (async function() {
+          const win = await openWebIDE();
+          const docProject = getProjectDocument(win);
+          const docRuntime = getRuntimeDocument(win);
           win.AppManager.update("runtime-list");
 
           connectToLocal(win, docRuntime);
 
           // Select main process
-          yield waitForUpdate(win, "runtime-targets");
+          await waitForUpdate(win, "runtime-targets");
           SimpleTest.executeSoon(() => {
             docProject.querySelectorAll("#project-panel-runtimeapps .panel-item")[0].click();
           });
 
-          yield waitForUpdate(win, "project");
+          await waitForUpdate(win, "project");
 
           ok(win.UI.toolboxPromise, "Toolbox promise exists");
-          yield win.UI.toolboxPromise;
+          await win.UI.toolboxPromise;
 
-          let nbox = win.document.querySelector("#notificationbox");
+          const nbox = win.document.querySelector("#notificationbox");
           ok(!nbox.hasAttribute("toolboxfullscreen"), "Toolbox is not fullscreen");
 
           win.Cmds.showRuntimeDetails();
 
           ok(!nbox.hasAttribute("toolboxfullscreen"), "Toolbox is not fullscreen");
 
-          yield win.Cmds.disconnectRuntime();
+          await win.Cmds.disconnectRuntime();
 
-          yield closeWebIDE(win);
+          await closeWebIDE(win);
 
           DebuggerServer.destroy();
 
           SimpleTest.finish();
-        });
-      }
+        })();
+      };
     </script>
   </body>
 </html>

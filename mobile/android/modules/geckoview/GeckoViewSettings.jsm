@@ -4,43 +4,57 @@
 
 "use strict";
 
-this.EXPORTED_SYMBOLS = ["GeckoViewSettings"];
+var EXPORTED_SYMBOLS = ["GeckoViewSettings"];
 
-const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
+ChromeUtils.import("resource://gre/modules/GeckoViewModule.jsm");
+ChromeUtils.import("resource://gre/modules/GeckoViewUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/GeckoViewModule.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  Services: "resource://gre/modules/Services.jsm",
+});
 
-XPCOMUtils.defineLazyModuleGetter(this, "SafeBrowsing",
-  "resource://gre/modules/SafeBrowsing.jsm");
+/* global SafeBrowsing:false */
+GeckoViewUtils.addLazyGetter(this, "SafeBrowsing", {
+  module: "resource://gre/modules/SafeBrowsing.jsm",
+  init: sb => sb.init(),
+});
 
-XPCOMUtils.defineLazyGetter(this, "dump", () =>
-    Cu.import("resource://gre/modules/AndroidLog.jsm",
-              {}).AndroidLog.d.bind(null, "ViewSettings"));
-
-function debug(aMsg) {
-  // dump(aMsg);
-}
+XPCOMUtils.defineLazyGetter(
+  this, "DESKTOP_USER_AGENT",
+  function() {
+    return Cc["@mozilla.org/network/protocol;1?name=http"]
+           .getService(Ci.nsIHttpProtocolHandler).userAgent
+           .replace(/Android \d.+?; [a-zA-Z]+/, "X11; Linux x86_64")
+           .replace(/Gecko\/[0-9\.]+/, "Gecko/20100101");
+  });
 
 // Handles GeckoView settings including:
-// * tracking protection
 // * multiprocess
+// * user agent override
 class GeckoViewSettings extends GeckoViewModule {
-  init() {
-    this._isSafeBrowsingInit = false;
-    this._useTrackingProtection = false;
+  onInitBrowser() {
+    if (this.settings.useMultiprocess) {
+      this.browser.setAttribute("remote", "true");
+    }
+  }
 
-    // We only allow to set this setting during initialization, further updates
-    // will be ignored.
-    this.useMultiprocess = !!this.settings.useMultiprocess;
-    this._displayMode = Ci.nsIDocShell.DISPLAY_MODE_BROWSER;
+  onInit() {
+    this._useTrackingProtection = false;
+    this._useDesktopMode = false;
   }
 
   onSettingsUpdate() {
-    debug("onSettingsUpdate: " + JSON.stringify(this.settings));
+    const settings = this.settings;
+    debug `onSettingsUpdate: ${settings}`;
 
-    this.useTrackingProtection = !!this.settings.useTrackingProtection;
-    this.displayMode = this.settings.displayMode;
+    this.displayMode = settings.displayMode;
+    this.useTrackingProtection = !!settings.useTrackingProtection;
+    this.useDesktopMode = !!settings.useDesktopMode;
+  }
+
+  get useMultiprocess() {
+    return this.browser.isRemoteBrowser;
   }
 
   get useTrackingProtection() {
@@ -48,53 +62,51 @@ class GeckoViewSettings extends GeckoViewModule {
   }
 
   set useTrackingProtection(aUse) {
-    if (aUse && !this._isSafeBrowsingInit) {
-      SafeBrowsing.init();
-      this._isSafeBrowsingInit = true;
-    }
-    if (aUse != this._useTrackingProtection) {
-      this.messageManager.loadFrameScript("data:," +
-        `docShell.useTrackingProtection = ${aUse}`,
-        true
-      );
-      this._useTrackingProtection = aUse;
-    }
+    aUse && SafeBrowsing;
+    this._useTrackingProtection = aUse;
   }
 
-  get useMultiprocess() {
-    return this.browser.getAttribute("remote") == "true";
-  }
+  onUserAgentRequest(aSubject, aTopic, aData) {
+    debug `onUserAgentRequest`;
 
-  set useMultiprocess(aUse) {
-    if (aUse == this.useMultiprocess) {
+    let channel = aSubject.QueryInterface(Ci.nsIHttpChannel);
+
+    if (this.browser.outerWindowID !== channel.topLevelOuterContentWindowId) {
       return;
     }
-    let parentNode = this.browser.parentNode;
-    parentNode.removeChild(this.browser);
 
-    if (aUse) {
-      this.browser.setAttribute("remote", "true");
-    } else {
-      this.browser.removeAttribute("remote");
+    if (this.useDesktopMode) {
+      channel.setRequestHeader("User-Agent", DESKTOP_USER_AGENT, false);
     }
-    parentNode.appendChild(this.browser);
+  }
+
+  get useDesktopMode() {
+    return this._useDesktopMode;
+  }
+
+  set useDesktopMode(aUse) {
+    if (this.useDesktopMode === aUse) {
+      return;
+    }
+    if (aUse) {
+      Services.obs.addObserver(this.onUserAgentRequest.bind(this),
+                               "http-on-useragent-request");
+    } else {
+      Services.obs.removeObserver(this.onUserAgentRequest.bind(this),
+                                  "http-on-useragent-request");
+    }
+    this._useDesktopMode = aUse;
   }
 
   get displayMode() {
-    return this._displayMode;
+    return this.window.QueryInterface(Ci.nsIInterfaceRequestor)
+                      .getInterface(Ci.nsIDocShell)
+                      .displayMode;
   }
 
   set displayMode(aMode) {
-    if (!this.useMultiprocess) {
-      this.window.QueryInterface(Ci.nsIInterfaceRequestor)
-                   .getInterface(Ci.nsIDocShell)
-                   .displayMode = aMode;
-    } else {
-      this.messageManager.loadFrameScript("data:," +
-        `docShell.displayMode = ${aMode}`,
-        true
-      );
-    }
-    this._displayMode = aMode;
+    this.window.QueryInterface(Ci.nsIInterfaceRequestor)
+               .getInterface(Ci.nsIDocShell)
+               .displayMode = aMode;
   }
 }

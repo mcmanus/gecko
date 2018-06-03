@@ -51,10 +51,16 @@ static char *RCSSTRING __UNUSED__="$Id: ice_component.c,v 1.2 2008/04/28 17:59:0
 #include "nr_crypto.h"
 #include "r_time.h"
 
+static void nr_ice_component_refresh_consent_cb(NR_SOCKET s, int how, void *cb_arg);
 static int nr_ice_component_stun_server_default_cb(void *cb_arg,nr_stun_server_ctx *stun_ctx,nr_socket *sock, nr_stun_server_request *req, int *dont_free, int *error);
 static int nr_ice_pre_answer_request_destroy(nr_ice_pre_answer_request **parp);
+int nr_ice_component_can_candidate_addr_pair(nr_transport_addr *local, nr_transport_addr *remote);
+int nr_ice_component_can_candidate_tcptype_pair(nr_socket_tcp_type left, nr_socket_tcp_type right);
+void nr_ice_component_consent_calc_consent_timer(nr_ice_component *comp);
 void nr_ice_component_consent_schedule_consent_timer(nr_ice_component *comp);
-void nr_ice_component_consent_destroy(nr_ice_component *comp);
+int nr_ice_component_refresh_consent(nr_stun_client_ctx *ctx, NR_async_cb finished_cb, void *cb_arg);
+int nr_ice_component_setup_consent(nr_ice_component *comp);
+int nr_ice_pre_answer_enqueue(nr_ice_component *comp, nr_socket *sock, nr_stun_server_request *req, int *dont_free);
 
 /* This function takes ownership of the contents of req (but not req itself) */
 static int nr_ice_pre_answer_request_create(nr_transport_addr *dst, nr_stun_server_request *req, nr_ice_pre_answer_request **parp)
@@ -532,9 +538,14 @@ static int nr_ice_component_initialize_tcp(struct nr_ice_ctx_ *ctx,nr_ice_compon
         if (ctx->turn_servers[j].turn_server.transport != IPPROTO_TCP)
           continue;
 
+        /* Create relay candidate */
+        if ((r=nr_transport_addr_copy(&addr, &addrs[i].addr)))
+          ABORT(r);
+        addr.protocol = IPPROTO_TCP;
+
         if (ctx->turn_servers[j].turn_server.type == NR_ICE_STUN_SERVER_TYPE_ADDR) {
           if (nr_transport_addr_check_compatibility(
-                &addrs[i].addr,
+                &addr,
                 &ctx->turn_servers[j].turn_server.u.addr)) {
             r_log(LOG_ICE,LOG_INFO,"ICE(%s): Skipping TURN server because of link local mis-match",ctx->label);
             continue;
@@ -563,11 +574,6 @@ static int nr_ice_component_initialize_tcp(struct nr_ice_ctx_ *ctx,nr_ice_compon
             cand=0;
           }
         }
-
-        /* Create relay candidate */
-        if ((r=nr_transport_addr_copy(&addr, &addrs[i].addr)))
-          ABORT(r);
-        addr.protocol = IPPROTO_TCP;
 
         /* If we're going to use TLS, make sure that's recorded */
         if (ctx->turn_servers[j].turn_server.tls) {
@@ -813,7 +819,7 @@ static int nr_ice_component_handle_triggered_check(nr_ice_component *comp, nr_ic
 
     _status=0;
   abort:
-    return(r);
+    return(_status);
   }
 
 /* Section 7.2.1 */

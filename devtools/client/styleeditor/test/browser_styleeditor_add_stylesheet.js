@@ -7,15 +7,15 @@
 
 const TESTCASE_URI = TEST_BASE_HTTPS + "simple.html";
 
-add_task(function* () {
-  let { ui } = yield openStyleEditorForURL(TESTCASE_URI);
+add_task(async function() {
+  const { ui } = await openStyleEditorForURL(TESTCASE_URI);
 
   is(ui.editors.length, 2, "Two sheets present after load.");
 
   // We have to wait for the length to change, because we might still
   // be seeing events from the initial open.
-  let added = new Promise(resolve => {
-    let handler = () => {
+  const added = new Promise(resolve => {
+    const handler = () => {
       if (ui.editors.length === 3) {
         ui.off("editor-added", handler);
         resolve();
@@ -25,13 +25,13 @@ add_task(function* () {
   });
 
   info("Adding a style sheet");
-  yield ContentTask.spawn(gBrowser.selectedBrowser, null, () => {
-    let document = content.document;
+  await ContentTask.spawn(gBrowser.selectedBrowser, null, () => {
+    const document = content.document;
     const style = document.createElement("style");
     style.appendChild(document.createTextNode("div { background: #f06; }"));
     document.head.appendChild(style);
   });
-  yield added;
+  await added;
 
   is(ui.editors.length, 3, "Three sheets present after new style sheet");
 });

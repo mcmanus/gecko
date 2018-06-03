@@ -5,7 +5,7 @@
 // Test that the HeapAnalyses{Client,Worker} can send SavedFrame stacks from
 // by-allocation-stack reports from the worker.
 
-add_task(function* test() {
+add_task(async function test() {
   const client = new HeapAnalysesClient();
 
   // Track some allocation stacks.
@@ -25,7 +25,7 @@ add_task(function* test() {
 
   dbg.memory.allocationSamplingProbability = 1;
 
-  for (let [func, n] of [ [g.f, 20],
+  for (const [func, n] of [ [g.f, 20],
                           [g.g, 10],
                           [g.h, 5] ]) {
     for (let i = 0; i < n; i++) {
@@ -40,13 +40,13 @@ add_task(function* test() {
   // Take a heap snapshot.
 
   const snapshotFilePath = saveNewHeapSnapshot({ debugger: dbg });
-  yield client.readHeapSnapshot(snapshotFilePath);
+  await client.readHeapSnapshot(snapshotFilePath);
   ok(true, "Should have read the heap snapshot");
 
   // Run a census broken down by class name -> allocation stack so we can grab
   // only the AllocationMarker objects we have complete control over.
 
-  const { report } = yield client.takeCensus(
+  const { report } = await client.takeCensus(
     snapshotFilePath,
     {
       breakdown: {
@@ -81,7 +81,7 @@ add_task(function* test() {
 
   // Gather the stacks we are expecting to appear as keys, and
   // check that there are no unexpected keys.
-  let stacks = {};
+  const stacks = {};
 
   map.forEach((v, k) => {
     if (k === "noStack") {

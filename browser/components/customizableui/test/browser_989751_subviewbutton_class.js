@@ -8,7 +8,8 @@ const kCustomClass = "acustomclassnoonewilluse";
 var tempElement = null;
 
 function insertClassNameToMenuChildren(parentMenu) {
-  let el = parentMenu.querySelector("menuitem:first-of-type");
+  // Skip hidden menuitem elements, not copied via fillSubviewFromMenuItems.
+  let el = parentMenu.querySelector("menuitem:not([hidden])");
   el.classList.add(kCustomClass);
   tempElement = el;
 }
@@ -17,7 +18,7 @@ function checkSubviewButtonClass(menuId, buttonId, subviewId) {
   return async function() {
     // Initialize DevTools before starting the test in order to create menuitems in
     // menuWebDeveloperPopup.
-    Cu.import("resource://devtools/shared/Loader.jsm", {})
+    ChromeUtils.import("resource://devtools/shared/Loader.jsm", {})
         .require("devtools/client/framework/devtools-browser");
 
     info("Checking for items without the subviewbutton class in " + buttonId + " widget");
@@ -57,6 +58,6 @@ function checkSubviewButtonClass(menuId, buttonId, subviewId) {
 add_task(checkSubviewButtonClass("menuWebDeveloperPopup", "developer-button", "PanelUI-developerItems"));
 
 registerCleanupFunction(function() {
-  tempElement.classList.remove(kCustomClass)
+  tempElement.classList.remove(kCustomClass);
   tempElement = null;
 });

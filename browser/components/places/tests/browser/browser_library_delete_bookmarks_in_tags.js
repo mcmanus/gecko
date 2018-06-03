@@ -10,7 +10,7 @@
 
 registerCleanupFunction(async function() {
   await PlacesUtils.bookmarks.eraseEverything();
-  await PlacesTestUtils.clearHistory();
+  await PlacesUtils.history.clear();
 });
 
 add_task(async function test_tags() {
@@ -24,8 +24,8 @@ add_task(async function test_tags() {
     return {
       title: `bm${index}`,
       url: uri,
-    }
-  })
+    };
+  });
 
   // Note: we insert the uris in reverse order, so that we end up with the
   // display in "logical" order of bm0 at the top, and bm2 at the bottom.
@@ -36,8 +36,8 @@ add_task(async function test_tags() {
     children,
   });
 
-  for (let i = 0; i < uris.length; i++) {
-    PlacesUtils.tagging.tagURI(uris[i], ["test"]);
+  for (let uri of uris) {
+    PlacesUtils.tagging.tagURI(uri, ["test"]);
   }
 
   let library = await promiseLibrary();
@@ -45,7 +45,7 @@ add_task(async function test_tags() {
   // Select and open the left pane "Bookmarks Toolbar" folder.
   let PO = library.PlacesOrganizer;
 
-  PO.selectLeftPaneQuery("Tags");
+  PO.selectLeftPaneBuiltIn("Tags");
   let tagsNode = PO._places.selectedNode;
   Assert.notEqual(tagsNode, null, "Should have a valid selection");
   let tagsTitle = PlacesUtils.getString("TagsFolderTitle");

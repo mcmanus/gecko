@@ -36,14 +36,14 @@
 { 0xc06162d2, 0xb803, 0x43b4, \
   { 0xaa, 0x31, 0xcf, 0x69, 0x7f, 0x93, 0x68, 0x1c } }
 
-class nsIDOMElement;
 class nsILoadContext;
 class nsITraceableChannel;
 
 namespace mozilla {
 namespace dom {
   class nsIContentParent;
-}
+  class Element;
+} // namespace dom
 namespace extensions {
 
 namespace detail {
@@ -121,7 +121,7 @@ public:
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_CHANNELWRAPPER_IID)
 
   static already_AddRefed<extensions::ChannelWrapper> Get(const dom::GlobalObject& global, nsIChannel* channel);
-
+  static already_AddRefed<extensions::ChannelWrapper> GetRegisteredChannel(const dom::GlobalObject& global, uint64_t aChannelId, const WebExtensionPolicy& aAddon, nsITabParent* aTabParent);
 
   uint64_t Id() const { return mId; }
 
@@ -133,6 +133,7 @@ public:
   void Cancel(uint32_t result, ErrorResult& aRv);
 
   void RedirectTo(nsIURI* uri, ErrorResult& aRv);
+  void UpgradeToSecure(ErrorResult& aRv);
 
 
   bool Suspended() const { return mSuspended; }
@@ -190,6 +191,8 @@ public:
 
   int64_t ParentWindowId() const;
 
+  void GetFrameAncestors(dom::Nullable<nsTArray<dom::MozFrameAncestorInfo>>& aFrameAncestors, ErrorResult& aRv) const;
+
   bool IsSystemLoad() const;
 
   void GetOriginURL(nsCString& aRetVal) const;
@@ -203,10 +206,14 @@ public:
 
   already_AddRefed<nsILoadContext> GetLoadContext() const;
 
-  already_AddRefed<nsIDOMElement> GetBrowserElement() const;
+  already_AddRefed<dom::Element> GetBrowserElement() const;
 
 
-  bool GetCanModify(ErrorResult& aRv) const;
+  bool CanModify() const;
+  bool GetCanModify(ErrorResult& aRv) const
+  {
+    return CanModify();
+  }
 
 
   void GetProxyInfo(dom::Nullable<dom::MozProxyInfo>& aRetVal, ErrorResult& aRv) const;
@@ -218,9 +225,9 @@ public:
 
   void GetResponseHeaders(nsTArray<dom::MozHTTPHeader>& aRetVal, ErrorResult& aRv) const;
 
-  void SetRequestHeader(const nsCString& header, const nsCString& value, ErrorResult& aRv);
+  void SetRequestHeader(const nsCString& header, const nsCString& value, bool merge, ErrorResult& aRv);
 
-  void SetResponseHeader(const nsCString& header, const nsCString& value, ErrorResult& aRv);
+  void SetResponseHeader(const nsCString& header, const nsCString& value, bool merge, ErrorResult& aRv);
 
 
   using EventTarget::EventListenerAdded;
@@ -262,6 +269,8 @@ private:
 
   uint64_t WindowId(nsILoadInfo* aLoadInfo) const;
 
+  nsresult GetFrameAncestors(nsILoadInfo* aLoadInfo, nsTArray<dom::MozFrameAncestorInfo>& aFrameAncestors) const;
+
   static uint64_t GetNextId()
   {
     static uint64_t sNextId = 1;
@@ -284,6 +293,7 @@ private:
   bool mAddedStreamListener = false;
   bool mFiredErrorEvent = false;
   bool mSuspended = false;
+  bool mResponseStarted = false;
 
 
   nsInterfaceHashtable<nsPtrHashKey<const nsAtom>, nsITabParent> mAddonEntries;

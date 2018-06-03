@@ -1,3 +1,5 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -10,32 +12,28 @@
 
 /* exported ExtensionTestCommon, MockExtension */
 
-this.EXPORTED_SYMBOLS = ["ExtensionTestCommon", "MockExtension"];
-
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+var EXPORTED_SYMBOLS = ["ExtensionTestCommon", "MockExtension"];
 
 Cu.importGlobalProperties(["TextEncoder"]);
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
-                                  "resource://gre/modules/AddonManager.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
-                                  "resource://gre/modules/AppConstants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Extension",
-                                  "resource://gre/modules/Extension.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ExtensionParent",
-                                  "resource://gre/modules/ExtensionParent.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
-                                  "resource://gre/modules/FileUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "OS",
-                                  "resource://gre/modules/osfile.jsm");
+ChromeUtils.defineModuleGetter(this, "AddonManager",
+                               "resource://gre/modules/AddonManager.jsm");
+ChromeUtils.defineModuleGetter(this, "Extension",
+                               "resource://gre/modules/Extension.jsm");
+ChromeUtils.defineModuleGetter(this, "ExtensionParent",
+                               "resource://gre/modules/ExtensionParent.jsm");
+ChromeUtils.defineModuleGetter(this, "FileUtils",
+                               "resource://gre/modules/FileUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "OS",
+                               "resource://gre/modules/osfile.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "apiManager",
                             () => ExtensionParent.apiManager);
 
-Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+ChromeUtils.import("resource://gre/modules/ExtensionUtils.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "uuidGen",
                                    "@mozilla.org/uuid-generator;1",
@@ -58,9 +56,10 @@ XPCOMUtils.defineLazyGetter(this, "console", ExtensionUtils.getConsole);
  * @param {nsIFile} file
  * @param {nsIURI} rootURI
  * @param {string} installType
+ * @param {boolean} [embedded = false]
  */
 class MockExtension {
-  constructor(file, rootURI, installType) {
+  constructor(file, rootURI, installType, embedded) {
     this.id = null;
     this.file = file;
     this.rootURI = rootURI;
@@ -68,11 +67,14 @@ class MockExtension {
     this.addon = null;
 
     let promiseEvent = eventName => new Promise(resolve => {
-      let onstartup = (msg, extension) => {
-        if (this.addon && extension.id == this.addon.id) {
-          apiManager.off(eventName, onstartup);
+      let onstartup = async (msg, extension) => {
+        this.maybeSetID(extension.rootURI, extension.id);
+        if (!this.id && this.addonPromise) {
+          await this.addonPromise;
+        }
 
-          this.id = extension.id;
+        if (extension.id == this.id) {
+          apiManager.off(eventName, onstartup);
           this._extension = extension;
           resolve(extension);
         }
@@ -83,6 +85,17 @@ class MockExtension {
     this._extension = null;
     this._extensionPromise = promiseEvent("startup");
     this._readyPromise = promiseEvent("ready");
+    if (!embedded) {
+      this._uninstallPromise = promiseEvent("uninstall-complete");
+    }
+  }
+
+  maybeSetID(uri, id) {
+    if (!this.id && uri instanceof Ci.nsIJARURI &&
+        uri.JARFile.QueryInterface(Ci.nsIFileURL)
+           .file.equals(this.file)) {
+      this.id = id;
+    }
   }
 
   testMessage(...args) {
@@ -108,19 +121,23 @@ class MockExtension {
         return this._readyPromise;
       });
     } else if (this.installType == "permanent") {
-      return new Promise((resolve, reject) => {
-        AddonManager.getInstallForFile(this.file, install => {
-          let listener = {
-            onInstallFailed: reject,
-            onInstallEnded: (install, newAddon) => {
-              this.addon = newAddon;
-              resolve(this._readyPromise);
-            },
-          };
+      this.addonPromise = new Promise(resolve => {
+        this.resolveAddon = resolve;
+      });
+      return new Promise(async (resolve, reject) => {
+        let install = await AddonManager.getInstallForFile(this.file);
+        let listener = {
+          onInstallFailed: reject,
+          onInstallEnded: (install, newAddon) => {
+            this.addon = newAddon;
+            this.id = newAddon.id;
+            this.resolveAddon(newAddon);
+            resolve(this._readyPromise);
+          },
+        };
 
-          install.addListener(listener);
-          install.install();
-        });
+        install.addListener(listener);
+        install.install();
       });
     }
     throw new Error("installType must be one of: temporary, permanent");
@@ -140,7 +157,7 @@ class MockExtension {
   }
 }
 
-this.ExtensionTestCommon = class ExtensionTestCommon {
+var ExtensionTestCommon = class ExtensionTestCommon {
   /**
    * This code is designed to make it easy to test a WebExtension
    * without creating a bunch of files. Everything is contained in a
@@ -175,10 +192,7 @@ this.ExtensionTestCommon = class ExtensionTestCommon {
       manifest = {};
     }
 
-    let files = data.files;
-    if (!files) {
-      files = {};
-    }
+    let files = Object.assign({}, data.files);
 
     function provide(obj, keys, value, override = false) {
       if (keys.length == 1) {
@@ -320,12 +334,12 @@ this.ExtensionTestCommon = class ExtensionTestCommon {
    */
   static serializeFunction(script) {
     // Serialization of object methods doesn't include `function` anymore.
-    const method = /^(async )?(\w+)\(/;
+    const method = /^(async )?(?:(\w+)|"(\w+)\.js")\(/;
 
     let code = script.toString();
     let match = code.match(method);
     if (match && match[2] !== "function") {
-      code = code.replace(method, "$1function $2(");
+      code = code.replace(method, "$1function $2$3(");
     }
     return code;
   }
@@ -364,7 +378,7 @@ this.ExtensionTestCommon = class ExtensionTestCommon {
 
     // This may be "temporary" or "permanent".
     if (data.useAddonManager) {
-      return new MockExtension(file, jarURI, data.useAddonManager);
+      return new MockExtension(file, jarURI, data.useAddonManager, data.embedded);
     }
 
     let id;
@@ -379,10 +393,21 @@ this.ExtensionTestCommon = class ExtensionTestCommon {
       id = uuidGen.generateUUID().number;
     }
 
+    let signedState = AddonManager.SIGNEDSTATE_SIGNED;
+    if (data.isPrivileged) {
+      signedState = AddonManager.SIGNEDSTATE_PRIVILEGED;
+    }
+    if (data.isSystem) {
+      signedState = AddonManager.SIGNEDSTATE_SYSTEM;
+    }
+
     return new Extension({
       id,
       resourceURI: jarURI,
       cleanupFile: file,
+      signedState,
+      temporarilyInstalled: !!data.temporarilyInstalled,
+      TEST_NO_ADDON_MANAGER: true,
     });
   }
 };

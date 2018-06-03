@@ -7,16 +7,20 @@
  * Makes sure Table Charts have the right internal structure.
  */
 
-add_task(function* () {
-  let { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
+add_task(async function() {
+  const { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
 
-  let { monitor } = yield initNetMonitor(SIMPLE_URL);
+  const { monitor, tab } = await initNetMonitor(SIMPLE_URL);
   info("Starting test... ");
 
-  let { document, windowRequire } = monitor.panelWin;
-  let { Chart } = windowRequire("devtools/client/shared/widgets/Chart");
+  const { document, windowRequire } = monitor.panelWin;
+  const { Chart } = windowRequire("devtools/client/shared/widgets/Chart");
 
-  let table = Chart.Table(document, {
+  const wait = waitForNetworkEvents(monitor, 1);
+  tab.linkedBrowser.loadURI(SIMPLE_URL);
+  await wait;
+
+  const table = Chart.Table(document, {
     title: "Table title",
     data: [{
       label1: 1,
@@ -41,12 +45,12 @@ add_task(function* () {
     }
   });
 
-  let node = table.node;
-  let title = node.querySelector(".table-chart-title");
-  let grid = node.querySelector(".table-chart-grid");
-  let totals = node.querySelector(".table-chart-totals");
-  let rows = grid.querySelectorAll(".table-chart-row");
-  let sums = node.querySelectorAll(".table-chart-summary-label");
+  const node = table.node;
+  const title = node.querySelector(".table-chart-title");
+  const grid = node.querySelector(".table-chart-grid");
+  const totals = node.querySelector(".table-chart-totals");
+  const rows = grid.querySelectorAll(".table-chart-row");
+  const sums = node.querySelectorAll(".table-chart-summary-label");
 
   ok(node.classList.contains("table-chart-container") &&
      node.classList.contains("generic-chart-container"),
@@ -116,5 +120,5 @@ add_task(function* () {
     "World 36.60",
     "The second sum's value is correct.");
 
-  yield teardown(monitor);
+  await teardown(monitor);
 });

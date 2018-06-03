@@ -13,6 +13,7 @@
 #include "nsCOMPtr.h"
 #include "nsIInputStream.h"
 #include "nsTArray.h"
+#include "nsWeakReference.h"
 
 #define BLOBURI_SCHEME "blob"
 #define FONTTABLEURI_SCHEME "moz-fonttable"
@@ -22,7 +23,6 @@ class nsIPrincipal;
 
 namespace mozilla {
 class BlobURLsReporter;
-class DOMMediaStream;
 
 namespace dom {
 class BlobImpl;
@@ -34,6 +34,7 @@ class MediaSource;
 
 class nsHostObjectProtocolHandler : public nsIProtocolHandler
                                   , public nsIProtocolHandlerWithDynamicFlags
+                                  , public nsSupportsWeakReference
 {
 public:
   nsHostObjectProtocolHandler();
@@ -63,9 +64,6 @@ public:
   static nsresult AddDataEntry(mozilla::dom::BlobImpl* aBlobImpl,
                                nsIPrincipal* aPrincipal,
                                nsACString& aUri);
-  static nsresult AddDataEntry(mozilla::DOMMediaStream* aMediaStream,
-                               nsIPrincipal* aPrincipal,
-                               nsACString& aUri);
   static nsresult AddDataEntry(mozilla::dom::MediaSource* aMediaSource,
                                nsIPrincipal* aPrincipal,
                                nsACString& aUri);
@@ -77,7 +75,6 @@ public:
   static void RemoveDataEntry(const nsACString& aUri,
                               bool aBroadcastToOTherProcesses = true);
 
-  // This is for IPC only.
   static void RemoveDataEntries();
 
   static bool HasDataEntry(const nsACString& aUri);
@@ -115,7 +112,6 @@ public:
 };
 
 bool IsBlobURI(nsIURI* aUri);
-bool IsMediaStreamURI(nsIURI* aUri);
 bool IsMediaSourceURI(nsIURI* aUri);
 
 inline bool IsRtspURI(nsIURI* aUri)
@@ -131,16 +127,13 @@ inline bool IsFontTableURI(nsIURI* aUri)
 }
 
 extern nsresult
-NS_GetBlobForBlobURI(nsIURI* aURI, mozilla::dom::BlobImpl** aBlob);
+NS_GetBlobForBlobURI(nsIURI* aURI, mozilla::dom::BlobImpl** aBlob, bool aAlsoIfRevoked = false);
 
 extern nsresult
 NS_GetBlobForBlobURISpec(const nsACString& aSpec, mozilla::dom::BlobImpl** aBlob);
 
 extern nsresult
 NS_GetStreamForBlobURI(nsIURI* aURI, nsIInputStream** aStream);
-
-extern nsresult
-NS_GetStreamForMediaStreamURI(nsIURI* aURI, mozilla::DOMMediaStream** aStream);
 
 extern nsresult
 NS_GetSourceForMediaSourceURI(nsIURI* aURI, mozilla::dom::MediaSource** aSource);

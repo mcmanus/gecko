@@ -180,7 +180,7 @@ public:
   LinkedListElement(LinkedListElement<T>&& aOther)
     : mIsSentinel(aOther.mIsSentinel)
   {
-    adjustLinkForMove(Move(aOther));
+    adjustLinkForMove(std::move(aOther));
   }
 
   LinkedListElement& operator=(LinkedListElement<T>&& aOther)
@@ -188,7 +188,7 @@ public:
     MOZ_ASSERT(mIsSentinel == aOther.mIsSentinel, "Mismatch NodeKind!");
     MOZ_ASSERT(!isInList(),
                "Assigning to an element in a list messes up that list!");
-    adjustLinkForMove(Move(aOther));
+    adjustLinkForMove(std::move(aOther));
     return *this;
   }
 
@@ -415,13 +415,14 @@ private:
   LinkedListElement<T> sentinel;
 
 public:
+  template <typename Type>
   class Iterator {
-    RawType mCurrent;
+    Type mCurrent;
 
   public:
-    explicit Iterator(RawType aCurrent) : mCurrent(aCurrent) {}
+    explicit Iterator(Type aCurrent) : mCurrent(aCurrent) {}
 
-    RawType operator *() const {
+    Type operator *() const {
       return mCurrent;
     }
 
@@ -430,7 +431,7 @@ public:
       return *this;
     }
 
-    bool operator!=(Iterator& aOther) const {
+    bool operator!=(const Iterator<Type>& aOther) const {
       return mCurrent != aOther.mCurrent;
     }
   };
@@ -438,13 +439,13 @@ public:
   LinkedList() : sentinel(LinkedListElement<T>::NodeKind::Sentinel) { }
 
   LinkedList(LinkedList<T>&& aOther)
-    : sentinel(mozilla::Move(aOther.sentinel))
+    : sentinel(std::move(aOther.sentinel))
   { }
 
   LinkedList& operator=(LinkedList<T>&& aOther)
   {
     MOZ_ASSERT(isEmpty(), "Assigning to a non-empty list leaks elements in that list!");
-    sentinel = mozilla::Move(aOther.sentinel);
+    sentinel = std::move(aOther.sentinel);
     return *this;
   }
 
@@ -535,11 +536,17 @@ public:
    *
    *     for (MyElementType* elt : myList) { ... }
    */
-  Iterator begin() {
-    return Iterator(getFirst());
+  Iterator<RawType> begin() {
+    return Iterator<RawType>(getFirst());
   }
-  Iterator end() {
-    return Iterator(nullptr);
+  Iterator<ConstRawType> begin() const {
+    return Iterator<ConstRawType>(getFirst());
+  }
+  Iterator<RawType> end() {
+    return Iterator<RawType>(nullptr);
+  }
+  Iterator<ConstRawType> end() const {
+    return Iterator<ConstRawType>(nullptr);
   }
 
   /*
@@ -551,7 +558,7 @@ public:
   size_t sizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
   {
     size_t n = 0;
-    for (const T* t = getFirst(); t; t = t->getNext()) {
+    for (ConstRawType t = getFirst(); t; t = t->getNext()) {
       n += aMallocSizeOf(t);
     }
     return n;

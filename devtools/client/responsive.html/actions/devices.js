@@ -29,7 +29,7 @@ const DISPLAYED_DEVICES_PREF = "devtools.responsive.html.displayedDeviceList";
  * - removed: Names of the devices that were explicitly removed by the user
  */
 function loadPreferredDevices() {
-  let preferredDevices = {
+  const preferredDevices = {
     "added": new Set(),
     "removed": new Set(),
   };
@@ -74,9 +74,9 @@ module.exports = {
   updatePreferredDevices: updatePreferredDevices,
 
   addCustomDevice(device) {
-    return function* (dispatch) {
+    return async function(dispatch) {
       // Add custom device to device storage
-      yield addDevice(device, "custom");
+      await addDevice(device, "custom");
       dispatch({
         type: ADD_DEVICE,
         device,
@@ -101,17 +101,17 @@ module.exports = {
   },
 
   removeCustomDevice(device) {
-    return function* (dispatch, getState) {
+    return async function(dispatch, getState) {
       // Check if the custom device is currently associated with any viewports
-      let { viewports } = getState();
-      for (let viewport of viewports) {
+      const { viewports } = getState();
+      for (const viewport of viewports) {
         if (viewport.device == device.name) {
           dispatch(removeDeviceAssociation(viewport.id));
         }
       }
 
       // Remove custom device from device storage
-      yield removeDevice(device, "custom");
+      await removeDevice(device, "custom");
       dispatch({
         type: REMOVE_DEVICE,
         device,
@@ -130,27 +130,27 @@ module.exports = {
   },
 
   loadDevices() {
-    return function* (dispatch) {
+    return async function(dispatch) {
       dispatch({ type: LOAD_DEVICE_LIST_START });
-      let preferredDevices = loadPreferredDevices();
+      const preferredDevices = loadPreferredDevices();
       let devices;
 
       try {
-        devices = yield getDevices();
+        devices = await getDevices();
       } catch (e) {
         console.error("Could not load device list: " + e);
         dispatch({ type: LOAD_DEVICE_LIST_ERROR });
         return;
       }
 
-      for (let type of devices.TYPES) {
+      for (const type of devices.TYPES) {
         dispatch(module.exports.addDeviceType(type));
-        for (let device of devices[type]) {
+        for (const device of devices[type]) {
           if (device.os == "fxos") {
             continue;
           }
 
-          let newDevice = Object.assign({}, device, {
+          const newDevice = Object.assign({}, device, {
             displayed: preferredDevices.added.has(device.name) ||
               (device.featured && !(preferredDevices.removed.has(device.name))),
           });

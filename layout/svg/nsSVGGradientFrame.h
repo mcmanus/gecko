@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,9 +18,7 @@
 class gfxPattern;
 class nsAtom;
 class nsIContent;
-class nsIFrame;
 class nsIPresShell;
-class nsStyleContext;
 
 namespace mozilla {
 class nsSVGAnimatedTransformList;
@@ -39,7 +38,7 @@ class nsSVGGradientFrame : public nsSVGPaintServerFrame
   typedef mozilla::gfx::ExtendMode ExtendMode;
 
 protected:
-  nsSVGGradientFrame(nsStyleContext* aContext, ClassID aID);
+  nsSVGGradientFrame(ComputedStyle* aStyle, ClassID aID);
 
 public:
   NS_DECL_ABSTRACT_FRAME(nsSVGGradientFrame)
@@ -123,10 +122,10 @@ private:
 class nsSVGLinearGradientFrame : public nsSVGGradientFrame
 {
   friend nsIFrame* NS_NewSVGLinearGradientFrame(nsIPresShell* aPresShell,
-                                                nsStyleContext* aContext);
+                                                ComputedStyle* aStyle);
 protected:
-  explicit nsSVGLinearGradientFrame(nsStyleContext* aContext)
-    : nsSVGGradientFrame(aContext, kClassID)
+  explicit nsSVGLinearGradientFrame(ComputedStyle* aStyle)
+    : nsSVGGradientFrame(aStyle, kClassID)
   {}
 
 public:
@@ -165,10 +164,10 @@ protected:
 class nsSVGRadialGradientFrame : public nsSVGGradientFrame
 {
   friend nsIFrame* NS_NewSVGRadialGradientFrame(nsIPresShell* aPresShell,
-                                                nsStyleContext* aContext);
+                                                ComputedStyle* aStyle);
 protected:
-  explicit nsSVGRadialGradientFrame(nsStyleContext* aContext)
-    : nsSVGGradientFrame(aContext, kClassID)
+  explicit nsSVGRadialGradientFrame(ComputedStyle* aStyle)
+    : nsSVGGradientFrame(aStyle, kClassID)
   {}
 
 public:

@@ -26,7 +26,6 @@
 #include "nsPluginsDir.h"
 #include "nsPluginLogging.h"
 
-#include "nsIDOMElement.h"
 #include "nsPIDOMWindow.h"
 #include "nsGlobalWindow.h"
 #include "nsIDocument.h"
@@ -38,7 +37,9 @@
 #include "nsIPrincipal.h"
 #include "nsWildCard.h"
 #include "nsContentUtils.h"
+#include "mozilla/dom/Element.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "mozilla/dom/ToJSValue.h"
 #include "nsIXULRuntime.h"
 #include "nsIXPConnect.h"
 
@@ -57,9 +58,6 @@
 #if (MOZ_WIDGET_GTK)
 #include <gdk/gdk.h>
 #include <gdk/gdkx.h>
-#if (MOZ_WIDGET_GTK == 2)
-#include "gtk2xtbin.h"
-#endif
 #endif
 
 #include "nsJSUtils.h"
@@ -75,9 +73,6 @@
 #include "mozilla/Mutex.h"
 #include "mozilla/PluginLibrary.h"
 using mozilla::PluginLibrary;
-
-#include "mozilla/PluginPRLibrary.h"
-using mozilla::PluginPRLibrary;
 
 #include "mozilla/plugins/PluginModuleParent.h"
 using mozilla::plugins::PluginModuleChromeParent;
@@ -108,17 +103,17 @@ static NPNetscapeFuncs sBrowserFuncs = {
   _geturl,
   _posturl,
   _requestread,
-  nullptr,
-  nullptr,
-  nullptr,
+  nullptr, // _newstream, unimplemented
+  nullptr, // _write, unimplemented
+  nullptr, // _destroystream, unimplemented
   _status,
   _useragent,
   _memalloc,
   _memfree,
   _memflush,
   _reloadplugins,
-  _getJavaEnv,
-  _getJavaPeer,
+  nullptr, // _getJavaEnv, unimplemented
+  nullptr, // _getJavaPeer, unimplemented
   _geturlnotify,
   _posturlnotify,
   _getvalue,
@@ -204,12 +199,6 @@ nsNPAPIPlugin::PluginCrashed(const nsAString& pluginDumpID,
   host->PluginCrashed(this, pluginDumpID, browserDumpID);
 }
 
-bool
-nsNPAPIPlugin::RunPluginOOP(const nsPluginTag *aPluginTag)
-{
-  return true;
-}
-
 inline PluginLibrary*
 GetNewPluginLibrary(nsPluginTag *aPluginTag)
 {
@@ -223,10 +212,7 @@ GetNewPluginLibrary(nsPluginTag *aPluginTag)
     return PluginModuleContentParent::LoadModule(aPluginTag->mId, aPluginTag);
   }
 
-  if (nsNPAPIPlugin::RunPluginOOP(aPluginTag)) {
-    return PluginModuleChromeParent::LoadModule(aPluginTag->mFullPath.get(), aPluginTag->mId, aPluginTag);
-  }
-  return new PluginPRLibrary(aPluginTag->mFullPath.get(), aPluginTag->mLibrary);
+  return PluginModuleChromeParent::LoadModule(aPluginTag->mFullPath.get(), aPluginTag->mId, aPluginTag);
 }
 
 // Creates an nsNPAPIPlugin object. One nsNPAPIPlugin object exists per plugin (not instance).
@@ -712,7 +698,7 @@ _getwindowobject(NPP npp)
   NS_ENSURE_TRUE(outer, nullptr);
 
   JS::Rooted<JSObject*> global(dom::RootingCx(),
-                               nsGlobalWindow::Cast(outer)->GetGlobalJSObject());
+                               nsGlobalWindowOuter::Cast(outer)->GetGlobalJSObject());
   return nsJSObjWrapper::GetNewOrUsed(npp, global);
 }
 
@@ -728,7 +714,7 @@ _getpluginelement(NPP npp)
   if (!inst)
     return nullptr;
 
-  nsCOMPtr<nsIDOMElement> element;
+  RefPtr<dom::Element> element;
   inst->GetDOMElement(getter_AddRefs(element));
 
   if (!element)
@@ -748,10 +734,16 @@ _getpluginelement(NPP npp)
   nsCOMPtr<nsIXPConnect> xpc(do_GetService(nsIXPConnect::GetCID()));
   NS_ENSURE_TRUE(xpc, nullptr);
 
-  JS::RootedObject obj(cx);
-  xpc->WrapNative(cx, ::JS::CurrentGlobalOrNull(cx), element,
-                  NS_GET_IID(nsIDOMElement), obj.address());
-  NS_ENSURE_TRUE(obj, nullptr);
+  JS::RootedValue val(cx);
+  if (!ToJSValue(cx, element, &val)) {
+    return nullptr;
+  }
+
+  if (NS_WARN_IF(!val.isObject())) {
+    return nullptr;
+  }
+
+  JS::RootedObject obj(cx, &val.toObject());
 
   return nsJSObjWrapper::GetNewOrUsed(npp, obj);
 }
@@ -988,7 +980,7 @@ _evaluate(NPP npp, NPObject* npobj, NPString *script, NPVariant *result)
   nsIDocument *doc = GetDocumentFromNPP(npp);
   NS_ENSURE_TRUE(doc, false);
 
-  nsGlobalWindow* win = nsGlobalWindow::Cast(doc->GetInnerWindow());
+  nsGlobalWindowInner* win = nsGlobalWindowInner::Cast(doc->GetInnerWindow());
   if (NS_WARN_IF(!win || !win->FastGetGlobalJSObject())) {
     return false;
   }
@@ -1056,8 +1048,7 @@ _evaluate(NPP npp, NPObject* npobj, NPString *script, NPVariant *result)
                   npp, npobj, script->UTF8Characters));
 
   JS::CompileOptions options(cx);
-  options.setFileAndLine(spec, 0)
-         .setVersion(JSVERSION_DEFAULT);
+  options.setFileAndLine(spec, 0);
   JS::Rooted<JS::Value> rval(cx);
   JS::AutoObjectVector scopeChain(cx);
   if (obj != js::GetGlobalForObjectCrossCompartment(obj) &&
@@ -1354,19 +1345,6 @@ _getvalue(NPP npp, NPNVariable variable, void *result)
         return NPERR_NO_ERROR;
       }
     }
-#if (MOZ_WIDGET_GTK == 2)
-    // adobe nppdf calls XtGetApplicationNameAndClass(display,
-    // &instance, &class) we have to init Xt toolkit before get
-    // XtDisplay just call gtk_xtbin_new(w,0) once
-    static GtkWidget *gtkXtBinHolder = 0;
-    if (!gtkXtBinHolder) {
-      gtkXtBinHolder = gtk_xtbin_new(gdk_get_default_root_window(),0);
-      // it crashes on destroy, let it leak
-      // gtk_widget_destroy(gtkXtBinHolder);
-    }
-    (*(Display **)result) =  GTK_XTBIN(gtkXtBinHolder)->xtdisplay;
-    return NPERR_NO_ERROR;
-#endif
 #endif
     return NPERR_GENERIC_ERROR;
   }
@@ -1480,18 +1458,13 @@ _getvalue(NPP npp, NPNVariable variable, void *result)
       return NPERR_GENERIC_ERROR;
     }
 
-    nsCOMPtr<nsIDOMElement> element;
+    RefPtr<dom::Element> element;
     inst->GetDOMElement(getter_AddRefs(element));
     if (!element) {
       return NPERR_GENERIC_ERROR;
     }
 
-    nsCOMPtr<nsIContent> content(do_QueryInterface(element));
-    if (!content) {
-      return NPERR_GENERIC_ERROR;
-    }
-
-    nsIPrincipal* principal = content->NodePrincipal();
+    nsIPrincipal* principal = element->NodePrincipal();
 
     nsAutoString utf16Origin;
     res = nsContentUtils::GetUTFOrigin(principal, utf16Origin);
@@ -1729,14 +1702,6 @@ _requestread(NPStream *pstream, NPByteRange *rangeList)
   return NPERR_STREAM_NOT_SEEKABLE;
 }
 
-// Deprecated, only stubbed out
-void* /* OJI type: JRIEnv* */
-_getJavaEnv()
-{
-  NPN_PLUGIN_LOG(PLUGIN_LOG_NORMAL, ("NPN_GetJavaEnv\n"));
-  return nullptr;
-}
-
 const char *
 _useragent(NPP npp)
 {
@@ -1768,14 +1733,6 @@ _memalloc (uint32_t size)
   }
   NPN_PLUGIN_LOG(PLUGIN_LOG_NOISY, ("NPN_MemAlloc: size=%d\n", size));
   return moz_xmalloc(size);
-}
-
-// Deprecated, only stubbed out
-void* /* OJI type: jref */
-_getJavaPeer(NPP npp)
-{
-  NPN_PLUGIN_LOG(PLUGIN_LOG_NORMAL, ("NPN_GetJavaPeer: npp=%p\n", (void*)npp));
-  return nullptr;
 }
 
 void

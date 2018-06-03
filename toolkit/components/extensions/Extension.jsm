@@ -1,10 +1,11 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 "use strict";
 
-this.EXPORTED_SYMBOLS = ["Extension", "ExtensionData", "Langpack"];
+var EXPORTED_SYMBOLS = ["Dictionary", "Extension", "ExtensionData", "Langpack"];
 
 /* exported Extension, ExtensionData */
 /* globals Extension ExtensionData */
@@ -31,20 +32,13 @@ this.EXPORTED_SYMBOLS = ["Extension", "ExtensionData", "Langpack"];
  * to run in the same process of the existing addon debugging browser element).
  */
 
-const Ci = Components.interfaces;
-const Cc = Components.classes;
-const Cu = Components.utils;
-const Cr = Components.results;
-
-Cu.importGlobalProperties(["TextEncoder"]);
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.importGlobalProperties(["fetch"]);
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   AddonManager: "resource://gre/modules/AddonManager.jsm",
   AddonManagerPrivate: "resource://gre/modules/AddonManager.jsm",
+  AddonSettings: "resource://gre/modules/addons/AddonSettings.jsm",
   AppConstants: "resource://gre/modules/AppConstants.jsm",
   AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
   ExtensionCommon: "resource://gre/modules/ExtensionCommon.jsm",
@@ -59,8 +53,8 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   OS: "resource://gre/modules/osfile.jsm",
   PluralForm: "resource://gre/modules/PluralForm.jsm",
   Schemas: "resource://gre/modules/Schemas.jsm",
-  setTimeout: "resource://gre/modules/Timer.jsm",
   TelemetryStopwatch: "resource://gre/modules/TelemetryStopwatch.jsm",
+  XPIProvider: "resource://gre/modules/addons/XPIProvider.jsm",
 });
 
 XPCOMUtils.defineLazyGetter(
@@ -68,16 +62,26 @@ XPCOMUtils.defineLazyGetter(
   () => Cc["@mozilla.org/webextensions/extension-process-script;1"]
           .getService().wrappedJSObject);
 
+// This is used for manipulating jar entry paths, which always use Unix
+// separators.
+XPCOMUtils.defineLazyGetter(
+  this, "OSPath", () => {
+    let obj = {};
+    ChromeUtils.import("resource://gre/modules/osfile/ospath_unix.jsm", obj);
+    return obj;
+  });
+
 XPCOMUtils.defineLazyGetter(
   this, "resourceProtocol",
   () => Services.io.getProtocolHandler("resource")
           .QueryInterface(Ci.nsIResProtocolHandler));
 
-Cu.import("resource://gre/modules/ExtensionParent.jsm");
-Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+ChromeUtils.import("resource://gre/modules/ExtensionParent.jsm");
+ChromeUtils.import("resource://gre/modules/ExtensionUtils.jsm");
 
 XPCOMUtils.defineLazyServiceGetters(this, {
   aomStartup: ["@mozilla.org/addons/addon-manager-startup;1", "amIAddonManagerStartup"],
+  spellCheck: ["@mozilla.org/spellchecker/engine;1", "mozISpellCheckingEngine"],
   uuidGen: ["@mozilla.org/uuid-generator;1", "nsIUUIDGenerator"],
 });
 
@@ -98,42 +102,6 @@ const {
 XPCOMUtils.defineLazyGetter(this, "console", ExtensionUtils.getConsole);
 
 XPCOMUtils.defineLazyGetter(this, "LocaleData", () => ExtensionCommon.LocaleData);
-
-// The maximum time to wait for extension shutdown blockers to complete.
-const SHUTDOWN_BLOCKER_MAX_MS = 8000;
-
-// The list of properties that themes are allowed to contain.
-XPCOMUtils.defineLazyGetter(this, "allowedThemeProperties", () => {
-  Cu.import("resource://gre/modules/ExtensionParent.jsm");
-  let propertiesInBaseManifest = ExtensionParent.baseManifestProperties;
-
-  // The properties found in the base manifest contain all of the properties that
-  // themes are allowed to have. However, the list also contains several properties
-  // that aren't allowed, so we need to filter them out first before the list can
-  // be used to validate themes.
-  return propertiesInBaseManifest.filter(prop => {
-    const propertiesToRemove = ["background", "content_scripts", "permissions"];
-    return !propertiesToRemove.includes(prop);
-  });
-});
-
-/**
- * Validates a theme to ensure it only contains static resources.
- *
- * @param {Array<string>} manifestProperties The list of top-level keys found in the
- *    the extension's manifest.
- * @returns {Array<string>} A list of invalid properties or an empty list
- *    if none are found.
- */
-function validateThemeManifest(manifestProperties) {
-  let invalidProps = [];
-  for (let propName of manifestProperties) {
-    if (propName != "theme" && !allowedThemeProperties.includes(propName)) {
-      invalidProps.push(propName);
-    }
-  }
-  return invalidProps;
-}
 
 /**
  * Classify an individual permission from a webextension manifest
@@ -221,13 +189,6 @@ var UUIDMap = {
   },
 };
 
-// This is the old interface that UUIDMap replaced, to be removed when
-// the references listed in bug 1291399 are updated.
-/* exported getExtensionUUID */
-function getExtensionUUID(id) {
-  return UUIDMap.get(id, true);
-}
-
 // For extensions that have called setUninstallURL(), send an event
 // so the browser can display the URL.
 var UninstallObserver = {
@@ -245,7 +206,7 @@ var UninstallObserver = {
     if (extension) {
       // Let any other interested listeners respond
       // (e.g., display the uninstall URL)
-      Management.emit("uninstall", extension);
+      Management.emit("uninstalling", extension);
     }
   },
 
@@ -289,15 +250,17 @@ var UninstallObserver = {
 
 UninstallObserver.init();
 
-// Represents the data contained in an extension, contained either
-// in a directory or a zip file, which may or may not be installed.
-// This class implements the functionality of the Extension class,
-// primarily related to manifest parsing and localization, which is
-// useful prior to extension installation or initialization.
-//
-// No functionality of this class is guaranteed to work before
-// |loadManifest| has been called, and completed.
-this.ExtensionData = class {
+/**
+ * Represents the data contained in an extension, contained either
+ * in a directory or a zip file, which may or may not be installed.
+ * This class implements the functionality of the Extension class,
+ * primarily related to manifest parsing and localization, which is
+ * useful prior to extension installation or initialization.
+ *
+ * No functionality of this class is guaranteed to work before
+ * `loadManifest` has been called, and completed.
+ */
+class ExtensionData {
   constructor(rootURI) {
     this.rootURI = rootURI;
     this.resourceURL = rootURI.spec;
@@ -328,11 +291,18 @@ this.ExtensionData = class {
     return Log.repository.getLogger(LOGGER_ID_BASE + id);
   }
 
-  // Report an error about the extension's manifest file.
+  /**
+   * Report an error about the extension's manifest file.
+   * @param {string} message The error message
+   */
   manifestError(message) {
     this.packagingError(`Reading manifest: ${message}`);
   }
 
+  /**
+   * Report a warning about the extension's manifest file.
+   * @param {string} message The warning message
+   */
   manifestWarning(message) {
     this.packagingWarning(`Reading manifest: ${message}`);
   }
@@ -410,6 +380,9 @@ this.ExtensionData = class {
     // Normalize the directory path.
     path = `${uri.JAREntry}/${path}`;
     path = path.replace(/\/\/+/g, "/").replace(/^\/|\/$/g, "") + "/";
+    if (path === "/") {
+      path = "";
+    }
 
     // Escape pattern metacharacters.
     let pattern = path.replace(/[[\]()?*~|$\\]/g, "\\$&") + "*";
@@ -460,12 +433,51 @@ this.ExtensionData = class {
     });
   }
 
-  // This method should return a structured representation of any
-  // capabilities this extension has access to, as derived from the
-  // manifest.  The current implementation just returns the contents
-  // of the permissions attribute, if we add things like url_overrides,
-  // they should also be added here.
-  get userPermissions() {
+  /**
+   * Returns an object representing any capabilities that the extension
+   * has access to based on fixed properties in the manifest.  The result
+   * includes the contents of the "permissions" property as well as other
+   * capabilities that are derived from manifest fields that users should
+   * be informed of (e.g., origins where content scripts are injected).
+   */
+  get manifestPermissions() {
+    if (this.type !== "extension") {
+      return null;
+    }
+
+    let permissions = new Set();
+    let origins = new Set();
+    for (let perm of this.manifest.permissions || []) {
+      let type = classifyPermission(perm);
+      if (type.origin) {
+        origins.add(perm);
+      } else if (!type.api) {
+        permissions.add(perm);
+      }
+    }
+
+    if (this.manifest.devtools_page) {
+      permissions.add("devtools");
+    }
+
+    for (let entry of this.manifest.content_scripts || []) {
+      for (let origin of entry.matches) {
+        origins.add(origin);
+      }
+    }
+
+    return {
+      permissions: Array.from(permissions),
+      origins: Array.from(origins),
+    };
+  }
+
+  /**
+   * Returns an object representing all capabilities this extension has
+   * access to, including fixed ones from the manifest as well as dynamically
+   * granted permissions.
+   */
+  get activePermissions() {
     if (this.type !== "extension") {
       return null;
     }
@@ -475,11 +487,6 @@ this.ExtensionData = class {
       apis: [...this.apiNames],
     };
 
-    if (Array.isArray(this.manifest.content_scripts)) {
-      for (let entry of this.manifest.content_scripts) {
-        result.origins.push(...entry.matches);
-      }
-    }
     const EXP_PATTERN = /^experiments\.\w+/;
     result.permissions = [...this.permissions]
       .filter(p => !result.origins.includes(p) && !EXP_PATTERN.test(p));
@@ -496,6 +503,11 @@ this.ExtensionData = class {
     };
   }
 
+  canUseExperiment(manifest) {
+    return this.experimentsAllowed && manifest.experiment_apis;
+  }
+
+  // eslint-disable-next-line complexity
   async parseManifest() {
     let [manifest] = await Promise.all([
       this.readJSON("manifest.json"),
@@ -524,18 +536,13 @@ this.ExtensionData = class {
     let manifestType = "manifest.WebExtensionManifest";
     if (this.manifest.theme) {
       this.type = "theme";
-      // XXX create a separate manifest type for themes
-      let invalidProps = validateThemeManifest(Object.getOwnPropertyNames(this.manifest));
-
-      if (invalidProps.length) {
-        let message = `Themes defined in the manifest may only contain static resources. ` +
-          `If you would like to use additional properties, please use the "theme" permission instead. ` +
-          `(the invalid properties found are: ${invalidProps})`;
-        this.manifestError(message);
-      }
+      manifestType = "manifest.ThemeManifest";
     } else if (this.manifest.langpack_id) {
       this.type = "langpack";
       manifestType = "manifest.WebExtensionLangpackManifest";
+    } else if (this.manifest.dictionaries) {
+      this.type = "dictionary";
+      manifestType = "manifest.WebExtensionDictionaryManifest";
     } else {
       this.type = "extension";
     }
@@ -571,13 +578,26 @@ this.ExtensionData = class {
     let permissions = new Set();
     let webAccessibleResources = [];
 
+    let schemaPromises = new Map();
+
+    let result = {
+      apiNames,
+      dependencies,
+      id,
+      manifest,
+      modules: null,
+      originPermissions,
+      permissions,
+      schemaURLs: null,
+      type: this.type,
+      webAccessibleResources,
+    };
+
     if (this.type === "extension") {
-      if (this.manifest.devtools_page) {
-        permissions.add("devtools");
-      }
+      let restrictSchemes = !(this.isPrivileged && manifest.permissions.includes("mozillaAddons"));
 
       for (let perm of manifest.permissions) {
-        if (perm === "geckoProfiler") {
+        if (perm === "geckoProfiler" && !this.isPrivileged) {
           const acceptedExtensions = Services.prefs.getStringPref("extensions.geckoProfiler.acceptedExtensionIds", "");
           if (!acceptedExtensions.split(",").includes(id)) {
             this.manifestError("Only whitelisted extensions are allowed to access the geckoProfiler.");
@@ -587,10 +607,15 @@ this.ExtensionData = class {
 
         let type = classifyPermission(perm);
         if (type.origin) {
-          let matcher = new MatchPattern(perm, {ignorePath: true});
+          try {
+            let matcher = new MatchPattern(perm, {restrictSchemes, ignorePath: true});
 
-          perm = matcher.pattern;
-          originPermissions.add(perm);
+            perm = matcher.pattern;
+            originPermissions.add(perm);
+          } catch (e) {
+            this.manifestWarning(`Invalid host permission: ${perm}`);
+            continue;
+          }
         } else if (type.api) {
           apiNames.add(type.api);
         }
@@ -617,14 +642,55 @@ this.ExtensionData = class {
         dependencies.add(`${api}@experiments.addons.mozilla.org`);
       }
 
+      let moduleData = data => ({
+        url: this.rootURI.resolve(data.script),
+        events: data.events,
+        paths: data.paths,
+        scopes: data.scopes,
+      });
+
+      let computeModuleInit = (scope, modules) => {
+        let manager = new ExtensionCommon.SchemaAPIManager(scope);
+        return manager.initModuleJSON([modules]);
+      };
+
+      if (this.canUseExperiment(manifest)) {
+        let parentModules = {};
+        let childModules = {};
+
+        for (let [name, data] of Object.entries(manifest.experiment_apis)) {
+          let schema = this.getURL(data.schema);
+
+          if (!schemaPromises.has(schema)) {
+            schemaPromises.set(schema, this.readJSON(data.schema).then(json => Schemas.processSchema(json)));
+          }
+
+          if (data.parent) {
+            parentModules[name] = moduleData(data.parent);
+          }
+
+          if (data.child) {
+            childModules[name] = moduleData(data.child);
+          }
+        }
+
+        result.modules = {
+          child: computeModuleInit("addon_child", childModules),
+          parent: computeModuleInit("addon_parent", parentModules),
+        };
+      }
+
       // Normalize all patterns to contain a single leading /
       if (manifest.web_accessible_resources) {
-        webAccessibleResources = manifest.web_accessible_resources
-          .map(path => path.replace(/^\/*/, "/"));
+        webAccessibleResources.push(...manifest.web_accessible_resources
+          .map(path => path.replace(/^\/*/, "/")));
       }
     } else if (this.type == "langpack") {
-      // Compute the chrome resources to be registered for this langpack
-      // and stash them in startupData
+      // Langpack startup is performance critical, so we want to compute as much
+      // as possible here to make startup not trigger async DB reads.
+      // We'll store the four items below in the startupData.
+
+      // 1. Compute the chrome resources to be registered for this langpack.
       const platform = AppConstants.platform;
       const chromeEntries = [];
       for (const [language, entry] of Object.entries(manifest.languages)) {
@@ -639,11 +705,74 @@ this.ExtensionData = class {
         }
       }
 
-      this.startupData = {chromeEntries};
+
+      // 2. Compute langpack ID.
+      const productCodeName = AppConstants.MOZ_BUILD_APP.replace("/", "-");
+
+      // The result path looks like this:
+      //   Firefox - `langpack-pl-browser`
+      //   Fennec - `langpack-pl-mobile-android`
+      const langpackId =
+        `langpack-${manifest.langpack_id}-${productCodeName}`;
+
+
+      // 3. Compute L10nRegistry sources for this langpack.
+      const l10nRegistrySources = {};
+
+      // Check if there's a root directory `/localization` in the langpack.
+      // If there is one, add it with the name `toolkit` as a FileSource.
+      const entries = await this.readDirectory("localization");
+      if (entries.length > 0) {
+        l10nRegistrySources.toolkit = "";
+      }
+
+      // Add any additional sources listed in the manifest
+      if (manifest.sources) {
+        for (const [sourceName, {base_path}] of Object.entries(manifest.sources)) {
+          l10nRegistrySources[sourceName] = base_path;
+        }
+      }
+
+      // 4. Save the list of languages handled by this langpack.
+      const languages = Object.keys(manifest.languages);
+
+
+      this.startupData = {chromeEntries, langpackId, l10nRegistrySources, languages};
+    } else if (this.type == "dictionary") {
+      let dictionaries = {};
+      for (let [lang, path] of Object.entries(manifest.dictionaries)) {
+        path = path.replace(/^\/+/, "");
+
+        let dir = OSPath.dirname(path);
+        if (dir === ".") {
+          dir = "";
+        }
+        let leafName = OSPath.basename(path);
+        let affixPath = leafName.slice(0, -3) + "aff";
+
+        let entries = Array.from(await this.readDirectory(dir), entry => entry.name);
+        if (!entries.includes(leafName)) {
+          this.manifestError(`Invalid dictionary path specified for '${lang}': ${path}`);
+        }
+        if (!entries.includes(affixPath)) {
+          this.manifestError(`Invalid dictionary path specified for '${lang}': Missing affix file: ${path}`);
+        }
+
+        dictionaries[lang] = path;
+      }
+
+      this.startupData = {dictionaries};
     }
 
-    return {apiNames, dependencies, originPermissions, id, manifest, permissions,
-            webAccessibleResources, type: this.type};
+    if (schemaPromises.size) {
+      let schemas = new Map();
+      for (let [url, promise] of schemaPromises) {
+        schemas.set(url, await promise);
+      }
+      result.schemaURLs = schemas;
+    }
+
+    return result;
   }
 
   // Reads the extension's |manifest.json| file, and stores its
@@ -667,12 +796,59 @@ this.ExtensionData = class {
     this.apiNames = manifestData.apiNames;
     this.dependencies = manifestData.dependencies;
     this.permissions = manifestData.permissions;
+    this.schemaURLs = manifestData.schemaURLs;
     this.type = manifestData.type;
 
+    this.modules = manifestData.modules;
+
+    this.apiManager = this.getAPIManager();
+    await this.apiManager.lazyInit();
+
     this.webAccessibleResources = manifestData.webAccessibleResources.map(res => new MatchGlob(res));
-    this.whiteListedHosts = new MatchPatternSet(manifestData.originPermissions);
+    this.whiteListedHosts = new MatchPatternSet(manifestData.originPermissions, {restrictSchemes: !this.hasPermission("mozillaAddons")});
 
     return this.manifest;
+  }
+
+  hasPermission(perm, includeOptional = false) {
+    let manifest_ = "manifest:";
+    if (perm.startsWith(manifest_)) {
+      return this.manifest[perm.substr(manifest_.length)] != null;
+    }
+
+    if (this.permissions.has(perm)) {
+      return true;
+    }
+
+    if (includeOptional && this.manifest.optional_permissions.includes(perm)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  getAPIManager() {
+    let apiManagers = [Management];
+
+    for (let id of this.dependencies) {
+      let policy = WebExtensionPolicy.getByID(id);
+      if (policy) {
+        apiManagers.push(policy.extension.experimentAPIManager);
+      }
+    }
+
+    if (this.modules) {
+      this.experimentAPIManager =
+        new ExtensionCommon.LazyAPIManager("main", this.modules.parent, this.schemaURLs);
+
+      apiManagers.push(this.experimentAPIManager);
+    }
+
+    if (apiManagers.length == 1) {
+      return apiManagers[0];
+    }
+
+    return new ExtensionCommon.MultiAPIManager("main", apiManagers.reverse());
   }
 
   localizeMessage(...args) {
@@ -821,9 +997,6 @@ this.ExtensionData = class {
    *                        Origin permissions requested.
    * @param {array<string>} info.permissions.permissions
    *                        Regular (non-origin) permissions requested.
-   * @param {AddonWrapper} info.addonName
-   *                       The name of the addon for which permissions are
-   *                       being requested.
    * @param {boolean} info.unsigned
    *                  True if the prompt is for installing an unsigned addon.
    * @param {string} info.type
@@ -837,7 +1010,10 @@ this.ExtensionData = class {
    *                          The string bundle to use for l10n.
    *
    * @returns {object} An object with properties containing localized strings
-   *                   for various elements of a permission dialog.
+   *                   for various elements of a permission dialog. The "header"
+   *                   property on this object is the notification header text
+   *                   and it has the string "<>" as a placeholder for the
+   *                   addon name.
    */
   static formatPermissionStrings(info, bundle) {
     let result = {};
@@ -851,7 +1027,10 @@ this.ExtensionData = class {
         allUrls = true;
         break;
       }
-      let match = /^[htps*]+:\/\/([^/]+)\//.exec(permission);
+      if (permission.startsWith("moz-extension:")) {
+        continue;
+      }
+      let match = /^[a-z*]+:\/\/([^/]+)\//.exec(permission);
       if (!match) {
         Cu.reportError(`Unparseable host permission ${permission}`);
         continue;
@@ -904,8 +1083,11 @@ this.ExtensionData = class {
       result.msgs.push(bundle.formatStringFromName(permissionKey(NATIVE_MSG_PERM), [info.appName], 1));
     }
 
-    // Finally, show remaining permissions, in any order.
-    for (let permission of perms.permissions) {
+    // Finally, show remaining permissions, in the same order as AMO.
+    // The permissions are sorted alphabetically by the permission
+    // string to match AMO.
+    let permissionsCopy = perms.permissions.slice(0);
+    for (let permission of permissionsCopy.sort()) {
       // Handled above
       if (permission == "nativeMessaging") {
         continue;
@@ -920,7 +1102,7 @@ this.ExtensionData = class {
 
     const haveAccessKeys = (AppConstants.platform !== "android");
 
-    result.header = bundle.formatStringFromName("webextPerms.header", [info.addonName], 1);
+    result.header = bundle.formatStringFromName("webextPerms.header", ["<>"], 1);
     result.text = info.unsigned ?
                   bundle.GetStringFromName("webextPerms.unsignedWarning") : "";
     result.listIntro = bundle.GetStringFromName("webextPerms.listIntro");
@@ -933,7 +1115,7 @@ this.ExtensionData = class {
     }
 
     if (info.type == "sideload") {
-      result.header = bundle.formatStringFromName("webextPerms.sideloadHeader", [info.addonName], 1);
+      result.header = bundle.formatStringFromName("webextPerms.sideloadHeader", ["<>"], 1);
       let key = result.msgs.length == 0 ?
                 "webextPerms.sideloadTextNoPerms" : "webextPerms.sideloadText2";
       result.text = bundle.GetStringFromName(key);
@@ -944,14 +1126,14 @@ this.ExtensionData = class {
         result.cancelKey = bundle.GetStringFromName("webextPerms.sideloadCancel.accessKey");
       }
     } else if (info.type == "update") {
-      result.header = "";
-      result.text = bundle.formatStringFromName("webextPerms.updateText", [info.addonName], 1);
+      result.header = bundle.formatStringFromName("webextPerms.updateText", ["<>"], 1);
+      result.text = "";
       result.acceptText = bundle.GetStringFromName("webextPerms.updateAccept.label");
       if (haveAccessKeys) {
         result.acceptKey = bundle.GetStringFromName("webextPerms.updateAccept.accessKey");
       }
     } else if (info.type == "optional") {
-      result.header = bundle.formatStringFromName("webextPerms.optionalPermsHeader", [info.addonName], 1);
+      result.header = bundle.formatStringFromName("webextPerms.optionalPermsHeader", ["<>"], 1);
       result.text = "";
       result.listIntro = bundle.GetStringFromName("webextPerms.optionalPermsListIntro");
       result.acceptText = bundle.GetStringFromName("webextPerms.optionalPermsAllow.label");
@@ -964,24 +1146,34 @@ this.ExtensionData = class {
 
     return result;
   }
-};
+}
 
 const PROXIED_EVENTS = new Set(["test-harness-message", "add-permissions", "remove-permissions"]);
 
-const shutdownPromises = new Map();
-
 class BootstrapScope {
   install(data, reason) {}
-  uninstall(data, reason) {}
+  uninstall(data, reason) {
+    AsyncShutdown.profileChangeTeardown.addBlocker(
+      `Uninstalling add-on: ${data.id}`,
+      Management.emit("uninstall", {id: data.id}).then(() => {
+        Management.emit("uninstall-complete", {id: data.id});
+      }));
+  }
+
+  update(data, reason) {
+    Management.emit("update", {id: data.id, resourceURI: data.resourceURI});
+  }
 
   startup(data, reason) {
+    // eslint-disable-next-line no-use-before-define
     this.extension = new Extension(data, this.BOOTSTRAP_REASON_TO_STRING_MAP[reason]);
     return this.extension.startup();
   }
 
   shutdown(data, reason) {
-    this.extension.shutdown(this.BOOTSTRAP_REASON_TO_STRING_MAP[reason]);
+    let result = this.extension.shutdown(this.BOOTSTRAP_REASON_TO_STRING_MAP[reason]);
     this.extension = null;
+    return result;
   }
 }
 
@@ -1000,11 +1192,28 @@ XPCOMUtils.defineLazyGetter(BootstrapScope.prototype, "BOOTSTRAP_REASON_TO_STRIN
   });
 });
 
+class DictionaryBootstrapScope extends BootstrapScope {
+  install(data, reason) {}
+  uninstall(data, reason) {}
+
+  startup(data, reason) {
+    // eslint-disable-next-line no-use-before-define
+    this.dictionary = new Dictionary(data);
+    return this.dictionary.startup(this.BOOTSTRAP_REASON_TO_STRING_MAP[reason]);
+  }
+
+  shutdown(data, reason) {
+    this.dictionary.shutdown(this.BOOTSTRAP_REASON_TO_STRING_MAP[reason]);
+    this.dictionary = null;
+  }
+}
+
 class LangpackBootstrapScope {
   install(data, reason) {}
   uninstall(data, reason) {}
 
   startup(data, reason) {
+    // eslint-disable-next-line no-use-before-define
     this.langpack = new Langpack(data);
     return this.langpack.startup();
   }
@@ -1015,9 +1224,12 @@ class LangpackBootstrapScope {
   }
 }
 
-// We create one instance of this class per extension. |addonData|
-// comes directly from bootstrap.js when initializing.
-this.Extension = class extends ExtensionData {
+/**
+ * This class is the main representation of an active WebExtension
+ * in the main process.
+ * @extends ExtensionData
+ */
+class Extension extends ExtensionData {
   constructor(addonData, startupReason) {
     super(addonData.resourceURI);
 
@@ -1033,7 +1245,12 @@ this.Extension = class extends ExtensionData {
       delete addonData.cleanupFile;
     }
 
+    if (addonData.TEST_NO_ADDON_MANAGER) {
+      this.dontSaveStartupData = true;
+    }
+
     this.addonData = addonData;
+    this.startupData = addonData.startupData || {};
     this.startupReason = startupReason;
 
     if (["ADDON_UPGRADE", "ADDON_DOWNGRADE"].includes(startupReason)) {
@@ -1064,7 +1281,6 @@ this.Extension = class extends ExtensionData {
 
     this.uninstallURL = null;
 
-    this.apis = [];
     this.whiteListedHosts = null;
     this._optionalOrigins = null;
     this.webAccessibleResources = null;
@@ -1081,7 +1297,7 @@ this.Extension = class extends ExtensionData {
         let patterns = this.whiteListedHosts.patterns.map(host => host.pattern);
 
         this.whiteListedHosts = new MatchPatternSet(new Set([...patterns, ...permissions.origins]),
-                                                    {ignorePath: true});
+                                                    {restrictSchemes: !this.hasPermission("mozillaAddons"), ignorePath: true});
       }
 
       this.policy.permissions = Array.from(this.permissions);
@@ -1109,6 +1325,13 @@ this.Extension = class extends ExtensionData {
     });
     /* eslint-enable mozilla/balanced-listeners */
   }
+
+  // Some helpful properties added elsewhere:
+  /**
+   * An object used to map between extension-visible tab ids and
+   * native Tab object
+   * @property {TabManager} tabManager
+   */
 
   static getBootstrapScope(id, file) {
     return new BootstrapScope();
@@ -1210,8 +1433,44 @@ this.Extension = class extends ExtensionData {
     return [this.id, this.version, Services.locale.getAppLocaleAsLangTag()];
   }
 
+  get isPrivileged() {
+    return (this.addonData.signedState === AddonManager.SIGNEDSTATE_PRIVILEGED ||
+            this.addonData.signedState === AddonManager.SIGNEDSTATE_SYSTEM ||
+            this.addonData.builtIn ||
+            (AppConstants.MOZ_ALLOW_LEGACY_EXTENSIONS &&
+             this.addonData.temporarilyInstalled));
+  }
+
+  get experimentsAllowed() {
+    return (AddonSettings.ALLOW_LEGACY_EXTENSIONS ||
+            this.isPrivileged);
+  }
+
+  saveStartupData() {
+    if (this.dontSaveStartupData) {
+      return;
+    }
+    AddonManagerPrivate.setStartupData(this.id, this.startupData);
+  }
+
+  async _parseManifest() {
+    let manifest = await super.parseManifest();
+    if (manifest && manifest.permissions.has("mozillaAddons") &&
+        !this.isPrivileged) {
+      Cu.reportError(`Stripping mozillaAddons permission from ${this.id}`);
+      manifest.permissions.delete("mozillaAddons");
+      let i = manifest.manifest.permissions.indexOf("mozillaAddons");
+      if (i >= 0) {
+        manifest.manifest.permissions.splice(i, 1);
+      } else {
+        throw new Error("Could not find mozilaAddons in original permissions array");
+      }
+    }
+    return manifest;
+  }
+
   parseManifest() {
-    return StartupCache.manifests.get(this.manifestCacheKey, () => super.parseManifest());
+    return StartupCache.manifests.get(this.manifestCacheKey, () => this._parseManifest());
   }
 
   async cachePermissions() {
@@ -1227,16 +1486,6 @@ this.Extension = class extends ExtensionData {
 
     if (this.errors.length) {
       return Promise.reject({errors: this.errors});
-    }
-
-    if (this.apiNames.size) {
-      // Load Experiments APIs that this extension depends on.
-      let apis = await Promise.all(
-        Array.from(this.apiNames, api => ExtensionCommon.ExtensionAPIs.load(api)));
-
-      for (let API of apis) {
-        this.apis.push(new API(this));
-      }
     }
 
     return manifest;
@@ -1255,12 +1504,16 @@ this.Extension = class extends ExtensionData {
       resourceURL: this.resourceURL,
       baseURL: this.baseURI.spec,
       contentScripts: this.contentScripts,
+      registeredContentScripts: new Map(),
       webAccessibleResources: this.webAccessibleResources.map(res => res.glob),
       whiteListedHosts: this.whiteListedHosts.patterns.map(pat => pat.pattern),
       localeData: this.localeData.serialize(),
+      childModules: this.modules && this.modules.child,
+      dependencies: this.dependencies,
       permissions: this.permissions,
       principal: this.principal,
       optionalPermissions: this.manifest.optional_permissions,
+      schemaURLs: this.schemaURLs,
     };
   }
 
@@ -1316,7 +1569,15 @@ this.Extension = class extends ExtensionData {
     if (!data["Extension:Extensions"]) {
       data["Extension:Extensions"] = [];
     }
+
     let serial = this.serialize();
+
+    // Map of the programmatically registered content script definitions
+    // (by string scriptId), used in ext-contentScripts.js to propagate
+    // the registered content scripts to the child content processes
+    // (e.g. when a new content process starts after a content process crash).
+    this.registeredContentScripts = serial.registeredContentScripts;
+
     data["Extension:Extensions"].push(serial);
 
     return this.broadcast("Extension:Startup", serial).then(() => {
@@ -1324,6 +1585,15 @@ this.Extension = class extends ExtensionData {
     });
   }
 
+  /**
+   * Call the close() method on the given object when this extension
+   * is shut down.  This can happen during browser shutdown, or when
+   * an extension is manually disabled or uninstalled.
+   *
+   * @param {object} obj
+   *        An object on which to call the close() method when this
+   *        extension is shut down.
+   */
   callOnClose(obj) {
     this.onShutdown.add(obj);
   }
@@ -1397,17 +1667,7 @@ this.Extension = class extends ExtensionData {
     }
   }
 
-  startup() {
-    this.startupPromise = this._startup();
-
-    return this.startupPromise;
-  }
-
-  async _startup() {
-    if (shutdownPromises.has(this.id)) {
-      await shutdownPromises.get(this.id);
-    }
-
+  async startup() {
     // Create a temporary policy object for the devtools and add-on
     // manager callers that depend on it being available early.
     this.policy = new WebExtensionPolicy({
@@ -1424,6 +1684,8 @@ this.Extension = class extends ExtensionData {
       // there's another active add-on with the same ID.
       this.policy.active = true;
     }
+
+    this.policy.extension = this;
 
     TelemetryStopwatch.start("WEBEXT_EXTENSION_STARTUP_MS", this);
     try {
@@ -1445,6 +1707,7 @@ this.Extension = class extends ExtensionData {
 
       this.policy.active = false;
       this.policy = processScript.initExtension(this);
+      this.policy.extension = this;
 
       this.updatePermissions(this.startupReason);
 
@@ -1460,9 +1723,11 @@ this.Extension = class extends ExtensionData {
       Management.emit("ready", this);
       this.emit("ready");
       TelemetryStopwatch.finish("WEBEXT_EXTENSION_STARTUP_MS", this);
-    } catch (e) {
-      dump(`Extension error: ${e.message || e} ${e.filename || e.fileName}:${e.lineNumber} :: ${e.stack || new Error().stack}\n`);
-      Cu.reportError(e);
+    } catch (errors) {
+      for (let e of [].concat(errors)) {
+        dump(`Extension error: ${e.message || e} ${e.filename || e.fileName}:${e.lineNumber} :: ${e.stack || new Error().stack}\n`);
+        Cu.reportError(e);
+      }
 
       if (this.policy) {
         this.policy.active = false;
@@ -1470,10 +1735,8 @@ this.Extension = class extends ExtensionData {
 
       this.cleanupGeneratedFile();
 
-      throw e;
+      throw errors;
     }
-
-    this.startupPromise = null;
   }
 
   cleanupGeneratedFile() {
@@ -1496,45 +1759,6 @@ this.Extension = class extends ExtensionData {
   }
 
   async shutdown(reason) {
-    let promise = this._shutdown(reason);
-
-    let blocker = () => {
-      return Promise.race([
-        promise,
-        new Promise(resolve => setTimeout(resolve, SHUTDOWN_BLOCKER_MAX_MS)),
-      ]);
-    };
-
-    AsyncShutdown.profileChangeTeardown.addBlocker(
-      `Extension Shutdown: ${this.id} (${this.manifest && this.name})`,
-      blocker);
-
-    // If we already have a shutdown promise for this extension, wait
-    // for it to complete before replacing it with a new one. This can
-    // sometimes happen during tests with rapid startup/shutdown cycles
-    // of multiple versions.
-    if (shutdownPromises.has(this.id)) {
-      await shutdownPromises.get(this.id);
-    }
-
-    let cleanup = () => {
-      shutdownPromises.delete(this.id);
-      AsyncShutdown.profileChangeTeardown.removeBlocker(blocker);
-    };
-    shutdownPromises.set(this.id, promise.then(cleanup, cleanup));
-
-    return Promise.resolve(promise);
-  }
-
-  async _shutdown(reason) {
-    try {
-      if (this.startupPromise) {
-        await this.startupPromise;
-      }
-    } catch (e) {
-      Cu.reportError(e);
-    }
-
     this.shutdownReason = reason;
     this.hasShutdown = true;
 
@@ -1571,10 +1795,6 @@ this.Extension = class extends ExtensionData {
       obj.close();
     }
 
-    for (let api of this.apis) {
-      api.destroy();
-    }
-
     ParentAPIManager.shutdownExtension(this.id);
 
     Management.emit("shutdown", this);
@@ -1595,23 +1815,6 @@ this.Extension = class extends ExtensionData {
     }
   }
 
-  hasPermission(perm, includeOptional = false) {
-    let manifest_ = "manifest:";
-    if (perm.startsWith(manifest_)) {
-      return this.manifest[perm.substr(manifest_.length)] != null;
-    }
-
-    if (this.permissions.has(perm)) {
-      return true;
-    }
-
-    if (includeOptional && this.manifest.optional_permissions.includes(perm)) {
-      return true;
-    }
-
-    return false;
-  }
-
   get name() {
     return this.manifest.name;
   }
@@ -1619,16 +1822,47 @@ this.Extension = class extends ExtensionData {
   get optionalOrigins() {
     if (this._optionalOrigins == null) {
       let origins = this.manifest.optional_permissions.filter(perm => classifyPermission(perm).origin);
-      this._optionalOrigins = new MatchPatternSet(origins, {ignorePath: true});
+      this._optionalOrigins = new MatchPatternSet(origins, {restrictSchemes: !this.hasPermission("mozillaAddons"), ignorePath: true});
     }
     return this._optionalOrigins;
   }
-};
+}
 
-this.Langpack = class extends ExtensionData {
+class Dictionary extends ExtensionData {
+  constructor(addonData, startupReason) {
+    super(addonData.resourceURI);
+    this.id = addonData.id;
+    this.startupData = addonData.startupData;
+  }
+
+  static getBootstrapScope(id, file) {
+    return new DictionaryBootstrapScope();
+  }
+
+  async startup(reason) {
+    this.dictionaries = {};
+    for (let [lang, path] of Object.entries(this.startupData.dictionaries)) {
+      let uri = Services.io.newURI(path.slice(0, -4) + ".aff", null, this.rootURI);
+      this.dictionaries[lang] = uri;
+
+      spellCheck.addDictionary(lang, uri);
+    }
+
+    Management.emit("ready", this);
+  }
+
+  async shutdown(reason) {
+    if (reason !== "APP_SHUTDOWN") {
+      XPIProvider.unregisterDictionaries(this.dictionaries);
+    }
+  }
+}
+
+class Langpack extends ExtensionData {
   constructor(addonData, startupReason) {
     super(addonData.resourceURI);
     this.startupData = addonData.startupData;
+    this.manifestCacheKey = [addonData.id, addonData.version];
   }
 
   static getBootstrapScope(id, file) {
@@ -1642,53 +1876,9 @@ this.Langpack = class extends ExtensionData {
     return this._setupLocaleData(locales);
   }
 
-  readLocaleFile(locale) {
-    return StartupCache.locales.get([this.id, this.version, locale],
-                                    () => super.readLocaleFile(locale))
-      .then(result => {
-        this.localeData.messages.set(locale, result);
-      });
-  }
-
-  get manifestCacheKey() {
-    return [this.id, this.version, Services.locale.getAppLocaleAsLangTag()];
-  }
-
-  async _parseManifest() {
-    let data = await super.parseManifest();
-
-    const productCodeName = AppConstants.MOZ_BUILD_APP.replace("/", "-");
-
-    // The result path looks like this:
-    //   Firefox - `langpack-pl-browser`
-    //   Fennec - `langpack-pl-mobile-android`
-    data.langpackId =
-      `langpack-${data.manifest.langpack_id}-${productCodeName}`;
-
-    const l10nRegistrySources = {};
-
-    // Check if there's a root directory `/localization` in the langpack.
-    // If there is one, add it with the name `toolkit` as a FileSource.
-    const entries = await this.readDirectory("./localization");
-    if (entries.length > 0) {
-      l10nRegistrySources.toolkit = "";
-    }
-
-    // Add any additional sources listed in the manifest
-    if (data.manifest.sources) {
-      for (const [sourceName, {base_path}] of Object.entries(data.manifest.sources)) {
-        l10nRegistrySources[sourceName] = base_path;
-      }
-    }
-
-    data.l10nRegistrySources = l10nRegistrySources;
-
-    return data;
-  }
-
   parseManifest() {
     return StartupCache.manifests.get(this.manifestCacheKey,
-                                      () => this._parseManifest());
+                                      () => super.parseManifest());
   }
 
   async startup(reason) {
@@ -1699,31 +1889,32 @@ this.Langpack = class extends ExtensionData {
         aomStartup.registerChrome(manifestURI, this.startupData.chromeEntries);
     }
 
-    const data = await this.parseManifest();
-    this.langpackId = data.langpackId;
-    this.l10nRegistrySources = data.l10nRegistrySources;
+    const langpackId = this.startupData.langpackId;
+    const l10nRegistrySources = this.startupData.l10nRegistrySources;
 
-    const languages = Object.keys(data.manifest.languages);
-    resourceProtocol.setSubstitution(this.langpackId, this.rootURI);
+    resourceProtocol.setSubstitution(langpackId, this.rootURI);
 
-    for (const [sourceName, basePath] of Object.entries(this.l10nRegistrySources)) {
+    for (const [sourceName, basePath] of Object.entries(l10nRegistrySources)) {
       L10nRegistry.registerSource(new FileSource(
-        `${sourceName}-${this.langpackId}`,
-        languages,
-        `resource://${this.langpackId}/${basePath}localization/{locale}/`
+        `${sourceName}-${langpackId}`,
+        this.startupData.languages,
+        `resource://${langpackId}/${basePath}localization/{locale}/`
       ));
     }
+
+    Services.obs.notifyObservers({wrappedJSObject: {langpack: this}},
+                                 "webextension-langpack-startup");
   }
 
   async shutdown(reason) {
-    for (const sourceName of Object.keys(this.l10nRegistrySources)) {
-      L10nRegistry.removeSource(`${sourceName}-${this.langpackId}`);
+    for (const sourceName of Object.keys(this.startupData.l10nRegistrySources)) {
+      L10nRegistry.removeSource(`${sourceName}-${this.startupData.langpackId}`);
     }
     if (this.chromeRegistryHandle) {
       this.chromeRegistryHandle.destruct();
       this.chromeRegistryHandle = null;
     }
 
-    resourceProtocol.setSubstitution(this.langpackId, null);
+    resourceProtocol.setSubstitution(this.startupData.langpackId, null);
   }
-};
+}

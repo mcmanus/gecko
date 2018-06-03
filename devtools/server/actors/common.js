@@ -6,7 +6,6 @@
 
 "use strict";
 
-const promise = require("promise");
 const { method } = require("devtools/shared/protocol");
 
 /**
@@ -42,7 +41,7 @@ function RegisteredActorFactory(options, prefix) {
     } else {
       // Lazy actor definition, where options contains all the information
       // required to load the actor lazily.
-      this._getConstructor = function () {
+      this._getConstructor = function() {
         // Load the module
         let mod;
         try {
@@ -52,7 +51,7 @@ function RegisteredActorFactory(options, prefix) {
                           e.message + "\n" + e.stack + "\n");
         }
         // Fetch the actor constructor
-        let c = mod[options.constructorName];
+        const c = mod[options.constructorName];
         if (!c) {
           throw new Error("Unable to find actor constructor named '" +
                           options.constructorName + "'. (Is it exported?)");
@@ -78,7 +77,7 @@ function RegisteredActorFactory(options, prefix) {
     }
   }
 }
-RegisteredActorFactory.prototype.createObservedActorFactory = function (conn,
+RegisteredActorFactory.prototype.createObservedActorFactory = function(conn,
   parentActor) {
   return new ObservedActorFactory(this._getConstructor, this._prefix, conn, parentActor);
 };
@@ -109,11 +108,11 @@ function ObservedActorFactory(getConstructor, prefix, conn, parentActor) {
   this.actorID = null;
   this.registeredPool = null;
 }
-ObservedActorFactory.prototype.createActor = function () {
+ObservedActorFactory.prototype.createActor = function() {
   // Fetch the actor constructor
-  let C = this._getConstructor();
+  const C = this._getConstructor();
   // Instantiate a new actor instance
-  let instance = new C(this._conn, this._parentActor);
+  const instance = new C(this._conn, this._parentActor);
   instance.conn = this._conn;
   instance.parentID = this._parentActor.actorID;
   // We want the newly-constructed actor to completely replace the factory
@@ -164,7 +163,7 @@ exports.ObservedActorFactory = ObservedActorFactory;
  */
 exports.createExtraActors = function createExtraActors(factories, pool) {
   // Walk over global actors added by extensions.
-  for (let name in factories) {
+  for (const name in factories) {
     let actor = this._extraActors[name];
     if (!actor) {
       // Register another factory, but this time specific to this connection.
@@ -197,8 +196,8 @@ exports.createExtraActors = function createExtraActors(factories, pool) {
  *     should use; see above.
  */
 exports.appendExtraActors = function appendExtraActors(object) {
-  for (let name in this._extraActors) {
-    let actor = this._extraActors[name];
+  for (const name in this._extraActors) {
+    const actor = this._extraActors[name];
     object[name] = actor.actorID;
   }
 };
@@ -220,7 +219,7 @@ ActorPool.prototype = {
    * Destroy the pool. This will remove all actors from the pool.
    */
   destroy: function APDestroy() {
-    for (let id in this._actors) {
+    for (const id in this._actors) {
       this.removeActor(this._actors[id]);
     }
   },
@@ -285,12 +284,12 @@ ActorPool.prototype = {
   /**
    * Match the api expected by the protocol library.
    */
-  unmanage: function (actor) {
+  unmanage: function(actor) {
     return this.removeActor(actor);
   },
 
-  forEach: function (callback) {
-    for (let name in this._actors) {
+  forEach: function(callback) {
+    for (const name in this._actors) {
       callback(this._actors[name]);
     }
   },
@@ -318,7 +317,7 @@ function OriginalLocation(actor, line, column, name) {
   this._name = name;
 }
 
-OriginalLocation.fromGeneratedLocation = function (generatedLocation) {
+OriginalLocation.fromGeneratedLocation = function(generatedLocation) {
   return new OriginalLocation(
     generatedLocation.generatedSourceActor,
     generatedLocation.generatedLine,
@@ -332,8 +331,8 @@ OriginalLocation.prototype = {
   },
 
   get originalUrl() {
-    let actor = this.originalSourceActor;
-    let source = actor.source;
+    const actor = this.originalSourceActor;
+    const source = actor.source;
     return source ? source.url : actor._originalUrl;
   },
 
@@ -361,7 +360,7 @@ OriginalLocation.prototype = {
     throw new Error("Shouldn't access generatedColumn from an Originallocation");
   },
 
-  equals: function (other) {
+  equals: function(other) {
     return this.originalSourceActor.url == other.originalSourceActor.url &&
            this.originalLine === other.originalLine &&
            (this.originalColumn === undefined ||
@@ -369,7 +368,7 @@ OriginalLocation.prototype = {
             this.originalColumn === other.originalColumn);
   },
 
-  toJSON: function () {
+  toJSON: function() {
     return {
       source: this.originalSourceActor.form(),
       line: this.originalLine,
@@ -398,7 +397,7 @@ function GeneratedLocation(actor, line, column, lastColumn) {
   this._lastColumn = (lastColumn !== undefined) ? lastColumn : column + 1;
 }
 
-GeneratedLocation.fromOriginalLocation = function (originalLocation) {
+GeneratedLocation.fromOriginalLocation = function(originalLocation) {
   return new GeneratedLocation(
     originalLocation.originalSourceActor,
     originalLocation.originalLine,
@@ -443,7 +442,7 @@ GeneratedLocation.prototype = {
     return this._lastColumn;
   },
 
-  equals: function (other) {
+  equals: function(other) {
     return this.generatedSourceActor.url == other.generatedSourceActor.url &&
            this.generatedLine === other.generatedLine &&
            (this.generatedColumn === undefined ||
@@ -451,7 +450,7 @@ GeneratedLocation.prototype = {
             this.generatedColumn === other.generatedColumn);
   },
 
-  toJSON: function () {
+  toJSON: function() {
     return {
       source: this.generatedSourceActor.form(),
       line: this.generatedLine,
@@ -482,12 +481,12 @@ exports.GeneratedLocation = GeneratedLocation;
  *          The decorated method.
  */
 function expectState(expectedState, methodFunc, activity) {
-  return function (...args) {
+  return function(...args) {
     if (this.state !== expectedState) {
       const msg = `Wrong state while ${activity}:` +
                   `Expected '${expectedState}', ` +
                   `but current state is '${this.state}'.`;
-      return promise.reject(new Error(msg));
+      return Promise.reject(new Error(msg));
     }
 
     return methodFunc.apply(this, args);
@@ -506,7 +505,7 @@ exports.expectState = expectState;
  * @see Framerate actor definition: devtools/server/actors/framerate.js
  */
 function actorBridge(methodName, definition = {}) {
-  return method(function () {
+  return method(function() {
     return this.bridge[methodName].apply(this.bridge, arguments);
   }, definition);
 }
@@ -517,7 +516,7 @@ exports.actorBridge = actorBridge;
  * created with `ActorClassWithSpec` rather than vanilla `ActorClass`.
  */
 function actorBridgeWithSpec(methodName) {
-  return method(function () {
+  return method(function() {
     return this.bridge[methodName].apply(this.bridge, arguments);
   });
 }

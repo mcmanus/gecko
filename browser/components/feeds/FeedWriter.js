@@ -4,23 +4,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cr = Components.results;
-const Cu = Components.utils;
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/NetUtil.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
 
 const FEEDWRITER_CID = Components.ID("{49bb6593-3aff-4eb3-a068-2712c28bd58e}");
 const FEEDWRITER_CONTRACTID = "@mozilla.org/browser/feeds/result-writer;1";
 
 function LOG(str) {
-  let prefB = Cc["@mozilla.org/preferences-service;1"].
-              getService(Ci.nsIPrefBranch);
-
-  let shouldLog = prefB.getBoolPref("feeds.log", false);
+  let shouldLog = Services.prefs.getBoolPref("feeds.log", false);
 
   if (shouldLog)
     dump("*** Feeds: " + str + "\n");
@@ -33,10 +25,8 @@ function LOG(str) {
  * @returns an nsIURI object, or null if the creation of the URI failed.
  */
 function makeURI(aURLSpec, aCharset) {
-  let ios = Cc["@mozilla.org/network/io-service;1"].
-            getService(Ci.nsIIOService);
   try {
-    return ios.newURI(aURLSpec, aCharset);
+    return Services.io.newURI(aURLSpec, aCharset);
   } catch (ex) { }
 
   return null;
@@ -74,12 +64,16 @@ function convertByteUnits(aBytes) {
   return [aBytes, units[unitIndex]];
 }
 
+XPCOMUtils.defineLazyPreferenceGetter(this, "gCanFrameFeeds",
+  "browser.feeds.unsafelyFrameFeeds", false);
+
 function FeedWriter() {
   this._selectedApp = undefined;
   this._selectedAppMenuItem = null;
   this._subscribeCallback = null;
   this._defaultHandlerMenuItem = null;
 
+  Services.telemetry.scalarAdd("browser.feeds.preview_loaded", 1);
 
   XPCOMUtils.defineLazyGetter(this, "_mm", () =>
     this._window.QueryInterface(Ci.nsIInterfaceRequestor).
@@ -124,12 +118,10 @@ FeedWriter.prototype = {
    *          The URI spec to set as the href
    */
   _safeSetURIAttribute(element, attribute, uri) {
-    let secman = Cc["@mozilla.org/scriptsecuritymanager;1"].
-                 getService(Ci.nsIScriptSecurityManager);
     const flags = Ci.nsIScriptSecurityManager.DISALLOW_INHERIT_PRINCIPAL;
     try {
       // TODO Is this necessary?
-      secman.checkLoadURIStrWithPrincipal(this._feedPrincipal, uri, flags);
+      Services.scriptSecurityManager.checkLoadURIStrWithPrincipal(this._feedPrincipal, uri, flags);
       // checkLoadURIStrWithPrincipal will throw if the link URI should not be
       // loaded, either because our feedURI isn't allowed to load it or per
       // the rules specified in |flags|, so we'll never "linkify" the link...
@@ -144,9 +136,7 @@ FeedWriter.prototype = {
   __bundle: null,
   get _bundle() {
     if (!this.__bundle) {
-      this.__bundle = Cc["@mozilla.org/intl/stringbundle;1"].
-                      getService(Ci.nsIStringBundleService).
-                      createBundle(URI_BUNDLE);
+      this.__bundle = Services.strings.createBundle(URI_BUNDLE);
     }
     return this.__bundle;
   },
@@ -201,7 +191,7 @@ FeedWriter.prototype = {
         timeStyle: "short",
         dateStyle: "long"
       };
-      this.__dateFormatter = Services.intl.createDateTimeFormat(undefined, dtOptions);
+      this.__dateFormatter = new Services.intl.DateTimeFormat(undefined, dtOptions);
     }
     return this.__dateFormatter;
   },
@@ -441,10 +431,10 @@ FeedWriter.prototype = {
         enclosureDiv.appendChild(this._document.createTextNode( " (" + type_text + ", " + size_text + ")"));
 
       else if (type_text)
-        enclosureDiv.appendChild(this._document.createTextNode( " (" + type_text + ")"))
+        enclosureDiv.appendChild(this._document.createTextNode( " (" + type_text + ")"));
 
       else if (size_text)
-        enclosureDiv.appendChild(this._document.createTextNode( " (" + size_text + ")"))
+        enclosureDiv.appendChild(this._document.createTextNode( " (" + size_text + ")"));
 
       enclosuresDiv.appendChild(enclosureDiv);
     }
@@ -492,9 +482,7 @@ FeedWriter.prototype = {
    * @returns moz-icon url of the given file as a string
    */
   _getFileIconURL(file) {
-    let ios = Cc["@mozilla.org/network/io-service;1"].
-              getService(Ci.nsIIOService);
-    let fph = ios.getProtocolHandler("file")
+    let fph = Services.io.getProtocolHandler("file")
                  .QueryInterface(Ci.nsIFileProtocolHandler);
     let urlSpec = fph.getURLSpecFromFile(file);
     return "moz-icon://" + urlSpec + "?size=16";
@@ -558,7 +546,7 @@ FeedWriter.prototype = {
     }
   },
 
-  // nsIDomEventListener
+  // EventListener
   handleEvent(event) {
     if (event.target.ownerDocument != this._document) {
       LOG("FeedWriter.handleEvent: Someone passed the feed writer as a listener to the events of another document!");
@@ -793,6 +781,9 @@ FeedWriter.prototype = {
   // BrowserFeedWriter WebIDL methods
   init(aWindow) {
     let window = aWindow;
+    if (window != window.top && !gCanFrameFeeds) {
+      return;
+    }
     this._feedURI = this._getOriginalURI(window);
     if (!this._feedURI)
       return;
@@ -801,9 +792,7 @@ FeedWriter.prototype = {
     this._document = window.document;
     this._handlersList = this._document.getElementById("handlersMenuList");
 
-    let secman = Cc["@mozilla.org/scriptsecuritymanager;1"].
-                 getService(Ci.nsIScriptSecurityManager);
-    this._feedPrincipal = secman.createCodebasePrincipal(this._feedURI, {});
+    this._feedPrincipal = Services.scriptSecurityManager.createCodebasePrincipal(this._feedURI, {});
 
     LOG("Subscribe Preview: feed uri = " + this._window.location.href);
 
@@ -894,6 +883,9 @@ FeedWriter.prototype = {
   },
 
   close() {
+    if (!this._window) {
+      return;
+    }
     this._document.getElementById("subscribeButton")
         .removeEventListener("click", this);
     this._handlersList
@@ -912,7 +904,7 @@ FeedWriter.prototype = {
   },
 
   _removeFeedFromCache() {
-    if (this._feedURI) {
+    if (this._window && this._feedURI) {
       let feedService = Cc["@mozilla.org/browser/feeds/result-service;1"].
                         getService(Ci.nsIFeedResultService);
       feedService.removeFeedResult(this._feedURI);
@@ -921,6 +913,9 @@ FeedWriter.prototype = {
   },
 
   subscribe() {
+    if (!this._window) {
+      return;
+    }
     let feedType = this._getFeedType();
 
     // Subscribe to the feed using the selected handler and save prefs
@@ -968,7 +963,7 @@ FeedWriter.prototype = {
       LOG(`FeedWriter:SetFeedPrefsAndSubscribe - ${JSON.stringify(settings)}`);
       this._mm.sendAsyncMessage("FeedWriter:SetFeedPrefsAndSubscribe",
                                 settings);
-    }
+    };
 
     // Show the file picker before subscribing if the
     // choose application menuitem was chosen using the keyboard
@@ -986,8 +981,8 @@ FeedWriter.prototype = {
   },
 
   classID: FEEDWRITER_CID,
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIDOMEventListener, Ci.nsIObserver,
-                                         Ci.nsIDOMGlobalPropertyInitializer])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIObserver,
+                                          Ci.nsIDOMGlobalPropertyInitializer])
 };
 
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory([FeedWriter]);

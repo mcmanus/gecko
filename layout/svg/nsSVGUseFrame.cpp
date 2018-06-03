@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,15 +10,16 @@
 #include "mozilla/dom/SVGUseElement.h"
 #include "SVGObserverUtils.h"
 
+using namespace mozilla;
 using namespace mozilla::dom;
 
 //----------------------------------------------------------------------
 // Implementation
 
 nsIFrame*
-NS_NewSVGUseFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewSVGUseFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsSVGUseFrame(aContext);
+  return new (aPresShell) nsSVGUseFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsSVGUseFrame)
@@ -99,10 +101,10 @@ nsSVGUseFrame::AttributeChanged(int32_t         aNameSpaceID,
 }
 
 void
-nsSVGUseFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsSVGUseFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
-  DestroyAnonymousContent(mContentClone.forget());
-  nsSVGGFrame::DestroyFrom(aDestructRoot);
+  aPostDestroyData.AddAnonymousContent(mContentClone.forget());
+  nsSVGGFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 
@@ -165,8 +167,10 @@ nsSVGUseFrame::NotifySVGChanged(uint32_t aFlags)
 nsresult
 nsSVGUseFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
 {
-  SVGUseElement *use = static_cast<SVGUseElement*>(GetContent());
-
+  // FIXME(emilio): This should not be done at frame construction time, but
+  // using Shadow DOM or something like that instead, to support properly
+  // display: contents in <svg:use>.
+  auto use = static_cast<SVGUseElement*>(GetContent());
   mContentClone = use->CreateAnonymousContent();
   nsLayoutUtils::PostRestyleEvent(
     use, nsRestyleHint(0), nsChangeHint_InvalidateRenderingObservers);

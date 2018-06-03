@@ -23,19 +23,19 @@
         "id": "ProfilerFeature",
         "type": "string",
         "enum": [
-          "displaylistdump",
-          "gpu",
           "java",
           "js",
-          "layersdump",
           "leaf",
           "mainthreadio",
           "memory",
           "privacy",
-          "restyle",
+          "responsiveness",
+          "screenshots",
+          "seqstyle",
           "stackwalk",
           "tasktracer",
-          "threads"
+          "threads",
+          "trackopts"
         ]
       }
     ],

@@ -25,7 +25,7 @@ public:
 
   ~Queue()
   {
-    MOZ_RELEASE_ASSERT(IsEmpty());
+    MOZ_ASSERT(IsEmpty());
 
     if (mHead) {
       free(mHead);
@@ -51,7 +51,7 @@ public:
     }
 
     T& eltLocation = mTail->mEvents[mOffsetTail];
-    eltLocation = Move(aElement);
+    eltLocation = std::move(aElement);
     ++mOffsetTail;
 
     return eltLocation;
@@ -68,7 +68,7 @@ public:
 
     MOZ_ASSERT(mOffsetHead < ItemsPerPage);
     MOZ_ASSERT_IF(mHead == mTail, mOffsetHead <= mOffsetTail);
-    T result = Move(mHead->mEvents[mOffsetHead++]);
+    T result = std::move(mHead->mEvents[mOffsetHead++]);
 
     MOZ_ASSERT(mOffsetHead <= ItemsPerPage);
 

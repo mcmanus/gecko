@@ -13,8 +13,8 @@ const TEST_DATA = [
     desc: "Hiding a node by creating a new stylesheet",
     selector: "#normal-div",
     before: true,
-    changeStyle: function* (testActor) {
-      yield testActor.eval(`
+    changeStyle: async function(testActor) {
+      await testActor.eval(`
         let div = document.createElement("div");
         div.id = "new-style";
         div.innerHTML = "<style>#normal-div {display:none;}</style>";
@@ -27,8 +27,8 @@ const TEST_DATA = [
     desc: "Showing a node by deleting an existing stylesheet",
     selector: "#normal-div",
     before: false,
-    changeStyle: function* (testActor) {
-      yield testActor.eval(`
+    changeStyle: async function(testActor) {
+      await testActor.eval(`
         document.getElementById("new-style").remove();
       `);
     },
@@ -38,8 +38,8 @@ const TEST_DATA = [
     desc: "Hiding a node by changing its style property",
     selector: "#display-none",
     before: false,
-    changeStyle: function* (testActor) {
-      yield testActor.eval(`
+    changeStyle: async function(testActor) {
+      await testActor.eval(`
         let node = document.querySelector("#display-none");
         node.style.display = "block";
       `);
@@ -50,8 +50,8 @@ const TEST_DATA = [
     desc: "Showing a node by removing its hidden attribute",
     selector: "#hidden-true",
     before: false,
-    changeStyle: function* (testActor) {
-      yield testActor.eval(`
+    changeStyle: async function(testActor) {
+      await testActor.eval(`
         document.querySelector("#hidden-true")
                 .removeAttribute("hidden");
       `);
@@ -62,8 +62,8 @@ const TEST_DATA = [
     desc: "Hiding a node by adding a hidden attribute",
     selector: "#hidden-true",
     before: true,
-    changeStyle: function* (testActor) {
-      yield testActor.setAttribute("#hidden-true", "hidden", "true");
+    changeStyle: async function(testActor) {
+      await testActor.setAttribute("#hidden-true", "hidden", "true");
     },
     after: false
   },
@@ -71,8 +71,8 @@ const TEST_DATA = [
     desc: "Showing a node by changin a stylesheet's rule",
     selector: "#hidden-via-stylesheet",
     before: false,
-    changeStyle: function* (testActor) {
-      yield testActor.eval(`
+    changeStyle: async function(testActor) {
+      await testActor.eval(`
         document.styleSheets[0]
                 .cssRules[0].style
                 .setProperty("display", "inline");
@@ -84,8 +84,8 @@ const TEST_DATA = [
     desc: "Hiding a node by adding a new rule to a stylesheet",
     selector: "#hidden-via-stylesheet",
     before: true,
-    changeStyle: function* (testActor) {
-      yield testActor.eval(`
+    changeStyle: async function(testActor) {
+      await testActor.eval(`
         document.styleSheets[0].insertRule(
           "#hidden-via-stylesheet {display: none;}", 1);
       `);
@@ -96,8 +96,8 @@ const TEST_DATA = [
     desc: "Hiding a node by adding a class that matches an existing rule",
     selector: "#normal-div",
     before: true,
-    changeStyle: function* (testActor) {
-      yield testActor.eval(`
+    changeStyle: async function(testActor) {
+      await testActor.eval(`
         document.styleSheets[0].insertRule(
           ".a-new-class {display: none;}", 2);
         document.querySelector("#normal-div")
@@ -108,37 +108,37 @@ const TEST_DATA = [
   }
 ];
 
-add_task(function* () {
-  let {inspector, testActor} = yield openInspectorForURL(TEST_URL);
+add_task(async function() {
+  const {inspector, testActor} = await openInspectorForURL(TEST_URL);
 
-  for (let data of TEST_DATA) {
+  for (const data of TEST_DATA) {
     info("Running test case: " + data.desc);
-    yield runTestData(inspector, testActor, data);
+    await runTestData(inspector, testActor, data);
   }
 });
 
-function* runTestData(inspector, testActor,
+async function runTestData(inspector, testActor,
                       {selector, before, changeStyle, after}) {
   info("Getting the " + selector + " test node");
-  let nodeFront = yield getNodeFront(selector, inspector);
-  let container = getContainerForNodeFront(nodeFront, inspector);
+  const nodeFront = await getNodeFront(selector, inspector);
+  const container = getContainerForNodeFront(nodeFront, inspector);
   is(!container.elt.classList.contains("not-displayed"), before,
     "The container is marked as " + (before ? "shown" : "hidden"));
 
   info("Listening for the display-change event");
-  let onDisplayChanged = new Promise(resolve => {
+  const onDisplayChanged = new Promise(resolve => {
     inspector.markup.walker.once("display-change", resolve);
   });
 
   info("Making style changes");
-  yield changeStyle(testActor);
-  let nodes = yield onDisplayChanged;
+  await changeStyle(testActor);
+  const nodes = await onDisplayChanged;
 
   info("Verifying that the list of changed nodes include our container");
 
   ok(nodes.length, "The display-change event was received with a nodes");
   let foundContainer = false;
-  for (let node of nodes) {
+  for (const node of nodes) {
     if (getContainerForNodeFront(node, inspector) === container) {
       foundContainer = true;
       break;

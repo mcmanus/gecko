@@ -99,25 +99,25 @@ struct sidCacheEntryStr {
     /*  2 */ PRUint16 authKeyBits;
     /*  2 */ PRUint16 keaType;
     /*  2 */ PRUint16 keaKeyBits;
-    /* 84  - common header total */
+    /*  4 */ PRUint32 signatureScheme;
+    /*  4 */ PRUint32 keaGroup;
+    /* 92  - common header total */
 
     union {
         struct {
             /*  2 */ ssl3CipherSuite cipherSuite;
-            /*  2 */ PRUint16 compression; /* SSLCompressionMethod */
-
-            /* 54 */ ssl3SidKeys keys; /* keys, wrapped as needed. */
+            /* 52 */ ssl3SidKeys keys; /* keys, wrapped as needed. */
 
             /*  4 */ PRUint32 masterWrapMech;
             /*  4 */ PRInt32 certIndex;
             /*  4 */ PRInt32 srvNameIndex;
             /* 32 */ PRUint8 srvNameHash[SHA256_LENGTH]; /* SHA256 name hash */
             /*  2 */ PRUint16 namedCurve;
-/*104 */} ssl3;
+/*100 */} ssl3;
 
 /* force sizeof(sidCacheEntry) to be a multiple of cache line size */
 struct {
-    /*124 */ PRUint8 filler[124]; /* 84+124==208, a multiple of 16 */
+    /*116 */ PRUint8 filler[116]; /* 92+116==208, a multiple of 16 */
 } forceSize;
     } u;
 };
@@ -433,9 +433,10 @@ ConvertFromSID(sidCacheEntry *to, sslSessionID *from)
     to->authKeyBits = from->authKeyBits;
     to->keaType = from->keaType;
     to->keaKeyBits = from->keaKeyBits;
+    to->keaGroup = from->keaGroup;
+    to->signatureScheme = from->sigScheme;
 
     to->u.ssl3.cipherSuite = from->u.ssl3.cipherSuite;
-    to->u.ssl3.compression = (PRUint16)from->u.ssl3.compression;
     to->u.ssl3.keys = from->u.ssl3.keys;
     to->u.ssl3.masterWrapMech = from->u.ssl3.masterWrapMech;
     to->sessionIDLength = from->u.ssl3.sessionIDLength;
@@ -478,7 +479,6 @@ ConvertToSID(sidCacheEntry *from,
 
     to->u.ssl3.sessionIDLength = from->sessionIDLength;
     to->u.ssl3.cipherSuite = from->u.ssl3.cipherSuite;
-    to->u.ssl3.compression = (SSLCompressionMethod)from->u.ssl3.compression;
     to->u.ssl3.keys = from->u.ssl3.keys;
     to->u.ssl3.masterWrapMech = from->u.ssl3.masterWrapMech;
     if (from->u.ssl3.srvNameIndex != -1 && psnce) {
@@ -494,12 +494,6 @@ ConvertToSID(sidCacheEntry *from,
     }
 
     PORT_Memcpy(to->u.ssl3.sessionID, from->sessionID, from->sessionIDLength);
-
-    /* the portions of the SID that are only restored on the client
-     * are set to invalid values on the server.
-     */
-    to->u.ssl3.clientWriteKey = NULL;
-    to->u.ssl3.serverWriteKey = NULL;
 
     to->urlSvrName = NULL;
 
@@ -543,6 +537,8 @@ ConvertToSID(sidCacheEntry *from,
     to->authKeyBits = from->authKeyBits;
     to->keaType = from->keaType;
     to->keaKeyBits = from->keaKeyBits;
+    to->keaGroup = from->keaGroup;
+    to->sigScheme = from->signatureScheme;
 
     return to;
 
@@ -733,9 +729,11 @@ ServerSessionIDLookup(const PRIPv6Addr *addr,
 /*
 ** Place a sid into the cache, if it isn't already there.
 */
-static void
-ServerSessionIDCache(sslSessionID *sid)
+void
+ssl_ServerCacheSessionID(sslSessionID *sid)
 {
+    PORT_Assert(sid);
+
     sidCacheEntry sce;
     PRUint32 now = 0;
     cacheDesc *cache = &globalCache;
@@ -798,8 +796,8 @@ ServerSessionIDCache(sslSessionID *sid)
 ** Although this is static, it is called from ssl via global function pointer
 **  ssl_sid_uncache.  This invalidates the referenced cache entry.
 */
-static void
-ServerSessionIDUncache(sslSessionID *sid)
+void
+ssl_ServerUncacheSessionID(sslSessionID *sid)
 {
     cacheDesc *cache = &globalCache;
     PRUint8 *sessionID;
@@ -1170,8 +1168,6 @@ ssl_ConfigServerSessionIDCacheInstanceWithOpt(cacheDesc *cache,
     }
 
     ssl_sid_lookup = ServerSessionIDLookup;
-    ssl_sid_cache = ServerSessionIDCache;
-    ssl_sid_uncache = ServerSessionIDUncache;
     return SECSuccess;
 }
 
@@ -1354,8 +1350,6 @@ SSL_InheritMPServerSIDCacheInstance(cacheDesc *cache, const char *envString)
     ssl_InitSessionCacheLocks(PR_FALSE);
 
     ssl_sid_lookup = ServerSessionIDLookup;
-    ssl_sid_cache = ServerSessionIDCache;
-    ssl_sid_uncache = ServerSessionIDUncache;
 
     if (!envString) {
         envString = PR_GetEnvSecure(envVarName);

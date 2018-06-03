@@ -11,7 +11,6 @@
 #include "mozilla/Maybe.h"
 #include "MediaDataDemuxer.h"
 #include "MediaResource.h"
-#include "mp4_demuxer/ByteReader.h"
 
 namespace mozilla {
 
@@ -22,7 +21,11 @@ class FrameParser;
 
 class ADTSTrackDemuxer;
 
-class ADTSDemuxer : public MediaDataDemuxer
+DDLoggedTypeDeclNameAndBase(ADTSDemuxer, MediaDataDemuxer);
+
+class ADTSDemuxer
+  : public MediaDataDemuxer
+  , public DecoderDoctorLifeLogger<ADTSDemuxer>
 {
 public:
   // MediaDataDemuxer interface.
@@ -43,7 +46,11 @@ private:
   RefPtr<ADTSTrackDemuxer> mTrackDemuxer;
 };
 
-class ADTSTrackDemuxer : public MediaTrackDemuxer
+DDLoggedTypeNameAndBase(ADTSTrackDemuxer, MediaTrackDemuxer);
+
+class ADTSTrackDemuxer
+  : public MediaTrackDemuxer
+  , public DecoderDoctorLifeLogger<ADTSTrackDemuxer>
 {
 public:
   explicit ADTSTrackDemuxer(MediaResource* aSource);

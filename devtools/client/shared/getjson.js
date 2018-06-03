@@ -4,12 +4,9 @@
 
 "use strict";
 
-const {CC} = require("chrome");
 const Services = require("Services");
 
 loader.lazyRequireGetter(this, "asyncStorage", "devtools/shared/async-storage");
-
-const XMLHttpRequest = CC("@mozilla.org/xmlextras/xmlhttprequest;1");
 
 /**
  * Downloads and caches a JSON file from an URL given by a pref.
@@ -22,16 +19,16 @@ const XMLHttpRequest = CC("@mozilla.org/xmlextras/xmlhttprequest;1");
  *           or cache hit
  *         - Rejected with an error message in case of failure
  */
-exports.getJSON = function (prefName) {
+exports.getJSON = function(prefName) {
   return new Promise((resolve, reject) => {
-    let xhr = new XMLHttpRequest();
+    const xhr = new XMLHttpRequest();
 
     // We used to store cached data in preferences, but now we use asyncStorage
     // Migration step: if it still exists, move this now useless preference in its
     // new location and clear it
     if (Services.prefs.prefHasUserValue(prefName + "_cache")) {
-      let json = Services.prefs.getCharPref(prefName + "_cache");
-      asyncStorage.setItem(prefName + "_cache", json).catch(function (e) {
+      const json = Services.prefs.getCharPref(prefName + "_cache");
+      asyncStorage.setItem(prefName + "_cache", json).catch(function(e) {
         // Could not move the cache, let's log the error but continue
         console.error(e);
       });
@@ -39,12 +36,12 @@ exports.getJSON = function (prefName) {
     }
 
     function readFromStorage(networkError) {
-      asyncStorage.getItem(prefName + "_cache").then(function (json) {
+      asyncStorage.getItem(prefName + "_cache").then(function(json) {
         if (!json) {
           return reject("Empty cache for " + prefName);
         }
         return resolve(json);
-      }).catch(function (e) {
+      }).catch(function(e) {
         reject("JSON not available, CDN error: " + networkError +
                         ", storage error: " + e);
       });
@@ -52,8 +49,8 @@ exports.getJSON = function (prefName) {
 
     xhr.onload = () => {
       try {
-        let json = JSON.parse(xhr.responseText);
-        asyncStorage.setItem(prefName + "_cache", json).catch(function (e) {
+        const json = JSON.parse(xhr.responseText);
+        asyncStorage.setItem(prefName + "_cache", json).catch(function(e) {
           // Could not update cache, let's log the error but continue
           console.error(e);
         });

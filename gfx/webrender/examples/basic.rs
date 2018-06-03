@@ -7,17 +7,15 @@ extern crate euclid;
 extern crate gleam;
 extern crate glutin;
 extern crate webrender;
+extern crate winit;
 
 #[path = "common/boilerplate.rs"]
 mod boilerplate;
 
-use app_units::Au;
 use boilerplate::{Example, HandyDandyRectBuilder};
 use euclid::vec2;
-use glutin::TouchPhase;
+use winit::TouchPhase;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::Read;
 use webrender::api::*;
 
 #[derive(Debug)]
@@ -88,7 +86,7 @@ impl TouchState {
         }
     }
 
-    fn handle_event(&mut self, touch: glutin::Touch) -> TouchResult {
+    fn handle_event(&mut self, touch: winit::Touch) -> TouchResult {
         match touch.phase {
             TouchPhase::Started => {
                 debug_assert!(!self.active_touches.contains_key(&touch.id));
@@ -166,13 +164,6 @@ impl TouchState {
     }
 }
 
-fn load_file(name: &str) -> Vec<u8> {
-    let mut file = File::open(name).unwrap();
-    let mut buffer = vec![];
-    file.read_to_end(&mut buffer).unwrap();
-    buffer
-}
-
 fn main() {
     let mut app = App {
         touch_state: TouchState::new(),
@@ -185,31 +176,35 @@ struct App {
 }
 
 impl Example for App {
+    // Make this the only example to test all shaders for compile errors.
+    const PRECACHE_SHADERS: bool = true;
+
     fn render(
         &mut self,
         api: &RenderApi,
         builder: &mut DisplayListBuilder,
-        resources: &mut ResourceUpdates,
-        layout_size: LayoutSize,
+        txn: &mut Transaction,
+        _: DeviceUintSize,
         _pipeline_id: PipelineId,
         _document_id: DocumentId,
     ) {
-        let bounds = LayoutRect::new(LayoutPoint::zero(), layout_size);
+        let bounds = LayoutRect::new(LayoutPoint::zero(), builder.content_size());
         let info = LayoutPrimitiveInfo::new(bounds);
         builder.push_stacking_context(
             &info,
-            ScrollPolicy::Scrollable,
+            None,
             None,
             TransformStyle::Flat,
             None,
             MixBlendMode::Normal,
             Vec::new(),
+            GlyphRasterSpace::Screen,
         );
 
         let image_mask_key = api.generate_image_key();
-        resources.add_image(
+        txn.add_image(
             image_mask_key,
-            ImageDescriptor::new(2, 2, ImageFormat::A8, true),
+            ImageDescriptor::new(2, 2, ImageFormat::R8, true, false),
             ImageData::new(vec![0, 80, 180, 255]),
             None,
         );
@@ -218,8 +213,12 @@ impl Example for App {
             rect: (75, 75).by(100, 100),
             repeat: false,
         };
-        let complex = ComplexClipRegion::new((50, 50).to(150, 150), BorderRadius::uniform(20.0));
-        let id = builder.define_clip(None, bounds, vec![complex], Some(mask));
+        let complex = ComplexClipRegion::new(
+            (50, 50).to(150, 150),
+            BorderRadius::uniform(20.0),
+            ClipMode::Clip
+        );
+        let id = builder.define_clip(bounds, vec![complex], Some(mask));
         builder.push_clip_id(id);
 
         let info = LayoutPrimitiveInfo::new((100, 100).to(200, 200));
@@ -250,77 +249,6 @@ impl Example for App {
         builder.pop_clip_id();
 
         if false {
-            // draw text?
-            let font_key = api.generate_font_key();
-            let font_bytes = load_file("../wrench/reftest/text/FreeSans.ttf");
-            resources.add_raw_font(font_key, font_bytes, 0);
-
-            let font_instance_key = api.generate_font_instance_key();
-            resources.add_font_instance(font_instance_key, font_key, Au::from_px(32), None, None, Vec::new());
-
-            let text_bounds = (100, 50).by(700, 200);
-            let glyphs = vec![
-                GlyphInstance {
-                    index: 48,
-                    point: LayoutPoint::new(100.0, 100.0),
-                },
-                GlyphInstance {
-                    index: 68,
-                    point: LayoutPoint::new(150.0, 100.0),
-                },
-                GlyphInstance {
-                    index: 80,
-                    point: LayoutPoint::new(200.0, 100.0),
-                },
-                GlyphInstance {
-                    index: 82,
-                    point: LayoutPoint::new(250.0, 100.0),
-                },
-                GlyphInstance {
-                    index: 81,
-                    point: LayoutPoint::new(300.0, 100.0),
-                },
-                GlyphInstance {
-                    index: 3,
-                    point: LayoutPoint::new(350.0, 100.0),
-                },
-                GlyphInstance {
-                    index: 86,
-                    point: LayoutPoint::new(400.0, 100.0),
-                },
-                GlyphInstance {
-                    index: 79,
-                    point: LayoutPoint::new(450.0, 100.0),
-                },
-                GlyphInstance {
-                    index: 72,
-                    point: LayoutPoint::new(500.0, 100.0),
-                },
-                GlyphInstance {
-                    index: 83,
-                    point: LayoutPoint::new(550.0, 100.0),
-                },
-                GlyphInstance {
-                    index: 87,
-                    point: LayoutPoint::new(600.0, 100.0),
-                },
-                GlyphInstance {
-                    index: 17,
-                    point: LayoutPoint::new(650.0, 100.0),
-                },
-            ];
-
-            let info = LayoutPrimitiveInfo::new(text_bounds);
-            builder.push_text(
-                &info,
-                &glyphs,
-                font_instance_key,
-                ColorF::new(1.0, 1.0, 0.0, 1.0),
-                None,
-            );
-        }
-
-        if false {
             // draw box shadow?
             let rect = LayoutRect::zero();
             let simple_box_bounds = (20, 200).by(50, 50);
@@ -339,7 +267,7 @@ impl Example for App {
                 color,
                 blur_radius,
                 spread_radius,
-                simple_border_radius,
+                BorderRadius::uniform(simple_border_radius),
                 box_shadow_type,
             );
         }
@@ -347,20 +275,24 @@ impl Example for App {
         builder.pop_stacking_context();
     }
 
-    fn on_event(&mut self, event: glutin::Event, api: &RenderApi, document_id: DocumentId) -> bool {
+    fn on_event(&mut self, event: winit::WindowEvent, api: &RenderApi, document_id: DocumentId) -> bool {
+        let mut txn = Transaction::new();
         match event {
-            glutin::Event::Touch(touch) => match self.touch_state.handle_event(touch) {
+            winit::WindowEvent::Touch(touch) => match self.touch_state.handle_event(touch) {
                 TouchResult::Pan(pan) => {
-                    api.set_pan(document_id, pan);
-                    api.generate_frame(document_id, None);
+                    txn.set_pan(pan);
                 }
                 TouchResult::Zoom(zoom) => {
-                    api.set_pinch_zoom(document_id, ZoomFactor::new(zoom));
-                    api.generate_frame(document_id, None);
+                    txn.set_pinch_zoom(ZoomFactor::new(zoom));
                 }
                 TouchResult::None => {}
             },
             _ => (),
+        }
+
+        if !txn.is_empty() {
+            txn.generate_frame();
+            api.send_transaction(document_id, txn);
         }
 
         false

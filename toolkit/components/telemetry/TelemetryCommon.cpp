@@ -7,6 +7,7 @@
 #include "nsITelemetry.h"
 #include "nsVersionComparator.h"
 #include "mozilla/TimeStamp.h"
+#include "mozilla/Preferences.h"
 #include "nsIConsoleService.h"
 #include "nsThreadUtils.h"
 
@@ -70,19 +71,25 @@ CanRecordDataset(uint32_t aDataset, bool aCanRecordBase, bool aCanRecordExtended
 bool
 CanRecordInProcess(RecordedProcessType processes, GeckoProcessType processType)
 {
-  bool recordAllChild = !!(processes & RecordedProcessType::AllChilds);
+  bool recordAllChildren = !!(processes & RecordedProcessType::AllChildren);
   // We can use (1 << ProcessType) due to the way RecordedProcessType is defined.
   bool canRecordProcess =
     !!(processes & static_cast<RecordedProcessType>(1 << processType));
 
   return canRecordProcess ||
-         ((processType != GeckoProcessType_Default) && recordAllChild);
+         ((processType != GeckoProcessType_Default) && recordAllChildren);
 }
 
 bool
 CanRecordInProcess(RecordedProcessType processes, ProcessID processId)
 {
   return CanRecordInProcess(processes, GetGeckoProcessType(processId));
+}
+
+bool
+CanRecordProduct(SupportedProduct aProducts)
+{
+  return !!(aProducts & GetCurrentProduct());
 }
 
 nsresult
@@ -116,7 +123,8 @@ LogToBrowserConsole(uint32_t aLogLevel, const nsAString& aMsg)
   }
 
   nsCOMPtr<nsIScriptError> error(do_CreateInstance(NS_SCRIPTERROR_CONTRACTID));
-  error->Init(aMsg, EmptyString(), EmptyString(), 0, 0, aLogLevel, "chrome javascript");
+  error->Init(aMsg, EmptyString(), EmptyString(), 0, 0, aLogLevel,
+              "chrome javascript", false /* from private window */);
   console->LogMessage(error);
 }
 
@@ -125,6 +133,18 @@ GetNameForProcessID(ProcessID process)
 {
   MOZ_ASSERT(process < ProcessID::Count);
   return ProcessIDToString[static_cast<uint32_t>(process)];
+}
+
+ProcessID
+GetIDForProcessName(const char* aProcessName)
+{
+  for (uint32_t id = 0; id < static_cast<uint32_t>(ProcessID::Count); id++) {
+    if (!strcmp(GetNameForProcessID(ProcessID(id)), aProcessName)) {
+      return ProcessID(id);
+    }
+  }
+
+  return ProcessID::Count;
 }
 
 GeckoProcessType
@@ -168,6 +188,44 @@ IsValidIdentifierString(const nsACString& aStr, const size_t aMaxLength,
   }
 
   return true;
+}
+
+JSString*
+ToJSString(JSContext* cx, const nsACString& aStr)
+{
+  const NS_ConvertUTF8toUTF16 wide(aStr);
+  return JS_NewUCStringCopyN(cx, wide.Data(), wide.Length());
+}
+
+JSString*
+ToJSString(JSContext* cx, const nsAString& aStr)
+{
+  return JS_NewUCStringCopyN(cx, aStr.Data(), aStr.Length());
+}
+
+// Keep knowledge about the current running product.
+// Defaults to Firefox and is reset on Android on Telemetry initialization.
+SupportedProduct gCurrentProduct = SupportedProduct::Firefox;
+
+void
+SetCurrentProduct()
+{
+#if defined(MOZ_WIDGET_ANDROID)
+  bool isGeckoview = Preferences::GetBool("toolkit.telemetry.isGeckoViewMode", false);
+  if (isGeckoview) {
+    gCurrentProduct = SupportedProduct::Geckoview;
+  } else {
+    gCurrentProduct = SupportedProduct::Fennec;
+  }
+#else
+  gCurrentProduct = SupportedProduct::Firefox;
+#endif
+}
+
+SupportedProduct
+GetCurrentProduct()
+{
+  return gCurrentProduct;
 }
 
 } // namespace Common

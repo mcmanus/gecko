@@ -24,7 +24,6 @@
 #include "gfxRect.h"
 
 #include "nsIAndroidBridge.h"
-#include "nsIDOMDOMCursor.h"
 
 #include "mozilla/Likely.h"
 #include "mozilla/Mutex.h"
@@ -69,24 +68,6 @@ typedef struct AndroidSystemColors {
     nscolor panelColorForeground;
     nscolor panelColorBackground;
 } AndroidSystemColors;
-
-class MessageCursorContinueCallback : public nsICursorContinueCallback
-{
-public:
-    NS_DECL_ISUPPORTS
-    NS_DECL_NSICURSORCONTINUECALLBACK
-
-    MessageCursorContinueCallback(int aRequestId)
-        : mRequestId(aRequestId)
-    {
-    }
-private:
-    virtual ~MessageCursorContinueCallback()
-    {
-    }
-
-    int mRequestId;
-};
 
 class AndroidBridge final
 {
@@ -175,16 +156,6 @@ public:
     bool PumpMessageLoop();
 
     // Utility methods.
-    static jstring NewJavaString(JNIEnv* env, const char16_t* string, uint32_t len);
-    static jstring NewJavaString(JNIEnv* env, const nsAString& string);
-    static jstring NewJavaString(JNIEnv* env, const char* string);
-    static jstring NewJavaString(JNIEnv* env, const nsACString& string);
-
-    static jstring NewJavaString(AutoLocalJNIFrame* frame, const char16_t* string, uint32_t len);
-    static jstring NewJavaString(AutoLocalJNIFrame* frame, const nsAString& string);
-    static jstring NewJavaString(AutoLocalJNIFrame* frame, const char* string);
-    static jstring NewJavaString(AutoLocalJNIFrame* frame, const nsACString& string);
-
     static jfieldID GetFieldID(JNIEnv* env, jclass jClass, const char* fieldName, const char* fieldType);
     static jfieldID GetStaticFieldID(JNIEnv* env, jclass jClass, const char* fieldName, const char* fieldType);
     static jmethodID GetMethodID(JNIEnv* env, jclass jClass, const char* methodName, const char* methodType);
@@ -268,7 +239,7 @@ public:
 
 class AutoJObject {
 public:
-    AutoJObject(JNIEnv* aJNIEnv = nullptr) : mObject(nullptr)
+    explicit AutoJObject(JNIEnv* aJNIEnv = nullptr) : mObject(nullptr)
     {
         mJNIEnv = aJNIEnv ? aJNIEnv : jni::GetGeckoThreadEnv();
     }
@@ -302,7 +273,7 @@ private:
 
 class AutoLocalJNIFrame {
 public:
-    AutoLocalJNIFrame(int nEntries = 15)
+    explicit AutoLocalJNIFrame(int nEntries = 15)
         : mEntries(nEntries)
         , mJNIEnv(jni::GetGeckoThreadEnv())
         , mHasFrameBeenPushed(false)
@@ -311,7 +282,7 @@ public:
         Push();
     }
 
-    AutoLocalJNIFrame(JNIEnv* aJNIEnv, int nEntries = 15)
+    explicit AutoLocalJNIFrame(JNIEnv* aJNIEnv, int nEntries = 15)
         : mEntries(nEntries)
         , mJNIEnv(aJNIEnv ? aJNIEnv : jni::GetGeckoThreadEnv())
         , mHasFrameBeenPushed(false)

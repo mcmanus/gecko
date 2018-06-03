@@ -225,7 +225,7 @@ template <typename T> struct HasFreeLSB { static const bool value = false; };
 // type is greater than byte-aligned. That bit is free to use if it's masked
 // out of such pointers before they're dereferenced.
 template <typename T> struct HasFreeLSB<T*> {
-  static const bool value = (MOZ_ALIGNOF(T) & 1) == 0;
+  static const bool value = (alignof(T) & 1) == 0;
 };
 
 // We store references as pointers, so they have a free bit if a pointer would
@@ -338,6 +338,14 @@ public:
   V unwrap() const {
     MOZ_ASSERT(isOk());
     return mImpl.unwrap();
+  }
+
+  /**
+   *  Get the success value from this Result, which must be a success result.
+   *  If it is an error result, then return the aValue.
+   */
+  V unwrapOr(V aValue) const {
+    return isOk() ? mImpl.unwrap() : aValue;
   }
 
   /** Get the error value from this Result, which must be an error result. */

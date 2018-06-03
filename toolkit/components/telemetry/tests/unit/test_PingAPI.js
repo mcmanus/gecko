@@ -6,12 +6,12 @@
 
 "use strict";
 
-Cu.import("resource://gre/modules/ClientID.jsm", this);
-Cu.import("resource://gre/modules/TelemetryController.jsm", this);
-Cu.import("resource://gre/modules/TelemetryArchive.jsm", this);
-Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
-Cu.import("resource://gre/modules/osfile.jsm", this);
-Cu.import("resource://gre/modules/Services.jsm", this);
+ChromeUtils.import("resource://gre/modules/ClientID.jsm", this);
+ChromeUtils.import("resource://gre/modules/TelemetryController.jsm", this);
+ChromeUtils.import("resource://gre/modules/TelemetryArchive.jsm", this);
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+ChromeUtils.import("resource://gre/modules/osfile.jsm", this);
+ChromeUtils.import("resource://gre/modules/Services.jsm", this);
 
 XPCOMUtils.defineLazyGetter(this, "gPingsArchivePath", function() {
   return OS.Path.join(OS.Constants.Path.profileDir, "datareporting", "archived");
@@ -22,7 +22,7 @@ XPCOMUtils.defineLazyGetter(this, "gPingsArchivePath", function() {
  * @param {Integer} aArchiveQuota The new quota, in bytes.
  */
 function fakeStorageQuota(aArchiveQuota) {
-  let storage = Cu.import("resource://gre/modules/TelemetryStorage.jsm", {});
+  let storage = ChromeUtils.import("resource://gre/modules/TelemetryStorage.jsm", {});
   storage.Policy.getArchiveQuota = () => aArchiveQuota;
 }
 
@@ -68,7 +68,6 @@ add_task(async function test_setup() {
   do_get_profile(true);
   // Make sure we don't generate unexpected pings due to pref changes.
   await setEmptyPrefWatchlist();
-  Services.prefs.setBoolPref(TelemetryUtils.Preferences.TelemetryEnabled, true);
 });
 
 add_task(async function test_archivedPings() {
@@ -217,6 +216,7 @@ add_task(async function test_archiveCleanup() {
     // Check that the pruned pings are not on disk anymore.
     for (let prunedInfo of expectedPrunedInfo) {
       await Assert.rejects(TelemetryArchive.promiseArchivedPingById(prunedInfo.id),
+                           /TelemetryStorage.loadArchivedPing - no ping with id/,
                            "Ping " + prunedInfo.id + " should have been pruned.");
       const pingPath =
         TelemetryStorage._testGetArchivedPingPath(prunedInfo.id, prunedInfo.creationDate, PING_TYPE);

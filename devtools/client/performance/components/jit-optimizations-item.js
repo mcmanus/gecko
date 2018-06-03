@@ -7,8 +7,10 @@ const { LocalizationHelper } = require("devtools/shared/l10n");
 const STRINGS_URI = "devtools/client/locales/jit-optimizations.properties";
 const L10N = new LocalizationHelper(STRINGS_URI);
 
-const {PluralForm} = require("devtools/shared/plural-form");
-const { DOM: dom, PropTypes, createClass, createFactory } = require("devtools/client/shared/vendor/react");
+const { PluralForm } = require("devtools/shared/plural-form");
+const { Component, createFactory } = require("devtools/client/shared/vendor/react");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
 const Frame = createFactory(require("devtools/client/shared/components/Frame"));
 const PROPNAME_MAX_LENGTH = 4;
 // If TREE_ROW_HEIGHT changes, be sure to change `var(--jit-tree-row-height)`
@@ -30,26 +32,37 @@ const OPTIMIZATION_FAILURE = L10N.getStr("jit.optimizationFailure");
 const JIT_SAMPLES = L10N.getStr("jit.samples");
 const JIT_TYPES = L10N.getStr("jit.types");
 const JIT_ATTEMPTS = L10N.getStr("jit.attempts");
+
 /* eslint-enable no-unused-vars */
 
-const JITOptimizationsItem = createClass({
-  displayName: "JITOptimizationsItem",
+class JITOptimizationsItem extends Component {
+  static get propTypes() {
+    return {
+      onViewSourceInDebugger: PropTypes.func.isRequired,
+      frameData: PropTypes.object.isRequired,
+      type: PropTypes.oneOf(OPTIMIZATION_ITEM_TYPES).isRequired,
+      depth: PropTypes.number.isRequired,
+      arrow: PropTypes.element.isRequired,
+      item: PropTypes.object,
+      focused: PropTypes.bool
+    };
+  }
 
-  propTypes: {
-    onViewSourceInDebugger: PropTypes.func.isRequired,
-    frameData: PropTypes.object.isRequired,
-    type: PropTypes.oneOf(OPTIMIZATION_ITEM_TYPES).isRequired,
-    depth: PropTypes.number.isRequired,
-    arrow: PropTypes.element.isRequired,
-    item: PropTypes.object,
-    focused: PropTypes.bool
-  },
+  constructor(props) {
+    super(props);
+    this._renderSite = this._renderSite.bind(this);
+    this._renderAttempts = this._renderAttempts.bind(this);
+    this._renderTypes = this._renderTypes.bind(this);
+    this._renderAttempt = this._renderAttempt.bind(this);
+    this._renderType = this._renderType.bind(this);
+    this._renderObservedType = this._renderObservedType.bind(this);
+  }
 
   _renderSite({ item: site, onViewSourceInDebugger, frameData }) {
-    let attempts = site.data.attempts;
-    let lastStrategy = attempts[attempts.length - 1].strategy;
+    const attempts = site.data.attempts;
+    const lastStrategy = attempts[attempts.length - 1].strategy;
     let propString = "";
-    let propertyName = site.data.propertyName;
+    const propertyName = site.data.propertyName;
 
     // Display property name if it exists
     if (propertyName) {
@@ -60,13 +73,13 @@ const JITOptimizationsItem = createClass({
       }
     }
 
-    let sampleString = PluralForm.get(site.samples, JIT_SAMPLES)
+    const sampleString = PluralForm.get(site.samples, JIT_SAMPLES)
       .replace("#1", site.samples);
-    let text = dom.span(
+    const text = dom.span(
       { className: "optimization-site-title" },
       `${lastStrategy}${propString} – (${sampleString})`
     );
-    let frame = Frame({
+    const frame = Frame({
       onClick: () => onViewSourceInDebugger(frameData.url, site.data.line),
       frame: {
         source: frameData.url,
@@ -74,45 +87,45 @@ const JITOptimizationsItem = createClass({
         column: site.data.column,
       }
     });
-    let children = [text, frame];
+    const children = [text, frame];
 
     if (!hasSuccessfulOutcome(site)) {
       children.unshift(dom.span({ className: "opt-icon warning" }));
     }
 
     return dom.span({ className: "optimization-site" }, ...children);
-  },
+  }
 
   _renderAttempts({ item: attempts }) {
     return dom.span({ className: "optimization-attempts" },
       `${JIT_ATTEMPTS} (${attempts.length})`
     );
-  },
+  }
 
   _renderTypes({ item: types }) {
     return dom.span({ className: "optimization-types" },
       `${JIT_TYPES} (${types.length})`
     );
-  },
+  }
 
   _renderAttempt({ item: attempt }) {
-    let success = isSuccessfulOutcome(attempt.outcome);
-    let { strategy, outcome } = attempt;
+    const success = isSuccessfulOutcome(attempt.outcome);
+    const { strategy, outcome } = attempt;
     return dom.span({ className: "optimization-attempt" },
       dom.span({ className: "optimization-strategy" }, strategy),
       " → ",
       dom.span({ className: `optimization-outcome ${success ? "success" : "failure"}` },
                outcome)
     );
-  },
+  }
 
   _renderType({ item: type }) {
     return dom.span({ className: "optimization-ion-type" },
                     `${type.site}:${type.mirType}`);
-  },
+  }
 
   _renderObservedType({ onViewSourceInDebugger, item: type }) {
-    let children = [
+    const children = [
       dom.span({ className: "optimization-observed-type-keyed" },
         `${type.keyedBy}${type.name ? ` → ${type.name}` : ""}`)
     ];
@@ -135,7 +148,7 @@ const JITOptimizationsItem = createClass({
     }
 
     return dom.span({ className: "optimization-observed-type" }, ...children);
-  },
+  }
 
   render() {
     /* eslint-disable no-unused-vars */
@@ -143,7 +156,7 @@ const JITOptimizationsItem = createClass({
      * TODO - Re-enable this eslint rule. The JIT tool is a work in progress, and these
      *        undefined variables may represent intended functionality.
      */
-    let {
+    const {
       depth,
       arrow,
       type,
@@ -173,7 +186,7 @@ const JITOptimizationsItem = createClass({
       arrow,
       content
     );
-  },
-});
+  }
+}
 
 module.exports = JITOptimizationsItem;

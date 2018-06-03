@@ -58,6 +58,7 @@
 #include "gfxEnv.h"
 #include "gfxPlatform.h"
 #include "gfxPrefs.h"
+#include "mozilla/AutoRestore.h"
 #include "mozilla/Logging.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/MiscEvents.h"
@@ -69,6 +70,7 @@
 #include <limits>
 
 #include "nsWindow.h"
+#include "nsAppRunner.h"
 
 #include <shellapi.h>
 #include <windows.h>
@@ -85,7 +87,6 @@
 #include "mozilla/WidgetTraceEvent.h"
 #include "nsIAppShell.h"
 #include "nsISupportsPrimitives.h"
-#include "nsIDOMMouseEvent.h"
 #include "nsIKeyEventInPluginCallback.h"
 #include "nsITheme.h"
 #include "nsIObserverService.h"
@@ -126,6 +127,7 @@
 #include "WinTaskbar.h"
 #include "WidgetUtils.h"
 #include "nsIWidgetListener.h"
+#include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/dom/Touch.h"
 #include "mozilla/gfx/2D.h"
 #include "nsToolkitCompsCID.h"
@@ -203,14 +205,13 @@
 #endif
 
 #include "mozilla/gfx/DeviceManagerDx.h"
-#include "mozilla/layers/APZCTreeManager.h"
 #include "mozilla/layers/InputAPZContext.h"
 #include "mozilla/layers/KnowsCompositor.h"
-#include "mozilla/layers/ScrollInputMethods.h"
 #include "InputData.h"
 
 #include "mozilla/Telemetry.h"
 #include "mozilla/plugins/PluginProcessParent.h"
+#include "mozilla/webrender/WebRenderAPI.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -271,9 +272,6 @@ BYTE            nsWindow::sLastMouseButton        = 0;
 bool            nsWindow::sHaveInitializedPrefs   = false;
 
 TriStateBool nsWindow::sHasBogusPopupsDropShadowOnMultiMonitor = TRI_UNKNOWN;
-
-WPARAM nsWindow::sMouseExitwParam = 0;
-LPARAM nsWindow::sMouseExitlParamScreen = 0;
 
 static SystemTimeConverter<DWORD>&
 TimeConverter() {
@@ -353,6 +351,9 @@ static NS_DEFINE_CID(kCClipboardCID, NS_CLIPBOARD_CID);
 
 // General purpose user32.dll hook object
 static WindowsDllInterceptor sUser32Intercept;
+
+// AddHook success checks
+static mozilla::Maybe<bool> sHookedGetWindowInfo;
 
 // 2 pixel offset for eTransparencyBorderlessGlass which equals the size of
 // the default window border Windows paints. Glass will be extended inward
@@ -614,6 +615,7 @@ nsWindow::nsWindow(bool aIsChildWindow)
   mFullscreenMode       = false;
   mMousePresent         = false;
   mDestroyCalled        = false;
+  mIsEarlyBlankWindow   = false;
   mHasTaskbarIconBeenCreated = false;
   mMouseTransparent     = false;
   mPickerDisplayCount   = 0;
@@ -715,8 +717,6 @@ nsWindow::~nsWindow()
 
   NS_IF_RELEASE(mNativeDragTarget);
 }
-
-NS_IMPL_ISUPPORTS_INHERITED0(nsWindow, nsBaseWidget)
 
 /**************************************************************
  *
@@ -834,10 +834,10 @@ nsWindow::Create(nsIWidget* aParent,
                            className,
                            L"",
                            style,
-                           aRect.x,
-                           aRect.y,
-                           aRect.width,
-                           GetHeight(aRect.height),
+                           aRect.X(),
+                           aRect.Y(),
+                           aRect.Width(),
+                           GetHeight(aRect.Height()),
                            parent,
                            nullptr,
                            nsToolkit::mDllInstance,
@@ -847,6 +847,14 @@ nsWindow::Create(nsIWidget* aParent,
     NS_WARNING("nsWindow CreateWindowEx failed.");
     return NS_ERROR_FAILURE;
   }
+  // If mDefaultScale is set before mWnd has been set, it will have the scale of the
+  // primary monitor, rather than the monitor that the window is actually on. For
+  // non-popup windows this gets corrected by the WM_DPICHANGED message which resets
+  // mDefaultScale, but for popup windows we don't reset mDefaultScale on that message.
+  // In order to ensure that popup windows spawned on a non-primary monitor end up
+  // with the correct scale, we reset mDefaultScale here so that it gets recomputed
+  // using the correct monitor now that we have a mWnd.
+  mDefaultScale = -1.0;
 
   if (mIsRTL) {
     DWORD dwAttribute = TRUE;    
@@ -1269,7 +1277,7 @@ nsWindow::SetParent(nsIWidget *aNewParent)
 void
 nsWindow::ReparentNativeWidget(nsIWidget* aNewParent)
 {
-  NS_PRECONDITION(aNewParent, "");
+  MOZ_ASSERT(aNewParent, "null widget");
 
   mParent = aNewParent;
   if (mWindowType == eWindowType_popup) {
@@ -1435,14 +1443,14 @@ nsWindow::CreateScrollSnapshot()
     // We failed to get the clip assume that we need a full fallback.
     clip.left = 0;
     clip.top = 0;
-    clip.right = mBounds.width;
-    clip.bottom = mBounds.height;
+    clip.right = mBounds.Width();
+    clip.bottom = mBounds.Height();
     return GetFallbackScrollSnapshot(clip);
   }
 
   // Check that the window is in a position to snapshot. We don't check for
   // clipped width as that doesn't currently matter for APZ scrolling.
-  if (clip.top || clip.bottom != mBounds.height) {
+  if (clip.top || clip.bottom != mBounds.Height()) {
     return GetFallbackScrollSnapshot(clip);
   }
 
@@ -1454,9 +1462,9 @@ nsWindow::CreateScrollSnapshot()
     ::ReleaseDC(mWnd, windowDC);
   });
 
-  gfx::IntSize snapshotSize(mBounds.width, mBounds.height);
+  gfx::IntSize snapshotSize(mBounds.Width(), mBounds.Height());
   ScrollSnapshot* snapshot;
-  if (clip.left || clip.right != mBounds.width) {
+  if (clip.left || clip.right != mBounds.Width()) {
     // Can't do a full snapshot, so use the partial snapshot.
     snapshot = EnsureSnapshotSurface(mPartialSnapshot, snapshotSize);
   } else {
@@ -1480,7 +1488,7 @@ nsWindow::CreateScrollSnapshot()
 already_AddRefed<SourceSurface>
 nsWindow::GetFallbackScrollSnapshot(const RECT& aRequiredClip)
 {
-  gfx::IntSize snapshotSize(mBounds.width, mBounds.height);
+  gfx::IntSize snapshotSize(mBounds.Width(), mBounds.Height());
 
   // If the current snapshot is the correct size and covers the required clip,
   // just keep that by returning null.
@@ -1572,6 +1580,11 @@ nsWindow::Show(bool bState)
         // speed up the initial paint after show for
         // top level windows:
         syncInvalidate = true;
+
+        // Set the cursor before showing the window to avoid the default wait
+        // cursor.
+        SetCursor(eCursor_standard);
+
         switch (mSizeMode) {
           case nsSizeMode_Fullscreen:
             ::ShowWindow(mWnd, SW_SHOW);
@@ -1693,7 +1706,7 @@ void nsWindow::SetThemeRegion()
       (mWindowType == eWindowType_popup && !IsPopupWithTitleBar() &&
        (mPopupType == ePopupTypeTooltip || mPopupType == ePopupTypePanel))) {
     HRGN hRgn = nullptr;
-    RECT rect = {0,0,mBounds.width,mBounds.height};
+    RECT rect = {0,0,mBounds.Width(),mBounds.Height()};
     
     HDC dc = ::GetDC(mWnd);
     GetThemeBackgroundRegion(nsUXThemeData::GetTheme(eUXTooltip), dc, TTP_STANDARD, TS_NORMAL, &rect, &hRgn);
@@ -1804,14 +1817,13 @@ nsWindow::Move(double aX, double aY)
   // Only perform this check for non-popup windows, since the positioning can
   // in fact change even when the x/y do not.  We always need to perform the
   // check. See bug #97805 for details.
-  if (mWindowType != eWindowType_popup && (mBounds.x == x) && (mBounds.y == y))
+  if (mWindowType != eWindowType_popup && mBounds.IsEqualXY(x, y))
   {
     // Nothing to do, since it is already positioned correctly.
     return;
   }
 
-  mBounds.x = x;
-  mBounds.y = y;
+  mBounds.MoveTo(x, y);
 
   if (mWnd) {
 #ifdef DEBUG
@@ -1843,7 +1855,7 @@ nsWindow::Move(double aX, double aY)
     if (IsPlugin() &&
         !mLayerManager &&
         mClipRects &&
-        (mClipRectCount != 1 || !mClipRects[0].IsEqualInterior(LayoutDeviceIntRect(0, 0, mBounds.width, mBounds.height)))) {
+        (mClipRectCount != 1 || !mClipRects[0].IsEqualInterior(LayoutDeviceIntRect(0, 0, mBounds.Width(), mBounds.Height())))) {
       flags |= SWP_NOCOPYBITS;
     }
     double oldScale = mDefaultScale;
@@ -1875,7 +1887,7 @@ nsWindow::Resize(double aWidth, double aHeight, bool aRepaint)
   ConstrainSize(&width, &height);
 
   // Avoid unnecessary resizing calls
-  if (mBounds.width == width && mBounds.height == height) {
+  if (mBounds.IsEqualSize(width, height)) {
     if (aRepaint) {
       Invalidate();
     }
@@ -1883,8 +1895,7 @@ nsWindow::Resize(double aWidth, double aHeight, bool aRepaint)
   }
 
   // Set cached value for lightweight and printing
-  mBounds.width  = width;
-  mBounds.height = height;
+  mBounds.SizeTo(width, height);
 
   if (mWnd) {
     UINT  flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE;
@@ -1928,8 +1939,7 @@ nsWindow::Resize(double aX, double aY, double aWidth,
   ConstrainSize(&width, &height);
 
   // Avoid unnecessary resizing calls
-  if (mBounds.x == x && mBounds.y == y &&
-      mBounds.width == width && mBounds.height == height) {
+  if (mBounds.IsEqualRect(x, y, width, height)) {
     if (aRepaint) {
       Invalidate();
     }
@@ -1937,10 +1947,7 @@ nsWindow::Resize(double aX, double aY, double aWidth,
   }
 
   // Set cached value for lightweight and printing
-  mBounds.x      = x;
-  mBounds.y      = y;
-  mBounds.width  = width;
-  mBounds.height = height;
+  mBounds.SetRect(x, y, width, height);
 
   if (mWnd) {
     UINT  flags = SWP_NOZORDER | SWP_NOACTIVATE;
@@ -1961,8 +1968,6 @@ nsWindow::Resize(double aX, double aY, double aWidth,
       // the system unexpectedly when we leave fullscreen state.
       ::SetWindowPos(mTransitionWnd, HWND_TOPMOST, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-      // Every transition window is only used once.
-      mTransitionWnd = nullptr;
     }
     SetThemeRegion();
   }
@@ -2147,8 +2152,8 @@ nsWindow::ConstrainPosition(bool aAllowSlop, int32_t *aX, int32_t *aY)
 
   // We need to use the window size in the kind of pixels used for window-
   // manipulation APIs.
-  int32_t logWidth = std::max<int32_t>(NSToIntRound(mBounds.width / dpiScale), 1);
-  int32_t logHeight = std::max<int32_t>(NSToIntRound(mBounds.height / dpiScale), 1);
+  int32_t logWidth = std::max<int32_t>(NSToIntRound(mBounds.Width() / dpiScale), 1);
+  int32_t logHeight = std::max<int32_t>(NSToIntRound(mBounds.Height() / dpiScale), 1);
 
   /* get our playing field. use the current screen, or failing that
   for any reason, use device caps for the default screen. */
@@ -2292,14 +2297,12 @@ nsWindow::GetBounds()
   LayoutDeviceIntRect rect;
 
   // assign size
-  rect.width  = r.right - r.left;
-  rect.height = r.bottom - r.top;
+  rect.SizeTo(r.right - r.left, r.bottom - r.top);
 
   // popup window bounds' are in screen coordinates, not relative to parent
   // window
   if (mWindowType == eWindowType_popup) {
-    rect.x = r.left;
-    rect.y = r.top;
+    rect.MoveTo(r.left, r.top);
     return rect;
   }
 
@@ -2344,8 +2347,7 @@ nsWindow::GetBounds()
       r.top  -= clientOffset.y;
     }
   }
-  rect.x = r.left;
-  rect.y = r.top;
+  rect.MoveTo(r.left, r.top);
   return rect;
 }
 
@@ -2363,8 +2365,7 @@ nsWindow::GetClientBounds()
   LayoutDeviceIntRect bounds = GetBounds();
   LayoutDeviceIntRect rect;
   rect.MoveTo(bounds.TopLeft() + GetClientOffset());
-  rect.width  = r.right - r.left;
-  rect.height = r.bottom - r.top;
+  rect.SizeTo(r.right - r.left, r.bottom - r.top);
   return rect;
 }
 
@@ -2379,12 +2380,7 @@ nsWindow::GetScreenBounds()
   RECT r;
   VERIFY(::GetWindowRect(mWnd, &r));
 
-  LayoutDeviceIntRect rect;
-  rect.x = r.left;
-  rect.y = r.top;
-  rect.width  = r.right - r.left;
-  rect.height = r.bottom - r.top;
-  return rect;
+  return LayoutDeviceIntRect(r.left, r.top, r.right - r.left, r.bottom - r.top);
 }
 
 nsresult
@@ -2465,8 +2461,7 @@ nsWindow::ResetLayout()
   // Send a gecko size event to trigger reflow.
   RECT clientRc = {0};
   GetClientRect(mWnd, &clientRc);
-  nsIntRect evRect(WinUtils::ToIntRect(clientRc));
-  OnResize(evRect);
+  OnResize(WinUtils::ToIntRect(clientRc).Size());
 
   // Invalidate and update
   Invalidate();
@@ -2505,11 +2500,15 @@ nsWindow::UpdateGetWindowInfoCaptionStatus(bool aActiveCaption)
   if (!mWnd)
     return;
 
-  if (!sGetWindowInfoPtrStub) {
+  if (sHookedGetWindowInfo.isNothing()) {
     sUser32Intercept.Init("user32.dll");
-    if (!sUser32Intercept.AddHook("GetWindowInfo", reinterpret_cast<intptr_t>(GetWindowInfoHook),
-                                  (void**) &sGetWindowInfoPtrStub))
+    sHookedGetWindowInfo =
+      Some(sUser32Intercept.AddHook("GetWindowInfo",
+                                    reinterpret_cast<intptr_t>(GetWindowInfoHook),
+                                    (void**) &sGetWindowInfoPtrStub));
+    if (!sHookedGetWindowInfo.value()) {
       return;
+    }
   }
   // Update our internally tracked caption status
   SetPropW(mWnd, kManageWindowInfoProperty, 
@@ -3094,16 +3093,16 @@ void nsWindow::UpdateOpaqueRegion(const LayoutDeviceIntRegion& aOpaqueRegion)
     // priority is to include the bounds of all plugins.
     LayoutDeviceIntRect largest =
       aOpaqueRegion.GetLargestRectangle(pluginBounds);
-    margins.cxLeftWidth = largest.x;
-    margins.cxRightWidth = clientBounds.width - largest.XMost();
-    margins.cyBottomHeight = clientBounds.height - largest.YMost();
+    margins.cxLeftWidth = largest.X();
+    margins.cxRightWidth = clientBounds.Width() - largest.XMost();
+    margins.cyBottomHeight = clientBounds.Height() - largest.YMost();
     if (mCustomNonClient) {
       // The minimum glass height must be the caption buttons height,
       // otherwise the buttons are drawn incorrectly.
-      largest.y = std::max<uint32_t>(largest.y,
-                         nsUXThemeData::GetCommandButtonBoxMetrics().cy);
+      largest.MoveToY(std::max<uint32_t>(largest.Y(),
+                        nsUXThemeData::GetCommandButtonBoxMetrics().cy));
     }
-    margins.cyTopHeight = largest.y;
+    margins.cyTopHeight = largest.Y();
   }
 
   // Only update glass area if there are changes
@@ -3276,10 +3275,10 @@ nsWindow::Invalidate(const LayoutDeviceIntRect& aRect)
 
     RECT rect;
 
-    rect.left   = aRect.x;
-    rect.top    = aRect.y;
-    rect.right  = aRect.x + aRect.width;
-    rect.bottom = aRect.y + aRect.height;
+    rect.left   = aRect.X();
+    rect.top    = aRect.Y();
+    rect.right  = aRect.XMost();
+    rect.bottom = aRect.YMost();
 
     VERIFY(::InvalidateRect(mWnd, &rect, FALSE));
   }
@@ -3366,8 +3365,8 @@ FullscreenTransitionThreadProc(LPVOID lpParam)
   ::SetWindowLongW(wnd, GWL_STYLE, 0);
   ::SetWindowLongW(wnd, GWL_EXSTYLE, WS_EX_LAYERED |
                    WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
-  ::SetWindowPos(wnd, HWND_TOPMOST, data->mBounds.x, data->mBounds.y,
-                 data->mBounds.width, data->mBounds.height, 0);
+  ::SetWindowPos(wnd, HWND_TOPMOST, data->mBounds.X(), data->mBounds.Y(),
+                 data->mBounds.Width(), data->mBounds.Height(), 0);
   data->mWnd = wnd;
   ::ReleaseSemaphore(data->mSemaphore, 1, nullptr);
   // The initialization data may no longer be valid
@@ -3426,10 +3425,10 @@ nsWindow::PrepareForFullscreenTransition(nsISupports** aData)
   MOZ_ASSERT(BoundsUseDesktopPixels(),
              "Should only be called on top-level window");
   double scale = GetDesktopToDeviceScale().scale; // XXX or GetDefaultScale() ?
-  initData.mBounds.x = NSToIntRound(x * scale);
-  initData.mBounds.y = NSToIntRound(y * scale);
-  initData.mBounds.width = NSToIntRound(width * scale);
-  initData.mBounds.height = NSToIntRound(height * scale);
+  initData.mBounds.SetRect(NSToIntRound(x * scale),
+                           NSToIntRound(y * scale),
+                           NSToIntRound(width * scale),
+                           NSToIntRound(height * scale));
 
   // Create a semaphore for synchronizing the window handle which will
   // be created by the transition thread and used by the main thread for
@@ -3447,6 +3446,7 @@ nsWindow::PrepareForFullscreenTransition(nsISupports** aData)
   }
 
   mTransitionWnd = initData.mWnd;
+
   auto data = new FullscreenTransitionData(initData.mWnd);
   *aData = data;
   NS_ADDREF(data);
@@ -3464,6 +3464,15 @@ nsWindow::PerformFullscreenTransition(FullscreenTransitionStage aStage,
     WM_FULLSCREEN_TRANSITION_BEFORE : WM_FULLSCREEN_TRANSITION_AFTER;
   WPARAM wparam = (WPARAM)callback.forget().take();
   ::PostMessage(data->mWnd, msg, wparam, (LPARAM)aDuration);
+}
+
+/* virtual */ void
+nsWindow::CleanupFullscreenTransition()
+{
+  MOZ_ASSERT(NS_IsMainThread(), "CleanupFullscreenTransition "
+             "should only run on the main thread");
+
+  mTransitionWnd = nullptr;
 }
 
 nsresult
@@ -3513,17 +3522,6 @@ nsWindow::MakeFullScreen(bool aFullScreen, nsIScreen* aTargetScreen)
   if (mWidgetListener) {
     mWidgetListener->SizeModeChanged(mSizeMode);
     mWidgetListener->FullscreenChanged(aFullScreen);
-  }
-
-  // Send a eMouseEnterIntoWidget event since Windows has already sent
-  // a WM_MOUSELEAVE that caused us to send a eMouseExitFromWidget event.
-  if (aFullScreen && !sCurrentWindow) {
-    sCurrentWindow = this;
-    LPARAM pos = sCurrentWindow->lParamToClient(sMouseExitlParamScreen);
-    sCurrentWindow->DispatchMouseEvent(eMouseEnterIntoWidget,
-                                       sMouseExitwParam, pos, false,
-                                       WidgetMouseEvent::eLeftButton,
-                                       MOUSE_INPUT_SOURCE());
   }
 
   return NS_OK;
@@ -4024,8 +4022,8 @@ nsWindow::OnDefaultButtonLoaded(const LayoutDeviceIntRect& aButtonRect)
   LayoutDeviceIntRect widgetRect = GetScreenBounds();
   LayoutDeviceIntRect buttonRect(aButtonRect + widgetRect.TopLeft());
 
-  LayoutDeviceIntPoint centerOfButton(buttonRect.x + buttonRect.width / 2,
-                                      buttonRect.y + buttonRect.height / 2);
+  LayoutDeviceIntPoint centerOfButton(buttonRect.X() + buttonRect.Width() / 2,
+                                      buttonRect.Y() + buttonRect.Height() / 2);
   // The center of the button can be outside of the widget.
   // E.g., it could be hidden by scrolling.
   if (!widgetRect.Contains(centerOfButton)) {
@@ -4065,13 +4063,22 @@ nsWindow::UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeometries)
     clearRegion.Or(clearRegion, gfx::IntRect::Truncate(0, 0, rect.right - rect.left, borderSize));
   }
 
+  mWindowButtonsRect = Nothing();
+
   if (!IsWin10OrLater()) {
     for (size_t i = 0; i < aThemeGeometries.Length(); i++) {
       if (aThemeGeometries[i].mType == nsNativeThemeWin::eThemeGeometryTypeWindowButtons) {
         LayoutDeviceIntRect bounds = aThemeGeometries[i].mRect;
+        // Extend the bounds by one pixel to the right, because that's how much
+        // the actual window button shape extends past the client area of the
+        // window (and overlaps the right window frame).
+        bounds.SetWidth(bounds.Width() + 1);
+        if (!mWindowButtonsRect) {
+          mWindowButtonsRect = Some(bounds);
+        }
         clearRegion.Or(clearRegion, gfx::IntRect::Truncate(bounds.X(), bounds.Y(), bounds.Width(), bounds.Height() - 2.0));
-        clearRegion.Or(clearRegion, gfx::IntRect::Truncate(bounds.X() + 1.0, bounds.YMost() - 2.0, bounds.Width() - 1.0, 1.0));
-        clearRegion.Or(clearRegion, gfx::IntRect::Truncate(bounds.X() + 2.0, bounds.YMost() - 1.0, bounds.Width() - 3.0, 1.0));
+        clearRegion.Or(clearRegion, gfx::IntRect::Truncate(bounds.X() + 1.0, bounds.YMost() - 2.0, bounds.Width() - 2.0, 1.0));
+        clearRegion.Or(clearRegion, gfx::IntRect::Truncate(bounds.X() + 2.0, bounds.YMost() - 1.0, bounds.Width() - 4.0, 1.0));
       }
     }
   }
@@ -4079,10 +4086,35 @@ nsWindow::UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeometries)
   layerManager->SetRegionToClear(clearRegion);
 }
 
+void
+nsWindow::AddWindowOverlayWebRenderCommands(layers::WebRenderBridgeChild* aWrBridge,
+                                            wr::DisplayListBuilder& aBuilder,
+                                            wr::IpcResourceUpdateQueue& aResources)
+{
+  if (mWindowButtonsRect) {
+    wr::LayoutRect rect = wr::ToLayoutRect(*mWindowButtonsRect);
+    nsTArray<wr::ComplexClipRegion> roundedClip;
+    roundedClip.AppendElement(wr::ToComplexClipRegion(
+      RoundedRect(ThebesRect(mWindowButtonsRect->ToUnknownRect()),
+                  RectCornerRadii(0, 0, 3, 3))));
+    wr::WrClipId clipId =
+      aBuilder.DefineClip(Nothing(), rect, &roundedClip);
+    aBuilder.PushClip(clipId);
+    aBuilder.PushClearRect(rect);
+    aBuilder.PopClip();
+  }
+}
+
 uint32_t
 nsWindow::GetMaxTouchPoints() const
 {
   return WinUtils::GetMaxTouchPoints();
+}
+
+void
+nsWindow::SetWindowClass(const nsAString& xulWinType)
+{
+  mIsEarlyBlankWindow = xulWinType.EqualsLiteral("navigator:blank");
 }
 
 /**************************************************************
@@ -4286,6 +4318,47 @@ bool nsWindow::DispatchPluginEvent(UINT aMessage,
   return ret;
 }
 
+bool nsWindow::TouchEventShouldStartDrag(EventMessage aEventMessage,
+                                         LayoutDeviceIntPoint aEventPoint)
+{
+  // Allow users to start dragging by double-tapping.
+  if (aEventMessage == eMouseDoubleClick) {
+    return true;
+  }
+
+  // In chrome UI, allow touchdownstartsdrag attributes
+  // to cause any touchdown event to trigger a drag.
+  if (aEventMessage == eMouseDown) {
+    WidgetMouseEvent hittest(true, eMouseHitTest, this,
+                             WidgetMouseEvent::eReal);
+    hittest.mRefPoint = aEventPoint;
+    hittest.mIgnoreRootScrollFrame = true;
+    hittest.inputSource = MouseEventBinding::MOZ_SOURCE_TOUCH;
+    DispatchInputEvent(&hittest);
+
+    EventTarget* target = hittest.GetDOMEventTarget();
+    if (target) {
+      nsCOMPtr<nsIContent> node = do_QueryInterface(target);
+
+      // Check if the element or any parent element has the
+      // attribute we're looking for.
+      while (node) {
+        if (node->IsElement()) {
+          nsAutoString startDrag;
+          node->AsElement()->GetAttribute(
+            NS_LITERAL_STRING("touchdownstartsdrag"), startDrag);
+          if (!startDrag.IsEmpty()) {
+            return true;
+          }
+        }
+        node = node->GetParent();
+      }
+    }
+  }
+
+  return false;
+}
+
 // Deal with all sort of mouse event
 bool
 nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
@@ -4337,12 +4410,13 @@ nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
 
     if (mTouchWindow) {
       // If mTouchWindow is true, then we must have APZ enabled and be
-      // feeding it raw touch events. In that case we don't need to
-      // send touch-generated mouse events to content. The only exception is
-      // the touch-generated mouse double-click, which is used to start off the
-      // touch-based drag-and-drop gesture.
+      // feeding it raw touch events. In that case we only want to
+      // send touch-generated mouse events to content if they should
+      // start a touch-based drag-and-drop gesture, such as on
+      // double-tapping or when tapping elements marked with the
+      // touchdownstartsdrag attribute in chrome UI.
       MOZ_ASSERT(mAPZC);
-      if (aEventMessage == eMouseDoubleClick) {
+      if (TouchEventShouldStartDrag(aEventMessage, eventPoint)) {
         aEventMessage = eMouseTouchDrag;
       } else {
         return result;
@@ -4363,7 +4437,7 @@ nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
 
   // Since it is unclear whether a user will use the digitizer,
   // Postpone initialization until first PEN message will be found.
-  if (nsIDOMMouseEvent::MOZ_SOURCE_PEN == aInputSource
+  if (MouseEventBinding::MOZ_SOURCE_PEN == aInputSource
       // Messages should be only at topLevel window.
       && nsWindowType::eWindowType_toplevel == mWindowType
       // Currently this scheme is used only when pointer events is enabled.
@@ -4570,8 +4644,7 @@ nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
   if (mWidgetListener) {
     if (aEventMessage == eMouseMove) {
       LayoutDeviceIntRect rect = GetBounds();
-      rect.x = 0;
-      rect.y = 0;
+      rect.MoveTo(0, 0);
 
       if (rect.Contains(event.mRefPoint)) {
         if (sCurrentWindow == nullptr || sCurrentWindow != this) {
@@ -4593,8 +4666,6 @@ nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
         }
       }
     } else if (aEventMessage == eMouseExitFromWidget) {
-      sMouseExitwParam = wParam;
-      sMouseExitlParamScreen = lParamToScreen(lParam);
       if (sCurrentWindow == this) {
         sCurrentWindow = nullptr;
       }
@@ -4647,13 +4718,18 @@ void nsWindow::DispatchFocusToTopLevelWindow(bool aIsActivate)
   }
 }
 
-bool nsWindow::IsTopLevelMouseExit(HWND aWnd)
+HWND nsWindow::WindowAtMouse()
 {
   DWORD pos = ::GetMessagePos();
   POINT mp;
   mp.x = GET_X_LPARAM(pos);
   mp.y = GET_Y_LPARAM(pos);
-  HWND mouseWnd = ::WindowFromPoint(mp);
+  return ::WindowFromPoint(mp);
+}
+
+bool nsWindow::IsTopLevelMouseExit(HWND aWnd)
+{
+  HWND mouseWnd = WindowAtMouse();
 
   // WinUtils::GetTopLevelHWND() will return a HWND for the window frame
   // (which includes the non-client area).  If the mouse has moved into
@@ -4962,6 +5038,20 @@ LRESULT CALLBACK nsWindow::WindowProcInternal(HWND hWnd, UINT msg, WPARAM wParam
   return res;
 }
 
+const char16_t*
+GetQuitType()
+{
+  if (Preferences::GetBool(PREF_WIN_REGISTER_APPLICATION_RESTART, false)) {
+    DWORD cchCmdLine = 0;
+    HRESULT rc =
+      ::GetApplicationRestartSettings(::GetCurrentProcess(), nullptr, &cchCmdLine, nullptr);
+    if (rc == S_OK) {
+      return u"os-restart";
+    }
+  }
+  return nullptr;
+}
+
 // The main windows message processing method for plugins.
 // The result means whether this method processed the native
 // event for plugin. If false, the native event should be
@@ -5134,7 +5224,9 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
         nsCOMPtr<nsISupportsPRBool> cancelQuit =
           do_CreateInstance(NS_SUPPORTS_PRBOOL_CONTRACTID);
         cancelQuit->SetData(false);
-        obsServ->NotifyObservers(cancelQuit, "quit-application-requested", nullptr);
+
+        const char16_t* quitType = GetQuitType();
+        obsServ->NotifyObservers(cancelQuit, "quit-application-requested", quitType);
 
         bool abortQuit;
         cancelQuit->GetData(&abortQuit);
@@ -5165,9 +5257,11 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
           mozilla::services::GetObserverService();
         const char16_t* context = u"shutdown-persist";
         const char16_t* syncShutdown = u"syncShutdown";
+        const char16_t* quitType = GetQuitType();
+
         obsServ->NotifyObservers(nullptr, "quit-application-granted", syncShutdown);
         obsServ->NotifyObservers(nullptr, "quit-application-forced", nullptr);
-        obsServ->NotifyObservers(nullptr, "quit-application", nullptr);
+        obsServ->NotifyObservers(nullptr, "quit-application", quitType);
         obsServ->NotifyObservers(nullptr, "profile-change-net-teardown", context);
         obsServ->NotifyObservers(nullptr, "profile-change-teardown", context);
         obsServ->NotifyObservers(nullptr, "profile-before-change", context);
@@ -5583,6 +5677,14 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
         break;
       mMousePresent = false;
 
+      // Check if the mouse is over the fullscreen transition window, if so
+      // clear sLastMouseMovePoint. This way the WM_MOUSEMOVE we get after the
+      // transition window disappears will not be ignored, even if the mouse
+      // hasn't moved.
+      if (mTransitionWnd && WindowAtMouse() == mTransitionWnd) {
+        sLastMouseMovePoint = {0};
+      }
+
       // We need to check mouse button states and put them in for
       // wParam.
       WPARAM mouseState = (GetKeyState(VK_LBUTTON) ? MK_LBUTTON : 0)
@@ -5607,7 +5709,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
         pointerInfo.pointerId = pointerId;
         DispatchMouseEvent(eMouseExitFromWidget, wParam, pos, false,
                            WidgetMouseEvent::eLeftButton,
-                           nsIDOMMouseEvent::MOZ_SOURCE_PEN, &pointerInfo);
+                           MouseEventBinding::MOZ_SOURCE_PEN, &pointerInfo);
         InkCollector::sInkCollector->ClearTarget();
         InkCollector::sInkCollector->ClearPointerId();
       }
@@ -5619,7 +5721,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
       // If the context menu is brought up by a touch long-press, then
       // the APZ code is responsible for dealing with this, so we don't
       // need to do anything.
-      if (mTouchWindow && MOUSE_INPUT_SOURCE() == nsIDOMMouseEvent::MOZ_SOURCE_TOUCH) {
+      if (mTouchWindow && MOUSE_INPUT_SOURCE() == MouseEventBinding::MOZ_SOURCE_TOUCH) {
         MOZ_ASSERT(mAPZC); // since mTouchWindow is true, APZ must be enabled
         result = true;
         break;
@@ -5843,6 +5945,9 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
     case WM_DISPLAYCHANGE:
     {
       ScreenHelperWin::RefreshScreens();
+      if (mWidgetListener) {
+        mWidgetListener->UIResolutionChanged();
+      }
       break;
     }
 
@@ -6442,7 +6547,15 @@ LRESULT nsWindow::ProcessKeyUpMessage(const MSG &aMsg, bool *aEventDispatched)
 {
   ModifierKeyState modKeyState;
   NativeKey nativeKey(this, aMsg, modKeyState);
-  return static_cast<LRESULT>(nativeKey.HandleKeyUpMessage(aEventDispatched));
+  bool result = nativeKey.HandleKeyUpMessage(aEventDispatched);
+  if (aMsg.wParam == VK_F10) {
+    // Bug 1382199: Windows default behavior will trigger the System menu bar
+    // when F10 is released. Among other things, this causes the System menu bar
+    // to appear when a web page overrides the contextmenu event. We *never*
+    // want this default behavior, so eat this key (never pass it to Windows).
+    return true;
+  }
+  return result;
 }
 
 LRESULT nsWindow::ProcessKeyDownMessage(const MSG &aMsg,
@@ -6658,9 +6771,7 @@ void nsWindow::OnWindowPosChanged(WINDOWPOS* wp)
 
   // Handle window position changes
   if (!(wp->flags & SWP_NOMOVE)) {
-    mBounds.x = wp->x;
-    mBounds.y = wp->y;
-
+    mBounds.MoveTo(wp->x, wp->y);
     NotifyWindowMoved(wp->x, wp->y);
   }
 
@@ -6673,7 +6784,6 @@ void nsWindow::OnWindowPosChanged(WINDOWPOS* wp)
 
     newWidth  = r.right - r.left;
     newHeight = r.bottom - r.top;
-    nsIntRect rect(wp->x, wp->y, newWidth, newHeight);
 
     if (newWidth > mLastSize.width)
     {
@@ -6710,8 +6820,7 @@ void nsWindow::OnWindowPosChanged(WINDOWPOS* wp)
                      RDW_ALLCHILDREN);
     }
 
-    mBounds.width    = newWidth;
-    mBounds.height   = newHeight;
+    mBounds.SizeTo(newWidth, newHeight);
     mLastSize.width  = newWidth;
     mLastSize.height = newHeight;
 
@@ -6728,15 +6837,27 @@ void nsWindow::OnWindowPosChanged(WINDOWPOS* wp)
         return;
       }
     }
+  }
 
-    // Recalculate the width and height based on the client area for gecko events.
+  // Notify the widget listener for size change of client area for gecko
+  // events. This needs to be done when either window size is changed,
+  // or window frame is changed. They may not happen together.
+  // However, we don't invoke that for popup when window frame changes,
+  // because popups may trigger frame change before size change via
+  // {Set,Clear}ThemeRegion they invoke in Resize. That would make the
+  // code below call OnResize with a wrong client size first, which can
+  // lead to flickerling for some popups.
+  if (!(wp->flags & SWP_NOSIZE) ||
+      ((wp->flags & SWP_FRAMECHANGED) && !IsPopup())) {
+    RECT r;
+    LayoutDeviceIntSize clientSize;
     if (::GetClientRect(mWnd, &r)) {
-      rect.width  = r.right - r.left;
-      rect.height = r.bottom - r.top;
+      clientSize = WinUtils::ToIntRect(r).Size();
+    } else {
+      clientSize = mBounds.Size();
     }
-    
     // Send a gecko resize event
-    OnResize(rect);
+    OnResize(clientSize);
   }
 }
 
@@ -6947,13 +7068,11 @@ bool nsWindow::OnGesture(WPARAM wParam, LPARAM lParam)
     wheelEvent.button      = 0;
     wheelEvent.mTime       = ::GetMessageTime();
     wheelEvent.mTimeStamp  = GetMessageTimeStamp(wheelEvent.mTime);
-    wheelEvent.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
+    wheelEvent.inputSource = MouseEventBinding::MOZ_SOURCE_TOUCH;
 
     bool endFeedback = true;
 
     if (mGesture.PanDeltaToPixelScroll(wheelEvent)) {
-      mozilla::Telemetry::Accumulate(mozilla::Telemetry::SCROLL_INPUT_METHODS,
-          (uint32_t) ScrollInputMethod::MainThreadTouch);
       DispatchEvent(&wheelEvent, status);
     }
 
@@ -6986,7 +7105,7 @@ bool nsWindow::OnGesture(WPARAM wParam, LPARAM lParam)
   event.button    = 0;
   event.mTime     = ::GetMessageTime();
   event.mTimeStamp = GetMessageTimeStamp(event.mTime);
-  event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
+  event.inputSource = MouseEventBinding::MOZ_SOURCE_TOUCH;
 
   nsEventStatus status;
   DispatchEvent(&event, status);
@@ -7022,11 +7141,11 @@ nsWindow::ConfigureChildren(const nsTArray<Configuration>& aConfigurations)
     NS_ENSURE_SUCCESS(rv, rv);
     LayoutDeviceIntRect bounds = w->GetBounds();
     if (bounds.Size() != configuration.mBounds.Size()) {
-      w->Resize(configuration.mBounds.x, configuration.mBounds.y,
-                configuration.mBounds.width, configuration.mBounds.height,
+      w->Resize(configuration.mBounds.X(), configuration.mBounds.Y(),
+                configuration.mBounds.Width(), configuration.mBounds.Height(),
                 true);
     } else if (bounds.TopLeft() != configuration.mBounds.TopLeft()) {
-      w->Move(configuration.mBounds.x, configuration.mBounds.y);
+      w->Move(configuration.mBounds.X(), configuration.mBounds.Y());
 
 
       if (gfxWindowsPlatform::GetPlatform()->IsDirect2DBackend() ||
@@ -7036,8 +7155,8 @@ nsWindow::ConfigureChildren(const nsTArray<Configuration>& aConfigurations)
         // underlying problem should be found and fixed!
         LayoutDeviceIntRegion r;
         r.Sub(bounds, configuration.mBounds);
-        r.MoveBy(-bounds.x,
-                 -bounds.y);
+        r.MoveBy(-bounds.X(),
+                 -bounds.Y());
         LayoutDeviceIntRect toInvalidate = r.GetBounds();
 
         WinUtils::InvalidatePluginAsWorkaround(w, toInvalidate);
@@ -7064,9 +7183,9 @@ CreateHRGNFromArray(const nsTArray<LayoutDeviceIntRect>& aRects)
   for (uint32_t i = 0; i < aRects.Length(); ++i) {
     const LayoutDeviceIntRect& r = aRects[i];
     bounds.UnionRect(bounds, r);
-    ::SetRect(&rects[i], r.x, r.y, r.XMost(), r.YMost());
+    ::SetRect(&rects[i], r.X(), r.Y(), r.XMost(), r.YMost());
   }
-  ::SetRect(&data->rdh.rcBound, bounds.x, bounds.y, bounds.XMost(), bounds.YMost());
+  ::SetRect(&data->rdh.rcBound, bounds.X(), bounds.Y(), bounds.XMost(), bounds.YMost());
   return ::ExtCreateRegion(nullptr, buf.Length(), data);
 }
 
@@ -7195,14 +7314,19 @@ void nsWindow::OnDestroy()
 }
 
 // Send a resize message to the listener
-bool nsWindow::OnResize(nsIntRect &aWindowRect)
+bool
+nsWindow::OnResize(const LayoutDeviceIntSize& aSize)
 {
-  bool result = mWidgetListener ?
-                mWidgetListener->WindowResized(this, aWindowRect.width, aWindowRect.height) : false;
+  bool result = false;
+  if (mWidgetListener) {
+    result = mWidgetListener->
+      WindowResized(this, aSize.width, aSize.height);
+  }
 
   // If there is an attached view, inform it as well as the normal widget listener.
   if (mAttachedWidgetListener) {
-    return mAttachedWidgetListener->WindowResized(this, aWindowRect.width, aWindowRect.height);
+    return mAttachedWidgetListener->
+      WindowResized(this, aSize.width, aSize.height);
   }
 
   return result;
@@ -7409,7 +7533,7 @@ nsWindow::GetAccessible()
       nsAccessibilityService* accService = GetOrCreateAccService();
       if (accService) {
         a11y::DocAccessible* docAcc =
-          GetAccService()->GetDocAccessible(frame->PresContext()->PresShell());
+          GetAccService()->GetDocAccessible(frame->PresShell());
         if (docAcc) {
           NS_LOG_WMGETOBJECT(this, mWnd,
                              docAcc->GetAccessibleOrDescendant(frame->GetContent()));
@@ -7467,18 +7591,20 @@ void nsWindow::SetWindowTranslucencyInner(nsTransparencyMode aMode)
 
   LONG_PTR style = ::GetWindowLongPtrW(hWnd, GWL_STYLE),
     exStyle = ::GetWindowLongPtr(hWnd, GWL_EXSTYLE);
- 
-   if (parent->mIsVisible)
-     style |= WS_VISIBLE;
-   if (parent->mSizeMode == nsSizeMode_Maximized)
-     style |= WS_MAXIMIZE;
-   else if (parent->mSizeMode == nsSizeMode_Minimized)
-     style |= WS_MINIMIZE;
 
-   if (aMode == eTransparencyTransparent)
-     exStyle |= WS_EX_LAYERED;
-   else
-     exStyle &= ~WS_EX_LAYERED;
+  if (parent->mIsVisible) {
+    style |= WS_VISIBLE;
+    if (parent->mSizeMode == nsSizeMode_Maximized) {
+      style |= WS_MAXIMIZE;
+    } else if (parent->mSizeMode == nsSizeMode_Minimized) {
+      style |= WS_MINIMIZE;
+    }
+  }
+
+  if (aMode == eTransparencyTransparent)
+    exStyle |= WS_EX_LAYERED;
+  else
+    exStyle &= ~WS_EX_LAYERED;
 
   VERIFY_WINDOW_STYLE(style);
   ::SetWindowLongPtrW(hWnd, GWL_STYLE, style);
@@ -7863,7 +7989,7 @@ nsWindow::DealWithPopups(HWND aWnd, UINT aMessage,
     case WM_NCMBUTTONDOWN:
       if (nativeMessage != WM_TOUCH &&
           IsTouchSupportEnabled(aWnd) &&
-          MOUSE_INPUT_SOURCE() == nsIDOMMouseEvent::MOZ_SOURCE_TOUCH) {
+          MOUSE_INPUT_SOURCE() == MouseEventBinding::MOZ_SOURCE_TOUCH) {
         // If any of these mouse events are really compatibility events that
         // Windows is sending for touch inputs, then don't allow them to dismiss
         // popups when APZ is enabled (instead we do the dismissing as part of
@@ -8223,10 +8349,10 @@ nsWindow::SetCandidateWindowForPlugin(const CandidateWindowPosition& aPosition)
   form.dwIndex = 0;
   if (aPosition.mExcludeRect) {
     form.dwStyle = CFS_EXCLUDE;
-    form.rcArea.left = aPosition.mRect.x;
-    form.rcArea.top = aPosition.mRect.y;
-    form.rcArea.right = aPosition.mRect.x + aPosition.mRect.width;
-    form.rcArea.bottom = aPosition.mRect.y + aPosition.mRect.height;
+    form.rcArea.left = aPosition.mRect.X();
+    form.rcArea.top = aPosition.mRect.Y();
+    form.rcArea.right = aPosition.mRect.XMost();
+    form.rcArea.bottom = aPosition.mRect.YMost();
   } else {
     form.dwStyle = CFS_CANDIDATEPOS;
   }
@@ -8255,6 +8381,23 @@ nsWindow::DefaultProcOfPluginEvent(const WidgetPluginEvent& aEvent)
 
   CallWindowProcW(GetPrevWindowProc(), mWnd, pPluginEvent->event,
                   pPluginEvent->wParam, pPluginEvent->lParam);
+}
+
+void
+nsWindow::EnableIMEForPlugin(bool aEnable)
+{
+  // Current IME state isn't plugin, ignore this call
+  if (NS_WARN_IF(mInputContext.mIMEState.mEnabled != IMEState::PLUGIN)) {
+    return;
+  }
+
+  InputContext inputContext = GetInputContext();
+  if (aEnable) {
+    inputContext.mHTMLInputType.AssignLiteral("text");
+  } else {
+    inputContext.mHTMLInputType.AssignLiteral("password");
+  }
+  SetInputContext(inputContext, InputContextAction());
 }
 
 nsresult
@@ -8395,7 +8538,7 @@ bool nsWindow::OnPointerEvents(UINT msg, WPARAM aWParam, LPARAM aLParam)
   // location
   LPARAM newLParam = lParamToClient(aLParam);
   DispatchMouseEvent(message, aWParam, newLParam, false, button,
-                     nsIDOMMouseEvent::MOZ_SOURCE_PEN, &pointerInfo);
+                     MouseEventBinding::MOZ_SOURCE_PEN, &pointerInfo);
   // Consume WM_POINTER* to stop Windows fires WM_*BUTTONDOWN / WM_*BUTTONUP
   // WM_MOUSEMOVE.
   return true;

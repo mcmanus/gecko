@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -23,13 +24,6 @@
 #include <algorithm>
 
 nsBoxLayout* nsSprocketLayout::gInstance = nullptr;
-
-//#define DEBUG_GROW
-
-#define DEBUG_SPRING_SIZE 8
-#define DEBUG_BORDER_SIZE 2
-#define COIL_SIZE 8
-
 
 nsresult
 NS_NewSprocketLayout(nsCOMPtr<nsBoxLayout>& aNewLayout)
@@ -489,7 +483,6 @@ nsSprocketLayout::XULLayout(nsIFrame* aBox, nsBoxLayoutState& aState)
 
       if (!newChildRect.IsEqualInterior(childRect)) {
 #ifdef DEBUG_GROW
-        child->XULDumpBox(stdout);
         printf(" GREW from (%d,%d) -> (%d,%d)\n", childRect.width, childRect.height, newChildRect.width, newChildRect.height);
 #endif
         newChildRect.Inflate(margin);
@@ -653,9 +646,6 @@ nsSprocketLayout::PopulateBoxSizes(nsIFrame* aBox, nsBoxLayoutState& aState, nsB
 
   nsFrameState frameState = nsFrameState(0);
   GetFrameState(aBox, frameState);
-
-  //if (frameState & NS_STATE_CURRENTLY_IN_DEBUG)
-  //   printf("In debug\n");
 
   aMinSize = 0;
   aMaxSize = NS_INTRINSICSIZE;
@@ -922,8 +912,8 @@ nsSprocketLayout::AlignChildren(nsIFrame* aBox,
   nsRect clientRect;
   aBox->GetXULClientRect(clientRect);
 
-  NS_PRECONDITION(!(frameState & NS_STATE_AUTO_STRETCH),
-                  "Only AlignChildren() with non-stretch alignment");
+  MOZ_ASSERT(!(frameState & NS_STATE_AUTO_STRETCH),
+             "Only AlignChildren() with non-stretch alignment");
 
   // These are only calculated if needed
   nsIFrame::Halignment halign;

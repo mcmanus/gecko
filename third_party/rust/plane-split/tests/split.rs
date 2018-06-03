@@ -2,19 +2,14 @@ extern crate euclid;
 extern crate plane_split;
 
 use std::f32::consts::FRAC_PI_4;
-use euclid::{Radians, TypedTransform3D, TypedRect, vec3};
-use plane_split::{BspSplitter, NaiveSplitter, Polygon, Splitter, _make_grid};
+use euclid::{Angle, TypedTransform3D, TypedRect, vec3};
+use plane_split::{BspSplitter, Polygon, Splitter, make_grid};
 
 
 fn grid_impl(count: usize, splitter: &mut Splitter<f32, ()>) {
-    let polys = _make_grid(count);
+    let polys = make_grid(count);
     let result = splitter.solve(&polys, vec3(0.0, 0.0, 1.0));
     assert_eq!(result.len(), count + count*count + count*count*count);
-}
-
-#[test]
-fn grid_naive() {
-    grid_impl(2, &mut NaiveSplitter::new());
 }
 
 #[test]
@@ -25,11 +20,11 @@ fn grid_bsp() {
 
 fn sort_rotation(splitter: &mut Splitter<f32, ()>) {
     let transform0: TypedTransform3D<f32, (), ()> =
-        TypedTransform3D::create_rotation(0.0, 1.0, 0.0, Radians::new(-FRAC_PI_4));
+        TypedTransform3D::create_rotation(0.0, 1.0, 0.0, Angle::radians(-FRAC_PI_4));
     let transform1: TypedTransform3D<f32, (), ()> =
-        TypedTransform3D::create_rotation(0.0, 1.0, 0.0, Radians::new(0.0));
+        TypedTransform3D::create_rotation(0.0, 1.0, 0.0, Angle::radians(0.0));
     let transform2: TypedTransform3D<f32, (), ()> =
-        TypedTransform3D::create_rotation(0.0, 1.0, 0.0, Radians::new(FRAC_PI_4));
+        TypedTransform3D::create_rotation(0.0, 1.0, 0.0, Angle::radians(FRAC_PI_4));
 
     let rect: TypedRect<f32, ()> = euclid::rect(-10.0, -10.0, 20.0, 20.0);
     let polys = [
@@ -41,11 +36,6 @@ fn sort_rotation(splitter: &mut Splitter<f32, ()>) {
     let result = splitter.solve(&polys, vec3(0.0, 0.0, -1.0));
     let ids: Vec<_> = result.iter().map(|poly| poly.anchor).collect();
     assert_eq!(&ids, &[2, 1, 0, 1, 2]);
-}
-
-#[test]
-fn rotation_naive() {
-    sort_rotation(&mut NaiveSplitter::new());
 }
 
 #[test]
@@ -67,11 +57,6 @@ fn sort_trivial(splitter: &mut Splitter<f32, ()>) {
     let mut anchors2 = anchors1.clone();
     anchors2.sort_by_key(|&a| -(a as i32));
     assert_eq!(anchors1, anchors2); //make sure Z is sorted backwards
-}
-
-#[test]
-fn trivial_naive() {
-    sort_trivial(&mut NaiveSplitter::new());
 }
 
 #[test]

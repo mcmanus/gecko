@@ -103,16 +103,14 @@ TEST_P(TlsPaddingTest, LastByteOfPadWrong) {
 
 class RecordReplacer : public TlsRecordFilter {
  public:
-  RecordReplacer(size_t size)
-      : TlsRecordFilter(), enabled_(false), size_(size) {}
+  RecordReplacer(const std::shared_ptr<TlsAgent>& a, size_t size)
+      : TlsRecordFilter(a), size_(size) {
+    Disable();
+  }
 
   PacketFilter::Action FilterRecord(const TlsRecordHeader& header,
                                     const DataBuffer& data,
                                     DataBuffer* changed) override {
-    if (!enabled_) {
-      return KEEP;
-    }
-
     EXPECT_EQ(kTlsApplicationDataType, header.content_type());
     changed->Allocate(size_);
 
@@ -120,14 +118,11 @@ class RecordReplacer : public TlsRecordFilter {
       changed->data()[i] = i & 0xff;
     }
 
-    enabled_ = false;
+    Disable();
     return CHANGE;
   }
 
-  void Enable() { enabled_ = true; }
-
  private:
-  bool enabled_;
   size_t size_;
 };
 
@@ -135,8 +130,8 @@ TEST_F(TlsConnectStreamTls13, LargeRecord) {
   EnsureTlsSetup();
 
   const size_t record_limit = 16384;
-  auto replacer = std::make_shared<RecordReplacer>(record_limit);
-  client_->SetTlsRecordFilter(replacer);
+  auto replacer = MakeTlsFilter<RecordReplacer>(client_, record_limit);
+  replacer->EnableDecryption();
   Connect();
 
   replacer->Enable();
@@ -149,8 +144,8 @@ TEST_F(TlsConnectStreamTls13, TooLargeRecord) {
   EnsureTlsSetup();
 
   const size_t record_limit = 16384;
-  auto replacer = std::make_shared<RecordReplacer>(record_limit + 1);
-  client_->SetTlsRecordFilter(replacer);
+  auto replacer = MakeTlsFilter<RecordReplacer>(client_, record_limit + 1);
+  replacer->EnableDecryption();
   Connect();
 
   replacer->Enable();
@@ -168,6 +163,29 @@ TEST_F(TlsConnectStreamTls13, TooLargeRecord) {
   EXPECT_EQ(SSL_ERROR_RECORD_OVERFLOW_ALERT, PORT_GetError());
 }
 
+class ShortHeaderChecker : public PacketFilter {
+ public:
+  PacketFilter::Action Filter(const DataBuffer& input, DataBuffer* output) {
+    // The first octet should be 0b001xxxxx.
+    EXPECT_EQ(1, input.data()[0] >> 5);
+    return KEEP;
+  }
+};
+
+TEST_F(TlsConnectDatagram13, ShortHeadersClient) {
+  Connect();
+  client_->SetOption(SSL_ENABLE_DTLS_SHORT_HEADER, PR_TRUE);
+  client_->SetFilter(std::make_shared<ShortHeaderChecker>());
+  SendReceive();
+}
+
+TEST_F(TlsConnectDatagram13, ShortHeadersServer) {
+  Connect();
+  server_->SetOption(SSL_ENABLE_DTLS_SHORT_HEADER, PR_TRUE);
+  server_->SetFilter(std::make_shared<ShortHeaderChecker>());
+  SendReceive();
+}
+
 const static size_t kContentSizesArr[] = {
     1, kMacSize - 1, kMacSize, 30, 31, 32, 36, 256, 257, 287, 288};
 
@@ -177,4 +195,4 @@ auto kTrueFalse = ::testing::ValuesIn(kTrueFalseArr);
 
 INSTANTIATE_TEST_CASE_P(TlsPadding, TlsPaddingTest,
                         ::testing::Combine(kContentSizes, kTrueFalse));
-}  // namespace nspr_test
+}  // namespace nss_test

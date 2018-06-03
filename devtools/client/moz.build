@@ -8,7 +8,8 @@ include('../templates.mozbuild')
 
 DIRS += [
     'aboutdebugging',
-    'animationinspector',
+    'accessibility',
+    'application',
     'canvasdebugger',
     'commandline',
     'debugger',
@@ -20,6 +21,7 @@ DIRS += [
     'memory',
     'netmonitor',
     'performance',
+    'performance-new',
     'preferences',
     'responsive.html',
     'scratchpad',

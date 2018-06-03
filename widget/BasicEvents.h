@@ -29,6 +29,8 @@ struct ParamTraits;
 
 namespace mozilla {
 
+class EventTargetChainItem;
+
 /******************************************************************************
  * mozilla::BaseEventFlags
  *
@@ -514,6 +516,7 @@ protected:
     , mLastRefPoint(0, 0)
     , mFocusSequenceNumber(0)
     , mSpecifiedEventType(nullptr)
+    , mPath(nullptr)
   {
     MOZ_COUNT_CTOR(WidgetEvent);
     mFlags.Clear();
@@ -525,6 +528,7 @@ protected:
 
   WidgetEvent()
     : WidgetEventTime()
+    , mPath(nullptr)
   {
     MOZ_COUNT_CTOR(WidgetEvent);
   }
@@ -546,6 +550,28 @@ public:
     MOZ_COUNT_CTOR(WidgetEvent);
     *this = aOther;
   }
+  WidgetEvent& operator=(const WidgetEvent& aOther) = default;
+
+  WidgetEvent(WidgetEvent&& aOther)
+    : WidgetEventTime(std::move(aOther))
+    , mClass(aOther.mClass)
+    , mMessage(aOther.mMessage)
+    , mRefPoint(std::move(aOther.mRefPoint))
+    , mLastRefPoint(std::move(aOther.mLastRefPoint))
+    , mFocusSequenceNumber(aOther.mFocusSequenceNumber)
+    , mFlags(std::move(aOther.mFlags))
+    , mSpecifiedEventType(std::move(aOther.mSpecifiedEventType))
+    , mSpecifiedEventTypeString(std::move(aOther.mSpecifiedEventTypeString))
+    , mTarget(std::move(aOther.mTarget))
+    , mCurrentTarget(std::move(aOther.mCurrentTarget))
+    , mOriginalTarget(std::move(aOther.mOriginalTarget))
+    , mRelatedTarget(std::move(aOther.mRelatedTarget))
+    , mOriginalRelatedTarget(std::move(aOther.mOriginalRelatedTarget))
+    , mPath(std::move(aOther.mPath))
+  {
+    MOZ_COUNT_CTOR(WidgetEvent);
+  }
+  WidgetEvent& operator=(WidgetEvent&& aOther) = default;
 
   virtual WidgetEvent* Duplicate() const
   {
@@ -588,6 +614,12 @@ public:
   nsCOMPtr<dom::EventTarget> mCurrentTarget;
   nsCOMPtr<dom::EventTarget> mOriginalTarget;
 
+  /// The possible related target
+  nsCOMPtr<dom::EventTarget> mRelatedTarget;
+  nsCOMPtr<dom::EventTarget> mOriginalRelatedTarget;
+
+  nsTArray<EventTargetChainItem>* mPath;
+
   dom::EventTarget* GetDOMEventTarget() const;
   dom::EventTarget* GetCurrentDOMEventTarget() const;
   dom::EventTarget* GetOriginalDOMEventTarget() const;
@@ -606,6 +638,9 @@ public:
     mTarget = aCopyTargets ? aEvent.mTarget : nullptr;
     mCurrentTarget = aCopyTargets ? aEvent.mCurrentTarget : nullptr;
     mOriginalTarget = aCopyTargets ? aEvent.mOriginalTarget : nullptr;
+    mRelatedTarget = aCopyTargets ? aEvent.mRelatedTarget : nullptr;
+    mOriginalRelatedTarget =
+      aCopyTargets ? aEvent.mOriginalRelatedTarget : nullptr;
   }
 
   /**
@@ -769,9 +804,13 @@ public:
    */
   bool HasDragEventMessage() const;
   /**
-   * Returns true if the event mMessage is one of key events.
+   * Returns true if aMessage or mMessage is one of key events.
    */
-  bool HasKeyEventMessage() const;
+  static bool IsKeyEventMessage(EventMessage aMessage);
+  bool HasKeyEventMessage() const
+  {
+    return IsKeyEventMessage(mMessage);
+  }
   /**
    * Returns true if the event mMessage is one of composition events or text
    * event.
@@ -847,6 +886,10 @@ public:
    * Whether the event should be dispatched in system group.
    */
   bool IsAllowedToDispatchInSystemGroup() const;
+  /**
+   * Whether the event should be blocked for fingerprinting resistance.
+   */
+  bool IsBlockedForFingerprintingResistance() const;
   /**
    * Initialize mComposed
    */
@@ -996,6 +1039,8 @@ public:
                                                mMessage != eLoadEnd &&
                                                mMessage != eLoadError;
   }
+
+  bool IsUserAction() const;
 };
 
 /******************************************************************************

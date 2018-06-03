@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,9 +15,11 @@
 #include "mozilla/RefPtr.h"
 #include "SVGObserverUtils.h"
 #include "mozilla/dom/SVGMaskElement.h"
+#include "mozilla/dom/SVGUnitTypesBinding.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
+using namespace mozilla::dom::SVGUnitTypesBinding;
 using namespace mozilla::gfx;
 using namespace mozilla::image;
 
@@ -37,9 +40,9 @@ GetLuminanceType(uint8_t aNSMaskType)
 }
 
 nsIFrame*
-NS_NewSVGMaskFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewSVGMaskFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsSVGMaskFrame(aContext);
+  return new (aPresShell) nsSVGMaskFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsSVGMaskFrame)
@@ -72,7 +75,7 @@ nsSVGMaskFrame::GetMaskForMaskedFrame(MaskParams& aParams)
     nsSVGUtils::ConvertToSurfaceSize(maskSurfaceRect.Size(), &resultOverflows);
 
   if (resultOverflows || maskSurfaceSize.IsEmpty()) {
-    // Return value other then DrawResult::SUCCESS, so the caller can skip
+    // Return value other then ImgDrawResult::SUCCESS, so the caller can skip
     // painting the masked frame(aParams.maskedFrame).
     return nullptr;
   }
@@ -87,10 +90,10 @@ nsSVGMaskFrame::GetMaskForMaskedFrame(MaskParams& aParams)
 
   RefPtr<DrawTarget> maskDT;
   if (maskType == NS_STYLE_MASK_TYPE_LUMINANCE) {
-    maskDT = gfxPlatform::GetPlatform()->CreateOffscreenContentDrawTarget(
+    maskDT = context->GetDrawTarget()->CreateSimilarDrawTarget(
                maskSurfaceSize, SurfaceFormat::B8G8R8A8);
   } else {
-    maskDT = gfxPlatform::GetPlatform()->CreateOffscreenContentDrawTarget(
+    maskDT = context->GetDrawTarget()->CreateSimilarDrawTarget(
                maskSurfaceSize, SurfaceFormat::A8);
   }
 
@@ -98,8 +101,8 @@ nsSVGMaskFrame::GetMaskForMaskedFrame(MaskParams& aParams)
     return nullptr;
   }
 
-  gfxMatrix maskSurfaceMatrix =
-    context->CurrentMatrix() * gfxMatrix::Translation(-maskSurfaceRect.TopLeft());
+  Matrix maskSurfaceMatrix =
+    context->CurrentMatrix() * ToMatrix(gfxMatrix::Translation(-maskSurfaceRect.TopLeft()));
 
   RefPtr<gfxContext> tmpCtx = gfxContext::CreateOrNull(maskDT);
   MOZ_ASSERT(tmpCtx); // already checked the draw target above
@@ -152,7 +155,7 @@ nsSVGMaskFrame::GetMaskForMaskedFrame(MaskParams& aParams)
     return nullptr;
   }
 
-  *aParams.maskTransform = ToMatrix(maskSurfaceMatrix);
+  *aParams.maskTransform = maskSurfaceMatrix;
   return surface.forget();
 }
 

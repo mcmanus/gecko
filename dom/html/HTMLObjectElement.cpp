@@ -14,7 +14,6 @@
 #include "nsError.h"
 #include "nsIDocument.h"
 #include "nsIPluginDocument.h"
-#include "nsIDOMDocument.h"
 #include "nsIObjectFrame.h"
 #include "nsNPAPIPluginInstance.h"
 #include "nsIWidget.h"
@@ -104,7 +103,6 @@ NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(HTMLObjectElement,
                                              nsIFrameLoaderOwner,
                                              nsIObjectLoadingContent,
                                              nsIImageLoadingContent,
-                                             imgIOnloadBlocker,
                                              nsIChannelEventSink,
                                              nsIConstraintValidation)
 
@@ -193,12 +191,8 @@ HTMLObjectElement::HandlePluginInstantiated(Element* aElement)
   // to initiate a call to nsIWidget::SetPluginFocused(true).  Otherwise
   // keyboard input won't work in a click-to-play plugin until aElement
   // loses focus and regains it.
-  nsIContent* focusedContent = nullptr;
   nsFocusManager *fm = nsFocusManager::GetFocusManager();
-  if (fm) {
-    focusedContent = fm->GetFocusedContent();
-  }
-  if (SameCOMIdentity(focusedContent, aElement)) {
+  if (fm && fm->GetFocusedElement() == aElement) {
     OnFocusBlurPlugin(aElement, true);
   }
 }
@@ -283,13 +277,15 @@ HTMLObjectElement::UnbindFromTree(bool aDeep,
 nsresult
 HTMLObjectElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
-                                const nsAttrValue* aOldValue, bool aNotify)
+                                const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
+                                bool aNotify)
 {
   nsresult rv = AfterMaybeChangeAttr(aNamespaceID, aName, aNotify);
   NS_ENSURE_SUCCESS(rv, rv);
 
   return nsGenericHTMLFormElement::AfterSetAttr(aNamespaceID, aName, aValue,
-                                                aOldValue, aNotify);
+                                                aOldValue, aSubjectPrincipal, aNotify);
 }
 
 nsresult
@@ -452,6 +448,7 @@ bool
 HTMLObjectElement::ParseAttribute(int32_t aNamespaceID,
                                   nsAtom *aAttribute,
                                   const nsAString &aValue,
+                                  nsIPrincipal* aMaybeScriptedPrincipal,
                                   nsAttrValue &aResult)
 {
   if (aNamespaceID == kNameSpaceID_None) {
@@ -464,7 +461,7 @@ HTMLObjectElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return nsGenericHTMLFormElement::ParseAttribute(aNamespaceID, aAttribute,
-                                                  aValue, aResult);
+                                                  aValue, aMaybeScriptedPrincipal, aResult);
 }
 
 void
@@ -521,7 +518,7 @@ HTMLObjectElement::IntrinsicState() const
 uint32_t
 HTMLObjectElement::GetCapabilities() const
 {
-  return nsObjectLoadingContent::GetCapabilities();
+  return nsObjectLoadingContent::GetCapabilities() | eFallbackIfClassIDPresent;
 }
 
 void

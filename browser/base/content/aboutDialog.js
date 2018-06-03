@@ -7,8 +7,8 @@
 /* import-globals-from aboutDialog-appUpdater.js */
 
 // Services = object with smart getters for common XPCOM services
-Components.utils.import("resource://gre/modules/Services.jsm");
-Components.utils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
 
 function init(aEvent) {
   if (aEvent.target != document)
@@ -16,10 +16,15 @@ function init(aEvent) {
 
   var distroId = Services.prefs.getCharPref("distribution.id", "");
   if (distroId) {
-    var distroVersion = Services.prefs.getCharPref("distribution.version");
+    var distroString = distroId;
+
+    var distroVersion = Services.prefs.getCharPref("distribution.version", "");
+    if (distroVersion) {
+      distroString += " - " + distroVersion;
+    }
 
     var distroIdField = document.getElementById("distributionId");
-    distroIdField.value = distroId + " - " + distroVersion;
+    distroIdField.value = distroString;
     distroIdField.style.display = "block";
 
     var distroAbout = Services.prefs.getStringPref("distribution.about", "");
@@ -73,6 +78,9 @@ function init(aEvent) {
         currentChannelText.hidden = true;
   }
 
+  if (AppConstants.MOZ_UPDATE_CHANNEL == "esr") {
+    document.getElementById("release").hidden = false;
+  }
   if (AppConstants.platform == "macosx") {
     // it may not be sized at this point, and we need its width to calculate its position
     window.sizeToContent();

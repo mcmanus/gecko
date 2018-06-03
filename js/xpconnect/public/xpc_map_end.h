@@ -23,10 +23,9 @@
 
 /**************************************************************/
 
-NS_IMETHODIMP XPC_MAP_CLASSNAME::GetClassName(char * *aClassName)
+NS_IMETHODIMP XPC_MAP_CLASSNAME::GetClassName(nsACString& aClassName)
 {
-    static const char sName[] = XPC_MAP_QUOTED_CLASSNAME;
-    *aClassName = (char*) nsMemory::Clone(sName, sizeof(sName));
+    aClassName.AssignLiteral(XPC_MAP_QUOTED_CLASSNAME);
     return NS_OK;
 }
 
@@ -99,9 +98,6 @@ NS_IMETHODIMP XPC_MAP_CLASSNAME::Construct(nsIXPConnectWrappedNative* wrapper, J
 NS_IMETHODIMP XPC_MAP_CLASSNAME::HasInstance(nsIXPConnectWrappedNative* wrapper, JSContext * cx, JSObject * obj, JS::HandleValue val, bool* bp, bool* _retval)
     {NS_ERROR("never called"); return NS_ERROR_NOT_IMPLEMENTED;}
 #endif
-
-NS_IMETHODIMP XPC_MAP_CLASSNAME::PostCreatePrototype(JSContext* cx, JSObject* proto)
-    {return NS_OK;}
 
 /**************************************************************/
 

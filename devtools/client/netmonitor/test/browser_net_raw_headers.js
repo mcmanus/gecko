@@ -7,32 +7,29 @@
  * Tests if showing raw headers works.
  */
 
-add_task(function* () {
-  let { tab, monitor } = yield initNetMonitor(POST_DATA_URL);
+add_task(async function() {
+  const { tab, monitor } = await initNetMonitor(POST_DATA_URL);
   info("Starting test... ");
 
-  let { document, store, windowRequire } = monitor.panelWin;
-  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
-  let {
+  const { document, store, windowRequire } = monitor.panelWin;
+  const Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+  const {
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
   store.dispatch(Actions.batchEnable(false));
 
-  let wait = waitForNetworkEvents(monitor, 0, 2);
-  yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
-    content.wrappedJSObject.performRequests();
-  });
-  yield wait;
+  // Execute requests.
+  await performRequests(monitor, tab, 2);
 
-  wait = waitForDOM(document, ".headers-overview");
+  wait = waitForDOM(document, "#headers-panel .tree-section", 2);
   EventUtils.sendMouseEvent({ type: "mousedown" },
     document.querySelectorAll(".request-list-item")[0]);
-  yield wait;
+  await wait;
 
   wait = waitForDOM(document, ".raw-headers-container textarea", 2);
   EventUtils.sendMouseEvent({ type: "click" }, getRawHeadersButton());
-  yield wait;
+  await wait;
 
   testRawHeaderButtonStyle(true);
 
@@ -53,7 +50,7 @@ add_task(function* () {
    *        flag indicating whether button is pressed or not
    */
   function testRawHeaderButtonStyle(checked) {
-    let rawHeadersButton = getRawHeadersButton();
+    const rawHeadersButton = getRawHeadersButton();
 
     if (checked) {
       is(rawHeadersButton.classList.contains("checked"), true,
@@ -72,15 +69,15 @@ add_task(function* () {
    * Tests that raw headers were displayed correctly
    */
   function testShowRawHeaders(data) {
-    let requestHeaders = document
+    const requestHeaders = document
       .querySelectorAll(".raw-headers-container textarea")[0].value;
-    for (let header of data.requestHeaders.headers) {
+    for (const header of data.requestHeaders.headers) {
       ok(requestHeaders.includes(header.name + ": " + header.value),
         "textarea contains request headers");
     }
-    let responseHeaders = document
+    const responseHeaders = document
       .querySelectorAll(".raw-headers-container textarea")[1].value;
-    for (let header of data.responseHeaders.headers) {
+    for (const header of data.responseHeaders.headers) {
       ok(responseHeaders.includes(header.name + ": " + header.value),
         "textarea contains response headers");
     }

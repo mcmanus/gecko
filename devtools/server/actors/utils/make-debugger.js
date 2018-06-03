@@ -6,7 +6,7 @@
 
 "use strict";
 
-const EventEmitter = require("devtools/shared/old-event-emitter");
+const EventEmitter = require("devtools/shared/event-emitter");
 const Debugger = require("Debugger");
 
 const { reportException } = require("devtools/shared/DevToolsUtils");
@@ -69,14 +69,14 @@ module.exports = function makeDebugger({ findDebuggees, shouldAddNewGlobalAsDebu
   dbg.allowUnobservedAsmJS = true;
   dbg.uncaughtExceptionHook = reportDebuggerHookException;
 
-  dbg.onNewGlobalObject = function (global) {
+  dbg.onNewGlobalObject = function(global) {
     if (shouldAddNewGlobalAsDebuggee(global)) {
       safeAddDebuggee(this, global);
     }
   };
 
-  dbg.addDebuggees = function () {
-    for (let global of findDebuggees(this)) {
+  dbg.addDebuggees = function() {
+    for (const global of findDebuggees(this)) {
       safeAddDebuggee(this, global);
     }
   };
@@ -91,7 +91,7 @@ const reportDebuggerHookException = e => reportException("Debugger Hook", e);
  */
 function safeAddDebuggee(dbg, global) {
   try {
-    let wrappedGlobal = dbg.addDebuggee(global);
+    const wrappedGlobal = dbg.addDebuggee(global);
     if (wrappedGlobal) {
       dbg.emit("newGlobal", wrappedGlobal);
     }

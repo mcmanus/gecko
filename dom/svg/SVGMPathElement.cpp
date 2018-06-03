@@ -49,9 +49,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(SVGMPathElement,
                                              SVGMPathElementBase,
-                                             nsIDOMNode,
-                                             nsIDOMElement,
-                                             nsIDOMSVGElement,
                                              nsIMutationObserver)
 
 // Constructor
@@ -67,7 +64,7 @@ SVGMPathElement::~SVGMPathElement()
 }
 
 //----------------------------------------------------------------------
-// nsIDOMNode methods
+// nsINode methods
 
 NS_IMPL_ELEMENT_CLONE_WITH_INIT(SVGMPathElement)
 
@@ -119,11 +116,14 @@ bool
 SVGMPathElement::ParseAttribute(int32_t aNamespaceID,
                                 nsAtom* aAttribute,
                                 const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 nsAttrValue& aResult)
 {
   bool returnVal =
     SVGMPathElementBase::ParseAttribute(aNamespaceID, aAttribute,
-                                          aValue, aResult);
+                                          aValue,
+                                          aMaybeScriptedPrincipal,
+                                          aResult);
   if ((aNamespaceID == kNameSpaceID_XLink ||
        aNamespaceID == kNameSpaceID_None ) &&
       aAttribute == nsGkAtoms::href &&
@@ -142,14 +142,14 @@ SVGMPathElement::ParseAttribute(int32_t aNamespaceID,
 }
 
 nsresult
-SVGMPathElement::UnsetAttr(int32_t aNamespaceID,
-                           nsAtom* aAttribute, bool aNotify)
+SVGMPathElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
+                              const nsAttrValue* aValue,
+                              const nsAttrValue* aOldValue,
+                              nsIPrincipal* aMaybeScriptedPrincipal,
+                              bool aNotify)
 {
-  nsresult rv = SVGMPathElementBase::UnsetAttr(aNamespaceID, aAttribute,
-                                               aNotify);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  if (aAttribute == nsGkAtoms::href) {
+  if (!aValue && aName == nsGkAtoms::href) {
+    // href attr being removed.
     if (aNamespaceID == kNameSpaceID_None) {
       UnlinkHrefTarget(true);
 
@@ -160,13 +160,16 @@ SVGMPathElement::UnsetAttr(int32_t aNamespaceID,
       if (xlinkHref) {
         UpdateHrefTarget(GetParent(), xlinkHref->GetStringValue());
       }
-    } else if (!HasAttr(kNameSpaceID_None, nsGkAtoms::href)) {
+    } else if (aNamespaceID == kNameSpaceID_XLink &&
+               !HasAttr(kNameSpaceID_None, nsGkAtoms::href)) {
       UnlinkHrefTarget(true);
-    } // else: we unset xlink:href, but we still have href attribute, so keep
-      // the target linking to href.
+    } // else: we unset some random-namespace href attribute, or unset xlink:href
+      // but still have href attribute, so keep the target linking to href.
   }
 
-  return NS_OK;
+  return SVGMPathElementBase::AfterSetAttr(aNamespaceID, aName,
+                                           aValue, aOldValue,
+                                           aMaybeScriptedPrincipal, aNotify);
 }
 
 //----------------------------------------------------------------------
@@ -183,8 +186,7 @@ SVGMPathElement::GetStringInfo()
 // nsIMutationObserver methods
 
 void
-SVGMPathElement::AttributeChanged(nsIDocument* aDocument,
-                                  Element* aElement,
+SVGMPathElement::AttributeChanged(Element* aElement,
                                   int32_t aNameSpaceID,
                                   nsAtom* aAttribute,
                                   int32_t aModType,

@@ -14,9 +14,13 @@ import logging
 from mozbuild.util import memoize
 from requests.packages.urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
+from taskgraph.task import Task
 
-_TC_ARTIFACT_LOCATION = \
-        'https://queue.taskcluster.net/v1/task/{task_id}/artifacts/public/build/{postfix}'
+_PUBLIC_TC_ARTIFACT_LOCATION = \
+        'https://queue.taskcluster.net/v1/task/{task_id}/artifacts/{artifact_prefix}/{postfix}'
+
+_PRIVATE_TC_ARTIFACT_LOCATION = \
+        'http://taskcluster/queue/v1/task/{task_id}/artifacts/{artifact_prefix}/{postfix}'
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +38,12 @@ def get_session():
     return session
 
 
-def _do_request(url, content=None):
+def _do_request(url, **kwargs):
     session = get_session()
-    if content is None:
-        response = session.get(url, stream=True)
+    if kwargs:
+        response = session.post(url, **kwargs)
     else:
-        response = session.post(url, json=content)
+        response = session.get(url, stream=True)
     if response.status_code >= 400:
         # Consume content before raise_for_status, so that the connection can be
         # reused.
@@ -59,10 +63,16 @@ def _handle_artifact(path, response):
 
 
 def get_artifact_url(task_id, path, use_proxy=False):
+    ARTIFACT_URL = 'https://queue.taskcluster.net/v1/task/{}/artifacts/{}'
     if use_proxy:
-        ARTIFACT_URL = 'http://taskcluster/queue/v1/task/{}/artifacts/{}'
-    else:
-        ARTIFACT_URL = 'https://queue.taskcluster.net/v1/task/{}/artifacts/{}'
+        # Until Bug 1405889 is deployed, we can't download directly
+        # from the taskcluster-proxy.  Work around by using the /bewit
+        # endpoint instead.
+        data = ARTIFACT_URL.format(task_id, path)
+        # The bewit URL is the body of a 303 redirect, which we don't
+        # want to follow (which fetches a potentially large resource).
+        response = _do_request('http://taskcluster/bewit', data=data, allow_redirects=False)
+        return response.text
     return ARTIFACT_URL.format(task_id, path)
 
 
@@ -82,6 +92,19 @@ def get_artifact(task_id, path, use_proxy=False):
 def list_artifacts(task_id, use_proxy=False):
     response = _do_request(get_artifact_url(task_id, '', use_proxy).rstrip('/'))
     return response.json()['artifacts']
+
+
+def get_artifact_prefix(task):
+    prefix = None
+    if isinstance(task, dict):
+        prefix = task.get('attributes', {}).get("artifact_prefix")
+    elif isinstance(task, Task):
+        prefix = task.attributes.get("artifact_prefix")
+    return prefix or "public/build"
+
+
+def get_artifact_path(task, path):
+    return "{}/{}".format(get_artifact_prefix(task), path)
 
 
 def get_index_url(index_path, use_proxy=False, multiple=False):
@@ -116,7 +139,7 @@ def list_tasks(index_path, use_proxy=False):
     results = []
     data = {}
     while True:
-        response = _do_request(get_index_url(index_path, use_proxy, multiple=True), data)
+        response = _do_request(get_index_url(index_path, use_proxy, multiple=True), json=data)
         response = response.json()
         results += response['tasks']
         if response.get('continuationToken'):
@@ -151,11 +174,57 @@ def cancel_task(task_id, use_proxy=False):
     if testing:
         logger.info('Would have cancelled {}.'.format(task_id))
     else:
-        _do_request(get_task_url(task_id, use_proxy) + '/cancel', content={})
+        _do_request(get_task_url(task_id, use_proxy) + '/cancel', json={})
 
 
-def get_taskcluster_artifact_prefix(task_id, postfix='', locale=None):
+def status_task(task_id, use_proxy=False):
+    """Gets the status of a task given a task_id. In testing mode, just logs that it would
+    have retrieved status."""
+    if testing:
+        logger.info('Would have gotten status for {}.'.format(task_id))
+    else:
+        resp = _do_request(get_task_url(task_id, use_proxy) + '/status')
+        status = resp.json().get("status", {}).get('state') or 'unknown'
+        return status
+
+
+def rerun_task(task_id):
+    """Reruns a task given a task_id. In testing mode, just logs that it would
+    have reran."""
+    if testing:
+        logger.info('Would have rerun {}.'.format(task_id))
+    else:
+        _do_request(get_task_url(task_id, use_proxy=True) + '/rerun', json={})
+
+
+def get_purge_cache_url(provisioner_id, worker_type, use_proxy=False):
+    if use_proxy:
+        TASK_URL = 'http://taskcluster/purge-cache/v1/purge-cache/{}/{}'
+    else:
+        TASK_URL = 'https://purge-cache.taskcluster.net/v1/purge-cache/{}/{}'
+    return TASK_URL.format(provisioner_id, worker_type)
+
+
+def purge_cache(provisioner_id, worker_type, cache_name, use_proxy=False):
+    """Requests a cache purge from the purge-caches service."""
+    if testing:
+        logger.info('Would have purged {}/{}/{}.'.format(provisioner_id, worker_type, cache_name))
+    else:
+        logger.info('Purging {}/{}/{}.'.format(provisioner_id, worker_type, cache_name))
+        purge_cache_url = get_purge_cache_url(provisioner_id, worker_type, use_proxy)
+        _do_request(purge_cache_url, json={'cacheName': cache_name})
+
+
+def get_taskcluster_artifact_prefix(task, task_id, postfix='', locale=None, force_private=False):
     if locale:
         postfix = '{}/{}'.format(locale, postfix)
 
-    return _TC_ARTIFACT_LOCATION.format(task_id=task_id, postfix=postfix)
+    artifact_prefix = get_artifact_prefix(task)
+    if artifact_prefix == 'public/build' and not force_private:
+        tmpl = _PUBLIC_TC_ARTIFACT_LOCATION
+    else:
+        tmpl = _PRIVATE_TC_ARTIFACT_LOCATION
+
+    return tmpl.format(
+        task_id=task_id, postfix=postfix, artifact_prefix=artifact_prefix
+    )

@@ -12,6 +12,7 @@
 let bookmarkPanel = document.getElementById("editBookmarkPanel");
 let bookmarkStar = BookmarkingUI.star;
 let bookmarkPanelTitle = document.getElementById("editBookmarkPanelTitle");
+let bookmarkRemoveButton = document.getElementById("editBookmarkPanelRemoveButton");
 let editBookmarkPanelRemoveButtonRect;
 
 const TEST_URL = "data:text/html,<html><body></body></html>";
@@ -23,7 +24,7 @@ add_task(async function setup() {
   registerCleanupFunction(() => {
     bookmarkPanel.removeAttribute("animate");
   });
-})
+});
 
 async function test_bookmarks_popup({isNewBookmark, popupShowFn, popupEditFn,
                                 shouldAutoClose, popupHideFn, isBookmarkRemoved}) {
@@ -50,8 +51,7 @@ async function test_bookmarks_popup({isNewBookmark, popupShowFn, popupEditFn,
       await shownPromise;
       Assert.equal(bookmarkPanel.state, "open", "Panel should be 'open' after shownPromise is resolved");
 
-    editBookmarkPanelRemoveButtonRect =
-      document.getElementById("editBookmarkPanelRemoveButton").getBoundingClientRect();
+      editBookmarkPanelRemoveButtonRect = bookmarkRemoveButton.getBoundingClientRect();
 
       if (popupEditFn) {
         await popupEditFn();
@@ -62,9 +62,14 @@ async function test_bookmarks_popup({isNewBookmark, popupShowFn, popupEditFn,
       Assert.equal(bookmarkStar.getAttribute("starred"), "true", "Page is starred");
       Assert.equal(bookmarkPanelTitle.value,
         isNewBookmark ?
-          gNavigatorBundle.getString("editBookmarkPanel.pageBookmarkedTitle") :
+          gNavigatorBundle.getString("editBookmarkPanel.newBookmarkTitle") :
           gNavigatorBundle.getString("editBookmarkPanel.editBookmarkTitle"),
         "title should match isEditingBookmark state");
+      Assert.equal(bookmarkRemoveButton.label,
+        isNewBookmark ?
+          gNavigatorBundle.getString("editBookmarkPanel.cancel.label") :
+          PluralForm.get(1, gNavigatorBundle.getString("editBookmark.removeBookmarks.label")).replace("#1", 1),
+        "remove/cancel button label should match isEditingBookmark state");
 
       if (!shouldAutoClose) {
         await new Promise(resolve => setTimeout(resolve, 400));
@@ -177,17 +182,17 @@ add_task(async function panel_shown_for_new_bookmarks_mousemove_mouseout() {
   });
 });
 
-add_task(async function panel_shown_for_new_bookmark_no_autoclose_close_with_ESC() {
+add_task(async function panel_shown_for_new_bookmark_close_with_ESC() {
   await test_bookmarks_popup({
-    isNewBookmark: false,
+    isNewBookmark: true,
     popupShowFn() {
       bookmarkStar.click();
     },
-    shouldAutoClose: false,
+    shouldAutoClose: true,
     popupHideFn() {
       EventUtils.synthesizeKey("VK_ESCAPE", {accelKey: true}, window);
     },
-    isBookmarkRemoved: false,
+    isBookmarkRemoved: true,
   });
 });
 
@@ -439,6 +444,88 @@ add_task(async function ctrl_d_new_bookmark_mousedown_mouseout_no_autoclose() {
       document.getElementById("editBookmarkPanelRemoveButton").click();
     },
     isBookmarkRemoved: true,
+  });
+});
+
+add_task(async function enter_during_autocomplete_should_prevent_autoclose() {
+  await test_bookmarks_popup({
+    isNewBookmark: true,
+    async popupShowFn(browser) {
+      EventUtils.synthesizeKey("d", {accelKey: true}, window);
+    },
+    async popupEditFn() {
+      let tagsField = document.getElementById("editBMPanel_tagsField");
+      tagsField.value = "";
+      tagsField.focus();
+
+      // Register a tag into the DB.
+      EventUtils.sendString("Abc", window);
+      tagsField.blur();
+
+      // Start autocomplete with the registered tag.
+      tagsField.value = "";
+      let popup = document.getElementById("PopupAutoComplete");
+      let promiseShown = BrowserTestUtils.waitForEvent(popup, "popupshown");
+      tagsField.focus();
+      EventUtils.sendString("a", window);
+      await promiseShown;
+      ok(promiseShown, "autocomplete shown");
+
+      // Select first candidate.
+      EventUtils.synthesizeKey("KEY_ArrowDown", {}, window);
+
+      // Type Enter key to choose the item.
+      EventUtils.synthesizeKey("KEY_Enter", {}, window);
+
+      Assert.equal(tagsField.value, "Abc",
+        "Autocomplete should've inserted the selected item");
+    },
+    shouldAutoClose: false,
+    popupHideFn() {
+      EventUtils.synthesizeKey("KEY_Escape", {}, window);
+    },
+    isBookmarkRemoved: false,
+  });
+});
+
+add_task(async function escape_during_autocomplete_should_prevent_autoclose() {
+  await test_bookmarks_popup({
+    isNewBookmark: true,
+    async popupShowFn(browser) {
+      EventUtils.synthesizeKey("d", {accelKey: true}, window);
+    },
+    async popupEditFn() {
+      let tagsField = document.getElementById("editBMPanel_tagsField");
+      tagsField.value = "";
+      tagsField.focus();
+
+      // Register a tag into the DB.
+      EventUtils.sendString("Abc", window);
+      tagsField.blur();
+
+      // Start autocomplete with the registered tag.
+      tagsField.value = "";
+      let popup = document.getElementById("PopupAutoComplete");
+      let promiseShown = BrowserTestUtils.waitForEvent(popup, "popupshown");
+      tagsField.focus();
+      EventUtils.sendString("a", window);
+      await promiseShown;
+      ok(promiseShown, "autocomplete shown");
+
+      // Select first candidate.
+      EventUtils.synthesizeKey("KEY_ArrowDown", {}, window);
+
+      // Type Enter key to choose the item.
+      EventUtils.synthesizeKey("KEY_Escape", {}, window);
+
+      Assert.equal(tagsField.value, "Abc",
+        "Autocomplete should've inserted the selected item and shouldn't clear it");
+    },
+    shouldAutoClose: false,
+    popupHideFn() {
+      EventUtils.synthesizeKey("KEY_Escape", {}, window);
+    },
+    isBookmarkRemoved: false,
   });
 });
 

@@ -10,7 +10,7 @@
 #include "nsISupports.h"
 #include "nsColor.h"
 #include "nsRect.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 
 #include "nsCOMPtr.h"
 #include "nsWidgetInitData.h"
@@ -143,6 +143,7 @@ typedef void* nsNativeWidget;
 #ifdef MOZ_X11
 #define NS_NATIVE_COMPOSITOR_DISPLAY   105
 #endif // MOZ_X11
+#define NS_NATIVE_EGL_WINDOW           106
 #endif
 #ifdef MOZ_WIDGET_ANDROID
 #define NS_JAVA_SURFACE                100
@@ -150,6 +151,7 @@ typedef void* nsNativeWidget;
 #define NS_PRESENTATION_SURFACE        102
 #endif
 
+// Must be kept in sync with xpcom/rust/xpcom/src/interfaces/nonidl.rs
 #define NS_IWIDGET_IID \
 { 0x06396bf6, 0x2dd8, 0x45e5, \
   { 0xac, 0x45, 0x75, 0x26, 0x53, 0xb1, 0xc9, 0x80 } }
@@ -164,6 +166,7 @@ enum nsTransparencyMode {
   eTransparencyTransparent, // Parts of the window may be transparent
   eTransparencyGlass,       // Transparent parts of the window have Vista AeroGlass effect applied
   eTransparencyBorderlessGlass // As above, but without a border around the opaque areas when there would otherwise be one with eTransparencyGlass
+  // If you add to the end here, you must update the serialization code in WidgetMessageUtils.h
 };
 
 /**
@@ -1212,6 +1215,11 @@ class nsIWidget : public nsISupports
                                              nsIRunnable* aCallback) = 0;
 
     /**
+      * Perform any actions needed after the fullscreen transition has ended.
+      */
+    virtual void CleanupFullscreenTransition() = 0;
+
+    /**
      * Return the screen the widget is in, or null if we don't know.
      */
     virtual already_AddRefed<nsIScreen> GetWidgetScreen() = 0;
@@ -1293,13 +1301,6 @@ class nsIWidget : public nsISupports
     virtual void AddWindowOverlayWebRenderCommands(mozilla::layers::WebRenderBridgeChild* aWrBridge,
                                                    mozilla::wr::DisplayListBuilder& aBuilder,
                                                    mozilla::wr::IpcResourceUpdateQueue& aResources) {}
-
-    /**
-     * Called on the main thread when WebRender resources used for
-     * AddWindowOverlayWebRenderCommands need to be destroyed.
-     */
-    virtual void CleanupWebRenderWindowOverlay(mozilla::layers::WebRenderBridgeChild* aWrBridge,
-                                               mozilla::wr::IpcResourceUpdateQueue& aResources) {}
 
     /**
      * Called when Gecko knows which themed widgets exist in this window.
@@ -1456,24 +1457,6 @@ class nsIWidget : public nsISupports
      * included, including those not targeted at this nsIwidget instance.
      */
     virtual bool HasPendingInputEvent() = 0;
-
-    /**
-     * Set the background color of the window titlebar for this widget. On Mac,
-     * for example, this will remove the grey gradient and bottom border and
-     * instead show a single, solid color.
-     *
-     * Ignored on any platform that does not support it. Ignored by widgets that
-     * do not represent windows.
-     *
-     * @param aColor  The color to set the title bar background to. Alpha values
-     *                other than fully transparent (0) are respected if possible
-     *                on the platform. An alpha of 0 will cause the window to
-     *                draw with the default style for the platform.
-     *
-     * @param aActive Whether the color should be applied to active or inactive
-     *                windows.
-     */
-    virtual void SetWindowTitlebarColor(nscolor aColor, bool aActive) = 0;
 
     /**
      * If set to true, the window will draw its contents into the titlebar
@@ -1692,8 +1675,9 @@ class nsIWidget : public nsISupports
      * Notify APZ to start autoscrolling.
      * @param aAnchorLocation the location of the autoscroll anchor
      * @param aGuid identifies the scroll frame to be autoscrolled
+     * @return true if APZ has been successfully notified
      */
-    virtual void StartAsyncAutoscroll(const ScreenPoint& aAnchorLocation,
+    virtual bool StartAsyncAutoscroll(const ScreenPoint& aAnchorLocation,
                                       const ScrollableLayerGuid& aGuid) = 0;
 
     /**
@@ -1838,6 +1822,13 @@ public:
      */
     virtual void DefaultProcOfPluginEvent(
                    const mozilla::WidgetPluginEvent& aEvent) = 0;
+
+    /*
+     * Enable or Disable IME by windowless plugin.
+     */
+    virtual void EnableIMEForPlugin(bool aEnable)
+    {
+    }
 
     /*
      * Notifies the input context changes.

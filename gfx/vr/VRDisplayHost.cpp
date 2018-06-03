@@ -1,13 +1,16 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-* This Source Code Form is subject to the terms of the Mozilla Public
-* License, v. 2.0. If a copy of the MPL was not distributed with this
-* file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "VRDisplayHost.h"
+#include "gfxPrefs.h"
 #include "gfxVR.h"
 #include "ipc/VRLayerParent.h"
 #include "mozilla/layers/TextureHost.h"
 #include "mozilla/dom/GamepadBinding.h" // For GamepadMappingType
+#include "VRThread.h"
 
 #if defined(XP_WIN)
 
@@ -22,6 +25,11 @@
 #include "mozilla/gfx/MacIOSurface.h"
 
 #endif
+
+#if defined(MOZ_ANDROID_GOOGLE_VR)
+#include "mozilla/layers/CompositorThread.h"
+#endif // defined(MOZ_ANDROID_GOOGLE_VR)
+
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -59,7 +67,9 @@ VRDisplayHost::AutoRestoreRenderState::IsSuccess()
 }
 
 VRDisplayHost::VRDisplayHost(VRDeviceType aType)
- : mFrameStarted(false)
+ : mDisplayInfo{}
+ , mLastUpdateDisplayInfo{}
+ , mFrameStarted(false)
 {
   MOZ_COUNT_CTOR(VRDisplayHost);
   mDisplayInfo.mType = aType;
@@ -67,10 +77,16 @@ VRDisplayHost::VRDisplayHost(VRDeviceType aType)
   mDisplayInfo.mPresentingGroups = 0;
   mDisplayInfo.mGroupMask = kVRGroupContent;
   mDisplayInfo.mFrameId = 0;
+  mDisplayInfo.mPresentingGeneration = 0;
+  mDisplayInfo.mDisplayState.mDisplayName[0] = '\0';
 }
 
 VRDisplayHost::~VRDisplayHost()
 {
+  if (mSubmitThread) {
+    mSubmitThread->Shutdown();
+    mSubmitThread = nullptr;
+  }
   MOZ_COUNT_DTOR(VRDisplayHost);
 }
 
@@ -79,7 +95,7 @@ bool
 VRDisplayHost::CreateD3DObjects()
 {
   if (!mDevice) {
-    RefPtr<ID3D11Device> device = gfx::DeviceManagerDx::Get()->GetCompositorDevice();
+    RefPtr<ID3D11Device> device = gfx::DeviceManagerDx::Get()->GetVRDevice();
     if (!device) {
       NS_WARNING("VRDisplayHost::CreateD3DObjects failed to get a D3D11Device");
       return false;
@@ -145,7 +161,7 @@ VRDisplayHost::SetGroupMask(uint32_t aGroupMask)
 bool
 VRDisplayHost::GetIsConnected()
 {
-  return mDisplayInfo.mIsConnected;
+  return mDisplayInfo.mDisplayState.mIsConnected;
 }
 
 void
@@ -196,7 +212,7 @@ VRDisplayHost::NotifyVSync()
   /**
    * We will trigger a new frame immediately after a successful frame texture
    * submission.  If content fails to call VRDisplay.submitFrame after
-   * kVRDisplayRAFMaxDuration milliseconds has elapsed since the last
+   * dom.vr.display.rafMaxDuration milliseconds has elapsed since the last
    * VRDisplay.requestAnimationFrame, we act as a "watchdog" and kick-off
    * a new VRDisplay.requestAnimationFrame to avoid a render loop stall and
    * to give content a chance to recover.
@@ -208,13 +224,7 @@ VRDisplayHost::NotifyVSync()
    * potentially extreme frame rates.  To ensure that content has a chance to
    * resume its presentation when the frames are accepted once again, we rely
    * on this "watchdog" to act as a VR refresh driver cycling at a rate defined
-   * by kVRDisplayRAFMaxDuration.
-   *
-   * kVRDisplayRAFMaxDuration is the number of milliseconds since last frame
-   * start before triggering a new frame.  When content is failing to submit
-   * frames on time or the lower level VR platform API's are rejecting frames,
-   * kVRDisplayRAFMaxDuration determines the rate at which RAF callbacks
-   * will be called.
+   * by dom.vr.display.rafMaxDuration.
    *
    * This number must be larger than the slowest expected frame time during
    * normal VR presentation, but small enough not to break content that
@@ -222,12 +232,10 @@ VRDisplayHost::NotifyVSync()
    *
    * The slowest expected refresh rate for a VR display currently is an
    * Oculus CV1 when ASW (Asynchronous Space Warp) is enabled, at 45hz.
-   * A kVRDisplayRAFMaxDuration value of 50 milliseconds results in a 20hz
+   * A dom.vr.display.rafMaxDuration value of 50 milliseconds results in a 20hz
    * rate, which avoids inadvertent triggering of the watchdog during
    * Oculus ASW even if every second frame is dropped.
    */
-  const double kVRDisplayRAFMaxDuration = 50;
-
   bool bShouldStartFrame = false;
 
   if (mDisplayInfo.mPresentingGroups == 0) {
@@ -241,7 +249,7 @@ VRDisplayHost::NotifyVSync()
       bShouldStartFrame = true;
     } else {
       TimeDuration duration = TimeStamp::Now() - mLastFrameStart;
-      if (duration.ToMilliseconds() > kVRDisplayRAFMaxDuration) {
+      if (duration.ToMilliseconds() > gfxPrefs::VRDisplayRafMaxDuration()) {
         bShouldStartFrame = true;
       }
     }
@@ -255,25 +263,17 @@ VRDisplayHost::NotifyVSync()
 }
 
 void
-VRDisplayHost::SubmitFrame(VRLayerParent* aLayer,
-                           const layers::SurfaceDescriptor &aTexture,
-                           uint64_t aFrameId,
-                           const gfx::Rect& aLeftEyeRect,
-                           const gfx::Rect& aRightEyeRect)
+VRDisplayHost::SubmitFrameInternal(const layers::SurfaceDescriptor &aTexture,
+                                   uint64_t aFrameId,
+                                   const gfx::Rect& aLeftEyeRect,
+                                   const gfx::Rect& aRightEyeRect)
 {
+#if !defined(MOZ_ANDROID_GOOGLE_VR)
+  MOZ_ASSERT(mSubmitThread->GetThread() == NS_GetCurrentThread());
+#endif // !defined(MOZ_ANDROID_GOOGLE_VR)
   AUTO_PROFILER_TRACING("VR", "SubmitFrameAtVRDisplayHost");
 
-  if ((mDisplayInfo.mGroupMask & aLayer->GetGroup()) == 0) {
-    // Suppress layers hidden by the group mask
-    return;
-  }
-
-  // Ensure that we only accept the first SubmitFrame call per RAF cycle.
-  if (!mFrameStarted || aFrameId != mDisplayInfo.mFrameId) {
-    return;
-  }
   mFrameStarted = false;
-
   switch (aTexture.type()) {
 
 #if defined(XP_WIN)
@@ -337,6 +337,14 @@ VRDisplayHost::SubmitFrame(VRLayerParent* aLayer,
       }
       break;
     }
+#elif defined(MOZ_ANDROID_GOOGLE_VR)
+    case SurfaceDescriptor::TEGLImageDescriptor: {
+      const EGLImageDescriptor& desc = aTexture.get_EGLImageDescriptor();
+      if (!SubmitFrame(&desc, aLeftEyeRect, aRightEyeRect)) {
+        return;
+      }
+      break;
+    }
 #endif
     default: {
       NS_WARNING("Unsupported SurfaceDescriptor type for VR layer texture");
@@ -344,7 +352,7 @@ VRDisplayHost::SubmitFrame(VRLayerParent* aLayer,
     }
   }
 
-#if defined(XP_WIN) || defined(XP_MACOSX)
+#if defined(XP_WIN) || defined(XP_MACOSX) || defined(MOZ_ANDROID_GOOGLE_VR)
 
   /**
    * Trigger the next VSync immediately after we are successfully
@@ -356,10 +364,50 @@ VRDisplayHost::SubmitFrame(VRLayerParent* aLayer,
    * frames to continue at a lower refresh rate until frame submission
    * succeeds again.
    */
-  VRManager *vm = VRManager::Get();
-  MOZ_ASSERT(vm);
-  vm->NotifyVRVsync(mDisplayInfo.mDisplayID);
+  VRManager* vm = VRManager::Get();
+  MessageLoop* loop = VRListenerThreadHolder::Loop();
+
+  loop->PostTask(NewRunnableMethod<const uint32_t>(
+    "gfx::VRManager::NotifyVRVsync",
+    vm, &VRManager::NotifyVRVsync, mDisplayInfo.mDisplayID
+  ));
 #endif
+}
+
+void
+VRDisplayHost::SubmitFrame(VRLayerParent* aLayer,
+                           const layers::SurfaceDescriptor &aTexture,
+                           uint64_t aFrameId,
+                           const gfx::Rect& aLeftEyeRect,
+                           const gfx::Rect& aRightEyeRect)
+{
+#if !defined(MOZ_ANDROID_GOOGLE_VR)
+  if (!mSubmitThread) {
+    mSubmitThread = new VRThread(NS_LITERAL_CSTRING("VR_SubmitFrame"));
+  }
+#endif // !defined(MOZ_ANDROID_GOOGLE_VR)
+
+  if ((mDisplayInfo.mGroupMask & aLayer->GetGroup()) == 0) {
+    // Suppress layers hidden by the group mask
+    return;
+  }
+
+  // Ensure that we only accept the first SubmitFrame call per RAF cycle.
+  if (!mFrameStarted || aFrameId != mDisplayInfo.mFrameId) {
+    return;
+  }
+
+  RefPtr<Runnable> submit =
+    NewRunnableMethod<StoreCopyPassByConstLRef<layers::SurfaceDescriptor>, uint64_t,
+      StoreCopyPassByConstLRef<gfx::Rect>, StoreCopyPassByConstLRef<gfx::Rect>>(
+      "gfx::VRDisplayHost::SubmitFrameInternal", this, &VRDisplayHost::SubmitFrameInternal,
+      aTexture, aFrameId, aLeftEyeRect, aRightEyeRect);
+#if !defined(MOZ_ANDROID_GOOGLE_VR)
+  mSubmitThread->Start();
+  mSubmitThread->PostTask(submit.forget());
+#else
+  CompositorThreadHolder::Loop()->PostTask(submit.forget());
+#endif // defined(MOZ_ANDROID_GOOGLE_VR)
 }
 
 bool
@@ -374,13 +422,12 @@ VRDisplayHost::CheckClearDisplayInfoDirty()
 
 VRControllerHost::VRControllerHost(VRDeviceType aType, dom::GamepadHand aHand,
                                    uint32_t aDisplayID)
- : mButtonPressed(0)
- , mButtonTouched(0)
+ : mControllerInfo{}
  , mVibrateIndex(0)
 {
   MOZ_COUNT_CTOR(VRControllerHost);
   mControllerInfo.mType = aType;
-  mControllerInfo.mHand = aHand;
+  mControllerInfo.mControllerState.mHand = aHand;
   mControllerInfo.mMappingType = dom::GamepadMappingType::_empty;
   mControllerInfo.mDisplayID = aDisplayID;
   mControllerInfo.mControllerID = VRSystemManager::AllocateControllerID();
@@ -400,25 +447,25 @@ VRControllerHost::GetControllerInfo() const
 void
 VRControllerHost::SetButtonPressed(uint64_t aBit)
 {
-  mButtonPressed = aBit;
+  mControllerInfo.mControllerState.mButtonPressed = aBit;
 }
 
 uint64_t
 VRControllerHost::GetButtonPressed()
 {
-  return mButtonPressed;
+  return mControllerInfo.mControllerState.mButtonPressed;
 }
 
 void
 VRControllerHost::SetButtonTouched(uint64_t aBit)
 {
-  mButtonTouched = aBit;
+  mControllerInfo.mControllerState.mButtonTouched = aBit;
 }
 
 uint64_t
 VRControllerHost::GetButtonTouched()
 {
-  return mButtonTouched;
+  return mControllerInfo.mControllerState.mButtonTouched;
 }
 
 void
@@ -436,7 +483,7 @@ VRControllerHost::GetPose()
 dom::GamepadHand
 VRControllerHost::GetHand()
 {
-  return mControllerInfo.mHand;
+  return mControllerInfo.mControllerState.mHand;
 }
 
 void

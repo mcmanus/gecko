@@ -27,7 +27,7 @@ const INITIAL_VIEWPORT = {
   },
 };
 
-let reducers = {
+const reducers = {
 
   [ADD_VIEWPORT](viewports) {
     // For the moment, there can be at most one viewport.
@@ -112,8 +112,8 @@ let reducers = {
 
 };
 
-module.exports = function (viewports = INITIAL_VIEWPORTS, action) {
-  let reducer = reducers[action.type];
+module.exports = function(viewports = INITIAL_VIEWPORTS, action) {
+  const reducer = reducers[action.type];
   if (!reducer) {
     return viewports;
   }

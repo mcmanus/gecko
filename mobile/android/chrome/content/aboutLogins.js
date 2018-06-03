@@ -2,12 +2,10 @@
 * License, v. 2.0. If a copy of the MPL was not distributed with this file,
 * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-var Ci = Components.interfaces, Cc = Components.classes, Cu = Components.utils;
-
-Cu.import("resource://services-common/utils.js"); /* global: CommonUtils */
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/TelemetryStopwatch.jsm");
+ChromeUtils.import("resource://services-common/utils.js"); /* global: CommonUtils */
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/TelemetryStopwatch.jsm");
 
 XPCOMUtils.defineLazyGetter(window, "gChromeWin", () =>
   window.QueryInterface(Ci.nsIInterfaceRequestor)
@@ -18,13 +16,13 @@ XPCOMUtils.defineLazyGetter(window, "gChromeWin", () =>
     .getInterface(Ci.nsIDOMWindow)
     .QueryInterface(Ci.nsIDOMChromeWindow));
 
-XPCOMUtils.defineLazyModuleGetter(this, "EventDispatcher",
-                                  "resource://gre/modules/Messaging.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Snackbars", "resource://gre/modules/Snackbars.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Prompt",
-                                  "resource://gre/modules/Prompt.jsm");
+ChromeUtils.defineModuleGetter(this, "EventDispatcher",
+                               "resource://gre/modules/Messaging.jsm");
+ChromeUtils.defineModuleGetter(this, "Snackbars", "resource://gre/modules/Snackbars.jsm");
+ChromeUtils.defineModuleGetter(this, "Prompt",
+                               "resource://gre/modules/Prompt.jsm");
 
-var debug = Cu.import("resource://gre/modules/AndroidLog.jsm", {}).AndroidLog.d.bind(null, "AboutLogins");
+var debug = ChromeUtils.import("resource://gre/modules/AndroidLog.jsm", {}).AndroidLog.d.bind(null, "AboutLogins");
 
 var gStringBundle = Services.strings.createBundle("chrome://browser/locale/aboutLogins.properties");
 
@@ -408,6 +406,9 @@ var Logins = {
               case 0:
                 // Corresponds to "confirm" button.
                 Services.logins.removeLogin(login);
+
+                // Show a snackbar to notify the login record has been deleted.
+                Snackbars.show(gStringBundle.GetStringFromName("loginsDetails.deleted"), Snackbars.LENGTH_LONG);
             }
           });
       }
@@ -436,6 +437,7 @@ var Logins = {
     loginItem.className = "login-item list-item";
 
     loginItem.addEventListener("click", this, true);
+    loginItem.addEventListener("contextmenu", this, true);
 
     // Create item icon.
     let img = document.createElement("div");
@@ -478,6 +480,7 @@ var Logins = {
         this._onPopState(event);
         break;
       }
+      case "contextmenu":
       case "click": {
         this._onLoginClick(event);
         break;
@@ -497,15 +500,15 @@ var Logins = {
   _filter: function(event) {
     let value = event.target.value.toLowerCase();
     let logins = this._logins.filter((login) => {
-      if (login.hostname.toLowerCase().indexOf(value) != -1) {
+      if (login.hostname.toLowerCase().includes(value)) {
         return true;
       }
       if (login.username &&
-          login.username.toLowerCase().indexOf(value) != -1) {
+          login.username.toLowerCase().includes(value)) {
         return true;
       }
       if (login.httpRealm &&
-          login.httpRealm.toLowerCase().indexOf(value) != -1) {
+          login.httpRealm.toLowerCase().includes(value)) {
         return true;
       }
       return false;

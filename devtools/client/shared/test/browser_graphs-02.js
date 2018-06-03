@@ -30,21 +30,21 @@ const TEST_DATA = [
 const TEST_REGIONS = [{ start: 320, end: 460 }, { start: 780, end: 860 }];
 const LineGraphWidget = require("devtools/client/shared/widgets/LineGraphWidget");
 
-add_task(function* () {
-  yield addTab("about:blank");
-  yield performTest();
+add_task(async function() {
+  await addTab("about:blank");
+  await performTest();
   gBrowser.removeCurrentTab();
 });
 
-function* performTest() {
-  let [host,, doc] = yield createHost();
-  let graph = new LineGraphWidget(doc.body, "fps");
-  yield graph.once("ready");
+async function performTest() {
+  const [host,, doc] = await createHost();
+  const graph = new LineGraphWidget(doc.body, "fps");
+  await graph.once("ready");
 
   testDataAndRegions(graph);
   testHighlights(graph);
 
-  yield graph.destroy();
+  await graph.destroy();
   host.destroy();
 }
 
@@ -82,8 +82,8 @@ function testDataAndRegions(graph) {
     "The data scale on the Y axis is correct.");
 
   for (let i = 0; i < TEST_REGIONS.length; i++) {
-    let original = TEST_REGIONS[i];
-    let normalized = graph._regions[i];
+    const original = TEST_REGIONS[i];
+    const normalized = graph._regions[i];
 
     is(original.start * graph.dataScaleX, normalized.start,
       "The region's start value was properly normalized.");

@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "Llwytho i Lawr"
   },
+  "downloadOnlyNotice": {
+    "message": "Rydych yn y modd Llwytho i Lawr yn Unig."
+  },
+  "downloadOnlyDetails": {
+    "message": "Mae Firefox Screenshots yn newid yn awtomatig i'r modd Llwytho i Lawr y Unig yn y sefyllfaoedd hyn:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "Mewn ffenestr Pori Prefat."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Mae cwcis trydydd parti wedi eu hanalluogi."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "Mae “Peidio cofio hanes” wedi ei alluogi."
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "Rydych yn defnyddio Firefox ESR."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "Mae llwytho i fyny wedi ei atal."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Dolen wedi ei Chadw"
   },
@@ -36,6 +57,28 @@
     "message": "Mae'r ddolen i'ch llun wedi ei gopïo i'r clipfwrdd. Pwyswch $META_KEY$-V i'w ludo.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Copïo"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Copïwyd y Llun"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Mae eich llun wedi ei gopïo i'r clipfwrdd. Pwyswch $META_KEY$-V i'w ludo.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Mae'r ddelwedd wedi ei thocio i $PIXELS$px.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }

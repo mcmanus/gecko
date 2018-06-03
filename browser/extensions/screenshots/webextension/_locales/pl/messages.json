@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "Pobierz"
   },
+  "downloadOnlyNotice": {
+    "message": "Obecnie używany jest tryb umożliwiający tylko pobieranie."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots automatycznie przełącza na tryb umożliwiający tylko pobieranie w tych sytuacjach:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "Okno jest prywatne."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Ciasteczka witryn zewnętrznych podmiotów są wyłączone."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "Zachowywanie historii jest wyłączone."
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "Używany jest Firefox ESR."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "Wysyłanie zostało wyłączone."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Skopiowano odnośnik"
   },
@@ -36,6 +57,28 @@
     "message": "Odnośnik do zrzutu został skopiowany do schowka. Naciśnij $META_KEY$-V, aby go wkleić.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Kopiuj"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Skopiowano zrzut"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Zrzut został skopiowany do schowka. Naciśnij $META_KEY$-V, aby go wkleić.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Ten obraz został przycięty do $PIXELS$ px.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }

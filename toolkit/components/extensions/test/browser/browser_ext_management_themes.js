@@ -2,7 +2,10 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-const {LightweightThemeManager} = Cu.import("resource://gre/modules/LightweightThemeManager.jsm", {});
+const {LightweightThemeManager} = ChromeUtils.import("resource://gre/modules/LightweightThemeManager.jsm", {});
+
+const {PromiseTestUtils} = ChromeUtils.import("resource://testing-common/PromiseTestUtils.jsm", null);
+PromiseTestUtils.whitelistRejectionsGlobally(/Message manager disconnected/);
 
 add_task(async function setup() {
   await SpecialPowers.pushPrefEnv({
@@ -32,6 +35,9 @@ add_task(async function test_management_themes() {
 
   async function background(TEST_ID) {
     browser.management.onInstalled.addListener(info => {
+      if (info.name == TEST_ID) {
+        return;
+      }
       browser.test.log(`${info.name} was installed`);
       browser.test.assertEq(info.type, "theme", "addon is theme");
       browser.test.sendMessage("onInstalled", info.name);
@@ -124,7 +130,6 @@ add_task(async function test_management_themes() {
     accentcolor: Math.random().toString(),
   };
   is(await extension.awaitMessage("onInstalled"), "Bling", "LWT installed");
-  is(await extension.awaitMessage("onDisabled"), "Default", "default disabled");
   is(await extension.awaitMessage("onEnabled"), "Bling", "LWT enabled");
 
   await theme.startup();

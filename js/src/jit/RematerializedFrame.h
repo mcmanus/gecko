@@ -9,12 +9,10 @@
 
 #include <algorithm>
 
-#include "jsfun.h"
-
 #include "jit/JitFrames.h"
 #include "jit/JSJitFrameIter.h"
-
 #include "vm/EnvironmentObject.h"
+#include "vm/JSFunction.h"
 #include "vm/Stack.h"
 
 namespace js {
@@ -190,6 +188,10 @@ class RematerializedFrame
 
     void setHasCachedSavedFrame() {
         hasCachedSavedFrame_ = true;
+    }
+
+    void clearHasCachedSavedFrame() {
+        hasCachedSavedFrame_ = false;
     }
 
     unsigned numFormalArgs() const {

@@ -20,12 +20,7 @@
 #include "xpcpublic.h"
 
 class nsICycleCollectorListener;
-class nsScriptNameSpaceManager;
 class nsIDocShell;
-
-namespace JS {
-class AutoValueVector;
-} // namespace JS
 
 namespace mozilla {
 template <class> class Maybe;
@@ -80,7 +75,7 @@ public:
   };
 
   // Setup all the statics etc - safe to call multiple times after Startup().
-  void EnsureStatics();
+  static void EnsureStatics();
 
   static void GarbageCollectNow(JS::gcreason::Reason reason,
                                 IsIncremental aIncremental = NonIncrementalGC,
@@ -171,12 +166,6 @@ namespace dom {
 
 void StartupJSEnvironment();
 void ShutdownJSEnvironment();
-
-// Get the NameSpaceManager, creating if necessary
-nsScriptNameSpaceManager* GetNameSpaceManager();
-
-// Peek the NameSpaceManager, without creating it.
-nsScriptNameSpaceManager* PeekNameSpaceManager();
 
 // Runnable that's used to do async error reporting
 class AsyncErrorReporter final : public mozilla::Runnable

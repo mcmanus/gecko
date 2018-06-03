@@ -22,8 +22,6 @@ EXPORTS += [
     'nsStringFlags.h',
     'nsStringFwd.h',
     'nsStringIterator.h',
-    'nsSubstring.h',
-    'nsSubstringTuple.h',
     'nsTDependentString.h',
     'nsTDependentSubstring.h',
     'nsTextFormatter.h',
@@ -46,8 +44,8 @@ UNIFIED_SOURCES += [
     'nsStringComparator.cpp',
     'nsStringObsolete.cpp',
     'nsSubstring.cpp',
-    'nsSubstringTuple.cpp',
     'nsTextFormatter.cpp',
+    'nsTSubstringTuple.cpp',
     'precompiled_templates.cpp',
 ]
 
@@ -59,11 +57,8 @@ if CONFIG['INTEL_ARCHITECTURE']:
     SOURCES += ['nsReadableUtilsSSE2.cpp']
     SOURCES['nsReadableUtilsSSE2.cpp'].flags += CONFIG['SSE2_FLAGS']
 
-# MSVC 2017 has a bug that incorrectly generates C5037 warning which
-# hits the template string code. We need to disable this warning as a
-# workaround. See https://developercommunity.visualstudio.com/
-# content/problem/81223/incorrect-error-c5037-with-permissive.html
-if CONFIG['_MSC_VER']:
-    CXXFLAGS += ['-wd5037']
+if CONFIG['HAVE_ARM_NEON'] or CONFIG['CPU_ARCH'] == 'aarch64':
+    SOURCES += ['nsUTF8UtilsNEON.cpp']
+    SOURCES['nsUTF8UtilsNEON.cpp'].flags += CONFIG['NEON_FLAGS']
 
 FINAL_LIBRARY = 'xul'

@@ -31,12 +31,12 @@ EXPORTS += [
     'nsMargin.h',
     'nsPoint.h',
     'nsRect.h',
+    'nsRectAbsolute.h',
     'nsRegion.h',
     'nsRegionFwd.h',
     'nsSize.h',
     'nsThemeConstants.h',
     'nsTransform2D.h',
-    'PingPongRegion.h',
     'RegionBuilder.h',
     'X11UndefineNone.h'
 ]
@@ -44,9 +44,11 @@ EXPORTS += [
 EXPORTS.mozilla += [
     'AppUnits.h',
     'ArrayView.h',
+    'FontPropertyTypes.h',
 ]
 
 EXPORTS.mozilla.gfx += [
+    'CompositorHitTestInfo.h',
     'TiledRegion.h',
 ]
 

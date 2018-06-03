@@ -26,22 +26,20 @@ public:
 
   void DoAsyncResolve(const nsACString  &hostname,
                       const OriginAttributes &originAttributes,
-                      uint32_t flags,
-                      const nsACString  &networkInterface);
+                      uint32_t flags);
 
   // Pass args here rather than storing them in the parent; they are only
   // needed if the request is to be canceled.
   mozilla::ipc::IPCResult RecvCancelDNSRequest(const nsCString& hostName,
                                                const OriginAttributes& originAttributes,
                                                const uint32_t& flags,
-                                               const nsCString& networkInterface,
                                                const nsresult& reason) override;
   mozilla::ipc::IPCResult Recv__delete__() override;
 
 protected:
   virtual void ActorDestroy(ActorDestroyReason why) override;
 private:
-  virtual ~DNSRequestParent();
+  virtual ~DNSRequestParent() = default;
 
   uint32_t mFlags;
   bool mIPCClosed;  // true if IPDL channel has been closed (child crash)

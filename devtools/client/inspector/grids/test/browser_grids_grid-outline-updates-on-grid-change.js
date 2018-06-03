@@ -20,33 +20,33 @@ const TEST_URI = `
   </div>
 `;
 
-add_task(function* () {
-  yield addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
+add_task(async function() {
+  await addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
 
-  let { inspector, gridInspector, testActor } = yield openLayoutView();
-  let { document: doc } = gridInspector;
-  let { highlighters, store } = inspector;
+  const { inspector, gridInspector, testActor } = await openLayoutView();
+  const { document: doc } = gridInspector;
+  const { highlighters, store } = inspector;
 
   info("Clicking on the first checkbox to highlight the grid");
-  let checkbox = doc.querySelector("#grid-list input");
+  const checkbox = doc.querySelector("#grid-list input");
 
-  let onHighlighterShown = highlighters.once("grid-highlighter-shown");
-  let onCheckboxChange = waitUntilState(store, state =>
+  const onHighlighterShown = highlighters.once("grid-highlighter-shown");
+  const onCheckboxChange = waitUntilState(store, state =>
     state.grids.length == 1 && state.grids[0].highlighted);
-  let onGridOutlineRendered = waitForDOM(doc, ".grid-outline-cell", 2);
+  const onGridOutlineRendered = waitForDOM(doc, ".grid-outline-cell", 2);
 
   checkbox.click();
 
-  yield onHighlighterShown;
-  yield onCheckboxChange;
-  let elements = yield onGridOutlineRendered;
+  await onHighlighterShown;
+  await onCheckboxChange;
+  let elements = await onGridOutlineRendered;
 
   info("Checking the grid outline is shown.");
   is(elements.length, 2, "Grid outline is shown.");
 
   info("Changing the grid in the page");
-  let onReflow = new Promise(resolve => {
-    let listener = {
+  const onReflow = new Promise(resolve => {
+    const listener = {
       callback: () => {
         inspector.reflowTracker.untrackReflows(listener, listener.callback);
         resolve();
@@ -54,7 +54,7 @@ add_task(function* () {
     };
     inspector.reflowTracker.trackReflows(listener, listener.callback);
   });
-  let onGridOutlineChanged = waitForDOM(doc, ".grid-outline-cell", 4);
+  const onGridOutlineChanged = waitForDOM(doc, ".grid-outline-cell", 4);
 
   testActor.eval(`
     const div = document.createElement("div");
@@ -62,8 +62,8 @@ add_task(function* () {
     document.querySelector(".container").appendChild(div);
   `);
 
-  yield onReflow;
-  elements = yield onGridOutlineChanged;
+  await onReflow;
+  elements = await onGridOutlineChanged;
 
   info("Checking the grid outline is correct.");
   is(elements.length, 4, "Grid outline was changed.");

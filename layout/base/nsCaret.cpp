@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 sw=2 et tw=78: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -18,9 +18,6 @@
 #include "nsFrameSelection.h"
 #include "nsIFrame.h"
 #include "nsIScrollableFrame.h"
-#include "nsIDOMNode.h"
-#include "nsISelection.h"
-#include "nsISelectionPrivate.h"
 #include "nsIContent.h"
 #include "nsIPresShell.h"
 #include "nsLayoutUtils.h"
@@ -33,6 +30,7 @@
 #include "nsTextFragment.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/LookAndFeel.h"
+#include "mozilla/dom/Selection.h"
 #include "nsIBidiKeyboard.h"
 #include "nsContentUtils.h"
 
@@ -152,21 +150,18 @@ nsresult nsCaret::Init(nsIPresShell *inPresShell)
   // listener
 
   nsCOMPtr<nsISelectionController> selCon = do_QueryReferent(mPresShell);
-  if (!selCon)
+  if (!selCon) {
     return NS_ERROR_FAILURE;
+  }
 
-  nsCOMPtr<nsISelection> domSelection;
-  nsresult rv = selCon->GetSelection(nsISelectionController::SELECTION_NORMAL,
-                                     getter_AddRefs(domSelection));
-  if (NS_FAILED(rv))
-    return rv;
-  if (!domSelection)
+  RefPtr<Selection> selection =
+    selCon->GetSelection(nsISelectionController::SELECTION_NORMAL);
+  if (!selection) {
     return NS_ERROR_FAILURE;
+  }
 
-  nsCOMPtr<nsISelectionPrivate> privateSelection = do_QueryInterface(domSelection);
-  if (privateSelection)
-    privateSelection->AddSelectionListener(this);
-  mDomSelectionWeak = do_GetWeakReference(domSelection);
+  selection->AddSelectionListener(this);
+  mDomSelectionWeak = selection;
 
   return NS_OK;
 }
@@ -217,10 +212,9 @@ void nsCaret::Terminate()
   mBlinkTimer = nullptr;
 
   // unregiser ourselves as a selection listener
-  nsCOMPtr<nsISelection> domSelection = do_QueryReferent(mDomSelectionWeak);
-  nsCOMPtr<nsISelectionPrivate> privateSelection(do_QueryInterface(domSelection));
-  if (privateSelection)
-    privateSelection->RemoveSelectionListener(this);
+  if (mDomSelectionWeak) {
+    mDomSelectionWeak->RemoveSelectionListener(this);
+  }
   mDomSelectionWeak = nullptr;
   mPresShell = nullptr;
 
@@ -229,16 +223,15 @@ void nsCaret::Terminate()
 
 NS_IMPL_ISUPPORTS(nsCaret, nsISelectionListener)
 
-nsISelection* nsCaret::GetSelection()
+Selection* nsCaret::GetSelection()
 {
-  nsCOMPtr<nsISelection> sel(do_QueryReferent(mDomSelectionWeak));
-  return sel;
+  return mDomSelectionWeak;
 }
 
-void nsCaret::SetSelection(nsISelection *aDOMSel)
+void nsCaret::SetSelection(Selection *aDOMSel)
 {
   MOZ_ASSERT(aDOMSel);
-  mDomSelectionWeak = do_GetWeakReference(aDOMSel);   // weak reference to pres shell
+  mDomSelectionWeak = aDOMSel;
   ResetBlinking();
   SchedulePaint(aDOMSel);
 }
@@ -397,7 +390,7 @@ nsCaret::GetFrameAndOffset(Selection* aSelection,
     focusOffset = aOverrideOffset;
   } else if (aSelection) {
     focusNode = aSelection->GetFocusNode();
-    aSelection->GetFocusOffset(&focusOffset);
+    focusOffset = aSelection->FocusOffset();
   } else {
     return nullptr;
   }
@@ -421,31 +414,24 @@ nsCaret::GetFrameAndOffset(Selection* aSelection,
 }
 
 /* static */ nsIFrame*
-nsCaret::GetGeometry(nsISelection* aSelection, nsRect* aRect)
+nsCaret::GetGeometry(Selection* aSelection, nsRect* aRect)
 {
   int32_t frameOffset;
-  Selection* selection = aSelection ? aSelection->AsSelection() : nullptr;
-  nsIFrame* frame = GetFrameAndOffset(selection, nullptr, 0, &frameOffset);
+  nsIFrame* frame = GetFrameAndOffset(aSelection, nullptr, 0, &frameOffset);
   if (frame) {
     *aRect = GetGeometryForFrame(frame, frameOffset, nullptr);
   }
   return frame;
 }
 
-Selection*
-nsCaret::GetSelectionInternal()
-{
-  nsISelection* domSelection = GetSelection();
-  return domSelection ? domSelection->AsSelection() : nullptr;
-}
-
-void nsCaret::SchedulePaint(nsISelection* aSelection)
+void
+nsCaret::SchedulePaint(Selection* aSelection)
 {
   Selection* selection;
   if (aSelection) {
-    selection = aSelection->AsSelection();
+    selection = aSelection;
   } else {
-    selection = GetSelectionInternal();
+    selection = GetSelection();
   }
   nsINode* focusNode;
   if (mOverrideContent) {
@@ -474,9 +460,9 @@ void nsCaret::SetVisibilityDuringSelection(bool aVisibility)
 }
 
 void
-nsCaret::SetCaretPosition(nsIDOMNode* aNode, int32_t aOffset)
+nsCaret::SetCaretPosition(nsINode* aNode, int32_t aOffset)
 {
-  mOverrideContent = do_QueryInterface(aNode);
+  mOverrideContent = aNode;
   mOverrideOffset = aOffset;
 
   ResetBlinking();
@@ -498,7 +484,7 @@ nsCaret::CheckSelectionLanguageChange()
   // Call SelectionLanguageChange on every paint. Mostly it will be a noop
   // but it should be fast anyway. This guarantees we never paint the caret
   // at the wrong place.
-  Selection* selection = GetSelectionInternal();
+  Selection* selection = GetSelection();
   if (selection) {
     selection->SelectionLanguageChange(isKeyboardRTL);
   }
@@ -517,7 +503,7 @@ nsCaret::GetPaintGeometry(nsRect* aRect)
   CheckSelectionLanguageChange();
 
   int32_t frameOffset;
-  nsIFrame *frame = GetFrameAndOffset(GetSelectionInternal(),
+  nsIFrame* frame = GetFrameAndOffset(GetSelection(),
       mOverrideContent, mOverrideOffset, &frameOffset);
   if (!frame) {
     return nullptr;
@@ -527,8 +513,7 @@ nsCaret::GetPaintGeometry(nsRect* aRect)
   const nsStyleUserInterface* userinterface = frame->StyleUserInterface();
   if ((!mIgnoreUserModify &&
        userinterface->mUserModify == StyleUserModify::ReadOnly) ||
-      userinterface->mUserInput == StyleUserInput::None ||
-      userinterface->mUserInput == StyleUserInput::Disabled) {
+      frame->IsContentDisabled()) {
     return nullptr;
   }
 
@@ -550,7 +535,7 @@ nsCaret::GetPaintGeometry(nsRect* aRect)
 
 nsIFrame*
 nsCaret::GetFrame(int32_t* aContentOffset) {
-  return GetFrameAndOffset(GetSelectionInternal(),
+  return GetFrameAndOffset(GetSelection(),
                            mOverrideContent,
                            mOverrideOffset,
                            aContentOffset);
@@ -586,7 +571,7 @@ void nsCaret::PaintCaret(DrawTarget& aDrawTarget,
 }
 
 NS_IMETHODIMP
-nsCaret::NotifySelectionChanged(nsIDOMDocument *, nsISelection *aDomSel,
+nsCaret::NotifySelectionChanged(nsIDocument *, Selection* aDomSel,
                                 int16_t aReason)
 {
   // Note that aDomSel, per the comment below may not be the same as our
@@ -596,8 +581,6 @@ nsCaret::NotifySelectionChanged(nsIDOMDocument *, nsISelection *aDomSel,
   if ((aReason & nsISelectionListener::MOUSEUP_REASON) || !IsVisible(aDomSel))//this wont do
     return NS_OK;
 
-  nsCOMPtr<nsISelection> domSel(do_QueryReferent(mDomSelectionWeak));
-
   // The same caret is shared amongst the document and any text widgets it
   // may contain. This means that the caret could get notifications from
   // multiple selections.
@@ -606,7 +589,7 @@ nsCaret::NotifySelectionChanged(nsIDOMDocument *, nsISelection *aDomSel,
   // the caret is currently interested in (mDomSelectionWeak), then there
   // is nothing to do!
 
-  if (domSel != aDomSel)
+  if (mDomSelectionWeak != aDomSel)
     return NS_OK;
 
   ResetBlinking();
@@ -636,16 +619,16 @@ void nsCaret::ResetBlinking()
   if (mBlinkTimer) {
     mBlinkTimer->Cancel();
   } else {
-    nsresult  err;
-    mBlinkTimer = do_CreateInstance("@mozilla.org/timer;1", &err);
-    if (NS_FAILED(err)) {
-      return;
-    }
-
+    nsIEventTarget* target = nullptr;
     if (nsCOMPtr<nsIPresShell> presShell = do_QueryReferent(mPresShell)) {
       if (nsCOMPtr<nsIDocument> doc = presShell->GetDocument()) {
-        mBlinkTimer->SetTarget(doc->EventTargetFor(TaskCategory::Other));
+        target = doc->EventTargetFor(TaskCategory::Other);
       }
+    }
+
+    mBlinkTimer = NS_NewTimer(target);
+    if (!mBlinkTimer) {
+      return;
     }
   }
 
@@ -852,11 +835,6 @@ size_t nsCaret::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
     // (since we don't own the PresShell).
     total += mPresShell->SizeOfOnlyThis(aMallocSizeOf);
   }
-  if (mDomSelectionWeak) {
-    // We only want size of the nsWeakReference object, not the selection
-    // (again, we don't own the selection).
-    total += mDomSelectionWeak->SizeOfOnlyThis(aMallocSizeOf);
-  }
   if (mBlinkTimer) {
     total += mBlinkTimer->SizeOfIncludingThis(aMallocSizeOf);
   }
@@ -876,14 +854,11 @@ bool nsCaret::IsMenuPopupHidingCaret()
 
   // Get the selection focus content, that's where the caret would
   // go if it was drawn.
-  nsCOMPtr<nsIDOMNode> node;
-  nsCOMPtr<nsISelection> domSelection = do_QueryReferent(mDomSelectionWeak);
-  if (!domSelection)
+  if (!mDomSelectionWeak) {
     return true; // No selection/caret to draw.
-  domSelection->GetFocusNode(getter_AddRefs(node));
-  if (!node)
-    return true; // No selection/caret to draw.
-  nsCOMPtr<nsIContent> caretContent = do_QueryInterface(node);
+  }
+  nsCOMPtr<nsIContent> caretContent =
+    nsIContent::FromNodeOrNull(mDomSelectionWeak->GetFocusNode());
   if (!caretContent)
     return true; // No selection/caret to draw.
 

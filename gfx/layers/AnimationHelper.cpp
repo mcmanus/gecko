@@ -6,22 +6,19 @@
 
 #include "AnimationHelper.h"
 #include "mozilla/ComputedTimingFunction.h" // for ComputedTimingFunction
-#include "mozilla/dom/AnimationEffectReadOnlyBinding.h" // for dom::FillMode
+#include "mozilla/dom/AnimationEffectBinding.h" // for dom::FillMode
 #include "mozilla/dom/KeyframeEffectBinding.h" // for dom::IterationComposite
-#include "mozilla/dom/KeyframeEffectReadOnly.h" // for dom::KeyFrameEffectReadOnly
+#include "mozilla/dom/KeyframeEffect.h" // for dom::KeyFrameEffectReadOnly
+#include "mozilla/dom/Nullable.h" // for dom::Nullable
 #include "mozilla/layers/CompositorThread.h" // for CompositorThreadHolder
 #include "mozilla/layers/LayerAnimationUtils.h" // for TimingFunctionToComputedTimingFunction
+#include "mozilla/ServoBindings.h" // for Servo_ComposeAnimationSegment, etc
 #include "mozilla/StyleAnimationValue.h" // for StyleAnimationValue, etc
 #include "nsDeviceContext.h"            // for AppUnitsPerCSSPixel
 #include "nsDisplayList.h"              // for nsDisplayTransform, etc
 
 namespace mozilla {
 namespace layers {
-
-struct StyleAnimationValueCompositePair {
-  StyleAnimationValue mValue;
-  dom::CompositeOperation mComposite;
-};
 
 void
 CompositorAnimationStorage::Clear()
@@ -95,10 +92,17 @@ CompositorAnimationStorage::SetAnimatedValue(uint64_t aId,
                                              const TransformData& aData)
 {
   MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
-  AnimatedValue* value = new AnimatedValue(Move(aTransformInDevSpace),
-                                           Move(aFrameTransform),
-                                           aData);
-  mAnimatedValues.Put(aId, value);
+  auto count = mAnimatedValues.Count();
+  AnimatedValue* value = mAnimatedValues.LookupOrAdd(aId,
+                                                     std::move(aTransformInDevSpace),
+                                                     std::move(aFrameTransform),
+                                                     aData);
+  if (count == mAnimatedValues.Count()) {
+    MOZ_ASSERT(value->mType == AnimatedValue::TRANSFORM);
+    value->mTransform.mTransformInDevSpace = std::move(aTransformInDevSpace);
+    value->mTransform.mFrameTransform = std::move(aFrameTransform);
+    value->mTransform.mData = aData;
+  }
 }
 
 void
@@ -107,10 +111,10 @@ CompositorAnimationStorage::SetAnimatedValue(uint64_t aId,
 {
   MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
   const TransformData dontCare = {};
-  AnimatedValue* value = new AnimatedValue(Move(aTransformInDevSpace),
-                                           gfx::Matrix4x4(),
-                                           dontCare);
-  mAnimatedValues.Put(aId, value);
+  SetAnimatedValue(aId,
+                   std::move(aTransformInDevSpace),
+                   std::move(gfx::Matrix4x4()),
+                   dontCare);
 }
 
 void
@@ -118,8 +122,12 @@ CompositorAnimationStorage::SetAnimatedValue(uint64_t aId,
                                              const float& aOpacity)
 {
   MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
-  AnimatedValue* value = new AnimatedValue(aOpacity);
-  mAnimatedValues.Put(aId, value);
+  auto count = mAnimatedValues.Count();
+  AnimatedValue* value = mAnimatedValues.LookupOrAdd(aId, aOpacity);
+  if (count == mAnimatedValues.Count()) {
+    MOZ_ASSERT(value->mType == AnimatedValue::OPACITY);
+    value->mOpacity = aOpacity;
+  }
 }
 
 AnimationArray*
@@ -137,82 +145,31 @@ CompositorAnimationStorage::SetAnimations(uint64_t aId, const AnimationArray& aV
   mAnimations.Put(aId, value);
 }
 
-static StyleAnimationValue
-SampleValue(double aPortion, const layers::Animation& aAnimation,
-            const StyleAnimationValueCompositePair& aStart,
-            const StyleAnimationValueCompositePair& aEnd,
-            const StyleAnimationValue& aLastValue,
-            uint64_t aCurrentIteration,
-            const StyleAnimationValue& aUnderlyingValue)
+
+AnimationHelper::SampleResult
+AnimationHelper::SampleAnimationForEachNode(
+  TimeStamp aPreviousFrameTime,
+  TimeStamp aCurrentFrameTime,
+  AnimationArray& aAnimations,
+  InfallibleTArray<AnimData>& aAnimationData,
+  RefPtr<RawServoAnimationValue>& aAnimationValue,
+  const AnimatedValue* aPreviousValue)
 {
-  NS_ASSERTION(aStart.mValue.IsNull() || aEnd.mValue.IsNull() ||
-               aStart.mValue.GetUnit() == aEnd.mValue.GetUnit(),
-               "Must have same unit");
+  MOZ_ASSERT(!aAnimations.IsEmpty(), "Should be called with animations");
 
-  StyleAnimationValue startValue =
-    dom::KeyframeEffectReadOnly::CompositeValue(aAnimation.property(),
-                                                aStart.mValue,
-                                                aUnderlyingValue,
-                                                aStart.mComposite);
-  StyleAnimationValue endValue =
-    dom::KeyframeEffectReadOnly::CompositeValue(aAnimation.property(),
-                                                aEnd.mValue,
-                                                aUnderlyingValue,
-                                                aEnd.mComposite);
-
-  // Iteration composition for accumulate
-  if (static_cast<dom::IterationCompositeOperation>
-        (aAnimation.iterationComposite()) ==
-          dom::IterationCompositeOperation::Accumulate &&
-      aCurrentIteration > 0) {
-    // FIXME: Bug 1293492: Add a utility function to calculate both of
-    // below StyleAnimationValues.
-    startValue =
-      StyleAnimationValue::Accumulate(aAnimation.property(),
-                                      aLastValue.IsNull()
-                                        ? aUnderlyingValue
-                                        : aLastValue,
-                                      Move(startValue),
-                                      aCurrentIteration);
-    endValue =
-      StyleAnimationValue::Accumulate(aAnimation.property(),
-                                      aLastValue.IsNull()
-                                        ? aUnderlyingValue
-                                        : aLastValue,
-                                      Move(endValue),
-                                      aCurrentIteration);
-  }
-
-  StyleAnimationValue interpolatedValue;
-  // This should never fail because we only pass transform and opacity values
-  // to the compositor and they should never fail to interpolate.
-  DebugOnly<bool> uncomputeResult =
-    StyleAnimationValue::Interpolate(aAnimation.property(),
-                                     startValue, endValue,
-                                     aPortion, interpolatedValue);
-  MOZ_ASSERT(uncomputeResult, "could not uncompute value");
-  return interpolatedValue;
-}
-
-bool
-AnimationHelper::SampleAnimationForEachNode(TimeStamp aTime,
-                           AnimationArray& aAnimations,
-                           InfallibleTArray<AnimData>& aAnimationData,
-                           StyleAnimationValue& aAnimationValue,
-                           bool& aHasInEffectAnimations)
-{
-  bool activeAnimations = false;
-
-  if (aAnimations.IsEmpty()) {
-    return activeAnimations;
-  }
-
+  bool hasInEffectAnimations = false;
+#ifdef DEBUG
+  // In cases where this function returns a SampleResult::Skipped, we actually
+  // do populate aAnimationValue in debug mode, so that we can MOZ_ASSERT at the
+  // call site that the value that would have been computed matches the stored
+  // value that we end up using. This flag is used to ensure we populate
+  // aAnimationValue in this scenario.
+  bool shouldBeSkipped = false;
+#endif
   // Process in order, since later aAnimations override earlier ones.
   for (size_t i = 0, iEnd = aAnimations.Length(); i < iEnd; ++i) {
     Animation& animation = aAnimations[i];
     AnimData& animData = aAnimationData[i];
-
-    activeAnimations = true;
 
     MOZ_ASSERT((!animation.originTime().IsNull() &&
                 animation.startTime().type() ==
@@ -220,34 +177,93 @@ AnimationHelper::SampleAnimationForEachNode(TimeStamp aTime,
                animation.isNotPlaying(),
                "If we are playing, we should have an origin time and a start"
                " time");
+
+    // Determine if the animation was play-pending and used a ready time later
+    // than the previous frame time.
+    //
+    // To determine this, _all_ of the following consitions need to hold:
+    //
+    // * There was no previous animation value (i.e. this is the first frame for
+    //   the animation since it was sent to the compositor), and
+    // * The animation is playing, and
+    // * There is a previous frame time, and
+    // * The ready time of the animation is ahead of the previous frame time.
+    //
+    bool hasFutureReadyTime = false;
+    if (!aPreviousValue &&
+        !animation.isNotPlaying() &&
+        !aPreviousFrameTime.IsNull()) {
+      // This is the inverse of the calculation performed in
+      // AnimationInfo::StartPendingAnimations to calculate the start time of
+      // play-pending animations.
+      // Note that we have to calculate (TimeStamp + TimeDuration) last to avoid
+      // underflow in the middle of the calulation.
+      const TimeStamp readyTime =
+        animation.originTime() +
+        (animation.startTime().get_TimeDuration() +
+         animation.holdTime().MultDouble(1.0 / animation.playbackRate()));
+      hasFutureReadyTime =
+        !readyTime.IsNull() && readyTime > aPreviousFrameTime;
+    }
+    // Use the previous vsync time to make main thread animations and compositor
+    // more closely aligned.
+    //
+    // On the first frame where we have animations the previous timestamp will
+    // not be set so we simply use the current timestamp.  As a result we will
+    // end up painting the first frame twice.  That doesn't appear to be
+    // noticeable, however.
+    //
+    // Likewise, if the animation is play-pending, it may have a ready time that
+    // is *after* |aPreviousFrameTime| (but *before* |aCurrentFrameTime|).
+    // To avoid flicker we need to use |aCurrentFrameTime| to avoid temporarily
+    // jumping backwards into the range prior to when the animation starts.
+    const TimeStamp& timeStamp =
+      aPreviousFrameTime.IsNull() || hasFutureReadyTime
+      ? aCurrentFrameTime
+      : aPreviousFrameTime;
+
     // If the animation is not currently playing, e.g. paused or
     // finished, then use the hold time to stay at the same position.
     TimeDuration elapsedDuration =
       animation.isNotPlaying() ||
       animation.startTime().type() != MaybeTimeDuration::TTimeDuration
       ? animation.holdTime()
-      : (aTime - animation.originTime() -
+      : (timeStamp - animation.originTime() -
          animation.startTime().get_TimeDuration())
         .MultDouble(animation.playbackRate());
-    TimingParams timing {
-      animation.duration(),
-      animation.delay(),
-      animation.endDelay(),
-      animation.iterations(),
-      animation.iterationStart(),
-      static_cast<dom::PlaybackDirection>(animation.direction()),
-      static_cast<dom::FillMode>(animation.fillMode()),
-      Move(AnimationUtils::TimingFunctionToComputedTimingFunction(
-           animation.easingFunction()))
-    };
 
     ComputedTiming computedTiming =
-      dom::AnimationEffectReadOnly::GetComputedTimingAt(
-        Nullable<TimeDuration>(elapsedDuration), timing,
+      dom::AnimationEffect::GetComputedTimingAt(
+        dom::Nullable<TimeDuration>(elapsedDuration), animData.mTiming,
         animation.playbackRate());
 
     if (computedTiming.mProgress.IsNull()) {
       continue;
+    }
+
+    dom::IterationCompositeOperation iterCompositeOperation =
+        static_cast<dom::IterationCompositeOperation>(
+          animation.iterationComposite());
+
+    // Skip caluculation if the progress hasn't changed since the last
+    // calculation.
+    // Note that we don't skip calculate this animation if there is another
+    // animation since the other animation might be 'accumulate' or 'add', or
+    // might have a missing keyframe (i.e. this animation value will be used in
+    // the missing keyframe).
+    // FIXME Bug 1455476: We should do this optimizations for the case where
+    // the layer has multiple animations.
+    if (iEnd == 1 &&
+        !dom::KeyframeEffect::HasComputedTimingChanged(
+          computedTiming,
+          iterCompositeOperation,
+          animData.mProgressOnLastCompose,
+          animData.mCurrentIterationOnLastCompose)) {
+#ifdef DEBUG
+      shouldBeSkipped = true;
+#else
+      return SampleResult::Skipped;
+#endif
     }
 
     uint32_t segmentIndex = 0;
@@ -268,22 +284,57 @@ AnimationHelper::SampleAnimationForEachNode(TimeStamp aTime,
                                          positionInSegment,
                                      computedTiming.mBeforeFlag);
 
-    StyleAnimationValueCompositePair from {
-      animData.mStartValues[segmentIndex],
-      static_cast<dom::CompositeOperation>(segment->startComposite())
-    };
-    StyleAnimationValueCompositePair to {
-      animData.mEndValues[segmentIndex],
-      static_cast<dom::CompositeOperation>(segment->endComposite())
-    };
+    // Like above optimization, skip caluculation if the target segment isn't
+    // changed and if the portion in the segment isn't changed.
+    // This optimization is needed for CSS animations/transitions with step
+    // timing functions (e.g. the throbber animation on tab or frame based
+    // animations).
+    // FIXME Bug 1455476: Like the above optimization, we should apply this
+    // optimizations for multiple animation cases as well.
+    if (iEnd == 1 &&
+        animData.mSegmentIndexOnLastCompose == segmentIndex &&
+        !animData.mPortionInSegmentOnLastCompose.IsNull() &&
+        animData.mPortionInSegmentOnLastCompose.Value() == portion) {
+#ifdef DEBUG
+      shouldBeSkipped = true;
+#else
+      return SampleResult::Skipped;
+#endif
+    }
+
+    AnimationPropertySegment animSegment;
+    animSegment.mFromKey = 0.0;
+    animSegment.mToKey = 1.0;
+    animSegment.mFromValue =
+      AnimationValue(animData.mStartValues[segmentIndex]);
+    animSegment.mToValue =
+      AnimationValue(animData.mEndValues[segmentIndex]);
+    animSegment.mFromComposite =
+      static_cast<dom::CompositeOperation>(segment->startComposite());
+    animSegment.mToComposite =
+      static_cast<dom::CompositeOperation>(segment->endComposite());
+
     // interpolate the property
-    aAnimationValue = SampleValue(portion,
-                                 animation,
-                                 from, to,
-                                 animData.mEndValues.LastElement(),
-                                 computedTiming.mCurrentIteration,
-                                 aAnimationValue);
-    aHasInEffectAnimations = true;
+    aAnimationValue =
+      Servo_ComposeAnimationSegment(
+        &animSegment,
+        aAnimationValue,
+        animData.mEndValues.LastElement(),
+        iterCompositeOperation,
+        portion,
+        computedTiming.mCurrentIteration).Consume();
+
+#ifdef DEBUG
+    if (shouldBeSkipped) {
+      return SampleResult::Skipped;
+    }
+#endif
+
+    hasInEffectAnimations = true;
+    animData.mProgressOnLastCompose = computedTiming.mProgress;
+    animData.mCurrentIterationOnLastCompose = computedTiming.mCurrentIteration;
+    animData.mSegmentIndexOnLastCompose = segmentIndex;
+    animData.mPortionInSegmentOnLastCompose.SetValue(portion);
   }
 
 #ifdef DEBUG
@@ -309,16 +360,24 @@ AnimationHelper::SampleAnimationForEachNode(TimeStamp aTime,
                "All of members of TransformData should be the same");
   }
 #endif
-  return activeAnimations;
+
+  return hasInEffectAnimations ? SampleResult::Sampled : SampleResult::None;
 }
 
-static inline void
+struct BogusAnimation {};
+
+static inline Result<Ok, BogusAnimation>
 SetCSSAngle(const CSSAngle& aAngle, nsCSSValue& aValue)
 {
   aValue.SetFloatValue(aAngle.value(), nsCSSUnit(aAngle.unit()));
+  if (!aValue.IsAngularUnit()) {
+    NS_ERROR("Bogus animation from IPC");
+    return Err(BogusAnimation { });
+  }
+  return Ok();
 }
 
-static nsCSSValueSharedList*
+static Result<nsCSSValueSharedList*, BogusAnimation>
 CreateCSSValueList(const InfallibleTArray<TransformFunction>& aFunctions)
 {
   nsAutoPtr<nsCSSValueList> result;
@@ -329,33 +388,33 @@ CreateCSSValueList(const InfallibleTArray<TransformFunction>& aFunctions)
       case TransformFunction::TRotationX:
       {
         const CSSAngle& angle = aFunctions[i].get_RotationX().angle();
-        arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_rotatex,
-                                                           resultTail);
-        SetCSSAngle(angle, arr->Item(1));
+        arr = AnimationValue::AppendTransformFunction(eCSSKeyword_rotatex,
+                                                      resultTail);
+        MOZ_TRY(SetCSSAngle(angle, arr->Item(1)));
         break;
       }
       case TransformFunction::TRotationY:
       {
         const CSSAngle& angle = aFunctions[i].get_RotationY().angle();
-        arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_rotatey,
-                                                           resultTail);
-        SetCSSAngle(angle, arr->Item(1));
+        arr = AnimationValue::AppendTransformFunction(eCSSKeyword_rotatey,
+                                                      resultTail);
+        MOZ_TRY(SetCSSAngle(angle, arr->Item(1)));
         break;
       }
       case TransformFunction::TRotationZ:
       {
         const CSSAngle& angle = aFunctions[i].get_RotationZ().angle();
-        arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_rotatez,
-                                                           resultTail);
-        SetCSSAngle(angle, arr->Item(1));
+        arr = AnimationValue::AppendTransformFunction(eCSSKeyword_rotatez,
+                                                      resultTail);
+        MOZ_TRY(SetCSSAngle(angle, arr->Item(1)));
         break;
       }
       case TransformFunction::TRotation:
       {
         const CSSAngle& angle = aFunctions[i].get_Rotation().angle();
-        arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_rotate,
-                                                           resultTail);
-        SetCSSAngle(angle, arr->Item(1));
+        arr = AnimationValue::AppendTransformFunction(eCSSKeyword_rotate,
+                                                      resultTail);
+        MOZ_TRY(SetCSSAngle(angle, arr->Item(1)));
         break;
       }
       case TransformFunction::TRotation3D:
@@ -364,20 +423,18 @@ CreateCSSValueList(const InfallibleTArray<TransformFunction>& aFunctions)
         float y = aFunctions[i].get_Rotation3D().y();
         float z = aFunctions[i].get_Rotation3D().z();
         const CSSAngle& angle = aFunctions[i].get_Rotation3D().angle();
-        arr =
-          StyleAnimationValue::AppendTransformFunction(eCSSKeyword_rotate3d,
-                                                       resultTail);
+        arr = AnimationValue::AppendTransformFunction(eCSSKeyword_rotate3d,
+                                                      resultTail);
         arr->Item(1).SetFloatValue(x, eCSSUnit_Number);
         arr->Item(2).SetFloatValue(y, eCSSUnit_Number);
         arr->Item(3).SetFloatValue(z, eCSSUnit_Number);
-        SetCSSAngle(angle, arr->Item(4));
+        MOZ_TRY(SetCSSAngle(angle, arr->Item(4)));
         break;
       }
       case TransformFunction::TScale:
       {
-        arr =
-          StyleAnimationValue::AppendTransformFunction(eCSSKeyword_scale3d,
-                                                       resultTail);
+        arr = AnimationValue::AppendTransformFunction(eCSSKeyword_scale3d,
+                                                      resultTail);
         arr->Item(1).SetFloatValue(aFunctions[i].get_Scale().x(), eCSSUnit_Number);
         arr->Item(2).SetFloatValue(aFunctions[i].get_Scale().y(), eCSSUnit_Number);
         arr->Item(3).SetFloatValue(aFunctions[i].get_Scale().z(), eCSSUnit_Number);
@@ -385,9 +442,8 @@ CreateCSSValueList(const InfallibleTArray<TransformFunction>& aFunctions)
       }
       case TransformFunction::TTranslation:
       {
-        arr =
-          StyleAnimationValue::AppendTransformFunction(eCSSKeyword_translate3d,
-                                                       resultTail);
+        arr = AnimationValue::AppendTransformFunction(eCSSKeyword_translate3d,
+                                                      resultTail);
         arr->Item(1).SetFloatValue(aFunctions[i].get_Translation().x(), eCSSUnit_Pixel);
         arr->Item(2).SetFloatValue(aFunctions[i].get_Translation().y(), eCSSUnit_Pixel);
         arr->Item(3).SetFloatValue(aFunctions[i].get_Translation().z(), eCSSUnit_Pixel);
@@ -396,34 +452,33 @@ CreateCSSValueList(const InfallibleTArray<TransformFunction>& aFunctions)
       case TransformFunction::TSkewX:
       {
         const CSSAngle& x = aFunctions[i].get_SkewX().x();
-        arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_skewx,
-                                                           resultTail);
-        SetCSSAngle(x, arr->Item(1));
+        arr = AnimationValue::AppendTransformFunction(eCSSKeyword_skewx,
+                                                      resultTail);
+        MOZ_TRY(SetCSSAngle(x, arr->Item(1)));
         break;
       }
       case TransformFunction::TSkewY:
       {
         const CSSAngle& y = aFunctions[i].get_SkewY().y();
-        arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_skewy,
-                                                           resultTail);
-        SetCSSAngle(y, arr->Item(1));
+        arr = AnimationValue::AppendTransformFunction(eCSSKeyword_skewy,
+                                                      resultTail);
+        MOZ_TRY(SetCSSAngle(y, arr->Item(1)));
         break;
       }
       case TransformFunction::TSkew:
       {
         const CSSAngle& x = aFunctions[i].get_Skew().x();
         const CSSAngle& y = aFunctions[i].get_Skew().y();
-        arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_skew,
-                                                           resultTail);
-        SetCSSAngle(x, arr->Item(1));
-        SetCSSAngle(y, arr->Item(2));
+        arr = AnimationValue::AppendTransformFunction(eCSSKeyword_skew,
+                                                      resultTail);
+        MOZ_TRY(SetCSSAngle(x, arr->Item(1)));
+        MOZ_TRY(SetCSSAngle(y, arr->Item(2)));
         break;
       }
       case TransformFunction::TTransformMatrix:
       {
-        arr =
-          StyleAnimationValue::AppendTransformFunction(eCSSKeyword_matrix3d,
-                                                       resultTail);
+        arr = AnimationValue::AppendTransformFunction(eCSSKeyword_matrix3d,
+                                                      resultTail);
         const gfx::Matrix4x4& matrix = aFunctions[i].get_TransformMatrix().value();
         arr->Item(1).SetFloatValue(matrix._11, eCSSUnit_Number);
         arr->Item(2).SetFloatValue(matrix._12, eCSSUnit_Number);
@@ -446,9 +501,8 @@ CreateCSSValueList(const InfallibleTArray<TransformFunction>& aFunctions)
       case TransformFunction::TPerspective:
       {
         float perspective = aFunctions[i].get_Perspective().value();
-        arr =
-          StyleAnimationValue::AppendTransformFunction(eCSSKeyword_perspective,
-                                                       resultTail);
+        arr = AnimationValue::AppendTransformFunction(eCSSKeyword_perspective,
+                                                      resultTail);
         arr->Item(1).SetFloatValue(perspective, eCSSUnit_Pixel);
         break;
       }
@@ -463,10 +517,10 @@ CreateCSSValueList(const InfallibleTArray<TransformFunction>& aFunctions)
   return new nsCSSValueSharedList(result.forget());
 }
 
-static StyleAnimationValue
-ToStyleAnimationValue(const Animatable& aAnimatable)
+static already_AddRefed<RawServoAnimationValue>
+ToAnimationValue(const Animatable& aAnimatable)
 {
-  StyleAnimationValue result;
+  RefPtr<RawServoAnimationValue> result;
 
   switch (aAnimatable.type()) {
     case Animatable::Tnull_t:
@@ -474,23 +528,28 @@ ToStyleAnimationValue(const Animatable& aAnimatable)
     case Animatable::TArrayOfTransformFunction: {
       const InfallibleTArray<TransformFunction>& transforms =
         aAnimatable.get_ArrayOfTransformFunction();
-      result.SetTransformValue(CreateCSSValueList(transforms));
+      auto listOrError = CreateCSSValueList(transforms);
+      if (listOrError.isOk()) {
+        RefPtr<nsCSSValueSharedList> list = listOrError.unwrap();
+        MOZ_ASSERT(list, "Transform list should be non null");
+        result = Servo_AnimationValue_Transform(*list).Consume();
+      }
       break;
     }
     case Animatable::Tfloat:
-      result.SetFloatValue(aAnimatable.get_float());
+      result = Servo_AnimationValue_Opacity(aAnimatable.get_float()).Consume();
       break;
     default:
       MOZ_ASSERT_UNREACHABLE("Unsupported type");
   }
-
-  return result;
+  return result.forget();
 }
 
 void
-AnimationHelper::SetAnimations(AnimationArray& aAnimations,
-                               InfallibleTArray<AnimData>& aAnimData,
-                               StyleAnimationValue& aBaseAnimationStyle)
+AnimationHelper::SetAnimations(
+  AnimationArray& aAnimations,
+  InfallibleTArray<AnimData>& aAnimData,
+  RefPtr<RawServoAnimationValue>& aBaseAnimationStyle)
 {
   for (uint32_t i = 0; i < aAnimations.Length(); i++) {
     Animation& animation = aAnimations[i];
@@ -509,19 +568,33 @@ AnimationHelper::SetAnimations(AnimationArray& aAnimations,
     }
 
     if (animation.baseStyle().type() != Animatable::Tnull_t) {
-      aBaseAnimationStyle = ToStyleAnimationValue(animation.baseStyle());
+      aBaseAnimationStyle = ToAnimationValue(animation.baseStyle());
     }
 
     AnimData* data = aAnimData.AppendElement();
+
+    data->mTiming = TimingParams {
+      animation.duration(),
+      animation.delay(),
+      animation.endDelay(),
+      animation.iterations(),
+      animation.iterationStart(),
+      static_cast<dom::PlaybackDirection>(animation.direction()),
+      static_cast<dom::FillMode>(animation.fillMode()),
+      std::move(AnimationUtils::TimingFunctionToComputedTimingFunction(
+           animation.easingFunction()))
+    };
     InfallibleTArray<Maybe<ComputedTimingFunction>>& functions =
       data->mFunctions;
-    InfallibleTArray<StyleAnimationValue>& startValues = data->mStartValues;
-    InfallibleTArray<StyleAnimationValue>& endValues = data->mEndValues;
+    InfallibleTArray<RefPtr<RawServoAnimationValue>>& startValues =
+      data->mStartValues;
+    InfallibleTArray<RefPtr<RawServoAnimationValue>>& endValues =
+      data->mEndValues;
 
     const InfallibleTArray<AnimationSegment>& segments = animation.segments();
     for (const AnimationSegment& segment : segments) {
-      startValues.AppendElement(ToStyleAnimationValue(segment.startState()));
-      endValues.AppendElement(ToStyleAnimationValue(segment.endState()));
+      startValues.AppendElement(ToAnimationValue(segment.startState()));
+      endValues.AppendElement(ToAnimationValue(segment.endState()));
 
       TimingFunction tf = segment.sampleFn();
       Maybe<ComputedTimingFunction> ctf =
@@ -543,34 +616,43 @@ AnimationHelper::GetNextCompositorAnimationsId()
   return nextId;
 }
 
-void
+bool
 AnimationHelper::SampleAnimations(CompositorAnimationStorage* aStorage,
-                                  TimeStamp aTime)
+                                  TimeStamp aPreviousFrameTime,
+                                  TimeStamp aCurrentFrameTime)
 {
   MOZ_ASSERT(aStorage);
+  bool isAnimating = false;
 
   // Do nothing if there are no compositor animations
   if (!aStorage->AnimationsCount()) {
-    return;
+    return isAnimating;
   }
 
   //Sample the animations in CompositorAnimationStorage
   for (auto iter = aStorage->ConstAnimationsTableIter();
        !iter.Done(); iter.Next()) {
-    bool hasInEffectAnimations = false;
     AnimationArray* animations = iter.UserData();
-    StyleAnimationValue animationValue;
+    if (animations->IsEmpty()) {
+      continue;
+    }
+
+    isAnimating = true;
+    RefPtr<RawServoAnimationValue> animationValue;
     InfallibleTArray<AnimData> animationData;
     AnimationHelper::SetAnimations(*animations,
                                    animationData,
                                    animationValue);
-    AnimationHelper::SampleAnimationForEachNode(aTime,
-                                                *animations,
-                                                animationData,
-                                                animationValue,
-                                                hasInEffectAnimations);
+    AnimatedValue* previousValue = aStorage->GetAnimatedValue(iter.Key());
+    AnimationHelper::SampleResult sampleResult =
+      AnimationHelper::SampleAnimationForEachNode(aPreviousFrameTime,
+                                                  aCurrentFrameTime,
+                                                  *animations,
+                                                  animationData,
+                                                  animationValue,
+                                                  previousValue);
 
-    if (!hasInEffectAnimations) {
+    if (sampleResult != AnimationHelper::SampleResult::Sampled) {
       continue;
     }
 
@@ -578,17 +660,19 @@ AnimationHelper::SampleAnimations(CompositorAnimationStorage* aStorage,
     Animation& animation = animations->LastElement();
     switch (animation.property()) {
       case eCSSProperty_opacity: {
-        aStorage->SetAnimatedValue(iter.Key(),
-                                   animationValue.GetFloatValue());
+        aStorage->SetAnimatedValue(
+          iter.Key(),
+          Servo_AnimationValue_GetOpacity(animationValue));
         break;
       }
       case eCSSProperty_transform: {
-        nsCSSValueSharedList* list = animationValue.GetCSSValueSharedListValue();
+        RefPtr<nsCSSValueSharedList> list;
+        Servo_AnimationValue_GetTransform(animationValue, &list);
         const TransformData& transformData = animation.data().get_TransformData();
         nsPoint origin = transformData.origin();
         // we expect all our transform data to arrive in device pixels
         gfx::Point3D transformOrigin = transformData.transformOrigin();
-        nsDisplayTransform::FrameTransformProperties props(list,
+        nsDisplayTransform::FrameTransformProperties props(std::move(list),
                                                            transformOrigin);
 
         gfx::Matrix4x4 transform =
@@ -610,7 +694,7 @@ AnimationHelper::SampleAnimations(CompositorAnimationStorage* aStorage,
                             1);
 
         aStorage->SetAnimatedValue(iter.Key(),
-                                   Move(transform), Move(frameTransform),
+                                   std::move(transform), std::move(frameTransform),
                                    transformData);
         break;
       }
@@ -618,6 +702,8 @@ AnimationHelper::SampleAnimations(CompositorAnimationStorage* aStorage,
         MOZ_ASSERT_UNREACHABLE("Unhandled animated property");
     }
   }
+
+  return isAnimating;
 }
 
 } // namespace layers

@@ -20,8 +20,9 @@
 #include "mozilla/dom/Element.h"
 #include "nsClassHashtable.h"
 #include "nsNodeUtils.h"
-#include "nsIDOMMutationEvent.h"
 #include "nsWrapperCache.h"
+#include "mozilla/dom/Nullable.h"
+#include "mozilla/dom/MutationEventBinding.h"
 #include "mozilla/dom/MutationObserverBinding.h"
 #include "nsIDocument.h"
 #include "mozilla/dom/Animation.h"
@@ -59,7 +60,7 @@ public:
 
   void GetType(mozilla::dom::DOMString& aRetVal) const
   {
-    aRetVal.SetOwnedAtom(mType, mozilla::dom::DOMString::eNullNotExpected);
+    aRetVal.SetKnownLiveAtom(mType, mozilla::dom::DOMString::eNullNotExpected);
   }
 
   nsINode* GetTarget() const
@@ -83,17 +84,18 @@ public:
 
   void GetAttributeName(mozilla::dom::DOMString& aRetVal) const
   {
-    aRetVal.SetOwnedAtom(mAttrName, mozilla::dom::DOMString::eTreatNullAsNull);
+    aRetVal.SetKnownLiveAtom(mAttrName,
+                             mozilla::dom::DOMString::eTreatNullAsNull);
   }
 
   void GetAttributeNamespace(mozilla::dom::DOMString& aRetVal) const
   {
-    aRetVal.SetOwnedString(mAttrNamespace);
+    aRetVal.SetKnownLiveString(mAttrNamespace);
   }
 
   void GetOldValue(mozilla::dom::DOMString& aRetVal) const
   {
-    aRetVal.SetOwnedString(mPrevValue);
+    aRetVal.SetKnownLiveString(mPrevValue);
   }
 
   void GetAddedAnimations(AnimationArray& aRetVal) const
@@ -223,7 +225,7 @@ public:
   {
     NS_ASSERTION(!mParent, "Shouldn't have parent");
     mAttributeFilter.Clear();
-    mAttributeFilter = mozilla::Move(aFilter);
+    mAttributeFilter = std::move(aFilter);
   }
 
   void AddClone(nsMutationReceiverBase* aClone)
@@ -403,14 +405,13 @@ public:
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTREMOVED
   NS_DECL_NSIMUTATIONOBSERVER_NODEWILLBEDESTROYED
 
-  virtual void AttributeSetToCurrentValue(nsIDocument* aDocument,
-                                          mozilla::dom::Element* aElement,
+  virtual void AttributeSetToCurrentValue(mozilla::dom::Element* aElement,
                                           int32_t aNameSpaceID,
                                           nsAtom* aAttribute) override
   {
     // We can reuse AttributeWillChange implementation.
-    AttributeWillChange(aDocument, aElement, aNameSpaceID, aAttribute,
-                        nsIDOMMutationEvent::MODIFICATION, nullptr);
+    AttributeWillChange(aElement, aNameSpaceID, aAttribute,
+                        mozilla::dom::MutationEventBinding::MODIFICATION, nullptr);
   }
 
 protected:
@@ -530,8 +531,9 @@ public:
 
   void HandleMutation();
 
-  void GetObservingInfo(nsTArray<Nullable<MutationObservingInfo>>& aResult,
-                        mozilla::ErrorResult& aRv);
+  void GetObservingInfo(
+    nsTArray<mozilla::dom::Nullable<MutationObservingInfo>>& aResult,
+    mozilla::ErrorResult& aRv);
 
   mozilla::dom::MutationCallback* MutationCallback() { return mCallback; }
 
@@ -575,11 +577,24 @@ public:
   }
 
   // static methods
-  static void HandleMutations()
+  static void QueueMutationObserverMicroTask();
+
+  static void HandleMutations(mozilla::AutoSlowOperation& aAso);
+
+  static bool AllScheduledMutationObserversAreSuppressed()
   {
     if (sScheduledMutationObservers) {
-      HandleMutationsInternal();
+      uint32_t len = sScheduledMutationObservers->Length();
+      if (len > 0) {
+        for (uint32_t i = 0; i < len; ++i) {
+          if (!(*sScheduledMutationObservers)[i]->Suppressed()) {
+            return false;
+          }
+        }
+        return true;
+      }
     }
+    return false;
   }
 
   static void EnterMutationHandling();
@@ -610,10 +625,10 @@ protected:
 
   bool Suppressed()
   {
-    return mOwner && nsGlobalWindow::Cast(mOwner)->IsInSyncOperation();
+    return mOwner && nsGlobalWindowInner::Cast(mOwner)->IsInSyncOperation();
   }
 
-  static void HandleMutationsInternal();
+  static void HandleMutationsInternal(mozilla::AutoSlowOperation& aAso);
 
   static void AddCurrentlyHandlingObserver(nsDOMMutationObserver* aObserver,
                                            uint32_t aMutationLevel);
@@ -641,7 +656,6 @@ protected:
 
   static uint64_t                                    sCount;
   static AutoTArray<RefPtr<nsDOMMutationObserver>, 4>* sScheduledMutationObservers;
-  static nsDOMMutationObserver*                      sCurrentObserver;
 
   static uint32_t                                    sMutationLevel;
   static AutoTArray<AutoTArray<RefPtr<nsDOMMutationObserver>, 4>, 4>*

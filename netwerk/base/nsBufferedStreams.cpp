@@ -140,7 +140,7 @@ nsBufferedStream::Seek(int32_t whence, int64_t offset)
     nsCOMPtr<nsISeekableStream> ras = do_QueryInterface(mStream, &rv);
     if (NS_FAILED(rv)) {
 #ifdef DEBUG
-        NS_ERROR("mStream doesn't QI to nsISeekableStream");
+        NS_WARNING("mStream doesn't QI to nsISeekableStream");
 #endif
         return rv;
     }
@@ -290,9 +290,13 @@ NS_INTERFACE_MAP_BEGIN(nsBufferedInputStream)
     NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsIInputStream, nsIBufferedInputStream)
     NS_INTERFACE_MAP_ENTRY(nsIBufferedInputStream)
     NS_INTERFACE_MAP_ENTRY(nsIStreamBufferAccess)
-    NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIIPCSerializableInputStream, IsIPCSerializable())
-    NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIAsyncInputStream, IsAsyncInputStream())
-    NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIInputStreamCallback, IsAsyncInputStream())
+    NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIIPCSerializableInputStream, mIsIPCSerializable)
+    NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIAsyncInputStream, mIsAsyncInputStream)
+    NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIInputStreamCallback, mIsAsyncInputStream)
+    NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsICloneableInputStream, mIsCloneableInputStream)
+    NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIInputStreamLength, mIsInputStreamLength)
+    NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIAsyncInputStreamLength, mIsAsyncInputStreamLength)
+    NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIInputStreamLengthCallback, mIsAsyncInputStreamLength)
     NS_IMPL_QUERY_CLASSINFO(nsBufferedInputStream)
 NS_INTERFACE_MAP_END_INHERITING(nsBufferedStream)
 
@@ -301,6 +305,16 @@ NS_IMPL_CI_INTERFACE_GETTER(nsBufferedInputStream,
                             nsIBufferedInputStream,
                             nsISeekableStream,
                             nsIStreamBufferAccess)
+
+nsBufferedInputStream::nsBufferedInputStream()
+   : nsBufferedStream()
+   , mMutex("nsBufferedInputStream::mMutex")
+   , mIsIPCSerializable(true)
+   , mIsAsyncInputStream(false)
+   , mIsCloneableInputStream(false)
+   , mIsInputStreamLength(false)
+   , mIsAsyncInputStreamLength(false)
+{}
 
 nsresult
 nsBufferedInputStream::Create(nsISupports *aOuter, REFNSIID aIID, void **aResult)
@@ -320,7 +334,35 @@ nsBufferedInputStream::Create(nsISupports *aOuter, REFNSIID aIID, void **aResult
 NS_IMETHODIMP
 nsBufferedInputStream::Init(nsIInputStream* stream, uint32_t bufferSize)
 {
-    return nsBufferedStream::Init(stream, bufferSize);
+    nsresult rv = nsBufferedStream::Init(stream, bufferSize);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    {
+        nsCOMPtr<nsIIPCSerializableInputStream> stream = do_QueryInterface(mStream);
+        mIsIPCSerializable = !!stream;
+    }
+
+    {
+        nsCOMPtr<nsIAsyncInputStream> stream = do_QueryInterface(mStream);
+        mIsAsyncInputStream = !!stream;
+    }
+
+    {
+        nsCOMPtr<nsICloneableInputStream> stream = do_QueryInterface(mStream);
+        mIsCloneableInputStream = !!stream;
+    }
+
+    {
+        nsCOMPtr<nsIInputStreamLength> stream = do_QueryInterface(mStream);
+        mIsInputStreamLength = !!stream;
+    }
+
+    {
+        nsCOMPtr<nsIAsyncInputStreamLength> stream = do_QueryInterface(mStream);
+        mIsAsyncInputStreamLength = !!stream;
+    }
+
+    return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -345,8 +387,6 @@ nsBufferedInputStream::Close()
     };
 #endif
 
-    mAsyncWaitCallback = nullptr;
-
     if (NS_FAILED(rv1)) {
         return rv1;
     }
@@ -356,12 +396,25 @@ nsBufferedInputStream::Close()
 NS_IMETHODIMP
 nsBufferedInputStream::Available(uint64_t *result)
 {
-    nsresult rv = NS_OK;
     *result = 0;
-    if (mStream) {
-        rv = Source()->Available(result);
+
+    if (!mStream) {
+        return NS_OK;
     }
-    *result += (mFillPoint - mCursor);
+
+    uint64_t avail = mFillPoint - mCursor;
+
+    uint64_t tmp;
+    nsresult rv = Source()->Available(&tmp);
+    if (NS_SUCCEEDED(rv)) {
+        avail += tmp;
+    }
+
+    if (avail) {
+        *result = avail;
+        return NS_OK;
+    }
+
     return rv;
 }
 
@@ -625,24 +678,6 @@ nsBufferedInputStream::ExpectedSerializedLength()
     return Nothing();
 }
 
-bool
-nsBufferedInputStream::IsIPCSerializable() const
-{
-    if (!mStream) {
-      return true;
-    }
-
-    nsCOMPtr<nsIIPCSerializableInputStream> stream = do_QueryInterface(mStream);
-    return !!stream;
-}
-
-bool
-nsBufferedInputStream::IsAsyncInputStream() const
-{
-    nsCOMPtr<nsIAsyncInputStream> stream = do_QueryInterface(mStream);
-    return !!stream;
-}
-
 NS_IMETHODIMP
 nsBufferedInputStream::CloseWithStatus(nsresult aStatus)
 {
@@ -660,30 +695,36 @@ nsBufferedInputStream::AsyncWait(nsIInputStreamCallback* aCallback,
         return NS_ERROR_FAILURE;
     }
 
-    if (mAsyncWaitCallback && aCallback) {
-        return NS_ERROR_FAILURE;
+    nsCOMPtr<nsIInputStreamCallback> callback = aCallback ? this : nullptr;
+    {
+        MutexAutoLock lock(mMutex);
+
+        if (mAsyncWaitCallback && aCallback) {
+            return NS_ERROR_FAILURE;
+        }
+
+        mAsyncWaitCallback = aCallback;
     }
 
-    mAsyncWaitCallback = aCallback;
-
-    if (!mAsyncWaitCallback) {
-        return NS_OK;
-    }
-
-    return stream->AsyncWait(this, aFlags, aRequestedCount, aEventTarget);
+    return stream->AsyncWait(callback, aFlags, aRequestedCount, aEventTarget);
 }
 
 NS_IMETHODIMP
 nsBufferedInputStream::OnInputStreamReady(nsIAsyncInputStream* aStream)
 {
-    // We have been canceled in the meanwhile.
-    if (!mAsyncWaitCallback) {
-        return NS_OK;
+    nsCOMPtr<nsIInputStreamCallback> callback;
+    {
+        MutexAutoLock lock(mMutex);
+
+        // We have been canceled in the meanwhile.
+        if (!mAsyncWaitCallback) {
+            return NS_OK;
+        }
+
+        callback.swap(mAsyncWaitCallback);
     }
 
-    nsCOMPtr<nsIInputStreamCallback> callback;
-    callback.swap(mAsyncWaitCallback);
-
+    MOZ_ASSERT(callback);
     return callback->OnInputStreamReady(this);
 }
 
@@ -695,6 +736,103 @@ nsBufferedInputStream::GetData(nsIInputStream **aResult)
     nsCOMPtr<nsIInputStream> inputStream = do_QueryInterface(stream);
     *aResult = inputStream.forget().take();
     return NS_OK;
+}
+
+// nsICloneableInputStream interface
+
+NS_IMETHODIMP
+nsBufferedInputStream::GetCloneable(bool* aCloneable)
+{
+  *aCloneable = false;
+
+  // If we don't have the buffer, the inputStream has been already closed.
+  // If mBufferStartOffset is not 0, the stream has been seeked or read.
+  // In both case the cloning is not supported.
+  if (!mBuffer || mBufferStartOffset) {
+    return NS_OK;
+  }
+
+  nsCOMPtr<nsICloneableInputStream> stream = do_QueryInterface(mStream);
+
+  // GetCloneable is infallible.
+  NS_ENSURE_TRUE(stream, NS_OK);
+
+  return stream->GetCloneable(aCloneable);
+}
+
+NS_IMETHODIMP
+nsBufferedInputStream::Clone(nsIInputStream** aResult)
+{
+  if (!mBuffer || mBufferStartOffset) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsCOMPtr<nsICloneableInputStream> stream = do_QueryInterface(mStream);
+  NS_ENSURE_TRUE(stream, NS_ERROR_FAILURE);
+
+  nsCOMPtr<nsIInputStream> clonedStream;
+  nsresult rv = stream->Clone(getter_AddRefs(clonedStream));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<nsIBufferedInputStream> bis = new nsBufferedInputStream();
+  rv = bis->Init(clonedStream, mBufferSize);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  bis.forget(aResult);
+  return NS_OK;
+}
+
+// nsIInputStreamLength
+
+NS_IMETHODIMP
+nsBufferedInputStream::Length(int64_t* aLength)
+{
+  nsCOMPtr<nsIInputStreamLength> stream = do_QueryInterface(mStream);
+  NS_ENSURE_TRUE(stream, NS_ERROR_FAILURE);
+
+  return stream->Length(aLength);
+}
+
+// nsIAsyncInputStreamLength
+
+NS_IMETHODIMP
+nsBufferedInputStream::AsyncLengthWait(nsIInputStreamLengthCallback* aCallback,
+                                       nsIEventTarget* aEventTarget)
+{
+  nsCOMPtr<nsIAsyncInputStreamLength> stream = do_QueryInterface(mStream);
+  if (!stream) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsCOMPtr<nsIInputStreamLengthCallback> callback = aCallback ? this : nullptr;
+  {
+    MutexAutoLock lock(mMutex);
+    mAsyncInputStreamLengthCallback = aCallback;
+  }
+
+  MOZ_ASSERT(stream);
+  return stream->AsyncLengthWait(callback, aEventTarget);
+}
+
+// nsIInputStreamLengthCallback
+
+NS_IMETHODIMP
+nsBufferedInputStream::OnInputStreamLengthReady(nsIAsyncInputStreamLength* aStream,
+                                                int64_t aLength)
+{
+  nsCOMPtr<nsIInputStreamLengthCallback> callback;
+  {
+    MutexAutoLock lock(mMutex);
+    // We have been canceled in the meanwhile.
+    if (!mAsyncInputStreamLengthCallback) {
+      return NS_OK;
+    }
+
+    callback.swap(mAsyncInputStreamLengthCallback);
+  }
+
+  MOZ_ASSERT(callback);
+  return callback->OnInputStreamLengthReady(this, aLength);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

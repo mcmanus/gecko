@@ -30,6 +30,7 @@
 
 #include "irregexp/RegExpEngine.h"
 
+#include "gc/GC.h"
 #include "irregexp/NativeRegExpMacroAssembler.h"
 #include "irregexp/RegExpCharacters.h"
 #include "irregexp/RegExpMacroAssembler.h"
@@ -1052,7 +1053,7 @@ ChoiceNode::FilterLATIN1(int depth, bool ignore_case, bool unicode)
         }
     }
 
-    alternatives_ = Move(new_alternatives);
+    alternatives_ = std::move(new_alternatives);
     return this;
 }
 
@@ -1694,6 +1695,7 @@ RegExpCompiler::Assemble(JSContext* cx,
 
     if (reg_exp_too_big_) {
         code.destroy();
+        js::gc::AutoSuppressGC suppress(cx);
         JS_ReportErrorASCII(cx, "regexp too big");
         return RegExpCode();
     }
@@ -1811,6 +1813,11 @@ irregexp::CompilePattern(JSContext* cx, HandleRegExpShared shared, RegExpCompile
         JS_ReportErrorASCII(cx, "%s", analysis.errorMessage());
         return RegExpCode();
     }
+
+    // We should not GC when we have a jit::MacroAssembler on the stack. Check
+    // this here because the static analysis does not understand the
+    // Maybe<NativeRegExpMacroAssembler> below.
+    JS::AutoCheckCannotGC nogc(cx);
 
     Maybe<jit::JitContext> ctx;
     Maybe<NativeRegExpMacroAssembler> native_assembler;
@@ -2323,7 +2330,8 @@ BoyerMoorePositionInfo::SetInterval(const Interval& interval)
         }
         return;
     }
-    for (int i = interval.from(); i <= interval.to(); i++) {
+    MOZ_ASSERT(interval.from() <= interval.to());
+    for (int i = interval.from(); i != interval.to() + 1; i++) {
         int mod_character = (i & kMask);
         if (!map_[mod_character]) {
             map_count_++;
@@ -2525,7 +2533,7 @@ BoyerMooreLookahead::EmitSkipInstructions(RegExpMacroAssembler* masm)
     jit::Label cont, again;
     masm->Bind(&again);
     masm->LoadCurrentCharacter(max_lookahead, &cont, true);
-    masm->CheckBitInTable(Move(boolean_skip_table), &cont);
+    masm->CheckBitInTable(std::move(boolean_skip_table), &cont);
     masm->AdvanceCurrentPosition(skip_distance);
     masm->JumpOrBacktrack(&again);
     masm->Bind(&cont);
@@ -2536,7 +2544,13 @@ BoyerMooreLookahead::EmitSkipInstructions(RegExpMacroAssembler* masm)
 bool
 RegExpCompiler::CheckOverRecursed()
 {
-    if (!CheckRecursionLimit(cx())) {
+    if (!CheckRecursionLimitDontReport(cx())) {
+#ifdef JS_MORE_DETERMINISTIC
+        // We don't report overrecursion here, but we throw an exception later
+        // and this still affects differential testing. Mimic ReportOverRecursed
+        // (the fuzzers check for this particular string).
+        fprintf(stderr, "ReportOverRecursed called\n");
+#endif
         SetRegExpTooBig();
         return false;
     }
@@ -3317,7 +3331,7 @@ EmitUseLookupTable(RegExpMacroAssembler* masm,
     for (int i = 0; i < kSize; i++)
         ba[i] = templ[i];
 
-    masm->CheckBitInTable(Move(ba), on_bit_set);
+    masm->CheckBitInTable(std::move(ba), on_bit_set);
     if (on_bit_clear != fall_through)
         masm->JumpOrBacktrack(on_bit_clear);
 }
@@ -3902,6 +3916,9 @@ TextNode::TextEmitPass(RegExpCompiler* compiler,
                     break;
                 }
                 if (emit_function != nullptr) {
+                    // emit_function is a function pointer. Suppress static
+                    // analysis false positives.
+                    JS::AutoSuppressGCAnalysis suppress;
                     bool bound_checked = emit_function(compiler,
                                                        quarks[j],
                                                        backtrack,

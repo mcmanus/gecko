@@ -73,6 +73,16 @@ CacheFileContextEvictor::Init(nsIFile *aCacheDirectory)
   return NS_OK;
 }
 
+void
+CacheFileContextEvictor::Shutdown()
+{
+  LOG(("CacheFileContextEvictor::Shutdown()"));
+
+  MOZ_ASSERT(CacheFileIOManager::IsOnIOThread());
+
+  CloseIterators();
+}
+
 uint32_t
 CacheFileContextEvictor::ContextsCount()
 {
@@ -268,8 +278,7 @@ CacheFileContextEvictor::PersistEvictionInfoToDisk(
     return rv;
   }
 
-  nsAutoCString path;
-  file->GetNativePath(path);
+  nsCString path = file->HumanReadablePath();
 
   PRFileDesc *fd;
   rv = file->OpenNSPRFileDesc(PR_RDWR | PR_CREATE_FILE | PR_TRUNCATE, 0600,
@@ -305,8 +314,7 @@ CacheFileContextEvictor::RemoveEvictInfoFromDisk(
     return rv;
   }
 
-  nsAutoCString path;
-  file->GetNativePath(path);
+  nsCString path = file->HumanReadablePath();
 
   rv = file->Remove(false);
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -332,13 +340,8 @@ CacheFileContextEvictor::LoadEvictInfoFromDisk()
 
   sDiskAlreadySearched = true;
 
-  nsCOMPtr<nsISimpleEnumerator> enumerator;
-  rv = mCacheDirectory->GetDirectoryEntries(getter_AddRefs(enumerator));
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  nsCOMPtr<nsIDirectoryEnumerator> dirEnum = do_QueryInterface(enumerator, &rv);
+  nsCOMPtr<nsIDirectoryEnumerator> dirEnum;
+  rv = mCacheDirectory->GetDirectoryEntries(getter_AddRefs(dirEnum));
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }

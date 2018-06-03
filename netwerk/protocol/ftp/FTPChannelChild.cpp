@@ -22,6 +22,7 @@
 #include "SerializedLoadContext.h"
 #include "mozilla/ipc/BackgroundUtils.h"
 #include "nsIPrompt.h"
+#include "nsIURIMutator.h"
 
 using mozilla::dom::ContentChild;
 using namespace mozilla::ipc;
@@ -192,11 +193,15 @@ FTPChannelChild::AsyncOpen(::nsIStreamListener* listener, nsISupports* aContext)
   autoStream.Serialize(mUploadStream,
                        static_cast<ContentChild*>(gNeckoChild->Manager()));
 
+  uint32_t loadFlags = 0;
+  GetLoadFlags(&loadFlags);
+
   FTPChannelOpenArgs openArgs;
   SerializeURI(nsBaseChannel::URI(), openArgs.uri());
   openArgs.startPos() = mStartPos;
   openArgs.entityID() = mEntityID;
   openArgs.uploadStream() = autoStream.TakeOptionalValue();
+  openArgs.loadFlags() = loadFlags;
 
   nsCOMPtr<nsILoadInfo> loadInfo;
   GetLoadInfo(getter_AddRefs(loadInfo));
@@ -259,7 +264,8 @@ public:
     , mURI(aURI)
   {
   }
-  void Run()
+
+  void Run() override
   {
     mChild->DoOnStartRequest(mChannelStatus, mContentLength, mContentType,
                              mLastModified, mEntityID, mURI);
@@ -328,7 +334,10 @@ FTPChannelChild::DoOnStartRequest(const nsresult& aChannelStatus,
   nsCOMPtr<nsIURI> uri = DeserializeURI(aURI);
   nsresult rv = uri->GetSpec(spec);
   if (NS_SUCCEEDED(rv)) {
-    rv = nsBaseChannel::URI()->SetSpec(spec);
+    // Changes nsBaseChannel::URI()
+    rv = NS_MutateURI(mURI)
+           .SetSpec(spec)
+           .Finalize(mURI);
     if (NS_FAILED(rv)) {
       Cancel(rv);
     }
@@ -365,7 +374,8 @@ public:
     , mCount(aCount)
   {
   }
-  void Run()
+
+  void Run() override
   {
     mChild->DoOnDataAvailable(mChannelStatus, mData, mOffset, mCount);
   }
@@ -407,7 +417,7 @@ class MaybeDivertOnDataFTPEvent : public NeckoTargetChannelEvent<FTPChannelChild
   , mOffset(offset)
   , mCount(count) {}
 
-  void Run()
+  void Run() override
   {
     mChild->MaybeDivertOnData(mData, mOffset, mCount);
   }
@@ -492,7 +502,8 @@ public:
     , mUseUTF8(aUseUTF8)
   {
   }
-  void Run()
+
+  void Run() override
   {
     mChild->DoOnStopRequest(mChannelStatus, mErrorMsg, mUseUTF8);
   }
@@ -525,13 +536,11 @@ public:
   nsFtpChildAsyncAlert(nsIPrompt *aPrompter, nsString aResponseMsg)
     : Runnable("nsFtpChildAsyncAlert")
     , mPrompter(aPrompter)
-    , mResponseMsg(aResponseMsg)
+    , mResponseMsg(std::move(aResponseMsg))
   {
   }
 protected:
-  virtual ~nsFtpChildAsyncAlert()
-  {
-  }
+  virtual ~nsFtpChildAsyncAlert() = default;
 public:
   NS_IMETHOD Run() override
   {
@@ -553,7 +562,7 @@ class MaybeDivertOnStopFTPEvent : public NeckoTargetChannelEvent<FTPChannelChild
   : NeckoTargetChannelEvent<FTPChannelChild>(child)
   , mChannelStatus(aChannelStatus) {}
 
-  void Run()
+  void Run() override
   {
     mChild->MaybeDivertOnStop(mChannelStatus);
   }
@@ -635,7 +644,8 @@ class FTPFailedAsyncOpenEvent : public NeckoTargetChannelEvent<FTPChannelChild>
   FTPFailedAsyncOpenEvent(FTPChannelChild* aChild, nsresult aStatus)
   : NeckoTargetChannelEvent<FTPChannelChild>(aChild)
   , mStatus(aStatus) {}
-  void Run() { mChild->DoFailedAsyncOpen(mStatus); }
+
+  void Run() override { mChild->DoFailedAsyncOpen(mStatus); }
 
  private:
   nsresult mStatus;
@@ -684,7 +694,7 @@ class FTPFlushedForDiversionEvent : public NeckoTargetChannelEvent<FTPChannelChi
     MOZ_RELEASE_ASSERT(aChild);
   }
 
-  void Run()
+  void Run() override
   {
     mChild->FlushedForDiversion();
   }
@@ -734,7 +744,7 @@ class FTPDeleteSelfEvent : public NeckoTargetChannelEvent<FTPChannelChild>
  public:
   explicit FTPDeleteSelfEvent(FTPChannelChild* aChild)
   : NeckoTargetChannelEvent<FTPChannelChild>(aChild) {}
-  void Run() { mChild->DoDeleteSelf(); }
+  void Run() override { mChild->DoDeleteSelf(); }
 };
 
 mozilla::ipc::IPCResult
@@ -955,4 +965,3 @@ FTPChannelChild::SetupNeckoTarget()
 
 } // namespace net
 } // namespace mozilla
-

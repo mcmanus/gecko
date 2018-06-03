@@ -8,6 +8,7 @@
 #include "nsJAR.h"
 #include "nsIFile.h"
 #include "nsIConsoleService.h"
+#include "mozilla/DebugOnly.h"
 #include "mozilla/Omnijar.h"
 #include "mozilla/Unused.h"
 
@@ -43,11 +44,27 @@ NS_IMPL_QUERY_INTERFACE(nsJAR, nsIZipReader)
 NS_IMPL_ADDREF(nsJAR)
 
 // Custom Release method works with nsZipReaderCache...
+// Release might be called from multi-thread, we have to
+// take this function carefully to avoid delete-after-use.
 MozExternalRefCountType nsJAR::Release(void)
 {
   nsrefcnt count;
-  NS_PRECONDITION(0 != mRefCnt, "dup release");
-  count = --mRefCnt;
+  MOZ_ASSERT(0 != mRefCnt, "dup release");
+
+  RefPtr<nsZipReaderCache> cache;
+  if (mRefCnt == 2) { // don't use a lock too frequently
+    // Use a mutex here to guarantee mCache is not racing and the target instance
+    // is still valid to increase ref-count.
+    MutexAutoLock lock(mLock);
+    cache = mCache;
+    mCache = nullptr;
+  }
+  if (cache) {
+    DebugOnly<nsresult> rv = cache->ReleaseZip(this);
+    MOZ_ASSERT(NS_SUCCEEDED(rv), "failed to release zip file");
+  }
+
+  count = --mRefCnt; // don't access any member variable after this line
   NS_LOG_RELEASE(this, count, "nsJAR");
   if (0 == count) {
     mRefCnt = 1; /* stabilize */
@@ -56,13 +73,7 @@ MozExternalRefCountType nsJAR::Release(void)
     delete this;
     return 0;
   }
-  if (1 == count && mCache) {
-#ifdef DEBUG
-    nsresult rv =
-#endif
-      mCache->ReleaseZip(this);
-    NS_ASSERTION(NS_SUCCEEDED(rv), "failed to release zip file");
-  }
+
   return count;
 }
 
@@ -201,11 +212,7 @@ nsJAR::Extract(const nsACString &aEntryName, nsIFile* outFile)
     if (NS_FAILED(rv)) return rv;
 
     // ExtractFile also closes the fd handle and resolves the symlink if needed
-    nsAutoCString path;
-    rv = outFile->GetNativePath(path);
-    if (NS_FAILED(rv)) return rv;
-
-    rv = mZip->ExtractFile(item, path.get(), fd);
+    rv = mZip->ExtractFile(item, outFile, fd);
   }
   if (NS_FAILED(rv)) return rv;
 
@@ -291,7 +298,7 @@ nsJAR::GetJarPath(nsACString& aResult)
 {
   NS_ENSURE_ARG_POINTER(mZipFile);
 
-  return mZipFile->GetNativePath(aResult);
+  return mZipFile->GetPersistentDescriptor(aResult);
 }
 
 nsresult
@@ -597,7 +604,7 @@ nsZipReaderCache::IsCached(nsIFile* zipFile, bool* aResult)
   MutexAutoLock lock(mLock);
 
   nsAutoCString uri;
-  rv = zipFile->GetNativePath(uri);
+  rv = zipFile->GetPersistentDescriptor(uri);
   if (NS_FAILED(rv))
     return rv;
 
@@ -620,7 +627,7 @@ nsZipReaderCache::GetZip(nsIFile* zipFile, nsIZipReader* *result,
 #endif
 
   nsAutoCString uri;
-  rv = zipFile->GetNativePath(uri);
+  rv = zipFile->GetPersistentDescriptor(uri);
   if (NS_FAILED(rv)) return rv;
 
   uri.InsertLiteral("file:", 0);
@@ -680,7 +687,7 @@ nsZipReaderCache::GetInnerZip(nsIFile* zipFile, const nsACString &entry,
 #endif
 
   nsAutoCString uri;
-  rv = zipFile->GetNativePath(uri);
+  rv = zipFile->GetPersistentDescriptor(uri);
   if (NS_FAILED(rv)) return rv;
 
   uri.InsertLiteral("jar:", 0);
@@ -723,7 +730,7 @@ nsZipReaderCache::GetFd(nsIFile* zipFile, PRFileDesc** aRetVal)
 
   nsresult rv;
   nsAutoCString uri;
-  rv = zipFile->GetNativePath(uri);
+  rv = zipFile->GetPersistentDescriptor(uri);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -871,7 +878,7 @@ nsZipReaderCache::Observe(nsISupports *aSubject,
       return NS_OK;
 
     nsAutoCString uri;
-    if (NS_FAILED(file->GetNativePath(uri)))
+    if (NS_FAILED(file->GetPersistentDescriptor(uri)))
       return NS_OK;
 
     uri.InsertLiteral("file:", 0);

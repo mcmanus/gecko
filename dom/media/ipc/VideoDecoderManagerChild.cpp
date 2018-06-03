@@ -3,10 +3,10 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 #include "VideoDecoderManagerChild.h"
 #include "VideoDecoderChild.h"
 #include "mozilla/dom/ContentChild.h"
-#include "MediaPrefs.h"
 #include "nsThreadUtils.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/ipc/ProtocolUtils.h"
@@ -52,7 +52,8 @@ VideoDecoderManagerChild::InitializeThread()
 VideoDecoderManagerChild::InitForContent(Endpoint<PVideoDecoderManagerChild>&& aVideoManager)
 {
   InitializeThread();
-  sVideoDecoderChildThread->Dispatch(NewRunnableFunction(&Open, Move(aVideoManager)), NS_DISPATCH_NORMAL);
+  sVideoDecoderChildThread->Dispatch(NewRunnableFunction("InitForContentRunnable",
+                                                         &Open, std::move(aVideoManager)), NS_DISPATCH_NORMAL);
 }
 
 /* static */ void
@@ -265,7 +266,7 @@ void
 VideoDecoderManagerChild::DeallocateSurfaceDescriptorGPUVideo(const SurfaceDescriptorGPUVideo& aSD)
 {
   RefPtr<VideoDecoderManagerChild> ref = this;
-  SurfaceDescriptorGPUVideo sd = Move(aSD);
+  SurfaceDescriptorGPUVideo sd = std::move(aSD);
   sVideoDecoderChildThread->Dispatch(
     NS_NewRunnableFunction(
       "dom::VideoDecoderManagerChild::DeallocateSurfaceDescriptorGPUVideo",
@@ -278,9 +279,9 @@ VideoDecoderManagerChild::DeallocateSurfaceDescriptorGPUVideo(const SurfaceDescr
 }
 
 void
-VideoDecoderManagerChild::HandleFatalError(const char* aName, const char* aMsg) const
+VideoDecoderManagerChild::HandleFatalError(const char* aMsg) const
 {
-  dom::ContentChild::FatalErrorIfNotUsingGPUProcess(aName, aMsg, OtherPid());
+  dom::ContentChild::FatalErrorIfNotUsingGPUProcess(aMsg, OtherPid());
 }
 
 } // namespace dom

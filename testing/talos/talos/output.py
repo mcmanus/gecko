@@ -236,15 +236,49 @@ class Output(object):
     def JS_Metric(cls, val_list):
         """v8 benchmark score"""
         results = [i for i, j in val_list]
-        LOG.info("javascript benchmark")
         return sum(results)
 
     @classmethod
-    def CanvasMark_Metric(cls, val_list):
-        """CanvasMark benchmark score (NOTE: this is identical to JS_Metric)"""
+    def speedometer_score(cls, val_list):
+        """
+        speedometer_score: https://bug-172968-attachments.webkit.org/attachment.cgi?id=319888
+        """
+        correctionFactor = 3
         results = [i for i, j in val_list]
-        LOG.info("CanvasMark benchmark")
-        return sum(results)
+        # speedometer has 16 tests, each of these are made of up 9 subtests
+        # and a sum of the 9 values.  We receive 160 values, and want to use
+        # the 16 test values, not the sub test values.
+        if len(results) != 160:
+            raise Exception("Speedometer has 160 subtests, found: %s instead" % len(results))
+
+        results = results[9::10]
+        score = 60 * 1000 / filter.geometric_mean(results) / correctionFactor
+        return score
+
+    @classmethod
+    def benchmark_score(cls, val_list):
+        """
+        benchmark_score: ares6/jetstream self reported as 'geomean'
+        """
+        results = [i for i, j in val_list if j == 'geomean']
+        return filter.mean(results)
+
+    @classmethod
+    def stylebench_score(cls, val_list):
+        """
+        stylebench_score: https://bug-172968-attachments.webkit.org/attachment.cgi?id=319888
+        """
+        correctionFactor = 3
+        results = [i for i, j in val_list]
+        # stylebench has 4 tests, each of these are made of up 12 subtests
+        # and a sum of the 12 values.  We receive 52 values, and want to use
+        # the 4 test values, not the sub test values.
+        if len(results) != 52:
+            raise Exception("StyleBench has 52 subtests, found: %s instead" % len(results))
+
+        results = results[12::13]
+        score = 60 * 1000 / filter.geometric_mean(results) / correctionFactor
+        return score
 
     def construct_results(self, vals, testname):
         if 'responsiveness' in testname:
@@ -253,8 +287,14 @@ class Output(object):
             return self.v8_Metric(vals)
         elif testname.startswith('kraken'):
             return self.JS_Metric(vals)
-        elif testname.startswith('tcanvasmark'):
-            return self.CanvasMark_Metric(vals)
+        elif testname.startswith('ares6'):
+            return self.benchmark_score(vals)
+        elif testname.startswith('jetstream'):
+            return self.benchmark_score(vals)
+        elif testname.startswith('speedometer'):
+            return self.speedometer_score(vals)
+        elif testname.startswith('stylebench'):
+            return self.stylebench_score(vals)
         elif len(vals) > 1:
             return filter.geometric_mean([i for i, j in vals])
         else:

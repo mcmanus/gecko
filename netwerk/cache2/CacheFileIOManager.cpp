@@ -52,10 +52,11 @@ namespace net {
 #define kSmartSizeUpdateInterval 60000 // in milliseconds
 
 #ifdef ANDROID
-const uint32_t kMaxCacheSizeKB = 200*1024; // 200 MB
+const uint32_t kMaxCacheSizeKB = 512*1024; // 512 MB
 #else
-const uint32_t kMaxCacheSizeKB = 350*1024; // 350 MB
+const uint32_t kMaxCacheSizeKB = 1024*1024; // 1 GB
 #endif
+const uint32_t kMaxClearOnShutdownCacheSizeKB = 150*1024; // 150 MB
 
 bool
 CacheFileHandle::DispatchRelease()
@@ -93,7 +94,7 @@ CacheFileHandle::Release()
   MOZ_ASSERT(CacheFileIOManager::IsOnIOThreadOrCeased());
 
   LOG(("CacheFileHandle::Release() [this=%p, refcnt=%" PRIuPTR "]", this, mRefCnt.get()));
-  NS_PRECONDITION(0 != mRefCnt, "dup release");
+  MOZ_ASSERT(0 != mRefCnt, "dup release");
   count = --mRefCnt;
   NS_LOG_RELEASE(this, count, "CacheFileHandle");
 
@@ -108,7 +109,7 @@ CacheFileHandle::Release()
 
 NS_INTERFACE_MAP_BEGIN(CacheFileHandle)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
-NS_INTERFACE_MAP_END_THREADSAFE
+NS_INTERFACE_MAP_END
 
 CacheFileHandle::CacheFileHandle(const SHA1Sum::Hash *aHash, bool aPriority, PinningStatus aPinning)
   : mHash(aHash)
@@ -552,9 +553,7 @@ public:
   }
 
 protected:
-  ~ShutdownEvent()
-  {
-  }
+  ~ShutdownEvent() = default;
 
 public:
   NS_IMETHOD Run() override
@@ -578,7 +577,7 @@ public:
       this, CacheIOThread::WRITE); // When writes and closing of handles is done
     MOZ_ASSERT(NS_SUCCEEDED(rv));
 
-    PRIntervalTime const waitTime = PR_MillisecondsToInterval(1000);
+    TimeDuration waitTime = TimeDuration::FromSeconds(1);
     while (!mNotified) {
       mon.Wait(waitTime);
       if (!mNotified) {
@@ -653,9 +652,7 @@ public:
   }
 
 protected:
-  ~OpenFileEvent()
-  {
-  }
+  ~OpenFileEvent() = default;
 
 public:
   NS_IMETHOD Run() override
@@ -721,9 +718,7 @@ public:
   }
 
 protected:
-  ~ReadEvent()
-  {
-  }
+  ~ReadEvent() = default;
 
 public:
   NS_IMETHOD Run() override
@@ -835,9 +830,7 @@ public:
   }
 
 protected:
-  ~DoomFileEvent()
-  {
-  }
+  ~DoomFileEvent() = default;
 
 public:
   NS_IMETHOD Run() override
@@ -877,9 +870,7 @@ public:
   }
 
 protected:
-  ~DoomFileByKeyEvent()
-  {
-  }
+  ~DoomFileByKeyEvent() = default;
 
 public:
   NS_IMETHOD Run() override
@@ -915,9 +906,7 @@ public:
   }
 
 protected:
-  ~ReleaseNSPRHandleEvent()
-  {
-  }
+  ~ReleaseNSPRHandleEvent() = default;
 
 public:
   NS_IMETHOD Run() override
@@ -948,9 +937,7 @@ public:
   }
 
 protected:
-  ~TruncateSeekSetEOFEvent()
-  {
-  }
+  ~TruncateSeekSetEOFEvent() = default;
 
 public:
   NS_IMETHOD Run() override
@@ -991,9 +978,7 @@ public:
   }
 
 protected:
-  ~RenameFileEvent()
-  {
-  }
+  ~RenameFileEvent() = default;
 
 public:
   NS_IMETHOD Run() override
@@ -1035,9 +1020,7 @@ public:
   }
 
 protected:
-  ~InitIndexEntryEvent()
-  {
-  }
+  ~InitIndexEntryEvent() = default;
 
 public:
   NS_IMETHOD Run() override
@@ -1106,9 +1089,7 @@ public:
   }
 
 protected:
-  ~UpdateIndexEntryEvent()
-  {
-  }
+  ~UpdateIndexEntryEvent() = default;
 
 public:
   NS_IMETHOD Run() override
@@ -1164,7 +1145,7 @@ public:
     , mIOMan(aManager)
   { }
 
-  virtual ~MetadataWriteScheduleEvent() { }
+  virtual ~MetadataWriteScheduleEvent() = default;
 
   NS_IMETHOD Run() override
   {
@@ -1354,6 +1335,11 @@ CacheFileIOManager::ShutdownInternal()
     mTrashDirEnumerator = nullptr;
   }
 
+  if (mContextEvictor) {
+    mContextEvictor->Shutdown();
+    mContextEvictor = nullptr;
+  }
+
   return NS_OK;
 }
 
@@ -1524,11 +1510,9 @@ CacheFileIOManager::ScheduleMetadataWriteInternal(CacheFile * aFile)
   nsresult rv;
 
   if (!mMetadataWritesTimer) {
-    mMetadataWritesTimer = do_CreateInstance("@mozilla.org/timer;1", &rv);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    rv = mMetadataWritesTimer->InitWithCallback(
-      this, kMetadataWriteDelay, nsITimer::TYPE_ONE_SHOT);
+    rv = NS_NewTimerWithCallback(getter_AddRefs(mMetadataWritesTimer),
+                                 this, kMetadataWriteDelay,
+                                 nsITimer::TYPE_ONE_SHOT);
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
@@ -3316,9 +3300,8 @@ CacheFileIOManager::CacheIndexStateChangedInternal()
 nsresult
 CacheFileIOManager::TrashDirectory(nsIFile *aFile)
 {
-  nsAutoCString path;
-  aFile->GetNativePath(path);
-  LOG(("CacheFileIOManager::TrashDirectory() [file=%s]", path.get()));
+  LOG(("CacheFileIOManager::TrashDirectory() [file=%s]",
+       aFile->HumanReadablePath().get()));
 
   nsresult rv;
 
@@ -3439,25 +3422,17 @@ CacheFileIOManager::StartRemovingTrash()
 
   uint32_t elapsed = (TimeStamp::NowLoRes() - mStartTime).ToMilliseconds();
   if (elapsed < kRemoveTrashStartDelay) {
-    nsCOMPtr<nsITimer> timer = do_CreateInstance("@mozilla.org/timer;1", &rv);
-    NS_ENSURE_SUCCESS(rv, rv);
-
     nsCOMPtr<nsIEventTarget> ioTarget = IOTarget();
     MOZ_ASSERT(ioTarget);
 
-    rv = timer->SetTarget(ioTarget);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    rv = timer->InitWithNamedFuncCallback(
+    return NS_NewTimerWithFuncCallback(
+      getter_AddRefs(mTrashTimer),
       CacheFileIOManager::OnTrashTimer,
       nullptr,
       kRemoveTrashStartDelay - elapsed,
       nsITimer::TYPE_ONE_SHOT,
-      "net::CacheFileIOManager::StartRemovingTrash");
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    mTrashTimer.swap(timer);
-    return NS_OK;
+      "net::CacheFileIOManager::StartRemovingTrash",
+      ioTarget);
   }
 
   nsCOMPtr<nsIRunnable> ev;
@@ -3522,12 +3497,8 @@ CacheFileIOManager::RemoveTrashInternal()
       }
       NS_ENSURE_SUCCESS(rv, rv);
 
-      nsCOMPtr<nsISimpleEnumerator> enumerator;
-      rv = mTrashDir->GetDirectoryEntries(getter_AddRefs(enumerator));
-      if (NS_SUCCEEDED(rv)) {
-        mTrashDirEnumerator = do_QueryInterface(enumerator, &rv);
-        NS_ENSURE_SUCCESS(rv, rv);
-      }
+      rv = mTrashDir->GetDirectoryEntries(getter_AddRefs(mTrashDirEnumerator));
+      NS_ENSURE_SUCCESS(rv, rv);
 
       continue; // check elapsed time
     }
@@ -3557,22 +3528,19 @@ CacheFileIOManager::RemoveTrashInternal()
       mTrashDirEnumerator->Close();
       mTrashDirEnumerator = nullptr;
       continue; // check elapsed time
-    } else {
-      bool isDir = false;
-      file->IsDirectory(&isDir);
-      if (isDir) {
-        NS_WARNING("Found a directory in a trash directory! It will be removed "
-                   "recursively, but this can block IO thread for a while!");
-        if (LOG_ENABLED()) {
-          nsAutoCString path;
-          file->GetNativePath(path);
-          LOG(("CacheFileIOManager::RemoveTrashInternal() - Found a directory in a trash "
-              "directory! It will be removed recursively, but this can block IO "
-              "thread for a while! [file=%s]", path.get()));
-        }
-      }
-      file->Remove(isDir);
     }
+    bool isDir = false;
+    file->IsDirectory(&isDir);
+    if (isDir) {
+      NS_WARNING("Found a directory in a trash directory! It will be removed "
+                  "recursively, but this can block IO thread for a while!");
+      if (LOG_ENABLED()) {
+        LOG(("CacheFileIOManager::RemoveTrashInternal() - Found a directory in a trash "
+            "directory! It will be removed recursively, but this can block IO "
+            "thread for a while! [file=%s]", file->HumanReadablePath().get()));
+      }
+    }
+    file->Remove(isDir);
   }
 
   NS_NOTREACHED("We should never get here");
@@ -3590,24 +3558,12 @@ CacheFileIOManager::FindTrashDirToRemove()
   // remove all cache files.
   MOZ_ASSERT(mIOThread->IsCurrentThread() || mShuttingDown);
 
-  nsCOMPtr<nsISimpleEnumerator> iter;
+  nsCOMPtr<nsIDirectoryEnumerator> iter;
   rv = mCacheDirectory->GetDirectoryEntries(getter_AddRefs(iter));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  bool more;
-  nsCOMPtr<nsISupports> elem;
-
-  while (NS_SUCCEEDED(iter->HasMoreElements(&more)) && more) {
-    rv = iter->GetNext(getter_AddRefs(elem));
-    if (NS_FAILED(rv)) {
-      continue;
-    }
-
-    nsCOMPtr<nsIFile> file = do_QueryInterface(elem);
-    if (!file) {
-      continue;
-    }
-
+  nsCOMPtr<nsIFile> file;
+  while (NS_SUCCEEDED(iter->GetNextFile(getter_AddRefs(file))) && file) {
     bool isDir = false;
     file->IsDirectory(&isDir);
     if (!isDir) {
@@ -4157,10 +4113,8 @@ CacheFileIOManager::SyncRemoveDir(nsIFile *aFile, const char *aDir)
   }
 
   if (LOG_ENABLED()) {
-    nsAutoCString path;
-    file->GetNativePath(path);
     LOG(("CacheFileIOManager::SyncRemoveDir() - Removing directory %s",
-         path.get()));
+         file->HumanReadablePath().get()));
   }
 
   rv = file->Remove(true);
@@ -4215,10 +4169,16 @@ CacheFileIOManager::SyncRemoveAllCacheFiles()
 static uint32_t
 SmartCacheSize(const uint32_t availKB)
 {
-  uint32_t maxSize = kMaxCacheSizeKB;
+  uint32_t maxSize;
 
-  if (availKB > 100 * 1024 * 1024) {
-    return maxSize;  // skip computing if we're over 100 GB
+  if (CacheObserver::ClearCacheOnShutdown()) {
+    maxSize = kMaxClearOnShutdownCacheSizeKB;
+  } else {
+    maxSize = kMaxCacheSizeKB;
+  }
+
+  if (availKB > 25 * 1024 * 1024) {
+    return maxSize;  // skip computing if we're over 25 GB
   }
 
   // Grow/shrink in 10 MB units, deliberately, so that in the common case we
@@ -4227,19 +4187,14 @@ SmartCacheSize(const uint32_t availKB)
   uint32_t sz10MBs = 0;
   uint32_t avail10MBs = availKB / (1024*10);
 
-  // .5% of space above 25 GB
-  if (avail10MBs > 2500) {
-    sz10MBs += static_cast<uint32_t>((avail10MBs - 2500)*.005);
-    avail10MBs = 2500;
-  }
-  // 1% of space between 7GB -> 25 GB
+  // 2.5% of space above 7GB
   if (avail10MBs > 700) {
-    sz10MBs += static_cast<uint32_t>((avail10MBs - 700)*.01);
+    sz10MBs += static_cast<uint32_t>((avail10MBs - 700)*.025);
     avail10MBs = 700;
   }
-  // 5% of space between 500 MB -> 7 GB
+  // 7.5% of space between 500 MB -> 7 GB
   if (avail10MBs > 50) {
-    sz10MBs += static_cast<uint32_t>((avail10MBs - 50)*.05);
+    sz10MBs += static_cast<uint32_t>((avail10MBs - 50)*.075);
     avail10MBs = 50;
   }
 
@@ -4248,11 +4203,11 @@ SmartCacheSize(const uint32_t availKB)
   // device owners may be sensitive to storage footprint: Use a smaller
   // percentage of available space and a smaller minimum.
 
-  // 20% of space up to 500 MB (10 MB min)
-  sz10MBs += std::max<uint32_t>(1, static_cast<uint32_t>(avail10MBs * .2));
+  // 16% of space up to 500 MB (10 MB min)
+  sz10MBs += std::max<uint32_t>(1, static_cast<uint32_t>(avail10MBs * .16));
 #else
-  // 40% of space up to 500 MB (50 MB min)
-  sz10MBs += std::max<uint32_t>(5, static_cast<uint32_t>(avail10MBs * .4));
+  // 30% of space up to 500 MB (50 MB min)
+  sz10MBs += std::max<uint32_t>(5, static_cast<uint32_t>(avail10MBs * .3));
 #endif
 
   return std::min<uint32_t>(maxSize, sz10MBs * 10 * 1024);

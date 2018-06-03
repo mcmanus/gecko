@@ -15,10 +15,15 @@
 #include "mozilla/dom/TabGroup.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/dom/CustomElementRegistry.h"
+#include "mozilla/dom/HTMLSlotElement.h"
+#include "mozilla/PerformanceCounter.h"
+
 
 namespace mozilla {
 class AbstractThread;
 namespace dom {
+
+class PerformanceInfo;
 
 // Two browsing contexts are considered "related" if they are reachable from one
 // another through window.opener, window.parent, or window.frames. This is the
@@ -53,6 +58,15 @@ public:
   {
     return aKey == mKey;
   }
+
+  PerformanceCounter* GetPerformanceCounter()
+  {
+    return mPerformanceCounter;
+  }
+
+  PerformanceInfo
+  ReportPerformanceInfo();
+
   TabGroup* GetTabGroup()
   {
     return mTabGroup;
@@ -99,6 +113,18 @@ public:
   // DocGroup.
   bool* GetValidAccessPtr();
 
+  // Append aSlot to the list of signal slot list, and queue a mutation observer
+  // microtask.
+  void SignalSlotChange(HTMLSlotElement& aSlot);
+
+  void MoveSignalSlotListTo(nsTArray<RefPtr<HTMLSlotElement>>& aDest);
+
+  // List of DocGroups that has non-empty signal slot list.
+  static AutoTArray<RefPtr<DocGroup>, 2>* sPendingDocGroups;
+
+  // Returns true if any of its documents are active but not in the bfcache.
+  bool IsActive() const;
+
 private:
   DocGroup(TabGroup* aTabGroup, const nsACString& aKey);
   ~DocGroup();
@@ -107,6 +133,10 @@ private:
   RefPtr<TabGroup> mTabGroup;
   nsTArray<nsIDocument*> mDocuments;
   RefPtr<mozilla::dom::CustomElementReactionsStack> mReactionsStack;
+  nsTArray<RefPtr<HTMLSlotElement>> mSignalSlotList;
+  // This pointer will be null if dom.performance.enable_scheduler_timing is
+  // false (default value)
+  RefPtr<mozilla::PerformanceCounter> mPerformanceCounter;
 };
 
 } // namespace dom

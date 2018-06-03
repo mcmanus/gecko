@@ -3,8 +3,7 @@
 
 "use strict";
 
-var Cu = Components.utils;
-const {require} = Cu.import("resource://devtools/shared/Loader.jsm", {});
+const {require} = ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
 const {RuleRewriter} = require("devtools/shared/css/parsing-utils");
 const {isCssPropertyKnown} = require("devtools/server/actors/css-properties");
 
@@ -537,7 +536,7 @@ const TEST_DATA = [
 ];
 
 function rewriteDeclarations(inputString, instruction, defaultIndentation) {
-  let rewriter = new RuleRewriter(isCssPropertyKnown, null, inputString);
+  const rewriter = new RuleRewriter(isCssPropertyKnown, null, inputString);
   rewriter.defaultIndentation = defaultIndentation;
 
   switch (instruction.type) {
@@ -574,8 +573,8 @@ function rewriteDeclarations(inputString, instruction, defaultIndentation) {
 }
 
 function run_test() {
-  for (let test of TEST_DATA) {
-    let {changed, text} = rewriteDeclarations(test.input, test.instruction,
+  for (const test of TEST_DATA) {
+    const {changed, text} = rewriteDeclarations(test.input, test.instruction,
                                               "\t");
     equal(text, test.expected, "output for " + test.desc);
 

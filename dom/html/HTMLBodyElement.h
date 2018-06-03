@@ -8,7 +8,6 @@
 
 #include "mozilla/Attributes.h"
 #include "nsGenericHTMLElement.h"
-#include "nsIStyleRule.h"
 
 namespace mozilla {
 
@@ -22,7 +21,6 @@ class HTMLBodyElement final : public nsGenericHTMLElement
 {
 public:
   using Element::GetText;
-  using Element::SetText;
 
   explicit HTMLBodyElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
     : nsGenericHTMLElement(aNodeInfo)
@@ -30,7 +28,9 @@ public:
   }
 
   // nsISupports
-  NS_DECL_ISUPPORTS_INHERITED
+  NS_INLINE_DECL_REFCOUNTING_INHERITED(HTMLBodyElement, nsGenericHTMLElement)
+
+  NS_IMPL_FROMNODE_HTML_WITH_TAG(HTMLBodyElement, body);
 
   // Event listener stuff; we need to declare only the ones we need to
   // forward to window that don't come from nsIDOMHTMLBodyElement.
@@ -112,6 +112,10 @@ public:
   {
     GetHTMLAttr(nsGkAtoms::background, aBackground);
   }
+  void GetBackground(nsAString& aBackground)
+  {
+    GetHTMLAttr(nsGkAtoms::background, aBackground);
+  }
   void SetBackground(const nsAString& aBackground, ErrorResult& aError)
   {
     SetHTMLAttr(nsGkAtoms::background, aBackground, aError);
@@ -120,6 +124,7 @@ public:
   virtual bool ParseAttribute(int32_t aNamespaceID,
                               nsAtom* aAttribute,
                               const nsAString& aValue,
+                              nsIPrincipal* aMaybeScriptedPrincipal,
                               nsAttrValue& aResult) override;
   virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const override;
   NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* aAttribute) const override;
@@ -139,6 +144,7 @@ public:
   virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
                                 const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
                                 bool aNotify) override;
 
 protected:

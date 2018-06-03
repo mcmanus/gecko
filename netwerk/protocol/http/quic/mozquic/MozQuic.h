@@ -16,9 +16,9 @@
 extern "C" {
 #endif
 
-#define MOZQUIC_ALPN "hq-05"
+#define MOZQUIC_ALPN "hq-11"
   
-  static const uint32_t mozquic_library_version = 1;
+static const uint32_t mozquic_library_version = 1;
 
   enum {
     MOZQUIC_OK                   = 0,
@@ -29,6 +29,7 @@ extern "C" {
     MOZQUIC_ERR_CRYPTO           = 5,
     MOZQUIC_ERR_VERSION          = 6,
     MOZQUIC_ERR_ALREADY_FINISHED = 7,
+    MOZQUIC_ERR_DEFERRED         = 8,
   };
 
   // The event Callbacks receive an application specified closure,
@@ -49,6 +50,9 @@ extern "C" {
     MOZQUIC_EVENT_TLSINPUT               = 10, // mozquic_eventdata_tlsinput
     MOZQUIC_EVENT_PING_OK                = 11, // nullptr
     MOZQUIC_EVENT_TLS_CLIENT_TPARAMS     = 12, // mozquic_eventdata_tlsinput
+    MOZQUIC_EVENT_CLOSE_APPLICATION      = 13, // mozquic_connection_t *
+    MOZQUIC_EVENT_0RTT_POSSIBLE          = 14, // mozquic_connection_t *
+    MOZQUIC_EVENT_STREAM_NO_REPLAY_ERROR = 15, // mozquic_stream_t *
   };
 
   enum {
@@ -64,6 +68,7 @@ extern "C" {
   {
     const char *originName;
     int originPort;
+    int ipv6;
     int handleIO; // true if library should schedule read and write events
     unsigned int appHandlesSendRecv; // flag to control TRANSMIT/RECV/TLSINPUT events
     unsigned int appHandlesLogging; // flag to control LOG events
@@ -72,18 +77,19 @@ extern "C" {
     unsigned char reservedInternally[512];
   };
 
-  uint32_t mozquic_unstable_api1(struct mozquic_config_t *c, const char *name, uint64_t, uint64_t);
-  uint32_t mozquic_unstable_api2(mozquic_connection_t *c, const char *name, uint64_t, uint64_t);
+  uint32_t mozquic_unstable_api1(struct mozquic_config_t *c, const char *name, uint64_t, void *);
+  uint32_t mozquic_unstable_api2(mozquic_connection_t *c, const char *name, uint64_t, void *);
   
   // this is a hack. it will be come a 'crypto config' and allow server key/cert and
   // some kind of client ca root
   int mozquic_nss_config(char *dir);
 
   int mozquic_new_connection(mozquic_connection_t **outSession, struct mozquic_config_t *inConfig);
+  int mozquic_shutdown_connection(mozquic_connection_t *inSession);
   int mozquic_destroy_connection(mozquic_connection_t *inSession);
   int mozquic_start_client(mozquic_connection_t *inSession); // client rename todo
   int mozquic_start_server(mozquic_connection_t *inSession);
-  int mozquic_start_new_stream(mozquic_stream_t **outStream, mozquic_connection_t *conn, void *data, uint32_t amount, int fin);
+  int mozquic_start_new_stream(mozquic_stream_t **outStream, mozquic_connection_t *conn, uint8_t uni, uint8_t no_replay, void *data, uint32_t amount, int fin);
   int mozquic_send(mozquic_stream_t *stream, void *data, uint32_t amount, int fin);
   int mozquic_end_stream(mozquic_stream_t *stream);
   int mozquic_reset_stream(mozquic_stream_t *stream); // a more final version of end_stream
@@ -91,17 +97,21 @@ extern "C" {
   int mozquic_recv(mozquic_stream_t *stream, void *data, uint32_t aval, uint32_t *amount, int *fin);
   int mozquic_set_event_callback(mozquic_connection_t *conn, int (*fx)(void *closure, uint32_t event, void *param));
   int mozquic_set_event_callback_closure(mozquic_connection_t *conn, void *closure);
-  int mozquic_check_peer(mozquic_connection_t *conn, uint32_t deadlineMS);
+  int mozquic_check_peer(mozquic_connection_t *conn, uint32_t deadlineMS); // generate PING_OK event
   int mozquic_get_streamid(mozquic_stream_t *stream);
-
+  int mozquic_get_allacked(mozquic_connection_t *conn);
   int mozquic_start_backpressure(mozquic_connection_t *conn);
   int mozquic_release_backpressure(mozquic_connection_t *conn);
-  
+
   ////////////////////////////////////////////////////
   // IO handlers
   // if library is handling IO this does not need to be called
   // otherwise call it to indicate IO should be handled
   int mozquic_IO(mozquic_connection_t *inSession);
+
+  // how long to wait on timers before calling mozquic_IO. in ms.
+  int mozquic_next_timer();
+
   // todo need one to get the pollset
 
   /* socket typedef */
@@ -122,12 +132,18 @@ extern "C" {
   {
     const unsigned char *pkt;
     uint32_t len;
-    struct sockaddr_in *explicitPeer;
+    const struct sockaddr *explicitPeer;
   };
 
   struct mozquic_eventdata_tlsinput
   {
     unsigned char *data;
+    uint32_t len;
+  };
+
+  struct mozquic_eventdata_raw
+  {
+    const unsigned char *data;
     uint32_t len;
   };
 

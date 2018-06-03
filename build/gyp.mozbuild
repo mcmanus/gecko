@@ -12,6 +12,7 @@ gyp_vars.update({
     'ubsan' : 0,
     'fuzzing' : 1 if CONFIG['FUZZING'] else 0,
     'libfuzzer' : 1 if CONFIG['LIBFUZZER'] else 0,
+    'libfuzzer_fuzzer_no_link_flag' : 1 if CONFIG['HAVE_LIBFUZZER_FLAG_FUZZER_NO_LINK'] else 0,
     'build_with_mozilla': 1,
     'build_with_chromium': 0,
     # 10.9 once we move to TC cross-compiles - bug 1270217
@@ -24,7 +25,7 @@ gyp_vars.update({
     'include_pulse_audio': 1 if CONFIG['MOZ_PULSEAUDIO'] else 0,
     # basic stuff for everything
     'include_internal_video_render': 0,
-    'clang': 1 if CONFIG['CLANG_CXX'] else 0,
+    'clang': 1 if CONFIG['CC_TYPE'] == 'clang' else 0,
     'clang_use_chrome_plugins': 0,
     'enable_protobuf': 0,
     'include_tests': 0,
@@ -60,7 +61,6 @@ gyp_vars.update({
     'arm_neon': 0,
     'arm_neon_optional': 1,
 
-    'moz_webrtc_omx': 0,
     'moz_webrtc_mediacodec': 0,
 
     # Turn off multi monitor screen share
@@ -124,4 +124,4 @@ if not CONFIG['MOZ_SYSTEM_LIBVPX']:
     gyp_vars['libvpx_dir'] =  '/media/libvpx/libvpx'
 
 if not CONFIG['MOZ_SYSTEM_LIBEVENT']:
-    gyp_vars['libevent_dir'] = '/ipc/chromium/src/third_party/libevent' 
+    gyp_vars['libevent_dir'] = '/ipc/chromium/src/third_party/libevent'

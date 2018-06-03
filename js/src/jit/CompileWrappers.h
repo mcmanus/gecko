@@ -7,7 +7,7 @@
 #ifndef jit_CompileWrappers_h
 #define jit_CompileWrappers_h
 
-#include "jscntxt.h"
+#include "vm/JSContext.h"
 
 namespace js {
 namespace jit {
@@ -16,7 +16,7 @@ class JitRuntime;
 
 // During Ion compilation we need access to various bits of the current
 // compartment, runtime and so forth. However, since compilation can run off
-// thread while the active thread is mutating the VM, this access needs
+// thread while the main thread is mutating the VM, this access needs
 // to be restricted. The classes below give the compiler an interface to access
 // all necessary information in a threadsafe fashion.
 
@@ -46,7 +46,10 @@ class CompileRuntime
     const Value& NaNValue();
     const Value& positiveInfinityValue();
     const WellKnownSymbols& wellKnownSymbols();
-    const void* addressOfActiveJSContext();
+
+    const void* mainContextPtr();
+    const void* addressOfJitStackLimit();
+    const void* addressOfInterruptBits();
 
 #ifdef DEBUG
     bool isInsideNursery(gc::Cell* cell);
@@ -72,37 +75,40 @@ class CompileZone
     const void* addressOfIonBailAfter();
 #endif
 
-    const void* addressOfJSContext();
     const void* addressOfNeedsIncrementalBarrier();
     const void* addressOfFreeList(gc::AllocKind allocKind);
     const void* addressOfNurseryPosition();
+    const void* addressOfStringNurseryPosition();
     const void* addressOfNurseryCurrentEnd();
+    const void* addressOfStringNurseryCurrentEnd();
 
     bool nurseryExists();
+    bool canNurseryAllocateStrings();
     void setMinorGCShouldCancelIonCompilations();
 };
 
-class JitCompartment;
+class JitRealm;
 
-class CompileCompartment
+class CompileRealm
 {
-    JSCompartment* compartment();
+    JS::Realm* realm();
 
   public:
-    static CompileCompartment* get(JSCompartment* comp);
+    static CompileRealm* get(JS::Realm* realm);
 
     CompileZone* zone();
     CompileRuntime* runtime();
 
     const void* addressOfRandomNumberGenerator();
 
-    const JitCompartment* jitCompartment();
+    const JitRealm* jitRealm();
 
     const GlobalObject* maybeGlobal();
+    const uint32_t* addressOfGlobalWriteBarriered();
 
     bool hasAllocationMetadataBuilder();
 
-    // Mirror CompartmentOptions.
+    // Mirror RealmOptions.
     void setSingletonsAsValues();
 };
 

@@ -23,8 +23,6 @@
 #include "nsString.h"
 #include "GeckoProfiler.h"
 
-#define NOTIFY_GLOBAL_OBSERVERS
-
 static const uint32_t kMinTelemetryNotifyObserversLatencyMs = 1;
 
 // Log module for nsObserverService logging...
@@ -221,7 +219,8 @@ nsObserverService::AddObserver(nsIObserver* aObserver, const char* aTopic,
     nsCOMPtr<nsIScriptError> error(do_CreateInstance(NS_SCRIPTERROR_CONTRACTID));
     error->Init(NS_LITERAL_STRING("http-on-* observers only work in the parent process"),
                 EmptyString(), EmptyString(), 0, 0,
-                nsIScriptError::warningFlag, "chrome javascript");
+                nsIScriptError::warningFlag, "chrome javascript",
+                false /* from private window */);
     console->LogMessage(error);
 
     return NS_ERROR_NOT_IMPLEMENTED;
@@ -288,20 +287,13 @@ NS_IMETHODIMP nsObserverService::NotifyObservers(nsISupports* aSubject,
 
   mozilla::TimeStamp start = TimeStamp::Now();
 
-  AUTO_PROFILER_LABEL_DYNAMIC("nsObserverService::NotifyObservers", OTHER,
-                              aTopic);
+  AUTO_PROFILER_LABEL_DYNAMIC_CSTR(
+    "nsObserverService::NotifyObservers", OTHER, aTopic);
 
   nsObserverList* observerList = mObserverTopicTable.GetEntry(aTopic);
   if (observerList) {
     observerList->NotifyObservers(aSubject, aTopic, aSomeData);
   }
-
-#ifdef NOTIFY_GLOBAL_OBSERVERS
-  observerList = mObserverTopicTable.GetEntry("*");
-  if (observerList) {
-    observerList->NotifyObservers(aSubject, aTopic, aSomeData);
-  }
-#endif
 
   uint32_t latencyMs = round((TimeStamp::Now() - start).ToMilliseconds());
   if (latencyMs >= kMinTelemetryNotifyObserversLatencyMs) {

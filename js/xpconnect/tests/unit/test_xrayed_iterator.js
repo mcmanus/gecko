@@ -1,4 +1,3 @@
-const Cu = Components.utils;
 function run_test() {
 
   var toEval = [
@@ -15,7 +14,7 @@ function run_test() {
     var control = [6, 7, 8, 9];
     var i = 0;
     for (var item of iterator) {
-      do_check_eq(item, control[i]);
+      Assert.equal(item, control[i]);
       ++i;
     }
   }

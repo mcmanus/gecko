@@ -3,6 +3,8 @@
 
 "use strict";
 
+requestLongerTimeout(2);
+
 /**
  * Test different text filtering flags
  */
@@ -134,216 +136,247 @@ const EXPECTED_REQUESTS = [
   },
 ];
 
-add_task(function* () {
-  let { monitor } = yield initNetMonitor(FILTERING_URL);
-  let { document, store, windowRequire } = monitor.panelWin;
-  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
-  let {
+add_task(async function() {
+  const { monitor } = await initNetMonitor(FILTERING_URL);
+  const { document, store, windowRequire } = monitor.panelWin;
+  const Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+  const {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
   store.dispatch(Actions.batchEnable(false));
 
+  function type(string) {
+    for (const ch of string) {
+      EventUtils.synthesizeKey(ch, {}, monitor.panelWin);
+    }
+  }
+
+  // Filtering network request will start fetching data lazily
+  // (fetching requestHeaders & responseHeaders for filtering WS & XHR)
+  // Lazy fetching will be executed when user focuses on filter box.
   function setFreetextFilter(value) {
-    store.dispatch(Actions.setRequestFilterText(value));
+    const filterBox = document.querySelector(".devtools-filterinput");
+    filterBox.focus();
+    filterBox.value = "";
+    type(value);
   }
 
   info("Starting test... ");
 
-  let waitNetwork = waitForNetworkEvents(monitor, REQUESTS.length);
-  loadCommonFrameScript();
-  yield performRequestsInContent(REQUESTS);
-  yield waitNetwork;
+  const waitNetwork = waitForNetworkEvents(monitor, REQUESTS.length);
+  loadFrameScriptUtils();
+  await performRequestsInContent(REQUESTS);
+  await waitNetwork;
 
   // Test running flag once requests finish running
   setFreetextFilter("is:running");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Test cached flag
   setFreetextFilter("is:from-cache");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
 
   setFreetextFilter("is:cached");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
 
   // Test negative cached flag
   setFreetextFilter("-is:from-cache");
-  testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
+  await testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
 
   setFreetextFilter("-is:cached");
-  testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
+  await testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
 
   // Test status-code flag
   setFreetextFilter("status-code:200");
-  testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
+  await testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
 
   // Test status-code negative flag
   setFreetextFilter("-status-code:200");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
 
   // Test mime-type flag
   setFreetextFilter("mime-type:HtmL");
-  testContents([1, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([1, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Test mime-type negative flag
   setFreetextFilter("-mime-type:HtmL");
-  testContents([0, 0, 1, 1, 1, 1, 1, 1, 1, 1]);
+  await testContents([0, 0, 1, 1, 1, 1, 1, 1, 1, 1]);
 
   // Test method flag
   setFreetextFilter("method:get");
-  testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  await testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
 
   // Test unmatched method flag
   setFreetextFilter("method:post");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Test scheme flag (all requests are http)
   setFreetextFilter("scheme:http");
-  testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  await testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
 
   setFreetextFilter("scheme:https");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Test regex filter
   setFreetextFilter("regexp:content.*?Sam");
-  testContents([1, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([1, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Test set-cookie-name flag
   setFreetextFilter("set-cookie-name:name2");
-  testContents([0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   setFreetextFilter("set-cookie-name:not-existing");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Test set-cookie-value flag
   setFreetextFilter("set-cookie-value:value2");
-  testContents([0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   setFreetextFilter("set-cookie-value:not-existing");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Test set-cookie-domain flag
   setFreetextFilter("set-cookie-domain:.example.com");
-  testContents([0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   setFreetextFilter("set-cookie-domain:.foo.example.com");
-  testContents([0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   setFreetextFilter("set-cookie-domain:.not-existing.example.com");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Test size
   setFreetextFilter("size:-1");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   setFreetextFilter("size:0");
-  testContents([0, 0, 0, 0, 1, 1, 1, 1, 0, 1]);
+  await testContents([0, 0, 0, 0, 1, 1, 1, 1, 0, 1]);
 
   setFreetextFilter("size:34");
-  testContents([0, 0, 1, 1, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 0, 1, 1, 0, 0, 0, 0, 0, 0]);
+
+  setFreetextFilter("size:0kb");
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Testing the lower bound
   setFreetextFilter("size:9.659k");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
 
   // Testing the actual value
   setFreetextFilter("size:10989");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
 
   // Testing the upper bound
   setFreetextFilter("size:11.804k");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
 
   // Test transferred
   setFreetextFilter("transferred:200");
-  testContents([0, 0, 0, 0, 1, 1, 1, 1, 0, 0]);
+  await testContents([0, 0, 0, 0, 1, 1, 1, 1, 0, 0]);
 
   setFreetextFilter("transferred:234");
-  testContents([1, 0, 1, 0, 0, 0, 0, 0, 0, 1]);
+  await testContents([1, 0, 1, 0, 0, 0, 0, 0, 0, 1]);
 
   setFreetextFilter("transferred:248");
-  testContents([0, 0, 1, 1, 0, 0, 0, 0, 0, 1]);
+  await testContents([0, 0, 1, 1, 0, 0, 0, 0, 0, 1]);
+
+  setFreetextFilter("transferred:0kb");
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Test larger-than
   setFreetextFilter("larger-than:-1");
-  testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  await testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
 
   setFreetextFilter("larger-than:0");
-  testContents([1, 1, 1, 1, 0, 0, 0, 0, 1, 0]);
+  await testContents([1, 1, 1, 1, 0, 0, 0, 0, 1, 0]);
 
   setFreetextFilter("larger-than:33");
-  testContents([0, 0, 1, 1, 0, 0, 0, 0, 1, 0]);
+  await testContents([0, 0, 1, 1, 0, 0, 0, 0, 1, 0]);
 
   setFreetextFilter("larger-than:34");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
 
   setFreetextFilter("larger-than:10.73k");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
 
   setFreetextFilter("larger-than:10.732k");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+
+  setFreetextFilter("larger-than:0kb");
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Test transferred-larger-than
   setFreetextFilter("transferred-larger-than:-1");
-  testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  await testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
 
   setFreetextFilter("transferred-larger-than:214");
-  testContents([1, 1, 1, 1, 0, 0, 0, 0, 1, 1]);
+  await testContents([1, 1, 1, 1, 0, 0, 0, 0, 1, 1]);
 
   setFreetextFilter("transferred-larger-than:247");
-  testContents([0, 1, 1, 1, 0, 0, 0, 0, 1, 0]);
+  await testContents([0, 1, 1, 1, 0, 0, 0, 0, 1, 0]);
 
   setFreetextFilter("transferred-larger-than:248");
-  testContents([0, 1, 0, 1, 0, 0, 0, 0, 1, 0]);
+  await testContents([0, 1, 0, 1, 0, 0, 0, 0, 1, 0]);
 
   setFreetextFilter("transferred-larger-than:10.73k");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+
+  setFreetextFilter("transferred-larger-than:0kb");
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Test cause
   setFreetextFilter("cause:xhr");
-  testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  await testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
 
   setFreetextFilter("cause:script");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Test has-response-header
   setFreetextFilter("has-response-header:Content-Type");
-  testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  await testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
 
   setFreetextFilter("has-response-header:Last-Modified");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Test remote-ip
   setFreetextFilter("remote-ip:127.0.0.1");
-  testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  await testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
 
   setFreetextFilter("remote-ip:192.168.1.2");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Test domain
   setFreetextFilter("domain:example.com");
-  testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  await testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
 
   setFreetextFilter("domain:wrongexample.com");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Test protocol
   setFreetextFilter("protocol:http/1");
-  testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  await testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
 
   setFreetextFilter("protocol:http/2");
-  testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  await testContents([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // Test mixing flags
   setFreetextFilter("-mime-type:HtmL status-code:200");
-  testContents([0, 0, 1, 1, 1, 1, 1, 1, 1, 0]);
+  await testContents([0, 0, 1, 1, 1, 1, 1, 1, 1, 0]);
 
-  yield teardown(monitor);
+  await teardown(monitor);
 
-  function testContents(visibility) {
+  async function testContents(visibility) {
     const items = getSortedRequests(store.getState());
-    const visibleItems = getDisplayedRequests(store.getState());
+    let visibleItems = getDisplayedRequests(store.getState());
+
+    // Filter results will be updated asynchronously, so we should wait until
+    // displayed requests reach final state.
+    await waitUntil(() => {
+      visibleItems = getDisplayedRequests(store.getState());
+      return visibleItems.size === visibility.filter(e => e).length;
+    });
 
     is(items.size, visibility.length,
       "There should be a specific amount of items in the requests menu.");
@@ -351,14 +384,36 @@ add_task(function* () {
       "There should be a specific amount of visible items in the requests menu.");
 
     for (let i = 0; i < visibility.length; i++) {
-      let itemId = items.get(i).id;
-      let shouldBeVisible = !!visibility[i];
+      const itemId = items.get(i).id;
+      const shouldBeVisible = !!visibility[i];
       let isThere = visibleItems.some(r => r.id == itemId);
+
+      // Filter results will be updated asynchronously, so we should wait until
+      // displayed requests reach final state.
+      await waitUntil(() => {
+        visibleItems = getDisplayedRequests(store.getState());
+        isThere = visibleItems.some(r => r.id == itemId);
+        return isThere === shouldBeVisible;
+      });
+
       is(isThere, shouldBeVisible,
         `The item at index ${i} has visibility=${shouldBeVisible}`);
+    }
+
+    // Fake mouse over the status column only after the list is fully updated
+    const requestItems = document.querySelectorAll(".request-list-item");
+    for (const requestItem of requestItems) {
+      requestItem.scrollIntoView();
+      const requestsListStatus = requestItem.querySelector(".status-code");
+      EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+      await waitUntil(() => requestsListStatus.title);
+    }
+
+    for (let i = 0; i < visibility.length; i++) {
+      const shouldBeVisible = !!visibility[i];
 
       if (shouldBeVisible) {
-        let { method, url, data } = EXPECTED_REQUESTS[i];
+        const { method, url, data } = EXPECTED_REQUESTS[i];
         verifyRequestItemTarget(
           document,
           getDisplayedRequests(store.getState()),

@@ -37,7 +37,7 @@ public class testInputConnection extends JavascriptBridgeTest {
         mActions.setPref("dom.select_events.enabled", true, /* flush */ false);
         mActions.setPref("dom.select_events.textcontrols.enabled", true, /* flush */ false);
         // Enable dummy key synthesis.
-        mActions.setPref("intl.ime.hack.on_ime_unaware_apps.fire_key_events_for_composition",
+        mActions.setPref("intl.ime.hack.on_any_apps.fire_key_events_for_composition",
                          true, /* flush */ false);
 
         final String url = mStringHelper.ROBOCOP_INPUT_URL;
@@ -212,18 +212,11 @@ public class testInputConnection extends JavascriptBridgeTest {
             assertTextAndSelectionAt("Can commit non-key string", ic, "foof", 4);
 
             getJS().syncCall("end_key_log");
-            if (mType.equals("designMode")) {
-                // designMode doesn't support dummy key synthesis.
-                fAssertEquals("Can synthesize keys",
-                              "keydown:o,casm;keypress:o,casm;keyup:o,casm;", // O key
-                              getKeyLog());
-            } else {
-                fAssertEquals("Can synthesize keys",
-                              "keydown:Unidentified,casm;keyup:Unidentified,casm;" + // Dummy
-                              "keydown:o,casm;keypress:o,casm;keyup:o,casm;" +       // O key
-                              "keydown:Unidentified,casm;keyup:Unidentified,casm;",  // Dummy
-                              getKeyLog());
-            }
+            fAssertEquals("Can synthesize keys",
+                          "keydown:Process,casm;keyup:Process,casm;" +     // Dummy
+                          "keydown:o,casm;keypress:o,casm;keyup:o,casm;" + // O key
+                          "keydown:Process,casm;keyup:Process,casm;",      // Dummy
+                          getKeyLog());
 
             ic.deleteSurroundingText(4, 0);
             assertTextAndSelectionAt("Can clear text", ic, "", 0);
@@ -316,13 +309,13 @@ public class testInputConnection extends JavascriptBridgeTest {
             ic.commitText("b", 1);
             // This test only works for input/textarea,
             if (mType.equals("input") || mType.equals("textarea")) {
-                assertTextAndSelectionAt("Can handle text replacement", ic, "abc", 2);
+                assertTextAndSelectionAt("Can handle text replacement", ic, "abc", 3);
             } else {
                 processGeckoEvents();
                 processInputConnectionEvents();
             }
 
-            ic.deleteSurroundingText(2, 1);
+            ic.deleteSurroundingText(3, 0);
             assertTextAndSelectionAt("Can clear text", ic, "", 0);
 
             // Bug 1307816 - Don't end then start composition when setting

@@ -12,7 +12,6 @@
 #include "GMPVideoDecoderProxy.h"
 #include "GMPVideoEncoderProxy.h"
 #include "GMPServiceParent.h"
-#include "MediaPrefs.h"
 #include "nsAppDirectoryServiceDefs.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/DebugOnly.h"
@@ -27,7 +26,7 @@ struct GMPTestRunner
 {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(GMPTestRunner)
 
-  GMPTestRunner() { MediaPrefs::GetSingleton(); }
+  GMPTestRunner() {}
   void DoTest(void (GMPTestRunner::*aTestMethod)(GMPTestMonitor&));
   void RunTestGMPTestCodec1(GMPTestMonitor& aMonitor);
   void RunTestGMPTestCodec2(GMPTestMonitor& aMonitor);
@@ -62,7 +61,7 @@ public:
   static void Run(GMPTestMonitor& aMonitor, const nsCString& aOrigin)
   {
     UniquePtr<GMPCallbackType> callback(new RunTestGMPVideoCodec(aMonitor));
-    Get(aOrigin, Move(callback));
+    Get(aOrigin, std::move(callback));
   }
 
 protected:
@@ -82,7 +81,7 @@ protected:
 
     RefPtr<GeckoMediaPluginService> service =
       GeckoMediaPluginService::GetGeckoMediaPluginService();
-    return ((*service).*Getter)(nullptr, &tags, aNodeId, Move(aCallback));
+    return ((*service).*Getter)(nullptr, &tags, aNodeId, std::move(aCallback));
   }
 
 protected:
@@ -126,7 +125,7 @@ public:
 
     UniquePtr<typename Base::GMPCallbackType> callback(
       new Step2(Base::mMonitor, aGMP, mShouldBeEqual));
-    nsresult rv = Base::Get(mOrigin2, Move(callback));
+    nsresult rv = Base::Get(mOrigin2, std::move(callback));
     EXPECT_TRUE(NS_SUCCEEDED(rv));
     if (NS_FAILED(rv)) {
       Base::mMonitor.SetFinished();
@@ -138,7 +137,7 @@ public:
   {
     UniquePtr<typename Base::GMPCallbackType> callback(
       new RunTestGMPCrossOrigin<Base>(aMonitor, aOrigin1, aOrigin2));
-    nsresult rv = Base::Get(aOrigin1, Move(callback));
+    nsresult rv = Base::Get(aOrigin1, std::move(callback));
     EXPECT_TRUE(NS_SUCCEEDED(rv));
     if (NS_FAILED(rv)) {
       aMonitor.SetFinished();

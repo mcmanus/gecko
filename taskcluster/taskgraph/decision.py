@@ -14,7 +14,7 @@ import yaml
 
 from .generator import TaskGraphGenerator
 from .create import create_tasks
-from .parameters import Parameters
+from .parameters import Parameters, get_version, get_app_version
 from .taskgraph import TaskGraph
 from .try_option_syntax import parse_message
 from .actions import render_actions_json
@@ -39,6 +39,11 @@ PER_PROJECT_PARAMETERS = {
         'include_nightly': True,
     },
 
+    'try-comm-central': {
+        'target_tasks_method': 'try_tasks',
+        'include_nightly': True,
+    },
+
     'ash': {
         'target_tasks_method': 'ash_tasks',
         'optimize_target_tasks': True,
@@ -59,13 +64,31 @@ PER_PROJECT_PARAMETERS = {
 
     'mozilla-beta': {
         'target_tasks_method': 'mozilla_beta_tasks',
-        'optimize_target_tasks': False,
+        'optimize_target_tasks': True,
         'include_nightly': True,
     },
 
     'mozilla-release': {
         'target_tasks_method': 'mozilla_release_tasks',
-        'optimize_target_tasks': False,
+        'optimize_target_tasks': True,
+        'include_nightly': True,
+    },
+
+    'mozilla-esr60': {
+        'target_tasks_method': 'mozilla_esr60_tasks',
+        'optimize_target_tasks': True,
+        'include_nightly': True,
+    },
+
+    'comm-beta': {
+        'target_tasks_method': 'mozilla_beta_tasks',
+        'optimize_target_tasks': True,
+        'include_nightly': True,
+    },
+
+    'comm-esr60': {
+        'target_tasks_method': 'mozilla_beta_tasks',
+        'optimize_target_tasks': True,
         'include_nightly': True,
     },
 
@@ -84,7 +107,26 @@ PER_PROJECT_PARAMETERS = {
 }
 
 
-def taskgraph_decision(options):
+def full_task_graph_to_runnable_jobs(full_task_json):
+    runnable_jobs = {}
+    for label, node in full_task_json.iteritems():
+        if not ('extra' in node['task'] and 'treeherder' in node['task']['extra']):
+            continue
+
+        th = node['task']['extra']['treeherder']
+        runnable_jobs[label] = {
+            'symbol': th['symbol']
+        }
+
+        for i in ('groupName', 'groupSymbol', 'collection'):
+            if i in th:
+                runnable_jobs[label][i] = th[i]
+        if th.get('machine', {}).get('platform'):
+            runnable_jobs[label]['platform'] = th['machine']['platform']
+    return runnable_jobs
+
+
+def taskgraph_decision(options, parameters=None):
     """
     Run the decision task.  This function implements `mach taskgraph decision`,
     and is responsible for
@@ -96,22 +138,25 @@ def taskgraph_decision(options):
      * calling TaskCluster APIs to create the graph
     """
 
-    parameters = get_decision_parameters(options)
+    parameters = parameters or get_decision_parameters(options)
 
     # create a TaskGraphGenerator instance
     tgg = TaskGraphGenerator(
-        root_dir=options['root'],
+        root_dir=options.get('root'),
         parameters=parameters)
 
     # write out the parameters used to generate this graph
     write_artifact('parameters.yml', dict(**parameters))
 
     # write out the public/actions.json file
-    write_artifact('actions.json', render_actions_json(parameters))
+    write_artifact('actions.json', render_actions_json(parameters, tgg.graph_config))
 
     # write out the full graph for reference
     full_task_json = tgg.full_task_graph.to_json()
     write_artifact('full-task-graph.json', full_task_json)
+
+    # write out the public/runnable-jobs.json.gz file
+    write_artifact('runnable-jobs.json.gz', full_task_graph_to_runnable_jobs(full_task_json))
 
     # this is just a test to check whether the from_json() function is working
     _, _ = TaskGraph.from_json(full_task_json)
@@ -148,12 +193,35 @@ def get_decision_parameters(options):
         'target_tasks_method',
     ] if n in options}
 
+    for n in (
+        'comm_base_repository',
+        'comm_head_repository',
+        'comm_head_rev',
+        'comm_head_ref',
+    ):
+        if n in options and options[n] is not None:
+            parameters[n] = options[n]
+
     # Define default filter list, as most configurations shouldn't need
     # custom filters.
     parameters['filters'] = [
         'check_servo',
         'target_tasks_method',
     ]
+    parameters['existing_tasks'] = {}
+    parameters['do_not_optimize'] = []
+    parameters['build_number'] = 1
+    parameters['version'] = get_version()
+    parameters['app_version'] = get_app_version()
+    parameters['next_version'] = None
+    parameters['release_type'] = ''
+    parameters['release_eta'] = ''
+    parameters['release_enable_partners'] = False
+    parameters['release_partners'] = []
+    parameters['release_partner_config'] = {}
+    parameters['release_partner_build_number'] = 1
+    parameters['release_enable_emefree'] = False
+    parameters['release_product'] = None
 
     # owner must be an email, but sometimes (e.g., for ffxbld) it is not, in which
     # case, fake it
@@ -186,43 +254,48 @@ def get_decision_parameters(options):
     if 'nightly' in parameters.get('target_tasks_method', ''):
         parameters['release_history'] = populate_release_history('Firefox', project)
 
-    # if try_task_config.json is present, load it
-    task_config_file = os.path.join(os.getcwd(), 'try_task_config.json')
+    if options.get('try_task_config_file'):
+        task_config_file = os.path.abspath(options.get('try_task_config_file'))
+    else:
+        # if try_task_config.json is present, load it
+        task_config_file = os.path.join(os.getcwd(), 'try_task_config.json')
 
     # load try settings
-    parameters['try_mode'] = None
-    if os.path.isfile(task_config_file):
-        parameters['try_mode'] = 'try_task_config'
-        with open(task_config_file, 'r') as fh:
-            parameters['try_task_config'] = json.load(fh)
-    else:
-        parameters['try_task_config'] = None
+    if 'try' in project:
+        parameters['try_mode'] = None
+        if os.path.isfile(task_config_file):
+            logger.info("using try tasks from {}".format(task_config_file))
+            parameters['try_mode'] = 'try_task_config'
+            with open(task_config_file, 'r') as fh:
+                parameters['try_task_config'] = json.load(fh)
+        else:
+            parameters['try_task_config'] = None
 
-    if 'try:' in parameters['message']:
-        parameters['try_mode'] = 'try_option_syntax'
-        args = parse_message(parameters['message'])
-        parameters['try_options'] = args
+        if 'try:' in parameters['message']:
+            parameters['try_mode'] = 'try_option_syntax'
+            args = parse_message(parameters['message'])
+            parameters['try_options'] = args
+        else:
+            parameters['try_options'] = None
+
+        if parameters['try_mode']:
+            # The user has explicitly requested a set of jobs, so run them all
+            # regardless of optimization.  Their dependencies can be optimized,
+            # though.
+            parameters['optimize_target_tasks'] = False
+        else:
+            # For a try push with no task selection, apply the default optimization
+            # process to all of the tasks.
+            parameters['optimize_target_tasks'] = True
+
     else:
+        parameters['try_mode'] = None
+        parameters['try_task_config'] = None
         parameters['try_options'] = None
 
-    parameters['optimize_target_tasks'] = {
-        # The user has explicitly requested a set of jobs, so run them all
-        # regardless of optimization.  Their dependencies can be optimized,
-        # though.
-        'try_task_config': False,
-
-        # Always perform optimization.  This makes it difficult to use try
-        # pushes to run a task that would otherwise be optimized, but is a
-        # compromise to avoid essentially disabling optimization in try.
-        # to run tasks that would otherwise be optimized, ues try_task_config.
-        'try_option_syntax': True,
-
-        # since no try jobs have been specified, the standard target task will
-        # be applied, and tasks should be optimized out of that.
-        None: True,
-    }[parameters['try_mode']]
-
-    return Parameters(**parameters)
+    result = Parameters(**parameters)
+    result.check()
+    return result
 
 
 def write_artifact(filename, data):
@@ -236,5 +309,9 @@ def write_artifact(filename, data):
     elif filename.endswith('.json'):
         with open(path, 'w') as f:
             json.dump(data, f, sort_keys=True, indent=2, separators=(',', ': '))
+    elif filename.endswith('.gz'):
+        import gzip
+        with gzip.open(path, 'wb') as f:
+            f.write(json.dumps(data))
     else:
         raise TypeError("Don't know how to write to {}".format(filename))

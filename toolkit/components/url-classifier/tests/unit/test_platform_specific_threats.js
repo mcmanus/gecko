@@ -1,7 +1,7 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-Cu.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
 
 let urlUtils = Cc["@mozilla.org/url-classifier/utils;1"]
                  .getService(Ci.nsIUrlClassifierUtils);
@@ -30,13 +30,13 @@ function testMobileOnlyThreats() {
   (function testFullHashRequest() {
     let requestWithPHA =
       urlUtils.makeFindFullHashRequestV4(["goog-phish-proto", "goog-harmful-proto"],
-                                         ["", ""],       // state.
+                                         ["", ""], // state.
                                          [btoa("0123")], // prefix.
                                          2, 1);
 
     let requestNoPHA =
       urlUtils.makeFindFullHashRequestV4(["goog-phish-proto"],
-                                         [""],           // state.
+                                         [""], // state.
                                          [btoa("0123")], // prefix.
                                          1, 1);
 

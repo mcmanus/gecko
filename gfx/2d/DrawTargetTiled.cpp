@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -37,10 +38,14 @@ DrawTargetTiled::Init(const TileSet& aTiles)
                             mTiles[i].mTileOrigin.x + mTiles[i].mDrawTarget->GetSize().width);
     uint32_t newYMost = max(mRect.YMost(),
                             mTiles[i].mTileOrigin.y + mTiles[i].mDrawTarget->GetSize().height);
-    mRect.x = min(mRect.x, mTiles[i].mTileOrigin.x);
-    mRect.y = min(mRect.y, mTiles[i].mTileOrigin.y);
-    mRect.width = newXMost - mRect.x;
-    mRect.height = newYMost - mRect.y;
+    if (i == 0) {
+      mRect.MoveTo(mTiles[0].mTileOrigin.x, mTiles[0].mTileOrigin.y);
+    } else {
+      mRect.MoveTo(min(mRect.X(), mTiles[i].mTileOrigin.x),
+                   min(mRect.Y(), mTiles[i].mTileOrigin.y));
+    }
+    mRect.SetRightEdge(newXMost);
+    mRect.SetBottomEdge(newYMost);
     mTiles[i].mDrawTarget->SetTransform(Matrix::Translation(-mTiles[i].mTileOrigin.x,
                                                             -mTiles[i].mTileOrigin.y));
   }
@@ -110,7 +115,7 @@ TILED_COMMAND(Flush)
 TILED_COMMAND4(DrawFilter, FilterNode*, const Rect&, const Point&, const DrawOptions&)
 TILED_COMMAND1(ClearRect, const Rect&)
 TILED_COMMAND4(MaskSurface, const Pattern&, SourceSurface*, Point, const DrawOptions&)
-TILED_COMMAND5(FillGlyphs, ScaledFont*, const GlyphBuffer&, const Pattern&, const DrawOptions&, const GlyphRenderingOptions*)
+TILED_COMMAND4(FillGlyphs, ScaledFont*, const GlyphBuffer&, const Pattern&, const DrawOptions&)
 TILED_COMMAND3(Mask, const Pattern&, const Pattern&, const DrawOptions&)
 
 void

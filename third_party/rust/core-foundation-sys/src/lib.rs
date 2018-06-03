@@ -10,8 +10,6 @@
 
 #![cfg_attr(all(feature="mac_os_10_7_support", feature="mac_os_10_8_features"), feature(linkage))] // back-compat requires weak linkage
 
-extern crate libc;
-
 pub mod array;
 pub mod base;
 pub mod bundle;
@@ -19,10 +17,13 @@ pub mod data;
 pub mod date;
 pub mod dictionary;
 pub mod error;
+pub mod filedescriptor;
 pub mod messageport;
 pub mod number;
 pub mod propertylist;
 pub mod runloop;
 pub mod set;
 pub mod string;
+pub mod timezone;
 pub mod url;
+pub mod uuid;

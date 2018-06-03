@@ -39,10 +39,6 @@ class Image;
 namespace dom {
 class OffscreenCanvas;
 
-namespace workers {
-class WorkerStructuredCloneClosure;
-}
-
 class ArrayBufferViewOrArrayBuffer;
 class CanvasRenderingContext2D;
 struct ChannelPixelLayout;
@@ -59,6 +55,7 @@ class ImageUtils;
 template<typename T> class MapDataIntoBufferSource;
 class Promise;
 class PostMessageEvent; // For StructuredClone between windows.
+class ImageBitmapShutdownObserver;
 
 struct ImageBitmapCloneData final
 {
@@ -117,6 +114,7 @@ public:
   already_AddRefed<layers::Image>
   TransferAsImage();
 
+  // This method returns null if the image has been already closed.
   UniquePtr<ImageBitmapCloneData>
   ToCloneData() const;
 
@@ -152,12 +150,6 @@ public:
                        nsTArray<RefPtr<gfx::DataSourceSurface>>& aClonedSurfaces,
                        ImageBitmap* aImageBitmap);
 
-  // Mozilla Extensions
-  // aObj is an optional argument that isn't used by ExtensionsEnabled() and
-  // only exists because the bindings layer insists on passing it to us.  All
-  // other consumers of this function should only call it passing one argument.
-  static bool ExtensionsEnabled(JSContext* aCx, JSObject* aObj = nullptr);
-
   friend CreateImageBitmapFromBlob;
   friend CreateImageBitmapFromBlobTask;
   friend CreateImageBitmapFromBlobWorkerTask;
@@ -180,6 +172,8 @@ public:
               int32_t aOffset, ErrorResult& aRv);
 
   size_t GetAllocatedSize() const;
+
+  void OnShutdown();
 
 protected:
 
@@ -276,6 +270,8 @@ protected:
   gfx::IntRect mPictureRect;
 
   const gfxAlphaType mAlphaType;
+
+  RefPtr<ImageBitmapShutdownObserver> mShutdownObserver;
 
   /*
    * Set mIsCroppingAreaOutSideOfSourceImage if image bitmap was cropped to the

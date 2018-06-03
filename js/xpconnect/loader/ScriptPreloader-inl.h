@@ -9,6 +9,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/CheckedInt.h"
+#include "mozilla/EndianUtils.h"
 #include "mozilla/EnumSet.h"
 #include "mozilla/Range.h"
 #include "mozilla/ResultExtensions.h"
@@ -229,7 +230,7 @@ public:
     explicit HashElemIter(T& hash, Matcher<ElemType>* matcher = nullptr)
         : hash_(hash), matcher_(matcher)
     {
-        iter_.emplace(Move(hash.Iter()));
+        iter_.emplace(std::move(hash.Iter()));
     }
 
     class Elem

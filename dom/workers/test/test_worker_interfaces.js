@@ -9,7 +9,7 @@
 // properties which qualify the exposure of that interface. For example:
 //
 // [
-//   "AGlobalInterface",
+//   "AGlobalInterface", // secure context only
 //   { name: "ExperimentalThing", release: false },
 //   { name: "ReallyExperimentalThing", nightly: true },
 //   { name: "DesktopOnlyThing", desktop: true },
@@ -18,60 +18,65 @@
 // ];
 //
 // See createInterfaceMap() below for a complete list of properties.
+//
+// The values of the properties need to be literal true/false
+// (e.g. indicating whether something is enabled on a particular
+// channel/OS).  If we ever end up in a situation where a propert
+// value needs to depend on channel or OS, we will need to make sure
+// we have that information before setting up the property lists.
 
 // IMPORTANT: Do not change this list without review from
 //            a JavaScript Engine peer!
 var ecmaGlobals =
   [
-    "Array",
-    "ArrayBuffer",
-    "Atomics",
-    "Boolean",
-    {name: "ByteLengthQueuingStrategy", optional: true},
-    {name: "CountQueuingStrategy", optional: true},
-    "DataView",
-    "Date",
-    "Error",
-    "EvalError",
-    "Float32Array",
-    "Float64Array",
-    "Function",
-    "Infinity",
-    "Int16Array",
-    "Int32Array",
-    "Int8Array",
-    "InternalError",
-    "Intl",
-    "JSON",
-    "Map",
-    "Math",
-    "NaN",
-    "Number",
-    "Object",
-    "Promise",
-    "Proxy",
-    "RangeError",
-    {name: "ReadableStream", optional: true},
-    "ReferenceError",
-    "Reflect",
-    "RegExp",
-    "Set",
-    "SharedArrayBuffer",
-    {name: "SIMD", nightly: true},
-    "StopIteration",
-    "String",
-    "Symbol",
-    "SyntaxError",
-    {name: "TypedObject", nightly: true},
-    "TypeError",
-    "Uint16Array",
-    "Uint32Array",
-    "Uint8Array",
-    "Uint8ClampedArray",
-    "URIError",
-    "WeakMap",
-    "WeakSet",
-    {name: "WebAssembly", optional: true}
+    {name: "Array", insecureContext: true},
+    {name: "ArrayBuffer", insecureContext: true},
+    {name: "Atomics", insecureContext: true, disabled: true},
+    {name: "Boolean", insecureContext: true},
+    {name: "ByteLengthQueuingStrategy", insecureContext: true, disabled: true},
+    {name: "CountQueuingStrategy", insecureContext: true, disabled: true},
+    {name: "DataView", insecureContext: true},
+    {name: "Date", insecureContext: true},
+    {name: "Error", insecureContext: true},
+    {name: "EvalError", insecureContext: true},
+    {name: "Float32Array", insecureContext: true},
+    {name: "Float64Array", insecureContext: true},
+    {name: "Function", insecureContext: true},
+    {name: "Infinity", insecureContext: true},
+    {name: "Int16Array", insecureContext: true},
+    {name: "Int32Array", insecureContext: true},
+    {name: "Int8Array", insecureContext: true},
+    {name: "InternalError", insecureContext: true},
+    {name: "Intl", insecureContext: true},
+    {name: "JSON", insecureContext: true},
+    {name: "Map", insecureContext: true},
+    {name: "Math", insecureContext: true},
+    {name: "NaN", insecureContext: true},
+    {name: "Number", insecureContext: true},
+    {name: "Object", insecureContext: true},
+    {name: "Promise", insecureContext: true},
+    {name: "Proxy", insecureContext: true},
+    {name: "RangeError", insecureContext: true},
+    {name: "ReadableStream", insecureContext: true, disabled: true},
+    {name: "ReferenceError", insecureContext: true},
+    {name: "Reflect", insecureContext: true},
+    {name: "RegExp", insecureContext: true},
+    {name: "Set", insecureContext: true},
+    {name: "SharedArrayBuffer", insecureContext: true, disabled: true},
+    {name: "SIMD", insecureContext: true, nightly: true},
+    {name: "String", insecureContext: true},
+    {name: "Symbol", insecureContext: true},
+    {name: "SyntaxError", insecureContext: true},
+    {name: "TypedObject", insecureContext: true, nightly: true},
+    {name: "TypeError", insecureContext: true},
+    {name: "Uint16Array", insecureContext: true},
+    {name: "Uint32Array", insecureContext: true},
+    {name: "Uint8Array", insecureContext: true},
+    {name: "Uint8ClampedArray", insecureContext: true},
+    {name: "URIError", insecureContext: true},
+    {name: "WeakMap", insecureContext: true},
+    {name: "WeakSet", insecureContext: true},
+    {name: "WebAssembly", insecureContext: true, disabled: !getJSTestingFunctions().wasmIsSupportedByHardware()},
   ];
 // IMPORTANT: Do not change the list above without review from
 //            a JavaScript Engine peer!
@@ -80,173 +85,175 @@ var ecmaGlobals =
 var interfaceNamesInGlobalScope =
   [
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "AbortController",
+    {name: "AbortController", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "AbortSignal",
+    {name: "AbortSignal", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "Blob",
+    {name: "Blob", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "BroadcastChannel",
+    {name: "BroadcastChannel", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "Cache",
+    {name: "Cache", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "CacheStorage",
+    {name: "CacheStorage", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "CloseEvent",
+    {name: "CloseEvent", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "Crypto",
+    {name: "Crypto", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "CustomEvent",
+    {name: "CustomEvent", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "DedicatedWorkerGlobalScope",
+    {name: "DedicatedWorkerGlobalScope", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "Directory",
+    {name: "Directory", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "DOMCursor",
+    {name: "DOMError", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "DOMError",
+    {name: "DOMException", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "DOMException",
+    {name: "DOMRequest", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "DOMRequest",
+    {name: "DOMStringList", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "DOMStringList",
+    {name: "ErrorEvent", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "ErrorEvent",
+    {name: "Event", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "Event",
+    {name: "EventSource", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "EventSource",
+    {name: "EventTarget", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "EventTarget",
+    {name: "File", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "File",
+    {name: "FileList", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "FileList",
+    {name: "FileReader", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "FileReader",
+    {name: "FileReaderSync", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "FileReaderSync",
+    {name: "FormData", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "FormData",
+    {name: "Headers", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "Headers",
+    {name: "IDBCursor", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "IDBCursor",
+    {name: "IDBCursorWithValue", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "IDBCursorWithValue",
+    {name: "IDBDatabase", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "IDBDatabase",
+    {name: "IDBFactory", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "IDBFactory",
+    {name: "IDBIndex", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "IDBIndex",
+    {name: "IDBKeyRange", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "IDBKeyRange",
+    {name: "IDBObjectStore", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "IDBObjectStore",
+    {name: "IDBOpenDBRequest", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "IDBOpenDBRequest",
+    {name: "IDBRequest", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "IDBRequest",
+    {name: "IDBTransaction", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "IDBTransaction",
+    {name: "IDBVersionChangeEvent", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "IDBVersionChangeEvent",
+    {name: "ImageBitmap", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "ImageBitmap",
+    {name: "ImageBitmapRenderingContext", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "ImageBitmapRenderingContext",
+    {name: "ImageData", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "ImageData",
+    {name: "MessageChannel", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "MessageChannel",
+    {name: "MessageEvent", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "MessageEvent",
+    {name: "MessagePort", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "MessagePort",
+    { name: "NetworkInformation", insecureContext: true, android: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "NetworkInformation", android: true },
+    {name: "Notification", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "Notification",
+    { name: "OffscreenCanvas", insecureContext: true, disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "OffscreenCanvas", disabled: true },
+    {name: "Performance", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "Performance",
+    {name: "PerformanceEntry", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "PerformanceEntry",
+    {name: "PerformanceMark", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "PerformanceMark",
+    {name: "PerformanceMeasure", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "PerformanceMeasure",
+    {name: "PerformanceObserver", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "PerformanceObserver",
+    {name: "PerformanceObserverEntryList", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "PerformanceObserverEntryList",
+    {name: "PerformanceResourceTiming", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "ProgressEvent",
+    {name: "PerformanceServerTiming", insecureContext: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "PushManager",
+    {name: "ProgressEvent", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "PushSubscription",
+    {name: "PushManager", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "PushSubscriptionOptions",
+    {name: "PushSubscription", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "Request",
+    {name: "PushSubscriptionOptions", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "Response",
+    {name: "Request", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "ServiceWorkerRegistration",
+    {name: "Response", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "StorageManager", isSecureContext: true, android: false},
+    {name: "ServiceWorkerRegistration", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "SubtleCrypto",
+    {name: "StorageManager", android: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "TextDecoder",
+    {name: "SubtleCrypto", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "TextEncoder",
+    {name: "TextDecoder", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "XMLHttpRequest",
+    {name: "TextEncoder", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "XMLHttpRequestEventTarget",
+    {name: "XMLHttpRequest", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "XMLHttpRequestUpload",
+    {name: "XMLHttpRequestEventTarget", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "URL",
+    {name: "XMLHttpRequestUpload", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "URLSearchParams",
+    {name: "URL", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "WebGLActiveInfo", disabled: true },
+    {name: "URLSearchParams", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "WebGLBuffer", disabled: true },
+    { name: "WebGLActiveInfo", insecureContext: true, disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "WebGLContextEvent", disabled: true },
+    { name: "WebGLBuffer", insecureContext: true, disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "WebGLFramebuffer", disabled: true },
+    { name: "WebGLContextEvent", insecureContext: true, disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "WebGLProgram", disabled: true },
+    { name: "WebGLFramebuffer", insecureContext: true, disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "WebGLRenderbuffer", disabled: true },
+    { name: "WebGLProgram", insecureContext: true, disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "WebGLRenderingContext", disabled: true },
+    { name: "WebGLRenderbuffer", insecureContext: true, disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "WebGLShader", disabled: true },
+    { name: "WebGLRenderingContext", insecureContext: true, disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "WebGLShaderPrecisionFormat", disabled: true },
+    { name: "WebGLShader", insecureContext: true, disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "WebGLTexture", disabled: true },
+    { name: "WebGLShaderPrecisionFormat", insecureContext: true, disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "WebGLUniformLocation", disabled: true },
+    { name: "WebGLTexture", insecureContext: true, disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "WebSocket",
+    { name: "WebGLUniformLocation", insecureContext: true, disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "Worker",
+    {name: "WebSocket", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "WorkerGlobalScope",
+    {name: "Worker", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "WorkerLocation",
+    {name: "WorkerGlobalScope", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "WorkerNavigator",
+    {name: "WorkerLocation", insecureContext: true},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "WorkerNavigator", insecureContext: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
   ];
 // IMPORTANT: Do not change the list above without review from a DOM peer!
@@ -256,6 +263,7 @@ function createInterfaceMap(version, userAgent) {
   var isRelease = !version.includes("a");
   var isDesktop = !/Mobile|Tablet/.test(userAgent);
   var isAndroid = !!navigator.userAgent.includes("Android");
+  var isInsecureContext = !self.isSecureContext;
 
   var interfaceMap = {};
 
@@ -263,7 +271,7 @@ function createInterfaceMap(version, userAgent) {
   {
     for (var entry of interfaces) {
       if (typeof(entry) === "string") {
-        interfaceMap[entry] = true;
+        interfaceMap[entry] = !isInsecureContext;
       } else {
         ok(!("pref" in entry), "Bogus pref annotation for " + entry.name);
         if ((entry.nightly === !isNightly) ||
@@ -271,11 +279,14 @@ function createInterfaceMap(version, userAgent) {
             (entry.desktop === !isDesktop) ||
             (entry.android === !isAndroid && !entry.nightlyAndroid) ||
             (entry.release === !isRelease) ||
-            (entry.isSecureContext === !isSecureContext) ||
+	    // The insecureContext test is very purposefully converting
+	    // entry.insecureContext to boolean, so undefined will convert to
+	    // false.  That way entries without an insecureContext annotation
+	    // will get treated as "insecureContext: false", which means exposed
+	    // only in secure contexts.
+            (isInsecureContext && !Boolean(entry.insecureContext)) ||
             entry.disabled) {
           interfaceMap[entry.name] = false;
-        } else if (entry.optional) {
-          interfaceMap[entry.name] = "optional";
         } else {
           interfaceMap[entry.name] = true;
         }
@@ -296,21 +307,17 @@ function runTest(version, userAgent) {
     if (!/^[A-Z]/.test(name)) {
       continue;
     }
-    ok(interfaceMap[name] === "optional" || interfaceMap[name],
+    ok(interfaceMap[name],
        "If this is failing: DANGER, are you sure you want to expose the new interface " + name +
        " to all webpages as a property on the worker? Do not make a change to this file without a " +
        " review from a DOM peer for that specific change!!! (or a JS peer for changes to ecmaGlobals)");
     delete interfaceMap[name];
   }
   for (var name of Object.keys(interfaceMap)) {
-    if (interfaceMap[name] === "optional") {
+    ok(name in self === interfaceMap[name],
+       name + " should " + (interfaceMap[name] ? "" : " NOT") + " be defined on the global scope");
+    if (!interfaceMap[name]) {
       delete interfaceMap[name];
-    } else {
-      ok(name in self === interfaceMap[name],
-         name + " should " + (interfaceMap[name] ? "" : " NOT") + " be defined on the global scope");
-      if (!interfaceMap[name]) {
-        delete interfaceMap[name];
-      }
     }
   }
   is(Object.keys(interfaceMap).length, 0,

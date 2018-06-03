@@ -4,19 +4,20 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "jscntxt.h"
-#include "jscompartment.h"
+#include "js/Wrapper.h"
+
 #include "jsexn.h"
-#include "jswrapper.h"
 
 #include "js/Proxy.h"
 #include "vm/ErrorObject.h"
+#include "vm/JSCompartment.h"
+#include "vm/JSContext.h"
 #include "vm/ProxyObject.h"
 #include "vm/RegExpObject.h"
 #include "vm/WrapperObject.h"
 
-#include "jsobjinlines.h"
-
+#include "gc/Marking-inl.h"
+#include "vm/JSObject-inl.h"
 #include "vm/NativeObject-inl.h"
 
 using namespace js;
@@ -34,7 +35,7 @@ Wrapper::finalizeInBackground(const Value& priv) const
     JSObject* wrapped = MaybeForwarded(&priv.toObject());
     gc::AllocKind wrappedKind;
     if (IsInsideNursery(wrapped)) {
-        JSRuntime *rt = wrapped->runtimeFromActiveCooperatingThread();
+        JSRuntime* rt = wrapped->runtimeFromMainThread();
         wrappedKind = wrapped->allocKindForTenure(rt->gc.nursery());
     } else {
         wrappedKind = wrapped->asTenured().getAllocKind();
@@ -85,7 +86,7 @@ ForwardingProxyHandler::enumerate(JSContext* cx, HandleObject proxy) const
     assertEnteredPolicy(cx, proxy, JSID_VOID, ENUMERATE);
     MOZ_ASSERT(!hasPrototype()); // Should never be called if there's a prototype.
     RootedObject target(cx, proxy->as<ProxyObject>().target());
-    return GetIterator(cx, target, 0);
+    return GetIterator(cx, target);
 }
 
 bool
@@ -295,17 +296,15 @@ ForwardingProxyHandler::boxedValue_unbox(JSContext* cx, HandleObject proxy,
 bool
 ForwardingProxyHandler::isCallable(JSObject* obj) const
 {
-    JSObject * target = obj->as<ProxyObject>().target();
+    JSObject* target = obj->as<ProxyObject>().target();
     return target->isCallable();
 }
 
 bool
 ForwardingProxyHandler::isConstructor(JSObject* obj) const
 {
-    // For now, all wrappers are constructable if they are callable. We will want to eventually
-    // decouple this behavior, but none of the Wrapper infrastructure is currently prepared for
-    // that.
-    return isCallable(obj);
+    JSObject* target = obj->as<ProxyObject>().target();
+    return target->isConstructor();
 }
 
 JSObject*
@@ -430,7 +429,7 @@ js::ReportAccessDenied(JSContext* cx)
 const char Wrapper::family = 0;
 const Wrapper Wrapper::singleton((unsigned)0);
 const Wrapper Wrapper::singletonWithPrototype((unsigned)0, true);
-JSObject* Wrapper::defaultProto = TaggedProto::LazyProto;
+JSObject* const Wrapper::defaultProto = TaggedProto::LazyProto;
 
 /* Compartments. */
 
@@ -444,18 +443,18 @@ js::TransparentObjectWrapper(JSContext* cx, HandleObject existing, HandleObject 
 
 ErrorCopier::~ErrorCopier()
 {
-    JSContext* cx = ac->context();
+    JSContext* cx = ar->context();
 
     // The provenance of Debugger.DebuggeeWouldRun is the topmost locking
     // debugger compartment; it should not be copied around.
-    if (ac->origin() != cx->compartment() &&
+    if (JS::GetCompartmentForRealm(ar->origin()) != cx->compartment() &&
         cx->isExceptionPending() &&
         !cx->isThrowingDebuggeeWouldRun())
     {
         RootedValue exc(cx);
         if (cx->getPendingException(&exc) && exc.isObject() && exc.toObject().is<ErrorObject>()) {
             cx->clearPendingException();
-            ac.reset();
+            ar.reset();
             Rooted<ErrorObject*> errObj(cx, &exc.toObject().as<ErrorObject>());
             JSObject* copyobj = CopyErrorObject(cx, errObj);
             if (copyobj)

@@ -20,49 +20,49 @@ const TEST_URL = `
   </body>
 `;
 
-add_task(function* () {
-  let {inspector, toolbox} = yield openInspectorForURL(
+add_task(async function() {
+  const {inspector, toolbox} = await openInspectorForURL(
     "data:text/html;charset=utf-8," + encodeURI(TEST_URL));
 
-  yield inspector.markup.expandAll();
+  await inspector.markup.expandAll();
 
-  let container1 = yield getContainerForSelector("#d1", inspector);
-  let evHolder1 = container1.elt.querySelector(".markupview-events");
+  const container1 = await getContainerForSelector("#d1", inspector);
+  const evHolder1 = container1.elt.querySelector(".markupview-event-badge");
 
-  let container2 = yield getContainerForSelector("#d2", inspector);
-  let evHolder2 = container2.elt.querySelector(".markupview-events");
+  const container2 = await getContainerForSelector("#d2", inspector);
+  const evHolder2 = container2.elt.querySelector(".markupview-event-badge");
 
-  let tooltip = inspector.markup.eventDetailsTooltip;
+  const tooltip = inspector.markup.eventDetailsTooltip;
 
   info("Click the event icon for the first element");
   let onShown = tooltip.once("shown");
   EventUtils.synthesizeMouseAtCenter(evHolder1, {},
     inspector.markup.doc.defaultView);
-  yield onShown;
+  await onShown;
   info("event tooltip for the first div is shown");
 
   info("Click the event icon for the second element");
-  let onHidden = tooltip.once("hidden");
+  const onHidden = tooltip.once("hidden");
   onShown = tooltip.once("shown");
   EventUtils.synthesizeMouseAtCenter(evHolder2, {},
     inspector.markup.doc.defaultView);
 
-  yield onHidden;
+  await onHidden;
   info("previous tooltip hidden");
 
-  yield onShown;
+  await onShown;
   info("event tooltip for the second div is shown");
 
-  info("Click on the animation inspector tab");
-  let onHighlighterHidden = toolbox.once("node-unhighlight");
-  let onTabInspectorSelected = inspector.sidebar.once("animationinspector-selected");
-  let animationInspectorTab = inspector.panelDoc.querySelector("#animationinspector-tab");
-  EventUtils.synthesizeMouseAtCenter(animationInspectorTab, {},
+  info("Click on the computed view tab");
+  const onHighlighterHidden = toolbox.once("node-unhighlight");
+  const onTabComputedViewSelected = inspector.sidebar.once("computedview-selected");
+  const computedViewTab = inspector.panelDoc.querySelector("#computedview-tab");
+  EventUtils.synthesizeMouseAtCenter(computedViewTab, {},
     inspector.panelDoc.defaultView);
 
-  yield onTabInspectorSelected;
-  info("animation inspector was selected");
+  await onTabComputedViewSelected;
+  info("computed view was selected");
 
-  yield onHighlighterHidden;
+  await onHighlighterHidden;
   info("box model highlighter hidden after moving the mouse out of the markup view");
 });

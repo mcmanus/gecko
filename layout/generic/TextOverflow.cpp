@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set shiftwidth=2 tabstop=8 autoindent cindent expandtab: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -23,7 +23,7 @@
 #include "nsIFrameInlines.h"
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Likely.h"
-#include "nsISelection.h"
+#include "mozilla/dom/Selection.h"
 #include "TextDrawTarget.h"
 
 using mozilla::layout::TextDrawTarget;
@@ -41,7 +41,7 @@ public:
   virtual already_AddRefed<DrawTarget> GetRefDrawTarget() override
   {
     RefPtr<gfxContext> ctx =
-      mFrame->PresContext()->PresShell()->CreateReferenceRenderingContext();
+      mFrame->PresShell()->CreateReferenceRenderingContext();
     RefPtr<DrawTarget> dt = ctx->GetDrawTarget();
     return dt.forget();
   }
@@ -57,7 +57,7 @@ GetEllipsisTextRun(nsIFrame* aFrame)
   LazyReferenceRenderingDrawTargetGetterFromFrame lazyRefDrawTargetGetter(aFrame);
   return fm->GetThebesFontGroup()->GetEllipsisTextRun(
     aFrame->PresContext()->AppUnitsPerDevPixel(),
-    nsLayoutUtils::GetTextRunOrientFlagsForStyle(aFrame->StyleContext()),
+    nsLayoutUtils::GetTextRunOrientFlagsForStyle(aFrame->Style()),
     lazyRefDrawTargetGetter);
 }
 
@@ -74,11 +74,10 @@ GetSelfOrNearestBlock(nsIFrame* aFrame)
 static bool
 IsAtomicElement(nsIFrame* aFrame, LayoutFrameType aFrameType)
 {
-  NS_PRECONDITION(!nsLayoutUtils::GetAsBlock(aFrame) ||
-                  !aFrame->IsBlockOutside(),
-                  "unexpected block frame");
-  NS_PRECONDITION(aFrameType != LayoutFrameType::Placeholder,
-                  "unexpected placeholder frame");
+  MOZ_ASSERT(!nsLayoutUtils::GetAsBlock(aFrame) || !aFrame->IsBlockOutside(),
+             "unexpected block frame");
+  MOZ_ASSERT(aFrameType != LayoutFrameType::Placeholder,
+             "unexpected placeholder frame");
   return !aFrame->IsFrameOfType(nsIFrame::eLineParticipant);
 }
 
@@ -98,11 +97,11 @@ IsFullyClipped(nsTextFrame* aFrame, nscoord aLeft, nscoord aRight,
 static bool
 IsInlineAxisOverflowVisible(nsIFrame* aFrame)
 {
-  NS_PRECONDITION(nsLayoutUtils::GetAsBlock(aFrame) != nullptr,
-                  "expected a block frame");
+  MOZ_ASSERT(nsLayoutUtils::GetAsBlock(aFrame) != nullptr,
+             "expected a block frame");
 
   nsIFrame* f = aFrame;
-  while (f && f->StyleContext()->GetPseudo() && !f->IsScrollFrame()) {
+  while (f && f->Style()->IsAnonBox() && !f->IsScrollFrame()) {
     f = f->GetParent();
   }
   if (!f) {
@@ -172,7 +171,7 @@ public:
                               uint32_t aLineNumber,
                               uint32_t aIndex)
     : nsDisplayItem(aBuilder, aFrame), mRect(aRect),
-      mStyle(aStyle), mAscent(aAscent), mIndex((aLineNumber << 1) + aIndex) {
+      mStyle(*aStyle), mAscent(aAscent), mIndex((aLineNumber << 1) + aIndex) {
     MOZ_COUNT_CTOR(nsDisplayTextOverflowMarker);
   }
 #ifdef NS_BUILD_REFCNT_LOGGING
@@ -221,7 +220,7 @@ public:
   NS_DISPLAY_DECL_NAME("TextOverflow", TYPE_TEXT_OVERFLOW)
 private:
   nsRect          mRect;   // in reference frame coordinates
-  const nsStyleTextOverflowSide* mStyle;
+  const nsStyleTextOverflowSide mStyle;
   nscoord         mAscent; // baseline for the marker text in mRect
   uint32_t        mIndex;
 };
@@ -240,11 +239,14 @@ void
 nsDisplayTextOverflowMarker::Paint(nsDisplayListBuilder* aBuilder,
                                    gfxContext*           aCtx)
 {
+  DrawTargetAutoDisableSubpixelAntialiasing disable(aCtx->GetDrawTarget(),
+                                                    mDisableSubpixelAA);
+
   nscolor foregroundColor = nsLayoutUtils::
     GetColor(mFrame, &nsStyleText::mWebkitTextFillColor);
 
   // Paint the text-shadows for the overflow marker
-  nsLayoutUtils::PaintTextShadow(mFrame, aCtx, mRect, mVisibleRect,
+  nsLayoutUtils::PaintTextShadow(mFrame, aCtx, mRect, GetPaintRect(),
                                  foregroundColor, PaintTextShadowCallback,
                                  (void*)this);
   aCtx->SetColor(gfx::Color::FromABGR(foregroundColor));
@@ -271,20 +273,20 @@ nsDisplayTextOverflowMarker::PaintTextToContext(gfxContext* aCtx,
   }
   pt += aOffsetFromRect;
 
-  if (mStyle->mType == NS_STYLE_TEXT_OVERFLOW_ELLIPSIS) {
+  if (mStyle.mType == NS_STYLE_TEXT_OVERFLOW_ELLIPSIS) {
     gfxTextRun* textRun = GetEllipsisTextRun(mFrame);
     if (textRun) {
       NS_ASSERTION(!textRun->IsRightToLeft(),
                    "Ellipsis textruns should always be LTR!");
-      gfxPoint gfxPt(pt.x, pt.y);
+      gfx::Point gfxPt(pt.x, pt.y);
       textRun->Draw(gfxTextRun::Range(textRun), gfxPt,
                     gfxTextRun::DrawParams(aCtx));
     }
   } else {
     RefPtr<nsFontMetrics> fm =
       nsLayoutUtils::GetInflatedFontMetricsForFrame(mFrame);
-    nsLayoutUtils::DrawString(mFrame, *fm, aCtx, mStyle->mString.get(),
-                              mStyle->mString.Length(), pt);
+    nsLayoutUtils::DrawString(mFrame, *fm, aCtx, mStyle.mString.get(),
+                              mStyle.mString.Length(), pt);
   }
 }
 
@@ -295,10 +297,6 @@ nsDisplayTextOverflowMarker::CreateWebRenderCommands(mozilla::wr::DisplayListBui
                                                      layers::WebRenderLayerManager* aManager,
                                                      nsDisplayListBuilder* aDisplayListBuilder)
 {
-  if (!gfxPrefs::LayersAllowTextLayers()) {
-      return false;
-  }
-
   bool snap;
   nsRect bounds = GetBounds(aDisplayListBuilder, &snap);
   if (bounds.IsEmpty()) {
@@ -306,13 +304,12 @@ nsDisplayTextOverflowMarker::CreateWebRenderCommands(mozilla::wr::DisplayListBui
   }
 
   // Run the rendering algorithm to capture the glyphs and shadows
-  RefPtr<TextDrawTarget> textDrawer = new TextDrawTarget(aSc);
+  RefPtr<TextDrawTarget> textDrawer = new TextDrawTarget(aBuilder, aSc, aManager, this, bounds);
   RefPtr<gfxContext> captureCtx = gfxContext::CreateOrNull(textDrawer);
-  // TextOverflowMarker only draws glyphs
-  textDrawer->StartDrawing(TextDrawTarget::Phase::eGlyphs);
   Paint(aDisplayListBuilder, captureCtx);
+  textDrawer->TerminateShadows();
 
-  return textDrawer->CreateWebRenderCommands(aBuilder, aSc, aManager, this, bounds);
+  return !textDrawer->HasUnsupportedFeatures();
 }
 
 
@@ -330,7 +327,7 @@ TextOverflow::TextOverflow(nsDisplayListBuilder* aBuilder,
 {
 #ifdef MOZ_XUL
   if (!mScrollableFrame) {
-    nsAtom* pseudoType = aBlockFrame->StyleContext()->GetPseudo();
+    nsAtom* pseudoType = aBlockFrame->Style()->GetPseudo();
     if (pseudoType == nsCSSAnonBoxes::mozXULAnonymousBlock) {
       mScrollableFrame =
         nsLayoutUtils::GetScrollableFrameFor(aBlockFrame->GetParent());
@@ -450,6 +447,8 @@ TextOverflow::AnalyzeMarkerEdges(nsIFrame* aFrame,
                                  bool* aFoundVisibleTextOrAtomic,
                                  InnerClipEdges* aClippedMarkerEdges)
 {
+  MOZ_ASSERT(aFrameType == LayoutFrameType::Text ||
+             IsAtomicElement(aFrame, aFrameType));
   LogicalRect borderRect(mBlockWM,
                          nsRect(aFrame->GetOffsetTo(mBlock),
                                 aFrame->GetSize()),
@@ -479,11 +478,12 @@ TextOverflow::AnalyzeMarkerEdges(nsIFrame* aFrame,
   if ((istartOverlap > 0 && insideIStartEdge) ||
       (iendOverlap > 0 && insideIEndEdge)) {
     if (aFrameType == LayoutFrameType::Text) {
-      if (aInsideMarkersArea.IStart(mBlockWM) <
-          aInsideMarkersArea.IEnd(mBlockWM)) {
+      auto textFrame = static_cast<nsTextFrame*>(aFrame);
+      if ((aInsideMarkersArea.IStart(mBlockWM) <
+           aInsideMarkersArea.IEnd(mBlockWM)) &&
+          textFrame->HasNonSuppressedText()) {
         // a clipped text frame and there is some room between the markers
         nscoord snappedIStart, snappedIEnd;
-        auto textFrame = static_cast<nsTextFrame*>(aFrame);
         bool isFullyClipped = mBlockWM.IsBidiLTR() ?
           IsFullyClipped(textFrame, istartOverlap, iendOverlap,
                          &snappedIStart, &snappedIEnd) :
@@ -513,7 +513,14 @@ TextOverflow::AnalyzeMarkerEdges(nsIFrame* aFrame,
   } else {
     // frame is inside
     aAlignmentEdges->Accumulate(mBlockWM, borderRect);
-    *aFoundVisibleTextOrAtomic = true;
+    if (aFrameType == LayoutFrameType::Text) {
+      auto textFrame = static_cast<nsTextFrame*>(aFrame);
+      if (textFrame->HasNonSuppressedText()) {
+        *aFoundVisibleTextOrAtomic = true;
+      }
+    } else {
+      *aFoundVisibleTextOrAtomic = true;
+    }
   }
 }
 
@@ -819,13 +826,12 @@ TextOverflow::CanHaveTextOverflow(nsIFrame* aBlockFrame)
   }
 
   // Inhibit the markers if a descendant content owns the caret.
-  RefPtr<nsCaret> caret = aBlockFrame->PresContext()->PresShell()->GetCaret();
+  RefPtr<nsCaret> caret = aBlockFrame->PresShell()->GetCaret();
   if (caret && caret->IsVisible()) {
-    nsCOMPtr<nsISelection> domSelection = caret->GetSelection();
+    RefPtr<dom::Selection> domSelection = caret->GetSelection();
     if (domSelection) {
-      nsCOMPtr<nsIDOMNode> node;
-      domSelection->GetFocusNode(getter_AddRefs(node));
-      nsCOMPtr<nsIContent> content = do_QueryInterface(node);
+      nsCOMPtr<nsIContent> content =
+        nsIContent::FromNodeOrNull(domSelection->GetFocusNode());
       if (content && nsContentUtils::ContentIsDescendantOf(content,
                        aBlockFrame->GetContent())) {
         return false;
@@ -853,10 +859,11 @@ TextOverflow::CreateMarkers(const nsLineBox* aLine,
       markerLogicalRect.GetPhysicalRect(mBlockWM, mBlockSize) + offset;
     ClipMarker(aContentArea.GetPhysicalRect(mBlockWM, mBlockSize) + offset,
                markerRect, clipState);
-    nsDisplayItem* marker = new (mBuilder)
-      nsDisplayTextOverflowMarker(mBuilder, mBlock, markerRect,
-                                  aLine->GetLogicalAscent(), mIStart.mStyle, aLineNumber, 0);
-    mMarkerList.AppendNewToTop(marker);
+    nsDisplayItem* marker =
+      MakeDisplayItem<nsDisplayTextOverflowMarker>(mBuilder, mBlock, markerRect,
+                                                   aLine->GetLogicalAscent(), mIStart.mStyle,
+                                                   aLineNumber, 0);
+    mMarkerList.AppendToTop(marker);
   }
 
   if (aCreateIEnd) {
@@ -870,10 +877,11 @@ TextOverflow::CreateMarkers(const nsLineBox* aLine,
       markerLogicalRect.GetPhysicalRect(mBlockWM, mBlockSize) + offset;
     ClipMarker(aContentArea.GetPhysicalRect(mBlockWM, mBlockSize) + offset,
                markerRect, clipState);
-    nsDisplayItem* marker = new (mBuilder)
-      nsDisplayTextOverflowMarker(mBuilder, mBlock, markerRect,
-                                  aLine->GetLogicalAscent(), mIEnd.mStyle, aLineNumber, 1);
-    mMarkerList.AppendNewToTop(marker);
+    nsDisplayItem* marker =
+      MakeDisplayItem<nsDisplayTextOverflowMarker>(mBuilder, mBlock, markerRect,
+                                                   aLine->GetLogicalAscent(), mIEnd.mStyle,
+                                                   aLineNumber, 1);
+    mMarkerList.AppendToTop(marker);
   }
 }
 
@@ -893,7 +901,7 @@ TextOverflow::Marker::SetupString(nsIFrame* aFrame)
     }
   } else {
     RefPtr<gfxContext> rc =
-      aFrame->PresContext()->PresShell()->CreateReferenceRenderingContext();
+      aFrame->PresShell()->CreateReferenceRenderingContext();
     RefPtr<nsFontMetrics> fm =
       nsLayoutUtils::GetInflatedFontMetricsForFrame(aFrame);
     mISize = nsLayoutUtils::AppUnitWidthOfStringBidi(mStyle->mString, aFrame,

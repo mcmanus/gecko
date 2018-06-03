@@ -11,7 +11,6 @@
 #include "nsXBLPrototypeBinding.h"
 #include "nsIScriptObjectPrincipal.h"
 #include "nsIScriptContext.h"
-#include "nsIDOMDocument.h"
 #include "jsapi.h"
 #include "jsfriendapi.h"
 #include "nsIURI.h"
@@ -23,6 +22,7 @@
 #include "nsIScriptSecurityManager.h"
 #include "nsContentUtils.h"
 #include "nsDOMJSUtils.h"
+#include "nsWindowSizes.h"
 #include "mozilla/Services.h"
 #include "xpcpublic.h"
 #include "mozilla/scache/StartupCache.h"
@@ -206,7 +206,7 @@ nsXBLDocumentInfo::ReadPrototypeBindings(nsIURI* aURI, nsXBLDocumentInfo** aDocI
     return rv;
 
   nsCOMPtr<nsIObjectInputStream> stream;
-  rv = NewObjectInputStreamFromBuffer(Move(buf), len, getter_AddRefs(stream));
+  rv = NewObjectInputStreamFromBuffer(std::move(buf), len, getter_AddRefs(stream));
   NS_ENSURE_SUCCESS(rv, rv);
 
   // The file compatibility.ini stores the build id. This is checked in
@@ -226,14 +226,9 @@ nsXBLDocumentInfo::ReadPrototypeBindings(nsIURI* aURI, nsXBLDocumentInfo** aDocI
   nsContentUtils::GetSecurityManager()->
     GetSystemPrincipal(getter_AddRefs(principal));
 
-  auto styleBackend = aBoundDocument ? aBoundDocument->GetStyleBackendType()
-                                     : StyleBackendType::Gecko;
-  nsCOMPtr<nsIDOMDocument> domdoc;
-  rv = NS_NewXBLDocument(getter_AddRefs(domdoc), aURI, nullptr, principal, styleBackend);
+  nsCOMPtr<nsIDocument> doc;
+  rv = NS_NewXBLDocument(getter_AddRefs(doc), aURI, nullptr, principal);
   NS_ENSURE_SUCCESS(rv, rv);
-
-  nsCOMPtr<nsIDocument> doc = do_QueryInterface(domdoc);
-  NS_ASSERTION(doc, "Must have a document!");
 
   RefPtr<nsXBLDocumentInfo> docInfo = new nsXBLDocumentInfo(doc);
 
@@ -298,7 +293,7 @@ nsXBLDocumentInfo::WritePrototypeBindings()
   rv = NewBufferFromStorageStream(storageStream, &buf, &len);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  return startupCache->PutBuffer(spec.get(), buf.get(), len);
+  return startupCache->PutBuffer(spec.get(), std::move(buf), len);
 }
 
 void
@@ -325,3 +320,23 @@ AssertInCompilationScope()
   MOZ_ASSERT(xpc::CompilationScope() == JS::CurrentGlobalOrNull(cx));
 }
 #endif
+
+size_t
+nsXBLDocumentInfo::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
+{
+  size_t n = aMallocSizeOf(this);
+  if (mDocument) {
+    SizeOfState state(aMallocSizeOf);
+    nsWindowSizes windowSizes(state);
+    mDocument->DocAddSizeOfIncludingThis(windowSizes);
+    n += windowSizes.getTotalSize();
+  }
+  if (mBindingTable) {
+    n += mBindingTable->ShallowSizeOfIncludingThis(aMallocSizeOf);
+    for (auto iter = mBindingTable->Iter(); !iter.Done(); iter.Next()) {
+      nsXBLPrototypeBinding* binding = iter.UserData();
+      n += binding->SizeOfIncludingThis(aMallocSizeOf);
+    }
+  }
+  return n;
+}

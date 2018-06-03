@@ -48,6 +48,11 @@ var SidebarUI = {
   _switcherPanel: null,
   _switcherTarget: null,
   _switcherArrow: null,
+  _inited: false,
+
+  get initialized() {
+    return this._inited;
+  },
 
   init() {
     this._box = document.getElementById("sidebar-box");
@@ -61,13 +66,14 @@ var SidebarUI = {
     this._switcherTarget.addEventListener("command", () => {
       this.toggleSwitcherPanel();
     });
+
+    this._inited = true;
   },
 
   uninit() {
     // If this is the last browser window, persist various values that should be
     // remembered for after a restart / reopening a browser window.
     let enumerator = Services.wm.getEnumerator("navigator:browser");
-    enumerator.getNext();
     if (!enumerator.hasMoreElements()) {
       document.persist("sidebar-box", "sidebarcommand");
 
@@ -120,6 +126,25 @@ var SidebarUI = {
     this._switcherTarget.classList.add("active");
   },
 
+  updateShortcut({button, key}) {
+    // If the shortcuts haven't been rendered yet then it will be set correctly
+    // on the first render so there's nothing to do now.
+    if (!this._addedShortcuts) {
+      return;
+    }
+    if (key) {
+      let keyId = key.getAttribute("id");
+      button = this._switcherPanel.querySelector(`[key="${keyId}"]`);
+    } else if (button) {
+      let keyId = button.getAttribute("key");
+      key = document.getElementById(keyId);
+    }
+    if (!button || !key) {
+      return;
+    }
+    button.setAttribute("shortcut", ShortcutUtils.prettifyShortcut(key));
+  },
+
   _addedShortcuts: false,
   _ensureShortcutsShown() {
     if (this._addedShortcuts) {
@@ -127,12 +152,7 @@ var SidebarUI = {
     }
     this._addedShortcuts = true;
     for (let button of this._switcherPanel.querySelectorAll("toolbarbutton[key]")) {
-      let keyId = button.getAttribute("key");
-      let key = document.getElementById(keyId);
-      if (!key) {
-        continue;
-      }
-      button.setAttribute("shortcut", ShortcutUtils.prettifyShortcut(key));
+      this.updateShortcut({button});
     }
   },
 
@@ -169,6 +189,11 @@ var SidebarUI = {
     }
 
     this.hideSwitcherPanel();
+
+    let content = SidebarUI.browser.contentWindow;
+    if (content && content.updatePosition) {
+      content.updatePosition();
+    }
   },
 
   /**
@@ -340,6 +365,15 @@ var SidebarUI = {
     return this.show(commandID, triggerNode);
   },
 
+  _loadSidebarExtension(sidebarBroadcaster) {
+    let extensionId = sidebarBroadcaster.getAttribute("extensionId");
+    if (extensionId) {
+      let extensionUrl = sidebarBroadcaster.getAttribute("panel");
+      let browserStyle = sidebarBroadcaster.getAttribute("browserStyle");
+      SidebarUI.browser.contentWindow.loadPanel(extensionId, extensionUrl, browserStyle);
+    }
+  },
+
   /**
    * Show the sidebar, using the parameters from the specified broadcaster.
    * @see SidebarUI note.
@@ -351,7 +385,9 @@ var SidebarUI = {
    *                                showing of the sidebar.
    */
   show(commandID, triggerNode) {
-    return this._show(commandID).then(() => {
+    return this._show(commandID).then((sidebarBroadcaster) => {
+      this._loadSidebarExtension(sidebarBroadcaster);
+
       if (triggerNode) {
         updateToggleControlLabel(triggerNode);
       }
@@ -368,9 +404,11 @@ var SidebarUI = {
    *
    * @param {string} commandID ID of the xul:broadcaster element to use.
    */
-   showInitially(commandID) {
-     return this._show(commandID);
-   },
+  showInitially(commandID) {
+    return this._show(commandID).then((sidebarBroadcaster) => {
+      this._loadSidebarExtension(sidebarBroadcaster);
+    });
+  },
 
   /**
    * Implementation for show. Also used internally for sidebars that are shown
@@ -426,14 +464,14 @@ var SidebarUI = {
           // We're handling the 'load' event before it bubbles up to the usual
           // (non-capturing) event handlers. Let it bubble up before resolving.
           setTimeout(() => {
-            resolve();
+            resolve(sidebarBroadcaster);
 
             // Now that the currentId is updated, fire a show event.
             this._fireShowEvent();
           }, 0);
         }, {capture: true, once: true});
       } else {
-        resolve();
+        resolve(sidebarBroadcaster);
 
         // Now that the currentId is updated, fire a show event.
         this._fireShowEvent();
@@ -444,6 +482,17 @@ var SidebarUI = {
         {commandID, isOpen: true}
       );
     });
+  },
+
+  /**
+  * Sets the webpage favicon in sidebar
+  *
+  */
+  setWebPageIcon(url) {
+    let iconURL = "url(page-icon:" + url + ")";
+    if (this._box.getAttribute("sidebarcommand") == "viewWebPanelsSidebar") {
+      this._icon.style.setProperty("--sidebar-webpage-icon", iconURL);
+    }
   },
 
   /**

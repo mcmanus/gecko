@@ -6,14 +6,12 @@
 
 "use strict";
 
-var Cu = Components.utils;
-var {require} = Cu.import("resource://devtools/shared/Loader.jsm", {});
+var {require} = ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
 var Services = require("Services");
 var {gDevTools} = require("devtools/client/framework/devtools");
 var {TargetFactory} = require("devtools/client/framework/target");
 var {Toolbox} = require("devtools/client/framework/toolbox");
 var {DebuggerClient} = require("devtools/shared/client/debugger-client");
-var {Task} = require("devtools/shared/task");
 var {LocalizationHelper} = require("devtools/shared/l10n");
 var L10N = new LocalizationHelper("devtools/client/locales/connection-screen.properties");
 
@@ -24,9 +22,9 @@ var gConnectionTimeout;
  * Once DOM is ready, we prefil the host/port inputs with
  * pref-stored values.
  */
-window.addEventListener("DOMContentLoaded", function () {
-  let host = Services.prefs.getCharPref("devtools.debugger.remote-host");
-  let port = Services.prefs.getIntPref("devtools.debugger.remote-port");
+window.addEventListener("DOMContentLoaded", function() {
+  const host = Services.prefs.getCharPref("devtools.debugger.remote-host");
+  const port = Services.prefs.getIntPref("devtools.debugger.remote-port");
 
   if (host) {
     document.getElementById("host").value = host;
@@ -36,8 +34,8 @@ window.addEventListener("DOMContentLoaded", function () {
     document.getElementById("port").value = port;
   }
 
-  let form = document.querySelector("#connection-form form");
-  form.addEventListener("submit", function () {
+  const form = document.querySelector("#connection-form form");
+  form.addEventListener("submit", function() {
     window.submit().catch(e => {
       console.error(e);
       // Bug 921850: catch rare exception from DebuggerClient.socketConnect
@@ -49,12 +47,13 @@ window.addEventListener("DOMContentLoaded", function () {
 /**
  * Called when the "connect" button is clicked.
  */
-var submit = Task.async(function* () {
+/* exported submit */
+var submit = async function() {
   // Show the "connecting" screen
   document.body.classList.add("connecting");
 
-  let host = document.getElementById("host").value;
-  let port = document.getElementById("port").value;
+  const host = document.getElementById("host").value;
+  const port = document.getElementById("port").value;
 
   // Save the host/port values
   try {
@@ -65,52 +64,51 @@ var submit = Task.async(function* () {
   }
 
   // Initiate the connection
-  let transport = yield DebuggerClient.socketConnect({ host, port });
+  const transport = await DebuggerClient.socketConnect({ host, port });
   gClient = new DebuggerClient(transport);
-  let delay = Services.prefs.getIntPref("devtools.debugger.remote-timeout");
+  const delay = Services.prefs.getIntPref("devtools.debugger.remote-timeout");
   gConnectionTimeout = setTimeout(handleConnectionTimeout, delay);
-  let response = yield gClient.connect();
-  yield onConnectionReady(...response);
-});
+  const response = await gClient.connect();
+  await onConnectionReady(...response);
+};
 
 /**
  * Connection is ready. List actors and build buttons.
  */
-var onConnectionReady = Task.async(function* ([aType, aTraits]) {
+var onConnectionReady = async function([aType, aTraits]) {
   clearTimeout(gConnectionTimeout);
 
   let addons = [];
   try {
-    let response = yield gClient.listAddons();
+    const response = await gClient.listAddons();
     if (!response.error && response.addons.length > 0) {
       addons = response.addons;
     }
-  } catch(e) {
+  } catch (e) {
     // listAddons throws if the runtime doesn't support addons
   }
 
   let parent = document.getElementById("addonActors");
   if (addons.length > 0) {
     // Add one entry for each add-on.
-    for (let addon of addons) {
+    for (const addon of addons) {
       if (!addon.debuggable) {
         continue;
       }
       buildAddonLink(addon, parent);
     }
-  }
-  else {
+  } else {
     // Hide the section when there are no add-ons
     parent.previousElementSibling.remove();
     parent.remove();
   }
 
-  let response = yield gClient.listTabs();
+  const response = await gClient.listTabs();
 
   parent = document.getElementById("tabActors");
 
   // Add Global Process debugging...
-  let globals = Cu.cloneInto(response, {});
+  const globals = Cu.cloneInto(response, {});
   delete globals.tabs;
   delete globals.selected;
   // ...only if there are appropriate actors (a 'from' property will always
@@ -121,14 +119,14 @@ var onConnectionReady = Task.async(function* ([aType, aTraits]) {
     buildTabLink(response.tabs[i], parent, i == response.selected);
   }
 
-  let gParent = document.getElementById("globalActors");
+  const gParent = document.getElementById("globalActors");
 
   // Build the Remote Process button
   // If Fx<39, tab actors were used to be exposed on RootActor
   // but in Fx>=39, chrome is debuggable via getProcess() and ChromeActor
   if (globals.consoleActor || gClient.mainRoot.traits.allowChromeProcess) {
-    let a = document.createElement("a");
-    a.onclick = function () {
+    const a = document.createElement("a");
+    a.onclick = function() {
       if (gClient.mainRoot.traits.allowChromeProcess) {
         gClient.getProcess()
                .then(aResponse => {
@@ -144,7 +142,7 @@ var onConnectionReady = Task.async(function* ([aType, aTraits]) {
     gParent.appendChild(a);
   }
   // Move the selected tab on top
-  let selectedLink = parent.querySelector("a.selected");
+  const selectedLink = parent.querySelector("a.selected");
   if (selectedLink) {
     parent.insertBefore(selectedLink, parent.firstChild);
   }
@@ -153,18 +151,18 @@ var onConnectionReady = Task.async(function* ([aType, aTraits]) {
   document.body.classList.add("actors-mode");
 
   // Ensure the first link is focused
-  let firstLink = parent.querySelector("a:first-of-type");
+  const firstLink = parent.querySelector("a:first-of-type");
   if (firstLink) {
     firstLink.focus();
   }
-});
+};
 
 /**
  * Build one button for an add-on actor.
  */
 function buildAddonLink(addon, parent) {
-  let a = document.createElement("a");
-  a.onclick = async function () {
+  const a = document.createElement("a");
+  a.onclick = async function() {
     const isTabActor = addon.isWebExtension;
     openToolbox(addon, true, "webconsole", isTabActor);
   };
@@ -180,8 +178,8 @@ function buildAddonLink(addon, parent) {
  * Build one button for a tab actor.
  */
 function buildTabLink(tab, parent, selected) {
-  let a = document.createElement("a");
-  a.onclick = function () {
+  const a = document.createElement("a");
+  a.onclick = function() {
     openToolbox(tab);
   };
 
@@ -226,19 +224,19 @@ function handleConnectionTimeout() {
  * Opens the toolbox.
  */
 function openToolbox(form, chrome = false, tool = "webconsole", isTabActor) {
-  let options = {
+  const options = {
     form: form,
     client: gClient,
     chrome: chrome,
     isTabActor: isTabActor
   };
   TargetFactory.forRemoteTab(options).then((target) => {
-    let hostType = Toolbox.HostType.WINDOW;
+    const hostType = Toolbox.HostType.WINDOW;
     gDevTools.showToolbox(target, tool, hostType).then((toolbox) => {
-      toolbox.once("destroyed", function () {
+      toolbox.once("destroyed", function() {
         gClient.close();
       });
-    }, console.error.bind(console));
+    }, console.error);
     window.close();
-  }, console.error.bind(console));
+  }, console.error);
 }

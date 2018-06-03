@@ -5,8 +5,6 @@
 
 #include "nsCOMArray.h"
 #include "nsIAuthPrompt.h"
-#include "nsIDOMNode.h"
-#include "nsIDOMDocument.h"
 #include "nsIDocument.h"
 #include "nsIExpatSink.h"
 #include "nsIChannelEventSink.h"
@@ -37,6 +35,7 @@
 #include "nsError.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/dom/Text.h"
 #include "mozilla/Encoding.h"
 #include "mozilla/UniquePtr.h"
 
@@ -124,7 +123,7 @@ txStylesheetSink::HandleStartElement(const char16_t *aName,
                                      uint32_t aAttsCount,
                                      uint32_t aLineNumber)
 {
-    NS_PRECONDITION(aAttsCount % 2 == 0, "incorrect aAttsCount");
+    MOZ_ASSERT(aAttsCount % 2 == 0, "incorrect aAttsCount");
 
     nsresult rv =
         mCompiler->startElement(aName, aAtts, aAttsCount / 2);
@@ -207,7 +206,7 @@ txStylesheetSink::ReportError(const char16_t *aErrorText,
                               nsIScriptError *aError,
                               bool *_retval)
 {
-    NS_PRECONDITION(aError && aSourceText && aErrorText, "Check arguments!!!");
+    MOZ_ASSERT(aError && aSourceText && aErrorText, "Check arguments!!!");
 
     // The expat driver should report the error.
     *_retval = true;
@@ -371,7 +370,7 @@ public:
                       nsIDocument* aLoaderDocument);
 
     TX_DECL_ACOMPILEOBSERVER
-    NS_INLINE_DECL_REFCOUNTING(txCompileObserver)
+    NS_INLINE_DECL_REFCOUNTING(txCompileObserver, override)
 
     nsresult startLoad(nsIURI* aUri, txStylesheetCompiler* aCompiler,
                        nsIPrincipal* aSourcePrincipal,
@@ -455,6 +454,7 @@ txCompileObserver::startLoad(nsIURI* aUri, txStylesheetCompiler* aCompiler,
                     aReferrerPrincipal, // triggeringPrincipal
                     nsILoadInfo::SEC_REQUIRE_CORS_DATA_INHERITS,
                     nsIContentPolicy::TYPE_XSLT,
+                    nullptr, // aPerformanceStorage
                     loadGroup);
 
     NS_ENSURE_SUCCESS(rv, rv);
@@ -563,13 +563,13 @@ handleNode(nsINode* aNode, txStylesheetCompiler* aCompiler)
         rv = aCompiler->endElement();
         NS_ENSURE_SUCCESS(rv, rv);
     }
-    else if (aNode->IsNodeOfType(nsINode::eTEXT)) {
+    else if (dom::Text* text = aNode->GetAsText()) {
         nsAutoString chars;
-        static_cast<nsIContent*>(aNode)->AppendTextTo(chars);
+        text->AppendTextTo(chars);
         rv = aCompiler->characters(chars);
         NS_ENSURE_SUCCESS(rv, rv);
     }
-    else if (aNode->IsNodeOfType(nsINode::eDOCUMENT)) {
+    else if (aNode->IsDocument()) {
         for (nsIContent* child = aNode->GetFirstChild();
              child;
              child = child->GetNextSibling()) {
@@ -588,7 +588,7 @@ public:
     explicit txSyncCompileObserver(txMozillaXSLTProcessor* aProcessor);
 
     TX_DECL_ACOMPILEOBSERVER
-    NS_INLINE_DECL_REFCOUNTING(txSyncCompileObserver)
+    NS_INLINE_DECL_REFCOUNTING(txSyncCompileObserver, override)
 
 private:
     // Private destructor, to discourage deletion outside of Release():
@@ -630,11 +630,10 @@ txSyncCompileObserver::loadURI(const nsAString& aUri,
     // make sense.
     nsCOMPtr<nsINode> source;
     if (mProcessor) {
-      source =
-        do_QueryInterface(mProcessor->GetSourceContentModel());
+      source = mProcessor->GetSourceContentModel();
     }
     nsAutoSyncOperation sync(source ? source->OwnerDoc() : nullptr);
-    nsCOMPtr<nsIDOMDocument> document;
+    nsCOMPtr<nsIDocument> document;
 
     rv = nsSyncLoadService::LoadDocument(uri, nsIContentPolicy::TYPE_XSLT,
                                          referrerPrincipal,
@@ -644,8 +643,7 @@ txSyncCompileObserver::loadURI(const nsAString& aUri,
                                          getter_AddRefs(document));
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCOMPtr<nsIDocument> doc = do_QueryInterface(document);
-    rv = handleNode(doc, aCompiler);
+    rv = handleNode(document, aCompiler);
     if (NS_FAILED(rv)) {
         nsAutoCString spec;
         uri->GetSpec(spec);
@@ -672,12 +670,11 @@ TX_CompileStylesheet(nsINode* aNode, txMozillaXSLTProcessor* aProcessor,
     nsCOMPtr<nsIDocument> doc = aNode->OwnerDoc();
 
     nsCOMPtr<nsIURI> uri;
-    if (aNode->IsNodeOfType(nsINode::eCONTENT)) {
-      uri = static_cast<nsIContent*>(aNode)->GetBaseURI();
-    }
-    else {
-      NS_ASSERTION(aNode->IsNodeOfType(nsINode::eDOCUMENT), "not a doc");
-      uri = static_cast<nsIDocument*>(aNode)->GetBaseURI();
+    if (aNode->IsContent()) {
+      uri = aNode->AsContent()->GetBaseURI();
+    } else {
+      NS_ASSERTION(aNode->IsDocument(), "not a doc");
+      uri = aNode->AsDocument()->GetBaseURI();
     }
     NS_ENSURE_TRUE(uri, NS_ERROR_FAILURE);
 

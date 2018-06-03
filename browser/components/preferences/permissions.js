@@ -5,13 +5,40 @@
 // Imported via permissions.xul.
 /* import-globals-from ../../../toolkit/content/treeUtils.js */
 
-Components.utils.import("resource://gre/modules/Services.jsm");
-Components.utils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
 
-const nsIPermissionManager = Components.interfaces.nsIPermissionManager;
-const nsICookiePermission = Components.interfaces.nsICookiePermission;
+const nsIPermissionManager = Ci.nsIPermissionManager;
+const nsICookiePermission = Ci.nsICookiePermission;
 
 const NOTIFICATION_FLUSH_PERMISSIONS = "flush-pending-permissions";
+
+const permissionExceptionsL10n = {
+  "trackingprotection": {
+    window: "permissions-exceptions-tracking-protection-window",
+    description: "permissions-exceptions-tracking-protection-desc",
+  },
+  "cookie": {
+    window: "permissions-exceptions-cookie-window",
+    description: "permissions-exceptions-cookie-desc",
+  },
+  "popup": {
+    window: "permissions-exceptions-popup-window",
+    description: "permissions-exceptions-popup-desc",
+  },
+  "login-saving": {
+    window: "permissions-exceptions-saved-logins-window",
+    description: "permissions-exceptions-saved-logins-desc",
+  },
+  "install": {
+    window: "permissions-exceptions-addons-window",
+    description: "permissions-exceptions-addons-desc",
+  },
+  "autoplay-media": {
+    window: "permissions-exceptions-autoplay-media-window",
+    description: "permissions-exceptions-autoplay-media-desc",
+  },
+};
 
 function Permission(principal, type, capability) {
   this.principal = principal;
@@ -47,7 +74,6 @@ var gPermissionManager = {
     isContainer(aIndex) { return false; },
     setTree(aTree) {},
     getImageSrc(aRow, aColumn) {},
-    getProgressMode(aRow, aColumn) {},
     getCellValue(aRow, aColumn) {},
     cycleHeader(column) {},
     getRowProperties(row) { return ""; },
@@ -105,9 +131,12 @@ var gPermissionManager = {
         principal.origin;
       }
     } catch (ex) {
-      var message = this._bundle.getString("invalidURI");
-      var title = this._bundle.getString("invalidURITitle");
-      Services.prompt.alert(window, title, message);
+      document.l10n.formatValues([
+        {id: "permissions-invalid-uri-title"},
+        {id: "permissions-invalid-uri-label"}
+      ]).then(([title, message]) => {
+        Services.prompt.alert(window, title, message);
+      });
       return;
     }
 
@@ -205,10 +234,10 @@ var gPermissionManager = {
   onLoad() {
     this._bundle = document.getElementById("bundlePreferences");
     var params = window.arguments[0];
-    this.init(params);
+    document.mozSubdialogReady = this.init(params);
   },
 
-  init(aParams) {
+  async init(aParams) {
     if (this._type) {
       // reusing an open dialog, clear the old observer
       this.uninit();
@@ -217,12 +246,16 @@ var gPermissionManager = {
     this._type = aParams.permissionType;
     this._manageCapability = aParams.manageCapability;
 
-    var permissionsText = document.getElementById("permissionsText");
-    while (permissionsText.hasChildNodes())
-      permissionsText.firstChild.remove();
-    permissionsText.appendChild(document.createTextNode(aParams.introText));
+    const l10n = permissionExceptionsL10n[this._type];
+    let permissionsText = document.getElementById("permissionsText");
+    document.l10n.setAttributes(permissionsText, l10n.description);
 
-    document.title = aParams.windowTitle;
+    document.l10n.setAttributes(document.documentElement, l10n.window);
+
+    await document.l10n.translateElements([
+      document.documentElement,
+      permissionsText,
+    ]);
 
     document.getElementById("btnBlock").hidden    = !aParams.blockVisible;
     document.getElementById("btnSession").hidden  = !aParams.sessionVisible;
@@ -275,7 +308,7 @@ var gPermissionManager = {
 
   observe(aSubject, aTopic, aData) {
     if (aTopic == "perm-changed") {
-      var permission = aSubject.QueryInterface(Components.interfaces.nsIPermission);
+      var permission = aSubject.QueryInterface(Ci.nsIPermission);
 
       // Ignore unrelated permission types.
       if (permission.type != this._type)
@@ -356,6 +389,11 @@ var gPermissionManager = {
                                                         this._lastPermissionSortColumn,
                                                         this._lastPermissionSortAscending);
     this._lastPermissionSortColumn = aColumn;
+    let sortDirection = this._lastPermissionSortAscending ? "descending" : "ascending";
+    let cols = document.querySelectorAll("treecol");
+    cols.forEach(c => c.removeAttribute("sortDirection"));
+    let column = document.querySelector(`treecol[data-field-name=${aColumn}]`);
+    column.setAttribute("sortDirection", sortDirection);
   },
 
   onApplyChanges() {
@@ -382,7 +420,7 @@ var gPermissionManager = {
     // load permissions into a table
     var enumerator = Services.perms.enumerator;
     while (enumerator.hasMoreElements()) {
-      var nextPermission = enumerator.getNext().QueryInterface(Components.interfaces.nsIPermission);
+      var nextPermission = enumerator.getNext().QueryInterface(Ci.nsIPermission);
       this._addPermissionToList(nextPermission);
     }
 

@@ -15,9 +15,17 @@ if CONFIG['CPU_ARCH'] == 'x86_64':
     SOURCES += files['X64_SOURCES']
     USE_YASM = True
     if CONFIG['OS_TARGET'] == 'WINNT':
-        ASFLAGS += [ '-I%s/media/libaom/config/win/x64/' % TOPSRCDIR ]
-        LOCAL_INCLUDES += [ '/media/libaom/config/win/x64/' ]
-        EXPORTS.aom += [ 'config/win/x64/aom_config.h' ]
+        if CONFIG['CC_TYPE'] == 'gcc':
+            ASFLAGS += [ '-I%s/media/libaom/config/win/mingw64/' % TOPSRCDIR ]
+            LOCAL_INCLUDES += [ '/media/libaom/config/win/mingw64/' ]
+            EXPORTS.aom += [ 'config/win/mingw64/aom_config.h' ]
+        else:
+            ASFLAGS += [ '-I%s/media/libaom/config/win/x64/' % TOPSRCDIR ]
+            LOCAL_INCLUDES += [ '/media/libaom/config/win/x64/' ]
+            EXPORTS.aom += [ 'config/win/x64/aom_config.h' ]
+            # This code is not included in our PGO profile, and pointlessly
+            # PGO-optimizing it slows down our builds a lot.
+            NO_PGO = True
     elif CONFIG['OS_TARGET'] == 'Darwin':
         ASFLAGS += [ '-I%s/media/libaom/config/mac/x64/' % TOPSRCDIR ]
         LOCAL_INCLUDES += [ '/media/libaom/config/mac/x64/' ]
@@ -39,6 +47,7 @@ elif CONFIG['CPU_ARCH'] == 'x86':
             ASFLAGS += [ '-I%s/media/libaom/config/win/ia32/' % TOPSRCDIR ]
             LOCAL_INCLUDES += [ '/media/libaom/config/win/ia32/' ]
             EXPORTS.aom += [ 'config/win/ia32/aom_config.h' ]
+            NO_PGO = True # Compiler OOMs, bug 1445922
     else: # Android, Linux, BSDs, etc.
         ASFLAGS += [ '-I%s/media/libaom/config/linux/ia32/' % TOPSRCDIR ]
         LOCAL_INCLUDES += [ '/media/libaom/config/linux/ia32/' ]
@@ -70,7 +79,7 @@ elif CONFIG['CPU_ARCH'] == 'arm':
         LOCAL_INCLUDES += [
             '%%%s/sources/android/cpufeatures' % CONFIG['ANDROID_NDK'],
         ]
-    if CONFIG['CLANG_CXX']:
+    if CONFIG['CC_TYPE'] == 'clang':
         ASFLAGS += [
             '-no-integrated-as',
         ]
@@ -83,7 +92,7 @@ else:
     EXPORTS.aom += [ 'config/generic/aom_config.h' ]
 
 # We allow warnings for third-party code that can be updated from upstream.
-ALLOW_COMPILER_WARNINGS = True
+AllowCompilerWarnings()
 
 FINAL_LIBRARY = 'gkmedias'
 
@@ -97,7 +106,7 @@ if CONFIG['OS_TARGET'] == 'Android':
             '%%%s/sources/android/cpufeatures/cpu-features.c' % CONFIG['ANDROID_NDK'],
         ]
 
-if CONFIG['CLANG_CL'] or not CONFIG['_MSC_VER']:
+if CONFIG['CC_TYPE'] != 'msvc':
     for f in SOURCES:
         if f.endswith('sse2.c'):
             SOURCES[f].flags += CONFIG['SSE2_FLAGS']
@@ -110,7 +119,7 @@ if CONFIG['CLANG_CL'] or not CONFIG['_MSC_VER']:
         elif f.endswith('avx2.c'):
             SOURCES[f].flags += ['-mavx2']
 
-if CONFIG['_MSC_VER'] and not CONFIG['CLANG_CL']:
+if CONFIG['CC_TYPE'] == 'msvc':
     for f in SOURCES:
         if f.endswith('avx.c'):
             SOURCES[f].flags += ['-arch:AVX']
@@ -118,12 +127,12 @@ if CONFIG['_MSC_VER'] and not CONFIG['CLANG_CL']:
             SOURCES[f].flags += ['-arch:AVX2']
 
 # Suppress warnings in third-party code.
-if CONFIG['GNU_CC'] or CONFIG['CLANG_CL']:
+if CONFIG['CC_TYPE'] in ('clang', 'clang-cl', 'gcc'):
     CFLAGS += [
         '-Wno-sign-compare',
         '-Wno-unused-function', # so many of these warnings; just ignore them
     ]
-if CONFIG['CLANG_CXX'] or CONFIG['CLANG_CL']:
+if CONFIG['CC_TYPE'] in ('clang', 'clang-cl'):
     CFLAGS += [
         '-Wno-unreachable-code',
         '-Wno-unneeded-internal-declaration',

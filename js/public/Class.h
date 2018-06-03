@@ -9,6 +9,8 @@
 #ifndef js_Class_h
 #define js_Class_h
 
+#include "mozilla/Attributes.h"
+
 #include "jstypes.h"
 
 #include "js/CallArgs.h"
@@ -39,8 +41,6 @@ extern JS_FRIEND_DATA(const js::Class* const) FunctionClassPtr;
 } // namespace js
 
 namespace JS {
-
-class AutoIdVector;
 
 /**
  * The answer to a successful query as to whether an object is an Array per
@@ -472,14 +472,6 @@ typedef void
 (* JSFinalizeOp)(JSFreeOp* fop, JSObject* obj);
 
 /**
- * Finalizes external strings created by JS_NewExternalString. The finalizer
- * can be called off the main thread.
- */
-struct JSStringFinalizer {
-    void (*finalize)(const JSStringFinalizer* fin, char16_t* chars);
-};
-
-/**
  * Check whether v is an instance of obj.  Return false on error or exception,
  * true on success with true in *bp if v is an instance of obj, false in
  * *bp otherwise.
@@ -536,12 +528,6 @@ typedef bool
 typedef bool
 (* DeletePropertyOp)(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
                      JS::ObjectOpResult& result);
-
-typedef bool
-(* WatchOp)(JSContext* cx, JS::HandleObject obj, JS::HandleId id, JS::HandleObject callable);
-
-typedef bool
-(* UnwatchOp)(JSContext* cx, JS::HandleObject obj, JS::HandleId id);
 
 class JS_FRIEND_API(ElementAdder)
 {
@@ -627,12 +613,7 @@ typedef void
         cOps->trace(trc, obj); \
     }
 
-// XXX: MOZ_NONHEAP_CLASS allows objects to be created statically or on the
-// stack. We actually want to ban stack objects too, but that's currently not
-// possible. So we define JS_STATIC_CLASS to make the intention clearer.
-#define JS_STATIC_CLASS MOZ_NONHEAP_CLASS
-
-struct JS_STATIC_CLASS ClassOps
+struct MOZ_STATIC_CLASS ClassOps
 {
     /* Function pointer members (may be null). */
     JSAddPropertyOp     addProperty;
@@ -657,7 +638,7 @@ typedef bool (*FinishClassInitOp)(JSContext* cx, JS::HandleObject ctor,
 
 const size_t JSCLASS_CACHED_PROTO_WIDTH = 6;
 
-struct JS_STATIC_CLASS ClassSpec
+struct MOZ_STATIC_CLASS ClassSpec
 {
     ClassObjectCreationOp createConstructor;
     ClassObjectCreationOp createPrototype;
@@ -693,7 +674,7 @@ struct JS_STATIC_CLASS ClassSpec
     }
 };
 
-struct JS_STATIC_CLASS ClassExtension
+struct MOZ_STATIC_CLASS ClassExtension
 {
     /**
      * If an object is used as a key in a weakmap, it may be desirable for the
@@ -732,7 +713,7 @@ struct JS_STATIC_CLASS ClassExtension
 #define JS_NULL_CLASS_SPEC  nullptr
 #define JS_NULL_CLASS_EXT   nullptr
 
-struct JS_STATIC_CLASS ObjectOps
+struct MOZ_STATIC_CLASS ObjectOps
 {
     LookupPropertyOp lookupProperty;
     DefinePropertyOp defineProperty;
@@ -741,8 +722,6 @@ struct JS_STATIC_CLASS ObjectOps
     SetPropertyOp    setProperty;
     GetOwnPropertyOp getOwnPropertyDescriptor;
     DeletePropertyOp deleteProperty;
-    WatchOp          watch;
-    UnwatchOp        unwatch;
     GetElementsOp    getElements;
     JSFunToStringOp  funToString;
 };
@@ -755,7 +734,7 @@ struct JS_STATIC_CLASS ObjectOps
 
 typedef void (*JSClassInternal)();
 
-struct JS_STATIC_CLASS JSClassOps
+struct MOZ_STATIC_CLASS JSClassOps
 {
     /* Function pointer members (may be null). */
     JSAddPropertyOp     addProperty;
@@ -859,7 +838,7 @@ static const uint32_t JSCLASS_FOREGROUND_FINALIZE =     1 << (JSCLASS_HIGH_FLAGS
 // application.
 static const uint32_t JSCLASS_GLOBAL_APPLICATION_SLOTS = 5;
 static const uint32_t JSCLASS_GLOBAL_SLOT_COUNT =
-    JSCLASS_GLOBAL_APPLICATION_SLOTS + JSProto_LIMIT * 2 + 37;
+    JSCLASS_GLOBAL_APPLICATION_SLOTS + JSProto_LIMIT * 2 + 36;
 
 #define JSCLASS_GLOBAL_FLAGS_WITH_SLOTS(n)                              \
     (JSCLASS_IS_GLOBAL | JSCLASS_HAS_RESERVED_SLOTS(JSCLASS_GLOBAL_SLOT_COUNT + (n)))
@@ -885,7 +864,7 @@ static const uint32_t JSCLASS_CACHED_PROTO_MASK = JS_BITMASK(js::JSCLASS_CACHED_
 
 namespace js {
 
-struct JS_STATIC_CLASS Class
+struct MOZ_STATIC_CLASS Class
 {
     JS_CLASS_MEMBERS(js::ClassOps, FreeOp);
     const ClassSpec* spec;
@@ -896,8 +875,8 @@ struct JS_STATIC_CLASS Class
      * Objects of this class aren't native objects. They don't have Shapes that
      * describe their properties and layout. Classes using this flag must
      * provide their own property behavior, either by being proxy classes (do
-     * this) or by overriding all the ObjectOps except getElements, watch and
-     * unwatch (don't do this).
+     * this) or by overriding all the ObjectOps except getElements
+     * (don't do this).
      */
     static const uint32_t NON_NATIVE = JSCLASS_INTERNAL_FLAG2;
 
@@ -974,8 +953,6 @@ struct JS_STATIC_CLASS Class
                                             const { return oOps ? oOps->getOwnPropertyDescriptor
                                                                                      : nullptr; }
     DeletePropertyOp getOpsDeleteProperty() const { return oOps ? oOps->deleteProperty : nullptr; }
-    WatchOp          getOpsWatch()          const { return oOps ? oOps->watch          : nullptr; }
-    UnwatchOp        getOpsUnwatch()        const { return oOps ? oOps->unwatch        : nullptr; }
     GetElementsOp    getOpsGetElements()    const { return oOps ? oOps->getElements    : nullptr; }
     JSFunToStringOp  getOpsFunToString()    const { return oOps ? oOps->funToString    : nullptr; }
 };
@@ -1047,6 +1024,9 @@ enum class ESClass {
     SetIterator,
     Arguments,
     Error,
+#ifdef ENABLE_BIGINT
+    BigInt,
+#endif
 
     /** None of the above. */
     Other

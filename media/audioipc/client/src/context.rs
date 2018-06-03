@@ -3,23 +3,33 @@
 // This program is made available under an ISC-style license.  See the
 // accompanying file LICENSE for details
 
-use ClientStream;
+use {ClientStream, CPUPOOL_INIT_PARAMS, G_SERVER_FD};
 use assert_not_in_callback;
-use audioipc::{self, ClientMessage, Connection, ServerMessage, messages};
-use cubeb_backend::{Context, Ops};
-use cubeb_core::{DeviceId, DeviceType, Error, ErrorCode, Result, StreamParams, ffi};
-use cubeb_core::binding::Binding;
+use audioipc::{messages, ClientMessage, ServerMessage};
+use audioipc::{core, rpc};
+use audioipc::codec::LengthDelimitedCodec;
+use audioipc::fd_passing::{framed_with_fds, FramedWithFds};
+use cubeb_backend::{ffi, Context, ContextOps, DeviceCollectionRef, DeviceId, DeviceType, Error,
+                    Ops, Result, Stream, StreamParams, StreamParamsRef};
+use futures::Future;
+use futures_cpupool::{self, CpuPool};
+use libc;
+use std::{fmt, io, mem, ptr};
 use std::ffi::{CStr, CString};
-use std::mem;
 use std::os::raw::c_void;
-use std::os::unix::net::UnixStream;
-use std::sync::{Mutex, MutexGuard};
+use std::os::unix::io::FromRawFd;
+use std::os::unix::net;
+use std::sync::mpsc;
 use stream;
+use tokio_core::reactor::{Handle, Remote};
+use tokio_uds::UnixStream;
 
-#[derive(Debug)]
-pub struct ClientContext {
-    _ops: *const Ops,
-    connection: Mutex<Connection>
+struct CubebClient;
+
+impl rpc::Client for CubebClient {
+    type Request = ServerMessage;
+    type Response = ClientMessage;
+    type Transport = FramedWithFds<UnixStream, LengthDelimitedCodec<Self::Request, Self::Response>>;
 }
 
 macro_rules! t(
@@ -32,86 +42,150 @@ macro_rules! t(
 
 pub const CLIENT_OPS: Ops = capi_new!(ClientContext, ClientStream);
 
+// ClientContext's layout *must* match cubeb.c's `struct cubeb` for the
+// common fields.
+#[repr(C)]
+pub struct ClientContext {
+    _ops: *const Ops,
+    rpc: rpc::ClientProxy<ServerMessage, ClientMessage>,
+    core: core::CoreThread,
+    cpu_pool: CpuPool,
+}
+
 impl ClientContext {
     #[doc(hidden)]
-    pub fn connection(&self) -> MutexGuard<Connection> {
-        self.connection.lock().unwrap()
+    pub fn remote(&self) -> Remote {
+        self.core.remote()
+    }
+
+    #[doc(hidden)]
+    pub fn rpc(&self) -> rpc::ClientProxy<ServerMessage, ClientMessage> {
+        self.rpc.clone()
+    }
+
+    #[doc(hidden)]
+    pub fn cpu_pool(&self) -> CpuPool {
+        self.cpu_pool.clone()
     }
 }
 
-impl Context for ClientContext {
-    fn init(_context_name: Option<&CStr>) -> Result<*mut ffi::cubeb> {
+// TODO: encapsulate connect, etc inside audioipc.
+fn open_server_stream() -> Result<net::UnixStream> {
+    unsafe {
+        if let Some(fd) = G_SERVER_FD {
+            return Ok(net::UnixStream::from_raw_fd(fd));
+        }
+
+        Err(Error::default())
+    }
+}
+
+impl ContextOps for ClientContext {
+    fn init(_context_name: Option<&CStr>) -> Result<Context> {
+        fn bind_and_send_client(
+            stream: UnixStream,
+            handle: &Handle,
+            tx_rpc: &mpsc::Sender<rpc::ClientProxy<ServerMessage, ClientMessage>>,
+        ) -> Option<()> {
+            let transport = framed_with_fds(stream, Default::default());
+            let rpc = rpc::bind_client::<CubebClient>(transport, handle);
+            // If send fails then the rx end has closed
+            // which is unlikely here.
+            let _ = tx_rpc.send(rpc);
+            Some(())
+        }
+
         assert_not_in_callback();
-        // TODO: encapsulate connect, etc inside audioipc.
-        let stream = t!(UnixStream::connect(audioipc::get_uds_path()));
+
+        let (tx_rpc, rx_rpc) = mpsc::channel();
+
+        let core = t!(core::spawn_thread("AudioIPC Client RPC", move || {
+            let handle = core::handle();
+
+            open_server_stream()
+                .ok()
+                .and_then(|stream| UnixStream::from_stream(stream, &handle).ok())
+                .and_then(|stream| bind_and_send_client(stream, &handle, &tx_rpc))
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        "Failed to open stream and create rpc.",
+                    )
+                })
+        }));
+
+        let rpc = t!(rx_rpc.recv());
+
+        let cpupool = CPUPOOL_INIT_PARAMS.with(|p| {
+            let params = p.replace(None).unwrap();
+            futures_cpupool::Builder::new()
+                .name_prefix("AudioIPC")
+                .pool_size(params.pool_size)
+                .stack_size(params.stack_size)
+                .create()
+        });
+
         let ctx = Box::new(ClientContext {
             _ops: &CLIENT_OPS as *const _,
-            connection: Mutex::new(Connection::new(stream))
+            rpc: rpc,
+            core: core,
+            cpu_pool: cpupool,
         });
-        Ok(Box::into_raw(ctx) as *mut _)
+        Ok(unsafe { Context::from_ptr(Box::into_raw(ctx) as *mut _) })
     }
 
-    fn backend_id(&self) -> &'static CStr {
-        // HACK: This is called reentrantly from Gecko's AudioStream::DataCallback.
-        //assert_not_in_callback();
+    fn backend_id(&mut self) -> &'static CStr {
+        assert_not_in_callback();
         unsafe { CStr::from_ptr(b"remote\0".as_ptr() as *const _) }
     }
 
-    fn max_channel_count(&self) -> Result<u32> {
-        // HACK: This needs to be reentrant as MSG calls it from within data_callback.
-        //assert_not_in_callback();
-        //let mut conn = self.connection();
-        //send_recv!(conn, ContextGetMaxChannelCount => ContextMaxChannelCount())
-        warn!("Context::max_channel_count lying about result until reentrancy issues resolved.");
-        Ok(2)
+    fn max_channel_count(&mut self) -> Result<u32> {
+        assert_not_in_callback();
+        send_recv!(self.rpc(), ContextGetMaxChannelCount => ContextMaxChannelCount())
     }
 
-    fn min_latency(&self, params: &StreamParams) -> Result<u32> {
+    fn min_latency(&mut self, params: StreamParams) -> Result<u32> {
         assert_not_in_callback();
-        let params = messages::StreamParams::from(unsafe { &*params.raw() });
-        let mut conn = self.connection();
-        send_recv!(conn, ContextGetMinLatency(params) => ContextMinLatency())
+        let params = messages::StreamParams::from(params.as_ref());
+        send_recv!(self.rpc(), ContextGetMinLatency(params) => ContextMinLatency())
     }
 
-    fn preferred_sample_rate(&self) -> Result<u32> {
+    fn preferred_sample_rate(&mut self) -> Result<u32> {
         assert_not_in_callback();
-        let mut conn = self.connection();
-        send_recv!(conn, ContextGetPreferredSampleRate => ContextPreferredSampleRate())
+        send_recv!(self.rpc(), ContextGetPreferredSampleRate => ContextPreferredSampleRate())
     }
 
-    fn preferred_channel_layout(&self) -> Result<ffi::cubeb_channel_layout> {
+    fn enumerate_devices(
+        &mut self,
+        devtype: DeviceType,
+        collection: &DeviceCollectionRef,
+    ) -> Result<()> {
         assert_not_in_callback();
-        let mut conn = self.connection();
-        send_recv!(conn, ContextGetPreferredChannelLayout => ContextPreferredChannelLayout())
-    }
-
-    fn enumerate_devices(&self, devtype: DeviceType) -> Result<ffi::cubeb_device_collection> {
-        assert_not_in_callback();
-        let mut conn = self.connection();
-        let v: Vec<ffi::cubeb_device_info> =
-            match send_recv!(conn, ContextGetDeviceEnumeration(devtype.bits()) => ContextEnumeratedDevices()) {
-                Ok(mut v) => v.drain(..).map(|i| i.into()).collect(),
-                Err(e) => return Err(e),
-            };
-        let vs = v.into_boxed_slice();
-        let coll = ffi::cubeb_device_collection {
-            count: vs.len(),
-            device: vs.as_ptr()
+        let v: Vec<ffi::cubeb_device_info> = match send_recv!(self.rpc(),
+                             ContextGetDeviceEnumeration(devtype.bits()) =>
+                             ContextEnumeratedDevices())
+        {
+            Ok(mut v) => v.drain(..).map(|i| i.into()).collect(),
+            Err(e) => return Err(e),
         };
+        let mut vs = v.into_boxed_slice();
+        let coll = unsafe { &mut *collection.as_ptr() };
+        coll.device = vs.as_mut_ptr();
+        coll.count = vs.len();
         // Giving away the memory owned by vs.  Don't free it!
         // Reclaimed in `device_collection_destroy`.
         mem::forget(vs);
-        Ok(coll)
+        Ok(())
     }
 
-    fn device_collection_destroy(&self, collection: *mut ffi::cubeb_device_collection) {
+    fn device_collection_destroy(&mut self, collection: &mut DeviceCollectionRef) -> Result<()> {
         assert_not_in_callback();
         unsafe {
-            let coll = &*collection;
+            let coll = &mut *collection.as_ptr();
             let mut devices = Vec::from_raw_parts(
                 coll.device as *mut ffi::cubeb_device_info,
                 coll.count,
-                coll.count
+                coll.count,
             );
             for dev in &mut devices {
                 if !dev.device_id.is_null() {
@@ -127,33 +201,36 @@ impl Context for ClientContext {
                     let _ = CString::from_raw(dev.friendly_name as *mut _);
                 }
             }
+            coll.device = ptr::null_mut();
+            coll.count = 0;
+            Ok(())
         }
     }
 
     fn stream_init(
-        &self,
+        &mut self,
         stream_name: Option<&CStr>,
         input_device: DeviceId,
-        input_stream_params: Option<&ffi::cubeb_stream_params>,
+        input_stream_params: Option<&StreamParamsRef>,
         output_device: DeviceId,
-        output_stream_params: Option<&ffi::cubeb_stream_params>,
+        output_stream_params: Option<&StreamParamsRef>,
         latency_frame: u32,
         // These params aren't sent to the server
         data_callback: ffi::cubeb_data_callback,
         state_callback: ffi::cubeb_state_callback,
         user_ptr: *mut c_void,
-    ) -> Result<*mut ffi::cubeb_stream> {
+    ) -> Result<Stream> {
         assert_not_in_callback();
 
-        fn opt_stream_params(p: Option<&ffi::cubeb_stream_params>) -> Option<messages::StreamParams> {
+        fn opt_stream_params(p: Option<&StreamParamsRef>) -> Option<messages::StreamParams> {
             match p {
-                Some(raw) => Some(messages::StreamParams::from(raw)),
+                Some(p) => Some(messages::StreamParams::from(p)),
                 None => None,
             }
         }
 
         let stream_name = match stream_name {
-            Some(s) => Some(s.to_bytes().to_vec()),
+            Some(s) => Some(s.to_bytes_with_nul().to_vec()),
             None => None,
         };
 
@@ -162,17 +239,17 @@ impl Context for ClientContext {
 
         let init_params = messages::StreamInitParams {
             stream_name: stream_name,
-            input_device: input_device.raw() as _,
+            input_device: input_device as usize,
             input_stream_params: input_stream_params,
-            output_device: output_device.raw() as _,
+            output_device: output_device as usize,
             output_stream_params: output_stream_params,
-            latency_frames: latency_frame
+            latency_frames: latency_frame,
         };
         stream::init(self, init_params, data_callback, state_callback, user_ptr)
     }
 
     fn register_device_collection_changed(
-        &self,
+        &mut self,
         _dev_type: DeviceType,
         _collection_changed_callback: ffi::cubeb_device_collection_changed_callback,
         _user_ptr: *mut c_void,
@@ -184,17 +261,23 @@ impl Context for ClientContext {
 
 impl Drop for ClientContext {
     fn drop(&mut self) {
-        let mut conn = self.connection();
-        info!("ClientContext drop...");
-        let r = conn.send(ServerMessage::ClientDisconnect);
-        if r.is_err() {
-            debug!("ClientContext::Drop send error={:?}", r);
-        } else {
-            let r = conn.receive();
-            if let Ok(ClientMessage::ClientDisconnected) = r {
-            } else {
-                debug!("ClientContext::Drop receive error={:?}", r);
+        debug!("ClientContext dropped...");
+        let _ = send_recv!(self.rpc(), ClientDisconnect => ClientDisconnected);
+        unsafe {
+            if G_SERVER_FD.is_some() {
+                libc::close(super::G_SERVER_FD.take().unwrap());
             }
         }
+    }
+}
+
+impl fmt::Debug for ClientContext {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("ClientContext")
+            .field("_ops", &self._ops)
+            .field("rpc", &self.rpc)
+            .field("core", &self.core)
+            .field("cpu_pool", &"...")
+            .finish()
     }
 }

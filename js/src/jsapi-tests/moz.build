@@ -19,6 +19,7 @@ UNIFIED_SOURCES += [
     'testCallNonGenericMethodOnProxy.cpp',
     'testChromeBuffer.cpp',
     'testCloneScript.cpp',
+    'testCompileNonSyntactic.cpp',
     'testDateToLocaleString.cpp',
     'testDebugger.cpp',
     'testDeepFreeze.cpp',
@@ -56,10 +57,10 @@ UNIFIED_SOURCES += [
     'testGetPropertyDescriptor.cpp',
     'testHashTable.cpp',
     'testIndexToString.cpp',
+    'testInformalValueTypeName.cpp',
     'testIntern.cpp',
     'testIntlAvailableLocales.cpp',
     'testIntString.cpp',
-    'testIntTypesABI.cpp',
     'testIsInsideNursery.cpp',
     'testIteratorObject.cpp',
     'testJSEvaluateScript.cpp',
@@ -98,7 +99,7 @@ UNIFIED_SOURCES += [
     'testThreadingExclusiveData.cpp',
     'testThreadingMutex.cpp',
     'testThreadingThread.cpp',
-    'testToIntWidth.cpp',
+    'testToSignedOrUnsignedInteger.cpp',
     'testTypedArrays.cpp',
     'testUbiNode.cpp',
     'testUncaughtSymbol.cpp',
@@ -136,6 +137,24 @@ if CONFIG['ENABLE_STREAMS']:
         'testReadableStream.cpp',
     ]
 
+
+if CONFIG['NIGHTLY_BUILD']:
+    # The Error interceptor only exists on Nightly.
+    UNIFIED_SOURCES += [
+        'testErrorInterceptor.cpp',
+    ]
+
+if CONFIG['JS_BUILD_BINAST'] and CONFIG['JS_STANDALONE']:
+    # Standalone builds leave the source directory untouched,
+    # which lets us run tests with the data files intact.
+    # Otherwise, in the current state of the build system,
+    # we can't have data files in js/src tests.
+    UNIFIED_SOURCES += [
+        'testBinASTReader.cpp',
+        'testBinTokenReaderTester.cpp'
+    ]
+
+
 DEFINES['EXPORT_JS_API'] = True
 
 LOCAL_INCLUDES += [
@@ -143,22 +162,20 @@ LOCAL_INCLUDES += [
     '..',
 ]
 
-if CONFIG['ENABLE_INTL_API'] and CONFIG['MOZ_ICU_DATA_ARCHIVE']:
-    # The ICU libraries linked into libmozjs will not include the ICU data,
-    # so link it directly.
-    USE_LIBS += ['icudata']
-
 USE_LIBS += [
     'static:js',
 ]
 
+if CONFIG['MOZ_NEEDS_LIBATOMIC']:
+    OS_LIBS += ['atomic']
+
 OS_LIBS += CONFIG['MOZ_ZLIB_LIBS']
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-shadow', '-Werror=format', '-fno-strict-aliasing']
 
 # This is intended as a temporary workaround to enable VS2015.
-if CONFIG['_MSC_VER']:
+if CONFIG['CC_TYPE'] in ('msvc', 'clang-cl'):
     CXXFLAGS += ['-wd4312']
 
 DEFINES['topsrcdir'] = '%s/js/src' % TOPSRCDIR

@@ -103,11 +103,13 @@ static bool NewTCPSocketPair(PRFileDesc *fd[], bool aSetRecvBuff)
       goto failed;
     }
   }
+  PR_SetFDInheritable(writer, false);
 
   reader = PR_Accept(listener, &listenAddr, PR_MillisecondsToInterval(200));
   if (!reader) {
     goto failed;
   }
+  PR_SetFDInheritable(reader, false);
   if (aSetRecvBuff) {
     PR_SetSocketOption(reader, &recvBufferOpt);
   }
@@ -138,6 +140,8 @@ PollableEvent::PollableEvent()
   : mWriteFD(nullptr)
   , mReadFD(nullptr)
   , mSignaled(false)
+  , mWriteFailed(false)
+  , mSignalTimestampAdjusted(false)
 {
   MOZ_COUNT_CTOR(PollableEvent);
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
@@ -216,6 +220,7 @@ PollableEvent::PollableEvent()
     // prime the system to deal with races invovled in [dc]tor cycle
     SOCKET_LOG(("PollableEvent() ctor ok\n"));
     mSignaled = true;
+    MarkFirstSignalTimestamp();
     PR_Write(mWriteFD, "I", 1);
   }
 }
@@ -272,13 +277,20 @@ PollableEvent::Signal()
   }
 #endif
 
-  mSignaled = true;
+  if (!mSignaled) {
+    mSignaled = true;
+    MarkFirstSignalTimestamp();
+  }
+
   int32_t status = PR_Write(mWriteFD, "M", 1);
   SOCKET_LOG(("PollableEvent::Signal PR_Write %d\n", status));
   if (status != 1) {
     NS_WARNING("PollableEvent::Signal Failed\n");
     SOCKET_LOG(("PollableEvent::Signal Failed\n"));
     mSignaled = false;
+    mWriteFailed = true;
+  } else {
+    mWriteFailed = false;
   }
   return (status == 1);
 }
@@ -290,11 +302,21 @@ PollableEvent::Clear()
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   SOCKET_LOG(("PollableEvent::Clear\n"));
+
+  if (!mFirstSignalAfterClear.IsNull()) {
+    SOCKET_LOG(("PollableEvent::Clear time to signal %ums",
+                (uint32_t)(TimeStamp::NowLoRes() - mFirstSignalAfterClear).ToMilliseconds()));
+  }
+
+  mFirstSignalAfterClear = TimeStamp();
+  mSignalTimestampAdjusted = false;
   mSignaled = false;
+
   if (!mReadFD) {
     SOCKET_LOG(("PollableEvent::Clear mReadFD is null\n"));
     return false;
   }
+
   char buf[2048];
   int32_t status;
 #ifdef XP_WIN
@@ -302,7 +324,7 @@ PollableEvent::Clear()
   // do not have any deadlock read from the socket as much as we can.
   while (true) {
     status = PR_Read(mReadFD, buf, 2048);
-    SOCKET_LOG(("PollableEvent::Signal PR_Read %d\n", status));
+    SOCKET_LOG(("PollableEvent::Clear PR_Read %d\n", status));
     if (status == 0) {
       SOCKET_LOG(("PollableEvent::Clear EOF!\n"));
       return false;
@@ -319,7 +341,7 @@ PollableEvent::Clear()
   }
 #else
   status = PR_Read(mReadFD, buf, 2048);
-  SOCKET_LOG(("PollableEvent::Signal PR_Read %d\n", status));
+  SOCKET_LOG(("PollableEvent::Clear PR_Read %d\n", status));
 
   if (status == 1) {
     return true;
@@ -343,5 +365,47 @@ PollableEvent::Clear()
 #endif //XP_WIN
 
 }
+
+void
+PollableEvent::MarkFirstSignalTimestamp()
+{
+  if (mFirstSignalAfterClear.IsNull()) {
+    SOCKET_LOG(("PollableEvent::MarkFirstSignalTimestamp"));
+    mFirstSignalAfterClear = TimeStamp::NowLoRes();
+  }
+}
+
+void
+PollableEvent::AdjustFirstSignalTimestamp()
+{
+  if (!mSignalTimestampAdjusted && !mFirstSignalAfterClear.IsNull()) {
+    SOCKET_LOG(("PollableEvent::AdjustFirstSignalTimestamp"));
+    mFirstSignalAfterClear = TimeStamp::NowLoRes();
+    mSignalTimestampAdjusted = true;
+  }
+}
+
+bool
+PollableEvent::IsSignallingAlive(TimeDuration const& timeout)
+{
+  if (mWriteFailed) {
+    return false;
+  }
+
+#ifdef DEBUG
+  // The timeout would be just a disturbance in a debug build.
+  return true;
+#else
+  if (!mSignaled || mFirstSignalAfterClear.IsNull() || timeout == TimeDuration()) {
+    return true;
+  }
+
+  TimeDuration delay = (TimeStamp::NowLoRes() - mFirstSignalAfterClear);
+  bool timedOut = delay > timeout;
+
+  return !timedOut;
+#endif // DEBUG
+}
+
 } // namespace net
 } // namespace mozilla

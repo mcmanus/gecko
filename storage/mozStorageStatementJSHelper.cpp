@@ -21,6 +21,8 @@
 
 #include "xpc_make_class.h"
 
+#include "mozilla/Services.h"
+
 namespace mozilla {
 namespace storage {
 
@@ -29,17 +31,19 @@ namespace storage {
 
 static
 bool
-stepFunc(JSContext *aCtx,
-         uint32_t,
-         JS::Value *_vp)
+stepFunc(JSContext *aCtx, uint32_t argc, JS::Value *_vp)
 {
-  nsCOMPtr<nsIXPConnect> xpc(Service::getXPConnect());
+  JS::CallArgs args = CallArgsFromVp(argc, _vp);
+
+  nsCOMPtr<nsIXPConnect> xpc(mozilla::services::GetXPConnect());
   nsCOMPtr<nsIXPConnectWrappedNative> wrapper;
-  JSObject *obj = JS_THIS_OBJECT(aCtx, _vp);
-  if (!obj) {
+
+  if (!args.thisv().isObject()) {
+    ::JS_ReportErrorASCII(aCtx, "mozIStorageStatement::step() requires object");
     return false;
   }
 
+  JSObject *obj = &args.thisv().toObject();
   nsresult rv =
     xpc->GetWrappedNativeOfJSObject(aCtx, obj, getter_AddRefs(wrapper));
   if (NS_FAILED(rv)) {
@@ -63,7 +67,7 @@ stepFunc(JSContext *aCtx,
   bool hasMore = false;
   rv = stmt->ExecuteStep(&hasMore);
   if (NS_SUCCEEDED(rv) && !hasMore) {
-    _vp->setBoolean(false);
+    args.rval().setBoolean(false);
     (void)stmt->Reset();
     return true;
   }
@@ -73,7 +77,7 @@ stepFunc(JSContext *aCtx,
     return false;
   }
 
-  _vp->setBoolean(hasMore);
+  args.rval().setBoolean(hasMore);
   return true;
 }
 

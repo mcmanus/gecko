@@ -10,6 +10,10 @@ const { DebuggerServer } = require("../main");
 const { getChildDocShells, TabActor } = require("./tab");
 const makeDebugger = require("./utils/make-debugger");
 
+const { extend } = require("devtools/shared/extend");
+const { ActorClassWithSpec, Actor } = require("devtools/shared/protocol");
+const { tabSpec } = require("devtools/shared/specs/tab");
+
 /**
  * Creates a TabActor for debugging all the chrome content in the
  * current process. Most of the implementation is inherited from TabActor.
@@ -30,7 +34,17 @@ const makeDebugger = require("./utils/make-debugger");
  * @param connection DebuggerServerConnection
  *        The connection to the client.
  */
-function ChromeActor(connection) {
+
+/**
+ * Protocol.js expects only the prototype object, and does not maintain the prototype
+ * chain when it constructs the ActorClass. For this reason we are using `extend` to
+ * maintain the properties of TabActor.prototype
+ * */
+
+const chromePrototype = extend({}, TabActor.prototype);
+
+chromePrototype.initialize = function(connection) {
+  Actor.prototype.initialize.call(this, connection);
   TabActor.call(this, connection);
 
   // This creates a Debugger instance for chrome debugging all globals.
@@ -62,34 +76,29 @@ function ChromeActor(connection) {
   }
 
   // On XPCShell, there is no window/docshell
-  let docShell = window ? window.QueryInterface(Ci.nsIInterfaceRequestor)
+  const docShell = window ? window.QueryInterface(Ci.nsIInterfaceRequestor)
                                 .getInterface(Ci.nsIDocShell)
                         : null;
   Object.defineProperty(this, "docShell", {
     value: docShell,
     configurable: true
   });
-}
-exports.ChromeActor = ChromeActor;
+};
 
-ChromeActor.prototype = Object.create(TabActor.prototype);
-
-ChromeActor.prototype.constructor = ChromeActor;
-
-ChromeActor.prototype.isRootActor = true;
+chromePrototype.isRootActor = true;
 
 /**
  * Getter for the list of all docshells in this tabActor
  * @return {Array}
  */
-Object.defineProperty(ChromeActor.prototype, "docShells", {
-  get: function () {
+Object.defineProperty(chromePrototype, "docShells", {
+  get: function() {
     // Iterate over all top-level windows and all their docshells.
     let docShells = [];
-    let e = Services.ww.getWindowEnumerator();
+    const e = Services.ww.getWindowEnumerator();
     while (e.hasMoreElements()) {
-      let window = e.getNext();
-      let docShell = window.QueryInterface(Ci.nsIInterfaceRequestor)
+      const window = e.getNext();
+      const docShell = window.QueryInterface(Ci.nsIInterfaceRequestor)
                            .getInterface(Ci.nsIWebNavigation)
                            .QueryInterface(Ci.nsIDocShell);
       docShells = docShells.concat(getChildDocShells(docShell));
@@ -99,7 +108,7 @@ Object.defineProperty(ChromeActor.prototype, "docShells", {
   }
 });
 
-ChromeActor.prototype.observe = function (subject, topic, data) {
+chromePrototype.observe = function(subject, topic, data) {
   TabActor.prototype.observe.call(this, subject, topic, data);
   if (!this.attached) {
     return;
@@ -114,7 +123,7 @@ ChromeActor.prototype.observe = function (subject, topic, data) {
   }
 };
 
-ChromeActor.prototype._attach = function () {
+chromePrototype._attach = function() {
   if (this.attached) {
     return false;
   }
@@ -126,10 +135,10 @@ ChromeActor.prototype._attach = function () {
   Services.obs.addObserver(this, "chrome-webnavigation-destroy");
 
   // Iterate over all top-level windows.
-  let e = Services.ww.getWindowEnumerator();
+  const e = Services.ww.getWindowEnumerator();
   while (e.hasMoreElements()) {
-    let window = e.getNext();
-    let docShell = window.QueryInterface(Ci.nsIInterfaceRequestor)
+    const window = e.getNext();
+    const docShell = window.QueryInterface(Ci.nsIInterfaceRequestor)
                          .getInterface(Ci.nsIWebNavigation)
                          .QueryInterface(Ci.nsIDocShell);
     if (docShell == this.docShell) {
@@ -140,7 +149,7 @@ ChromeActor.prototype._attach = function () {
   return undefined;
 };
 
-ChromeActor.prototype._detach = function () {
+chromePrototype._detach = function() {
   if (!this.attached) {
     return false;
   }
@@ -149,10 +158,10 @@ ChromeActor.prototype._detach = function () {
   Services.obs.removeObserver(this, "chrome-webnavigation-destroy");
 
   // Iterate over all top-level windows.
-  let e = Services.ww.getWindowEnumerator();
+  const e = Services.ww.getWindowEnumerator();
   while (e.hasMoreElements()) {
-    let window = e.getNext();
-    let docShell = window.QueryInterface(Ci.nsIInterfaceRequestor)
+    const window = e.getNext();
+    const docShell = window.QueryInterface(Ci.nsIInterfaceRequestor)
                          .getInterface(Ci.nsIWebNavigation)
                          .QueryInterface(Ci.nsIDocShell);
     if (docShell == this.docShell) {
@@ -170,12 +179,12 @@ ChromeActor.prototype._detach = function () {
 /**
  * Prepare to enter a nested event loop by disabling debuggee events.
  */
-ChromeActor.prototype.preNest = function () {
+chromePrototype.preNest = function() {
   // Disable events in all open windows.
-  let e = Services.wm.getEnumerator(null);
+  const e = Services.wm.getEnumerator(null);
   while (e.hasMoreElements()) {
-    let win = e.getNext();
-    let windowUtils = win.QueryInterface(Ci.nsIInterfaceRequestor)
+    const win = e.getNext();
+    const windowUtils = win.QueryInterface(Ci.nsIInterfaceRequestor)
                          .getInterface(Ci.nsIDOMWindowUtils);
     windowUtils.suppressEventHandling(true);
     windowUtils.suspendTimeouts();
@@ -185,14 +194,18 @@ ChromeActor.prototype.preNest = function () {
 /**
  * Prepare to exit a nested event loop by enabling debuggee events.
  */
-ChromeActor.prototype.postNest = function (nestData) {
+chromePrototype.postNest = function(nestData) {
   // Enable events in all open windows.
-  let e = Services.wm.getEnumerator(null);
+  const e = Services.wm.getEnumerator(null);
   while (e.hasMoreElements()) {
-    let win = e.getNext();
-    let windowUtils = win.QueryInterface(Ci.nsIInterfaceRequestor)
+    const win = e.getNext();
+    const windowUtils = win.QueryInterface(Ci.nsIInterfaceRequestor)
                          .getInterface(Ci.nsIDOMWindowUtils);
     windowUtils.resumeTimeouts();
     windowUtils.suppressEventHandling(false);
   }
 };
+
+chromePrototype.typeName = "Chrome";
+exports.chromePrototype = chromePrototype;
+exports.ChromeActor = ActorClassWithSpec(tabSpec, chromePrototype);

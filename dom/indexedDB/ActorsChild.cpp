@@ -24,12 +24,15 @@
 #include "mozilla/Maybe.h"
 #include "mozilla/TypeTraits.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/dom/Event.h"
 #include "mozilla/dom/PermissionMessageUtils.h"
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/indexedDB/PBackgroundIDBDatabaseFileChild.h"
 #include "mozilla/dom/indexedDB/PIndexedDBPermissionRequestChild.h"
 #include "mozilla/dom/ipc/PendingIPCBlobChild.h"
 #include "mozilla/dom/IPCBlobUtils.h"
+#include "mozilla/dom/WorkerPrivate.h"
+#include "mozilla/dom/WorkerRunnable.h"
 #include "mozilla/Encoding.h"
 #include "mozilla/ipc/BackgroundUtils.h"
 #include "mozilla/TaskQueue.h"
@@ -38,7 +41,6 @@
 #include "nsIAsyncInputStream.h"
 #include "nsIBFCacheEntry.h"
 #include "nsIDocument.h"
-#include "nsIDOMEvent.h"
 #include "nsIEventTarget.h"
 #include "nsIFileStreams.h"
 #include "nsNetCID.h"
@@ -48,8 +50,6 @@
 #include "PermissionRequestBase.h"
 #include "ProfilerHelpers.h"
 #include "ReportInternalError.h"
-#include "WorkerPrivate.h"
-#include "WorkerRunnable.h"
 
 #ifdef DEBUG
 #include "IndexedDatabaseManager.h"
@@ -71,8 +71,6 @@ namespace mozilla {
 using ipc::PrincipalInfo;
 
 namespace dom {
-
-using namespace workers;
 
 namespace indexedDB {
 
@@ -726,7 +724,7 @@ void
 DispatchErrorEvent(IDBRequest* aRequest,
                    nsresult aErrorCode,
                    IDBTransaction* aTransaction = nullptr,
-                   nsIDOMEvent* aEvent = nullptr)
+                   Event* aEvent = nullptr)
 {
   MOZ_ASSERT(aRequest);
   aRequest->AssertIsOnOwningThread();
@@ -740,7 +738,7 @@ DispatchErrorEvent(IDBRequest* aRequest,
 
   request->SetError(aErrorCode);
 
-  nsCOMPtr<nsIDOMEvent> errorEvent;
+  RefPtr<Event> errorEvent;
   if (!aEvent) {
     // Make an error event and fire it at the target.
     errorEvent = CreateGenericEvent(request,
@@ -776,9 +774,9 @@ DispatchErrorEvent(IDBRequest* aRequest,
                  aErrorCode);
   }
 
-  bool doDefault;
-  nsresult rv = request->DispatchEvent(aEvent, &doDefault);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  IgnoredErrorResult rv;
+  bool doDefault = request->DispatchEvent(*aEvent, CallerType::System, rv);
+  if (NS_WARN_IF(rv.Failed())) {
     return;
   }
 
@@ -802,7 +800,7 @@ DispatchErrorEvent(IDBRequest* aRequest,
 
 void
 DispatchSuccessEvent(ResultHelper* aResultHelper,
-                     nsIDOMEvent* aEvent = nullptr)
+                     Event* aEvent = nullptr)
 {
   MOZ_ASSERT(aResultHelper);
 
@@ -819,7 +817,7 @@ DispatchSuccessEvent(ResultHelper* aResultHelper,
     return;
   }
 
-  nsCOMPtr<nsIDOMEvent> successEvent;
+  RefPtr<Event> successEvent;
   if (!aEvent) {
     successEvent = CreateGenericEvent(request,
                                       nsDependentString(kSuccessEventType),
@@ -851,22 +849,26 @@ DispatchSuccessEvent(ResultHelper* aResultHelper,
                  IDB_LOG_STRINGIFY(aEvent, kSuccessEventType));
   }
 
-  bool dummy;
-  nsresult rv = request->DispatchEvent(aEvent, &dummy);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  MOZ_ASSERT_IF(transaction,
+                transaction->IsOpen() && !transaction->IsAborted());
+
+  IgnoredErrorResult rv;
+  request->DispatchEvent(*aEvent, rv);
+  if (NS_WARN_IF(rv.Failed())) {
     return;
   }
-
-  MOZ_ASSERT_IF(transaction,
-                transaction->IsOpen() || transaction->IsAborted());
 
   WidgetEvent* internalEvent = aEvent->WidgetEventPtr();
   MOZ_ASSERT(internalEvent);
 
   if (transaction &&
-      transaction->IsOpen() &&
-      internalEvent->mFlags.mExceptionWasRaised) {
-    transaction->Abort(NS_ERROR_DOM_INDEXEDDB_ABORT_ERR);
+      transaction->IsOpen()) {
+    if (internalEvent->mFlags.mExceptionWasRaised) {
+      transaction->Abort(NS_ERROR_DOM_INDEXEDDB_ABORT_ERR);
+    } else {
+      // To handle upgrade transaction.
+      transaction->Run();
+    }
   }
 }
 
@@ -1755,6 +1757,7 @@ BackgroundFactoryRequestChild::BackgroundFactoryRequestChild(
                                                uint64_t aRequestedVersion)
   : BackgroundRequestChildBase(aOpenRequest)
   , mFactory(aFactory)
+  , mDatabaseActor(nullptr)
   , mRequestedVersion(aRequestedVersion)
   , mIsDeleteOp(aIsDeleteOp)
 {
@@ -1779,6 +1782,15 @@ BackgroundFactoryRequestChild::GetOpenDBRequest() const
   return static_cast<IDBOpenDBRequest*>(mRequest.get());
 }
 
+void
+BackgroundFactoryRequestChild::SetDatabaseActor(BackgroundDatabaseChild* aActor)
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(!aActor || !mDatabaseActor);
+
+  mDatabaseActor = aActor;
+}
+
 bool
 BackgroundFactoryRequestChild::HandleResponse(nsresult aResponse)
 {
@@ -1789,6 +1801,11 @@ BackgroundFactoryRequestChild::HandleResponse(nsresult aResponse)
   mRequest->Reset();
 
   DispatchErrorEvent(mRequest, aResponse);
+
+  if (mDatabaseActor) {
+    mDatabaseActor->ReleaseDOMObject();
+    MOZ_ASSERT(!mDatabaseActor);
+  }
 
   return true;
 }
@@ -1808,12 +1825,15 @@ BackgroundFactoryRequestChild::HandleResponse(
   IDBDatabase* database = databaseActor->GetDOMObject();
   if (!database) {
     databaseActor->EnsureDOMObject();
+    MOZ_ASSERT(mDatabaseActor);
 
     database = databaseActor->GetDOMObject();
     MOZ_ASSERT(database);
 
     MOZ_ASSERT(!database->IsClosed());
   }
+
+  MOZ_ASSERT(mDatabaseActor == databaseActor);
 
   if (database->IsClosed()) {
     // If the database was closed already, which is only possible if we fired an
@@ -1827,6 +1847,7 @@ BackgroundFactoryRequestChild::HandleResponse(
   }
 
   databaseActor->ReleaseDOMObject();
+  MOZ_ASSERT(!mDatabaseActor);
 
   return true;
 }
@@ -1839,13 +1860,15 @@ BackgroundFactoryRequestChild::HandleResponse(
 
   ResultHelper helper(mRequest, nullptr, &JS::UndefinedHandleValue);
 
-  nsCOMPtr<nsIDOMEvent> successEvent =
+  RefPtr<Event> successEvent =
     IDBVersionChangeEvent::Create(mRequest,
                                   nsDependentString(kSuccessEventType),
                                   aResponse.previousVersion());
   MOZ_ASSERT(successEvent);
 
   DispatchSuccessEvent(&helper, successEvent);
+
+  MOZ_ASSERT(!mDatabaseActor);
 
   return true;
 }
@@ -1991,7 +2014,7 @@ BackgroundFactoryRequestChild::RecvBlocked(const uint64_t& aCurrentVersion)
 
   const nsDependentString type(kBlockedEventType);
 
-  nsCOMPtr<nsIDOMEvent> blockedEvent;
+  RefPtr<Event> blockedEvent;
   if (mIsDeleteOp) {
     blockedEvent =
       IDBVersionChangeEvent::Create(mRequest, type, aCurrentVersion);
@@ -2012,8 +2035,9 @@ BackgroundFactoryRequestChild::RecvBlocked(const uint64_t& aCurrentVersion)
                IDB_LOG_ID_STRING(),
                kungFuDeathGrip->LoggingSerialNumber());
 
-  bool dummy;
-  if (NS_FAILED(kungFuDeathGrip->DispatchEvent(blockedEvent, &dummy))) {
+  IgnoredErrorResult rv;
+  kungFuDeathGrip->DispatchEvent(*blockedEvent, rv);
+  if (rv.Failed()) {
     NS_WARNING("Failed to dispatch event!");
   }
 
@@ -2095,6 +2119,8 @@ BackgroundDatabaseChild::EnsureDOMObject()
 
   mDatabase = mTemporaryStrongDatabase;
   mSpec.forget();
+
+  mOpenRequestActor->SetDatabaseActor(this);
 }
 
 void
@@ -2105,6 +2131,8 @@ BackgroundDatabaseChild::ReleaseDOMObject()
   mTemporaryStrongDatabase->AssertIsOnOwningThread();
   MOZ_ASSERT(mOpenRequestActor);
   MOZ_ASSERT(mDatabase == mTemporaryStrongDatabase);
+
+  mOpenRequestActor->SetDatabaseActor(nullptr);
 
   mOpenRequestActor = nullptr;
 
@@ -2238,7 +2266,7 @@ BackgroundDatabaseChild::RecvPBackgroundIDBVersionChangeTransactionConstructor(
 
   request->SetTransaction(transaction);
 
-  nsCOMPtr<nsIDOMEvent> upgradeNeededEvent =
+  RefPtr<Event> upgradeNeededEvent =
     IDBVersionChangeEvent::Create(request,
                                   nsDependentString(kUpgradeNeededEventType),
                                   aCurrentVersion,
@@ -2321,7 +2349,7 @@ BackgroundDatabaseChild::RecvVersionChange(const uint64_t& aOldVersion,
   // Otherwise fire a versionchange event.
   const nsDependentString type(kVersionChangeEventType);
 
-  nsCOMPtr<nsIDOMEvent> versionChangeEvent;
+  RefPtr<Event> versionChangeEvent;
 
   switch (aNewVersion.type()) {
     case NullableVersion::Tnull_t:
@@ -2347,8 +2375,9 @@ BackgroundDatabaseChild::RecvVersionChange(const uint64_t& aOldVersion,
                "IndexedDB %s: C: IDBDatabase \"versionchange\" event",
                IDB_LOG_ID_STRING());
 
-  bool dummy;
-  if (NS_FAILED(kungFuDeathGrip->DispatchEvent(versionChangeEvent, &dummy))) {
+  IgnoredErrorResult rv;
+  kungFuDeathGrip->DispatchEvent(*versionChangeEvent, rv);
+  if (rv.Failed()) {
     NS_WARNING("Failed to dispatch event!");
   }
 
@@ -3029,7 +3058,7 @@ BackgroundRequestChild::HandleResponse(
   auto& serializedCloneInfo =
     const_cast<SerializedStructuredCloneReadInfo&>(aResponse);
 
-  StructuredCloneReadInfo cloneReadInfo(Move(serializedCloneInfo));
+  StructuredCloneReadInfo cloneReadInfo(std::move(serializedCloneInfo));
 
   DeserializeStructuredCloneFiles(mTransaction->Database(),
                                   aResponse.files(),
@@ -3064,7 +3093,7 @@ BackgroundRequestChild::HandleResponse(
       StructuredCloneReadInfo* cloneReadInfo = cloneReadInfos.AppendElement();
 
       // Move relevant data into the cloneReadInfo
-      *cloneReadInfo = Move(serializedCloneInfo);
+      *cloneReadInfo = std::move(serializedCloneInfo);
 
       // Get the files
       nsTArray<StructuredCloneFile> files;
@@ -3073,7 +3102,7 @@ BackgroundRequestChild::HandleResponse(
                                       GetNextModuleSet(*cloneReadInfo),
                                       files);
 
-      cloneReadInfo->mFiles = Move(files);
+      cloneReadInfo->mFiles = std::move(files);
     }
   }
 
@@ -3398,7 +3427,7 @@ PreprocessHelper::Init(const nsTArray<StructuredCloneFile>& aFiles)
     streamPairs.AppendElement(StreamPair(bytecodeStream, compiledStream));
   }
 
-  mStreamPairs = Move(streamPairs);
+  mStreamPairs = std::move(streamPairs);
 
   return NS_OK;
 }
@@ -3501,9 +3530,8 @@ PreprocessHelper::ProcessCurrentStreamPair()
   RefPtr<JS::WasmModule> module =
     JS::DeserializeWasmModule(mCurrentBytecodeFileDesc,
                               mCurrentCompiledFileDesc,
-                              Move(buildId),
+                              std::move(buildId),
                               nullptr,
-                              0,
                               0);
   if (NS_WARN_IF(!module)) {
     ContinueWithStatus(NS_ERROR_FAILURE);
@@ -3526,7 +3554,8 @@ PreprocessHelper::WaitForStreamReady(nsIInputStream* aInputStream)
   nsCOMPtr<nsIAsyncFileMetadata> asyncFileMetadata =
     do_QueryInterface(aInputStream);
   if (asyncFileMetadata) {
-    nsresult rv = asyncFileMetadata->AsyncWait(this, mTaskQueueEventTarget);
+    nsresult rv =
+      asyncFileMetadata->AsyncFileMetadataWait(this, mTaskQueueEventTarget);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
@@ -3831,7 +3860,7 @@ BackgroundCursorChild::HandleResponse(
     const_cast<nsTArray<ObjectStoreCursorResponse>&>(aResponses);
 
   for (ObjectStoreCursorResponse& response : responses) {
-    StructuredCloneReadInfo cloneReadInfo(Move(response.cloneInfo()));
+    StructuredCloneReadInfo cloneReadInfo(std::move(response.cloneInfo()));
     cloneReadInfo.mDatabase = mTransaction->Database();
 
     DeserializeStructuredCloneFiles(mTransaction->Database(),
@@ -3842,11 +3871,11 @@ BackgroundCursorChild::HandleResponse(
     RefPtr<IDBCursor> newCursor;
 
     if (mCursor) {
-      mCursor->Reset(Move(response.key()), Move(cloneReadInfo));
+      mCursor->Reset(std::move(response.key()), std::move(cloneReadInfo));
     } else {
       newCursor = IDBCursor::Create(this,
-                                    Move(response.key()),
-                                    Move(cloneReadInfo));
+                                    std::move(response.key()),
+                                    std::move(cloneReadInfo));
       mCursor = newCursor;
     }
   }
@@ -3872,9 +3901,9 @@ BackgroundCursorChild::HandleResponse(
   RefPtr<IDBCursor> newCursor;
 
   if (mCursor) {
-    mCursor->Reset(Move(response.key()));
+    mCursor->Reset(std::move(response.key()));
   } else {
-    newCursor = IDBCursor::Create(this, Move(response.key()));
+    newCursor = IDBCursor::Create(this, std::move(response.key()));
     mCursor = newCursor;
   }
 
@@ -3895,7 +3924,7 @@ BackgroundCursorChild::HandleResponse(const IndexCursorResponse& aResponse)
   // XXX Fix this somehow...
   auto& response = const_cast<IndexCursorResponse&>(aResponse);
 
-  StructuredCloneReadInfo cloneReadInfo(Move(response.cloneInfo()));
+  StructuredCloneReadInfo cloneReadInfo(std::move(response.cloneInfo()));
   cloneReadInfo.mDatabase = mTransaction->Database();
 
   DeserializeStructuredCloneFiles(mTransaction->Database(),
@@ -3906,16 +3935,16 @@ BackgroundCursorChild::HandleResponse(const IndexCursorResponse& aResponse)
   RefPtr<IDBCursor> newCursor;
 
   if (mCursor) {
-    mCursor->Reset(Move(response.key()),
-                   Move(response.sortKey()),
-                   Move(response.objectKey()),
-                   Move(cloneReadInfo));
+    mCursor->Reset(std::move(response.key()),
+                   std::move(response.sortKey()),
+                   std::move(response.objectKey()),
+                   std::move(cloneReadInfo));
   } else {
     newCursor = IDBCursor::Create(this,
-                                  Move(response.key()),
-                                  Move(response.sortKey()),
-                                  Move(response.objectKey()),
-                                  Move(cloneReadInfo));
+                                  std::move(response.key()),
+                                  std::move(response.sortKey()),
+                                  std::move(response.objectKey()),
+                                  std::move(cloneReadInfo));
     mCursor = newCursor;
   }
 
@@ -3939,14 +3968,14 @@ BackgroundCursorChild::HandleResponse(const IndexKeyCursorResponse& aResponse)
   RefPtr<IDBCursor> newCursor;
 
   if (mCursor) {
-    mCursor->Reset(Move(response.key()),
-                   Move(response.sortKey()),
-                   Move(response.objectKey()));
+    mCursor->Reset(std::move(response.key()),
+                   std::move(response.sortKey()),
+                   std::move(response.objectKey()));
   } else {
     newCursor = IDBCursor::Create(this,
-                                  Move(response.key()),
-                                  Move(response.sortKey()),
-                                  Move(response.objectKey()));
+                                  std::move(response.key()),
+                                  std::move(response.sortKey()),
+                                  std::move(response.objectKey()));
     mCursor = newCursor;
   }
 

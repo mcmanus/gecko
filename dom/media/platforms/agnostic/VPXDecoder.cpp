@@ -16,7 +16,9 @@
 #include <algorithm>
 
 #undef LOG
-#define LOG(arg, ...) MOZ_LOG(sPDMLog, mozilla::LogLevel::Debug, ("VPXDecoder(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
+#define LOG(arg, ...)                                                          \
+  DDMOZ_LOG(                                                                   \
+    sPDMLog, mozilla::LogLevel::Debug, "::%s: " arg, __func__, ##__VA_ARGS__)
 
 namespace mozilla {
 
@@ -86,9 +88,9 @@ RefPtr<ShutdownPromise>
 VPXDecoder::Shutdown()
 {
   RefPtr<VPXDecoder> self = this;
-  return InvokeAsync(mTaskQueue, __func__, [self, this]() {
-    vpx_codec_destroy(&mVPX);
-    vpx_codec_destroy(&mVPXAlpha);
+  return InvokeAsync(mTaskQueue, __func__, [self]() {
+    vpx_codec_destroy(&self->mVPX);
+    vpx_codec_destroy(&self->mVPXAlpha);
     return ShutdownPromise::CreateAndResolve(true, __func__);
   });
 }
@@ -231,9 +233,9 @@ VPXDecoder::ProcessDecode(MediaRawData* aSample)
       return DecodePromise::CreateAndReject(
         MediaResult(NS_ERROR_OUT_OF_MEMORY, __func__), __func__);
     }
-    results.AppendElement(Move(v));
+    results.AppendElement(std::move(v));
   }
-  return DecodePromise::CreateAndResolve(Move(results), __func__);
+  return DecodePromise::CreateAndResolve(std::move(results), __func__);
 }
 
 RefPtr<MediaDataDecoder::DecodePromise>

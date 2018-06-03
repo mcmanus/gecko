@@ -1,6 +1,6 @@
 {
   const { DOMLocalization } =
-    Components.utils.import("resource://gre/modules/DOMLocalization.jsm");
+    ChromeUtils.import("resource://gre/modules/DOMLocalization.jsm", {});
 
   /**
    * Polyfill for document.ready polyfill.
@@ -9,14 +9,23 @@
    * @returns {Promise}
    */
   function documentReady() {
-    const rs = document.readyState;
-    if (rs === 'interactive' || rs === 'completed') {
-      return Promise.resolve();
+    if (document.contentType === "application/vnd.mozilla.xul+xml") {
+      // XUL
+      return new Promise(
+        resolve => document.addEventListener(
+          "MozBeforeInitialXULLayout", resolve, { once: true }
+        )
+      );
     }
 
+    // HTML
+    const rs = document.readyState;
+    if (rs === "interactive" || rs === "completed") {
+      return Promise.resolve();
+    }
     return new Promise(
       resolve => document.addEventListener(
-        'readystatechange', resolve, { once: true }
+        "readystatechange", resolve, { once: true }
       )
     );
   }
@@ -29,7 +38,7 @@
    */
   function getResourceLinks(elem) {
     return Array.from(elem.querySelectorAll('link[rel="localization"]')).map(
-      el => el.getAttribute('href')
+      el => el.getAttribute("href")
     );
   }
 
@@ -37,14 +46,11 @@
 
   document.l10n = new DOMLocalization(window, resourceIds);
 
-  // trigger first context to be fetched eagerly
-  document.l10n.ctxs.touchNext();
+  // Trigger the first two contexts to be loaded eagerly.
+  document.l10n.ctxs.touchNext(2);
 
   document.l10n.ready = documentReady().then(() => {
     document.l10n.registerObservers();
-    window.addEventListener('unload', () => {
-      document.l10n.unregisterObservers();
-    });
     document.l10n.connectRoot(document.documentElement);
     return document.l10n.translateRoots();
   });

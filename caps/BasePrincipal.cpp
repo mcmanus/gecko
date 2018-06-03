@@ -13,6 +13,7 @@
 #include "nsIStandardURL.h"
 
 #include "ContentPrincipal.h"
+#include "ExpandedPrincipal.h"
 #include "nsNetUtil.h"
 #include "nsIURIWithPrincipal.h"
 #include "NullPrincipal.h"
@@ -188,7 +189,7 @@ BasePrincipal::SetCsp(nsIContentSecurityPolicy* aCsp)
 }
 
 NS_IMETHODIMP
-BasePrincipal::EnsureCSP(nsIDOMDocument* aDocument,
+BasePrincipal::EnsureCSP(nsIDocument* aDocument,
                          nsIContentSecurityPolicy** aCSP)
 {
   if (mCSP) {
@@ -218,7 +219,7 @@ BasePrincipal::GetPreloadCsp(nsIContentSecurityPolicy** aPreloadCSP)
 }
 
 NS_IMETHODIMP
-BasePrincipal::EnsurePreloadCSP(nsIDOMDocument* aDocument,
+BasePrincipal::EnsurePreloadCSP(nsIDocument* aDocument,
                                 nsIContentSecurityPolicy** aPreloadCSP)
 {
   if (mPreloadCSP) {
@@ -357,6 +358,15 @@ BasePrincipal::AddonHasPermission(const nsAtom* aPerm)
   return false;
 }
 
+nsIPrincipal*
+BasePrincipal::PrincipalToInherit(nsIURI* aRequestedURI)
+{
+  if (Is<ExpandedPrincipal>()) {
+    return As<ExpandedPrincipal>()->PrincipalToInherit(aRequestedURI);
+  }
+  return this;
+}
+
 already_AddRefed<BasePrincipal>
 BasePrincipal::CreateCodebasePrincipal(nsIURI* aURI,
                                        const OriginAttributes& aAttrs)
@@ -451,9 +461,29 @@ BasePrincipal::CloneStrippingUserContextIdAndFirstPartyDomain()
   return BasePrincipal::CreateCodebasePrincipal(uri, attrs);
 }
 
+extensions::WebExtensionPolicy*
+BasePrincipal::ContentScriptAddonPolicy()
+{
+  if (!Is<ExpandedPrincipal>()) {
+    return nullptr;
+  }
+
+  auto expanded = As<ExpandedPrincipal>();
+  for (auto& prin : expanded->WhiteList()) {
+    if (auto policy = BasePrincipal::Cast(prin)->AddonPolicy()) {
+      return policy;
+    }
+  }
+
+  return nullptr;
+}
+
 bool
 BasePrincipal::AddonAllowsLoad(nsIURI* aURI, bool aExplicit /* = false */)
 {
+  if (Is<ExpandedPrincipal>()) {
+    return As<ExpandedPrincipal>()->AddonAllowsLoad(aURI, aExplicit);
+  }
   if (auto policy = AddonPolicy()) {
     return policy->CanAccessURI(aURI, aExplicit);
   }

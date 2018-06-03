@@ -108,11 +108,10 @@ public:
                       double aHeight,
                       bool   aRepaint) override
   {
-    if (mBounds.x != aX || mBounds.y != aY) {
+    if (!mBounds.IsEqualXY(aX, aY)) {
       NotifyWindowMoved(aX, aY);
     }
-    mBounds.x = aX;
-    mBounds.y = aY;
+    mBounds.MoveTo(aX, aY);
     return Resize(aWidth, aHeight, aRepaint);
   }
 
@@ -140,7 +139,7 @@ public:
   { return NS_ERROR_UNEXPECTED; }
 
   virtual LayoutDeviceIntPoint WidgetToScreenOffset() override
-  { return LayoutDeviceIntPoint::FromUnknownPoint(GetWindowPosition() + GetChromeDimensions()); }
+  { return GetWindowPosition() + GetChromeOffset(); }
 
   int32_t RoundsWidgetCoordinatesTo() override;
 
@@ -182,11 +181,17 @@ public:
                   LayersBackend aBackendHint = mozilla::layers::LayersBackend::LAYERS_NONE,
                   LayerManagerPersistence aPersistence = LAYER_MANAGER_CURRENT) override;
 
-  // This is used after a compositor reset. The lambda aInitializeFunc is used
-  // to perform any caller-required initialization for the newly created layer
+  // This is used for creating remote layer managers and for re-creating
+  // them after a compositor reset. The lambda aInitializeFunc is used to perform
+  // any caller-required initialization for the newly created layer
   // manager; in the event of a failure, return false and it will destroy the
   // new layer manager without changing the state of the widget.
-  bool RecreateLayerManager(const std::function<bool(LayerManager*)>& aInitializeFunc);
+  bool CreateRemoteLayerManager(const std::function<bool(LayerManager*)>& aInitializeFunc);
+
+  bool HasLayerManager()
+  {
+    return !!mLayerManager;
+  }
 
   virtual void SetInputContext(const InputContext& aContext,
                                const InputContextAction& aAction) override;
@@ -229,11 +234,11 @@ public:
 
   nsIntSize GetScreenDimensions();
 
-  // Get the size of the chrome of the window that this tab belongs to.
-  nsIntPoint GetChromeDimensions();
+  // Get the offset to the chrome of the window that this tab belongs to.
+  LayoutDeviceIntPoint GetChromeOffset();
 
   // Get the screen position of the application window.
-  nsIntPoint GetWindowPosition();
+  LayoutDeviceIntPoint GetWindowPosition();
 
   virtual LayoutDeviceIntRect GetScreenBounds() override;
 
@@ -282,6 +287,7 @@ public:
 
   virtual void SetCandidateWindowForPlugin(
                  const CandidateWindowPosition& aPosition) override;
+  virtual void EnableIMEForPlugin(bool aEnable) override;
 
   virtual void ZoomToRect(const uint32_t& aPresShellId,
                           const FrameMetrics::ViewID& aViewId,
@@ -337,6 +343,10 @@ private:
   uint32_t GetCaretOffset();
 
   nsIWidgetListener* GetCurrentWidgetListener();
+
+  // When this widget caches input context and currently managed by
+  // IMEStateManager, the cache is valid.
+  bool HaveValidInputContextCache() const;
 
   class PaintTask : public Runnable {
   public:
@@ -405,6 +415,14 @@ protected:
 
 private:
   bool mNeedIMEStateInit;
+  // When remote process requests to commit/cancel a composition, the
+  // composition may have already been committed in the main process.  In such
+  // case, this will receive remaining composition events for the old
+  // composition even after requesting to commit/cancel the old composition
+  // but the TextComposition for the old composition has already been destroyed.
+  // So, until this meets new eCompositionStart, following composition events
+  // should be ignored if this is set to true.
+  bool mIgnoreCompositionEvents;
 };
 
 class PuppetScreen : public nsBaseScreen

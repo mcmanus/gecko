@@ -4,23 +4,19 @@
 
 "use strict";
 
-var Ci = Components.interfaces;
-var Cc = Components.classes;
-var Cu = Components.utils;
+ChromeUtils.import("resource://gre/modules/BrowserUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/TelemetryTimestamps.jsm");
+ChromeUtils.import("resource://gre/modules/TelemetryController.jsm");
+ChromeUtils.import("resource://gre/modules/TelemetryArchive.jsm");
+ChromeUtils.import("resource://gre/modules/TelemetryUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Preferences.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/TelemetryTimestamps.jsm");
-Cu.import("resource://gre/modules/TelemetryController.jsm");
-Cu.import("resource://gre/modules/TelemetryArchive.jsm");
-Cu.import("resource://gre/modules/TelemetryUtils.jsm");
-Cu.import("resource://gre/modules/TelemetryLog.jsm");
-Cu.import("resource://gre/modules/Preferences.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
-                                  "resource://gre/modules/AppConstants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
-                                  "resource://gre/modules/Preferences.jsm");
+ChromeUtils.defineModuleGetter(this, "AppConstants",
+                               "resource://gre/modules/AppConstants.jsm");
+ChromeUtils.defineModuleGetter(this, "Preferences",
+                               "resource://gre/modules/Preferences.jsm");
 
 const Telemetry = Services.telemetry;
 const bundle = Services.strings.createBundle(
@@ -35,7 +31,7 @@ const PREF_TELEMETRY_SERVER_OWNER = "toolkit.telemetry.server_owner";
 const PREF_TELEMETRY_ENABLED = "toolkit.telemetry.enabled";
 const PREF_DEBUG_SLOW_SQL = "toolkit.telemetry.debugSlowSql";
 const PREF_SYMBOL_SERVER_URI = "profiler.symbolicationUrl";
-const DEFAULT_SYMBOL_SERVER_URI = "http://symbolapi.mozilla.org";
+const DEFAULT_SYMBOL_SERVER_URI = "https://symbols.mozilla.org/symbolicate/v4";
 const PREF_FHR_UPLOAD_ENABLED = "datareporting.healthreport.uploadEnabled";
 
 // ms idle before applying the filter (allow uninterrupted typing)
@@ -99,7 +95,7 @@ function explodeObject(obj) {
 function filterObject(obj, filterOut) {
   let ret = {};
   for (let k of Object.keys(obj)) {
-    if (filterOut.indexOf(k) == -1) {
+    if (!filterOut.includes(k)) {
       ret[k] = obj[k];
     }
   }
@@ -190,7 +186,7 @@ var Settings = {
     for (let el of elements) {
       el.addEventListener("click", function() {
         if (AppConstants.platform == "android") {
-          Cu.import("resource://gre/modules/Messaging.jsm");
+          ChromeUtils.import("resource://gre/modules/Messaging.jsm");
           EventDispatcher.instance.sendRequest({
             type: "Settings:Show",
             resource: "preferences_privacy",
@@ -212,7 +208,7 @@ var Settings = {
 
   getStatusStringForSetting(setting) {
     let enabled = Preferences.get(setting.pref, setting.defaultPrefValue);
-    let status = bundle.GetStringFromName(enabled ? "telemetryEnabled" : "telemetryDisabled");
+    let status = bundle.GetStringFromName(enabled ? "telemetryUploadEnabled" : "telemetryUploadDisabled");
     return status;
   },
 
@@ -220,22 +216,24 @@ var Settings = {
    * Updates the button & text at the top of the page to reflect Telemetry state.
    */
   render() {
-    let homeExplanation = document.getElementById("home-explanation");
-    let fhrEnabled = Preferences.get(this.SETTINGS[0].pref, this.SETTINGS[0].defaultPrefValue);
-    fhrEnabled = bundle.GetStringFromName(fhrEnabled ? "telemetryEnabled" : "telemetryDisabled");
-    let extendedEnabled = Preferences.get(this.SETTINGS[1].pref, this.SETTINGS[1].defaultPrefValue);
-    extendedEnabled = bundle.GetStringFromName(extendedEnabled ? "extendedTelemetryEnabled" : "extendedTelemetryDisabled");
-    let parameters = [fhrEnabled, extendedEnabled].map(this.convertStringToLink);
+    let settingsExplanation = document.getElementById("settings-explanation");
+    let uploadEnabled = this.getStatusStringForSetting(this.SETTINGS[0]);
+    let extendedEnabled = Services.telemetry.canRecordExtended;
+    let collectedData = bundle.GetStringFromName(extendedEnabled ? "prereleaseData" : "releaseData");
+    let explanation = bundle.GetStringFromName("settingsExplanation");
 
-    let explanation = bundle.formatStringFromName("homeExplanation", parameters, 2);
+    let fragment = BrowserUtils.getLocalizedFragment(document, explanation, collectedData, this.convertStringToLink(uploadEnabled));
+    settingsExplanation.appendChild(fragment);
 
-    // eslint-disable-next-line no-unsanitized/property
-    homeExplanation.innerHTML = explanation;
-    this.attachObservers()
+    this.attachObservers();
   },
 
   convertStringToLink(string) {
-    return "<a href=\"\" class=\"change-data-choices-link\">" + string + "</a>";
+    let link = document.createElement("a");
+    link.setAttribute("href", "#");
+    link.setAttribute("class", "change-data-choices-link");
+    link.textContent = string;
+    return link;
   },
 };
 
@@ -281,8 +279,6 @@ var PingPicker = {
         pingPicker.classList.add("hidden");
       }
     });
-    document.getElementById("choose-payload")
-            .addEventListener("change", () => displayPingData(gPingData));
     document.getElementById("processes")
             .addEventListener("change", () => displayPingData(gPingData));
     Array.from(document.querySelectorAll(".change-ping")).forEach(el => {
@@ -290,7 +286,7 @@ var PingPicker = {
         if (!pingPicker.classList.contains("hidden")) {
           pingPicker.classList.add("hidden");
         } else {
-          pingPicker.classList.remove("hidden")
+          pingPicker.classList.remove("hidden");
           event.stopPropagation();
         }
       });
@@ -307,14 +303,18 @@ var PingPicker = {
 
   render() {
     let pings = bundle.GetStringFromName("pingExplanationLink");
-    let pingLink = "<a href=\"https://firefox-source-docs.mozilla.org/toolkit/components/telemetry/telemetry/concepts/pings.html\">" + pings + "</a>";
+    let pingLink = document.createElement("a");
+    pingLink.setAttribute("href", "https://firefox-source-docs.mozilla.org/toolkit/components/telemetry/telemetry/concepts/pings.html");
+    pingLink.textContent = pings;
     let pingName = this._getSelectedPingName();
+    let pingNameSpan = document.createElement("span");
+    pingNameSpan.setAttribute("class", "change-ping");
 
     // Display the type and controls if the ping is not current
     let pingDate = document.getElementById("ping-date");
     let pingType = document.getElementById("ping-type");
     let controls = document.getElementById("controls");
-    let explanation;
+    let fragment;
     if (!this.viewCurrentPingData) {
       // Change sidebar heading text.
       pingDate.textContent = pingName;
@@ -325,26 +325,26 @@ var PingPicker = {
 
       // Change home page text.
       pingName = bundle.formatStringFromName("namedPing", [pingName, pingTypeText], 2);
-      let pingNameHtml = "<span class=\"change-ping\">" + pingName + "</span>";
-      let parameters = [pingLink, pingNameHtml, pingTypeText];
-      explanation = bundle.formatStringFromName("pingDetails", parameters, 3);
+      pingNameSpan.textContent = pingName;
+      let explanation = bundle.GetStringFromName("pingDetails");
+      fragment = BrowserUtils.getLocalizedFragment(document, explanation, pingLink, pingNameSpan, pingTypeText);
     } else {
       // Change sidebar heading text.
       controls.classList.add("hidden");
       pingType.textContent = bundle.GetStringFromName("currentPingSidebar");
 
       // Change home page text.
-      let pingNameHtml = "<span class=\"change-ping\">" + pingName + "</span>";
-      explanation = bundle.formatStringFromName("pingDetailsCurrent", [pingLink, pingNameHtml], 2);
+      pingNameSpan.textContent = pingName;
+      let explanation = bundle.GetStringFromName("pingDetailsCurrent");
+      fragment = BrowserUtils.getLocalizedFragment(document, explanation, pingLink, pingNameSpan);
     }
 
     let pingExplanation = document.getElementById("ping-explanation");
-
-    // eslint-disable-next-line no-unsanitized/property
-    pingExplanation.innerHTML = explanation;
-    pingExplanation.querySelector(".change-ping").addEventListener("click", () =>
-      document.getElementById("ping-picker").classList.remove("hidden")
-    );
+    pingExplanation.appendChild(fragment);
+    pingExplanation.querySelector(".change-ping").addEventListener("click", (ev) => {
+      document.getElementById("ping-picker").classList.remove("hidden");
+      ev.stopPropagation();
+    });
 
     GenericSubsection.deleteAllSubSections();
   },
@@ -421,7 +421,7 @@ var PingPicker = {
     for (let p of this._archivedPings) {
       pingTypes.add(p.type);
       const pingDate = new Date(p.timestampCreated);
-      const datetimeText = Services.intl.createDateTimeFormat(undefined, {
+      const datetimeText = new Services.intl.DateTimeFormat(undefined, {
           dateStyle: "short",
           timeStyle: "medium"
         }).format(pingDate);
@@ -512,6 +512,8 @@ var PingPicker = {
           first = false;
         }
         option.hidden = (type != this.TYPE_ALL) && (option.dataset.type != type);
+        // Arrow keys should only iterate over visible options
+        option.disabled = option.hidden;
       });
     });
     this._updateArchivedPingData();
@@ -671,7 +673,6 @@ var EnvironmentData = {
     this.renderAddonsObject(addons.activeAddons, addonSection, "activeAddons");
     this.renderActivePlugins(addons.activePlugins, addonSection, "activePlugins");
     this.renderKeyValueObject(addons.theme, addonSection, "theme");
-    this.renderKeyValueObject(addons.activeExperiment, addonSection, "activeExperiment");
     this.renderAddonsObject(addons.activeGMPlugins, addonSection, "activeGMPlugins");
     this.renderPersona(addons, addonSection, "persona");
 
@@ -688,59 +689,6 @@ var EnvironmentData = {
     this.appendColumn(row, "td", value);
     table.appendChild(row);
   },
-  /**
-   * Helper function for appending a column to the data table.
-   *
-   * @param aRowElement Parent row element
-   * @param aColType Column's tag name
-   * @param aColText Column contents
-   */
-  appendColumn(aRowElement, aColType, aColText) {
-    let colElement = document.createElement(aColType);
-    let colTextElement = document.createTextNode(aColText);
-    colElement.appendChild(colTextElement);
-    aRowElement.appendChild(colElement);
-  },
-};
-
-var TelLog = {
-  /**
-   * Renders the telemetry log
-   */
-  render(payload) {
-    let entries = payload.log;
-    const hasData = entries && entries.length > 0;
-    setHasData("telemetry-log-section", hasData);
-    if (!hasData) {
-      return;
-    }
-
-    let table = document.createElement("table");
-
-    let caption = document.createElement("caption");
-    let captionString = bundle.GetStringFromName("telemetryLogTitle");
-    caption.appendChild(document.createTextNode(captionString + "\n"));
-    table.appendChild(caption);
-
-    let headings = document.createElement("tr");
-    this.appendColumn(headings, "th", bundle.GetStringFromName("telemetryLogHeadingId") + "\t");
-    this.appendColumn(headings, "th", bundle.GetStringFromName("telemetryLogHeadingTimestamp") + "\t");
-    this.appendColumn(headings, "th", bundle.GetStringFromName("telemetryLogHeadingData") + "\t");
-    table.appendChild(headings);
-
-    for (let entry of entries) {
-        let row = document.createElement("tr");
-        for (let elem of entry) {
-            this.appendColumn(row, "td", elem + "\t");
-        }
-        table.appendChild(row);
-    }
-
-    let dataDiv = document.getElementById("telemetry-log");
-    removeAllChildNodes(dataDiv);
-    dataDiv.appendChild(table);
-  },
-
   /**
    * Helper function for appending a column to the data table.
    *
@@ -938,7 +886,7 @@ var StackRenderer = {
     for (let i = 0; i < aStacks.length; ++i) {
       let stack = aStacks[i];
       aRenderHeader(i);
-      this.renderStack(div, stack)
+      this.renderStack(div, stack);
     }
   },
 
@@ -1048,7 +996,7 @@ function SymbolicationRequest_fetchSymbols() {
   this.symbolRequest.setRequestHeader("Connection", "close");
   this.symbolRequest.onreadystatechange = this.handleSymbolResponse.bind(this);
   this.symbolRequest.send(requestJSON);
-}
+};
 
 var ChromeHangs = {
 
@@ -1057,16 +1005,15 @@ var ChromeHangs = {
   /**
    * Renders raw chrome hang data
    */
-  render: function ChromeHangs_render(payload) {
-    let hangs = payload.chromeHangs;
-    setHasData("chrome-hangs-section", !!hangs);
-    if (!hangs) {
+  render: function ChromeHangs_render(chromeHangs) {
+    setHasData("chrome-hangs-section", !!chromeHangs);
+    if (!chromeHangs) {
       return;
     }
 
-    let stacks = hangs.stacks;
-    let memoryMap = hangs.memoryMap;
-    let durations = hangs.durations;
+    let stacks = chromeHangs.stacks;
+    let memoryMap = chromeHangs.memoryMap;
+    let durations = chromeHangs.durations;
 
     StackRenderer.renderStacks("chrome-hangs", stacks, memoryMap,
                                (index) => this.renderHangHeader(index, durations));
@@ -1149,7 +1096,6 @@ var Histogram = {
     outerDiv.appendChild(divStats);
 
     if (isRTL()) {
-      hgram.buckets.reverse();
       hgram.values.reverse();
     }
 
@@ -1279,13 +1225,15 @@ var Search = {
 
   // A list of ids of sections that do not support search.
   blacklist: [
+    "late-writes-section",
+    "chrome-hangs-section",
     "raw-payload-section"
   ],
 
   // Pass if: all non-empty array items match (case-sensitive)
   isPassText(subject, filter) {
     for (let item of filter) {
-      if (item.length && subject.indexOf(item) < 0) {
+      if (item.length && !subject.includes(item)) {
         return false; // mismatch and not a spurious space
       }
     }
@@ -1315,7 +1263,7 @@ var Search = {
         };
       }
     }
-    return [isPassFunc, filter]
+    return [isPassFunc, filter];
   },
 
   filterElements(elements, filterText) {
@@ -1407,7 +1355,7 @@ var Search = {
       let keyedSubSections = [];
       let subsections = section.querySelectorAll(".sub-section");
       for (let section of subsections) {
-        let datas = section.querySelector("table").rows
+        let datas = section.querySelector("table").rows;
         keyedSubSections.push({key: section, datas});
       }
       noSearchResults = this.filterKeyedElements(keyedSubSections, text);
@@ -1457,6 +1405,7 @@ var Search = {
 
   homeSearch(text) {
     changeUrlSearch(text);
+    removeSearchSectionTitles();
     if (text === "") {
       this.resetHome();
       return;
@@ -1472,13 +1421,19 @@ var Search = {
       }
       section.classList.add("active");
       let sectionHidden = this.search(text, section);
-      if (noSearchResults && !sectionHidden) {
+      if (!sectionHidden) {
+        let sectionTitle = document.querySelector(`.category[value="${section.id}"] .category-name`).textContent;
+        let sectionDataDiv = document.querySelector(`#${section.id}.has-data.active .data`);
+        let titleDiv = document.createElement("h1");
+        titleDiv.classList.add("data", "search-section-title");
+        titleDiv.textContent = sectionTitle;
+        section.insertBefore(titleDiv, sectionDataDiv);
         noSearchResults = false;
       }
     });
     this.updateNoResults(text, noSearchResults);
   }
-}
+};
 
 /*
  * Helper function to render JS objects with white space between top level elements
@@ -1521,7 +1476,7 @@ var GenericSubsection = {
       let section = ev.target;
       showSubSection(section);
     });
-    subCategory.appendChild(document.createTextNode(title))
+    subCategory.appendChild(document.createTextNode(title));
     category.appendChild(subCategory);
   },
 
@@ -1563,10 +1518,10 @@ var GenericSubsection = {
     let subsections = document.querySelectorAll(".category-subsection");
     subsections.forEach((el) => {
       el.parentElement.removeChild(el);
-    })
+    });
   },
 
-}
+};
 
 var GenericTable = {
 
@@ -1684,7 +1639,7 @@ var AddonDetails = {
       let titleText = bundle.formatStringFromName("addonProvider", [provider], 1);
       providerSection.appendChild(document.createTextNode(titleText));
 
-      let headingStrings = [this.tableIDTitle, this.tableDetailsTitle ]
+      let headingStrings = [this.tableIDTitle, this.tableDetailsTitle ];
       let table = GenericTable.render(explodeObject(addonDetails[provider]),
                                       headingStrings);
       table.appendChild(providerSection);
@@ -1871,6 +1826,7 @@ function displayProcessesSelector(selectedSection) {
 }
 
 function refreshSearch() {
+  removeSearchSectionTitles();
   let selectedSection = document.querySelector(".category.selected").getAttribute("value");
   let search = document.getElementById("search");
   if (!Search.blacklist.includes(selectedSection)) {
@@ -1879,12 +1835,19 @@ function refreshSearch() {
 }
 
 function adjustSearchState() {
+  removeSearchSectionTitles();
   let selectedSection = document.querySelector(".category.selected").getAttribute("value");
   let search = document.getElementById("search");
   search.value = "";
   search.hidden = Search.blacklist.includes(selectedSection);
   document.getElementById("no-search-results").classList.add("hidden");
   Search.search(""); // reinitialize search state.
+}
+
+function removeSearchSectionTitles() {
+    for (let sectionTitleDiv of Array.from(document.getElementsByClassName("search-section-title"))) {
+        sectionTitleDiv.remove();
+    }
 }
 
 function adjustSection() {
@@ -1975,12 +1938,9 @@ function show(selected) {
   selected.classList.add("selected");
 
   document.querySelectorAll("section").forEach((section) => {
-    section.classList.remove("active")
+    section.classList.remove("active");
   });
   selected_section.classList.add("active");
-
-  // Hack because subsection text appear selected. See Bug 1375114.
-  document.getSelection().empty();
 
   adjustHeaderState();
   displayProcessesSelector(selectedValue);
@@ -2006,7 +1966,6 @@ function showSubSection(selected) {
   let title = selected.parentElement.querySelector(".category-name").textContent;
   let subsection = selected.textContent;
   document.getElementById("sectionTitle").textContent = title + " - " + subsection;
-  document.getSelection().empty(); // prevent subsection text selection
   changeUrlPath(subsection, true);
 }
 
@@ -2021,7 +1980,7 @@ function setupListeners() {
   let menu = document.getElementById("categories");
   menu.addEventListener("click", (e) => {
     if (e.target && e.target.parentNode == menu) {
-      show(e.target)
+      show(e.target);
     }
   });
 
@@ -2055,7 +2014,7 @@ function setupListeners() {
         return;
       }
 
-      ChromeHangs.render(gPingData);
+      ChromeHangs.render(gPingData.payload.chromeHangs);
   });
 
   document.getElementById("captured-stacks-fetch-symbols").addEventListener("click",
@@ -2205,10 +2164,10 @@ var HistogramSection = {
     }
 
     let hasData = Array.from(hgramsSelect.options).some((option) => {
-      if (option == "parent") {
+      let value = option.getAttribute("value");
+      if (value == "parent") {
         return Object.keys(aPayload.histograms).length > 0;
       }
-      let value = option.getAttribute("value");
       let histos = aPayload.processes[value].histograms;
       return histos && Object.keys(histos).length > 0;
     });
@@ -2220,7 +2179,7 @@ var HistogramSection = {
       }
     }
   },
-}
+};
 
 var KeyedHistogramSection = {
   render(aPayload) {
@@ -2239,10 +2198,10 @@ var KeyedHistogramSection = {
     }
 
     let hasData = Array.from(keyedHgramsSelect.options).some((option) => {
-      if (option == "parent") {
+      let value = option.getAttribute("value");
+      if (value == "parent") {
         return Object.keys(aPayload.keyedHistograms).length > 0;
       }
-      let value = option.getAttribute("value");
       let keyedHistos = aPayload.processes[value].keyedHistograms;
       return keyedHistos && Object.keys(keyedHistos).length > 0;
     });
@@ -2255,7 +2214,7 @@ var KeyedHistogramSection = {
       }
     }
   },
-}
+};
 
 var SessionInformation = {
   render(aPayload) {
@@ -2270,7 +2229,7 @@ var SessionInformation = {
       infoSection.appendChild(table);
     }
   },
-}
+};
 
 var SimpleMeasurements = {
   render(aPayload) {
@@ -2331,7 +2290,7 @@ var SimpleMeasurements = {
 
     return result;
   },
-}
+};
 
 function renderProcessList(ping, selectEl) {
   removeAllChildNodes(selectEl);
@@ -2357,38 +2316,6 @@ function renderProcessList(ping, selectEl) {
     option.appendChild(document.createTextNode(process));
     option.setAttribute("value", process);
     selectEl.appendChild(option);
-  }
-}
-
-function renderPayloadList(ping) {
-  // Rebuild the payload select with options:
-  //   Parent Payload (selected)
-  //   Child Payload 1..ping.payload.childPayloads.length
-  let listEl = document.getElementById("choose-payload");
-  removeAllChildNodes(listEl);
-
-  let option = document.createElement("option");
-  let text = bundle.GetStringFromName("parentPayload");
-  let content = document.createTextNode(text);
-  let payloadIndex = 0;
-  option.appendChild(content);
-  option.setAttribute("value", payloadIndex++);
-  option.selected = true;
-  listEl.appendChild(option);
-
-  if (!ping.payload.childPayloads) {
-    listEl.disabled = true;
-    return
-  }
-  listEl.disabled = false;
-
-  for (; payloadIndex <= ping.payload.childPayloads.length; ++payloadIndex) {
-    option = document.createElement("option");
-    text = bundle.formatStringFromName("childPayloadN", [payloadIndex], 1);
-    content = document.createTextNode(text);
-    option.appendChild(content);
-    option.setAttribute("value", payloadIndex);
-    listEl.appendChild(option);
   }
 }
 
@@ -2430,7 +2357,6 @@ function displayPingData(ping, updatePayloadList = false) {
 function displayRichPingData(ping, updatePayloadList) {
   // Update the payload list and process lists
   if (updatePayloadList) {
-    renderPayloadList(ping);
     renderProcessList(ping, document.getElementById("processes"));
   }
 
@@ -2479,20 +2405,8 @@ function displayRichPingData(ping, updatePayloadList) {
 
   LateWritesSingleton.renderLateWrites(payload.lateWrites);
 
-  // Select payload to render
-  let payloadSelect = document.getElementById("choose-payload");
-  let payloadOption = payloadSelect.selectedOptions.item(0);
-  let payloadIndex = payloadOption.getAttribute("value");
-
-  if (payloadIndex > 0) {
-    payload = ping.payload.childPayloads[payloadIndex - 1];
-  }
-
   // Show chrome hang stacks
-  ChromeHangs.render(payload);
-
-  // Show telemetry log.
-  TelLog.render(payload);
+  ChromeHangs.render(payload.chromeHangs);
 
   // Show simple measurements
   SimpleMeasurements.render(payload);

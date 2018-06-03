@@ -9,6 +9,7 @@
 #include "js/Vector.h"
 #include "jsapi-tests/tests.h"
 #include "threading/Thread.h"
+#include "util/Text.h"
 #include "vm/SharedImmutableStringsCache.h"
 
 const int NUM_THREADS = 256;
@@ -42,7 +43,7 @@ getString(CacheAndIndex* cacheAndIndex)
         auto dupe = js::DuplicateString(str);
         MOZ_RELEASE_ASSERT(dupe);
 
-        auto deduped = cacheAndIndex->cache->getOrCreate(mozilla::Move(dupe), js_strlen(str));
+        auto deduped = cacheAndIndex->cache->getOrCreate(std::move(dupe), js_strlen(str));
         MOZ_RELEASE_ASSERT(deduped.isSome());
         MOZ_RELEASE_ASSERT(js::EqualChars(str, deduped->chars(), js_strlen(str) + 1));
 

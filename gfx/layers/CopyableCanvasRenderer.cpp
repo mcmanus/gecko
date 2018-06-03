@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -84,12 +85,14 @@ CopyableCanvasRenderer::Initialize(const CanvasInitializeData& aData)
 bool
 CopyableCanvasRenderer::IsDataValid(const CanvasInitializeData& aData)
 {
-  return mGLContext == aData.mGLContext;
+  return mGLContext == aData.mGLContext && mBufferProvider == aData.mBufferProvider;
 }
 
 void
 CopyableCanvasRenderer::ClearCachedResources()
 {
+  SetDirty();
+
   if (mBufferProvider) {
     mBufferProvider->ClearCachedResources();
   }
@@ -104,6 +107,7 @@ CopyableCanvasRenderer::Destroy()
     mBufferProvider->ClearCachedResources();
   }
 
+  mBufferProvider = nullptr;
   mCachedTempSurface = nullptr;
 }
 
@@ -139,9 +143,8 @@ CopyableCanvasRenderer::ReadbackSurface()
   SharedSurface* frontbuffer = nullptr;
   if (mGLFrontbuffer) {
     frontbuffer = mGLFrontbuffer.get();
-  } else {
-    GLScreenBuffer* screen = mGLContext->Screen();
-    const auto& front = screen->Front();
+  } else if (mGLContext->Screen()) {
+    const auto& front = mGLContext->Screen()->Front();
     if (front) {
       frontbuffer = front->Surf();
     }
@@ -153,8 +156,8 @@ CopyableCanvasRenderer::ReadbackSurface()
   }
 
   IntSize readSize(frontbuffer->mSize);
-  SurfaceFormat format =
-    mOpaque ? SurfaceFormat::B8G8R8X8 : SurfaceFormat::B8G8R8A8;
+  SurfaceFormat format = frontbuffer->mHasAlpha ? SurfaceFormat::B8G8R8A8
+                                                : SurfaceFormat::B8G8R8X8;
   bool needsPremult = frontbuffer->mHasAlpha && !mIsAlphaPremultiplied;
 
   RefPtr<DataSourceSurface> resultSurf = GetTempSurface(readSize, format);

@@ -26,18 +26,14 @@ bool JSAPITest::init()
     createGlobal();
     if (!global)
         return false;
-    JS_EnterCompartment(cx, global);
+    JS::EnterRealm(cx, global);
     return true;
 }
 
 void JSAPITest::uninit()
 {
-    if (oldCompartment) {
-        JS_LeaveCompartment(cx, oldCompartment);
-        oldCompartment = nullptr;
-    }
     if (global) {
-        JS_LeaveCompartment(cx, nullptr);
+        JS::LeaveRealm(cx, nullptr);
         global = nullptr;
     }
     if (cx) {
@@ -45,6 +41,7 @@ void JSAPITest::uninit()
         destroyContext();
         cx = nullptr;
     }
+    msgs.clear();
 }
 
 bool JSAPITest::exec(const char* bytes, const char* filename, int lineno)
@@ -82,18 +79,16 @@ JSObject* JSAPITest::createGlobal(JSPrincipals* principals)
 {
     /* Create the global object. */
     JS::RootedObject newGlobal(cx);
-    JS::CompartmentOptions options;
+    JS::RealmOptions options;
 #ifdef ENABLE_STREAMS
     options.creationOptions().setStreamsEnabled(true);
 #endif
-    printf("enabled\n");
-    options.behaviors().setVersion(JSVERSION_DEFAULT);
     newGlobal = JS_NewGlobalObject(cx, getGlobalClass(), principals, JS::FireOnNewGlobalHook,
                                    options);
     if (!newGlobal)
         return nullptr;
 
-    JSAutoCompartment ac(cx, newGlobal);
+    JSAutoRealm ar(cx, newGlobal);
 
     // Populate the global object with the standard globals like Object and
     // Array.

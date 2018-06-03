@@ -1,8 +1,7 @@
-var Cu = Components.utils;
 const PREF_UTTERANCE_ORDER = "accessibility.accessfu.utterance";
 
-Cu.import("resource://gre/modules/accessibility/Utils.jsm");
-Cu.import("resource://gre/modules/accessibility/OutputGenerator.jsm", this);
+ChromeUtils.import("resource://gre/modules/accessibility/Utils.jsm");
+ChromeUtils.import("resource://gre/modules/accessibility/OutputGenerator.jsm", this);
 
 /**
  * Test context output generation.
@@ -85,20 +84,15 @@ function testObjectOutput(aAccOrElmOrID, aGenerator) {
  *                         the |aAccOrElmOrID|.
  * @param aOutputKind      the type of output
  */
-function testOutput(expected, aAccOrElmOrID, aOldAccOrElmOrID, aOutputKind) {
-  var generator;
-  if (aOutputKind === 1) {
-    generator = UtteranceGenerator;
-  } else {
-    generator = BrailleGenerator;
-  }
-  testContextOutput(expected, aAccOrElmOrID, aOldAccOrElmOrID, generator);
+function testOutput(expected, aAccOrElmOrID, aOldAccOrElmOrID) {
+  testContextOutput(expected, aAccOrElmOrID, aOldAccOrElmOrID,
+    UtteranceGenerator);
   // Just need to test object output for individual
   // accOrElmOrID.
   if (aOldAccOrElmOrID) {
     return;
   }
-  testObjectOutput(aAccOrElmOrID, generator);
+  testObjectOutput(aAccOrElmOrID, UtteranceGenerator);
 }
 
 function testHints(expected, aAccOrElmOrID, aOldAccOrElmOrID) {

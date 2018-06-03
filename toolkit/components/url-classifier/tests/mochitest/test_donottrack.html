@@ -14,9 +14,6 @@
 
 <script class="testbody" type="text/javascript">
 
-var Cc = SpecialPowers.Cc;
-var Ci = SpecialPowers.Ci;
-
 var mainWindow = window.QueryInterface(Ci.nsIInterfaceRequestor)
                     .getInterface(Ci.nsIWebNavigation)
                     .QueryInterface(Ci.nsIDocShellTreeItem)
@@ -64,7 +61,7 @@ const tests = [
     setting:  {dntPref: false, tpPref: false, tppbPref: false, pbMode: false},
     expected: {dnt: "unspecified"}
   },
-]
+];
 
 const DNT_PREF = "privacy.donottrackheader.enabled";
 const TP_PREF = "privacy.trackingprotection.enabled";
@@ -73,8 +70,8 @@ const TP_PB_PREF = "privacy.trackingprotection.pbmode.enabled";
 const contentPage =
   "http://mochi.test:8888/tests/toolkit/components/url-classifier/tests/mochitest/dnt.html";
 
-Components.utils.import("resource://gre/modules/Services.jsm");
-Components.utils.import("resource://testing-common/TestUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://testing-common/TestUtils.jsm");
 
 function executeTest(test) {
   SpecialPowers.pushPrefEnv({"set": [

@@ -1,48 +1,56 @@
-/* global toolbox */
+/* global toolbox, createDebuggerContext, waitForSources, testUrl,
+          waitForPaused, addBreakpoint, assertPausedLocation, stepIn,
+          findSource, removeBreakpoint, resume */
 
 info(`START: ${new Error().lineNumber}`);
 
-let testUrl = "http://mozilla.org/browser-toolbox-test.js";
-
-Task.spawn(function* () {
-  Services.prefs.clearUserPref("devtools.debugger.tabs")
-  Services.prefs.clearUserPref("devtools.debugger.pending-selected-location")
+(async function() {
+  Services.prefs.clearUserPref("devtools.debugger.tabs");
+  Services.prefs.clearUserPref("devtools.debugger.pending-selected-location");
 
   info("Waiting for debugger load");
-  yield toolbox.selectTool("jsdebugger");
-  let dbg = createDebuggerContext(toolbox);
-  let window = dbg.win;
-  let document = window.document;
+  await toolbox.selectTool("jsdebugger");
+  const dbg = createDebuggerContext(toolbox);
+  const window = dbg.win;
+  const document = window.document;
 
-  yield waitForSources(dbg, testUrl);
+  await waitForSources(dbg, testUrl);
 //  yield waitForSourceCount(dbg, 6);
 
   info("Loaded, selecting the test script to debug");
   // First expand the domain
-  let domain = [...document.querySelectorAll(".tree-node")].find(node => {
+  const domain = [...document.querySelectorAll(".tree-node")].find(node => {
     return node.textContent.trim() == "mozilla.org";
   });
-  let arrow = domain.querySelector(".arrow");
+  const arrow = domain.querySelector(".arrow");
   arrow.click();
+
+  const fileName = testUrl.match(/browser-toolbox-test.*\.js/)[0];
+
   let script = [...document.querySelectorAll(".tree-node")].find(node => {
-    return node.textContent.includes("browser-toolbox-test.js");
+    return node.textContent.includes(fileName);
   });
   script = script.querySelector(".node");
   script.click();
 
-  let onPaused = waitForPaused(dbg);
-  yield addBreakpoint(dbg, "browser-toolbox-test.js", 2);
+  const onPaused = waitForPaused(dbg);
+  await addBreakpoint(dbg, fileName, 2);
 
-  yield onPaused;
+  await onPaused;
 
-  assertPausedLocation(dbg, "browser-toolbox-test.js", 2);
+  assertPausedLocation(dbg, fileName, 2);
 
-  yield stepIn(dbg);
+  await stepIn(dbg);
 
-  assertPausedLocation(dbg, "browser-toolbox-test.js", 3);
+  assertPausedLocation(dbg, fileName, 3);
 
-  yield resume(dbg);
+  // Remove the breakpoint before resuming in order to prevent hitting the breakpoint
+  // again during test closing.
+  const source = findSource(dbg, fileName);
+  await removeBreakpoint(dbg, source.id, 2);
+
+  await resume(dbg);
 
   info("Close the browser toolbox");
   toolbox.destroy();
-});
+})();

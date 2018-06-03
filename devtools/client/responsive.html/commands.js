@@ -4,16 +4,13 @@
 
 "use strict";
 
-const { Cc, Ci } = require("chrome");
+const Services = require("Services");
 
 loader.lazyRequireGetter(this, "ResponsiveUIManager", "devtools/client/responsive.html/manager", true);
 
-const BRAND_SHORT_NAME = Cc["@mozilla.org/intl/stringbundle;1"]
-                           .getService(Ci.nsIStringBundleService)
-                           .createBundle("chrome://branding/locale/brand.properties")
-                           .GetStringFromName("brandShortName");
+const BRAND_SHORT_NAME = Services.strings.createBundle("chrome://branding/locale/brand.properties")
+                                 .GetStringFromName("brandShortName");
 
-const Services = require("Services");
 const osString = Services.appinfo.OS;
 const l10n = require("gcli/l10n");
 
@@ -51,19 +48,19 @@ exports.items = [
     description: l10n.lookup("resizeModeToggleDesc"),
     manual: l10n.lookupFormat("resizeModeManual2", [BRAND_SHORT_NAME]),
     state: {
-      isChecked: function (target) {
+      isChecked: function(target) {
         if (!target.tab) {
           return false;
         }
         return ResponsiveUIManager.isActiveForTab(target.tab);
       },
-      onChange: function (target, changeHandler) {
+      onChange: function(target, changeHandler) {
         if (target.tab) {
           ResponsiveUIManager.on("on", changeHandler);
           ResponsiveUIManager.on("off", changeHandler);
         }
       },
-      offChange: function (target, changeHandler) {
+      offChange: function(target, changeHandler) {
         // Do not check for target.tab as it may already be null during destroy
         ResponsiveUIManager.off("on", changeHandler);
         ResponsiveUIManager.off("off", changeHandler);
@@ -92,9 +89,9 @@ exports.items = [
   }
 ];
 
-function* resize(args, context) {
-  let browserWindow = context.environment.chromeWindow;
-  yield ResponsiveUIManager.handleGcliCommand(browserWindow,
+async function resize(args, context) {
+  const browserWindow = context.environment.chromeWindow;
+  await ResponsiveUIManager.handleGcliCommand(browserWindow,
                                               browserWindow.gBrowser.selectedTab,
                                               this.name,
                                               args);

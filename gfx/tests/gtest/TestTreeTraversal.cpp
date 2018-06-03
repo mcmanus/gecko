@@ -1,3 +1,9 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 #include <vector>
 #include "mozilla/RefPtr.h"
 #include "gtest/gtest.h"
@@ -1379,7 +1385,7 @@ static RefPtr<Node> DepthFirstSearchPostOrderForwardRecursive(RefPtr<Node> aNode
 template <typename Node>
 static RefPtr<Node> BreadthFirstSearchForwardQueue(RefPtr<Node> aNode)
 {
-  queue<RefPtr<Node>> nodes;
+  std::queue<RefPtr<Node>> nodes;
   nodes.push(aNode);
   while(!nodes.empty()) {
     RefPtr<Node> node = nodes.front();
@@ -1458,7 +1464,7 @@ static RefPtr<Node> DepthFirstSearchPostOrderReverseRecursive(RefPtr<Node> aNode
 template <typename Node>
 static RefPtr<Node> BreadthFirstSearchReverseQueue(RefPtr<Node> aNode)
 {
-  queue<RefPtr<Node>> nodes;
+  std::queue<RefPtr<Node>> nodes;
   nodes.push(aNode);
   while(!nodes.empty()) {
     RefPtr<Node> node = nodes.front();

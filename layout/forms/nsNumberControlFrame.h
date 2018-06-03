@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -32,7 +33,7 @@ class nsNumberControlFrame final : public nsContainerFrame
                                  , public nsIFormControlFrame
 {
   friend nsIFrame*
-  NS_NewNumberControlFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
+  NS_NewNumberControlFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle);
 
   typedef mozilla::CSSPseudoElementType CSSPseudoElementType;
   typedef mozilla::dom::Element Element;
@@ -40,13 +41,13 @@ class nsNumberControlFrame final : public nsContainerFrame
   typedef mozilla::WidgetEvent WidgetEvent;
   typedef mozilla::WidgetGUIEvent WidgetGUIEvent;
 
-  explicit nsNumberControlFrame(nsStyleContext* aContext);
+  explicit nsNumberControlFrame(ComputedStyle* aStyle);
 
 public:
   NS_DECL_QUERYFRAME
   NS_DECL_FRAMEARENA_HELPERS(nsNumberControlFrame)
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
   virtual void ContentStatesChanged(mozilla::EventStates aStates) override;
 
 #ifdef ACCESSIBILITY
@@ -155,8 +156,6 @@ public:
    * Our element had HTMLInputElement::Select() called on it.
    */
   void HandleSelectCall();
-
-  virtual Element* GetPseudoElement(CSSPseudoElementType aType) override;
 
   bool ShouldUseNativeStyleForSpinner() const;
 

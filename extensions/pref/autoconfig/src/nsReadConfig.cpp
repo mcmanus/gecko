@@ -4,6 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsReadConfig.h"
+#include "nsJSConfigTriggers.h"
+
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsIAppStartup.h"
 #include "nsDirectoryServiceDefs.h"
@@ -26,44 +28,38 @@
 
 extern mozilla::LazyLogModule MCD;
 
-extern nsresult EvaluateAdminConfigScript(const char *js_buffer, size_t length,
-                                          const char *filename,
-                                          bool bGlobalContext,
-                                          bool bCallbacks,
-                                          bool skipFirstLine);
-extern nsresult CentralizedAdminPrefManagerInit();
+extern nsresult CentralizedAdminPrefManagerInit(bool aSandboxEnabled);
 extern nsresult CentralizedAdminPrefManagerFinish();
 
-
-static void DisplayError(void)
+static nsresult DisplayError(void)
 {
     nsresult rv;
 
     nsCOMPtr<nsIPromptService> promptService = do_GetService("@mozilla.org/embedcomp/prompt-service;1");
     if (!promptService)
-        return;
+        return NS_ERROR_FAILURE;
 
     nsCOMPtr<nsIStringBundleService> bundleService = do_GetService(NS_STRINGBUNDLE_CONTRACTID);
     if (!bundleService)
-        return;
+        return NS_ERROR_FAILURE;
 
     nsCOMPtr<nsIStringBundle> bundle;
     bundleService->CreateBundle("chrome://autoconfig/locale/autoconfig.properties",
                                 getter_AddRefs(bundle));
     if (!bundle)
-        return;
+        return NS_ERROR_FAILURE;
 
     nsAutoString title;
     rv = bundle->GetStringFromName("readConfigTitle", title);
     if (NS_FAILED(rv))
-        return;
+        return rv;
 
     nsAutoString err;
     rv = bundle->GetStringFromName("readConfigMsg", err);
     if (NS_FAILED(rv))
-        return;
+        return rv;
 
-    promptService->Alert(nullptr, title.get(), err.get());
+    return promptService->Alert(nullptr, title.get(), err.get());
 }
 
 // nsISupports Implementation
@@ -99,24 +95,32 @@ NS_IMETHODIMP nsReadConfig::Observe(nsISupports *aSubject, const char *aTopic, c
 
     if (!nsCRT::strcmp(aTopic, NS_PREFSERVICE_READ_TOPIC_ID)) {
         rv = readConfigFile();
-        if (NS_FAILED(rv)) {
-            DisplayError();
-
-            nsCOMPtr<nsIAppStartup> appStartup =
-                do_GetService(NS_APPSTARTUP_CONTRACTID);
-            if (appStartup)
-                appStartup->Quit(nsIAppStartup::eAttemptQuit);
+        // Don't show error alerts if the sandbox is enabled
+        if (NS_FAILED(rv) && !sandboxEnabled) {
+            rv = DisplayError();
+            if (NS_FAILED(rv)) {
+                nsCOMPtr<nsIAppStartup> appStartup =
+                    do_GetService(NS_APPSTARTUP_CONTRACTID);
+                if (appStartup)
+                    appStartup->Quit(nsIAppStartup::eAttemptQuit);
+            }
         }
     }
     return rv;
 }
 
+/**
+ * This is the blocklist for known bad autoconfig files.
+ */
+static const char *gBlockedConfigs[] = {
+  "dsengine.cfg"
+};
 
 nsresult nsReadConfig::readConfigFile()
 {
     nsresult rv = NS_OK;
-    nsCString lockFileName;
-    nsCString lockVendor;
+    nsAutoCString lockFileName;
+    nsAutoCString lockVendor;
     uint32_t fileNameLen = 0;
 
     nsCOMPtr<nsIPrefBranch> defaultPrefBranch;
@@ -132,20 +136,31 @@ nsresult nsReadConfig::readConfigFile()
     // This preference is set in the all.js or all-ns.js (depending whether
     // running mozilla or netscp6)
 
-    rv = defaultPrefBranch->GetCharPref("general.config.filename",
-                                  getter_Copies(lockFileName));
+    bool sandboxEnabled = false;
+    rv = defaultPrefBranch->GetBoolPref("general.config.sandbox_enabled",
+                                        &sandboxEnabled);
 
+    rv = defaultPrefBranch->GetCharPref("general.config.filename",
+                                        lockFileName);
 
     MOZ_LOG(MCD, LogLevel::Debug, ("general.config.filename = %s\n", lockFileName.get()));
     if (NS_FAILED(rv))
         return rv;
+
+    for (size_t index = 0, len = mozilla::ArrayLength(gBlockedConfigs); index < len;
+         ++index) {
+      if (lockFileName == gBlockedConfigs[index]) {
+        // This is NS_OK because we don't want to show an error to the user
+        return rv;
+      }
+    }
 
     // This needs to be read only once.
     //
     if (!mRead) {
         // Initiate the new JS Context for Preference management
 
-        rv = CentralizedAdminPrefManagerInit();
+        rv = CentralizedAdminPrefManagerInit(sandboxEnabled);
         if (NS_FAILED(rv))
             return rv;
 
@@ -179,16 +194,14 @@ nsresult nsReadConfig::readConfigFile()
       return rv;
     }
 
-    rv = prefBranch->GetCharPref("general.config.filename",
-                                  getter_Copies(lockFileName));
+    rv = prefBranch->GetCharPref("general.config.filename", lockFileName);
     if (NS_FAILED(rv))
         // There is NO REASON we should ever get here. This is POST reading
         // of the config file.
         return NS_ERROR_FAILURE;
 
 
-    rv = prefBranch->GetCharPref("general.config.vendor",
-                                  getter_Copies(lockVendor));
+    rv = prefBranch->GetCharPref("general.config.vendor", lockVendor);
     // If vendor is not nullptr, do this check
     if (NS_SUCCEEDED(rv)) {
 
@@ -203,9 +216,8 @@ nsresult nsReadConfig::readConfigFile()
     }
 
     // get the value of the autoconfig url
-    nsCString urlName;
-    rv = prefBranch->GetCharPref("autoadmin.global_config_url",
-                                  getter_Copies(urlName));
+    nsAutoCString urlName;
+    rv = prefBranch->GetCharPref("autoadmin.global_config_url", urlName);
     if (NS_SUCCEEDED(rv) && !urlName.IsEmpty()) {
 
         // Instantiating nsAutoConfig object if the pref is present
@@ -290,7 +302,8 @@ nsresult nsReadConfig::openAndEvaluateJSFile(const char *aFileName, int32_t obsc
         }
         rv = EvaluateAdminConfigScript(buf, amt, aFileName,
                                        false, true,
-                                       isEncoded ? true:false);
+                                       isEncoded,
+                                       !isBinDir);
     }
     inStr->Close();
     free(buf);

@@ -25,11 +25,11 @@ public:
 
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
-  NS_IMPL_FROMCONTENT_HTML_WITH_TAG(HTMLEmbedElement, embed)
+  NS_IMPL_FROMNODE_HTML_WITH_TAG(HTMLEmbedElement, embed)
   virtual int32_t TabIndexDefault() override;
 
 #ifdef XP_MACOSX
-  // nsIDOMEventTarget
+  // EventTarget
   NS_IMETHOD PostHandleEvent(EventChainPostVisitor& aVisitor) override;
 #endif
 
@@ -48,6 +48,7 @@ public:
   virtual bool ParseAttribute(int32_t aNamespaceID,
                               nsAtom *aAttribute,
                               const nsAString &aValue,
+                              nsIPrincipal* aMaybeScriptedPrincipal,
                               nsAttrValue &aResult) override;
   virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const override;
   NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom *aAttribute) const override;
@@ -135,6 +136,7 @@ protected:
   virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
                                 const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
                                 bool aNotify) override;
   virtual nsresult OnAttrSetButNotChanged(int32_t aNamespaceID, nsAtom* aName,
                                           const nsAttrValueOrString& aValue,

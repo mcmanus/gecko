@@ -17,9 +17,11 @@ from mach.decorators import (
     CommandArgument,
     CommandProvider,
     Command,
+    SettingsProvider,
 )
 
 from mozbuild.base import MachCommandBase, MachCommandConditions as conditions
+from moztest.resolve import TEST_SUITES
 from argparse import ArgumentParser
 
 UNKNOWN_TEST = '''
@@ -37,150 +39,9 @@ https://bugzilla.mozilla.org/enter_bug.cgi?product=Testing&component=General.
 '''.strip()
 
 UNKNOWN_FLAVOR = '''
-I know you are trying to run a %s test. Unfortunately, I can't run those
+I know you are trying to run a %s%s test. Unfortunately, I can't run those
 tests yet. Sorry!
 '''.strip()
-
-MOCHITEST_CHUNK_BY_DIR = 4
-MOCHITEST_TOTAL_CHUNKS = 5
-
-TEST_SUITES = {
-    'cppunittest': {
-        'aliases': ('Cpp', 'cpp'),
-        'mach_command': 'cppunittest',
-        'kwargs': {'test_file': None},
-    },
-    'crashtest': {
-        'aliases': ('C', 'Rc', 'RC', 'rc'),
-        'mach_command': 'crashtest',
-        'kwargs': {'test_file': None},
-    },
-    'firefox-ui-functional': {
-        'aliases': ('Fxfn',),
-        'mach_command': 'firefox-ui-functional',
-        'kwargs': {},
-    },
-    'firefox-ui-update': {
-        'aliases': ('Fxup',),
-        'mach_command': 'firefox-ui-update',
-        'kwargs': {},
-    },
-    'check-spidermonkey': {
-        'aliases': ('Sm', 'sm'),
-        'mach_command': 'check-spidermonkey',
-        'kwargs': {'valgrind': False},
-    },
-    'mochitest-a11y': {
-        'mach_command': 'mochitest',
-        'kwargs': {'flavor': 'a11y', 'test_paths': None},
-    },
-    'mochitest-browser': {
-        'aliases': ('bc', 'BC', 'Bc'),
-        'mach_command': 'mochitest',
-        'kwargs': {'flavor': 'browser-chrome', 'test_paths': None},
-    },
-    'mochitest-chrome': {
-        'mach_command': 'mochitest',
-        'kwargs': {'flavor': 'chrome', 'test_paths': None},
-    },
-    'mochitest-devtools': {
-        'aliases': ('dt', 'DT', 'Dt'),
-        'mach_command': 'mochitest',
-        'kwargs': {'subsuite': 'devtools', 'test_paths': None},
-    },
-    'mochitest-plain': {
-        'mach_command': 'mochitest',
-        'kwargs': {'flavor': 'plain', 'test_paths': None},
-    },
-    'python': {
-        'mach_command': 'python-test',
-        'kwargs': {'tests': None},
-    },
-    'reftest': {
-        'aliases': ('RR', 'rr', 'Rr'),
-        'mach_command': 'reftest',
-        'kwargs': {'tests': None},
-    },
-    'web-platform-tests': {
-        'aliases': ('wpt',),
-        'mach_command': 'web-platform-tests',
-        'kwargs': {}
-    },
-    'valgrind': {
-        'aliases': ('V', 'v'),
-        'mach_command': 'valgrind-test',
-        'kwargs': {},
-    },
-    'xpcshell': {
-        'aliases': ('X', 'x'),
-        'mach_command': 'xpcshell-test',
-        'kwargs': {'test_file': 'all'},
-    },
-}
-
-# Maps test flavors to metadata on how to run that test.
-TEST_FLAVORS = {
-    'a11y': {
-        'mach_command': 'mochitest',
-        'kwargs': {'flavor': 'a11y', 'test_paths': []},
-    },
-    'browser-chrome': {
-        'mach_command': 'mochitest',
-        'kwargs': {'flavor': 'browser-chrome', 'test_paths': []},
-    },
-    'crashtest': {},
-    'chrome': {
-        'mach_command': 'mochitest',
-        'kwargs': {'flavor': 'chrome', 'test_paths': []},
-    },
-    'firefox-ui-functional': {
-        'mach_command': 'firefox-ui-functional',
-        'kwargs': {'tests': []},
-    },
-    'firefox-ui-update': {
-        'mach_command': 'firefox-ui-update',
-        'kwargs': {'tests': []},
-    },
-    'marionette': {
-        'mach_command': 'marionette-test',
-        'kwargs': {'tests': []},
-    },
-    'mochitest': {
-        'mach_command': 'mochitest',
-        'kwargs': {'flavor': 'mochitest', 'test_paths': []},
-    },
-    'python': {
-        'mach_command': 'python-test',
-        'kwargs': {},
-    },
-    'reftest': {
-        'mach_command': 'reftest',
-        'kwargs': {'tests': []}
-    },
-    'steeplechase': {},
-    'web-platform-tests': {
-        'mach_command': 'web-platform-tests',
-        'kwargs': {'include': []}
-    },
-    'xpcshell': {
-        'mach_command': 'xpcshell-test',
-        'kwargs': {'test_paths': []},
-    },
-}
-
-for i in range(1, MOCHITEST_TOTAL_CHUNKS + 1):
-    TEST_SUITES['mochitest-%d' % i] = {
-        'aliases': ('M%d' % i, 'm%d' % i),
-        'mach_command': 'mochitest',
-        'kwargs': {
-            'flavor': 'mochitest',
-            'subsuite': 'default',
-            'chunk_by_dir': MOCHITEST_CHUNK_BY_DIR,
-            'total_chunks': MOCHITEST_TOTAL_CHUNKS,
-            'this_chunk': i,
-            'test_paths': None,
-        },
-    }
 
 TEST_HELP = '''
 Test or tests to run. Tests can be specified by filename, directory, suite
@@ -191,16 +52,41 @@ The following test suites and aliases are supported: %s
 TEST_HELP = TEST_HELP.strip()
 
 
+@SettingsProvider
+class TestConfig(object):
+
+    @classmethod
+    def config_settings(cls):
+        from mozlog.commandline import log_formatters
+        from mozlog.structuredlog import log_levels
+        format_desc = "The default format to use when running tests with `mach test`."
+        format_choices = log_formatters.keys()
+        level_desc = "The default log level to use when running tests with `mach test`."
+        level_choices = [l.lower() for l in log_levels]
+        return [
+            ('test.format', 'string', format_desc, 'mach', {'choices': format_choices}),
+            ('test.level', 'string', level_desc, 'info', {'choices': level_choices}),
+        ]
+
+
+def get_test_parser():
+    from mozlog.commandline import add_logging_group
+    parser = argparse.ArgumentParser()
+    parser.add_argument('what', default=None, nargs='*', help=TEST_HELP)
+    parser.add_argument('extra_args', default=None, nargs=argparse.REMAINDER,
+                        help="Extra arguments to pass to the underlying test command(s). "
+                             "If an underlying command doesn't recognize the argument, it "
+                             "will fail.")
+    add_logging_group(parser)
+    return parser
+
+
 @CommandProvider
 class Test(MachCommandBase):
     @Command('test', category='testing',
-             description='Run tests (detects the kind of test and runs it).')
-    @CommandArgument('what', default=None, nargs='*', help=TEST_HELP)
-    @CommandArgument('extra_args', default=None, nargs=argparse.REMAINDER,
-                     help="Extra arguments to pass to the underlying test command(s). "
-                          "If an underlying command doesn't recognize the argument, it "
-                          "will fail.")
-    def test(self, what, extra_args):
+             description='Run tests (detects the kind of test and runs it).',
+             parser=get_test_parser)
+    def test(self, what, extra_args, **log_args):
         """Run tests from names or paths.
 
         mach test accepts arguments specifying which tests to run. Each argument
@@ -224,82 +110,39 @@ class Test(MachCommandBase):
         you specify a directory with xpcshell and browser chrome mochitests,
         both harnesses will be invoked.
         """
-        from mozbuild.testing import TestResolver
+        from mozlog.commandline import setup_logging
+        from mozlog.handlers import StreamHandler
+        from moztest.resolve import get_suite_definition, TestResolver, TEST_SUITES
 
-        # Parse arguments and assemble a test "plan."
-        run_suites = set()
-        run_tests = []
         resolver = self._spawn(TestResolver)
-
-        for entry in what:
-            # If the path matches the name or alias of an entire suite, run
-            # the entire suite.
-            if entry in TEST_SUITES:
-                run_suites.add(entry)
-                continue
-            suitefound = False
-            for suite, v in TEST_SUITES.items():
-                if entry in v.get('aliases', []):
-                    run_suites.add(suite)
-                    suitefound = True
-            if suitefound:
-                continue
-
-            # Now look for file/directory matches in the TestResolver.
-            relpath = self._wrap_path_argument(entry).relpath()
-            tests = list(resolver.resolve_tests(paths=[relpath]))
-            run_tests.extend(tests)
-
-            if not tests:
-                print('UNKNOWN TEST: %s' % entry, file=sys.stderr)
-
-        if not what:
-            # TODO: This isn't really related to try, and should be
-            # extracted to a common library for vcs interactions when it is
-            # introduced in bug 1185599.
-            from autotry import AutoTry
-            at = AutoTry(self.topsrcdir, resolver, self._mach_context)
-            changed_files = at.find_changed_files()
-            if changed_files:
-                print("Tests will be run based on modifications to the "
-                      "following files:\n\t%s" % "\n\t".join(changed_files))
-
-            reader = self.mozbuild_reader(config_mode='empty')
-            files_info = reader.files_info(changed_files)
-
-            paths, tags, flavors = set(), set(), set()
-            for info in files_info.values():
-                paths |= info.test_files
-                tags |= info.test_tags
-                flavors |= info.test_flavors
-
-            # This requires multiple calls to resolve_tests, because the test
-            # resolver returns tests that match every condition, while we want
-            # tests that match any condition. Bug 1210213 tracks implementing
-            # more flexible querying.
-            if tags:
-                run_tests = list(resolver.resolve_tests(tags=tags))
-            if paths:
-                run_tests += [t for t in resolver.resolve_tests(paths=paths)
-                              if not (tags & set(t.get('tags', '').split()))]
-            if flavors:
-                run_tests = [
-                    t for t in run_tests if t['flavor'] not in flavors]
-                for flavor in flavors:
-                    run_tests += list(resolver.resolve_tests(flavor=flavor))
+        run_suites, run_tests = resolver.resolve_metadata(what)
 
         if not run_suites and not run_tests:
             print(UNKNOWN_TEST)
             return 1
 
+        # Create shared logger
+        format_args = {'level': self._mach_context.settings['test']['level']}
+        if not run_suites and len(run_tests) == 1:
+            format_args['verbose'] = True
+            format_args['compact'] = False
+
+        default_format = self._mach_context.settings['test']['format']
+        log = setup_logging('mach-test', log_args, {default_format: sys.stdout}, format_args)
+        for handler in log.handlers:
+            if isinstance(handler, StreamHandler):
+                handler.formatter.inner.summary_on_shutdown = True
+
         status = None
         for suite_name in run_suites:
             suite = TEST_SUITES[suite_name]
+            kwargs = suite['kwargs']
+            kwargs['log'] = log
 
             if 'mach_command' in suite:
                 res = self._mach_context.commands.dispatch(
                     suite['mach_command'], self._mach_context,
-                    argv=extra_args, **suite['kwargs'])
+                    argv=extra_args, **kwargs)
                 if res:
                     status = res
 
@@ -309,19 +152,15 @@ class Test(MachCommandBase):
             buckets.setdefault(key, []).append(test)
 
         for (flavor, subsuite), tests in sorted(buckets.items()):
-            if flavor not in TEST_FLAVORS:
-                print(UNKNOWN_FLAVOR % flavor)
-                status = 1
-                continue
-
-            m = TEST_FLAVORS[flavor]
+            m = get_suite_definition(flavor, subsuite)
             if 'mach_command' not in m:
-                print(UNKNOWN_FLAVOR % flavor)
+                substr = '-{}'.format(subsuite) if subsuite else ''
+                print(UNKNOWN_FLAVOR % (flavor, substr))
                 status = 1
                 continue
 
             kwargs = dict(m['kwargs'])
-            kwargs['subsuite'] = subsuite
+            kwargs['log'] = log
 
             res = self._mach_context.commands.dispatch(
                 m['mach_command'], self._mach_context,
@@ -329,6 +168,7 @@ class Test(MachCommandBase):
             if res:
                 status = res
 
+        log.shutdown()
         return status
 
 
@@ -342,9 +182,12 @@ class MachCommands(MachCommandBase):
                      'executed.')
     def run_cppunit_test(self, **params):
         from mozlog import commandline
-        log = commandline.setup_logging("cppunittest",
-                                        {},
-                                        {"tbpl": sys.stdout})
+
+        log = params.get('log')
+        if not log:
+            log = commandline.setup_logging("cppunittest",
+                                            {},
+                                            {"tbpl": sys.stdout})
 
         # See if we have crash symbols
         symbols_path = os.path.join(self.distdir, 'crashreporter-symbols')
@@ -396,6 +239,9 @@ class MachCommands(MachCommandBase):
         commandline.add_logging_group(parser)
         options, args = parser.parse_args()
 
+        if not options.adb_path:
+            from mozrunner.devices.android_device import get_adb_path
+            options.adb_path = get_adb_path(self)
         options.symbols_path = symbols_path
         options.manifest_path = manifest_path
         options.xre_path = self.bindir
@@ -462,18 +308,6 @@ class CheckSpiderMonkeyCommand(MachCommandBase):
             self.bindir, executable_name('jsapi-tests'))]
         jsapi_tests_result = subprocess.call(jsapi_tests_cmd)
 
-        print('running check-style')
-        check_style_cmd = [python, os.path.join(
-            self.topsrcdir, 'config', 'check_spidermonkey_style.py')]
-        check_style_result = subprocess.call(
-            check_style_cmd, cwd=os.path.join(self.topsrcdir, 'js', 'src'))
-
-        print('running check-masm')
-        check_masm_cmd = [python, os.path.join(
-            self.topsrcdir, 'config', 'check_macroassembler_style.py')]
-        check_masm_result = subprocess.call(
-            check_masm_cmd, cwd=os.path.join(self.topsrcdir, 'js', 'src'))
-
         print('running check-js-msg-encoding')
         check_js_msg_cmd = [python, os.path.join(
             self.topsrcdir, 'config', 'check_js_msg_encoding.py')]
@@ -481,14 +315,30 @@ class CheckSpiderMonkeyCommand(MachCommandBase):
             check_js_msg_cmd, cwd=self.topsrcdir)
 
         all_passed = jittest_result and jstest_result and jsapi_tests_result and \
-            check_style_result and check_masm_result and check_js_msg_result
+            check_js_msg_result
 
         return all_passed
 
 
+def has_js_binary(binary):
+    def has_binary(cls):
+        name = binary + cls.substs['BIN_SUFFIX']
+        path = os.path.join(cls.topobjdir, 'dist', 'bin', name)
+
+        has_binary.__doc__ = """
+`{}` not found in <objdir>/dist/bin. Make sure you aren't using an artifact build
+and try rebuilding with `ac_add_options --enable-js-shell`.
+""".format(name).lstrip()
+
+        return os.path.isfile(path)
+    return has_binary
+
+
 @CommandProvider
 class JsapiTestsCommand(MachCommandBase):
-    @Command('jsapi-tests', category='testing', description='Run jsapi tests (JavaScript engine).')
+    @Command('jsapi-tests', category='testing',
+             conditions=[has_js_binary('jsapi-tests')],
+             description='Run jsapi tests (JavaScript engine).')
     @CommandArgument('test_name', nargs='?', metavar='N',
                      help='Test to run. Can be a prefix or omitted. If omitted, the entire '
                      'test suite is executed.')
@@ -504,6 +354,22 @@ class JsapiTestsCommand(MachCommandBase):
         jsapi_tests_result = subprocess.call(jsapi_tests_cmd)
 
         return jsapi_tests_result
+
+
+def get_jsshell_parser():
+    from jsshell.benchmark import get_parser
+    return get_parser()
+
+
+@CommandProvider
+class JsShellTests(MachCommandBase):
+    @Command('jsshell-bench', category='testing',
+             parser=get_jsshell_parser,
+             description="Run benchmarks in the SpiderMonkey JS shell.")
+    def run_jsshelltests(self, **kwargs):
+        self._activate_virtualenv()
+        from jsshell import benchmark
+        return benchmark.run(**kwargs)
 
 
 @CommandProvider
@@ -522,7 +388,7 @@ class CramTest(MachCommandBase):
         from manifestparser import TestManifest
 
         if test_objects is None:
-            from mozbuild.testing import TestResolver
+            from moztest.resolve import TestResolver
             resolver = self._spawn(TestResolver)
             if test_paths:
                 # If we were given test paths, try to find tests matching them.
@@ -632,7 +498,7 @@ class ChunkFinder(MachCommandBase):
         suite_name = kwargs['suite_name'][0]
         _, dump_tests = tempfile.mkstemp()
 
-        from mozbuild.testing import TestResolver
+        from moztest.resolve import TestResolver
         resolver = self._spawn(TestResolver)
         relpath = self._wrap_path_argument(test_path).relpath()
         tests = list(resolver.resolve_tests(paths=[relpath]))
@@ -834,7 +700,7 @@ class TestInfoCommand(MachCommandBase):
             self.full_test_name = self.test_name
 
         # search for full_test_name in test manifests
-        from mozbuild.testing import TestResolver
+        from moztest.resolve import TestResolver
         resolver = self._spawn(TestResolver)
         relpath = self._wrap_path_argument(self.full_test_name).relpath()
         tests = list(resolver.resolve_tests(paths=[relpath]))
@@ -918,7 +784,10 @@ class TestInfoCommand(MachCommandBase):
     def get_platform(self, record):
         platform = record['build']['platform']
         type = record['build']['type']
-        e10s = "-%s" % record['run']['type'] if 'run' in record else ""
+        if 'run' in record and 'e10s' in record['run']['type']:
+            e10s = "-e10s"
+        else:
+            e10s = ""
         return "%s/%s%s:" % (platform, type, e10s)
 
     def submit(self, query):
@@ -983,7 +852,7 @@ class TestInfoCommand(MachCommandBase):
                     worst_platform = platform
                     worst_failures = failures
                     worst_runs = runs
-                print("%-30s %6d failures in %6d runs" % (
+                print("%-40s %6d failures in %6d runs" % (
                     platform, failures, runs))
             print("\nTotal: %d failures in %d runs or %.3f failures/run" %
                   (total_failures, total_runs, (float)(total_failures) / total_runs))
@@ -1022,7 +891,7 @@ class TestInfoCommand(MachCommandBase):
             data.sort(key=self.get_platform)
             for record in data:
                 platform = self.get_platform(record)
-                print("%-30s %6.2f s (%.2f s - %.2f s over %d runs)" % (
+                print("%-40s %6.2f s (%.2f s - %.2f s over %d runs)" % (
                     platform, record['average'], record['min'],
                     record['max'], record['count']))
         else:

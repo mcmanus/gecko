@@ -2,13 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   EventDispatcher: "resource://gre/modules/Messaging.jsm",
   FileUtils: "resource://gre/modules/FileUtils.jsm",
+  GeckoViewUtils: "resource://gre/modules/GeckoViewUtils.jsm",
   Services: "resource://gre/modules/Services.jsm",
 });
 
@@ -22,8 +21,8 @@ function PromptFactory() {
 PromptFactory.prototype = {
   classID: Components.ID("{076ac188-23c1-4390-aa08-7ef1f78ca5d9}"),
 
-  QueryInterface: XPCOMUtils.generateQI([
-    Ci.nsIPromptFactory, Ci.nsIPromptService, Ci.nsIPromptService2]),
+  QueryInterface: ChromeUtils.generateQI([
+    Ci.nsIPromptFactory, Ci.nsIPromptService]),
 
   handleEvent: function(aEvent) {
     switch (aEvent.type) {
@@ -164,7 +163,7 @@ PromptFactory.prototype = {
   },
 
   _handleContextMenu: function(aEvent) {
-    let target = aEvent.target;
+    let target = aEvent.composedTarget;
     if (aEvent.defaultPrevented || target.isContentEditable) {
       return;
     }
@@ -274,23 +273,9 @@ PromptFactory.prototype = {
     aEvent.preventDefault();
   },
 
-  receiveMessage: function(aMsg) {
-    if (aMsg.name !== "GeckoView:Prompt") {
-      return;
-    }
-
-    let prompt = new PromptDelegate(aMsg.target.contentWindow || aMsg.target.ownerGlobal);
-    prompt.asyncShowPrompt(aMsg.data, result => {
-      aMsg.target.messageManager.sendAsyncMessage("GeckoView:PromptClose", {
-        uuid: aMsg.data.uuid,
-        result: result,
-      });
-    });
-  },
-
   /* ----------  nsIPromptFactory  ---------- */
   getPrompt: function(aDOMWin, aIID) {
-    // Delegated to login manager here, which in turn calls back into us via nsIPromptService2.
+    // Delegated to login manager here, which in turn calls back into us via nsIPromptService.
     if (aIID.equals(Ci.nsIAuthPrompt2) || aIID.equals(Ci.nsIAuthPrompt)) {
       try {
         let pwmgr = Cc["@mozilla.org/passwordmanager/authpromptfactory;1"].getService(Ci.nsIPromptFactory);
@@ -307,7 +292,7 @@ PromptFactory.prototype = {
 
   /* ----------  private memebers  ---------- */
 
-  // nsIPromptService and nsIPromptService2 methods proxy to our Prompt class
+  // nsIPromptService methods proxy to our Prompt class
   callProxy: function(aMethod, aArguments) {
     let prompt = new PromptDelegate(aArguments[0]);
     return prompt[aMethod].apply(prompt, Array.prototype.slice.call(aArguments, 1));
@@ -343,7 +328,6 @@ PromptFactory.prototype = {
     return this.callProxy("select", arguments);
   },
 
-  /* ----------  nsIPromptService2  ---------- */
   promptAuth: function() {
     return this.callProxy("promptAuth", arguments);
   },
@@ -355,28 +339,18 @@ PromptFactory.prototype = {
 function PromptDelegate(aDomWin) {
   this._domWin = aDomWin;
 
-  if (Services.appinfo.processType != Services.appinfo.PROCESS_TYPE_DEFAULT) {
-    return;
+  if (aDomWin) {
+    this._dispatcher = GeckoViewUtils.getDispatcherForWindow(aDomWin);
   }
 
-  this._dispatcher = EventDispatcher.instance;
-
-  if (!aDomWin) {
-    return;
-  }
-  let gvWin = aDomWin.QueryInterface(Ci.nsIInterfaceRequestor)
-                     .getInterface(Ci.nsIDocShell).QueryInterface(Ci.nsIDocShellTreeItem)
-                     .rootTreeItem.QueryInterface(Ci.nsIInterfaceRequestor)
-                     .getInterface(Ci.nsIDOMWindow);
-  try {
-    this._dispatcher = gvWin.WindowEventDispatcher || EventDispatcher.for(gvWin);
-  } catch (e) {
-    // Use global dispatcher.
+  if (!this._dispatcher) {
+    [this._dispatcher, this._domWin] =
+        GeckoViewUtils.getActiveDispatcherAndWindow();
   }
 }
 
 PromptDelegate.prototype = {
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIPrompt]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIPrompt]),
 
   BUTTON_TYPE_POSITIVE: 0,
   BUTTON_TYPE_NEUTRAL: 1,
@@ -408,7 +382,7 @@ PromptDelegate.prototype = {
       return true;
 
     } catch (ex) {
-      Cu.reportError("Failed to change modal state: " + e);
+      Cu.reportError("Failed to change modal state: " + ex);
     }
     return false;
   },
@@ -419,14 +393,15 @@ PromptDelegate.prototype = {
    */
   _showPrompt: function(aMsg) {
     let result = undefined;
-    if (!this._changeModalState(/* aEntering */ true)) {
+    if (!this._domWin || !this._changeModalState(/* aEntering */ true)) {
       return;
     }
     try {
       this.asyncShowPrompt(aMsg, res => result = res);
 
       // Spin this thread while we wait for a result
-      Services.tm.spinEventLoopUntil(() => result !== undefined);
+      Services.tm.spinEventLoopUntil(() =>
+          this._domWin.closed || result !== undefined);
     } finally {
       this._changeModalState(/* aEntering */ false);
     }
@@ -434,48 +409,32 @@ PromptDelegate.prototype = {
   },
 
   asyncShowPrompt: function(aMsg, aCallback) {
-    if (Services.appinfo.processType != Services.appinfo.PROCESS_TYPE_DEFAULT) {
-      let docShell = this._domWin.QueryInterface(Ci.nsIInterfaceRequestor)
-                                 .getInterface(Ci.nsIDocShell)
-                                 .QueryInterface(Ci.nsIDocShellTreeItem)
-                                 .rootTreeItem;
-      let messageManager = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
-                                   .getInterface(Ci.nsITabChild)
-                                   .messageManager;
+    let handled = false;
+    let onResponse = response => {
+      if (handled) {
+        return;
+      }
+      aCallback(response);
+      // This callback object is tied to the Java garbage collector because
+      // it is invoked from Java. Manually release the target callback
+      // here; otherwise we may hold onto resources for too long, because
+      // we would be relying on both the Java and the JS garbage collectors
+      // to run.
+      aMsg = undefined;
+      aCallback = undefined;
+      handled = true;
+    };
 
-      let uuid = UUIDGen.generateUUID().toString();
-      aMsg.uuid = uuid;
-
-      messageManager.addMessageListener("GeckoView:PromptClose", function listener(msg) {
-        if (msg.data.uuid !== uuid) {
-          return;
-        }
-        messageManager.removeMessageListener(msg.name, listener);
-        aCallback(msg.data.result);
-      });
-      messageManager.sendAsyncMessage("GeckoView:Prompt", aMsg);
+    if (!this._dispatcher) {
+      onResponse(null);
       return;
     }
 
-    let handled = false;
     this._dispatcher.dispatch("GeckoView:Prompt", aMsg, {
-      onSuccess: response => {
-        if (handled) {
-          return;
-        }
-        aCallback(response);
-        // This callback object is tied to the Java garbage collector because
-        // it is invoked from Java. Manually release the target callback
-        // here; otherwise we may hold onto resources for too long, because
-        // we would be relying on both the Java and the JS garbage collectors
-        // to run.
-        aMsg = undefined;
-        aCallback = undefined;
-        handled = true;
-      },
+      onSuccess: onResponse,
       onError: error => {
         Cu.reportError("Prompt error: " + error);
-        this.onSuccess(null);
+        onResponse(null);
       },
     });
   },
@@ -713,7 +672,7 @@ PromptDelegate.prototype = {
   },
 
   asyncPromptAuth: function(aChannel, aCallback, aContext, aLevel, aAuthInfo,
-                            aCheckLabel, aCheckState) {
+                            aCheckMsg, aCheckState) {
     let responded = false;
     let callback = result => {
       // OK: result && result.password !== undefined
@@ -732,7 +691,7 @@ PromptDelegate.prototype = {
     this.asyncShowPrompt(this._addCheck(aCheckMsg, aCheckState,
                           this._getAuthMsg(aChannel, aLevel, aAuthInfo)), callback);
     return {
-      QueryInterface: XPCOMUtils.generateQI([Ci.nsICancelable]),
+      QueryInterface: ChromeUtils.generateQI([Ci.nsICancelable]),
       cancel: function() {
         if (responded) {
           return;
@@ -819,7 +778,7 @@ function FilePickerDelegate() {
 FilePickerDelegate.prototype = {
   classID: Components.ID("{e4565e36-f101-4bf5-950b-4be0887785a9}"),
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIFilePicker]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIFilePicker]),
 
   /* ----------  nsIFilePicker  ---------- */
   init: function(aParent, aTitle, aMode) {
@@ -871,7 +830,7 @@ FilePickerDelegate.prototype = {
 
   appendFilter: function(aTitle, aFilter) {
     // Only include filter that specify extensions (i.e. exclude generic ones like "*").
-    let filters = aFilter.split(/[\s,;]+/).filter(filter => filter.indexOf(".") >= 0);
+    let filters = aFilter.split(/[\s,;]+/).filter(filter => filter.includes("."));
     Array.prototype.push.apply(this._extensions, filters);
   },
 
@@ -912,7 +871,7 @@ FilePickerDelegate.prototype = {
       throw Cr.NS_ERROR_NOT_AVAILABLE;
     }
     return {
-      QueryInterface: XPCOMUtils.generateQI([Ci.nsISimpleEnumerator]),
+      QueryInterface: ChromeUtils.generateQI([Ci.nsISimpleEnumerator]),
       _owner: this,
       _index: 0,
       hasMoreElements: function() {
@@ -1009,7 +968,7 @@ function ColorPickerDelegate() {
 ColorPickerDelegate.prototype = {
   classID: Components.ID("{aa0dd6fc-73dd-4621-8385-c0b377e02cee}"),
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIColorPicker]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIColorPicker]),
 
   init: function(aParent, aTitle, aInitialColor) {
     this._prompt = new PromptDelegate(aParent);

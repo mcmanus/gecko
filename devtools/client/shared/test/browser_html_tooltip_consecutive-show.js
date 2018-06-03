@@ -16,23 +16,23 @@ const {HTMLTooltip} = require("devtools/client/shared/widgets/tooltip/HTMLToolti
 loadHelperScript("helper_html_tooltip.js");
 
 function getTooltipContent(doc) {
-  let div = doc.createElementNS(HTML_NS, "div");
+  const div = doc.createElementNS(HTML_NS, "div");
   div.style.height = "50px";
   div.textContent = "tooltip";
   return div;
 }
 
-add_task(function* () {
-  let [,, doc] = yield createHost("bottom", TEST_URI);
+add_task(async function() {
+  const [,, doc] = await createHost("bottom", TEST_URI);
 
-  let box1 = doc.getElementById("box1");
-  let box2 = doc.getElementById("box2");
-  let box3 = doc.getElementById("box3");
-  let box4 = doc.getElementById("box4");
+  const box1 = doc.getElementById("box1");
+  const box2 = doc.getElementById("box2");
+  const box3 = doc.getElementById("box3");
+  const box4 = doc.getElementById("box4");
 
-  let width = 100, height = 50;
+  const width = 100, height = 50;
 
-  let tooltip = new HTMLTooltip(doc, {useXulWrapper: false});
+  const tooltip = new HTMLTooltip(doc, {useXulWrapper: false});
   tooltip.setContent(getTooltipContent(doc), {width, height});
 
   info("Show the tooltip on each of the 4 hbox, without calling hide in between");
@@ -54,7 +54,7 @@ add_task(function* () {
   checkTooltipGeometry(tooltip, box4, {position: "top", width, height});
 
   info("Hide tooltip before leaving test");
-  yield hideTooltip(tooltip);
+  await hideTooltip(tooltip);
 
   tooltip.destroy();
 });

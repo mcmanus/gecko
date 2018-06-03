@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,6 +8,7 @@
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/PaymentRequest.h"
 #include "mozilla/dom/PaymentResponse.h"
+#include "mozilla/EventStateManager.h"
 #include "nsContentUtils.h"
 #include "nsIURLParser.h"
 #include "nsNetCID.h"
@@ -31,6 +32,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(PaymentRequest,
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAbortPromise)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mResponse)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mShippingAddress)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mFullShippingAddress)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(PaymentRequest,
@@ -40,6 +42,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(PaymentRequest,
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mAbortPromise)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mResponse)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mShippingAddress)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mFullShippingAddress)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(PaymentRequest)
@@ -51,7 +54,8 @@ NS_IMPL_RELEASE_INHERITED(PaymentRequest, DOMEventTargetHelper)
 bool
 PaymentRequest::PrefEnabled(JSContext* aCx, JSObject* aObj)
 {
-  return Preferences::GetBool("dom.payments.request.enabled");
+  return XRE_IsContentProcess() &&
+         Preferences::GetBool("dom.payments.request.enabled");
 }
 
 nsresult
@@ -387,17 +391,6 @@ PaymentRequest::IsValidCurrencyAmount(const nsAString& aItem,
                                       nsAString& aErrorMsg)
 {
   nsresult rv;
-  if (aIsTotalItem) {
-    rv = IsNonNegativeNumber(aItem, aAmount.mValue, aErrorMsg);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-  } else {
-    rv = IsValidNumber(aItem, aAmount.mValue, aErrorMsg);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-  }
   // currencySystem must equal urn:iso:std:iso:4217
   if (!aAmount.mCurrencySystem.EqualsASCII("urn:iso:std:iso:4217")) {
     aErrorMsg.AssignLiteral("The amount.currencySystem of \"");
@@ -410,6 +403,17 @@ PaymentRequest::IsValidCurrencyAmount(const nsAString& aItem,
   rv = IsValidCurrency(aItem, aAmount.mCurrency, aErrorMsg);
   if (NS_FAILED(rv)) {
     return rv;
+  }
+  if (aIsTotalItem) {
+    rv = IsNonNegativeNumber(aItem, aAmount.mValue, aErrorMsg);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+  } else {
+    rv = IsValidNumber(aItem, aAmount.mValue, aErrorMsg);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
   }
   return NS_OK;
 }
@@ -540,33 +544,23 @@ PaymentRequest::Constructor(const GlobalObject& aGlobal,
     return nullptr;
   }
 
-  // If the node has the same origin as the parent node, the feature is allowed-to-use.
-  // Otherwise, only allow-to-use this feature when the browsing context container is
-  // an iframe with "allowpaymentrequest" attribute.
+
   nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
-  nsINode* node = static_cast<nsINode*>(doc);
-  if (!node) {
+  if (!doc) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return nullptr;
   }
 
-  nsCOMPtr<nsIPrincipal> topLevelPrincipal;
-  do {
-    nsINode* parentNode = nsContentUtils::GetCrossDocParentNode(node);
-    if (parentNode) {
-      nsresult rv = nsContentUtils::CheckSameOrigin(node, parentNode);
-      if (NS_FAILED(rv)) {
-        nsIContent* content = static_cast<nsIContent*>(parentNode);
-        if (!content->IsHTMLElement(nsGkAtoms::iframe) ||
-            !content->HasAttr(kNameSpaceID_None, nsGkAtoms::allowpaymentrequest)) {
-          aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
-          return nullptr;
-        }
-      }
-    }
-    topLevelPrincipal = node->NodePrincipal();
-    node = parentNode;
-  } while (node);
+  // Check if AllowPaymentRequest on the owner document
+  if (!doc->AllowPaymentRequest()) {
+    aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
+    return nullptr;
+  }
+
+  // Get the top level principal
+  nsCOMPtr<nsIDocument> topLevelDoc = doc->GetTopLevelContentDocument();
+  MOZ_ASSERT(topLevelDoc);
+  nsCOMPtr<nsIPrincipal> topLevelPrincipal = topLevelDoc->NodePrincipal();
 
   // Check payment methods and details
   nsAutoString message;
@@ -636,6 +630,7 @@ PaymentRequest::PaymentRequest(nsPIDOMWindowInner* aWindow, const nsAString& aIn
   , mInternalId(aInternalId)
   , mShippingAddress(nullptr)
   , mUpdating(false)
+  , mRequestShipping(false)
   , mUpdateError(NS_OK)
   , mState(eCreated)
 {
@@ -686,10 +681,16 @@ PaymentRequest::RespondCanMakePayment(bool aResult)
 }
 
 already_AddRefed<Promise>
-PaymentRequest::Show(ErrorResult& aRv)
+PaymentRequest::Show(const Optional<OwningNonNull<Promise>>& aDetailsPromise,
+                     ErrorResult& aRv)
 {
   if (mState != eCreated) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+    return nullptr;
+  }
+
+  if (!EventStateManager::IsHandlingUserInput()) {
+    aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
     return nullptr;
   }
 
@@ -708,6 +709,12 @@ PaymentRequest::Show(ErrorResult& aRv)
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
   }
+
+  if (aDetailsPromise.WasPassed()) {
+    aDetailsPromise.Value().AppendNativeHandler(this);
+    mUpdating = true;
+  }
+
   nsresult rv = manager->ShowPayment(mInternalId);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     if (rv == NS_ERROR_ABORT) {
@@ -751,6 +758,10 @@ PaymentRequest::RespondShowPayment(const nsAString& aMethodName,
     RejectShowPayment(aRv);
     return;
   }
+
+  // https://github.com/w3c/payment-request/issues/692
+  mShippingAddress.swap(mFullShippingAddress);
+  mFullShippingAddress = nullptr;
 
   RefPtr<PaymentResponse> paymentResponse =
     new PaymentResponse(GetOwner(), mInternalId, mId, aMethodName,
@@ -848,7 +859,7 @@ PaymentRequest::UpdatePayment(JSContext* aCx, const PaymentDetailsUpdate& aDetai
   if (NS_WARN_IF(!manager)) {
     return NS_ERROR_FAILURE;
   }
-  nsresult rv = manager->UpdatePayment(aCx, mInternalId, aDetails);
+  nsresult rv = manager->UpdatePayment(aCx, mInternalId, aDetails, mRequestShipping);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
@@ -925,8 +936,9 @@ PaymentRequest::DispatchUpdateEvent(const nsAString& aType)
   event->SetTrusted(true);
   event->SetRequest(this);
 
-  bool dummy;
-  return DispatchEvent(event, &dummy);
+  ErrorResult rv;
+  DispatchEvent(*event, rv);
+  return rv.StealNSResult();
 }
 
 already_AddRefed<PaymentAddress>
@@ -949,11 +961,15 @@ PaymentRequest::UpdateShippingAddress(const nsAString& aCountry,
                                       const nsAString& aRecipient,
                                       const nsAString& aPhone)
 {
-  mShippingAddress = new PaymentAddress(GetOwner(), aCountry, aAddressLine,
+  nsTArray<nsString> emptyArray;
+  mShippingAddress = new PaymentAddress(GetOwner(), aCountry, emptyArray,
                                         aRegion, aCity, aDependentLocality,
                                         aPostalCode, aSortingCode, aLanguageCode,
-                                        aOrganization, aRecipient, aPhone);
-
+                                        EmptyString(), EmptyString(), EmptyString());
+  mFullShippingAddress = new PaymentAddress(GetOwner(), aCountry, aAddressLine,
+                                            aRegion, aCity, aDependentLocality,
+                                            aPostalCode, aSortingCode, aLanguageCode,
+                                            aOrganization, aRecipient, aPhone);
   // Fire shippingaddresschange event
   return DispatchUpdateEvent(NS_LITERAL_STRING("shippingaddresschange"));
 }
@@ -989,6 +1005,43 @@ Nullable<PaymentShippingType>
 PaymentRequest::GetShippingType() const
 {
   return mShippingType;
+}
+
+void
+PaymentRequest::ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue)
+{
+  MOZ_ASSERT(aCx);
+  mUpdating = false;
+  if (NS_WARN_IF(!aValue.isObject())) {
+    return;
+  }
+
+  // Converting value to a PaymentDetailsUpdate dictionary
+  PaymentDetailsUpdate details;
+  if (!details.Init(aCx, aValue)) {
+    AbortUpdate(NS_ERROR_DOM_TYPE_ERR);
+    JS_ClearPendingException(aCx);
+    return;
+  }
+
+  nsresult rv = IsValidDetailsUpdate(details, mRequestShipping);
+  if (NS_FAILED(rv)) {
+    AbortUpdate(rv);
+    return;
+  }
+
+  // Update the PaymentRequest with the new details
+  if (NS_FAILED(UpdatePayment(aCx, details))) {
+    AbortUpdate(NS_ERROR_DOM_ABORT_ERR);
+    return;
+  }
+}
+
+void
+PaymentRequest::RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue)
+{
+  mUpdating = false;
+  AbortUpdate(NS_ERROR_DOM_ABORT_ERR);
 }
 
 PaymentRequest::~PaymentRequest()

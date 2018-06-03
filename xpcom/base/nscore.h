@@ -16,7 +16,7 @@
 #endif
 
 /* Definitions of functions and operators that allocate memory. */
-#if !defined(XPCOM_GLUE) && !defined(NS_NO_XPCOM) && !defined(MOZ_NO_MOZALLOC)
+#if !defined(NS_NO_XPCOM) && !defined(MOZ_NO_MOZALLOC)
 #  include "mozilla/mozalloc.h"
 #endif
 
@@ -166,7 +166,7 @@
  * sense to touch memory pages and free that memory at shutdown,
  * unless we are running leak stats.
  */
-#if defined(NS_BUILD_REFCNT_LOGGING) || defined(MOZ_VALGRIND) || defined(MOZ_ASAN)
+#if defined(NS_BUILD_REFCNT_LOGGING) || defined(MOZ_VALGRIND) || defined(MOZ_ASAN) || defined(MOZ_CODE_COVERAGE)
 #define NS_FREE_PERMANENT_DATA
 #endif
 

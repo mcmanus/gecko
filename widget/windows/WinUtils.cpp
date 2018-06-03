@@ -14,8 +14,8 @@
 #include "nsWindow.h"
 #include "nsWindowDefs.h"
 #include "KeyboardLayout.h"
-#include "nsIDOMMouseEvent.h"
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/DataSurfaceHelpers.h"
 #include "mozilla/HangMonitor.h"
@@ -32,13 +32,12 @@
 #include "nsDirectoryServiceUtils.h"
 #include "imgIContainer.h"
 #include "imgITools.h"
-#include "nsStringStream.h"
 #include "nsNetUtil.h"
 #include "nsIOutputStream.h"
 #include "nsNetCID.h"
 #include "prtime.h"
 #ifdef MOZ_PLACES
-#include "mozIAsyncFavicons.h"
+#include "nsIFaviconService.h"
 #endif
 #include "nsIIconURI.h"
 #include "nsIDownloader.h"
@@ -434,11 +433,6 @@ struct CoTaskMemFreePolicy
 
 SetThreadDpiAwarenessContextProc WinUtils::sSetThreadDpiAwarenessContext = NULL;
 EnableNonClientDpiScalingProc WinUtils::sEnableNonClientDpiScaling = NULL;
-#ifdef ACCESSIBILITY
-typedef NTSTATUS (NTAPI* NtTestAlertPtr)(VOID);
-static NtTestAlertPtr sNtTestAlert = nullptr;
-#endif
-
 
 /* static */
 void
@@ -462,12 +456,6 @@ WinUtils::Initialize()
       }
     }
   }
-
-#ifdef ACCESSIBILITY
-  sNtTestAlert = reinterpret_cast<NtTestAlertPtr>(
-      ::GetProcAddress(::GetModuleHandleW(L"ntdll.dll"), "NtTestAlert"));
-  MOZ_ASSERT(sNtTestAlert);
-#endif
 }
 
 // static
@@ -674,20 +662,16 @@ WinUtils::MonitorFromRect(const gfx::Rect& rect)
     IsPerMonitorDPIAware() ? 1.0 : LogToPhysFactor(GetPrimaryMonitor());
 
   RECT globalWindowBounds = {
-    NSToIntRound(dpiScale * rect.x),
-    NSToIntRound(dpiScale * rect.y),
-    NSToIntRound(dpiScale * (rect.x + rect.width)),
-    NSToIntRound(dpiScale * (rect.y + rect.height))
+    NSToIntRound(dpiScale * rect.X()),
+    NSToIntRound(dpiScale * rect.Y()),
+    NSToIntRound(dpiScale * (rect.XMost())),
+    NSToIntRound(dpiScale * (rect.YMost()))
   };
 
   return ::MonitorFromRect(&globalWindowBounds, MONITOR_DEFAULTTONEAREST);
 }
 
 #ifdef ACCESSIBILITY
-#ifndef STATUS_SUCCESS
-#define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
-#endif
-
 /* static */
 a11y::Accessible*
 WinUtils::GetRootAccessibleForHWND(HWND aHwnd)
@@ -815,7 +799,7 @@ WinUtils::GetRegistryKey(HKEY aRoot,
                          wchar_t* aBuffer,
                          DWORD aBufferLength)
 {
-  NS_PRECONDITION(aKeyName, "The key name is NULL");
+  MOZ_ASSERT(aKeyName, "The key name is NULL");
 
   HKEY key;
   LONG result =
@@ -1094,11 +1078,12 @@ WinUtils::GetNativeMessage(UINT aInternalMessage)
 uint16_t
 WinUtils::GetMouseInputSource()
 {
-  int32_t inputSource = nsIDOMMouseEvent::MOZ_SOURCE_MOUSE;
+  int32_t inputSource = dom::MouseEventBinding::MOZ_SOURCE_MOUSE;
   LPARAM lParamExtraInfo = ::GetMessageExtraInfo();
   if ((lParamExtraInfo & TABLET_INK_SIGNATURE) == TABLET_INK_CHECK) {
     inputSource = (lParamExtraInfo & TABLET_INK_TOUCH) ?
-      nsIDOMMouseEvent::MOZ_SOURCE_TOUCH : nsIDOMMouseEvent::MOZ_SOURCE_PEN;
+      dom::MouseEventBinding::MOZ_SOURCE_TOUCH :
+      dom::MouseEventBinding::MOZ_SOURCE_PEN;
   }
   return static_cast<uint16_t>(inputSource);
 }
@@ -1175,8 +1160,8 @@ WinUtils::InvalidatePluginAsWorkaround(nsIWidget* aWidget,
 
   if (windowRect.top == 0 && windowRect.left == 0) {
     RECT rect;
-    rect.left   = aRect.x;
-    rect.top    = aRect.y;
+    rect.left   = aRect.X();
+    rect.top    = aRect.Y();
     rect.right  = aRect.XMost();
     rect.bottom = aRect.YMost();
 
@@ -1266,18 +1251,12 @@ AsyncFaviconDataReady::OnComplete(nsIURI *aFaviconURI,
   rv = icoFile->GetPath(path);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  // Convert the obtained favicon data to an input stream
-  nsCOMPtr<nsIInputStream> stream;
-  rv = NS_NewByteInputStream(getter_AddRefs(stream),
-                             reinterpret_cast<const char*>(aData),
-                             aDataLen,
-                             NS_ASSIGNMENT_DEPEND);
-  NS_ENSURE_SUCCESS(rv, rv);
-
   // Decode the image from the format it was returned to us in (probably PNG)
   nsCOMPtr<imgIContainer> container;
   nsCOMPtr<imgITools> imgtool = do_CreateInstance("@mozilla.org/image/tools;1");
-  rv = imgtool->DecodeImage(stream, aMimeType, getter_AddRefs(container));
+  rv = imgtool->DecodeImageFromBuffer(reinterpret_cast<const char*>(aData),
+                                      aDataLen, aMimeType,
+                                      getter_AddRefs(container));
   NS_ENSURE_SUCCESS(rv, rv);
 
   RefPtr<SourceSurface> surface =
@@ -1343,7 +1322,7 @@ AsyncFaviconDataReady::OnComplete(nsIURI *aFaviconURI,
   int32_t stride = 4 * size.width;
 
   // AsyncEncodeAndWriteIcon takes ownership of the heap allocated buffer
-  nsCOMPtr<nsIRunnable> event = new AsyncEncodeAndWriteIcon(path, Move(data),
+  nsCOMPtr<nsIRunnable> event = new AsyncEncodeAndWriteIcon(path, std::move(data),
                                                             stride,
                                                             size.width,
                                                             size.height,
@@ -1363,7 +1342,7 @@ AsyncEncodeAndWriteIcon::AsyncEncodeAndWriteIcon(const nsAString &aIconPath,
                                                  const bool aURLShortcut) :
   mURLShortcut(aURLShortcut),
   mIconPath(aIconPath),
-  mBuffer(Move(aBuffer)),
+  mBuffer(std::move(aBuffer)),
   mStride(aStride),
   mWidth(aWidth),
   mHeight(aHeight)
@@ -1372,7 +1351,7 @@ AsyncEncodeAndWriteIcon::AsyncEncodeAndWriteIcon(const nsAString &aIconPath,
 
 NS_IMETHODIMP AsyncEncodeAndWriteIcon::Run()
 {
-  NS_PRECONDITION(!NS_IsMainThread(), "Should not be called on the main thread.");
+  MOZ_ASSERT(!NS_IsMainThread(), "Should not be called on the main thread.");
 
   // Note that since we're off the main thread we can't use
   // gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget()
@@ -1485,21 +1464,18 @@ NS_IMETHODIMP AsyncDeleteAllFaviconsFromDisk::Run()
   nsresult rv = mJumpListCacheDir->AppendNative(
       nsDependentCString(FaviconHelper::kJumpListCacheDir));
   NS_ENSURE_SUCCESS(rv, rv);
-  nsCOMPtr<nsISimpleEnumerator> entries;
+
+  nsCOMPtr<nsIDirectoryEnumerator> entries;
   rv = mJumpListCacheDir->GetDirectoryEntries(getter_AddRefs(entries));
   NS_ENSURE_SUCCESS(rv, rv);
 
   // Loop through each directory entry and remove all ICO files found
   do {
-    bool hasMore = false;
-    if (NS_FAILED(entries->HasMoreElements(&hasMore)) || !hasMore)
+    nsCOMPtr<nsIFile> currFile;
+    if (NS_FAILED(entries->GetNextFile(getter_AddRefs(currFile))) ||
+        !currFile)
       break;
 
-    nsCOMPtr<nsISupports> supp;
-    if (NS_FAILED(entries->GetNext(getter_AddRefs(supp))))
-      break;
-
-    nsCOMPtr<nsIFile> currFile(do_QueryInterface(supp));
     nsAutoString path;
     if (NS_FAILED(currFile->GetPath(path)))
       continue;
@@ -1670,7 +1646,7 @@ nsresult
 {
 #ifdef MOZ_PLACES
   // Obtain the favicon service and get the favicon for the specified page
-  nsCOMPtr<mozIAsyncFavicons> favIconSvc(
+  nsCOMPtr<nsIFaviconService> favIconSvc(
     do_GetService("@mozilla.org/browser/favicon-service;1"));
   NS_ENSURE_TRUE(favIconSvc, NS_ERROR_FAILURE);
 
@@ -1725,12 +1701,12 @@ WinUtils::GetShellItemPath(IShellItem* aItem,
 }
 
 /* static */
-nsIntRegion
+LayoutDeviceIntRegion
 WinUtils::ConvertHRGNToRegion(HRGN aRgn)
 {
   NS_ASSERTION(aRgn, "Don't pass NULL region here");
 
-  nsIntRegion rgn;
+  LayoutDeviceIntRegion rgn;
 
   DWORD size = ::GetRegionData(aRgn, 0, nullptr);
   AutoTArray<uint8_t,100> buffer;
@@ -1754,19 +1730,26 @@ WinUtils::ConvertHRGNToRegion(HRGN aRgn)
   return rgn;
 }
 
-nsIntRect
+LayoutDeviceIntRect
 WinUtils::ToIntRect(const RECT& aRect)
 {
-  return nsIntRect(aRect.left, aRect.top,
-                   aRect.right - aRect.left,
-                   aRect.bottom - aRect.top);
+  return LayoutDeviceIntRect(aRect.left, aRect.top,
+                             aRect.right - aRect.left,
+                             aRect.bottom - aRect.top);
 }
 
 /* static */
 bool
 WinUtils::IsIMEEnabled(const InputContext& aInputContext)
 {
-  return IsIMEEnabled(aInputContext.mIMEState.mEnabled);
+  if (!IsIMEEnabled(aInputContext.mIMEState.mEnabled)) {
+    return false;
+  }
+  if (aInputContext.mIMEState.mEnabled == IMEState::PLUGIN &&
+      aInputContext.mHTMLInputType.EqualsLiteral("password")) {
+    return false;
+  }
+  return true;
 }
 
 /* static */
@@ -1788,13 +1771,6 @@ WinUtils::SetupKeyModifiersSequence(nsTArray<KeyPair>* aArray,
       aArray->AppendElement(KeyPair(map[1], map[2]));
     }
   }
-}
-
-/* static */
-bool
-WinUtils::ShouldHideScrollbars()
-{
-  return false;
 }
 
 // This is in use here and in dom/events/TouchEvent.cpp
@@ -1884,6 +1860,28 @@ WinUtils::ResolveJunctionPointsAndSymLinks(nsIFile* aPath)
   }
 
   return true;
+}
+
+/* static */
+bool
+WinUtils::RunningFromANetworkDrive()
+{
+  wchar_t exePath[MAX_PATH];
+  if (!::GetModuleFileNameW(nullptr, exePath, MAX_PATH)) {
+    return false;
+  }
+
+  std::wstring exeString(exePath);
+  if (!widget::WinUtils::ResolveJunctionPointsAndSymLinks(exeString)) {
+    return false;
+  }
+
+  wchar_t volPath[MAX_PATH];
+  if (!::GetVolumePathNameW(exeString.c_str(), volPath, MAX_PATH)) {
+    return false;
+  }
+
+  return (::GetDriveTypeW(volPath) == DRIVE_REMOTE);
 }
 
 /* static */

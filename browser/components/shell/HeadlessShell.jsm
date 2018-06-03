@@ -4,13 +4,15 @@
 
 "use strict";
 
-let EXPORTED_SYMBOLS = ["HeadlessShell"];
+var EXPORTED_SYMBOLS = ["HeadlessShell"];
 
-Components.utils.import("resource://gre/modules/Services.jsm");
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
-Components.utils.import("resource://gre/modules/osfile.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/osfile.jsm");
 
-const Ci = Components.interfaces;
+// Refrences to the progress listeners to keep them from being gc'ed
+// before they are called.
+const progressListeners = new Map();
 
 function loadContentWindow(webNavigation, uri) {
   return new Promise((resolve, reject) => {
@@ -31,14 +33,16 @@ function loadContentWindow(webNavigation, uri) {
         }
         let contentWindow = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
                                     .getInterface(Ci.nsIDOMWindow);
+        progressListeners.delete(progressListener);
         webProgress.removeProgressListener(progressListener);
         contentWindow.addEventListener("load", (event) => {
           resolve(contentWindow);
         }, { once: true });
       },
-      QueryInterface: XPCOMUtils.generateQI(["nsIWebProgressListener",
-                                             "nsISupportsWeakReference"])
+      QueryInterface: ChromeUtils.generateQI(["nsIWebProgressListener",
+                                              "nsISupportsWeakReference"])
     };
+    progressListeners.set(progressListener, progressListener);
     webProgress.addProgressListener(progressListener,
                                     Ci.nsIWebProgress.NOTIFY_LOCATION);
   });

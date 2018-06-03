@@ -9,8 +9,8 @@ const {
   changeTouchSimulation,
 } = require("devtools/client/responsive.html/actions/touch-simulation");
 
-add_task(function* () {
-  let store = Store();
+add_task(async function() {
+  const store = Store();
   const { getState, dispatch } = store;
 
   ok(!getState().touchSimulation.enabled,

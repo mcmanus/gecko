@@ -5,8 +5,11 @@
 var Cm = Components.manager;
 
 // Shared logging for all HTTP server functions.
-Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://services-common/utils.js");
+ChromeUtils.import("resource://gre/modules/Log.jsm");
+ChromeUtils.import("resource://services-common/utils.js");
+ChromeUtils.import("resource://testing-common/TestUtils.jsm");
+ChromeUtils.import("resource://testing-common/services/sync/utils.js");
+
 const SYNC_HTTP_LOGGER = "Sync.Test.Server";
 
 // While the sync code itself uses 1.5, the tests hard-code 1.1,
@@ -78,6 +81,7 @@ function ServerWBO(id, initialPayload, modified) {
   }
   this.payload = initialPayload;
   this.modified = modified || new_timestamp();
+  this.sortindex = 0;
 }
 ServerWBO.prototype = {
 
@@ -86,18 +90,20 @@ ServerWBO.prototype = {
   },
 
   get() {
-    return JSON.stringify(this, ["id", "modified", "payload"]);
+    return { id: this.id, modified: this.modified, payload: this.payload };
   },
 
   put(input) {
     input = JSON.parse(input);
     this.payload = input.payload;
     this.modified = new_timestamp();
+    this.sortindex = input.sortindex || 0;
   },
 
   delete() {
     delete this.payload;
     delete this.modified;
+    delete this.sortindex;
   },
 
   // This handler sets `newModified` on the response body if the collection
@@ -114,7 +120,7 @@ ServerWBO.prototype = {
       switch (request.method) {
         case "GET":
           if (self.payload) {
-            body = self.get();
+            body = JSON.stringify(self.get());
           } else {
             statusCode = 404;
             status = "Not Found";
@@ -141,7 +147,27 @@ ServerWBO.prototype = {
       response.setStatusLine(request.httpVersion, statusCode, status);
       response.bodyOutputStream.write(body, body.length);
     };
-  }
+  },
+
+  /**
+   * Get the cleartext data stored in the payload.
+   *
+   * This isn't `get cleartext`, because `x.cleartext.blah = 3;` wouldn't work,
+   * which seems like a footgun.
+   */
+  getCleartext() {
+    return JSON.parse(JSON.parse(this.payload).ciphertext);
+  },
+
+  /**
+   * Setter for getCleartext(), but lets you adjust the modified timestamp too.
+   * Returns this ServerWBO object.
+   */
+  setCleartext(cleartext, modifiedTimestamp = this.modified) {
+    this.payload = JSON.stringify(encryptPayload(cleartext));
+    this.modified = modifiedTimestamp;
+    return this;
+  },
 
 };
 
@@ -230,9 +256,7 @@ ServerCollection.prototype = {
    * @return an array of the payloads of each stored WBO.
    */
   payloads() {
-    return this.wbos().map(function(wbo) {
-      return JSON.parse(JSON.parse(wbo.payload).ciphertext);
-    });
+    return this.wbos().map(wbo => wbo.getCleartext());
   },
 
   // Just for syntactic elegance.
@@ -244,6 +268,10 @@ ServerCollection.prototype = {
     return this.wbo(id).payload;
   },
 
+  cleartext(id) {
+    return this.wbo(id).getCleartext();
+  },
+
   /**
    * Insert the provided WBO under its ID.
    *
@@ -252,6 +280,40 @@ ServerCollection.prototype = {
   insertWBO: function insertWBO(wbo) {
     this.timestamp = Math.max(this.timestamp, wbo.modified);
     return this._wbos[wbo.id] = wbo;
+  },
+
+  /**
+   * Update an existing WBO's cleartext using a callback function that modifies
+   * the record in place, or returns a new record.
+   */
+  updateRecord(id, updateCallback, optTimestamp) {
+    let wbo = this.wbo(id);
+    if (!wbo) {
+      throw new Error("No record with provided ID");
+    }
+    let curCleartext = wbo.getCleartext();
+    // Allow update callback to either return a new cleartext, or modify in place.
+    let newCleartext = updateCallback(curCleartext) || curCleartext;
+    wbo.setCleartext(newCleartext, optTimestamp);
+    // It is already inserted, but we might need to update our timestamp based
+    // on it's `modified` value, if `optTimestamp` was provided.
+    return this.insertWBO(wbo);
+  },
+
+  /**
+   * Insert a record, which may either an object with a cleartext property, or
+   * the cleartext property itself.
+   */
+  insertRecord(record, timestamp = Date.now() / 1000) {
+    if (typeof timestamp != "number") {
+      throw new TypeError("insertRecord: Timestamp is not a number.");
+    }
+    if (!record.id) {
+      throw new Error("Attempt to insert record with no id");
+    }
+    // Allow providing either the cleartext directly, or the CryptoWrapper-like.
+    let cleartext = record.cleartext || record;
+    return this.insert(record.id, encryptPayload(cleartext), timestamp);
   },
 
   /**
@@ -283,8 +345,9 @@ ServerCollection.prototype = {
 
   _inResultSet(wbo, options) {
     return wbo.payload
-           && (!options.ids || (options.ids.indexOf(wbo.id) != -1))
-           && (!options.newer || (wbo.modified > options.newer));
+           && (!options.ids || (options.ids.includes(wbo.id)))
+           && (!options.newer || (wbo.modified > options.newer))
+           && (!options.older || (wbo.modified < options.older));
   },
 
   count(options) {
@@ -299,15 +362,37 @@ ServerCollection.prototype = {
   },
 
   get(options, request) {
-    let result;
-    if (options.full) {
-      let data = [];
-      for (let wbo of Object.values(this._wbos)) {
-        // Drop deleted.
-        if (wbo.modified && this._inResultSet(wbo, options)) {
-          data.push(wbo.get());
-        }
+    let data = [];
+    for (let wbo of Object.values(this._wbos)) {
+      if (wbo.modified && this._inResultSet(wbo, options)) {
+        data.push(wbo);
       }
+    }
+    switch (options.sort) {
+      case "newest":
+        data.sort((a, b) => b.modified - a.modified);
+        break;
+
+      case "oldest":
+        data.sort((a, b) => a.modified - b.modified);
+        break;
+
+      case "index":
+        data.sort((a, b) => b.sortindex - a.sortindex);
+        break;
+
+      default:
+        if (options.sort) {
+          this._log.error("Error: client requesting unknown sort order",
+                          options.sort);
+          throw new Error("Unknown sort order");
+        }
+        // If the client didn't request a sort order, shuffle the records
+        // to ensure that we don't accidentally depend on the default order.
+        TestUtils.shuffle(data);
+    }
+    if (options.full) {
+      data = data.map(wbo => wbo.get());
       let start = options.offset || 0;
       if (options.limit) {
         let numItemsPastOffset = data.length - start;
@@ -323,19 +408,12 @@ ServerCollection.prototype = {
       if (request && request.getHeader("accept") == "application/newlines") {
         this._log.error("Error: client requesting application/newlines content");
         throw new Error("This server should not serve application/newlines content");
-      } else {
-        result = JSON.stringify(data);
       }
 
       // Use options as a backchannel to report count.
       options.recordCount = data.length;
     } else {
-      let data = [];
-      for (let [id, wbo] of Object.entries(this._wbos)) {
-        if (this._inResultSet(wbo, options)) {
-          data.push(id);
-        }
-      }
+      data = data.map(wbo => wbo.id);
       let start = options.offset || 0;
       if (options.limit) {
         data = data.slice(start, start + options.limit);
@@ -343,10 +421,9 @@ ServerCollection.prototype = {
       } else if (start) {
         data = data.slice(start);
       }
-      result = JSON.stringify(data);
       options.recordCount = data.length;
     }
-    return result;
+    return JSON.stringify(data);
   },
 
   post(input) {
@@ -368,6 +445,7 @@ ServerCollection.prototype = {
       if (wbo) {
         wbo.payload = record.payload;
         wbo.modified = new_timestamp();
+        wbo.sortindex = record.sortindex || 0;
         success.push(record.id);
       } else {
         failed[record.id] = "no wbo configured";
@@ -425,6 +503,9 @@ ServerCollection.prototype = {
       }
       if (options.newer) {
         options.newer = parseFloat(options.newer);
+      }
+      if (options.older) {
+        options.older = parseFloat(options.older);
       }
       if (options.limit) {
         options.limit = parseInt(options.limit, 10);
@@ -530,7 +611,7 @@ function track_collections_helper() {
       // Update the collection timestamp to the appropriate modified time.
       // This is either a value set by the handler, or the current time.
       if (request.method != "GET") {
-        update_collection(coll, response.newModified)
+        update_collection(coll, response.newModified);
       }
     };
   }
@@ -799,7 +880,7 @@ SyncServer.prototype = {
     let createContents   = this.createContents.bind(this, username);
     let modified         = function(collectionName) {
       return collection(collectionName).timestamp;
-    }
+    };
     let deleteCollections = this.deleteCollections.bind(this, username);
     return {
       collection,
@@ -969,7 +1050,7 @@ SyncServer.prototype = {
           }
         }
         return false;
-      }
+      };
 
       switch (req.method) {
         case "GET": {

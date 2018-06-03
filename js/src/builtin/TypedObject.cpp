@@ -4,33 +4,33 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "builtin/TypedObject.h"
+#include "builtin/TypedObject-inl.h"
 
 #include "mozilla/Casting.h"
 #include "mozilla/CheckedInt.h"
 
-#include "jscompartment.h"
-#include "jsfun.h"
 #include "jsutil.h"
 
 #include "builtin/SIMD.h"
 #include "gc/Marking.h"
 #include "js/Vector.h"
+#include "util/StringBuffer.h"
 #include "vm/GlobalObject.h"
-#include "vm/String.h"
-#include "vm/StringBuffer.h"
+#include "vm/JSCompartment.h"
+#include "vm/JSFunction.h"
+#include "vm/SelfHosting.h"
+#include "vm/StringType.h"
 #include "vm/TypedArrayObject.h"
 
-#include "jsatominlines.h"
-#include "jsobjinlines.h"
-
+#include "gc/Nursery-inl.h"
 #include "gc/StoreBuffer-inl.h"
+#include "vm/JSAtom-inl.h"
+#include "vm/JSObject-inl.h"
 #include "vm/NativeObject-inl.h"
 #include "vm/Shape-inl.h"
 
 using mozilla::AssertedCast;
 using mozilla::CheckedInt32;
-using mozilla::DebugOnly;
 using mozilla::IsPowerOfTwo;
 using mozilla::PodCopy;
 using mozilla::PointerRangeSize;
@@ -45,7 +45,6 @@ const Class js::TypedObjectModuleObject::class_ = {
 
 static const JSFunctionSpec TypedObjectMethods[] = {
     JS_SELF_HOSTED_FN("objectType", "TypeOfTypedObject", 1, 0),
-    JS_SELF_HOSTED_FN("storage", "StorageOfTypedObject", 1, 0),
     JS_FS_END
 };
 
@@ -118,10 +117,6 @@ ConvertAndCopyTo(JSContext* cx,
                  HandleAtom name,
                  HandleValue val)
 {
-    RootedFunction func(cx, SelfHostedFunction(cx, cx->names().ConvertAndCopyTo));
-    if (!func)
-        return false;
-
     FixedInvokeArgs<5> args(cx);
 
     args[0].setObject(*typeObj);
@@ -133,9 +128,8 @@ ConvertAndCopyTo(JSContext* cx,
         args[3].setNull();
     args[4].set(val);
 
-    RootedValue fval(cx, ObjectValue(*func));
     RootedValue dummy(cx); // ignored by ConvertAndCopyTo
-    return js::Call(cx, fval, dummy, args, &dummy);
+    return CallSelfHostedFunction(cx, cx->names().ConvertAndCopyTo, dummy, args, &dummy);
 }
 
 static bool
@@ -156,18 +150,13 @@ Reify(JSContext* cx,
       size_t offset,
       MutableHandleValue to)
 {
-    RootedFunction func(cx, SelfHostedFunction(cx, cx->names().Reify));
-    if (!func)
-        return false;
-
     FixedInvokeArgs<3> args(cx);
 
     args[0].setObject(*type);
     args[1].setObject(*typedObj);
     args[2].setInt32(offset);
 
-    RootedValue fval(cx, ObjectValue(*func));
-    return js::Call(cx, fval, UndefinedHandleValue, args, to);
+    return CallSelfHostedFunction(cx, cx->names().Reify, UndefinedHandleValue, args, to);
 }
 
 // Extracts the `prototype` property from `obj`, throwing if it is
@@ -1244,7 +1233,7 @@ GlobalObject::initTypedObjectModule(JSContext* cx, Handle<GlobalObject*> global)
         return false;
 
     Rooted<TypedObjectModuleObject*> module(cx);
-    module = NewObjectWithGivenProto<TypedObjectModuleObject>(cx, objProto);
+    module = NewObjectWithGivenProto<TypedObjectModuleObject>(cx, objProto, SingletonObject);
     if (!module)
         return false;
 
@@ -1311,9 +1300,8 @@ GlobalObject::initTypedObjectModule(JSContext* cx, Handle<GlobalObject*> global)
 }
 
 JSObject*
-js::InitTypedObjectModuleObject(JSContext* cx, HandleObject obj)
+js::InitTypedObjectModuleObject(JSContext* cx, Handle<GlobalObject*> global)
 {
-    Handle<GlobalObject*> global = obj.as<GlobalObject>();
     return GlobalObject::getOrCreateTypedObjectModule(cx, global);
 }
 
@@ -1361,7 +1349,7 @@ bool
 TypedObject::isAttached() const
 {
     if (is<InlineTransparentTypedObject>()) {
-        ObjectWeakMap* table = compartment()->lazyArrayBuffers;
+        ObjectWeakMap* table = ObjectRealm::get(this).lazyArrayBuffers.get();
         if (table) {
             JSObject* buffer = table->lookup(this);
             if (buffer)
@@ -1435,7 +1423,7 @@ OutlineTypedObject::setOwnerAndData(JSObject* owner, uint8_t* data)
     // Trigger a post barrier when attaching an object outside the nursery to
     // one that is inside it.
     if (owner && !IsInsideNursery(this) && IsInsideNursery(owner))
-        zone()->group()->storeBuffer().putWholeCell(this);
+        owner->storeBuffer()->putWholeCell(this);
 }
 
 /*static*/ OutlineTypedObject*
@@ -1447,6 +1435,8 @@ OutlineTypedObject::createUnattachedWithClass(JSContext* cx,
 {
     MOZ_ASSERT(clasp == &OutlineTransparentTypedObject::class_ ||
                clasp == &OutlineOpaqueTypedObject::class_);
+
+    AutoSetNewObjectMetadata metadata(cx);
 
     RootedObjectGroup group(cx, ObjectGroup::defaultNewGroup(cx, clasp,
                                                              TaggedProto(&descr->typedProto()),
@@ -1603,7 +1593,7 @@ OutlineTypedObject::obj_trace(JSTracer* trc, JSObject* object)
 {
     OutlineTypedObject& typedObj = object->as<OutlineTypedObject>();
 
-    TraceEdge(trc, &typedObj.shape_, "OutlineTypedObject_shape");
+    TraceEdge(trc, typedObj.shapePtr(), "OutlineTypedObject_shape");
 
     if (!typedObj.owner_)
         return;
@@ -1622,7 +1612,6 @@ OutlineTypedObject::obj_trace(JSTracer* trc, JSObject* object)
     // inline with it. Note that an array buffer pointing to data in an inline
     // typed object will never be used as an owner for another outline typed
     // object. In such cases, the owner will be the inline typed object itself.
-    MakeAccessibleAfterMovingGC(owner);
     MOZ_ASSERT_IF(owner->is<ArrayBufferObject>(),
                   !owner->as<ArrayBufferObject>().forInlineTypedObject());
     if (owner != oldOwner &&
@@ -1633,7 +1622,7 @@ OutlineTypedObject::obj_trace(JSTracer* trc, JSObject* object)
         typedObj.setData(newData);
 
         if (trc->isTenuringTracer()) {
-            Nursery& nursery = typedObj.zoneFromAnyThread()->group()->nursery();
+            Nursery& nursery = trc->runtime()->gc.nursery();
             nursery.maybeSetForwardingPointer(trc, oldData, newData, /* direct = */ false);
         }
     }
@@ -2115,7 +2104,7 @@ InlineTypedObject::obj_trace(JSTracer* trc, JSObject* object)
 {
     InlineTypedObject& typedObj = object->as<InlineTypedObject>();
 
-    TraceEdge(trc, &typedObj.shape_, "InlineTypedObject_shape");
+    TraceEdge(trc, typedObj.shapePtr(), "InlineTypedObject_shape");
 
     // Inline transparent objects do not have references and do not need more
     // tracing. If there is an entry in the compartment's LazyArrayBufferTable,
@@ -2143,7 +2132,7 @@ InlineTypedObject::obj_moved(JSObject* dst, JSObject* src)
         // but they will not set any direct forwarding pointers.
         uint8_t* oldData = reinterpret_cast<uint8_t*>(src) + offsetOfDataStart();
         uint8_t* newData = dst->as<InlineTypedObject>().inlineTypedMem();
-        auto& nursery = dst->zone()->group()->nursery();
+        auto& nursery = dst->runtimeFromMainThread()->gc.nursery();
         bool direct = descr.size() >= sizeof(uintptr_t);
         nursery.setForwardingPointerWhileTenuring(oldData, newData, direct);
     }
@@ -2154,12 +2143,16 @@ InlineTypedObject::obj_moved(JSObject* dst, JSObject* src)
 ArrayBufferObject*
 InlineTransparentTypedObject::getOrCreateBuffer(JSContext* cx)
 {
-    ObjectWeakMap*& table = cx->compartment()->lazyArrayBuffers;
-    if (!table) {
-        table = cx->new_<ObjectWeakMap>(cx);
+    ObjectRealm& realm = ObjectRealm::get(this);
+    if (!realm.lazyArrayBuffers) {
+        auto table = cx->make_unique<ObjectWeakMap>(cx);
         if (!table || !table->init())
             return nullptr;
+
+        realm.lazyArrayBuffers = std::move(table);
     }
+
+    ObjectWeakMap* table = realm.lazyArrayBuffers.get();
 
     JSObject* obj = table->lookup(this);
     if (obj)
@@ -2183,7 +2176,7 @@ InlineTransparentTypedObject::getOrCreateBuffer(JSContext* cx)
     // (the first view is held strongly by the buffer) and is used by the
     // buffer marking code to detect whether its data pointer needs to be
     // relocated.
-    JS_ALWAYS_TRUE(buffer->addView(cx, this));
+    MOZ_ALWAYS_TRUE(buffer->addView(cx, this));
 
     buffer->setForInlineTypedObject();
     buffer->setHasTypedObjectViews();
@@ -2194,7 +2187,7 @@ InlineTransparentTypedObject::getOrCreateBuffer(JSContext* cx)
     if (IsInsideNursery(this)) {
         // Make sure the buffer is traced by the next generational collection,
         // so that its data pointer is updated after this typed object moves.
-        zone()->group()->storeBuffer().putWholeCell(buffer);
+        storeBuffer()->putWholeCell(buffer);
     }
 
     return buffer;
@@ -2220,12 +2213,11 @@ const ObjectOps TypedObject::objectOps_ = {
     TypedObject::obj_setProperty,
     TypedObject::obj_getOwnPropertyDescriptor,
     TypedObject::obj_deleteProperty,
-    nullptr, nullptr, /* watch/unwatch */
     nullptr,   /* getElements */
     nullptr, /* thisValue */
 };
 
-#define DEFINE_TYPEDOBJ_CLASS(Name, Trace, Moved, flag)   \
+#define DEFINE_TYPEDOBJ_CLASS(Name, Trace, Moved)        \
     static const ClassOps Name##ClassOps = {             \
         nullptr,        /* addProperty */                \
         nullptr,        /* delProperty */                \
@@ -2245,7 +2237,8 @@ const ObjectOps TypedObject::objectOps_ = {
     };                                                   \
     const Class Name::class_ = {                         \
         # Name,                                          \
-        Class::NON_NATIVE | flag,                        \
+        Class::NON_NATIVE |                              \
+            JSCLASS_DELAY_METADATA_BUILDER,              \
         &Name##ClassOps,                                 \
         JS_NULL_CLASS_SPEC,                              \
         &Name##ClassExt,                                 \
@@ -2254,20 +2247,16 @@ const ObjectOps TypedObject::objectOps_ = {
 
 DEFINE_TYPEDOBJ_CLASS(OutlineTransparentTypedObject,
                       OutlineTypedObject::obj_trace,
-                      nullptr,
-                      0);
+                      nullptr);
 DEFINE_TYPEDOBJ_CLASS(OutlineOpaqueTypedObject,
                       OutlineTypedObject::obj_trace,
-                      nullptr,
-                      0);
+                      nullptr);
 DEFINE_TYPEDOBJ_CLASS(InlineTransparentTypedObject,
                       InlineTypedObject::obj_trace,
-                      InlineTypedObject::obj_moved,
-                      JSCLASS_DELAY_METADATA_BUILDER);
+                      InlineTypedObject::obj_moved);
 DEFINE_TYPEDOBJ_CLASS(InlineOpaqueTypedObject,
                       InlineTypedObject::obj_trace,
-                      InlineTypedObject::obj_moved,
-                      JSCLASS_DELAY_METADATA_BUILDER);
+                      InlineTypedObject::obj_moved);
 
 static int32_t
 LengthForType(TypeDescr& descr)
@@ -2286,27 +2275,6 @@ LengthForType(TypeDescr& descr)
     MOZ_CRASH("Invalid kind");
 }
 
-static bool
-CheckOffset(uint32_t offset, uint32_t size, uint32_t alignment, uint32_t bufferLength)
-{
-    // Offset (plus size) must be fully contained within the buffer.
-    if (offset > bufferLength)
-        return false;
-    if (offset + size < offset)
-        return false;
-    if (offset + size > bufferLength)
-        return false;
-
-    // Offset must be aligned.
-    if ((offset % alignment) != 0)
-        return false;
-
-    return true;
-}
-
-template<typename T, typename U, typename V, typename W>
-inline bool CheckOffset(T, U, V, W) = delete;
-
 /*static*/ bool
 TypedObject::construct(JSContext* cx, unsigned int argc, Value* vp)
 {
@@ -2315,11 +2283,9 @@ TypedObject::construct(JSContext* cx, unsigned int argc, Value* vp)
     MOZ_ASSERT(args.callee().is<TypeDescr>());
     Rooted<TypeDescr*> callee(cx, &args.callee().as<TypeDescr>());
 
-    // Typed object constructors are overloaded in three ways, in order of
-    // precedence:
+    // Typed object constructors are overloaded in two ways:
     //
     //   new TypeObj()
-    //   new TypeObj(buffer, [offset])
     //   new TypeObj(data)
 
     // Zero argument constructor:
@@ -2328,50 +2294,6 @@ TypedObject::construct(JSContext* cx, unsigned int argc, Value* vp)
         Rooted<TypedObject*> obj(cx, createZeroed(cx, callee, length));
         if (!obj)
             return false;
-        args.rval().setObject(*obj);
-        return true;
-    }
-
-    // Buffer constructor.
-    if (args[0].isObject() && args[0].toObject().is<ArrayBufferObject>()) {
-        Rooted<ArrayBufferObject*> buffer(cx);
-        buffer = &args[0].toObject().as<ArrayBufferObject>();
-
-        if (callee->opaque() || buffer->isDetached()) {
-            JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_TYPEDOBJECT_BAD_ARGS);
-            return false;
-        }
-
-        uint32_t offset;
-        if (args.length() >= 2 && !args[1].isUndefined()) {
-            if (!args[1].isInt32() || args[1].toInt32() < 0) {
-                JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_TYPEDOBJECT_BAD_ARGS);
-                return false;
-            }
-
-            offset = args[1].toInt32();
-        } else {
-            offset = 0;
-        }
-
-        if (args.length() >= 3 && !args[2].isUndefined()) {
-            JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_TYPEDOBJECT_BAD_ARGS);
-            return false;
-        }
-
-        if (!CheckOffset(offset, callee->size(), callee->alignment(),
-                         buffer->byteLength()))
-        {
-            JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_TYPEDOBJECT_BAD_ARGS);
-            return false;
-        }
-
-        Rooted<OutlineTypedObject*> obj(cx);
-        obj = OutlineTypedObject::createUnattached(cx, callee, LengthForType(*callee));
-        if (!obj)
-            return false;
-
-        obj->attach(cx, *buffer, offset);
         args.rval().setObject(*obj);
         return true;
     }
@@ -2410,17 +2332,13 @@ TypedObject::create(JSContext* cx, js::gc::AllocKind kind, js::gc::InitialHeap h
         return cx->alreadyReportedOOM();
 
     TypedObject* tobj = static_cast<TypedObject*>(obj);
-    tobj->group_.init(group);
+    tobj->initGroup(group);
     tobj->initShape(shape);
 
-    tobj->setInitialElementsMaybeNonNative(js::emptyObjectElements);
+    MOZ_ASSERT(clasp->shouldDelayMetadataBuilder());
+    cx->realm()->setObjectPendingMetadata(cx, tobj);
 
-    if (clasp->shouldDelayMetadataBuilder())
-        cx->compartment()->setObjectPendingMetadata(cx, tobj);
-    else
-        tobj = SetNewObjectMetadata(cx, tobj);
-
-    js::gc::TraceCreateObject(tobj);
+    js::gc::gcTracer.traceCreateObject(tobj);
 
     return tobj;
 }
@@ -2688,7 +2606,7 @@ js::LoadScalar##T::Func(JSContext* cx, unsigned argc, Value* vp)                
                                                                                         \
     JS::AutoCheckCannotGC nogc(cx);                                                     \
     T* target = reinterpret_cast<T*>(typedObj.typedMem(offset, nogc));                  \
-    args.rval().setNumber((double) *target);                                            \
+    args.rval().setNumber(JS::CanonicalizeNaN((double) *target));                       \
     return true;                                                                        \
 }
 

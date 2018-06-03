@@ -20,18 +20,19 @@ public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(SharedCertVerifier)
 
   SharedCertVerifier(OcspDownloadConfig odc, OcspStrictConfig osc,
-                     OcspGetConfig ogc,
                      mozilla::TimeDuration ocspSoftTimeout,
                      mozilla::TimeDuration ocspHardTimeout,
                      uint32_t certShortLifetimeInDays,
                      PinningMode pinningMode, SHA1Mode sha1Mode,
                      BRNameMatchingPolicy::Mode nameMatchingMode,
                      NetscapeStepUpPolicy netscapeStepUpPolicy,
-                     CertificateTransparencyMode ctMode)
-    : mozilla::psm::CertVerifier(odc, osc, ogc, ocspSoftTimeout,
+                     CertificateTransparencyMode ctMode,
+                     DistrustedCAPolicy distrustedCAPolicy)
+    : mozilla::psm::CertVerifier(odc, osc, ocspSoftTimeout,
                                  ocspHardTimeout, certShortLifetimeInDays,
                                  pinningMode, sha1Mode, nameMatchingMode,
-                                 netscapeStepUpPolicy, ctMode)
+                                 netscapeStepUpPolicy, ctMode,
+                                 distrustedCAPolicy)
   {
   }
 };

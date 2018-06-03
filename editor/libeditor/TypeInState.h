@@ -6,10 +6,10 @@
 #ifndef TypeInState_h
 #define TypeInState_h
 
+#include "mozilla/EditorDOMPoint.h"
 #include "mozilla/UniquePtr.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
-#include "nsISelectionListener.h"
 #include "nsISupportsImpl.h"
 #include "nsString.h"
 #include "nsTArray.h"
@@ -21,7 +21,7 @@
 #endif
 
 class nsAtom;
-class nsIDOMNode;
+class nsINode;
 
 namespace mozilla {
 
@@ -33,32 +33,31 @@ class Selection;
 struct PropItem
 {
   nsAtom* tag;
-  nsString attr;
+  nsAtom* attr;
   nsString value;
 
   PropItem();
-  PropItem(nsAtom* aTag, const nsAString& aAttr, const nsAString& aValue);
+  PropItem(nsAtom* aTag, nsAtom* aAttr, const nsAString& aValue);
   ~PropItem();
 };
 
-class TypeInState final : public nsISelectionListener
+class TypeInState final
 {
 public:
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_CLASS(TypeInState)
+  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(TypeInState)
+  NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(TypeInState)
 
   TypeInState();
   void Reset();
 
   nsresult UpdateSelState(dom::Selection* aSelection);
 
-  // nsISelectionListener
-  NS_DECL_NSISELECTIONLISTENER
+  void OnSelectionChange(dom::Selection& aSelection);
 
-  void SetProp(nsAtom* aProp, const nsAString& aAttr, const nsAString& aValue);
+  void SetProp(nsAtom* aProp, nsAtom* aAttr, const nsAString& aValue);
 
   void ClearAllProps();
-  void ClearProp(nsAtom* aProp, const nsAString& aAttr);
+  void ClearProp(nsAtom* aProp, nsAtom* aAttr);
 
   /**
    * TakeClearProperty() hands back next property item on the clear list.
@@ -78,30 +77,28 @@ public:
    */
   int32_t TakeRelativeFontSize();
 
-  void GetTypingState(bool& isSet, bool& theSetting, nsAtom* aProp);
   void GetTypingState(bool& isSet, bool& theSetting, nsAtom* aProp,
-                      const nsString& aAttr, nsString* outValue);
+                      nsAtom* aAttr = nullptr, nsString* outValue = nullptr);
 
-  static bool FindPropInList(nsAtom* aProp, const nsAString& aAttr,
+  static bool FindPropInList(nsAtom* aProp, nsAtom* aAttr,
                              nsAString* outValue, nsTArray<PropItem*>& aList,
                              int32_t& outIndex);
 
 protected:
   virtual ~TypeInState();
 
-  void RemovePropFromSetList(nsAtom* aProp, const nsAString& aAttr);
-  void RemovePropFromClearedList(nsAtom* aProp, const nsAString& aAttr);
-  bool IsPropSet(nsAtom* aProp, const nsAString& aAttr, nsAString* outValue);
-  bool IsPropSet(nsAtom* aProp, const nsAString& aAttr, nsAString* outValue,
+  void RemovePropFromSetList(nsAtom* aProp, nsAtom* aAttr);
+  void RemovePropFromClearedList(nsAtom* aProp, nsAtom* aAttr);
+  bool IsPropSet(nsAtom* aProp, nsAtom* aAttr, nsAString* outValue);
+  bool IsPropSet(nsAtom* aProp, nsAtom* aAttr, nsAString* outValue,
                  int32_t& outIndex);
-  bool IsPropCleared(nsAtom* aProp, const nsAString& aAttr);
-  bool IsPropCleared(nsAtom* aProp, const nsAString& aAttr, int32_t& outIndex);
+  bool IsPropCleared(nsAtom* aProp, nsAtom* aAttr);
+  bool IsPropCleared(nsAtom* aProp, nsAtom* aAttr, int32_t& outIndex);
 
   nsTArray<PropItem*> mSetArray;
   nsTArray<PropItem*> mClearedArray;
+  EditorDOMPoint mLastSelectionPoint;
   int32_t mRelativeFontSize;
-  nsCOMPtr<nsIDOMNode> mLastSelectionContainer;
-  int32_t mLastSelectionOffset;
 
   friend class HTMLEditRules;
 };

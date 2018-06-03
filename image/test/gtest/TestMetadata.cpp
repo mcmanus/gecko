@@ -48,7 +48,7 @@ CheckMetadata(const ImageTestCase& aTestCase,
   ASSERT_TRUE(NS_SUCCEEDED(rv));
 
   // Write the data into a SourceBuffer.
-  NotNull<RefPtr<SourceBuffer>> sourceBuffer = WrapNotNull(new SourceBuffer());
+  auto sourceBuffer = MakeNotNull<RefPtr<SourceBuffer>>();
   sourceBuffer->ExpectLength(length);
   rv = sourceBuffer->AppendFromInputStream(inputStream, length);
   ASSERT_TRUE(NS_SUCCEEDED(rv));
@@ -255,6 +255,6 @@ TEST_F(ImageDecoderMetadata, NoFrameDelayGIFFullDecode)
   EXPECT_TRUE(NS_SUCCEEDED(result.Surface().Seek(0)));
   EXPECT_TRUE(bool(result.Surface()));
 
-  EXPECT_TRUE(NS_SUCCEEDED(result.Surface().Seek(1)));
-  EXPECT_TRUE(bool(result.Surface()));
+  RawAccessFrameRef partialFrame = result.Surface().RawAccessRef(1);
+  EXPECT_TRUE(bool(partialFrame));
 }

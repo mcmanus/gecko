@@ -1,10 +1,11 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 "use strict";
 
-this.EXPORTED_SYMBOLS = ["LegacyExtensionsUtils"];
+var EXPORTED_SYMBOLS = ["LegacyExtensionsUtils"];
 
 /* exported LegacyExtensionsUtils, LegacyExtensionContext */
 
@@ -13,18 +14,16 @@ this.EXPORTED_SYMBOLS = ["LegacyExtensionsUtils"];
  * and exchange messages with the embedded WebExtension.
  */
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "Extension",
+                               "resource://gre/modules/Extension.jsm");
+ChromeUtils.defineModuleGetter(this, "ExtensionChild",
+                               "resource://gre/modules/ExtensionChild.jsm");
+ChromeUtils.defineModuleGetter(this, "Services",
+                               "resource://gre/modules/Services.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "Extension",
-                                  "resource://gre/modules/Extension.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ExtensionChild",
-                                  "resource://gre/modules/ExtensionChild.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
-                                  "resource://gre/modules/Services.jsm");
-
-Cu.import("resource://gre/modules/ExtensionCommon.jsm");
+ChromeUtils.import("resource://gre/modules/ExtensionCommon.jsm");
 
 var {
   BaseContext,
@@ -246,7 +245,7 @@ EmbeddedExtensionManager = {
   },
 };
 
-this.LegacyExtensionsUtils = {
+var LegacyExtensionsUtils = {
   getEmbeddedExtensionFor: (addon) => {
     return EmbeddedExtensionManager.getEmbeddedExtensionFor(addon);
   },

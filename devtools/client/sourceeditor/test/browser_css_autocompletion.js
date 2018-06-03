@@ -70,59 +70,62 @@ const TEST_URI = "data:text/html;charset=UTF-8," + encodeURIComponent(
    " </html>"
   ].join("\n"));
 
-let doc = null;
+let browser;
 let index = 0;
 let completer = null;
-let progress;
-let progressDiv;
 let inspector;
 
-function test() {
-  waitForExplicitFinish();
-  addTab(TEST_URI).then(function () {
-    /* eslint-disable mozilla/no-cpows-in-tests */
-    doc = content.document;
-    /* eslint-enable mozilla/no-cpows-in-tests */
-    runTests();
-  });
+add_task(async function test() {
+  const tab = await addTab(TEST_URI);
+  browser = tab.linkedBrowser;
+  await runTests();
+  browser = null;
+  gBrowser.removeCurrentTab();
+});
+
+async function runTests() {
+  const target = TargetFactory.forTab(gBrowser.selectedTab);
+  await target.makeRemote();
+  inspector = InspectorFront(target.client, target.form);
+  const walker = await inspector.getWalker();
+  completer = new CSSCompleter({walker: walker,
+                                cssProperties: getClientCssProperties()});
+  await checkStateAndMoveOn();
+  await completer.walker.release();
+  inspector.destroy();
+  inspector = null;
+  completer = null;
 }
 
-function runTests() {
-  progress = doc.getElementById("progress");
-  progressDiv = doc.querySelector("#progress > div");
-  let target = TargetFactory.forTab(gBrowser.selectedTab);
-  target.makeRemote().then(() => {
-    inspector = InspectorFront(target.client, target.form);
-    inspector.getWalker().then(walker => {
-      completer = new CSSCompleter({walker: walker,
-                                    cssProperties: getClientCssProperties()});
-      checkStateAndMoveOn();
-    });
-  });
-}
-
-function checkStateAndMoveOn() {
+async function checkStateAndMoveOn() {
   if (index == tests.length) {
-    finishUp();
     return;
   }
 
-  let [lineCh, expectedSuggestions] = tests[index];
-  let [line, ch] = lineCh;
+  const [lineCh, expectedSuggestions] = tests[index];
+  const [line, ch] = lineCh;
 
-  progress.dataset.progress = ++index;
-  progressDiv.style.width = 100 * index / tests.length + "%";
+  ++index;
+  await ContentTask.spawn(browser, [index, tests.length], function([idx, len]) {
+    const progress = content.document.getElementById("progress");
+    const progressDiv = content.document.querySelector("#progress > div");
+    progress.dataset.progress = idx;
+    progressDiv.style.width = 100 * idx / len + "%";
+  });
 
-  completer.complete(limit(source, lineCh), {line, ch})
-           .then(actualSuggestions => checkState(expectedSuggestions, actualSuggestions))
-           .then(checkStateAndMoveOn);
+  const actualSuggestions = await completer.complete(limit(source, lineCh), {line, ch});
+  await checkState(expectedSuggestions, actualSuggestions);
+  await checkStateAndMoveOn();
 }
 
-function checkState(expected, actual) {
+async function checkState(expected, actual) {
   if (expected.length != actual.length) {
     ok(false, "Number of suggestions did not match up for state " + index +
               ". Expected: " + expected.length + ", Actual: " + actual.length);
-    progress.classList.add("failed");
+    await ContentTask.spawn(browser, null, function() {
+      const progress = content.document.getElementById("progress");
+      progress.classList.add("failed");
+    });
     return;
   }
 
@@ -134,16 +137,4 @@ function checkState(expected, actual) {
     }
   }
   ok(true, "Test " + index + " passed. ");
-}
-
-function finishUp() {
-  completer.walker.release().then(() => {
-    inspector.destroy();
-    inspector = null;
-    completer = null;
-    gBrowser.removeCurrentTab();
-    finish();
-  });
-  progress = null;
-  progressDiv = null;
 }

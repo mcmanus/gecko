@@ -15,33 +15,33 @@ Bug 1067491 - Test that frames keep the same index while we are recording.
 <script>
 "use strict";
 
-window.onload = function () {
+window.onload = function() {
   SimpleTest.waitForExplicitFinish();
 
-  Task.spawn(function* () {
-    let { memory, client } = yield startServerAndGetSelectedTabMemory();
-    yield memory.attach();
+  (async function() {
+    const { memory, client } = await startServerAndGetSelectedTabMemory();
+    await memory.attach();
 
-    yield memory.startRecordingAllocations();
+    await memory.startRecordingAllocations();
 
     // Allocate twice with the exact same stack (hence setTimeout rather than
     // allocating directly in the generator), but with getAllocations() calls in
     // between.
 
-    let allocs = [];
+    const allocs = [];
     function allocator() {
       allocs.push({});
     }
 
     setTimeout(allocator, 1);
-    yield waitForTime(2);
-    let first = yield memory.getAllocations();
+    await waitForTime(2);
+    const first = await memory.getAllocations();
 
     setTimeout(allocator, 1);
-    yield waitForTime(2);
-    let second = yield memory.getAllocations();
+    await waitForTime(2);
+    const second = await memory.getAllocations();
 
-    yield memory.stopRecordingAllocations();
+    await memory.stopRecordingAllocations();
 
     // Assert that each frame in the first response has the same index in the
     // second response. This isn't commutative, so we don't check that all
@@ -70,9 +70,9 @@ window.onload = function () {
       assertSameFrame(first.frames[i], second.frames[i]);
     }
 
-    yield memory.detach();
+    await memory.detach();
     destroyServerAndFinish(client);
-  });
+  })();
 };
 </script>
 </pre>

@@ -20,6 +20,16 @@ var TrackingProtection = {
     this.container = $("#tracking-protection-container");
     this.content = $("#tracking-protection-content");
     this.icon = $("#tracking-protection-icon");
+    this.broadcaster = $("#trackingProtectionBroadcaster");
+
+    this.enableTooltip =
+      gNavigatorBundle.getString("trackingProtection.toggle.enable.tooltip");
+    this.disableTooltip =
+      gNavigatorBundle.getString("trackingProtection.toggle.disable.tooltip");
+    this.enableTooltipPB =
+      gNavigatorBundle.getString("trackingProtection.toggle.enable.pbmode.tooltip");
+    this.disableTooltipPB =
+      gNavigatorBundle.getString("trackingProtection.toggle.disable.pbmode.tooltip");
 
     this.updateEnabled();
     Services.prefs.addObserver(this.PREF_ENABLED_GLOBALLY, this);
@@ -49,12 +59,36 @@ var TrackingProtection = {
             PrivateBrowsingUtils.isWindowPrivate(window));
   },
 
+  onGlobalToggleCommand() {
+    if (PrivateBrowsingUtils.isWindowPrivate(window)) {
+      Services.prefs.setBoolPref(this.PREF_ENABLED_IN_PRIVATE_WINDOWS, !this.enabledInPrivateWindows);
+    } else {
+      Services.prefs.setBoolPref(this.PREF_ENABLED_GLOBALLY, !this.enabledGlobally);
+    }
+  },
+
+  openPreferences() {
+    openPreferences("privacy-trackingprotection", { origin: "appMenu-trackingprotection" });
+  },
+
   updateEnabled() {
     this.enabledGlobally =
       Services.prefs.getBoolPref(this.PREF_ENABLED_GLOBALLY);
     this.enabledInPrivateWindows =
       Services.prefs.getBoolPref(this.PREF_ENABLED_IN_PRIVATE_WINDOWS);
     this.container.hidden = !this.enabled;
+
+    if (PrivateBrowsingUtils.isWindowPrivate(window)) {
+      this.broadcaster.setAttribute("enabled", this.enabledInPrivateWindows);
+      this.broadcaster.setAttribute("aria-pressed", this.enabledInPrivateWindows);
+      this.broadcaster.setAttribute("tooltiptext", this.enabledInPrivateWindows ?
+        this.disableTooltipPB : this.enableTooltipPB);
+    } else {
+      this.broadcaster.setAttribute("enabled", this.enabledGlobally);
+      this.broadcaster.setAttribute("aria-pressed", this.enabledGlobally);
+      this.broadcaster.setAttribute("tooltiptext", this.enabledGlobally ?
+        this.disableTooltip : this.enableTooltip);
+    }
   },
 
   enabledHistogramAdd(value) {
@@ -108,10 +142,10 @@ var TrackingProtection = {
 
       // Open the tracking protection introduction panel, if applicable.
       if (this.enabledGlobally) {
-        let introCount = gPrefService.getIntPref("privacy.trackingprotection.introCount");
+        let introCount = Services.prefs.getIntPref("privacy.trackingprotection.introCount");
         if (introCount < TrackingProtection.MAX_INTROS) {
-          gPrefService.setIntPref("privacy.trackingprotection.introCount", ++introCount);
-          gPrefService.savePrefFile(null);
+          Services.prefs.setIntPref("privacy.trackingprotection.introCount", ++introCount);
+          Services.prefs.savePrefFile(null);
           this.showIntroPanel();
         }
       }
@@ -188,9 +222,9 @@ var TrackingProtection = {
     // This function may be called in private windows, but it does not change
     // any preference unless Tracking Protection is enabled globally.
     if (this.enabledGlobally) {
-      gPrefService.setIntPref("privacy.trackingprotection.introCount",
-                              this.MAX_INTROS);
-      gPrefService.savePrefFile(null);
+      Services.prefs.setIntPref("privacy.trackingprotection.introCount",
+                                this.MAX_INTROS);
+      Services.prefs.savePrefFile(null);
     }
   },
 

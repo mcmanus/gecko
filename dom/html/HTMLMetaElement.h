@@ -19,7 +19,7 @@ public:
   explicit HTMLMetaElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
 
   // nsISupports
-  NS_DECL_ISUPPORTS_INHERITED
+  NS_INLINE_DECL_REFCOUNTING_INHERITED(HTMLMetaElement, nsGenericHTMLElement)
 
   virtual nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                               nsIContent* aBindingParent,
@@ -30,6 +30,7 @@ public:
   virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
                                 const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
                                 bool aNotify) override;
 
   void CreateAndDispatchEvent(nsIDocument* aDoc, const nsAString& aEventName);
@@ -53,10 +54,9 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::httpEquiv, aHttpEquiv, aRv);
   }
-  nsresult GetContent(nsAString& aValue)
+  void GetContent(nsAString& aValue)
   {
     GetHTMLAttr(nsGkAtoms::content, aValue);
-    return NS_OK;
   }
   void SetContent(const nsAString& aContent, ErrorResult& aRv)
   {
@@ -77,7 +77,7 @@ protected:
   virtual ~HTMLMetaElement();
 
 private:
-  nsresult SetMetaReferrer(nsIDocument* aDocument);
+  void SetMetaReferrer(nsIDocument* aDocument);
 };
 
 } // namespace dom

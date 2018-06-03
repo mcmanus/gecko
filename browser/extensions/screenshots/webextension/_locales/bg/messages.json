@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "Изтегляне"
   },
+  "downloadOnlyNotice": {
+    "message": "В момента сте в режим на изтегляне."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots автоматично преминава в режим на изтегляне в следните ситуации"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "в поверителен прозорец"
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Бисквитките от трети страни са забранени"
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "настройката „Не помни история“ е включена"
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "Използвате Firefox ESR."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "Качването на снимки е изключено."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Препратката е копирана"
   },
@@ -36,6 +57,28 @@
     "message": "Препратка към снимката е копирана в системния буфер. За да я поставите натиснете $META_KEY$-V.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Копиране"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Снимката е копирана"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Снимката е копирана в системния буфер. За да я поставите натиснете $META_KEY$-V.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Изображението е отрязано до $PIXELS$px.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -68,7 +111,7 @@
     "message": "Избраната област е твърде малка"
   },
   "privateWindowErrorTitle": {
-    "message": "Правене на снимки е изключено в поверителен режим"
+    "message": "Снимането е изключено в поверителен режим"
   },
   "privateWindowErrorDetails": {
     "message": "Съжаляваме за неудобството. Очаквайте тази възможност в бъдещите версии."
@@ -81,6 +124,12 @@
   },
   "tourBodyIntro": {
     "message": "Създавайте, запазвайте и споделяйте снимки на екрана без да напускате Firefox."
+  },
+  "tourHeaderPageAction": {
+    "message": "Нов начин за запазване"
+  },
+  "tourBodyPageAction": {
+    "message": "Отворете менюто за действия със страницата, което се намира в адресната лента, когато желаете да направите снимка на екрана."
   },
   "tourHeaderClickAndDrag": {
     "message": "Уловете само нужното"

@@ -1,7 +1,7 @@
 "use strict";
 
-var {OS: {File, Path, Constants}} = Components.utils.import("resource://gre/modules/osfile.jsm", {});
-var {Services} = Components.utils.import("resource://gre/modules/Services.jsm", {});
+var {OS: {File, Path, Constants}} = ChromeUtils.import("resource://gre/modules/osfile.jsm", {});
+var {Services} = ChromeUtils.import("resource://gre/modules/Services.jsm", {});
 
 // Ensure that we have a profile but that the OS.File worker is not launched
 add_task(async function init() {
@@ -28,23 +28,21 @@ add_task(async function test_startup() {
   let READY = "OSFILE_WORKER_READY_MS";
 
   let before = Services.telemetry.snapshotHistograms(Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTIN,
-                                                     false,
                                                      false).parent;
 
   // Launch the OS.File worker
   await File.getCurrentDirectory();
 
   let after = Services.telemetry.snapshotHistograms(Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTIN,
-                                                    false,
                                                     false).parent;
 
 
-  do_print("Ensuring that we have recorded measures for histograms");
-  do_check_eq(getCount(after[LAUNCH]), getCount(before[LAUNCH]) + 1);
-  do_check_eq(getCount(after[READY]), getCount(before[READY]) + 1);
+  info("Ensuring that we have recorded measures for histograms");
+  Assert.equal(getCount(after[LAUNCH]), getCount(before[LAUNCH]) + 1);
+  Assert.equal(getCount(after[READY]), getCount(before[READY]) + 1);
 
-  do_print("Ensuring that launh <= ready");
-  do_check_true(after[LAUNCH].sum <= after[READY].sum);
+  info("Ensuring that launh <= ready");
+  Assert.ok(after[LAUNCH].sum <= after[READY].sum);
 });
 
 // Ensure that calling writeAtomic adds data to the relevant histograms
@@ -52,7 +50,6 @@ add_task(async function test_writeAtomic() {
   let LABEL = "OSFILE_WRITEATOMIC_JANK_MS";
 
   let before = Services.telemetry.snapshotHistograms(Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTIN,
-                                                     false,
                                                      false).parent;
 
   // Perform a write.
@@ -60,8 +57,7 @@ add_task(async function test_writeAtomic() {
   await File.writeAtomic(path, LABEL, { tmpPath: path + ".tmp" } );
 
   let after = Services.telemetry.snapshotHistograms(Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTIN,
-                                                    false,
                                                     false).parent;
 
-  do_check_eq(getCount(after[LABEL]), getCount(before[LABEL]) + 1);
+  Assert.equal(getCount(after[LABEL]), getCount(before[LABEL]) + 1);
 });

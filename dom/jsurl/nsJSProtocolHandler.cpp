@@ -6,10 +6,11 @@
 
 #include "nsCOMPtr.h"
 #include "jsapi.h"
-#include "jswrapper.h"
+#include "js/Wrapper.h"
 #include "nsCRT.h"
 #include "nsError.h"
 #include "nsString.h"
+#include "nsGlobalWindowInner.h"
 #include "nsReadableUtils.h"
 #include "nsJSProtocolHandler.h"
 #include "nsStringStream.h"
@@ -158,10 +159,7 @@ nsresult nsJSThunk::EvaluateScript(nsIChannel *aChannel,
         nsCOMPtr<nsILoadInfo> loadInfo;
         aChannel->GetLoadInfo(getter_AddRefs(loadInfo));
         if (loadInfo && loadInfo->GetForceInheritPrincipal()) {
-            principal = loadInfo->PrincipalToInherit();
-            if (!principal) {
-                principal = loadInfo->TriggeringPrincipal();
-            }
+            principal = loadInfo->FindPrincipalToInherit(aChannel);
         } else {
             // No execution without a principal!
             NS_ASSERTION(!owner, "Non-principal owner?");
@@ -262,8 +260,7 @@ nsresult nsJSThunk::EvaluateScript(nsIChannel *aChannel,
     JS::Rooted<JS::Value> v (cx, JS::UndefinedValue());
     // Finally, we have everything needed to evaluate the expression.
     JS::CompileOptions options(cx);
-    options.setFileAndLine(mURL.get(), 1)
-           .setVersion(JSVERSION_DEFAULT);
+    options.setFileAndLine(mURL.get(), 1);
     {
         nsJSUtils::ExecutionContext exec(cx, globalJSObject);
         exec.SetCoerceToString(true);
@@ -414,9 +411,10 @@ nsresult nsJSChannel::Init(nsIURI* aURI, nsILoadInfo* aLoadInfo)
     // Remember, until AsyncOpen is called, the script will not be evaluated
     // and the underlying Input Stream will not be created...
     nsCOMPtr<nsIChannel> channel;
+    RefPtr<nsJSThunk> thunk = mIOThunk;
     rv = NS_NewInputStreamChannelInternal(getter_AddRefs(channel),
                                           aURI,
-                                          mIOThunk,
+                                          thunk.forget(),
                                           NS_LITERAL_CSTRING("text/html"),
                                           EmptyCString(),
                                           aLoadInfo);
@@ -658,8 +656,9 @@ nsJSChannel::AsyncOpen(nsIStreamListener *aListener, nsISupports *aContext)
         name = "nsJSChannel::NotifyListener";
     }
 
-    nsresult rv = NS_DispatchToCurrentThread(
-      mozilla::NewRunnableMethod(name, this, method));
+    nsCOMPtr<nsIRunnable> runnable = mozilla::NewRunnableMethod(name, this, method);
+    nsGlobalWindowInner* window = nsGlobalWindowInner::Cast(mOriginalInnerWindow);
+    nsresult rv = window->Dispatch(mozilla::TaskCategory::Other, runnable.forget());
 
     if (NS_FAILED(rv)) {
         loadGroup->RemoveRequest(this, nullptr, rv);
@@ -1192,27 +1191,32 @@ nsJSProtocolHandler::NewURI(const nsACString &aSpec,
                             nsIURI *aBaseURI,
                             nsIURI **result)
 {
-    nsresult rv;
+    nsresult rv = NS_OK;
 
     // javascript: URLs (currently) have no additional structure beyond that
     // provided by standard URLs, so there is no "outer" object given to
     // CreateInstance.
 
-    nsCOMPtr<nsIURI> url = new nsJSURI(aBaseURI);
-
-    if (!aCharset || !nsCRT::strcasecmp("UTF-8", aCharset))
-      rv = url->SetSpec(aSpec);
-    else {
-      nsAutoCString utf8Spec;
-      rv = EnsureUTF8Spec(PromiseFlatCString(aSpec), aCharset, utf8Spec);
-      if (NS_SUCCEEDED(rv)) {
-        if (utf8Spec.IsEmpty())
-          rv = url->SetSpec(aSpec);
-        else
-          rv = url->SetSpec(utf8Spec);
-      }
+    NS_MutateURI mutator(new nsJSURI::Mutator());
+    nsCOMPtr<nsIURI> base(aBaseURI);
+    mutator.Apply(NS_MutatorMethod(&nsIJSURIMutator::SetBase, base));
+    if (!aCharset || !nsCRT::strcasecmp("UTF-8", aCharset)) {
+        mutator.SetSpec(aSpec);
+    } else {
+        nsAutoCString utf8Spec;
+        rv = EnsureUTF8Spec(PromiseFlatCString(aSpec), aCharset, utf8Spec);
+        if (NS_FAILED(rv)) {
+            return rv;
+        }
+        if (utf8Spec.IsEmpty()) {
+            mutator.SetSpec(aSpec);
+        } else {
+            mutator.SetSpec(utf8Spec);
+        }
     }
 
+    nsCOMPtr<nsIURI> url;
+    rv = mutator.Finalize(url);
     if (NS_FAILED(rv)) {
         return rv;
     }
@@ -1282,9 +1286,16 @@ NS_INTERFACE_MAP_END_INHERITING(mozilla::net::nsSimpleURI)
 // nsISerializable methods:
 
 NS_IMETHODIMP
-nsJSURI::Read(nsIObjectInputStream* aStream)
+nsJSURI::Read(nsIObjectInputStream *aStream)
 {
-    nsresult rv = mozilla::net::nsSimpleURI::Read(aStream);
+    NS_NOTREACHED("Use nsIURIMutator.read() instead");
+    return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+nsresult
+nsJSURI::ReadPrivate(nsIObjectInputStream *aStream)
+{
+    nsresult rv = mozilla::net::nsSimpleURI::ReadPrivate(aStream);
     if (NS_FAILED(rv)) return rv;
 
     bool haveBase;
@@ -1379,13 +1390,32 @@ nsJSURI::StartClone(mozilla::net::nsSimpleURI::RefHandlingEnum refHandlingMode,
     return url;
 }
 
+// Queries this list of interfaces. If none match, it queries mURI.
+NS_IMPL_NSIURIMUTATOR_ISUPPORTS(nsJSURI::Mutator,
+                                nsIURISetters,
+                                nsIURIMutator,
+                                nsISerializable,
+                                nsIJSURIMutator)
+
+NS_IMETHODIMP
+nsJSURI::Mutate(nsIURIMutator** aMutator)
+{
+    RefPtr<nsJSURI::Mutator> mutator = new nsJSURI::Mutator();
+    nsresult rv = mutator->InitFromURI(this);
+    if (NS_FAILED(rv)) {
+        return rv;
+    }
+    mutator.forget(aMutator);
+    return NS_OK;
+}
+
 /* virtual */ nsresult
 nsJSURI::EqualsInternal(nsIURI* aOther,
                         mozilla::net::nsSimpleURI::RefHandlingEnum aRefHandlingMode,
                         bool* aResult)
 {
     NS_ENSURE_ARG_POINTER(aOther);
-    NS_PRECONDITION(aResult, "null pointer for outparam");
+    MOZ_ASSERT(aResult, "null pointer for outparam");
 
     RefPtr<nsJSURI> otherJSURI;
     nsresult rv = aOther->QueryInterface(kJSURICID,

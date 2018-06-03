@@ -246,7 +246,7 @@ ConvolverNode::SetBuffer(JSContext* aCx, AudioBuffer* aBuffer, ErrorResult& aRv)
       // Supported number of channels
       break;
     default:
-      aRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
+      aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
       return;
     }
   }
@@ -279,12 +279,12 @@ ConvolverNode::SetBuffer(JSContext* aCx, AudioBuffer* aBuffer, ErrorResult& aRv)
         data.mChannelData[i] = floatData;
         floatData += data.mDuration;
       }
-      data.mBuffer = Move(floatBuffer);
+      data.mBuffer = std::move(floatBuffer);
       data.mBufferFormat = AUDIO_FORMAT_FLOAT32;
     }
     SendDoubleParameterToStream(ConvolverNodeEngine::SAMPLE_RATE,
                                 aBuffer->SampleRate());
-    ns->SetBuffer(Move(data));
+    ns->SetBuffer(std::move(data));
   } else {
     ns->SetBuffer(AudioChunk());
   }

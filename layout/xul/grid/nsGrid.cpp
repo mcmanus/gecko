@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -323,7 +324,7 @@ nsGrid::BuildRows(nsIFrame* aBox, int32_t aRowCount, bool aIsHorizontal)
       for (int32_t i=0; i < mRowCount; i++)
         mRows[i].Init(nullptr, false);
 
-      row = Move(mRows);
+      row = std::move(mRows);
     }
   } else {
     if (aRowCount > mColumnCount) {
@@ -332,7 +333,7 @@ nsGrid::BuildRows(nsIFrame* aBox, int32_t aRowCount, bool aIsHorizontal)
        for (int32_t i=0; i < mColumnCount; i++)
          mColumns[i].Init(nullptr, false);
 
-       row = Move(mColumns);
+       row = std::move(mColumns);
     }
   }
 
@@ -370,7 +371,7 @@ nsGrid::BuildCellMap(int32_t aRows, int32_t aColumns)
     mCellMap[i].SetBoxInRow(nullptr);
     mCellMap[i].SetBoxInColumn(nullptr);
   }
-  return Move(mCellMap);
+  return std::move(mCellMap);
 }
 
 /**

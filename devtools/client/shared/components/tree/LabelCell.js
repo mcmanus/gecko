@@ -6,39 +6,36 @@
 "use strict";
 
 // Make this available to both AMD and CJS environments
-define(function (require, exports, module) {
-  // ReactJS
-  const React = require("devtools/client/shared/vendor/react");
-
-  // Shortcuts
-  const { td, span } = React.DOM;
-  const PropTypes = React.PropTypes;
+define(function(require, exports, module) {
+  const { Component } = require("devtools/client/shared/vendor/react");
+  const dom = require("devtools/client/shared/vendor/react-dom-factories");
+  const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
 
   /**
    * Render the default cell used for toggle buttons
    */
-  let LabelCell = React.createClass({
-    displayName: "LabelCell",
-
+  class LabelCell extends Component {
     // See the TreeView component for details related
     // to the 'member' object.
-    propTypes: {
-      id: PropTypes.string.isRequired,
-      member: PropTypes.object.isRequired
-    },
+    static get propTypes() {
+      return {
+        id: PropTypes.string.isRequired,
+        member: PropTypes.object.isRequired
+      };
+    }
 
-    render: function () {
-      let id = this.props.id;
-      let member = this.props.member;
-      let level = member.level || 0;
+    render() {
+      const id = this.props.id;
+      const member = this.props.member;
+      const level = member.level || 0;
 
       // Compute indentation dynamically. The deeper the item is
       // inside the hierarchy, the bigger is the left padding.
-      let rowStyle = {
+      const rowStyle = {
         "paddingInlineStart": (level * 16) + "px",
       };
 
-      let iconClassList = ["treeIcon"];
+      const iconClassList = ["treeIcon"];
       if (member.hasChildren && member.loading) {
         iconClassList.push("devtools-throbber");
       } else if (member.hasChildren) {
@@ -49,16 +46,16 @@ define(function (require, exports, module) {
       }
 
       return (
-        td({
+        dom.td({
           className: "treeLabelCell",
           key: "default",
           style: rowStyle,
           role: "presentation"},
-          span({
+          dom.span({
             className: iconClassList.join(" "),
             role: "presentation"
           }),
-          span({
+          dom.span({
             className: "treeLabel " + member.type + "Label",
             "aria-labelledby": id,
             "data-level": level
@@ -66,7 +63,7 @@ define(function (require, exports, module) {
         )
       );
     }
-  });
+  }
 
   // Exports from this module
   module.exports = LabelCell;

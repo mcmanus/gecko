@@ -7,9 +7,7 @@
 #include "WindowNamedPropertiesHandler.h"
 #include "mozilla/dom/EventTargetBinding.h"
 #include "mozilla/dom/WindowBinding.h"
-#include "mozilla/Preferences.h"
 #include "nsContentUtils.h"
-#include "nsDOMClassInfo.h"
 #include "nsDOMWindowList.h"
 #include "nsGlobalWindow.h"
 #include "nsHTMLDocument.h"
@@ -107,7 +105,7 @@ WindowNamedPropertiesHandler::getOwnPropDescriptor(JSContext* aCx,
 
   // Grab the DOM window.
   JS::Rooted<JSObject*> global(aCx, JS_GetGlobalForObject(aCx, aProxy));
-  nsGlobalWindow* win = xpc::WindowOrNull(global);
+  nsGlobalWindowInner* win = xpc::WindowOrNull(global);
   if (win->Length() > 0) {
     nsCOMPtr<nsPIDOMWindowOuter> childWin = win->GetChildWindow(str);
     if (childWin && ShouldExposeChildWindow(str, childWin)) {
@@ -115,7 +113,7 @@ WindowNamedPropertiesHandler::getOwnPropDescriptor(JSContext* aCx,
       // global scope is still allowed, since |var| only looks up |own|
       // properties. But unqualified shadowing will fail, per-spec.
       JS::Rooted<JS::Value> v(aCx);
-      if (!WrapObject(aCx, childWin, &v)) {
+      if (!ToJSValue(aCx, nsGlobalWindowOuter::Cast(childWin), &v)) {
         return false;
       }
       FillPropertyDescriptor(aDesc, aProxy, 0, v);
@@ -130,27 +128,25 @@ WindowNamedPropertiesHandler::getOwnPropDescriptor(JSContext* aCx,
   }
   nsHTMLDocument* document = static_cast<nsHTMLDocument*>(htmlDoc.get());
 
+  JS::Rooted<JS::Value> v(aCx);
   Element* element = document->GetElementById(str);
   if (element) {
-    JS::Rooted<JS::Value> v(aCx);
-    if (!WrapObject(aCx, element, &v)) {
+    if (!ToJSValue(aCx, element, &v)) {
       return false;
     }
     FillPropertyDescriptor(aDesc, aProxy, 0, v);
     return true;
   }
 
-  nsWrapperCache* cache;
-  nsISupports* result = document->ResolveName(str, &cache);
-  if (!result) {
-    return true;
-  }
-
-  JS::Rooted<JS::Value> v(aCx);
-  if (!WrapObject(aCx, result, cache, nullptr, &v)) {
+  ErrorResult rv;
+  bool found = document->ResolveName(aCx, str, &v, rv);
+  if (rv.MaybeSetPendingException(aCx)) {
     return false;
   }
-  FillPropertyDescriptor(aDesc, aProxy, 0, v);
+
+  if (found) {
+    FillPropertyDescriptor(aDesc, aProxy, 0, v);
+  }
   return true;
 }
 
@@ -179,12 +175,12 @@ WindowNamedPropertiesHandler::ownPropNames(JSContext* aCx,
   }
 
   // Grab the DOM window.
-  nsGlobalWindow* win = xpc::WindowOrNull(JS_GetGlobalForObject(aCx, aProxy));
+  nsGlobalWindowInner* win = xpc::WindowOrNull(JS_GetGlobalForObject(aCx, aProxy));
   nsTArray<nsString> names;
   // The names live on the outer window, which might be null
-  nsGlobalWindow* outer = win->GetOuterWindowInternal();
+  nsGlobalWindowOuter* outer = win->GetOuterWindowInternal();
   if (outer) {
-    nsDOMWindowList* childWindows = outer->GetWindowList();
+    nsDOMWindowList* childWindows = outer->GetFrames();
     if (childWindows) {
       uint32_t length = childWindows->GetLength();
       for (uint32_t i = 0; i < length; ++i) {
@@ -238,96 +234,6 @@ WindowNamedPropertiesHandler::delete_(JSContext* aCx,
   return aResult.failCantDeleteWindowNamedProperty();
 }
 
-static bool
-IsWebExtensionContentScript(JSContext* aCx)
-{
-  auto* priv = xpc::CompartmentPrivate::Get(JS::CurrentGlobalOrNull(aCx));
-  return priv->isWebExtensionContentScript;
-}
-
-static const int32_t kAlwaysAllowNamedPropertiesObject = 0;
-static const int32_t kDisallowNamedPropertiesObjectForContentScripts = 1;
-static const int32_t kDisallowNamedPropertiesObjectForXrays = 2;
-
-static bool
-AllowNamedPropertiesObject(JSContext* aCx)
-{
-  static int32_t sAllowed;
-  static bool sAllowedCached = false;
-  if (!sAllowedCached) {
-    Preferences::AddIntVarCache(&sAllowed,
-                                "dom.allow_named_properties_object_for_xrays",
-                                kDisallowNamedPropertiesObjectForContentScripts);
-    sAllowedCached = true;
-  }
-
-  if (sAllowed == kDisallowNamedPropertiesObjectForXrays) {
-    return false;
-  }
-
-  if (sAllowed == kAlwaysAllowNamedPropertiesObject) {
-    return true;
-  }
-
-  if (sAllowed == kDisallowNamedPropertiesObjectForContentScripts) {
-    return !IsWebExtensionContentScript(aCx);
-  }
-
-  NS_WARNING("Unknown value for dom.allow_named_properties_object_for_xrays");
-  // Fail open for now.
-  return true;
-}
-
-
-static bool
-ResolveWindowNamedProperty(JSContext* aCx, JS::Handle<JSObject*> aWrapper,
-                           JS::Handle<JSObject*> aObj, JS::Handle<jsid> aId,
-                           JS::MutableHandle<JS::PropertyDescriptor> aDesc)
-{
-  if (!AllowNamedPropertiesObject(aCx)) {
-    return true;
-  }
-
-  {
-    JSAutoCompartment ac(aCx, aObj);
-    if (!js::GetProxyHandler(aObj)->getOwnPropertyDescriptor(aCx, aObj, aId,
-                                                             aDesc)) {
-      return false;
-    }
-  }
-
-  if (aDesc.object()) {
-    aDesc.object().set(aWrapper);
-
-    return JS_WrapPropertyDescriptor(aCx, aDesc);
-  }
-
-  return true;
-}
-
-static bool
-EnumerateWindowNamedProperties(JSContext* aCx, JS::Handle<JSObject*> aWrapper,
-                               JS::Handle<JSObject*> aObj,
-                               JS::AutoIdVector& aProps)
-{
-  if (!AllowNamedPropertiesObject(aCx)) {
-    return true;
-  }
-
-  JSAutoCompartment ac(aCx, aObj);
-  return js::GetProxyHandler(aObj)->ownPropertyKeys(aCx, aObj, aProps);
-}
-
-const NativePropertyHooks sWindowNamedPropertiesNativePropertyHooks[] = { {
-  ResolveWindowNamedProperty,
-  EnumerateWindowNamedProperties,
-  nullptr,
-  { nullptr, nullptr },
-  prototypes::id::_ID_Count,
-  constructors::id::_ID_Count,
-  nullptr
-} };
-
 // Note that this class doesn't need any reserved slots, but SpiderMonkey
 // asserts all proxy classes have at least one reserved slot.
 static const DOMIfaceAndProtoJSClass WindowNamedPropertiesClass = {
@@ -338,7 +244,7 @@ static const DOMIfaceAndProtoJSClass WindowNamedPropertiesClass = {
   false,
   prototypes::id::_ID_Count,
   0,
-  sWindowNamedPropertiesNativePropertyHooks,
+  &sEmptyNativePropertyHooks,
   "[object WindowProperties]",
   EventTargetBinding::GetProtoObject
 };

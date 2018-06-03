@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,14 +10,12 @@
 #include "gfx2DGlue.h"
 #include "gfxContext.h"
 #include "gfxPlatform.h"
-#include "mozilla/dom/SVGSVGElement.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/ShapeUtils.h"
 #include "nsCSSRendering.h"
 #include "nsIFrame.h"
 #include "nsLayoutUtils.h"
-#include "nsRuleNode.h"
 #include "nsSVGElement.h"
 #include "nsSVGUtils.h"
 #include "nsSVGViewBox.h"
@@ -67,6 +66,21 @@ nsCSSClipPathInstance::HitTestBasicShapeClip(nsIFrame* aFrame,
   float pixelRatio = float(nsPresContext::AppUnitsPerCSSPixel()) /
                      aFrame->PresContext()->AppUnitsPerDevPixel();
   return path->ContainsPoint(ToPoint(aPoint) * pixelRatio, Matrix());
+}
+
+/* static */ Rect
+nsCSSClipPathInstance::GetBoundingRectForBasicShapeClip(nsIFrame* aFrame,
+                                                        const StyleShapeSource& aClipPathStyle)
+{
+  MOZ_ASSERT(aClipPathStyle.GetType() == StyleShapeSourceType::Shape ||
+             aClipPathStyle.GetType() == StyleShapeSourceType::Box);
+
+  nsCSSClipPathInstance instance(aFrame, aClipPathStyle);
+
+  RefPtr<DrawTarget> drawTarget =
+    gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget();
+  RefPtr<Path> path = instance.CreateClipPath(drawTarget);
+  return path->GetBounds();
 }
 
 already_AddRefed<Path>

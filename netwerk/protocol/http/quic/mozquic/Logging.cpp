@@ -16,62 +16,79 @@
 namespace mozquic  {
 
 const char *Log::mCategoryName[] = {
-    "ack", "stream", "handshake"
+  "ack", "stream", "connection", "tls", "handshake", "sender",
+  ""
 };
 
 static Log gLogger;
 
 uint32_t
-Log::sDoLog(int cat, int level, MozQuic *m, const char *fmt, ...)
+Log::sDoLog(unsigned int cat, unsigned int level, MozQuic *m, const char *fmt, ...)
 {
   va_list a;
   va_start(a, fmt);
-  uint32_t rv = gLogger.DoLog(cat, level, m, 0, fmt, a);
+  uint32_t rv = gLogger.DoLog(cat, level, m, nullptr, nullptr, fmt, a);
   va_end(a);
   return rv;
 }
 
 uint32_t
-Log::sDoLog(int cat, int level, MozQuic *m, uint64_t cid,
+Log::sDoLog(unsigned int cat, unsigned int level, MozQuic *m,
+            CID *localCID, CID *peerCID,
             const char *fmt, va_list paramList)
 {
-  return gLogger.DoLog(cat, level, m, cid, fmt, paramList);
+  return gLogger.DoLog(cat, level, m, localCID, peerCID, fmt, paramList);
 }
 
 uint32_t
-Log::sDoLogCID(int cat, int level, MozQuic *m, uint64_t cid,
+Log::sDoLogCID(unsigned int cat, unsigned int level, MozQuic *m,
+               CID *localCID, CID *peerCID,
                const char *fmt, ...)
 {
   va_list a;
   va_start(a, fmt);
-  uint32_t rv = gLogger.DoLog(cat, level, m, cid, fmt, a);
+  uint32_t rv = gLogger.DoLog(cat, level, m, localCID, peerCID, fmt, a);
   va_end(a);
   return rv;
 }
 
 uint32_t
-Log::DoLog(int cat, int level, MozQuic *m, uint64_t cid, const char *fmt, va_list paramList)
+Log::DoLog(unsigned int cat, unsigned int level, MozQuic *m,
+           CID *localCID, CID *peerCID,
+           const char *fmt, va_list paramList)
 {
-  assert (cat >= 0);
-  assert (cat <kCategoryCount);
+  bool quiet = false;
+  if (level > 10) {
+    level -= 10;
+    quiet = true;
+  }
+
+  assert (cat < kCategoryCount);
   if (mCategory[cat] < level) {
     return MOZQUIC_OK;
   }
 
-  uint64_t useCid = 0;
-  if (cid) {
-    useCid = cid;
-  } else if (m) {
-    useCid = m->mConnectionID;
+  CID nullCID;
+  if (!localCID) {
+    localCID = (m && m->mLocalCID) ? &(m->mLocalCID) : & nullCID;
   }
-
+  if (!peerCID) {
+    peerCID = (m && m->mPeerCID) ? &(m->mPeerCID) : & nullCID;
+  }
+  
   if (!m || !m->mAppHandlesLogging) {
-    fprintf(stderr,"%06ld:%016lx ", MozQuic::Timestamp() % 1000000, useCid);
+    if (!quiet) {
+      fprintf(stderr,"%06lld:{%s,%s} ",
+              MozQuic::Timestamp() % 1000000,
+              localCID->Text(), peerCID->Text());
+    }
     vfprintf(stderr, fmt, paramList);
-  }
-  else if (m && m->mConnEventCB && m->mClosure) {
+  } else if (m && m->mConnEventCB && m->mClosure) {
     char buffer[2048];
-    int used = snprintf(buffer, 2048, "%06ld: ", MozQuic::Timestamp() % 1000000);
+    int used = 0;
+    if (!quiet) {
+      used = snprintf(buffer, 2048, "%06lld: ", MozQuic::Timestamp() % 1000000);
+    }
     if (used >= 2047) {
       return MOZQUIC_OK;
     }
@@ -88,6 +105,7 @@ Log::DoLog(int cat, int level, MozQuic *m, uint64_t cid, const char *fmt, va_lis
 Log::Log()
 {
   memset(mCategory, 0, sizeof (uint32_t) * kCategoryCount);
+  assert(mCategoryName[kCategoryCount][0] == 0);
 }
 
 int

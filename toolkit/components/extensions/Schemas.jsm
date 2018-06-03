@@ -1,39 +1,35 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 "use strict";
-
-const Ci = Components.interfaces;
-const Cc = Components.classes;
-const Cu = Components.utils;
-const Cr = Components.results;
 
 const global = this;
 
 Cu.importGlobalProperties(["URL"]);
 
-Cu.import("resource://gre/modules/AppConstants.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+ChromeUtils.import("resource://gre/modules/ExtensionUtils.jsm");
 var {
   DefaultMap,
   DefaultWeakMap,
 } = ExtensionUtils;
 
-XPCOMUtils.defineLazyModuleGetter(this, "ExtensionParent",
-                                  "resource://gre/modules/ExtensionParent.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
-                                  "resource://gre/modules/NetUtil.jsm");
+ChromeUtils.defineModuleGetter(this, "ExtensionParent",
+                               "resource://gre/modules/ExtensionParent.jsm");
+ChromeUtils.defineModuleGetter(this, "NetUtil",
+                               "resource://gre/modules/NetUtil.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "contentPolicyService",
                                    "@mozilla.org/addons/content-policy;1",
                                    "nsIAddonContentPolicy");
 
 XPCOMUtils.defineLazyGetter(this, "StartupCache", () => ExtensionParent.StartupCache);
 
-this.EXPORTED_SYMBOLS = ["Schemas"];
+var EXPORTED_SYMBOLS = ["SchemaRoot", "Schemas"];
 
 const {DEBUG} = AppConstants;
 
@@ -97,15 +93,19 @@ function stripDescriptions(json, stripThis = true) {
   return result;
 }
 
-async function readJSONAndBlobbify(url) {
-  let json = await readJSON(url);
-
+function blobbify(json) {
   // We don't actually use descriptions at runtime, and they make up about a
   // third of the size of our structured clone data, so strip them before
   // blobbifying.
   json = stripDescriptions(json);
 
   return new StructuredCloneHolder(json);
+}
+
+async function readJSONAndBlobbify(url) {
+  let json = await readJSON(url);
+
+  return blobbify(json);
 }
 
 /**
@@ -336,7 +336,7 @@ class Context {
   }
 
   get cloneScope() {
-    return this.params.cloneScope;
+    return this.params.cloneScope || undefined;
   }
 
   get url() {
@@ -721,11 +721,15 @@ class InjectionEntry {
  * as defined in the schema. Otherwise an error is reported to the context.
  */
 class InjectionContext extends Context {
-  constructor(params) {
+  constructor(params, schemaRoot) {
     super(params, CONTEXT_FOR_INJECTION);
+
+    this.schemaRoot = schemaRoot;
 
     this.pendingEntries = new Set();
     this.children = new DefaultWeakMap(() => new Map());
+
+    this.injectedRoots = new Set();
 
     if (params.setPermissionsChangedCallback) {
       params.setPermissionsChangedCallback(
@@ -916,17 +920,28 @@ const FORMATS = {
   },
 
   strictRelativeUrl(string, context) {
-    // Do not accept a string which resolves as an absolute URL, or any
-    // protocol-relative URL.
+    void FORMATS.unresolvedRelativeUrl(string, context);
+    return FORMATS.relativeUrl(string, context);
+  },
+
+  unresolvedRelativeUrl(string, context) {
     if (!string.startsWith("//")) {
       try {
         new URL(string);
       } catch (e) {
-        return FORMATS.relativeUrl(string, context);
+        return string;
       }
     }
 
     throw new SyntaxError(`String ${JSON.stringify(string)} must be a relative URL`);
+  },
+
+  homepageUrl(string, context) {
+    // Pipes are used for separating homepages, but we only allow extensions to
+    // set a single homepage. Encoding any pipes makes it one URL.
+    return FORMATS.relativeUrl(
+      string.replace(new RegExp("\\|", "g"), "%7C"),
+      context);
   },
 
   imageDataOrStrictRelativeUrl(string, context) {
@@ -1115,6 +1130,8 @@ class Type extends Entry {
    * Parses the given schema object and returns an instance of this
    * class which corresponds to its properties.
    *
+   * @param {SchemaRoot} root
+   *        The root schema for this type.
    * @param {object} schema
    *        A JSON schema object which corresponds to a definition of
    *        this type.
@@ -1131,7 +1148,7 @@ class Type extends Entry {
    *        schema object.
    * @static
    */
-  static parseSchema(schema, path, extraProperties = []) {
+  static parseSchema(root, schema, path, extraProperties = []) {
     this.checkSchemaProperties(schema, path, extraProperties);
 
     return new this(schema);
@@ -1225,10 +1242,10 @@ class ChoiceType extends Type {
     return ["choices", ...super.EXTRA_PROPERTIES];
   }
 
-  static parseSchema(schema, path, extraProperties = []) {
+  static parseSchema(root, schema, path, extraProperties = []) {
     this.checkSchemaProperties(schema, path, extraProperties);
 
-    let choices = schema.choices.map(t => Schemas.parseSchema(t, path));
+    let choices = schema.choices.map(t => root.parseSchema(t, path));
     return new this(schema, choices);
   }
 
@@ -1290,27 +1307,28 @@ class RefType extends Type {
     return ["$ref", ...super.EXTRA_PROPERTIES];
   }
 
-  static parseSchema(schema, path, extraProperties = []) {
+  static parseSchema(root, schema, path, extraProperties = []) {
     this.checkSchemaProperties(schema, path, extraProperties);
 
     let ref = schema.$ref;
-    let ns = path[0];
+    let ns = path.join(".");
     if (ref.includes(".")) {
-      [ns, ref] = ref.split(".");
+      [, ns, ref] = /^(.*)\.(.*?)$/.exec(ref);
     }
-    return new this(schema, ns, ref);
+    return new this(root, schema, ns, ref);
   }
 
   // For a reference to a type named T declared in namespace NS,
   // namespaceName will be NS and reference will be T.
-  constructor(schema, namespaceName, reference) {
+  constructor(root, schema, namespaceName, reference) {
     super(schema);
+    this.root = root;
     this.namespaceName = namespaceName;
     this.reference = reference;
   }
 
   get targetType() {
-    let ns = Schemas.getNamespace(this.namespaceName);
+    let ns = this.root.getNamespace(this.namespaceName);
     let type = ns.get(this.reference);
     if (!type) {
       throw new Error(`Internal error: Type ${this.reference} not found`);
@@ -1334,7 +1352,7 @@ class StringType extends Type {
             ...super.EXTRA_PROPERTIES];
   }
 
-  static parseSchema(schema, path, extraProperties = []) {
+  static parseSchema(root, schema, path, extraProperties = []) {
     this.checkSchemaProperties(schema, path, extraProperties);
 
     let enumeration = schema.enum || null;
@@ -1447,18 +1465,28 @@ class StringType extends Type {
   }
 }
 
+class NullType extends Type {
+  normalize(value, context) {
+    return this.normalizeBase("null", value, context);
+  }
+
+  checkBaseType(baseType) {
+    return baseType == "null";
+  }
+}
+
 let FunctionEntry;
 let Event;
 let SubModuleType;
 
 class ObjectType extends Type {
   static get EXTRA_PROPERTIES() {
-    return ["properties", "patternProperties", ...super.EXTRA_PROPERTIES];
+    return ["properties", "patternProperties", "$import", ...super.EXTRA_PROPERTIES];
   }
 
-  static parseSchema(schema, path, extraProperties = []) {
+  static parseSchema(root, schema, path, extraProperties = []) {
     if ("functions" in schema) {
-      return SubModuleType.parseSchema(schema, path, extraProperties);
+      return SubModuleType.parseSchema(root, schema, path, extraProperties);
     }
 
     if (DEBUG && !("$extend" in schema)) {
@@ -1467,10 +1495,21 @@ class ObjectType extends Type {
     }
     this.checkSchemaProperties(schema, path, extraProperties);
 
+    let imported = null;
+    if ("$import" in schema) {
+      let importPath = schema.$import;
+      let idx = importPath.indexOf(".");
+      if (idx === -1) {
+        imported = [path[0], importPath];
+      } else {
+        imported = [importPath.slice(0, idx), importPath.slice(idx + 1)];
+      }
+    }
+
     let parseProperty = (schema, extraProps = []) => {
       return {
-        type: Schemas.parseSchema(schema, path,
-                                  DEBUG && ["unsupported", "onError", "permissions", "default", ...extraProps]),
+        type: root.parseSchema(schema, path,
+                               DEBUG && ["unsupported", "onError", "permissions", "default", ...extraProps]),
         optional: schema.optional || false,
         unsupported: schema.unsupported || false,
         onError: schema.onError || null,
@@ -1508,18 +1547,36 @@ class ObjectType extends Type {
         type = {"type": "any"};
       }
 
-      additionalProperties = Schemas.parseSchema(type, path);
+      additionalProperties = root.parseSchema(type, path);
     }
 
-    return new this(schema, properties, additionalProperties, patternProperties, schema.isInstanceOf || null);
+    return new this(schema, properties, additionalProperties, patternProperties, schema.isInstanceOf || null, imported);
   }
 
-  constructor(schema, properties, additionalProperties, patternProperties, isInstanceOf) {
+  constructor(schema, properties, additionalProperties, patternProperties, isInstanceOf, imported) {
     super(schema);
     this.properties = properties;
     this.additionalProperties = additionalProperties;
     this.patternProperties = patternProperties;
     this.isInstanceOf = isInstanceOf;
+
+    if (imported) {
+      let [ns, path] = imported;
+      ns = Schemas.getNamespace(ns);
+      let importedType = ns.get(path);
+      if (!importedType) {
+        throw new Error(`Internal error: imported type ${path} not found`);
+      }
+
+      if (DEBUG && !(importedType instanceof ObjectType)) {
+        throw new Error(`Internal error: cannot import non-object type ${path}`);
+      }
+
+      this.properties = Object.assign({}, importedType.properties, this.properties);
+      this.patternProperties = [...importedType.patternProperties,
+                                ...this.patternProperties];
+      this.additionalProperties = importedType.additionalProperties || this.additionalProperties;
+    }
   }
 
   extend(type) {
@@ -1656,8 +1713,7 @@ class ObjectType extends Type {
 
       if (this.additionalProperties) {
         for (let prop of remainingProps) {
-          let type = this.additionalProperties;
-          let r = context.withPath(prop, () => type.normalize(properties[prop], context));
+          let r = context.withPath(prop, () => this.additionalProperties.normalize(properties[prop], context));
           if (r.error) {
             return r;
           }
@@ -1689,19 +1745,19 @@ SubModuleType = class SubModuleType extends Type {
     return ["functions", "events", "properties", ...super.EXTRA_PROPERTIES];
   }
 
-  static parseSchema(schema, path, extraProperties = []) {
+  static parseSchema(root, schema, path, extraProperties = []) {
     this.checkSchemaProperties(schema, path, extraProperties);
 
     // The path we pass in here is only used for error messages.
     path = [...path, schema.id];
     let functions = schema.functions.filter(fun => !fun.unsupported)
-                          .map(fun => FunctionEntry.parseSchema(fun, path));
+                          .map(fun => FunctionEntry.parseSchema(root, fun, path));
 
     let events = [];
 
     if (schema.events) {
       events = schema.events.filter(event => !event.unsupported)
-                     .map(event => Event.parseSchema(event, path));
+                     .map(event => Event.parseSchema(root, event, path));
     }
 
     return new this(functions, events);
@@ -1739,10 +1795,11 @@ class IntegerType extends Type {
     return ["minimum", "maximum", ...super.EXTRA_PROPERTIES];
   }
 
-  static parseSchema(schema, path, extraProperties = []) {
+  static parseSchema(root, schema, path, extraProperties = []) {
     this.checkSchemaProperties(schema, path, extraProperties);
 
-    return new this(schema, schema.minimum || -Infinity, schema.maximum || Infinity);
+    let {minimum = -Infinity, maximum = Infinity} = schema;
+    return new this(schema, minimum, maximum);
   }
 
   constructor(schema, minimum, maximum) {
@@ -1796,10 +1853,10 @@ class ArrayType extends Type {
     return ["items", "minItems", "maxItems", ...super.EXTRA_PROPERTIES];
   }
 
-  static parseSchema(schema, path, extraProperties = []) {
+  static parseSchema(root, schema, path, extraProperties = []) {
     this.checkSchemaProperties(schema, path, extraProperties);
 
-    let items = Schemas.parseSchema(schema.items, path, ["onError"]);
+    let items = root.parseSchema(schema.items, path, ["onError"]);
 
     return new this(schema, items, schema.minItems || 0, schema.maxItems || Infinity);
   }
@@ -1857,7 +1914,7 @@ class FunctionType extends Type {
             ...super.EXTRA_PROPERTIES];
   }
 
-  static parseSchema(schema, path, extraProperties = []) {
+  static parseSchema(root, schema, path, extraProperties = []) {
     this.checkSchemaProperties(schema, path, extraProperties);
 
     let isAsync = !!schema.async;
@@ -1874,7 +1931,7 @@ class FunctionType extends Type {
         }
 
         parameters.push({
-          type: Schemas.parseSchema(param, path, ["name", "optional", "default"]),
+          type: root.parseSchema(param, path, ["name", "optional", "default"]),
           name: param.name,
           optional: param.optional == null ? isCallback : param.optional,
           default: param.default == undefined ? null : param.default,
@@ -2008,8 +2065,9 @@ class SubModuleProperty extends Entry {
   // namespaceName: Namespace in which the property lives.
   // reference: Name of the type defining the functions to add to the property.
   // properties: Additional properties to add to the module (unsupported).
-  constructor(schema, path, name, reference, properties, permissions) {
+  constructor(root, schema, path, name, reference, properties, permissions) {
     super(schema);
+    this.root = root;
     this.name = name;
     this.path = path;
     this.namespaceName = path.join(".");
@@ -2021,11 +2079,11 @@ class SubModuleProperty extends Entry {
   getDescriptor(path, context) {
     let obj = Cu.createObjectIn(context.cloneScope);
 
-    let ns = Schemas.getNamespace(this.namespaceName);
+    let ns = this.root.getNamespace(this.namespaceName);
     let type = ns.get(this.reference);
     if (!type && this.reference.includes(".")) {
       let [namespaceName, ref] = this.reference.split(".");
-      ns = Schemas.getNamespace(namespaceName);
+      ns = this.root.getNamespace(namespaceName);
       type = ns.get(ref);
     }
 
@@ -2157,19 +2215,20 @@ class CallEntry extends Entry {
 
 // Represents a "function" defined in a schema namespace.
 FunctionEntry = class FunctionEntry extends CallEntry {
-  static parseSchema(schema, path) {
+  static parseSchema(root, schema, path) {
     // When not in DEBUG mode, we just need to know *if* this returns.
     let returns = !!schema.returns;
     if (DEBUG && "returns" in schema) {
       returns = {
-        type: Schemas.parseSchema(schema.returns, path, ["optional", "name"]),
+        type: root.parseSchema(schema.returns, path, ["optional", "name"]),
         optional: schema.returns.optional || false,
         name: "result",
       };
     }
 
     return new this(schema, path, schema.name,
-                    Schemas.parseSchema(schema, path,
+                    root.parseSchema(
+                      schema, path,
                       ["name", "unsupported", "returns",
                        "permissions",
                        "allowAmbiguousOptionalArguments"]),
@@ -2278,12 +2337,12 @@ FunctionEntry = class FunctionEntry extends CallEntry {
 
 // Represents an "event" defined in a schema namespace.
 //
-// TODO(rpl): we should be able to remove the eslint-disable-line that follows
+// TODO Bug 1369722: we should be able to remove the eslint-disable-line that follows
 // once Bug 1369722 has been fixed.
 Event = class Event extends CallEntry { // eslint-disable-line no-native-reassign
-  static parseSchema(event, path) {
+  static parseSchema(root, event, path) {
     let extraParameters = Array.from(event.extraParameters || [], param => ({
-      type: Schemas.parseSchema(param, path, ["name", "optional", "default"]),
+      type: root.parseSchema(param, path, ["name", "optional", "default"]),
       name: param.name,
       optional: param.optional || false,
       default: param.default == undefined ? null : param.default,
@@ -2294,7 +2353,7 @@ Event = class Event extends CallEntry { // eslint-disable-line no-native-reassig
                            "returns", "filters"];
 
     return new this(event, path, event.name,
-                    Schemas.parseSchema(event, path, extraProperties),
+                    root.parseSchema(event, path, extraProperties),
                     extraParameters,
                     event.unsupported || false,
                     event.permissions || null);
@@ -2361,6 +2420,7 @@ const TYPES = Object.freeze(Object.assign(Object.create(null), {
   boolean: BooleanType,
   function: FunctionType,
   integer: IntegerType,
+  null: NullType,
   number: NumberType,
   object: ObjectType,
   string: StringType,
@@ -2374,8 +2434,10 @@ const LOADERS = {
 };
 
 class Namespace extends Map {
-  constructor(name, path) {
+  constructor(root, name, path) {
     super();
+
+    this.root = root;
 
     this._lazySchemas = [];
     this.initialized = false;
@@ -2408,7 +2470,7 @@ class Namespace extends Map {
     }
 
     if (schema.$import) {
-      this.superNamespace = Schemas.getNamespace(schema.$import);
+      this.superNamespace = this.root.getNamespace(schema.$import);
     }
   }
 
@@ -2503,7 +2565,7 @@ class Namespace extends Map {
     if ("$extend" in type) {
       return this.extendType(type);
     }
-    return Schemas.parseSchema(type, this.path, ["id"]);
+    return this.root.parseSchema(type, this.path, ["id"]);
   }
 
   extendType(type) {
@@ -2514,13 +2576,13 @@ class Namespace extends Map {
       type.type = "object";
     } else if (DEBUG) {
       if (!targetType) {
-        throw new Error(`Internal error: Attempt to extend a nonexistant type ${type.$extend}`);
+        throw new Error(`Internal error: Attempt to extend a nonexistent type ${type.$extend}`);
       } else if (!(targetType instanceof ChoiceType)) {
         throw new Error(`Internal error: Attempt to extend a non-extensible type ${type.$extend}`);
       }
     }
 
-    let parsed = Schemas.parseSchema(type, this.path, ["$extend"]);
+    let parsed = this.root.parseSchema(type, this.path, ["$extend"]);
 
     if (DEBUG && parsed.constructor !== targetType.constructor) {
       throw new Error(`Internal error: Bad attempt to extend ${type.$extend}`);
@@ -2534,7 +2596,8 @@ class Namespace extends Map {
   loadProperty(name, prop) {
     if ("$ref" in prop) {
       if (!prop.unsupported) {
-        return new SubModuleProperty(prop, this.path, name,
+        return new SubModuleProperty(this.root,
+                                     prop, this.path, name,
                                      prop.$ref, prop.properties || {},
                                      prop.permissions || null);
       }
@@ -2543,18 +2606,18 @@ class Namespace extends Map {
     } else {
       // We ignore the "optional" attribute on properties since we
       // don't inject anything here anyway.
-      let type = Schemas.parseSchema(prop, [this.name], ["optional", "permissions", "writable"]);
+      let type = this.root.parseSchema(prop, [this.name], ["optional", "permissions", "writable"]);
       return new TypeProperty(prop, this.path, name, type, prop.writable || false,
                               prop.permissions || null);
     }
   }
 
   loadFunction(name, fun) {
-    return FunctionEntry.parseSchema(fun, this.path);
+    return FunctionEntry.parseSchema(this.root, fun, this.path);
   }
 
   loadEvent(name, event) {
-    return Event.parseSchema(event, this.path);
+    return Event.parseSchema(this.root, event, this.path);
   }
 
   /**
@@ -2578,7 +2641,8 @@ class Namespace extends Map {
   getDescriptor(path, context) {
     let obj = Cu.createObjectIn(context.cloneScope);
 
-    this.injectInto(obj, context);
+    let ns = context.schemaRoot.getNamespace(this.path.join("."));
+    ns.injectInto(obj, context);
 
     // Only inject the namespace object if it isn't empty.
     if (Object.keys(obj).length) {
@@ -2621,10 +2685,13 @@ class Namespace extends Map {
    *
    * @param {string} name
    *        The name of the sub-namespace to retrieve.
+   * @param {boolean} [create = true]
+   *        If true, create any intermediate namespaces which don't
+   *        exist.
    *
    * @returns {Namespace}
    */
-  getNamespace(name) {
+  getNamespace(name, create = true) {
     let subName;
 
     let idx = name.indexOf(".");
@@ -2635,7 +2702,10 @@ class Namespace extends Map {
 
     let ns = super.get(name);
     if (!ns) {
-      ns = new Namespace(name, this.path);
+      if (!create) {
+        return null;
+      }
+      ns = new Namespace(this.root, name, this.path);
       this.set(name, ns);
     }
 
@@ -2645,40 +2715,167 @@ class Namespace extends Map {
     return ns;
   }
 
+  getOwnNamespace(name) {
+    return this.getNamespace(name);
+  }
+
   has(key) {
     this.init();
     return super.has(key);
   }
 }
 
-this.Schemas = {
-  initialized: false,
 
-  REVOKE: Symbol("@@revoke"),
+/**
+ * A namespace which combines the children of an arbitrary number of
+ * sub-namespaces.
+ */
+class Namespaces extends Namespace {
+  constructor(root, name, path, namespaces) {
+    super(root, name, path);
 
-  // Maps a schema URL to the JSON contained in that schema file. This
-  // is useful for sending the JSON across processes.
-  schemaJSON: new Map(),
+    this.namespaces = namespaces;
+  }
 
-  // A separate map of schema JSON which should be available in all
-  // content processes.
-  contentSchemaJSON: new Map(),
+  injectInto(obj, context) {
+    for (let ns of this.namespaces) {
+      ns.injectInto(obj, context);
+    }
+  }
+}
 
-  // Map[<schema-name> -> Map[<symbol-name> -> Entry]]
-  // This keeps track of all the schemas that have been loaded so far.
-  rootNamespace: new Namespace("", []),
+/**
+ * A root schema which combines the contents of an arbitrary number of base
+ * schema roots.
+ */
+class SchemaRoots extends Namespaces {
+  constructor(root, bases) {
+    bases = bases.map(base => base.rootSchema || base);
 
-  getNamespace(name) {
-    return this.rootNamespace.getNamespace(name);
-  },
+    super(null, "", [], bases);
+
+    this.root = root;
+    this.bases = bases;
+    this._namespaces = new Map();
+  }
+
+  _getNamespace(name, create) {
+    let results = [];
+    for (let root of this.bases) {
+      let ns = root.getNamespace(name, create);
+      if (ns) {
+        results.push(ns);
+      }
+    }
+
+    if (results.length == 1) {
+      return results[0];
+    }
+
+    if (results.length > 0) {
+      return new Namespaces(this.root, name, name.split("."), results);
+    }
+    return null;
+  }
+
+  getNamespace(name, create) {
+    let ns = this._namespaces.get(name);
+    if (!ns) {
+      ns = this._getNamespace(name, create);
+      if (ns) {
+        this._namespaces.set(name, ns);
+      }
+    }
+    return ns;
+  }
+
+  * getNamespaces(name) {
+    for (let root of this.bases) {
+      yield* root.getNamespaces(name);
+    }
+  }
+}
+
+/**
+ * A root schema namespace containing schema data which is isolated from data in
+ * other schema roots. May extend a base namespace, in which case schemas in
+ * this root may refer to types in a base, but not vice versa.
+ *
+ * @param {SchemaRoot|Array<SchemaRoot>|null} base
+ *        A base schema root (or roots) from which to derive, or null.
+ * @param {Map<string, Array|StructuredCloneHolder>} schemaJSON
+ *        A map of schema URLs and corresponding JSON blobs from which to
+ *        populate this root namespace.
+ */
+class SchemaRoot extends Namespace {
+  constructor(base, schemaJSON) {
+    super(null, "", []);
+
+    if (Array.isArray(base)) {
+      base = new SchemaRoots(this, base);
+    }
+
+    this.root = this;
+    this.base = base;
+    this.schemaJSON = schemaJSON;
+  }
+
+  * getNamespaces(path) {
+    let name = path.join(".");
+
+    let ns = this.getNamespace(name, false);
+    if (ns) {
+      yield ns;
+    }
+
+    if (this.base) {
+      yield* this.base.getNamespaces(name);
+    }
+  }
+
+  /**
+   * Returns the sub-namespace with the given name. If the given namespace
+   * doesn't already exist, attempts to find it in the base SchemaRoot before
+   * creating a new empty namespace.
+   *
+   * @param {string} name
+   *        The namespace to retrieve.
+   * @param {boolean} [create = true]
+   *        If true, an empty namespace should be created if one does not
+   *        already exist.
+   * @returns {Namespace|null}
+   */
+  getNamespace(name, create = true) {
+    let ns = super.getNamespace(name, false);
+    if (ns) {
+      return ns;
+    }
+
+    ns = this.base && this.base.getNamespace(name, false);
+    if (ns) {
+      return ns;
+    }
+    return create && super.getNamespace(name, create);
+  }
+
+  /**
+   * Like getNamespace, but does not take the base SchemaRoot into account.
+   *
+   * @param {string} name
+   *        The namespace to retrieve.
+   * @returns {Namespace}
+   */
+  getOwnNamespace(name) {
+    return super.getNamespace(name);
+  }
 
   parseSchema(schema, path, extraProperties = []) {
     let allowedProperties = DEBUG && new Set(extraProperties);
 
     if ("choices" in schema) {
-      return ChoiceType.parseSchema(schema, path, allowedProperties);
+      return ChoiceType.parseSchema(this, schema, path, allowedProperties);
     } else if ("$ref" in schema) {
-      return RefType.parseSchema(schema, path, allowedProperties);
+      return RefType.parseSchema(this, schema, path, allowedProperties);
     }
 
     let type = TYPES[schema.type];
@@ -2695,71 +2892,10 @@ this.Schemas = {
       }
     }
 
-    return type.parseSchema(schema, path, allowedProperties);
-  },
-
-  init() {
-    if (this.initialized) {
-      return;
-    }
-    this.initialized = true;
-
-    if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
-      let data = Services.cpmm.initialProcessData;
-      let schemas = data["Extension:Schemas"];
-      if (schemas) {
-        this.schemaJSON = schemas;
-      }
-
-      Services.cpmm.addMessageListener("Schema:Add", this);
-    }
-
-    this.flushSchemas();
-  },
-
-  receiveMessage(msg) {
-    let {data} = msg;
-    switch (msg.name) {
-      case "Schema:Add":
-        // If we're given a Map, the ordering of the initial items
-        // matters, so swap with our current data to make sure its
-        // entries appear first.
-        if (typeof data.get === "function") {
-          // Create a new Map so we're sure it's in the same compartment.
-          [this.schemaJSON, data] = [new Map(data), this.schemaJSON];
-        }
-
-        for (let [url, schema] of data) {
-          this.schemaJSON.set(url, schema);
-        }
-        this.flushSchemas();
-        break;
-
-      case "Schema:Delete":
-        this.schemaJSON.delete(data.url);
-        this.flushSchemas();
-        break;
-    }
-  },
-
-  _needFlush: true,
-  flushSchemas() {
-    if (this._needFlush) {
-      this._needFlush = false;
-      XPCOMUtils.defineLazyGetter(this, "rootNamespace",
-                                  () => this.parseSchemas());
-    }
-  },
+    return type.parseSchema(this, schema, path, allowedProperties);
+  }
 
   parseSchemas() {
-    this._needFlush = true;
-
-    Object.defineProperty(this, "rootNamespace", {
-      enumerable: true,
-      configurable: true,
-      value: new Namespace("", []),
-    });
-
     for (let [key, schema] of this.schemaJSON.entries()) {
       try {
         if (typeof schema.deserialize === "function") {
@@ -2779,14 +2915,152 @@ this.Schemas = {
         Cu.reportError(e);
       }
     }
-
-    return this.rootNamespace;
-  },
+  }
 
   loadSchema(json) {
     for (let namespace of json) {
-      this.getNamespace(namespace.namespace)
+      this.getOwnNamespace(namespace.namespace)
           .addSchema(namespace);
+    }
+  }
+
+  /**
+   * Checks whether a given object has the necessary permissions to
+   * expose the given namespace.
+   *
+   * @param {string} namespace
+   *        The top-level namespace to check permissions for.
+   * @param {object} wrapperFuncs
+   *        Wrapper functions for the given context.
+   * @param {function} wrapperFuncs.hasPermission
+   *        A function which, when given a string argument, returns true
+   *        if the context has the given permission.
+   * @returns {boolean}
+   *        True if the context has permission for the given namespace.
+   */
+  checkPermissions(namespace, wrapperFuncs) {
+    let ns = this.getNamespace(namespace);
+    if (ns && ns.permissions) {
+      return ns.permissions.some(perm => wrapperFuncs.hasPermission(perm));
+    }
+    return true;
+  }
+
+  /**
+   * Inject registered extension APIs into `dest`.
+   *
+   * @param {object} dest The root namespace for the APIs.
+   *     This object is usually exposed to extensions as "chrome" or "browser".
+   * @param {object} wrapperFuncs An implementation of the InjectionContext
+   *     interface, which runs the actual functionality of the generated API.
+   */
+  inject(dest, wrapperFuncs) {
+    let context = new InjectionContext(wrapperFuncs, this);
+
+    this.injectInto(dest, context);
+  }
+
+  injectInto(dest, context) {
+    // For schema graphs where multiple schema roots have the same base, don't
+    // inject it more than once.
+
+    if (!context.injectedRoots.has(this)) {
+      context.injectedRoots.add(this);
+      if (this.base) {
+        this.base.injectInto(dest, context);
+      }
+      super.injectInto(dest, context);
+    }
+  }
+
+  /**
+   * Normalize `obj` according to the loaded schema for `typeName`.
+   *
+   * @param {object} obj The object to normalize against the schema.
+   * @param {string} typeName The name in the format namespace.propertyname
+   * @param {object} context An implementation of Context. Any validation errors
+   *     are reported to the given context.
+   * @returns {object} The normalized object.
+   */
+  normalize(obj, typeName, context) {
+    let [namespaceName, prop] = typeName.split(".");
+    let ns = this.getNamespace(namespaceName);
+    let type = ns.get(prop);
+
+    let result = type.normalize(obj, new Context(context));
+    if (result.error) {
+      return {error: forceString(result.error)};
+    }
+    return result;
+  }
+}
+
+this.Schemas = {
+  initialized: false,
+
+  REVOKE: Symbol("@@revoke"),
+
+  // Maps a schema URL to the JSON contained in that schema file. This
+  // is useful for sending the JSON across processes.
+  schemaJSON: new Map(),
+
+  // A separate map of schema JSON which should be available in all
+  // content processes.
+  contentSchemaJSON: new Map(),
+
+  _rootSchema: null,
+
+  get rootSchema() {
+    if (!this.initialized) {
+      this.init();
+    }
+    if (!this._rootSchema) {
+      this._rootSchema = new SchemaRoot(null, this.schemaJSON);
+      this._rootSchema.parseSchemas();
+    }
+    return this._rootSchema;
+  },
+
+  getNamespace(name) {
+    return this.rootSchema.getNamespace(name);
+  },
+
+  init() {
+    if (this.initialized) {
+      return;
+    }
+    this.initialized = true;
+
+    if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
+      let data = Services.cpmm.initialProcessData;
+      let schemas = data["Extension:Schemas"];
+      if (schemas) {
+        this.schemaJSON = schemas;
+      }
+
+      Services.cpmm.addMessageListener("Schema:Add", this);
+    }
+  },
+
+  receiveMessage(msg) {
+    let {data} = msg;
+    switch (msg.name) {
+      case "Schema:Add":
+        // If we're given a Map, the ordering of the initial items
+        // matters, so swap with our current data to make sure its
+        // entries appear first.
+        if (typeof data.get === "function") {
+          // Create a new Map so we're sure it's in the same compartment.
+          [this.schemaJSON, data] = [new Map(data), this.schemaJSON];
+        }
+
+        for (let [url, schema] of data) {
+          this.schemaJSON.set(url, schema);
+        }
+        if (this._rootSchema) {
+          throw new Error("Schema loaded after root schema populated");
+        }
+        break;
     }
   },
 
@@ -2815,7 +3089,17 @@ this.Schemas = {
       this.schemaHook([[url, schema]]);
     }
 
-    this.flushSchemas();
+    if (this._rootSchema) {
+      throw new Error("Schema loaded after root schema populated");
+    }
+  },
+
+  fetch(url) {
+    return readJSONAndBlobbify(url);
+  },
+
+  processSchema(json) {
+    return blobbify(json);
   },
 
   async load(url, content = false) {
@@ -2833,17 +3117,6 @@ this.Schemas = {
     }
   },
 
-  unload(url) {
-    this.schemaJSON.delete(url);
-
-    let data = Services.ppmm.initialProcessData;
-    data["Extension:Schemas"] = this.schemaJSON;
-
-    Services.ppmm.broadcastAsyncMessage("Schema:Delete", {url});
-
-    this.flushSchemas();
-  },
-
   /**
    * Checks whether a given object has the necessary permissions to
    * expose the given namespace.
@@ -2859,15 +3132,7 @@ this.Schemas = {
    *        True if the context has permission for the given namespace.
    */
   checkPermissions(namespace, wrapperFuncs) {
-    if (!this.initialized) {
-      this.init();
-    }
-
-    let ns = this.getNamespace(namespace);
-    if (ns && ns.permissions) {
-      return ns.permissions.some(perm => wrapperFuncs.hasPermission(perm));
-    }
-    return true;
+    return this.rootSchema.checkPermissions(namespace, wrapperFuncs);
   },
 
   exportLazyGetter,
@@ -2881,13 +3146,7 @@ this.Schemas = {
    *     interface, which runs the actual functionality of the generated API.
    */
   inject(dest, wrapperFuncs) {
-    if (!this.initialized) {
-      this.init();
-    }
-
-    let context = new InjectionContext(wrapperFuncs);
-
-    this.rootNamespace.injectInto(dest, context);
+    this.rootSchema.inject(dest, wrapperFuncs);
   },
 
   /**
@@ -2900,18 +3159,6 @@ this.Schemas = {
    * @returns {object} The normalized object.
    */
   normalize(obj, typeName, context) {
-    if (!this.initialized) {
-      this.init();
-    }
-
-    let [namespaceName, prop] = typeName.split(".");
-    let ns = this.getNamespace(namespaceName);
-    let type = ns.get(prop);
-
-    let result = type.normalize(obj, new Context(context));
-    if (result.error) {
-      return {error: forceString(result.error)};
-    }
-    return result;
+    return this.rootSchema.normalize(obj, typeName, context);
   },
 };

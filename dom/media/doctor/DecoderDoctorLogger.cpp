@@ -14,12 +14,22 @@
 
 namespace mozilla {
 
-/* static */ Atomic<DecoderDoctorLogger::LogState>
+/* static */ Atomic<DecoderDoctorLogger::LogState, ReleaseAcquire>
   DecoderDoctorLogger::sLogState{ DecoderDoctorLogger::scDisabled };
 
 /* static */ const char* DecoderDoctorLogger::sShutdownReason = nullptr;
 
 static DDMediaLogs* sMediaLogs;
+
+/* static */ void
+DecoderDoctorLogger::Init()
+{
+  MOZ_ASSERT(static_cast<LogState>(sLogState) == scDisabled);
+  if (MOZ_LOG_TEST(sDecoderDoctorLoggerLog, LogLevel::Error) ||
+      MOZ_LOG_TEST(sDecoderDoctorLoggerEndLog, LogLevel::Error)) {
+    EnableLogging();
+  }
+}
 
 // First DDLogShutdowner sets sLogState to scShutdown, to prevent further
 // logging.
@@ -157,14 +167,14 @@ DecoderDoctorLogger::RetrieveMessages(
 /* static */ void
 DecoderDoctorLogger::Log(const char* aSubjectTypeName,
                          const void* aSubjectPointer,
-                         DDLogClass aClass,
+                         DDLogCategory aCategory,
                          const char* aLabel,
                          DDLogValue&& aValue)
 {
   if (IsDDLoggingEnabled()) {
     MOZ_ASSERT(sMediaLogs);
     sMediaLogs->Log(
-      aSubjectTypeName, aSubjectPointer, aClass, aLabel, Move(aValue));
+      aSubjectTypeName, aSubjectPointer, aCategory, aLabel, std::move(aValue));
   }
 }
 

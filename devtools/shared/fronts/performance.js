@@ -7,7 +7,6 @@ const { Cu } = require("chrome");
 const { Front, FrontClassWithSpec, custom, preEvent } = require("devtools/shared/protocol");
 const { PerformanceRecordingFront } = require("devtools/shared/fronts/performance-recording");
 const { performanceSpec } = require("devtools/shared/specs/performance");
-const { Task } = require("devtools/shared/task");
 
 loader.lazyRequireGetter(this, "PerformanceIO",
   "devtools/client/performance/modules/io");
@@ -15,13 +14,13 @@ loader.lazyRequireGetter(this, "getSystemInfo",
   "devtools/shared/system", true);
 
 const PerformanceFront = FrontClassWithSpec(performanceSpec, {
-  initialize: function (client, form) {
+  initialize: function(client, form) {
     Front.prototype.initialize.call(this, client, form);
     this.actorID = form.performanceActor;
     this.manage(this);
   },
 
-  destroy: function () {
+  destroy: function() {
     Front.prototype.destroy.call(this);
   },
 
@@ -29,13 +28,13 @@ const PerformanceFront = FrontClassWithSpec(performanceSpec, {
    * Conenct to the server, and handle once-off tasks like storing traits
    * or system info.
    */
-  connect: custom(Task.async(function* () {
-    let systemClient = yield getSystemInfo();
-    let { traits } = yield this._connect({ systemClient });
+  connect: custom(async function() {
+    const systemClient = await getSystemInfo();
+    const { traits } = await this._connect({ systemClient });
     this._traits = traits;
 
     return this._traits;
-  }), {
+  }, {
     impl: "_connect"
   }),
 
@@ -54,23 +53,23 @@ const PerformanceFront = FrontClassWithSpec(performanceSpec, {
    * @param {PerformanceRecording} recording
    * @return {number?}
    */
-  getBufferUsageForRecording: function (recording) {
+  getBufferUsageForRecording: function(recording) {
     if (!recording.isRecording()) {
       return void 0;
     }
-    let {
+    const {
       position: currentPosition,
       totalSize,
       generation: currentGeneration
     } = this._currentBufferStatus;
-    let {
+    const {
       position: origPosition,
       generation: origGeneration
     } = recording.getStartingBufferStatus();
 
-    let normalizedCurrent = (totalSize * (currentGeneration - origGeneration)) +
+    const normalizedCurrent = (totalSize * (currentGeneration - origGeneration)) +
                             currentPosition;
-    let percent = (normalizedCurrent - origPosition) / totalSize;
+    const percent = (normalizedCurrent - origPosition) / totalSize;
 
     // Clamp between 0 and 1; can get negative percentage values when a new
     // recording starts and the currentBufferStatus has not yet been updated. Rather
@@ -92,9 +91,9 @@ const PerformanceFront = FrontClassWithSpec(performanceSpec, {
    *        The file to import the data from.
    * @return {Promise<PerformanceRecordingFront>}
    */
-  importRecording: function (file) {
+  importRecording: function(file) {
     return PerformanceIO.loadRecordingFromFile(file).then(recordingData => {
-      let model = new PerformanceRecordingFront();
+      const model = new PerformanceRecordingFront();
       model._imported = true;
       model._label = recordingData.label || "";
       model._duration = recordingData.duration;
@@ -115,7 +114,7 @@ const PerformanceFront = FrontClassWithSpec(performanceSpec, {
    * Store profiler status when the position has been update so we can
    * calculate recording's buffer percentage usage after emitting the event.
    */
-  _onProfilerStatus: preEvent("profiler-status", function (data) {
+  _onProfilerStatus: preEvent("profiler-status", function(data) {
     this._currentBufferStatus = data;
   }),
 
@@ -124,8 +123,8 @@ const PerformanceFront = FrontClassWithSpec(performanceSpec, {
    * apply the timeline data to the front PerformanceRecording (so we only have one event
    * for each timeline data chunk as they could be shared amongst several recordings).
    */
-  _onTimelineEvent: preEvent("timeline-data", function (type, data, recordings) {
-    for (let recording of recordings) {
+  _onTimelineEvent: preEvent("timeline-data", function(type, data, recordings) {
+    for (const recording of recordings) {
       recording._addTimelineData(type, data);
     }
   }),

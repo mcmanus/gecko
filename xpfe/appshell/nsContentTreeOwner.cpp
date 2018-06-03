@@ -14,13 +14,9 @@
 #include "nsAutoPtr.h"
 
 // Interfaces needed to be included
-#include "nsIDOMNode.h"
-#include "nsIDOMElement.h"
-#include "nsIDOMNodeList.h"
 #include "nsIDOMWindow.h"
 #include "nsIDOMChromeWindow.h"
 #include "nsIBrowserDOMWindow.h"
-#include "nsIDOMXULElement.h"
 #include "nsIEmbeddingSiteWindow.h"
 #include "nsIPrompt.h"
 #include "nsIAuthPrompt.h"
@@ -37,8 +33,8 @@
 #include "nsWindowWatcher.h"
 #include "NullPrincipal.h"
 #include "mozilla/BrowserElementParent.h"
+#include "nsIDocShellLoadInfo.h"
 
-#include "nsIDOMDocument.h"
 #include "nsIScriptObjectPrincipal.h"
 #include "nsIURI.h"
 #include "nsIDocument.h"
@@ -372,7 +368,7 @@ nsContentTreeOwner::GetHasPrimaryContent(bool* aResult)
 
 NS_IMETHODIMP nsContentTreeOwner::OnBeforeLinkTraversal(const nsAString &originalTarget,
                                                         nsIURI *linkURI,
-                                                        nsIDOMNode *linkNode,
+                                                        nsINode *linkNode,
                                                         bool isAppTab,
                                                         nsAString &_retval)
 {
@@ -429,25 +425,6 @@ NS_IMETHODIMP nsContentTreeOwner::ReloadInFreshProcess(nsIDocShell* aDocShell,
   return NS_OK;
 }
 
-NS_IMETHODIMP nsContentTreeOwner::StartPrerenderingDocument(nsIURI* aHref,
-                                                            nsIURI* aReferrer,
-                                                            nsIPrincipal* aTriggeringPrincipal)
-{
-  NS_WARNING("Cannot prerender a document in the parent process");
-  return NS_ERROR_FAILURE;
-}
-
-NS_IMETHODIMP nsContentTreeOwner::ShouldSwitchToPrerenderedDocument(nsIURI* aHref,
-                                                                    nsIURI* aReferrer,
-                                                                    nsIRunnable* aSuccess,
-                                                                    nsIRunnable* aFailure,
-                                                                    bool* aRetval)
-{
-  NS_WARNING("Cannot switch to prerendered document in the parent process");
-  *aRetval = false;
-  return NS_OK;
-}
-
 //*****************************************************************************
 // nsContentTreeOwner::nsIWebBrowserChrome2
 //*****************************************************************************
@@ -469,12 +446,9 @@ NS_IMETHODIMP nsContentTreeOwner::SetStatusWithContext(uint32_t aStatusType,
   {
     switch(aStatusType)
     {
-    case STATUS_SCRIPT:
-      xulBrowserWindow->SetJSStatus(aStatusText);
-      break;
     case STATUS_LINK:
       {
-        nsCOMPtr<nsIDOMElement> element = do_QueryInterface(aStatusContext);
+        nsCOMPtr<dom::Element> element = do_QueryInterface(aStatusContext);
         xulBrowserWindow->SetOverLink(aStatusText, element);
         break;
       }
@@ -825,6 +799,7 @@ nsContentTreeOwner::ProvideWindow(mozIDOMWindowProxy* aParent,
                                   const nsAString& aName,
                                   const nsACString& aFeatures,
                                   bool aForceNoOpener,
+                                  nsIDocShellLoadInfo* aLoadInfo,
                                   bool* aWindowIsNew,
                                   mozIDOMWindowProxy** aReturn)
 {
@@ -928,7 +903,7 @@ nsContentTreeOwner::ProvideWindow(mozIDOMWindowProxy* aParent,
     //
     // This method handles setting the opener for us, so we don't need to set it
     // ourselves.
-    RefPtr<NullPrincipal> nullPrincipal = NullPrincipal::Create();
+    RefPtr<NullPrincipal> nullPrincipal = NullPrincipal::CreateWithoutOriginAttributes();
     return browserDOMWin->CreateContentWindow(aURI, aParent, openLocation,
                                               flags, nullPrincipal, aReturn);
   }

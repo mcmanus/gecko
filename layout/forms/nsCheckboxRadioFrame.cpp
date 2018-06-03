@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,7 +8,7 @@
 
 #include "nsGkAtoms.h"
 #include "nsLayoutUtils.h"
-#include "nsIDOMHTMLInputElement.h"
+#include "mozilla/dom/HTMLInputElement.h"
 #include "mozilla/EventStateManager.h"
 #include "mozilla/LookAndFeel.h"
 #include "nsDeviceContext.h"
@@ -15,17 +16,18 @@
 #include "nsThemeConstants.h"
 
 using namespace mozilla;
+using mozilla::dom::HTMLInputElement;
 
 //#define FCF_NOISY
 
 nsCheckboxRadioFrame*
-NS_NewCheckboxRadioFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewCheckboxRadioFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsCheckboxRadioFrame(aContext);
+  return new (aPresShell) nsCheckboxRadioFrame(aStyle);
 }
 
-nsCheckboxRadioFrame::nsCheckboxRadioFrame(nsStyleContext* aContext)
-  : nsAtomicContainerFrame(aContext, kClassID)
+nsCheckboxRadioFrame::nsCheckboxRadioFrame(ComputedStyle* aStyle)
+  : nsAtomicContainerFrame(aStyle, kClassID)
 {
 }
 
@@ -34,11 +36,11 @@ nsCheckboxRadioFrame::~nsCheckboxRadioFrame()
 }
 
 void
-nsCheckboxRadioFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsCheckboxRadioFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   // Unregister the access key registered in reflow
   nsCheckboxRadioFrame::RegUnRegAccessKey(static_cast<nsIFrame*>(this), false);
-  nsAtomicContainerFrame::DestroyFrom(aDestructRoot);
+  nsAtomicContainerFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsCheckboxRadioFrame)
@@ -160,7 +162,7 @@ nsCheckboxRadioFrame::RegUnRegAccessKey(nsIFrame* aFrame, bool aDoReg)
 
   nsAutoString accessKey;
 
-  nsIContent* content = aFrame->GetContent();
+  Element* content = aFrame->GetContent()->AsElement();
   content->GetAttr(kNameSpaceID_None, nsGkAtoms::accesskey, accessKey);
   if (!accessKey.IsEmpty()) {
     EventStateManager* stateManager = presContext->EventStateManager();
@@ -184,10 +186,8 @@ nsCheckboxRadioFrame::HandleEvent(nsPresContext* aPresContext,
                                   WidgetGUIEvent* aEvent,
                                   nsEventStatus* aEventStatus)
 {
-  // Check for user-input:none style
-  const nsStyleUserInterface* uiStyle = StyleUserInterface();
-  if (uiStyle->mUserInput == StyleUserInput::None ||
-      uiStyle->mUserInput == StyleUserInput::Disabled) {
+  // Check for disabled content so that selection works properly (?).
+  if (IsContentDisabled()) {
     return nsFrame::HandleEvent(aPresContext, aEvent, aEventStatus);
   }
   return NS_OK;
@@ -196,9 +196,9 @@ nsCheckboxRadioFrame::HandleEvent(nsPresContext* aPresContext,
 void
 nsCheckboxRadioFrame::GetCurrentCheckState(bool* aState)
 {
-  nsCOMPtr<nsIDOMHTMLInputElement> inputElement = do_QueryInterface(mContent);
+  HTMLInputElement* inputElement = HTMLInputElement::FromNode(mContent);
   if (inputElement) {
-    inputElement->GetChecked(aState);
+    *aState = inputElement->Checked();
   }
 }
 

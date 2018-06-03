@@ -5,11 +5,13 @@
 extern crate gleam;
 extern crate glutin;
 extern crate webrender;
+extern crate winit;
 
 #[path = "common/boilerplate.rs"]
 mod boilerplate;
 
 use boilerplate::{Example, HandyDandyRectBuilder};
+use gleam::gl;
 use std::mem;
 use webrender::api::*;
 
@@ -20,7 +22,7 @@ struct ImageGenerator {
 }
 
 impl ImageGenerator {
-    fn new() -> ImageGenerator {
+    fn new() -> Self {
         ImageGenerator {
             next_pattern: 0,
             patterns: [
@@ -62,10 +64,7 @@ impl webrender::ExternalImageHandler for ImageGenerator {
     fn lock(&mut self, _key: ExternalImageId, channel_index: u8) -> webrender::ExternalImage {
         self.generate_image(channel_index as u32);
         webrender::ExternalImage {
-            u0: 0.0,
-            v0: 0.0,
-            u1: 1.0,
-            v1: 1.0,
+            uv: TexelRect::new(0.0, 0.0, 1.0, 1.0),
             source: webrender::ExternalImageSource::RawData(&self.current_image),
         }
     }
@@ -85,8 +84,8 @@ impl Example for App {
         &mut self,
         api: &RenderApi,
         builder: &mut DisplayListBuilder,
-        resources: &mut ResourceUpdates,
-        _layout_size: LayoutSize,
+        txn: &mut Transaction,
+        _framebuffer_size: DeviceUintSize,
         _pipeline_id: PipelineId,
         _document_id: DocumentId,
     ) {
@@ -94,12 +93,13 @@ impl Example for App {
         let info = LayoutPrimitiveInfo::new(bounds);
         builder.push_stacking_context(
             &info,
-            ScrollPolicy::Scrollable,
+            None,
             None,
             TransformStyle::Flat,
             None,
             MixBlendMode::Normal,
             Vec::new(),
+            GlyphRasterSpace::Screen,
         );
 
         let x0 = 50.0;
@@ -111,17 +111,17 @@ impl Example for App {
             let key1 = api.generate_image_key();
 
             self.image_generator.generate_image(128);
-            resources.add_image(
+            txn.add_image(
                 key0,
-                ImageDescriptor::new(128, 128, ImageFormat::BGRA8, true),
+                ImageDescriptor::new(128, 128, ImageFormat::BGRA8, true, false),
                 ImageData::new(self.image_generator.take()),
                 None,
             );
 
             self.image_generator.generate_image(128);
-            resources.add_image(
+            txn.add_image(
                 key1,
-                ImageDescriptor::new(128, 128, ImageFormat::BGRA8, true),
+                ImageDescriptor::new(128, 128, ImageFormat::BGRA8, true, false),
                 ImageData::new(self.image_generator.take()),
                 None,
             );
@@ -146,6 +146,7 @@ impl Example for App {
                 image_size,
                 LayoutSize::zero(),
                 ImageRendering::Auto,
+                AlphaType::PremultipliedAlpha,
                 *key,
             );
         }
@@ -161,6 +162,7 @@ impl Example for App {
                 image_size,
                 LayoutSize::zero(),
                 ImageRendering::Auto,
+                AlphaType::PremultipliedAlpha,
                 image_key,
             );
         }
@@ -176,6 +178,7 @@ impl Example for App {
             image_size,
             LayoutSize::zero(),
             ImageRendering::Auto,
+            AlphaType::PremultipliedAlpha,
             swap_key,
         );
         self.swap_index = 1 - self.swap_index;
@@ -185,16 +188,23 @@ impl Example for App {
 
     fn on_event(
         &mut self,
-        event: glutin::Event,
+        event: winit::WindowEvent,
         api: &RenderApi,
         _document_id: DocumentId,
     ) -> bool {
         match event {
-            glutin::Event::KeyboardInput(glutin::ElementState::Pressed, _, Some(key)) => {
-                let mut updates = ResourceUpdates::new();
+            winit::WindowEvent::KeyboardInput {
+                input: winit::KeyboardInput {
+                    state: winit::ElementState::Pressed,
+                    virtual_keycode: Some(key),
+                    ..
+                },
+                ..
+            } => {
+                let mut txn = Transaction::new();
 
                 match key {
-                    glutin::VirtualKeyCode::S => {
+                    winit::VirtualKeyCode::S => {
                         self.stress_keys.clear();
 
                         for _ in 0 .. 16 {
@@ -205,9 +215,9 @@ impl Example for App {
 
                                 self.image_generator.generate_image(size);
 
-                                updates.add_image(
+                                txn.add_image(
                                     image_key,
-                                    ImageDescriptor::new(size, size, ImageFormat::BGRA8, true),
+                                    ImageDescriptor::new(size, size, ImageFormat::BGRA8, true, false),
                                     ImageData::new(self.image_generator.take()),
                                     None,
                                 );
@@ -216,23 +226,23 @@ impl Example for App {
                             }
                         }
                     }
-                    glutin::VirtualKeyCode::D => if let Some(image_key) = self.image_key.take() {
-                        updates.delete_image(image_key);
+                    winit::VirtualKeyCode::D => if let Some(image_key) = self.image_key.take() {
+                        txn.delete_image(image_key);
                     },
-                    glutin::VirtualKeyCode::U => if let Some(image_key) = self.image_key {
+                    winit::VirtualKeyCode::U => if let Some(image_key) = self.image_key {
                         let size = 128;
                         self.image_generator.generate_image(size);
 
-                        updates.update_image(
+                        txn.update_image(
                             image_key,
-                            ImageDescriptor::new(size, size, ImageFormat::BGRA8, true),
+                            ImageDescriptor::new(size, size, ImageFormat::BGRA8, true, false),
                             ImageData::new(self.image_generator.take()),
                             None,
                         );
                     },
-                    glutin::VirtualKeyCode::E => {
+                    winit::VirtualKeyCode::E => {
                         if let Some(image_key) = self.image_key.take() {
-                            updates.delete_image(image_key);
+                            txn.delete_image(image_key);
                         }
 
                         let size = 32;
@@ -241,30 +251,30 @@ impl Example for App {
                         let image_data = ExternalImageData {
                             id: ExternalImageId(0),
                             channel_index: size as u8,
-                            image_type: ExternalImageType::ExternalBuffer,
+                            image_type: ExternalImageType::Buffer,
                         };
 
-                        updates.add_image(
+                        txn.add_image(
                             image_key,
-                            ImageDescriptor::new(size, size, ImageFormat::BGRA8, true),
+                            ImageDescriptor::new(size, size, ImageFormat::BGRA8, true, false),
                             ImageData::External(image_data),
                             None,
                         );
 
                         self.image_key = Some(image_key);
                     }
-                    glutin::VirtualKeyCode::R => {
+                    winit::VirtualKeyCode::R => {
                         if let Some(image_key) = self.image_key.take() {
-                            updates.delete_image(image_key);
+                            txn.delete_image(image_key);
                         }
 
                         let image_key = api.generate_image_key();
                         let size = 32;
                         self.image_generator.generate_image(size);
 
-                        updates.add_image(
+                        txn.add_image(
                             image_key,
-                            ImageDescriptor::new(size, size, ImageFormat::BGRA8, true),
+                            ImageDescriptor::new(size, size, ImageFormat::BGRA8, true, false),
                             ImageData::new(self.image_generator.take()),
                             None,
                         );
@@ -274,7 +284,7 @@ impl Example for App {
                     _ => {}
                 }
 
-                api.update_resources(updates);
+                api.update_resources(txn.resource_updates);
                 return true;
             }
             _ => {}
@@ -283,8 +293,12 @@ impl Example for App {
         false
     }
 
-    fn get_external_image_handler(&self) -> Option<Box<webrender::ExternalImageHandler>> {
-        Some(Box::new(ImageGenerator::new()))
+    fn get_image_handlers(
+        &mut self,
+        _gl: &gl::Gl,
+    ) -> (Option<Box<webrender::ExternalImageHandler>>,
+          Option<Box<webrender::OutputImageHandler>>) {
+        (Some(Box::new(ImageGenerator::new())), None)
     }
 }
 

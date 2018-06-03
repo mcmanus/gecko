@@ -112,8 +112,6 @@ const ATTRIBUTE_TYPES = [
   {namespaceURI: XUL_NS, attributeName: "popup", tagName: "*", type: TYPE_IDREF},
   {namespaceURI: XUL_NS, attributeName: "ref", tagName: "*", type: TYPE_URI},
   {namespaceURI: XUL_NS, attributeName: "removeelement", tagName: "*", type: TYPE_IDREF},
-  {namespaceURI: XUL_NS, attributeName: "sortResource", tagName: "*", type: TYPE_URI},
-  {namespaceURI: XUL_NS, attributeName: "sortResource2", tagName: "*", type: TYPE_URI},
   {namespaceURI: XUL_NS, attributeName: "src", tagName: "stringbundle", type: TYPE_URI},
   {namespaceURI: XUL_NS, attributeName: "template", tagName: "*", type: TYPE_IDREF},
   {namespaceURI: XUL_NS, attributeName: "tooltip", tagName: "*", type: TYPE_IDREF},
@@ -128,42 +126,42 @@ const ATTRIBUTE_TYPES = [
 ];
 
 var parsers = {
-  [TYPE_URI]: function (attributeValue) {
+  [TYPE_URI]: function(attributeValue) {
     return [{
       type: TYPE_URI,
       value: attributeValue
     }];
   },
-  [TYPE_URI_LIST]: function (attributeValue) {
-    let data = splitBy(attributeValue, " ");
-    for (let token of data) {
+  [TYPE_URI_LIST]: function(attributeValue) {
+    const data = splitBy(attributeValue, " ");
+    for (const token of data) {
       if (!token.type) {
         token.type = TYPE_URI;
       }
     }
     return data;
   },
-  [TYPE_JS_RESOURCE_URI]: function (attributeValue) {
+  [TYPE_JS_RESOURCE_URI]: function(attributeValue) {
     return [{
       type: TYPE_JS_RESOURCE_URI,
       value: attributeValue
     }];
   },
-  [TYPE_CSS_RESOURCE_URI]: function (attributeValue) {
+  [TYPE_CSS_RESOURCE_URI]: function(attributeValue) {
     return [{
       type: TYPE_CSS_RESOURCE_URI,
       value: attributeValue
     }];
   },
-  [TYPE_IDREF]: function (attributeValue) {
+  [TYPE_IDREF]: function(attributeValue) {
     return [{
       type: TYPE_IDREF,
       value: attributeValue
     }];
   },
-  [TYPE_IDREF_LIST]: function (attributeValue) {
-    let data = splitBy(attributeValue, " ");
-    for (let token of data) {
+  [TYPE_IDREF_LIST]: function(attributeValue) {
+    const data = splitBy(attributeValue, " ");
+    for (const token of data) {
       if (!token.type) {
         token.type = TYPE_IDREF;
       }
@@ -195,7 +193,7 @@ function parseAttribute(namespaceURI, tagName, attributes, attributeName) {
                     "provided attributes");
   }
 
-  let type = getType(namespaceURI, tagName, attributes, attributeName);
+  const type = getType(namespaceURI, tagName, attributes, attributeName);
   if (!type) {
     return [{
       type: TYPE_STRING,
@@ -217,14 +215,14 @@ function parseAttribute(namespaceURI, tagName, attributes, attributeName) {
  * type object otherwise.
  */
 function getType(namespaceURI, tagName, attributes, attributeName) {
-  for (let typeData of ATTRIBUTE_TYPES) {
-    let containsAttribute = attributeName === typeData.attributeName ||
+  for (const typeData of ATTRIBUTE_TYPES) {
+    const containsAttribute = attributeName === typeData.attributeName ||
                             typeData.attributeName === "*";
-    let hasNamespace = namespaceURI === typeData.namespaceURI ||
+    const hasNamespace = namespaceURI === typeData.namespaceURI ||
                        typeData.namespaceURI === "*";
-    let hasTagName = tagName.toLowerCase() === typeData.tagName ||
+    const hasTagName = tagName.toLowerCase() === typeData.tagName ||
                      typeData.tagName === "*";
-    let isValid = typeData.isValid
+    const isValid = typeData.isValid
                   ? typeData.isValid(namespaceURI,
                                      tagName,
                                      attributes,
@@ -240,7 +238,7 @@ function getType(namespaceURI, tagName, attributes, attributeName) {
 }
 
 function getAttribute(attributes, attributeName) {
-  for (let {name, value} of attributes) {
+  for (const {name, value} of attributes) {
     if (name === attributeName) {
       return value;
     }
@@ -249,7 +247,7 @@ function getAttribute(attributes, attributeName) {
 }
 
 function hasAttribute(attributes, attributeName) {
-  for (let {name} of attributes) {
+  for (const {name} of attributes) {
     if (name === attributeName) {
       return true;
     }
@@ -266,7 +264,9 @@ function hasAttribute(attributes, attributeName) {
  * @return {Array}
  */
 function splitBy(value, splitChar) {
-  let data = [], i = 0, buffer = "";
+  const data = [];
+
+  let i = 0, buffer = "";
   while (i <= value.length) {
     if (i === value.length && buffer) {
       data.push({value: buffer});

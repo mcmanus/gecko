@@ -6,20 +6,19 @@
 
 const {AddonManager} = require("resource://gre/modules/AddonManager.jsm");
 const Services = require("Services");
-const {getJSON} = require("devtools/client/shared/getjson");
-const EventEmitter = require("devtools/shared/old-event-emitter");
+const EventEmitter = require("devtools/shared/event-emitter");
 
 var ADB_LINK = Services.prefs.getCharPref("devtools.webide.adbAddonURL");
 var ADB_ADDON_ID = Services.prefs.getCharPref("devtools.webide.adbAddonID");
 
 var platform = Services.appShell.hiddenDOMWindow.navigator.platform;
 var OS = "";
-if (platform.indexOf("Win") != -1) {
+if (platform.includes("Win")) {
   OS = "win32";
-} else if (platform.indexOf("Mac") != -1) {
+} else if (platform.includes("Mac")) {
   OS = "mac64";
-} else if (platform.indexOf("Linux") != -1) {
-  if (platform.indexOf("x86_64") != -1) {
+} else if (platform.includes("Linux")) {
+  if (platform.includes("x86_64")) {
     OS = "linux64";
   } else {
     OS = "linux32";
@@ -31,13 +30,13 @@ addonsListener.onEnabled =
 addonsListener.onDisabled =
 addonsListener.onInstalled =
 addonsListener.onUninstalled = (updatedAddon) => {
-  let addons = GetAvailableAddons();
+  const addons = GetAvailableAddons();
   addons.adb.updateInstallStatus();
 };
 AddonManager.addAddonListener(addonsListener);
 
 var AvailableAddons = null;
-var GetAvailableAddons = exports.GetAvailableAddons = function () {
+var GetAvailableAddons = exports.GetAvailableAddons = function() {
   if (!AvailableAddons) {
     AvailableAddons = {
       adb: new ADBAddon()
@@ -46,7 +45,7 @@ var GetAvailableAddons = exports.GetAvailableAddons = function () {
   return AvailableAddons;
 };
 
-exports.ForgetAddonsList = function () {
+exports.ForgetAddonsList = function() {
   AvailableAddons = null;
 };
 
@@ -63,54 +62,50 @@ Addon.prototype = {
     return this._status;
   },
 
-  updateInstallStatus: function () {
-    AddonManager.getAddonByID(this.addonID, (addon) => {
-      if (addon && !addon.userDisabled) {
-        this.status = "installed";
-      } else {
-        this.status = "uninstalled";
-      }
-    });
+  updateInstallStatus: async function() {
+    const addon = await AddonManager.getAddonByID(this.addonID);
+    if (addon && !addon.userDisabled) {
+      this.status = "installed";
+    } else {
+      this.status = "uninstalled";
+    }
   },
 
-  install: function () {
-    AddonManager.getAddonByID(this.addonID, (addon) => {
-      if (addon && !addon.userDisabled) {
-        this.status = "installed";
-        return;
-      }
-      this.status = "preparing";
-      if (addon && addon.userDisabled) {
-        addon.userDisabled = false;
-      } else {
-        AddonManager.getInstallForURL(this.xpiLink, (install) => {
-          install.addListener(this);
-          install.install();
-        }, "application/x-xpinstall");
-      }
-    });
+  install: async function() {
+    const addon = await AddonManager.getAddonByID(this.addonID);
+    if (addon && !addon.userDisabled) {
+      this.status = "installed";
+      return;
+    }
+    this.status = "preparing";
+    if (addon && addon.userDisabled) {
+      await addon.enable();
+    } else {
+      const install = await AddonManager.getInstallForURL(this.xpiLink, "application/x-xpinstall");
+      install.addListener(this);
+      install.install();
+    }
   },
 
-  uninstall: function () {
-    AddonManager.getAddonByID(this.addonID, (addon) => {
-      addon.uninstall();
-    });
+  uninstall: async function() {
+    const addon = await AddonManager.getAddonByID(this.addonID);
+    addon.uninstall();
   },
 
-  installFailureHandler: function (install, message) {
+  installFailureHandler: function(install, message) {
     this.status = "uninstalled";
     this.emit("failure", message);
   },
 
-  onDownloadStarted: function () {
+  onDownloadStarted: function() {
     this.status = "downloading";
   },
 
-  onInstallStarted: function () {
+  onInstallStarted: function() {
     this.status = "installing";
   },
 
-  onDownloadProgress: function (install) {
+  onDownloadProgress: function(install) {
     if (install.maxProgress == -1) {
       this.emit("progress", -1);
     } else {
@@ -118,20 +113,20 @@ Addon.prototype = {
     }
   },
 
-  onInstallEnded: function ({addon}) {
-    addon.userDisabled = false;
+  onInstallEnded: function({addon}) {
+    addon.enable();
   },
 
-  onDownloadCancelled: function (install) {
+  onDownloadCancelled: function(install) {
     this.installFailureHandler(install, "Download cancelled");
   },
-  onDownloadFailed: function (install) {
+  onDownloadFailed: function(install) {
     this.installFailureHandler(install, "Download failed");
   },
-  onInstallCancelled: function (install) {
+  onInstallCancelled: function(install) {
     this.installFailureHandler(install, "Install cancelled");
   },
-  onInstallFailed: function (install) {
+  onInstallFailed: function(install) {
     this.installFailureHandler(install, "Install failed");
   },
 };
@@ -139,7 +134,7 @@ Addon.prototype = {
 function ADBAddon() {
   EventEmitter.decorate(this);
   // This addon uses the string "linux" for "linux32"
-  let fixedOS = OS == "linux32" ? "linux" : OS;
+  const fixedOS = OS == "linux32" ? "linux" : OS;
   this.xpiLink = ADB_LINK.replace(/#OS#/g, fixedOS);
   this.addonID = ADB_ADDON_ID;
   this.updateInstallStatus();

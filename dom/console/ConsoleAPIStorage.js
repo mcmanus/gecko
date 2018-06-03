@@ -4,12 +4,8 @@
 
 "use strict";
 
-var Cu = Components.utils;
-var Ci = Components.interfaces;
-var Cc = Components.classes;
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 // This constant tells how many messages to process in a single timer execution.
 const MESSAGES_IN_INTERVAL = 1500
@@ -48,8 +44,8 @@ function ConsoleAPIStorageService() {
 
 ConsoleAPIStorageService.prototype = {
   classID : CONSOLEAPISTORAGE_CID,
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIConsoleAPIStorage,
-                                         Ci.nsIObserver]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIConsoleAPIStorage,
+                                          Ci.nsIObserver]),
   classInfo: XPCOMUtils.generateCI({
     classID: CONSOLEAPISTORAGE_CID,
     contractID: '@mozilla.org/consoleAPI-storage;1',

@@ -6,15 +6,11 @@
 
 "use strict";
 
-const { Cc, Ci, Cu } = require("chrome");
+const { Cu } = require("chrome");
 const Services = require("Services");
 const { ActorPool, appendExtraActors, createExtraActors } = require("devtools/server/actors/common");
 const { DebuggerServer } = require("devtools/server/main");
 
-loader.lazyGetter(this, "ppmm", () => {
-  return Cc["@mozilla.org/parentprocessmessagemanager;1"].getService(
-    Ci.nsIMessageBroadcaster);
-});
 loader.lazyRequireGetter(this, "WindowActor",
   "devtools/server/actors/window", true);
 
@@ -116,21 +112,9 @@ RootActor.prototype = {
 
   traits: {
     sources: true,
-    // Whether the inspector actor allows modifying outer HTML.
-    editOuterHTML: true,
-    // Whether the inspector actor allows modifying innerHTML and inserting
-    // adjacent HTML.
-    pasteHTML: true,
     // Whether the server-side highlighter actor exists and can be used to
     // remotely highlight nodes (see server/actors/highlighters.js)
     highlightable: true,
-    // Which custom highlighter does the server-side highlighter actor supports?
-    // (see server/actors/highlighters.js)
-    customHighlighters: true,
-    // Whether the inspector actor implements the getImageDataFromURL
-    // method that returns data-uris for image URLs. This is used for image
-    // tooltips for instance
-    urlToImageDataResolver: true,
     networkMonitor: true,
     // Whether the storage inspector actor to inspect cookies, etc.
     storageInspector: true,
@@ -147,14 +131,9 @@ RootActor.prototype = {
     // Whether the style rule actor implements the modifySelector method
     // that modifies the rule's selector
     selectorEditable: true,
-    // Whether the page style actor implements the addNewRule method that
-    // adds new rules to the page
-    addNewRule: true,
-    // Whether the dom node actor implements the getUniqueSelector method
-    getUniqueSelector: true,
-    // Whether the dom node actor implements the getCssPath method
+    // Whether the dom node actor implements the getCssPath method. Added in 53.
     getCssPath: true,
-    // Whether the dom node actor implements the getXPath method
+    // Whether the dom node actor implements the getXPath method. Added in 56.
     getXPath: true,
     // Whether the director scripts are supported
     directorScripts: true,
@@ -162,15 +141,9 @@ RootActor.prototype = {
     // blackboxing/pretty-printing (not supported in Fever Dream yet)
     noBlackBoxing: false,
     noPrettyPrinting: false,
-    // Whether the page style actor implements the getUsedFontFaces method
-    // that returns the font faces used on a node
-    getUsedFontFaces: true,
     // Trait added in Gecko 38, indicating that all features necessary for
     // grabbing allocations from the MemoryActor are available for the performance tool
     memoryActorAllocations: true,
-    // Added in Gecko 40, indicating that the backend isn't stupid about
-    // sending resumption packets on tab navigation.
-    noNeedToFakeResumptionOnNavigation: true,
     // Added in Firefox 40. Indicates that the backend supports registering custom
     // commands through the WebConsoleCommands API.
     webConsoleCommands: true,
@@ -203,7 +176,7 @@ RootActor.prototype = {
   /**
    * Return a 'hello' packet as specified by the Remote Debugging Protocol.
    */
-  sayHello: function () {
+  sayHello: function() {
     return {
       from: this.actorID,
       applicationType: this.applicationType,
@@ -213,7 +186,7 @@ RootActor.prototype = {
     };
   },
 
-  forwardingCancelled: function (prefix) {
+  forwardingCancelled: function(prefix) {
     return {
       from: this.actorID,
       type: "forwardingCancelled",
@@ -224,7 +197,7 @@ RootActor.prototype = {
   /**
    * Destroys the actor from the browser window.
    */
-  destroy: function () {
+  destroy: function() {
     /* Tell the live lists we aren't watching any more. */
     if (this._parameters.tabList) {
       this._parameters.tabList.onListChanged = null;
@@ -259,8 +232,8 @@ RootActor.prototype = {
    * browser.  This can replace usages of `listTabs` that only wanted the global actors
    * and didn't actually care about tabs.
    */
-  onGetRoot: function () {
-    let reply = {
+  onGetRoot: function() {
+    const reply = {
       from: this.actorID,
     };
 
@@ -289,8 +262,8 @@ RootActor.prototype = {
    * would trigger any lazy tabs to be loaded, greatly increasing resource usage.  Avoid
    * this method whenever possible.
    */
-  onListTabs: async function () {
-    let tabList = this._parameters.tabList;
+  onListTabs: async function(request) {
+    const tabList = this._parameters.tabList;
     if (!tabList) {
       return { from: this.actorID, error: "noTabs",
                message: "This root actor has no browser tabs." };
@@ -304,12 +277,13 @@ RootActor.prototype = {
     // all the actors to a new ActorPool. We'll replace the old tab actor pool with the
     // one we build here, thus retiring any actors that didn't get listed again, and
     // preparing any new actors to receive packets.
-    let newActorPool = new ActorPool(this.conn);
-    let tabActorList = [];
+    const newActorPool = new ActorPool(this.conn);
+    const tabActorList = [];
     let selected;
 
-    let tabActors = await tabList.getList();
-    for (let tabActor of tabActors) {
+    const options = request.options || {};
+    const tabActors = await tabList.getList(options);
+    for (const tabActor of tabActors) {
       if (tabActor.exited) {
         // Tab actor may have exited while we were gathering the list.
         continue;
@@ -323,7 +297,7 @@ RootActor.prototype = {
     }
 
     // Start with the root reply, which includes the global actors for the whole browser.
-    let reply = this.onGetRoot();
+    const reply = this.onGetRoot();
 
     // Drop the old actorID -> actor map. Actors that still mattered were added to the
     // new map; others will go away.
@@ -342,8 +316,8 @@ RootActor.prototype = {
     return reply;
   },
 
-  onGetTab: async function (options) {
-    let tabList = this._parameters.tabList;
+  onGetTab: async function(options) {
+    const tabList = this._parameters.tabList;
     if (!tabList) {
       return { error: "noTabs",
                message: "This root actor has no browser tabs." };
@@ -373,7 +347,7 @@ RootActor.prototype = {
     return { tab: tabActor.form() };
   },
 
-  onGetWindow: function ({ outerWindowID }) {
+  onGetWindow: function({ outerWindowID }) {
     if (!DebuggerServer.allowChromeProcess) {
       return {
         from: this.actorID,
@@ -381,7 +355,7 @@ RootActor.prototype = {
         message: "You are not allowed to debug windows."
       };
     }
-    let window = Services.wm.getOuterWindowWithId(outerWindowID);
+    const window = Services.wm.getOuterWindowWithId(outerWindowID);
     if (!window) {
       return {
         from: this.actorID,
@@ -395,7 +369,7 @@ RootActor.prototype = {
       this.conn.addActorPool(this._windowActorPool);
     }
 
-    let actor = new WindowActor(this.conn, window);
+    const actor = new WindowActor(this.conn, window);
     actor.parentID = this.actorID;
     this._windowActorPool.addActor(actor);
 
@@ -405,14 +379,14 @@ RootActor.prototype = {
     };
   },
 
-  onTabListChanged: function () {
+  onTabListChanged: function() {
     this.conn.send({ from: this.actorID, type: "tabListChanged" });
     /* It's a one-shot notification; no need to watch any more. */
     this._parameters.tabList.onListChanged = null;
   },
 
-  onListAddons: function () {
-    let addonList = this._parameters.addonList;
+  onListAddons: function() {
+    const addonList = this._parameters.addonList;
     if (!addonList) {
       return { from: this.actorID, error: "noAddons",
                message: "This root actor has no browser addons." };
@@ -422,8 +396,8 @@ RootActor.prototype = {
     addonList.onListChanged = this._onAddonListChanged;
 
     return addonList.getList().then((addonActors) => {
-      let addonActorPool = new ActorPool(this.conn);
-      for (let addonActor of addonActors) {
+      const addonActorPool = new ActorPool(this.conn);
+      for (const addonActor of addonActors) {
         addonActorPool.addActor(addonActor);
       }
 
@@ -440,13 +414,13 @@ RootActor.prototype = {
     });
   },
 
-  onAddonListChanged: function () {
+  onAddonListChanged: function() {
     this.conn.send({ from: this.actorID, type: "addonListChanged" });
     this._parameters.addonList.onListChanged = null;
   },
 
-  onListWorkers: function () {
-    let workerList = this._parameters.workerList;
+  onListWorkers: function() {
+    const workerList = this._parameters.workerList;
     if (!workerList) {
       return { from: this.actorID, error: "noWorkers",
                message: "This root actor has no workers." };
@@ -456,8 +430,8 @@ RootActor.prototype = {
     workerList.onListChanged = this._onWorkerListChanged;
 
     return workerList.getList().then(actors => {
-      let pool = new ActorPool(this.conn);
-      for (let actor of actors) {
+      const pool = new ActorPool(this.conn);
+      for (const actor of actors) {
         pool.addActor(actor);
       }
 
@@ -472,13 +446,13 @@ RootActor.prototype = {
     });
   },
 
-  onWorkerListChanged: function () {
+  onWorkerListChanged: function() {
     this.conn.send({ from: this.actorID, type: "workerListChanged" });
     this._parameters.workerList.onListChanged = null;
   },
 
-  onListServiceWorkerRegistrations: function () {
-    let registrationList = this._parameters.serviceWorkerRegistrationList;
+  onListServiceWorkerRegistrations: function() {
+    const registrationList = this._parameters.serviceWorkerRegistrationList;
     if (!registrationList) {
       return { from: this.actorID, error: "noServiceWorkerRegistrations",
                message: "This root actor has no service worker registrations." };
@@ -488,8 +462,8 @@ RootActor.prototype = {
     registrationList.onListChanged = this._onServiceWorkerRegistrationListChanged;
 
     return registrationList.getList().then(actors => {
-      let pool = new ActorPool(this.conn);
-      for (let actor of actors) {
+      const pool = new ActorPool(this.conn);
+      for (const actor of actors) {
         pool.addActor(actor);
       }
 
@@ -504,13 +478,13 @@ RootActor.prototype = {
     });
   },
 
-  onServiceWorkerRegistrationListChanged: function () {
+  onServiceWorkerRegistrationListChanged: function() {
     this.conn.send({ from: this.actorID, type: "serviceWorkerRegistrationListChanged" });
     this._parameters.serviceWorkerRegistrationList.onListChanged = null;
   },
 
-  onListProcesses: function () {
-    let { processList } = this._parameters;
+  onListProcesses: function() {
+    const { processList } = this._parameters;
     if (!processList) {
       return { from: this.actorID, error: "noProcesses",
                message: "This root actor has no processes." };
@@ -521,12 +495,12 @@ RootActor.prototype = {
     };
   },
 
-  onProcessListChanged: function () {
+  onProcessListChanged: function() {
     this.conn.send({ from: this.actorID, type: "processListChanged" });
     this._parameters.processList.onListChanged = null;
   },
 
-  onGetProcess: function (request) {
+  async onGetProcess(request) {
     if (!DebuggerServer.allowChromeProcess) {
       return { error: "forbidden",
                message: "You are not allowed to debug chrome." };
@@ -538,9 +512,14 @@ RootActor.prototype = {
     // If the request doesn't contains id parameter or id is 0
     // (id == 0, based on onListProcesses implementation)
     if ((!("id" in request)) || request.id === 0) {
+      if (this._chromeActor && (!this._chromeActor.docShell ||
+          this._chromeActor.docShell.isBeingDestroyed)) {
+        this._globalActorPool.removeActor(this._chromeActor);
+        this._chromeActor = null;
+      }
       if (!this._chromeActor) {
         // Create a ChromeActor for the parent process
-        let { ChromeActor } = require("devtools/server/actors/chrome");
+        const { ChromeActor } = require("devtools/server/actors/chrome");
         this._chromeActor = new ChromeActor(this.conn);
         this._globalActorPool.addActor(this._chromeActor);
       }
@@ -548,8 +527,8 @@ RootActor.prototype = {
       return { form: this._chromeActor.form() };
     }
 
-    let { id } = request;
-    let mm = ppmm.getChildAt(id);
+    const { id } = request;
+    const mm = Services.ppmm.getChildAt(id);
     if (!mm) {
       return { error: "noProcess",
                message: "There is no process with id '" + id + "'." };
@@ -558,17 +537,16 @@ RootActor.prototype = {
     if (form) {
       return { form };
     }
-    let onDestroy = () => {
+    const onDestroy = () => {
       this._processActors.delete(id);
     };
-    return DebuggerServer.connectToContent(this.conn, mm, onDestroy).then(formResult => {
-      this._processActors.set(id, formResult);
-      return { form: formResult };
-    });
+    form = await DebuggerServer.connectToContentProcess(this.conn, mm, onDestroy);
+    this._processActors.set(id, form);
+    return { form };
   },
 
   /* This is not in the spec, but it's used by tests. */
-  onEcho: function (request) {
+  onEcho: function(request) {
     /*
      * Request packets are frozen. Copy request, so that
      * DebuggerServerConnection.onPacket can attach a 'from' property.
@@ -576,7 +554,7 @@ RootActor.prototype = {
     return Cu.cloneInto(request, {});
   },
 
-  onProtocolDescription: function () {
+  onProtocolDescription: function() {
     return require("devtools/shared/protocol").dumpProtocolSpec();
   },
 
@@ -588,7 +566,7 @@ RootActor.prototype = {
    * Remove the extra actor (added by DebuggerServer.addGlobalActor or
    * DebuggerServer.addTabActor) name |name|.
    */
-  removeActorByName: function (name) {
+  removeActorByName: function(name) {
     if (name in this._extraActors) {
       const actor = this._extraActors[name];
       if (this._globalActorPool.has(actor)) {

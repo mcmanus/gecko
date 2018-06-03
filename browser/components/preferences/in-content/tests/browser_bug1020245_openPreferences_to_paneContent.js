@@ -23,8 +23,9 @@ add_task(async function() {
   is(prefs.selectedPane, "panePrivacy", "Privacy pane is selected by default");
   let doc = gBrowser.contentDocument;
   is(doc.location.hash, "#privacy", "The subcategory should be removed from the URI");
-  ok(doc.querySelector("#locationBarGroup").hidden, "Location Bar prefs should be hidden when only Reports are requested");
-  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
+  await TestUtils.waitForCondition(() => doc.querySelector(".spotlight"), "Wait for the reports section is spotlighted.");
+  is(doc.querySelector(".spotlight").getAttribute("data-subcategory"), "reports", "The reports section is spotlighted.");
+  BrowserTestUtils.removeTab(gBrowser.selectedTab);
 });
 
 // Test opening Preferences with subcategory on an existing Preferences tab. See bug 1358475.
@@ -41,8 +42,9 @@ add_task(async function() {
   let selectedPane = gBrowser.contentWindow.history.state;
   is(selectedPane, "panePrivacy", "Privacy pane should be selected");
   is(doc.location.hash, "#privacy", "The subcategory should be removed from the URI");
-  ok(doc.querySelector("#locationBarGroup").hidden, "Location Bar prefs should be hidden when only Reports are requested");
-  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
+  await TestUtils.waitForCondition(() => doc.querySelector(".spotlight"), "Wait for the reports section is spotlighted.");
+  is(doc.querySelector(".spotlight").getAttribute("data-subcategory"), "reports", "The reports section is spotlighted.");
+  BrowserTestUtils.removeTab(gBrowser.selectedTab);
 });
 
 // Test opening to a subcategory displays the correct values for preferences
@@ -53,7 +55,7 @@ add_task(async function() {
   }
 
   await SpecialPowers.pushPrefEnv({
-    set: [["browser.crashReports.unsubmittedCheck.autoSubmit", true]],
+    set: [["browser.crashReports.unsubmittedCheck.autoSubmit2", true]],
   });
   await openPreferencesViaOpenPreferencesAPI("privacy-reports", {leaveOpen: true});
 
@@ -63,7 +65,7 @@ add_task(async function() {
     "Checkbox for automatically submitting crashes should be checked when the pref is true and only Reports are requested"
   );
 
-  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
+  BrowserTestUtils.removeTab(gBrowser.selectedTab);
   await SpecialPowers.popPrefEnv();
 });
 
@@ -74,7 +76,7 @@ add_task(async function() {
   }
 
   await SpecialPowers.pushPrefEnv({
-    set: [["browser.crashReports.unsubmittedCheck.autoSubmit", false]],
+    set: [["browser.crashReports.unsubmittedCheck.autoSubmit2", false]],
   });
   await openPreferencesViaOpenPreferencesAPI("privacy-reports", {leaveOpen: true});
 
@@ -84,7 +86,7 @@ add_task(async function() {
     "Checkbox for automatically submitting crashes should not be checked when the pref is false only Reports are requested"
   );
 
-  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
+  BrowserTestUtils.removeTab(gBrowser.selectedTab);
   await SpecialPowers.popPrefEnv();
 });
 

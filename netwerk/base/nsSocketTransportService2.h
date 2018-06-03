@@ -23,12 +23,6 @@
 #include "mozilla/UniquePtr.h"
 #include "PollableEvent.h"
 
-#if defined(_WIN64) && defined(WIN95)
-#include "WinDef.h"
-
-typedef PRStatus (*FileDesc2PlatformOverlappedIOHandleFunc)(PRFileDesc *fd, void **ol);
-#endif
-
 class nsASocketHandler;
 struct PRPollDesc;
 class nsIPrefBranch;
@@ -75,7 +69,7 @@ class LinkedRunnableEvent final : public LinkedListElement<LinkedRunnableEvent>
 {
 public:
   explicit LinkedRunnableEvent(nsIRunnable *event) : mEvent(event) {}
-  ~LinkedRunnableEvent() {}
+  ~LinkedRunnableEvent() = default;
 
   already_AddRefed<nsIRunnable> TakeEvent()
   {
@@ -126,11 +120,6 @@ public:
                                                        !mSleepPhase; }
     PRIntervalTime MaxTimeForPrClosePref() {return mMaxTimeForPrClosePref; }
 
-#if defined(_WIN64) && defined(WIN95)
-    void AddOverlappedPendingSocket(PRFileDesc *aFd);
-    bool HasFileDesc2PlatformOverlappedIOHandleFunc();
-    PRStatus CallFileDesc2PlatformOverlappedIOHandleFunc(PRFileDesc *fd, void **ol);
-#endif
 protected:
 
     virtual ~nsSocketTransportService();
@@ -179,7 +168,23 @@ private:
     {
         PRFileDesc       *mFD;
         nsASocketHandler *mHandler;
-        uint16_t          mElapsedTime;  // time elapsed w/o activity
+        PRIntervalTime    mPollStartEpoch;  // time we started to poll this socket
+
+    public:
+        // Returns true iff the socket has not been signalled longer than
+        // the desired timeout (mHandler->mPollTimeout).
+        bool IsTimedOut(PRIntervalTime now) const;
+        // Engages the timeout by marking the epoch we start polling this socket.
+        // If epoch is already marked this does nothing, hence, this method can be
+        // called everytime we put this socket to poll() list with in-flags set.
+        void EnsureTimeout(PRIntervalTime now);
+        // Called after an event on a socket has been signalled to turn of the
+        // timeout calculation.
+        void DisengageTimeout();
+        // Returns the number of intervals this socket is about to timeout in,
+        // or 0 (zero) when it has already timed out.  Returns NS_SOCKET_POLL_TIMEOUT
+        // when there is no timeout set on the socket.
+        PRIntervalTime TimeoutIn(PRIntervalTime now) const;
     };
 
     SocketContext *mActiveList;                   /* mListSize entries */
@@ -215,11 +220,10 @@ private:
 
     PRPollDesc *mPollList;                        /* mListSize + 1 entries */
 
-    PRIntervalTime PollTimeout();            // computes ideal poll timeout
+    PRIntervalTime PollTimeout(PRIntervalTime now); // computes ideal poll timeout
     nsresult       DoPollIteration(TimeDuration *pollDuration);
                                              // perfoms a single poll iteration
-    int32_t        Poll(uint32_t *interval,
-                        TimeDuration *pollDuration);
+    int32_t        Poll(TimeDuration *pollDuration, PRIntervalTime now);
                                              // calls PR_Poll.  the out param
                                              // interval indicates the poll
                                              // duration in seconds.
@@ -243,11 +247,22 @@ private:
     int32_t     mKeepaliveProbeCount;
     // True if TCP keepalive is enabled globally.
     bool        mKeepaliveEnabledPref;
+    // Timeout of pollable event signalling.
+    TimeDuration mPollableEventTimeout;
 
     Atomic<bool>                    mServingPendingQueue;
     Atomic<int32_t, Relaxed>        mMaxTimePerPollIter;
     Atomic<bool, Relaxed>           mTelemetryEnabledPref;
     Atomic<PRIntervalTime, Relaxed> mMaxTimeForPrClosePref;
+    // Timestamp of the last network link change event, tracked
+    // also on child processes.
+    Atomic<PRIntervalTime, Relaxed> mLastNetworkLinkChangeTime;
+    // Preference for how long we do busy wait after network link
+    // change has been detected.
+    Atomic<PRIntervalTime, Relaxed> mNetworkLinkChangeBusyWaitPeriod;
+    // Preference for the value of timeout for poll() we use during
+    // the network link change event period.
+    Atomic<PRIntervalTime, Relaxed> mNetworkLinkChangeBusyWaitTimeout;
 
     // Between a computer going to sleep and waking up the PR_*** telemetry
     // will be corrupted - so do not record it.
@@ -282,20 +297,7 @@ private:
     void EndPolling();
 #endif
 
-#if defined(_WIN64) && defined(WIN95)       
-    // If TCP Fast Open is used on Windows an overlapped io is used. We need to
-    // wait until this io is finished or canceled before detroying its
-    // PRFileDesc.
-    nsTArray<PRFileDesc *> mOverlappedPendingSockets;
-
-    bool mFileDesc2PlatformOverlappedIOHandleFuncChecked;
-    HMODULE mNsprLibrary;
-    FileDesc2PlatformOverlappedIOHandleFunc mFileDesc2PlatformOverlappedIOHandleFunc;
-
-    void CheckFileDesc2PlatformOverlappedIOHandleFunc();
-    void CheckOverlappedPendingSocketsAreDone();
-#endif
-
+    void TryRepairPollableEvent();
 };
 
 extern nsSocketTransportService *gSocketTransportService;

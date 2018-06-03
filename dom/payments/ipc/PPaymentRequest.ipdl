@@ -27,6 +27,7 @@ struct IPCPaymentItem
   nsString label;
   IPCPaymentCurrencyAmount amount;
   bool pending;
+  nsString type;
 };
 
 struct IPCPaymentDetailsModifier
@@ -54,6 +55,7 @@ struct IPCPaymentDetails
   IPCPaymentShippingOption[] shippingOptions;
   IPCPaymentDetailsModifier[] modifiers;
   nsString error;
+  nsString shippingAddressErrors;
   bool displayItemsPassed;
   bool shippingOptionsPassed;
   bool modifiersPassed;
@@ -75,6 +77,7 @@ struct IPCPaymentCreateActionRequest
   IPCPaymentMethodData[] methodData;
   IPCPaymentDetails details;
   IPCPaymentOptions options;
+  nsString shippingOption;
 };
 
 struct IPCPaymentCanMakeActionRequest
@@ -102,6 +105,7 @@ struct IPCPaymentUpdateActionRequest
 {
   nsString requestId;
   IPCPaymentDetails details;
+  nsString shippingOption;
 };
 
 union IPCPaymentActionRequest

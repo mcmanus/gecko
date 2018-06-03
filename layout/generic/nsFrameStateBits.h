@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -223,13 +224,8 @@ FRAME_STATE_BIT(Generic, 42, NS_FRAME_FONT_INFLATION_FLOW_ROOT)
 // this does not include nsSVGOuterSVGFrame since it takes part is CSS layout.
 FRAME_STATE_BIT(Generic, 43, NS_FRAME_SVG_LAYOUT)
 
-// Is this frame allowed to have generated (::before/::after) content?
-FRAME_STATE_BIT(Generic, 44, NS_FRAME_MAY_HAVE_GENERATED_CONTENT)
-
-// This bit is set on frames that create ContainerLayers with component
-// alpha children. With BasicLayers we avoid creating these, so we mark
-// the frames for future reference.
-FRAME_STATE_BIT(Generic, 45, NS_FRAME_NO_COMPONENT_ALPHA)
+// Bits 44 and 45 are currently unused, but be kind and check with bug 1465478
+// first please :-)
 
 // This bit indicates that we're tracking visibility for this frame, and that
 // the frame has a VisibilityStateProperty property.
@@ -266,8 +262,8 @@ FRAME_STATE_BIT(Generic, 53, NS_FRAME_IS_NONDISPLAY)
 // Frame has a LayerActivityProperty property
 FRAME_STATE_BIT(Generic, 54, NS_FRAME_HAS_LAYER_ACTIVITY_PROPERTY)
 
-// Frame owns anonymous boxes whose style contexts it will need to update during
-// a stylo tree traversal.
+// Frame owns anonymous boxes whose ComputedStyles it will need to update
+// during a stylo tree traversal.
 FRAME_STATE_BIT(Generic, 55, NS_FRAME_OWNS_ANON_BOXES)
 
 // Frame maybe has a counter-reset/increment style
@@ -289,6 +285,8 @@ FRAME_STATE_BIT(Generic, 59, NS_FRAME_IS_IN_SINGLE_CHAR_MI)
 // NOTE: Bits 20-31 and 60-63 of the frame state are reserved for specific
 // frame classes.
 
+// NOTE: Bits 44 and 45 are currently unused.
+
 
 // == Frame state bits that apply to box frames ===============================
 
@@ -299,9 +297,7 @@ FRAME_STATE_BIT(Box, 21, NS_STATE_STACK_NOT_POSITIONED)
 FRAME_STATE_BIT(Box, 22, NS_STATE_IS_HORIZONTAL)
 FRAME_STATE_BIT(Box, 23, NS_STATE_AUTO_STRETCH)
 FRAME_STATE_BIT(Box, 24, NS_STATE_IS_ROOT)
-FRAME_STATE_BIT(Box, 25, NS_STATE_CURRENTLY_IN_DEBUG)
-FRAME_STATE_BIT(Box, 26, NS_STATE_SET_TO_DEBUG)
-FRAME_STATE_BIT(Box, 27, NS_STATE_DEBUG_WAS_SET)
+/* Bits 25, 26, and 27 were used for xul debug flags but are now unused */
 FRAME_STATE_BIT(Box, 28, NS_STATE_MENU_HAS_POPUP_LIST)
 FRAME_STATE_BIT(Box, 29, NS_STATE_BOX_WRAPS_KIDS_IN_BLOCK)
 FRAME_STATE_BIT(Box, 30, NS_STATE_EQUAL_SIZE)
@@ -319,11 +315,14 @@ FRAME_STATE_GROUP(FlexContainer, nsFlexContainerFrame)
 FRAME_STATE_BIT(FlexContainer, 20, NS_STATE_FLEX_NORMAL_FLOW_CHILDREN_IN_CSS_ORDER)
 
 // Set for a flex container that is emulating a legacy
-// 'display:-webkit-{inline-}box' container.
-FRAME_STATE_BIT(FlexContainer, 21, NS_STATE_FLEX_IS_LEGACY_WEBKIT_BOX)
+// 'display:-webkit-{inline-}box' or 'display:-moz-{inline-}box' container.
+FRAME_STATE_BIT(FlexContainer, 21, NS_STATE_FLEX_IS_EMULATING_LEGACY_BOX)
+
+// True iff computed flex values should be generated on the next reflow
+FRAME_STATE_BIT(FlexContainer, 22, NS_STATE_FLEX_GENERATE_COMPUTED_VALUES)
 
 // True if the container has no flex items; may lie if there is a pending reflow
-FRAME_STATE_BIT(FlexContainer, 22, NS_STATE_FLEX_SYNTHESIZE_BASELINE)
+FRAME_STATE_BIT(FlexContainer, 23, NS_STATE_FLEX_SYNTHESIZE_BASELINE)
 
 // == Frame state bits that apply to grid container frames ====================
 

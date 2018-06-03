@@ -8,8 +8,8 @@
 #include "WrapperFactory.h"
 #include "AccessCheck.h"
 #include "jsfriendapi.h"
-#include "jswrapper.h"
 #include "js/Proxy.h"
+#include "js/Wrapper.h"
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/BlobBinding.h"
 #include "mozilla/dom/File.h"
@@ -17,7 +17,6 @@
 #include "mozilla/dom/StructuredCloneHolder.h"
 #include "nsGlobalWindow.h"
 #include "nsJSUtils.h"
-#include "nsIDOMFileList.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -74,7 +73,7 @@ public:
     JSObject* CustomReadHandler(JSContext* aCx,
                                 JSStructuredCloneReader* aReader,
                                 uint32_t aTag,
-                                uint32_t aData)
+                                uint32_t aData) override
     {
         if (aTag == SCTAG_REFLECTOR) {
             MOZ_ASSERT(!aData);
@@ -142,7 +141,7 @@ public:
 
     bool CustomWriteHandler(JSContext* aCx,
                             JSStructuredCloneWriter* aWriter,
-                            JS::Handle<JSObject*> aObj)
+                            JS::Handle<JSObject*> aObj) override
     {
         {
             JS::Rooted<JSObject*> obj(aCx, aObj);
@@ -212,11 +211,11 @@ StackScopedClone(JSContext* cx, StackScopedCloneOptions& options,
 {
     StackScopedCloneData data(cx, &options);
     {
-        // For parsing val we have to enter its compartment.
+        // For parsing val we have to enter its realm.
         // (unless it's a primitive)
-        Maybe<JSAutoCompartment> ac;
+        Maybe<JSAutoRealm> ar;
         if (val.isObject()) {
-            ac.emplace(cx, &val.toObject());
+            ar.emplace(cx, &val.toObject());
         } else if (val.isString() && !JS_WrapValue(cx, val)) {
             return false;
         }
@@ -225,7 +224,7 @@ StackScopedClone(JSContext* cx, StackScopedCloneOptions& options,
             return false;
     }
 
-    // Now recreate the clones in the target compartment.
+    // Now recreate the clones in the target realm.
     if (!data.Read(cx, val))
         return false;
 
@@ -289,15 +288,20 @@ FunctionForwarder(JSContext* cx, unsigned argc, Value* vp)
     RootedValue v(cx, js::GetFunctionNativeReserved(&args.callee(), 0));
     RootedObject unwrappedFun(cx, js::UncheckedUnwrap(&v.toObject()));
 
-    RootedObject thisObj(cx, args.isConstructing() ? nullptr : JS_THIS_OBJECT(cx, vp));
+    RootedValue thisVal(cx, NullValue());
+    if (!args.isConstructing()) {
+        RootedObject thisObject(cx);
+        if (!args.computeThis(cx, &thisObject))
+            return false;
+        thisVal.setObject(*thisObject);
+    }
+
     {
         // We manually implement the contents of CrossCompartmentWrapper::call
         // here, because certain function wrappers (notably content->nsEP) are
         // not callable.
-        JSAutoCompartment ac(cx, unwrappedFun);
-
-        RootedValue thisVal(cx, ObjectOrNullValue(thisObj));
-        if (!CheckSameOriginArg(cx, options, thisVal) || !JS_WrapObject(cx, &thisObj))
+        JSAutoRealm ar(cx, unwrappedFun);
+        if (!CheckSameOriginArg(cx, options, thisVal) || !JS_WrapValue(cx, &thisVal))
             return false;
 
         for (size_t n = 0;  n < args.length(); ++n) {
@@ -312,7 +316,7 @@ FunctionForwarder(JSContext* cx, unsigned argc, Value* vp)
                 return false;
             args.rval().setObject(*obj);
         } else {
-            if (!JS_CallFunctionValue(cx, thisObj, fval, args, args.rval()))
+            if (!JS::Call(cx, thisVal, fval, args, args.rval()))
                 return false;
         }
     }
@@ -329,11 +333,20 @@ NewFunctionForwarder(JSContext* cx, HandleId idArg, HandleObject callable,
     if (id == JSID_VOIDHANDLE)
         id = GetJSIDByIndex(cx, XPCJSContext::IDX_EMPTYSTRING);
 
+    // If our callable is a (possibly wrapped) function, we can give
+    // the exported thing the right number of args.
+    unsigned nargs = 0;
+    RootedObject unwrapped(cx, js::UncheckedUnwrap(callable));
+    if (unwrapped) {
+        if (JSFunction* fun = JS_GetObjectFunction(unwrapped))
+            nargs = JS_GetFunctionArity(fun);
+    }
+
     // We have no way of knowing whether the underlying function wants to be a
     // constructor or not, so we just mark all forwarders as constructors, and
     // let the underlying function throw for construct calls if it wants.
     JSFunction* fun = js::NewFunctionByIdWithReserved(cx, FunctionForwarder,
-                                                      0, JSFUN_CONSTRUCTOR, id);
+                                                      nargs, JSFUN_CONSTRUCTOR, id);
     if (!fun)
         return false;
 
@@ -386,8 +399,8 @@ ExportFunction(JSContext* cx, HandleValue vfunction, HandleValue vscope, HandleV
 
     {
         // We need to operate in the target scope from here on, let's enter
-        // its compartment.
-        JSAutoCompartment ac(cx, targetScope);
+        // its realm.
+        JSAutoRealm ar(cx, targetScope);
 
         // Unwrapping to see if we have a callable.
         funObj = UncheckedUnwrap(funObj);
@@ -470,7 +483,7 @@ CreateObjectIn(JSContext* cx, HandleValue vobj, CreateObjectInOptions& options,
 
     RootedObject obj(cx);
     {
-        JSAutoCompartment ac(cx, scope);
+        JSAutoRealm ar(cx, scope);
         JS_MarkCrossZoneId(cx, options.defineAs);
 
         obj = JS_NewPlainObject(cx);

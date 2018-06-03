@@ -7,10 +7,12 @@
 #ifndef builtin_WeakMapObject_h
 #define builtin_WeakMapObject_h
 
-#include "jsobj.h"
-#include "jsweakmap.h"
+#include "gc/WeakMap.h"
+#include "vm/JSObject.h"
 
 namespace js {
+
+class GlobalObject;
 
 // Abstract base class for WeakMapObject and WeakSetObject.
 class WeakCollectionObject : public NativeObject
@@ -32,19 +34,8 @@ class WeakMapObject : public WeakCollectionObject
     static const Class class_;
 };
 
-// WeakMap methods exposed so they can be installed in the self-hosting global.
-
-extern bool
-WeakMap_get(JSContext* cx, unsigned argc, Value* vp);
-
-extern bool
-WeakMap_set(JSContext* cx, unsigned argc, Value* vp);
-
 extern JSObject*
-InitBareWeakMapCtor(JSContext* cx, HandleObject obj);
-
-extern JSObject*
-InitWeakMapClass(JSContext* cx, HandleObject obj);
+InitWeakMapClass(JSContext* cx, Handle<GlobalObject*> global);
 
 } // namespace js
 

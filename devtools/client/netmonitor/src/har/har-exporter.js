@@ -14,7 +14,7 @@ var uid = 1;
 
 // Helper tracer. Should be generic sharable by other modules (bug 1171927)
 const trace = {
-  log: function (...args) {
+  log: function(...args) {
   }
 };
 
@@ -64,9 +64,9 @@ const HarExporter = {
    */
   async save(options) {
     // Set default options related to save operation.
-    let defaultFileName = Services.prefs.getCharPref(
+    const defaultFileName = Services.prefs.getCharPref(
       "devtools.netmonitor.har.defaultFileName");
-    let compress = Services.prefs.getBoolPref(
+    const compress = Services.prefs.getBoolPref(
       "devtools.netmonitor.har.compress");
 
     trace.log("HarExporter.save; " + defaultFileName, options);
@@ -83,18 +83,18 @@ const HarExporter = {
     }
 
     fileName = `${fileName}${compress ? ".zip" : ""}`;
-    let blob = compress ? data : new Blob([data], { type: "application/json" });
+    const blob = compress ? data : new Blob([data], { type: "application/json" });
 
     FileSaver.saveAs(blob, fileName, document);
   },
 
   formatDate(date) {
-    let year = String(date.getFullYear() % 100).padStart(2, "0");
-    let month = String(date.getMonth() + 1).padStart(2, "0");
-    let day = String(date.getDate()).padStart(2, "0");
-    let hour = String(date.getHours()).padStart(2, "0");
-    let minutes = String(date.getMinutes()).padStart(2, "0");
-    let seconds = String(date.getSeconds()).padStart(2, "0");
+    const year = String(date.getFullYear() % 100).padStart(2, "0");
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    const hour = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    const seconds = String(date.getSeconds()).padStart(2, "0");
 
     return `${year}-${month}-${day} ${hour}-${minutes}-${seconds}`;
   },
@@ -112,29 +112,48 @@ const HarExporter = {
    * @param Object options
    *        Configuration object, see save() for detailed description.
    */
-  copy: function (options) {
+  copy: function(options) {
     return this.fetchHarData(options).then(jsonString => {
       clipboardHelper.copyString(jsonString);
       return jsonString;
     });
   },
 
+  /**
+   * Get HAR data as JSON object.
+   *
+   * @param Object options
+   *        Configuration object, see save() for detailed description.
+   */
+  getHar: function(options) {
+    return this.fetchHarData(options).then(data => {
+      return data ? JSON.parse(data) : null;
+    });
+  },
+
   // Helpers
 
-  fetchHarData: function (options) {
+  fetchHarData: function(options) {
     // Generate page ID
     options.id = options.id || uid++;
 
     // Set default generic HAR export options.
-    options.jsonp = options.jsonp ||
-      Services.prefs.getBoolPref("devtools.netmonitor.har.jsonp");
-    options.includeResponseBodies = options.includeResponseBodies ||
-      Services.prefs.getBoolPref(
+    if (typeof options.jsonp != "boolean") {
+      options.jsonp = Services.prefs.getBoolPref(
+        "devtools.netmonitor.har.jsonp");
+    }
+    if (typeof options.includeResponseBodies != "boolean") {
+      options.includeResponseBodies = Services.prefs.getBoolPref(
         "devtools.netmonitor.har.includeResponseBodies");
-    options.jsonpCallback = options.jsonpCallback ||
-      Services.prefs.getCharPref("devtools.netmonitor.har.jsonpCallback");
-    options.forceExport = options.forceExport ||
-      Services.prefs.getBoolPref("devtools.netmonitor.har.forceExport");
+    }
+    if (typeof options.jsonpCallback != "boolean") {
+      options.jsonpCallback = Services.prefs.getCharPref(
+        "devtools.netmonitor.har.jsonpCallback");
+    }
+    if (typeof options.forceExport != "boolean") {
+      options.forceExport = Services.prefs.getBoolPref(
+        "devtools.netmonitor.har.forceExport");
+    }
 
     // Build HAR object.
     return this.buildHarData(options).then(har => {
@@ -153,7 +172,7 @@ const HarExporter = {
       if (options.jsonp) {
         // This callback name is also used in HAR Viewer by default.
         // http://www.softwareishard.com/har/viewer/
-        let callbackName = options.jsonpCallback || "onInputData";
+        const callbackName = options.jsonpCallback || "onInputData";
         jsonString = callbackName + "(" + jsonString + ");";
       }
 
@@ -169,16 +188,40 @@ const HarExporter = {
    * since it can involve additional RDP communication (e.g. resolving
    * long strings).
    */
-  buildHarData: function (options) {
+  buildHarData: async function(options) {
+    const { connector } = options;
+    const {
+      getTabTarget,
+    } = connector;
+    const {
+      form: { title, url }
+    } = getTabTarget();
+
+    // Disconnect from redux actions/store.
+    connector.enableActions(false);
+
+    options = {
+      ...options,
+      title: title || url,
+      getString: connector.getLongString,
+      getTimingMarker: connector.getTimingMarker,
+      requestData: connector.requestData,
+    };
+
     // Build HAR object from collected data.
-    let builder = new HarBuilder(options);
-    return builder.build();
+    const builder = new HarBuilder(options);
+    const result = await builder.build();
+
+    // Connect to redux actions again.
+    connector.enableActions(true);
+
+    return result;
   },
 
   /**
    * Build JSON string from the HAR data object.
    */
-  stringify: function (har) {
+  stringify: function(har) {
     if (!har) {
       return null;
     }

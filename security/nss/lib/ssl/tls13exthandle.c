@@ -321,16 +321,6 @@ tls13_ServerHandleKeyShareXtn(const sslSocket *ss, TLSExtensionData *xtnData,
             goto loser;
     }
 
-    /* Check that the client only offered one share if this is
-     * after HRR. */
-    if (ss->ssl3.hs.helloRetry) {
-        if (PR_PREV_LINK(&xtnData->remoteKeyShares) !=
-            PR_NEXT_LINK(&xtnData->remoteKeyShares)) {
-            PORT_SetError(SSL_ERROR_RX_MALFORMED_CLIENT_HELLO);
-            goto loser;
-        }
-    }
-
     return SECSuccess;
 
 loser:
@@ -732,7 +722,12 @@ tls13_ClientHandleTicketEarlyDataXtn(const sslSocket *ss, TLSExtensionData *xtnD
 
 /*
  *     struct {
+ *       select (Handshake.msg_type) {
+ *       case client_hello:
  *          ProtocolVersion versions<2..254>;
+ *       case server_hello:
+ *          ProtocolVersion version;
+ *       };
  *     } SupportedVersions;
  */
 SECStatus
@@ -747,7 +742,7 @@ tls13_ClientSendSupportedVersionsXtn(const sslSocket *ss, TLSExtensionData *xtnD
         return SECSuccess;
     }
 
-    SSL_TRC(3, ("%d: TLS13[%d]: send supported_versions extension",
+    SSL_TRC(3, ("%d: TLS13[%d]: client send supported_versions extension",
                 SSL_GETPID(), ss->fd));
 
     rv = sslBuffer_Skip(buf, 1, &lengthOffset);
@@ -755,14 +750,6 @@ tls13_ClientSendSupportedVersionsXtn(const sslSocket *ss, TLSExtensionData *xtnD
         return SECFailure;
     }
 
-    if (ss->opt.enableAltHandshaketype && !IS_DTLS(ss)) {
-        rv = sslBuffer_AppendNumber(
-            buf, tls13_EncodeAltDraftVersion(SSL_LIBRARY_VERSION_TLS_1_3),
-            2);
-        if (rv != SECSuccess) {
-            return SECFailure;
-        }
-    }
     for (version = ss->vrange.max; version >= ss->vrange.min; --version) {
         rv = sslBuffer_AppendNumber(buf, tls13_EncodeDraftVersion(version), 2);
         if (rv != SECSuccess) {
@@ -771,6 +758,29 @@ tls13_ClientSendSupportedVersionsXtn(const sslSocket *ss, TLSExtensionData *xtnD
     }
 
     rv = sslBuffer_InsertLength(buf, lengthOffset, 1);
+    if (rv != SECSuccess) {
+        return SECFailure;
+    }
+
+    *added = PR_TRUE;
+    return SECSuccess;
+}
+
+SECStatus
+tls13_ServerSendSupportedVersionsXtn(const sslSocket *ss, TLSExtensionData *xtnData,
+                                     sslBuffer *buf, PRBool *added)
+{
+    SECStatus rv;
+
+    if (ss->version < SSL_LIBRARY_VERSION_TLS_1_3) {
+        return SECSuccess;
+    }
+
+    SSL_TRC(3, ("%d: TLS13[%d]: server send supported_versions extension",
+                SSL_GETPID(), ss->fd));
+
+    rv = sslBuffer_AppendNumber(
+        buf, tls13_EncodeDraftVersion(SSL_LIBRARY_VERSION_TLS_1_3), 2);
     if (rv != SECSuccess) {
         return SECFailure;
     }
@@ -850,12 +860,12 @@ tls13_ServerHandleCookieXtn(const sslSocket *ss, TLSExtensionData *xtnData,
     }
 
     if (xtnData->cookie.len == 0) {
-        PORT_SetError(SSL_ERROR_RX_MALFORMED_SERVER_HELLO);
+        PORT_SetError(SSL_ERROR_RX_MALFORMED_CLIENT_HELLO);
         return SECFailure;
     }
 
     if (data->len) {
-        PORT_SetError(SSL_ERROR_RX_MALFORMED_SERVER_HELLO);
+        PORT_SetError(SSL_ERROR_RX_MALFORMED_CLIENT_HELLO);
         return SECFailure;
     }
 

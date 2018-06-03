@@ -7,18 +7,16 @@
  * PageThumbs and backgroundPageThumbsContent.
  */
 
-this.EXPORTED_SYMBOLS = ["PageThumbUtils"];
+var EXPORTED_SYMBOLS = ["PageThumbUtils"];
 
-const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/AppConstants.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
+ChromeUtils.defineModuleGetter(this, "BrowserUtils",
   "resource://gre/modules/BrowserUtils.jsm");
 
-this.PageThumbUtils = {
+var PageThumbUtils = {
   // The default background color for page thumbnails.
   THUMBNAIL_BG_COLOR: "#fff",
   // The namespace for thumbnail canvas elements.
@@ -302,7 +300,7 @@ this.PageThumbUtils = {
 
     // FIXME Bug 720575 - Don't capture thumbnails for SVG or XML documents as
     //       that currently regresses Talos SVG tests.
-    if (aDocument instanceof Ci.nsIDOMXMLDocument) {
+    if (ChromeUtils.getClassName(aDocument) === "XMLDocument") {
       return false;
     }
 

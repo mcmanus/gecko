@@ -2,26 +2,27 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* import-globals-from extensionControlled.js */
 /* import-globals-from preferences.js */
 /* import-globals-from ../../../../toolkit/mozapps/preferences/fontbuilder.js */
 /* import-globals-from ../../../base/content/aboutDialog-appUpdater.js */
 
-XPCOMUtils.defineLazyModuleGetter(this, "ExtensionSettingsStore",
-                                  "resource://gre/modules/ExtensionSettingsStore.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
-                                  "resource://gre/modules/AddonManager.jsm");
-
-Components.utils.import("resource://gre/modules/Services.jsm");
-Components.utils.import("resource://gre/modules/Downloads.jsm");
-Components.utils.import("resource://gre/modules/FileUtils.jsm");
-Components.utils.import("resource:///modules/ShellService.jsm");
-Components.utils.import("resource:///modules/TransientPrefs.jsm");
-Components.utils.import("resource://gre/modules/Services.jsm");
-Components.utils.import("resource://gre/modules/AppConstants.jsm");
-Components.utils.import("resource://gre/modules/DownloadUtils.jsm");
-Components.utils.import("resource://gre/modules/LoadContextInfo.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "CloudStorage",
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/Downloads.jsm");
+ChromeUtils.import("resource://gre/modules/FileUtils.jsm");
+ChromeUtils.import("resource:///modules/ShellService.jsm");
+ChromeUtils.import("resource:///modules/TransientPrefs.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/DownloadUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "CloudStorage",
   "resource://gre/modules/CloudStorage.jsm");
+
+XPCOMUtils.defineLazyServiceGetters(this, {
+  gCategoryManager: ["@mozilla.org/categorymanager;1", "nsICategoryManager"],
+  gHandlerService: ["@mozilla.org/uriloader/handler-service;1", "nsIHandlerService"],
+  gMIMEService: ["@mozilla.org/mime;1", "nsIMIMEService"],
+  gWebContentContentConverterService: ["@mozilla.org/embeddor.implemented/web-content-handler-registrar;1", "nsIWebContentConverterService"],
+});
 
 // Constants & Enumeration Values
 const TYPE_MAYBE_FEED = "application/vnd.mozilla.maybe.feed";
@@ -41,6 +42,9 @@ const PREF_CONTAINERS_EXTENSION = "privacy.userContext.extension";
 const PREF_SHOW_PLUGINS_IN_LIST = "browser.download.show_plugins_in_list";
 const PREF_HIDE_PLUGINS_WITHOUT_EXTENSIONS =
   "browser.download.hide_plugins_without_extensions";
+
+// Strings to identify ExtensionSettingsStore overrides
+const CONTAINERS_KEY = "privacy.containers";
 
 /*
  * Preferences where we store handling information about the feed type.
@@ -94,22 +98,153 @@ const ICON_URL_APP = AppConstants.platform == "linux" ?
 // was set by us to a custom handler icon and CSS should not try to override it.
 const APP_ICON_ATTR_NAME = "appHandlerIcon";
 
-XPCOMUtils.defineLazyModuleGetter(this, "OS",
+ChromeUtils.defineModuleGetter(this, "OS",
   "resource://gre/modules/osfile.jsm");
 
-if (AppConstants.E10S_TESTING_ONLY) {
-  XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
-    "resource://gre/modules/UpdateUtils.jsm");
+if (AppConstants.MOZ_DEV_EDITION) {
+  ChromeUtils.defineModuleGetter(this, "fxAccounts",
+    "resource://gre/modules/FxAccounts.jsm");
+  ChromeUtils.defineModuleGetter(this, "FxAccounts",
+    "resource://gre/modules/FxAccounts.jsm");
 }
 
-if (AppConstants.MOZ_DEV_EDITION) {
-  XPCOMUtils.defineLazyModuleGetter(this, "fxAccounts",
-    "resource://gre/modules/FxAccounts.jsm");
+Preferences.addAll([
+  // Startup
+  { id: "browser.startup.page", type: "int" },
+  { id: "browser.privatebrowsing.autostart", type: "bool" },
+
+  // Downloads
+  { id: "browser.download.useDownloadDir", type: "bool" },
+  { id: "browser.download.folderList", type: "int" },
+  { id: "browser.download.dir", type: "file" },
+
+  /* Tab preferences
+  Preferences:
+
+  browser.link.open_newwindow
+      1 opens such links in the most recent window or tab,
+      2 opens such links in a new window,
+      3 opens such links in a new tab
+  browser.tabs.loadInBackground
+  - true if display should switch to a new tab which has been opened from a
+    link, false if display shouldn't switch
+  browser.tabs.warnOnClose
+  - true if when closing a window with multiple tabs the user is warned and
+    allowed to cancel the action, false to just close the window
+  browser.tabs.warnOnOpen
+  - true if the user should be warned if he attempts to open a lot of tabs at
+    once (e.g. a large folder of bookmarks), false otherwise
+  browser.taskbar.previews.enable
+  - true if tabs are to be shown in the Windows 7 taskbar
+  */
+
+  { id: "browser.link.open_newwindow", type: "int" },
+  { id: "browser.tabs.loadInBackground", type: "bool", inverted: true },
+  { id: "browser.tabs.warnOnClose", type: "bool" },
+  { id: "browser.tabs.warnOnOpen", type: "bool" },
+  { id: "browser.sessionstore.restore_on_demand", type: "bool" },
+  { id: "browser.ctrlTab.previews", type: "bool" },
+
+  // Fonts
+  { id: "font.language.group", type: "wstring" },
+
+  // Languages
+  { id: "browser.translation.detectLanguage", type: "bool" },
+
+  // General tab
+
+  /* Accessibility
+   * accessibility.browsewithcaret
+     - true enables keyboard navigation and selection within web pages using a
+       visible caret, false uses normal keyboard navigation with no caret
+   * accessibility.typeaheadfind
+     - when set to true, typing outside text areas and input boxes will
+       automatically start searching for what's typed within the current
+       document; when set to false, no search action happens */
+  { id: "accessibility.browsewithcaret", type: "bool" },
+  { id: "accessibility.typeaheadfind", type: "bool" },
+  { id: "accessibility.blockautorefresh", type: "bool" },
+
+  /* Browsing
+   * general.autoScroll
+     - when set to true, clicking the scroll wheel on the mouse activates a
+       mouse mode where moving the mouse down scrolls the document downward with
+       speed correlated with the distance of the cursor from the original
+       position at which the click occurred (and likewise with movement upward);
+       if false, this behavior is disabled
+   * general.smoothScroll
+     - set to true to enable finer page scrolling than line-by-line on page-up,
+       page-down, and other such page movements */
+  { id: "general.autoScroll", type: "bool" },
+  { id: "general.smoothScroll", type: "bool" },
+  { id: "layout.spellcheckDefault", type: "int" },
+
+  { id: "browser.preferences.defaultPerformanceSettings.enabled", type: "bool" },
+  { id: "dom.ipc.processCount", type: "int" },
+  { id: "dom.ipc.processCount.web", type: "int" },
+  { id: "layers.acceleration.disabled", type: "bool", inverted: true },
+
+  // Files and Applications
+  { id: "browser.feeds.handler", type: "string" },
+  { id: "browser.feeds.handler.default", type: "string" },
+  { id: "browser.feeds.handlers.application", type: "file" },
+  { id: "browser.feeds.handlers.webservice", type: "string" },
+
+  { id: "browser.videoFeeds.handler", type: "string" },
+  { id: "browser.videoFeeds.handler.default", type: "string" },
+  { id: "browser.videoFeeds.handlers.application", type: "file" },
+  { id: "browser.videoFeeds.handlers.webservice", type: "string" },
+
+  { id: "browser.audioFeeds.handler", type: "string" },
+  { id: "browser.audioFeeds.handler.default", type: "string" },
+  { id: "browser.audioFeeds.handlers.application", type: "file" },
+  { id: "browser.audioFeeds.handlers.webservice", type: "string" },
+
+  { id: "pref.downloads.disable_button.edit_actions", type: "bool" },
+
+  // DRM content
+  { id: "media.eme.enabled", type: "bool" },
+
+  // Update
+  { id: "browser.preferences.advanced.selectedTabIndex", type: "int" },
+  { id: "browser.search.update", type: "bool" },
+
+  { id: "privacy.userContext.enabled", type: "bool" },
+]);
+
+if (AppConstants.HAVE_SHELL_SERVICE) {
+  Preferences.addAll([
+    { id: "browser.shell.checkDefaultBrowser", type: "bool" },
+    { id: "pref.general.disable_button.default_browser", type: "bool" },
+  ]);
+}
+
+if (AppConstants.platform === "win") {
+  Preferences.addAll([
+    { id: "browser.taskbar.previews.enable", type: "bool" },
+    { id: "ui.osk.enabled", type: "bool" },
+  ]);
+}
+
+if (AppConstants.MOZ_UPDATER) {
+  Preferences.addAll([
+    { id: "app.update.enabled", type: "bool" },
+    { id: "app.update.auto", type: "bool" },
+    { id: "app.update.disable_button.showUpdateHistory", type: "bool" },
+  ]);
+
+  if (AppConstants.MOZ_MAINTENANCE_SERVICE) {
+    Preferences.addAll([
+      { id: "app.update.service.enabled", type: "bool" },
+    ]);
+  }
 }
 
 // A promise that resolves when the list of application handlers is loaded.
 // We store this in a global so tests can await it.
 var promiseLoadHandlersList;
+
+var gNodeToObjectMap = new WeakMap();
 
 var gMainPane = {
   // The set of types the app knows how to handle.  A hash of HandlerInfoWrapper
@@ -125,12 +260,10 @@ var gMainPane = {
   // that match that string.
   _visibleTypes: [],
 
-  // A count of the number of times each visible type description appears.
-  // We use these counts to determine whether or not to annotate descriptions
-  // with their types to distinguish duplicate descriptions from each other.
-  // A hash of integer counts, indexed by string description.
-  _visibleTypeDescriptionCount: {},
-
+  // browser.startup.page values
+  STARTUP_PREF_BLANK: 0,
+  STARTUP_PREF_HOMEPAGE: 1,
+  STARTUP_PREF_RESTORE_SESSION: 3,
 
   // Convenience & Performance Shortcuts
 
@@ -146,28 +279,13 @@ var gMainPane = {
 
   get _list() {
     delete this._list;
-    return this._list = document.getElementById("handlersView")
+    return this._list = document.getElementById("handlersView");
   },
 
   get _filter() {
     delete this._filter;
-    return this._filter = document.getElementById("filter")
+    return this._filter = document.getElementById("filter");
   },
-
-  _prefSvc: Cc["@mozilla.org/preferences-service;1"].
-    getService(Ci.nsIPrefBranch),
-
-  _mimeSvc: Cc["@mozilla.org/mime;1"].
-    getService(Ci.nsIMIMEService),
-
-  _helperAppSvc: Cc["@mozilla.org/uriloader/external-helper-app-service;1"].
-    getService(Ci.nsIExternalHelperAppService),
-
-  _handlerSvc: Cc["@mozilla.org/uriloader/handler-service;1"].
-    getService(Ci.nsIHandlerService),
-
-  _ioSvc: Cc["@mozilla.org/network/io-service;1"].
-    getService(Ci.nsIIOService),
 
   _backoffIndex: 0,
 
@@ -218,35 +336,23 @@ var gMainPane = {
     this.updateDefaultPerformanceSettingsPref();
 
     let defaultPerformancePref =
-      document.getElementById("browser.preferences.defaultPerformanceSettings.enabled");
-    defaultPerformancePref.addEventListener("change", () => {
+      Preferences.get("browser.preferences.defaultPerformanceSettings.enabled");
+    defaultPerformancePref.on("change", () => {
       this.updatePerformanceSettingsBox({ duringChangeEvent: true });
     });
     this.updatePerformanceSettingsBox({ duringChangeEvent: false });
 
-    // set up the "use current page" label-changing listener
-    this._updateUseCurrentButton();
-    window.addEventListener("focus", this._updateUseCurrentButton.bind(this));
-
-    this.updateBrowserStartupLastSession();
-
-    handleControllingExtension("url_overrides", "newTabURL");
-    let newTabObserver = {
-      observe(subject, topic, data) {
-          handleControllingExtension("url_overrides", "newTabURL");
-      },
-    };
-    Services.obs.addObserver(newTabObserver, "newtab-url-changed");
-    window.addEventListener("unload", () => {
-      Services.obs.removeObserver(newTabObserver, "newtab-url-changed");
-    });
+    let connectionSettingsLink = document.getElementById("connectionSettingsLearnMore");
+    let connectionSettingsUrl = Services.urlFormatter.formatURLPref("app.support.baseURL") +
+                                "prefs-connection-settings";
+    connectionSettingsLink.setAttribute("href", connectionSettingsUrl);
+    this.updateProxySettingsUI();
+    initializeProxyUI(gMainPane);
 
     if (AppConstants.platform == "win") {
       // Functionality for "Show tabs in taskbar" on Windows 7 and up.
       try {
-        let sysInfo = Cc["@mozilla.org/system-info;1"].
-          getService(Ci.nsIPropertyBag2);
-        let ver = parseFloat(sysInfo.getProperty("version"));
+        let ver = parseFloat(Services.sysinfo.getProperty("version"));
         let showTabsInTaskbar = document.getElementById("showTabsInTaskbar");
         showTabsInTaskbar.hidden = ver < 6.1;
       } catch (ex) { }
@@ -261,38 +367,38 @@ var gMainPane = {
     if (!TransientPrefs.prefShouldBeVisible("browser.tabs.warnOnOpen"))
       document.getElementById("warnOpenMany").hidden = true;
 
-    setEventListener("browser.privatebrowsing.autostart", "change",
-      gMainPane.updateBrowserStartupLastSession);
+    // Startup pref
+    setEventListener("browserRestoreSession", "command",
+      gMainPane.onBrowserRestoreSessionChange);
+    gMainPane.updateBrowserStartupUI = gMainPane.updateBrowserStartupUI.bind(gMainPane);
+    Preferences.get("browser.privatebrowsing.autostart").on("change",
+      gMainPane.updateBrowserStartupUI);
+    Preferences.get("browser.startup.page").on("change",
+      gMainPane.updateBrowserStartupUI);
+    Preferences.get("browser.startup.homepage").on("change",
+      gMainPane.updateBrowserStartupUI);
+    gMainPane.updateBrowserStartupUI();
+
     if (AppConstants.HAVE_SHELL_SERVICE) {
       setEventListener("setDefaultButton", "command",
         gMainPane.setDefaultBrowser);
     }
-    setEventListener("useCurrent", "command",
-      gMainPane.setHomePageToCurrent);
-    setEventListener("useBookmark", "command",
-      gMainPane.setHomePageToBookmark);
-    setEventListener("restoreDefaultHomePage", "command",
-      gMainPane.restoreDefaultHomePage);
-    setEventListener("disableHomePageExtension", "command",
-                     gMainPane.makeDisableControllingExtension("prefs", "homepage_override"));
     setEventListener("disableContainersExtension", "command",
-                     gMainPane.makeDisableControllingExtension("prefs", "privacy.containers"));
-    setEventListener("disableNewTabExtension", "command",
-                     gMainPane.makeDisableControllingExtension("url_overrides", "newTabURL"));
+                     makeDisableControllingExtension(PREF_SETTING_TYPE, CONTAINERS_KEY));
     setEventListener("chooseLanguage", "command",
       gMainPane.showLanguages);
     setEventListener("translationAttributionImage", "click",
       gMainPane.openTranslationProviderAttribution);
     setEventListener("translateButton", "command",
       gMainPane.showTranslationExceptions);
-    setEventListener("font.language.group", "change",
-      gMainPane._rebuildFonts);
+    Preferences.get("font.language.group").on("change",
+      gMainPane._rebuildFonts.bind(gMainPane));
     setEventListener("advancedFonts", "command",
       gMainPane.configureFonts);
     setEventListener("colors", "command",
       gMainPane.configureColors);
-    setEventListener("layers.acceleration.disabled", "change",
-      gMainPane.updateHardwareAcceleration);
+    Preferences.get("layers.acceleration.disabled").on("change",
+      gMainPane.updateHardwareAcceleration.bind(gMainPane));
     setEventListener("connectionSettings", "command",
       gMainPane.showConnections);
     setEventListener("browserContainersCheckbox", "command",
@@ -311,29 +417,9 @@ var gMainPane = {
       let row = document.getElementById("translationBox");
       row.removeAttribute("hidden");
       // Showing attribution only for Bing Translator.
-      Components.utils.import("resource:///modules/translation/Translation.jsm");
+      ChromeUtils.import("resource:///modules/translation/Translation.jsm");
       if (Translation.translationEngine == "bing") {
         document.getElementById("bingAttribution").removeAttribute("hidden");
-      }
-    }
-
-    if (AppConstants.E10S_TESTING_ONLY) {
-      setEventListener("e10sAutoStart", "command",
-        gMainPane.enableE10SChange);
-      let e10sCheckbox = document.getElementById("e10sAutoStart");
-
-      let e10sPref = document.getElementById("browser.tabs.remote.autostart");
-      let e10sTempPref = document.getElementById("e10sTempPref");
-      let e10sForceEnable = document.getElementById("e10sForceEnable");
-
-      let preffedOn = e10sPref.value || e10sTempPref.value || e10sForceEnable.value;
-
-      if (preffedOn) {
-        // The checkbox is checked if e10s is preffed on and enabled.
-        e10sCheckbox.checked = Services.appinfo.browserTabsRemoteAutostart;
-
-        // but if it's force disabled, then the checkbox is disabled.
-        e10sCheckbox.disabled = !Services.appinfo.browserTabsRemoteAutostart;
       }
     }
 
@@ -348,10 +434,12 @@ var gMainPane = {
       OS.File.stat(ignoreSeparateProfile).then(() => separateProfileModeCheckbox.checked = false,
         () => separateProfileModeCheckbox.checked = true);
 
-      fxAccounts.getSignedInUser().then(data => {
-        document.getElementById("getStarted").selectedIndex = data ? 1 : 0;
-      })
-        .catch(Cu.reportError);
+      if (Services.prefs.getBoolPref("identity.fxaccounts.enabled")) {
+        document.getElementById("sync-dev-edition-root").hidden = false;
+        fxAccounts.getSignedInUser().then(data => {
+          document.getElementById("getStarted").selectedIndex = data ? 1 : 0;
+        }).catch(Cu.reportError);
+      }
     }
 
     // Initialize the Firefox Updates section.
@@ -374,7 +462,11 @@ var gMainPane = {
     let arch = bundle.GetStringFromName(archResource);
     version += ` (${arch})`;
 
-    document.getElementById("version").textContent = version;
+    document.l10n.setAttributes(
+      document.getElementById("updateAppInfo"),
+      "update-application-version",
+      { version }
+    );
 
     // Show a release notes link if we have a URL.
     let relNotesLink = document.getElementById("releasenotes");
@@ -389,10 +481,15 @@ var gMainPane = {
 
     let distroId = Services.prefs.getCharPref("distribution.id", "");
     if (distroId) {
-      let distroVersion = Services.prefs.getCharPref("distribution.version");
+      let distroString = distroId;
+
+      let distroVersion = Services.prefs.getCharPref("distribution.version", "");
+      if (distroVersion) {
+        distroString += " - " + distroVersion;
+      }
 
       let distroIdField = document.getElementById("distributionId");
-      distroIdField.value = distroId + " - " + distroVersion;
+      distroIdField.value = distroString;
       distroIdField.hidden = false;
 
       let distroAbout = Services.prefs.getStringPref("distribution.about", "");
@@ -422,31 +519,33 @@ var gMainPane = {
 
     // Observe preferences that influence what we display so we can rebuild
     // the view when they change.
-    this._prefSvc.addObserver(PREF_SHOW_PLUGINS_IN_LIST, this);
-    this._prefSvc.addObserver(PREF_HIDE_PLUGINS_WITHOUT_EXTENSIONS, this);
-    this._prefSvc.addObserver(PREF_FEED_SELECTED_APP, this);
-    this._prefSvc.addObserver(PREF_FEED_SELECTED_WEB, this);
-    this._prefSvc.addObserver(PREF_FEED_SELECTED_ACTION, this);
-    this._prefSvc.addObserver(PREF_FEED_SELECTED_READER, this);
+    Services.prefs.addObserver(PREF_SHOW_PLUGINS_IN_LIST, this);
+    Services.prefs.addObserver(PREF_HIDE_PLUGINS_WITHOUT_EXTENSIONS, this);
+    Services.prefs.addObserver(PREF_FEED_SELECTED_APP, this);
+    Services.prefs.addObserver(PREF_FEED_SELECTED_WEB, this);
+    Services.prefs.addObserver(PREF_FEED_SELECTED_ACTION, this);
+    Services.prefs.addObserver(PREF_FEED_SELECTED_READER, this);
 
-    this._prefSvc.addObserver(PREF_VIDEO_FEED_SELECTED_APP, this);
-    this._prefSvc.addObserver(PREF_VIDEO_FEED_SELECTED_WEB, this);
-    this._prefSvc.addObserver(PREF_VIDEO_FEED_SELECTED_ACTION, this);
-    this._prefSvc.addObserver(PREF_VIDEO_FEED_SELECTED_READER, this);
+    Services.prefs.addObserver(PREF_VIDEO_FEED_SELECTED_APP, this);
+    Services.prefs.addObserver(PREF_VIDEO_FEED_SELECTED_WEB, this);
+    Services.prefs.addObserver(PREF_VIDEO_FEED_SELECTED_ACTION, this);
+    Services.prefs.addObserver(PREF_VIDEO_FEED_SELECTED_READER, this);
 
-    this._prefSvc.addObserver(PREF_AUDIO_FEED_SELECTED_APP, this);
-    this._prefSvc.addObserver(PREF_AUDIO_FEED_SELECTED_WEB, this);
-    this._prefSvc.addObserver(PREF_AUDIO_FEED_SELECTED_ACTION, this);
-    this._prefSvc.addObserver(PREF_AUDIO_FEED_SELECTED_READER, this);
+    Services.prefs.addObserver(PREF_AUDIO_FEED_SELECTED_APP, this);
+    Services.prefs.addObserver(PREF_AUDIO_FEED_SELECTED_WEB, this);
+    Services.prefs.addObserver(PREF_AUDIO_FEED_SELECTED_ACTION, this);
+    Services.prefs.addObserver(PREF_AUDIO_FEED_SELECTED_READER, this);
 
     setEventListener("filter", "command", gMainPane.filter);
-    setEventListener("handlersView", "select",
-      gMainPane.onSelectionChanged);
     setEventListener("typeColumn", "click", gMainPane.sort);
     setEventListener("actionColumn", "click", gMainPane.sort);
     setEventListener("chooseFolder", "command", gMainPane.chooseFolder);
-    setEventListener("browser.download.dir", "change", gMainPane.displayDownloadDirPref);
     setEventListener("saveWhere", "command", gMainPane.handleSaveToCommand);
+    Preferences.get("browser.download.folderList").on("change",
+      gMainPane.displayDownloadDirPref.bind(gMainPane));
+    Preferences.get("browser.download.dir").on("change",
+      gMainPane.displayDownloadDirPref.bind(gMainPane));
+    gMainPane.displayDownloadDirPref();
 
     // Listen for window unload so we can remove our preference observers.
     window.addEventListener("unload", this);
@@ -474,9 +573,7 @@ var gMainPane = {
     ]);
 
     // Notify observers that the UI is now ready
-    Components.classes["@mozilla.org/observer-service;1"]
-      .getService(Components.interfaces.nsIObserverService)
-      .notifyObservers(window, "main-pane-loaded");
+    Services.obs.notifyObservers(window, "main-pane-loaded");
   },
 
   preInit() {
@@ -486,6 +583,7 @@ var gMainPane = {
       // of the preferences page.
       window.addEventListener("pageshow", async () => {
         try {
+          this._initListEventHandlers();
           this._loadData();
           await this._rebuildVisibleTypes();
           this._sortVisibleTypes();
@@ -511,14 +609,14 @@ var gMainPane = {
    * Enables/disables the Settings button used to configure containers
    */
   readBrowserContainersCheckbox() {
-    const pref = document.getElementById("privacy.userContext.enabled");
+    const pref = Preferences.get("privacy.userContext.enabled");
     const settings = document.getElementById("browserContainersSettings");
 
     settings.disabled = !pref.value;
     const containersEnabled = Services.prefs.getBoolPref("privacy.userContext.enabled");
     const containersCheckbox = document.getElementById("browserContainersCheckbox");
     containersCheckbox.checked = containersEnabled;
-    handleControllingExtension("prefs", "privacy.containers")
+    handleControllingExtension(PREF_SETTING_TYPE, CONTAINERS_KEY)
       .then((isControlled) => {
         containersCheckbox.disabled = isControlled;
       });
@@ -535,7 +633,7 @@ var gMainPane = {
       document.getElementById("browserContainersbox").setAttribute("data-hidden-from-search", "true");
       return;
     }
-    this._prefSvc.addObserver(PREF_CONTAINERS_EXTENSION, this);
+    Services.prefs.addObserver(PREF_CONTAINERS_EXTENSION, this);
 
     const link = document.getElementById("browserContainersLearnMore");
     link.href = Services.urlFormatter.formatURLPref("app.support.baseURL") + "containers";
@@ -544,55 +642,7 @@ var gMainPane = {
     this.readBrowserContainersCheckbox();
   },
 
-  isE10SEnabled() {
-    let e10sEnabled;
-    try {
-      let e10sStatus = Components.classes["@mozilla.org/supports-PRUint64;1"]
-        .createInstance(Ci.nsISupportsPRUint64);
-      let appinfo = Services.appinfo.QueryInterface(Ci.nsIObserver);
-      appinfo.observe(e10sStatus, "getE10SBlocked", "");
-      e10sEnabled = e10sStatus.data < 2;
-    } catch (e) {
-      e10sEnabled = false;
-    }
-
-    return e10sEnabled;
-  },
-
-  enableE10SChange() {
-    if (AppConstants.E10S_TESTING_ONLY) {
-      let e10sCheckbox = document.getElementById("e10sAutoStart");
-      let e10sPref = document.getElementById("browser.tabs.remote.autostart");
-      let e10sTempPref = document.getElementById("e10sTempPref");
-
-      let prefsToChange;
-      if (e10sCheckbox.checked) {
-        // Enabling e10s autostart
-        prefsToChange = [e10sPref];
-      } else {
-        // Disabling e10s autostart
-        prefsToChange = [e10sPref];
-        if (e10sTempPref.value) {
-          prefsToChange.push(e10sTempPref);
-        }
-      }
-
-      let buttonIndex = confirmRestartPrompt(e10sCheckbox.checked, 0,
-        true, false);
-      if (buttonIndex == CONFIRM_RESTART_PROMPT_RESTART_NOW) {
-        for (let prefToChange of prefsToChange) {
-          prefToChange.value = e10sCheckbox.checked;
-        }
-
-        Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
-      }
-
-      // Revert the checkbox in case we didn't quit
-      e10sCheckbox.checked = e10sPref.value || e10sTempPref.value;
-    }
-  },
-
-  separateProfileModeChange() {
+  async separateProfileModeChange() {
     if (AppConstants.MOZ_DEV_EDITION) {
       function quitApp() {
         Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestartNotSameProfile);
@@ -615,14 +665,13 @@ var gMainPane = {
       }
 
       let separateProfileModeCheckbox = document.getElementById("separateProfileMode");
-      let button_index = confirmRestartPrompt(separateProfileModeCheckbox.checked,
+      let button_index = await confirmRestartPrompt(separateProfileModeCheckbox.checked,
         0, false, true);
       switch (button_index) {
         case CONFIRM_RESTART_PROMPT_CANCEL:
           revertCheckbox();
           return;
         case CONFIRM_RESTART_PROMPT_RESTART_NOW:
-          const Cc = Components.classes, Ci = Components.interfaces;
           let cancelQuit = Cc["@mozilla.org/supports-PRBool;1"]
             .createInstance(Ci.nsISupportsPRBool);
           Services.obs.notifyObservers(cancelQuit, "quit-application-requested",
@@ -641,39 +690,33 @@ var gMainPane = {
     }
   },
 
-  onGetStarted(aEvent) {
-    if (AppConstants.MOZ_DEV_EDITION) {
-      const Cc = Components.classes, Ci = Components.interfaces;
-      let wm = Cc["@mozilla.org/appshell/window-mediator;1"]
-        .getService(Ci.nsIWindowMediator);
-      let win = wm.getMostRecentWindow("navigator:browser");
-
-      fxAccounts.getSignedInUser().then(data => {
-        if (win) {
-          if (data) {
-            // We have a user, open Sync preferences in the same tab
-            win.openUILinkIn("about:preferences#sync", "current");
-            return;
-          }
-          let accountsTab = win.gBrowser.addTab("about:accounts?action=signin&entrypoint=dev-edition-setup");
-          win.gBrowser.selectedTab = accountsTab;
-        }
-      });
+  async onGetStarted(aEvent) {
+    if (!AppConstants.MOZ_DEV_EDITION) {
+      return;
     }
+    const win = Services.wm.getMostRecentWindow("navigator:browser");
+    if (!win) {
+      return;
+    }
+    const user = await fxAccounts.getSignedInUser();
+    if (user) {
+      // We have a user, open Sync preferences in the same tab
+      win.openTrustedLinkIn("about:preferences#sync", "current");
+      return;
+    }
+    let url = await FxAccounts.config.promiseSignInURI("dev-edition-setup");
+    let accountsTab = win.gBrowser.addTab(url);
+    win.gBrowser.selectedTab = accountsTab;
   },
 
   // HOME PAGE
-
   /*
    * Preferences:
    *
-   * browser.startup.homepage
-   * - the user's home page, as a string; if the home page is a set of tabs,
-   *   this will be those URLs separated by the pipe character "|"
    * browser.startup.page
    * - what page(s) to show when the user starts the application, as an integer:
    *
-   *     0: a blank page
+   *     0: a blank page (DEPRECATED - this can be set via browser.startup.homepage)
    *     1: the home page (as set by the browser.startup.homepage pref)
    *     2: the last page the user visited (DEPRECATED)
    *     3: windows and tabs from the last session (a.k.a. session restore)
@@ -683,171 +726,14 @@ var gMainPane = {
    *   option is preserved.
    */
 
-  syncFromHomePref() {
-    let homePref = document.getElementById("browser.startup.homepage");
-
-    // Set the "Use Current Page(s)" button's text and enabled state.
-    this._updateUseCurrentButton();
-
-    // This is an async task.
-    handleControllingExtension("prefs", "homepage_override")
-      .then((isControlled) => {
-        // Disable or enable the inputs based on if this is controlled by an extension.
-        document.querySelectorAll("#browserHomePage, .homepage-button")
-          .forEach((button) => {
-            button.disabled = isControlled;
-          });
-      });
-
-    // If the pref is set to about:home or about:newtab, set the value to ""
-    // to show the placeholder text (about:home title) rather than
-    // exposing those URLs to users.
-    let defaultBranch = Services.prefs.getDefaultBranch("");
-    let defaultValue = defaultBranch.getComplexValue("browser.startup.homepage",
-      Ci.nsIPrefLocalizedString).data;
-    let currentValue = homePref.value.toLowerCase();
-    if (currentValue == "about:home" ||
-      (currentValue == defaultValue && currentValue == "about:newtab")) {
-      return "";
-    }
-
-    // If the pref is actually "", show about:blank.  The actual home page
-    // loading code treats them the same, and we don't want the placeholder text
-    // to be shown.
-    if (homePref.value == "")
-      return "about:blank";
-
-    // Otherwise, show the actual pref value.
-    return undefined;
-  },
-
-  syncToHomePref(value) {
-    // If the value is "", use about:home.
-    if (value == "")
-      return "about:home";
-
-    // Otherwise, use the actual textbox value.
-    return undefined;
-  },
-
-  /**
-   * Sets the home page to the current displayed page (or frontmost tab, if the
-   * most recent browser window contains multiple tabs), updating preference
-   * window UI to reflect this.
-   */
-  setHomePageToCurrent() {
-    let homePage = document.getElementById("browser.startup.homepage");
-    let tabs = this._getTabsForHomePage();
-    function getTabURI(t) {
-      return t.linkedBrowser.currentURI.spec;
-    }
-
-    // FIXME Bug 244192: using dangerous "|" joiner!
-    if (tabs.length)
-      homePage.value = tabs.map(getTabURI).join("|");
-  },
-
-  /**
-   * Displays a dialog in which the user can select a bookmark to use as home
-   * page.  If the user selects a bookmark, that bookmark's name is displayed in
-   * UI and the bookmark's address is stored to the home page preference.
-   */
-  setHomePageToBookmark() {
-    var rv = { urls: null, names: null };
-    gSubDialog.open("chrome://browser/content/preferences/selectBookmark.xul",
-      "resizable=yes, modal=yes", rv,
-      this._setHomePageToBookmarkClosed.bind(this, rv));
-  },
-
-  _setHomePageToBookmarkClosed(rv, aEvent) {
-    if (aEvent.detail.button != "accept")
-      return;
-    if (rv.urls && rv.names) {
-      var homePage = document.getElementById("browser.startup.homepage");
-
-      // XXX still using dangerous "|" joiner!
-      homePage.value = rv.urls.join("|");
-    }
-  },
-
-  /**
-   * Switches the "Use Current Page" button between its singular and plural
-   * forms.
-   */
-  async _updateUseCurrentButton() {
-    let useCurrent = document.getElementById("useCurrent");
-    let tabs = this._getTabsForHomePage();
-
-    if (tabs.length > 1)
-      useCurrent.label = useCurrent.getAttribute("label2");
-    else
-      useCurrent.label = useCurrent.getAttribute("label1");
-
-    // If the homepage is controlled by an extension then you can't use this.
-    if (await getControllingExtensionId("prefs", "homepage_override")) {
-      useCurrent.disabled = true;
-      return;
-    }
-
-    // In this case, the button's disabled state is set by preferences.xml.
-    let prefName = "pref.browser.homepage.disable_button.current_page";
-    if (document.getElementById(prefName).locked)
-      return;
-
-    useCurrent.disabled = !tabs.length
-  },
-
-  _getTabsForHomePage() {
-    var win;
-    var tabs = [];
-
-    const Cc = Components.classes, Ci = Components.interfaces;
-    var wm = Cc["@mozilla.org/appshell/window-mediator;1"]
-      .getService(Ci.nsIWindowMediator);
-    win = wm.getMostRecentWindow("navigator:browser");
-
-    if (win && win.document.documentElement
-      .getAttribute("windowtype") == "navigator:browser") {
-      // We should only include visible & non-pinned tabs
-
-      tabs = win.gBrowser.visibleTabs.slice(win.gBrowser._numPinnedTabs);
-      tabs = tabs.filter(this.isNotAboutPreferences);
-    }
-
-    return tabs;
-  },
-
-  /**
-   * Check to see if a tab is not about:preferences
-   */
-  isNotAboutPreferences(aElement, aIndex, aArray) {
-    return !aElement.linkedBrowser.currentURI.spec.startsWith("about:preferences");
-  },
-
-  /**
-   * Restores the default home page as the user's home page.
-   */
-  restoreDefaultHomePage() {
-    var homePage = document.getElementById("browser.startup.homepage");
-    homePage.value = homePage.defaultValue;
-  },
-
-  makeDisableControllingExtension(type, settingName) {
-    return async function disableExtension() {
-      let id = await getControllingExtensionId(type, settingName);
-      let addon = await AddonManager.getAddonByID(id);
-      addon.userDisabled = true;
-    };
-  },
-
   /**
    * Utility function to enable/disable the button specified by aButtonID based
    * on the value of the Boolean preference specified by aPreferenceID.
    */
   updateButtons(aButtonID, aPreferenceID) {
     var button = document.getElementById(aButtonID);
-    var preference = document.getElementById(aPreferenceID);
-    button.disabled = preference.value != true;
+    var preference = Preferences.get(aPreferenceID);
+    button.disabled = !preference.value;
     return undefined;
   },
 
@@ -855,20 +741,39 @@ var gMainPane = {
    * Hide/show the "Show my windows and tabs from last time" option based
    * on the value of the browser.privatebrowsing.autostart pref.
    */
-  updateBrowserStartupLastSession() {
-    let pbAutoStartPref = document.getElementById("browser.privatebrowsing.autostart");
-    let startupPref = document.getElementById("browser.startup.page");
-    let group = document.getElementById("browserStartupPage");
-    let option = document.getElementById("browserStartupLastSession");
-    if (pbAutoStartPref.value) {
-      option.setAttribute("disabled", "true");
-      if (option.selected) {
-        group.selectedItem = document.getElementById("browserStartupHomePage");
-      }
+  updateBrowserStartupUI() {
+    const pbAutoStartPref = Preferences.get("browser.privatebrowsing.autostart");
+    const startupPref = Preferences.get("browser.startup.page");
+
+    let newValue;
+    let checkbox = document.getElementById("browserRestoreSession");
+    if (pbAutoStartPref.value || startupPref.locked) {
+      checkbox.setAttribute("disabled", "true");
+      newValue = false;
     } else {
-      option.removeAttribute("disabled");
-      startupPref.updateElements(); // select the correct radio in the startup group
+      checkbox.removeAttribute("disabled");
+      newValue = startupPref.value === this.STARTUP_PREF_RESTORE_SESSION;
     }
+    if (checkbox.checked !== newValue) {
+      checkbox.checked = newValue;
+    }
+  },
+
+  onBrowserRestoreSessionChange(event) {
+    const value = event.target.checked;
+    const startupPref = Preferences.get("browser.startup.page");
+    let newValue;
+
+    if (value) {
+      // We need to restore the blank homepage setting in our other pref
+      if (startupPref.value === this.STARTUP_PREF_BLANK) {
+        Preferences.get("browser.startup.homepage").value = "about:blank";
+      }
+      newValue = this.STARTUP_PREF_RESTORE_SESSION;
+    } else {
+      newValue = this.STARTUP_PREF_HOMEPAGE;
+    }
+    startupPref.value = newValue;
   },
 
   // TABS
@@ -902,7 +807,7 @@ var gMainPane = {
    * @returns |true| if such links should be opened in new tabs
    */
   readLinkTarget() {
-    var openNewWindow = document.getElementById("browser.link.open_newwindow");
+    var openNewWindow = Preferences.get("browser.link.open_newwindow");
     return openNewWindow.value != 2;
   },
 
@@ -950,7 +855,7 @@ var gMainPane = {
    */
   setDefaultBrowser() {
     if (AppConstants.HAVE_SHELL_SERVICE) {
-      let alwaysCheckPref = document.getElementById("browser.shell.checkDefaultBrowser");
+      let alwaysCheckPref = Preferences.get("browser.shell.checkDefaultBrowser");
       alwaysCheckPref.value = true;
 
       // Reset exponential backoff delay time in order to do visual update in pollForDefaultBrowser.
@@ -987,7 +892,7 @@ var gMainPane = {
   },
 
   openTranslationProviderAttribution() {
-    Components.utils.import("resource:///modules/translation/Translation.jsm");
+    ChromeUtils.import("resource:///modules/translation/Translation.jsm");
     Translation.openProviderAttribution();
   },
 
@@ -1012,10 +917,24 @@ var gMainPane = {
    * Displays a dialog in which proxy settings may be changed.
    */
   showConnections() {
-    gSubDialog.open("chrome://browser/content/preferences/connection.xul");
+    gSubDialog.open("chrome://browser/content/preferences/connection.xul",
+                    null, null, this.updateProxySettingsUI.bind(this));
   },
 
-  checkBrowserContainers(event) {
+  // Update the UI to show the proper description depending on whether an
+  // extension is in control or not.
+  async updateProxySettingsUI() {
+    let controllingExtension = await getControllingExtension(PREF_SETTING_TYPE, PROXY_KEY);
+    let description = document.getElementById("connectionSettingsDescription");
+
+    if (controllingExtension) {
+      setControllingExtensionDescription(description, controllingExtension, "proxy.settings");
+    } else {
+      setControllingExtensionDescription(description, null, "network-proxy-connection-description");
+    }
+  },
+
+  async checkBrowserContainers(event) {
     let checkbox = document.getElementById("browserContainersCheckbox");
     if (checkbox.checked) {
       Services.prefs.setBoolPref("privacy.userContext.enabled", true);
@@ -1028,14 +947,14 @@ var gMainPane = {
       return;
     }
 
-    let bundlePreferences = document.getElementById("bundlePreferences");
-
-    let title = bundlePreferences.getString("disableContainersAlertTitle");
-    let message = PluralForm.get(count, bundlePreferences.getString("disableContainersMsg"))
-      .replace("#S", count)
-    let okButton = PluralForm.get(count, bundlePreferences.getString("disableContainersOkButton"))
-      .replace("#S", count)
-    let cancelButton = bundlePreferences.getString("disableContainersButton2");
+    let [
+      title, message, okButton, cancelButton
+    ] = await document.l10n.formatValues([
+      {id: "containers-disable-alert-title"},
+      {id: "containers-disable-alert-desc", args: { tabCount: count }},
+      {id: "containers-disable-alert-ok-button", args: { tabCount: count }},
+      {id: "containers-disable-alert-cancel-button"}
+    ]);
 
     let buttonFlags = (Ci.nsIPrompt.BUTTON_TITLE_IS_STRING * Ci.nsIPrompt.BUTTON_POS_0) +
       (Ci.nsIPrompt.BUTTON_TITLE_IS_STRING * Ci.nsIPrompt.BUTTON_POS_1);
@@ -1082,12 +1001,7 @@ var gMainPane = {
    * Populates the default font list in UI.
    */
   _rebuildFonts() {
-    var preferences = document.getElementById("mainPreferences");
-    // Ensure preferences are "visible" to ensure bindings work.
-    preferences.hidden = false;
-    // Force flush:
-    preferences.clientHeight;
-    var langGroupPref = document.getElementById("font.language.group");
+    var langGroupPref = Preferences.get("font.language.group");
     var isSerif = this._readDefaultFontTypeForLanguage(langGroupPref.value) == "serif";
     this._selectDefaultLanguageGroup(langGroupPref.value, isSerif);
   },
@@ -1099,14 +1013,10 @@ var gMainPane = {
   _readDefaultFontTypeForLanguage(aLanguageGroup) {
     const kDefaultFontType = "font.default.%LANG%";
     var defaultFontTypePref = kDefaultFontType.replace(/%LANG%/, aLanguageGroup);
-    var preference = document.getElementById(defaultFontTypePref);
+    var preference = Preferences.get(defaultFontTypePref);
     if (!preference) {
-      preference = document.createElement("preference");
-      preference.id = defaultFontTypePref;
-      preference.setAttribute("name", defaultFontTypePref);
-      preference.setAttribute("type", "string");
-      preference.setAttribute("onchange", "gMainPane._rebuildFonts();");
-      document.getElementById("mainPreferences").appendChild(preference);
+      preference = Preferences.add({ id: defaultFontTypePref, type: "string" });
+      preference.on("change", gMainPane._rebuildFonts.bind(gMainPane));
     }
     return preference.value;
   },
@@ -1130,7 +1040,6 @@ var gMainPane = {
       const kFontNameListFmtSansSerif = "font.name-list.sans-serif.%LANG%";
       const kFontSizeFmtVariable = "font.size.variable.%LANG%";
 
-      var preferences = document.getElementById("mainPreferences");
       var prefs = [{
         format: aIsSerif ? kFontNameFmtSerif : kFontNameFmtSansSerif,
         type: "fontname",
@@ -1150,14 +1059,10 @@ var gMainPane = {
         fonttype: null
       }];
       for (var i = 0; i < prefs.length; ++i) {
-        var preference = document.getElementById(prefs[i].format.replace(/%LANG%/, aLanguageGroup));
+        var preference = Preferences.get(prefs[i].format.replace(/%LANG%/, aLanguageGroup));
         if (!preference) {
-          preference = document.createElement("preference");
           var name = prefs[i].format.replace(/%LANG%/, aLanguageGroup);
-          preference.id = name;
-          preference.setAttribute("name", name);
-          preference.setAttribute("type", prefs[i].type);
-          preferences.appendChild(preference);
+          preference = Preferences.add({ id: name, type: prefs[i].type });
         }
 
         if (!prefs[i].element)
@@ -1174,7 +1079,7 @@ var gMainPane = {
         }
       }
     })()
-      .catch(Components.utils.reportError);
+      .catch(Cu.reportError);
   },
 
   /**
@@ -1195,7 +1100,7 @@ var gMainPane = {
    *     2  enables spellchecking for all text fields
    */
   readCheckSpelling() {
-    var pref = document.getElementById("layout.spellcheckDefault");
+    var pref = Preferences.get("layout.spellcheckDefault");
     this._storedSpellCheck = pref.value;
 
     return (pref.value != 0);
@@ -1219,9 +1124,9 @@ var gMainPane = {
 
   updateDefaultPerformanceSettingsPref() {
     let defaultPerformancePref =
-      document.getElementById("browser.preferences.defaultPerformanceSettings.enabled");
-    let processCountPref = document.getElementById("dom.ipc.processCount");
-    let accelerationPref = document.getElementById("layers.acceleration.disabled");
+      Preferences.get("browser.preferences.defaultPerformanceSettings.enabled");
+    let processCountPref = Preferences.get("dom.ipc.processCount");
+    let accelerationPref = Preferences.get("layers.acceleration.disabled");
     if (processCountPref.value != processCountPref.defaultValue ||
       accelerationPref.value != accelerationPref.defaultValue) {
       defaultPerformancePref.value = false;
@@ -1230,43 +1135,33 @@ var gMainPane = {
 
   updatePerformanceSettingsBox({ duringChangeEvent }) {
     let defaultPerformancePref =
-      document.getElementById("browser.preferences.defaultPerformanceSettings.enabled");
+      Preferences.get("browser.preferences.defaultPerformanceSettings.enabled");
     let performanceSettings = document.getElementById("performanceSettings");
-    let processCountPref = document.getElementById("dom.ipc.processCount");
+    let processCountPref = Preferences.get("dom.ipc.processCount");
     if (defaultPerformancePref.value) {
-      let accelerationPref = document.getElementById("layers.acceleration.disabled");
-      // Unset the value so process count will be decided by e10s rollout.
+      let accelerationPref = Preferences.get("layers.acceleration.disabled");
+      // Unset the value so process count will be decided by the platform.
       processCountPref.value = processCountPref.defaultValue;
       accelerationPref.value = accelerationPref.defaultValue;
       performanceSettings.hidden = true;
     } else {
-      let e10sRolloutProcessCountPref =
-        document.getElementById("dom.ipc.processCount.web");
-      // Take the e10s rollout value as the default value (if it exists),
-      // but don't overwrite the user set value.
-      if (duringChangeEvent &&
-        e10sRolloutProcessCountPref.value &&
-        processCountPref.value == processCountPref.defaultValue) {
-        processCountPref.value = e10sRolloutProcessCountPref.value;
-      }
       performanceSettings.hidden = false;
     }
   },
 
   buildContentProcessCountMenuList() {
-    if (gMainPane.isE10SEnabled()) {
-      let processCountPref = document.getElementById("dom.ipc.processCount");
-      let e10sRolloutProcessCountPref =
-        document.getElementById("dom.ipc.processCount.web");
-      let defaultProcessCount =
-        e10sRolloutProcessCountPref.value || processCountPref.defaultValue;
-      let bundlePreferences = document.getElementById("bundlePreferences");
-      let label = bundlePreferences.getFormattedString("defaultContentProcessCount",
-        [defaultProcessCount]);
+    if (Services.appinfo.browserTabsRemoteAutostart) {
+      let processCountPref = Preferences.get("dom.ipc.processCount");
+      let defaultProcessCount = processCountPref.defaultValue;
+
       let contentProcessCount =
         document.querySelector(`#contentProcessCount > menupopup >
                                 menuitem[value="${defaultProcessCount}"]`);
-      contentProcessCount.label = label;
+
+      document.l10n.setAttributes(
+        contentProcessCount,
+        "performance-default-content-process-count",
+        { num: defaultProcessCount });
 
       document.getElementById("limitContentProcess").disabled = false;
       document.getElementById("contentProcessCount").disabled = false;
@@ -1314,32 +1209,37 @@ var gMainPane = {
    */
   updateReadPrefs() {
     if (AppConstants.MOZ_UPDATER) {
-      var enabledPref = document.getElementById("app.update.enabled");
-      var autoPref = document.getElementById("app.update.auto");
+      var enabledPref = Preferences.get("app.update.enabled");
+      var autoPref = Preferences.get("app.update.auto");
+      let disabledByPolicy = Services.policies &&
+                             !Services.policies.isAllowed("appUpdate");
       var radiogroup = document.getElementById("updateRadioGroup");
 
-      if (!enabledPref.value)   // Don't care for autoPref.value in this case.
-        radiogroup.value = "manual";    // 3. Never check for updates.
-      else if (autoPref.value)  // enabledPref.value && autoPref.value
-        radiogroup.value = "auto";      // 1. Automatically install updates
-      else                      // enabledPref.value && !autoPref.value
+      if (!enabledPref.value || disabledByPolicy) // Don't care for autoPref.value in this case.
+        radiogroup.value = "manual"; // 3. Never check for updates.
+      else if (autoPref.value) // enabledPref.value && autoPref.value
+        radiogroup.value = "auto"; // 1. Automatically install updates
+      else // enabledPref.value && !autoPref.value
         radiogroup.value = "checkOnly"; // 2. Check, but let me choose
 
-      var canCheck = Components.classes["@mozilla.org/updates/update-service;1"].
-        getService(Components.interfaces.nsIApplicationUpdateService).
+      var canCheck = Cc["@mozilla.org/updates/update-service;1"].
+        getService(Ci.nsIApplicationUpdateService).
         canCheckForUpdates;
       // canCheck is false if the enabledPref is false and locked,
       // or the binary platform or OS version is not known.
       // A locked pref is sufficient to disable the radiogroup.
-      radiogroup.disabled = !canCheck || enabledPref.locked || autoPref.locked;
+      radiogroup.disabled = !canCheck ||
+                            enabledPref.locked ||
+                            autoPref.locked ||
+                            disabledByPolicy;
 
       if (AppConstants.MOZ_MAINTENANCE_SERVICE) {
         // Check to see if the maintenance service is installed.
         // If it is don't show the preference at all.
         var installed;
         try {
-          var wrk = Components.classes["@mozilla.org/windows-registry-key;1"]
-            .createInstance(Components.interfaces.nsIWindowsRegKey);
+          var wrk = Cc["@mozilla.org/windows-registry-key;1"]
+            .createInstance(Ci.nsIWindowsRegKey);
           wrk.open(wrk.ROOT_KEY_LOCAL_MACHINE,
             "SOFTWARE\\Mozilla\\MaintenanceService",
             wrk.ACCESS_READ | wrk.WOW64_64);
@@ -1358,12 +1258,14 @@ var gMainPane = {
    * Sets the pref values based on the selected item of the radiogroup.
    */
   updateWritePrefs() {
-    if (AppConstants.MOZ_UPDATER) {
-      var enabledPref = document.getElementById("app.update.enabled");
-      var autoPref = document.getElementById("app.update.auto");
+    let disabledByPolicy = Services.policies &&
+                           !Services.policies.isAllowed("appUpdate");
+    if (AppConstants.MOZ_UPDATER && !disabledByPolicy) {
+      var enabledPref = Preferences.get("app.update.enabled");
+      var autoPref = Preferences.get("app.update.auto");
       var radiogroup = document.getElementById("updateRadioGroup");
       switch (radiogroup.value) {
-        case "auto":      // 1. Automatically install updates for Desktop only
+        case "auto": // 1. Automatically install updates for Desktop only
           enabledPref.value = true;
           autoPref.value = true;
           break;
@@ -1371,7 +1273,7 @@ var gMainPane = {
           enabledPref.value = true;
           autoPref.value = false;
           break;
-        case "manual":    // 3. Never check for updates.
+        case "manual": // 3. Never check for updates.
           enabledPref.value = false;
           autoPref.value = false;
       }
@@ -1387,38 +1289,30 @@ var gMainPane = {
 
   destroy() {
     window.removeEventListener("unload", this);
-    this._prefSvc.removeObserver(PREF_SHOW_PLUGINS_IN_LIST, this);
-    this._prefSvc.removeObserver(PREF_HIDE_PLUGINS_WITHOUT_EXTENSIONS, this);
-    this._prefSvc.removeObserver(PREF_FEED_SELECTED_APP, this);
-    this._prefSvc.removeObserver(PREF_FEED_SELECTED_WEB, this);
-    this._prefSvc.removeObserver(PREF_FEED_SELECTED_ACTION, this);
-    this._prefSvc.removeObserver(PREF_FEED_SELECTED_READER, this);
+    Services.prefs.removeObserver(PREF_SHOW_PLUGINS_IN_LIST, this);
+    Services.prefs.removeObserver(PREF_HIDE_PLUGINS_WITHOUT_EXTENSIONS, this);
+    Services.prefs.removeObserver(PREF_FEED_SELECTED_APP, this);
+    Services.prefs.removeObserver(PREF_FEED_SELECTED_WEB, this);
+    Services.prefs.removeObserver(PREF_FEED_SELECTED_ACTION, this);
+    Services.prefs.removeObserver(PREF_FEED_SELECTED_READER, this);
 
-    this._prefSvc.removeObserver(PREF_VIDEO_FEED_SELECTED_APP, this);
-    this._prefSvc.removeObserver(PREF_VIDEO_FEED_SELECTED_WEB, this);
-    this._prefSvc.removeObserver(PREF_VIDEO_FEED_SELECTED_ACTION, this);
-    this._prefSvc.removeObserver(PREF_VIDEO_FEED_SELECTED_READER, this);
+    Services.prefs.removeObserver(PREF_VIDEO_FEED_SELECTED_APP, this);
+    Services.prefs.removeObserver(PREF_VIDEO_FEED_SELECTED_WEB, this);
+    Services.prefs.removeObserver(PREF_VIDEO_FEED_SELECTED_ACTION, this);
+    Services.prefs.removeObserver(PREF_VIDEO_FEED_SELECTED_READER, this);
 
-    this._prefSvc.removeObserver(PREF_AUDIO_FEED_SELECTED_APP, this);
-    this._prefSvc.removeObserver(PREF_AUDIO_FEED_SELECTED_WEB, this);
-    this._prefSvc.removeObserver(PREF_AUDIO_FEED_SELECTED_ACTION, this);
-    this._prefSvc.removeObserver(PREF_AUDIO_FEED_SELECTED_READER, this);
+    Services.prefs.removeObserver(PREF_AUDIO_FEED_SELECTED_APP, this);
+    Services.prefs.removeObserver(PREF_AUDIO_FEED_SELECTED_WEB, this);
+    Services.prefs.removeObserver(PREF_AUDIO_FEED_SELECTED_ACTION, this);
+    Services.prefs.removeObserver(PREF_AUDIO_FEED_SELECTED_READER, this);
 
-    this._prefSvc.removeObserver(PREF_CONTAINERS_EXTENSION, this);
+    Services.prefs.removeObserver(PREF_CONTAINERS_EXTENSION, this);
   },
 
 
   // nsISupports
 
-  QueryInterface(aIID) {
-    if (aIID.equals(Ci.nsIObserver) ||
-      aIID.equals(Ci.nsIDOMEventListener ||
-        aIID.equals(Ci.nsISupports)))
-      return this;
-
-    throw Cr.NS_ERROR_NO_INTERFACE;
-  },
-
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIObserver]),
 
   // nsIObserver
 
@@ -1450,7 +1344,7 @@ var gMainPane = {
   },
 
 
-  // nsIDOMEventListener
+  // EventListener
 
   handleEvent(aEvent) {
     if (aEvent.type == "unload") {
@@ -1484,7 +1378,7 @@ var gMainPane = {
    * applications menu.
    */
   _loadInternalHandlers() {
-    var internalHandlers = [pdfHandlerInfo];
+    var internalHandlers = [new PDFHandlerInfoWrapper()];
     for (let internalHandler of internalHandlers) {
       if (internalHandler.enabled) {
         this._handledTypes[internalHandler.type] = internalHandler;
@@ -1521,7 +1415,7 @@ var gMainPane = {
         handlerInfoWrapper = this._handledTypes[mimeType.type];
       } else {
         let wrappedHandlerInfo =
-          this._mimeSvc.getFromTypeAndExtension(mimeType.type, null);
+          gMIMEService.getFromTypeAndExtension(mimeType.type, null);
         handlerInfoWrapper = new HandlerInfoWrapper(mimeType.type, wrappedHandlerInfo);
         handlerInfoWrapper.handledOnlyByPlugin = true;
         this._handledTypes[mimeType.type] = handlerInfoWrapper;
@@ -1534,7 +1428,7 @@ var gMainPane = {
    * Load the set of handlers defined by the application datastore.
    */
   _loadApplicationHandlers() {
-    var wrappedHandlerInfos = this._handlerSvc.enumerate();
+    var wrappedHandlerInfos = gHandlerService.enumerate();
     while (wrappedHandlerInfos.hasMoreElements()) {
       let wrappedHandlerInfo =
         wrappedHandlerInfos.getNext().QueryInterface(Ci.nsIHandlerInfo);
@@ -1555,15 +1449,44 @@ var gMainPane = {
 
   // View Construction
 
+  selectedHandlerListItem: null,
+
+  _initListEventHandlers() {
+    this._list.addEventListener("select", event => {
+      if (event.target != this._list) {
+        return;
+      }
+
+      let handlerListItem = this._list.selectedItem &&
+                            HandlerListItem.forNode(this._list.selectedItem);
+      if (this.selectedHandlerListItem == handlerListItem) {
+        return;
+      }
+
+      if (this.selectedHandlerListItem) {
+        this.selectedHandlerListItem.showActionsMenu = false;
+      }
+      this.selectedHandlerListItem = handlerListItem;
+      if (handlerListItem) {
+        this.rebuildActionsMenu();
+        handlerListItem.showActionsMenu = true;
+      }
+    });
+  },
+
   async _rebuildVisibleTypes() {
-    // Reset the list of visible types and the visible type description counts.
     this._visibleTypes = [];
-    this._visibleTypeDescriptionCount = {};
+
+    // Map whose keys are string descriptions and values are references to the
+    // first visible HandlerInfoWrapper that has this description. We use this
+    // to determine whether or not to annotate descriptions with their types to
+    // distinguish duplicate descriptions from each other.
+    let visibleDescriptions = new Map();
 
     // Get the preferences that help determine what types to show.
-    var showPlugins = this._prefSvc.getBoolPref(PREF_SHOW_PLUGINS_IN_LIST);
+    var showPlugins = Services.prefs.getBoolPref(PREF_SHOW_PLUGINS_IN_LIST);
     var hidePluginsWithoutExtensions =
-      this._prefSvc.getBoolPref(PREF_HIDE_PLUGINS_WITHOUT_EXTENSIONS);
+      Services.prefs.getBoolPref(PREF_HIDE_PLUGINS_WITHOUT_EXTENSIONS);
 
     for (let type in this._handledTypes) {
       // Yield before processing each handler info object to avoid monopolizing
@@ -1592,14 +1515,27 @@ var gMainPane = {
       // We couldn't find any reason to exclude the type, so include it.
       this._visibleTypes.push(handlerInfo);
 
-      if (handlerInfo.description in this._visibleTypeDescriptionCount)
-        this._visibleTypeDescriptionCount[handlerInfo.description]++;
-      else
-        this._visibleTypeDescriptionCount[handlerInfo.description] = 1;
+      let otherHandlerInfo = visibleDescriptions.get(handlerInfo.description);
+      if (!otherHandlerInfo) {
+        // This is the first type with this description that we encountered
+        // while rebuilding the _visibleTypes array this time. Make sure the
+        // flag is reset so we won't add the type to the description.
+        handlerInfo.disambiguateDescription = false;
+        visibleDescriptions.set(handlerInfo.description, handlerInfo);
+      } else {
+        // There is at least another type with this description. Make sure we
+        // add the type to the description on both HandlerInfoWrapper objects.
+        handlerInfo.disambiguateDescription = true;
+        otherHandlerInfo.disambiguateDescription = true;
+      }
     }
   },
 
   _rebuildView() {
+    let lastSelectedType = this.selectedHandlerListItem &&
+                           this.selectedHandlerListItem.handlerInfoWrapper.type;
+    this.selectedHandlerListItem = null;
+
     // Clear the list of entries.
     while (this._list.childNodes.length > 1)
       this._list.removeChild(this._list.lastChild);
@@ -1611,141 +1547,19 @@ var gMainPane = {
       visibleTypes = visibleTypes.filter(this._matchesFilter, this);
 
     for (let visibleType of visibleTypes) {
-      let item = document.createElement("richlistitem");
-      item.setAttribute("type", visibleType.type);
-      item.setAttribute("typeDescription", this._describeType(visibleType));
-      if (visibleType.smallIcon)
-        item.setAttribute("typeIcon", visibleType.smallIcon);
-      item.setAttribute("actionDescription",
-        this._describePreferredAction(visibleType));
+      let item = new HandlerListItem(visibleType);
+      item.connectAndAppendToList(this._list);
 
-      if (!this._setIconClassForPreferredAction(visibleType, item)) {
-        item.setAttribute("actionIcon",
-          this._getIconURLForPreferredAction(visibleType));
+      if (visibleType.type === lastSelectedType) {
+        this._list.selectedItem = item.node;
       }
-
-      this._list.appendChild(item);
     }
-
-    this._selectLastSelectedType();
   },
 
   _matchesFilter(aType) {
     var filterValue = this._filter.value.toLowerCase();
-    return this._describeType(aType).toLowerCase().indexOf(filterValue) != -1 ||
-      this._describePreferredAction(aType).toLowerCase().indexOf(filterValue) != -1;
-  },
-
-  /**
-   * Describe, in a human-readable fashion, the type represented by the given
-   * handler info object.  Normally this is just the description provided by
-   * the info object, but if more than one object presents the same description,
-   * then we annotate the duplicate descriptions with the type itself to help
-   * users distinguish between those types.
-   *
-   * @param aHandlerInfo {nsIHandlerInfo} the type being described
-   * @returns {string} a description of the type
-   */
-  _describeType(aHandlerInfo) {
-    if (this._visibleTypeDescriptionCount[aHandlerInfo.description] > 1)
-      return this._prefsBundle.getFormattedString("typeDescriptionWithType",
-        [aHandlerInfo.description,
-        aHandlerInfo.type]);
-
-    return aHandlerInfo.description;
-  },
-
-  /**
-   * Describe, in a human-readable fashion, the preferred action to take on
-   * the type represented by the given handler info object.
-   *
-   * XXX Should this be part of the HandlerInfoWrapper interface?  It would
-   * violate the separation of model and view, but it might make more sense
-   * nonetheless (f.e. it would make sortTypes easier).
-   *
-   * @param aHandlerInfo {nsIHandlerInfo} the type whose preferred action
-   *                                      is being described
-   * @returns {string} a description of the action
-   */
-  _describePreferredAction(aHandlerInfo) {
-    // alwaysAskBeforeHandling overrides the preferred action, so if that flag
-    // is set, then describe that behavior instead.  For most types, this is
-    // the "alwaysAsk" string, but for the feed type we show something special.
-    if (aHandlerInfo.alwaysAskBeforeHandling) {
-      if (isFeedType(aHandlerInfo.type))
-        return this._prefsBundle.getFormattedString("previewInApp",
-          [this._brandShortName]);
-      return this._prefsBundle.getString("alwaysAsk");
-    }
-
-    switch (aHandlerInfo.preferredAction) {
-      case Ci.nsIHandlerInfo.saveToDisk:
-        return this._prefsBundle.getString("saveFile");
-
-      case Ci.nsIHandlerInfo.useHelperApp:
-        var preferredApp = aHandlerInfo.preferredApplicationHandler;
-        var name;
-        if (preferredApp instanceof Ci.nsILocalHandlerApp)
-          name = getFileDisplayName(preferredApp.executable);
-        else
-          name = preferredApp.name;
-        return this._prefsBundle.getFormattedString("useApp", [name]);
-
-      case Ci.nsIHandlerInfo.handleInternally:
-        // For the feed type, handleInternally means live bookmarks.
-        if (isFeedType(aHandlerInfo.type)) {
-          return this._prefsBundle.getFormattedString("addLiveBookmarksInApp",
-            [this._brandShortName]);
-        }
-
-        if (aHandlerInfo instanceof InternalHandlerInfoWrapper) {
-          return this._prefsBundle.getFormattedString("previewInApp",
-            [this._brandShortName]);
-        }
-
-        // For other types, handleInternally looks like either useHelperApp
-        // or useSystemDefault depending on whether or not there's a preferred
-        // handler app.
-        if (this.isValidHandlerApp(aHandlerInfo.preferredApplicationHandler))
-          return aHandlerInfo.preferredApplicationHandler.name;
-
-        return aHandlerInfo.defaultDescription;
-
-      // XXX Why don't we say the app will handle the type internally?
-      // Is it because the app can't actually do that?  But if that's true,
-      // then why would a preferredAction ever get set to this value
-      // in the first place?
-
-      case Ci.nsIHandlerInfo.useSystemDefault:
-        return this._prefsBundle.getFormattedString("useDefault",
-          [aHandlerInfo.defaultDescription]);
-
-      case kActionUsePlugin:
-        return this._prefsBundle.getFormattedString("usePluginIn",
-          [aHandlerInfo.pluginName,
-          this._brandShortName]);
-      default:
-        throw new Error(`Unexpected preferredAction: ${aHandlerInfo.preferredAction}`);
-    }
-  },
-
-  _selectLastSelectedType() {
-    // If the list is disabled by the pref.downloads.disable_button.edit_actions
-    // preference being locked, then don't select the type, as that would cause
-    // it to appear selected, with a different background and an actions menu
-    // that makes it seem like you can choose an action for the type.
-    if (this._list.disabled)
-      return;
-
-    var lastSelectedType = this._list.getAttribute("lastSelectedType");
-    if (!lastSelectedType)
-      return;
-
-    var item = this._list.getElementsByAttribute("type", lastSelectedType)[0];
-    if (!item)
-      return;
-
-    this._list.selectedItem = item;
+    return aType.typeDescription.toLowerCase().includes(filterValue) ||
+           aType.actionDescription.toLowerCase().includes(filterValue);
   },
 
   /**
@@ -1767,6 +1581,9 @@ var gMainPane = {
 
     if (aHandlerApp instanceof Ci.nsIWebContentHandlerInfo)
       return aHandlerApp.uri;
+
+    if (aHandlerApp instanceof Ci.nsIGIOMimeApp)
+      return aHandlerApp.command;
 
     return false;
   },
@@ -1795,9 +1612,8 @@ var gMainPane = {
    */
   rebuildActionsMenu() {
     var typeItem = this._list.selectedItem;
-    var handlerInfo = this._handledTypes[typeItem.type];
-    var menu =
-      document.getAnonymousElementByAttribute(typeItem, "class", "actionsMenu");
+    var handlerInfo = this.selectedHandlerListItem.handlerInfoWrapper;
+    var menu = typeItem.querySelector(".actionsMenu");
     var menuPopup = menu.menupopup;
 
     // Clear out existing items.
@@ -1809,7 +1625,7 @@ var gMainPane = {
     if (handlerInfo instanceof InternalHandlerInfoWrapper) {
       internalMenuItem = document.createElement("menuitem");
       internalMenuItem.setAttribute("action", Ci.nsIHandlerInfo.handleInternally);
-      let label = this._prefsBundle.getFormattedString("previewInApp",
+      let label = gMainPane._prefsBundle.getFormattedString("previewInApp",
         [this._brandShortName]);
       internalMenuItem.setAttribute("label", label);
       internalMenuItem.setAttribute("tooltiptext", label);
@@ -1822,10 +1638,10 @@ var gMainPane = {
       askMenuItem.setAttribute("action", Ci.nsIHandlerInfo.alwaysAsk);
       let label;
       if (isFeedType(handlerInfo.type))
-        label = this._prefsBundle.getFormattedString("previewInApp",
+        label = gMainPane._prefsBundle.getFormattedString("previewInApp",
           [this._brandShortName]);
       else
-        label = this._prefsBundle.getString("alwaysAsk");
+        label = gMainPane._prefsBundle.getString("alwaysAsk");
       askMenuItem.setAttribute("label", label);
       askMenuItem.setAttribute("tooltiptext", label);
       askMenuItem.setAttribute(APP_ICON_ATTR_NAME, "ask");
@@ -1840,7 +1656,7 @@ var gMainPane = {
       !isFeedType(handlerInfo.type)) {
       var saveMenuItem = document.createElement("menuitem");
       saveMenuItem.setAttribute("action", Ci.nsIHandlerInfo.saveToDisk);
-      let label = this._prefsBundle.getString("saveFile");
+      let label = gMainPane._prefsBundle.getString("saveFile");
       saveMenuItem.setAttribute("label", label);
       saveMenuItem.setAttribute("tooltiptext", label);
       saveMenuItem.setAttribute(APP_ICON_ATTR_NAME, "save");
@@ -1851,7 +1667,7 @@ var gMainPane = {
     if (isFeedType(handlerInfo.type)) {
       internalMenuItem = document.createElement("menuitem");
       internalMenuItem.setAttribute("action", Ci.nsIHandlerInfo.handleInternally);
-      let label = this._prefsBundle.getFormattedString("addLiveBookmarksInApp",
+      let label = gMainPane._prefsBundle.getFormattedString("addLiveBookmarksInApp",
         [this._brandShortName]);
       internalMenuItem.setAttribute("label", label);
       internalMenuItem.setAttribute("tooltiptext", label);
@@ -1868,11 +1684,11 @@ var gMainPane = {
     if (handlerInfo.hasDefaultHandler) {
       var defaultMenuItem = document.createElement("menuitem");
       defaultMenuItem.setAttribute("action", Ci.nsIHandlerInfo.useSystemDefault);
-      let label = this._prefsBundle.getFormattedString("useDefault",
+      let label = gMainPane._prefsBundle.getFormattedString("useDefault",
         [handlerInfo.defaultDescription]);
       defaultMenuItem.setAttribute("label", label);
       defaultMenuItem.setAttribute("tooltiptext", handlerInfo.defaultDescription);
-      defaultMenuItem.setAttribute("image", this._getIconURLForSystemDefault(handlerInfo));
+      defaultMenuItem.setAttribute("image", handlerInfo.iconURLForSystemDefault);
 
       menuPopup.appendChild(defaultMenuItem);
     }
@@ -1893,7 +1709,7 @@ var gMainPane = {
         label = getFileDisplayName(possibleApp.executable);
       else
         label = possibleApp.name;
-      label = this._prefsBundle.getFormattedString("useApp", [label]);
+      label = gMainPane._prefsBundle.getFormattedString("useApp", [label]);
       menuItem.setAttribute("label", label);
       menuItem.setAttribute("tooltiptext", label);
       menuItem.setAttribute("image", this._getIconURLForHandlerApp(possibleApp));
@@ -1905,12 +1721,52 @@ var gMainPane = {
       menuPopup.appendChild(menuItem);
       possibleAppMenuItems.push(menuItem);
     }
+    // Add gio handlers
+    if (Cc["@mozilla.org/gio-service;1"]) {
+      let gIOSvc = Cc["@mozilla.org/gio-service;1"].
+                   getService(Ci.nsIGIOService);
+      var gioApps = gIOSvc.getAppsForURIScheme(handlerInfo.type);
+      let enumerator = gioApps.enumerate();
+      let possibleHandlers = handlerInfo.possibleApplicationHandlers;
+      while (enumerator.hasMoreElements()) {
+        let handler = enumerator.getNext().QueryInterface(Ci.nsIHandlerApp);
+        // OS handler share the same name, it's most likely the same app, skipping...
+        if (handler.name == handlerInfo.defaultDescription) {
+          continue;
+        }
+        // Check if the handler is already in possibleHandlers
+        let appAlreadyInHandlers = false;
+        for (let i = possibleHandlers.length - 1; i >= 0; --i) {
+          let app = possibleHandlers.queryElementAt(i, Ci.nsIHandlerApp);
+          // nsGIOMimeApp::Equals is able to compare with nsILocalHandlerApp
+          if (handler.equals(app)) {
+            appAlreadyInHandlers = true;
+            break;
+          }
+        }
+        if (!appAlreadyInHandlers) {
+          let menuItem = document.createElement("menuitem");
+          menuItem.setAttribute("action", Ci.nsIHandlerInfo.useHelperApp);
+          let label = gMainPane._prefsBundle.getFormattedString("useApp", [handler.name]);
+          menuItem.setAttribute("label", label);
+          menuItem.setAttribute("tooltiptext", label);
+          menuItem.setAttribute("image", this._getIconURLForHandlerApp(handler));
+
+          // Attach the handler app object to the menu item so we can use it
+          // to make changes to the datastore when the user selects the item.
+          menuItem.handlerApp = handler;
+
+          menuPopup.appendChild(menuItem);
+          possibleAppMenuItems.push(menuItem);
+        }
+      }
+    }
 
     // Create a menu item for the plugin.
     if (handlerInfo.pluginName) {
       var pluginMenuItem = document.createElement("menuitem");
       pluginMenuItem.setAttribute("action", kActionUsePlugin);
-      let label = this._prefsBundle.getFormattedString("usePluginIn",
+      let label = gMainPane._prefsBundle.getFormattedString("usePluginIn",
         [handlerInfo.pluginName,
         this._brandShortName]);
       pluginMenuItem.setAttribute("label", label);
@@ -1934,7 +1790,7 @@ var gMainPane = {
       menuItem.addEventListener("command", function(e) {
         gMainPane.chooseApp(e);
       });
-      let label = this._prefsBundle.getString("useOtherApp");
+      let label = gMainPane._prefsBundle.getString("useOtherApp");
       menuItem.setAttribute("label", label);
       menuItem.setAttribute("tooltiptext", label);
       menuPopup.appendChild(menuItem);
@@ -1949,7 +1805,7 @@ var gMainPane = {
       menuItem.addEventListener("command", function(e) {
         gMainPane.manageApp(e);
       });
-      menuItem.setAttribute("label", this._prefsBundle.getString("manageApp"));
+      menuItem.setAttribute("label", gMainPane._prefsBundle.getString("manageApp"));
       menuPopup.appendChild(menuItem);
     }
 
@@ -1964,7 +1820,7 @@ var gMainPane = {
         if (internalMenuItem) {
           menu.selectedItem = internalMenuItem;
         } else {
-          Cu.reportError("No menu item defined to set!")
+          Cu.reportError("No menu item defined to set!");
         }
         break;
       case Ci.nsIHandlerInfo.useSystemDefault:
@@ -2019,16 +1875,14 @@ var gMainPane = {
     if (!this._sortColumn)
       return;
 
-    var t = this;
-
     function sortByType(a, b) {
-      return t._describeType(a).toLowerCase().
-        localeCompare(t._describeType(b).toLowerCase());
+      return a.typeDescription.toLowerCase().
+        localeCompare(b.typeDescription.toLowerCase());
     }
 
     function sortByAction(a, b) {
-      return t._describePreferredAction(a).toLowerCase().
-        localeCompare(t._describePreferredAction(b).toLowerCase());
+      return a.actionDescription.toLowerCase().
+        localeCompare(b.actionDescription.toLowerCase());
     }
 
     switch (this._sortColumn.getAttribute("value")) {
@@ -2059,6 +1913,14 @@ var gMainPane = {
 
   // Changes
 
+  // Whether or not we are currently storing the action selected by the user.
+  // We use this to suppress notification-triggered updates to the list when
+  // we make changes that may spawn such updates, specifically when we change
+  // the action for the feed type, which results in feed preference updates,
+  // which spawn "pref changed" notifications that would otherwise cause us
+  // to rebuild the view unnecessarily.
+  _storingAction: false,
+
   onSelectAction(aActionItem) {
     this._storingAction = true;
 
@@ -2070,8 +1932,7 @@ var gMainPane = {
   },
 
   _storeAction(aActionItem) {
-    var typeItem = this._list.selectedItem;
-    var handlerInfo = this._handledTypes[typeItem.type];
+    var handlerInfo = this.selectedHandlerListItem.handlerInfoWrapper;
 
     let action = parseInt(aActionItem.getAttribute("action"));
 
@@ -2106,12 +1967,7 @@ var gMainPane = {
     handlerInfo.handledOnlyByPlugin = false;
 
     // Update the action label and image to reflect the new preferred action.
-    typeItem.setAttribute("actionDescription",
-      this._describePreferredAction(handlerInfo));
-    if (!this._setIconClassForPreferredAction(handlerInfo, typeItem)) {
-      typeItem.setAttribute("actionIcon",
-        this._getIconURLForPreferredAction(handlerInfo));
-    }
+    this.selectedHandlerListItem.refreshAction();
   },
 
   manageApp(aEvent) {
@@ -2119,8 +1975,7 @@ var gMainPane = {
     // as we handle it specially ourselves.
     aEvent.stopPropagation();
 
-    var typeItem = this._list.selectedItem;
-    var handlerInfo = this._handledTypes[typeItem.type];
+    var handlerInfo = this.selectedHandlerListItem.handlerInfoWrapper;
 
     let onComplete = () => {
       // Rebuild the actions menu so that we revert to the previous selection,
@@ -2128,12 +1983,7 @@ var gMainPane = {
       this.rebuildActionsMenu();
 
       // update the richlistitem too. Will be visible when selecting another row
-      typeItem.setAttribute("actionDescription",
-        this._describePreferredAction(handlerInfo));
-      if (!this._setIconClassForPreferredAction(handlerInfo, typeItem)) {
-        typeItem.setAttribute("actionIcon",
-          this._getIconURLForPreferredAction(handlerInfo));
-      }
+      this.selectedHandlerListItem.refreshAction();
     };
 
     gSubDialog.open("chrome://browser/content/preferences/applicationManager.xul",
@@ -2156,8 +2006,7 @@ var gMainPane = {
       // If the user picked a new app from the menu, select it.
       if (aHandlerApp) {
         let typeItem = this._list.selectedItem;
-        let actionsMenu =
-          document.getAnonymousElementByAttribute(typeItem, "class", "actionsMenu");
+        let actionsMenu = typeItem.querySelector(".actionsMenu");
         let menuItems = actionsMenu.menupopup.childNodes;
         for (let i = 0; i < menuItems.length; i++) {
           let menuItem = menuItems[i];
@@ -2172,17 +2021,17 @@ var gMainPane = {
 
     if (AppConstants.platform == "win") {
       var params = {};
-      var handlerInfo = this._handledTypes[this._list.selectedItem.type];
+      var handlerInfo = this.selectedHandlerListItem.handlerInfoWrapper;
 
       if (isFeedType(handlerInfo.type)) {
         // MIME info will be null, create a temp object.
-        params.mimeInfo = this._mimeSvc.getFromTypeAndExtension(handlerInfo.type,
+        params.mimeInfo = gMIMEService.getFromTypeAndExtension(handlerInfo.type,
           handlerInfo.primaryExtension);
       } else {
         params.mimeInfo = handlerInfo.wrappedHandlerInfo;
       }
 
-      params.title = this._prefsBundle.getString("fpTitleChooseApp");
+      params.title = gMainPane._prefsBundle.getString("fpTitleChooseApp");
       params.description = handlerInfo.description;
       params.filename = null;
       params.handlerApp = null;
@@ -2201,7 +2050,7 @@ var gMainPane = {
       gSubDialog.open("chrome://global/content/appPicker.xul",
         null, params, onAppSelected);
     } else {
-      let winTitle = this._prefsBundle.getString("fpTitleChooseApp");
+      let winTitle = gMainPane._prefsBundle.getString("fpTitleChooseApp");
       let fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
       let fpCallback = aResult => {
         if (aResult == Ci.nsIFilePicker.returnOK && fp.file &&
@@ -2212,7 +2061,7 @@ var gMainPane = {
           handlerApp.executable = fp.file;
 
           // Add the app to the type's list of possible handlers.
-          let handler = this._handledTypes[this._list.selectedItem.type];
+          let handler = this.selectedHandlerListItem.handlerInfoWrapper;
           handler.addPossibleApplicationHandler(handlerApp);
 
           chooseAppCallback(handlerApp);
@@ -2227,66 +2076,6 @@ var gMainPane = {
     }
   },
 
-  // Mark which item in the list was last selected so we can reselect it
-  // when we rebuild the list or when the user returns to the prefpane.
-  onSelectionChanged() {
-    if (this._list.selectedItem)
-      this._list.setAttribute("lastSelectedType",
-        this._list.selectedItem.getAttribute("type"));
-  },
-
-  _setIconClassForPreferredAction(aHandlerInfo, aElement) {
-    // If this returns true, the attribute that CSS sniffs for was set to something
-    // so you shouldn't manually set an icon URI.
-    // This removes the existing actionIcon attribute if any, even if returning false.
-    aElement.removeAttribute("actionIcon");
-
-    if (aHandlerInfo.alwaysAskBeforeHandling) {
-      aElement.setAttribute(APP_ICON_ATTR_NAME, "ask");
-      return true;
-    }
-
-    switch (aHandlerInfo.preferredAction) {
-      case Ci.nsIHandlerInfo.saveToDisk:
-        aElement.setAttribute(APP_ICON_ATTR_NAME, "save");
-        return true;
-
-      case Ci.nsIHandlerInfo.handleInternally:
-        if (isFeedType(aHandlerInfo.type)) {
-          aElement.setAttribute(APP_ICON_ATTR_NAME, "feed");
-          return true;
-        } else if (aHandlerInfo instanceof InternalHandlerInfoWrapper) {
-          aElement.setAttribute(APP_ICON_ATTR_NAME, "ask");
-          return true;
-        }
-        break;
-
-      case kActionUsePlugin:
-        aElement.setAttribute(APP_ICON_ATTR_NAME, "plugin");
-        return true;
-    }
-    aElement.removeAttribute(APP_ICON_ATTR_NAME);
-    return false;
-  },
-
-  _getIconURLForPreferredAction(aHandlerInfo) {
-    switch (aHandlerInfo.preferredAction) {
-      case Ci.nsIHandlerInfo.useSystemDefault:
-        return this._getIconURLForSystemDefault(aHandlerInfo);
-
-      case Ci.nsIHandlerInfo.useHelperApp:
-        let preferredApp = aHandlerInfo.preferredApplicationHandler;
-        if (this.isValidHandlerApp(preferredApp))
-          return this._getIconURLForHandlerApp(preferredApp);
-      // Explicit fall-through
-
-      // This should never happen, but if preferredAction is set to some weird
-      // value, then fall back to the generic application icon.
-      default:
-        return ICON_URL_APP;
-    }
-  },
-
   _getIconURLForHandlerApp(aHandlerApp) {
     if (aHandlerApp instanceof Ci.nsILocalHandlerApp)
       return this._getIconURLForFile(aHandlerApp.executable);
@@ -2295,14 +2084,14 @@ var gMainPane = {
       return this._getIconURLForWebApp(aHandlerApp.uriTemplate);
 
     if (aHandlerApp instanceof Ci.nsIWebContentHandlerInfo)
-      return this._getIconURLForWebApp(aHandlerApp.uri)
+      return this._getIconURLForWebApp(aHandlerApp.uri);
 
     // We know nothing about other kinds of handler apps.
     return "";
   },
 
   _getIconURLForFile(aFile) {
-    var fph = this._ioSvc.getProtocolHandler("file").
+    var fph = Services.io.getProtocolHandler("file").
       QueryInterface(Ci.nsIFileProtocolHandler);
     var urlSpec = fph.getURLSpecFromFile(aFile);
 
@@ -2310,7 +2099,7 @@ var gMainPane = {
   },
 
   _getIconURLForWebApp(aWebAppURITemplate) {
-    var uri = this._ioSvc.newURI(aWebAppURITemplate);
+    var uri = Services.io.newURI(aWebAppURITemplate);
 
     // Unfortunately we can't use the favicon service to get the favicon,
     // because the service looks in the annotations table for a record with
@@ -2319,33 +2108,10 @@ var gMainPane = {
     // they'll only visit URLs derived from that template (i.e. with %s
     // in the template replaced by the URL of the content being handled).
 
-    if (/^https?$/.test(uri.scheme) && this._prefSvc.getBoolPref("browser.chrome.favicons"))
+    if (/^https?$/.test(uri.scheme) && Services.prefs.getBoolPref("browser.chrome.favicons"))
       return uri.prePath + "/favicon.ico";
 
     return "";
-  },
-
-  _getIconURLForSystemDefault(aHandlerInfo) {
-    // Handler info objects for MIME types on some OSes implement a property bag
-    // interface from which we can get an icon for the default app, so if we're
-    // dealing with a MIME type on one of those OSes, then try to get the icon.
-    if ("wrappedHandlerInfo" in aHandlerInfo) {
-      let wrappedHandlerInfo = aHandlerInfo.wrappedHandlerInfo;
-
-      if (wrappedHandlerInfo instanceof Ci.nsIMIMEInfo &&
-        wrappedHandlerInfo instanceof Ci.nsIPropertyBag) {
-        try {
-          let url = wrappedHandlerInfo.getProperty("defaultApplicationIconURL");
-          if (url)
-            return url + "?size=16";
-        } catch (ex) { }
-      }
-    }
-
-    // If this isn't a MIME type object on an OS that supports retrieving
-    // the icon, or if we couldn't retrieve the icon for some other reason,
-    // then use a generic icon.
-    return ICON_URL_APP;
   },
 
   // DOWNLOADS
@@ -2389,11 +2155,11 @@ var gMainPane = {
   readUseDownloadDir() {
     var downloadFolder = document.getElementById("downloadFolder");
     var chooseFolder = document.getElementById("chooseFolder");
-    var preference = document.getElementById("browser.download.useDownloadDir");
+    var preference = Preferences.get("browser.download.useDownloadDir");
     downloadFolder.disabled = !preference.value || preference.locked;
     chooseFolder.disabled = !preference.value || preference.locked;
 
-    this.readCloudStorage().catch(Components.utils.reportError);
+    this.readCloudStorage().catch(Cu.reportError);
     // don't override the preference's value in UI
     return undefined;
   },
@@ -2417,8 +2183,8 @@ var gMainPane = {
         [providerDisplayName], 1);
       saveToCloudRadio.hidden = false;
 
-      let useDownloadDirPref = document.getElementById("browser.download.useDownloadDir");
-      let folderListPref = document.getElementById("browser.download.folderList");
+      let useDownloadDirPref = Preferences.get("browser.download.useDownloadDir");
+      let folderListPref = Preferences.get("browser.download.folderList");
 
       // Check if useDownloadDir is true and folderListPref is set to Cloud Storage value 3
       // before selecting cloudStorageradio button. Disable folder field and Browse button if
@@ -2438,7 +2204,7 @@ var gMainPane = {
    * button based on option selected.
    */
   handleSaveToCommand(event) {
-    return this.handleSaveToCommandTask(event).catch(Components.utils.reportError);
+    return this.handleSaveToCommandTask(event).catch(Cu.reportError);
   },
   async handleSaveToCommandTask(event) {
     if (event.target.id !== "saveToCloud" && event.target.id !== "saveTo") {
@@ -2452,7 +2218,7 @@ var gMainPane = {
       // with useDownloadDirPref value true, if selectedIndex is other than
       // SaveTo radio button disable downloadFolder filefield and chooseFolder button
       let saveWhere = document.getElementById("saveWhere");
-      let useDownloadDirPref = document.getElementById("browser.download.useDownloadDir");
+      let useDownloadDirPref = Preferences.get("browser.download.useDownloadDir");
       if (useDownloadDirPref.value) {
         let downloadFolder = document.getElementById("downloadFolder");
         let chooseFolder = document.getElementById("chooseFolder");
@@ -2466,12 +2232,12 @@ var gMainPane = {
       // default Downloads, check pref 'browser.download.dir' before setting respective
       // folderListPref value. If currentDirPref is unspecified folderList should
       // default to 1
-      let folderListPref = document.getElementById("browser.download.folderList");
+      let folderListPref = Preferences.get("browser.download.folderList");
       let saveTo = document.getElementById("saveTo");
       if (saveWhere.selectedItem == saveToCloudRadio) {
         folderListPref.value = 3;
       } else if (saveWhere.selectedItem == saveTo) {
-        let currentDirPref = document.getElementById("browser.download.dir");
+        let currentDirPref = Preferences.get("browser.download.dir");
         folderListPref.value = currentDirPref.value ? await this._folderToIndex(currentDirPref.value) : 1;
       }
     }
@@ -2483,19 +2249,18 @@ var gMainPane = {
    * response to the choice, if one is made.
    */
   chooseFolder() {
-    return this.chooseFolderTask().catch(Components.utils.reportError);
+    return this.chooseFolderTask().catch(Cu.reportError);
   },
   async chooseFolderTask() {
-    let bundlePreferences = document.getElementById("bundlePreferences");
-    let title = bundlePreferences.getString("chooseDownloadFolderTitle");
-    let folderListPref = document.getElementById("browser.download.folderList");
+    let title = gMainPane._prefsBundle.getString("chooseDownloadFolderTitle");
+    let folderListPref = Preferences.get("browser.download.folderList");
     let currentDirPref = await this._indexToFolder(folderListPref.value);
     let defDownloads = await this._indexToFolder(1);
-    let fp = Components.classes["@mozilla.org/filepicker;1"].
-      createInstance(Components.interfaces.nsIFilePicker);
+    let fp = Cc["@mozilla.org/filepicker;1"].
+      createInstance(Ci.nsIFilePicker);
 
-    fp.init(window, title, Components.interfaces.nsIFilePicker.modeGetFolder);
-    fp.appendFilters(Components.interfaces.nsIFilePicker.filterAll);
+    fp.init(window, title, Ci.nsIFilePicker.modeGetFolder);
+    fp.appendFilters(Ci.nsIFilePicker.filterAll);
     // First try to open what's currently configured
     if (currentDirPref && currentDirPref.exists()) {
       fp.displayDirectory = currentDirPref;
@@ -2508,11 +2273,11 @@ var gMainPane = {
     }
 
     let result = await new Promise(resolve => fp.open(resolve));
-    if (result != Components.interfaces.nsIFilePicker.returnOK) {
+    if (result != Ci.nsIFilePicker.returnOK) {
       return;
     }
 
-    let downloadDirPref = document.getElementById("browser.download.dir");
+    let downloadDirPref = Preferences.get("browser.download.dir");
     downloadDirPref.value = fp.file;
     folderListPref.value = await this._folderToIndex(fp.file);
     // Note, the real prefs will not be updated yet, so dnld manager's
@@ -2526,23 +2291,20 @@ var gMainPane = {
    * preferences.
    */
   displayDownloadDirPref() {
-    this.displayDownloadDirPrefTask().catch(Components.utils.reportError);
+    this.displayDownloadDirPrefTask().catch(Cu.reportError);
 
     // don't override the preference's value in UI
     return undefined;
   },
 
   async displayDownloadDirPrefTask() {
-    var folderListPref = document.getElementById("browser.download.folderList");
-    var bundlePreferences = document.getElementById("bundlePreferences");
+    var folderListPref = Preferences.get("browser.download.folderList");
     var downloadFolder = document.getElementById("downloadFolder");
-    var currentDirPref = document.getElementById("browser.download.dir");
+    var currentDirPref = Preferences.get("browser.download.dir");
 
     // Used in defining the correct path to the folder icon.
-    var ios = Components.classes["@mozilla.org/network/io-service;1"]
-      .getService(Components.interfaces.nsIIOService);
-    var fph = ios.getProtocolHandler("file")
-      .QueryInterface(Components.interfaces.nsIFileProtocolHandler);
+    var fph = Services.io.getProtocolHandler("file")
+      .QueryInterface(Ci.nsIFileProtocolHandler);
     var iconUrlSpec;
 
     let folderIndex = folderListPref.value;
@@ -2556,28 +2318,20 @@ var gMainPane = {
 
     // Display a 'pretty' label or the path in the UI.
     if (folderIndex == 2) {
-      // Custom path selected and is configured
-      downloadFolder.label = this._getDisplayNameOfFile(currentDirPref.value);
+      // Force the left-to-right direction when displaying a custom path.
+      downloadFolder.value = currentDirPref.value ?
+        `\u2066${currentDirPref.value.path}\u2069` : "";
       iconUrlSpec = fph.getURLSpecFromFile(currentDirPref.value);
     } else if (folderIndex == 1) {
       // 'Downloads'
-      downloadFolder.label = bundlePreferences.getString("downloadsFolderName");
+      downloadFolder.value = gMainPane._prefsBundle.getString("downloadsFolderName");
       iconUrlSpec = fph.getURLSpecFromFile(await this._indexToFolder(1));
     } else {
       // 'Desktop'
-      downloadFolder.label = bundlePreferences.getString("desktopFolderName");
+      downloadFolder.value = gMainPane._prefsBundle.getString("desktopFolderName");
       iconUrlSpec = fph.getURLSpecFromFile(await this._getDownloadsFolder("Desktop"));
     }
-    downloadFolder.image = "moz-icon://" + iconUrlSpec + "?size=16";
-  },
-
-  /**
-   * Returns the textual path of a folder in readable form.
-   */
-  _getDisplayNameOfFile(aFolder) {
-    // TODO: would like to add support for 'Downloads on Macintosh HD'
-    //       for OS X users.
-    return aFolder ? aFolder.path : "";
+    downloadFolder.style.backgroundImage = "url(moz-icon://" + iconUrlSpec + "?size=16)";
   },
 
   /**
@@ -2592,9 +2346,7 @@ var gMainPane = {
   async _getDownloadsFolder(aFolder) {
     switch (aFolder) {
       case "Desktop":
-        var fileLoc = Components.classes["@mozilla.org/file/directory_service;1"]
-          .getService(Components.interfaces.nsIProperties);
-        return fileLoc.get("Desk", Components.interfaces.nsIFile);
+        return Services.dirsvc.get("Desk", Ci.nsIFile);
       case "Downloads":
         let downloadsDir = await Downloads.getSystemDownloadsDirectory();
         return new FileUtils.File(downloadsDir);
@@ -2636,7 +2388,7 @@ var gMainPane = {
       case 1:
         return this._getDownloadsFolder("Downloads");
     }
-    var currentDirPref = document.getElementById("browser.download.dir");
+    var currentDirPref = Preferences.get("browser.download.dir");
     return currentDirPref.value;
   }
 };
@@ -2670,69 +2422,6 @@ function getLocalHandlerApp(aFile) {
   return localHandlerApp;
 }
 
-let extensionControlledContentIds = {
-  "privacy.containers": "browserContainersExtensionContent",
-  "homepage_override": "browserHomePageExtensionContent",
-  "newTabURL": "browserNewTabExtensionContent",
-};
-
-/**
-  * Check if a pref is being managed by an extension.
-  */
-async function getControllingExtensionId(type, settingName) {
-  await ExtensionSettingsStore.initialize();
-  return ExtensionSettingsStore.getTopExtensionId(type, settingName);
-}
-
-function getControllingExtensionEl(settingName) {
-  return document.getElementById(extensionControlledContentIds[settingName]);
-}
-
-async function handleControllingExtension(type, settingName) {
-  let controllingExtensionId = await getControllingExtensionId(type, settingName);
-
-  if (controllingExtensionId) {
-    showControllingExtension(settingName, controllingExtensionId);
-  } else {
-    hideControllingExtension(settingName);
-  }
-
-  return !!controllingExtensionId;
-}
-
-async function showControllingExtension(settingName, extensionId) {
-  let extensionControlledContent = getControllingExtensionEl(settingName);
-  // Tell the user what extension is controlling the setting.
-  let addon = await AddonManager.getAddonByID(extensionId);
-  const defaultIcon = "chrome://mozapps/skin/extensions/extensionGeneric.svg";
-  let stringParts = document
-    .getElementById("bundlePreferences")
-    .getString(`extensionControlled.${settingName}`)
-    .split("%S");
-  let description = extensionControlledContent.querySelector("description");
-
-  // Remove the old content from the description.
-  while (description.firstChild) {
-    description.firstChild.remove();
-  }
-
-  // Populate the description.
-  description.appendChild(document.createTextNode(stringParts[0]));
-  let image = document.createElement("image");
-  image.setAttribute("src", addon.iconURL || defaultIcon);
-  image.classList.add("extension-controlled-icon");
-  description.appendChild(image);
-  description.appendChild(document.createTextNode(` ${addon.name}`));
-  description.appendChild(document.createTextNode(stringParts[1]));
-
-  // Show the controlling extension row and hide the old label.
-  extensionControlledContent.hidden = false;
-}
-
-function hideControllingExtension(settingName) {
-  getControllingExtensionEl(settingName).hidden = true;
-}
-
 /**
  * An enumeration of items in a JS array.
  *
@@ -2761,7 +2450,88 @@ function isFeedType(t) {
   return t == TYPE_MAYBE_FEED || t == TYPE_MAYBE_VIDEO_FEED || t == TYPE_MAYBE_AUDIO_FEED;
 }
 
-// HandlerInfoWrapper
+// eslint-disable-next-line no-undef
+let gHandlerListItemFragment = MozXULElement.parseXULToFragment(`
+  <richlistitem>
+    <hbox flex="1" equalsize="always">
+      <hbox class="typeContainer" flex="1" align="center">
+        <image class="typeIcon" width="16" height="16"
+               src="moz-icon://goat?size=16"/>
+        <label class="typeDescription" flex="1" crop="end"/>
+      </hbox>
+      <hbox class="actionContainer" flex="1" align="center">
+        <image class="actionIcon" width="16" height="16"/>
+        <label class="actionDescription" flex="1" crop="end"/>
+      </hbox>
+      <hbox class="actionsMenuContainer" flex="1">
+        <menulist class="actionsMenu" flex="1" crop="end" selectedIndex="1">
+          <menupopup/>
+        </menulist>
+      </hbox>
+    </hbox>
+  </richlistitem>
+`);
+
+/**
+ * This is associated to <richlistitem> elements in the handlers view.
+ */
+class HandlerListItem {
+  static forNode(node) {
+    return gNodeToObjectMap.get(node);
+  }
+
+  constructor(handlerInfoWrapper) {
+    this.handlerInfoWrapper = handlerInfoWrapper;
+  }
+
+  setOrRemoveAttributes(iterable) {
+    for (let [selector, name, value] of iterable) {
+      let node = selector ? this.node.querySelector(selector) : this.node;
+      if (value) {
+        node.setAttribute(name, value);
+      } else {
+        node.removeAttribute(name);
+      }
+    }
+  }
+
+  connectAndAppendToList(list) {
+    list.appendChild(document.importNode(gHandlerListItemFragment, true));
+    this.node = list.lastChild;
+    gNodeToObjectMap.set(this.node, this);
+
+    this.node.querySelector(".actionsMenu").addEventListener("command",
+      event => gMainPane.onSelectAction(event.originalTarget));
+
+    let typeDescription = this.handlerInfoWrapper.typeDescription;
+    this.setOrRemoveAttributes([
+      [null, "type", this.handlerInfoWrapper.type],
+      [".typeContainer", "tooltiptext", typeDescription],
+      [".typeDescription", "value", typeDescription],
+      [".typeIcon", "src", this.handlerInfoWrapper.smallIcon],
+    ]);
+    this.refreshAction();
+    this.showActionsMenu = false;
+  }
+
+  refreshAction() {
+    let { actionIconClass, actionDescription } = this.handlerInfoWrapper;
+    this.setOrRemoveAttributes([
+      [null, APP_ICON_ATTR_NAME, actionIconClass],
+      [".actionContainer", "tooltiptext", actionDescription],
+      [".actionDescription", "value", actionDescription],
+      [".actionIcon", "src", actionIconClass ? null :
+                             this.handlerInfoWrapper.actionIcon],
+    ]);
+  }
+
+  set showActionsMenu(value) {
+    this.setOrRemoveAttributes([
+      [".actionContainer", "hidden", value],
+      [".actionsMenuContainer", "hidden", !value],
+    ]);
+  }
+}
 
 /**
  * This object wraps nsIHandlerInfo with some additional functionality
@@ -2774,45 +2544,34 @@ function isFeedType(t) {
  *
  * We don't implement all the original nsIHandlerInfo functionality,
  * just the stuff that the prefpane needs.
- *
- * In theory, all of the custom functionality in this wrapper should get
- * pushed down into nsIHandlerInfo eventually.
  */
-function HandlerInfoWrapper(aType, aHandlerInfo) {
-  this._type = aType;
-  this.wrappedHandlerInfo = aHandlerInfo;
-}
+class HandlerInfoWrapper {
+  constructor(type, handlerInfo) {
+    this.type = type;
+    this.wrappedHandlerInfo = handlerInfo;
+    this.disambiguateDescription = false;
 
-HandlerInfoWrapper.prototype = {
-  // The wrapped nsIHandlerInfo object.  In general, this object is private,
-  // but there are a couple cases where callers access it directly for things
-  // we haven't (yet?) implemented, so we make it a public property.
-  wrappedHandlerInfo: null,
+    // A plugin that can handle this type, if any.
+    //
+    // Note: just because we have one doesn't mean it *will* handle the type.
+    // That depends on whether or not the type is in the list of types for which
+    // plugin handling is disabled.
+    this.pluginName = "";
 
-
-  // Convenience Utils
-
-  _handlerSvc: Cc["@mozilla.org/uriloader/handler-service;1"].
-    getService(Ci.nsIHandlerService),
-
-  _prefSvc: Cc["@mozilla.org/preferences-service;1"].
-    getService(Ci.nsIPrefBranch),
-
-  _categoryMgr: Cc["@mozilla.org/categorymanager;1"].
-    getService(Ci.nsICategoryManager),
-
-  element(aID) {
-    return document.getElementById(aID);
-  },
-
-
-  // nsIHandlerInfo
-
-  // The MIME type or protocol scheme.
-  _type: null,
-  get type() {
-    return this._type;
-  },
+    // Whether or not this type is only handled by a plugin or is also handled
+    // by some user-configured action as specified in the handler info object.
+    //
+    // Note: we can't just check if there's a handler info object for this type,
+    // because OS and user configuration is mixed up in the handler info object,
+    // so we always need to retrieve it for the OS info and can't tell whether
+    // it represents only OS-default information or user-configured information.
+    //
+    // FIXME: once handler info records are broken up into OS-provided records
+    // and user-configured records, stop using this boolean flag and simply
+    // check for the presence of a user-configured record to determine whether
+    // or not this type is only handled by a plugin.  Filed as bug 395142.
+    this.handledOnlyByPlugin = false;
+  }
 
   get description() {
     if (this.wrappedHandlerInfo.description)
@@ -2820,28 +2579,172 @@ HandlerInfoWrapper.prototype = {
 
     if (this.primaryExtension) {
       var extension = this.primaryExtension.toUpperCase();
-      return this.element("bundlePreferences").getFormattedString("fileEnding",
+      return gMainPane._prefsBundle.getFormattedString("fileEnding",
         [extension]);
     }
 
     return this.type;
-  },
+  }
+
+  /**
+   * Describe, in a human-readable fashion, the type represented by the given
+   * handler info object.  Normally this is just the description, but if more
+   * than one object presents the same description, "disambiguateDescription"
+   * is set and we annotate the duplicate descriptions with the type itself
+   * to help users distinguish between those types.
+   */
+  get typeDescription() {
+    if (this.disambiguateDescription) {
+      return gMainPane._prefsBundle.getFormattedString(
+        "typeDescriptionWithType", [this.description, this.type]);
+    }
+
+    return this.description;
+  }
+
+  /**
+   * Describe, in a human-readable fashion, the preferred action to take on
+   * the type represented by the given handler info object.
+   */
+  get actionDescription() {
+    // alwaysAskBeforeHandling overrides the preferred action, so if that flag
+    // is set, then describe that behavior instead.  For most types, this is
+    // the "alwaysAsk" string, but for the feed type we show something special.
+    if (this.alwaysAskBeforeHandling) {
+      if (isFeedType(this.type))
+        return gMainPane._prefsBundle.getFormattedString("previewInApp",
+          [gMainPane._brandShortName]);
+      return gMainPane._prefsBundle.getString("alwaysAsk");
+    }
+
+    switch (this.preferredAction) {
+      case Ci.nsIHandlerInfo.saveToDisk:
+        return gMainPane._prefsBundle.getString("saveFile");
+
+      case Ci.nsIHandlerInfo.useHelperApp:
+        var preferredApp = this.preferredApplicationHandler;
+        var name;
+        if (preferredApp instanceof Ci.nsILocalHandlerApp)
+          name = getFileDisplayName(preferredApp.executable);
+        else
+          name = preferredApp.name;
+        return gMainPane._prefsBundle.getFormattedString("useApp", [name]);
+
+      case Ci.nsIHandlerInfo.handleInternally:
+        // For the feed type, handleInternally means live bookmarks.
+        if (isFeedType(this.type)) {
+          return gMainPane._prefsBundle.getFormattedString("addLiveBookmarksInApp",
+            [gMainPane._brandShortName]);
+        }
+
+        if (this instanceof InternalHandlerInfoWrapper) {
+          return gMainPane._prefsBundle.getFormattedString("previewInApp",
+            [gMainPane._brandShortName]);
+        }
+
+        // For other types, handleInternally looks like either useHelperApp
+        // or useSystemDefault depending on whether or not there's a preferred
+        // handler app.
+        if (gMainPane.isValidHandlerApp(this.preferredApplicationHandler))
+          return this.preferredApplicationHandler.name;
+
+        return this.defaultDescription;
+
+      // XXX Why don't we say the app will handle the type internally?
+      // Is it because the app can't actually do that?  But if that's true,
+      // then why would a preferredAction ever get set to this value
+      // in the first place?
+
+      case Ci.nsIHandlerInfo.useSystemDefault:
+        return gMainPane._prefsBundle.getFormattedString("useDefault",
+          [this.defaultDescription]);
+
+      case kActionUsePlugin:
+        return gMainPane._prefsBundle.getFormattedString("usePluginIn",
+          [this.pluginName,
+          gMainPane._brandShortName]);
+      default:
+        throw new Error(`Unexpected preferredAction: ${this.preferredAction}`);
+    }
+  }
+
+  get actionIconClass() {
+    if (this.alwaysAskBeforeHandling) {
+      return "ask";
+    }
+
+    switch (this.preferredAction) {
+      case Ci.nsIHandlerInfo.saveToDisk:
+        return "save";
+
+      case Ci.nsIHandlerInfo.handleInternally:
+        if (isFeedType(this.type)) {
+          return "feed";
+        } else if (this instanceof InternalHandlerInfoWrapper) {
+          return "ask";
+        }
+
+      case kActionUsePlugin:
+        return "plugin";
+    }
+
+    return "";
+  }
+
+  get actionIcon() {
+    switch (this.preferredAction) {
+      case Ci.nsIHandlerInfo.useSystemDefault:
+        return this.iconURLForSystemDefault;
+
+      case Ci.nsIHandlerInfo.useHelperApp:
+        let preferredApp = this.preferredApplicationHandler;
+        if (gMainPane.isValidHandlerApp(preferredApp)) {
+          return gMainPane._getIconURLForHandlerApp(preferredApp);
+        }
+      // Explicit fall-through
+
+      // This should never happen, but if preferredAction is set to some weird
+      // value, then fall back to the generic application icon.
+      default:
+        return ICON_URL_APP;
+    }
+  }
+
+  get iconURLForSystemDefault() {
+    // Handler info objects for MIME types on some OSes implement a property bag
+    // interface from which we can get an icon for the default app, so if we're
+    // dealing with a MIME type on one of those OSes, then try to get the icon.
+    if (this.wrappedHandlerInfo instanceof Ci.nsIMIMEInfo &&
+        this.wrappedHandlerInfo instanceof Ci.nsIPropertyBag) {
+      try {
+        let url = this.wrappedHandlerInfo.getProperty("defaultApplicationIconURL");
+        if (url) {
+          return url + "?size=16";
+        }
+      } catch (ex) { }
+    }
+
+    // If this isn't a MIME type object on an OS that supports retrieving
+    // the icon, or if we couldn't retrieve the icon for some other reason,
+    // then use a generic icon.
+    return ICON_URL_APP;
+  }
 
   get preferredApplicationHandler() {
     return this.wrappedHandlerInfo.preferredApplicationHandler;
-  },
+  }
 
   set preferredApplicationHandler(aNewValue) {
     this.wrappedHandlerInfo.preferredApplicationHandler = aNewValue;
 
     // Make sure the preferred handler is in the set of possible handlers.
     if (aNewValue)
-      this.addPossibleApplicationHandler(aNewValue)
-  },
+      this.addPossibleApplicationHandler(aNewValue);
+  }
 
   get possibleApplicationHandlers() {
     return this.wrappedHandlerInfo.possibleApplicationHandlers;
-  },
+  }
 
   addPossibleApplicationHandler(aNewHandler) {
     var possibleApps = this.possibleApplicationHandlers.enumerate();
@@ -2850,7 +2753,7 @@ HandlerInfoWrapper.prototype = {
         return;
     }
     this.possibleApplicationHandlers.appendElement(aNewHandler);
-  },
+  }
 
   removePossibleApplicationHandler(aHandler) {
     var defaultApp = this.preferredApplicationHandler;
@@ -2869,15 +2772,15 @@ HandlerInfoWrapper.prototype = {
         break;
       }
     }
-  },
+  }
 
   get hasDefaultHandler() {
     return this.wrappedHandlerInfo.hasDefaultHandler;
-  },
+  }
 
   get defaultDescription() {
     return this.wrappedHandlerInfo.defaultDescription;
-  },
+  }
 
   // What to do with content of this type.
   get preferredAction() {
@@ -2899,7 +2802,7 @@ HandlerInfoWrapper.prototype = {
     }
 
     return this.wrappedHandlerInfo.preferredAction;
-  },
+  }
 
   set preferredAction(aNewValue) {
     // If the action is to use the plugin,
@@ -2917,7 +2820,7 @@ HandlerInfoWrapper.prototype = {
 
     if (aNewValue != kActionUsePlugin)
       this.wrappedHandlerInfo.preferredAction = aNewValue;
-  },
+  }
 
   get alwaysAskBeforeHandling() {
     // If this type is handled only by a plugin, we can't trust the value
@@ -2939,14 +2842,11 @@ HandlerInfoWrapper.prototype = {
       return true;
 
     return this.wrappedHandlerInfo.alwaysAskBeforeHandling;
-  },
+  }
 
   set alwaysAskBeforeHandling(aNewValue) {
     this.wrappedHandlerInfo.alwaysAskBeforeHandling = aNewValue;
-  },
-
-
-  // nsIMIMEInfo
+  }
 
   // The primary file extension associated with this type, if any.
   //
@@ -2957,45 +2857,21 @@ HandlerInfoWrapper.prototype = {
     try {
       if (this.wrappedHandlerInfo instanceof Ci.nsIMIMEInfo &&
         this.wrappedHandlerInfo.primaryExtension)
-        return this.wrappedHandlerInfo.primaryExtension
+        return this.wrappedHandlerInfo.primaryExtension;
     } catch (ex) { }
 
     return null;
-  },
-
-
-  // Plugin Handling
-
-  // A plugin that can handle this type, if any.
-  //
-  // Note: just because we have one doesn't mean it *will* handle the type.
-  // That depends on whether or not the type is in the list of types for which
-  // plugin handling is disabled.
-  plugin: null,
-
-  // Whether or not this type is only handled by a plugin or is also handled
-  // by some user-configured action as specified in the handler info object.
-  //
-  // Note: we can't just check if there's a handler info object for this type,
-  // because OS and user configuration is mixed up in the handler info object,
-  // so we always need to retrieve it for the OS info and can't tell whether
-  // it represents only OS-default information or user-configured information.
-  //
-  // FIXME: once handler info records are broken up into OS-provided records
-  // and user-configured records, stop using this boolean flag and simply
-  // check for the presence of a user-configured record to determine whether
-  // or not this type is only handled by a plugin.  Filed as bug 395142.
-  handledOnlyByPlugin: undefined,
+  }
 
   get isDisabledPluginType() {
-    return this._getDisabledPluginTypes().indexOf(this.type) != -1;
-  },
+    return this._getDisabledPluginTypes().includes(this.type);
+  }
 
   _getDisabledPluginTypes() {
     var types = "";
 
-    if (this._prefSvc.prefHasUserValue(PREF_DISABLED_PLUGIN_TYPES))
-      types = this._prefSvc.getCharPref(PREF_DISABLED_PLUGIN_TYPES);
+    if (Services.prefs.prefHasUserValue(PREF_DISABLED_PLUGIN_TYPES))
+      types = Services.prefs.getCharPref(PREF_DISABLED_PLUGIN_TYPES);
 
     // Only split if the string isn't empty so we don't end up with an array
     // containing a single empty string.
@@ -3003,22 +2879,22 @@ HandlerInfoWrapper.prototype = {
       return types.split(",");
 
     return [];
-  },
+  }
 
   disablePluginType() {
     var disabledPluginTypes = this._getDisabledPluginTypes();
 
-    if (disabledPluginTypes.indexOf(this.type) == -1)
+    if (!disabledPluginTypes.includes(this.type))
       disabledPluginTypes.push(this.type);
 
-    this._prefSvc.setCharPref(PREF_DISABLED_PLUGIN_TYPES,
+    Services.prefs.setCharPref(PREF_DISABLED_PLUGIN_TYPES,
       disabledPluginTypes.join(","));
 
     // Update the category manager so existing browser windows update.
-    this._categoryMgr.deleteCategoryEntry("Gecko-Content-Viewers",
+    gCategoryManager.deleteCategoryEntry("Gecko-Content-Viewers",
       this.type,
       false);
-  },
+  }
 
   enablePluginType() {
     var disabledPluginTypes = this._getDisabledPluginTypes();
@@ -3026,31 +2902,25 @@ HandlerInfoWrapper.prototype = {
     var type = this.type;
     disabledPluginTypes = disabledPluginTypes.filter(v => v != type);
 
-    this._prefSvc.setCharPref(PREF_DISABLED_PLUGIN_TYPES,
+    Services.prefs.setCharPref(PREF_DISABLED_PLUGIN_TYPES,
       disabledPluginTypes.join(","));
 
     // Update the category manager so existing browser windows update.
-    this._categoryMgr.
-      addCategoryEntry("Gecko-Content-Viewers",
+    gCategoryManager.addCategoryEntry(
+      "Gecko-Content-Viewers",
       this.type,
       "@mozilla.org/content/plugin/document-loader-factory;1",
       false,
       true);
-  },
-
-
-  // Storage
+  }
 
   store() {
-    this._handlerSvc.store(this.wrappedHandlerInfo);
-  },
-
-
-  // Icons
+    gHandlerService.store(this.wrappedHandlerInfo);
+  }
 
   get smallIcon() {
     return this._getIcon(16);
-  },
+  }
 
   _getIcon(aSize) {
     if (this.primaryExtension)
@@ -3063,11 +2933,7 @@ HandlerInfoWrapper.prototype = {
     // one (for example in the case of protocol schemes).  Filed as bug 395141.
     return null;
   }
-
-};
-
-
-// Feed Handler Info
+}
 
 /**
  * This object implements nsIHandlerInfo for the feed types.  It's a separate
@@ -3076,48 +2942,31 @@ HandlerInfoWrapper.prototype = {
  *
  * This object inherits from HandlerInfoWrapper in order to get functionality
  * that isn't special to the feed type.
- *
- * XXX Should we inherit from HandlerInfoWrapper?  After all, we override
- * most of that wrapper's properties and methods, and we have to dance around
- * the fact that the wrapper expects to have a wrappedHandlerInfo, which we
- * don't provide.
  */
-
-function FeedHandlerInfo(aMIMEType) {
-  HandlerInfoWrapper.call(this, aMIMEType, null);
-}
-
-FeedHandlerInfo.prototype = {
-  __proto__: HandlerInfoWrapper.prototype,
-
-  // Convenience Utils
-
-  _converterSvc:
-  Cc["@mozilla.org/embeddor.implemented/web-content-handler-registrar;1"].
-    getService(Ci.nsIWebContentConverterService),
-
-  _shellSvc: AppConstants.HAVE_SHELL_SERVICE ? getShellService() : null,
-
-  // nsIHandlerInfo
+class FeedHandlerInfo extends HandlerInfoWrapper {
+  constructor(aMIMEType, properties) {
+    super(aMIMEType, null);
+    Object.assign(this, properties);
+  }
 
   get description() {
-    return this.element("bundlePreferences").getString(this._appPrefLabel);
-  },
+    return gMainPane._prefsBundle.getString(this._appPrefLabel);
+  }
 
   get preferredApplicationHandler() {
-    switch (this.element(this._prefSelectedReader).value) {
+    switch (Preferences.get(this._prefSelectedReader).value) {
       case "client":
-        var file = this.element(this._prefSelectedApp).value;
+        var file = Preferences.get(this._prefSelectedApp).value;
         if (file)
           return getLocalHandlerApp(file);
 
         return null;
 
       case "web":
-        var uri = this.element(this._prefSelectedWeb).value;
+        var uri = Preferences.get(this._prefSelectedWeb).value;
         if (!uri)
           return null;
-        return this._converterSvc.getWebContentHandlerByURI(this.type, uri);
+        return gWebContentContentConverterService.getWebContentHandlerByURI(this.type, uri);
 
       case "bookmarks":
       default:
@@ -3126,26 +2975,24 @@ FeedHandlerInfo.prototype = {
         // no preferred handler.
         return null;
     }
-  },
+  }
 
   set preferredApplicationHandler(aNewValue) {
     if (aNewValue instanceof Ci.nsILocalHandlerApp) {
-      this.element(this._prefSelectedApp).value = aNewValue.executable;
-      this.element(this._prefSelectedReader).value = "client";
+      Preferences.get(this._prefSelectedApp).value = aNewValue.executable;
+      Preferences.get(this._prefSelectedReader).value = "client";
     } else if (aNewValue instanceof Ci.nsIWebContentHandlerInfo) {
-      this.element(this._prefSelectedWeb).value = aNewValue.uri;
-      this.element(this._prefSelectedReader).value = "web";
+      Preferences.get(this._prefSelectedWeb).value = aNewValue.uri;
+      Preferences.get(this._prefSelectedReader).value = "web";
       // Make the web handler be the new "auto handler" for feeds.
       // Note: we don't have to unregister the auto handler when the user picks
       // a non-web handler (local app, Live Bookmarks, etc.) because the service
       // only uses the "auto handler" when the selected reader is a web handler.
       // We also don't have to unregister it when the user turns on "always ask"
       // (i.e. preview in browser), since that also overrides the auto handler.
-      this._converterSvc.setAutoHandler(this.type, aNewValue);
+      gWebContentContentConverterService.setAutoHandler(this.type, aNewValue);
     }
-  },
-
-  _possibleApplicationHandlers: null,
+  }
 
   get possibleApplicationHandlers() {
     if (this._possibleApplicationHandlers)
@@ -3157,14 +3004,7 @@ FeedHandlerInfo.prototype = {
       _inner: [],
       _removed: [],
 
-      QueryInterface(aIID) {
-        if (aIID.equals(Ci.nsIMutableArray) ||
-          aIID.equals(Ci.nsIArray) ||
-          aIID.equals(Ci.nsISupports))
-          return this;
-
-        throw Cr.NS_ERROR_NO_INTERFACE;
-      },
+      QueryInterface: ChromeUtils.generateQI(["nsIMutableArray", "nsIArray"]),
 
       get length() {
         return this._inner.length;
@@ -3194,7 +3034,7 @@ FeedHandlerInfo.prototype = {
     // only a single path.  But we display all the local apps the user chooses
     // while the prefpane is open, only dropping the list when the user closes
     // the prefpane, for maximum usability and consistency with other types.
-    var preferredAppFile = this.element(this._prefSelectedApp).value;
+    var preferredAppFile = Preferences.get(this._prefSelectedApp).value;
     if (preferredAppFile) {
       let preferredApp = getLocalHandlerApp(preferredAppFile);
       let defaultApp = this._defaultApplicationHandler;
@@ -3203,14 +3043,13 @@ FeedHandlerInfo.prototype = {
     }
 
     // Add the registered web handlers.  There can be any number of these.
-    var webHandlers = this._converterSvc.getContentHandlers(this.type);
+    var webHandlers = gWebContentContentConverterService.getContentHandlers(this.type);
     for (let webHandler of webHandlers)
       this._possibleApplicationHandlers.appendElement(webHandler);
 
     return this._possibleApplicationHandlers;
-  },
+  }
 
-  __defaultApplicationHandler: undefined,
   get _defaultApplicationHandler() {
     if (typeof this.__defaultApplicationHandler != "undefined")
       return this.__defaultApplicationHandler;
@@ -3218,9 +3057,9 @@ FeedHandlerInfo.prototype = {
     var defaultFeedReader = null;
     if (AppConstants.HAVE_SHELL_SERVICE) {
       try {
-        defaultFeedReader = this._shellSvc.defaultFeedReader;
+        defaultFeedReader = getShellService().defaultFeedReader;
       } catch (ex) {
-        // no default reader or _shellSvc is null
+        // no default reader or getShellService() is null
       }
     }
 
@@ -3237,20 +3076,20 @@ FeedHandlerInfo.prototype = {
     }
 
     return this.__defaultApplicationHandler;
-  },
+  }
 
   get hasDefaultHandler() {
     if (AppConstants.HAVE_SHELL_SERVICE) {
       try {
-        if (this._shellSvc.defaultFeedReader)
+        if (getShellService().defaultFeedReader)
           return true;
       } catch (ex) {
-        // no default reader or _shellSvc is null
+        // no default reader or getShellService() is null
       }
     }
 
     return false;
-  },
+  }
 
   get defaultDescription() {
     if (this.hasDefaultHandler)
@@ -3258,11 +3097,11 @@ FeedHandlerInfo.prototype = {
 
     // Should we instead return null?
     return "";
-  },
+  }
 
   // What to do with content of this type.
   get preferredAction() {
-    switch (this.element(this._prefSelectedAction).value) {
+    switch (Preferences.get(this._prefSelectedAction).value) {
 
       case "bookmarks":
         return Ci.nsIHandlerInfo.handleInternally;
@@ -3294,56 +3133,42 @@ FeedHandlerInfo.prototype = {
       default:
         return Ci.nsIHandlerInfo.handleInternally;
     }
-  },
+  }
 
   set preferredAction(aNewValue) {
     switch (aNewValue) {
 
       case Ci.nsIHandlerInfo.handleInternally:
-        this.element(this._prefSelectedReader).value = "bookmarks";
+        Preferences.get(this._prefSelectedReader).value = "bookmarks";
         break;
 
       case Ci.nsIHandlerInfo.useHelperApp:
-        this.element(this._prefSelectedAction).value = "reader";
+        Preferences.get(this._prefSelectedAction).value = "reader";
         // The controller has already set preferredApplicationHandler
         // to the new helper app.
         break;
 
       case Ci.nsIHandlerInfo.useSystemDefault:
-        this.element(this._prefSelectedAction).value = "reader";
+        Preferences.get(this._prefSelectedAction).value = "reader";
         this.preferredApplicationHandler = this._defaultApplicationHandler;
         break;
     }
-  },
+  }
 
   get alwaysAskBeforeHandling() {
-    return this.element(this._prefSelectedAction).value == "ask";
-  },
+    return Preferences.get(this._prefSelectedAction).value == "ask";
+  }
 
   set alwaysAskBeforeHandling(aNewValue) {
-    if (aNewValue == true)
-      this.element(this._prefSelectedAction).value = "ask";
+    if (aNewValue)
+      Preferences.get(this._prefSelectedAction).value = "ask";
     else
-      this.element(this._prefSelectedAction).value = "reader";
-  },
-
-  // Whether or not we are currently storing the action selected by the user.
-  // We use this to suppress notification-triggered updates to the list when
-  // we make changes that may spawn such updates, specifically when we change
-  // the action for the feed type, which results in feed preference updates,
-  // which spawn "pref changed" notifications that would otherwise cause us
-  // to rebuild the view unnecessarily.
-  _storingAction: false,
-
-
-  // nsIMIMEInfo
+      Preferences.get(this._prefSelectedAction).value = "reader";
+  }
 
   get primaryExtension() {
     return "xml";
-  },
-
-
-  // Storage
+  }
 
   // Changes to the preferred action and handler take effect immediately
   // (we write them out to the preferences right as they happen),
@@ -3353,7 +3178,7 @@ FeedHandlerInfo.prototype = {
   store() {
     for (let app of this._possibleApplicationHandlers._removed) {
       if (app instanceof Ci.nsILocalHandlerApp) {
-        let pref = this.element(PREF_FEED_SELECTED_APP);
+        let pref = Preferences.get(PREF_FEED_SELECTED_APP);
         var preferredAppFile = pref.value;
         if (preferredAppFile) {
           let preferredApp = getLocalHandlerApp(preferredAppFile);
@@ -3362,87 +3187,86 @@ FeedHandlerInfo.prototype = {
         }
       } else {
         app.QueryInterface(Ci.nsIWebContentHandlerInfo);
-        this._converterSvc.removeContentHandler(app.contentType, app.uri);
+        gWebContentContentConverterService.removeContentHandler(app.contentType,
+                                                                app.uri);
       }
     }
     this._possibleApplicationHandlers._removed = [];
-  },
-
-
-  // Icons
+  }
 
   get smallIcon() {
     return this._smallIcon;
   }
+}
 
-};
-
-var feedHandlerInfo = {
-  __proto__: new FeedHandlerInfo(TYPE_MAYBE_FEED),
+var feedHandlerInfo = new FeedHandlerInfo(TYPE_MAYBE_FEED, {
   _prefSelectedApp: PREF_FEED_SELECTED_APP,
   _prefSelectedWeb: PREF_FEED_SELECTED_WEB,
   _prefSelectedAction: PREF_FEED_SELECTED_ACTION,
   _prefSelectedReader: PREF_FEED_SELECTED_READER,
   _smallIcon: "chrome://browser/skin/feeds/feedIcon16.png",
   _appPrefLabel: "webFeed"
-}
+});
 
-var videoFeedHandlerInfo = {
-  __proto__: new FeedHandlerInfo(TYPE_MAYBE_VIDEO_FEED),
+var videoFeedHandlerInfo = new FeedHandlerInfo(TYPE_MAYBE_VIDEO_FEED, {
   _prefSelectedApp: PREF_VIDEO_FEED_SELECTED_APP,
   _prefSelectedWeb: PREF_VIDEO_FEED_SELECTED_WEB,
   _prefSelectedAction: PREF_VIDEO_FEED_SELECTED_ACTION,
   _prefSelectedReader: PREF_VIDEO_FEED_SELECTED_READER,
   _smallIcon: "chrome://browser/skin/feeds/videoFeedIcon16.png",
   _appPrefLabel: "videoPodcastFeed"
-}
+});
 
-var audioFeedHandlerInfo = {
-  __proto__: new FeedHandlerInfo(TYPE_MAYBE_AUDIO_FEED),
+var audioFeedHandlerInfo = new FeedHandlerInfo(TYPE_MAYBE_AUDIO_FEED, {
   _prefSelectedApp: PREF_AUDIO_FEED_SELECTED_APP,
   _prefSelectedWeb: PREF_AUDIO_FEED_SELECTED_WEB,
   _prefSelectedAction: PREF_AUDIO_FEED_SELECTED_ACTION,
   _prefSelectedReader: PREF_AUDIO_FEED_SELECTED_READER,
   _smallIcon: "chrome://browser/skin/feeds/audioFeedIcon16.png",
   _appPrefLabel: "audioPodcastFeed"
-}
+});
 
 /**
  * InternalHandlerInfoWrapper provides a basic mechanism to create an internal
  * mime type handler that can be enabled/disabled in the applications preference
  * menu.
  */
-function InternalHandlerInfoWrapper(aMIMEType) {
-  var mimeSvc = Cc["@mozilla.org/mime;1"].getService(Ci.nsIMIMEService);
-  var handlerInfo = mimeSvc.getFromTypeAndExtension(aMIMEType, null);
-
-  HandlerInfoWrapper.call(this, aMIMEType, handlerInfo);
-}
-
-InternalHandlerInfoWrapper.prototype = {
-  __proto__: HandlerInfoWrapper.prototype,
+class InternalHandlerInfoWrapper extends HandlerInfoWrapper {
+  constructor(mimeType) {
+    super(mimeType, gMIMEService.getFromTypeAndExtension(mimeType, null));
+  }
 
   // Override store so we so we can notify any code listening for registration
   // or unregistration of this handler.
   store() {
-    HandlerInfoWrapper.prototype.store.call(this);
+    super.store();
     Services.obs.notifyObservers(null, this._handlerChanged);
-  },
+  }
 
   get enabled() {
     throw Cr.NS_ERROR_NOT_IMPLEMENTED;
-  },
+  }
 
   get description() {
-    return this.element("bundlePreferences").getString(this._appPrefLabel);
+    return gMainPane._prefsBundle.getString(this._appPrefLabel);
   }
-};
+}
 
-var pdfHandlerInfo = {
-  __proto__: new InternalHandlerInfoWrapper(TYPE_PDF),
-  _handlerChanged: TOPIC_PDFJS_HANDLER_CHANGED,
-  _appPrefLabel: "portableDocumentFormat",
+class PDFHandlerInfoWrapper extends InternalHandlerInfoWrapper {
+  constructor() {
+    super(TYPE_PDF);
+  }
+
+  get _handlerChanged() {
+    return TOPIC_PDFJS_HANDLER_CHANGED;
+  }
+
+  get _appPrefLabel() {
+    return "portableDocumentFormat";
+  }
+
   get enabled() {
-    return !Services.prefs.getBoolPref(PREF_PDFJS_DISABLED);
-  },
-};
+    return !Services.prefs.getBoolPref(PREF_PDFJS_DISABLED) &&
+           Services.policies.isAllowed("PDF.js");
+  }
+}

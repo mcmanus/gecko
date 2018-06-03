@@ -9,7 +9,6 @@
 #include "HalImpl.h"
 #include "HalLog.h"
 #include "HalSandbox.h"
-#include "nsIDOMDocument.h"
 #include "nsIDOMWindow.h"
 #include "nsIDocument.h"
 #include "nsIDocShell.h"
@@ -388,93 +387,6 @@ NotifyBatteryChange(const BatteryInformation& aInfo)
   BatteryObservers().BroadcastCachedInformation();
 }
 
-class SystemClockChangeObserversManager : public ObserversManager<int64_t>
-{
-protected:
-  void EnableNotifications() override {
-    PROXY_IF_SANDBOXED(EnableSystemClockChangeNotifications());
-  }
-
-  void DisableNotifications() override {
-    PROXY_IF_SANDBOXED(DisableSystemClockChangeNotifications());
-  }
-};
-
-static SystemClockChangeObserversManager&
-SystemClockChangeObservers()
-{
-  static SystemClockChangeObserversManager sSystemClockChangeObservers;
-  AssertMainThread();
-  return sSystemClockChangeObservers;
-}
-
-void
-RegisterSystemClockChangeObserver(SystemClockChangeObserver* aObserver)
-{
-  AssertMainThread();
-  SystemClockChangeObservers().AddObserver(aObserver);
-}
-
-void
-UnregisterSystemClockChangeObserver(SystemClockChangeObserver* aObserver)
-{
-  AssertMainThread();
-  SystemClockChangeObservers().RemoveObserver(aObserver);
-}
-
-void
-NotifySystemClockChange(const int64_t& aClockDeltaMS)
-{
-  SystemClockChangeObservers().BroadcastInformation(aClockDeltaMS);
-}
-
-class SystemTimezoneChangeObserversManager : public ObserversManager<SystemTimezoneChangeInformation>
-{
-protected:
-  void EnableNotifications() override {
-    PROXY_IF_SANDBOXED(EnableSystemTimezoneChangeNotifications());
-  }
-
-  void DisableNotifications() override {
-    PROXY_IF_SANDBOXED(DisableSystemTimezoneChangeNotifications());
-  }
-};
-
-static SystemTimezoneChangeObserversManager&
-SystemTimezoneChangeObservers()
-{
-  static SystemTimezoneChangeObserversManager sSystemTimezoneChangeObservers;
-  return sSystemTimezoneChangeObservers;
-}
-
-void
-RegisterSystemTimezoneChangeObserver(SystemTimezoneChangeObserver* aObserver)
-{
-  AssertMainThread();
-  SystemTimezoneChangeObservers().AddObserver(aObserver);
-}
-
-void
-UnregisterSystemTimezoneChangeObserver(SystemTimezoneChangeObserver* aObserver)
-{
-  AssertMainThread();
-  SystemTimezoneChangeObservers().RemoveObserver(aObserver);
-}
-
-void
-NotifySystemTimezoneChange(const SystemTimezoneChangeInformation& aSystemTimezoneChangeInfo)
-{
-  nsJSUtils::ResetTimeZone();
-  SystemTimezoneChangeObservers().BroadcastInformation(aSystemTimezoneChangeInfo);
-}
-
-void
-AdjustSystemClock(int64_t aDeltaMilliseconds)
-{
-  AssertMainThread();
-  PROXY_IF_SANDBOXED(AdjustSystemClock(aDeltaMilliseconds));
-}
-
 void
 EnableSensorNotifications(SensorType aSensor) {
   AssertMainThread();
@@ -526,14 +438,29 @@ UnregisterSensorObserver(SensorType aSensor, ISensorObserver *aObserver) {
   }
   DisableSensorNotifications(aSensor);
 
-  // Destroy sSensorObservers only if all observer lists are empty.
   for (int i = 0; i < NUM_SENSOR_TYPE; i++) {
     if (gSensorObservers[i].Length() > 0) {
       return;
     }
   }
-  delete [] gSensorObservers;
+
+  // We want to destroy gSensorObservers if all observer lists are
+  // empty, but we have to defer the deallocation via a runnable to
+  // mainthread (since we may be inside NotifySensorChange()/Broadcast()
+  // when it calls UnregisterSensorObserver()).
+  SensorObserverList* sensorlists = gSensorObservers;
   gSensorObservers = nullptr;
+
+  // Unlike DispatchToMainThread, DispatchToCurrentThread doesn't leak a runnable if
+  // it fails (and we assert we're on MainThread).
+  if (NS_FAILED(NS_DispatchToCurrentThread(NS_NewRunnableFunction("UnregisterSensorObserver",
+                                                                  [sensorlists]() -> void {
+      delete [] sensorlists;
+      }))))
+  {
+    // Still need to delete sensorlists if the dispatch fails
+    delete [] sensorlists;
+  }
 }
 
 void
@@ -752,19 +679,6 @@ SetProcessPriority(int aPid, ProcessPriority aPriority)
   PROXY_IF_SANDBOXED(SetProcessPriority(aPid, aPriority));
 }
 
-void
-SetCurrentThreadPriority(hal::ThreadPriority aThreadPriority)
-{
-  PROXY_IF_SANDBOXED(SetCurrentThreadPriority(aThreadPriority));
-}
-
-void
-SetThreadPriority(PlatformThreadId aThreadId,
-                  hal::ThreadPriority aThreadPriority)
-{
-  PROXY_IF_SANDBOXED(SetThreadPriority(aThreadId, aThreadPriority));
-}
-
 // From HalTypes.h.
 const char*
 ProcessPriorityToString(ProcessPriority aPriority)
@@ -789,18 +703,6 @@ ProcessPriorityToString(ProcessPriority aPriority)
   default:
     MOZ_ASSERT(false);
     return "???";
-  }
-}
-
-const char *
-ThreadPriorityToString(ThreadPriority aPriority)
-{
-  switch (aPriority) {
-    case THREAD_PRIORITY_COMPOSITOR:
-      return "COMPOSITOR";
-    default:
-      MOZ_ASSERT(false);
-      return "???";
   }
 }
 

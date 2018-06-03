@@ -4,16 +4,9 @@
 
 "use strict";
 
-const {
-  classes: Cc,
-  interfaces: Ci,
-  utils: Cu,
-  results: Cr
-} = Components;
-
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/NetUtil.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 /** This little class ensures that redirects maintain an https:// origin */
 function RedirectHttpsOnly() {}
@@ -30,7 +23,7 @@ RedirectHttpsOnly.prototype = {
   getInterface(iid) {
     return this.QueryInterface(iid);
   },
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIChannelEventSink])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIChannelEventSink])
 };
 
 /** This class loads a resource into a single string. ResourceLoader.load() is
@@ -84,7 +77,7 @@ ResourceLoader.prototype = {
   getInterface(iid) {
     return this.QueryInterface(iid);
   },
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIStreamListener])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIStreamListener])
 };
 
 /**
@@ -156,9 +149,7 @@ IdpSandbox.createIdpUri = function(domain, protocol) {
   let message = "Invalid IdP parameters: ";
   try {
     let wkIdp = "https://" + domain + "/.well-known/idp-proxy/" + protocol;
-    let ioService = Components.classes["@mozilla.org/network/io-service;1"]
-                    .getService(Ci.nsIIOService);
-    let uri = ioService.newURI(wkIdp);
+    let uri = Services.io.newURI(wkIdp);
 
     if (uri.hostPort !== domain) {
       throw new Error(message + "domain is invalid");
@@ -252,9 +243,7 @@ IdpSandbox.prototype = {
                                  e.lineNumber, e.columnNumber,
                                  Ci.nsIScriptError.errorFlag,
                                  "content javascript", winID);
-    let consoleService = Cc["@mozilla.org/consoleservice;1"]
-        .getService(Ci.nsIConsoleService);
-    consoleService.logMessage(scriptError);
+    Services.console.logMessage(scriptError);
   },
 
   stop() {
@@ -270,5 +259,4 @@ IdpSandbox.prototype = {
   }
 };
 
-this.EXPORTED_SYMBOLS = ["IdpSandbox"];
-this.IdpSandbox = IdpSandbox;
+var EXPORTED_SYMBOLS = ["IdpSandbox"];

@@ -11,7 +11,6 @@
 
 #include "nsDOMDataChannelDeclarations.h"
 #include "nsDOMDataChannel.h"
-#include "nsIDOMDataChannel.h"
 #include "mozilla/DOMEventTargetHelper.h"
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/MessageEvent.h"
@@ -52,7 +51,7 @@ nsDOMDataChannel::~nsDOMDataChannel()
 /* virtual */ JSObject*
 nsDOMDataChannel::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return DataChannelBinding::Wrap(aCx, this, aGivenProto);
+  return RTCDataChannelBinding::Wrap(aCx, this, aGivenProto);
 }
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(nsDOMDataChannel)
@@ -69,7 +68,6 @@ NS_IMPL_ADDREF_INHERITED(nsDOMDataChannel, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(nsDOMDataChannel, DOMEventTargetHelper)
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsDOMDataChannel)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMDataChannel)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 nsDOMDataChannel::nsDOMDataChannel(already_AddRefed<mozilla::DataChannel>& aDataChannel,
@@ -113,31 +111,22 @@ nsDOMDataChannel::Init(nsPIDOMWindowInner* aDOMWindow)
 
 // Most of the GetFoo()/SetFoo()s don't need to touch shared resources and
 // are safe after Close()
-NS_IMETHODIMP
+void
 nsDOMDataChannel::GetLabel(nsAString& aLabel)
 {
   mDataChannel->GetLabel(aLabel);
-  return NS_OK;
 }
 
-NS_IMETHODIMP
+void
 nsDOMDataChannel::GetProtocol(nsAString& aProtocol)
 {
   mDataChannel->GetProtocol(aProtocol);
-  return NS_OK;
 }
 
 uint16_t
 nsDOMDataChannel::Id() const
 {
   return mDataChannel->GetStream();
-}
-
-NS_IMETHODIMP
-nsDOMDataChannel::GetId(uint16_t *aId)
-{
-  *aId = Id();
-  return NS_OK;
 }
 
 // XXX should be GetType()?  Open question for the spec
@@ -147,24 +136,10 @@ nsDOMDataChannel::Reliable() const
   return mDataChannel->GetType() == mozilla::DataChannelConnection::RELIABLE;
 }
 
-NS_IMETHODIMP
-nsDOMDataChannel::GetReliable(bool* aReliable)
-{
-  *aReliable = Reliable();
-  return NS_OK;
-}
-
 bool
 nsDOMDataChannel::Ordered() const
 {
   return mDataChannel->GetOrdered();
-}
-
-NS_IMETHODIMP
-nsDOMDataChannel::GetOrdered(bool* aOrdered)
-{
-  *aOrdered = Ordered();
-  return NS_OK;
 }
 
 RTCDataChannelState
@@ -173,28 +148,6 @@ nsDOMDataChannel::ReadyState() const
   return static_cast<RTCDataChannelState>(mDataChannel->GetReadyState());
 }
 
-
-NS_IMETHODIMP
-nsDOMDataChannel::GetReadyState(nsAString& aReadyState)
-{
-  // mState is handled on multiple threads and needs locking
-  uint16_t readyState = mozilla::DataChannel::CLOSED;
-  if (!mSentClose) {
-    readyState = mDataChannel->GetReadyState();
-  }
-  // From the WebRTC spec
-  const char * stateName[] = {
-    "connecting",
-    "open",
-    "closing",
-    "closed"
-  };
-  MOZ_ASSERT(/*readyState >= mozilla::DataChannel::CONNECTING && */ // Always true due to datatypes
-             readyState <= mozilla::DataChannel::CLOSED);
-  aReadyState.AssignASCII(stateName[readyState]);
-
-  return NS_OK;
-}
 
 uint32_t
 nsDOMDataChannel::BufferedAmount() const
@@ -211,53 +164,17 @@ nsDOMDataChannel::BufferedAmountLowThreshold() const
   return mDataChannel->GetBufferedAmountLowThreshold();
 }
 
-NS_IMETHODIMP
-nsDOMDataChannel::GetBufferedAmount(uint32_t* aBufferedAmount)
-{
-  *aBufferedAmount = BufferedAmount();
-  return NS_OK;
-}
-
 void
 nsDOMDataChannel::SetBufferedAmountLowThreshold(uint32_t aThreshold)
 {
   mDataChannel->SetBufferedAmountLowThreshold(aThreshold);
 }
 
-NS_IMETHODIMP nsDOMDataChannel::GetBinaryType(nsAString & aBinaryType)
-{
-  switch (mBinaryType) {
-  case DC_BINARY_TYPE_ARRAYBUFFER:
-    aBinaryType.AssignLiteral("arraybuffer");
-    break;
-  case DC_BINARY_TYPE_BLOB:
-    aBinaryType.AssignLiteral("blob");
-    break;
-  default:
-    NS_ERROR("Should not happen");
-  }
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDOMDataChannel::SetBinaryType(const nsAString& aBinaryType)
-{
-  if (aBinaryType.EqualsLiteral("arraybuffer")) {
-    mBinaryType = DC_BINARY_TYPE_ARRAYBUFFER;
-  } else if (aBinaryType.EqualsLiteral("blob")) {
-    mBinaryType = DC_BINARY_TYPE_BLOB;
-  } else  {
-    return NS_ERROR_INVALID_ARG;
-  }
-  return NS_OK;
-}
-
-NS_IMETHODIMP
+void
 nsDOMDataChannel::Close()
 {
   mDataChannel->Close();
   UpdateMustKeepAlive();
-  return NS_OK;
 }
 
 // All of the following is copy/pasted from WebSocket.cpp.
@@ -417,12 +334,12 @@ nsDOMDataChannel::DoOnMessageAvailable(const nsACString& aData,
   event->SetTrusted(true);
 
   LOG(("%p(%p): %s - Dispatching\n",this,(void*)mDataChannel,__FUNCTION__));
-  bool dummy;
-  rv = DispatchEvent(static_cast<Event*>(event), &dummy);
-  if (NS_FAILED(rv)) {
+  ErrorResult err;
+  DispatchEvent(*event, err);
+  if (err.Failed()) {
     NS_WARNING("Failed to dispatch the message event!!!");
   }
-  return rv;
+  return err.StealNSResult();
 }
 
 nsresult
@@ -456,8 +373,9 @@ nsDOMDataChannel::OnSimpleEvent(nsISupports* aContext, const nsAString& aName)
   event->InitEvent(aName, false, false);
   event->SetTrusted(true);
 
-  bool dummy;
-  return DispatchEvent(event, &dummy);
+  ErrorResult err;
+  DispatchEvent(*event, err);
+  return err.StealNSResult();
 }
 
 nsresult
@@ -616,7 +534,7 @@ nsDOMDataChannel::EventListenerRemoved(nsAtom* aType)
 nsresult
 NS_NewDOMDataChannel(already_AddRefed<mozilla::DataChannel>&& aDataChannel,
                      nsPIDOMWindowInner* aWindow,
-                     nsIDOMDataChannel** aDomDataChannel)
+                     nsDOMDataChannel** aDomDataChannel)
 {
   RefPtr<nsDOMDataChannel> domdc =
     new nsDOMDataChannel(aDataChannel, aWindow);
@@ -624,12 +542,6 @@ NS_NewDOMDataChannel(already_AddRefed<mozilla::DataChannel>&& aDataChannel,
   nsresult rv = domdc->Init(aWindow);
   NS_ENSURE_SUCCESS(rv,rv);
 
-  return CallQueryInterface(domdc, aDomDataChannel);
-}
-
-/* static */
-void
-NS_DataChannelAppReady(nsIDOMDataChannel* aDomDataChannel)
-{
-  ((nsDOMDataChannel *)aDomDataChannel)->AppReady();
+  domdc.forget(aDomDataChannel);
+  return NS_OK;
 }

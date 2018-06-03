@@ -308,10 +308,9 @@ NS_DEFINE_STATIC_IID_ACCESSOR(nsXPCOMCycleCollectionParticipant,
     if (LowWordEquals(aIID, NS_GET_IID(nsCycleCollectionISupports))) {         \
       *aInstancePtr = NS_CYCLE_COLLECTION_CLASSNAME(_class)::Upcast(this);     \
       return NS_OK;                                                            \
-    } else {                                                                   \
-      /* Avoid warnings about foundInterface being left uninitialized. */      \
-      foundInterface = nullptr;                                                \
     }                                                                          \
+    /* Avoid warnings about foundInterface being left uninitialized. */        \
+    foundInterface = nullptr;                                                  \
   } else
 
 #define NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(_class)                        \
@@ -331,7 +330,7 @@ NS_DEFINE_STATIC_IID_ACCESSOR(nsXPCOMCycleCollectionParticipant,
 #define NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(_class)            \
   NS_IMETHODIMP _class::QueryInterface(REFNSIID aIID, void** aInstancePtr)    \
   {                                                                           \
-    NS_PRECONDITION(aInstancePtr, "null out param");                          \
+    MOZ_ASSERT(aInstancePtr, "null out param");                               \
                                                                               \
     if (TopThreeWordsEquals(aIID, NS_GET_IID(nsXPCOMCycleCollectionParticipant), \
                             NS_GET_IID(nsCycleCollectionISupports))) {        \

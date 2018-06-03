@@ -12,7 +12,7 @@
 #include "NamespaceImports.h"
 
 #include "vm/Scope.h"
-#include "vm/String.h"
+#include "vm/StringType.h"
 #include "vm/TraceLogging.h"
 
 class JSLinearString;
@@ -35,6 +35,16 @@ CompileGlobalScript(JSContext* cx, LifoAlloc& alloc, ScopeKind scopeKind,
                     const ReadOnlyCompileOptions& options,
                     SourceBufferHolder& srcBuf,
                     ScriptSourceObject** sourceObjectOut = nullptr);
+
+#if defined(JS_BUILD_BINAST)
+
+JSScript*
+CompileGlobalBinASTScript(JSContext *cx, LifoAlloc& alloc,
+                          const ReadOnlyCompileOptions& options,
+                          const uint8_t* src, size_t len,
+                          ScriptSourceObject** sourceObjectOut = nullptr);
+
+#endif // JS_BUILD_BINAST
 
 JSScript*
 CompileEvalScript(JSContext* cx, LifoAlloc& alloc,
@@ -124,6 +134,14 @@ IsKeyword(JSLinearString* str);
 void
 TraceParser(JSTracer* trc, JS::AutoGCRooter* parser);
 
+#if defined(JS_BUILD_BINAST)
+
+/* Trace all GC things reachable from binjs parser. Defined in BinSource.cpp. */
+void
+TraceBinParser(JSTracer* trc, JS::AutoGCRooter* parser);
+
+#endif // defined(JS_BUILD_BINAST)
+
 class MOZ_STACK_CLASS AutoFrontendTraceLog
 {
 #ifdef JS_TRACE_LOGGING
@@ -134,9 +152,6 @@ class MOZ_STACK_CLASS AutoFrontendTraceLog
 #endif
 
   public:
-    AutoFrontendTraceLog(JSContext* cx, const TraceLoggerTextId id,
-                         const char* filename, size_t line, size_t column);
-
     AutoFrontendTraceLog(JSContext* cx, const TraceLoggerTextId id,
                          const ErrorReporter& reporter);
 

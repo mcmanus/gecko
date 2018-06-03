@@ -344,12 +344,6 @@ class JS_FRIEND_API(BaseProxyHandler)
     virtual bool isCallable(JSObject* obj) const;
     virtual bool isConstructor(JSObject* obj) const;
 
-    // These two hooks must be overridden, or not overridden, in tandem -- no
-    // overriding just one!
-    virtual bool watch(JSContext* cx, JS::HandleObject proxy, JS::HandleId id,
-                       JS::HandleObject callable) const;
-    virtual bool unwatch(JSContext* cx, JS::HandleObject proxy, JS::HandleId id) const;
-
     virtual bool getElements(JSContext* cx, HandleObject proxy, uint32_t begin, uint32_t end,
                              ElementAdder* adder) const;
 
@@ -358,7 +352,7 @@ class JS_FRIEND_API(BaseProxyHandler)
     virtual bool isScripted() const { return false; }
 };
 
-extern JS_FRIEND_DATA(const js::Class* const) ProxyClassPtr;
+extern JS_FRIEND_DATA(const js::Class) ProxyClass;
 
 inline bool IsProxy(const JSObject* obj)
 {
@@ -390,6 +384,10 @@ struct ProxyReservedSlots
     Value slots[1];
 
     static inline int offsetOfPrivateSlot();
+
+    static inline int offsetOfSlot(size_t slot) {
+        return offsetof(ProxyReservedSlots, slots[0]) + slot * sizeof(Value);
+    }
 
     void init(size_t nreserved) {
         for (size_t i = 0; i < nreserved; i++)
@@ -465,6 +463,24 @@ GetProxyDataLayout(const JSObject* obj)
     return reinterpret_cast<const ProxyDataLayout*>(reinterpret_cast<const uint8_t*>(obj) +
                                                     ProxyDataOffset);
 }
+
+JS_FRIEND_API(void)
+SetValueInProxy(Value* slot, const Value& value);
+
+inline void
+SetProxyReservedSlotUnchecked(JSObject* obj, size_t n, const Value& extra)
+{
+    MOZ_ASSERT(n < JSCLASS_RESERVED_SLOTS(GetObjectClass(obj)));
+
+    Value* vp = &GetProxyDataLayout(obj)->reservedSlots->slots[n];
+
+    // Trigger a barrier before writing the slot.
+    if (vp->isGCThing() || extra.isGCThing())
+        SetValueInProxy(vp, extra);
+    else
+        *vp = extra;
+}
+
 } // namespace detail
 
 inline const BaseProxyHandler*
@@ -498,30 +514,23 @@ SetProxyHandler(JSObject* obj, const BaseProxyHandler* handler)
     detail::GetProxyDataLayout(obj)->handler = handler;
 }
 
-JS_FRIEND_API(void)
-SetValueInProxy(Value* slot, const Value& value);
-
 inline void
 SetProxyReservedSlot(JSObject* obj, size_t n, const Value& extra)
 {
-    MOZ_ASSERT(n < JSCLASS_RESERVED_SLOTS(GetObjectClass(obj)));
-    Value* vp = &detail::GetProxyDataLayout(obj)->reservedSlots->slots[n];
-
-    // Trigger a barrier before writing the slot.
-    if (vp->isGCThing() || extra.isGCThing())
-        SetValueInProxy(vp, extra);
-    else
-        *vp = extra;
+    MOZ_ASSERT_IF(gc::detail::ObjectIsMarkedBlack(obj), JS::ValueIsNotGray(extra));
+    detail::SetProxyReservedSlotUnchecked(obj, n, extra);
 }
 
 inline void
 SetProxyPrivate(JSObject* obj, const Value& value)
 {
+    MOZ_ASSERT_IF(gc::detail::ObjectIsMarkedBlack(obj), JS::ValueIsNotGray(value));
+
     Value* vp = &detail::GetProxyDataLayout(obj)->values()->privateSlot;
 
     // Trigger a barrier before writing the slot.
     if (vp->isGCThing() || value.isGCThing())
-        SetValueInProxy(vp, value);
+        detail::SetValueInProxy(vp, value);
     else
         *vp = value;
 }
@@ -538,13 +547,13 @@ class MOZ_STACK_CLASS ProxyOptions {
     explicit ProxyOptions(bool singletonArg, bool lazyProtoArg = false)
       : singleton_(singletonArg),
         lazyProto_(lazyProtoArg),
-        clasp_(ProxyClassPtr)
+        clasp_(&ProxyClass)
     {}
 
   public:
     ProxyOptions() : singleton_(false),
                      lazyProto_(false),
-                     clasp_(ProxyClassPtr)
+                     clasp_(&ProxyClass)
     {}
 
     bool singleton() const { return singleton_; }
@@ -676,9 +685,6 @@ inline void assertEnteredPolicy(JSContext* cx, JSObject* obj, jsid id,
                                 BaseProxyHandler::Action act)
 {}
 #endif
-
-extern JS_FRIEND_API(JSObject*)
-InitProxyClass(JSContext* cx, JS::HandleObject obj);
 
 extern JS_FRIEND_DATA(const js::ClassOps) ProxyClassOps;
 extern JS_FRIEND_DATA(const js::ClassExtension) ProxyClassExtension;

@@ -17,18 +17,28 @@ class VoidFunction;
 class AudioWorkletGlobalScope final : public WorkletGlobalScope
 {
 public:
-  explicit AudioWorkletGlobalScope(nsPIDOMWindowInner* aWindow);
+  AudioWorkletGlobalScope();
 
   bool
-  WrapGlobalObject(JSContext* aCx, nsIPrincipal* aPrincipal,
+  WrapGlobalObject(JSContext* aCx,
                    JS::MutableHandle<JSObject*> aReflector) override;
 
   void
   RegisterProcessor(const nsAString& aType,
                     VoidFunction& aProcessorCtor);
 
+  uint64_t CurrentFrame() const;
+
+  double CurrentTime() const;
+
+  float SampleRate() const;
+
 private:
-  ~AudioWorkletGlobalScope();
+  ~AudioWorkletGlobalScope() = default;
+
+  uint64_t mCurrentFrame;
+  double mCurrentTime;
+  float mSampleRate;
 };
 
 } // namespace dom

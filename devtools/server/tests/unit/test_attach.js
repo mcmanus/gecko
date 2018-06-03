@@ -11,10 +11,10 @@ function run_test() {
   gDebuggee = testGlobal("test-1");
   DebuggerServer.addTestGlobal(gDebuggee);
 
-  let transport = DebuggerServer.connectPipe();
+  const transport = DebuggerServer.connectPipe();
   gClient = new DebuggerClient(transport);
-  gClient.connect().then(function ([type, traits]) {
-    attachTestTab(gClient, "test-1", function (reply, tabClient) {
+  gClient.connect().then(function([type, traits]) {
+    attachTestTab(gClient, "test-1", function(reply, tabClient) {
       test_attach(tabClient);
     });
   });
@@ -22,14 +22,14 @@ function run_test() {
 }
 
 function test_attach(tabClient) {
-  tabClient.attachThread({}, function (response, threadClient) {
-    do_check_eq(threadClient.state, "paused");
+  tabClient.attachThread({}, function(response, threadClient) {
+    Assert.equal(threadClient.state, "paused");
     threadClient.resume(cleanup);
   });
 }
 
 function cleanup() {
-  gClient.addListener("closed", function (event) {
+  gClient.addListener("closed", function(event) {
     do_test_finished();
   });
   gClient.close();

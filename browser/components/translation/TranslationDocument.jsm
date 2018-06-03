@@ -4,15 +4,10 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+var EXPORTED_SYMBOLS = [ "TranslationDocument" ];
 
-this.EXPORTED_SYMBOLS = [ "TranslationDocument" ];
-
-const SHOW_ELEMENT = Ci.nsIDOMNodeFilter.SHOW_ELEMENT;
-const SHOW_TEXT = Ci.nsIDOMNodeFilter.SHOW_TEXT;
-const TEXT_NODE = Ci.nsIDOMNode.TEXT_NODE;
-
-Cu.import("resource://services-common/utils.js");
+ChromeUtils.import("resource://services-common/async.js");
+Cu.importGlobalProperties(["DOMParser"]);
 
 /**
  * This class represents a document that is being translated,
@@ -23,7 +18,7 @@ Cu.import("resource://services-common/utils.js");
  *
  * @param document  The document to be translated
  */
-this.TranslationDocument = function(document) {
+var TranslationDocument = function(document) {
   this.itemsMap = new Map();
   this.roots = [];
   this._init(document);
@@ -144,7 +139,7 @@ this.TranslationDocument.prototype = {
     let wasLastItemPlaceholder = false;
 
     for (let child of item.nodeRef.childNodes) {
-      if (child.nodeType == TEXT_NODE) {
+      if (child.nodeType == child.TEXT_NODE) {
         let x = child.nodeValue.trim();
         if (x != "") {
           item.original.push(x);
@@ -212,14 +207,10 @@ this.TranslationDocument.prototype = {
       // Let the event loop breath on every 100 nodes
       // that are replaced.
       const YIELD_INTERVAL = 100;
-      let count = YIELD_INTERVAL;
-
+      let maybeYield = Async.jankYielder(YIELD_INTERVAL);
       for (let root of this.roots) {
         root.swapText(target);
-        if (count-- == 0) {
-          count = YIELD_INTERVAL;
-          await CommonUtils.laterTickResolvingPromise();
-        }
+        await maybeYield();
       }
     })();
   }
@@ -309,8 +300,7 @@ TranslationItem.prototype = {
       return;
     }
 
-    let domParser = Cc["@mozilla.org/xmlextras/domparser;1"]
-                      .createInstance(Ci.nsIDOMParser);
+    let domParser = new DOMParser();
 
     let doc = domParser.parseFromString(result, "text/html");
     parseResultNode(this, doc.body.firstChild);
@@ -417,7 +407,7 @@ function regenerateTextFromOriginalHelper(item) {
 function parseResultNode(item, node) {
   item.translation = [];
   for (let child of node.childNodes) {
-    if (child.nodeType == TEXT_NODE) {
+    if (child.nodeType == child.TEXT_NODE) {
       item.translation.push(child.nodeValue);
     } else if (child.localName == "br") {
       item.translation.push(TranslationItem_NodePlaceholder);
@@ -566,7 +556,7 @@ function swapTextForItem(item, target) {
     // text change instead of two (while also leaving the page closer to
     // its original state).
     while (curNode &&
-           curNode.nodeType == TEXT_NODE &&
+           curNode.nodeType == curNode.TEXT_NODE &&
            curNode.nodeValue.trim() == "") {
       curNode = curNode.nextSibling;
     }
@@ -616,7 +606,7 @@ function swapTextForItem(item, target) {
         // targetItem for those nodes are handled.
 
         while (curNode &&
-               (curNode.nodeType != TEXT_NODE ||
+               (curNode.nodeType != curNode.TEXT_NODE ||
                 curNode.nodeValue.trim() == "")) {
           curNode = curNode.nextSibling;
         }
@@ -625,7 +615,7 @@ function swapTextForItem(item, target) {
         // Finally, if it's a text item, we just need to find the next
         // text node to use. Text nodes don't need to be reordered, so
         // the first one found can be used.
-        while (curNode && curNode.nodeType != TEXT_NODE) {
+        while (curNode && curNode.nodeType != curNode.TEXT_NODE) {
           curNode = curNode.nextSibling;
         }
 
@@ -662,7 +652,7 @@ function swapTextForItem(item, target) {
 function getNextSiblingSkippingEmptyTextNodes(startSibling) {
   let item = startSibling.nextSibling;
   while (item &&
-         item.nodeType == TEXT_NODE &&
+         item.nodeType == item.TEXT_NODE &&
          item.nodeValue.trim() == "") {
     item = item.nextSibling;
   }
@@ -672,7 +662,7 @@ function getNextSiblingSkippingEmptyTextNodes(startSibling) {
 function clearRemainingNonEmptyTextNodesFromElement(startSibling) {
   let item = startSibling;
   while (item) {
-    if (item.nodeType == TEXT_NODE &&
+    if (item.nodeType == item.TEXT_NODE &&
         item.nodeValue != "") {
       item.nodeValue = "";
     }

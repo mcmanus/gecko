@@ -1,5 +1,5 @@
 
-Components.utils.import("resource://gre/modules/addons/AddonSettings.jsm")
+ChromeUtils.import("resource://gre/modules/addons/AddonSettings.jsm");
 
 let profileDir;
 add_task(async function setup() {
@@ -7,10 +7,10 @@ add_task(async function setup() {
   profileDir.append("extensions");
 
   if (!profileDir.exists())
-    profileDir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
+    profileDir.create(Ci.nsIFile.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
 
   createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "1.9.2");
-  startupManager();
+  await promiseStartupManager();
 });
 
 const IMPLICIT_ID_XPI = "data/webext-implicit-id.xpi";
@@ -27,16 +27,12 @@ add_task(async function test_implicit_id() {
   let addon = await promiseAddonByID(IMPLICIT_ID_ID);
   equal(addon, null, "Add-on is not installed");
 
-  let xpifile = do_get_file(IMPLICIT_ID_XPI);
-  await Promise.all([
-    promiseInstallAllFiles([xpifile]),
-    promiseWebExtensionStartup(),
-  ]);
+  await promiseInstallFile(do_get_file(IMPLICIT_ID_XPI));
 
   addon = await promiseAddonByID(IMPLICIT_ID_ID);
   notEqual(addon, null, "Add-on is installed");
 
-  addon.uninstall();
+  await addon.uninstall();
 });
 
 // We should also be able to install webext-implicit-id.xpi temporarily
@@ -51,10 +47,7 @@ add_task(async function test_implicit_id_temp() {
   equal(addon, null, "Add-on is not installed");
 
   let xpifile = do_get_file(IMPLICIT_ID_XPI);
-  await Promise.all([
-    AddonManager.installTemporaryAddon(xpifile),
-    promiseWebExtensionStartup(),
-  ]);
+  await AddonManager.installTemporaryAddon(xpifile);
 
   addon = await promiseAddonByID(IMPLICIT_ID_ID);
   notEqual(addon, null, "Add-on is installed");
@@ -65,7 +58,7 @@ add_task(async function test_implicit_id_temp() {
         Services.io.newFileURI(xpifile).spec,
         "SourceURI of the add-on has the expected value");
 
-  addon.uninstall();
+  await addon.uninstall();
 });
 
 // We should be able to temporarily install an unsigned web extension
@@ -82,10 +75,7 @@ add_task(async function test_unsigned_no_id_temp_install() {
   const addonDir = await promiseWriteWebManifestForExtension(manifest, gTmpD,
                                                 "the-addon-sub-dir");
   const testDate = new Date();
-  const [addon] = await Promise.all([
-    AddonManager.installTemporaryAddon(addonDir),
-    promiseWebExtensionStartup(),
-  ]);
+  const addon = await AddonManager.installTemporaryAddon(addonDir);
 
   ok(addon.id, "ID should have been auto-generated");
   ok(Math.abs(addon.installDate - testDate) < 10000, "addon has an expected installDate");
@@ -98,16 +88,13 @@ add_task(async function test_unsigned_no_id_temp_install() {
         "SourceURI of the add-on has the expected value");
 
   // Install the same directory again, as if re-installing or reloading.
-  const [secondAddon] = await Promise.all([
-    AddonManager.installTemporaryAddon(addonDir),
-    promiseWebExtensionStartup(),
-  ]);
+  const secondAddon = await AddonManager.installTemporaryAddon(addonDir);
   // The IDs should be the same.
   equal(secondAddon.id, addon.id, "Reinstalled add-on has the expected ID");
   equal(secondAddon.installDate.valueOf(), addon.installDate.valueOf(),
         "Reloaded add-on has the expected installDate.");
 
-  secondAddon.uninstall();
+  await secondAddon.uninstall();
   Services.obs.notifyObservers(addonDir, "flush-cache-entry");
   addonDir.remove(true);
   AddonTestUtils.useRealCertChecks = false;
@@ -138,7 +125,7 @@ add_task(async function test_multiple_no_id_extensions() {
 
   const allAddons = await AddonManager.getAllAddons();
 
-  do_print(`Found these add-ons: ${allAddons.map(a => a.name).join(", ")}`);
+  info(`Found these add-ons: ${allAddons.map(a => a.name).join(", ")}`);
   const filtered = allAddons.filter(addon => addon.name === manifest.name);
   // Make sure we have two add-ons by the same name.
   equal(filtered.length, 2, "Two add-ons are installed with the same name");
@@ -203,7 +190,7 @@ add_task(async function test_two_ids() {
         id: GOOD_ID
       }
     }
-  }
+  };
 
   let extension = ExtensionTestUtils.loadExtension({
     manifest,
@@ -240,7 +227,7 @@ add_task(async function test_strict_min_max() {
         strict_max_version: "1"
       },
     },
-  }
+  };
   let testManifest = Object.assign(apps, MANIFEST);
 
   let extension = ExtensionTestUtils.loadExtension({
@@ -266,7 +253,7 @@ add_task(async function test_strict_min_max() {
         strict_max_version: "2"
       },
     },
-  }
+  };
   testManifest = Object.assign(apps, MANIFEST);
 
   extension = ExtensionTestUtils.loadExtension({
@@ -292,7 +279,7 @@ add_task(async function test_strict_min_max() {
         strict_max_version: "1"
       },
     },
-  }
+  };
   testManifest = Object.assign(apps, MANIFEST);
 
   extension = ExtensionTestUtils.loadExtension({
@@ -317,7 +304,7 @@ add_task(async function test_strict_min_max() {
         strict_min_version: "2"
       },
     },
-  }
+  };
   testManifest = Object.assign(apps, MANIFEST);
 
   extension = ExtensionTestUtils.loadExtension({
@@ -342,7 +329,7 @@ add_task(async function test_strict_min_max() {
         strict_max_version: "1"
       },
     },
-  }
+  };
   testManifest = Object.assign(apps, MANIFEST);
 
   extension = ExtensionTestUtils.loadExtension({
@@ -368,7 +355,7 @@ add_task(async function test_strict_min_max() {
         strict_max_version: "2"
       },
     },
-  }
+  };
   testManifest = Object.assign(apps, MANIFEST);
 
   extension = ExtensionTestUtils.loadExtension({
@@ -392,7 +379,7 @@ add_task(async function test_strict_min_max() {
         strict_min_version: "1",
       },
     },
-  }
+  };
   testManifest = Object.assign(apps, MANIFEST);
 
   extension = ExtensionTestUtils.loadExtension({
@@ -417,7 +404,7 @@ add_task(async function test_strict_min_max() {
         strict_max_version: "2",
       },
     },
-  }
+  };
   testManifest = Object.assign(apps, MANIFEST);
 
   extension = ExtensionTestUtils.loadExtension({
@@ -443,7 +430,7 @@ add_task(async function test_strict_min_max() {
           strict_min_version: version,
         },
       },
-    }
+    };
 
     let minStarTestManifest = Object.assign(minStarApps, MANIFEST);
 
@@ -470,7 +457,7 @@ add_task(async function test_strict_min_max() {
         strict_max_version: "1",
       },
     },
-  }
+  };
   testManifest = Object.assign(apps, MANIFEST);
 
   extension = ExtensionTestUtils.loadExtension({
@@ -498,7 +485,7 @@ add_task(async function test_permissions_prompt() {
     manifest_version: 2,
     version: "1.0",
 
-    permissions: ["tabs", "storage", "https://*.example.com/*", "<all_urls>", "experiments.test"],
+    permissions: ["tabs", "storage", "https://*.example.com/*", "<all_urls>"],
   };
 
   let xpi = ExtensionTestCommon.generateXPI({manifest});
@@ -511,7 +498,7 @@ add_task(async function test_permissions_prompt() {
     return Promise.resolve();
   };
 
-  await promiseCompleteInstall(install);
+  await install.install();
 
   notEqual(perminfo, undefined, "Permission handler was invoked");
   equal(perminfo.existingAddon, null, "Permission info does not include an existing addon");
@@ -519,12 +506,11 @@ add_task(async function test_permissions_prompt() {
   let perms = perminfo.addon.userPermissions;
   deepEqual(perms.permissions, ["tabs", "storage"], "API permissions are correct");
   deepEqual(perms.origins, ["https://*.example.com/*", "<all_urls>"], "Host permissions are correct");
-  deepEqual(perms.apis, ["test"], "Experiments permissions are correct");
 
   let addon = await promiseAddonByID(perminfo.addon.id);
   notEqual(addon, null, "Extension was installed");
 
-  addon.uninstall();
+  await addon.uninstall();
   await OS.File.remove(xpi.path);
 });
 

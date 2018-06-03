@@ -15,6 +15,7 @@
 #include "mozilla/places/History.h"
 #endif
 #include "nsIURL.h"
+#include "nsIURIMutator.h"
 #include "nsISizeOf.h"
 #include "nsIDocShell.h"
 #include "nsIPrefetchService.h"
@@ -29,6 +30,7 @@
 
 #include "mozilla/Services.h"
 #include "nsAttrValueInlines.h"
+#include "HTMLLinkElement.h"
 
 namespace mozilla {
 namespace dom {
@@ -148,7 +150,6 @@ Link::TryDNSPrefetchOrPreconnectOrPrefetchOrPreloadOrPrerender()
     if (prefetchService) {
       nsCOMPtr<nsIURI> uri(GetURI());
       if (uri) {
-        nsCOMPtr<nsIDOMNode> domNode = GetAsDOMNode(mElement);
         if (linkTypes & nsStyleLinkElement::ePRELOAD) {
           nsAttrValue asAttr;
           nsContentPolicyType policyType;
@@ -161,18 +162,18 @@ Link::TryDNSPrefetchOrPreconnectOrPrefetchOrPreloadOrPrerender()
             return;
           }
 
-          if (!nsStyleLinkElement::CheckPreloadAttrs(asAttr, mimeType, media,
-                                                     mElement->OwnerDoc())) {
+          if (!HTMLLinkElement::CheckPreloadAttrs(asAttr, mimeType, media,
+                                                  mElement->OwnerDoc())) {
             policyType = nsIContentPolicy::TYPE_INVALID;
           }
 
           prefetchService->PreloadURI(uri,
                                       mElement->OwnerDoc()->GetDocumentURI(),
-                                      domNode, policyType);
+                                      mElement, policyType);
         } else {
           prefetchService->PrefetchURI(uri,
                                        mElement->OwnerDoc()->GetDocumentURI(),
-                                       domNode, linkTypes & nsStyleLinkElement::ePREFETCH);
+                                       mElement, linkTypes & nsStyleLinkElement::ePREFETCH);
         }
         return;
       }
@@ -183,15 +184,7 @@ Link::TryDNSPrefetchOrPreconnectOrPrefetchOrPreloadOrPrerender()
     nsCOMPtr<nsIURI> uri(GetURI());
     if (uri && mElement->OwnerDoc()) {
       mElement->OwnerDoc()->MaybePreconnect(uri,
-        mElement->AttrValueToCORSMode(mElement->GetParsedAttr(nsGkAtoms::crossorigin)));
-      return;
-    }
-  }
-
-  if (linkTypes & nsStyleLinkElement::ePRERENDER) {
-    nsCOMPtr<nsIURI> uri(GetURI());
-    if (uri && mElement->OwnerDoc()) {
-      mElement->OwnerDoc()->PrerenderHref(uri);
+        Element::AttrValueToCORSMode(mElement->GetParsedAttr(nsGkAtoms::crossorigin)));
       return;
     }
   }
@@ -238,8 +231,6 @@ Link::UpdatePreload(nsAtom* aName, const nsAttrValue* aValue,
     return;
   }
 
-  nsCOMPtr<nsIDOMNode> domNode = GetAsDOMNode(mElement);
-
   nsAttrValue asAttr;
   nsContentPolicyType asPolicyType;
   nsAutoString mimeType;
@@ -249,13 +240,13 @@ Link::UpdatePreload(nsAtom* aName, const nsAttrValue* aValue,
   if (asPolicyType == nsIContentPolicy::TYPE_INVALID) {
     // Ignore preload with a wrong or empty as attribute, but be sure to cancel
     // the old one.
-    prefetchService->CancelPrefetchPreloadURI(uri, domNode);
+    prefetchService->CancelPrefetchPreloadURI(uri, mElement);
     return;
   }
 
   nsContentPolicyType policyType = asPolicyType;
-  if (!nsStyleLinkElement::CheckPreloadAttrs(asAttr, mimeType, media,
-                                             mElement->OwnerDoc())) {
+  if (!HTMLLinkElement::CheckPreloadAttrs(asAttr, mimeType, media,
+                                          mElement->OwnerDoc())) {
     policyType = nsIContentPolicy::TYPE_INVALID;
   }
 
@@ -263,9 +254,9 @@ Link::UpdatePreload(nsAtom* aName, const nsAttrValue* aValue,
     CORSMode corsMode = Element::AttrValueToCORSMode(aValue);
     CORSMode oldCorsMode = Element::AttrValueToCORSMode(aOldValue);
     if (corsMode != oldCorsMode) {
-      prefetchService->CancelPrefetchPreloadURI(uri, domNode);
+      prefetchService->CancelPrefetchPreloadURI(uri, mElement);
       prefetchService->PreloadURI(uri, mElement->OwnerDoc()->GetDocumentURI(),
-                                  domNode, policyType);
+                                  mElement, policyType);
     }
     return;
   }
@@ -275,8 +266,8 @@ Link::UpdatePreload(nsAtom* aName, const nsAttrValue* aValue,
   if (aName == nsGkAtoms::as) {
     if (aOldValue) {
       oldPolicyType = AsValueToContentPolicy(*aOldValue);
-      if (!nsStyleLinkElement::CheckPreloadAttrs(*aOldValue, mimeType, media,
-                                                 mElement->OwnerDoc())) {
+      if (!HTMLLinkElement::CheckPreloadAttrs(*aOldValue, mimeType, media,
+                                              mElement->OwnerDoc())) {
         oldPolicyType = nsIContentPolicy::TYPE_INVALID;
       }
     } else {
@@ -292,8 +283,8 @@ Link::UpdatePreload(nsAtom* aName, const nsAttrValue* aValue,
     }
     nsAutoString oldMimeType;
     nsContentUtils::SplitMimeType(oldType, oldMimeType, notUsed);
-    if (nsStyleLinkElement::CheckPreloadAttrs(asAttr, oldMimeType, media,
-                                              mElement->OwnerDoc())) {
+    if (HTMLLinkElement::CheckPreloadAttrs(asAttr, oldMimeType, media,
+                                           mElement->OwnerDoc())) {
       oldPolicyType = asPolicyType;
     } else {
       oldPolicyType = nsIContentPolicy::TYPE_INVALID;
@@ -306,8 +297,8 @@ Link::UpdatePreload(nsAtom* aName, const nsAttrValue* aValue,
     } else {
       oldMedia = EmptyString();
     }
-    if (nsStyleLinkElement::CheckPreloadAttrs(asAttr, mimeType, oldMedia,
-                                              mElement->OwnerDoc())) {
+    if (HTMLLinkElement::CheckPreloadAttrs(asAttr, mimeType, oldMedia,
+                                           mElement->OwnerDoc())) {
       oldPolicyType = asPolicyType;
     } else {
       oldPolicyType = nsIContentPolicy::TYPE_INVALID;
@@ -316,7 +307,7 @@ Link::UpdatePreload(nsAtom* aName, const nsAttrValue* aValue,
 
   if ((policyType != oldPolicyType) &&
       (oldPolicyType != nsIContentPolicy::TYPE_INVALID)) {
-    prefetchService->CancelPrefetchPreloadURI(uri, domNode);
+    prefetchService->CancelPrefetchPreloadURI(uri, mElement);
 
   }
 
@@ -326,7 +317,7 @@ Link::UpdatePreload(nsAtom* aName, const nsAttrValue* aValue,
   if ((policyType != oldPolicyType) ||
       (policyType == nsIContentPolicy::TYPE_INVALID)) {
     prefetchService->PreloadURI(uri, mElement->OwnerDoc()->GetDocumentURI(),
-                                domNode, policyType);
+                                mElement, policyType);
   }
 }
 
@@ -337,8 +328,7 @@ Link::CancelPrefetchOrPreload()
   if (prefetchService) {
     nsCOMPtr<nsIURI> uri(GetURI());
     if (uri) {
-      nsCOMPtr<nsIDOMNode> domNode = GetAsDOMNode(mElement);
-      prefetchService->CancelPrefetchPreloadURI(uri, domNode);
+      prefetchService->CancelPrefetchPreloadURI(uri, mElement);
     }
   }
 }
@@ -437,7 +427,7 @@ Link::GetURI() const
 void
 Link::SetProtocol(const nsAString &aProtocol)
 {
-  nsCOMPtr<nsIURI> uri(GetURIToMutate());
+  nsCOMPtr<nsIURI> uri(GetURI());
   if (!uri) {
     // Ignore failures to be compatible with NS4.
     return;
@@ -448,7 +438,12 @@ Link::SetProtocol(const nsAString &aProtocol)
   aProtocol.EndReading(end);
   nsAString::const_iterator iter(start);
   (void)FindCharInReadable(':', iter, end);
-  (void)uri->SetScheme(NS_ConvertUTF16toUTF8(Substring(start, iter)));
+  nsresult rv = NS_MutateURI(uri)
+                  .SetScheme(NS_ConvertUTF16toUTF8(Substring(start, iter)))
+                  .Finalize(uri);
+  if (NS_FAILED(rv)) {
+    return;
+  }
 
   SetHrefAttribute(uri);
 }
@@ -456,73 +451,96 @@ Link::SetProtocol(const nsAString &aProtocol)
 void
 Link::SetPassword(const nsAString &aPassword)
 {
-  nsCOMPtr<nsIURI> uri(GetURIToMutate());
+  nsCOMPtr<nsIURI> uri(GetURI());
   if (!uri) {
     // Ignore failures to be compatible with NS4.
     return;
   }
 
-  uri->SetPassword(NS_ConvertUTF16toUTF8(aPassword));
-  SetHrefAttribute(uri);
+  nsresult rv = NS_MutateURI(uri)
+                  .SetPassword(NS_ConvertUTF16toUTF8(aPassword))
+                  .Finalize(uri);
+  if (NS_SUCCEEDED(rv)) {
+    SetHrefAttribute(uri);
+  }
 }
 
 void
 Link::SetUsername(const nsAString &aUsername)
 {
-  nsCOMPtr<nsIURI> uri(GetURIToMutate());
+  nsCOMPtr<nsIURI> uri(GetURI());
   if (!uri) {
     // Ignore failures to be compatible with NS4.
     return;
   }
 
-  uri->SetUsername(NS_ConvertUTF16toUTF8(aUsername));
-  SetHrefAttribute(uri);
+  nsresult rv = NS_MutateURI(uri)
+                  .SetUsername(NS_ConvertUTF16toUTF8(aUsername))
+                  .Finalize(uri);
+  if (NS_SUCCEEDED(rv)) {
+    SetHrefAttribute(uri);
+  }
 }
 
 void
 Link::SetHost(const nsAString &aHost)
 {
-  nsCOMPtr<nsIURI> uri(GetURIToMutate());
+  nsCOMPtr<nsIURI> uri(GetURI());
   if (!uri) {
     // Ignore failures to be compatible with NS4.
     return;
   }
 
-  (void)uri->SetHostPort(NS_ConvertUTF16toUTF8(aHost));
+  nsresult rv = NS_MutateURI(uri)
+                  .SetHostPort(NS_ConvertUTF16toUTF8(aHost))
+                  .Finalize(uri);
+  if (NS_FAILED(rv)) {
+    return;
+  }
   SetHrefAttribute(uri);
 }
 
 void
 Link::SetHostname(const nsAString &aHostname)
 {
-  nsCOMPtr<nsIURI> uri(GetURIToMutate());
+  nsCOMPtr<nsIURI> uri(GetURI());
   if (!uri) {
     // Ignore failures to be compatible with NS4.
     return;
   }
 
-  (void)uri->SetHost(NS_ConvertUTF16toUTF8(aHostname));
+  nsresult rv = NS_MutateURI(uri)
+                  .SetHost(NS_ConvertUTF16toUTF8(aHostname))
+                  .Finalize(uri);
+  if (NS_FAILED(rv)) {
+    return;
+  }
   SetHrefAttribute(uri);
 }
 
 void
 Link::SetPathname(const nsAString &aPathname)
 {
-  nsCOMPtr<nsIURI> uri(GetURIToMutate());
+  nsCOMPtr<nsIURI> uri(GetURI());
   nsCOMPtr<nsIURL> url(do_QueryInterface(uri));
   if (!url) {
     // Ignore failures to be compatible with NS4.
     return;
   }
 
-  (void)url->SetFilePath(NS_ConvertUTF16toUTF8(aPathname));
+  nsresult rv = NS_MutateURI(uri)
+                  .SetFilePath(NS_ConvertUTF16toUTF8(aPathname))
+                  .Finalize(uri);
+  if (NS_FAILED(rv)) {
+    return;
+  }
   SetHrefAttribute(uri);
 }
 
 void
 Link::SetSearch(const nsAString& aSearch)
 {
-  nsCOMPtr<nsIURI> uri(GetURIToMutate());
+  nsCOMPtr<nsIURI> uri(GetURI());
   nsCOMPtr<nsIURL> url(do_QueryInterface(uri));
   if (!url) {
     // Ignore failures to be compatible with NS4.
@@ -530,14 +548,19 @@ Link::SetSearch(const nsAString& aSearch)
   }
 
   auto encoding = mElement->OwnerDoc()->GetDocumentCharacterSet();
-  (void)url->SetQueryWithEncoding(NS_ConvertUTF16toUTF8(aSearch), encoding);
+  nsresult rv = NS_MutateURI(uri)
+                  .SetQueryWithEncoding(NS_ConvertUTF16toUTF8(aSearch), encoding)
+                  .Finalize(uri);
+  if (NS_FAILED(rv)) {
+    return;
+  }
   SetHrefAttribute(uri);
 }
 
 void
 Link::SetPort(const nsAString &aPort)
 {
-  nsCOMPtr<nsIURI> uri(GetURIToMutate());
+  nsCOMPtr<nsIURI> uri(GetURI());
   if (!uri) {
     // Ignore failures to be compatible with NS4.
     return;
@@ -555,20 +578,31 @@ Link::SetPort(const nsAString &aPort)
     }
   }
 
-  (void)uri->SetPort(port);
+  rv = NS_MutateURI(uri)
+         .SetPort(port)
+         .Finalize(uri);
+  if (NS_FAILED(rv)) {
+    return;
+  }
   SetHrefAttribute(uri);
 }
 
 void
 Link::SetHash(const nsAString &aHash)
 {
-  nsCOMPtr<nsIURI> uri(GetURIToMutate());
+  nsCOMPtr<nsIURI> uri(GetURI());
   if (!uri) {
     // Ignore failures to be compatible with NS4.
     return;
   }
 
-  (void)uri->SetRef(NS_ConvertUTF16toUTF8(aHash));
+  nsresult rv = NS_MutateURI(uri)
+                  .SetRef(NS_ConvertUTF16toUTF8(aHash))
+                  .Finalize(uri);
+  if (NS_FAILED(rv)) {
+    return;
+  }
+
   SetHrefAttribute(uri);
 }
 
@@ -700,7 +734,8 @@ Link::GetSearch(nsAString &_search)
   nsAutoCString search;
   nsresult rv = url->GetQuery(search);
   if (NS_SUCCEEDED(rv) && !search.IsEmpty()) {
-    CopyUTF8toUTF16(NS_LITERAL_CSTRING("?") + search, _search);
+    _search.Assign(u'?');
+    AppendUTF8toUTF16(search, _search);
   }
 }
 
@@ -827,6 +862,7 @@ Link::UnregisterFromHistory()
 already_AddRefed<nsIURI>
 Link::GetURIToMutate()
 {
+  MOZ_ASSERT(false, "TODO: REMOVE THIS METHOD");
   nsCOMPtr<nsIURI> uri(GetURI());
   if (!uri) {
     return nullptr;
@@ -902,9 +938,11 @@ Link::AsValueToContentPolicy(const nsAttrValue& aValue)
   case DESTINATION_INVALID:
     return nsIContentPolicy::TYPE_INVALID;
   case DESTINATION_AUDIO:
+    return nsIContentPolicy::TYPE_INTERNAL_AUDIO;
   case DESTINATION_TRACK:
+    return nsIContentPolicy::TYPE_INTERNAL_TRACK;
   case DESTINATION_VIDEO:
-    return nsIContentPolicy::TYPE_MEDIA;
+    return nsIContentPolicy::TYPE_INTERNAL_VIDEO;
   case DESTINATION_FONT:
     return nsIContentPolicy::TYPE_FONT;
   case DESTINATION_IMAGE:

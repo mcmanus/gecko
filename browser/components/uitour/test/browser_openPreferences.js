@@ -1,7 +1,5 @@
 "use strict";
 
-var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
-
 var gTestTab;
 var gContentAPI;
 var gContentWindow;
@@ -12,7 +10,7 @@ add_UITour_task(async function test_openPreferences() {
   let promiseTabOpened = BrowserTestUtils.waitForNewTab(gBrowser, "about:preferences");
   await gContentAPI.openPreferences();
   let tab = await promiseTabOpened;
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });
 
 add_UITour_task(async function test_openInvalidPreferences() {
@@ -32,7 +30,7 @@ add_UITour_task(async function test_openPrivacyPreferences() {
   let promiseTabOpened = BrowserTestUtils.waitForNewTab(gBrowser, "about:preferences#privacy");
   await gContentAPI.openPreferences("privacy");
   let tab = await promiseTabOpened;
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });
 
 add_UITour_task(async function test_openPrivacyReports() {
@@ -45,8 +43,9 @@ add_UITour_task(async function test_openPrivacyReports() {
   let tab = await promiseTabOpened;
   await BrowserTestUtils.waitForEvent(gBrowser.selectedBrowser, "Initialized");
   let doc = gBrowser.selectedBrowser.contentDocument;
-  let reports = doc.querySelector("groupbox[data-subcategory='reports']");
   is(doc.location.hash, "#privacy", "Should not display the reports subcategory in the location hash.");
-  is(reports.hidden, false, "Should open to the reports subcategory in the privacy pane in the new Preferences.");
-  await BrowserTestUtils.removeTab(tab);
+  await TestUtils.waitForCondition(() => doc.querySelector(".spotlight"),
+    "Wait for the reports section is spotlighted.");
+  is(doc.querySelector(".spotlight").getAttribute("data-subcategory"), "reports", "The reports section is spotlighted.");
+  BrowserTestUtils.removeTab(tab);
 });

@@ -2,6 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import, print_function
+
 import os
 import sys
 import tempfile
@@ -18,10 +20,10 @@ class ArchlinuxBootstrapper(StyloInstall, BaseBootstrapper):
     SYSTEM_PACKAGES = [
         'autoconf2.13',
         'base-devel',
-        'ccache',
-        'mercurial',
+        'nodejs',
         'python2',
         'python2-setuptools',
+        'python',  # This is Python 3 on Arch.
         'unzip',
         'zip',
     ]
@@ -49,12 +51,10 @@ class ArchlinuxBootstrapper(StyloInstall, BaseBootstrapper):
         'imake',
         'inetutils',
         'libpulse',
-        'mesa',
         'xorg-server-xvfb',
         'yasm',
         'gst-libav',
         'gst-plugins-good',
-        'networkmanager',
     ]
 
     BROWSER_AUR_PACKAGES = [
@@ -118,12 +118,12 @@ class ArchlinuxBootstrapper(StyloInstall, BaseBootstrapper):
             raise e
 
         # 2. Android pieces.
-        import android
+        from mozboot import android
         android.ensure_android('linux', artifact_mode=artifact_mode,
                                no_interactive=self.no_interactive)
 
     def suggest_mobile_android_mozconfig(self, artifact_mode=False):
-        import android
+        from mozboot import android
         android.suggest_mozconfig('linux', artifact_mode=artifact_mode)
 
     def suggest_mobile_android_artifact_mode_mozconfig(self):

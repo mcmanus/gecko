@@ -10,6 +10,8 @@
 #include "mozilla/AddonManagerWebAPI.h"
 #include "mozilla/ResultExtensions.h"
 #include "nsEscape.h"
+#include "nsIDocShell.h"
+#include "nsIObserver.h"
 #include "nsISubstitutingProtocolHandler.h"
 #include "nsNetUtil.h"
 #include "nsPrintfCString.h"
@@ -30,8 +32,11 @@ static const char kBackgroundPageHTMLScript[] = "\n\
     <script type=\"text/javascript\" src=\"%s\"></script>";
 
 static const char kBackgroundPageHTMLEnd[] = "\n\
-  <body>\n\
+  </body>\n\
 </html>";
+
+static const char kRestrictedDomainPref[] =
+  "extensions.webextensions.restrictedDomains";
 
 static inline ExtensionPolicyService&
 EPS()
@@ -88,12 +93,19 @@ WebExtensionPolicy::WebExtensionPolicy(GlobalObject& aGlobal,
 
   mContentScripts.SetCapacity(aInit.mContentScripts.Length());
   for (const auto& scriptInit : aInit.mContentScripts) {
+    // The activeTab permission is only for dynamically injected scripts,
+    // it cannot be used for declarative content scripts.
+    if (scriptInit.mHasActiveTabPermission) {
+      aRv.Throw(NS_ERROR_INVALID_ARG);
+      return;
+    }
+
     RefPtr<WebExtensionContentScript> contentScript =
       new WebExtensionContentScript(*this, scriptInit, aRv);
     if (aRv.Failed()) {
       return;
     }
-    mContentScripts.AppendElement(Move(contentScript));
+    mContentScripts.AppendElement(std::move(contentScript));
   }
 
   nsresult rv = NS_NewURI(getter_AddRefs(mBaseURI), aInit.mBaseURL);
@@ -212,6 +224,39 @@ WebExtensionPolicy::GetURL(const nsAString& aPath) const
   return NS_ConvertUTF8toUTF16(spec);
 }
 
+void
+WebExtensionPolicy::RegisterContentScript(WebExtensionContentScript& script,
+                                          ErrorResult& aRv)
+{
+  // Raise an "invalid argument" error if the script is not related to
+  // the expected extension or if it is already registered.
+  if (script.mExtension != this || mContentScripts.Contains(&script)) {
+    aRv.Throw(NS_ERROR_INVALID_ARG);
+    return;
+  }
+
+  RefPtr<WebExtensionContentScript> newScript = &script;
+
+  if (!mContentScripts.AppendElement(std::move(newScript), fallible)) {
+    aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
+    return;
+  }
+
+  WebExtensionPolicyBinding::ClearCachedContentScriptsValue(this);
+}
+
+void
+WebExtensionPolicy::UnregisterContentScript(const WebExtensionContentScript& script,
+                                            ErrorResult& aRv)
+{
+  if (script.mExtension != this || !mContentScripts.RemoveElement(&script)) {
+    aRv.Throw(NS_ERROR_INVALID_ARG);
+    return;
+  }
+
+  WebExtensionPolicyBinding::ClearCachedContentScriptsValue(this);
+}
+
 /* static */ bool
 WebExtensionPolicy::UseRemoteWebExtensions(GlobalObject& aGlobal)
 {
@@ -222,6 +267,106 @@ WebExtensionPolicy::UseRemoteWebExtensions(GlobalObject& aGlobal)
 WebExtensionPolicy::IsExtensionProcess(GlobalObject& aGlobal)
 {
   return EPS().IsExtensionProcess();
+}
+
+namespace {
+  /**
+   * Maintains a dynamically updated AtomSet based on the comma-separated
+   * values in the given string pref.
+   */
+  class AtomSetPref : public nsIObserver
+                    , public nsSupportsWeakReference
+  {
+  public:
+    NS_DECL_ISUPPORTS
+    NS_DECL_NSIOBSERVER
+
+    static already_AddRefed<AtomSetPref>
+    Create(const char* aPref)
+    {
+      RefPtr<AtomSetPref> self = new AtomSetPref(aPref);
+      Preferences::AddWeakObserver(self, aPref);
+      return self.forget();
+    }
+
+    const AtomSet& Get() const;
+
+    bool Contains(const nsAtom* aAtom) const
+    {
+      return Get().Contains(aAtom);
+    }
+
+  protected:
+    virtual ~AtomSetPref() = default;
+
+    explicit AtomSetPref(const char* aPref) : mPref(aPref)
+    {}
+
+  private:
+    mutable RefPtr<AtomSet> mAtomSet;
+    const char* mPref;
+  };
+
+  const AtomSet&
+  AtomSetPref::Get() const
+  {
+    if (!mAtomSet) {
+      nsAutoCString eltsString;
+      Unused << Preferences::GetCString(mPref, eltsString);
+
+      AutoTArray<nsString, 32> elts;
+      for (const nsACString& elt : eltsString.Split(',')) {
+        elts.AppendElement(NS_ConvertUTF8toUTF16(elt));
+        elts.LastElement().StripWhitespace();
+      }
+      mAtomSet = new AtomSet(elts);
+    }
+
+    return *mAtomSet;
+  }
+
+  NS_IMETHODIMP
+  AtomSetPref::Observe(nsISupports *aSubject, const char *aTopic,
+                       const char16_t *aData)
+  {
+    mAtomSet = nullptr;
+    return NS_OK;
+  }
+
+  NS_IMPL_ISUPPORTS(AtomSetPref, nsIObserver, nsISupportsWeakReference)
+};
+
+/* static */ bool
+WebExtensionPolicy::IsRestrictedDoc(const DocInfo& aDoc)
+{
+  // With the exception of top-level about:blank documents with null
+  // principals, we never match documents that have non-codebase principals,
+  // including those with null principals or system principals.
+  if (aDoc.Principal() && !aDoc.Principal()->GetIsCodebasePrincipal()) {
+    return true;
+  }
+
+  return IsRestrictedURI(aDoc.PrincipalURL());
+}
+
+/* static */ bool
+WebExtensionPolicy::IsRestrictedURI(const URLInfo &aURI)
+{
+  static RefPtr<AtomSetPref> domains;
+  if (!domains) {
+    domains = AtomSetPref::Create(kRestrictedDomainPref);
+    ClearOnShutdown(&domains);
+  }
+
+  if (domains->Contains(aURI.HostAtom())) {
+    return true;
+  }
+
+  if (AddonManagerWebAPI::IsValidSite(aURI.URI())) {
+    return true;
+  }
+
+  return false;
 }
 
 nsCString
@@ -303,6 +448,8 @@ WebExtensionContentScript::WebExtensionContentScript(WebExtensionPolicy& aExtens
                                                      const ContentScriptInit& aInit,
                                                      ErrorResult& aRv)
   : mExtension(&aExtension)
+  , mHasActiveTabPermission(aInit.mHasActiveTabPermission)
+  , mRestricted(!aExtension.HasPermission(nsGkAtoms::mozillaAddons))
   , mMatches(aInit.mMatches)
   , mExcludeMatches(aInit.mExcludeMatches)
   , mCssPaths(aInit.mCssPaths)
@@ -320,7 +467,6 @@ WebExtensionContentScript::WebExtensionContentScript(WebExtensionPolicy& aExtens
     mExcludeGlobs.SetValue().AppendElements(aInit.mExcludeGlobs.Value());
   }
 }
-
 
 bool
 WebExtensionContentScript::Matches(const DocInfo& aDoc) const
@@ -348,14 +494,17 @@ WebExtensionContentScript::Matches(const DocInfo& aDoc) const
     return true;
   }
 
-  // With the exception of top-level about:blank documents with null
-  // principals, we never match documents that have non-codebase principals,
-  // including those with null principals or system principals.
-  if (aDoc.Principal() && !aDoc.Principal()->GetIsCodebasePrincipal()) {
+  if (mRestricted && mExtension->IsRestrictedDoc(aDoc)) {
     return false;
   }
 
-  return MatchesURI(aDoc.PrincipalURL());
+  auto& urlinfo = aDoc.PrincipalURL();
+  if (mHasActiveTabPermission && aDoc.ShouldMatchActiveTabPermission() &&
+      MatchPattern::MatchesAllURLs(urlinfo)) {
+    return true;
+  }
+
+  return MatchesURI(urlinfo);
 }
 
 bool
@@ -377,7 +526,7 @@ WebExtensionContentScript::MatchesURI(const URLInfo& aURL) const
     return false;
   }
 
-  if (AddonManagerWebAPI::IsValidSite(aURL.URI())) {
+  if (mRestricted && mExtension->IsRestrictedURI(aURL)) {
     return false;
   }
 
@@ -434,6 +583,54 @@ DocInfo::IsTopLevel() const
   return mIsTopLevel.ref();
 }
 
+bool
+WindowShouldMatchActiveTab(nsPIDOMWindowOuter* aWin)
+{
+  if (aWin->IsTopLevelWindow()) {
+    return true;
+  }
+
+  nsIDocShell* docshell = aWin->GetDocShell();
+  if (!docshell || docshell->GetCreatedDynamically()) {
+    return false;
+  }
+
+  nsIDocument* doc = aWin->GetExtantDoc();
+  if (!doc) {
+    return false;
+  }
+
+  nsIChannel* channel = doc->GetChannel();
+  if (!channel) {
+    return false;
+  }
+
+  nsCOMPtr<nsILoadInfo> loadInfo = channel->GetLoadInfo();
+
+  if (!loadInfo) {
+    return false;
+  }
+
+  if (!loadInfo->GetOriginalFrameSrcLoad()) {
+    return false;
+  }
+
+  nsCOMPtr<nsPIDOMWindowOuter> parent = aWin->GetParent();
+  MOZ_ASSERT(parent != nullptr);
+  return WindowShouldMatchActiveTab(parent);
+}
+
+bool
+DocInfo::ShouldMatchActiveTabPermission() const
+{
+  struct Matcher
+  {
+    bool match(Window aWin) { return WindowShouldMatchActiveTab(aWin); }
+    bool match(LoadInfo aLoadInfo) { return false; }
+  };
+  return mObj.match(Matcher());
+}
+
 uint64_t
 DocInfo::FrameID() const
 {
@@ -485,8 +682,7 @@ DocInfo::Principal() const
 const URLInfo&
 DocInfo::PrincipalURL() const
 {
-  if (!URL().InheritsPrincipal() ||
-      !(Principal() && Principal()->GetIsCodebasePrincipal())) {
+  if (!(Principal() && Principal()->GetIsCodebasePrincipal())) {
     return URL();
   }
 

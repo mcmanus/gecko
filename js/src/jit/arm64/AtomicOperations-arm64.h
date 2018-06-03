@@ -12,6 +12,8 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/Types.h"
 
+#include "vm/ArrayBufferObject.h"
+
 #if !defined(__clang__) && !defined(__GNUC__)
 # error "This file only for gcc-compatible compilers"
 #endif
@@ -125,6 +127,20 @@ js::jit::AtomicOperations::loadSafeWhenRacy(T* addr)
     return v;
 }
 
+namespace js { namespace jit {
+
+// Clang requires a specialization for uint8_clamped.
+template<>
+inline js::uint8_clamped
+js::jit::AtomicOperations::loadSafeWhenRacy(js::uint8_clamped* addr)
+{
+    uint8_t v;
+    __atomic_load(&addr->val, &v, __ATOMIC_RELAXED);
+    return js::uint8_clamped(v);
+}
+
+} }
+
 template <typename T>
 inline void
 js::jit::AtomicOperations::storeSafeWhenRacy(T* addr, T val)
@@ -132,6 +148,18 @@ js::jit::AtomicOperations::storeSafeWhenRacy(T* addr, T val)
     MOZ_ASSERT(tier1Constraints(addr));
     __atomic_store(addr, &val, __ATOMIC_RELAXED);
 }
+
+namespace js { namespace jit {
+
+// Clang requires a specialization for uint8_clamped.
+template<>
+inline void
+js::jit::AtomicOperations::storeSafeWhenRacy(js::uint8_clamped* addr, js::uint8_clamped val)
+{
+    __atomic_store(&addr->val, &val.val, __ATOMIC_RELAXED);
+}
+
+} }
 
 inline void
 js::jit::AtomicOperations::memcpySafeWhenRacy(void* dest, const void* src, size_t nbytes)
@@ -146,29 +174,6 @@ js::jit::AtomicOperations::memmoveSafeWhenRacy(void* dest, const void* src,
                                                size_t nbytes)
 {
     memmove(dest, src, nbytes);
-}
-
-template<size_t nbytes>
-inline void
-js::jit::RegionLock::acquire(void* addr)
-{
-    uint32_t zero = 0;
-    uint32_t one = 1;
-    while (!__atomic_compare_exchange(&spinlock, &zero, &one, false, __ATOMIC_ACQUIRE,
-                                      __ATOMIC_ACQUIRE))
-    {
-        zero = 0;
-        continue;
-    }
-}
-
-template<size_t nbytes>
-inline void
-js::jit::RegionLock::release(void* addr)
-{
-    MOZ_ASSERT(AtomicOperations::loadSeqCst(&spinlock) == 1, "releasing unlocked region lock");
-    uint32_t zero = 0;
-    __atomic_store(&spinlock, &zero, __ATOMIC_SEQ_CST);
 }
 
 #endif // jit_arm64_AtomicOperations_arm64_h

@@ -209,8 +209,6 @@ TEST(CSPParser, Directives)
       "script-src 'sha256-a'" },
     { "script-src 'sha256-siVR8vAcqP06h2ppeNwqgjr0yZ6yned4X2VF84j4GmI='",
       "script-src 'sha256-siVR8vAcqP06h2ppeNwqgjr0yZ6yned4X2VF84j4GmI='" },
-    { "referrer no-referrer",
-      "referrer no-referrer" },
     { "require-sri-for script style",
       "require-sri-for script style"},
     { "script-src 'nonce-foo' 'unsafe-inline' ",
@@ -219,6 +217,10 @@ TEST(CSPParser, Directives)
       "script-src 'nonce-foo' 'strict-dynamic' 'unsafe-inline' https:" },
     { "default-src 'sha256-siVR8' 'strict-dynamic' 'unsafe-inline' https:  ",
       "default-src 'sha256-siVR8' 'unsafe-inline' https:" },
+    { "worker-src https://example.com",
+      "worker-src https://example.com" },
+    { "worker-src http://worker.com; frame-src http://frame.com; child-src http://child.com",
+      "worker-src http://worker.com; frame-src http://frame.com; child-src http://child.com" },
   };
 
   uint32_t policyCount = sizeof(policies) / sizeof(PolicyTest);
@@ -281,8 +283,6 @@ TEST(CSPParser, IgnoreUpperLowerCasePolicies)
       "script-src 'nonce-NONCENEEDSTOBEUPPERCASE'" },
     { "script-src 'SHA256-siVR8vAcqP06h2ppeNwqgjr0yZ6yned4X2VF84j4GmI='",
       "script-src 'sha256-siVR8vAcqP06h2ppeNwqgjr0yZ6yned4X2VF84j4GmI='" },
-    { "refERRer No-refeRRer",
-      "referrer no-referrer" },
     { "upgrade-INSECURE-requests",
       "upgrade-insecure-requests" },
     { "sanDBox alloW-foRMs",
@@ -576,8 +576,6 @@ TEST(CSPParser, BadPolicies)
     { "defaut-src asdf", "" },
     { "default-src: aaa", "" },
     { "asdf http://test.com", ""},
-    { "referrer", ""},
-    { "referrer foo", ""},
     { "require-sri-for", ""},
     { "require-sri-for foo", ""},
     { "report-uri", ""},
@@ -798,6 +796,8 @@ TEST(CSPParser, GoodGeneratedPolicies)
       "frame-ancestors http://a.b.c.d.e.f.g.h.i.j.k.l.x.com" },
     { "frame-ancestors https://self.com:34",
       "frame-ancestors https://self.com:34" },
+    { "frame-ancestors http://sampleuser:samplepass@example.com",
+      "frame-ancestors 'none'" },
     { "default-src 'none'; frame-ancestors 'self'",
       "default-src 'none'; frame-ancestors http://www.selfuri.com" },
     { "frame-ancestors http://self:80",
@@ -1128,4 +1128,3 @@ TEST(CSPParser, FuzzyPoliciesIncDirLimASCII)
   }
 }
 #endif
-

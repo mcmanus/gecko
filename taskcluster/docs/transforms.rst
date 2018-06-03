@@ -137,14 +137,15 @@ part of the documentation.
 
 following ``run-using`` are available
 
-  * ``buildbot``
   * ``hazard``
   * ``mach``
   * ``mozharness``
   * ``mozharness-test``
   * ``run-task``
   * ``spidermonkey`` or ``spidermonkey-package`` or ``spidermonkey-mozjs-crate`` or ``spidermonkey-rust-bindings``
+  * ``debian-package``
   * ``toolchain-script``
+  * ``always-optimized``
 
 
 Task Descriptions

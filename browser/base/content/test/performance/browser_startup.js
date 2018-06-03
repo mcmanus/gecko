@@ -50,8 +50,6 @@ const startupPhases = {
   // We are at this phase after creating the first browser window (ie. after final-ui-startup).
   "before opening first browser window": {blacklist: {
     modules: new Set([
-      "resource://gre/modules/PlacesBackups.jsm",
-      "resource://gre/modules/PlacesUtils.jsm",
     ])
   }},
 
@@ -60,7 +58,6 @@ const startupPhases = {
   // before first paint and delayed it.
   "before first paint": {blacklist: {
     components: new Set([
-      "UnifiedComplete.js",
       "nsSearchService.js",
     ]),
     modules: new Set([
@@ -71,9 +68,10 @@ const startupPhases = {
       "resource:///modules/BrowserUITelemetry.jsm",
       "resource:///modules/BrowserUsageTelemetry.jsm",
       "resource:///modules/ContentCrashHandlers.jsm",
-      "resource:///modules/DirectoryLinksProvider.jsm",
+      "resource:///modules/ShellService.jsm",
       "resource://gre/modules/NewTabUtils.jsm",
       "resource://gre/modules/PageThumbs.jsm",
+      "resource://gre/modules/PlacesUtils.jsm",
       "resource://gre/modules/Promise.jsm", // imported by devtools during _delayedStartup
       "resource://gre/modules/Preferences.jsm",
     ]),
@@ -92,20 +90,20 @@ const startupPhases = {
       "nsPlacesExpiration.js",
     ]),
     modules: new Set([
-      // Bug 1391495 - RecentWindow.jsm is intermittently used.
-      // "resource:///modules/RecentWindow.jsm",
+      // Bug 1391495 - BrowserWindowTracker.jsm is intermittently used.
+      // "resource:///modules/BrowserWindowTracker.jsm",
       "resource://gre/modules/BookmarkHTMLUtils.jsm",
       "resource://gre/modules/Bookmarks.jsm",
       "resource://gre/modules/ContextualIdentityService.jsm",
       "resource://gre/modules/CrashSubmit.jsm",
       "resource://gre/modules/FxAccounts.jsm",
       "resource://gre/modules/FxAccountsStorage.jsm",
+      "resource://gre/modules/PlacesBackups.jsm",
       "resource://gre/modules/PlacesSyncUtils.jsm",
       "resource://gre/modules/Sqlite.jsm",
     ]),
     services: new Set([
       "@mozilla.org/browser/annotation-service;1",
-      "@mozilla.org/browser/favicon-service;1",
       "@mozilla.org/browser/nav-bookmarks-service;1",
     ])
   }},
@@ -114,6 +112,9 @@ const startupPhases = {
   // and loaded lazily when used for the first time by the user should
   // be blacklisted here.
   "before becoming idle": {blacklist: {
+    components: new Set([
+      "UnifiedComplete.js",
+    ]),
     modules: new Set([
       "resource://gre/modules/AsyncPrefs.jsm",
       "resource://gre/modules/LoginManagerContextMenu.jsm",
@@ -122,8 +123,12 @@ const startupPhases = {
   }},
 };
 
+if (Services.prefs.getBoolPref("browser.startup.blankWindow")) {
+  startupPhases["before profile selection"].whitelist.components.add("XULStore.js");
+}
+
 if (!gBrowser.selectedBrowser.isRemoteBrowser) {
-  // With e10s disabled, Places and RecentWindow.jsm (from a
+  // With e10s disabled, Places and BrowserWindowTracker.jsm (from a
   // SessionSaver.jsm timer) intermittently get loaded earlier. Likely
   // due to messages from the 'content' process arriving synchronously
   // instead of crossing a process boundary.
@@ -143,9 +148,10 @@ if (!gBrowser.selectedBrowser.isRemoteBrowser) {
 }
 
 add_task(async function() {
-  if (!AppConstants.NIGHTLY_BUILD && !AppConstants.DEBUG) {
+  if (!AppConstants.NIGHTLY_BUILD && !AppConstants.MOZ_DEV_EDITION && !AppConstants.DEBUG) {
     ok(!("@mozilla.org/test/startuprecorder;1" in Cc),
-       "the startup recorder component shouldn't exist in this non-nightly non-debug build.");
+       "the startup recorder component shouldn't exist in this non-nightly/non-devedition/" +
+       "non-debug build.");
     return;
   }
 
@@ -154,7 +160,7 @@ add_task(async function() {
 
   let loader = Cc["@mozilla.org/moz/jsloader;1"].getService(Ci.xpcIJSModuleLoader);
   let componentStacks = new Map();
-  let data = startupRecorder.data.code;
+  let data = Cu.cloneInto(startupRecorder.data.code, {});
   // Keep only the file name for components, as the path is an absolute file
   // URL rather than a resource:// URL like for modules.
   for (let phase in data) {

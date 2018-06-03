@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -109,14 +109,14 @@ PresentationRequest::Constructor(const GlobalObject& aGlobal,
   }
 
   RefPtr<PresentationRequest> request =
-    new PresentationRequest(window, Move(urls));
+    new PresentationRequest(window, std::move(urls));
   return NS_WARN_IF(!request->Init()) ? nullptr : request.forget();
 }
 
 PresentationRequest::PresentationRequest(nsPIDOMWindowInner* aWindow,
                                          nsTArray<nsString>&& aUrls)
   : DOMEventTargetHelper(aWindow)
-  , mUrls(Move(aUrls))
+  , mUrls(std::move(aUrls))
 {
 }
 
@@ -188,7 +188,7 @@ PresentationRequest::StartWithDevice(const nsAString& aDeviceId,
     return promise.forget();
   }
 
-  RefPtr<Navigator> navigator = nsGlobalWindow::Cast(GetOwner())->Navigator();
+  RefPtr<Navigator> navigator = nsGlobalWindowInner::Cast(GetOwner())->Navigator();
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
   }
@@ -231,8 +231,7 @@ PresentationRequest::StartWithDevice(const nsAString& aDeviceId,
   // process. If it's in child process, the corresponding xul:browser element
   // will be obtained at PresentationRequestParent::DoRequest in its parent
   // process.
-  nsCOMPtr<nsIDOMEventTarget> handler =
-    do_QueryInterface(GetOwner()->GetChromeEventHandler());
+  nsCOMPtr<EventTarget> handler = GetOwner()->GetChromeEventHandler();
   nsCOMPtr<nsIPrincipal> principal = doc->NodePrincipal();
   nsCOMPtr<nsIPresentationServiceCallback> callback =
     new PresentationRequesterCallback(this, id, promise);
@@ -488,7 +487,7 @@ PresentationRequest::NotifyPromiseSettled()
     return;
   }
 
-  RefPtr<Navigator> navigator = nsGlobalWindow::Cast(GetOwner())->Navigator();
+  RefPtr<Navigator> navigator = nsGlobalWindowInner::Cast(GetOwner())->Navigator();
   if (!navigator) {
     return;
   }

@@ -3,7 +3,6 @@
   <head>
     <title>aria-relevant</title>
     <meta content="text/html; charset=utf-8" http-equiv="Content-Type"/>
-    <link rel="stylesheet" href="/resources/testharness.css">
     <link rel="stylesheet" href="/wai-aria/scripts/manual.css">
     <script src="/resources/testharness.js"></script>
     <script src="/resources/testharnessreport.js"></script>
@@ -76,7 +75,6 @@
                   "container-relevant:additions"
                ]
             ],
-            "AXAPI" : [],
             "IAccessible2" : [
                [
                   "property",
@@ -98,7 +96,7 @@
   </head>
   <body>
   <p>This test examines the ARIA properties for aria-relevant.</p>
-    <div role='group' id='test' aria-relevant='additions'>
+    <div role='group' id='test' aria-relevant='additions' aria-live='polite'>
     <div role='group' id='child'>content</div>
   </div>
 
@@ -107,4 +105,3 @@
   <div id="ATTAmessages"></div>
   </body>
 </html>
-

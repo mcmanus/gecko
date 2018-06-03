@@ -9,12 +9,11 @@
 
 #include "mozilla/Maybe.h"
 
-#include "jsfun.h"
-
 #include "jit/JitAllocPolicy.h"
 #include "jit/JitFrames.h"
 #include "jit/Registers.h"
 #include "vm/EnvironmentObject.h"
+#include "vm/JSFunction.h"
 
 namespace js {
 namespace jit {
@@ -248,13 +247,14 @@ class CompileInfo
         // If the script uses an environment in body, the environment chain
         // will need to be observable.
         needsBodyEnvironmentObject_ = script->needsBodyEnvironment();
+        funNeedsSomeEnvironmentObject_ = fun ? fun->needsSomeEnvironmentObject() : false;
     }
 
     explicit CompileInfo(unsigned nlocals)
       : script_(nullptr), fun_(nullptr), osrPc_(nullptr),
         analysisMode_(Analysis_None), scriptNeedsArgsObj_(false),
         mayReadFrameArgsDirectly_(false), inlineScriptTree_(nullptr),
-        needsBodyEnvironmentObject_(false)
+        needsBodyEnvironmentObject_(false), funNeedsSomeEnvironmentObject_(false)
     {
         nimplicit_ = 0;
         nargs_ = 0;
@@ -485,7 +485,7 @@ class CompileInfo
         if (thisSlotForDerivedClassConstructor_ && *thisSlotForDerivedClassConstructor_ == slot)
             return true;
 
-        if (funMaybeLazy()->needsSomeEnvironmentObject() && slot == environmentChainSlot())
+        if (funNeedsSomeEnvironmentObject_ && slot == environmentChainSlot())
             return true;
 
         // If the function may need an arguments object, then make sure to
@@ -575,6 +575,7 @@ class CompileInfo
     // Whether a script needs environments within its body. This informs us
     // that the environment chain is not easy to reconstruct.
     bool needsBodyEnvironmentObject_;
+    bool funNeedsSomeEnvironmentObject_;
 };
 
 } // namespace jit

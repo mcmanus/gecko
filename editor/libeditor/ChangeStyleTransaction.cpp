@@ -22,6 +22,44 @@ namespace mozilla {
 
 using namespace dom;
 
+// static
+already_AddRefed<ChangeStyleTransaction>
+ChangeStyleTransaction::Create(Element& aElement,
+                               nsAtom& aProperty,
+                               const nsAString& aValue)
+{
+  RefPtr<ChangeStyleTransaction> transaction =
+    new ChangeStyleTransaction(aElement, aProperty, aValue, false);
+  return transaction.forget();
+}
+
+// static
+already_AddRefed<ChangeStyleTransaction>
+ChangeStyleTransaction::CreateToRemove(Element& aElement,
+                                       nsAtom& aProperty,
+                                       const nsAString& aValue)
+{
+  RefPtr<ChangeStyleTransaction> transaction =
+    new ChangeStyleTransaction(aElement, aProperty, aValue, true);
+  return transaction.forget();
+}
+
+ChangeStyleTransaction::ChangeStyleTransaction(Element& aElement,
+                                               nsAtom& aProperty,
+                                               const nsAString& aValue,
+                                               bool aRemove)
+  : EditTransactionBase()
+  , mElement(&aElement)
+  , mProperty(&aProperty)
+  , mValue(aValue)
+  , mRemoveProperty(aRemove)
+  , mUndoValue()
+  , mRedoValue()
+  , mUndoAttributeWasSet(false)
+  , mRedoAttributeWasSet(false)
+{
+}
+
 #define kNullCh (char16_t('\0'))
 
 NS_IMPL_CYCLE_COLLECTION_INHERITED(ChangeStyleTransaction, EditTransactionBase,
@@ -119,22 +157,6 @@ ChangeStyleTransaction::RemoveValueFromListOfValues(
   aValues.Assign(outString);
 }
 
-ChangeStyleTransaction::ChangeStyleTransaction(Element& aElement,
-                                               nsAtom& aProperty,
-                                               const nsAString& aValue,
-                                               EChangeType aChangeType)
-  : EditTransactionBase()
-  , mElement(&aElement)
-  , mProperty(&aProperty)
-  , mValue(aValue)
-  , mRemoveProperty(aChangeType == eRemove)
-  , mUndoValue()
-  , mRedoValue()
-  , mUndoAttributeWasSet(false)
-  , mRedoAttributeWasSet(false)
-{
-}
-
 NS_IMETHODIMP
 ChangeStyleTransaction::DoTransaction()
 {
@@ -161,10 +183,6 @@ ChangeStyleTransaction::DoTransaction()
     nsAutoString returnString;
     if (multiple) {
       // Let's remove only the value we have to remove and not the others
-
-      // The two lines below are a workaround because
-      // nsDOMCSSDeclaration::GetPropertyCSSValue is not yet implemented (bug
-      // 62682)
       RemoveValueFromListOfValues(values, NS_LITERAL_STRING("none"));
       RemoveValueFromListOfValues(values, mValue);
       if (values.IsEmpty()) {
@@ -185,10 +203,6 @@ ChangeStyleTransaction::DoTransaction()
     cssDecl->GetPropertyPriority(propertyNameString, priority);
     if (multiple) {
       // Let's add the value we have to add to the others
-
-      // The line below is a workaround because
-      // nsDOMCSSDeclaration::GetPropertyCSSValue is not yet implemented (bug
-      // 62682)
       AddValueToMultivalueProperty(values, mValue);
     } else {
       values.Assign(mValue);
@@ -198,9 +212,7 @@ ChangeStyleTransaction::DoTransaction()
   }
 
   // Let's be sure we don't keep an empty style attribute
-  uint32_t length;
-  rv = cssDecl->GetLength(&length);
-  NS_ENSURE_SUCCESS(rv, rv);
+  uint32_t length = cssDecl->Length();
   if (!length) {
     rv = mElement->UnsetAttr(kNameSpaceID_None, nsGkAtoms::style, true);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -247,20 +259,6 @@ NS_IMETHODIMP
 ChangeStyleTransaction::RedoTransaction()
 {
   return SetStyle(mRedoAttributeWasSet, mRedoValue);
-}
-
-NS_IMETHODIMP
-ChangeStyleTransaction::GetTxnDescription(nsAString& aString)
-{
-  aString.AssignLiteral("ChangeStyleTransaction: [mRemoveProperty == ");
-
-  if (mRemoveProperty) {
-    aString.AppendLiteral("true] ");
-  } else {
-    aString.AppendLiteral("false] ");
-  }
-  aString += nsDependentAtomString(mProperty);
-  return NS_OK;
 }
 
 // True if the CSS property accepts more than one value

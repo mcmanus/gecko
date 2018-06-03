@@ -11,7 +11,6 @@
 
 <?xml-stylesheet href="chrome://browser/content/places/places.css"?>
 <?xml-stylesheet href="chrome://browser/skin/places/places.css"?>
-<?xul-overlay href="chrome://browser/content/places/placesOverlay.xul"?>
 
 <window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
         title="549192:  History view not updated after deleting entry"
@@ -41,31 +40,11 @@
      * Ensures that history views are updated after deleting entries.
      */
 
-    function promiseURIDeleted() {
-     return new Promise(resolve => {
-       let historyObserver = {
-         onBeginUpdateBatch: function PEX_onBeginUpdateBatch() {},
-         onEndUpdateBatch: function PEX_onEndUpdateBatch() {},
-         onClearHistory() {},
-         onVisit() {},
-         onTitleChanged() {},
-         onDeleteURI(aURI, aGUID, aReason) {
-           PlacesUtils.history.removeObserver(historyObserver);
-           resolve();
-         },
-         onPageChanged() {},
-         onDeleteVisits(aURI, aTime) { },
-       };
-
-       PlacesUtils.history.addObserver(historyObserver);
-     });
-    }
-
     function runTest() {
       SimpleTest.waitForExplicitFinish();
 
       (async function() {
-        await PlacesTestUtils.clearHistory();
+        await PlacesUtils.history.clear();
 
         // Add some visits.
         let timeInMicroseconds = PlacesUtils.toPRTime(Date.now() - 10000);
@@ -75,15 +54,14 @@
           return timeInMicroseconds;
         }
 
-        let vtime = Date.now() * 1000;
-        const ttype = PlacesUtils.history.TRANSITION_TYPED;
+        const transition = PlacesUtils.history.TRANSITIONS.TYPED;
         let places =
           [{ uri: Services.io.newURI("http://example.tld/"),
-             visitDate: newTimeInMicroseconds(), transition: ttype },
+             visitDate: newTimeInMicroseconds(), transition },
            { uri: Services.io.newURI("http://example2.tld/"),
-             visitDate: newTimeInMicroseconds(), transition: ttype },
+             visitDate: newTimeInMicroseconds(), transition },
            { uri: Services.io.newURI("http://example3.tld/"),
-             visitDate: newTimeInMicroseconds(), transition: ttype }];
+             visitDate: newTimeInMicroseconds(), transition }];
 
         await PlacesTestUtils.addVisits(places);
 
@@ -91,7 +69,7 @@
         let query = PlacesUtils.history.getNewQuery();
         let opts = PlacesUtils.history.getNewQueryOptions();
         opts.sortingMode = opts.SORT_BY_DATE_DESCENDING;
-        let queryURI = PlacesUtils.history.queriesToQueryString([query], 1, opts);
+        let queryURI = PlacesUtils.history.queryToQueryString(query, opts);
 
         // Setup the places tree contents.
         var tree = document.getElementById("tree");
@@ -126,16 +104,16 @@
         for (let i = 0; i < rc; i++) {
           selection.select(0);
           let node = tree.selectedNode;
-          let promiseDeleted = promiseURIDeleted();
-          tree.controller.remove("Removing page");
+          let promiseDeleted = PlacesTestUtils.waitForNotification("onDeleteURI",
+            uri => uri.spec == node.uri, "history");
+          tree.controller.remove();
           await promiseDeleted;
-          ok(treeView.treeIndexForNode(node) == Ci.nsINavHistoryResultTreeViewer.INDEX_INVISIBLE,
-            node.uri + " removed.");
+          ok(treeView.treeIndexForNode(node) == -1, node.uri + " removed.");
           is(treeView.rowCount, rc - i - 1, "Rows count decreased");
         }
 
         // Cleanup.
-        await PlacesTestUtils.clearHistory();
+        await PlacesUtils.history.clear();
       })().then(() => SimpleTest.finish());
     }
   ]]></script>

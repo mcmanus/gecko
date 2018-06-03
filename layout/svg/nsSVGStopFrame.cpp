@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,7 +8,7 @@
 #include "nsContainerFrame.h"
 #include "nsFrame.h"
 #include "nsGkAtoms.h"
-#include "nsStyleContext.h"
+#include "mozilla/ComputedStyle.h"
 #include "SVGObserverUtils.h"
 
 // This is a very simple frame whose only purpose is to capture style change
@@ -17,10 +18,10 @@
 class nsSVGStopFrame : public nsFrame
 {
   friend nsIFrame*
-  NS_NewSVGStopFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
+  NS_NewSVGStopFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle);
 protected:
-  explicit nsSVGStopFrame(nsStyleContext* aContext)
-    : nsFrame(aContext, kClassID)
+  explicit nsSVGStopFrame(ComputedStyle* aStyle)
+    : nsFrame(aStyle, kClassID)
   {
     AddStateBits(NS_FRAME_IS_NONDISPLAY);
   }
@@ -96,7 +97,7 @@ nsSVGStopFrame::AttributeChanged(int32_t         aNameSpaceID,
 // -------------------------------------------------------------------------
 
 nsIFrame* NS_NewSVGStopFrame(nsIPresShell*   aPresShell,
-                             nsStyleContext* aContext)
+                             ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsSVGStopFrame(aContext);
+  return new (aPresShell) nsSVGStopFrame(aStyle);
 }

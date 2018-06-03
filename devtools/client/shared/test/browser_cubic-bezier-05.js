@@ -13,11 +13,11 @@ const {PREDEFINED, PRESETS, DEFAULT_PRESET_CATEGORY} =
 
 const TEST_URI = CHROME_URL_ROOT + "doc_cubic-bezier-01.html";
 
-add_task(function* () {
-  let [host,, doc] = yield createHost("bottom", TEST_URI);
+add_task(async function() {
+  const [host,, doc] = await createHost("bottom", TEST_URI);
 
-  let container = doc.querySelector("#cubic-bezier-container");
-  let w = new CubicBezierPresetWidget(container);
+  const container = doc.querySelector("#cubic-bezier-container");
+  const w = new CubicBezierPresetWidget(container);
 
   info("Checking that preset is selected if coordinates are known");
 

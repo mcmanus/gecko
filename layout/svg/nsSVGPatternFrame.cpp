@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,24 +18,26 @@
 #include "nsContentUtils.h"
 #include "nsGkAtoms.h"
 #include "nsSVGDisplayableFrame.h"
-#include "nsStyleContext.h"
+#include "mozilla/ComputedStyle.h"
 #include "SVGObserverUtils.h"
 #include "SVGGeometryFrame.h"
 #include "mozilla/dom/SVGPatternElement.h"
+#include "mozilla/dom/SVGUnitTypesBinding.h"
 #include "nsSVGUtils.h"
 #include "nsSVGAnimatedTransformList.h"
 #include "SVGContentUtils.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
+using namespace mozilla::dom::SVGUnitTypesBinding;
 using namespace mozilla::gfx;
 using namespace mozilla::image;
 
 //----------------------------------------------------------------------
 // Implementation
 
-nsSVGPatternFrame::nsSVGPatternFrame(nsStyleContext* aContext)
-  : nsSVGPaintServerFrame(aContext, kClassID)
+nsSVGPatternFrame::nsSVGPatternFrame(ComputedStyle* aStyle)
+  : nsSVGPaintServerFrame(aStyle, kClassID)
   , mSource(nullptr)
   , mLoopFlag(false)
   , mNoHRefURI(false)
@@ -660,7 +663,7 @@ nsSVGPatternFrame::ConstructCTM(const nsSVGViewBox& aViewBox,
                                 const Matrix &callerCTM,
                                 nsIFrame *aTarget)
 {
-  SVGSVGElement *ctx = nullptr;
+  SVGViewportElement *ctx = nullptr;
   nsIContent* targetContent = aTarget->GetContent();
   gfxFloat scaleX, scaleY;
 
@@ -754,8 +757,8 @@ nsSVGPatternFrame::GetPaintServerPattern(nsIFrame *aSource,
 // -------------------------------------------------------------------------
 
 nsIFrame* NS_NewSVGPatternFrame(nsIPresShell*   aPresShell,
-                                nsStyleContext* aContext)
+                                ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsSVGPatternFrame(aContext);
+  return new (aPresShell) nsSVGPatternFrame(aStyle);
 }
 

@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -73,6 +74,7 @@ public:
   ~TextureParent();
 
   bool Init(const SurfaceDescriptor& aSharedData,
+            const ReadLockDescriptor& aReadLock,
             const LayersBackend& aLayersBackend,
             const TextureFlags& aFlags);
 
@@ -110,20 +112,15 @@ WrapWithWebRenderTextureHost(ISurfaceAllocator* aDeallocator,
 PTextureParent*
 TextureHost::CreateIPDLActor(HostIPCAllocator* aAllocator,
                              const SurfaceDescriptor& aSharedData,
+                             const ReadLockDescriptor& aReadLock,
                              LayersBackend aLayersBackend,
                              TextureFlags aFlags,
                              uint64_t aSerial,
                              const wr::MaybeExternalImageId& aExternalImageId)
 {
-  if (aSharedData.type() == SurfaceDescriptor::TSurfaceDescriptorBuffer &&
-      aSharedData.get_SurfaceDescriptorBuffer().data().type() == MemoryOrShmem::Tuintptr_t &&
-      !aAllocator->IsSameProcess())
-  {
-    NS_ERROR("A client process is trying to peek at our address space using a MemoryTexture!");
-    return nullptr;
-  }
   TextureParent* actor = new TextureParent(aAllocator, aSerial, aExternalImageId);
-  if (!actor->Init(aSharedData, aLayersBackend, aFlags)) {
+  if (!actor->Init(aSharedData, aReadLock, aLayersBackend, aFlags)) {
+    actor->ActorDestroy(ipc::IProtocol::ActorDestroyReason::FailedConstructor);
     delete actor;
     return nullptr;
   }
@@ -198,6 +195,7 @@ already_AddRefed<TextureHost> CreateTextureHostD3D11(const SurfaceDescriptor& aD
 
 already_AddRefed<TextureHost>
 TextureHost::Create(const SurfaceDescriptor& aDesc,
+                    const ReadLockDescriptor& aReadLock,
                     ISurfaceAllocator* aDeallocator,
                     LayersBackend aBackend,
                     TextureFlags aFlags,
@@ -231,6 +229,11 @@ TextureHost::Create(const SurfaceDescriptor& aDesc,
 
 #ifdef MOZ_X11
     case SurfaceDescriptor::TSurfaceDescriptorX11: {
+      if (!aDeallocator->IsSameProcess()) {
+        NS_ERROR("A client process is trying to peek at our address space using a X11Texture!");
+        return nullptr;
+      }
+
       const SurfaceDescriptorX11& desc = aDesc.get_SurfaceDescriptorX11();
       result = MakeAndAddRef<X11TextureHost>(aFlags, desc);
       break;
@@ -247,9 +250,13 @@ TextureHost::Create(const SurfaceDescriptor& aDesc,
       MOZ_CRASH("GFX: Unsupported Surface type host");
   }
 
-  if (WrapWithWebRenderTextureHost(aDeallocator, aBackend, aFlags)) {
+  if (result && WrapWithWebRenderTextureHost(aDeallocator, aBackend, aFlags)) {
     MOZ_ASSERT(aExternalImageId.isSome());
     result = new WebRenderTextureHost(aDesc, aFlags, result, aExternalImageId.ref());
+  }
+
+  if (result) {
+    result->DeserializeReadLock(aReadLock, aDeallocator);
   }
 
   return result.forget();
@@ -268,13 +275,52 @@ CreateBackendIndependentTextureHost(const SurfaceDescriptor& aDesc,
       const MemoryOrShmem& data = bufferDesc.data();
       switch (data.type()) {
         case MemoryOrShmem::TShmem: {
-          result = new ShmemTextureHost(data.get_Shmem(),
-                                        bufferDesc.desc(),
-                                        aDeallocator,
-                                        aFlags);
+          const ipc::Shmem& shmem = data.get_Shmem();
+          const BufferDescriptor& desc = bufferDesc.desc();
+          if (!shmem.IsReadable()) {
+            // We failed to map the shmem so we can't verify its size. This
+            // should not be a fatal error, so just create the texture with
+            // nothing backing it.
+            result = new ShmemTextureHost(shmem, desc, aDeallocator, aFlags);
+            break;
+          }
+
+          size_t bufSize = shmem.Size<char>();
+          size_t reqSize = SIZE_MAX;
+          switch (desc.type()) {
+            case BufferDescriptor::TYCbCrDescriptor: {
+              const YCbCrDescriptor& ycbcr = desc.get_YCbCrDescriptor();
+              reqSize =
+                ImageDataSerializer::ComputeYCbCrBufferSize(ycbcr.ySize(), ycbcr.yStride(),
+                                                            ycbcr.cbCrSize(), ycbcr.cbCrStride(),
+                                                            ycbcr.yOffset(), ycbcr.cbOffset(),
+                                                            ycbcr.crOffset());
+              break;
+            }
+            case BufferDescriptor::TRGBDescriptor: {
+              const RGBDescriptor& rgb = desc.get_RGBDescriptor();
+              reqSize = ImageDataSerializer::ComputeRGBBufferSize(rgb.size(), rgb.format());
+              break;
+            }
+            default:
+              gfxCriticalError() << "Bad buffer host descriptor " << (int)desc.type();
+              MOZ_CRASH("GFX: Bad descriptor");
+          }
+
+          if (reqSize == 0 || bufSize < reqSize) {
+            NS_ERROR("A client process gave a shmem too small to fit for its descriptor!");
+            return nullptr;
+          }
+
+          result = new ShmemTextureHost(shmem, desc, aDeallocator, aFlags);
           break;
         }
         case MemoryOrShmem::Tuintptr_t: {
+          if (!aDeallocator->IsSameProcess()) {
+            NS_ERROR("A client process is trying to peek at our address space using a MemoryTexture!");
+            return nullptr;
+          }
+
           result = new MemoryTextureHost(reinterpret_cast<uint8_t*>(data.get_uintptr_t()),
                                          bufferDesc.desc(),
                                          aFlags);
@@ -292,6 +338,11 @@ CreateBackendIndependentTextureHost(const SurfaceDescriptor& aDesc,
     }
 #ifdef XP_WIN
     case SurfaceDescriptor::TSurfaceDescriptorDIB: {
+      if (!aDeallocator->IsSameProcess()) {
+        NS_ERROR("A client process is trying to peek at our address space using a DIBTexture!");
+        return nullptr;
+      }
+
       result = new DIBTextureHost(aFlags, aDesc);
       break;
     }
@@ -313,6 +364,7 @@ TextureHost::TextureHost(TextureFlags aFlags)
     , mFlags(aFlags)
     , mCompositableCount(0)
     , mFwdTransactionId(0)
+    , mReadLocked(false)
 {
 }
 
@@ -336,7 +388,7 @@ void TextureHost::Finalize()
 void
 TextureHost::UnbindTextureSource()
 {
-  if (mReadLock) {
+  if (mReadLocked) {
     // This TextureHost is not used anymore. Since most compositor backends are
     // working asynchronously under the hood a compositor could still be using
     // this texture, so it is generally best to wait until the end of the next
@@ -410,8 +462,7 @@ TextureHost::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   }
   AppendToString(aStream, mFlags, " [flags=", "]");
 #ifdef MOZ_DUMP_PAINTING
-  if (gfxPrefs::LayersDumpTexture() ||
-      PROFILER_FEATURE_ACTIVE(ProfilerFeature::LayersDump)) {
+  if (gfxPrefs::LayersDumpTexture()) {
     nsAutoCString pfx(aPrefix);
     pfx += "  ";
 
@@ -577,13 +628,13 @@ BufferTextureHost::NumSubTextures() const
 }
 
 void
-BufferTextureHost::PushResourceUpdates(wr::ResourceUpdateQueue& aResources,
+BufferTextureHost::PushResourceUpdates(wr::TransactionBuilder& aResources,
                                        ResourceUpdateOp aOp,
                                        const Range<wr::ImageKey>& aImageKeys,
                                        const wr::ExternalImageId& aExtID)
 {
-  auto method = aOp == TextureHost::ADD_IMAGE ? &wr::ResourceUpdateQueue::AddExternalImage
-                                              : &wr::ResourceUpdateQueue::UpdateExternalImage;
+  auto method = aOp == TextureHost::ADD_IMAGE ? &wr::TransactionBuilder::AddExternalImage
+                                              : &wr::TransactionBuilder::UpdateExternalImage;
   auto bufferType = wr::WrExternalImageBufferType::ExternalBuffer;
 
   if (GetFormat() != gfx::SurfaceFormat::YUV) {
@@ -614,16 +665,17 @@ BufferTextureHost::PushDisplayItems(wr::DisplayListBuilder& aBuilder,
 {
   if (GetFormat() != gfx::SurfaceFormat::YUV) {
     MOZ_ASSERT(aImageKeys.length() == 1);
-    aBuilder.PushImage(aBounds, aClip, true, aFilter, aImageKeys[0]);
+    aBuilder.PushImage(aBounds, aClip, true, aFilter, aImageKeys[0], !(mFlags & TextureFlags::NON_PREMULTIPLIED));
   } else {
     MOZ_ASSERT(aImageKeys.length() == 3);
+    const YCbCrDescriptor& desc = mDescriptor.get_YCbCrDescriptor();
     aBuilder.PushYCbCrPlanarImage(aBounds,
                                   aClip,
                                   true,
                                   aImageKeys[0],
                                   aImageKeys[1],
                                   aImageKeys[2],
-                                  wr::WrYuvColorSpace::Rec601,
+                                  wr::ToWrYuvColorSpace(desc.yUVColorSpace()),
                                   aFilter);
   }
 }
@@ -632,35 +684,31 @@ void
 TextureHost::DeserializeReadLock(const ReadLockDescriptor& aDesc,
                                  ISurfaceAllocator* aAllocator)
 {
-  RefPtr<TextureReadLock> lock = TextureReadLock::Deserialize(aDesc, aAllocator);
-  if (!lock) {
+  if (mReadLock) {
     return;
   }
 
-  // If mReadLock is not null it means we haven't unlocked it yet and the content
-  // side should not have been able to write into this texture and send a new lock!
-  MOZ_ASSERT(!mReadLock);
-  mReadLock = lock.forget();
+  mReadLock = TextureReadLock::Deserialize(aDesc, aAllocator);
 }
 
 void
-TextureHost::SetReadLock(TextureReadLock* aReadLock)
+TextureHost::SetReadLocked()
 {
-  if (!aReadLock) {
+  if (!mReadLock) {
     return;
   }
-  // If mReadLock is not null it means we haven't unlocked it yet and the content
-  // side should not have been able to write into this texture and send a new lock!
-  MOZ_ASSERT(!mReadLock);
-  mReadLock = aReadLock;
+  // If mReadLocked is true it means we haven't read unlocked yet and the content
+  // side should not have been able to write into this texture and read lock again!
+  MOZ_ASSERT(!mReadLocked);
+  mReadLocked = true;
 }
 
 void
 TextureHost::ReadUnlock()
 {
-  if (mReadLock) {
+  if (mReadLock && mReadLocked) {
     mReadLock->ReadUnlock();
-    mReadLock = nullptr;
+    mReadLocked = false;
   }
 }
 
@@ -966,8 +1014,7 @@ BufferTextureHost::Upload(nsIntRegion *aRegion)
         mFirstSource = mProvider->CreateDataTextureSource(mFlags|TextureFlags::RGB_FROM_YCBCR);
         mFirstSource->SetOwner(this);
       }
-      mFirstSource->Update(surf, aRegion);
-      return true;
+      return mFirstSource->Update(surf, aRegion);
     }
 
     RefPtr<DataTextureSource> srcY;
@@ -1206,10 +1253,12 @@ TextureParent::NotifyNotUsed(uint64_t aTransactionId)
 
 bool
 TextureParent::Init(const SurfaceDescriptor& aSharedData,
+                    const ReadLockDescriptor& aReadLock,
                     const LayersBackend& aBackend,
                     const TextureFlags& aFlags)
 {
   mTextureHost = TextureHost::Create(aSharedData,
+                                     aReadLock,
                                      mSurfaceAllocator,
                                      aBackend,
                                      aFlags,

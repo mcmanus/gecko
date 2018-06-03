@@ -21,15 +21,16 @@
 #include "mozilla/Variant.h"
 
 #include "jsapi.h"
-#include "jscntxt.h"
 
 #include "ds/Fifo.h"
 #include "jit/Ion.h"
+#include "js/TypeDecls.h"
 #include "threading/ConditionVariable.h"
+#include "vm/JSContext.h"
 #include "vm/MutexIDs.h"
 
 namespace JS {
-struct Zone;
+class OffThreadToken {};
 } // namespace JS
 
 namespace js {
@@ -52,6 +53,7 @@ enum class ParseTaskKind
     Script,
     Module,
     ScriptDecode,
+    BinAST,
     MultiScriptsDecode
 };
 
@@ -92,6 +94,7 @@ class GlobalHelperThreadState
 
     typedef Vector<jit::IonBuilder*, 0, SystemAllocPolicy> IonBuilderVector;
     typedef Vector<ParseTask*, 0, SystemAllocPolicy> ParseTaskVector;
+    typedef mozilla::LinkedList<ParseTask> ParseTaskList;
     typedef Vector<UniquePtr<SourceCompressionTask>, 0, SystemAllocPolicy> SourceCompressionTaskVector;
     typedef Vector<GCHelperState*, 0, SystemAllocPolicy> GCHelperStateVector;
     typedef Vector<GCParallelTask*, 0, SystemAllocPolicy> GCParallelTaskVector;
@@ -120,7 +123,8 @@ class GlobalHelperThreadState
     PromiseHelperTaskVector promiseHelperTasks_;
 
     // Script parsing/emitting worklist and finished jobs.
-    ParseTaskVector parseWorklist_, parseFinishedList_;
+    ParseTaskVector parseWorklist_;
+    ParseTaskList parseFinishedList_;
 
     // Parse tasks waiting for an atoms-zone GC to complete.
     ParseTaskVector parseWaitingOnGC_;
@@ -140,9 +144,13 @@ class GlobalHelperThreadState
     // GC tasks needing to be done in parallel.
     GCParallelTaskVector gcParallelWorklist_;
 
-    ParseTask* removeFinishedParseTask(ParseTaskKind kind, void* token);
+    ParseTask* removeFinishedParseTask(ParseTaskKind kind, JS::OffThreadToken* token);
 
   public:
+
+    void addSizeOfIncludingThis(JS::GlobalStats* stats,
+                                AutoLockHelperThreadState& lock) const;
+
     size_t maxIonCompilationThreads() const;
     size_t maxWasmCompilationThreads() const;
     size_t maxWasmTier2GeneratorThreads() const;
@@ -161,7 +169,7 @@ class GlobalHelperThreadState
     void lock();
     void unlock();
 #ifdef DEBUG
-    bool isLockedByCurrentThread();
+    bool isLockedByCurrentThread() const;
 #endif
 
     enum CondVar {
@@ -187,7 +195,7 @@ class GlobalHelperThreadState
     {
         // Self-moving is undefined behavior.
         if (*index != vector.length() - 1)
-            vector[*index] = mozilla::Move(vector.back());
+            vector[*index] = std::move(vector.back());
         (*index)--;
         vector.popBack();
     }
@@ -233,7 +241,7 @@ class GlobalHelperThreadState
     ParseTaskVector& parseWorklist(const AutoLockHelperThreadState&) {
         return parseWorklist_;
     }
-    ParseTaskVector& parseFinishedList(const AutoLockHelperThreadState&) {
+    ParseTaskList& parseFinishedList(const AutoLockHelperThreadState&) {
         return parseFinishedList_;
     }
     ParseTaskVector& parseWaitingOnGC(const AutoLockHelperThreadState&) {
@@ -261,6 +269,9 @@ class GlobalHelperThreadState
     }
 
     bool canStartWasmCompile(const AutoLockHelperThreadState& lock, wasm::CompileMode mode);
+
+    bool canStartWasmTier1Compile(const AutoLockHelperThreadState& lock);
+    bool canStartWasmTier2Compile(const AutoLockHelperThreadState& lock);
     bool canStartWasmTier2Generator(const AutoLockHelperThreadState& lock);
     bool canStartPromiseHelperTask(const AutoLockHelperThreadState& lock);
     bool canStartIonCompile(const AutoLockHelperThreadState& lock);
@@ -286,34 +297,36 @@ class GlobalHelperThreadState
             mozilla::IsSame<bool, decltype((*(F*)nullptr)((ParseTask*)nullptr))>::value
         >::Type
     >
-    bool finishParseTask(JSContext* cx, ParseTaskKind kind, void* token, F&& finishCallback);
+    bool finishParseTask(JSContext* cx, ParseTaskKind kind, JS::OffThreadToken* token, F&& finishCallback);
 
-    JSScript* finishParseTask(JSContext* cx, ParseTaskKind kind, void* token);
+    JSScript* finishParseTask(JSContext* cx, ParseTaskKind kind, JS::OffThreadToken* token);
 
-    bool finishParseTask(JSContext* cx, ParseTaskKind kind, void* token, MutableHandle<ScriptVector> scripts);
+    bool finishParseTask(JSContext* cx, ParseTaskKind kind, JS::OffThreadToken* token, MutableHandle<ScriptVector> scripts);
 
-    void cancelParseTask(JSRuntime* rt, ParseTaskKind kind, void* token);
+    void cancelParseTask(JSRuntime* rt, ParseTaskKind kind, JS::OffThreadToken* token);
+    void destroyParseTask(JSRuntime* rt, ParseTask* parseTask);
 
-    void mergeParseTaskCompartment(JSContext* cx, ParseTask* parseTask,
-                                   Handle<GlobalObject*> global,
-                                   JSCompartment* dest);
+    void mergeParseTaskRealm(JSContext* cx, ParseTask* parseTask, JS::Realm* dest);
 
-    void trace(JSTracer* trc);
+    void trace(JSTracer* trc, js::gc::AutoTraceSession& session);
 
-    JSScript* finishScriptParseTask(JSContext* cx, void* token);
-    JSScript* finishScriptDecodeTask(JSContext* cx, void* token);
-    bool finishMultiScriptsDecodeTask(JSContext* cx, void* token, MutableHandle<ScriptVector> scripts);
-    JSObject* finishModuleParseTask(JSContext* cx, void* token);
+    JSScript* finishScriptParseTask(JSContext* cx, JS::OffThreadToken* token);
+    JSScript* finishScriptDecodeTask(JSContext* cx, JS::OffThreadToken* token);
+    bool finishMultiScriptsDecodeTask(JSContext* cx, JS::OffThreadToken* token, MutableHandle<ScriptVector> scripts);
+    JSObject* finishModuleParseTask(JSContext* cx, JS::OffThreadToken* token);
+
+#if defined(JS_BUILD_BINAST)
+    JSScript* finishBinASTDecodeTask(JSContext* cx, JS::OffThreadToken* token);
+#endif
 
     bool hasActiveThreads(const AutoLockHelperThreadState&);
+    void waitForAllThreads();
     void waitForAllThreadsLocked(AutoLockHelperThreadState&);
 
     template <typename T>
     bool checkTaskThreadLimit(size_t maxThreads, bool isMaster = false) const;
 
   private:
-    void waitForAllThreads();
-
     /*
      * Lock protecting all mutable shared state accessed by helper threads, and
      * used by all condition variables.
@@ -409,6 +422,20 @@ struct HelperThread
     void threadLoop();
 
   private:
+    struct TaskSpec
+    {
+        using Selector = bool(GlobalHelperThreadState::*)(const AutoLockHelperThreadState&);
+        using Handler = void(HelperThread::*)(AutoLockHelperThreadState&);
+
+        js::ThreadType type;
+        Selector canStart;
+        Handler handleWorkload;
+    };
+
+    static const TaskSpec taskSpecs[];
+
+    const TaskSpec* findHighestPriorityTask(const AutoLockHelperThreadState& locked);
+
     template <typename T>
     T maybeCurrentTaskAs() {
         if (currentTask.isSome() && currentTask->is<T>())
@@ -418,6 +445,9 @@ struct HelperThread
     }
 
     void handleWasmWorkload(AutoLockHelperThreadState& locked, wasm::CompileMode mode);
+
+    void handleWasmTier1Workload(AutoLockHelperThreadState& locked);
+    void handleWasmTier2Workload(AutoLockHelperThreadState& locked);
     void handleWasmTier2GeneratorWorkload(AutoLockHelperThreadState& locked);
     void handlePromiseHelperTaskWorkload(AutoLockHelperThreadState& locked);
     void handleIonWorkload(AutoLockHelperThreadState& locked);
@@ -479,12 +509,15 @@ CancelOffThreadWasmTier2Generator();
 bool
 StartOffThreadPromiseHelperTask(JSContext* cx, UniquePtr<PromiseHelperTask> task);
 
+bool
+StartOffThreadPromiseHelperTask(PromiseHelperTask* task);
+
 /*
  * Schedule an Ion compilation for a script, given a builder which has been
  * generated and read everything needed from the VM state.
  */
 bool
-StartOffThreadIonCompile(JSContext* cx, jit::IonBuilder* builder);
+StartOffThreadIonCompile(jit::IonBuilder* builder, const AutoLockHelperThreadState& lock);
 
 /*
  * Schedule deletion of Ion compilation data.
@@ -497,7 +530,8 @@ struct ZonesInState { JSRuntime* runtime; JS::Zone::GCState state; };
 struct CompilationsUsingNursery { JSRuntime* runtime; };
 
 using CompilationSelector = mozilla::Variant<JSScript*,
-                                             JSCompartment*,
+                                             JS::Realm*,
+                                             Zone*,
                                              ZonesInState,
                                              JSRuntime*,
                                              CompilationsUsingNursery,
@@ -516,9 +550,15 @@ CancelOffThreadIonCompile(JSScript* script)
 }
 
 inline void
-CancelOffThreadIonCompile(JSCompartment* comp)
+CancelOffThreadIonCompile(JS::Realm* realm)
 {
-    CancelOffThreadIonCompile(CompilationSelector(comp), true);
+    CancelOffThreadIonCompile(CompilationSelector(realm), true);
+}
+
+inline void
+CancelOffThreadIonCompile(Zone* zone)
+{
+    CancelOffThreadIonCompile(CompilationSelector(zone), true);
 }
 
 inline void
@@ -539,15 +579,9 @@ CancelOffThreadIonCompilesUsingNurseryPointers(JSRuntime* runtime)
     CancelOffThreadIonCompile(CompilationSelector(CompilationsUsingNursery{runtime}), true);
 }
 
-inline void
-CancelOffThreadIonCompile()
-{
-    CancelOffThreadIonCompile(CompilationSelector(AllCompilations()), false);
-}
-
 #ifdef DEBUG
 bool
-HasOffThreadIonCompile(JSCompartment* comp);
+HasOffThreadIonCompile(JS::Realm* realm);
 #endif
 
 /* Cancel all scheduled, in progress or finished parses for runtime. */
@@ -572,6 +606,15 @@ bool
 StartOffThreadDecodeScript(JSContext* cx, const ReadOnlyCompileOptions& options,
                            const JS::TranscodeRange& range,
                            JS::OffThreadCompileCallback callback, void* callbackData);
+
+#if defined(JS_BUILD_BINAST)
+
+bool
+StartOffThreadDecodeBinAST(JSContext* cx, const ReadOnlyCompileOptions& options,
+                           const uint8_t* buf, size_t length,
+                           JS::OffThreadCompileCallback callback, void* callbackData);
+
+#endif /* JS_BUILD_BINAST */
 
 bool
 StartOffThreadDecodeMultiScripts(JSContext* cx, const ReadOnlyCompileOptions& options,
@@ -630,18 +673,14 @@ class MOZ_RAII AutoUnlockHelperThreadState : public UnlockGuard<Mutex>
     }
 };
 
-struct ParseTask
+struct ParseTask : public mozilla::LinkedListElement<ParseTask>, public JS::OffThreadToken
 {
     ParseTaskKind kind;
     OwningCompileOptions options;
 
-    mozilla::Variant<const JS::TranscodeRange,
-                     JS::TwoByteChars,
-                     JS::TranscodeSources*> data;
-
     LifoAlloc alloc;
 
-    // Rooted pointer to the global object to use while parsing.
+    // The global object to use while parsing.
     JSObject* parseGlobal;
 
     // Callback invoked off thread when the parse finishes.
@@ -662,16 +701,11 @@ struct ParseTask
     bool overRecursed;
     bool outOfMemory;
 
-    ParseTask(ParseTaskKind kind, JSContext* cx, JSObject* parseGlobal,
-              const char16_t* chars, size_t length,
+    ParseTask(ParseTaskKind kind, JSContext* cx,
               JS::OffThreadCompileCallback callback, void* callbackData);
-    ParseTask(ParseTaskKind kind, JSContext* cx, JSObject* parseGlobal,
-              const JS::TranscodeRange& range,
-              JS::OffThreadCompileCallback callback, void* callbackData);
-    ParseTask(ParseTaskKind kind, JSContext* cx, JSObject* parseGlobal,
-              JS::TranscodeSources& sources,
-              JS::OffThreadCompileCallback callback, void* callbackData);
-    bool init(JSContext* cx, const ReadOnlyCompileOptions& options);
+    virtual ~ParseTask();
+
+    bool init(JSContext* cx, const ReadOnlyCompileOptions& options, JSObject* global);
 
     void activate(JSRuntime* rt);
     virtual void parse(JSContext* cx) = 0;
@@ -681,39 +715,59 @@ struct ParseTask
         return parseGlobal->runtimeFromAnyThread() == rt;
     }
 
-    virtual ~ParseTask();
-
     void trace(JSTracer* trc);
+
+    size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
+    size_t sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const {
+        return mallocSizeOf(this) + sizeOfExcludingThis(mallocSizeOf);
+    }
 };
 
 struct ScriptParseTask : public ParseTask
 {
-    ScriptParseTask(JSContext* cx, JSObject* parseGlobal,
-                    const char16_t* chars, size_t length,
+    JS::TwoByteChars data;
+
+    ScriptParseTask(JSContext* cx, const char16_t* chars, size_t length,
                     JS::OffThreadCompileCallback callback, void* callbackData);
     void parse(JSContext* cx) override;
 };
 
 struct ModuleParseTask : public ParseTask
 {
-    ModuleParseTask(JSContext* cx, JSObject* parseGlobal,
-                    const char16_t* chars, size_t length,
+    JS::TwoByteChars data;
+
+    ModuleParseTask(JSContext* cx, const char16_t* chars, size_t length,
                     JS::OffThreadCompileCallback callback, void* callbackData);
     void parse(JSContext* cx) override;
 };
 
 struct ScriptDecodeTask : public ParseTask
 {
-    ScriptDecodeTask(JSContext* cx, JSObject* parseGlobal,
-                     const JS::TranscodeRange& range,
+    const JS::TranscodeRange range;
+
+    ScriptDecodeTask(JSContext* cx, const JS::TranscodeRange& range,
                      JS::OffThreadCompileCallback callback, void* callbackData);
     void parse(JSContext* cx) override;
 };
 
+#if defined(JS_BUILD_BINAST)
+
+struct BinASTDecodeTask : public ParseTask
+{
+    mozilla::Range<const uint8_t> data;
+
+    BinASTDecodeTask(JSContext* cx, const uint8_t* buf, size_t length,
+                     JS::OffThreadCompileCallback callback, void* callbackData);
+    void parse(JSContext* cx) override;
+};
+
+#endif /* JS_BUILD_BINAST */
+
 struct MultiScriptsDecodeTask : public ParseTask
 {
-    MultiScriptsDecodeTask(JSContext* cx, JSObject* parseGlobal,
-                           JS::TranscodeSources& sources,
+    JS::TranscodeSources* sources;
+
+    MultiScriptsDecodeTask(JSContext* cx, JS::TranscodeSources& sources,
                            JS::OffThreadCompileCallback callback, void* callbackData);
     void parse(JSContext* cx) override;
 };
@@ -796,6 +850,9 @@ struct PromiseHelperTask : OffThreadPromiseTask
 
     // May be called in the absence of helper threads or off-thread promise
     // support to synchronously execute and resolve a PromiseTask.
+    //
+    // Warning: After this function returns, 'this' can be deleted at any time, so the
+    // caller must immediately return from the stream callback.
     void executeAndResolveAndDestroy(JSContext* cx);
 };
 

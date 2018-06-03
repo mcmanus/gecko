@@ -47,8 +47,8 @@ async function testUpdateNoPrompt(filename, id,
   ok(!sawPopup, "Should not have seen a permission notification");
   PopupNotifications.panel.removeEventListener("popupshown", popupListener);
 
-  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
-  addon.uninstall();
+  BrowserTestUtils.removeTab(gBrowser.selectedTab);
+  await addon.uninstall();
 }
 
 // Test that we don't see a prompt when updating from a legacy

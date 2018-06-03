@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -27,7 +28,6 @@
 #include "mozilla/gfx/Point.h"
 #include "nsCSSRendering.h"
 #include "mozilla/Unused.h"
-#include "mozilla/GeckoRestyleManager.h"
 
 using namespace mozilla;
 using namespace mozilla::layers;
@@ -211,9 +211,8 @@ nsSVGIntegrationUtils::GetSVGCoordContextForNonSVGFrame(nsIFrame* aNonSVGFrame)
   nsIFrame* firstFrame =
     nsLayoutUtils::FirstContinuationOrIBSplitSibling(aNonSVGFrame);
   nsRect r = nsLayoutUtils::GetAllInFlowRectsUnion(firstFrame, firstFrame);
-  nsPresContext* presContext = firstFrame->PresContext();
-  return gfx::Size(presContext->AppUnitsToFloatCSSPixels(r.width),
-                   presContext->AppUnitsToFloatCSSPixels(r.height));
+  return gfx::Size(nsPresContext::AppUnitsToFloatCSSPixels(r.width),
+                   nsPresContext::AppUnitsToFloatCSSPixels(r.height));
 }
 
 gfxRect
@@ -418,7 +417,7 @@ public:
     basic->SetTarget(&aContext);
 
     gfxContextMatrixAutoSaveRestore autoSR(&aContext);
-    aContext.SetMatrix(aContext.CurrentMatrix().PreTranslate(-mUserSpaceToFrameSpaceOffset));
+    aContext.SetMatrixDouble(aContext.CurrentMatrixDouble().PreTranslate(-mUserSpaceToFrameSpaceOffset));
 
     mLayerManager->EndTransaction(FrameLayerBuilder::DrawPaintedLayer, mBuilder);
     basic->SetTarget(oldCtx);
@@ -437,9 +436,9 @@ typedef nsSVGIntegrationUtils::PaintFramesParams PaintFramesParams;
  */
 static void
 PaintMaskSurface(const PaintFramesParams& aParams,
-                 DrawTarget* aMaskDT, float aOpacity, nsStyleContext* aSC,
+                 DrawTarget* aMaskDT, float aOpacity, ComputedStyle* aSC,
                  const nsTArray<nsSVGMaskFrame*>& aMaskFrames,
-                 const gfxMatrix& aMaskSurfaceMatrix,
+                 const Matrix& aMaskSurfaceMatrix,
                  const nsPoint& aOffsetToUserSpace)
 {
   MOZ_ASSERT(aMaskFrames.Length() > 0);
@@ -503,7 +502,7 @@ PaintMaskSurface(const PaintFramesParams& aParams,
         nsCSSRendering::PaintStyleImageLayerWithSC(params, *maskContext, aSC,
                                               *aParams.frame->StyleBorder());
     } else {
-      aParams.imgParams.result &= DrawResult::NOT_READY;
+      aParams.imgParams.result &= ImgDrawResult::NOT_READY;
     }
   }
 }
@@ -522,7 +521,7 @@ struct MaskPaintResult {
 
 static MaskPaintResult
 CreateAndPaintMaskSurface(const PaintFramesParams& aParams,
-                          float aOpacity, nsStyleContext* aSC,
+                          float aOpacity, ComputedStyle* aSC,
                           const nsTArray<nsSVGMaskFrame*>& aMaskFrames,
                           const nsPoint& aOffsetToUserSpace)
 {
@@ -572,15 +571,15 @@ CreateAndPaintMaskSurface(const PaintFramesParams& aParams,
 
   // Set context's matrix on maskContext, offset by the maskSurfaceRect's
   // position. This makes sure that we combine the masks in device space.
-  gfxMatrix maskSurfaceMatrix =
-    ctx.CurrentMatrix() * gfxMatrix::Translation(-aParams.maskRect.TopLeft());
+  Matrix maskSurfaceMatrix =
+    ctx.CurrentMatrix() * Matrix::Translation(-aParams.maskRect.TopLeft());
 
   PaintMaskSurface(aParams, maskDT,
                    paintResult.opacityApplied ? aOpacity : 1.0,
                    aSC, aMaskFrames, maskSurfaceMatrix,
                    aOffsetToUserSpace);
 
-  if (aParams.imgParams.result != DrawResult::SUCCESS) {
+  if (aParams.imgParams.result != ImgDrawResult::SUCCESS) {
     // Now we know the status of mask resource since we used it while painting.
     // According to the return value of PaintMaskSurface, we know whether mask
     // resource is resolvable or not.
@@ -603,7 +602,7 @@ CreateAndPaintMaskSurface(const PaintFramesParams& aParams,
     return paintResult;
   }
 
-  paintResult.maskTransform = ToMatrix(maskSurfaceMatrix);
+  paintResult.maskTransform = maskSurfaceMatrix;
   if (!paintResult.maskTransform.Invert()) {
     return paintResult;
   }
@@ -652,7 +651,7 @@ struct EffectOffsets {
   gfxPoint offsetToUserSpaceInDevPx;
 };
 
-EffectOffsets
+static EffectOffsets
 ComputeEffectOffset(nsIFrame* aFrame, const PaintFramesParams& aParams)
 {
   EffectOffsets result;
@@ -710,8 +709,8 @@ MoveContextOriginToUserSpace(nsIFrame* aFrame, const PaintFramesParams& aParams)
 {
   EffectOffsets offset = ComputeEffectOffset(aFrame, aParams);
 
-  aParams.ctx.SetMatrix(
-    aParams.ctx.CurrentMatrix().PreTranslate(offset.offsetToUserSpaceInDevPx));
+  aParams.ctx.SetMatrixDouble(
+    aParams.ctx.CurrentMatrixDouble().PreTranslate(offset.offsetToUserSpaceInDevPx));
 
   return offset;
 }
@@ -832,7 +831,7 @@ nsSVGIntegrationUtils::PaintMask(const PaintFramesParams& aParams)
     EffectOffsets offsets = MoveContextOriginToUserSpace(frame, aParams);
     PaintMaskSurface(aParams, maskTarget,
                      shouldPushOpacity ?  1.0 : maskUsage.opacity,
-                     firstFrame->StyleContext(), maskFrames,
+                     firstFrame->Style(), maskFrames,
                      ctx.CurrentMatrix(),
                      offsets.offsetToUserSpace);
   }
@@ -851,7 +850,7 @@ nsSVGIntegrationUtils::PaintMask(const PaintFramesParams& aParams)
       maskUsage.shouldGenerateMaskLayer ? maskTarget->Snapshot() : nullptr;
     clipPathFrame->PaintClipMask(ctx, frame, cssPxToDevPxMatrix,
                                    &clipMaskTransform, maskSurface,
-                                   ToMatrix(ctx.CurrentMatrix()));
+                                   ctx.CurrentMatrix());
   }
 }
 
@@ -926,7 +925,7 @@ nsSVGIntegrationUtils::PaintMaskAndClipPath(const PaintFramesParams& aParams)
       EffectOffsets offsets = MoveContextOriginToUserSpace(frame, aParams);
       MaskPaintResult paintResult =
         CreateAndPaintMaskSurface(aParams, maskUsage.opacity,
-                                  firstFrame->StyleContext(),
+                                  firstFrame->Style(),
                                   maskFrames, offsets.offsetToUserSpace);
 
       if (paintResult.transparentBlackMask) {

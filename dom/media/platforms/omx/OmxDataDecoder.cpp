@@ -19,14 +19,17 @@
 #undef LOGL
 #endif
 
-#define LOG(arg, ...) MOZ_LOG(sPDMLog, mozilla::LogLevel::Debug, ("OmxDataDecoder(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
+#define LOG(arg, ...)                                                          \
+  DDMOZ_LOG(                                                                   \
+    sPDMLog, mozilla::LogLevel::Debug, "::%s: " arg, __func__, ##__VA_ARGS__)
 
-#define LOGL(arg, ...)                                                     \
-  {                                                                        \
-    void* p = self;                                              \
-    MOZ_LOG(sPDMLog, mozilla::LogLevel::Debug,                         \
-            ("OmxDataDecoder(%p)::%s: " arg, p, __func__, ##__VA_ARGS__)); \
-  }
+#define LOGL(arg, ...)                                                         \
+  DDMOZ_LOGEX(self.get(),                                                      \
+              sPDMLog,                                                         \
+              mozilla::LogLevel::Debug,                                        \
+              "::%s: " arg,                                                    \
+              __func__,                                                        \
+              ##__VA_ARGS__)
 
 #define CHECK_OMX_ERR(err)     \
   if (err != OMX_ErrorNone) {  \
@@ -97,8 +100,10 @@ protected:
 };
 
 OmxDataDecoder::OmxDataDecoder(const TrackInfo& aTrackInfo,
+                               TaskQueue* aTaskQueue,
                                layers::ImageContainer* aImageContainer)
   : mOmxTaskQueue(CreateMediaDecodeTaskQueue("OmxDataDecoder::mOmxTaskQueue"))
+  , mTaskQueue(aTaskQueue)
   , mImageContainer(aImageContainer)
   , mWatchManager(this, mOmxTaskQueue)
   , mOmxState(OMX_STATETYPE::OMX_StateInvalid, "OmxDataDecoder::mOmxState")
@@ -177,7 +182,7 @@ OmxDataDecoder::Decode(MediaRawData* aSample)
   RefPtr<MediaRawData> sample = aSample;
   return InvokeAsync(mOmxTaskQueue, __func__, [self, this, sample]() {
     RefPtr<DecodePromise> p = mDecodePromise.Ensure(__func__);
-    mMediaRawDatas.AppendElement(Move(sample));
+    mMediaRawDatas.AppendElement(std::move(sample));
 
     // Start to fill/empty buffers.
     if (mOmxState == OMX_StateIdle ||
@@ -204,9 +209,9 @@ OmxDataDecoder::Drain()
   LOG("");
 
   RefPtr<OmxDataDecoder> self = this;
-  return InvokeAsync(mOmxTaskQueue, __func__, [self, this]() {
-    RefPtr<DecodePromise> p = mDrainPromise.Ensure(__func__);
-    SendEosBuffer();
+  return InvokeAsync(mOmxTaskQueue, __func__, [self]() {
+    RefPtr<DecodePromise> p = self->mDrainPromise.Ensure(__func__);
+    self->SendEosBuffer();
     return p;
   });
 }
@@ -268,25 +273,29 @@ OmxDataDecoder::DoAsyncShutdown()
              return OmxCommandPromise::CreateAndReject(aError, __func__);
            })
     ->Then(mOmxTaskQueue, __func__,
-           [self] () {
+           [self] () -> RefPtr<ShutdownPromise> {
              LOGL("DoAsyncShutdown: OMX_StateLoaded, it is safe to shutdown omx");
              self->mOmxLayer->Shutdown();
              self->mWatchManager.Shutdown();
              self->mOmxLayer = nullptr;
              self->mMediaDataHelper = nullptr;
-
              self->mShuttingDown = false;
+             return ShutdownPromise::CreateAndResolve(true, __func__);
+           },
+           [self] () -> RefPtr<ShutdownPromise> {
+             self->mOmxLayer->Shutdown();
+             self->mWatchManager.Shutdown();
+             self->mOmxLayer = nullptr;
+             self->mMediaDataHelper = nullptr;
+             return ShutdownPromise::CreateAndReject(false, __func__);
+           })
+    ->Then(mTaskQueue, __func__,
+           [self] () {
              self->mOmxTaskQueue->BeginShutdown();
              self->mOmxTaskQueue->AwaitShutdownAndIdle();
              self->mShutdownPromise.Resolve(true, __func__);
            },
            [self] () {
-             self->mOmxLayer->Shutdown();
-             self->mWatchManager.Shutdown();
-             self->mOmxLayer = nullptr;
-             self->mMediaDataHelper = nullptr;
-
-             self->mShuttingDown = false;
              self->mOmxTaskQueue->BeginShutdown();
              self->mOmxTaskQueue->AwaitShutdownAndIdle();
              self->mShutdownPromise.Resolve(true, __func__);
@@ -358,7 +367,7 @@ OmxDataDecoder::Output(BufferData* aData)
     aData->mStatus = BufferData::BufferStatus::FREE;
   }
 
-  mDecodedData.AppendElement(Move(data));
+  mDecodedData.AppendElement(std::move(data));
 }
 
 void
@@ -396,7 +405,9 @@ OmxDataDecoder::EmptyBufferDone(BufferData* aData)
         mDecodedData.Clear();
       });
 
-    mOmxTaskQueue->Dispatch(r.forget());
+    nsresult rv = mOmxTaskQueue->Dispatch(r.forget());
+    MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+    Unused << rv;
   }
 }
 
@@ -615,6 +626,9 @@ OmxDataDecoder::FillCodecConfigDataToOmx()
 
   // Some codecs like h264, its codec specific data is at the first packet, not in container.
   if (csc->Length()) {
+    // Buffer size should large enough for raw data.
+    MOZ_RELEASE_ASSERT(inbuf->mBuffer->nAllocLen >= csc->Length());
+
     memcpy(inbuf->mBuffer->pBuffer,
            csc->Elements(),
            csc->Length());
@@ -1003,9 +1017,15 @@ MediaDataHelper::CreateYUV420VideoData(BufferData* aBufferData)
                                  media::TimeUnit::FromMicroseconds(-1),
                                  info.ImageRect());
 
-  LOG("YUV420 VideoData: disp width %d, height %d, pic width %d, height %d, time %lld",
-      info.mDisplay.width, info.mDisplay.height, info.mImage.width,
-      info.mImage.height, aBufferData->mBuffer->nTimeStamp);
+  MOZ_LOG(sPDMLog,
+          mozilla::LogLevel::Debug,
+          ("YUV420 VideoData: disp width %d, height %d, pic width %d, height "
+           "%d, time %lld",
+           info.mDisplay.width,
+           info.mDisplay.height,
+           info.mImage.width,
+           info.mImage.height,
+           aBufferData->mBuffer->nTimeStamp));
 
   return data.forget();
 }

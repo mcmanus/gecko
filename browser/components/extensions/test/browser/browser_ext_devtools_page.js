@@ -2,8 +2,8 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-const {DevToolsShim} = Cu.import("chrome://devtools-shim/content/DevToolsShim.jsm", {});
-const {gDevTools} = DevToolsShim;
+const {require} = ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
+const {gDevTools} = require("devtools/client/framework/devtools");
 
 /**
  * This test file ensures that:
@@ -154,7 +154,7 @@ add_task(async function test_devtools_page_runtime_api_messaging() {
 
   await extension.unload();
 
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });
 
 /**
@@ -277,5 +277,5 @@ add_task(async function test_devtools_page_and_extension_tab_messaging() {
 
   await extension.unload();
 
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });

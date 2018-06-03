@@ -10,13 +10,13 @@ import org.mozilla.gecko.background.common.log.Logger;
 import org.mozilla.gecko.background.db.Tab;
 import org.mozilla.gecko.db.BrowserContract;
 import org.mozilla.gecko.db.BrowserContract.Clients;
+import org.mozilla.gecko.sync.SessionCreateException;
 import org.mozilla.gecko.sync.delegates.ClientsDataDelegate;
 import org.mozilla.gecko.sync.repositories.InactiveSessionException;
 import org.mozilla.gecko.sync.repositories.NoContentProviderException;
 import org.mozilla.gecko.sync.repositories.NoStoreDelegateException;
 import org.mozilla.gecko.sync.repositories.Repository;
 import org.mozilla.gecko.sync.repositories.RepositorySession;
-import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionCreationDelegate;
 import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionFetchRecordsDelegate;
 import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionFinishDelegate;
 import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionWipeDelegate;
@@ -164,7 +164,7 @@ public class FennecTabsRepository extends Repository {
         }
       };
 
-      delegateQueue.execute(command);
+      fetchWorkQueue.execute(command);
     }
 
     @Override
@@ -201,7 +201,7 @@ public class FennecTabsRepository extends Repository {
       // Bug 783692: Now that Bug 730039 has landed, we could implement this,
       // but it's not a priority since it's not used (yet).
       Logger.warn(LOG_TAG, "Not returning anything from fetch");
-      delegateQueue.execute(new Runnable() {
+      fetchWorkQueue.execute(new Runnable() {
         @Override
         public void run() {
           delegate.onFetchCompleted();
@@ -250,7 +250,7 @@ public class FennecTabsRepository extends Repository {
                 clientsProvider.delete(BrowserContractHelpers.CLIENTS_CONTENT_URI,
                                        CLIENT_GUID_IS,
                                        selectionArgs);
-                storeDelegate.onRecordStoreSucceeded(record.guid);
+                storeDelegate.onRecordStoreSucceeded(1);
               } catch (Exception e) {
                 storeDelegate.onRecordStoreFailed(e, record.guid);
               }
@@ -283,7 +283,7 @@ public class FennecTabsRepository extends Repository {
             final int inserted = tabsProvider.bulkInsert(BrowserContractHelpers.TABS_CONTENT_URI, tabsArray);
             Logger.trace(LOG_TAG, "Inserted: " + inserted);
 
-            storeDelegate.onRecordStoreSucceeded(record.guid);
+            storeDelegate.onRecordStoreSucceeded(1);
           } catch (Exception e) {
             Logger.warn(LOG_TAG, "Error storing tabs.", e);
             storeDelegate.onRecordStoreFailed(e, record.guid);
@@ -309,13 +309,11 @@ public class FennecTabsRepository extends Repository {
   }
 
   @Override
-  public void createSession(RepositorySessionCreationDelegate delegate,
-                            Context context) {
+  public RepositorySession createSession(Context context) throws SessionCreateException {
     try {
-      final FennecTabsRepositorySession session = new FennecTabsRepositorySession(this, context);
-      delegate.onSessionCreated(session);
+      return new FennecTabsRepositorySession(this, context);
     } catch (Exception e) {
-      delegate.onSessionCreateFailed(e);
+      throw new SessionCreateException(e);
     }
   }
 

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -10,7 +11,8 @@
 
 #include "mozilla/ViewportFrame.h"
 
-#include "mozilla/ServoRestyleManager.h"
+#include "mozilla/ComputedStyleInlines.h"
+#include "mozilla/RestyleManager.h"
 #include "nsGkAtoms.h"
 #include "nsIScrollableFrame.h"
 #include "nsSubDocumentFrame.h"
@@ -19,15 +21,14 @@
 #include "GeckoProfiler.h"
 #include "nsIMozBrowserFrame.h"
 #include "nsPlaceholderFrame.h"
-#include "mozilla/ServoStyleContextInlines.h"
 
 using namespace mozilla;
 typedef nsAbsoluteContainingBlock::AbsPosReflowFlags AbsPosReflowFlags;
 
 ViewportFrame*
-NS_NewViewportFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewViewportFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) ViewportFrame(aContext);
+  return new (aPresShell) ViewportFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(ViewportFrame)
@@ -71,10 +72,10 @@ ViewportFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     // Wrap the whole top layer in a single item with maximum z-index,
     // and append it at the very end, so that it stays at the topmost.
     nsDisplayWrapList* wrapList =
-      new (aBuilder) nsDisplayWrapList(aBuilder, this, &topLayerList);
+      MakeDisplayItem<nsDisplayWrapList>(aBuilder, this, &topLayerList);
     wrapList->SetOverrideZIndex(
       std::numeric_limits<decltype(wrapList->ZIndex())>::max());
-    aLists.PositionedDescendants()->AppendNewToTop(wrapList);
+    aLists.PositionedDescendants()->AppendToTop(wrapList);
   }
 }
 
@@ -102,13 +103,14 @@ BuildDisplayListForTopLayerFrame(nsDisplayListBuilder* aBuilder,
                                  nsIFrame* aFrame,
                                  nsDisplayList* aList)
 {
+  nsRect visible;
   nsRect dirty;
   DisplayListClipState::AutoClipMultiple clipState(aBuilder);
   nsDisplayListBuilder::AutoCurrentActiveScrolledRootSetter asrSetter(aBuilder);
   nsDisplayListBuilder::OutOfFlowDisplayData*
     savedOutOfFlowData = nsDisplayListBuilder::GetOutOfFlowData(aFrame);
   if (savedOutOfFlowData) {
-    dirty = savedOutOfFlowData->mDirtyRect;
+    visible = savedOutOfFlowData->GetVisibleRectForFrame(aBuilder, aFrame, &dirty);
     // This function is called after we've finished building display items for
     // the root scroll frame. That means that the content clip from the root
     // scroll frame is no longer on aBuilder. However, we need to make sure
@@ -119,12 +121,12 @@ BuildDisplayListForTopLayerFrame(nsDisplayListBuilder* aBuilder,
     clipState.SetClipChainForContainingBlockDescendants(
       savedOutOfFlowData->mCombinedClipChain);
     clipState.ClipContainingBlockDescendantsExtra(
-      dirty + aBuilder->ToReferenceFrame(aFrame), nullptr);
+      visible + aBuilder->ToReferenceFrame(aFrame), nullptr);
     asrSetter.SetCurrentActiveScrolledRoot(
       savedOutOfFlowData->mContainingBlockActiveScrolledRoot);
   }
   nsDisplayListBuilder::AutoBuildingDisplayList
-    buildingForChild(aBuilder, aFrame, dirty,
+    buildingForChild(aBuilder, aFrame, visible, dirty,
                      aBuilder->IsAtRootOfPseudoStackingContext());
 
   nsDisplayList list;
@@ -166,6 +168,9 @@ ViewportFrame::BuildDisplayListForTopLayer(nsDisplayListBuilder* aBuilder,
       if (nsIFrame* backdropPh =
           frame->GetChildList(kBackdropList).FirstChild()) {
         MOZ_ASSERT(backdropPh->IsPlaceholderFrame());
+        MOZ_ASSERT(!backdropPh->GetNextSibling(), "more than one ::backdrop?");
+        MOZ_ASSERT(backdropPh->HasAnyStateBits(NS_FRAME_FIRST_REFLOW),
+                   "did you intend to reflow ::backdrop placeholders?");
         nsIFrame* backdropFrame =
           static_cast<nsPlaceholderFrame*>(backdropPh)->GetOutOfFlowFrame();
         MOZ_ASSERT(backdropFrame);
@@ -175,7 +180,7 @@ ViewportFrame::BuildDisplayListForTopLayer(nsDisplayListBuilder* aBuilder,
     }
   }
 
-  nsIPresShell* shell = PresContext()->PresShell();
+  nsIPresShell* shell = PresShell();
   if (nsCanvasFrame* canvasFrame = shell->GetCanvasFrame()) {
     if (Element* container = canvasFrame->GetCustomContentContainer()) {
       if (nsIFrame* frame = container->GetPrimaryFrame()) {
@@ -276,7 +281,7 @@ ViewportFrame::AdjustReflowInputAsContainingBlock(ReflowInput* aReflowInput) con
   // If a scroll position clamping scroll-port size has been set, layout
   // fixed position elements to this size instead of the computed size.
   nsRect rect(0, 0, aReflowInput->ComputedWidth(), aReflowInput->ComputedHeight());
-  nsIPresShell* ps = PresContext()->PresShell();
+  nsIPresShell* ps = PresShell();
   if (ps->IsScrollPositionClampingScrollPortSizeSet()) {
     rect.SizeTo(ps->GetScrollPositionClampingScrollPortSize());
   }
@@ -396,7 +401,7 @@ ViewportFrame::Reflow(nsPresContext*           aPresContext,
     nsSubDocumentFrame* container = static_cast<nsSubDocumentFrame*>
       (nsLayoutUtils::GetCrossDocParentFrame(this));
     if (container && !container->ShouldClipSubdocument()) {
-      container->PresContext()->PresShell()->
+      container->PresShell()->
         FrameNeedsReflow(container, nsIPresShell::eResize, NS_FRAME_IS_DIRTY);
     }
   }
@@ -409,7 +414,7 @@ bool
 ViewportFrame::ComputeCustomOverflow(nsOverflowAreas& aOverflowAreas)
 {
   nsIScrollableFrame* rootScrollFrame =
-    PresContext()->PresShell()->GetRootScrollFrameAsScrollable();
+    PresShell()->GetRootScrollFrameAsScrollable();
   if (rootScrollFrame && !rootScrollFrame->IsIgnoringViewportClipping()) {
     return false;
   }
@@ -420,19 +425,18 @@ ViewportFrame::ComputeCustomOverflow(nsOverflowAreas& aOverflowAreas)
 void
 ViewportFrame::UpdateStyle(ServoRestyleState& aRestyleState)
 {
-  ServoStyleContext* oldContext = StyleContext()->AsServo();
-  nsAtom* pseudo = oldContext->GetPseudo();
-  RefPtr<ServoStyleContext> newContext =
+ nsAtom* pseudo = Style()->GetPseudo();
+  RefPtr<ComputedStyle> newStyle =
     aRestyleState.StyleSet().ResolveInheritingAnonymousBoxStyle(pseudo, nullptr);
 
   // We're special because we have a null GetContent(), so don't call things
   // like UpdateStyleOfOwnedChildFrame that try to append changes for the
   // content to the change list.  Nor do we computed a changehint, since we have
   // no way to apply it anyway.
-  newContext->ResolveSameStructsAs(oldContext);
+  newStyle->ResolveSameStructsAs(Style());
 
   MOZ_ASSERT(!GetNextContinuation(), "Viewport has continuations?");
-  SetStyleContext(newContext);
+  SetComputedStyle(newStyle);
 
   UpdateStyleOfOwnedAnonBoxes(aRestyleState);
 }

@@ -25,8 +25,16 @@ public:
                                      nsISupports*        aContainer,
                                      nsIStreamListener** aDocListener,
                                      bool                aReset = true,
-                                     nsIContentSink*     aSink = nullptr);
-  virtual void SetScriptGlobalObject(nsIScriptGlobalObject* aScriptGlobalObject);
+                                     nsIContentSink*     aSink = nullptr) override;
+  virtual void SetScriptGlobalObject(nsIScriptGlobalObject* aScriptGlobalObject) override;
+
+  virtual void Destroy() override
+  {
+    if (mStreamListener) {
+      mStreamListener->DropDocumentRef();
+    }
+    MediaDocument::Destroy();
+  }
 
 protected:
 
@@ -71,14 +79,13 @@ VideoDocument::SetScriptGlobalObject(nsIScriptGlobalObject* aScriptGlobalObject)
   // anything that might require it....
   MediaDocument::SetScriptGlobalObject(aScriptGlobalObject);
 
-  if (aScriptGlobalObject) {
-    if (!nsContentUtils::IsChildOfSameType(this) &&
-        GetReadyStateEnum() != nsIDocument::READYSTATE_COMPLETE) {
+  if (aScriptGlobalObject && !InitialSetupHasBeenDone()) {
+    if (!nsContentUtils::IsChildOfSameType(this)) {
       LinkStylesheet(NS_LITERAL_STRING("resource://content-accessible/TopLevelVideoDocument.css"));
       LinkStylesheet(NS_LITERAL_STRING("chrome://global/skin/media/TopLevelVideoDocument.css"));
       LinkScript(NS_LITERAL_STRING("chrome://global/content/TopLevelVideoDocument.js"));
     }
-    BecomeInteractive();
+    InitialSetupDone();
   }
 }
 
@@ -100,15 +107,15 @@ VideoDocument::CreateSyntheticVideoDocument(nsIChannel* aChannel,
   RefPtr<mozilla::dom::NodeInfo> nodeInfo;
   nodeInfo = mNodeInfoManager->GetNodeInfo(nsGkAtoms::video, nullptr,
                                            kNameSpaceID_XHTML,
-                                           nsIDOMNode::ELEMENT_NODE);
+                                           nsINode::ELEMENT_NODE);
 
   RefPtr<HTMLMediaElement> element =
     static_cast<HTMLMediaElement*>(NS_NewHTMLVideoElement(nodeInfo.forget(),
                                                           NOT_FROM_PARSER));
   if (!element)
     return NS_ERROR_OUT_OF_MEMORY;
-  element->SetAutoplay(true);
-  element->SetControls(true);
+  element->SetAutoplay(true, IgnoreErrors());
+  element->SetControls(true, IgnoreErrors());
   element->LoadWithChannel(aChannel, aListener);
   UpdateTitle(aChannel);
 
@@ -131,7 +138,8 @@ VideoDocument::UpdateTitle(nsIChannel* aChannel)
 
   nsAutoString fileName;
   GetFileName(fileName, aChannel);
-  SetTitle(fileName);
+  IgnoredErrorResult ignored;
+  SetTitle(fileName, ignored);
 }
 
 } // namespace dom

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -70,7 +71,7 @@ public:
   NS_DECL_FRAMEARENA_HELPERS(nsPluginFrame)
   NS_DECL_QUERYFRAME
 
-  friend nsIFrame* NS_NewObjectFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
+  friend nsIFrame* NS_NewObjectFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle);
 
   virtual void Init(nsIContent*       aContent,
                     nsContainerFrame* aParent,
@@ -82,8 +83,7 @@ public:
                       const ReflowInput& aReflowInput,
                       nsReflowStatus& aStatus) override;
   virtual void DidReflow(nsPresContext* aPresContext,
-                         const ReflowInput* aReflowInput,
-                         nsDidReflowStatus aStatus) override;
+                         const ReflowInput* aReflowInput) override;
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                 const nsDisplayListSet& aLists) override;
 
@@ -101,9 +101,9 @@ public:
   virtual nsresult GetFrameName(nsAString& aResult) const override;
 #endif
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
-  virtual void DidSetStyleContext(nsStyleContext* aOldStyleContext) override;
+  virtual void DidSetComputedStyle(ComputedStyle* aOldComputedStyle) override;
 
   NS_IMETHOD GetPluginInstance(nsNPAPIPluginInstance** aPluginInstance) override;
 
@@ -233,7 +233,7 @@ public:
                                mozilla::layers::WebRenderLayerManager* aManager,
                                nsDisplayListBuilder* aDisplayListBuilder);
 protected:
-  explicit nsPluginFrame(nsStyleContext* aContext);
+  explicit nsPluginFrame(ComputedStyle* aStyle);
   virtual ~nsPluginFrame();
 
   // NOTE:  This frame class does not inherit from |nsLeafFrame|, so
@@ -348,6 +348,21 @@ private:
   mozilla::UniquePtr<PluginFrameDidCompositeObserver> mDidCompositeObserver;
 };
 
+class nsDisplayPluginGeometry : public nsDisplayItemGenericGeometry
+{
+public:
+  nsDisplayPluginGeometry(nsDisplayItem *aItem, nsDisplayListBuilder* aBuilder)
+    : nsDisplayItemGenericGeometry(aItem, aBuilder)
+  {}
+
+  // Plugins MozPaintWait event depends on sync decode, so we always want
+  // to rebuild the display list when sync decoding.
+  virtual bool InvalidateForSyncDecodeImages() const override
+  {
+    return true;
+  }
+};
+
 class nsDisplayPlugin : public nsDisplayItem {
 public:
   nsDisplayPlugin(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame)
@@ -389,6 +404,11 @@ public:
   {
     return static_cast<nsPluginFrame*>(mFrame)->GetLayerState(aBuilder,
                                                               aManager);
+  }
+
+  virtual nsDisplayItemGeometry* AllocateGeometry(nsDisplayListBuilder* aBuilder) override
+  {
+    return new nsDisplayPluginGeometry(this, aBuilder);
   }
 
   virtual bool CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,

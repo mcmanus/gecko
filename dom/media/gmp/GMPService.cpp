@@ -36,6 +36,7 @@
 #include "nsThreadUtils.h"
 #include "GMPCrashHelper.h"
 
+#include "MediaResult.h"
 #include "mozilla/dom/PluginCrashedEvent.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/Attributes.h"
@@ -149,6 +150,7 @@ GeckoMediaPluginService::GeckoMediaPluginService()
   : mMutex("GeckoMediaPluginService::mMutex")
   , mGMPThreadShutdown(false)
   , mShuttingDownOnGMPThread(false)
+  , mXPCOMWillShutdown(false)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -223,6 +225,8 @@ GeckoMediaPluginService::Init()
   nsCOMPtr<nsIObserverService> obsService = mozilla::services::GetObserverService();
   MOZ_ASSERT(obsService);
   MOZ_ALWAYS_SUCCEEDS(obsService->AddObserver(this, NS_XPCOM_SHUTDOWN_THREADS_OBSERVER_ID, false));
+  MOZ_ALWAYS_SUCCEEDS(
+    obsService->AddObserver(this, NS_XPCOM_WILL_SHUTDOWN_OBSERVER_ID, false));
 
   // Kick off scanning for plugins
   nsCOMPtr<nsIThread> thread;
@@ -237,7 +241,9 @@ GeckoMediaPluginService::GetCDM(const NodeId& aNodeId,
   MOZ_ASSERT(mGMPThread->EventTarget()->IsOnCurrentThread());
 
   if (mShuttingDownOnGMPThread || aTags.IsEmpty()) {
-    return GetCDMParentPromise::CreateAndReject(NS_ERROR_FAILURE, __func__);
+    nsPrintfCString reason("%s::%s failed, aTags.IsEmpty() = %d, mShuttingDownOnGMPThread = %d.",
+      __CLASS__, __FUNCTION__, aTags.IsEmpty(), mShuttingDownOnGMPThread);
+    return GetCDMParentPromise::CreateAndReject(MediaResult(NS_ERROR_FAILURE, reason.get()), __func__);
   }
 
   typedef MozPromiseHolder<GetCDMParentPromise> PromiseHolder;
@@ -254,7 +260,10 @@ GeckoMediaPluginService::GetCDM(const NodeId& aNodeId,
              UniquePtr<PromiseHolder> holder(rawHolder);
              RefPtr<ChromiumCDMParent> cdm = parent->GetChromiumCDM();
              if (!parent) {
-               holder->Reject(NS_ERROR_FAILURE, __func__);
+               nsPrintfCString reason(
+                 "%s::%s failed since GetChromiumCDM returns nullptr.",
+                 __CLASS__, __FUNCTION__);
+               holder->Reject(MediaResult(NS_ERROR_FAILURE, reason.get()), __func__);
                return;
              }
              if (helper) {
@@ -262,9 +271,12 @@ GeckoMediaPluginService::GetCDM(const NodeId& aNodeId,
              }
              holder->Resolve(cdm, __func__);
            },
-           [rawHolder] {
+           [rawHolder](MediaResult result) {
+             nsPrintfCString reason(
+               "%s::%s failed since GetContentParent rejects the promise with reason %s.",
+               __CLASS__, __FUNCTION__, result.Description().get());
              UniquePtr<PromiseHolder> holder(rawHolder);
-             holder->Reject(NS_ERROR_FAILURE, __func__);
+             holder->Reject(MediaResult(NS_ERROR_FAILURE, reason.get()), __func__);
            });
 
   return promise;

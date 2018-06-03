@@ -7,14 +7,13 @@
  * This file contains the base line graph that all Performance line graphs use.
  */
 
-const { Task } = require("devtools/shared/task");
-const { Heritage } = require("devtools/client/shared/widgets/view-helpers");
+const { extend } = require("devtools/shared/extend");
 const LineGraphWidget = require("devtools/client/shared/widgets/LineGraphWidget");
 const MountainGraphWidget = require("devtools/client/shared/widgets/MountainGraphWidget");
 const { CanvasGraphUtils } = require("devtools/client/shared/widgets/Graphs");
 
 const defer = require("devtools/shared/defer");
-const EventEmitter = require("devtools/shared/old-event-emitter");
+const EventEmitter = require("devtools/shared/event-emitter");
 
 const { colorUtils } = require("devtools/shared/css/color");
 const { getColor } = require("devtools/client/shared/theme");
@@ -49,7 +48,7 @@ const OPTIMIZATIONS_GRAPH_RESOLUTION = 100;
 /**
  * A base class for performance graphs to inherit from.
  *
- * @param nsIDOMNode parent
+ * @param Node parent
  *        The parent node holding the overview.
  * @param string metric
  *        The unit of measurement for this graph.
@@ -59,7 +58,7 @@ function PerformanceGraph(parent, metric) {
   this.setTheme();
 }
 
-PerformanceGraph.prototype = Heritage.extend(LineGraphWidget.prototype, {
+PerformanceGraph.prototype = extend(LineGraphWidget.prototype, {
   strokeWidth: STROKE_WIDTH,
   dampenValuesFactor: DAMPEN_VALUES,
   fixedHeight: HEIGHT,
@@ -71,7 +70,7 @@ PerformanceGraph.prototype = Heritage.extend(LineGraphWidget.prototype, {
   /**
    * Disables selection and empties this graph.
    */
-  clearView: function () {
+  clearView: function() {
     this.selectionEnabled = false;
     this.dropSelection();
     this.setData([]);
@@ -82,9 +81,9 @@ PerformanceGraph.prototype = Heritage.extend(LineGraphWidget.prototype, {
    * and updates the internal styling to match. Requires a redraw
    * to see the effects.
    */
-  setTheme: function (theme) {
+  setTheme: function(theme) {
     theme = theme || "light";
-    let mainColor = getColor(this.mainColor || "graphs-blue", theme);
+    const mainColor = getColor(this.mainColor || "graphs-blue", theme);
     this.backgroundColor = getColor("body-background", theme);
     this.strokeColor = mainColor;
     this.backgroundGradientStart = colorUtils.setAlpha(mainColor, 0.2);
@@ -101,16 +100,16 @@ PerformanceGraph.prototype = Heritage.extend(LineGraphWidget.prototype, {
 /**
  * Constructor for the framerate graph. Inherits from PerformanceGraph.
  *
- * @param nsIDOMNode parent
+ * @param Node parent
  *        The parent node holding the overview.
  */
 function FramerateGraph(parent) {
   PerformanceGraph.call(this, parent, ProfilerGlobal.L10N.getStr("graphs.fps"));
 }
 
-FramerateGraph.prototype = Heritage.extend(PerformanceGraph.prototype, {
+FramerateGraph.prototype = extend(PerformanceGraph.prototype, {
   mainColor: FRAMERATE_GRAPH_COLOR_NAME,
-  setPerformanceData: function ({ duration, ticks }, resolution) {
+  setPerformanceData: function({ duration, ticks }, resolution) {
     this.dataDuration = duration;
     return this.setDataFromTimestamps(ticks, resolution, duration);
   }
@@ -119,16 +118,16 @@ FramerateGraph.prototype = Heritage.extend(PerformanceGraph.prototype, {
 /**
  * Constructor for the memory graph. Inherits from PerformanceGraph.
  *
- * @param nsIDOMNode parent
+ * @param Node parent
  *        The parent node holding the overview.
  */
 function MemoryGraph(parent) {
   PerformanceGraph.call(this, parent, ProfilerGlobal.L10N.getStr("graphs.memory"));
 }
 
-MemoryGraph.prototype = Heritage.extend(PerformanceGraph.prototype, {
+MemoryGraph.prototype = extend(PerformanceGraph.prototype, {
   mainColor: MEMORY_GRAPH_COLOR_NAME,
-  setPerformanceData: function ({ duration, memory }) {
+  setPerformanceData: function({ duration, memory }) {
     this.dataDuration = duration;
     return this.setData(memory);
   }
@@ -138,7 +137,7 @@ function TimelineGraph(parent, filter) {
   MarkersOverview.call(this, parent, filter);
 }
 
-TimelineGraph.prototype = Heritage.extend(MarkersOverview.prototype, {
+TimelineGraph.prototype = extend(MarkersOverview.prototype, {
   headerHeight: MARKERS_GRAPH_HEADER_HEIGHT,
   rowHeight: MARKERS_GRAPH_ROW_HEIGHT,
   groupPadding: MARKERS_GROUP_VERTICAL_PADDING,
@@ -195,7 +194,7 @@ GraphsController.prototype = {
   /**
    * Returns the corresponding graph by `graphName`.
    */
-  get: function (graphName) {
+  get: function(graphName) {
     return this._graphs[graphName];
   },
 
@@ -206,12 +205,12 @@ GraphsController.prototype = {
    * Saves rendering progress as a promise to be consumed by `destroy`,
    * to wait for cleaning up rendering during destruction.
    */
-  render: Task.async(function* (recordingData, resolution) {
+  async render(recordingData, resolution) {
     // Get the previous render promise so we don't start rendering
     // until the previous render cycle completes, which can occur
     // especially when a recording is finished, and triggers a
     // fresh rendering at a higher rate
-    yield (this._rendering && this._rendering.promise);
+    await (this._rendering && this._rendering.promise);
 
     // Check after yielding to ensure we're not tearing down,
     // as this can create a race condition in tests
@@ -220,18 +219,18 @@ GraphsController.prototype = {
     }
 
     this._rendering = defer();
-    for (let graph of (yield this._getEnabled())) {
-      yield graph.setPerformanceData(recordingData, resolution);
+    for (const graph of (await this._getEnabled())) {
+      await graph.setPerformanceData(recordingData, resolution);
       this.emit("rendered", graph.graphName);
     }
     this._rendering.resolve();
-  }),
+  },
 
   /**
    * Destroys the underlying graphs.
    */
-  destroy: Task.async(function* () {
-    let primary = this._getPrimaryLink();
+  async destroy() {
+    const primary = this._getPrimaryLink();
 
     this._destroyed = true;
 
@@ -242,21 +241,21 @@ GraphsController.prototype = {
     // If there was rendering, wait until the most recent render cycle
     // has finished
     if (this._rendering) {
-      yield this._rendering.promise;
+      await this._rendering.promise;
     }
 
-    for (let graph of this.getWidgets()) {
-      yield graph.destroy();
+    for (const graph of this.getWidgets()) {
+      await graph.destroy();
     }
-  }),
+  },
 
   /**
    * Applies the theme to the underlying graphs. Optionally takes
    * a `redraw` boolean in the options to force redraw.
    */
-  setTheme: function (options = {}) {
-    let theme = options.theme || this._getTheme();
-    for (let graph of this.getWidgets()) {
+  setTheme: function(options = {}) {
+    const theme = options.theme || this._getTheme();
+    for (const graph of this.getWidgets()) {
       graph.setTheme(theme);
       graph.refresh({ force: options.redraw });
     }
@@ -267,7 +266,7 @@ GraphsController.prototype = {
    * to the graph if it is enabled once it's ready, or otherwise returns
    * null if disabled.
    */
-  isAvailable: Task.async(function* (graphName) {
+  async isAvailable(graphName) {
     if (!this._enabled.has(graphName)) {
       return null;
     }
@@ -275,19 +274,19 @@ GraphsController.prototype = {
     let graph = this.get(graphName);
 
     if (!graph) {
-      graph = yield this._construct(graphName);
+      graph = await this._construct(graphName);
     }
 
-    yield graph.ready();
+    await graph.ready();
     return graph;
-  }),
+  },
 
   /**
    * Enable or disable a subgraph controlled by GraphsController.
    * This determines what graphs are visible and get rendered.
    */
-  enable: function (graphName, isEnabled) {
-    let el = this.$(this._definition[graphName].selector);
+  enable: function(graphName, isEnabled) {
+    const el = this.$(this._definition[graphName].selector);
     el.classList[isEnabled ? "remove" : "add"]("hidden");
 
     // If no status change, just return
@@ -309,7 +308,7 @@ GraphsController.prototype = {
    * also hides the root element. This is a one way switch, and used
    * when older platforms do not have any timeline data.
    */
-  disableAll: function () {
+  disableAll: function() {
     this._root.classList.add("hidden");
     // Hide all the subelements
     Object.keys(this._definition).forEach(graphName => this.enable(graphName, false));
@@ -319,7 +318,7 @@ GraphsController.prototype = {
    * Sets a mapped selection on the graph that is the main controller
    * for keeping the graphs' selections in sync.
    */
-  setMappedSelection: function (selection, { mapStart, mapEnd }) {
+  setMappedSelection: function(selection, { mapStart, mapEnd }) {
     return this._getPrimaryLink().setMappedSelection(selection, { mapStart, mapEnd });
   },
 
@@ -327,8 +326,8 @@ GraphsController.prototype = {
    * Fetches the currently mapped selection. If graphs are not yet rendered,
    * (which throws in Graphs.js), return null.
    */
-  getMappedSelection: function ({ mapStart, mapEnd }) {
-    let primary = this._getPrimaryLink();
+  getMappedSelection: function({ mapStart, mapEnd }) {
+    const primary = this._getPrimaryLink();
     if (primary && primary.hasData()) {
       return primary.getMappedSelection({ mapStart, mapEnd });
     }
@@ -339,14 +338,14 @@ GraphsController.prototype = {
    * Returns an array of graphs that have been created, not necessarily
    * enabled currently.
    */
-  getWidgets: function () {
+  getWidgets: function() {
     return Object.keys(this._graphs).map(name => this._graphs[name]);
   },
 
   /**
    * Drops the selection.
    */
-  dropSelection: function () {
+  dropSelection: function() {
     if (this._getPrimaryLink()) {
       return this._getPrimaryLink().dropSelection();
     }
@@ -356,23 +355,23 @@ GraphsController.prototype = {
   /**
    * Makes sure the selection is enabled or disabled in all the graphs.
    */
-  selectionEnabled: Task.async(function* (enabled) {
-    for (let graph of (yield this._getEnabled())) {
+  async selectionEnabled(enabled) {
+    for (const graph of (await this._getEnabled())) {
       graph.selectionEnabled = enabled;
     }
-  }),
+  },
 
   /**
    * Creates the graph `graphName` and initializes it.
    */
-  _construct: Task.async(function* (graphName) {
-    let def = this._definition[graphName];
-    let el = this.$(def.selector);
-    let filter = this._getFilter();
-    let graph = this._graphs[graphName] = new def.constructor(el, filter);
+  async _construct(graphName) {
+    const def = this._definition[graphName];
+    const el = this.$(def.selector);
+    const filter = this._getFilter();
+    const graph = this._graphs[graphName] = new def.constructor(el, filter);
     graph.graphName = graphName;
 
-    yield graph.ready();
+    await graph.ready();
 
     // Sync the graphs' animations and selections together
     if (def.primaryLink) {
@@ -387,20 +386,20 @@ GraphsController.prototype = {
 
     this.setTheme();
     return graph;
-  }),
+  },
 
   /**
    * Returns the main graph for this collection, that all graphs
    * are bound to for syncing and selection.
    */
-  _getPrimaryLink: function () {
+  _getPrimaryLink: function() {
     return this.get(this._primaryLink);
   },
 
   /**
    * Emitted when a selection occurs.
    */
-  _onSelecting: function () {
+  _onSelecting: function() {
     this.emit("selecting");
   },
 
@@ -410,26 +409,26 @@ GraphsController.prototype = {
    * as those could be enabled. Uses caching, as rendering happens many times per second,
    * compared to how often which graphs/features are changed (rarely).
    */
-  _getEnabled: Task.async(function* () {
+  async _getEnabled() {
     if (this._enabledGraphs) {
       return this._enabledGraphs;
     }
-    let enabled = [];
-    for (let graphName of this._enabled) {
-      let graph = yield this.isAvailable(graphName);
+    const enabled = [];
+    for (const graphName of this._enabled) {
+      const graph = await this.isAvailable(graphName);
       if (graph) {
         enabled.push(graph);
       }
     }
     this._enabledGraphs = enabled;
     return this._enabledGraphs;
-  }),
+  },
 };
 
 /**
  * A base class for performance graphs to inherit from.
  *
- * @param nsIDOMNode parent
+ * @param Node parent
  *        The parent node holding the overview.
  * @param string metric
  *        The unit of measurement for this graph.
@@ -439,19 +438,19 @@ function OptimizationsGraph(parent) {
   this.setTheme();
 }
 
-OptimizationsGraph.prototype = Heritage.extend(MountainGraphWidget.prototype, {
+OptimizationsGraph.prototype = extend(MountainGraphWidget.prototype, {
 
-  render: Task.async(function* (threadNode, frameNode) {
+  async render(threadNode, frameNode) {
     // Regardless if we draw or clear the graph, wait
     // until it's ready.
-    yield this.ready();
+    await this.ready();
 
     if (!threadNode || !frameNode) {
       this.setData([]);
       return;
     }
 
-    let { sampleTimes } = threadNode;
+    const { sampleTimes } = threadNode;
 
     if (!sampleTimes.length) {
       this.setData([]);
@@ -461,11 +460,11 @@ OptimizationsGraph.prototype = Heritage.extend(MountainGraphWidget.prototype, {
     // Take startTime/endTime from samples recorded, rather than
     // using duration directly from threadNode, as the first sample that
     // equals the startTime does not get recorded.
-    let startTime = sampleTimes[0];
-    let endTime = sampleTimes[sampleTimes.length - 1];
+    const startTime = sampleTimes[0];
+    const endTime = sampleTimes[sampleTimes.length - 1];
 
-    let bucketSize = (endTime - startTime) / OPTIMIZATIONS_GRAPH_RESOLUTION;
-    let data = createTierGraphDataFromFrameNode(frameNode, sampleTimes, bucketSize);
+    const bucketSize = (endTime - startTime) / OPTIMIZATIONS_GRAPH_RESOLUTION;
+    const data = createTierGraphDataFromFrameNode(frameNode, sampleTimes, bucketSize);
 
     // If for some reason we don't have data (like the frameNode doesn't
     // have optimizations, but it shouldn't be at this point if it doesn't),
@@ -477,20 +476,20 @@ OptimizationsGraph.prototype = Heritage.extend(MountainGraphWidget.prototype, {
     }
 
     this.dataOffsetX = startTime;
-    yield this.setData(data);
-  }),
+    await this.setData(data);
+  },
 
   /**
    * Sets the theme via `theme` to either "light" or "dark",
    * and updates the internal styling to match. Requires a redraw
    * to see the effects.
    */
-  setTheme: function (theme) {
+  setTheme: function(theme) {
     theme = theme || "light";
 
-    let interpreterColor = getColor("graphs-red", theme);
-    let baselineColor = getColor("graphs-blue", theme);
-    let ionColor = getColor("graphs-green", theme);
+    const interpreterColor = getColor("graphs-red", theme);
+    const baselineColor = getColor("graphs-blue", theme);
+    const ionColor = getColor("graphs-green", theme);
 
     this.format = [
       { color: interpreterColor },

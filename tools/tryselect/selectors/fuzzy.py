@@ -6,23 +6,23 @@ from __future__ import absolute_import, print_function, unicode_literals
 
 import os
 import platform
+import re
 import subprocess
 import sys
 from distutils.spawn import find_executable
 
 from mozboot.util import get_state_dir
+from mozterm import Terminal
+from moztest.resolve import TestResolver, get_suite_definition
 
 from .. import preset as pset
 from ..cli import BaseTryParser
 from ..tasks import generate_tasks
 from ..vcs import VCSHelper
 
-try:
-    import blessings
-    terminal = blessings.Terminal()
-except ImportError:
-    from mozlint.formatters.stylish import NullTerminal
-    terminal = NullTerminal()
+terminal = Terminal()
+
+here = os.path.abspath(os.path.dirname(__file__))
 
 FZF_NOT_FOUND = """
 Could not find the `fzf` binary.
@@ -51,13 +51,6 @@ editor integrations, download the appropriate binary and put it on your $PATH:
 
     https://github.com/junegunn/fzf-bin/releases
 """.lstrip()
-
-FZF_RUN_INSTALL_WIZARD = """
-{t.bold}Running the fzf installation wizard.{t.normal}
-
-Only the fzf binary is required, if you do not wish to install the shell
-integrations, {t.bold}feel free to press 'n' at each of the prompts.{t.normal}
-""".format(t=terminal)
 
 FZF_HEADER = """
 For more shortcuts, see {t.italic_white}mach help try fuzzy{t.normal} and {t.italic_white}man fzf
@@ -96,19 +89,9 @@ class FuzzyParser(BaseTryParser):
           'default': False,
           'help': "Update fzf before running.",
           }],
-        [['--full'],
-         {'action': 'store_true',
-          'default': False,
-          'help': "Use the full set of tasks as input to fzf (instead of "
-                  "target tasks).",
-          }],
-        [['-p', '--parameters'],
-         {'default': None,
-          'help': "Use the given parameters.yml to generate tasks, "
-                  "defaults to latest parameters.yml from mozilla-central",
-          }],
     ]
-    templates = ['artifact', 'env']
+    common_groups = ['push', 'task', 'preset']
+    templates = ['artifact', 'path', 'env', 'rebuild', 'chemspill-prio', 'talos-profile']
 
 
 def run(cmd, cwd=None):
@@ -116,18 +99,11 @@ def run(cmd, cwd=None):
     return subprocess.call(cmd, cwd=cwd, shell=True if is_win else False)
 
 
-def run_fzf_install_script(fzf_path, bin_only=False):
-    # We could run this without installing the shell integrations on all
-    # platforms, but those integrations are actually really useful so give user
-    # the choice.
+def run_fzf_install_script(fzf_path):
     if platform.system() == 'Windows':
         cmd = ['bash', '-c', './install --bin']
     else:
-        cmd = ['./install']
-        if bin_only:
-            cmd.append('--bin')
-        else:
-            print(FZF_RUN_INSTALL_WIZARD)
+        cmd = ['./install', '--bin']
 
     if run(cmd, cwd=fzf_path):
         print(FZF_INSTALL_FAILED)
@@ -159,7 +135,7 @@ def fzf_bootstrap(update=False):
             print("Update fzf failed.")
             sys.exit(1)
 
-        run_fzf_install_script(fzf_path, bin_only=True)
+        run_fzf_install_script(fzf_path)
         return get_fzf()
 
     if os.path.isdir(fzf_path):
@@ -197,22 +173,48 @@ def format_header():
     return FZF_HEADER.format(shortcuts=', '.join(shortcuts), t=terminal)
 
 
+def filter_by_paths(tasks, paths):
+    resolver = TestResolver.from_environment(cwd=here)
+    run_suites, run_tests = resolver.resolve_metadata(paths)
+    flavors = set([(t['flavor'], t.get('subsuite')) for t in run_tests])
+
+    task_regexes = set()
+    for flavor, subsuite in flavors:
+        suite = get_suite_definition(flavor, subsuite, strict=True)
+        if 'task_regex' not in suite:
+            print("warning: no tasks could be resolved from flavor '{}'{}".format(
+                    flavor, " and subsuite '{}'".format(subsuite) if subsuite else ""))
+            continue
+
+        task_regexes.update(suite['task_regex'])
+
+    def match_task(task):
+        return any(re.search(pattern, task) for pattern in task_regexes)
+
+    return filter(match_task, tasks)
+
+
 def run_fuzzy_try(update=False, query=None, templates=None, full=False, parameters=None,
-                  save=False, preset=None, list_presets=False, push=True, message='{msg}',
-                  **kwargs):
-    if list_presets:
-        return pset.list_presets(section='fuzzy')
+                  save=False, preset=None, mod_presets=False, push=True, message='{msg}',
+                  paths=None, **kwargs):
+    if mod_presets:
+        return getattr(pset, mod_presets)(section='fuzzy')
 
     fzf = fzf_bootstrap(update)
 
     if not fzf:
         print(FZF_NOT_FOUND)
-        return
+        return 1
 
     vcs = VCSHelper.create()
     vcs.check_working_directory(push)
 
-    all_tasks = generate_tasks(parameters, full)
+    all_tasks = generate_tasks(parameters, full, root=vcs.root)
+
+    if paths:
+        all_tasks = filter_by_paths(all_tasks, paths)
+        if not all_tasks:
+            return 1
 
     key_shortcuts = [k + ':' + v for k, v in fzf_shortcuts.iteritems()]
     cmd = [
@@ -247,6 +249,14 @@ def run_fuzzy_try(update=False, query=None, templates=None, full=False, paramete
     if save:
         pset.save('fuzzy', save, query)
 
-    query = " with query: {}".format(query) if query else ""
-    msg = "Fuzzy{}".format(query)
-    return vcs.push_to_try('fuzzy', message.format(msg=msg), selected, templates, push=push)
+    # build commit message
+    msg = "Fuzzy"
+    args = []
+    if paths:
+        args.append("paths={}".format(':'.join(paths)))
+    if query:
+        args.append("query={}".format(query))
+    if args:
+        msg = "{} {}".format(msg, '&'.join(args))
+    return vcs.push_to_try('fuzzy', message.format(msg=msg), selected, templates, push=push,
+                           closed_tree=kwargs["closed_tree"])

@@ -11,32 +11,36 @@
 #include <limits>
 
 #include "mozilla/Assertions.h"
-#include "nsAutoPtr.h"
 #include "TimeUnits.h"
 #include "VideoUtils.h"
 
 extern mozilla::LazyLogModule gMediaDemuxerLog;
-#define MP3LOG(msg, ...) \
-  MOZ_LOG(gMediaDemuxerLog, LogLevel::Debug, ("MP3Demuxer " msg, ##__VA_ARGS__))
-#define MP3LOGV(msg, ...) \
-  MOZ_LOG(gMediaDemuxerLog, LogLevel::Verbose, ("MP3Demuxer " msg, ##__VA_ARGS__))
+#define MP3LOG(msg, ...)                                                       \
+  DDMOZ_LOG(gMediaDemuxerLog, LogLevel::Debug, msg, ##__VA_ARGS__)
+#define MP3LOGV(msg, ...)                                                      \
+  DDMOZ_LOG(gMediaDemuxerLog, LogLevel::Verbose, msg, ##__VA_ARGS__)
 
 using mozilla::media::TimeUnit;
 using mozilla::media::TimeInterval;
 using mozilla::media::TimeIntervals;
-using mp4_demuxer::ByteReader;
+using mozilla::BufferReader;
 
 namespace mozilla {
 
 // MP3Demuxer
 
-MP3Demuxer::MP3Demuxer(MediaResource* aSource) : mSource(aSource) { }
+MP3Demuxer::MP3Demuxer(MediaResource* aSource)
+  : mSource(aSource)
+{
+  DDLINKCHILD("source", aSource);
+}
 
 bool
 MP3Demuxer::InitInternal()
 {
   if (!mTrackDemuxer) {
     mTrackDemuxer = new MP3TrackDemuxer(mSource);
+    DDLINKCHILD("track demuxer", mTrackDemuxer.get());
   }
   return mTrackDemuxer->Init();
 }
@@ -107,6 +111,7 @@ MP3TrackDemuxer::MP3TrackDemuxer(MediaResource* aSource)
   , mSamplesPerSecond(0)
   , mChannels(0)
 {
+  DDLINKCHILD("source", aSource);
   Reset();
 }
 
@@ -385,16 +390,31 @@ MP3TrackDemuxer::Duration() const
   if (mParser.VBRInfo().IsValid() && numAudioFrames.valueOr(0) + 1 > 1) {
     // VBR headers don't include the VBR header frame.
     numFrames = numAudioFrames.value() + 1;
-  } else {
-    const int64_t streamLen = StreamLength();
-    if (streamLen < 0) {
-      // Unknown length, we can't estimate duration.
-      return TimeUnit::FromMicroseconds(-1);
-    }
-    if (AverageFrameLength() > 0) {
-      numFrames = (streamLen - mFirstFrameOffset) / AverageFrameLength();
-    }
+    return Duration(numFrames);
   }
+
+  const int64_t streamLen = StreamLength();
+  if (streamLen < 0) { // Live streams.
+    // Unknown length, we can't estimate duration.
+    return TimeUnit::FromMicroseconds(-1);
+  }
+  // We can't early return when streamLen < 0 before checking numAudioFrames
+  // since some live radio will give an opening remark before playing music
+  // and the duration of the opening talk can be calculated by numAudioFrames.
+
+  const int64_t size = streamLen - mFirstFrameOffset;
+  MOZ_ASSERT(size);
+
+  // If it's CBR, calculate the duration by bitrate.
+  if (!mParser.VBRInfo().IsValid()) {
+    const int32_t bitrate = mParser.CurrentFrame().Header().Bitrate();
+    return media::TimeUnit::FromSeconds(static_cast<double>(size) * 8 / bitrate);
+  }
+
+  if (AverageFrameLength() > 0) {
+    numFrames = size / AverageFrameLength();
+  }
+
   return Duration(numFrames);
 }
 
@@ -426,7 +446,7 @@ MP3TrackDemuxer::FindFirstFrame()
           " Length()=%" PRIu64,
           candidateFrame.mStart, candidateFrame.Length());
 
-  while (candidateFrame.Length() && numSuccFrames < MIN_SUCCESSIVE_FRAMES) {
+  while (candidateFrame.Length()) {
     mParser.EndFrameSession();
     mOffset = currentFrame.mEnd;
     const MediaByteRange prevFrame = currentFrame;
@@ -452,16 +472,26 @@ MP3TrackDemuxer::FindFirstFrame()
       MP3LOGV("FindFirst() new candidate frame: mOffset=%" PRIu64
               " Length()=%" PRIu64,
               candidateFrame.mStart, candidateFrame.Length());
+    } else if (numSuccFrames >= MIN_SUCCESSIVE_FRAMES) {
+      MP3LOG("FindFirst() accepting candidate frame: "
+             "successiveFrames=%d", numSuccFrames);
+      mFrameLock = true;
+      return candidateFrame;
+    } else if (prevFrame.mStart == mParser.ID3Header().TotalTagSize() &&
+               currentFrame.mEnd == StreamLength()) {
+      // We accept streams with only two frames if both frames are valid. This
+      // is to handle very short files and provide parity with Chrome. See
+      // bug 1432195 for more information. This will not handle short files
+      // with a trailing tag, but as of writing we lack infrastructure to
+      // handle such tags.
+      MP3LOG("FindFirst() accepting candidate frame for short stream: "
+             "successiveFrames=%d", numSuccFrames);
+      mFrameLock = true;
+      return candidateFrame;
     }
   }
 
-  if (numSuccFrames >= MIN_SUCCESSIVE_FRAMES) {
-    MP3LOG("FindFirst() accepting candidate frame: "
-           "successiveFrames=%d", numSuccFrames);
-    mFrameLock = true;
-  } else {
-    MP3LOG("FindFirst() no suitable first frame found");
-  }
+  MP3LOG("FindFirst() no suitable first frame found");
   return candidateFrame;
 }
 
@@ -538,9 +568,10 @@ MP3TrackDemuxer::FindNextFrame()
       break;
     }
 
-    ByteReader reader(buffer, read);
+    BufferReader reader(buffer, read);
     uint32_t bytesToSkip = 0;
-    foundFrame = mParser.Parse(&reader, &bytesToSkip);
+    auto res = mParser.Parse(&reader, &bytesToSkip);
+    foundFrame = res.unwrapOr(false);
     frameHeaderOffset =
       mOffset + reader.Offset() - FrameParser::FrameHeader::SIZE;
 
@@ -612,7 +643,7 @@ MP3TrackDemuxer::GetNextFrame(const MediaByteRange& aRange)
   RefPtr<MediaRawData> frame = new MediaRawData();
   frame->mOffset = aRange.mStart;
 
-  nsAutoPtr<MediaRawDataWriter> frameWriter(frame->CreateWriter());
+  UniquePtr<MediaRawDataWriter> frameWriter(frame->CreateWriter());
   if (!frameWriter->SetSize(aRange.Length())) {
     MP3LOG("GetNext() Exit failed to allocated media buffer");
     return nullptr;
@@ -638,7 +669,7 @@ MP3TrackDemuxer::GetNextFrame(const MediaByteRange& aRange)
 
   if (mNumParsedFrames == 1) {
     // First frame parsed, let's read VBR info if available.
-    ByteReader reader(frame->Data(), frame->Size());
+    BufferReader reader(frame->Data(), frame->Size());
     mParser.ParseVBRHeader(&reader);
     mFirstFrameOffset = frame->mOffset;
   }
@@ -766,3 +797,6 @@ MP3TrackDemuxer::AverageFrameLength() const
 }
 
 } // namespace mozilla
+
+#undef MP3LOG
+#undef MP3LOGV

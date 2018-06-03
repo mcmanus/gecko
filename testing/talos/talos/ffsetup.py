@@ -7,19 +7,22 @@ Set up a browser environment before running a test.
 """
 from __future__ import absolute_import, print_function
 
+import json
 import os
+import shutil
 import tempfile
 
 import mozfile
 import mozinfo
 import mozrunner
 from mozlog import get_proxy_logger
-from mozprocess import ProcessHandlerMixin
 from mozprofile.profile import Profile
 from talos import utils
 from talos.gecko_profile import GeckoProfile
-from talos.utils import TalosError
+from talos.utils import TalosError, run_in_debug_mode
 from talos import heavy
+
+here = os.path.abspath(os.path.dirname(__file__))
 
 LOG = get_proxy_logger()
 
@@ -56,6 +59,13 @@ class FFSetup(object):
         # (in etlparser.py). TODO fix that ?
         self.profile_dir = os.path.join(self._tmp_dir, 'profile')
         self.gecko_profile = None
+        self.debug_mode = run_in_debug_mode(browser_config)
+
+    @property
+    def profile_data_dir(self):
+        if 'MOZ_DEVELOPER_REPO_DIR' in os.environ:
+            return os.path.join(os.environ['MOZ_DEVELOPER_REPO_DIR'], 'testing', 'profiles')
+        return os.path.join(here, 'profile_data')
 
     def _init_env(self):
         self.env = dict(os.environ)
@@ -73,44 +83,72 @@ class FFSetup(object):
             os.path.dirname(self.browser_config['browser_path'])
 
     def _init_profile(self):
-        preferences = dict(self.browser_config['preferences'])
-        if self.test_config.get('preferences'):
-            test_prefs = dict(
-                [(i, utils.parse_pref(j))
-                 for i, j in self.test_config['preferences'].items()]
-            )
-            preferences.update(test_prefs)
-        # interpolate webserver value in prefs
-        webserver = self.browser_config['webserver']
-        if '://' not in webserver:
-            webserver = 'http://' + webserver
-        for name, value in preferences.items():
-            if type(value) is str:
-                value = utils.interpolate(value, webserver=webserver)
-                preferences[name] = value
-
         extensions = self.browser_config['extensions'][:]
         if self.test_config.get('extensions'):
-            extensions.append(self.test_config['extensions'])
-
-        if self.browser_config['develop'] or \
-           'try' in str.lower(self.browser_config['branch_name']):
-            extensions = [os.path.dirname(i) for i in extensions]
+            extensions.extend(self.test_config['extensions'])
 
         # downloading a profile instead of using the empty one
         if self.test_config['profile'] is not None:
             path = heavy.download_profile(self.test_config['profile'])
             self.test_config['profile_path'] = path
 
-        profile = Profile.clone(
-            os.path.normpath(self.test_config['profile_path']),
-            self.profile_dir,
-            restore=False)
+        profile_path = os.path.normpath(self.test_config['profile_path'])
+        LOG.info("Cloning profile located at %s" % profile_path)
 
+        def _feedback(directory, content):
+            # Called by shutil.copytree on each visited directory.
+            # Used here to display info.
+            #
+            # Returns the items that should be ignored by
+            # shutil.copytree when copying the tree, so always returns
+            # an empty list.
+            sub = directory.split(profile_path)[-1].lstrip("/")
+            if sub:
+                LOG.info("=> %s" % sub)
+            return []
+
+        profile = Profile.clone(profile_path,
+                                self.profile_dir,
+                                ignore=_feedback,
+                                restore=False)
+
+        # build pref interpolation context
+        webserver = self.browser_config['webserver']
+        if '://' not in webserver:
+            webserver = 'http://' + webserver
+
+        interpolation = {
+            'webserver': webserver,
+        }
+
+        # merge base profiles
+        with open(os.path.join(self.profile_data_dir, 'profiles.json'), 'r') as fh:
+            base_profiles = json.load(fh)['talos']
+
+        for name in base_profiles:
+            path = os.path.join(self.profile_data_dir, name)
+            LOG.info("Merging profile: {}".format(path))
+            profile.merge(path, interpolation=interpolation)
+
+        # set test preferences
+        preferences = self.browser_config.get('preferences', {}).copy()
+        if self.test_config.get('preferences'):
+            test_prefs = dict(
+                [(i, utils.parse_pref(j))
+                 for i, j in self.test_config['preferences'].items()]
+            )
+            preferences.update(test_prefs)
+
+        for name, value in preferences.items():
+            if type(value) is str:
+                value = utils.interpolate(value, **interpolation)
+                preferences[name] = value
         profile.set_preferences(preferences)
 
         # installing addons
-        profile.addon_manager.install_addons(extensions)
+        LOG.info("Installing Add-ons:")
+        LOG.info(extensions)
+        profile.addons.install(extensions)
 
         # installing webextensions
         webextensions = self.test_config.get('webextensions', None)
@@ -118,6 +156,7 @@ class FFSetup(object):
             webextensions = [webextensions]
 
         if webextensions is not None:
+            LOG.info("Installing Webextensions:")
             for webext in webextensions:
                 filename = utils.interpolate(webext)
                 if mozinfo.os == 'win':
@@ -126,8 +165,8 @@ class FFSetup(object):
                     continue
                 if not os.path.exists(filename):
                     continue
-
-                profile.addon_manager.install_from_path(filename)
+                LOG.info(filename)
+                profile.addons.install(filename)
 
     def _run_profile(self):
         runner_cls = mozrunner.runners.get(
@@ -139,9 +178,7 @@ class FFSetup(object):
         runner = runner_cls(profile=self.profile_dir,
                             binary=self.browser_config["browser_path"],
                             cmdargs=args,
-                            env=self.env,
-                            process_class=ProcessHandlerMixin,
-                            process_args={})
+                            env=self.env)
 
         runner.start(outputTimeout=30)
         proc = runner.process_handler
@@ -171,11 +208,86 @@ class FFSetup(object):
         try:
             mozfile.remove(self._tmp_dir)
         except Exception as e:
-            print("Exception while removing profile directory: %s" % self._tmp_dir)
-            print(e)
+            LOG.info("Exception while removing profile directory: %s" % self._tmp_dir)
+            LOG.info(e)
 
         if self.gecko_profile:
             self.gecko_profile.clean()
+
+    def collect_or_clean_ccov(self, clean=False):
+        # NOTE: Currently only supported when running in production
+        if not self.browser_config.get('develop', False):
+            # first see if we an find any ccov files at the ccov output dirs
+            if clean:
+                LOG.info("Cleaning ccov files before starting the talos test")
+            else:
+                LOG.info("Collecting ccov files that were generated during the talos test")
+            gcov_prefix = os.getenv('GCOV_PREFIX', None)
+            js_ccov_dir = os.getenv('JS_CODE_COVERAGE_OUTPUT_DIR', None)
+            gcda_archive_folder_name = 'gcda-archive'
+            _gcda_files_found = []
+
+            for _ccov_env in [gcov_prefix, js_ccov_dir]:
+                if _ccov_env is not None:
+                    # ccov output dir env vars exist; now search for gcda files to remove
+                    _ccov_path = os.path.abspath(_ccov_env)
+                    if os.path.exists(_ccov_path):
+                        # now walk through and look for gcda files
+                        LOG.info("Recursive search for gcda files in: %s" % _ccov_path)
+                        for root, dirs, files in os.walk(_ccov_path):
+                            for next_file in files:
+                                if next_file.endswith(".gcda"):
+                                    # don't want to move or delete files in our 'gcda-archive'
+                                    if root.find(gcda_archive_folder_name) == -1:
+                                        _gcda_files_found.append(os.path.join(root, next_file))
+                    else:
+                        LOG.info("The ccov env var path doesn't exist: %s" % str(_ccov_path))
+
+            # now  clean or collect gcda files accordingly
+            if clean:
+                # remove ccov data
+                LOG.info("Found %d gcda files to clean. Deleting..." % (len(_gcda_files_found)))
+                for _gcda in _gcda_files_found:
+                    try:
+                        mozfile.remove(_gcda)
+                    except Exception as e:
+                        LOG.info("Exception while removing file: %s" % _gcda)
+                        LOG.info(e)
+                LOG.info("Finished cleaning ccov gcda files")
+            else:
+                # copy gcda files to archive folder to be collected later
+                gcda_archive_top = os.path.join(gcov_prefix,
+                                                gcda_archive_folder_name,
+                                                self.test_config['name'])
+                LOG.info("Found %d gcda files to collect. Moving to gcda archive %s"
+                         % (len(_gcda_files_found), str(gcda_archive_top)))
+                if not os.path.exists(gcda_archive_top):
+                    try:
+                        os.makedirs(gcda_archive_top)
+                    except OSError:
+                        LOG.critical("Unable to make gcda archive folder %s" % gcda_archive_top)
+                for _gcda in _gcda_files_found:
+                    # want to copy the existing directory strucutre but put it under archive-dir
+                    # need to remove preceeding '/' from _gcda file name so can join the path
+                    gcda_archive_file = os.path.join(gcov_prefix,
+                                                     gcda_archive_folder_name,
+                                                     self.test_config['name'],
+                                                     _gcda.strip(gcov_prefix + "//"))
+                    gcda_archive_dest = os.path.dirname(gcda_archive_file)
+
+                    # create archive folder, mirroring structure
+                    if not os.path.exists(gcda_archive_dest):
+                        try:
+                            os.makedirs(gcda_archive_dest)
+                        except OSError:
+                            LOG.critical("Unable to make archive folder %s" % gcda_archive_dest)
+                    # now copy the file there
+                    try:
+                        shutil.copy(_gcda, gcda_archive_dest)
+                    except Exception as e:
+                        LOG.info("Error copying %s to %s" % (str(_gcda), str(gcda_archive_dest)))
+                        LOG.info(e)
+                LOG.info("Finished collecting ccov gcda files. Copied to: %s" % gcda_archive_top)
 
     def __enter__(self):
         LOG.info('Initialising browser for %s test...'
@@ -183,12 +295,20 @@ class FFSetup(object):
         self._init_env()
         self._init_profile()
         try:
-            self._run_profile()
-        except:
+            if not self.debug_mode and self.test_config['name'] != "damp":
+                self._run_profile()
+        except BaseException:
             self.clean()
             raise
         self._init_gecko_profile()
         LOG.info('Browser initialized.')
+        # remove ccov files before actual tests start
+        if self.browser_config.get('code_coverage', False):
+            # if the Firefox build was instrumented for ccov, initializing the browser
+            # will have caused ccov to output some gcda files; in order to have valid
+            # ccov data for the talos test we want to remove these files before starting
+            # the actual talos test(s)
+            self.collect_or_clean_ccov(clean=True)
         return self
 
     def __exit__(self, type, value, tb):

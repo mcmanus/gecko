@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <assert.h>
+
 namespace mozquic  {
 
 enum {
@@ -13,19 +15,68 @@ enum {
   kMozQuicMSS = 16384,
   kTagLen = 16,
 
-  STREAM_FIN_BIT = 0x20,
+  STREAM_FIN_BIT = 0x01,
+  STREAM_LEN_BIT = 0x02,
+  STREAM_OFF_BIT = 0x04,
 };
 
 enum LongHeaderType {
-  PACKET_TYPE_VERSION_NEGOTIATION    = 1,
-  PACKET_TYPE_CLIENT_INITIAL         = 2,
-  PACKET_TYPE_SERVER_STATELESS_RETRY = 3,
-  PACKET_TYPE_SERVER_CLEARTEXT       = 4,
-  PACKET_TYPE_CLIENT_CLEARTEXT       = 5,
-  PACKET_TYPE_0RTT_PROTECTED         = 6,
-  PACKET_TYPE_1RTT_PROTECTED_KP0     = 7,
-  PACKET_TYPE_1RTT_PROTECTED_KP1     = 8,
-  PACKET_TYPE_PUBLIC_RESET           = 9,
+  PACKET_TYPE_INITIAL                = 0x7F,
+  PACKET_TYPE_RETRY                  = 0x7E,
+  PACKET_TYPE_HANDSHAKE              = 0x7D,
+  PACKET_TYPE_0RTT_PROTECTED         = 0x7C,
+  PACKET_TYPE_ERR                    = 0xFF
+};
+
+enum ShortHeaderType {
+  SHORT_1 = 0x00,
+  SHORT_2 = 0x01,
+  SHORT_4 = 0x02,
+};
+
+class CID
+{
+public:
+CID() : mNull(true) { mText[0] = '-'; mText[1] = 0;}
+  void Parse(uint8_t cil, const unsigned char *cidptr);
+  void Randomize();
+  char *Text();
+
+  operator uint64_t() const{
+    assert(0);
+    return 0;
+  }
+  
+  operator bool() const {
+    return !Null();
+  }
+
+  bool operator !() const {
+    return Null();
+  }
+
+  bool operator ==(const CID &b) const {
+    return (mLen == b.mLen) && !memcmp(mID, b.mID, mLen);
+  }
+
+  bool operator !=(const CID &b) const {
+    return !((mLen == b.mLen) && !memcmp(mID, b.mID, mLen));
+  }
+
+  size_t Hash() const;
+  uint32_t Len() const { return mLen; }
+  const unsigned char *Data() const { return &mID[0]; }
+
+  static uint32_t FormatLongHeader(const CID &destCID, const CID &srcCID, bool omitLocal,
+                                   unsigned char *output, uint32_t avail, uint32_t &used);
+private:
+  bool Null() const { return mNull; }
+  void BuildText();
+
+  unsigned char mID[18];
+  uint32_t mLen;
+  bool         mNull;
+  char mText[37]; // todo make this lazy allocated for logging
 };
 
 class LongHeaderData
@@ -33,10 +84,15 @@ class LongHeaderData
 public:
   LongHeaderData(unsigned char *, uint32_t);
   enum LongHeaderType mType;
-  uint64_t mConnectionID;
+  CID mDestCID;
+  CID mSourceCID;
+  uint32_t mPayloadLen;
   uint64_t mPacketNumber;
   uint32_t mVersion;
+  uint32_t mHeaderSize;
 };
+
+class MozQuic;
 
 class ShortHeaderData
 {
@@ -44,73 +100,71 @@ private:
   static uint64_t DecodePacketNumber(unsigned char *pkt, int pnSize, uint64_t next);
 
 public:
-  ShortHeaderData(unsigned char *, uint32_t, uint64_t, uint64_t);
+  ShortHeaderData(MozQuic *logging, unsigned char *, uint32_t, uint64_t, bool,
+                  CID &defaultCID);
   uint32_t mHeaderSize;
-  uint64_t mConnectionID;
+  CID mDestCID;
   uint64_t mPacketNumber;
 };
 
 enum FrameType {
-  FRAME_TYPE_PADDING           = 0x0,
-  FRAME_TYPE_RST_STREAM        = 0x1,
-  FRAME_TYPE_CLOSE             = 0x2,
-  // 3 was goaway
-  FRAME_TYPE_MAX_DATA          = 0x4,
-  FRAME_TYPE_MAX_STREAM_DATA   = 0x5,
-  FRAME_TYPE_MAX_STREAM_ID     = 0x6,
-  FRAME_TYPE_PING              = 0x7,
-  FRAME_TYPE_BLOCKED           = 0x8,
-  FRAME_TYPE_STREAM_BLOCKED    = 0x9,
-  FRAME_TYPE_STREAM_ID_BLOCKED  = 0xA,
-  FRAME_TYPE_NEW_CONNECTION_ID = 0xB,
-  FRAME_TYPE_STOP_SENDING      = 0xC,
-  // ACK                       = 0xa0 - 0xbf
-  FRAME_MASK_ACK               = 0xe0,
-  FRAME_TYPE_ACK               = 0xa0, // 101. ....
-  // STREAM                    = 0xc0 - 0xff
-  FRAME_MASK_STREAM            = 0xc0,
-  FRAME_TYPE_STREAM            = 0xc0, // 11.. ....
-};
+  FRAME_TYPE_PADDING           = 0x00,
+  FRAME_TYPE_RST_STREAM        = 0x01,
+  FRAME_TYPE_CONN_CLOSE        = 0x02,
+  FRAME_TYPE_APPLICATION_CLOSE = 0x03,
+  FRAME_TYPE_MAX_DATA          = 0x04,
+  FRAME_TYPE_MAX_STREAM_DATA   = 0x05,
+  FRAME_TYPE_MAX_STREAM_ID     = 0x06,
+  FRAME_TYPE_PING              = 0x07,
+  FRAME_TYPE_BLOCKED           = 0x08,
+  FRAME_TYPE_STREAM_BLOCKED    = 0x09,
+  FRAME_TYPE_STREAM_ID_BLOCKED  = 0x0A,
+  FRAME_TYPE_NEW_CONNECTION_ID = 0x0B,
+  FRAME_TYPE_STOP_SENDING      = 0x0C,
+  FRAME_TYPE_ACK               = 0x0D,
+  FRAME_TYPE_PATH_CHALLENGE    = 0x0E,
+  FRAME_TYPE_PATH_RESPONSE     = 0x0F,
 
-class MozQuic;
+  // STREAM                    = 0x10 to 0x17
+  FRAME_MASK_STREAM            = 0xf8,
+  FRAME_TYPE_STREAM            = 0x10, // 0001 0...
+};
 
 class FrameHeaderData
 {
 public:
   FrameHeaderData(const unsigned char *, uint32_t, MozQuic *, bool);
+
   FrameType mType;
   uint32_t  mValid;
   uint32_t  mFrameLen;
   union {
     struct {
       bool mFinBit;
-      uint16_t mDataLen;
+      uint32_t mDataLen;
       uint32_t mStreamID;
       uint64_t mOffset;
     } mStream;
     struct {
-      uint8_t mAckBlockLengthLen;
-      uint8_t mNumBlocks;
-      uint8_t mNumTS;
       uint64_t mLargestAcked;
-      uint16_t mAckDelay;
+      uint64_t mAckDelay;
+      uint64_t mAckBlocks; // includes block 0 with implicit gap0
     } mAck;
     struct {
-      uint32_t mErrorCode;
       uint32_t mStreamID;
+      uint16_t mErrorCode;
       uint64_t mFinalOffset;
     } mRstStream;
     struct {
-      uint32_t mErrorCode;
       uint32_t mStreamID;
+      uint16_t mErrorCode;
     } mStopSending;
     struct {
-      uint32_t mErrorCode;
-    } mClose;
+      uint16_t mErrorCode;
+    } mConnClose;
     struct {
-      uint32_t mClientStreamID;
-      uint32_t mServerStreamID;
-    } mGoaway;
+      uint16_t mErrorCode;
+    } mApplicationClose;
     struct {
       uint64_t mMaximumData;
     } mMaxData;
@@ -123,27 +177,34 @@ public:
     } mMaxStreamID;
     struct {
       uint32_t mStreamID;
+      uint64_t mOffset;
     } mStreamBlocked;
     struct {
-      uint16_t mSequence;
-      uint64_t mConnectionID;
-    } mNewConnectionID;
+      uint64_t mSequence;
+      uint8_t  mToken[16];
+     } mNewConnectionID;
+    struct {
+      uint64_t mOffset;
+    } mBlocked;
+    struct {
+      uint32_t mStreamID;
+    } mStreamIDBlocked;
+    struct {
+      uint64_t mData;
+    } mPathChallenge;
+    struct {
+      uint64_t mData;
+    } mPathResponse;
   } u;
+
+  CID  mForNewConnectionID;
 };
 
 enum FrameTypeLengths {
   FRAME_TYPE_PADDING_LENGTH           = 1,
-  FRAME_TYPE_RST_STREAM_LENGTH        = 17,
-  FRAME_TYPE_CLOSE_LENGTH             = 7,
-  FRAME_TYPE_MAX_DATA_LENGTH          = 9,
-  FRAME_TYPE_MAX_STREAM_DATA_LENGTH   = 13,
-  FRAME_TYPE_MAX_STREAM_ID_LENGTH     = 5,
   FRAME_TYPE_PING_LENGTH              = 1,
-  FRAME_TYPE_BLOCKED_LENGTH           = 1,
-  FRAME_TYPE_STREAM_BLOCKED_LENGTH    = 5,
-  FRAME_TYPE_STREAM_ID_BLOCKED_LENGTH  = 1,
-  FRAME_TYPE_NEW_CONNECTION_ID_LENGTH = 11,
-  FRAME_TYPE_STOP_SENDING_LENGTH      = 9,
+  FRAME_TYPE_PATH_CHALLENGE_LENGTH    = 9,
+  FRAME_TYPE_PATH_RESPONSE_LENGTH     = 9
 };
 
 }

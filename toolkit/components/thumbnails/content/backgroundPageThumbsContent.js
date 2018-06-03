@@ -4,13 +4,11 @@
 
 /* eslint-env mozilla/frame-script */
 
-var { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
-
 Cu.importGlobalProperties(["Blob", "FileReader"]);
 
-Cu.import("resource://gre/modules/PageThumbUtils.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/PageThumbUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 // Let the page settle for this amount of milliseconds before capturing to allow
 // for any in-page changes or redirects.
@@ -48,6 +46,7 @@ const backgroundPageThumbsContent = {
                        Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_HISTORY;
     docShell.defaultLoadFlags = defaultFlags;
     docShell.sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION;
+    docShell.useTrackingProtection = true;
 
     addMessageListener("BackgroundPageThumbs:capture",
                        this._onCapture.bind(this));
@@ -232,7 +231,7 @@ const backgroundPageThumbsContent = {
                          null, null, null);
   },
 
-  QueryInterface: XPCOMUtils.generateQI([
+  QueryInterface: ChromeUtils.generateQI([
     Ci.nsIWebProgressListener,
     Ci.nsISupportsWeakReference,
     Ci.nsIObserver,

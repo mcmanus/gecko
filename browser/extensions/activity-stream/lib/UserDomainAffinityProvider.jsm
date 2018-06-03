@@ -3,10 +3,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-const history = Cc["@mozilla.org/browser/nav-history-service;1"].getService(Ci.nsINavHistoryService);
+ChromeUtils.defineModuleGetter(this, "PlacesUtils",
+  "resource://gre/modules/PlacesUtils.jsm");
 
 const DEFAULT_TIME_SEGMENTS = [
   {"id": "hour", "startTime": 3600, "endTime": 0, "weightPosition": 1},
@@ -55,7 +55,7 @@ function merge(...args) {
  *
  * - The parameter sets provide factors for weighting which allows for
  * flexible targeting. The functionality to calculate final scores can
- * be seen in UserDomainAffinityProvider#calcuateScores
+ * be seen in UserDomainAffinityProvider#calculateScores
  *
  * - The user domain affinity scores are summed up across all time segments
  * see UserDomainAffinityProvider#calculateAllUserDomainAffinityScores
@@ -74,11 +74,22 @@ function merge(...args) {
  * lookups of scores[domain][parameterSet] is beneficial
  */
 this.UserDomainAffinityProvider = class UserDomainAffinityProvider {
-  constructor(timeSegments = DEFAULT_TIME_SEGMENTS, parameterSets = DEFAULT_PARAMETER_SETS, maxHistoryQueryResults = DEFAULT_MAX_HISTORY_QUERY_RESULTS) {
+  constructor(
+    timeSegments = DEFAULT_TIME_SEGMENTS,
+    parameterSets = DEFAULT_PARAMETER_SETS,
+    maxHistoryQueryResults = DEFAULT_MAX_HISTORY_QUERY_RESULTS,
+    version,
+    scores) {
     this.timeSegments = timeSegments;
     this.maxHistoryQueryResults = maxHistoryQueryResults;
-    this.parameterSets = this.prepareParameterSets(parameterSets);
-    this.scores = this.calculateAllUserDomainAffinityScores();
+    this.version = version;
+    if (scores) {
+      this.parameterSets = parameterSets;
+      this.scores = scores;
+    } else {
+      this.parameterSets = this.prepareParameterSets(parameterSets);
+      this.scores = this.calculateAllUserDomainAffinityScores();
+    }
   }
 
   /**
@@ -233,7 +244,7 @@ this.UserDomainAffinityProvider = class UserDomainAffinityProvider {
    */
   queryVisits(ts) {
     const visitCounts = {};
-    const query = history.getNewQuery();
+    const query = PlacesUtils.history.getNewQuery();
     const wwwRegEx = /^www\./;
 
     query.beginTimeReference = query.TIME_RELATIVE_NOW;
@@ -242,11 +253,11 @@ this.UserDomainAffinityProvider = class UserDomainAffinityProvider {
     query.endTimeReference = query.TIME_RELATIVE_NOW;
     query.endTime = (ts.endTime && ts.endTime !== 0) ? -(ts.endTime * 1000 * 1000) : 0;
 
-    const options = history.getNewQueryOptions();
+    const options = PlacesUtils.history.getNewQueryOptions();
     options.sortingMode = options.SORT_BY_VISITCOUNT_DESCENDING;
     options.maxResults = this.maxHistoryQueryResults;
 
-    const root = history.executeQuery(query, options).root;
+    const {root} = PlacesUtils.history.executeQuery(query, options);
     root.containerOpen = true;
     for (let i = 0; i < root.childCount; i++) {
       let node = root.getChild(i);
@@ -271,7 +282,7 @@ this.UserDomainAffinityProvider = class UserDomainAffinityProvider {
   calculateItemRelevanceScore(item) {
     const params = this.parameterSets[item.parameter_set];
     if (!item.domain_affinities || !params) {
-      return 1;
+      return item.item_score;
     }
 
     const scores = Object
@@ -302,6 +313,18 @@ this.UserDomainAffinityProvider = class UserDomainAffinityProvider {
     return params.itemScoreFactor * (item.item_score - normalizedCombinedDomainScore) + normalizedCombinedDomainScore;
   }
 
+  /**
+   * Returns an object holding the settings and affinity scores of this provider instance.
+   */
+  getAffinities() {
+    return {
+      timeSegments: this.timeSegments,
+      parameterSets: this.parameterSets,
+      maxHistoryQueryResults: this.maxHistoryQueryResults,
+      version: this.version,
+      scores: this.scores
+    };
+  }
 };
 
-this.EXPORTED_SYMBOLS = ["UserDomainAffinityProvider"];
+const EXPORTED_SYMBOLS = ["UserDomainAffinityProvider"];

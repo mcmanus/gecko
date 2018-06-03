@@ -39,6 +39,7 @@ public abstract class SessionTest extends UITest {
         private final int mIndex;
         private final T[] mItems;
 
+        @SuppressWarnings({"unchecked", "varargs"})
         public SessionObject(int index, T... items) {
             mIndex = index;
             mItems = items;
@@ -56,6 +57,7 @@ public abstract class SessionTest extends UITest {
     protected class PageInfo {
         private final String url;
         private final String title;
+        private final String triggeringPrincipal_base64;
 
         public PageInfo(String key) {
             if (key.startsWith("about:")) {
@@ -64,6 +66,8 @@ public abstract class SessionTest extends UITest {
                 url = getPage(key);
             }
             title = key;
+            triggeringPrincipal_base64 =
+              "SmIS26zLEdO3ZQBgsLbOywAAAAAAAAAAwAAAAAAAAEY=";
         }
     }
 
@@ -134,7 +138,7 @@ public abstract class SessionTest extends UITest {
     }
 
     protected Session createTestSession(int selectedTabIndex) {
-        PageInfo home = new PageInfo(StringHelper.STATIC_ABOUT_HOME_URL);
+        PageInfo home = new PageInfo("about:home");
         PageInfo page1 = new PageInfo("page1");
         PageInfo page2 = new PageInfo("page2");
         PageInfo page3 = new PageInfo("page3");
@@ -271,6 +275,8 @@ public abstract class SessionTest extends UITest {
                     final JSONObject entry = new JSONObject();
                     entry.put("url", page.url);
                     entry.put("title", page.title);
+                    entry.put("triggeringPrincipal_base64",
+                              page.triggeringPrincipal_base64);
                     entries.put(entry);
                 }
 
@@ -348,6 +354,7 @@ public abstract class SessionTest extends UITest {
             final JSONArray tabs = window.getJSONArray("tabs");
             final int optSelected = window.optInt("selected", -1);
 
+            asserter.is(tabs.length(), sessionTabs.length, "number of saved tabs matches");
             asserter.is(optSelected, session.getIndex() + 1, "selected tab matches");
 
             for (int i = 0; i < tabs.length(); i++) {
@@ -363,12 +370,17 @@ public abstract class SessionTest extends UITest {
                     final JSONObject entry = entries.getJSONObject(j);
                     final String url = entry.getString("url");
                     final String title = entry.optString("title");
+                    final String principal =
+                      entry.getString("triggeringPrincipal_base64");
                     final PageInfo page = pages[j];
 
                     asserter.is(url, page.url, "URL in JSON matches session URL");
                     if (!page.url.startsWith("about:")) {
                         asserter.is(title, page.title, "title in JSON matches session title");
                     }
+
+                    asserter.is(principal, page.triggeringPrincipal_base64,
+                                "principal in JSON matches session principal");
                 }
             }
         } catch (JSONException e) {

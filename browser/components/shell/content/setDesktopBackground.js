@@ -2,9 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-Components.utils.import("resource://gre/modules/AppConstants.jsm");
-
-var Ci = Components.interfaces;
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 var gSetBackground = {
   _position: AppConstants.platform == "macosx" ? "STRETCH" : "",
@@ -16,8 +15,8 @@ var gSetBackground = {
   _imageName: null,
 
   get _shell() {
-    return Components.classes["@mozilla.org/browser/shell-service;1"]
-                     .getService(Ci.nsIShellService);
+    return Cc["@mozilla.org/browser/shell-service;1"]
+             .getService(Ci.nsIShellService);
   },
 
   load() {
@@ -32,9 +31,7 @@ var gSetBackground = {
 
     if (AppConstants.platform == "win") {
       // Hide fill + fit options if < Win7 since they don't work.
-      var version = Components.classes["@mozilla.org/system-info;1"]
-                    .getService(Ci.nsIPropertyBag2)
-                    .getProperty("version");
+      var version = Services.sysinfo.getProperty("version");
       var isWindows7OrHigher = (parseFloat(version) >= 6.1);
       if (!isWindows7OrHigher) {
         document.getElementById("fillPosition").hidden = true;
@@ -80,9 +77,7 @@ var gSetBackground = {
       document.persist("menuPosition", "value");
       this._shell.desktopBackgroundColor = this._hexStringToLong(this._backgroundColor);
     } else {
-      Components.classes["@mozilla.org/observer-service;1"]
-                .getService(Ci.nsIObserverService)
-                .addObserver(this, "shell:desktop-background-changed");
+      Services.obs.addObserver(this, "shell:desktop-background-changed");
 
       var bundle = document.getElementById("backgroundBundle");
       var setDesktopBackground = document.getElementById("setDesktopBackground");
@@ -195,9 +190,7 @@ if (AppConstants.platform != "macosx") {
       document.getElementById("setDesktopBackground").hidden = true;
       document.getElementById("showDesktopPreferences").hidden = false;
 
-      Components.classes["@mozilla.org/observer-service;1"]
-                .getService(Ci.nsIObserverService)
-                .removeObserver(this, "shell:desktop-background-changed");
+      Services.obs.removeObserver(this, "shell:desktop-background-changed");
     }
   };
 

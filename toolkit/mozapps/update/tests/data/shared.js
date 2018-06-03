@@ -5,8 +5,8 @@
 /* Shared code for xpcshell and mochitests-chrome */
 /* eslint-disable no-undef */
 
-Cu.import("resource://gre/modules/FileUtils.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/FileUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 const PREF_APP_UPDATE_AUTO                       = "app.update.auto";
 const PREF_APP_UPDATE_BACKGROUNDERRORS           = "app.update.backgroundErrors";
@@ -34,7 +34,6 @@ const PREF_APP_UPDATE_URL_MANUAL                 = "app.update.url.manual";
 const PREFBRANCH_APP_PARTNER         = "app.partner.";
 const PREF_DISTRIBUTION_ID           = "distribution.id";
 const PREF_DISTRIBUTION_VERSION      = "distribution.version";
-const PREF_TOOLKIT_TELEMETRY_ENABLED = "toolkit.telemetry.enabled";
 
 const NS_APP_PROFILE_DIR_STARTUP   = "ProfDS";
 const NS_APP_USER_PROFILE_50_DIR   = "ProfD";
@@ -147,7 +146,7 @@ const observer = {
       }
     }
   },
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIObserver])
 };
 
 /**
@@ -453,7 +452,7 @@ function cleanUpdatesDir(aDir) {
 
   let dirEntries = aDir.directoryEntries;
   while (dirEntries.hasMoreElements()) {
-    let entry = dirEntries.getNext().QueryInterface(Ci.nsIFile);
+    let entry = dirEntries.nextFile;
 
     if (entry.isDirectory()) {
       if (entry.leafName == DIR_PATCH && entry.parent.leafName == DIR_UPDATES) {
@@ -511,7 +510,7 @@ function removeDirRecursive(aDir) {
 
   let dirEntries = aDir.directoryEntries;
   while (dirEntries.hasMoreElements()) {
-    let entry = dirEntries.getNext().QueryInterface(Ci.nsIFile);
+    let entry = dirEntries.nextFile;
 
     if (entry.isDirectory()) {
       removeDirRecursive(entry);

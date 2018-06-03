@@ -35,12 +35,11 @@ public:
 
   NS_DECL_ADDSIZEOFEXCLUDINGTHIS
 
-  NS_IMPL_FROMCONTENT_HTML_WITH_TAG(HTMLAreaElement, area)
+  NS_IMPL_FROMNODE_HTML_WITH_TAG(HTMLAreaElement, area)
 
   virtual int32_t TabIndexDefault() override;
 
-  virtual nsresult GetEventTargetParent(
-                     EventChainPreVisitor& aVisitor) override;
+  void GetEventTargetParent(EventChainPreVisitor& aVisitor) override;
   virtual nsresult PostHandleEvent(EventChainPostVisitor& aVisitor) override;
   virtual bool IsLink(nsIURI** aURI) const override;
   virtual void GetLinkTarget(nsAString& aTarget) override;
@@ -188,7 +187,7 @@ public:
     GetHref(aResult);
   }
 
-  virtual void NodeInfoChanged(nsIDocument* aOldDoc) final override
+  void NodeInfoChanged(nsIDocument* aOldDoc) final
   {
     ClearHasPendingLinkUpdate();
     nsGenericHTMLElement::NodeInfoChanged(aOldDoc);
@@ -202,6 +201,7 @@ protected:
   virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
                                 const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
                                 bool aNotify) override;
 
   RefPtr<nsDOMTokenList > mRelList;

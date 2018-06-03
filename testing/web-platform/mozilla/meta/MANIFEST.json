@@ -8,6 +8,31 @@
      {}
     ]
    ],
+   "binast/large.binjs": [
+    [
+     {}
+    ]
+   ],
+   "binast/large.js": [
+    [
+     {}
+    ]
+   ],
+   "binast/serve.py": [
+    [
+     {}
+    ]
+   ],
+   "binast/small.binjs": [
+    [
+     {}
+    ]
+   ],
+   "binast/small.js": [
+    [
+     {}
+    ]
+   ],
    "dom/throttling/resources/test.html": [
     [
      {}
@@ -415,6 +440,30 @@
    ]
   },
   "testharness": {
+   "baselinecoverage/wpt_baselinecoverage.html": [
+    [
+     "/_mozilla/baselinecoverage/wpt_baselinecoverage.html",
+     {}
+    ]
+   ],
+   "binast/insecure.html": [
+    [
+     "/_mozilla/binast/insecure.html",
+     {}
+    ]
+   ],
+   "binast/large.https.html": [
+    [
+     "/_mozilla/binast/large.https.html",
+     {}
+    ]
+   ],
+   "binast/small.https.html": [
+    [
+     "/_mozilla/binast/small.https.html",
+     {}
+    ]
+   ],
    "dom/classList.html": [
     [
      "/_mozilla/dom/classList.html",
@@ -466,6 +515,24 @@
    "dom/throttling/throttling-ws.window.js": [
     [
      "/_mozilla/dom/throttling/throttling-ws.window.html",
+     {}
+    ]
+   ],
+   "editor/cloning_attributes.html": [
+    [
+     "/_mozilla/editor/cloning_attributes.html",
+     {}
+    ]
+   ],
+   "editor/initial_selection_on_focus.html": [
+    [
+     "/_mozilla/editor/initial_selection_on_focus.html",
+     {}
+    ]
+   ],
+   "editor/joining_nodes.html": [
+    [
+     "/_mozilla/editor/joining_nodes.html",
      {}
     ]
    ],
@@ -974,16 +1041,52 @@
    "74e16eb87ecdfeb2dfc28f36e0c73a584abdf9c2",
    "support"
   ],
+  "baselinecoverage/wpt_baselinecoverage.html": [
+   "8deca29e7b82fc7ef4c11d2a16e8611dfb8cf487",
+   "testharness"
+  ],
+  "binast/insecure.html": [
+   "04b9d7807d0adf6a471d0621f18ddf20010fdac1",
+   "testharness"
+  ],
+  "binast/large.binjs": [
+   "b83da2863c47d8cedec22bf136fbea077ba8a86b",
+   "support"
+  ],
+  "binast/large.https.html": [
+   "35b870a066dc31ecab2f0de8fb38a6d54345f332",
+   "testharness"
+  ],
+  "binast/large.js": [
+   "1477587b19402f93514b1099a559cc7a376d2ab7",
+   "support"
+  ],
+  "binast/serve.py": [
+   "2421d4ce3c58c8d42c440e2455fd95db898b2b91",
+   "support"
+  ],
+  "binast/small.binjs": [
+   "0a8c0455cc13c1e8fe36540d768f0fad2e31aa2f",
+   "support"
+  ],
+  "binast/small.https.html": [
+   "aedfb37a31775d878fc64237656cdb956331fb86",
+   "testharness"
+  ],
+  "binast/small.js": [
+   "047cbda8fa0155dc777deecb7f98779e94d84b1a",
+   "support"
+  ],
   "dom/classList.html": [
-   "f289334e7b3486259b9aae54b4282a7211b8813e",
+   "17c65652a2943738a0cc5152aec737f243a02d3d",
    "testharness"
   ],
   "dom/throttling/resources/test.html": [
-   "15bf447545bf4ccd8b6a71d5d2cf2e5bba303293",
+   "0898e3efa5dbcc74138bdf27ff2787d1f1a2d4d8",
    "support"
   ],
   "dom/throttling/resources/throttling.js": [
-   "2dc138ec9298d31711bc33fc47af12da1f64c4ce",
+   "e0bf1a7c5a0d2c8be2b793c786bb9484779dcbbf",
    "support"
   ],
   "dom/throttling/resources/ws.sub.js": [
@@ -991,35 +1094,47 @@
    "support"
   ],
   "dom/throttling/throttling-1.window.js": [
-   "609c0d54b0aaf81b28a590217abde69c5e23f168",
+   "216ffff13da87662a1dcddbc6ab091cc0e7380ba",
    "testharness"
   ],
   "dom/throttling/throttling-2.window.js": [
-   "1c6900b823d95ee84791fb04eeae8b61311f5c58",
+   "e76ad877b617c343968211596c34e787849ef587",
    "testharness"
   ],
   "dom/throttling/throttling-3.window.js": [
-   "a9b4b0ade8a22eae9c804735513d89370311d471",
+   "c7e6a0638b216f1f314a022d166ac3d2d6b3ffbd",
    "testharness"
   ],
   "dom/throttling/throttling-4.window.js": [
-   "aeabd55bbb829c92d69bfc44f5e6fe3ad3105a84",
+   "7a6d52ee3f4077bbfc7f0ac635559abc14e0fde5",
    "testharness"
   ],
   "dom/throttling/throttling-indexeddb.window.js": [
-   "275a900b501e54cadc5ca224240489ad27464081",
+   "334beb79c9bd4fd56574b5eca2b6a3709d9057e7",
    "testharness"
   ],
   "dom/throttling/throttling-webaudio.window.js": [
-   "fd5cd3bd05b749e871e5a3e746e2cfc10a48d794",
+   "27e56f68bc041ad07b9c9c27341006d95cd90194",
    "testharness"
   ],
   "dom/throttling/throttling-webrtc.window.js": [
-   "1d832a4e14ad10c5a2143c6b0d7f5cad2c29bdcd",
+   "02e6acec2ff275e0e935cb6d903d348f98d5d437",
    "testharness"
   ],
   "dom/throttling/throttling-ws.window.js": [
-   "df9b37384c42984fe80ea8a35164089f977268b0",
+   "67a981ba2a4d08b684947ed42aba6648dcd262b4",
+   "testharness"
+  ],
+  "editor/cloning_attributes.html": [
+   "257023d742dd84a93816e05d24f380e27405db66",
+   "testharness"
+  ],
+  "editor/initial_selection_on_focus.html": [
+   "06948dbf72160a7de5a0baaa2f6cf1bb54fbeb8f",
+   "testharness"
+  ],
+  "editor/joining_nodes.html": [
+   "048cf7d99acdecb927f97c4554c4d04ca8b15a8a",
    "testharness"
   ],
   "fetch/api/redirect/redirect-referrer-mixed-content.js": [
@@ -1419,11 +1534,11 @@
    "support"
   ],
   "wasm/js/globals.wast.js": [
-   "86b3c907edd8bb3867c5a5aaaebf6066a215b154",
+   "1cb0dc48bd61564325053bf49ae7a1bdb27f5c49",
    "support"
   ],
   "wasm/js/harness/index.js": [
-   "654a29a03543230ddd2db8f8a3398f33233cbf69",
+   "c1f8ca410de85f15e1d9e57748a2fb9f607be40f",
    "support"
   ],
   "wasm/js/harness/wasm-constants.js": [

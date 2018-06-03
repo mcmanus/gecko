@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -6,6 +8,7 @@
 #define GFX_WR_IPCRESOURCEUPDATEQUEUE_H
 
 #include "mozilla/layers/WebRenderMessages.h"
+#include "mozilla/layers/RefCountedShmem.h"
 #include "mozilla/webrender/WebRenderTypes.h"
 
 namespace mozilla {
@@ -18,7 +21,7 @@ namespace wr {
 /// allocations and creates dedicated shmems for large allocations.
 class ShmSegmentsWriter {
 public:
-  ShmSegmentsWriter(ipc::IShmemAllocator* aAllocator, size_t aChunkSize);
+  ShmSegmentsWriter(layers::WebRenderBridgeChild* aAllocator, size_t aChunkSize);
   ~ShmSegmentsWriter();
 
   layers::OffsetRange Write(Range<uint8_t> aBytes);
@@ -29,32 +32,33 @@ public:
     return Write(Range<uint8_t>((uint8_t*)aValues.begin().get(), aValues.length() * sizeof(T)));
   }
 
-  void Flush(nsTArray<ipc::Shmem>& aSmallAllocs, nsTArray<ipc::Shmem>& aLargeAllocs);
+  void Flush(nsTArray<layers::RefCountedShmem>& aSmallAllocs, nsTArray<ipc::Shmem>& aLargeAllocs);
 
   void Clear();
+  bool IsEmpty() const;
 
 protected:
-  void AllocChunk();
+  bool AllocChunk();
   layers::OffsetRange AllocLargeChunk(size_t aSize);
 
-  nsTArray<ipc::Shmem> mSmallAllocs;
+  nsTArray<layers::RefCountedShmem> mSmallAllocs;
   nsTArray<ipc::Shmem> mLargeAllocs;
-  ipc::IShmemAllocator* mShmAllocator;
+  layers::WebRenderBridgeChild* mShmAllocator;
   size_t mCursor;
   size_t mChunkSize;
 };
 
 class ShmSegmentsReader {
 public:
-  ShmSegmentsReader(const nsTArray<ipc::Shmem>& aSmallShmems,
+  ShmSegmentsReader(const nsTArray<layers::RefCountedShmem>& aSmallShmems,
                     const nsTArray<ipc::Shmem>& aLargeShmems);
 
-  bool Read(const layers::OffsetRange& aRange, wr::Vec_u8& aInto);
+  bool Read(const layers::OffsetRange& aRange, wr::Vec<uint8_t>& aInto);
 
 protected:
-  bool ReadLarge(const layers::OffsetRange& aRange, wr::Vec_u8& aInto);
+  bool ReadLarge(const layers::OffsetRange& aRange, wr::Vec<uint8_t>& aInto);
 
-  const nsTArray<ipc::Shmem>& mSmallAllocs;
+  const nsTArray<layers::RefCountedShmem>& mSmallAllocs;
   const nsTArray<ipc::Shmem>& mLargeAllocs;
   size_t mChunkSize;
 };
@@ -64,26 +68,29 @@ public:
   // Because we are using shmems, the size should be a multiple of the page size.
   // Each shmem has two guard pages, and the minimum shmem size (at least one Windows)
   // is 64k which is already quite large for a lot of the resources we use here.
-  // So we pick 64k - 2 * 4k = 57344 bytes as the defautl alloc
-  explicit IpcResourceUpdateQueue(ipc::IShmemAllocator* aAllocator, size_t aChunkSize = 57344);
+  // The RefCountedShmem type used to allocate the chunks keeps a 16 bytes header
+  // in the buffer which we account for here as well.
+  // So we pick 64k - 2 * 4k - 16 = 57328 bytes as the default alloc size.
+  explicit IpcResourceUpdateQueue(layers::WebRenderBridgeChild* aAllocator, size_t aChunkSize = 57328);
 
-  void AddImage(wr::ImageKey aKey,
+  bool AddImage(wr::ImageKey aKey,
                 const ImageDescriptor& aDescriptor,
                 Range<uint8_t> aBytes);
 
-  void AddBlobImage(wr::ImageKey aKey,
+  bool AddBlobImage(wr::ImageKey aKey,
                     const ImageDescriptor& aDescriptor,
                     Range<uint8_t> aBytes);
 
   void AddExternalImage(wr::ExternalImageId aExtId, wr::ImageKey aKey);
 
-  void UpdateImageBuffer(wr::ImageKey aKey,
+  bool UpdateImageBuffer(wr::ImageKey aKey,
                          const ImageDescriptor& aDescriptor,
                          Range<uint8_t> aBytes);
 
-  void UpdateBlobImage(wr::ImageKey aKey,
+  bool UpdateBlobImage(wr::ImageKey aKey,
                        const ImageDescriptor& aDescriptor,
-                       Range<uint8_t> aBytes);
+                       Range<uint8_t> aBytes,
+                       ImageIntRect aDirtyRect);
 
   void UpdateExternalImage(ImageKey aKey,
                            const ImageDescriptor& aDescriptor,
@@ -93,7 +100,9 @@ public:
 
   void DeleteImage(wr::ImageKey aKey);
 
-  void AddRawFont(wr::FontKey aKey, Range<uint8_t> aBytes, uint32_t aIndex);
+  bool AddRawFont(wr::FontKey aKey, Range<uint8_t> aBytes, uint32_t aIndex);
+
+  bool AddFontDescriptor(wr::FontKey aKey, Range<uint8_t> aBytes, uint32_t aIndex);
 
   void DeleteFont(wr::FontKey aKey);
 
@@ -109,9 +118,13 @@ public:
   void Clear();
 
   void Flush(nsTArray<layers::OpUpdateResource>& aUpdates,
-             nsTArray<ipc::Shmem>& aSmallAllocs,
+             nsTArray<layers::RefCountedShmem>& aSmallAllocs,
              nsTArray<ipc::Shmem>& aLargeAllocs);
 
+  bool IsEmpty() const;
+
+  static void ReleaseShmems(ipc::IProtocol*, nsTArray<layers::RefCountedShmem>& aShmems);
+  static void ReleaseShmems(ipc::IProtocol*, nsTArray<ipc::Shmem>& aShmems);
 protected:
   ShmSegmentsWriter mWriter;
   nsTArray<layers::OpUpdateResource> mUpdates;

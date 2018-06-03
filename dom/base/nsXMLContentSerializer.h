@@ -50,15 +50,16 @@ class nsXMLContentSerializer : public nsIContentSerializer {
                                 int32_t aStartOffset, int32_t aEndOffset,
                                 nsAString& aStr) override;
 
-  NS_IMETHOD AppendProcessingInstruction(nsIContent* aPI,
+  NS_IMETHOD AppendProcessingInstruction(mozilla::dom::ProcessingInstruction* aPI,
                                          int32_t aStartOffset,
                                          int32_t aEndOffset,
                                          nsAString& aStr) override;
 
-  NS_IMETHOD AppendComment(nsIContent* aComment, int32_t aStartOffset,
+  NS_IMETHOD AppendComment(mozilla::dom::Comment* aComment,
+                           int32_t aStartOffset,
                            int32_t aEndOffset, nsAString& aStr) override;
 
-  NS_IMETHOD AppendDoctype(nsIContent *aDoctype,
+  NS_IMETHOD AppendDoctype(mozilla::dom::DocumentType* aDoctype,
                            nsAString& aStr) override;
 
   NS_IMETHOD AppendElementStart(mozilla::dom::Element* aElement,
@@ -209,13 +210,13 @@ class nsXMLContentSerializer : public nsIContentSerializer {
    */
   void GenerateNewPrefix(nsAString& aPrefix);
 
-  uint32_t ScanNamespaceDeclarations(nsIContent* aContent,
-                                     nsIContent *aOriginalElement,
+  uint32_t ScanNamespaceDeclarations(mozilla::dom::Element* aContent,
+                                     mozilla::dom::Element* aOriginalElement,
                                      const nsAString& aTagNamespaceURI);
 
   MOZ_MUST_USE
-  virtual bool SerializeAttributes(nsIContent* aContent,
-                                   nsIContent *aOriginalElement,
+  virtual bool SerializeAttributes(mozilla::dom::Element* aContent,
+                                   mozilla::dom::Element* aOriginalElement,
                                    nsAString& aTagPrefix,
                                    const nsAString& aTagNamespaceURI,
                                    nsAtom* aTagName,
@@ -243,10 +244,10 @@ class nsXMLContentSerializer : public nsIContentSerializer {
    * by setting aForceFormat to true.
    * @return boolean  true if the element can be output
    */
-  virtual bool CheckElementStart(nsIContent * aContent,
-                                   bool & aForceFormat,
-                                   nsAString& aStr,
-                                   nsresult& aResult);
+  virtual bool CheckElementStart(mozilla::dom::Element* aElement,
+                                 bool & aForceFormat,
+                                 nsAString& aStr,
+                                 nsresult& aResult);
 
   /**
    * This method is responsible for appending the '>' at the end of the start

@@ -20,11 +20,11 @@ using namespace mozilla::a11y::aria;
 struct EnumTypeData
 {
   // ARIA attribute name.
-  nsAtom* const mAttrName;
+  nsStaticAtom* const mAttrName;
 
   // States if the attribute value is matched to the enum value. Used as
-  // nsIContent::AttrValuesArray, last item must be nullptr.
-  nsAtom* const* const mValues[4];
+  // Element::AttrValuesArray, last item must be nullptr.
+  nsStaticAtom* const* const mValues[4];
 
   // States applied if corresponding enum values are matched.
   const uint64_t mStates[3];
@@ -90,7 +90,7 @@ aria::MapToState(EStateRule aRule, dom::Element* aElement, uint64_t* aState)
       static const EnumTypeData data = {
         nsGkAtoms::aria_autocomplete,
         { &nsGkAtoms::inlinevalue,
-          &nsGkAtoms::list,
+          &nsGkAtoms::list_,
           &nsGkAtoms::both, nullptr },
         { states::SUPPORTS_AUTOCOMPLETION,
           states::HASPOPUP | states::SUPPORTS_AUTOCOMPLETION,

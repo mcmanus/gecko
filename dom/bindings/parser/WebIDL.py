@@ -684,7 +684,7 @@ def globalNameSetToExposureSet(globalScope, nameSet, exposureSet):
 
 class IDLInterfaceOrNamespace(IDLObjectWithScope, IDLExposureMixins):
     def __init__(self, location, parentScope, name, parent, members,
-                 isKnownNonPartial):
+                 isKnownNonPartial, toStringTag):
         assert isinstance(parentScope, IDLScope)
         assert isinstance(name, IDLUnresolvedIdentifier)
         assert isKnownNonPartial or not parent
@@ -721,6 +721,8 @@ class IDLInterfaceOrNamespace(IDLObjectWithScope, IDLExposureMixins):
         # If this is an iterator interface, we need to know what iterable
         # interface we're iterating for in order to get its nativeType.
         self.iterableInterface = None
+
+        self.toStringTag = toStringTag
 
         IDLObjectWithScope.__init__(self, location, parentScope, name)
         IDLExposureMixins.__init__(self, location)
@@ -1017,10 +1019,9 @@ class IDLInterfaceOrNamespace(IDLObjectWithScope, IDLExposureMixins):
                                   [self.location])
 
             for m in self.members:
-                if ((m.isMethod() and m.isJsonifier()) or
-                    m.identifier.name == "toJSON"):
+                if m.identifier.name == "toJSON":
                     raise WebIDLError("Unforgeable interface %s has a "
-                                      "jsonifier so we won't be able to add "
+                                      "toJSON so we won't be able to add "
                                       "one ourselves" % self.identifier.name,
                                       [self.location, m.location])
 
@@ -1095,12 +1096,12 @@ class IDLInterfaceOrNamespace(IDLObjectWithScope, IDLExposureMixins):
                 testInterface = testInterface.parent
 
         # Ensure that there's at most one of each {named,indexed}
-        # {getter,setter,creator,deleter}, at most one stringifier,
+        # {getter,setter,deleter}, at most one stringifier,
         # and at most one legacycaller.  Note that this last is not
         # quite per spec, but in practice no one overloads
         # legacycallers.  Also note that in practice we disallow
         # indexed deleters, but it simplifies some other code to
-        # treat deleter analogously to getter/setter/creator by
+        # treat deleter analogously to getter/setter by
         # prefixing it with "named".
         specialMembersSeen = {}
         for member in self.members:
@@ -1111,21 +1112,16 @@ class IDLInterfaceOrNamespace(IDLObjectWithScope, IDLExposureMixins):
                 memberType = "getters"
             elif member.isSetter():
                 memberType = "setters"
-            elif member.isCreator():
-                memberType = "creators"
             elif member.isDeleter():
                 memberType = "deleters"
             elif member.isStringifier():
                 memberType = "stringifiers"
-            elif member.isJsonifier():
-                memberType = "jsonifiers"
             elif member.isLegacycaller():
                 memberType = "legacycallers"
             else:
                 continue
 
-            if (memberType != "stringifiers" and memberType != "legacycallers" and
-                memberType != "jsonifiers"):
+            if (memberType != "stringifiers" and memberType != "legacycallers"):
                 if member.isNamed():
                     memberType = "named " + memberType
                 else:
@@ -1158,8 +1154,8 @@ class IDLInterfaceOrNamespace(IDLObjectWithScope, IDLExposureMixins):
                 ancestor = ancestor.parent
 
         if self._isOnGlobalProtoChain:
-            # Make sure we have no named setters, creators, or deleters
-            for memberType in ["setter", "creator", "deleter"]:
+            # Make sure we have no named setters or deleters
+            for memberType in ["setter", "deleter"]:
                 memberId = "named " + memberType + "s"
                 if memberId in specialMembersSeen:
                     raise WebIDLError("Interface with [Global] has a named %s" %
@@ -1183,6 +1179,22 @@ class IDLInterfaceOrNamespace(IDLObjectWithScope, IDLExposureMixins):
                 parent = parent.parent
 
     def validate(self):
+
+        def checkDuplicateNames(member, name, attributeName):
+            for m in self.members:
+                if m.identifier.name == name:
+                    raise WebIDLError("[%s=%s] has same name as interface member" %
+                                      (attributeName, name),
+                                      [member.location, m.location])
+                if m.isMethod() and m != member and name in m.aliases:
+                    raise WebIDLError("conflicting [%s=%s] definitions" %
+                                      (attributeName, name),
+                                      [member.location, m.location])
+                if m.isAttr() and m != member and name in m.bindingAliases:
+                    raise WebIDLError("conflicting [%s=%s] definitions" %
+                                      (attributeName, name),
+                                      [member.location, m.location])
+
         # We don't support consequential unforgeable interfaces.  Need to check
         # this here, because in finish() an interface might not know yet that
         # it's consequential.
@@ -1295,15 +1307,15 @@ class IDLInterfaceOrNamespace(IDLObjectWithScope, IDLExposureMixins):
                         raise WebIDLError("[Alias] must not be used on an "
                                           "[Unforgeable] operation",
                                           [member.location])
-                    for m in self.members:
-                        if m.identifier.name == alias:
-                            raise WebIDLError("[Alias=%s] has same name as "
-                                              "interface member" % alias,
-                                              [member.location, m.location])
-                        if m.isMethod() and m != member and alias in m.aliases:
-                            raise WebIDLError("duplicate [Alias=%s] definitions" %
-                                              alias,
-                                              [member.location, m.location])
+
+                    checkDuplicateNames(member, alias, "Alias")
+
+            # Check that the name of a [BindingAlias] doesn't conflict with an
+            # interface member.
+            if member.isAttr():
+                for bindingAlias in member.bindingAliases:
+                    checkDuplicateNames(member, bindingAlias, "BindingAlias")
+
 
         if (self.getExtendedAttribute("Pref") and
             self._exposureGlobalNames != set([self.parentScope.primaryGlobalName])):
@@ -1565,15 +1577,23 @@ class IDLInterfaceOrNamespace(IDLObjectWithScope, IDLExposureMixins):
 
 class IDLInterface(IDLInterfaceOrNamespace):
     def __init__(self, location, parentScope, name, parent, members,
-                 isKnownNonPartial):
+                 isKnownNonPartial, classNameOverride=None,
+                 toStringTag=None):
         IDLInterfaceOrNamespace.__init__(self, location, parentScope, name,
-                                         parent, members, isKnownNonPartial)
+                                         parent, members, isKnownNonPartial,
+                                         toStringTag)
+        self.classNameOverride = classNameOverride
 
     def __str__(self):
         return "Interface '%s'" % self.identifier.name
 
     def isInterface(self):
         return True
+
+    def getClassName(self):
+        if self.classNameOverride:
+            return self.classNameOverride
+        return self.identifier.name
 
     def addExtendedAttributes(self, attrs):
         for attr in attrs:
@@ -1669,14 +1689,6 @@ class IDLInterface(IDLInterfaceOrNamespace):
                     elif newMethod not in self.namedConstructors:
                         raise WebIDLError("NamedConstructor conflicts with a NamedConstructor of a different interface",
                                           [method.location, newMethod.location])
-            elif (identifier == "ArrayClass"):
-                if not attr.noArguments():
-                    raise WebIDLError("[ArrayClass] must take no arguments",
-                                      [attr.location])
-                if self.parent:
-                    raise WebIDLError("[ArrayClass] must not be specified on "
-                                      "an interface with inherited interfaces",
-                                      [attr.location, self.location])
             elif (identifier == "ExceptionClass"):
                 if not attr.noArguments():
                     raise WebIDLError("[ExceptionClass] must take no arguments",
@@ -1726,10 +1738,11 @@ class IDLInterface(IDLInterfaceOrNamespace):
                   identifier == "OverrideBuiltins" or
                   identifier == "ChromeOnly" or
                   identifier == "Unforgeable" or
-                  identifier == "UnsafeInPrerendering" or
                   identifier == "LegacyEventInit" or
                   identifier == "ProbablyShortLivingWrapper" or
                   identifier == "LegacyUnenumerableNamedProperties" or
+                  identifier == "RunConstructorInCallerCompartment" or
+                  identifier == "WantsEventListenerHooks" or
                   identifier == "NonOrdinaryGetPrototypeOf"):
                 # Known extended attributes that do not take values
                 if not attr.noArguments():
@@ -1759,7 +1772,8 @@ class IDLInterface(IDLInterfaceOrNamespace):
 class IDLNamespace(IDLInterfaceOrNamespace):
     def __init__(self, location, parentScope, name, members, isKnownNonPartial):
         IDLInterfaceOrNamespace.__init__(self, location, parentScope, name,
-                                         None, members, isKnownNonPartial)
+                                         None, members, isKnownNonPartial,
+                                         toStringTag=None)
 
     def __str__(self):
         return "Namespace '%s'" % self.identifier.name
@@ -1784,9 +1798,15 @@ class IDLNamespace(IDLInterfaceOrNamespace):
                 if not attr.hasValue():
                     raise WebIDLError("[%s] must have a value" % identifier,
                                       [attr.location])
-            elif identifier == "ProtoObjectHack":
+            elif (identifier == "ProtoObjectHack" or
+                  identifier == "ChromeOnly"):
                 if not attr.noArguments():
                     raise WebIDLError("[%s] must not have arguments" % identifier,
+                                      [attr.location])
+            elif identifier == "Pref":
+                # Known extended attributes that take a string value
+                if not attr.hasValue():
+                    raise WebIDLError("[%s] must have a value" % identifier,
                                       [attr.location])
             else:
                 raise WebIDLError("Unknown extended attribute %s on namespace" %
@@ -2136,7 +2156,7 @@ class IDLType(IDLObject):
         # Should only call this on float types
         assert self.isFloat()
 
-    def isSerializable(self):
+    def isJSONType(self):
         return False
 
     def tag(self):
@@ -2334,8 +2354,8 @@ class IDLNullableType(IDLParametrizedType):
     def isUnion(self):
         return self.inner.isUnion()
 
-    def isSerializable(self):
-        return self.inner.isSerializable()
+    def isJSONType(self):
+        return self.inner.isJSONType()
 
     def tag(self):
         return self.inner.tag()
@@ -2414,8 +2434,8 @@ class IDLSequenceType(IDLParametrizedType):
     def isEnum(self):
         return False
 
-    def isSerializable(self):
-        return self.inner.isSerializable()
+    def isJSONType(self):
+        return self.inner.isJSONType()
 
     def tag(self):
         return IDLType.Tags.sequence
@@ -2459,6 +2479,9 @@ class IDLRecordType(IDLParametrizedType):
 
     def isRecord(self):
         return True
+
+    def isJSONType(self):
+        return self.inner.isJSONType()
 
     def tag(self):
         return IDLType.Tags.record
@@ -2509,8 +2532,8 @@ class IDLUnionType(IDLType):
     def isUnion(self):
         return True
 
-    def isSerializable(self):
-        return all(m.isSerializable() for m in self.memberTypes)
+    def isJSONType(self):
+        return all(m.isJSONType() for m in self.memberTypes)
 
     def includesRestrictedFloat(self):
         return any(t.includesRestrictedFloat() for t in self.memberTypes)
@@ -2651,6 +2674,9 @@ class IDLTypedefType(IDLType):
 
     def isVoid(self):
         return self.inner.isVoid()
+
+    def isJSONType(self):
+        return self.inner.isJSONType()
 
     def isSequence(self):
         return self.inner.isSequence()
@@ -2793,15 +2819,20 @@ class IDLWrapperType(IDLType):
     def isEnum(self):
         return isinstance(self.inner, IDLEnum)
 
-    def isSerializable(self):
+    def isJSONType(self):
         if self.isInterface():
             if self.inner.isExternal():
                 return False
-            return any(m.isMethod() and m.isJsonifier() for m in self.inner.members)
+            iface = self.inner
+            while iface:
+                if any(m.isMethod() and m.isToJSON() for m in self.inner.members):
+                    return True
+                iface = iface.parent
+            return False
         elif self.isEnum():
             return True
         elif self.isDictionary():
-            return all(m.type.isSerializable() for m in self.inner.members)
+            return all(m.type.isJSONType() for m in self.inner.members)
         else:
             raise WebIDLError("IDLWrapperType wraps type %s that we don't know if "
                               "is serializable" % type(self.inner), [self.location])
@@ -3087,8 +3118,8 @@ class IDLBuiltinType(IDLType):
         return (self._typeTag == IDLBuiltinType.Types.unrestricted_float or
                 self._typeTag == IDLBuiltinType.Types.unrestricted_double)
 
-    def isSerializable(self):
-        return self.isPrimitive() or self.isString() or self.isDate()
+    def isJSONType(self):
+        return self.isPrimitive() or self.isString() or self.isObject()
 
     def includesRestrictedFloat(self):
         return self.isFloat() and not self.isUnrestricted()
@@ -3583,6 +3614,11 @@ class IDLInterfaceMember(IDLObjectWithIdentifier, IDLExposureMixins):
                               [self.location])
         self.aliases.append(alias)
 
+    def _addBindingAlias(self, bindingAlias):
+        if bindingAlias in self.bindingAliases:
+            raise WebIDLError("Duplicate [BindingAlias=%s] on attribute" % bindingAlias,
+                              [self.location])
+        self.bindingAliases.append(bindingAlias)
 
 class IDLMaplikeOrSetlikeOrIterableBase(IDLInterfaceMember):
 
@@ -3976,7 +4012,8 @@ class IDLConst(IDLInterfaceMember):
               identifier == "ChromeOnly" or
               identifier == "Func" or
               identifier == "SecureContext" or
-              identifier == "NonEnumerable"):
+              identifier == "NonEnumerable" or
+              identifier == "NeedsWindowsUndef"):
             # Known attributes that we don't need to do anything with here
             pass
         else:
@@ -4012,6 +4049,7 @@ class IDLAttribute(IDLInterfaceMember):
         self.dependsOn = "Everything"
         self.affects = "Everything"
         self.navigatorObjectGetter = navigatorObjectGetter
+        self.bindingAliases = []
 
         if static and identifier.name == "prototype":
             raise WebIDLError("The identifier of a static attribute must not be 'prototype'",
@@ -4150,11 +4188,17 @@ class IDLAttribute(IDLInterfaceMember):
 
     def handleExtendedAttribute(self, attr):
         identifier = attr.identifier()
-        if ((identifier == "SetterThrows" or identifier == "SetterCanOOM")
+        if ((identifier == "SetterThrows" or identifier == "SetterCanOOM" or
+             identifier == "SetterNeedsSubjectPrincipal")
             and self.readonly):
             raise WebIDLError("Readonly attributes must not be flagged as "
                               "[%s]" % identifier,
                               [self.location])
+        elif identifier == "BindingAlias":
+            if not attr.hasValue():
+                raise WebIDLError("[BindingAlias] takes an identifier or string",
+                                  [attr.location])
+            self._addBindingAlias(attr.value())
         elif (((identifier == "Throws" or identifier == "GetterThrows" or
                 identifier == "CanOOM" or identifier == "GetterCanOOM") and
                self.getExtendedAttribute("StoreInSlot")) or
@@ -4350,8 +4394,9 @@ class IDLAttribute(IDLInterfaceMember):
               identifier == "SecureContext" or
               identifier == "Frozen" or
               identifier == "NewObject" or
-              identifier == "UnsafeInPrerendering" or
               identifier == "NeedsSubjectPrincipal" or
+              identifier == "SetterNeedsSubjectPrincipal" or
+              identifier == "GetterNeedsSubjectPrincipal" or
               identifier == "NeedsCallerType" or
               identifier == "ReturnValueNeedsContainsHack" or
               identifier == "BinaryName" or
@@ -4619,7 +4664,6 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
     Special = enum(
         'Getter',
         'Setter',
-        'Creator',
         'Deleter',
         'LegacyCaller',
         base=IDLInterfaceMember.Special
@@ -4632,9 +4676,9 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
     )
 
     def __init__(self, location, identifier, returnType, arguments,
-                 static=False, getter=False, setter=False, creator=False,
+                 static=False, getter=False, setter=False,
                  deleter=False, specialType=NamedOrIndexed.Neither,
-                 legacycaller=False, stringifier=False, jsonifier=False,
+                 legacycaller=False, stringifier=False,
                  maplikeOrSetlikeOrIterable=None, htmlConstructor=False):
         # REVIEW: specialType is NamedOrIndexed -- wow, this is messed up.
         IDLInterfaceMember.__init__(self, location, identifier,
@@ -4653,16 +4697,12 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
         self._getter = getter
         assert isinstance(setter, bool)
         self._setter = setter
-        assert isinstance(creator, bool)
-        self._creator = creator
         assert isinstance(deleter, bool)
         self._deleter = deleter
         assert isinstance(legacycaller, bool)
         self._legacycaller = legacycaller
         assert isinstance(stringifier, bool)
         self._stringifier = stringifier
-        assert isinstance(jsonifier, bool)
-        self._jsonifier = jsonifier
         assert maplikeOrSetlikeOrIterable is None or isinstance(maplikeOrSetlikeOrIterable, IDLMaplikeOrSetlikeOrIterableBase)
         self.maplikeOrSetlikeOrIterable = maplikeOrSetlikeOrIterable
         assert isinstance(htmlConstructor, bool)
@@ -4695,7 +4735,7 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
             assert not arguments[0].optional and not arguments[0].variadic
             assert not self._getter or not overload.returnType.isVoid()
 
-        if self._setter or self._creator:
+        if self._setter:
             assert len(self._overloads) == 1
             arguments = self._overloads[0].arguments
             assert len(arguments) == 2
@@ -4710,12 +4750,6 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
             assert len(overload.arguments) == 0
             assert overload.returnType == BuiltinTypes[IDLBuiltinType.Types.domstring]
 
-        if self._jsonifier:
-            assert len(self._overloads) == 1
-            overload = self._overloads[0]
-            assert len(overload.arguments) == 0
-            assert overload.returnType == BuiltinTypes[IDLBuiltinType.Types.object]
-
     def isStatic(self):
         return self._static
 
@@ -4727,9 +4761,6 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
 
     def isSetter(self):
         return self._setter
-
-    def isCreator(self):
-        return self._creator
 
     def isDeleter(self):
         return self._deleter
@@ -4750,8 +4781,11 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
     def isStringifier(self):
         return self._stringifier
 
-    def isJsonifier(self):
-        return self._jsonifier
+    def isToJSON(self):
+        return self.identifier.name == "toJSON"
+
+    def isDefaultToJSON(self):
+        return self.isToJSON() and self.getExtendedAttribute("Default")
 
     def isMaplikeOrSetlikeOrIterableMethod(self):
         """
@@ -4763,11 +4797,9 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
     def isSpecial(self):
         return (self.isGetter() or
                 self.isSetter() or
-                self.isCreator() or
                 self.isDeleter() or
                 self.isLegacycaller() or
-                self.isStringifier() or
-                self.isJsonifier())
+                self.isStringifier())
 
     def isHTMLConstructor(self):
         return self._htmlConstructor
@@ -4819,14 +4851,10 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
         assert not method.isGetter()
         assert not self.isSetter()
         assert not method.isSetter()
-        assert not self.isCreator()
-        assert not method.isCreator()
         assert not self.isDeleter()
         assert not method.isDeleter()
         assert not self.isStringifier()
         assert not method.isStringifier()
-        assert not self.isJsonifier()
-        assert not method.isJsonifier()
         assert not self.isHTMLConstructor()
         assert not method.isHTMLConstructor()
 
@@ -4949,6 +4977,19 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
                               " methods on JS-implemented classes only.",
                               [self.location])
 
+        # Ensure that toJSON methods satisfy the spec constraints on them.
+        if self.identifier.name == "toJSON":
+            if len(self.signatures()) != 1:
+                raise WebIDLError("toJSON method has multiple overloads",
+                                  [self._overloads[0].location,
+                                   self._overloads[1].location])
+            if len(self.signatures()[0][1]) != 0:
+                raise WebIDLError("toJSON method has arguments",
+                                  [self.location])
+            if not self.signatures()[0][0].isJSONType():
+                raise WebIDLError("toJSON method has non-JSON return type",
+                                  [self.location])
+
     def overloadsForArgCount(self, argc):
         return [overload for overload in self._overloads if
                 len(overload.arguments) == argc or
@@ -4997,7 +5038,9 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
         if (identifier == "GetterThrows" or
             identifier == "SetterThrows" or
             identifier == "GetterCanOOM" or
-            identifier == "SetterCanOOM"):
+            identifier == "SetterCanOOM" or
+            identifier == "SetterNeedsSubjectPrincipal" or
+            identifier == "GetterNeedsSubjectPrincipal"):
             raise WebIDLError("Methods must not be flagged as "
                               "[%s]" % identifier,
                               [attr.location, self.location])
@@ -5080,11 +5123,18 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
                 raise WebIDLError("[CEReactions] is only allowed on operation, "
                                   "attribute, setter, and deleter",
                                   [attr.location, self.location])
+        elif identifier == "Default":
+            if not attr.noArguments():
+                raise WebIDLError("[Default] must take no arguments",
+                                  [attr.location])
+
+            if not self.isToJSON():
+                raise WebIDLError("[Default] is only allowed on toJSON operations",
+                                  [attr.location, self.location])
         elif (identifier == "Throws" or
               identifier == "CanOOM" or
               identifier == "NewObject" or
               identifier == "ChromeOnly" or
-              identifier == "UnsafeInPrerendering" or
               identifier == "Pref" or
               identifier == "Deprecated" or
               identifier == "Func" or
@@ -5268,7 +5318,6 @@ class Tokenizer(object):
         "false": "FALSE",
         "serializer": "SERIALIZER",
         "stringifier": "STRINGIFIER",
-        "jsonifier": "JSONIFIER",
         "unrestricted": "UNRESTRICTED",
         "attribute": "ATTRIBUTE",
         "readonly": "READONLY",
@@ -5276,7 +5325,6 @@ class Tokenizer(object):
         "static": "STATIC",
         "getter": "GETTER",
         "setter": "SETTER",
-        "creator": "CREATOR",
         "deleter": "DELETER",
         "legacycaller": "LEGACYCALLER",
         "optional": "OPTIONAL",
@@ -5991,13 +6039,12 @@ class Parser(Tokenizer):
 
         getter = True if IDLMethod.Special.Getter in p[1] else False
         setter = True if IDLMethod.Special.Setter in p[1] else False
-        creator = True if IDLMethod.Special.Creator in p[1] else False
         deleter = True if IDLMethod.Special.Deleter in p[1] else False
         legacycaller = True if IDLMethod.Special.LegacyCaller in p[1] else False
 
         if getter or deleter:
-            if setter or creator:
-                raise WebIDLError("getter and deleter are incompatible with setter and creator",
+            if setter:
+                raise WebIDLError("getter and deleter are incompatible with setter",
                                   [self.getLocation(p, 1)])
 
         (returnType, identifier, arguments) = p[2]
@@ -6032,10 +6079,9 @@ class Parser(Tokenizer):
             if returnType.isVoid():
                 raise WebIDLError("getter cannot have void return type",
                                   [self.getLocation(p, 2)])
-        if setter or creator:
+        if setter:
             if len(arguments) != 2:
-                raise WebIDLError("%s has wrong number of arguments" %
-                                  ("setter" if setter else "creator"),
+                raise WebIDLError("setter has wrong number of arguments",
                                   [self.getLocation(p, 2)])
             argType = arguments[0].type
             if argType == BuiltinTypes[IDLBuiltinType.Types.domstring]:
@@ -6043,18 +6089,15 @@ class Parser(Tokenizer):
             elif argType == BuiltinTypes[IDLBuiltinType.Types.unsigned_long]:
                 specialType = IDLMethod.NamedOrIndexed.Indexed
             else:
-                raise WebIDLError("%s has wrong argument type (must be DOMString or UnsignedLong)" %
-                                  ("setter" if setter else "creator"),
+                raise WebIDLError("settter has wrong argument type (must be DOMString or UnsignedLong)",
                                   [arguments[0].location])
             if arguments[0].optional or arguments[0].variadic:
-                raise WebIDLError("%s cannot have %s argument" %
-                                  ("setter" if setter else "creator",
-                                   "optional" if arguments[0].optional else "variadic"),
+                raise WebIDLError("setter cannot have %s argument" %
+                                   ("optional" if arguments[0].optional else "variadic"),
                                   [arguments[0].location])
             if arguments[1].optional or arguments[1].variadic:
-                raise WebIDLError("%s cannot have %s argument" %
-                                  ("setter" if setter else "creator",
-                                   "optional" if arguments[1].optional else "variadic"),
+                raise WebIDLError("setter cannot have %s argument" %
+                                   ("optional" if arguments[1].optional else "variadic"),
                                   [arguments[1].location])
 
         if stringifier:
@@ -6067,7 +6110,7 @@ class Parser(Tokenizer):
 
         # identifier might be None.  This is only permitted for special methods.
         if not identifier:
-            if (not getter and not setter and not creator and
+            if (not getter and not setter and
                 not deleter and not legacycaller and not stringifier):
                 raise WebIDLError("Identifier required for non-special methods",
                                   [self.getLocation(p, 2)])
@@ -6075,19 +6118,18 @@ class Parser(Tokenizer):
             location = BuiltinLocation("<auto-generated-identifier>")
             identifier = IDLUnresolvedIdentifier(
                 location,
-                "__%s%s%s%s%s%s%s" %
+                "__%s%s%s%s%s%s" %
                 ("named" if specialType == IDLMethod.NamedOrIndexed.Named else
                  "indexed" if specialType == IDLMethod.NamedOrIndexed.Indexed else "",
                  "getter" if getter else "",
                  "setter" if setter else "",
                  "deleter" if deleter else "",
-                 "creator" if creator else "",
                  "legacycaller" if legacycaller else "",
                  "stringifier" if stringifier else ""),
                 allowDoubleUnderscore=True)
 
         method = IDLMethod(self.getLocation(p, 2), identifier, returnType, arguments,
-                           static=static, getter=getter, setter=setter, creator=creator,
+                           static=static, getter=getter, setter=setter,
                            deleter=deleter, specialType=specialType,
                            legacycaller=legacycaller, stringifier=stringifier)
         p[0] = method
@@ -6104,19 +6146,6 @@ class Parser(Tokenizer):
                            returnType=BuiltinTypes[IDLBuiltinType.Types.domstring],
                            arguments=[],
                            stringifier=True)
-        p[0] = method
-
-    def p_Jsonifier(self, p):
-        """
-            Operation : JSONIFIER SEMICOLON
-        """
-        identifier = IDLUnresolvedIdentifier(BuiltinLocation("<auto-generated-identifier>"),
-                                             "__jsonifier", allowDoubleUnderscore=True)
-        method = IDLMethod(self.getLocation(p, 1),
-                           identifier,
-                           returnType=BuiltinTypes[IDLBuiltinType.Types.object],
-                           arguments=[],
-                           jsonifier=True)
         p[0] = method
 
     def p_QualifierStatic(self, p):
@@ -6162,12 +6191,6 @@ class Parser(Tokenizer):
             Special : SETTER
         """
         p[0] = IDLMethod.Special.Setter
-
-    def p_SpecialCreator(self, p):
-        """
-            Special : CREATOR
-        """
-        p[0] = IDLMethod.Special.Creator
 
     def p_SpecialDeleter(self, p):
         """
@@ -6260,7 +6283,6 @@ class Parser(Tokenizer):
                          | ATTRIBUTE
                          | CALLBACK
                          | CONST
-                         | CREATOR
                          | DELETER
                          | DICTIONARY
                          | ENUM
@@ -6279,7 +6301,6 @@ class Parser(Tokenizer):
                          | SETTER
                          | STATIC
                          | STRINGIFIER
-                         | JSONIFIER
                          | TYPEDEF
                          | UNRESTRICTED
                          | NAMESPACE
@@ -6410,7 +6431,6 @@ class Parser(Tokenizer):
                   | BYTE
                   | LEGACYCALLER
                   | CONST
-                  | CREATOR
                   | DELETER
                   | DOUBLE
                   | EXCEPTION
@@ -6432,7 +6452,6 @@ class Parser(Tokenizer):
                   | SHORT
                   | STATIC
                   | STRINGIFIER
-                  | JSONIFIER
                   | TRUE
                   | TYPEDEF
                   | UNSIGNED
@@ -6948,9 +6967,12 @@ class Parser(Tokenizer):
                 nextMethod.addExtendedAttributes([simpleExtendedAttr("Throws")])
                 itr_ident = IDLUnresolvedIdentifier(iface.location,
                                                     iface.identifier.name + "Iterator")
+                toStringTag = iface.identifier.name + " Iterator"
                 itr_iface = IDLInterface(iface.location, self.globalScope(),
                                          itr_ident, None, [nextMethod],
-                                         isKnownNonPartial=True)
+                                         isKnownNonPartial=True,
+                                         classNameOverride=toStringTag,
+                                         toStringTag=toStringTag)
                 itr_iface.addExtendedAttributes([simpleExtendedAttr("NoInterfaceObject")])
                 # Make sure the exposure set for the iterator interface is the
                 # same as the exposure set for the iterable interface, because

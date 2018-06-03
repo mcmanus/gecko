@@ -1,6 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: sw=2 ts=8 et :
- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -75,11 +74,9 @@ SurfaceDescriptorX11::SurfaceDescriptorX11(gfxXlibSurface* aSurf,
     mFormat = cairo_xlib_surface_get_visual(aSurf->CairoSurface())->visualid;
   }
 
-#ifdef GL_PROVIDER_GLX
   if (aForwardGLX) {
     mGLXPixmap = aSurf->GetGLXPixmap();
   }
-#endif
 }
 
 SurfaceDescriptorX11::SurfaceDescriptorX11(Drawable aDrawable, XID aFormatID,
@@ -110,10 +107,8 @@ SurfaceDescriptorX11::OpenForeign() const
     surf = new gfxXlibSurface(display, mId, visual, mSize);
   }
 
-#ifdef GL_PROVIDER_GLX
   if (mGLXPixmap)
     surf->BindGLXPixmap(mGLXPixmap);
-#endif
 
   return surf->CairoStatus() ? nullptr : surf.forget();
 }

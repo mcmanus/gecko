@@ -1,7 +1,7 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-Components.utils.import("resource://gre/modules/Promise.jsm");
+ChromeUtils.import("resource://gre/modules/Promise.jsm", this);
 
 const kDefaultWait = 2000;
 
@@ -67,7 +67,9 @@ function promiseLoadSubDialog(aURL) {
       }
       is(expectedStyleSheetURLs.length, 0, "All expectedStyleSheetURLs should have been found");
 
-      resolve(aEvent.detail.dialog._frame.contentWindow);
+      // Wait for the next event tick to make sure the remaining part of the
+      // testcase runs after the dialog gets ready for input.
+      executeSoon(() => resolve(aEvent.detail.dialog._frame.contentWindow));
     });
   });
 }
@@ -140,86 +142,6 @@ function openPreferencesViaOpenPreferencesAPI(aPane, aOptions) {
   });
 }
 
-function waitForCondition(aConditionFn, aMaxTries = 50, aCheckInterval = 100) {
-  return new Promise((resolve, reject) => {
-    function tryNow() {
-      tries++;
-      let rv = aConditionFn();
-      if (rv) {
-        resolve(rv);
-      } else if (tries < aMaxTries) {
-        tryAgain();
-      } else {
-        reject("Condition timed out: " + aConditionFn.toSource());
-      }
-    }
-    function tryAgain() {
-      setTimeout(tryNow, aCheckInterval);
-    }
-    let tries = 0;
-    tryAgain();
-  });
-}
-
-function promiseWindowDialogOpen(buttonAction, url) {
-  return new Promise(resolve => {
-    Services.ww.registerNotification(function onOpen(subj, topic, data) {
-      if (topic == "domwindowopened" && subj instanceof Ci.nsIDOMWindow) {
-        subj.addEventListener("load", function onLoad() {
-          if (subj.document.documentURI == url) {
-            Services.ww.unregisterNotification(onOpen);
-            let doc = subj.document.documentElement;
-            doc.getButton(buttonAction).click();
-            resolve();
-          }
-        }, { once: true });
-      }
-    });
-  });
-}
-
-function promiseAlertDialogOpen(buttonAction) {
-  return promiseWindowDialogOpen(buttonAction, "chrome://global/content/commonDialog.xul");
-}
-
-function addPersistentStoragePerm(origin) {
-  let uri = NetUtil.newURI(origin);
-  let principal = Services.scriptSecurityManager.createCodebasePrincipal(uri, {});
-  Services.perms.addFromPrincipal(principal, "persistent-storage", Ci.nsIPermissionManager.ALLOW_ACTION);
-}
-
-function promiseSiteDataManagerSitesUpdated() {
-  return TestUtils.topicObserved("sitedatamanager:sites-updated", () => true);
-}
-
-function openSiteDataSettingsDialog() {
-  let doc = gBrowser.selectedBrowser.contentDocument;
-  let settingsBtn = doc.getElementById("siteDataSettings");
-  let dialogOverlay = content.gSubDialog._preloadDialog._overlay;
-  let dialogLoadPromise = promiseLoadSubDialog("chrome://browser/content/preferences/siteDataSettings.xul");
-  let dialogInitPromise = TestUtils.topicObserved("sitedata-settings-init", () => true);
-  let fullyLoadPromise = Promise.all([dialogLoadPromise, dialogInitPromise]).then(() => {
-    is(dialogOverlay.style.visibility, "visible", "The Settings dialog should be visible");
-  });
-  settingsBtn.doCommand();
-  return fullyLoadPromise;
-}
-
-function assertSitesListed(doc, hosts) {
-  let frameDoc = content.gSubDialog._topDialog._frame.contentDocument;
-  let removeBtn = frameDoc.getElementById("removeSelected");
-  let removeAllBtn = frameDoc.getElementById("removeAll");
-  let sitesList = frameDoc.getElementById("sitesList");
-  let totalSitesNumber = sitesList.getElementsByTagName("richlistitem").length;
-  is(totalSitesNumber, hosts.length, "Should list the right sites number");
-  hosts.forEach(host => {
-    let site = sitesList.querySelector(`richlistitem[host="${host}"]`);
-    ok(site, `Should list the site of ${host}`);
-  });
-  is(removeBtn.disabled, false, "Should enable the removeSelected button");
-  is(removeAllBtn.disabled, false, "Should enable the removeAllBtn button");
-}
-
 async function evaluateSearchResults(keyword, searchReults) {
   searchReults = Array.isArray(searchReults) ? searchReults : [searchReults];
   searchReults.push("header-searchResults");
@@ -242,39 +164,3 @@ async function evaluateSearchResults(keyword, searchReults) {
   }
 }
 
-const mockSiteDataManager = {
-
-  _SiteDataManager: null,
-  _originalQMS: null,
-  _originalRemoveQuotaUsage: null,
-
-  getUsage(onUsageResult) {
-    let result = this.fakeSites.map(site => ({
-      origin: site.principal.origin,
-      usage: site.usage,
-      persisted: site.persisted
-    }));
-    onUsageResult({ result });
-  },
-
-  _removeQuotaUsage(site) {
-    var target = site.principals[0].URI.host;
-    this.fakeSites = this.fakeSites.filter(fakeSite => {
-      return fakeSite.principal.URI.host != target;
-    });
-  },
-
-  register(SiteDataManager) {
-    this._SiteDataManager = SiteDataManager;
-    this._originalQMS = this._SiteDataManager._qms;
-    this._SiteDataManager._qms = this;
-    this._originalRemoveQuotaUsage = this._SiteDataManager._removeQuotaUsage;
-    this._SiteDataManager._removeQuotaUsage = this._removeQuotaUsage.bind(this);
-    this.fakeSites = null;
-  },
-
-  unregister() {
-    this._SiteDataManager._qms = this._originalQMS;
-    this._SiteDataManager._removeQuotaUsage = this._originalRemoveQuotaUsage;
-  }
-};

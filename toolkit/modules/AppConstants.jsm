@@ -6,8 +6,8 @@
 
 "use strict";
 
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Services", "resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "Services", "resource://gre/modules/Services.jsm");
 
 this.EXPORTED_SYMBOLS = ["AppConstants"];
 
@@ -24,6 +24,13 @@ this.AppConstants = Object.freeze({
 
   RELEASE_OR_BETA:
 #ifdef RELEASE_OR_BETA
+  true,
+#else
+  false,
+#endif
+
+  EARLY_BETA_OR_EARLIER:
+#ifdef EARLY_BETA_OR_EARLIER
   true,
 #else
   false,
@@ -180,13 +187,6 @@ this.AppConstants = Object.freeze({
   false,
 #endif
 
-  E10S_TESTING_ONLY:
-#ifdef E10S_TESTING_ONLY
-  true,
-#else
-  false,
-#endif
-
   DEBUG:
 #ifdef DEBUG
   true,
@@ -243,22 +243,8 @@ this.AppConstants = Object.freeze({
   false,
 #endif
 
-  INSTALL_COMPACT_THEMES:
-#ifdef INSTALL_COMPACT_THEMES
-  true,
-#else
-  false,
-#endif
-
   MENUBAR_CAN_AUTOHIDE:
 #ifdef MENUBAR_CAN_AUTOHIDE
-  true,
-#else
-  false,
-#endif
-
-  CAN_DRAW_IN_TITLEBAR:
-#ifdef CAN_DRAW_IN_TITLEBAR
   true,
 #else
   false,
@@ -340,12 +326,4 @@ this.AppConstants = Object.freeze({
 #else
     false,
 #endif
-
-  MOZ_STYLO:
-#ifdef MOZ_STYLO
-    true,
-#else
-    false,
-#endif
-
 });

@@ -4,7 +4,7 @@
 
 "use strict";
 
-const EventEmitter = require("devtools/shared/old-event-emitter");
+const EventEmitter = require("devtools/shared/event-emitter");
 const KeyShortcuts = require("devtools/client/shared/key-shortcuts");
 const {HTMLTooltip} = require("devtools/client/shared/widgets/tooltip/HTMLTooltip");
 const InlineTooltip = require("devtools/client/shared/widgets/tooltip/InlineTooltip");
@@ -48,7 +48,7 @@ class SwatchBasedEditorTooltip {
     this.shortcuts = new KeyShortcuts({
       window: this.tooltip.topWindow
     });
-    this.shortcuts.on("Escape", (name, event) => {
+    this.shortcuts.on("Escape", event => {
       if (!this.tooltip.isVisible()) {
         return;
       }
@@ -57,7 +57,7 @@ class SwatchBasedEditorTooltip {
       event.stopPropagation();
       event.preventDefault();
     });
-    this.shortcuts.on("Return", (name, event) => {
+    this.shortcuts.on("Return", event => {
       if (!this.tooltip.isVisible()) {
         return;
       }
@@ -103,32 +103,36 @@ class SwatchBasedEditorTooltip {
    *         immediately if there is no currently active swatch.
    */
   show() {
-    let tooltipAnchor = this.useInline ?
+    const tooltipAnchor = this.useInline ?
       this.activeSwatch.closest(`.${INLINE_TOOLTIP_CLASS}`) :
       this.activeSwatch;
 
     if (tooltipAnchor) {
-      let onShown = this.tooltip.once("shown");
+      const onShown = this.tooltip.once("shown");
+
       this.tooltip.show(tooltipAnchor, "topcenter bottomleft");
-
-      // When the tooltip is closed by clicking outside the panel we want to
-      // commit any changes.
-      this.tooltip.once("hidden", () => {
-        if (!this._reverted && !this.eyedropperOpen) {
-          this.commit();
-        }
-        this._reverted = false;
-
-        // Once the tooltip is hidden we need to clean up any remaining objects.
-        if (!this.eyedropperOpen) {
-          this.activeSwatch = null;
-        }
-      });
+      this.tooltip.once("hidden", () => this.onTooltipHidden());
 
       return onShown;
     }
 
     return Promise.resolve();
+  }
+
+  /**
+   * Can be overridden by subclasses if implementation specific behavior is needed on
+   * tooltip hidden.
+   */
+  onTooltipHidden() {
+    // When the tooltip is closed by clicking outside the panel we want to commit any
+    // changes.
+    if (!this._reverted) {
+      this.commit();
+    }
+    this._reverted = false;
+
+    // Once the tooltip is hidden we need to clean up any remaining objects.
+    this.activeSwatch = null;
   }
 
   hide() {
@@ -154,16 +158,16 @@ class SwatchBasedEditorTooltip {
    */
   addSwatch(swatchEl, callbacks = {}) {
     if (!callbacks.onShow) {
-      callbacks.onShow = function () {};
+      callbacks.onShow = function() {};
     }
     if (!callbacks.onPreview) {
-      callbacks.onPreview = function () {};
+      callbacks.onPreview = function() {};
     }
     if (!callbacks.onRevert) {
-      callbacks.onRevert = function () {};
+      callbacks.onRevert = function() {};
     }
     if (!callbacks.onCommit) {
-      callbacks.onCommit = function () {};
+      callbacks.onCommit = function() {};
     }
 
     this.swatches.set(swatchEl, {
@@ -184,7 +188,7 @@ class SwatchBasedEditorTooltip {
   }
 
   _onSwatchClick(event) {
-    let swatch = this.swatches.get(event.target);
+    const swatch = this.swatches.get(event.target);
 
     if (event.shiftKey) {
       event.stopPropagation();
@@ -203,18 +207,18 @@ class SwatchBasedEditorTooltip {
    */
   preview(value) {
     if (this.activeSwatch) {
-      let swatch = this.swatches.get(this.activeSwatch);
+      const swatch = this.swatches.get(this.activeSwatch);
       swatch.callbacks.onPreview(value);
     }
   }
 
   /**
-   * This parent class only calls this on <esc> keypress
+   * This parent class only calls this on <esc> keydown
    */
   revert() {
     if (this.activeSwatch) {
       this._reverted = true;
-      let swatch = this.swatches.get(this.activeSwatch);
+      const swatch = this.swatches.get(this.activeSwatch);
       this.tooltip.once("hidden", () => {
         swatch.callbacks.onRevert();
       });
@@ -222,11 +226,11 @@ class SwatchBasedEditorTooltip {
   }
 
   /**
-   * This parent class only calls this on <enter> keypress
+   * This parent class only calls this on <enter> keydown
    */
   commit() {
     if (this.activeSwatch) {
-      let swatch = this.swatches.get(this.activeSwatch);
+      const swatch = this.swatches.get(this.activeSwatch);
       swatch.callbacks.onCommit();
     }
   }
@@ -234,7 +238,7 @@ class SwatchBasedEditorTooltip {
   destroy() {
     this.swatches.clear();
     this.activeSwatch = null;
-    this.tooltip.off("keypress", this._onTooltipKeypress);
+    this.tooltip.off("keydown", this._onTooltipKeydown);
     this.tooltip.destroy();
     this.shortcuts.destroy();
   }

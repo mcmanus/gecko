@@ -35,18 +35,14 @@ class FxDesktopBuild(BuildScript, TryToolsMixin, object):
             'all_actions': [
                 'get-secrets',
                 'clobber',
-                'clone-tools',
-                'checkout-sources',
-                'setup-mock',
                 'build',
-                'upload-files',  # upload from BB to TC
-                'sendchange',
+                'static-analysis-autotest',
                 'check-test',
                 'valgrind-test',
-                'package-source',
-                'generate-source-signing-manifest',
                 'multi-l10n',
+                'package-source',
                 'update',
+                'ensure-upload-path',
             ],
             'require_config_file': True,
             # Default configuration
@@ -58,8 +54,6 @@ class FxDesktopBuild(BuildScript, TryToolsMixin, object):
                 # nightly stuff
                 "nightly_build": False,
                 'balrog_credentials_file': 'oauth.txt',
-                'taskcluster_credentials_file': 'oauth.txt',
-                'periodic_clobber': 168,
                 # hg tool stuff
                 "tools_repo": "https://hg.mozilla.org/build/tools",
                 # Seed all clones with mozilla-unified. This ensures subsequent
@@ -76,26 +70,15 @@ class FxDesktopBuild(BuildScript, TryToolsMixin, object):
                     "%(objdir)s/dist/thunderbird*",
                     "%(objdir)s/dist/install/sea/*.exe"
                 ],
-                'stage_product': 'firefox',
-                'platform_supports_post_upload_to_latest': True,
-                'build_resources_path': '%(abs_src_dir)s/obj-firefox/.mozbuild/build_resources.json',
+                'build_resources_path': '%(abs_obj_dir)s/.mozbuild/build_resources.json',
                 'nightly_promotion_branches': ['mozilla-central', 'mozilla-aurora'],
 
                 # try will overwrite these
                 'clone_with_purge': False,
                 'clone_by_revision': False,
-                'tinderbox_build_dir': None,
-                'to_tinderbox_dated': True,
-                'release_to_try_builds': False,
-                'include_post_upload_builddir': False,
-                'use_clobberer': True,
 
-                'stage_username': 'ffxbld',
-                'stage_ssh_key': 'ffxbld_rsa',
                 'virtualenv_modules': [
                     'requests==2.8.1',
-                    'PyHawk-with-a-single-extra-commit==0.1.5',
-                    'taskcluster==0.0.26',
                 ],
                 'virtualenv_path': 'venv',
                 #
@@ -106,25 +89,9 @@ class FxDesktopBuild(BuildScript, TryToolsMixin, object):
         super(FxDesktopBuild, self).__init__(**buildscript_kwargs)
 
     def _pre_config_lock(self, rw_config):
-        """grab buildbot props if we are running this in automation"""
+        """grab properties if we are running this in automation"""
         super(FxDesktopBuild, self)._pre_config_lock(rw_config)
         c = self.config
-        if c['is_automation']:
-            # parse buildbot config and add it to self.config
-            self.info("We are running this in buildbot, grab the build props")
-            self.read_buildbot_config()
-            ###
-            if c.get('stage_platform'):
-                platform_for_log_url = c['stage_platform']
-                if c.get('pgo_build'):
-                    platform_for_log_url += '-pgo'
-                # postrun.py uses stage_platform buildbot prop as part of the log url
-                self.set_buildbot_property('stage_platform',
-                                           platform_for_log_url,
-                                           write_to_file=True)
-            else:
-                self.fatal("'stage_platform' not determined and is required in your config")
-
         if self.try_message_has_flag('artifact') or os.environ.get('USE_ARTIFACT'):
             # Not all jobs that look like builds can be made into artifact
             # builds (for example, various SAN builds will not make sense as
@@ -205,7 +172,6 @@ class FxDesktopBuild(BuildScript, TryToolsMixin, object):
         self.actions = tuple(rw_config.actions)
         self.all_actions = tuple(rw_config.all_actions)
 
-
     def query_abs_dirs(self):
         if self.abs_dirs:
             return self.abs_dirs
@@ -240,11 +206,6 @@ class FxDesktopBuild(BuildScript, TryToolsMixin, object):
         return self.abs_dirs
 
         # Actions {{{2
-        # read_buildbot_config in BuildingMixin
-        # clobber in BuildingMixin -> PurgeMixin
-        # if Linux config:
-        # reset_mock in BuildingMixing -> MockMixin
-        # setup_mock in BuildingMixing (overrides MockMixin.mock_setup)
 
     def set_extra_try_arguments(self, action, success=None):
         """ Override unneeded method from TryToolsMixin """
@@ -256,6 +217,7 @@ class FxDesktopBuild(BuildScript, TryToolsMixin, object):
             # Suppress Windows modal dialogs to avoid hangs
             import ctypes
             ctypes.windll.kernel32.SetErrorMode(0x8001)
+
 
 if __name__ == '__main__':
     fx_desktop_build = FxDesktopBuild()

@@ -342,11 +342,11 @@ int av1_get_qindex(const struct segmentation *seg, int segment_id,
 }
 
 #if CONFIG_AOM_QM
-qm_val_t *aom_iqmatrix(AV1_COMMON *cm, int qmlevel, int is_chroma,
+const qm_val_t *aom_iqmatrix(AV1_COMMON *cm, int qmlevel, int is_chroma,
                        TX_SIZE tx_size, int is_intra) {
   return &cm->giqmatrix[qmlevel][!!is_chroma][!!is_intra][tx_size][0];
 }
-qm_val_t *aom_qmatrix(AV1_COMMON *cm, int qmlevel, int is_chroma,
+const qm_val_t *aom_qmatrix(AV1_COMMON *cm, int qmlevel, int is_chroma,
                       TX_SIZE tx_size, int is_intra) {
   return &cm->gqmatrix[qmlevel][!!is_chroma][!!is_intra][tx_size][0];
 }
@@ -356,25 +356,32 @@ qm_val_t *aom_qmatrix(AV1_COMMON *cm, int qmlevel, int is_chroma,
 #else
 #define QM_TOTAL_SIZE 3344
 #endif
-static uint16_t wt_matrix_ref[NUM_QM_LEVELS][2][QM_TOTAL_SIZE];
-static uint16_t iwt_matrix_ref[NUM_QM_LEVELS][2][QM_TOTAL_SIZE];
+static const uint16_t wt_matrix_ref[NUM_QM_LEVELS][2][QM_TOTAL_SIZE];
+static const uint16_t iwt_matrix_ref[NUM_QM_LEVELS][2][QM_TOTAL_SIZE];
 
 void aom_qm_init(AV1_COMMON *cm) {
-  int q, c, f, t, size;
+  int q, c, f, t;
   int current;
   for (q = 0; q < NUM_QM_LEVELS; ++q) {
     for (c = 0; c < 2; ++c) {
       for (f = 0; f < 2; ++f) {
         current = 0;
         for (t = 0; t < TX_SIZES_ALL; ++t) {
-          size = tx_size_2d[t];
-          cm->gqmatrix[q][c][f][t] = &wt_matrix_ref[AOMMIN(
-              NUM_QM_LEVELS - 1, f == 0 ? q + DEFAULT_QM_INTER_OFFSET : q)][c]
-                                                   [current];
-          cm->giqmatrix[q][c][f][t] = &iwt_matrix_ref[AOMMIN(
-              NUM_QM_LEVELS - 1, f == 0 ? q + DEFAULT_QM_INTER_OFFSET : q)][c]
+          const int size = tx_size_2d[t];
+          // Don't use QM for sizes > 32x32
+          if (q == NUM_QM_LEVELS - 1 || size > 1024) {
+            cm->gqmatrix[q][c][f][t] = NULL;
+            cm->giqmatrix[q][c][f][t] = NULL;
+          } else {
+            assert(current + size <= QM_TOTAL_SIZE);
+            cm->gqmatrix[q][c][f][t] = &wt_matrix_ref[AOMMIN(
+                NUM_QM_LEVELS - 1, f == 0 ? q + DEFAULT_QM_INTER_OFFSET : q)][c]
                                                      [current];
-          current += size;
+            cm->giqmatrix[q][c][f][t] = &iwt_matrix_ref[AOMMIN(
+                NUM_QM_LEVELS - 1, f == 0 ? q + DEFAULT_QM_INTER_OFFSET : q)][c]
+                                                       [current];
+            current += size;
+          }
         }
       }
     }
@@ -392,7 +399,7 @@ void aom_qm_init(AV1_COMMON *cm) {
    frequency domain according to different nominal viewing
    distances.
  */
-static uint16_t iwt_matrix_ref[NUM_QM_LEVELS][2][QM_TOTAL_SIZE] = {
+static const uint16_t iwt_matrix_ref[NUM_QM_LEVELS][2][QM_TOTAL_SIZE] = {
   {
       { /* Luma */
 #if CONFIG_CHROMA_2X2
@@ -7288,7 +7295,7 @@ static uint16_t iwt_matrix_ref[NUM_QM_LEVELS][2][QM_TOTAL_SIZE] = {
   },
 };
 
-static uint16_t wt_matrix_ref[NUM_QM_LEVELS][2][QM_TOTAL_SIZE] = {
+static const uint16_t wt_matrix_ref[NUM_QM_LEVELS][2][QM_TOTAL_SIZE] = {
   {
       { /* Luma */
 #if CONFIG_CHROMA_2X2
@@ -14039,7 +14046,7 @@ static uint16_t wt_matrix_ref[NUM_QM_LEVELS][2][QM_TOTAL_SIZE] = {
 };
 #endif
 
-#if CONFIG_PVQ || CONFIG_DAALA_DIST
+#if CONFIG_PVQ
 /* Quantization matrices for 8x8. For other block sizes, we currently just do
    resampling. */
 /* Flat quantization, i.e. optimize for PSNR. */

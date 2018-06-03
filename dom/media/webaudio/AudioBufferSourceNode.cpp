@@ -702,9 +702,9 @@ void
 AudioBufferSourceNode::Start(double aWhen, double aOffset,
                              const Optional<double>& aDuration, ErrorResult& aRv)
 {
-  if (!WebAudioUtils::IsTimeValid(aWhen) ||
+  if (!WebAudioUtils::IsTimeValid(aWhen) || aOffset < 0 ||
       (aDuration.WasPassed() && !WebAudioUtils::IsTimeValid(aDuration.Value()))) {
-    aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
+    aRv.Throw(NS_ERROR_RANGE_ERR);
     return;
   }
 
@@ -756,7 +756,7 @@ AudioBufferSourceNode::SendBufferParameterToStream(JSContext* aCx)
 
   if (mBuffer) {
     AudioChunk data = mBuffer->GetThreadSharedChannelsForRate(aCx);
-    ns->SetBuffer(Move(data));
+    ns->SetBuffer(std::move(data));
 
     if (mStartCalled) {
       SendOffsetAndDurationParametersToStream(ns);
@@ -805,7 +805,7 @@ void
 AudioBufferSourceNode::Stop(double aWhen, ErrorResult& aRv)
 {
   if (!WebAudioUtils::IsTimeValid(aWhen)) {
-    aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
+    aRv.Throw(NS_ERROR_RANGE_ERR);
     return;
   }
 

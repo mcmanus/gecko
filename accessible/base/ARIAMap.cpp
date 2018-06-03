@@ -578,7 +578,7 @@ static const nsRoleMapEntry sWAIRoleMaps[] =
   },
   { // document
     &nsGkAtoms::document,
-    roles::DOCUMENT,
+    roles::NON_NATIVE_DOCUMENT,
     kUseMapRole,
     eNoValue,
     eNoAction,
@@ -615,6 +615,37 @@ static const nsRoleMapEntry sWAIRoleMaps[] =
     eNoAction,
     eNoLiveAttr,
     eLandmark,
+    kNoReqStates
+  },
+  { // graphics-document
+    &nsGkAtoms::graphicsDocument,
+    roles::NON_NATIVE_DOCUMENT,
+    kUseMapRole,
+    eNoValue,
+    eNoAction,
+    eNoLiveAttr,
+    kGenericAccType,
+    kNoReqStates,
+    eReadonlyUntilEditable
+  },
+  { // graphics-object
+    &nsGkAtoms::graphicsObject,
+    roles::GROUPING,
+    kUseMapRole,
+    eNoValue,
+    eNoAction,
+    eNoLiveAttr,
+    kGenericAccType,
+    kNoReqStates
+  },
+  { // graphics-symbol
+    &nsGkAtoms::graphicsSymbol,
+    roles::GRAPHIC,
+    kUseMapRole,
+    eNoValue,
+    eNoAction,
+    eNoLiveAttr,
+    kGenericAccType,
     kNoReqStates
   },
   { // grid
@@ -694,7 +725,7 @@ static const nsRoleMapEntry sWAIRoleMaps[] =
     states::LINKED
   },
   { // list
-    &nsGkAtoms::list,
+    &nsGkAtoms::list_,
     roles::LIST,
     kUseMapRole,
     eNoValue,
@@ -1033,7 +1064,7 @@ static const nsRoleMapEntry sWAIRoleMaps[] =
     kNoReqStates
   },
   { // switch
-    &nsGkAtoms::_switch,
+    &nsGkAtoms::svgSwitch,
     roles::SWITCH,
     kUseMapRole,
     eNoValue,
@@ -1230,7 +1261,7 @@ static const EStateRule sWAIUnivStateMap[] = {
 
 struct AttrCharacteristics
 {
-  nsAtom** attributeName;
+  nsStaticAtom** attributeName;
   const uint8_t characteristics;
 };
 
@@ -1375,8 +1406,10 @@ aria::HasDefinedARIAHidden(nsIContent* aContent)
 {
   return aContent &&
     nsAccUtils::HasDefinedARIAToken(aContent, nsGkAtoms::aria_hidden) &&
-    !aContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::aria_hidden,
-                           nsGkAtoms::_false, eCaseMatters);
+    !aContent->AsElement()->AttrValueIs(kNameSpaceID_None,
+                                        nsGkAtoms::aria_hidden,
+                                        nsGkAtoms::_false,
+                                        eCaseMatters);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1386,7 +1419,7 @@ bool
 AttrIterator::Next(nsAString& aAttrName, nsAString& aAttrValue)
 {
   while (mAttrIdx < mAttrCount) {
-    const nsAttrName* attr = mContent->GetAttrNameAt(mAttrIdx);
+    const nsAttrName* attr = mElement->GetAttrNameAt(mAttrIdx);
     mAttrIdx++;
     if (attr->NamespaceEquals(kNameSpaceID_None)) {
       nsAtom* attrAtom = attr->Atom();
@@ -1399,17 +1432,17 @@ AttrIterator::Next(nsAString& aAttrName, nsAString& aAttrValue)
         continue; // No need to handle exposing as obj attribute here
 
       if ((attrFlags & ATTR_VALTOKEN) &&
-           !nsAccUtils::HasDefinedARIAToken(mContent, attrAtom))
+           !nsAccUtils::HasDefinedARIAToken(mElement, attrAtom))
         continue; // only expose token based attributes if they are defined
 
       if ((attrFlags & ATTR_BYPASSOBJ_IF_FALSE) &&
-          mContent->AttrValueIs(kNameSpaceID_None, attrAtom,
+          mElement->AttrValueIs(kNameSpaceID_None, attrAtom,
                                 nsGkAtoms::_false, eCaseMatters)) {
         continue; // only expose token based attribute if value is not 'false'.
       }
 
       nsAutoString value;
-      if (mContent->GetAttr(kNameSpaceID_None, attrAtom, value)) {
+      if (mElement->GetAttr(kNameSpaceID_None, attrAtom, value)) {
         aAttrName.Assign(Substring(attrStr, 5));
         aAttrValue.Assign(value);
         return true;

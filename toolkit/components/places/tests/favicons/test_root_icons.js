@@ -10,7 +10,7 @@ add_task(async function() {
   await PlacesTestUtils.addVisits(pageURI);
   let faviconURI = NetUtil.newURI("http://www.places.test/favicon.ico");
   PlacesUtils.favicons.replaceFaviconDataFromDataURL(
-    faviconURI, SMALLPNG_DATA_URI.spec, 0, Services.scriptSecurityManager.getSystemPrincipal());
+    faviconURI, SMALLPNG_DATA_URI.spec, 0, systemPrincipal);
   await setFaviconForPage(pageURI, faviconURI);
 
   // Sanity checks.
@@ -51,10 +51,10 @@ add_task(async function test_removePagesByTimeframe() {
   let faviconURI = NetUtil.newURI("http://www.places.test/page/favicon.ico");
   let rootIconURI = NetUtil.newURI("http://www.places.test/favicon.ico");
   PlacesUtils.favicons.replaceFaviconDataFromDataURL(
-    faviconURI, SMALLSVG_DATA_URI.spec, 0, Services.scriptSecurityManager.getSystemPrincipal());
+    faviconURI, SMALLSVG_DATA_URI.spec, 0, systemPrincipal);
   await setFaviconForPage(pageURI, faviconURI);
   PlacesUtils.favicons.replaceFaviconDataFromDataURL(
-    rootIconURI, SMALLPNG_DATA_URI.spec, 0, Services.scriptSecurityManager.getSystemPrincipal());
+    rootIconURI, SMALLPNG_DATA_URI.spec, 0, systemPrincipal);
   await setFaviconForPage(pageURI, rootIconURI);
 
   // Sanity checks.
@@ -65,10 +65,10 @@ add_task(async function test_removePagesByTimeframe() {
   Assert.equal(await getFaviconUrlForPage("http://www.places.test/old/"),
                rootIconURI.spec, "Should get the root icon");
 
-  PlacesUtils.history.removePagesByTimeframe(
-    PlacesUtils.toPRTime(Date.now() - 14400000),
-    PlacesUtils.toPRTime(new Date())
-  );
+  await PlacesUtils.history.removeByFilter({
+    beginDate: new Date(Date.now() - 14400000),
+    endDate: new Date()
+  });
 
   // Check database entries.
   await PlacesTestUtils.promiseAsyncUpdates();
@@ -81,13 +81,15 @@ add_task(async function test_removePagesByTimeframe() {
   rows = await db.execute("SELECT * FROM moz_icons_to_pages");
   Assert.equal(rows.length, 0, "There should be no relation entry");
 
-  PlacesUtils.history.removePagesByTimeframe(0, PlacesUtils.toPRTime(new Date()));
+  await PlacesUtils.history.removeByFilter({
+    beginDate: new Date(0),
+    endDt: new Date()
+  });
   await PlacesTestUtils.promiseAsyncUpdates();
   rows = await db.execute("SELECT * FROM moz_icons");
   // Debug logging for possible intermittent failure (bug 1358368).
   if (rows.length != 0) {
     dump_table("moz_icons");
-    dump_table("moz_hosts");
   }
   Assert.equal(rows.length, 0, "There should be no icon entry");
 });
@@ -97,9 +99,27 @@ add_task(async function test_different_host() {
   await PlacesTestUtils.addVisits(pageURI);
   let faviconURI = NetUtil.newURI("http://mozilla.test/favicon.ico");
   PlacesUtils.favicons.replaceFaviconDataFromDataURL(
-    faviconURI, SMALLPNG_DATA_URI.spec, 0, Services.scriptSecurityManager.getSystemPrincipal());
+    faviconURI, SMALLPNG_DATA_URI.spec, 0, systemPrincipal);
   await setFaviconForPage(pageURI, faviconURI);
 
   Assert.equal(await getFaviconUrlForPage(pageURI),
                faviconURI.spec, "Should get the png icon");
+});
+
+add_task(async function test_same_size() {
+  // Add two icons with the same size, one is a root icon. Check that the
+  // non-root icon is preferred when a smaller size is requested.
+  let data = readFileData(do_get_file("favicon-normal32.png"));
+  let pageURI = NetUtil.newURI("http://new_places.test/page/");
+  await PlacesTestUtils.addVisits(pageURI);
+
+  let faviconURI = NetUtil.newURI("http://new_places.test/favicon.ico");
+  PlacesUtils.favicons.replaceFaviconData(faviconURI, data, data.length, "image/png");
+  await setFaviconForPage(pageURI, faviconURI);
+  faviconURI = NetUtil.newURI("http://new_places.test/another_icon.ico");
+  PlacesUtils.favicons.replaceFaviconData(faviconURI, data, data.length, "image/png");
+  await setFaviconForPage(pageURI, faviconURI);
+
+  Assert.equal(await getFaviconUrlForPage(pageURI, 20),
+               faviconURI.spec, "Should get the non-root icon");
 });

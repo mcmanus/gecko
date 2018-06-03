@@ -64,16 +64,14 @@
 #include "nsISimpleEnumerator.h"
 #include "nsIDirectoryEnumerator.h"
 #include "nsIFile.h"
-#include "nsDirectoryServiceUtils.h"
-#include "nsDirectoryServiceDefs.h"
 #include "mozISpellI18NManager.h"
 #include "nsUnicharUtils.h"
 #include "nsCRT.h"
 #include "mozInlineSpellChecker.h"
-#include "mozilla/Services.h"
 #include <stdlib.h>
 #include "nsIPrefService.h"
 #include "nsIPrefBranch.h"
+#include "nsNetUtil.h"
 #include "mozilla/dom/ContentParent.h"
 
 using mozilla::dom::ContentParent;
@@ -158,18 +156,13 @@ NS_IMETHODIMP mozHunspell::SetDictionary(const char16_t *aDictionary)
     return NS_OK;
   }
 
-  nsIFile* affFile = mDictionaries.GetWeak(nsDependentString(aDictionary));
+  nsIURI* affFile = mDictionaries.GetWeak(nsDependentString(aDictionary));
   if (!affFile)
     return NS_ERROR_FILE_NOT_FOUND;
 
   nsAutoCString dictFileName, affFileName;
 
-  // XXX This isn't really good. nsIFile->NativePath isn't safe for all
-  // character sets on Windows.
-  // A better way would be to QI to nsIFile, and get a filehandle
-  // from there. Only problem is that hunspell wants a path
-
-  nsresult rv = affFile->GetNativePath(affFileName);
+  nsresult rv = affFile->GetSpec(affFileName);
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (mAffixFileName.Equals(affFileName.get()))
@@ -191,7 +184,7 @@ NS_IMETHODIMP mozHunspell::SetDictionary(const char16_t *aDictionary)
   mAffixFileName = affFileName;
 
   mHunspell = new Hunspell(affFileName.get(),
-                         dictFileName.get());
+                           dictFileName.get());
   if (!mHunspell)
     return NS_ERROR_OUT_OF_MEMORY;
 
@@ -302,11 +295,6 @@ mozHunspell::LoadDictionaryList(bool aNotifyChildProcesses)
 
   nsresult rv;
 
-  nsCOMPtr<nsIProperties> dirSvc =
-    do_GetService(NS_DIRECTORY_SERVICE_CONTRACTID);
-  if (!dirSvc)
-    return;
-
   // find built in dictionaries, or dictionaries specified in
   // spellchecker.dictionary_path in prefs
   nsCOMPtr<nsIFile> dictDir;
@@ -314,39 +302,14 @@ mozHunspell::LoadDictionaryList(bool aNotifyChildProcesses)
   // check preferences first
   nsCOMPtr<nsIPrefBranch> prefs(do_GetService(NS_PREFSERVICE_CONTRACTID));
   if (prefs) {
-    nsCString extDictPath;
-    rv = prefs->GetCharPref("spellchecker.dictionary_path", getter_Copies(extDictPath));
+    nsAutoCString extDictPath;
+    rv = prefs->GetCharPref("spellchecker.dictionary_path", extDictPath);
     if (NS_SUCCEEDED(rv)) {
       // set the spellchecker.dictionary_path
       rv = NS_NewNativeLocalFile(extDictPath, true, getter_AddRefs(dictDir));
     }
-  }
-  if (!dictDir) {
-    // spellcheck.dictionary_path not found, set internal path
-    rv = dirSvc->Get(DICTIONARY_SEARCH_DIRECTORY,
-                     NS_GET_IID(nsIFile), getter_AddRefs(dictDir));
-  }
-  if (dictDir) {
-    LoadDictionariesFromDir(dictDir);
-  }
-  else {
-    // try to load gredir/dictionaries
-    nsCOMPtr<nsIFile> greDir;
-    rv = dirSvc->Get(NS_GRE_DIR,
-                     NS_GET_IID(nsIFile), getter_AddRefs(greDir));
-    if (NS_SUCCEEDED(rv)) {
-      greDir->AppendNative(NS_LITERAL_CSTRING("dictionaries"));
-      LoadDictionariesFromDir(greDir);
-    }
-
-    // try to load appdir/dictionaries only if different than gredir
-    nsCOMPtr<nsIFile> appDir;
-    rv = dirSvc->Get(NS_XPCOM_CURRENT_PROCESS_DIR,
-                     NS_GET_IID(nsIFile), getter_AddRefs(appDir));
-    bool equals;
-    if (NS_SUCCEEDED(rv) && NS_SUCCEEDED(appDir->Equals(greDir, &equals)) && !equals) {
-      appDir->AppendNative(NS_LITERAL_CSTRING("dictionaries"));
-      LoadDictionariesFromDir(appDir);
+    if (dictDir) {
+      LoadDictionariesFromDir(dictDir);
     }
   }
 
@@ -373,28 +336,21 @@ mozHunspell::LoadDictionaryList(bool aNotifyChildProcesses)
     }
   }
 
-  // find dictionaries from extensions requiring restart
-  nsCOMPtr<nsISimpleEnumerator> dictDirs;
-  rv = dirSvc->Get(DICTIONARY_SEARCH_DIRECTORY_LIST,
-                   NS_GET_IID(nsISimpleEnumerator), getter_AddRefs(dictDirs));
-  if (NS_FAILED(rv))
-    return;
-
-  bool hasMore;
-  while (NS_SUCCEEDED(dictDirs->HasMoreElements(&hasMore)) && hasMore) {
-    nsCOMPtr<nsISupports> elem;
-    dictDirs->GetNext(getter_AddRefs(elem));
-
-    dictDir = do_QueryInterface(elem);
-    if (dictDir)
-      LoadDictionariesFromDir(dictDir);
-  }
-
   // find dictionaries from restartless extensions
   for (int32_t i = 0; i < mDynamicDirectories.Count(); i++) {
     LoadDictionariesFromDir(mDynamicDirectories[i]);
   }
 
+  for (auto iter = mDynamicDictionaries.Iter(); !iter.Done(); iter.Next()) {
+    mDictionaries.Put(iter.Key(), iter.Data());
+  }
+
+  DictionariesChanged(aNotifyChildProcesses);
+}
+
+void
+mozHunspell::DictionariesChanged(bool aNotifyChildProcesses)
+{
   // Now we have finished updating the list of dictionaries, update the current
   // dictionary and any editors which may use it.
   mozInlineSpellChecker::UpdateCanEnableInlineSpellChecking();
@@ -406,7 +362,7 @@ mozHunspell::LoadDictionaryList(bool aNotifyChildProcesses)
   // Check if the current dictionary is still available.
   // If not, try to replace it with another dictionary of the same language.
   if (!mDictionary.IsEmpty()) {
-    rv = SetDictionary(mDictionary.get());
+    nsresult rv = SetDictionary(mDictionary.get());
     if (NS_SUCCEEDED(rv))
       return;
   }
@@ -432,13 +388,9 @@ mozHunspell::LoadDictionariesFromDir(nsIFile* aDir)
   if (NS_FAILED(rv) || !check)
     return NS_ERROR_UNEXPECTED;
 
-  nsCOMPtr<nsISimpleEnumerator> e;
-  rv = aDir->GetDirectoryEntries(getter_AddRefs(e));
+  nsCOMPtr<nsIDirectoryEnumerator> files;
+  rv = aDir->GetDirectoryEntries(getter_AddRefs(files));
   if (NS_FAILED(rv))
-    return NS_ERROR_UNEXPECTED;
-
-  nsCOMPtr<nsIDirectoryEnumerator> files(do_QueryInterface(e));
-  if (!files)
     return NS_ERROR_UNEXPECTED;
 
   nsCOMPtr<nsIFile> file;
@@ -466,7 +418,11 @@ mozHunspell::LoadDictionariesFromDir(nsIFile* aDir)
     // Replace '_' separator with '-'
     dict.ReplaceChar("_", '-');
 
-    mDictionaries.Put(dict, file);
+    nsCOMPtr<nsIURI> uri;
+    rv = NS_NewFileURI(getter_AddRefs(uri), file);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    mDictionaries.Put(dict, uri);
   }
 
   return NS_OK;
@@ -642,5 +598,30 @@ NS_IMETHODIMP mozHunspell::RemoveDirectory(nsIFile *aDir)
                          nullptr);
   }
 #endif
+  return NS_OK;
+}
+
+NS_IMETHODIMP mozHunspell::AddDictionary(const nsAString& aLang, nsIURI *aFile)
+{
+  NS_ENSURE_TRUE(aFile, NS_ERROR_INVALID_ARG);
+
+  mDynamicDictionaries.Put(aLang, aFile);
+  mDictionaries.Put(aLang, aFile);
+  DictionariesChanged(true);
+  return NS_OK;
+}
+
+NS_IMETHODIMP mozHunspell::RemoveDictionary(const nsAString& aLang, nsIURI *aFile, bool* aRetVal)
+{
+  NS_ENSURE_TRUE(aFile, NS_ERROR_INVALID_ARG);
+  *aRetVal = false;
+
+  nsCOMPtr<nsIURI> file = mDynamicDictionaries.Get(aLang);
+  bool equal;
+  if (file && NS_SUCCEEDED(file->Equals(aFile, &equal)) && equal) {
+    mDynamicDictionaries.Remove(aLang);
+    LoadDictionaryList(true);
+    *aRetVal = true;
+  }
   return NS_OK;
 }

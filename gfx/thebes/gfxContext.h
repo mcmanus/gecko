@@ -40,7 +40,7 @@ class ClipExporter;
  * All drawing happens by creating a path and then stroking or filling it.
  * The functions like Rectangle and Arc do not do any drawing themselves.
  * When a path is drawn (stroked or filled), it is filled/stroked with a
- * pattern set by SetPattern, SetColor or SetSource.
+ * pattern set by SetPattern or SetColor.
  *
  * Note that the gfxContext takes coordinates in device pixels,
  * as opposed to app units.
@@ -50,6 +50,7 @@ class gfxContext final {
     typedef mozilla::gfx::CompositionOp CompositionOp;
     typedef mozilla::gfx::JoinStyle JoinStyle;
     typedef mozilla::gfx::FillRule FillRule;
+    typedef mozilla::gfx::Float Float;
     typedef mozilla::gfx::Path Path;
     typedef mozilla::gfx::Pattern Pattern;
     typedef mozilla::gfx::Rect Rect;
@@ -134,11 +135,6 @@ public:
     void MoveTo(const gfxPoint& pt);
 
     /**
-     * Returns the current point in the current path.
-     */
-    gfxPoint CurrentPoint();
-
-    /**
      * Draws a line from the current point to pt.
      *
      * @see MoveTo
@@ -172,12 +168,14 @@ public:
     /**
      * Replaces the current transformation matrix with matrix.
      */
-    void SetMatrix(const gfxMatrix& matrix);
+    void SetMatrix(const mozilla::gfx::Matrix& matrix);
+    void SetMatrixDouble(const gfxMatrix& matrix);
 
     /**
      * Returns the current transformation matrix.
      */
-    gfxMatrix CurrentMatrix() const;
+    mozilla::gfx::Matrix CurrentMatrix() const;
+    gfxMatrix CurrentMatrixDouble() const;
 
     /**
      * Converts a point from device to user coordinates using the inverse
@@ -261,6 +259,15 @@ public:
     bool GetDeviceColor(mozilla::gfx::Color& aColorOut);
 
     /**
+     * Returns true if color is neither opaque nor transparent (i.e. alpha is not 0
+     * or 1), and false otherwise. If true, aColorOut is set on output.
+     */
+    bool HasNonOpaqueNonTransparentColor(mozilla::gfx::Color& aColorOut) {
+        return GetDeviceColor(aColorOut) &&
+               0.f < aColorOut.a && aColorOut.a < 1.f;
+    }
+
+    /**
      * Set a solid color in the sRGB color space to use for drawing.
      * If CMS is not enabled, the color is treated as a device-space color
      * and this call is identical to SetDeviceColor().
@@ -268,25 +275,9 @@ public:
     void SetColor(const mozilla::gfx::Color& aColor);
 
     /**
-     * Uses a surface for drawing. This is a shorthand for creating a
-     * pattern and setting it.
-     *
-     * @param offset from the source surface, to use only part of it.
-     *        May need to make it negative.
-     */
-    void SetSource(gfxASurface *surface, const gfxPoint& offset = gfxPoint(0.0, 0.0));
-
-    /**
      * Uses a pattern for drawing.
      */
     void SetPattern(gfxPattern *pattern);
-
-    /**
-     * Set the color that text drawn on top of transparent pixels should be
-     * anti-aliased into.
-     */
-    void SetFontSmoothingBackgroundColor(const mozilla::gfx::Color& aColor);
-    mozilla::gfx::Color GetFontSmoothingBackgroundColor();
 
     /**
      * Get the source pattern (solid color, normal pattern, surface, etc)
@@ -300,7 +291,7 @@ public:
      * Paints the current source surface/pattern everywhere in the current
      * clip region.
      */
-    void Paint(gfxFloat alpha = 1.0);
+    void Paint(Float alpha = 1.0);
 
     /**
      ** Painting with a Mask
@@ -317,25 +308,25 @@ public:
      ** Line Properties
      **/
 
-    void SetDash(gfxFloat *dashes, int ndash, gfxFloat offset);
+    void SetDash(const Float *dashes, int ndash, Float offset);
     // Return true if dashing is set, false if it's not enabled or the
     // context is in an error state.  |offset| can be nullptr to mean
     // "don't care".
-    bool CurrentDash(FallibleTArray<gfxFloat>& dashes, gfxFloat* offset) const;
+    bool CurrentDash(FallibleTArray<Float>& dashes, Float* offset) const;
     // Returns 0.0 if dashing isn't enabled.
-    gfxFloat CurrentDashOffset() const;
+    Float CurrentDashOffset() const;
 
     /**
      * Sets the line width that's used for line drawing.
      */
-    void SetLineWidth(gfxFloat width);
+    void SetLineWidth(Float width);
 
     /**
      * Returns the currently set line width.
      *
      * @see SetLineWidth
      */
-    gfxFloat CurrentLineWidth() const;
+    Float CurrentLineWidth() const;
 
     /**
      * Sets the line caps, i.e. how line endings are drawn.
@@ -350,8 +341,8 @@ public:
     void SetLineJoin(JoinStyle join);
     JoinStyle CurrentLineJoin() const;
 
-    void SetMiterLimit(gfxFloat limit);
-    gfxFloat CurrentMiterLimit() const;
+    void SetMiterLimit(Float limit);
+    Float CurrentMiterLimit() const;
 
     /**
      * Sets the operator used for all further drawing. The operator affects
@@ -475,7 +466,6 @@ private:
   typedef mozilla::gfx::DrawTarget DrawTarget;
   typedef mozilla::gfx::Color Color;
   typedef mozilla::gfx::StrokeOptions StrokeOptions;
-  typedef mozilla::gfx::Float Float;
   typedef mozilla::gfx::PathBuilder PathBuilder;
   typedef mozilla::gfx::SourceSurface SourceSurface;
 
@@ -485,7 +475,6 @@ private:
       , color(0, 0, 0, 1.0f)
       , aaMode(mozilla::gfx::AntialiasMode::SUBPIXEL)
       , patternTransformChanged(false)
-      , mBlendOpacity(0.0f)
 #ifdef DEBUG
       , mContentChanged(false)
 #endif
@@ -494,10 +483,6 @@ private:
     mozilla::gfx::CompositionOp op;
     Color color;
     RefPtr<gfxPattern> pattern;
-    RefPtr<gfxASurface> sourceSurfCairo;
-    RefPtr<SourceSurface> sourceSurface;
-    mozilla::gfx::Point sourceSurfaceDeviceOffset;
-    Matrix surfTransform;
     Matrix transform;
     struct PushedClip {
       RefPtr<Path> path;
@@ -514,12 +499,7 @@ private:
     Color fontSmoothingBackgroundColor;
     // This is used solely for using minimal intermediate surface size.
     mozilla::gfx::Point deviceOffset;
-    // Support groups
-    mozilla::gfx::Float mBlendOpacity;
-    RefPtr<SourceSurface> mBlendMask;
-    Matrix mBlendMaskTransform;
 #ifdef DEBUG
-    bool mWasPushedForBlendBack;
     // Whether the content of this AzureState changed after construction.
     bool mContentChanged;
 #endif
@@ -529,7 +509,6 @@ private:
   void EnsurePath();
   // This ensures mPathBuilder contains a valid PathBuilder (in user space!)
   void EnsurePathBuilder();
-  void FillAzure(const Pattern& aPattern, mozilla::gfx::Float aOpacity);
   CompositionOp GetOp();
   void ChangeTransform(const mozilla::gfx::Matrix &aNewMatrix, bool aUpdatePatternTransform = true);
   Rect GetAzureDeviceSpaceClipBounds() const;
@@ -635,7 +614,7 @@ public:
       }
     }
 
-    const gfxMatrix& Matrix()
+    const mozilla::gfx::Matrix& Matrix()
     {
       MOZ_ASSERT(mContext, "mMatrix doesn't contain a useful matrix");
       return mMatrix;
@@ -645,7 +624,7 @@ public:
 
 private:
     gfxContext *mContext;
-    gfxMatrix   mMatrix;
+    mozilla::gfx::Matrix mMatrix;
 };
 
 

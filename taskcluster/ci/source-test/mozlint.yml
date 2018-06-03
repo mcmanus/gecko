@@ -1,14 +1,61 @@
-eslint:
-    description: JS lint check
-    platform: lint/opt
+job-defaults:
+    always-target: true
     treeherder:
-        symbol: ES
         kind: test
         tier: 1
     worker-type: aws-provisioner-v1/gecko-t-linux-xlarge
     worker:
         docker-image: {in-tree: "lint"}
         max-run-time: 1800
+    run:
+        using: mach
+    when:
+        files-changed:
+            # Other misc lint related files.
+            - 'python/mozlint/**'
+            - 'tools/lint/**'
+
+codespell:
+    description: Checks for misspellings in text files
+    platform: lint/opt
+    treeherder:
+        symbol: spell
+    run:
+        mach: lint -l codespell -f treeherder
+    when:
+        files-changed:
+            - '**/*.js'
+            - '**/*.jsm'
+            - '**/*.jxs'
+            - '**/*.xml'
+            - '**/*.html'
+            - '**/*.xhtml'
+            - '**/*.cpp'
+            - '**/*.c'
+            - '**/*.h'
+            - '**/*.configure'
+            - '**/*.py'
+            - '**/*.properties'
+            - '**/*.rst'
+
+cpp-virtual-final:
+    description: lint C++ virtual function declarations
+    platform: lint/opt
+    treeherder:
+        symbol: Cvf
+    run:
+        mach: lint -l cpp-virtual-final -f treeherder
+    when:
+        files-changed:
+            - '**/*.cpp'
+            - '**/*.h'
+            - '**/*.mm'
+
+eslint:
+    description: JS lint check
+    platform: lint/opt
+    treeherder:
+        symbol: ES
     run:
         using: run-task
         command: >
@@ -32,65 +79,53 @@ eslint:
             # The plugin implementing custom checks.
             - 'tools/lint/eslint/eslint-plugin-mozilla/**'
             - 'tools/lint/eslint/eslint-plugin-spidermonkey-js/**'
-            # Other misc lint related files.
-            - 'python/mozlint/**'
-            - 'tools/lint/**'
+
+mingw-cap:
+    description: lint for MinGW Capitalization issues
+    platform: lint/opt
+    treeherder:
+        symbol: mingw
+    run:
+        mach: lint -l mingw-capitalization -f treeherder
+    when:
+        files-changed:
+            - '**/*.cpp'
+            - '**/*.cc'
+            - '**/*.c'
+            - '**/*.h'
 
 py-compat:
     description: lint for python 2/3 compatibility issues
     platform: lint/opt
     treeherder:
         symbol: py-compat
-        kind: test
-        tier: 1
-    worker-type: aws-provisioner-v1/gecko-t-linux-xlarge
-    worker:
-        docker-image: {in-tree: "lint"}
-        max-run-time: 1800
     run:
-        using: mach
         mach: lint -l py2 -l py3 -f treeherder
     when:
         files-changed:
             - '**/*.py'
             - '**/.flake8'
-            - 'python/mozlint/**'
-            - 'tools/lint/**'
 
 py-flake8:
     description: flake8 run over the gecko codebase
     platform: lint/opt
     treeherder:
         symbol: f8
-        kind: test
-        tier: 1
-    worker-type: aws-provisioner-v1/gecko-t-linux-xlarge
-    worker:
-        docker-image: {in-tree: "lint"}
-        max-run-time: 1800
     run:
-        using: mach
         mach: lint -l flake8 -f treeherder
     when:
         files-changed:
             - '**/*.py'
             - '**/.flake8'
-            - 'python/mozlint/**'
-            - 'tools/lint/**'
+            # moz.configure files are also Python files.
+            - '**/*.configure'
 
 test-manifest:
     description: lint test manifests
     platform: lint/opt
     treeherder:
         symbol: tm
-        kind: test
-        tier: 1
-    worker-type: aws-provisioner-v1/gecko-t-linux-xlarge
-    worker:
-        docker-image: {in-tree: "lint"}
-        max-run-time: 1800
     run:
-        using: mach
         mach: lint -l test-disable -f treeherder
     when:
         files-changed:
@@ -103,14 +138,7 @@ wptlint-gecko:
     platform: lint/opt
     treeherder:
         symbol: W
-        kind: test
-        tier: 1
-    worker-type: aws-provisioner-v1/gecko-t-linux-xlarge
-    worker:
-        docker-image: {in-tree: "lint"}
-        max-run-time: 1800
     run:
-        using: mach
         mach: lint -l wpt -l wpt_manifest -f treeherder
     when:
         files-changed:
@@ -118,27 +146,27 @@ wptlint-gecko:
             - 'testing/web-platform/mozilla/tests/**'
             - 'testing/web-platform/meta/MANIFEST.json'
             - 'testing/web-platform/mozilla/meta/MANIFEST.json'
-            - 'python/mozlint/**'
-            - 'tools/lint/**'
 
 yaml:
     description: yamllint run over the gecko codebase
     platform: lint/opt
     treeherder:
         symbol: yaml
-        kind: test
-        tier: 1
-    worker-type: aws-provisioner-v1/gecko-t-linux-xlarge
-    worker:
-        docker-image: {in-tree: "lint"}
-        max-run-time: 1800
     run:
-        using: mach
         mach: lint -l yaml -f treeherder
     when:
         files-changed:
             - '**/*.yml'
             - '**/*.yaml'
             - '**/.ymllint'
-            - 'python/mozlint/**'
-            - 'tools/lint/**'
+
+shellcheck:
+    description: shellcheck run over the gecko codebase
+    platform: lint/opt
+    treeherder:
+        symbol: shell
+    run:
+        mach: lint -l shellcheck -f treeherder
+    when:
+        files-changed:
+            - '**/*.sh'

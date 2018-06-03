@@ -6,6 +6,7 @@
 
 #include "mozilla/ServoKeyframeRule.h"
 
+#include "mozilla/DeclarationBlock.h"
 #include "nsDOMCSSDeclaration.h"
 #include "mozAutoDocUpdate.h"
 
@@ -21,7 +22,7 @@ public:
   explicit ServoKeyframeDeclaration(ServoKeyframeRule* aRule)
     : mRule(aRule)
   {
-    mDecls = new ServoDeclarationBlock(
+    mDecls = new DeclarationBlock(
       Servo_Keyframe_GetStyle(aRule->Raw()).Consume());
   }
 
@@ -29,13 +30,12 @@ public:
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_AMBIGUOUS(
     ServoKeyframeDeclaration, nsICSSDeclaration)
 
-  NS_IMETHOD GetParentRule(nsIDOMCSSRule** aParent) final
-  {
-    *aParent = mRule;
-    return NS_OK;
-  }
+  css::Rule* GetParentRule() final { return mRule; }
 
-  void DropReference() { mRule = nullptr; }
+  void DropReference() {
+    mRule = nullptr;
+    mDecls->SetOwningRule(nullptr);
+  }
 
   DeclarationBlock* GetCSSDeclaration(Operation aOperation) final
   {
@@ -49,28 +49,23 @@ public:
     mRule->UpdateRule([this, aDecls]() {
       if (mDecls != aDecls) {
         mDecls->SetOwningRule(nullptr);
-        mDecls = aDecls->AsServo();
+        mDecls = aDecls;
         mDecls->SetOwningRule(mRule);
         Servo_Keyframe_SetStyle(mRule->Raw(), mDecls->Raw());
       }
     });
     return NS_OK;
   }
-  void GetCSSParsingEnvironment(CSSParsingEnvironment& aCSSParseEnv) final
+  ParsingEnvironment GetParsingEnvironment(
+      nsIPrincipal* aSubjectPrincipal) const final
   {
-    MOZ_ASSERT_UNREACHABLE("GetCSSParsingEnvironment "
-                           "shouldn't be calling for a Servo rule");
-    GetCSSParsingEnvironmentForRule(mRule, aCSSParseEnv);
-  }
-  ServoCSSParsingEnvironment GetServoCSSParsingEnvironment() const final
-  {
-    return GetServoCSSParsingEnvironmentForRule(mRule);
+    return GetParsingEnvironmentForRule(mRule);
   }
   nsIDocument* DocToUpdate() final { return nullptr; }
 
   nsINode* GetParentObject() final
   {
-    return mRule ? mRule->GetDocument() : nullptr;
+    return mRule ? mRule->GetParentObject() : nullptr;
   }
 
   size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
@@ -81,10 +76,12 @@ public:
   }
 
 private:
-  virtual ~ServoKeyframeDeclaration() {}
+  virtual ~ServoKeyframeDeclaration() {
+    MOZ_ASSERT(!mRule, "Backpointer should have been cleared");
+  }
 
   ServoKeyframeRule* mRule;
-  RefPtr<ServoDeclarationBlock> mDecls;
+  RefPtr<DeclarationBlock> mDecls;
 };
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(ServoKeyframeDeclaration)
@@ -102,6 +99,9 @@ NS_INTERFACE_MAP_END_INHERITING(nsDOMCSSDeclaration)
 
 ServoKeyframeRule::~ServoKeyframeRule()
 {
+  if (mDeclaration) {
+    mDeclaration->DropReference();
+  }
 }
 
 NS_IMPL_ADDREF_INHERITED(ServoKeyframeRule, dom::CSSKeyframeRule)
@@ -131,16 +131,6 @@ ServoKeyframeRule::IsCCLeaf() const
   return Rule::IsCCLeaf() && !mDeclaration;
 }
 
-/* virtual */ already_AddRefed<css::Rule>
-ServoKeyframeRule::Clone() const
-{
-  // Rule::Clone is only used when CSSStyleSheetInner is cloned in
-  // preparation of being mutated. However, ServoStyleSheet never clones
-  // anything, so this method should never be called.
-  MOZ_ASSERT_UNREACHABLE("Shouldn't be cloning ServoKeyframeRule");
-  return nullptr;
-}
-
 #ifdef DEBUG
 /* virtual */ void
 ServoKeyframeRule::List(FILE* out, int32_t aIndent) const
@@ -158,38 +148,30 @@ template<typename Func>
 void
 ServoKeyframeRule::UpdateRule(Func aCallback)
 {
-  nsIDocument* doc = GetDocument();
-  MOZ_AUTO_DOC_UPDATE(doc, UPDATE_STYLE, true);
-
   aCallback();
 
   if (StyleSheet* sheet = GetStyleSheet()) {
-    // FIXME sheet->AsGecko()->SetModifiedByChildRule();
-    if (doc) {
-      doc->StyleRuleChanged(sheet, this);
-    }
+    sheet->RuleChanged(this);
   }
 }
 
-NS_IMETHODIMP
+void
 ServoKeyframeRule::GetKeyText(nsAString& aKeyText)
 {
   Servo_Keyframe_GetKeyText(mRaw, &aKeyText);
-  return NS_OK;
 }
 
-NS_IMETHODIMP
+void
 ServoKeyframeRule::SetKeyText(const nsAString& aKeyText)
 {
   NS_ConvertUTF16toUTF8 keyText(aKeyText);
   UpdateRule([this, &keyText]() {
     Servo_Keyframe_SetKeyText(mRaw, &keyText);
   });
-  return NS_OK;
 }
 
 void
-ServoKeyframeRule::GetCssTextImpl(nsAString& aCssText) const
+ServoKeyframeRule::GetCssText(nsAString& aCssText) const
 {
   Servo_Keyframe_GetCssText(mRaw, &aCssText);
 }

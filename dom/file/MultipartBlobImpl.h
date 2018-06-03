@@ -18,7 +18,7 @@ namespace dom {
 class MultipartBlobImpl final : public BaseBlobImpl
 {
 public:
-  NS_DECL_ISUPPORTS_INHERITED
+  NS_INLINE_DECL_REFCOUNTING_INHERITED(MultipartBlobImpl, BaseBlobImpl)
 
   // Create as a file
   static already_AddRefed<MultipartBlobImpl>
@@ -99,7 +99,7 @@ protected:
                     const nsAString& aName,
                     const nsAString& aContentType)
     : BaseBlobImpl(aName, aContentType, UINT64_MAX),
-      mBlobImpls(Move(aBlobImpls)),
+      mBlobImpls(std::move(aBlobImpls)),
       mIsFromNsIFile(false)
   {
   }
@@ -107,7 +107,7 @@ protected:
   MultipartBlobImpl(nsTArray<RefPtr<BlobImpl>>&& aBlobImpls,
                     const nsAString& aContentType)
     : BaseBlobImpl(aContentType, UINT64_MAX),
-      mBlobImpls(Move(aBlobImpls)),
+      mBlobImpls(std::move(aBlobImpls)),
       mIsFromNsIFile(false)
   {
   }

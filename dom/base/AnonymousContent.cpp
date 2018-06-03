@@ -10,7 +10,6 @@
 #include "nsComputedDOMStyle.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsIDocument.h"
-#include "nsIDOMHTMLCollection.h"
 #include "nsIFrame.h"
 #include "nsStyledElement.h"
 #include "HTMLCanvasElement.h"
@@ -75,6 +74,7 @@ void
 AnonymousContent::SetAttributeForElement(const nsAString& aElementId,
                                          const nsAString& aName,
                                          const nsAString& aValue,
+                                         nsIPrincipal* aSubjectPrincipal,
                                          ErrorResult& aRv)
 {
   Element* element = GetElementById(aElementId);
@@ -83,7 +83,7 @@ AnonymousContent::SetAttributeForElement(const nsAString& aElementId,
     return;
   }
 
-  element->SetAttribute(aName, aValue, aRv);
+  element->SetAttribute(aName, aValue, aSubjectPrincipal, aRv);
 }
 
 void

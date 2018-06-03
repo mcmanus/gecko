@@ -20,6 +20,7 @@ add_task(async function test_ui_state_notification_calls_updateAllUI() {
 });
 
 add_task(async function test_ui_state_signedin() {
+  const relativeDateAnchor = new Date();
   let state = {
     status: UIState.STATUS_SIGNED_IN,
     email: "foo@bar.com",
@@ -27,6 +28,13 @@ add_task(async function test_ui_state_signedin() {
     avatarURL: "https://foo.bar",
     lastSync: new Date(),
     syncing: false
+  };
+
+  const origRelativeTimeFormat = gSync.relativeTimeFormat;
+  gSync.relativeTimeFormat = {
+    formatBestUnit(date) {
+      return origRelativeTimeFormat.formatBestUnit(date, {now: relativeDateAnchor});
+    }
   };
 
   gSync.updateAllUI(state);
@@ -43,6 +51,7 @@ add_task(async function test_ui_state_signedin() {
   });
   checkRemoteTabsPanel("PanelUI-remotetabs-main", false);
   checkMenuBarItem("sync-syncnowitem");
+  gSync.relativeTimeFormat = origRelativeTimeFormat;
 });
 
 add_task(async function test_ui_state_syncing() {
@@ -108,8 +117,8 @@ add_task(async function test_ui_state_unverified() {
     syncing: false,
     syncNowTooltip: tooltipText
   });
-  checkRemoteTabsPanel("PanelUI-remotetabs-setupsync", false);
-  checkMenuBarItem("sync-setup");
+  checkRemoteTabsPanel("PanelUI-remotetabs-unverified", false);
+  checkMenuBarItem("sync-unverifieditem");
 });
 
 add_task(async function test_ui_state_loginFailed() {
@@ -134,21 +143,6 @@ add_task(async function test_ui_state_loginFailed() {
   checkMenuBarItem("sync-reauthitem");
 });
 
-add_task(async function test_FormatLastSyncDateNow() {
-  let now = new Date();
-  let nowString = gSync.formatLastSyncDate(now);
-  is(nowString, "Last sync: " + now.toLocaleDateString(undefined, {weekday: "long", hour: "numeric", minute: "numeric"}),
-     "The date is correctly formatted");
-});
-
-add_task(async function test_FormatLastSyncDateMonthAgo() {
-  let monthAgo = new Date();
-  monthAgo.setMonth(monthAgo.getMonth() - 1);
-  let monthAgoString = gSync.formatLastSyncDate(monthAgo);
-  is(monthAgoString, "Last sync: " + monthAgo.toLocaleDateString(undefined, {month: "long", day: "numeric"}),
-     "The date is correctly formatted");
-});
-
 function checkPanelUIStatusBar({label, tooltip, fxastatus, avatarURL, syncing, syncNowTooltip}) {
   let labelNode = document.getElementById("appMenu-fxa-label");
   let tooltipNode = document.getElementById("appMenu-fxa-status");
@@ -160,7 +154,7 @@ function checkPanelUIStatusBar({label, tooltip, fxastatus, avatarURL, syncing, s
   if (fxastatus) {
     is(statusNode.getAttribute("fxastatus"), fxastatus, "fxa fxastatus has the right value");
   } else {
-    ok(!statusNode.hasAttribute("fxastatus"), "fxastatus is unset")
+    ok(!statusNode.hasAttribute("fxastatus"), "fxastatus is unset");
   }
   if (avatarURL) {
     is(avatar.style.listStyleImage, `url("${avatarURL}")`, "fxa avatar URL is set");
@@ -176,7 +170,8 @@ function checkPanelUIStatusBar({label, tooltip, fxastatus, avatarURL, syncing, s
 function checkRemoteTabsPanel(expectedShownItemId, syncing, syncNowTooltip) {
   checkItemsVisiblities(["PanelUI-remotetabs-main",
                          "PanelUI-remotetabs-setupsync",
-                         "PanelUI-remotetabs-reauthsync"],
+                         "PanelUI-remotetabs-reauthsync",
+                         "PanelUI-remotetabs-unverified"],
                         expectedShownItemId);
 
   if (syncing != undefined && syncNowTooltip != undefined) {
@@ -185,7 +180,7 @@ function checkRemoteTabsPanel(expectedShownItemId, syncing, syncNowTooltip) {
 }
 
 function checkMenuBarItem(expectedShownItemId) {
-  checkItemsVisiblities(["sync-setup", "sync-syncnowitem", "sync-reauthitem"],
+  checkItemsVisiblities(["sync-setup", "sync-syncnowitem", "sync-reauthitem", "sync-unverifieditem"],
                         expectedShownItemId);
 }
 
@@ -225,7 +220,7 @@ function promiseObserver(topic) {
     let obs = (aSubject, aTopic, aData) => {
       Services.obs.removeObserver(obs, aTopic);
       resolve(aSubject);
-    }
+    };
     Services.obs.addObserver(obs, topic);
   });
 }

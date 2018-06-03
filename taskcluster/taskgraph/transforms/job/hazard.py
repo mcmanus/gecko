@@ -14,7 +14,7 @@ from taskgraph.transforms.job import run_job_using
 from taskgraph.transforms.job.common import (
     docker_worker_add_workspace_cache,
     docker_worker_setup_secrets,
-    docker_worker_add_public_artifacts,
+    docker_worker_add_artifacts,
     docker_worker_add_tooltool,
     support_vcs_checkout,
 )
@@ -34,6 +34,9 @@ haz_run_schema = Schema({
     # appropriately.  `true` here means ['*'], all secrets.  Not supported on
     # Windows
     Required('secrets', default=False): Any(bool, [basestring]),
+
+    # Base work directory used to set up the task.
+    Required('workdir'): basestring,
 })
 
 
@@ -44,7 +47,7 @@ def docker_worker_hazard(config, job, taskdesc):
     worker = taskdesc['worker']
     worker['artifacts'] = []
 
-    docker_worker_add_public_artifacts(config, job, taskdesc)
+    docker_worker_add_artifacts(config, job, taskdesc)
     docker_worker_add_workspace_cache(config, job, taskdesc)
     docker_worker_add_tooltool(config, job, taskdesc)
     docker_worker_setup_secrets(config, job, taskdesc)
@@ -62,11 +65,11 @@ def docker_worker_hazard(config, job, taskdesc):
 
     # build-haz-linux.sh needs this otherwise it assumes the checkout is in
     # the workspace.
-    env['GECKO_DIR'] = '/builds/worker/checkouts/gecko'
+    env['GECKO_DIR'] = '{workdir}/checkouts/gecko'.format(**run)
 
     worker['command'] = [
-        '/builds/worker/bin/run-task',
-        '--vcs-checkout', '/builds/worker/checkouts/gecko',
+        '{workdir}/bin/run-task'.format(**run),
+        '--vcs-checkout', '{workdir}/checkouts/gecko'.format(**run),
         '--',
         '/bin/bash', '-c', run['command']
     ]

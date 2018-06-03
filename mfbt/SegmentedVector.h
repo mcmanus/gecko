@@ -139,6 +139,11 @@ public:
       aIdealSegmentSize - sizeof(Segment) < sizeof(T));
   }
 
+  SegmentedVector(SegmentedVector&& aOther)
+    : mSegments(std::move(aOther.mSegments))
+  {
+  }
+
   ~SegmentedVector() { Clear(); }
 
   bool IsEmpty() const { return !mSegments.getFirst(); }

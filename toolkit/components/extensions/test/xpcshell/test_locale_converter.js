@@ -37,7 +37,7 @@ add_task(async function init() {
 
   policy.active = true;
 
-  do_register_cleanup(() => {
+  registerCleanupFunction(() => {
     policy.active = false;
   });
 });
@@ -63,7 +63,7 @@ add_task(async function testAsyncConvert() {
   let listener;
   let awaitResult = new Promise((resolve, reject) => {
     listener = {
-      QueryInterface: XPCOMUtils.generateQI([Ci.nsIStreamListener]),
+      QueryInterface: ChromeUtils.generateQI([Ci.nsIStreamListener]),
 
       onDataAvailable(request, context, inputStream, offset, count) {
         this.resultParts.push(NetUtil.readInputStreamToString(inputStream, count));
@@ -118,7 +118,7 @@ add_task(async function testInvalidUUID() {
   }, expectInvalidContextException);
 
   Assert.throws(() => {
-    let listener = {QueryInterface: XPCOMUtils.generateQI([Ci.nsIStreamListener])};
+    let listener = {QueryInterface: ChromeUtils.generateQI([Ci.nsIStreamListener])};
 
     convService.asyncConvertData(FROM_TYPE, TO_TYPE, listener, uri);
   }, expectInvalidContextException);
@@ -129,5 +129,5 @@ add_task(async function testInvalidUUID() {
 add_task(async function testEmptyStream() {
   let stream = StringStream("");
   let resultStream = convService.convert(stream, FROM_TYPE, TO_TYPE, URI);
-  equal(resultStream.data, "");
+  equal(resultStream.available(), 0, "Size of output stream should match size of input stream");
 });

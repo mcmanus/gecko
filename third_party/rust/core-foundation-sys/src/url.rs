@@ -6,7 +6,8 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
-use libc::c_void;
+
+use std::os::raw::c_void;
 
 use base::{CFOptionFlags, CFIndex, CFAllocatorRef, Boolean, CFTypeID, CFTypeRef, SInt32};
 use string::{CFStringRef, CFStringEncoding};
@@ -124,13 +125,14 @@ extern {
     //fn CFURLCreateStringByAddingPercentEscapes
     //fn CFURLCreateStringByReplacingPercentEscapes
     //fn CFURLCreateStringByReplacingPercentEscapesUsingEncoding
-    //fn CFURLGetFileSystemRepresentation
+    pub fn CFURLGetFileSystemRepresentation(anURL: CFURLRef, resolveAgainstBase: Boolean, buffer: *mut u8, maxBufLen: CFIndex) -> Boolean;
+
     //fn CFURLGetFSRef
     pub fn CFURLGetString(anURL: CFURLRef) -> CFStringRef;
 
     /* Getting URL Properties */
     //fn CFURLGetBaseURL(anURL: CFURLRef) -> CFURLRef;
-    //fn CFURLGetBytes
+    pub fn CFURLGetBytes(anURL: CFURLRef, buffer: *mut u8, bufferLength: CFIndex) -> CFIndex;
     //fn CFURLGetByteRangeForComponent
     pub fn CFURLGetTypeID() -> CFTypeID;
     //fn CFURLResourceIsReachable

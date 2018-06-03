@@ -1,15 +1,19 @@
 /* eslint-env mozilla/frame-script */
 
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
+ChromeUtils.defineModuleGetter(this, "PlacesUtils",
   "resource://gre/modules/PlacesUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesTestUtils",
+ChromeUtils.defineModuleGetter(this, "PlacesTestUtils",
   "resource://testing-common/PlacesTestUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
+ChromeUtils.defineModuleGetter(this, "Preferences",
   "resource://gre/modules/Preferences.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "HttpServer",
+ChromeUtils.defineModuleGetter(this, "HttpServer",
   "resource://testing-common/httpd.js");
+ChromeUtils.defineModuleGetter(this, "SearchTestUtils",
+  "resource://testing-common/SearchTestUtils.jsm");
+
+SearchTestUtils.init(Assert, registerCleanupFunction);
 
 /**
  * Waits for the next top-level document load in the current browser.  The URI
@@ -29,8 +33,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "HttpServer",
  */
 function waitForDocLoadAndStopIt(aExpectedURL, aBrowser = gBrowser.selectedBrowser, aStopFromProgressListener = true) {
   function content_script(contentStopFromProgressListener) {
-    let { interfaces: Ci, utils: Cu } = Components;
-    Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+    ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
     let wp = docShell.QueryInterface(Ci.nsIWebProgress);
 
     function stopContent(now, uri) {
@@ -59,7 +62,7 @@ function waitForDocLoadAndStopIt(aExpectedURL, aBrowser = gBrowser.selectedBrows
           stopContent(contentStopFromProgressListener, chan.originalURI.spec);
         }
       },
-      QueryInterface: XPCOMUtils.generateQI(["nsISupportsWeakReference"])
+      QueryInterface: ChromeUtils.generateQI(["nsISupportsWeakReference"])
     };
     wp.addProgressListener(progressListener, wp.NOTIFY_STATE_WINDOW);
 
@@ -96,7 +99,7 @@ function is_hidden(element) {
   if (style.visibility != "visible")
     return true;
   if (style.display == "-moz-popup")
-    return ["hiding", "closed"].indexOf(element.state) != -1;
+    return ["hiding", "closed"].includes(element.state);
 
   // Hiding a parent element will hide all its children
   if (element.parentNode != element.ownerDocument)
@@ -138,7 +141,7 @@ function runHttpServer(scheme, host, port = -1) {
     port = httpserver.identity.primaryPort;
     httpserver.identity.setPrimary(scheme, host, port);
   } catch (ex) {
-    info("We can't launch our http server successfully.")
+    info("We can't launch our http server successfully.");
   }
   is(httpserver.identity.has(scheme, host, port), true, `${scheme}://${host}:${port} is listening.`);
   return httpserver;
@@ -205,24 +208,6 @@ function promiseAutocompleteResultPopup(inputText,
   return promiseSearchComplete(win, dontAnimate);
 }
 
-function promiseNewSearchEngine(basename) {
-  return new Promise((resolve, reject) => {
-    info("Waiting for engine to be added: " + basename);
-    let url = getRootDirectory(gTestPath) + basename;
-    Services.search.addEngine(url, null, "", false, {
-      onSuccess(engine) {
-        info("Search engine added: " + basename);
-        registerCleanupFunction(() => Services.search.removeEngine(engine));
-        resolve(engine);
-      },
-      onError(errCode) {
-        Assert.ok(false, "addEngine failed with error code " + errCode);
-        reject();
-      },
-    });
-  });
-}
-
 function promisePageActionPanelOpen() {
   let dwu = window.QueryInterface(Ci.nsIInterfaceRequestor)
                   .getInterface(Ci.nsIDOMWindowUtils);
@@ -248,6 +233,38 @@ function promisePageActionPanelOpen() {
   });
 }
 
+async function waitForActivatedActionPanel() {
+  if (!BrowserPageActions.activatedActionPanelNode) {
+    info("Waiting for activated-action panel to be added to mainPopupSet");
+    await new Promise(resolve => {
+      let observer = new MutationObserver(mutations => {
+        if (BrowserPageActions.activatedActionPanelNode) {
+          observer.disconnect();
+          resolve();
+        }
+      });
+      let popupSet = document.getElementById("mainPopupSet");
+      observer.observe(popupSet, { childList: true });
+    });
+    info("Activated-action panel added to mainPopupSet");
+  }
+  if (!BrowserPageActions.activatedActionPanelNode.state == "open") {
+    info("Waiting for activated-action panel popupshown");
+    await promisePanelShown(BrowserPageActions.activatedActionPanelNode);
+    info("Got activated-action panel popupshown");
+  }
+  let panelView =
+    BrowserPageActions.activatedActionPanelNode.querySelector("panelview");
+  if (panelView) {
+    await BrowserTestUtils.waitForEvent(
+      BrowserPageActions.activatedActionPanelNode,
+      "ViewShown"
+    );
+    await promisePageActionViewChildrenVisible(panelView);
+  }
+  return panelView;
+}
+
 function promisePageActionPanelShown() {
   return promisePanelShown(BrowserPageActions.panelNode);
 }
@@ -266,10 +283,14 @@ function promisePanelHidden(panelIDOrNode) {
 
 function promisePanelEvent(panelIDOrNode, eventType) {
   return new Promise(resolve => {
-    let panel = typeof(panelIDOrNode) != "string" ? panelIDOrNode :
-                document.getElementById(panelIDOrNode);
-    if (!panel ||
-        (eventType == "popupshown" && panel.state == "open") ||
+    let panel = panelIDOrNode;
+    if (typeof panel == "string") {
+      panel = document.getElementById(panelIDOrNode);
+      if (!panel) {
+        throw new Error(`Panel with ID "${panelIDOrNode}" does not exist.`);
+      }
+    }
+    if ((eventType == "popupshown" && panel.state == "open") ||
         (eventType == "popuphidden" && panel.state == "closed")) {
       executeSoon(resolve);
       return;
@@ -290,16 +311,18 @@ function promisePageActionViewShown() {
 }
 
 function promisePageActionViewChildrenVisible(panelViewNode) {
-  info("promisePageActionViewChildrenVisible waiting for a child node to be visible");
+  return promiseNodeVisible(panelViewNode.firstChild.firstChild);
+}
+
+function promiseNodeVisible(node) {
+  info(`promiseNodeVisible waiting, node.id=${node.id} node.localeName=${node.localName}\n`);
   let dwu = window.QueryInterface(Ci.nsIInterfaceRequestor)
                   .getInterface(Ci.nsIDOMWindowUtils);
   return BrowserTestUtils.waitForCondition(() => {
-    let bodyNode = panelViewNode.firstChild;
-    for (let childNode of bodyNode.childNodes) {
-      let bounds = dwu.getBoundsWithoutFlushing(childNode);
-      if (bounds.width > 0 && bounds.height > 0) {
-        return true;
-      }
+    let bounds = dwu.getBoundsWithoutFlushing(node);
+    if (bounds.width > 0 && bounds.height > 0) {
+      info(`promiseNodeVisible OK, node.id=${node.id} node.localeName=${node.localName}\n`);
+      return true;
     }
     return false;
   });
@@ -312,4 +335,37 @@ function promiseSpeculativeConnection(httpserver) {
     }
     return false;
   }, "Waiting for connection setup");
+}
+
+async function waitForAutocompleteResultAt(index) {
+  let searchString = gURLBar.controller.searchString;
+  await BrowserTestUtils.waitForCondition(
+    () => gURLBar.popup.richlistbox.children.length > index &&
+          gURLBar.popup.richlistbox.children[index].getAttribute("ac-text") == searchString,
+    `Waiting for the autocomplete result for "${searchString}" at [${index}] to appear`);
+  // Ensure the addition is complete, for proper mouse events on the entries.
+  await new Promise(resolve => window.requestIdleCallback(resolve, {timeout: 1000}));
+  return gURLBar.popup.richlistbox.children[index];
+}
+
+function promiseSuggestionsPresent(msg = "") {
+  return TestUtils.waitForCondition(suggestionsPresent,
+                                    msg || "Waiting for suggestions");
+}
+
+function suggestionsPresent() {
+  let controller = gURLBar.popup.input.controller;
+  let matchCount = controller.matchCount;
+  for (let i = 0; i < matchCount; i++) {
+    let url = controller.getValueAt(i);
+    let mozActionMatch = url.match(/^moz-action:([^,]+),(.*)$/);
+    if (mozActionMatch) {
+      let [, type, paramStr] = mozActionMatch;
+      let params = JSON.parse(paramStr);
+      if (type == "searchengine" && "searchSuggestion" in params) {
+        return true;
+      }
+    }
+  }
+  return false;
 }

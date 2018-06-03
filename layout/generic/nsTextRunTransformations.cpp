@@ -1,10 +1,12 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsTextRunTransformations.h"
 
+#include "mozilla/ComputedStyleInlines.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Move.h"
 
@@ -54,7 +56,7 @@ nsTransformedTextRun::Create(const gfxTextRunFactory::Parameters* aParams,
   RefPtr<nsTransformedTextRun> result =
     new (storage) nsTransformedTextRun(aParams, aFactory, aFontGroup,
                                        aString, aLength, aFlags, aFlags2,
-                                       Move(aStyles), aOwnsFactory);
+                                       std::move(aStyles), aOwnsFactory);
   return result.forget();
 }
 
@@ -110,7 +112,7 @@ nsTransformingTextRunFactory::MakeTextRun(const char16_t* aString, uint32_t aLen
                                           bool aOwnsFactory)
 {
   return nsTransformedTextRun::Create(aParams, this, aFontGroup,
-                                      aString, aLength, aFlags, aFlags2, Move(aStyles),
+                                      aString, aLength, aFlags, aFlags2, std::move(aStyles),
                                       aOwnsFactory);
 }
 
@@ -129,7 +131,7 @@ nsTransformingTextRunFactory::MakeTextRun(const uint8_t* aString, uint32_t aLeng
   return MakeTextRun(unicodeString.get(), aLength, aParams, aFontGroup,
                      aFlags & ~gfx::ShapedTextFlags::TEXT_IS_8BIT,
                      aFlags2,
-                     Move(aStyles), aOwnsFactory);
+                     std::move(aStyles), aOwnsFactory);
 }
 
 void
@@ -141,6 +143,8 @@ MergeCharactersInTextRun(gfxTextRun* aDest, gfxTextRun* aSrc,
   gfxTextRun::GlyphRunIterator iter(aSrc, gfxTextRun::Range(aSrc));
   uint32_t offset = 0;
   AutoTArray<gfxTextRun::DetailedGlyph,2> glyphs;
+  const gfxTextRun::CompressedGlyph continuationGlyph =
+    gfxTextRun::CompressedGlyph::MakeComplex(false, false, 0);
   while (iter.NextRun()) {
     const gfxTextRun::GlyphRun* run = iter.GetGlyphRun();
     nsresult rv = aDest->AddGlyphRun(run->mFont, run->mMatchType,
@@ -160,8 +164,6 @@ MergeCharactersInTextRun(gfxTextRun* aDest, gfxTextRun* aSrc,
           gfxTextRun::DetailedGlyph details;
           details.mGlyphID = g.GetSimpleGlyph();
           details.mAdvance = g.GetSimpleAdvance();
-          details.mXOffset = 0;
-          details.mYOffset = 0;
           glyphs.AppendElement(details);
         }
       } else {
@@ -201,7 +203,7 @@ MergeCharactersInTextRun(gfxTextRun* aDest, gfxTextRun* aSrc,
         ++offset;
 
         while (offset < aDest->GetLength() && aDeletedChars[offset]) {
-          aDest->SetGlyphs(offset++, gfxTextRun::CompressedGlyph(), nullptr);
+          aDest->SetGlyphs(offset++, continuationGlyph, nullptr);
         }
       }
 
@@ -680,7 +682,7 @@ nsCaseTransformTextRunFactory::RebuildTextRun(nsTransformedTextRun* aTextRun,
     transformedChild = mInnerTransformingTextRunFactory->MakeTextRun(
         convertedString.BeginReading(), convertedString.Length(),
         &innerParams, fontGroup, flags, nsTextFrameUtils::Flags(),
-        Move(styleArray), false);
+        std::move(styleArray), false);
     child = transformedChild.get();
   } else {
     cachedChild = fontGroup->MakeTextRun(

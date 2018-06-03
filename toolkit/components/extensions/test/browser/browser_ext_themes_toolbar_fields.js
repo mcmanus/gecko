@@ -3,16 +3,26 @@
 // This test checks whether applied WebExtension themes that attempt to change
 // the background color and the color of the navbar text fields are applied properly.
 
+ChromeUtils.import("resource://testing-common/CustomizableUITestUtils.jsm", this);
+let gCUITestUtils = new CustomizableUITestUtils(window);
+
 add_task(async function setup() {
   await SpecialPowers.pushPrefEnv({set: [
     ["extensions.webextensions.themes.enabled", true],
-    ["browser.search.widget.inNavBar", true],
   ]});
+
+  await gCUITestUtils.addSearchBar();
+  registerCleanupFunction(() => {
+    gCUITestUtils.removeSearchBar();
+  });
 });
 
 add_task(async function test_support_toolbar_field_properties() {
+  let searchbar = BrowserSearch.searchBar;
+
   const TOOLBAR_FIELD_BACKGROUND = "#ff00ff";
   const TOOLBAR_FIELD_COLOR = "#00ff00";
+  const TOOLBAR_FIELD_BORDER = "#aaaaff";
   let extension = ExtensionTestUtils.loadExtension({
     manifest: {
       "theme": {
@@ -24,6 +34,7 @@ add_task(async function test_support_toolbar_field_properties() {
           "textcolor": TEXT_COLOR,
           "toolbar_field": TOOLBAR_FIELD_BACKGROUND,
           "toolbar_field_text": TOOLBAR_FIELD_COLOR,
+          "toolbar_field_border": TOOLBAR_FIELD_BORDER,
         },
       },
     },
@@ -34,11 +45,14 @@ add_task(async function test_support_toolbar_field_properties() {
 
   await extension.startup();
 
+  let root = document.documentElement;
   // Remove the `remotecontrol` attribute since it interferes with the urlbar styling.
-  document.documentElement.removeAttribute("remotecontrol");
+  root.removeAttribute("remotecontrol");
+  registerCleanupFunction(() => {
+    root.setAttribute("remotecontrol", "true");
+  });
 
   let toolbox = document.querySelector("#navigator-toolbox");
-  let searchbar = document.querySelector("#searchbar");
   let fields = [
     toolbox.querySelector("#urlbar"),
     document.getAnonymousElementByAttribute(searchbar, "anonid", "searchbar-textbox"),
@@ -53,13 +67,68 @@ add_task(async function test_support_toolbar_field_properties() {
   for (let field of fields) {
     info(`Testing ${field.id || field.className}`);
     Assert.equal(window.getComputedStyle(field).backgroundColor,
-      "rgb(" + hexToRGB(TOOLBAR_FIELD_BACKGROUND).join(", ") + ")", "Field background should be set.");
+                 hexToCSS(TOOLBAR_FIELD_BACKGROUND),
+                 "Field background should be set.");
     Assert.equal(window.getComputedStyle(field).color,
-      "rgb(" + hexToRGB(TOOLBAR_FIELD_COLOR).join(", ") + ")", "Field color should be set.");
+                 hexToCSS(TOOLBAR_FIELD_COLOR),
+                 "Field color should be set.");
+    testBorderColor(field, TOOLBAR_FIELD_BORDER);
   }
 
-  // Restore the `remotecontrol` attribute at the end of the test.
-  document.documentElement.setAttribute("remotecontrol", "true");
+  await extension.unload();
+});
+
+add_task(async function test_support_toolbar_field_brighttext() {
+  let root = document.documentElement;
+  // Remove the `remotecontrol` attribute since it interferes with the urlbar styling.
+  root.removeAttribute("remotecontrol");
+  registerCleanupFunction(() => {
+    root.setAttribute("remotecontrol", "true");
+  });
+  let toolbox = document.querySelector("#navigator-toolbox");
+  let urlbar = toolbox.querySelector("#urlbar");
+
+  let extension = ExtensionTestUtils.loadExtension({
+    manifest: {
+      "theme": {
+        "colors": {
+          "accentcolor": ACCENT_COLOR,
+          "textcolor": TEXT_COLOR,
+          "toolbar_field": "#fff",
+          "toolbar_field_text": "#000",
+        },
+      },
+    },
+  });
+
+  await extension.startup();
+
+  Assert.equal(window.getComputedStyle(urlbar).color,
+               hexToCSS("#000000"), "Color has been set");
+  Assert.ok(!root.hasAttribute("lwt-toolbar-field-brighttext"),
+            "Brighttext attribute should not be set");
+
+  await extension.unload();
+
+  extension = ExtensionTestUtils.loadExtension({
+    manifest: {
+      "theme": {
+        "colors": {
+          "accentcolor": ACCENT_COLOR,
+          "textcolor": TEXT_COLOR,
+          "toolbar_field": "#000",
+          "toolbar_field_text": "#fff",
+        },
+      },
+    },
+  });
+
+  await extension.startup();
+
+  Assert.equal(window.getComputedStyle(urlbar).color,
+               hexToCSS("#ffffff"), "Color has been set");
+  Assert.ok(root.hasAttribute("lwt-toolbar-field-brighttext"),
+            "Brighttext attribute should be set");
 
   await extension.unload();
 });

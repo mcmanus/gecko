@@ -7,6 +7,8 @@
  */
 
 add_task(async function test_escape() {
+  Services.prefs.setBoolPref("browser.urlbar.autoFill", false);
+
   let uri1 = NetUtil.newURI("http://site/");
   let uri2 = NetUtil.newURI("http://happytimes/");
   await PlacesTestUtils.addVisits([
@@ -14,7 +16,7 @@ add_task(async function test_escape() {
     { uri: uri2, title: "title" }
   ]);
 
-  do_print("Searching for h matches site and not http://");
+  info("Searching for h matches site and not http://");
   await check_autocomplete({
     search: "h",
     matches: [ { uri: uri2, title: "title" } ]

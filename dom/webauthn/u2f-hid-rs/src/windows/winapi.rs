@@ -60,7 +60,7 @@ extern "stdcall" {
 macro_rules! offset_of {
     ($ty:ty, $field:ident) => {
         unsafe { &(*(0 as *const $ty)).$field as *const _ as usize }
-    }
+    };
 }
 
 fn from_wide_ptr(ptr: *const u16, len: usize) -> String {
@@ -195,7 +195,7 @@ impl DeviceInterfaceDetailData {
             return None;
         }
 
-        let mut data = unsafe { libc::malloc(size) as PSP_DEVICE_INTERFACE_DETAIL_DATA_W };
+        let data = unsafe { libc::malloc(size) as PSP_DEVICE_INTERFACE_DETAIL_DATA_W };
         if data.is_null() {
             return None;
         }

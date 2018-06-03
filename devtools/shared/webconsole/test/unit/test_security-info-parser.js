@@ -5,11 +5,10 @@
 
 // Test that NetworkHelper.parseSecurityInfo returns correctly formatted object.
 
-const { require } = Components.utils.import("resource://devtools/shared/Loader.jsm", {});
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+const { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
 
 Object.defineProperty(this, "NetworkHelper", {
-  get: function () {
+  get: function() {
     return require("devtools/shared/webconsole/network-helper");
   },
   configurable: true,
@@ -17,7 +16,6 @@ Object.defineProperty(this, "NetworkHelper", {
   enumerable: true
 });
 
-var Ci = Components.interfaces;
 const wpl = Ci.nsIWebProgressListener;
 const MockCertificate = {
   commonName: "cn",
@@ -35,8 +33,8 @@ const MockCertificate = {
 };
 
 const MockSecurityInfo = {
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsITransportSecurityInfo,
-                                         Ci.nsISSLStatusProvider]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsITransportSecurityInfo,
+                                          Ci.nsISSLStatusProvider]),
   securityState: wpl.STATE_IS_SECURE,
   errorCode: 0,
   SSLStatus: {
@@ -48,7 +46,7 @@ const MockSecurityInfo = {
 };
 
 function run_test() {
-  let result = NetworkHelper.parseSecurityInfo(MockSecurityInfo, {});
+  const result = NetworkHelper.parseSecurityInfo(MockSecurityInfo, {});
 
   equal(result.state, "secure", "State is correct.");
 

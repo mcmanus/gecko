@@ -3,7 +3,7 @@ const CONTAINERS_URL = "chrome://browser/content/preferences/containers.xul";
 add_task(async function setup() {
   await openPreferencesViaOpenPreferencesAPI("containers", { leaveOpen: true });
   registerCleanupFunction(async function() {
-    await BrowserTestUtils.removeTab(gBrowser.selectedTab);
+    BrowserTestUtils.removeTab(gBrowser.selectedTab);
   });
 });
 
@@ -14,7 +14,7 @@ add_task(async function() {
     let dialogPromise = promiseLoadSubDialog(CONTAINERS_URL);
 
     let addButton = doc.getElementById("containersAdd");
-    addButton.click();
+    addButton.doCommand();
 
     let dialog = await dialogPromise;
 

@@ -14,33 +14,29 @@
 #define LOG_ENABLED() LOG5_ENABLED()
 
 #include "nsHttpConnectionInfo.h"
+
 #include "mozilla/net/DNS.h"
-#include "prnetdb.h"
-#include "nsICryptoHash.h"
 #include "nsComponentManagerUtils.h"
+#include "nsICryptoHash.h"
 #include "nsIProtocolProxyService.h"
+#include "nsNetCID.h"
+#include "prnetdb.h"
 
 static nsresult
 SHA256(const char* aPlainText, nsAutoCString& aResult)
 {
-  static nsICryptoHash* hasher = nullptr;
-  nsresult rv;
-  if (!hasher) {
-    rv = CallCreateInstance("@mozilla.org/security/hash;1", &hasher);
+    nsresult rv;
+    nsCOMPtr<nsICryptoHash> hasher =
+      do_CreateInstance(NS_CRYPTO_HASH_CONTRACTID, &rv);
     if (NS_FAILED(rv)) {
       LOG(("nsHttpDigestAuth: no crypto hash!\n"));
       return rv;
     }
-  }
-
-  rv = hasher->Init(nsICryptoHash::SHA256);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  rv = hasher->Update((unsigned char*) aPlainText, strlen(aPlainText));
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  rv = hasher->Finish(false, aResult);
-  return rv;
+    rv = hasher->Init(nsICryptoHash::SHA256);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = hasher->Update((unsigned char*) aPlainText, strlen(aPlainText));
+    NS_ENSURE_SUCCESS(rv, rv);
+    return hasher->Finish(false, aResult);
 }
 
 namespace mozilla {
@@ -109,13 +105,6 @@ nsHttpConnectionInfo::Init(const nsACString &host, int32_t port,
     SetOriginServer(host, port);
 }
 
-void
-nsHttpConnectionInfo::SetNetworkInterfaceId(const nsACString& aNetworkInterfaceId)
-{
-    mNetworkInterfaceId = aNetworkInterfaceId;
-    BuildHashKey();
-}
-
 void nsHttpConnectionInfo::BuildHashKey()
 {
     //
@@ -151,11 +140,6 @@ void nsHttpConnectionInfo::BuildHashKey()
     mHashKey.AssignLiteral(".......[tlsflags0x00000000]");
 
     mHashKey.Append(keyHost);
-    if (!mNetworkInterfaceId.IsEmpty()) {
-        mHashKey.Append('(');
-        mHashKey.Append(mNetworkInterfaceId);
-        mHashKey.Append(')');
-    }
     mHashKey.Append(':');
     mHashKey.AppendInt(keyPort);
     if (!mUsername.IsEmpty()) {
@@ -251,10 +235,6 @@ nsHttpConnectionInfo::Clone() const
                                          mOriginAttributes, mRoutedHost, mRoutedPort);
     }
 
-    if (!mNetworkInterfaceId.IsEmpty()) {
-        clone->SetNetworkInterfaceId(mNetworkInterfaceId);
-    }
-
     // Make sure the anonymous, insecure-scheme, and private flags are transferred
     clone->SetAnonymous(GetAnonymous());
     clone->SetPrivate(GetPrivate());
@@ -286,9 +266,6 @@ nsHttpConnectionInfo::CloneAsDirectRoute(nsHttpConnectionInfo **outCI)
     clone->SetNoSpdy(GetNoSpdy());
     clone->SetBeConservative(GetBeConservative());
     clone->SetTlsFlags(GetTlsFlags());
-    if (!mNetworkInterfaceId.IsEmpty()) {
-        clone->SetNetworkInterfaceId(mNetworkInterfaceId);
-    }
     clone.forget(outCI);
 }
 

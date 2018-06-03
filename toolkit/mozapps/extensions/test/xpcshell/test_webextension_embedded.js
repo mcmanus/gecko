@@ -8,17 +8,16 @@ const profileDir = gProfD.clone();
 profileDir.append("extensions");
 
 createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "49");
-startupManager();
 
 // NOTE: the following import needs to be called after the `createAppInfo`
 // or it will fail Extension.jsm internally imports AddonManager.jsm and
 // AddonManager will raise a ReferenceError exception because it tried to
 // access an undefined `Services.appinfo` object.
-const { Management } = Components.utils.import("resource://gre/modules/Extension.jsm", {});
+const { Management } = ChromeUtils.import("resource://gre/modules/Extension.jsm", {});
 
 const {
   EmbeddedExtensionManager,
-} = Components.utils.import("resource://gre/modules/LegacyExtensionsUtils.jsm", {});
+} = ChromeUtils.import("resource://gre/modules/LegacyExtensionsUtils.jsm", {});
 
 function promiseWebExtensionShutdown() {
   return new Promise(resolve => {
@@ -52,6 +51,7 @@ const EMBEDDED_WEBEXT_MANIFEST = JSON.stringify({
  *  is persisted and restored correctly across restarts.
  */
 add_task(async function has_embedded_webextension_persisted() {
+  await promiseStartupManager();
   const ID = "embedded-webextension-addon-persist@tests.mozilla.org";
 
   const xpiFile = createTempXPIFile({
@@ -115,7 +115,7 @@ add_task(async function has_embedded_webextension_persisted() {
      "Got the expected 'startup' property in the webExtension object");
 
   let waitUninstall = promiseAddonEvent("onUninstalled");
-  addon.uninstall();
+  await addon.uninstall();
   await waitUninstall;
 });
 
@@ -186,7 +186,7 @@ add_task(async function run_embedded_webext_bootstrap() {
   // test the params of the shutdown and uninstall bootstrap method.
   let waitForWebExtensionShutdown = promiseWebExtensionShutdown();
   let waitUninstall = promiseAddonEvent("onUninstalled");
-  addon.uninstall();
+  await addon.uninstall();
   await waitForWebExtensionShutdown;
   await waitUninstall;
 
@@ -252,7 +252,7 @@ add_task(async function reload_embedded_webext_bootstrap() {
   await startupInfo.data.webExtension.startup();
 
   const waitForAddonDisabled = promiseAddonEvent("onDisabled");
-  addon.userDisabled = true;
+  await addon.disable();
   await waitForAddonDisabled;
 
   // No embedded webextension should be currently around.
@@ -260,7 +260,7 @@ add_task(async function reload_embedded_webext_bootstrap() {
         "No embedded extension instance should be tracked here");
 
   const waitForAddonEnabled = promiseAddonEvent("onEnabled");
-  addon.userDisabled = false;
+  await addon.enable();
   await waitForAddonEnabled;
 
   // Only one embedded extension.
@@ -275,7 +275,7 @@ add_task(async function reload_embedded_webext_bootstrap() {
   await startupInfo.data.webExtension.startup();
 
   const waitForReinstalled = promiseAddonEvent("onInstalled");
-  addon.reload();
+  await addon.reload();
   await waitForReinstalled;
 
   // No leaked embedded extension after the previous reloads.
@@ -291,7 +291,7 @@ add_task(async function reload_embedded_webext_bootstrap() {
 
   // Uninstall the test addon
   let waitUninstalled = promiseAddonEvent("onUninstalled");
-  addon.uninstall();
+  await addon.uninstall();
   await waitUninstalled;
 
   // No leaked embedded extension after uninstalling.
@@ -363,7 +363,7 @@ add_task(async function shutdown_embedded_webext_without_bootstrap_shutdown() {
 
   // Uninstall the addon.
   const waitUninstalled = promiseAddonEvent("onUninstalled");
-  addon.uninstall();
+  await addon.uninstall();
   await waitUninstalled;
 
   // No leaked embedded extension after uninstalling.

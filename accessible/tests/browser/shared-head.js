@@ -11,9 +11,7 @@
             invokeSetStyle, getAccessibleDOMNodeID, getAccessibleTagName,
             addAccessibleTask, findAccessibleChildByID, isDefunct,
             CURRENT_CONTENT_DIR, loadScripts, loadFrameScripts, snippetToURL,
-            Cc, Cu, arrayFromChildren */
-
-const { interfaces: Ci, utils: Cu, classes: Cc } = Components;
+            Cc, Cu, arrayFromChildren, forceGC */
 
 /**
  * Current browser test directory path used to load subscripts.
@@ -150,7 +148,7 @@ function invokeFocus(browser, id) {
   return ContentTask.spawn(browser, id, contentId => {
     let elm = content.document.getElementById(contentId);
     if (elm instanceof Ci.nsIDOMNSEditableElement && elm.editor ||
-        elm instanceof Ci.nsIDOMXULTextBoxElement) {
+        elm.localName == "textbox") {
       elm.selectionStart = elm.selectionEnd = elm.value.length;
     }
     elm.focus();
@@ -362,4 +360,16 @@ function queryInterfaces(accessible, interfaces) {
 function arrayFromChildren(accessible) {
   return Array.from({ length: accessible.childCount }, (c, i) =>
     accessible.getChildAt(i));
+}
+
+/**
+ * Force garbage collection.
+ */
+function forceGC() {
+  SpecialPowers.gc();
+  SpecialPowers.forceShrinkingGC();
+  SpecialPowers.forceCC();
+  SpecialPowers.gc();
+  SpecialPowers.forceShrinkingGC();
+  SpecialPowers.forceCC();
 }

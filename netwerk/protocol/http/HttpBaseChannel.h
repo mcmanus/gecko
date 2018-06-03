@@ -62,7 +62,7 @@ class nsIPrincipal;
 namespace mozilla {
 
 namespace dom {
-class Performance;
+class PerformanceStorage;
 }
 
 class LogCollector;
@@ -195,6 +195,7 @@ public:
   NS_IMETHOD GetResponseStatusText(nsACString& aValue) override;
   NS_IMETHOD GetRequestSucceeded(bool *aValue) override;
   NS_IMETHOD RedirectTo(nsIURI *newURI) override;
+  NS_IMETHOD UpgradeToSecure() override;
   NS_IMETHOD GetRequestContextID(uint64_t *aRCID) override;
   NS_IMETHOD GetTransferSize(uint64_t *aTransferSize) override;
   NS_IMETHOD GetDecodedBodySize(uint64_t *aDecodedBodySize) override;
@@ -235,6 +236,8 @@ public:
   NS_IMETHOD SetAllowAltSvc(bool aAllowAltSvc) override;
   NS_IMETHOD GetBeConservative(bool *aBeConservative) override;
   NS_IMETHOD SetBeConservative(bool aBeConservative) override;
+  NS_IMETHOD GetTrr(bool *aTRR) override;
+  NS_IMETHOD SetTrr(bool aTRR) override;
   NS_IMETHOD GetTlsFlags(uint32_t *aTlsFlags) override;
   NS_IMETHOD SetTlsFlags(uint32_t aTlsFlags) override;
   NS_IMETHOD GetApiRedirectToURI(nsIURI * *aApiRedirectToURI) override;
@@ -244,8 +247,6 @@ public:
   NS_IMETHOD SetResponseTimeoutEnabled(bool aEnable) override;
   NS_IMETHOD GetInitialRwin(uint32_t* aRwin) override;
   NS_IMETHOD SetInitialRwin(uint32_t aRwin) override;
-  NS_IMETHOD GetNetworkInterfaceId(nsACString& aNetworkInterfaceId) override;
-  NS_IMETHOD SetNetworkInterfaceId(const nsACString& aNetworkInterfaceId) override;
   NS_IMETHOD ForcePending(bool aForcePending) override;
   NS_IMETHOD GetLastModifiedTime(PRTime* lastModifiedTime) override;
   NS_IMETHOD GetCorsIncludeCredentials(bool* aInclude) override;
@@ -260,6 +261,7 @@ public:
   NS_IMETHOD SetTopWindowURIIfUnknown(nsIURI *aTopWindowURI) override;
   NS_IMETHOD GetProxyURI(nsIURI **proxyURI) override;
   virtual void SetCorsPreflightParameters(const nsTArray<nsCString>& unsafeHeaders) override;
+  virtual void SetAltDataForChild(bool aIsForChild) override;
   NS_IMETHOD GetConnectionInfoHashKey(nsACString& aConnectionInfoHashKey) override;
   NS_IMETHOD GetIntegrityMetadata(nsAString& aIntegrityMetadata) override;
   NS_IMETHOD SetIntegrityMetadata(const nsAString& aIntegrityMetadata) override;
@@ -298,6 +300,10 @@ public:
                         ReportAction aAction = ReportAction::Forget) override;
 
   void
+  FlushReportsToConsoleForServiceWorkerScope(const nsACString& aScope,
+                                             ReportAction aAction = ReportAction::Forget) override;
+
+  void
   FlushConsoleReports(nsIDocument* aDocument,
                       ReportAction aAction = ReportAction::Forget) override;
 
@@ -320,7 +326,7 @@ public:
         nsContentEncodings(nsIHttpChannel* aChannel, const char* aEncodingHeader);
 
     private:
-        virtual ~nsContentEncodings();
+        virtual ~nsContentEncodings() = default;
 
         MOZ_MUST_USE nsresult PrepareForNext(void);
 
@@ -338,6 +344,7 @@ public:
 
     nsHttpResponseHead * GetResponseHead() const { return mResponseHead; }
     nsHttpRequestHead * GetRequestHead() { return &mRequestHead; }
+    nsHttpHeaderArray * GetResponseTrailers() const { return mResponseTrailers; }
 
     const NetAddr& GetSelfAddr() { return mSelfAddr; }
     const NetAddr& GetPeerAddr() { return mPeerAddr; }
@@ -347,6 +354,10 @@ public:
 public: /* Necko internal use only... */
     int64_t GetAltDataLength() { return mAltDataLength; }
     bool IsNavigation();
+
+    static bool IsReferrerSchemeAllowed(nsIURI *aReferrer);
+
+    static void PropagateReferenceIfNeeded(nsIURI *aURI, nsCOMPtr<nsIURI>& aRedirectURI);
 
     // Return whether upon a redirect code of httpStatus for method, the
     // request method should be rewritten to GET.
@@ -371,6 +382,41 @@ public: /* Necko internal use only... */
       return mChannelId;
     }
 
+    void InternalSetUploadStream(nsIInputStream *uploadStream)
+    {
+      mUploadStream = uploadStream;
+    }
+
+    void InternalSetUploadStreamLength(uint64_t aLength)
+    {
+      mReqContentLength = aLength;
+    }
+
+    void SetUploadStreamHasHeaders(bool hasHeaders)
+    {
+      mUploadStreamHasHeaders = hasHeaders;
+    }
+
+    MOZ_MUST_USE nsresult
+    SetReferrerWithPolicyInternal(nsIURI *referrer, uint32_t referrerPolicy)
+    {
+      nsAutoCString spec;
+      nsresult rv = referrer->GetAsciiSpec(spec);
+      if (NS_FAILED(rv)) {
+        return rv;
+      }
+      mReferrer = referrer;
+      mReferrerPolicy = referrerPolicy;
+      rv = mRequestHead.SetHeader(nsHttp::Referer, spec);
+      return rv;
+    }
+
+    MOZ_MUST_USE nsresult SetTopWindowURI(nsIURI* aTopWindowURI)
+    {
+      mTopWindowURI = aTopWindowURI;
+      return NS_OK;
+    }
+
 protected:
   // Handle notifying listener, removing from loadgroup if request failed.
   void     DoNotifyListener();
@@ -379,13 +425,18 @@ protected:
   // drop reference to listener, its callbacks, and the progress sink
   virtual void ReleaseListeners();
 
+  // Call AsyncAbort().
+  virtual void
+  DoAsyncAbort(nsresult aStatus) = 0;
+
   // This is fired only when a cookie is created due to the presence of
   // Set-Cookie header in the response header of any network request.
   // This notification will come only after the "http-on-examine-response"
   // was fired.
   void NotifySetCookie(char const *aCookie);
 
-  mozilla::dom::Performance* GetPerformance();
+  mozilla::dom::PerformanceStorage* GetPerformanceStorage();
+  void MaybeReportTimingData();
   nsIURI* GetReferringPage();
   nsPIDOMWindowInner* GetInnerDOMWindow();
 
@@ -434,6 +485,16 @@ protected:
   // Called before we create the redirect target channel.
   already_AddRefed<nsILoadInfo> CloneLoadInfoForRedirect(nsIURI *newURI, uint32_t redirectFlags);
 
+  static void CallTypeSniffers(void *aClosure, const uint8_t *aData,
+                               uint32_t aCount);
+
+  nsresult
+  CheckRedirectLimit(uint32_t aRedirectFlags) const;
+
+  bool
+  MaybeWaitForUploadStreamLength(nsIStreamListener *aListener,
+                                 nsISupports *aContext);
+
   friend class PrivateBrowsingChannel<HttpBaseChannel>;
   friend class InterceptFailedOnStop;
 
@@ -462,6 +523,15 @@ private:
   // Proxy release all members above on main thread.
   void ReleaseMainThreadOnlyReferences();
 
+  bool IsCrossOriginWithReferrer();
+
+  nsresult
+  ExplicitSetUploadStreamLength(uint64_t aContentLength,
+                                bool aStreamHasHeaders);
+
+  void
+  MaybeResumeAsyncOpen();
+
 protected:
   // Use Release-Acquire ordering to ensure the OMT ODA is ignored while channel
   // is canceled on main thread.
@@ -477,6 +547,7 @@ protected:
   nsCOMPtr<nsIInputStream>          mUploadStream;
   nsCOMPtr<nsIRunnable>             mUploadCloneableCallback;
   nsAutoPtr<nsHttpResponseHead>     mResponseHead;
+  nsAutoPtr<nsHttpHeaderArray>      mResponseTrailers;
   RefPtr<nsHttpConnectionInfo>      mConnectionInfo;
   nsCOMPtr<nsIProxyInfo>            mProxyInfo;
   nsCOMPtr<nsISupports>             mSecurityInfo;
@@ -504,6 +575,7 @@ protected:
   int16_t                           mPriority;
   uint8_t                           mRedirectionLimit;
 
+  uint32_t                          mUpgradeToSecure            : 1;
   uint32_t                          mApplyConversion            : 1;
   uint32_t                          mIsPending                  : 1;
   uint32_t                          mWasOpened                  : 1;
@@ -520,9 +592,11 @@ protected:
   uint32_t                          mTracingEnabled             : 1;
   // True if timing collection is enabled
   uint32_t                          mTimingEnabled              : 1;
+  uint32_t                          mReportTiming               : 1;
   uint32_t                          mAllowSpdy                  : 1;
   uint32_t                          mAllowAltSvc                : 1;
   uint32_t                          mBeConservative             : 1;
+  uint32_t                          mTRR                        : 1;
   uint32_t                          mResponseTimeoutEnabled     : 1;
   // A flag that should be false only if a cross-domain redirect occurred
   uint32_t                          mAllRedirectsSameOrigin     : 1;
@@ -543,6 +617,11 @@ protected:
   // True iff this request has been calculated in its request context as
   // a non tail request.  We must remove it again when this channel is done.
   uint32_t                          mAddedAsNonTailRequest : 1;
+
+  // True if AsyncOpen() is called when the stream length is still unknown.
+  // AsyncOpen() will be retriggered when InputStreamLengthHelper execs the
+  // callback, passing the stream length value.
+  uint32_t                          mAsyncOpenWaitingForStreamLength : 1;
 
   // An opaque flags for non-standard behavior of the TLS system.
   // It is unlikely this will need to be set outside of telemetry studies
@@ -601,12 +680,15 @@ protected:
   bool mCorsIncludeCredentials;
   uint32_t mCorsMode;
   uint32_t mRedirectMode;
-  uint32_t mFetchCacheMode;
 
   // These parameters are used to ensure that we do not call OnStartRequest and
   // OnStopRequest more than once.
   bool mOnStartRequestCalled;
   bool mOnStopRequestCalled;
+
+  // Defaults to true.  This is set to false when it is no longer possible
+  // to upgrade the request to a secure channel.
+  uint32_t                          mUpgradableToSecure : 1;
 
   // Defaults to false. Is set to true at the begining of OnStartRequest.
   // Used to ensure methods can't be called before OnStartRequest.
@@ -615,9 +697,6 @@ protected:
   uint64_t mTransferSize;
   uint64_t mDecodedBodySize;
   uint64_t mEncodedBodySize;
-
-  // The network interface id that's associated with this channel.
-  nsCString mNetworkInterfaceId;
 
   uint64_t mRequestContextID;
   bool EnsureRequestContextID();
@@ -647,6 +726,9 @@ protected:
   // Holds the name of the alternative data type the channel returned.
   nsCString mAvailableCachedAltDataType;
   int64_t   mAltDataLength;
+  // This flag will be true if the consumer is requesting alt-data AND the
+  // consumer is in the child process.
+  bool mAltDataForChild;
 
   bool mForceMainDocumentChannel;
   Atomic<bool, ReleaseAcquire> mIsTrackingResource;
@@ -659,7 +741,6 @@ protected:
   uint32_t mLastRedirectFlags;
 
   uint64_t mReqContentLength;
-  bool mReqContentLengthDetermined;
 
   nsString mIntegrityMetadata;
 
@@ -667,6 +748,10 @@ protected:
   nsCString mMatchedList;
   nsCString mMatchedProvider;
   nsCString mMatchedFullHash;
+
+  // This is set true if the channel is waiting for the
+  // InputStreamLengthHelper::GetAsyncLength callback.
+  bool mPendingInputStreamLengthOperation;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(HttpBaseChannel, HTTP_BASE_CHANNEL_IID)
@@ -722,7 +807,7 @@ MOZ_MUST_USE nsresult HttpAsyncAborter<T>::AsyncAbort(nsresult status)
 template <class T>
 inline void HttpAsyncAborter<T>::HandleAsyncAbort()
 {
-  NS_PRECONDITION(!mCallOnResume, "How did that happen?");
+  MOZ_ASSERT(!mCallOnResume, "How did that happen?");
 
   if (mThis->mSuspendCount) {
     MOZ_LOG(gHttpLog, LogLevel::Debug,
@@ -759,7 +844,7 @@ class ProxyReleaseRunnable final : public mozilla::Runnable
 public:
   explicit ProxyReleaseRunnable(nsTArray<nsCOMPtr<nsISupports>>&& aDoomed)
     : Runnable("ProxyReleaseRunnable")
-    , mDoomed(Move(aDoomed))
+    , mDoomed(std::move(aDoomed))
   {}
 
   NS_IMETHOD
@@ -770,7 +855,7 @@ public:
   }
 
 private:
-  virtual ~ProxyReleaseRunnable() {}
+  virtual ~ProxyReleaseRunnable() = default;
 
   nsTArray<nsCOMPtr<nsISupports>> mDoomed;
 };

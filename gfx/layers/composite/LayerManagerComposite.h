@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -34,6 +35,7 @@
 #include "nsRegion.h"                   // for nsIntRegion
 #include "nscore.h"                     // for nsAString, etc
 #include "LayerTreeInvalidation.h"
+#include "mozilla/layers/CompositorScreenshotGrabber.h"
 
 class gfxContext;
 
@@ -107,10 +109,6 @@ public:
 
   virtual void ForcePresent() = 0;
   virtual void AddInvalidRegion(const nsIntRegion& aRegion) = 0;
-  virtual void ClearApproximatelyVisibleRegions(uint64_t aLayersId,
-                                                const Maybe<uint32_t>& aPresShellId) = 0;
-  virtual void UpdateApproximatelyVisibleRegion(const ScrollableLayerGuid& aGuid,
-                                                const CSSIntRegion& aRegion) = 0;
 
   virtual void NotifyShadowTreeTransaction() {}
   virtual void BeginTransactionWithDrawTarget(gfx::DrawTarget* aTarget,
@@ -121,6 +119,7 @@ public:
                               EndTransactionFlags aFlags = END_DEFAULT) = 0;
   virtual void UpdateRenderBounds(const gfx::IntRect& aRect) {}
   virtual void SetDiagnosticTypes(DiagnosticTypes aDiagnostics) {}
+  virtual void InvalidateAll() = 0;
 
   virtual HostLayerManager* AsHostLayerManager() override {
     return this;
@@ -131,7 +130,7 @@ public:
 
   void ExtractImageCompositeNotifications(nsTArray<ImageCompositeNotificationInfo>* aNotifications)
   {
-    aNotifications->AppendElements(Move(mImageCompositeNotifications));
+    aNotifications->AppendElements(std::move(mImageCompositeNotifications));
   }
 
   void AppendImageCompositeNotification(const ImageCompositeNotificationInfo& aNotification)
@@ -207,10 +206,10 @@ public:
 
   // We maintaining a global mapping from ID to CompositorBridgeParent for
   // async compositables.
-  uint32_t GetCompositorBridgeID() const {
+  uint64_t GetCompositorBridgeID() const {
     return mCompositorBridgeID;
   }
-  void SetCompositorBridgeID(uint32_t aID) {
+  void SetCompositorBridgeID(uint64_t aID) {
     MOZ_ASSERT(mCompositorBridgeID == 0, "The compositor ID must be set only once.");
     mCompositorBridgeID = aID;
   }
@@ -223,7 +222,7 @@ protected:
   float mWarningLevel;
   mozilla::TimeStamp mWarnTime;
   UniquePtr<Diagnostics> mDiagnostics;
-  uint32_t mCompositorBridgeID;
+  uint64_t mCompositorBridgeID;
 
   bool mWindowOverlayChanged;
   TimeDuration mLastPaintTime;
@@ -307,7 +306,6 @@ public:
   virtual already_AddRefed<ContainerLayer> CreateContainerLayer() override;
   virtual already_AddRefed<ImageLayer> CreateImageLayer() override;
   virtual already_AddRefed<ColorLayer> CreateColorLayer() override;
-  virtual already_AddRefed<TextLayer> CreateTextLayer() override;
   virtual already_AddRefed<BorderLayer> CreateBorderLayer() override;
   virtual already_AddRefed<CanvasLayer> CreateCanvasLayer() override;
   virtual already_AddRefed<RefLayer> CreateRefLayer() override;
@@ -378,31 +376,6 @@ public:
     mInvalidRegion.Or(mInvalidRegion, aRegion);
   }
 
-  void ClearApproximatelyVisibleRegions(uint64_t aLayersId,
-                                        const Maybe<uint32_t>& aPresShellId) override
-  {
-    for (auto iter = mVisibleRegions.Iter(); !iter.Done(); iter.Next()) {
-      if (iter.Key().mLayersId == aLayersId &&
-          (!aPresShellId || iter.Key().mPresShellId == *aPresShellId)) {
-        iter.Remove();
-      }
-    }
-  }
-
-  void UpdateApproximatelyVisibleRegion(const ScrollableLayerGuid& aGuid,
-                                        const CSSIntRegion& aRegion) override
-  {
-    CSSIntRegion* regionForScrollFrame = mVisibleRegions.LookupOrAdd(aGuid);
-    MOZ_ASSERT(regionForScrollFrame);
-
-    *regionForScrollFrame = aRegion;
-  }
-
-  CSSIntRegion* GetApproximatelyVisibleRegion(const ScrollableLayerGuid& aGuid)
-  {
-    return mVisibleRegions.Get(aGuid);
-  }
-
   Compositor* GetCompositor() const override {
     return mCompositor;
   }
@@ -432,6 +405,10 @@ public:
   }
   virtual void SetDiagnosticTypes(DiagnosticTypes aDiagnostics) override {
     mCompositor->SetDiagnosticTypes(aDiagnostics);
+  }
+
+  virtual void InvalidateAll() override {
+    AddInvalidRegion(nsIntRegion(mRenderBounds));
   }
 
   void ForcePresent() override { mCompositor->ForcePresent(); }
@@ -474,7 +451,6 @@ private:
    */
   void RenderDebugOverlay(const gfx::IntRect& aBounds);
 
-
   RefPtr<CompositingRenderTarget> PushGroupForLayerEffects();
   void PopGroupForLayerEffects(RefPtr<CompositingRenderTarget> aPreviousTarget,
                                gfx::IntRect aClipRect,
@@ -495,14 +471,11 @@ private:
 
   nsIntRegion mInvalidRegion;
 
-  typedef nsClassHashtable<nsGenericHashKey<ScrollableLayerGuid>,
-                           CSSIntRegion> VisibleRegions;
-  VisibleRegions mVisibleRegions;
-
   bool mInTransaction;
   bool mIsCompositorReady;
 
   RefPtr<CompositingRenderTarget> mTwoPassTmpTarget;
+  CompositorScreenshotGrabber mProfilerScreenshotGrabber;
   RefPtr<TextRenderer> mTextRenderer;
 
 #ifdef USE_SKIA
@@ -578,7 +551,7 @@ public:
   }
   void SetShadowVisibleRegion(LayerIntRegion&& aRegion)
   {
-    mShadowVisibleRegion = Move(aRegion);
+    mShadowVisibleRegion = std::move(aRegion);
   }
 
   void SetShadowOpacity(float aOpacity)
@@ -612,6 +585,8 @@ public:
   gfx::Matrix4x4 GetShadowTransform();
   bool GetShadowTransformSetByAnimation() { return mShadowTransformSetByAnimation; }
   bool GetShadowOpacitySetByAnimation() { return mShadowOpacitySetByAnimation; }
+
+  void RecomputeShadowVisibleRegionFromChildren();
 
 protected:
   HostLayerManager* mCompositorManager;
@@ -649,9 +624,9 @@ public:
 
   virtual ~LayerComposite();
 
-  virtual void SetLayerManager(HostLayerManager* aManager);
+  virtual void SetLayerManager(HostLayerManager* aManager) override;
 
-  virtual LayerComposite* GetFirstChildComposite()
+  virtual LayerComposite* GetFirstChildComposite() override
   {
     return nullptr;
   }
@@ -674,7 +649,7 @@ public:
   virtual void RenderLayer(const gfx::IntRect& aClipRect,
                            const Maybe<gfx::Polygon>& aGeometry) = 0;
 
-  virtual bool SetCompositableHost(CompositableHost*)
+  virtual bool SetCompositableHost(CompositableHost*) override
   {
     // We must handle this gracefully, see bug 967824
     NS_WARNING("called SetCompositableHost for a layer type not accepting a compositable");

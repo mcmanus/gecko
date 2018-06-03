@@ -20,10 +20,11 @@ public:
   explicit HTMLIFrameElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo,
                              FromParser aFromParser = NOT_FROM_PARSER);
 
-  NS_IMPL_FROMCONTENT_HTML_WITH_TAG(HTMLIFrameElement, iframe)
+  NS_IMPL_FROMNODE_HTML_WITH_TAG(HTMLIFrameElement, iframe)
 
   // nsISupports
-  NS_DECL_ISUPPORTS_INHERITED
+  NS_INLINE_DECL_REFCOUNTING_INHERITED(HTMLIFrameElement,
+                                       nsGenericHTMLFrameElement)
 
   // Element
   virtual bool IsInteractiveHTMLContent(bool aIgnoreTabindex) const override
@@ -35,6 +36,7 @@ public:
   virtual bool ParseAttribute(int32_t aNamespaceID,
                                 nsAtom* aAttribute,
                                 const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 nsAttrValue& aResult) override;
   NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* aAttribute) const override;
   virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const override;
@@ -45,13 +47,13 @@ public:
   uint32_t GetSandboxFlags();
 
   // Web IDL binding methods
-  void GetSrc(nsAString& aSrc) const
+  void GetSrc(nsString& aSrc) const
   {
     GetURIAttr(nsGkAtoms::src, nullptr, aSrc);
   }
-  void SetSrc(const nsAString& aSrc, ErrorResult& aError)
+  void SetSrc(const nsAString& aSrc, nsIPrincipal* aTriggeringPrincipal, ErrorResult& aError)
   {
-    SetHTMLAttr(nsGkAtoms::src, aSrc, aError);
+    SetHTMLAttr(nsGkAtoms::src, aSrc, aTriggeringPrincipal, aError);
   }
   void GetSrcdoc(DOMString& aSrcdoc)
   {
@@ -195,6 +197,7 @@ protected:
   virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
                                 const nsAttrValue* aOldValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 bool aNotify) override;
   virtual nsresult OnAttrSetButNotChanged(int32_t aNamespaceID, nsAtom* aName,
                                           const nsAttrValueOrString& aValue,

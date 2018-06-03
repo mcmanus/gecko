@@ -1,7 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-/* global ThreadSafeChromeUtils*/
+/* global ChromeUtils*/
 
 // This is a worker which reads offline heap snapshots into memory and performs
 // heavyweight analyses on them without blocking the main thread. A
@@ -47,7 +47,7 @@ const dominatorTreeSnapshots = [];
  */
 workerHelper.createTask(self, "readHeapSnapshot", ({ snapshotFilePath }) => {
   snapshots[snapshotFilePath] =
-    ThreadSafeChromeUtils.readHeapSnapshot(snapshotFilePath);
+    ChromeUtils.readHeapSnapshot(snapshotFilePath);
   return true;
 });
 
@@ -55,14 +55,14 @@ workerHelper.createTask(self, "readHeapSnapshot", ({ snapshotFilePath }) => {
  * @see HeapAnalysesClient.prototype.deleteHeapSnapshot
  */
 workerHelper.createTask(self, "deleteHeapSnapshot", ({ snapshotFilePath }) => {
-  let snapshot = snapshots[snapshotFilePath];
+  const snapshot = snapshots[snapshotFilePath];
   if (!snapshot) {
     throw new Error(`No known heap snapshot for '${snapshotFilePath}'`);
   }
 
   snapshots[snapshotFilePath] = undefined;
 
-  let dominatorTreeId = dominatorTreeSnapshots.indexOf(snapshot);
+  const dominatorTreeId = dominatorTreeSnapshots.indexOf(snapshot);
   if (dominatorTreeId != -1) {
     dominatorTreeSnapshots[dominatorTreeId] = undefined;
     dominatorTrees[dominatorTreeId] = undefined;

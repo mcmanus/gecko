@@ -34,9 +34,8 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(Blob)
   NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
-  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIDOMBlob)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMBlob)
-  NS_INTERFACE_MAP_ENTRY(nsIXHRSendable)
+  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIMutable)
+  NS_INTERFACE_MAP_ENTRY_CONCRETE(Blob)
   NS_INTERFACE_MAP_ENTRY(nsIMutable)
   NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
 NS_INTERFACE_MAP_END
@@ -98,15 +97,6 @@ Blob::Blob(nsISupports* aParent, BlobImpl* aImpl)
   , mParent(aParent)
 {
   MOZ_ASSERT(mImpl);
-
-#ifdef DEBUG
-  {
-    nsCOMPtr<nsPIDOMWindowInner> win = do_QueryInterface(aParent);
-    if (win) {
-      MOZ_ASSERT(win->IsInnerWindow());
-    }
-  }
-#endif
 }
 
 Blob::~Blob()
@@ -150,7 +140,7 @@ Blob::ToFile(const nsAString& aName, ErrorResult& aRv) const
   mImpl->GetType(contentType);
 
   RefPtr<MultipartBlobImpl> impl =
-    MultipartBlobImpl::Create(Move(blobImpls), aName, contentType, aRv);
+    MultipartBlobImpl::Create(std::move(blobImpls), aName, contentType, aRv);
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
   }
@@ -189,11 +179,16 @@ Blob::GetType(nsAString &aType)
 already_AddRefed<Blob>
 Blob::Slice(const Optional<int64_t>& aStart,
             const Optional<int64_t>& aEnd,
-            const nsAString& aContentType,
+            const Optional<nsAString>& aContentType,
             ErrorResult& aRv)
 {
+  nsAutoString contentType;
+  if (aContentType.WasPassed()) {
+    contentType = aContentType.Value();
+  }
+
   RefPtr<BlobImpl> impl =
-    mImpl->Slice(aStart, aEnd, aContentType, aRv);
+    mImpl->Slice(aStart, aEnd, contentType, aRv);
   if (aRv.Failed()) {
     return nullptr;
   }
@@ -208,11 +203,14 @@ Blob::GetAllocationSize() const
   return mImpl->GetAllocationSize();
 }
 
-NS_IMETHODIMP
+// contentTypeWithCharset can be set to the contentType or
+// contentType+charset based on what the spec says.
+// See: https://fetch.spec.whatwg.org/#concept-bodyinit-extract
+nsresult
 Blob::GetSendInfo(nsIInputStream** aBody,
                   uint64_t* aContentLength,
                   nsACString& aContentType,
-                  nsACString& aCharset)
+                  nsACString& aCharset) const
 {
   return mImpl->GetSendInfo(aBody, aContentLength, aContentType, aCharset);
 }

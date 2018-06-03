@@ -9,9 +9,10 @@
  */
 
 #include "nsScriptError.h"
-#include "jsprf.h"
+#include "js/Printf.h"
 #include "MainThreadUtils.h"
 #include "mozilla/Assertions.h"
+#include "nsContentUtils.h"
 #include "nsGlobalWindow.h"
 #include "nsNetUtil.h"
 #include "nsPIDOMWindow.h"
@@ -60,8 +61,8 @@ nsScriptErrorBase::InitializeOnMainThread()
     MOZ_ASSERT(!mInitializedOnMainThread);
 
     if (mInnerWindowID) {
-        nsGlobalWindow* window =
-          nsGlobalWindow::GetInnerWindowWithId(mInnerWindowID);
+        nsGlobalWindowInner* window =
+          nsGlobalWindowInner::GetInnerWindowWithId(mInnerWindowID);
         if (window) {
             nsPIDOMWindowOuter* outer = window->GetOuterWindow();
             if (outer)
@@ -180,22 +181,6 @@ nsScriptErrorBase::SetErrorMessageName(const nsAString& aErrorMessageName) {
     return NS_OK;
 }
 
-NS_IMETHODIMP
-nsScriptErrorBase::Init(const nsAString& message,
-                        const nsAString& sourceName,
-                        const nsAString& sourceLine,
-                        uint32_t lineNumber,
-                        uint32_t columnNumber,
-                        uint32_t flags,
-                        const char* category)
-{
-    return InitWithWindowID(message, sourceName, sourceLine, lineNumber,
-                            columnNumber, flags,
-                            category ? nsDependentCString(category)
-                                     : EmptyCString(),
-                            0);
-}
-
 static void
 AssignSourceNameHelper(nsString& aSourceNameDest, const nsAString& aSourceNameSrc)
 {
@@ -224,6 +209,26 @@ AssignSourceNameHelper(nsIURI* aSourceURI, nsString& aSourceNameDest)
                                                   aSourceNameDest))) {
         aSourceNameDest.AssignLiteral("[nsIURI::GetSpec failed]");
     }
+}
+
+NS_IMETHODIMP
+nsScriptErrorBase::Init(const nsAString& message,
+                        const nsAString& sourceName,
+                        const nsAString& sourceLine,
+                        uint32_t lineNumber,
+                        uint32_t columnNumber,
+                        uint32_t flags,
+                        const char* category,
+                        bool fromPrivateWindow)
+{
+    InitializationHelper(message, sourceLine, lineNumber, columnNumber, flags,
+                         category ? nsDependentCString(category)
+                                  : EmptyCString(),
+                         0 /* inner Window ID */);
+    AssignSourceNameHelper(mSourceName, sourceName);
+
+    mIsFromPrivateWindow = fromPrivateWindow;
+    return NS_OK;
 }
 
 void
@@ -318,7 +323,7 @@ ToStringHelper(const char* aSeverity, const nsString& aMessage,
     static const char format2[] =
         "[%s: \"%s\"]";
 
-    UniqueChars temp;
+    JS::UniqueChars temp;
     char* tempMessage = nullptr;
     char* tempSourceName = nullptr;
     char* tempSourceLine = nullptr;
@@ -432,7 +437,7 @@ nsScriptErrorBase::GetNotes(nsIArray** aNotes)
 
     uint32_t len = mNotes.Length();
     for (uint32_t i = 0; i < len; i++)
-        array->AppendElement(mNotes[i], false);
+        array->AppendElement(mNotes[i]);
     array.forget(aNotes);
 
     return NS_OK;

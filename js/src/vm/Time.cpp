@@ -261,12 +261,12 @@ PRMJ_InvalidParameterHandler(const wchar_t* expression,
 
 /* Format a time value into a buffer. Same semantics as strftime() */
 size_t
-PRMJ_FormatTime(char* buf, int buflen, const char* fmt, PRMJTime* prtm)
+PRMJ_FormatTime(char* buf, int buflen, const char* fmt, const PRMJTime* prtm,
+                int timeZoneYear, int offsetInSeconds)
 {
     size_t result = 0;
 #if defined(XP_UNIX) || defined(XP_WIN)
     struct tm a;
-    int fake_tm_year = 0;
 #ifdef XP_WIN
     _invalid_parameter_handler oldHandler;
 #ifndef __MINGW32__
@@ -289,12 +289,14 @@ PRMJ_FormatTime(char* buf, int buflen, const char* fmt, PRMJTime* prtm)
      * (e.g., bug 511726, bug 554338).
      */
 #if defined(HAVE_LOCALTIME_R) && defined(HAVE_TM_ZONE_TM_GMTOFF)
+    char emptyTimeZoneId[] = "";
     {
         /*
          * Fill out |td| to the time represented by |prtm|, leaving the
          * timezone fields zeroed out. localtime_r will then fill in the
          * timezone fields for that local time according to the system's
-         * timezone parameters.
+         * timezone parameters. Use |timeZoneYear| for the year to ensure the
+         * time zone name matches the time zone offset used by the caller.
          */
         struct tm td;
         memset(&td, 0, sizeof(td));
@@ -304,14 +306,22 @@ PRMJ_FormatTime(char* buf, int buflen, const char* fmt, PRMJTime* prtm)
         td.tm_mday = prtm->tm_mday;
         td.tm_mon = prtm->tm_mon;
         td.tm_wday = prtm->tm_wday;
-        td.tm_year = prtm->tm_year - 1900;
+        td.tm_year = timeZoneYear - 1900;
         td.tm_yday = prtm->tm_yday;
         td.tm_isdst = prtm->tm_isdst;
-        time_t t = mktime(&td);
-        localtime_r(&t, &td);
 
-        a.tm_gmtoff = td.tm_gmtoff;
-        a.tm_zone = td.tm_zone;
+        time_t t = mktime(&td);
+
+        // If either mktime or localtime_r failed, fill in the fallback time
+        // zone offset |offsetInSeconds| and set the time zone identifier to
+        // the empty string.
+        if (t != static_cast<time_t>(-1) && localtime_r(&t, &td)) {
+            a.tm_gmtoff = td.tm_gmtoff;
+            a.tm_zone = td.tm_zone;
+        } else {
+            a.tm_gmtoff = offsetInSeconds;
+            a.tm_zone = emptyTimeZoneId;
+        }
     }
 #endif
 
@@ -322,10 +332,9 @@ PRMJ_FormatTime(char* buf, int buflen, const char* fmt, PRMJTime* prtm)
      * Note that FAKE_YEAR_BASE should be a multiple of 100 to make 2-digit
      * year formats (%y) work correctly (since we won't find the fake year
      * in that case).
-     * e.g. new Date(1873, 0).toLocaleFormat('%Y %y') => "1873 73"
-     * See bug 327869.
      */
-#define FAKE_YEAR_BASE 9900
+    constexpr int FAKE_YEAR_BASE = 9900;
+    int fake_tm_year = 0;
     if (prtm->tm_year < 1900 || prtm->tm_year > 9999) {
         fake_tm_year = FAKE_YEAR_BASE + prtm->tm_year % 100;
         a.tm_year = fake_tm_year - 1900;

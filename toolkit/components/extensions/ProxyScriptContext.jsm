@@ -1,27 +1,32 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 "use strict";
 
-this.EXPORTED_SYMBOLS = ["ProxyScriptContext"];
+var EXPORTED_SYMBOLS = ["ProxyScriptContext", "ProxyChannelFilter"];
 
-/* exported ProxyScriptContext */
+/* exported ProxyScriptContext, ProxyChannelFilter */
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/ExtensionCommon.jsm");
+ChromeUtils.import("resource://gre/modules/ExtensionUtils.jsm");
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/ExtensionCommon.jsm");
-Cu.import("resource://gre/modules/ExtensionUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "ExtensionChild",
-                                  "resource://gre/modules/ExtensionChild.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Schemas",
-                                  "resource://gre/modules/Schemas.jsm");
+ChromeUtils.defineModuleGetter(this, "ExtensionChild",
+                               "resource://gre/modules/ExtensionChild.jsm");
+ChromeUtils.defineModuleGetter(this, "ExtensionParent",
+                               "resource://gre/modules/ExtensionParent.jsm");
+ChromeUtils.defineModuleGetter(this, "Schemas",
+                               "resource://gre/modules/Schemas.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "ProxyService",
                                    "@mozilla.org/network/protocol-proxy-service;1",
                                    "nsIProtocolProxyService");
+
+XPCOMUtils.defineLazyGetter(this, "tabTracker", () => {
+  return ExtensionParent.apiManager.global.tabTracker;
+});
 
 const CATEGORY_EXTENSION_SCRIPTS_CONTENT = "webextension-scripts-content";
 
@@ -66,7 +71,7 @@ const ProxyInfoData = {
   type(proxyData) {
     let {type} = proxyData;
     if (typeof type !== "string" || !PROXY_TYPES.hasOwnProperty(type.toUpperCase())) {
-      throw new ExtensionError(`FindProxyForURL: Invalid proxy server type: "${type}"`);
+      throw new ExtensionError(`ProxyInfoData: Invalid proxy server type: "${type}"`);
     }
     proxyData.type = PROXY_TYPES[type.toUpperCase()];
   },
@@ -74,10 +79,10 @@ const ProxyInfoData = {
   host(proxyData) {
     let {host} = proxyData;
     if (typeof host !== "string" || host.includes(" ")) {
-      throw new ExtensionError(`FindProxyForURL: Invalid proxy server host: "${host}"`);
+      throw new ExtensionError(`ProxyInfoData: Invalid proxy server host: "${host}"`);
     }
     if (!host.length) {
-      throw new ExtensionError("FindProxyForURL: Proxy server host cannot be empty");
+      throw new ExtensionError("ProxyInfoData: Proxy server host cannot be empty");
     }
     proxyData.host = host;
   },
@@ -85,11 +90,11 @@ const ProxyInfoData = {
   port(proxyData) {
     let port = Number.parseInt(proxyData.port, 10);
     if (!Number.isInteger(port)) {
-      throw new ExtensionError(`FindProxyForURL: Invalid proxy server port: "${port}"`);
+      throw new ExtensionError(`ProxyInfoData: Invalid proxy server port: "${port}"`);
     }
 
     if (port < 1 || port > 0xffff) {
-      throw new ExtensionError(`FindProxyForURL: Proxy server port ${port} outside range 1 to 65535`);
+      throw new ExtensionError(`ProxyInfoData: Proxy server port ${port} outside range 1 to 65535`);
     }
     proxyData.port = port;
   },
@@ -97,14 +102,14 @@ const ProxyInfoData = {
   username(proxyData) {
     let {username} = proxyData;
     if (username !== undefined && typeof username !== "string") {
-      throw new ExtensionError(`FindProxyForURL: Invalid proxy server username: "${username}"`);
+      throw new ExtensionError(`ProxyInfoData: Invalid proxy server username: "${username}"`);
     }
   },
 
   password(proxyData) {
     let {password} = proxyData;
     if (password !== undefined && typeof password !== "string") {
-      throw new ExtensionError(`FindProxyForURL: Invalid proxy server password: "${password}"`);
+      throw new ExtensionError(`ProxyInfoData: Invalid proxy server password: "${password}"`);
     }
   },
 
@@ -112,10 +117,10 @@ const ProxyInfoData = {
     let {proxyDNS, type} = proxyData;
     if (proxyDNS !== undefined) {
       if (typeof proxyDNS !== "boolean") {
-        throw new ExtensionError(`FindProxyForURL: Invalid proxyDNS value: "${proxyDNS}"`);
+        throw new ExtensionError(`ProxyInfoData: Invalid proxyDNS value: "${proxyDNS}"`);
       }
       if (proxyDNS && type !== PROXY_TYPES.SOCKS && type !== PROXY_TYPES.SOCKS4) {
-        throw new ExtensionError(`FindProxyForURL: proxyDNS can only be true for SOCKS proxy servers`);
+        throw new ExtensionError(`ProxyInfoData: proxyDNS can only be true for SOCKS proxy servers`);
       }
     }
   },
@@ -123,7 +128,7 @@ const ProxyInfoData = {
   failoverTimeout(proxyData) {
     let {failoverTimeout} = proxyData;
     if (failoverTimeout !== undefined && (!Number.isInteger(failoverTimeout) || failoverTimeout < 1)) {
-      throw new ExtensionError(`FindProxyForURL: Invalid failover timeout: "${failoverTimeout}"`);
+      throw new ExtensionError(`ProxyInfoData: Invalid failover timeout: "${failoverTimeout}"`);
     }
   },
 
@@ -131,21 +136,29 @@ const ProxyInfoData = {
     if (proxyDataListIndex >= proxyDataList.length) {
       return defaultProxyInfo;
     }
+    let proxyData = proxyDataList[proxyDataListIndex];
+    if (proxyData == null) {
+      return null;
+    }
     let {type, host, port, username, password, proxyDNS, failoverTimeout} =
-        ProxyInfoData.validate(proxyDataList[proxyDataListIndex]);
+        ProxyInfoData.validate(proxyData);
     if (type === PROXY_TYPES.DIRECT) {
       return defaultProxyInfo;
     }
     let failoverProxy = this.createProxyInfoFromData(proxyDataList, defaultProxyInfo, proxyDataListIndex + 1);
-    // When Bug 1360404 is fixed use ProxyService.newProxyInfoWithAuth() for all types.
+
     if (type === PROXY_TYPES.SOCKS || type === PROXY_TYPES.SOCKS4) {
       return ProxyService.newProxyInfoWithAuth(
-              type, host, port, username, password, proxyDNS ? TRANSPARENT_PROXY_RESOLVES_HOST : 0,
-              failoverTimeout ? failoverTimeout : PROXY_TIMEOUT_SEC, failoverProxy);
+        type, host, port, username, password,
+        proxyDNS ? TRANSPARENT_PROXY_RESOLVES_HOST : 0,
+        failoverTimeout ? failoverTimeout : PROXY_TIMEOUT_SEC,
+        failoverProxy);
     }
     return ProxyService.newProxyInfo(
-            type, host, port, proxyDNS ? TRANSPARENT_PROXY_RESOLVES_HOST : 0,
-            failoverTimeout ? failoverTimeout : PROXY_TIMEOUT_SEC, failoverProxy);
+      type, host, port,
+      proxyDNS ? TRANSPARENT_PROXY_RESOLVES_HOST : 0,
+      failoverTimeout ? failoverTimeout : PROXY_TIMEOUT_SEC,
+      failoverProxy);
   },
 
   /**
@@ -157,12 +170,12 @@ const ProxyInfoData = {
    */
   parseProxyInfoDataFromPAC(rule) {
     if (!rule) {
-      throw new ExtensionError("FindProxyForURL: Missing Proxy Rule");
+      throw new ExtensionError("ProxyInfoData: Missing Proxy Rule");
     }
 
     let parts = rule.toLowerCase().split(/\s+/);
     if (!parts[0] || parts.length > 2) {
-      throw new ExtensionError(`FindProxyForURL: Invalid arguments passed for proxy rule: "${rule}"`);
+      throw new ExtensionError(`ProxyInfoData: Invalid arguments passed for proxy rule: "${rule}"`);
     }
     let type = parts[0];
     let [host, port] = parts.length > 1 ? parts[1].split(":") : [];
@@ -173,20 +186,179 @@ const ProxyInfoData = {
       case PROXY_TYPES.SOCKS:
       case PROXY_TYPES.SOCKS4:
         if (!host || !port) {
-          throw new ExtensionError(`FindProxyForURL: Invalid host or port from proxy rule: "${rule}"`);
+          throw new ExtensionError(`ProxyInfoData: Invalid host or port from proxy rule: "${rule}"`);
         }
         return {type, host, port};
       case PROXY_TYPES.DIRECT:
         if (host || port) {
-          throw new ExtensionError(`FindProxyForURL: Invalid argument for proxy type: "${type}"`);
+          throw new ExtensionError(`ProxyInfoData: Invalid argument for proxy type: "${type}"`);
         }
         return {type};
       default:
-        throw new ExtensionError(`FindProxyForURL: Unrecognized proxy type: "${type}"`);
+        throw new ExtensionError(`ProxyInfoData: Unrecognized proxy type: "${type}"`);
     }
   },
 
+  proxyInfoFromProxyData(context, proxyData, defaultProxyInfo) {
+    switch (typeof proxyData) {
+      case "string":
+        let proxyRules = [];
+        try {
+          for (let result of proxyData.split(";")) {
+            proxyRules.push(ProxyInfoData.parseProxyInfoDataFromPAC(result.trim()));
+          }
+        } catch (e) {
+          // If we have valid proxies already, lets use them and just emit
+          // errors for the failovers.
+          if (proxyRules.length === 0) {
+            throw e;
+          }
+          let error = context.normalizeError(e);
+          context.extension.emit("proxy-error", {
+            message: error.message,
+            fileName: error.fileName,
+            lineNumber: error.lineNumber,
+            stack: error.stack,
+          });
+        }
+        proxyData = proxyRules;
+        // fall through
+      case "object":
+        if (Array.isArray(proxyData) && proxyData.length > 0) {
+          return ProxyInfoData.createProxyInfoFromData(proxyData, defaultProxyInfo);
+        }
+        // Not an array, fall through to error.
+      default:
+        throw new ExtensionError("ProxyInfoData: proxyData must be a string or array of objects");
+    }
+  },
 };
+
+function normalizeFilter(filter) {
+  if (!filter) {
+    filter = {};
+  }
+
+  return {urls: filter.urls || null, types: filter.types || null};
+}
+
+class ProxyChannelFilter {
+  constructor(context, extension, listener, filter, extraInfoSpec) {
+    this.context = context;
+    this.extension = extension;
+    this.filter = normalizeFilter(filter);
+    this.listener = listener;
+    this.extraInfoSpec = extraInfoSpec || [];
+
+    ProxyService.registerChannelFilter(
+      this /* nsIProtocolProxyChannelFilter aFilter */,
+      0 /* unsigned long aPosition */
+    );
+  }
+
+  // Copy from WebRequest.jsm with small changes.
+  getRequestData(channel, extraData) {
+    let data = {
+      requestId: String(channel.id),
+      url: channel.finalURL,
+      method: channel.method,
+      type: channel.type,
+      fromCache: !!channel.fromCache,
+
+      originUrl: channel.originURL || undefined,
+      documentUrl: channel.documentURL || undefined,
+
+      frameId: channel.windowId,
+      parentFrameId: channel.parentWindowId,
+
+      frameAncestors: channel.frameAncestors || undefined,
+
+      timeStamp: Date.now(),
+
+      ...extraData,
+    };
+    if (this.extraInfoSpec.includes("requestHeaders")) {
+      data.requestHeaders = channel.getRequestHeaders();
+    }
+    return data;
+  }
+
+  /**
+   * This method (which is required by the nsIProtocolProxyService interface)
+   * is called to apply proxy filter rules for the given URI and proxy object
+   * (or list of proxy objects).
+   *
+   * @param {nsIProtocolProxyService} service A reference to the Protocol Proxy Service.
+   * @param {nsIChannel} channel The channel for which these proxy settings apply.
+   * @param {nsIProxyInfo} defaultProxyInfo The proxy (or list of proxies) that
+   *     would be used by default for the given URI. This may be null.
+   * @param {nsIProtocolProxyChannelFilter} proxyFilter
+   */
+  async applyFilter(service, channel, defaultProxyInfo, proxyFilter) {
+    let proxyInfo;
+    try {
+      let wrapper = ChannelWrapper.get(channel);
+
+      let browserData = {tabId: -1, windowId: -1};
+      if (wrapper.browserElement) {
+        browserData = tabTracker.getBrowserData(wrapper.browserElement);
+      }
+      let {filter} = this;
+      if (filter.tabId != null && browserData.tabId !== filter.tabId) {
+        return;
+      }
+      if (filter.windowId != null && browserData.windowId !== filter.windowId) {
+        return;
+      }
+
+      if (wrapper.matches(filter, this.extension.policy, {isProxy: true})) {
+        let data = this.getRequestData(wrapper, {tabId: browserData.tabId});
+
+        let ret = await this.listener(data);
+        if (ret == null) {
+          // If ret undefined or null, fall through to the `finally` block to apply the proxy result.
+          proxyInfo = ret;
+          return;
+        }
+        // We only accept proxyInfo objects, not the PAC strings. ProxyInfoData will
+        // accept either, so we want to enforce the limit here.
+        if (typeof ret !== "object") {
+          throw new ExtensionError("ProxyInfoData: proxyData must be an object or array of objects");
+        }
+        // We allow the call to return either a single proxyInfo or an array of proxyInfo.
+        if (!Array.isArray(ret)) {
+          ret = [ret];
+        }
+        proxyInfo = ProxyInfoData.createProxyInfoFromData(ret, defaultProxyInfo);
+      }
+    } catch (e) {
+      // We need to normalize errors to dispatch them to the extension handler.  If
+      // we have not started up yet, we'll just log those to the console.
+      if (!this.context) {
+        this.extension.logError(`proxy-error before extension startup: ${e}`);
+        return;
+      }
+      let error = this.context.normalizeError(e);
+      this.extension.emit("proxy-error", {
+        message: error.message,
+        fileName: error.fileName,
+        lineNumber: error.lineNumber,
+        stack: error.stack,
+      });
+    } finally {
+      // We must call onProxyFilterResult.  proxyInfo may be null or nsIProxyInfo.
+      // defaultProxyInfo will be null unless a prior proxy handler has set something.
+      // If proxyInfo is null, that removes any prior proxy config.  This allows a
+      // proxy extension to override higher level (e.g. prefs) config under certain
+      // circumstances.
+      proxyFilter.onProxyFilterResult(proxyInfo !== undefined ? proxyInfo : defaultProxyInfo);
+    }
+  }
+
+  destroy() {
+    ProxyService.unregisterFilter(this);
+  }
+}
 
 class ProxyScriptContext extends BaseContext {
   constructor(extension, url, contextInfo = {}) {
@@ -195,7 +367,7 @@ class ProxyScriptContext extends BaseContext {
     this.extension = extension;
     this.messageManager = Services.cpmm;
     this.sandbox = Cu.Sandbox(this.extension.principal, {
-      sandboxName: `proxyscript:${extension.id}:${url}`,
+      sandboxName: `Extension Proxy Script (${extension.policy.debugName}): ${url}`,
       metadata: {addonID: extension.id},
     });
     this.url = url;
@@ -244,40 +416,6 @@ class ProxyScriptContext extends BaseContext {
     return this.sandbox;
   }
 
-  proxyInfoFromProxyData(proxyData, defaultProxyInfo) {
-    switch (typeof proxyData) {
-      case "string":
-        let proxyRules = [];
-        try {
-          for (let result of proxyData.split(";")) {
-            proxyRules.push(ProxyInfoData.parseProxyInfoDataFromPAC(result.trim()));
-          }
-        } catch (e) {
-          // If we have valid proxies already, lets use them and just emit
-          // errors for the failovers.
-          if (proxyRules.length === 0) {
-            throw e;
-          }
-          let error = this.normalizeError(e);
-          this.extension.emit("proxy-error", {
-            message: error.message,
-            fileName: error.fileName,
-            lineNumber: error.lineNumber,
-            stack: error.stack,
-          });
-        }
-        proxyData = proxyRules;
-        // fall through
-      case "object":
-        if (Array.isArray(proxyData) && proxyData.length > 0) {
-          return ProxyInfoData.createProxyInfoFromData(proxyData, defaultProxyInfo);
-        }
-        // Not an array, fall through to error.
-      default:
-        throw new ExtensionError("FindProxyForURL: Return type must be a string or array of objects");
-    }
-  }
-
   /**
    * This method (which is required by the nsIProtocolProxyService interface)
    * is called to apply proxy filter rules for the given URI and proxy object
@@ -287,13 +425,15 @@ class ProxyScriptContext extends BaseContext {
    * @param {Object} uri The URI for which these proxy settings apply.
    * @param {Object} defaultProxyInfo The proxy (or list of proxies) that
    *     would be used by default for the given URI. This may be null.
-   * @returns {Object} The proxy info to apply for the given URI.
+   * @param {Object} callback nsIProxyProtocolFilterResult to call onProxyFilterResult
+         on with the proxy info to apply for the given URI.
    */
-  applyFilter(service, uri, defaultProxyInfo) {
+  applyFilter(service, uri, defaultProxyInfo, callback) {
     try {
-      // Bug 1337001 - provide path and query components to non-https URLs.
+      // TODO Bug 1337001 - provide path and query components to non-https URLs.
       let ret = this.FindProxyForURL(uri.prePath, uri.host, this.contextInfo);
-      return this.proxyInfoFromProxyData(ret, defaultProxyInfo);
+      ret = ProxyInfoData.proxyInfoFromProxyData(this, ret, defaultProxyInfo);
+      callback.onProxyFilterResult(ret);
     } catch (e) {
       let error = this.normalizeError(e);
       this.extension.emit("proxy-error", {
@@ -302,8 +442,8 @@ class ProxyScriptContext extends BaseContext {
         lineNumber: error.lineNumber,
         stack: error.stack,
       });
+      callback.onProxyFilterResult(defaultProxyInfo);
     }
-    return defaultProxyInfo;
   }
 
   /**
@@ -319,14 +459,15 @@ class ProxyScriptContext extends BaseContext {
 
 class ProxyScriptAPIManager extends SchemaAPIManager {
   constructor() {
-    super("proxy");
+    super("proxy", Schemas);
     this.initialized = false;
   }
 
   lazyInit() {
     if (!this.initialized) {
-      for (let [/* name */, value] of XPCOMUtils.enumerateCategoryEntries(
-          CATEGORY_EXTENSION_SCRIPTS_CONTENT)) {
+      this.initGlobal();
+      let entries = XPCOMUtils.enumerateCategoryEntries(CATEGORY_EXTENSION_SCRIPTS_CONTENT);
+      for (let [/* name */, value] of entries) {
         this.loadScript(value);
       }
       this.initialized = true;
@@ -383,6 +524,6 @@ defineLazyGetter(ProxyScriptContext.prototype, "browserObj", function() {
 
   let browserObj = Cu.createObjectIn(this.sandbox);
   let injectionContext = new ProxyScriptInjectionContext(this, can);
-  Schemas.inject(browserObj, injectionContext);
+  proxyScriptAPIManager.schema.inject(browserObj, injectionContext);
   return browserObj;
 });

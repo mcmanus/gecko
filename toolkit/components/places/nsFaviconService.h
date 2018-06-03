@@ -7,7 +7,6 @@
 #define nsFaviconService_h_
 
 #include "nsIFaviconService.h"
-#include "mozIAsyncFavicons.h"
 
 #include "nsCOMPtr.h"
 #include "nsString.h"
@@ -50,7 +49,6 @@ public:
 };
 
 class nsFaviconService final : public nsIFaviconService
-                             , public mozIAsyncFavicons
                              , public nsITimerCallback
                              , public nsINamed
 {
@@ -124,7 +122,6 @@ public:
 
   NS_DECL_ISUPPORTS
   NS_DECL_NSIFAVICONSERVICE
-  NS_DECL_MOZIASYNCFAVICONS
   NS_DECL_NSITIMERCALLBACK
   NS_DECL_NSINAMED
 
@@ -159,6 +156,8 @@ private:
   // This class needs access to the icons cache.
   friend class mozilla::places::AsyncReplaceFaviconData;
   nsTHashtable<UnassociatedIconHashKey> mUnassociatedIcons;
+
+  uint16_t mDefaultIconURIPreferredSize;
 };
 
 #define FAVICON_ANNOTATION_NAME "favicon"

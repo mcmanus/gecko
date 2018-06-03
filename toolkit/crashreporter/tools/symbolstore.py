@@ -147,7 +147,7 @@ class HGRepoInfo:
         rev = os.environ.get('MOZ_SOURCE_CHANGESET')
         if not rev:
             rev = read_output('hg', '-R', path,
-                              'parent', '--template={node|short}')
+                              'parent', '--template={node}')
 
         # Look for the default hg path. If MOZ_SOURCE_REPO is set, we
         # don't bother asking hg.
@@ -480,12 +480,9 @@ class Dumper:
 
     def RunFileCommand(self, file):
         """Utility function, returns the output of file(1)"""
-        try:
-            # we use -L to read the targets of symlinks,
-            # and -b to print just the content, not the filename
-            return os.popen("file -Lb " + file).read()
-        except:
-            return ""
+        # we use -L to read the targets of symlinks,
+        # and -b to print just the content, not the filename
+        return read_output('file', '-Lb', file)
 
     # This is a no-op except on Win32
     def SourceServerIndexing(self, debug_file, guid, sourceFileStream, vcs_root):
@@ -495,12 +492,12 @@ class Dumper:
     def CopyDebug(self, file, debug_file, guid, code_file, code_id):
         pass
 
-    def Process(self, file_to_process):
+    def Process(self, file_to_process, count_ctors=False):
         """Process the given file."""
         if self.ShouldProcess(os.path.abspath(file_to_process)):
-            self.ProcessFile(file_to_process)
+            self.ProcessFile(file_to_process, count_ctors=count_ctors)
 
-    def ProcessFile(self, file, dsymbundle=None):
+    def ProcessFile(self, file, dsymbundle=None, count_ctors=False):
         """Dump symbols from these files into a symbol file, stored
         in the proper directory structure in  |symbol_path|; processing is performed
         asynchronously, and Finish must be called to wait for it complete and cleanup.
@@ -512,7 +509,8 @@ class Dumper:
         # the tinderbox vcs path will be assigned further down
         vcs_root = os.environ.get('MOZ_SOURCE_REPO')
         for arch_num, arch in enumerate(self.archs):
-            self.ProcessFileWork(file, arch_num, arch, vcs_root, dsymbundle)
+            self.ProcessFileWork(file, arch_num, arch, vcs_root, dsymbundle,
+                                 count_ctors=count_ctors)
 
     def dump_syms_cmdline(self, file, arch, dsymbundle=None):
         '''
@@ -521,7 +519,9 @@ class Dumper:
         # The Mac dumper overrides this.
         return [self.dump_syms, file]
 
-    def ProcessFileWork(self, file, arch_num, arch, vcs_root, dsymbundle=None):
+    def ProcessFileWork(self, file, arch_num, arch, vcs_root, dsymbundle=None,
+                        count_ctors=False):
+        ctors = 0
         t_start = time.time()
         print("Processing file: %s" % file, file=sys.stderr)
 
@@ -555,9 +555,9 @@ class Dumper:
                     if line.startswith("FILE"):
                         # FILE index filename
                         (x, index, filename) = line.rstrip().split(None, 2)
-                        filename = normpath(filename)
                         # We want original file paths for the source server.
                         sourcepath = filename
+                        filename = normpath(filename)
                         if filename in self.file_mapping:
                             filename = self.file_mapping[filename]
                         if self.vcsinfo:
@@ -585,6 +585,16 @@ class Dumper:
                             code_id, code_file = bits[2:]
                         f.write(line)
                     else:
+                        if count_ctors and line.startswith("FUNC "):
+                            # Static initializers, as created by clang and gcc
+                            # have symbols that start with "_GLOBAL_sub"
+                            if '_GLOBAL__sub_' in line:
+                                ctors += 1
+                            # MSVC creates `dynamic initializer for '...'`
+                            # symbols.
+                            elif "`dynamic initializer for '" in line:
+                                ctors += 1
+
                         # pass through all other lines unchanged
                         f.write(line)
                 f.close()
@@ -608,12 +618,55 @@ class Dumper:
         if dsymbundle:
             shutil.rmtree(dsymbundle)
 
+        if count_ctors:
+            import json
+
+            perfherder_data = {
+                "framework": {"name": "build_metrics"},
+                "suites": [{
+                    "name": "compiler_metrics",
+                    "subtests": [{
+                        "name": "num_static_constructors",
+                        "value": ctors,
+                        "alertChangeType": "absolute",
+                        "alertThreshold": 3
+                    }]}
+                ]
+            }
+            for opt in os.environ.get('PERFHERDER_EXTRA_OPTIONS', '').split():
+                for suite in perfherder_data['suites']:
+                    if opt not in suite.get('extraOptions', []):
+                        suite.setdefault('extraOptions', []).append(opt)
+
+            print('PERFHERDER_DATA: %s' % json.dumps(perfherder_data),
+                  file=sys.stderr)
+
         elapsed = time.time() - t_start
         print('Finished processing %s in %.2fs' % (file, elapsed),
               file=sys.stderr)
 
 # Platform-specific subclasses.  For the most part, these just have
 # logic to determine what files to extract symbols from.
+
+def locate_pdb(path):
+    '''Given a path to a binary, attempt to locate the matching pdb file with simple heuristics:
+    * Look for a pdb file with the same base name next to the binary
+    * Look for a pdb file with the same base name in the cwd
+
+    Returns the path to the pdb file if it exists, or None if it could not be located.
+    '''
+    path, ext = os.path.splitext(path)
+    pdb = path + '.pdb'
+    if os.path.isfile(pdb):
+        return pdb
+    # If there's no pdb next to the file, see if there's a pdb with the same root name
+    # in the cwd. We build some binaries directly into dist/bin, but put the pdb files
+    # in the relative objdir, which is the cwd when running this script.
+    base = os.path.basename(pdb)
+    pdb = os.path.join(os.getcwd(), base)
+    if os.path.isfile(pdb):
+        return pdb
+    return None
 
 class Dumper_Win32(Dumper):
     fixedFilenameCaseCache = {}
@@ -622,14 +675,13 @@ class Dumper_Win32(Dumper):
         """This function will allow processing of exe or dll files that have pdb
         files with the same base name next to them."""
         if file.endswith(".exe") or file.endswith(".dll"):
-            path, ext = os.path.splitext(file)
-            if os.path.isfile(path + ".pdb"):
+            if locate_pdb(file) is not None:
                 return True
         return False
 
 
     def CopyDebug(self, file, debug_file, guid, code_file, code_id):
-        file = "%s.pdb" % os.path.splitext(file)[0]
+        file = locate_pdb(file)
         def compress(path):
             compressed_file = path[:-1] + '_'
             # ignore makecab's output
@@ -752,13 +804,14 @@ class Dumper_Mac(Dumper):
             return self.RunFileCommand(file).startswith("Mach-O")
         return False
 
-    def ProcessFile(self, file):
+    def ProcessFile(self, file, count_ctors=False):
         print("Starting Mac pre-processing on file: %s" % file,
               file=sys.stderr)
         dsymbundle = self.GenerateDSYM(file)
         if dsymbundle:
             # kick off new jobs per-arch with our new list of files
-            Dumper.ProcessFile(self, file, dsymbundle=dsymbundle)
+            Dumper.ProcessFile(self, file, dsymbundle=dsymbundle,
+                               count_ctors=count_ctors)
 
     def dump_syms_cmdline(self, file, arch, dsymbundle=None):
         '''
@@ -847,6 +900,9 @@ def main():
 to canonical locations in the source repository. Specify
 <install manifest filename>,<install destination> as a comma-separated pair.
 """)
+    parser.add_option("--count-ctors",
+                      action="store_true", dest="count_ctors", default=False,
+                      help="Count static initializers")
     (options, args) = parser.parse_args()
 
     #check to see if the pdbstr.exe exists
@@ -881,7 +937,7 @@ to canonical locations in the source repository. Specify
                                        s3_bucket=bucket,
                                        file_mapping=file_mapping)
 
-    dumper.Process(args[2])
+    dumper.Process(args[2], options.count_ctors)
 
 # run main if run directly
 if __name__ == "__main__":

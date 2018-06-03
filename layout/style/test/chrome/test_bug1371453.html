@@ -9,10 +9,8 @@
 <script>
 SimpleTest.waitForExplicitFinish();
 
-let DOMUtils = SpecialPowers.Cc["@mozilla.org/inspector/dom-utils;1"]
-               .getService(SpecialPowers.Ci.inIDOMUtils);
 const Cu = SpecialPowers.Components.utils;
-const { ContentTaskUtils } = Cu.import("resource://testing-common/ContentTaskUtils.jsm", {});
+const { ContentTaskUtils } = ChromeUtils.import("resource://testing-common/ContentTaskUtils.jsm", {});
 document.styleSheetChangeEventsEnabled = true;
 
 runTest();
@@ -24,8 +22,7 @@ async function runTest() {
   let event = await ContentTaskUtils.waitForEvent(document, "StyleRuleAdded", true);
   is(event.rule.type, CSSRule.IMPORT_RULE, "Got expected import rule.");
 
-  let non_stylo_todo_isnot = SpecialPowers.DOMWindowUtils.isStyledByServo ? isnot : todo_isnot;
-  non_stylo_todo_isnot(event.rule.styleSheet, null, "Import rule contains a stylesheet.");
+  isnot(event.rule.styleSheet, null, "Import rule contains a stylesheet.");
 
   isnot(event.rule.media, null, "Import rule contains a media list.");
 

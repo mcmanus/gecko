@@ -1,11 +1,11 @@
 // Tests the filter search box in the storage inspector
 "use strict";
 
-add_task(function* () {
-  yield openTabAndSetupStorage(MAIN_DOMAIN + "storage-search.html");
+add_task(async function() {
+  await openTabAndSetupStorage(MAIN_DOMAIN + "storage-search.html");
 
   gUI.tree.expandAll();
-  yield selectTreeItem(["cookies", "http://test1.example.org"]);
+  await selectTreeItem(["cookies", "http://test1.example.org"]);
 
   showColumn("expires", false);
   showColumn("host", false);
@@ -14,7 +14,7 @@ add_task(function* () {
   showColumn("path", false);
 
   // Results: 0=hidden, 1=visible
-  let testcases = [
+  const testcases = [
     // Test that search isn't case-sensitive
     {
       value: "FoO",
@@ -71,7 +71,7 @@ add_task(function* () {
     },
   ];
 
-  let testcasesAfterHiding = [
+  const testcasesAfterHiding = [
     // Test that search isn't case-sensitive
     {
       value: "OR",
@@ -113,15 +113,15 @@ add_task(function* () {
   showColumn("value", false);
   runTests(testcasesAfterHiding);
 
-  yield finishTests();
+  await finishTests();
 });
 
 function runTests(testcases) {
-  let $$ = sel => gPanelWindow.document.querySelectorAll(sel);
-  let names = $$("#name .table-widget-cell");
-  let rows = $$("#value .table-widget-cell");
-  for (let testcase of testcases) {
-    let {value, results} = testcase;
+  const $$ = sel => gPanelWindow.document.querySelectorAll(sel);
+  const names = $$("#name .table-widget-cell");
+  const rows = $$("#value .table-widget-cell");
+  for (const testcase of testcases) {
+    const {value, results} = testcase;
 
     info(`Testing input: ${value}`);
 
@@ -131,7 +131,7 @@ function runTests(testcases) {
     for (let i = 0; i < rows.length; i++) {
       info(`Testing row ${i} for "${value}"`);
       info(`key: ${names[i].value}, value: ${rows[i].value}`);
-      let state = results[i] ? "visible" : "hidden";
+      const state = results[i] ? "visible" : "hidden";
       is(rows[i].hasAttribute("hidden"), !results[i],
          `Row ${i} should be ${state}`);
     }

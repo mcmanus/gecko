@@ -107,7 +107,7 @@ input {
   text-indent: 0;
   -moz-user-select: text;
   text-shadow: none;
-  overflow-clip-box: content-box;
+  overflow-clip-box: padding-box content-box;
 }
 
 input > .anonymous-div,
@@ -160,8 +160,6 @@ textarea > .preview-div {
   padding: inherit !important;
   margin: 0px;
   text-decoration: inherit;
-  text-decoration-color: inherit;
-  text-decoration-style: inherit;
   display: inline-block;
   ime-mode: inherit;
   resize: inherit;
@@ -175,16 +173,12 @@ input > .preview-div {
   white-space: pre;
 }
 
-input > .anonymous-div.wrap {
-  white-space: pre-wrap;
-}
-textarea > .anonymous-div.inherit-overflow,
-input > .anonymous-div.inherit-overflow {
+textarea > .anonymous-div.inherit-overflow {
   overflow: inherit;
 }
-textarea > .anonymous-div.inherit-scroll-behavior,
-input > .anonymous-div.inherit-scroll-behavior {
+textarea > .anonymous-div.inherit-scroll-behavior {
   scroll-behavior: inherit;
+  overscroll-behavior: inherit;
 }
 
 input::placeholder,
@@ -421,6 +415,13 @@ optgroup:before {
   border-inline-start-width: 2px ! important;
 }
 
+@supports -moz-bool-pref("dom.select_popup_in_content.enabled") {
+  *|*::-moz-dropdown-list {
+    -moz-top-layer: top !important;
+    position: absolute !important;
+  }
+}
+
 input:disabled,
 textarea:disabled,
 option:disabled,
@@ -428,7 +429,6 @@ optgroup:disabled,
 select:disabled:disabled /* Need the pseudo-class twice to have the specificity
                             be at least the same as select[size][multiple] above */
 {
-  -moz-user-input: disabled;
   color: GrayText;
   background-color: ThreeDLightShadow;
   cursor: inherit;
@@ -519,7 +519,7 @@ input[type="file"] > button[type="button"] {
 }
 
 /* colored part of the color selector button */
-input[type="color"]:-moz-system-metric(color-picker-available)::-moz-color-swatch {
+input[type="color"]::-moz-color-swatch {
   width: 100%;
   height: 100%;
   min-width: 3px;
@@ -606,7 +606,7 @@ input[type="search"] {
 /* Non text-related properties for buttons: these ones are shared with
    input[type="color"] */
 button,
-input[type="color"]:-moz-system-metric(color-picker-available),
+input[type="color"],
 input[type="reset"],
 input[type="button"],
 input[type="submit"] {
@@ -641,7 +641,7 @@ input[type="submit"] {
   overflow-clip-box: padding-box;
 }
 
-input[type="color"]:-moz-system-metric(color-picker-available) {
+input[type="color"] {
   inline-size: 64px;
   block-size: 23px;
 }
@@ -689,7 +689,7 @@ button {
 }
 
 button:hover,
-input[type="color"]:-moz-system-metric(color-picker-available):hover,
+input[type="color"]:hover,
 input[type="reset"]:hover,
 input[type="button"]:hover,
 input[type="submit"]:hover {
@@ -704,7 +704,7 @@ input[type="submit"]:hover {
 }
 
 button:active:hover,
-input[type="color"]:-moz-system-metric(color-picker-available):active:hover,
+input[type="color"]:active:hover,
 input[type="reset"]:active:hover,
 input[type="button"]:active:hover,
 input[type="submit"]:active:hover {
@@ -726,7 +726,7 @@ input[type="submit"]:active:hover {
 }
 
 button::-moz-focus-inner,
-input[type="color"]:-moz-system-metric(color-picker-available)::-moz-focus-inner,
+input[type="color"]::-moz-focus-inner,
 input[type="reset"]::-moz-focus-inner,
 input[type="button"]::-moz-focus-inner,
 input[type="submit"]::-moz-focus-inner,
@@ -740,7 +740,7 @@ input[type="file"] > button[type="button"]::-moz-focus-inner {
 }
 
 button:-moz-focusring::-moz-focus-inner,
-input[type="color"]:-moz-system-metric(color-picker-available):-moz-focusring::-moz-focus-inner,
+input[type="color"]:-moz-focusring::-moz-focus-inner,
 input[type="reset"]:-moz-focusring::-moz-focus-inner,
 input[type="button"]:-moz-focusring::-moz-focus-inner,
 input[type="submit"]:-moz-focusring::-moz-focus-inner,
@@ -749,8 +749,8 @@ input[type="file"] > button[type="button"]:-moz-focusring::-moz-focus-inner {
 }
 
 button:disabled:active, button:disabled,
-input[type="color"]:-moz-system-metric(color-picker-available):disabled:active,
-input[type="color"]:-moz-system-metric(color-picker-available):disabled,
+input[type="color"]:disabled:active,
+input[type="color"]:disabled,
 input[type="reset"]:disabled:active,
 input[type="reset"]:disabled,
 input[type="button"]:disabled:active,
@@ -839,12 +839,10 @@ progress {
   vertical-align: -0.2em;
 
   /* Default style in case of there is -moz-appearance: none; */
-  border: 2px solid;
+  border: 1px solid ThreeDShadow;
+  border-right-color: ThreeDHighlight;
+  border-bottom-color: ThreeDHighlight;
   /* #e6e6e6 is a light gray. */
-  -moz-border-top-colors: ThreeDShadow #e6e6e6;
-  -moz-border-right-colors: ThreeDHighlight #e6e6e6;
-  -moz-border-bottom-colors: ThreeDHighlight #e6e6e6;
-  -moz-border-left-colors: ThreeDShadow #e6e6e6;
   background-color: #e6e6e6;
 }
 
@@ -1029,9 +1027,14 @@ input[type=range]::-moz-range-thumb {
   -moz-user-select: none ! important;
 }
 
-/* As a temporary workaround until bug 677302 the rule for input[type=number]
- * has moved to number-control.css
- */
+input[type="number"] {
+  -moz-appearance: number-input;
+  /* Has to revert some properties applied by the generic input rule. */
+  -moz-binding: none;
+  inline-size: 20ch; /* It'd be nice if this matched the default inline-size
+                        of <input type=text>, but that's not easy to achieve
+                        due to platform differences. */
+}
 
 input[type=number]::-moz-number-wrapper {
   /* Prevent styling that would change the type of frame we construct. */
@@ -1055,6 +1058,8 @@ input[type=number]::-moz-number-text {
    * ancestor, not have that general CSS rule reset it.
    */
   text-align: inherit;
+  text-decoration: inherit;
+  ime-mode: inherit;
   flex: 1;
   min-inline-size: 0;
   padding: 0;
@@ -1127,6 +1132,7 @@ input[type="number"] > div > div > div:hover {
 input[type="date"],
 input[type="time"] {
   overflow: hidden !important;
+  font-family: -moz-fixed;
 }
 
 :-moz-autofill, :-moz-autofill-preview {

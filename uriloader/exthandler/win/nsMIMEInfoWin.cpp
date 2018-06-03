@@ -241,8 +241,7 @@ nsMIMEInfoWin::LoadUriInternal(nsIURI * aURL)
     SHELLEXECUTEINFOW sinfo;
     memset(&sinfo, 0, sizeof(sinfo));
     sinfo.cbSize   = sizeof(sinfo);
-    sinfo.fMask    = SEE_MASK_FLAG_DDEWAIT |
-      SEE_MASK_FLAG_NO_UI;
+    sinfo.fMask    = SEE_MASK_FLAG_DDEWAIT;
     sinfo.hwnd     = nullptr;
     sinfo.lpVerb   = (LPWSTR)&cmdVerb;
     sinfo.nShow    = SW_SHOWNORMAL;
@@ -523,7 +522,7 @@ void nsMIMEInfoWin::ProcessPath(nsCOMPtr<nsIMutableArray>& appList,
     return;
 
   // Save in our main tracking arrays
-  appList->AppendElement(aApp, false);
+  appList->AppendElement(aApp);
   trackList.AppendElement(lower);
 }
 

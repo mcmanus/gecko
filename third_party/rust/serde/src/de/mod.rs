@@ -84,7 +84,6 @@
 //!    - LinkedList\<T\>
 //!    - VecDeque\<T\>
 //!    - Vec\<T\>
-//!    - EnumSet\<T\> (unstable)
 //!  - **Zero-copy types**:
 //!    - &str
 //!    - &[u8]
@@ -94,10 +93,11 @@
 //!    - OsString
 //!  - **Miscellaneous standard library types**:
 //!    - Duration
+//!    - SystemTime
 //!    - Path
 //!    - PathBuf
 //!    - Range\<T\>
-//!    - NonZero\<T\> (unstable)
+//!    - num::NonZero* (unstable)
 //!  - **Net types**:
 //!    - IpAddr
 //!    - Ipv4Addr
@@ -170,7 +170,8 @@ macro_rules! declare_error_trait {
             ///
             /// impl<'de> Deserialize<'de> for IpAddr {
             ///     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            ///         where D: Deserializer<'de>
+            ///     where
+            ///         D: Deserializer<'de>,
             ///     {
             ///         let s = try!(String::deserialize(deserializer));
             ///         s.parse().map_err(de::Error::custom)
@@ -194,6 +195,7 @@ macro_rules! declare_error_trait {
             /// For example if we try to deserialize a String out of a JSON file
             /// containing an integer, the unexpected type is the integer and the
             /// expected type is the string.
+            #[cold]
             fn invalid_type(unexp: Unexpected, exp: &Expected) -> Self {
                 Error::custom(format_args!("invalid type: {}, expected {}", unexp, exp))
             }
@@ -211,6 +213,7 @@ macro_rules! declare_error_trait {
             /// For example if we try to deserialize a String out of some binary data
             /// that is not valid UTF-8, the unexpected value is the bytes and the
             /// expected value is a string.
+            #[cold]
             fn invalid_value(unexp: Unexpected, exp: &Expected) -> Self {
                 Error::custom(format_args!("invalid value: {}, expected {}", unexp, exp))
             }
@@ -224,12 +227,14 @@ macro_rules! declare_error_trait {
             /// The `exp` argument provides information about what data was being
             /// expected. For example `exp` might say that a tuple of size 6 was
             /// expected.
+            #[cold]
             fn invalid_length(len: usize, exp: &Expected) -> Self {
                 Error::custom(format_args!("invalid length {}, expected {}", len, exp))
             }
 
             /// Raised when a `Deserialize` enum type received a variant with an
             /// unrecognized name.
+            #[cold]
             fn unknown_variant(variant: &str, expected: &'static [&'static str]) -> Self {
                 if expected.is_empty() {
                     Error::custom(format_args!("unknown variant `{}`, there are no variants",
@@ -243,6 +248,7 @@ macro_rules! declare_error_trait {
 
             /// Raised when a `Deserialize` struct type received a field with an
             /// unrecognized name.
+            #[cold]
             fn unknown_field(field: &str, expected: &'static [&'static str]) -> Self {
                 if expected.is_empty() {
                     Error::custom(format_args!("unknown field `{}`, there are no fields",
@@ -257,12 +263,14 @@ macro_rules! declare_error_trait {
             /// Raised when a `Deserialize` struct type expected to receive a required
             /// field with a particular name but that field was not present in the
             /// input.
+            #[cold]
             fn missing_field(field: &'static str) -> Self {
                 Error::custom(format_args!("missing field `{}`", field))
             }
 
             /// Raised when a `Deserialize` struct type received more than one of the
             /// same field.
+            #[cold]
             fn duplicate_field(field: &'static str) -> Self {
                 Error::custom(format_args!("duplicate field `{}`", field))
             }
@@ -297,7 +305,8 @@ declare_error_trait!(Error: Sized + Debug + Display);
 /// #     }
 /// #
 /// fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
-///     where E: de::Error
+/// where
+///     E: de::Error,
 /// {
 ///     Err(de::Error::invalid_type(Unexpected::Bool(v), &self))
 /// }
@@ -421,7 +430,8 @@ impl<'a> fmt::Display for Unexpected<'a> {
 /// #     }
 /// #
 /// fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
-///     where E: de::Error
+/// where
+///     E: de::Error,
 /// {
 ///     Err(de::Error::invalid_type(Unexpected::Bool(v), &self))
 /// }
@@ -434,7 +444,8 @@ impl<'a> fmt::Display for Unexpected<'a> {
 /// # use serde::de::{self, Unexpected};
 /// #
 /// # fn example<E>() -> Result<(), E>
-/// #     where E: de::Error
+/// # where
+/// #     E: de::Error,
 /// # {
 /// #     let v = true;
 /// return Err(de::Error::invalid_type(Unexpected::Bool(v), &"a negative integer"));
@@ -503,6 +514,35 @@ pub trait Deserialize<'de>: Sized {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>;
+
+    /// Deserializes a value into `self` from the given Deserializer.
+    ///
+    /// The purpose of this method is to allow the deserializer to reuse
+    /// resources and avoid copies. As such, if this method returns an error,
+    /// `self` will be in an indeterminate state where some parts of the struct
+    /// have been overwritten. Although whatever state that is will be
+    /// memory-safe.
+    ///
+    /// This is generally useful when repeatedly deserializing values that
+    /// are processed one at a time, where the value of `self` doesn't matter
+    /// when the next deserialization occurs.
+    ///
+    /// If you manually implement this, your recursive deserializations should
+    /// use `deserialize_in_place`.
+    ///
+    /// This method is stable and an official public API, but hidden from the
+    /// documentation because it is almost never what newbies are looking for.
+    /// Showing it in rustdoc would cause it to be featured more prominently
+    /// than it deserves.
+    #[doc(hidden)]
+    fn deserialize_in_place<D>(deserializer: D, place: &mut Self) -> Result<(), D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Default implementation just delegates to `deserialize` impl.
+        *place = Deserialize::deserialize(deserializer)?;
+        Ok(())
+    }
 }
 
 /// A data structure that can be deserialized without borrowing any data from
@@ -519,11 +559,13 @@ pub trait Deserialize<'de>: Sized {
 /// #
 /// # trait Ignore {
 /// fn from_str<'a, T>(s: &'a str) -> Result<T>
-///     where T: Deserialize<'a>;
+/// where
+///     T: Deserialize<'a>;
 ///
 /// fn from_reader<R, T>(rdr: R) -> Result<T>
-///     where R: Read,
-///           T: DeserializeOwned;
+/// where
+///     R: Read,
+///     T: DeserializeOwned;
 /// # }
 /// ```
 pub trait DeserializeOwned: for<'de> Deserialize<'de> {}
@@ -599,7 +641,8 @@ where
 /// struct ExtendVec<'a, T: 'a>(&'a mut Vec<T>);
 ///
 /// impl<'de, 'a, T> DeserializeSeed<'de> for ExtendVec<'a, T>
-///     where T: Deserialize<'de>
+/// where
+///     T: Deserialize<'de>,
 /// {
 ///     // The return type of the `deserialize` method. This implementation
 ///     // appends onto an existing vector but does not create any new data
@@ -607,14 +650,16 @@ where
 ///     type Value = ();
 ///
 ///     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-///         where D: Deserializer<'de>
+///     where
+///         D: Deserializer<'de>,
 ///     {
 ///         // Visitor implementation that will walk an inner array of the JSON
 ///         // input.
 ///         struct ExtendVecVisitor<'a, T: 'a>(&'a mut Vec<T>);
 ///
 ///         impl<'de, 'a, T> Visitor<'de> for ExtendVecVisitor<'a, T>
-///             where T: Deserialize<'de>
+///         where
+///             T: Deserialize<'de>,
 ///         {
 ///             type Value = ();
 ///
@@ -623,7 +668,8 @@ where
 ///             }
 ///
 ///             fn visit_seq<A>(self, mut seq: A) -> Result<(), A::Error>
-///                 where A: SeqAccess<'de>
+///             where
+///                 A: SeqAccess<'de>,
 ///             {
 ///                 // Visit each element in the inner array and push it onto
 ///                 // the existing vector.
@@ -642,7 +688,8 @@ where
 /// struct FlattenedVecVisitor<T>(PhantomData<T>);
 ///
 /// impl<'de, T> Visitor<'de> for FlattenedVecVisitor<T>
-///     where T: Deserialize<'de>
+/// where
+///     T: Deserialize<'de>,
 /// {
 ///     // This Visitor constructs a single Vec<T> to hold the flattened
 ///     // contents of the inner arrays.
@@ -653,7 +700,8 @@ where
 ///     }
 ///
 ///     fn visit_seq<A>(self, mut seq: A) -> Result<Vec<T>, A::Error>
-///         where A: SeqAccess<'de>
+///     where
+///         A: SeqAccess<'de>,
 ///     {
 ///         // Create a single Vec to hold the flattened contents.
 ///         let mut vec = Vec::new();
@@ -669,7 +717,8 @@ where
 /// }
 ///
 /// # fn example<'de, D>(deserializer: D) -> Result<(), D::Error>
-/// #     where D: Deserializer<'de>
+/// # where
+/// #     D: Deserializer<'de>,
 /// # {
 /// let visitor = FlattenedVecVisitor(PhantomData);
 /// let flattened: Vec<u64> = deserializer.deserialize_seq(visitor)?;
@@ -1010,6 +1059,77 @@ pub trait Deserializer<'de>: Sized {
     fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>;
+
+    /// Determine whether `Deserialize` implementations should expect to
+    /// deserialize their human-readable form.
+    ///
+    /// Some types have a human-readable form that may be somewhat expensive to
+    /// construct, as well as a binary form that is compact and efficient.
+    /// Generally text-based formats like JSON and YAML will prefer to use the
+    /// human-readable one and binary formats like Bincode will prefer the
+    /// compact one.
+    ///
+    /// ```
+    /// # use std::ops::Add;
+    /// # use std::str::FromStr;
+    /// #
+    /// # struct Timestamp;
+    /// #
+    /// # impl Timestamp {
+    /// #     const EPOCH: Timestamp = Timestamp;
+    /// # }
+    /// #
+    /// # impl FromStr for Timestamp {
+    /// #     type Err = String;
+    /// #     fn from_str(_: &str) -> Result<Self, Self::Err> {
+    /// #         unimplemented!()
+    /// #     }
+    /// # }
+    /// #
+    /// # struct Duration;
+    /// #
+    /// # impl Duration {
+    /// #     fn seconds(_: u64) -> Self { unimplemented!() }
+    /// # }
+    /// #
+    /// # impl Add<Duration> for Timestamp {
+    /// #     type Output = Timestamp;
+    /// #     fn add(self, _: Duration) -> Self::Output {
+    /// #         unimplemented!()
+    /// #     }
+    /// # }
+    /// #
+    /// use serde::de::{self, Deserialize, Deserializer};
+    ///
+    /// impl<'de> Deserialize<'de> for Timestamp {
+    ///     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    ///     where
+    ///         D: Deserializer<'de>,
+    ///     {
+    ///         if deserializer.is_human_readable() {
+    ///             // Deserialize from a human-readable string like "2015-05-15T17:01:00Z".
+    ///             let s = String::deserialize(deserializer)?;
+    ///             Timestamp::from_str(&s).map_err(de::Error::custom)
+    ///         } else {
+    ///             // Deserialize from a compact binary representation, seconds since
+    ///             // the Unix epoch.
+    ///             let n = u64::deserialize(deserializer)?;
+    ///             Ok(Timestamp::EPOCH + Duration::seconds(n))
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// The default implementation of this method returns `true`. Data formats
+    /// may override this to `false` to request a compact form for types that
+    /// support one. Note that modifying this method to change a format from
+    /// human-readable to compact or vice versa should be regarded as a breaking
+    /// change, as a value serialized in human-readable mode is not required to
+    /// deserialize from the same data in compact mode.
+    #[inline]
+    fn is_human_readable(&self) -> bool {
+        true
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1035,7 +1155,8 @@ pub trait Deserializer<'de>: Sized {
 ///     }
 ///
 ///     fn visit_str<E>(self, s: &str) -> Result<Self::Value, E>
-///         where E: de::Error
+///     where
+///         E: de::Error,
 ///     {
 ///         if s.len() >= self.min {
 ///             Ok(s.to_owned())
@@ -1119,7 +1240,7 @@ pub trait Visitor<'de>: Sized {
         self.visit_i64(v as i64)
     }
 
-    /// The input contains an `i32`.
+    /// The input contains an `i64`.
     ///
     /// The default implementation fails with a type error.
     fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
@@ -1262,7 +1383,7 @@ pub trait Visitor<'de>: Sized {
     /// The default implementation forwards to `visit_str` and then drops the
     /// `String`.
     #[inline]
-    #[cfg(any(feature = "std", feature = "collections"))]
+    #[cfg(any(feature = "std", feature = "alloc"))]
     fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
     where
         E: Error,
@@ -1321,7 +1442,7 @@ pub trait Visitor<'de>: Sized {
     ///
     /// The default implementation forwards to `visit_bytes` and then drops the
     /// `Vec<u8>`.
-    #[cfg(any(feature = "std", feature = "collections"))]
+    #[cfg(any(feature = "std", feature = "alloc"))]
     fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
     where
         E: Error,
@@ -1406,6 +1527,15 @@ pub trait Visitor<'de>: Sized {
         let _ = data;
         Err(Error::invalid_type(Unexpected::Enum, &self))
     }
+
+    // Used when deserializing a flattened Option field. Not public API.
+    #[doc(hidden)]
+    fn __private_visit_untagged_option<D>(self, _: D) -> Result<Self::Value, ()>
+    where
+        D: Deserializer<'de>,
+    {
+        Err(())
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1423,7 +1553,7 @@ pub trait SeqAccess<'de> {
     /// `Ok(None)` if there are no more remaining items.
     ///
     /// `Deserialize` implementations should typically use
-    /// `SeqAcccess::next_element` instead.
+    /// `SeqAccess::next_element` instead.
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
     where
         T: DeserializeSeed<'de>;
@@ -1715,15 +1845,18 @@ pub trait VariantAccess<'de>: Sized {
     /// }
     /// #
     /// #     fn newtype_variant_seed<T>(self, _: T) -> Result<T::Value, Self::Error>
-    /// #         where T: DeserializeSeed<'de>
+    /// #     where
+    /// #         T: DeserializeSeed<'de>,
     /// #     { unimplemented!() }
     /// #
     /// #     fn tuple_variant<V>(self, _: usize, _: V) -> Result<V::Value, Self::Error>
-    /// #         where V: Visitor<'de>
+    /// #     where
+    /// #         V: Visitor<'de>,
     /// #     { unimplemented!() }
     /// #
     /// #     fn struct_variant<V>(self, _: &[&str], _: V) -> Result<V::Value, Self::Error>
-    /// #         where V: Visitor<'de>
+    /// #     where
+    /// #         V: Visitor<'de>,
     /// #     { unimplemented!() }
     /// # }
     /// ```
@@ -1750,7 +1883,8 @@ pub trait VariantAccess<'de>: Sized {
     /// #     }
     /// #
     /// fn newtype_variant_seed<T>(self, _seed: T) -> Result<T::Value, Self::Error>
-    ///     where T: DeserializeSeed<'de>
+    /// where
+    ///     T: DeserializeSeed<'de>,
     /// {
     ///     // What the data actually contained; suppose it is a unit variant.
     ///     let unexp = Unexpected::UnitVariant;
@@ -1758,11 +1892,13 @@ pub trait VariantAccess<'de>: Sized {
     /// }
     /// #
     /// #     fn tuple_variant<V>(self, _: usize, _: V) -> Result<V::Value, Self::Error>
-    /// #         where V: Visitor<'de>
+    /// #     where
+    /// #         V: Visitor<'de>,
     /// #     { unimplemented!() }
     /// #
     /// #     fn struct_variant<V>(self, _: &[&str], _: V) -> Result<V::Value, Self::Error>
-    /// #         where V: Visitor<'de>
+    /// #     where
+    /// #         V: Visitor<'de>,
     /// #     { unimplemented!() }
     /// # }
     /// ```
@@ -1803,13 +1939,17 @@ pub trait VariantAccess<'de>: Sized {
     /// #     }
     /// #
     /// #     fn newtype_variant_seed<T>(self, _: T) -> Result<T::Value, Self::Error>
-    /// #         where T: DeserializeSeed<'de>
+    /// #     where
+    /// #         T: DeserializeSeed<'de>,
     /// #     { unimplemented!() }
     /// #
-    /// fn tuple_variant<V>(self,
-    ///                         _len: usize,
-    ///                         _visitor: V) -> Result<V::Value, Self::Error>
-    ///     where V: Visitor<'de>
+    /// fn tuple_variant<V>(
+    ///     self,
+    ///     _len: usize,
+    ///     _visitor: V,
+    /// ) -> Result<V::Value, Self::Error>
+    /// where
+    ///     V: Visitor<'de>,
     /// {
     ///     // What the data actually contained; suppose it is a unit variant.
     ///     let unexp = Unexpected::UnitVariant;
@@ -1817,7 +1957,8 @@ pub trait VariantAccess<'de>: Sized {
     /// }
     /// #
     /// #     fn struct_variant<V>(self, _: &[&str], _: V) -> Result<V::Value, Self::Error>
-    /// #         where V: Visitor<'de>
+    /// #     where
+    /// #         V: Visitor<'de>,
     /// #     { unimplemented!() }
     /// # }
     /// ```
@@ -1845,17 +1986,22 @@ pub trait VariantAccess<'de>: Sized {
     /// #     }
     /// #
     /// #     fn newtype_variant_seed<T>(self, _: T) -> Result<T::Value, Self::Error>
-    /// #         where T: DeserializeSeed<'de>
+    /// #     where
+    /// #         T: DeserializeSeed<'de>,
     /// #     { unimplemented!() }
     /// #
     /// #     fn tuple_variant<V>(self, _: usize, _: V) -> Result<V::Value, Self::Error>
-    /// #         where V: Visitor<'de>
+    /// #     where
+    /// #         V: Visitor<'de>,
     /// #     { unimplemented!() }
     /// #
-    /// fn struct_variant<V>(self,
-    ///                          _fields: &'static [&'static str],
-    ///                          _visitor: V) -> Result<V::Value, Self::Error>
-    ///     where V: Visitor<'de>
+    /// fn struct_variant<V>(
+    ///     self,
+    ///     _fields: &'static [&'static str],
+    ///     _visitor: V,
+    /// ) -> Result<V::Value, Self::Error>
+    /// where
+    ///     V: Visitor<'de>,
     /// {
     ///     // What the data actually contained; suppose it is a unit variant.
     ///     let unexp = Unexpected::UnitVariant;

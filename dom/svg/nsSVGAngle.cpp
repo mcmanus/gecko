@@ -19,8 +19,10 @@
 
 using namespace mozilla;
 using namespace mozilla::dom;
+using namespace mozilla::dom::SVGAngleBinding;
+using namespace mozilla::dom::SVGMarkerElementBinding;
 
-static nsAtom** const unitMap[] =
+static nsStaticAtom** const unitMap[] =
 {
   nullptr, /* SVG_ANGLETYPE_UNKNOWN */
   nullptr, /* SVG_ANGLETYPE_UNSPECIFIED */
@@ -67,7 +69,7 @@ GetUnitTypeForString(const nsAString& unitStr)
   if (unitStr.IsEmpty())
     return SVG_ANGLETYPE_UNSPECIFIED;
 
-  nsAtom *unitAtom = NS_GetStaticAtom(unitStr);
+  nsStaticAtom* unitAtom = NS_GetStaticAtom(unitStr);
 
   if (unitAtom) {
     for (uint32_t i = 0 ; i < ArrayLength(unitMap) ; i++) {
@@ -379,7 +381,7 @@ nsSVGAngle::SMILOrient::ValueFromString(const nsAString& aStr,
     val.mU.mOrient.mUnit = unitType;
     val.mU.mOrient.mOrientType = SVG_MARKER_ORIENT_ANGLE;
   }
-  aValue = Move(val);
+  aValue = std::move(val);
   aPreventCachingOfSandwich = false;
 
   return NS_OK;

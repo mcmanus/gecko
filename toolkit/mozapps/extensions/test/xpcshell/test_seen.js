@@ -19,37 +19,37 @@ add_task(async function() {
   await promiseStartupManager();
 
   let install = await promiseInstallFile(do_get_addon("test_bootstrap1_1"));
-  do_check_eq(install.state, AddonManager.STATE_INSTALLED);
-  do_check_false(hasFlag(install.addon.pendingOperations, AddonManager.PENDING_INSTALL));
+  Assert.equal(install.state, AddonManager.STATE_INSTALLED);
+  Assert.ok(!hasFlag(install.addon.pendingOperations, AddonManager.PENDING_INSTALL));
 
   let addon = install.addon;
-  do_check_eq(addon.version, "1.0");
-  do_check_false(addon.foreignInstall);
-  do_check_true(addon.seen);
+  Assert.equal(addon.version, "1.0");
+  Assert.ok(!addon.foreignInstall);
+  Assert.ok(addon.seen);
 
   await promiseRestartManager();
 
   addon = await promiseAddonByID(ID);
-  do_check_false(addon.foreignInstall);
-  do_check_true(addon.seen);
+  Assert.ok(!addon.foreignInstall);
+  Assert.ok(addon.seen);
 
   // Installing an update should retain that
   install = await promiseInstallFile(do_get_addon("test_bootstrap1_2"));
-  do_check_eq(install.state, AddonManager.STATE_INSTALLED);
-  do_check_false(hasFlag(install.addon.pendingOperations, AddonManager.PENDING_INSTALL));
+  Assert.equal(install.state, AddonManager.STATE_INSTALLED);
+  Assert.ok(!hasFlag(install.addon.pendingOperations, AddonManager.PENDING_INSTALL));
 
   addon = install.addon;
-  do_check_eq(addon.version, "2.0");
-  do_check_false(addon.foreignInstall);
-  do_check_true(addon.seen);
+  Assert.equal(addon.version, "2.0");
+  Assert.ok(!addon.foreignInstall);
+  Assert.ok(addon.seen);
 
   await promiseRestartManager();
 
   addon = await promiseAddonByID(ID);
-  do_check_false(addon.foreignInstall);
-  do_check_true(addon.seen);
+  Assert.ok(!addon.foreignInstall);
+  Assert.ok(addon.seen);
 
-  addon.uninstall();
+  await addon.uninstall();
 
   await promiseShutdownManager();
 });
@@ -62,14 +62,14 @@ add_task(async function() {
   let systemParentDir = gTmpD.clone();
   systemParentDir.append("systemwide-extensions");
   registerDirectory("XRESysSExtPD", systemParentDir.clone());
-  do_register_cleanup(() => {
+  registerCleanupFunction(() => {
     systemParentDir.remove(true);
   });
 
   let systemDir = systemParentDir.clone();
   systemDir.append(Services.appinfo.ID);
 
-  let path = manuallyInstall(do_get_addon("test_bootstrap1_1"), systemDir, ID);
+  let path = await manuallyInstall(do_get_addon("test_bootstrap1_1"), systemDir, ID);
   // Make sure the startup code will detect sideloaded updates
   setExtensionModifiedTime(path, Date.now() - 10000);
 
@@ -77,15 +77,15 @@ add_task(async function() {
   await AddonManagerPrivate.getNewSideloads();
 
   let addon = await promiseAddonByID(ID);
-  do_check_eq(addon.version, "1.0");
-  do_check_true(addon.foreignInstall);
-  do_check_false(addon.seen);
+  Assert.equal(addon.version, "1.0");
+  Assert.ok(addon.foreignInstall);
+  Assert.ok(!addon.seen);
 
   await promiseRestartManager();
 
   addon = await promiseAddonByID(ID);
-  do_check_true(addon.foreignInstall);
-  do_check_false(addon.seen);
+  Assert.ok(addon.foreignInstall);
+  Assert.ok(!addon.seen);
 
   await promiseShutdownManager();
   Services.obs.notifyObservers(path, "flush-cache-entry");
@@ -97,159 +97,159 @@ add_task(async function() {
 // Sideloading an add-on in the profile should mark it as unseen and it should
 // remain unseen after an update is sideloaded.
 add_task(async function() {
-  let path = manuallyInstall(do_get_addon("test_bootstrap1_1"), profileDir, ID);
+  let path = await manuallyInstall(do_get_addon("test_bootstrap1_1"), profileDir, ID);
   // Make sure the startup code will detect sideloaded updates
   setExtensionModifiedTime(path, Date.now() - 10000);
 
   await promiseStartupManager();
 
   let addon = await promiseAddonByID(ID);
-  do_check_eq(addon.version, "1.0");
-  do_check_true(addon.foreignInstall);
-  do_check_false(addon.seen);
+  Assert.equal(addon.version, "1.0");
+  Assert.ok(addon.foreignInstall);
+  Assert.ok(!addon.seen);
 
   await promiseRestartManager();
 
   addon = await promiseAddonByID(ID);
-  do_check_true(addon.foreignInstall);
-  do_check_false(addon.seen);
+  Assert.ok(addon.foreignInstall);
+  Assert.ok(!addon.seen);
 
   await promiseShutdownManager();
 
   // Sideloading an update shouldn't change the state
   manuallyUninstall(profileDir, ID);
-  manuallyInstall(do_get_addon("test_bootstrap1_2"), profileDir, ID);
+  await manuallyInstall(do_get_addon("test_bootstrap1_2"), profileDir, ID);
   setExtensionModifiedTime(path, Date.now());
 
   await promiseStartupManager();
 
   addon = await promiseAddonByID(ID);
-  do_check_eq(addon.version, "2.0");
-  do_check_true(addon.foreignInstall);
-  do_check_false(addon.seen);
+  Assert.equal(addon.version, "2.0");
+  Assert.ok(addon.foreignInstall);
+  Assert.ok(!addon.seen);
 
-  addon.uninstall();
+  await addon.uninstall();
   await promiseShutdownManager();
 });
 
 // Sideloading an add-on in the profile should mark it as unseen and it should
 // remain unseen after a regular update.
 add_task(async function() {
-  let path = manuallyInstall(do_get_addon("test_bootstrap1_1"), profileDir, ID);
+  let path = await manuallyInstall(do_get_addon("test_bootstrap1_1"), profileDir, ID);
   // Make sure the startup code will detect sideloaded updates
   setExtensionModifiedTime(path, Date.now() - 10000);
 
   await promiseStartupManager();
 
   let addon = await promiseAddonByID(ID);
-  do_check_eq(addon.version, "1.0");
-  do_check_true(addon.foreignInstall);
-  do_check_false(addon.seen);
+  Assert.equal(addon.version, "1.0");
+  Assert.ok(addon.foreignInstall);
+  Assert.ok(!addon.seen);
 
   await promiseRestartManager();
 
   addon = await promiseAddonByID(ID);
-  do_check_true(addon.foreignInstall);
-  do_check_false(addon.seen);
+  Assert.ok(addon.foreignInstall);
+  Assert.ok(!addon.seen);
 
   // Updating through the API shouldn't change the state
   let install = await promiseInstallFile(do_get_addon("test_bootstrap1_2"));
-  do_check_eq(install.state, AddonManager.STATE_INSTALLED);
-  do_check_false(hasFlag(install.addon.pendingOperations, AddonManager.PENDING_INSTALL));
+  Assert.equal(install.state, AddonManager.STATE_INSTALLED);
+  Assert.ok(!hasFlag(install.addon.pendingOperations, AddonManager.PENDING_INSTALL));
 
   addon = install.addon;
-  do_check_true(addon.foreignInstall);
-  do_check_false(addon.seen);
+  Assert.ok(addon.foreignInstall);
+  Assert.ok(!addon.seen);
 
   await promiseRestartManager();
 
   addon = await promiseAddonByID(ID);
-  do_check_eq(addon.version, "2.0");
-  do_check_true(addon.foreignInstall);
-  do_check_false(addon.seen);
+  Assert.equal(addon.version, "2.0");
+  Assert.ok(addon.foreignInstall);
+  Assert.ok(!addon.seen);
 
-  addon.uninstall();
+  await addon.uninstall();
   await promiseShutdownManager();
 });
 
 // After a sideloaded addon has been seen, sideloading an update should
 // not reset it to unseen.
 add_task(async function() {
-  let path = manuallyInstall(do_get_addon("test_bootstrap1_1"), profileDir, ID);
+  let path = await manuallyInstall(do_get_addon("test_bootstrap1_1"), profileDir, ID);
   // Make sure the startup code will detect sideloaded updates
   setExtensionModifiedTime(path, Date.now() - 10000);
 
   await promiseStartupManager();
 
   let addon = await promiseAddonByID(ID);
-  do_check_eq(addon.version, "1.0");
-  do_check_true(addon.foreignInstall);
-  do_check_false(addon.seen);
+  Assert.equal(addon.version, "1.0");
+  Assert.ok(addon.foreignInstall);
+  Assert.ok(!addon.seen);
   addon.markAsSeen();
-  do_check_true(addon.seen);
+  Assert.ok(addon.seen);
 
   await promiseRestartManager();
 
   addon = await promiseAddonByID(ID);
-  do_check_true(addon.foreignInstall);
-  do_check_true(addon.seen);
+  Assert.ok(addon.foreignInstall);
+  Assert.ok(addon.seen);
 
   await promiseShutdownManager();
 
   // Sideloading an update shouldn't change the state
   manuallyUninstall(profileDir, ID);
-  manuallyInstall(do_get_addon("test_bootstrap1_2"), profileDir, ID);
+  await manuallyInstall(do_get_addon("test_bootstrap1_2"), profileDir, ID);
   setExtensionModifiedTime(path, Date.now());
 
   await promiseStartupManager();
 
   addon = await promiseAddonByID(ID);
-  do_check_eq(addon.version, "2.0");
-  do_check_true(addon.foreignInstall);
-  do_check_true(addon.seen);
+  Assert.equal(addon.version, "2.0");
+  Assert.ok(addon.foreignInstall);
+  Assert.ok(addon.seen);
 
-  addon.uninstall();
+  await addon.uninstall();
   await promiseShutdownManager();
 });
 
 // After a sideloaded addon has been seen, manually applying an update should
 // not reset it to unseen.
 add_task(async function() {
-  let path = manuallyInstall(do_get_addon("test_bootstrap1_1"), profileDir, ID);
+  let path = await manuallyInstall(do_get_addon("test_bootstrap1_1"), profileDir, ID);
   // Make sure the startup code will detect sideloaded updates
   setExtensionModifiedTime(path, Date.now() - 10000);
 
   await promiseStartupManager();
 
   let addon = await promiseAddonByID(ID);
-  do_check_eq(addon.version, "1.0");
-  do_check_true(addon.foreignInstall);
-  do_check_false(addon.seen);
+  Assert.equal(addon.version, "1.0");
+  Assert.ok(addon.foreignInstall);
+  Assert.ok(!addon.seen);
   addon.markAsSeen();
-  do_check_true(addon.seen);
+  Assert.ok(addon.seen);
 
   await promiseRestartManager();
 
   addon = await promiseAddonByID(ID);
-  do_check_true(addon.foreignInstall);
-  do_check_true(addon.seen);
+  Assert.ok(addon.foreignInstall);
+  Assert.ok(addon.seen);
 
   // Updating through the API shouldn't change the state
   let install = await promiseInstallFile(do_get_addon("test_bootstrap1_2"));
-  do_check_eq(install.state, AddonManager.STATE_INSTALLED);
-  do_check_false(hasFlag(install.addon.pendingOperations, AddonManager.PENDING_INSTALL));
+  Assert.equal(install.state, AddonManager.STATE_INSTALLED);
+  Assert.ok(!hasFlag(install.addon.pendingOperations, AddonManager.PENDING_INSTALL));
 
   addon = install.addon;
-  do_check_true(addon.foreignInstall);
-  do_check_true(addon.seen);
+  Assert.ok(addon.foreignInstall);
+  Assert.ok(addon.seen);
 
   await promiseRestartManager();
 
   addon = await promiseAddonByID(ID);
-  do_check_eq(addon.version, "2.0");
-  do_check_true(addon.foreignInstall);
-  do_check_true(addon.seen);
+  Assert.equal(addon.version, "2.0");
+  Assert.ok(addon.foreignInstall);
+  Assert.ok(addon.seen);
 
-  addon.uninstall();
+  await addon.uninstall();
   await promiseShutdownManager();
 });

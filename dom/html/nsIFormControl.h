@@ -9,14 +9,13 @@
 #include "mozilla/EventForwards.h"
 #include "nsISupports.h"
 
-class nsIDOMHTMLFormElement;
-class nsPresState;
-
 namespace mozilla {
+class PresState;
 namespace dom {
 class Element;
 class HTMLFieldSetElement;
 class HTMLFormSubmission;
+class HTMLFormElement;
 } // namespace dom
 } // namespace mozilla
 
@@ -120,7 +119,7 @@ public:
    * so that it can be properly sorted with the other controls in the
    * form.
    */
-  virtual void SetForm(nsIDOMHTMLFormElement* aForm) = 0;
+  virtual void SetForm(mozilla::dom::HTMLFormElement* aForm) = 0;
 
   /**
    * Tell the control to forget about its form.
@@ -169,7 +168,7 @@ public:
    * @return true if the form control was a checkbox and its
    *         checked state was restored, false otherwise.
    */
-  virtual bool RestoreState(nsPresState* aState) = 0;
+  virtual bool RestoreState(mozilla::PresState* aState) = 0;
 
   virtual bool AllowDrop() = 0;
 
@@ -289,11 +288,6 @@ nsIFormControl::IsSingleLineTextControl(bool aExcludePassword, uint32_t aType)
          aType == NS_FORM_INPUT_TEL ||
          aType == NS_FORM_INPUT_URL ||
          // TODO: those are temporary until bug 773205 is fixed.
-#if defined(MOZ_WIDGET_ANDROID)
-         // On Android/B2G, date/time input appears as a normal text box.
-         aType == NS_FORM_INPUT_TIME ||
-         aType == NS_FORM_INPUT_DATE ||
-#endif
          aType == NS_FORM_INPUT_MONTH ||
          aType == NS_FORM_INPUT_WEEK ||
          aType == NS_FORM_INPUT_DATETIME_LOCAL ||

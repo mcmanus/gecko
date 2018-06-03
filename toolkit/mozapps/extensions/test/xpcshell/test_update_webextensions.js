@@ -8,16 +8,16 @@ Services.prefs.setBoolPref(PREF_EM_CHECK_UPDATE_SECURITY, false);
 var testserver = createHttpServer();
 gPort = testserver.identity.primaryPort;
 
-const uuidGenerator = AM_Cc["@mozilla.org/uuid-generator;1"].getService(AM_Ci.nsIUUIDGenerator);
+const uuidGenerator = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
 
 const extensionsDir = gProfD.clone();
 extensionsDir.append("extensions");
 
 const addonsDir = gTmpD.clone();
 addonsDir.append("addons");
-addonsDir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, 0o755);
+addonsDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o755);
 
-do_register_cleanup(() => addonsDir.remove(true));
+registerCleanupFunction(() => addonsDir.remove(true));
 
 testserver.registerDirectory("/addons/", addonsDir);
 
@@ -36,17 +36,12 @@ function serveManifest(request, response) {
   response.write(manifest.data);
 }
 
-function promiseInstallWebExtension(aData) {
+async function promiseInstallWebExtension(aData) {
   let addonFile = createTempWebExtensionFile(aData);
 
-  let startupPromise = promiseWebExtensionStartup();
-
-  return promiseInstallAllFiles([addonFile]).then(() => {
-    return startupPromise;
-  }).then(() => {
-    Services.obs.notifyObservers(addonFile, "flush-cache-entry");
-    return promiseAddonByID(aData.id);
-  });
+  let {addon} = await promiseInstallFile(addonFile);
+  Services.obs.notifyObservers(addonFile, "flush-cache-entry");
+  return addon;
 }
 
 var checkUpdates = async function(aData, aReason = AddonManager.UPDATE_WHEN_PERIODIC_UPDATE) {
@@ -69,7 +64,7 @@ var checkUpdates = async function(aData, aReason = AddonManager.UPDATE_WHEN_PERI
   provide(aData, "addon.manifest.applications.gecko.id", id);
 
   let updatePath = `/updates/${id}.json`.replace(/[{}]/g, "");
-  let updateUrl = `http://localhost:${gPort}${updatePath}`
+  let updateUrl = `http://localhost:${gPort}${updatePath}`;
 
   let addonData = { updates: [] };
   let manifestJSON = {
@@ -124,14 +119,12 @@ var checkUpdates = async function(aData, aReason = AddonManager.UPDATE_WHEN_PERI
 };
 
 
-function run_test() {
+add_task(async function setup() {
   createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "42.0", "42.0");
 
-  startupManager();
-  do_register_cleanup(promiseShutdownManager);
-
-  run_next_test();
-}
+  await promiseStartupManager();
+  registerCleanupFunction(promiseShutdownManager);
+});
 
 
 // Check that compatibility updates are applied.
@@ -158,7 +151,7 @@ add_task(async function checkUpdateMetadata() {
   ok(update.addon.isCompatibleWith("48", "48"), "compatible max");
   ok(!update.addon.isCompatibleWith("49", "49"), "not compatible max");
 
-  update.addon.uninstall();
+  await update.addon.uninstall();
 });
 
 
@@ -178,15 +171,12 @@ add_task(async function checkUpdateToWebExt() {
 
   equal(update.addon.version, "1.0", "add-on version");
 
-  await Promise.all([
-    promiseCompleteAllInstalls([update.updateAvailable]),
-    promiseWebExtensionStartup(),
-  ]);
+  await update.updateAvailable.install();
 
   let addon = await promiseAddonByID(update.addon.id);
   equal(addon.version, "1.2", "new add-on version");
 
-  addon.uninstall();
+  await addon.uninstall();
 });
 
 
@@ -195,7 +185,7 @@ add_task(async function checkUpdateToRDF() {
   let update = await checkUpdates({
     addon: { manifest: { version: "1.0" } },
     updates: {
-      "1.1": { addon: { rdf: true } },
+      "1.1": { addon: { rdf: true, bootstrap: true } },
     }
   });
 
@@ -220,7 +210,7 @@ add_task(async function checkUpdateToRDF() {
   let addon = await promiseAddonByID(update.addon.id);
   equal(addon.version, "1.0", "new add-on version");
 
-  addon.uninstall();
+  await addon.uninstall();
 });
 
 

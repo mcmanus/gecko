@@ -54,7 +54,7 @@ SVGStyleElement::~SVGStyleElement()
 }
 
 //----------------------------------------------------------------------
-// nsIDOMNode methods
+// nsINode methods
 
 
 NS_IMPL_ELEMENT_CLONE_WITH_INIT(SVGStyleElement)
@@ -86,54 +86,34 @@ SVGStyleElement::UnbindFromTree(bool aDeep, bool aNullParent)
   nsCOMPtr<nsIDocument> oldDoc = GetUncomposedDoc();
   ShadowRoot* oldShadow = GetContainingShadow();
   SVGStyleElementBase::UnbindFromTree(aDeep, aNullParent);
-  UpdateStyleSheetInternal(oldDoc, oldShadow);
+  Unused << UpdateStyleSheetInternal(oldDoc, oldShadow);
 }
 
 nsresult
-SVGStyleElement::SetAttr(int32_t aNameSpaceID, nsAtom* aName,
-                         nsAtom* aPrefix, const nsAString& aValue,
-                         bool aNotify)
+SVGStyleElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
+                              const nsAttrValue* aValue,
+                              const nsAttrValue* aOldValue,
+                              nsIPrincipal* aMaybeScriptedPrincipal,
+                              bool aNotify)
 {
-  nsresult rv = SVGStyleElementBase::SetAttr(aNameSpaceID, aName, aPrefix,
-                                             aValue, aNotify);
-  if (NS_SUCCEEDED(rv) && aNameSpaceID == kNameSpaceID_None) {
+  if (aNameSpaceID == kNameSpaceID_None) {
     if (aName == nsGkAtoms::title ||
         aName == nsGkAtoms::media ||
         aName == nsGkAtoms::type) {
-      UpdateStyleSheetInternal(nullptr, nullptr, true);
-    } else if (aName == nsGkAtoms::scoped &&
-               OwnerDoc()->IsScopedStyleEnabled()) {
-      UpdateStyleSheetScopedness(true);
+      Unused << UpdateStyleSheetInternal(nullptr, nullptr, ForceUpdate::Yes);
     }
   }
 
-  return rv;
-}
-
-nsresult
-SVGStyleElement::UnsetAttr(int32_t aNameSpaceID, nsAtom* aAttribute,
-                           bool aNotify)
-{
-  nsresult rv = SVGStyleElementBase::UnsetAttr(aNameSpaceID, aAttribute,
-                                               aNotify);
-  if (NS_SUCCEEDED(rv) && aNameSpaceID == kNameSpaceID_None) {
-    if (aAttribute == nsGkAtoms::title ||
-        aAttribute == nsGkAtoms::media ||
-        aAttribute == nsGkAtoms::type) {
-      UpdateStyleSheetInternal(nullptr, nullptr, true);
-    } else if (aAttribute == nsGkAtoms::scoped &&
-               OwnerDoc()->IsScopedStyleEnabled()) {
-      UpdateStyleSheetScopedness(false);
-    }
-  }
-
-  return rv;
+  return SVGStyleElementBase::AfterSetAttr(aNameSpaceID, aName, aValue,
+                                           aOldValue, aMaybeScriptedPrincipal,
+                                           aNotify);
 }
 
 bool
 SVGStyleElement::ParseAttribute(int32_t aNamespaceID,
                                 nsAtom* aAttribute,
                                 const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None &&
@@ -143,40 +123,33 @@ SVGStyleElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return SVGStyleElementBase::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                             aResult);
+                                             aMaybeScriptedPrincipal, aResult);
 }
 
 //----------------------------------------------------------------------
 // nsIMutationObserver methods
 
 void
-SVGStyleElement::CharacterDataChanged(nsIDocument* aDocument,
-                                      nsIContent* aContent,
-                                      CharacterDataChangeInfo* aInfo)
+SVGStyleElement::CharacterDataChanged(nsIContent* aContent,
+                                      const CharacterDataChangeInfo&)
 {
   ContentChanged(aContent);
 }
 
 void
-SVGStyleElement::ContentAppended(nsIDocument* aDocument,
-                                 nsIContent* aContainer,
-                                 nsIContent* aFirstNewContent)
+SVGStyleElement::ContentAppended(nsIContent* aFirstNewContent)
 {
-  ContentChanged(aContainer);
+  ContentChanged(aFirstNewContent->GetParent());
 }
 
 void
-SVGStyleElement::ContentInserted(nsIDocument* aDocument,
-                                 nsIContent* aContainer,
-                                 nsIContent* aChild)
+SVGStyleElement::ContentInserted(nsIContent* aChild)
 {
   ContentChanged(aChild);
 }
 
 void
-SVGStyleElement::ContentRemoved(nsIDocument* aDocument,
-                                nsIContent* aContainer,
-                                nsIContent* aChild,
+SVGStyleElement::ContentRemoved(nsIContent* aChild,
                                 nsIContent* aPreviousSibling)
 {
   ContentChanged(aChild);
@@ -186,7 +159,7 @@ void
 SVGStyleElement::ContentChanged(nsIContent* aContent)
 {
   if (nsContentUtils::IsInSameAnonymousTree(this, aContent)) {
-    UpdateStyleSheetInternal(nullptr, nullptr);
+    Unused << UpdateStyleSheetInternal(nullptr, nullptr);
   }
 }
 
@@ -207,93 +180,69 @@ SVGStyleElement::SetXmlspace(const nsAString & aXmlspace, ErrorResult& rv)
 void
 SVGStyleElement::GetMedia(nsAString & aMedia)
 {
-  GetAttr(kNameSpaceID_None, nsGkAtoms::media, aMedia);
+  GetAttr(nsGkAtoms::media, aMedia);
 }
 
 void
 SVGStyleElement::SetMedia(const nsAString& aMedia, ErrorResult& rv)
 {
-  rv = SetAttr(kNameSpaceID_None, nsGkAtoms::media, aMedia, true);
-}
-
-bool
-SVGStyleElement::Scoped() const
-{
-  return GetBoolAttr(nsGkAtoms::scoped);
-}
-
-void
-SVGStyleElement::SetScoped(bool aScoped, ErrorResult& rv)
-{
-  rv = SetBoolAttr(nsGkAtoms::scoped, aScoped);
+  SetAttr(nsGkAtoms::media, aMedia, rv);
 }
 
 void
 SVGStyleElement::GetType(nsAString & aType)
 {
-  GetAttr(kNameSpaceID_None, nsGkAtoms::type, aType);
+  GetAttr(nsGkAtoms::type, aType);
 }
 
 void
 SVGStyleElement::SetType(const nsAString& aType, ErrorResult& rv)
 {
-  rv = SetAttr(kNameSpaceID_None, nsGkAtoms::type, aType, true);
+  SetAttr(nsGkAtoms::type, aType, rv);
 }
 
 void
 SVGStyleElement::GetTitle(nsAString & aTitle)
 {
-  GetAttr(kNameSpaceID_None, nsGkAtoms::title, aTitle);
+  GetAttr(nsGkAtoms::title, aTitle);
 }
 
 void
 SVGStyleElement::SetTitle(const nsAString& aTitle, ErrorResult& rv)
 {
-  rv = SetAttr(kNameSpaceID_None, nsGkAtoms::title, aTitle, true);
+  SetAttr(nsGkAtoms::title, aTitle, rv);
 }
 
 //----------------------------------------------------------------------
 // nsStyleLinkElement methods
 
-already_AddRefed<nsIURI>
-SVGStyleElement::GetStyleSheetURL(bool* aIsInline)
+Maybe<nsStyleLinkElement::SheetInfo>
+SVGStyleElement::GetStyleSheetInfo()
 {
-  *aIsInline = true;
-  return nullptr;
-}
-
-void
-SVGStyleElement::GetStyleSheetInfo(nsAString& aTitle,
-                                   nsAString& aType,
-                                   nsAString& aMedia,
-                                   bool* aIsScoped,
-                                   bool* aIsAlternate)
-{
-  *aIsAlternate = false;
-
-  nsAutoString title;
-  GetAttr(kNameSpaceID_None, nsGkAtoms::title, title);
-  title.CompressWhitespace();
-  aTitle.Assign(title);
-
-  GetAttr(kNameSpaceID_None, nsGkAtoms::media, aMedia);
-  // The SVG spec is formulated in terms of the CSS2 spec,
-  // which specifies that media queries are case insensitive.
-  nsContentUtils::ASCIIToLower(aMedia);
-
-  GetAttr(kNameSpaceID_None, nsGkAtoms::type, aType);
-  if (aType.IsEmpty()) {
-    aType.AssignLiteral("text/css");
+  if (!IsCSSMimeTypeAttribute(*this)) {
+    return Nothing();
   }
 
-  *aIsScoped = HasAttr(kNameSpaceID_None, nsGkAtoms::scoped) &&
-               OwnerDoc()->IsScopedStyleEnabled();
-}
+  nsAutoString title;
+  nsAutoString media;
+  GetTitleAndMediaForElement(*this, title, media);
 
-CORSMode
-SVGStyleElement::GetCORSMode() const
-{
-  return AttrValueToCORSMode(GetParsedAttr(nsGkAtoms::crossorigin));
+  return Some(SheetInfo {
+    *OwnerDoc(),
+    this,
+    nullptr,
+    // FIXME(bug 1459822): Why doesn't this need a principal, but
+    // HTMLStyleElement does?
+    nullptr,
+    net::ReferrerPolicy::RP_Unset,
+    // FIXME(bug 1459822): Why does this need a crossorigin attribute, but
+    // HTMLStyleElement doesn't?
+    AttrValueToCORSMode(GetParsedAttr(nsGkAtoms::crossorigin)),
+    title,
+    media,
+    HasAlternateRel::No,
+    IsInline::Yes,
+  });
 }
 
 } // namespace dom

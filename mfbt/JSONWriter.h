@@ -92,7 +92,7 @@
 #ifndef mozilla_JSONWriter_h
 #define mozilla_JSONWriter_h
 
-#include "mozilla/double-conversion.h"
+#include "double-conversion/double-conversion.h"
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/PodOperations.h"
 #include "mozilla/Sprintf.h"
@@ -340,7 +340,7 @@ protected:
 
 public:
   explicit JSONWriter(UniquePtr<JSONWriteFunc> aWriter)
-    : mWriter(Move(aWriter))
+    : mWriter(std::move(aWriter))
     , mNeedComma()
     , mNeedNewlines()
     , mDepth(0)

@@ -8,7 +8,7 @@ add_task(async function setup() {
   registerCleanupFunction(async function() {
     Services.prefs.clearUserPref(PREF_TRIMURL);
     Services.prefs.clearUserPref(PREF_AUTOFILL);
-    await PlacesTestUtils.clearHistory();
+    await PlacesUtils.history.clear();
     gURLBar.handleRevert();
   });
   Services.prefs.setBoolPref(PREF_TRIMURL, true);
@@ -27,7 +27,7 @@ add_task(async function setup() {
 async function promiseSearch(searchtext) {
   gURLBar.focus();
   gURLBar.inputField.value = searchtext.substr(0, searchtext.length - 1);
-  EventUtils.synthesizeKey(searchtext.substr(-1, 1), {});
+  EventUtils.sendString(searchtext.substr(-1, 1));
   await promiseSearchComplete();
 }
 
@@ -61,41 +61,46 @@ const tests = [{
     resultListActionText: "Search with Google",
     resultListType: "searchengine",
     finalCompleteValue: 'moz-action:searchengine,{"engineName":"Google","input":"http%3A%2F%2F","searchQuery":"http%3A%2F%2F"}'
-  }, {
+  },
+  {
     search: "https://",
     autofilledValue: "https://",
     resultListDisplayTitle: "https://",
     resultListActionText: "Search with Google",
     resultListType: "searchengine",
     finalCompleteValue: 'moz-action:searchengine,{"engineName":"Google","input":"https%3A%2F%2F","searchQuery":"https%3A%2F%2F"}'
-  }, {
+  },
+  {
     search: "au",
     autofilledValue: "autofilltrimurl.com/",
     resultListDisplayTitle: "www.autofilltrimurl.com",
     resultListActionText: "Visit",
     resultListType: "",
-    finalCompleteValue: "www.autofilltrimurl.com/"
-  }, {
+    finalCompleteValue: "http://www.autofilltrimurl.com/"
+  },
+  {
     search: "http://au",
     autofilledValue: "http://autofilltrimurl.com/",
-    resultListDisplayTitle: "autofilltrimurl.com",
+    resultListDisplayTitle: "www.autofilltrimurl.com",
     resultListActionText: "Visit",
     resultListType: "",
-    finalCompleteValue: "http://autofilltrimurl.com/"
-  }, {
+    finalCompleteValue: "http://www.autofilltrimurl.com/"
+  },
+  {
     search: "sec",
     autofilledValue: "secureautofillurl.com/",
     resultListDisplayTitle: "https://www.secureautofillurl.com",
     resultListActionText: "Visit",
     resultListType: "",
     finalCompleteValue: "https://www.secureautofillurl.com/"
-  }, {
+  },
+  {
     search: "https://sec",
     autofilledValue: "https://secureautofillurl.com/",
-    resultListDisplayTitle: "https://secureautofillurl.com",
+    resultListDisplayTitle: "https://www.secureautofillurl.com",
     resultListActionText: "Visit",
     resultListType: "",
-    finalCompleteValue: "https://secureautofillurl.com/"
+    finalCompleteValue: "https://www.secureautofillurl.com/"
   },
 ];
 
@@ -111,6 +116,6 @@ add_task(async function autofill_complete_domain() {
 
   // Now ensure selecting from the popup correctly trims.
   is(gURLBar.controller.matchCount, 2, "Found the expected number of matches");
-  EventUtils.synthesizeKey("VK_DOWN", {});
+  EventUtils.synthesizeKey("KEY_ArrowDown");
   is(gURLBar.inputField.value, "www.autofilltrimurl.com/whatever", "trim was applied correctly");
 });

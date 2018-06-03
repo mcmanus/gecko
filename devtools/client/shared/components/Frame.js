@@ -4,42 +4,46 @@
 
 "use strict";
 
-const { DOM: dom, createClass, PropTypes } = require("devtools/client/shared/vendor/react");
-const { getSourceNames, parseURL,
-        isScratchpadScheme, getSourceMappedFile } = require("devtools/client/shared/source-utils");
+const { Component } = require("devtools/client/shared/vendor/react");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
+const { getUnicodeUrl, getUnicodeUrlPath, getUnicodeHostname } =
+  require("devtools/client/shared/unicode-url");
+const { getSourceNames, parseURL, isScratchpadScheme, getSourceMappedFile } =
+  require("devtools/client/shared/source-utils");
 const { LocalizationHelper } = require("devtools/shared/l10n");
 
 const l10n = new LocalizationHelper("devtools/client/locales/components.properties");
 const webl10n = new LocalizationHelper("devtools/client/locales/webconsole.properties");
 
-module.exports = createClass({
-  displayName: "Frame",
+class Frame extends Component {
+  static get propTypes() {
+    return {
+      // SavedFrame, or an object containing all the required properties.
+      frame: PropTypes.shape({
+        functionDisplayName: PropTypes.string,
+        source: PropTypes.string.isRequired,
+        line: PropTypes.oneOfType([ PropTypes.string, PropTypes.number ]),
+        column: PropTypes.oneOfType([ PropTypes.string, PropTypes.number ]),
+      }).isRequired,
+      // Clicking on the frame link -- probably should link to the debugger.
+      onClick: PropTypes.func,
+      // Option to display a function name before the source link.
+      showFunctionName: PropTypes.bool,
+      // Option to display a function name even if it's anonymous.
+      showAnonymousFunctionName: PropTypes.bool,
+      // Option to display a host name after the source link.
+      showHost: PropTypes.bool,
+      // Option to display a host name if the filename is empty or just '/'
+      showEmptyPathAsHost: PropTypes.bool,
+      // Option to display a full source instead of just the filename.
+      showFullSourceUrl: PropTypes.bool,
+      // Service to enable the source map feature for console.
+      sourceMapService: PropTypes.object,
+    };
+  }
 
-  propTypes: {
-    // SavedFrame, or an object containing all the required properties.
-    frame: PropTypes.shape({
-      functionDisplayName: PropTypes.string,
-      source: PropTypes.string.isRequired,
-      line: PropTypes.oneOfType([ PropTypes.string, PropTypes.number ]),
-      column: PropTypes.oneOfType([ PropTypes.string, PropTypes.number ]),
-    }).isRequired,
-    // Clicking on the frame link -- probably should link to the debugger.
-    onClick: PropTypes.func.isRequired,
-    // Option to display a function name before the source link.
-    showFunctionName: PropTypes.bool,
-    // Option to display a function name even if it's anonymous.
-    showAnonymousFunctionName: PropTypes.bool,
-    // Option to display a host name after the source link.
-    showHost: PropTypes.bool,
-    // Option to display a host name if the filename is empty or just '/'
-    showEmptyPathAsHost: PropTypes.bool,
-    // Option to display a full source instead of just the filename.
-    showFullSourceUrl: PropTypes.bool,
-    // Service to enable the source map feature for console.
-    sourceMapService: PropTypes.object,
-  },
-
-  getDefaultProps() {
+  static get defaultProps() {
     return {
       showFunctionName: false,
       showAnonymousFunctionName: false,
@@ -47,7 +51,13 @@ module.exports = createClass({
       showEmptyPathAsHost: false,
       showFullSourceUrl: false,
     };
-  },
+  }
+
+  constructor(props) {
+    super(props);
+    this._locationChanged = this._locationChanged.bind(this);
+    this.getSourceForClick = this.getSourceForClick.bind(this);
+  }
 
   componentWillMount() {
     if (this.props.sourceMapService) {
@@ -55,7 +65,7 @@ module.exports = createClass({
       this.props.sourceMapService.subscribe(source, line, column,
                                             this._locationChanged);
     }
-  },
+  }
 
   componentWillUnmount() {
     if (this.props.sourceMapService) {
@@ -63,10 +73,10 @@ module.exports = createClass({
       this.props.sourceMapService.unsubscribe(source, line, column,
                                               this._locationChanged);
     }
-  },
+  }
 
   _locationChanged(isSourceMapped, url, line, column) {
-    let newState = {
+    const newState = {
       isSourceMapped,
     };
     if (isSourceMapped) {
@@ -79,7 +89,7 @@ module.exports = createClass({
     }
 
     this.setState(newState);
-  },
+  }
 
   /**
    * Utility method to convert the Frame object model to the
@@ -95,11 +105,11 @@ module.exports = createClass({
       column,
       functionDisplayName: this.props.frame.functionDisplayName,
     };
-  },
+  }
 
   render() {
     let frame, isSourceMapped;
-    let {
+    const {
       onClick,
       showFunctionName,
       showAnonymousFunctionName,
@@ -115,11 +125,20 @@ module.exports = createClass({
       frame = this.props.frame;
     }
 
-    let source = frame.source ? String(frame.source) : "";
-    let line = frame.line != void 0 ? Number(frame.line) : null;
-    let column = frame.column != void 0 ? Number(frame.column) : null;
+    // If the resource was loaded by browser-loader.js, `frame.source` looks like:
+    // resource://devtools/shared/base-loader.js -> resource://devtools/path/to/file.js .
+    // What's needed is only the last part after " -> ".
+    const source = frame.source
+      ? String(frame.source).split(" -> ").pop()
+      : "";
+    const line = frame.line != void 0 ? Number(frame.line) : null;
+    const column = frame.column != void 0 ? Number(frame.column) : null;
 
     const { short, long, host } = getSourceNames(source);
+    const unicodeShort = getUnicodeUrlPath(short);
+    const unicodeLong  = getUnicodeUrl(long);
+    const unicodeHost  = host ? getUnicodeHostname(host) : "";
+
     // Reparse the URL to determine if we should link this; `getSourceNames`
     // has already cached this indirectly. We don't want to attempt to
     // link to "self-hosted" and "(unknown)". However, we do want to link
@@ -131,8 +150,7 @@ module.exports = createClass({
     const elements = [];
     const sourceElements = [];
     let sourceEl;
-
-    let tooltip = long;
+    let tooltip = unicodeLong;
 
     // Exclude all falsy values, including `0`, as line numbers start with 1.
     if (line) {
@@ -143,7 +161,7 @@ module.exports = createClass({
       }
     }
 
-    let attributes = {
+    const attributes = {
       "data-url": long,
       className: "frame-link",
     };
@@ -165,7 +183,7 @@ module.exports = createClass({
       }
     }
 
-    let displaySource = showFullSourceUrl ? long : short;
+    let displaySource = showFullSourceUrl ? unicodeLong : unicodeShort;
     if (isSourceMapped) {
       displaySource = getSourceMappedFile(displaySource);
     } else if (showEmptyPathAsHost && (displaySource === "" || displaySource === "/")) {
@@ -198,7 +216,7 @@ module.exports = createClass({
 
     // Inner el is useful for achieving ellipsis on the left and correct LTR/RTL
     // ordering. See CSS styles for frame-link-source-[inner] and bug 1290056.
-    let sourceInnerEl = dom.span({
+    const sourceInnerEl = dom.span({
       key: "source-inner",
       className: "frame-link-source-inner",
       title: isLinkable ?
@@ -211,7 +229,8 @@ module.exports = createClass({
       sourceEl = dom.a({
         onClick: e => {
           e.preventDefault();
-          onClick(this.getSourceForClick(frame));
+          e.stopPropagation();
+          onClick(this.getSourceForClick({...frame, source}));
         },
         href: source,
         className: "frame-link-source",
@@ -225,14 +244,16 @@ module.exports = createClass({
     }
     elements.push(sourceEl);
 
-    if (showHost && host) {
+    if (showHost && unicodeHost) {
       elements.push(" ");
       elements.push(dom.span({
         key: "host",
         className: "frame-link-host",
-      }, host));
+      }, unicodeHost));
     }
 
     return dom.span(attributes, ...elements);
   }
-});
+}
+
+module.exports = Frame;

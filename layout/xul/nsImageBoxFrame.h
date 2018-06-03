@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,23 +12,19 @@
 #include "imgILoader.h"
 #include "imgIRequest.h"
 #include "imgIContainer.h"
-#include "imgINotificationObserver.h"
-#include "imgIOnloadBlocker.h"
 
 class imgRequestProxy;
 class nsImageBoxFrame;
 
 class nsDisplayXULImage;
 
-class nsImageBoxListener final : public imgINotificationObserver,
-                                 public imgIOnloadBlocker
+class nsImageBoxListener final : public imgINotificationObserver
 {
 public:
   nsImageBoxListener();
 
   NS_DECL_ISUPPORTS
   NS_DECL_IMGINOTIFICATIONOBSERVER
-  NS_DECL_IMGIONLOADBLOCKER
 
   void SetFrame(nsImageBoxFrame *frame) { mFrame = frame; }
 
@@ -40,7 +37,7 @@ private:
 class nsImageBoxFrame final : public nsLeafBoxFrame
 {
 public:
-  typedef mozilla::image::DrawResult DrawResult;
+  typedef mozilla::image::ImgDrawResult ImgDrawResult;
   typedef mozilla::layers::ImageContainer ImageContainer;
   typedef mozilla::layers::LayerManager LayerManager;
 
@@ -54,7 +51,7 @@ public:
 
   nsresult Notify(imgIRequest *aRequest, int32_t aType, const nsIntRect* aData);
 
-  friend nsIFrame* NS_NewImageBoxFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
+  friend nsIFrame* NS_NewImageBoxFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle);
 
   virtual void Init(nsIContent*       aContent,
                     nsContainerFrame* aParent,
@@ -64,9 +61,9 @@ public:
                                     nsAtom* aAttribute,
                                     int32_t aModType) override;
 
-  virtual void DidSetStyleContext(nsStyleContext* aOldStyleContext) override;
+  virtual void DidSetComputedStyle(ComputedStyle* aOldComputedStyle) override;
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override;
@@ -91,15 +88,15 @@ public:
   virtual ~nsImageBoxFrame();
 
   already_AddRefed<imgIContainer> GetImageContainerForPainting(const nsPoint& aPt,
-                                                               DrawResult& aDrawResult,
+                                                               ImgDrawResult& aDrawResult,
                                                                Maybe<nsPoint>& aAnchorPoint,
                                                                nsRect& aDest);
 
-  DrawResult PaintImage(gfxContext& aRenderingContext,
+  ImgDrawResult PaintImage(gfxContext& aRenderingContext,
                         const nsRect& aDirtyRect,
                         nsPoint aPt, uint32_t aFlags);
 
-  DrawResult CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
+  ImgDrawResult CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
                                      mozilla::wr::IpcResourceUpdateQueue& aResources,
                                      const mozilla::layers::StackingContextHelper& aSc,
                                      mozilla::layers::WebRenderLayerManager* aManager,
@@ -112,7 +109,7 @@ public:
   nsRect GetDestRect(const nsPoint& aOffset, Maybe<nsPoint>& aAnchorPoint);
 
 protected:
-  explicit nsImageBoxFrame(nsStyleContext* aContext);
+  explicit nsImageBoxFrame(ComputedStyle* aStyle);
 
   virtual void GetImageSize();
 
@@ -158,6 +155,10 @@ public:
                                        nsDisplayListBuilder* aBuilder) override;
   virtual already_AddRefed<imgIContainer> GetImage() override;
   virtual nsRect GetDestRect() const override;
+  virtual void UpdateDrawResult(mozilla::image::ImgDrawResult aResult) override
+  {
+    nsDisplayItemGenericImageGeometry::UpdateDrawResult(this, aResult);
+  }
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
                            bool* aSnap) const override
   {
@@ -172,14 +173,6 @@ public:
   // event receiver for us
   virtual void Paint(nsDisplayListBuilder* aBuilder,
                      gfxContext* aCtx) override;
-
-  virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
-                                   LayerManager* aManager,
-                                   const ContainerLayerParameters& aParameters) override;
-
-  virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
-                                             LayerManager* aManager,
-                                             const ContainerLayerParameters& aContainerParameters) override;
 
   virtual bool CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
                                        mozilla::wr::IpcResourceUpdateQueue& aResources,

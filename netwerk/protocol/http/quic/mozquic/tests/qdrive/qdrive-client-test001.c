@@ -14,7 +14,7 @@ static struct closure
 {
   int test_state;
   unsigned char test1_char[3];
-  int test1_iters[3];
+  unsigned int test1_iters[3];
   mozquic_stream_t *test1_stream[3];
   int test1_fin[3];
 } testState;
@@ -40,7 +40,7 @@ static void onConnected(mozquic_connection_t *localConnection)
     testState.test1_iters[i] = (random() % 10) * 1024;
     char buf[1024];
     snprintf(buf, 1024, "GET %d %c\n", testState.test1_iters[i] / 1024, testState.test1_char[i]);
-    mozquic_start_new_stream(testState.test1_stream + i, localConnection, buf, strlen(buf), 0);
+    mozquic_start_new_stream(testState.test1_stream + i, localConnection, 0, 0, buf, strlen(buf), 0);
     
     fprintf(stderr,"QDRIVE CLIENT %p expect %d\n", testState.test1_stream[i],
             testState.test1_iters[i]);
@@ -89,7 +89,7 @@ int testEvent1(void *closure, uint32_t event, void *param)
       test_assert(code == MOZQUIC_OK);
       test_assert(testState.test1_iters[idx] >= read);
       testState.test1_iters[idx] -= read;
-      for (int i = 0; i < read; i++) {
+      for (unsigned int i = 0; i < read; i++) {
         test_assert(testState.test1_char[idx] == buf[i]);
       }
       if (fin) {

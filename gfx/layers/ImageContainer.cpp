@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -73,7 +74,7 @@ BufferRecycleBin::RecycleBuffer(UniquePtr<uint8_t[]> aBuffer, uint32_t aSize)
     mRecycledBuffers.Clear();
   }
   mRecycledBufferSize = aSize;
-  mRecycledBuffers.AppendElement(Move(aBuffer));
+  mRecycledBuffers.AppendElement(std::move(aBuffer));
 }
 
 UniquePtr<uint8_t[]>
@@ -81,11 +82,12 @@ BufferRecycleBin::GetBuffer(uint32_t aSize)
 {
   MutexAutoLock lock(mLock);
 
-  if (mRecycledBuffers.IsEmpty() || mRecycledBufferSize != aSize)
-    return MakeUnique<uint8_t[]>(aSize);
+  if (mRecycledBuffers.IsEmpty() || mRecycledBufferSize != aSize) {
+    return UniquePtr<uint8_t[]>(new (fallible) uint8_t[aSize]);
+  }
 
   uint32_t last = mRecycledBuffers.Length() - 1;
-  UniquePtr<uint8_t[]> result = Move(mRecycledBuffers[last]);
+  UniquePtr<uint8_t[]> result = std::move(mRecycledBuffers[last]);
   mRecycledBuffers.RemoveElementAt(last);
   return result;
 }
@@ -470,27 +472,13 @@ ImageContainer::GetD3D11YCbCrRecycleAllocator(KnowsCompositor* aAllocator)
     return mD3D11YCbCrRecycleAllocator;
   }
 
-  RefPtr<ID3D11Device> device = gfx::DeviceManagerDx::Get()->GetContentDevice();
-  if (!device) {
-    device = gfx::DeviceManagerDx::Get()->GetCompositorDevice();
-  }
-
-  LayersBackend backend = aAllocator->GetCompositorBackendType();
-  if (!device || backend != LayersBackend::LAYERS_D3D11) {
+  if (!aAllocator->SupportsD3D11() ||
+      !gfx::DeviceManagerDx::Get()->GetImageDevice()) {
     return nullptr;
   }
-
-  RefPtr<ID3D10Multithread> multi;
-  HRESULT hr =
-    device->QueryInterface((ID3D10Multithread**)getter_AddRefs(multi));
-  if (FAILED(hr) || !multi) {
-    gfxWarning() << "Multithread safety interface not supported. " << hr;
-    return nullptr;
-  }
-  multi->SetMultithreadProtected(TRUE);
 
   mD3D11YCbCrRecycleAllocator =
-    new D3D11YCbCrRecycleAllocator(aAllocator, device);
+    new D3D11YCbCrRecycleAllocator(aAllocator);
   return mD3D11YCbCrRecycleAllocator;
 }
 #endif
@@ -505,7 +493,7 @@ PlanarYCbCrImage::PlanarYCbCrImage()
 RecyclingPlanarYCbCrImage::~RecyclingPlanarYCbCrImage()
 {
   if (mBuffer) {
-    mRecycleBin->RecycleBuffer(Move(mBuffer), mBufferSize);
+    mRecycleBin->RecycleBuffer(std::move(mBuffer), mBufferSize);
   }
 }
 
@@ -538,12 +526,15 @@ static void
 CopyPlane(uint8_t *aDst, const uint8_t *aSrc,
           const gfx::IntSize &aSize, int32_t aStride, int32_t aSkip)
 {
+  int32_t height = aSize.height;
+  int32_t width = aSize.width;
+
+  MOZ_RELEASE_ASSERT(width <= aStride);
+
   if (!aSkip) {
     // Fast path: planar input.
-    memcpy(aDst, aSrc, aSize.height * aStride);
+    memcpy(aDst, aSrc, height * aStride);
   } else {
-    int32_t height = aSize.height;
-    int32_t width = aSize.width;
     for (int y = 0; y < height; ++y) {
       const uint8_t *src = aSrc;
       uint8_t *dst = aDst;
@@ -561,13 +552,11 @@ CopyPlane(uint8_t *aDst, const uint8_t *aSrc,
 bool
 RecyclingPlanarYCbCrImage::CopyData(const Data& aData)
 {
-  mData = aData;
-
   // update buffer size
   // Use uint32_t throughout to match AllocateBuffer's param and mBufferSize
   const auto checkedSize =
-    CheckedInt<uint32_t>(mData.mCbCrStride) * mData.mCbCrSize.height * 2 +
-    CheckedInt<uint32_t>(mData.mYStride) * mData.mYSize.height;
+    CheckedInt<uint32_t>(aData.mCbCrStride) * aData.mCbCrSize.height * 2 +
+    CheckedInt<uint32_t>(aData.mYStride) * aData.mYSize.height;
 
   if (!checkedSize.isValid())
     return false;
@@ -582,16 +571,18 @@ RecyclingPlanarYCbCrImage::CopyData(const Data& aData)
   // update buffer size
   mBufferSize = size;
 
+  mData = aData;
   mData.mYChannel = mBuffer.get();
   mData.mCbChannel = mData.mYChannel + mData.mYStride * mData.mYSize.height;
   mData.mCrChannel = mData.mCbChannel + mData.mCbCrStride * mData.mCbCrSize.height;
+  mData.mYSkip = mData.mCbSkip = mData.mCrSkip = 0;
 
   CopyPlane(mData.mYChannel, aData.mYChannel,
-            mData.mYSize, mData.mYStride, mData.mYSkip);
+            aData.mYSize, aData.mYStride, aData.mYSkip);
   CopyPlane(mData.mCbChannel, aData.mCbChannel,
-            mData.mCbCrSize, mData.mCbCrStride, mData.mCbSkip);
+            aData.mCbCrSize, aData.mCbCrStride, aData.mCbSkip);
   CopyPlane(mData.mCrChannel, aData.mCrChannel,
-            mData.mCbCrSize, mData.mCbCrStride, mData.mCrSkip);
+            aData.mCbCrSize, aData.mCbCrStride, aData.mCrSkip);
 
   mSize = aData.mPicSize;
   mOrigin = gfx::IntPoint(aData.mPicX, aData.mPicY);
@@ -599,7 +590,7 @@ RecyclingPlanarYCbCrImage::CopyData(const Data& aData)
 }
 
 gfxImageFormat
-PlanarYCbCrImage::GetOffscreenFormat()
+PlanarYCbCrImage::GetOffscreenFormat() const
 {
   return mOffscreenFormat == SurfaceFormat::UNKNOWN ?
     gfxVars::OffscreenFormat() :
@@ -658,13 +649,13 @@ NVImage::NVImage()
 NVImage::~NVImage() = default;
 
 IntSize
-NVImage::GetSize()
+NVImage::GetSize() const
 {
   return mSize;
 }
 
 IntRect
-NVImage::GetPictureRect()
+NVImage::GetPictureRect() const
 {
   return mData.GetPictureRect();
 }
@@ -739,7 +730,7 @@ NVImage::GetAsSourceSurface()
 }
 
 bool
-NVImage::IsValid()
+NVImage::IsValid() const
 {
   return !!mBufferSize;
 }
@@ -811,19 +802,22 @@ NVImage::AllocateBuffer(uint32_t aSize)
   return buffer;
 }
 
-SourceSurfaceImage::SourceSurfaceImage(const gfx::IntSize& aSize, gfx::SourceSurface* aSourceSurface)
-  : Image(nullptr, ImageFormat::CAIRO_SURFACE),
-    mSize(aSize),
-    mSourceSurface(aSourceSurface),
-    mTextureFlags(TextureFlags::DEFAULT)
-{}
+SourceSurfaceImage::SourceSurfaceImage(const gfx::IntSize& aSize,
+                                       gfx::SourceSurface* aSourceSurface)
+  : Image(nullptr, ImageFormat::CAIRO_SURFACE)
+  , mSize(aSize)
+  , mSourceSurface(aSourceSurface)
+  , mTextureFlags(TextureFlags::DEFAULT)
+{
+}
 
 SourceSurfaceImage::SourceSurfaceImage(gfx::SourceSurface* aSourceSurface)
-  : Image(nullptr, ImageFormat::CAIRO_SURFACE),
-    mSize(aSourceSurface->GetSize()),
-    mSourceSurface(aSourceSurface),
-    mTextureFlags(TextureFlags::DEFAULT)
-{}
+  : Image(nullptr, ImageFormat::CAIRO_SURFACE)
+  , mSize(aSourceSurface->GetSize())
+  , mSourceSurface(aSourceSurface)
+  , mTextureFlags(TextureFlags::DEFAULT)
+{
+}
 
 SourceSurfaceImage::~SourceSurfaceImage() = default;
 
@@ -858,7 +852,7 @@ SourceSurfaceImage::GetTextureClient(KnowsCompositor* aForwarder)
   }
 
   // Remove the speculatively added entry.
-  mTextureClients.Remove(aForwarder->GetSerial());
+  entry.OrRemove();
   return nullptr;
 }
 

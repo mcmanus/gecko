@@ -3,7 +3,6 @@
 
 "use strict";
 
-const Services = require("Services");
 const {
   EXPAND_TAB,
   TAB_SIZE,
@@ -109,8 +108,8 @@ function test_indent_detection() {
   Services.prefs.setBoolPref(EXPAND_TAB, true);
   Services.prefs.setBoolPref(DETECT_INDENT, true);
 
-  for (let test of TESTS) {
-    let iterFn = function (start, end, callback) {
+  for (const test of TESTS) {
+    const iterFn = function(start, end, callback) {
       test.input.slice(start, end).forEach(callback);
     };
 
@@ -118,7 +117,7 @@ function test_indent_detection() {
               "test getIndentationFromIteration " + test.desc);
   }
 
-  for (let test of TESTS) {
+  for (const test of TESTS) {
     deepEqual(getIndentationFromString(test.input.join("\n")), test.expected,
               "test getIndentationFromString " + test.desc);
   }

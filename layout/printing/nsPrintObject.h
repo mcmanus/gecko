@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -33,8 +34,7 @@ public:
   ~nsPrintObject(); // non-virtual
 
   // Methods
-  nsresult Init(nsIDocShell* aDocShell, nsIDOMDocument* aDoc,
-                bool aPrintPreview);
+  nsresult Init(nsIDocShell* aDocShell, nsIDocument* aDoc, bool aPrintPreview);
 
   bool IsPrintable()  { return !mDontPrint; }
   void   DestroyPresentation();

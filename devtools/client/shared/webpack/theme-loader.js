@@ -12,13 +12,13 @@ var fs = require("fs");
  *
  * Used e.g. for runtime access to colors defined in variables.css
  */
-module.exports.pitch = function (remainingRequest, precedingRequest, data) {
+module.exports.pitch = function(remainingRequest, precedingRequest, data) {
   if (this.cacheable) {
     this.cacheable();
   }
 
-  let request = remainingRequest.split("!");
-  let rawUrl = request[request.length - 1];
+  const request = remainingRequest.split("!");
+  const rawUrl = request[request.length - 1];
   let content = fs.readFileSync(rawUrl, "utf8");
 
   // Avoid mix of single & double quotes in a string

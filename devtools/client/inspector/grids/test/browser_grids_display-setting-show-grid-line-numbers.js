@@ -20,14 +20,14 @@ const TEST_URI = `
 
 const SHOW_GRID_LINE_NUMBERS = "devtools.gridinspector.showGridLineNumbers";
 
-add_task(function* () {
-  yield addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
-  let { inspector, gridInspector } = yield openLayoutView();
-  let { document: doc } = gridInspector;
-  let { store } = inspector;
+add_task(async function() {
+  await addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
+  const { inspector, gridInspector } = await openLayoutView();
+  const { document: doc } = gridInspector;
+  const { store } = inspector;
 
-  yield selectNode("#grid", inspector);
-  let checkbox = doc.getElementById("grid-setting-show-grid-line-numbers");
+  await selectNode("#grid", inspector);
+  const checkbox = doc.getElementById("grid-setting-show-grid-line-numbers");
 
   info("Checking the initial state of the CSS grid highlighter setting.");
   ok(!Services.prefs.getBoolPref(SHOW_GRID_LINE_NUMBERS),
@@ -37,7 +37,7 @@ add_task(function* () {
   let onCheckboxChange = waitUntilState(store, state =>
     state.highlighterSettings.showGridLineNumbers);
   checkbox.click();
-  yield onCheckboxChange;
+  await onCheckboxChange;
 
   ok(Services.prefs.getBoolPref(SHOW_GRID_LINE_NUMBERS),
     "'Display numbers on lines' is pref on.");
@@ -46,7 +46,7 @@ add_task(function* () {
   onCheckboxChange = waitUntilState(store, state =>
     !state.highlighterSettings.showGridLineNumbers);
   checkbox.click();
-  yield onCheckboxChange;
+  await onCheckboxChange;
 
   ok(!Services.prefs.getBoolPref(SHOW_GRID_LINE_NUMBERS),
     "'Display numbers on lines' is pref off.");

@@ -30,13 +30,13 @@ SharedSurface_EGLImage::Create(GLContext* prodGL,
     UniquePtr<SharedSurface_EGLImage> ret;
 
     if (!HasExtensions(egl, prodGL)) {
-        return Move(ret);
+        return std::move(ret);
     }
 
     MOZ_ALWAYS_TRUE(prodGL->MakeCurrent());
     GLuint prodTex = CreateTextureForOffscreen(prodGL, formats, size);
     if (!prodTex) {
-        return Move(ret);
+        return std::move(ret);
     }
 
     EGLClientBuffer buffer = reinterpret_cast<EGLClientBuffer>(uintptr_t(prodTex));
@@ -45,12 +45,12 @@ SharedSurface_EGLImage::Create(GLContext* prodGL,
                                        nullptr);
     if (!image) {
         prodGL->fDeleteTextures(1, &prodTex);
-        return Move(ret);
+        return std::move(ret);
     }
 
     ret.reset( new SharedSurface_EGLImage(prodGL, egl, size, hasAlpha,
                                           formats, prodTex, image) );
-    return Move(ret);
+    return std::move(ret);
 }
 
 bool
@@ -177,7 +177,7 @@ SurfaceFactory_EGLImage::Create(GLContext* prodGL, const SurfaceCaps& caps,
         ret.reset( new ptrT(prodGL, caps, allocator, flags, context) );
     }
 
-    return Move(ret);
+    return std::move(ret);
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -200,12 +200,12 @@ SharedSurface_SurfaceTexture::Create(GLContext* prodGL,
     MOZ_ASSERT(egl);
     EGLSurface eglSurface = egl->CreateCompatibleSurface(window.NativeWindow());
     if (!eglSurface) {
-        return Move(ret);
+        return std::move(ret);
     }
 
     ret.reset(new SharedSurface_SurfaceTexture(prodGL, size, hasAlpha,
                                                formats, surface, eglSurface));
-    return Move(ret);
+    return std::move(ret);
 }
 
 SharedSurface_SurfaceTexture::SharedSurface_SurfaceTexture(GLContext* gl,
@@ -274,7 +274,12 @@ SharedSurface_SurfaceTexture::WaitForBufferOwnership()
 bool
 SharedSurface_SurfaceTexture::ToSurfaceDescriptor(layers::SurfaceDescriptor* const out_descriptor)
 {
-    *out_descriptor = layers::SurfaceTextureDescriptor(mSurface->GetHandle(), mSize, false /* NOT continuous */);
+    *out_descriptor =
+        layers::SurfaceTextureDescriptor(mSurface->GetHandle(),
+                                         mSize,
+                                         gfx::SurfaceFormat::R8G8B8A8,
+                                         false /* NOT continuous */,
+                                         false /* Do not ignore transform */);
     return true;
 }
 
@@ -287,7 +292,7 @@ SurfaceFactory_SurfaceTexture::Create(GLContext* prodGL, const SurfaceCaps& caps
 {
     UniquePtr<SurfaceFactory_SurfaceTexture> ret(
         new SurfaceFactory_SurfaceTexture(prodGL, caps, allocator, flags));
-    return Move(ret);
+    return std::move(ret);
 }
 
 UniquePtr<SharedSurface>

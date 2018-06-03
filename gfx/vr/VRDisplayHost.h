@@ -1,7 +1,8 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-* This Source Code Form is subject to the terms of the Mozilla Public
-* License, v. 2.0. If a copy of the MPL was not distributed with this
-* file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef GFX_VR_DISPLAY_HOST_H
 #define GFX_VR_DISPLAY_HOST_H
@@ -26,6 +27,7 @@ class MacIOSurface;
 #endif
 namespace mozilla {
 namespace gfx {
+class VRThread;
 class VRLayerParent;
 
 class VRDisplayHost {
@@ -40,7 +42,7 @@ public:
   virtual void ZeroSensor() = 0;
   virtual void StartPresentation() = 0;
   virtual void StopPresentation() = 0;
-  virtual void NotifyVSync();
+  void NotifyVSync();
 
   void StartFrame();
   void SubmitFrame(VRLayerParent* aLayer,
@@ -84,18 +86,28 @@ protected:
                            const IntSize& aSize,
                            const gfx::Rect& aLeftEyeRect,
                            const gfx::Rect& aRightEyeRect) = 0;
+#elif defined(MOZ_ANDROID_GOOGLE_VR)
+  virtual bool SubmitFrame(const mozilla::layers::EGLImageDescriptor* aDescriptor,
+                           const gfx::Rect& aLeftEyeRect,
+                           const gfx::Rect& aRightEyeRect) = 0;
 #endif
 
   VRDisplayInfo mDisplayInfo;
 
-  nsTArray<RefPtr<VRLayerParent>> mLayers;
+  nsTArray<VRLayerParent *> mLayers;
   // Weak reference to mLayers entries are cleared in
   // VRLayerParent destructor
 
 protected:
   virtual VRHMDSensorState GetSensorState() = 0;
 
+  RefPtr<VRThread> mSubmitThread;
 private:
+  void SubmitFrameInternal(const layers::SurfaceDescriptor& aTexture,
+                           uint64_t aFrameId,
+                           const gfx::Rect& aLeftEyeRect,
+                           const gfx::Rect& aRightEyeRect);
+
   VRDisplayInfo mLastUpdateDisplayInfo;
   TimeStamp mLastFrameStart;
   bool mFrameStarted;
@@ -135,10 +147,6 @@ protected:
   virtual ~VRControllerHost();
 
   VRControllerInfo mControllerInfo;
-  // The current button pressed bit of button mask.
-  uint64_t mButtonPressed;
-  // The current button touched bit of button mask.
-  uint64_t mButtonTouched;
   uint64_t mVibrateIndex;
   dom::GamepadPoseState mPose;
 };

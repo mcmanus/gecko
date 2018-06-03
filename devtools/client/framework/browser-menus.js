@@ -12,6 +12,7 @@
  * - devtools/client/definitions for tool-specifics entries
  */
 
+const {Cu} = require("chrome");
 const {LocalizationHelper} = require("devtools/shared/l10n");
 const MENUS_L10N = new LocalizationHelper("devtools/client/locales/menus.properties");
 
@@ -44,7 +45,7 @@ function l10n(key) {
  * @return XULMenuItemElement
  */
 function createMenuItem({ doc, id, label, accesskey, isCheckbox }) {
-  let menuitem = doc.createElement("menuitem");
+  const menuitem = doc.createElement("menuitem");
   menuitem.id = id;
   menuitem.setAttribute("label", label);
   if (accesskey) {
@@ -66,20 +67,20 @@ function createMenuItem({ doc, id, label, accesskey, isCheckbox }) {
  *        The document to which the tool menu item is to be added.
  */
 function createToolMenuElements(toolDefinition, doc) {
-  let id = toolDefinition.id;
-  let menuId = "menuitem_" + id;
+  const id = toolDefinition.id;
+  const menuId = "menuitem_" + id;
 
   // Prevent multiple entries for the same tool.
   if (doc.getElementById(menuId)) {
     return;
   }
 
-  let oncommand = function (id, event) {
-    let window = event.target.ownerDocument.defaultView;
-    gDevToolsBrowser.selectToolCommand(window.gBrowser, id);
+  const oncommand = function(id, event) {
+    const window = event.target.ownerDocument.defaultView;
+    gDevToolsBrowser.selectToolCommand(window.gBrowser, id, Cu.now());
   }.bind(null, id);
 
-  let menuitem = createMenuItem({
+  const menuitem = createMenuItem({
     doc,
     id: "menuitem_" + id,
     label: toolDefinition.menuLabel || toolDefinition.label,
@@ -107,11 +108,11 @@ function createToolMenuElements(toolDefinition, doc) {
  *        The tool definition after which the tool menu item is to be added.
  */
 function insertToolMenuElements(doc, toolDefinition, prevDef) {
-  let { menuitem } = createToolMenuElements(toolDefinition, doc);
+  const { menuitem } = createToolMenuElements(toolDefinition, doc);
 
   let ref;
   if (prevDef) {
-    let menuitem = doc.getElementById("menuitem_" + prevDef.id);
+    const menuitem = doc.getElementById("menuitem_" + prevDef.id);
     ref = menuitem && menuitem.nextSibling ? menuitem.nextSibling : null;
   } else {
     ref = doc.getElementById("menu_devtools_separator");
@@ -132,12 +133,12 @@ exports.insertToolMenuElements = insertToolMenuElements;
  *        The document to which the tool menu item is to be removed from
  */
 function removeToolFromMenu(toolId, doc) {
-  let key = doc.getElementById("key_" + toolId);
+  const key = doc.getElementById("key_" + toolId);
   if (key) {
     key.remove();
   }
 
-  let menuitem = doc.getElementById("menuitem_" + toolId);
+  const menuitem = doc.getElementById("menuitem_" + toolId);
   if (menuitem) {
     menuitem.remove();
   }
@@ -151,15 +152,15 @@ exports.removeToolFromMenu = removeToolFromMenu;
  *        The document to which the tool items are to be added.
  */
 function addAllToolsToMenu(doc) {
-  let fragKeys = doc.createDocumentFragment();
-  let fragMenuItems = doc.createDocumentFragment();
+  const fragKeys = doc.createDocumentFragment();
+  const fragMenuItems = doc.createDocumentFragment();
 
-  for (let toolDefinition of gDevTools.getToolDefinitionArray()) {
+  for (const toolDefinition of gDevTools.getToolDefinitionArray()) {
     if (!toolDefinition.inMenu) {
       continue;
     }
 
-    let elements = createToolMenuElements(toolDefinition, doc);
+    const elements = createToolMenuElements(toolDefinition, doc);
 
     if (!elements) {
       continue;
@@ -171,7 +172,7 @@ function addAllToolsToMenu(doc) {
     fragMenuItems.appendChild(elements.menuitem);
   }
 
-  let mps = doc.getElementById("menu_devtools_separator");
+  const mps = doc.getElementById("menu_devtools_separator");
   if (mps) {
     mps.parentNode.insertBefore(fragMenuItems, mps);
   }
@@ -184,19 +185,19 @@ function addAllToolsToMenu(doc) {
  *        The document to which menus are to be added.
  */
 function addTopLevelItems(doc) {
-  let menuItems = doc.createDocumentFragment();
+  const menuItems = doc.createDocumentFragment();
 
-  let { menuitems } = require("../menus");
-  for (let item of menuitems) {
+  const { menuitems } = require("../menus");
+  for (const item of menuitems) {
     if (item.separator) {
-      let separator = doc.createElement("menuseparator");
+      const separator = doc.createElement("menuseparator");
       separator.id = item.id;
       menuItems.appendChild(separator);
     } else {
-      let { id, l10nKey } = item;
+      const { id, l10nKey } = item;
 
       // Create a <menuitem>
-      let menuitem = createMenuItem({
+      const menuitem = createMenuItem({
         doc,
         id,
         label: l10n(l10nKey + ".label"),
@@ -213,20 +214,20 @@ function addTopLevelItems(doc) {
   }
 
   // Cache all nodes before insertion to be able to remove them on unload
-  let nodes = [];
-  for (let node of menuItems.children) {
+  const nodes = [];
+  for (const node of menuItems.children) {
     nodes.push(node);
   }
   FragmentsCache.set(doc, nodes);
 
-  let menu = doc.getElementById("menuWebDeveloperPopup");
+  const menu = doc.getElementById("menuWebDeveloperPopup");
   menu.appendChild(menuItems);
 
   // There is still "Page Source" menuitem hardcoded into browser.xul. Instead
   // of manually inserting everything around it, move it to the expected
   // position.
-  let pageSource = doc.getElementById("menu_pageSource");
-  let endSeparator = doc.getElementById("devToolsEndSeparator");
+  const pageSource = doc.getElementById("menu_pageSource");
+  const endSeparator = doc.getElementById("devToolsEndSeparator");
   menu.insertBefore(pageSource, endSeparator);
 }
 
@@ -237,12 +238,12 @@ function addTopLevelItems(doc) {
  *        The document to which menus are to be added.
  */
 function removeTopLevelItems(doc) {
-  let nodes = FragmentsCache.get(doc);
+  const nodes = FragmentsCache.get(doc);
   if (!nodes) {
     return;
   }
   FragmentsCache.delete(doc);
-  for (let node of nodes) {
+  for (const node of nodes) {
     node.remove();
   }
 }
@@ -253,7 +254,7 @@ function removeTopLevelItems(doc) {
  * @param {XULDocument} doc
  *        The document to which menus are to be added.
  */
-exports.addMenus = function (doc) {
+exports.addMenus = function(doc) {
   addTopLevelItems(doc);
 
   addAllToolsToMenu(doc);
@@ -265,7 +266,7 @@ exports.addMenus = function (doc) {
  * @param {XULDocument} doc
  *        The document to which menus are to be removed.
  */
-exports.removeMenus = function (doc) {
+exports.removeMenus = function(doc) {
   // We only remove top level entries. Per-tool entries are removed while
   // unregistering each tool.
   removeTopLevelItems(doc);

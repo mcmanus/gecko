@@ -19,7 +19,6 @@
 #include "mozilla/EndianUtils.h"
 #include "mozilla/SharedThreadPool.h"
 #include "MediaDataDemuxer.h"
-#include "nsAutoPtr.h"
 #include "nsAutoRef.h"
 #include "NesteggPacketHolder.h"
 #include "XiphExtradata.h"
@@ -31,7 +30,12 @@
 #include <numeric>
 #include <stdint.h>
 
-#define WEBM_DEBUG(arg, ...) MOZ_LOG(gMediaDemuxerLog, mozilla::LogLevel::Debug, ("WebMDemuxer(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
+#define WEBM_DEBUG(arg, ...)                                                   \
+  DDMOZ_LOG(gMediaDemuxerLog,                                                  \
+            mozilla::LogLevel::Debug,                                          \
+            "::%s: " arg,                                                      \
+            __func__,                                                          \
+            ##__VA_ARGS__)
 extern mozilla::LazyLogModule gMediaDemuxerLog;
 
 namespace mozilla {
@@ -178,6 +182,10 @@ WebMDemuxer::WebMDemuxer(MediaResource* aResource, bool aIsMediaSource)
   , mLastWebMBlockOffset(-1)
   , mIsMediaSource(aIsMediaSource)
 {
+  DDLINKCHILD("resource", aResource);
+  // Audio/video contexts hold a MediaResourceIndex.
+  DDLINKCHILD("video context", mVideoContext.GetResource());
+  DDLINKCHILD("audio context", mAudioContext.GetResource());
 }
 
 WebMDemuxer::~WebMDemuxer()
@@ -247,6 +255,7 @@ WebMDemuxer::GetTrackDemuxer(TrackInfo::TrackType aType, uint32_t aTrackNumber)
   }
   RefPtr<WebMTrackDemuxer> e =
     new WebMTrackDemuxer(this, aType, aTrackNumber);
+  DDLINKCHILD("track demuxer", e.get());
   mDemuxers.AppendElement(e);
 
   return e.forget();
@@ -553,7 +562,7 @@ WebMDemuxer::GetTrackCrypto(TrackInfo::TrackType aType, size_t aTrackNumber)
     crypto.mValid = true;
     // crypto.mMode is not used for WebMs
     crypto.mIVSize = WEBM_IV_SIZE;
-    crypto.mKeyId = Move(initData);
+    crypto.mKeyId = std::move(initData);
   }
 
   return crypto;
@@ -771,7 +780,7 @@ WebMDemuxer::GetNextPacket(TrackInfo::TrackType aType,
     if (packetEncryption == NESTEGG_PACKET_HAS_SIGNAL_BYTE_UNENCRYPTED ||
         packetEncryption == NESTEGG_PACKET_HAS_SIGNAL_BYTE_ENCRYPTED ||
         packetEncryption == NESTEGG_PACKET_HAS_SIGNAL_BYTE_PARTITIONED) {
-      nsAutoPtr<MediaRawDataWriter> writer(sample->CreateWriter());
+      UniquePtr<MediaRawDataWriter> writer(sample->CreateWriter());
       unsigned char const* iv;
       size_t ivLength;
       nestegg_packet_iv(holder->Packet(), &iv, &ivLength);
@@ -1228,7 +1237,7 @@ WebMTrackDemuxer::SetNextKeyFrameTime()
   }
   // We may have demuxed more than intended, so ensure that all frames are kept
   // in the right order.
-  mSamples.PushFront(Move(skipSamplesQueue));
+  mSamples.PushFront(std::move(skipSamplesQueue));
 
   if (frameTime.IsValid()) {
     mNextKeyframeTime.emplace(frameTime);
@@ -1262,7 +1271,7 @@ WebMTrackDemuxer::UpdateSamples(nsTArray<RefPtr<MediaRawData>>& aSamples)
 {
   for (const auto& sample : aSamples) {
     if (sample->mCrypto.mValid) {
-      nsAutoPtr<MediaRawDataWriter> writer(sample->CreateWriter());
+      UniquePtr<MediaRawDataWriter> writer(sample->CreateWriter());
       writer->mCrypto.mMode = mInfo->mCrypto.mMode;
       writer->mCrypto.mIVSize = mInfo->mCrypto.mIVSize;
       writer->mCrypto.mKeyId.AppendElements(mInfo->mCrypto.mKeyId);
@@ -1312,7 +1321,7 @@ WebMTrackDemuxer::SkipToNextRandomAccessPoint(const TimeUnit& aTimeThreshold)
     return SkipAccessPointPromise::CreateAndResolve(parsed, __func__);
   } else {
     SkipFailureHolder failure(NS_ERROR_DOM_MEDIA_END_OF_STREAM, parsed);
-    return SkipAccessPointPromise::CreateAndReject(Move(failure), __func__);
+    return SkipAccessPointPromise::CreateAndReject(std::move(failure), __func__);
   }
 }
 

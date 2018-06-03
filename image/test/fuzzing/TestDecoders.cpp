@@ -20,7 +20,7 @@
 #include "nsString.h"
 #include "nsThreadUtils.h"
 
-#include "FuzzingInterface.h"
+#include "FuzzingInterfaceStream.h"
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -52,7 +52,7 @@ public:
   void Go()
   {
     mSurface =
-      ImageOps::DecodeToSurface(mInputStream,
+      ImageOps::DecodeToSurface(mInputStream.forget(),
                                 nsDependentCString(mimeType.c_str()),
                                 imgIContainer::DECODE_FLAGS_DEFAULT);
     if (!mSurface)

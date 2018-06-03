@@ -3,21 +3,21 @@
 set -e
 set -x
 
-make_flags='-j12'
+make_flags="-j$(nproc)"
 
 . $data_dir/download-tools.sh
 
 prepare() {
   pushd $root_dir
-  download_and_check ftp://ftp.gnu.org/gnu/binutils binutils-$binutils_version.tar.$binutils_ext.sig
+  download_and_check https://ftp.gnu.org/gnu/binutils binutils-$binutils_version.tar.$binutils_ext.sig
   tar xaf $TMPDIR/binutils-$binutils_version.tar.$binutils_ext
 
   case "$gcc_version" in
   *-*)
-    download ftp://gcc.gnu.org/pub/gcc/snapshots/$gcc_version/gcc-$gcc_version.tar.$gcc_ext
+    download https://gcc.gnu.org/pub/gcc/snapshots/$gcc_version/gcc-$gcc_version.tar.$gcc_ext
     ;;
   *)
-    download_and_check ftp://ftp.gnu.org/gnu/gcc/gcc-$gcc_version gcc-$gcc_version.tar.$gcc_ext.sig
+    download_and_check https://ftp.gnu.org/gnu/gcc/gcc-$gcc_version gcc-$gcc_version.tar.$gcc_ext.sig
     ;;
   esac
   tar xaf $TMPDIR/gcc-$gcc_version.tar.$gcc_ext
@@ -29,27 +29,51 @@ prepare() {
     tar() { :; }
     sed() { :; }
     wget() {
-      echo $1
+      # Get last argument given to wget.
+      eval echo \$$# >&3
     }
 
+    # In GCC >= 7, the download_prerequisites script tried to do its own
+    # verification, but we have ours, so disable it.
+    set -- --no-verify
     . ./contrib/download_prerequisites
-  ) | while read url; do
+  ) 3>&1 > /dev/null | while read url; do
     file=$(basename $url)
     case "$file" in
     gmp-*.tar.*)
       # If download_prerequisites wants 4.3.2, use 5.1.3 instead.
       file=${file/4.3.2/5.1.3}
-      download_and_check https://gmplib.org/download/gmp $file.sig
+      download_and_check https://ftp.gnu.org/gnu/gmp/ $file.sig
       ;;
     mpfr-*.tar.*)
       # If download_prerequisites wants 2.4.2, use 3.1.5 instead.
       file=${file/2.4.2/3.1.5}
-      download_and_check http://www.mpfr.org/${file%.tar.*} $file.asc
+      download_and_check https://ftp.gnu.org/gnu/mpfr/ $file.sig
       ;;
     mpc-*.tar.*)
       # If download_prerequisites wants 0.8.1, use 0.8.2 instead.
       file=${file/0.8.1/0.8.2}
-      download_and_check http://www.multiprecision.org/mpc/download $file.asc
+      case "$file" in
+      *-0.8.2.tar*|*-0.9.tar*|*-1.0.tar*)
+        ext=asc
+        ;;
+      *)
+        ext=sig
+        ;;
+      esac
+      case "$file" in
+      *-0.8.2.tar*)
+          # The ftp.gnu.org mirror doesn't have 0.8.2, so we use
+          # a debian source tarball instead. It has a different name,
+          # so we can't use `download`. Manually do what it does, but
+          # handling the difference in file name.
+          wget -c --progress=dot:mega -O $TMPDIR/$file http://snapshot.debian.org/archive/debian/20100527T162226Z/pool/main/m/mpclib/mpclib_0.8.2.orig.tar.gz
+          (cd $TMPDIR; sha256sum $file) >> $root_dir/downloads
+          ;;
+      *)
+          download_and_check https://ftp.gnu.org/gnu/mpc $file.$ext
+          ;;
+      esac
       ;;
     *)
       download $(dirname $url) $file
@@ -66,8 +90,27 @@ prepare() {
   popd
 }
 
+prepare_mingw() {
+  export prefix=/tools/mingw32
+  export install_dir=$root_dir$prefix
+  mkdir -p $install_dir
+  export PATH=$PATH:$install_dir/bin/
+
+  cd $root_dir
+
+  git clone -n git://git.code.sf.net/p/mingw-w64/mingw-w64
+  pushd mingw-w64
+  git checkout $mingw_version # Asserts the integrity of the checkout (Right?)
+  popd
+}
+
 apply_patch() {
-  pushd $root_dir/gcc-$gcc_version
+  if [ $# -ge 2 ]; then
+    pushd $root_dir/$1
+    shift
+  else
+    pushd $root_dir/gcc-$gcc_version
+  fi
   patch -p1 < $1
   popd
 }
@@ -78,41 +121,33 @@ build_binutils() {
   then
     # gold is disabled because we don't use it on automation, and also we ran into
     # some issues with it using this script in build-clang.py.
-    binutils_configure_flags="--disable-gold --enable-plugins --disable-nls"
+    binutils_configure_flags="--disable-gold --enable-plugins --disable-nls --with-sysroot=/"
   fi
 
   mkdir $root_dir/binutils-objdir
   pushd $root_dir/binutils-objdir
-  ../binutils-$binutils_version/configure --prefix /tools/gcc/ $binutils_configure_flags
+  ../binutils-$binutils_version/configure --prefix=${prefix-/tools/gcc}/ $binutils_configure_flags
   make $make_flags
   make install $make_flags DESTDIR=$root_dir
+  export PATH=$root_dir/${prefix-/tools/gcc}/bin:$PATH
   popd
 }
 
 build_gcc() {
   mkdir $root_dir/gcc-objdir
   pushd $root_dir/gcc-objdir
-  ../gcc-$gcc_version/configure --prefix=/tools/gcc --enable-languages=c,c++  --disable-nls --disable-gnu-unique-object --enable-__cxa_atexit --with-arch-32=pentiumpro
+  ../gcc-$gcc_version/configure --prefix=${prefix-/tools/gcc} --enable-languages=c,c++  --disable-nls --disable-gnu-unique-object --enable-__cxa_atexit --with-arch-32=pentiumpro --with-sysroot=/
   make $make_flags
   make $make_flags install DESTDIR=$root_dir
 
   cd $root_dir/tools
+  ln -s gcc gcc/bin/cc
+
   tar caf $root_dir/gcc.tar.xz gcc/
   popd
 }
 
 build_gcc_and_mingw() {
-  export install_dir=$root_dir/tools/gcc/
-  mkdir -p $install_dir
-  export PATH=$PATH:$install_dir/bin/
-
-  cd $root_dir
-
-  git clone -n git://git.code.sf.net/p/mingw-w64/mingw-w64
-  pushd mingw-w64
-  git checkout $mingw_version # Asserts the integrity of the checkout (Right?)
-  popd
-
   mkdir gcc-objdir
   pushd gcc-objdir
   ../gcc-$gcc_version/configure --prefix=$install_dir --target=i686-w64-mingw32 --with-gnu-ld --with-gnu-as --disable-multilib --enable-threads=posix
@@ -152,7 +187,7 @@ build_gcc_and_mingw() {
   make install
   popd
 
-  pushd $root_dir/tools
-  tar caf $root_dir/mingw32.tar.xz gcc/
+  pushd $(dirname $install_dir)
+  tar caf $root_dir/mingw32.tar.xz $(basename $install_dir)/
   popd
 }

@@ -113,15 +113,15 @@ public:
   }
 
 private:
-  void GetActiveState(nsAString& astate)
+  void GetActiveState(nsAString& aState)
   {
     if (mActive) {
-      CopyASCIItoUTF16("active", astate);
+      aState.AssignLiteral("active");
     } else {
       if(mReason == AudioChannelService::AudibleChangedReasons::ePauseStateChanged) {
-        CopyASCIItoUTF16("inactive-pause", astate);
+        aState.AssignLiteral("inactive-pause");
       } else {
-        CopyASCIItoUTF16("inactive-nonaudible", astate);
+        aState.AssignLiteral("inactive-nonaudible");
       }
     }
   }
@@ -345,12 +345,10 @@ AudioChannelService::UnregisterAudioChannelAgent(AudioChannelAgent* aAgent)
 AudioPlaybackConfig
 AudioChannelService::GetMediaConfig(nsPIDOMWindowOuter* aWindow) const
 {
-  MOZ_ASSERT(!aWindow || aWindow->IsOuterWindow());
-
   AudioPlaybackConfig config(1.0, false,
                              nsISuspendedTypes::NONE_SUSPENDED);
 
-  if (!aWindow || !aWindow->IsOuterWindow()) {
+  if (!aWindow) {
     config.SetConfig(0.0, true,
                      nsISuspendedTypes::SUSPENDED_BLOCK);
     return config;
@@ -452,7 +450,6 @@ AudioChannelService::RefreshAgents(nsPIDOMWindowOuter* aWindow,
                                    const std::function<void(AudioChannelAgent*)>& aFunc)
 {
   MOZ_ASSERT(aWindow);
-  MOZ_ASSERT(aWindow->IsOuterWindow());
 
   nsCOMPtr<nsPIDOMWindowOuter> topWindow = aWindow->GetScriptableTop();
   if (!topWindow) {
@@ -495,7 +492,6 @@ AudioChannelService::SetWindowAudioCaptured(nsPIDOMWindowOuter* aWindow,
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aWindow);
-  MOZ_ASSERT(aWindow->IsOuterWindow());
 
   MOZ_LOG(GetAudioChannelLog(), LogLevel::Debug,
          ("AudioChannelService, SetWindowAudioCaptured, window = %p, "
@@ -532,7 +528,6 @@ AudioChannelService::GetOrCreateWindowData(nsPIDOMWindowOuter* aWindow)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aWindow);
-  MOZ_ASSERT(aWindow->IsOuterWindow());
 
   AudioChannelWindow* winData = GetWindowData(aWindow->WindowID());
   if (!winData) {
@@ -595,7 +590,6 @@ void
 AudioChannelService::NotifyMediaResumedFromBlock(nsPIDOMWindowOuter* aWindow)
 {
   MOZ_ASSERT(aWindow);
-  MOZ_ASSERT(aWindow->IsOuterWindow());
 
   nsCOMPtr<nsPIDOMWindowOuter> topWindow = aWindow->GetScriptableTop();
   if (!topWindow) {
@@ -797,25 +791,9 @@ AudioChannelService::AudioChannelWindow::RemoveAgent(AudioChannelAgent* aAgent)
 void
 AudioChannelService::AudioChannelWindow::NotifyMediaBlockStop(nsPIDOMWindowOuter* aWindow)
 {
-  // Can't use raw pointer for lamba variable capturing, use smart ptr.
-  nsCOMPtr<nsPIDOMWindowOuter> window = aWindow;
-  NS_DispatchToCurrentThread(NS_NewRunnableFunction(
-    "dom::AudioChannelService::AudioChannelWindow::NotifyMediaBlockStop",
-    [window]() -> void {
-      nsCOMPtr<nsIObserverService> observerService =
-        services::GetObserverService();
-      if (NS_WARN_IF(!observerService)) {
-        return;
-      }
-
-      observerService->NotifyObservers(ToSupports(window),
-                                       "audio-playback",
-                                       u"mediaBlockStop");
-    })
-  );
-
   if (mShouldSendActiveMediaBlockStopEvent) {
     mShouldSendActiveMediaBlockStopEvent = false;
+    nsCOMPtr<nsPIDOMWindowOuter> window = aWindow;
     NS_DispatchToCurrentThread(NS_NewRunnableFunction(
       "dom::AudioChannelService::AudioChannelWindow::NotifyMediaBlockStop",
       [window]() -> void {
@@ -974,7 +952,6 @@ AudioChannelService::AudioChannelWindow::MaybeNotifyMediaBlockStart(AudioChannel
     return;
   }
 
-  MOZ_ASSERT(window->IsOuterWindow());
   nsCOMPtr<nsPIDOMWindowInner> inner = window->GetCurrentInnerWindow();
   if (!inner) {
     return;

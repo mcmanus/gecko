@@ -36,16 +36,11 @@ add_task(async function test_empty_password() {
 
       // Synthesize input to empty the field
       passwordTextbox.focus();
-      await EventUtils.synthesizeKey("VK_RIGHT", {});
-      await EventUtils.synthesizeKey("VK_BACK_SPACE", {});
+      await EventUtils.synthesizeKey("KEY_ArrowRight");
+      await EventUtils.synthesizeKey("KEY_Backspace");
 
       let mainActionButton = notificationElement.button;
       Assert.ok(mainActionButton.disabled, "Main action button is disabled");
-
-      // Makes sure submiting an empty password throws an error
-      Assert.throws(notificationElement.button.doCommand(),
-                    "Can't add a login with a null or empty password.",
-                    "Should fail for an empty password");
     });
 });
 

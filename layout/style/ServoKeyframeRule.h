@@ -10,9 +10,11 @@
 #include "mozilla/dom/CSSKeyframeRule.h"
 #include "mozilla/ServoBindingTypes.h"
 
+class nsICSSDeclaration;
+
 namespace mozilla {
 
-class ServoDeclarationBlock;
+class DeclarationBlock;
 class ServoKeyframeDeclaration;
 
 class ServoKeyframeRule final : public dom::CSSKeyframeRule
@@ -31,16 +33,13 @@ public:
 #ifdef DEBUG
   void List(FILE* out = stdout, int32_t aIndent = 0) const final;
 #endif
-  already_AddRefed<mozilla::css::Rule> Clone() const final;
 
   RawServoKeyframe* Raw() const { return mRaw; }
 
-  // nsIDOMCSSKeyframeRule interface
-  NS_IMETHOD GetKeyText(nsAString& aKeyText) final;
-  NS_IMETHOD SetKeyText(const nsAString& aKeyText) final;
-
   // WebIDL interface
-  void GetCssTextImpl(nsAString& aCssText) const final;
+  void GetCssText(nsAString& aCssText) const final;
+  void GetKeyText(nsAString& aKeyText) final;
+  void SetKeyText(const nsAString& aKeyText) final;
   nsICSSDeclaration* Style() final;
 
   size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const final;

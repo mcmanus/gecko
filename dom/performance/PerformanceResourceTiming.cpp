@@ -6,12 +6,14 @@
 
 #include "PerformanceResourceTiming.h"
 #include "mozilla/dom/PerformanceResourceTimingBinding.h"
+#include "nsNetUtil.h"
+#include "nsArrayUtils.h"
 
 using namespace mozilla::dom;
 
 NS_IMPL_CYCLE_COLLECTION_INHERITED(PerformanceResourceTiming,
                                    PerformanceEntry,
-                                   mTiming)
+                                   mPerformance)
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(PerformanceResourceTiming,
                                                PerformanceEntry)
@@ -23,45 +25,19 @@ NS_INTERFACE_MAP_END_INHERITING(PerformanceEntry)
 NS_IMPL_ADDREF_INHERITED(PerformanceResourceTiming, PerformanceEntry)
 NS_IMPL_RELEASE_INHERITED(PerformanceResourceTiming, PerformanceEntry)
 
-PerformanceResourceTiming::PerformanceResourceTiming(PerformanceTiming* aPerformanceTiming,
+PerformanceResourceTiming::PerformanceResourceTiming(UniquePtr<PerformanceTimingData>&& aPerformanceTiming,
                                                      Performance* aPerformance,
-                                                     const nsAString& aName,
-                                                     nsIHttpChannel* aChannel)
-: PerformanceEntry(aPerformance->GetParentObject(), aName, NS_LITERAL_STRING("resource")),
-  mTiming(aPerformanceTiming),
-  mEncodedBodySize(0),
-  mTransferSize(0),
-  mDecodedBodySize(0)
+                                                     const nsAString& aName)
+  : PerformanceEntry(aPerformance->GetParentObject(), aName, NS_LITERAL_STRING("resource"))
+  , mTimingData(std::move(aPerformanceTiming))
+  , mPerformance(aPerformance)
 {
   MOZ_ASSERT(aPerformance, "Parent performance object should be provided");
-  SetPropertiesFromChannel(aChannel);
-}
-
-void
-PerformanceResourceTiming::SetPropertiesFromChannel(nsIHttpChannel* aChannel)
-{
-  if (!aChannel) {
-    return;
+  if (NS_IsMainThread()) {
+    // Used to check if an addon content script has access to this timing.
+    // We don't need it in workers, and ignore mOriginalURI if null.
+    NS_NewURI(getter_AddRefs(mOriginalURI), aName);
   }
-
-  nsAutoCString protocol;
-  Unused << aChannel->GetProtocolVersion(protocol);
-  SetNextHopProtocol(NS_ConvertUTF8toUTF16(protocol));
-
-  uint64_t encodedBodySize = 0;
-  Unused << aChannel->GetEncodedBodySize(&encodedBodySize);
-  SetEncodedBodySize(encodedBodySize);
-
-  uint64_t transferSize = 0;
-  Unused << aChannel->GetTransferSize(&transferSize);
-  SetTransferSize(transferSize);
-
-  uint64_t decodedBodySize = 0;
-  Unused << aChannel->GetDecodedBodySize(&decodedBodySize);
-  if (decodedBodySize == 0) {
-    decodedBodySize = encodedBodySize;
-  }
-  SetDecodedBodySize(decodedBodySize);
 }
 
 PerformanceResourceTiming::~PerformanceResourceTiming()
@@ -78,13 +54,14 @@ PerformanceResourceTiming::StartTime() const
   // Ignore zero values.  The RedirectStart and WorkerStart values
   // can come from earlier redirected channels prior to the AsyncOpen
   // time being recorded.
-  DOMHighResTimeStamp redirect = mTiming->RedirectStartHighRes();
+  DOMHighResTimeStamp redirect =
+    mTimingData->RedirectStartHighRes(mPerformance);
   redirect = redirect ? redirect : DBL_MAX;
 
-  DOMHighResTimeStamp worker = mTiming->WorkerStartHighRes();
+  DOMHighResTimeStamp worker = mTimingData->WorkerStartHighRes(mPerformance);
   worker = worker ? worker : DBL_MAX;
 
-  DOMHighResTimeStamp asyncOpen = mTiming->AsyncOpenHighRes();
+  DOMHighResTimeStamp asyncOpen = mTimingData->AsyncOpenHighRes(mPerformance);
 
   return std::min(asyncOpen, std::min(redirect, worker));
 }
@@ -106,5 +83,60 @@ PerformanceResourceTiming::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSize
 {
   return PerformanceEntry::SizeOfExcludingThis(aMallocSizeOf) +
          mInitiatorType.SizeOfExcludingThisIfUnshared(aMallocSizeOf) +
-         mNextHopProtocol.SizeOfExcludingThisIfUnshared(aMallocSizeOf);
+         (mTimingData
+            ? mTimingData->NextHopProtocol().SizeOfExcludingThisIfUnshared(aMallocSizeOf)
+            : 0);
+}
+
+void
+PerformanceResourceTiming::GetServerTiming(
+                            nsTArray<RefPtr<PerformanceServerTiming>>& aRetval,
+                            Maybe<nsIPrincipal*>& aSubjectPrincipal)
+{
+  aRetval.Clear();
+  if (!TimingAllowedForCaller(aSubjectPrincipal)) {
+    return;
+  }
+
+  nsTArray<nsCOMPtr<nsIServerTiming>> serverTimingArray = mTimingData->GetServerTiming();
+  uint32_t length = serverTimingArray.Length();
+  for (uint32_t index = 0; index < length; ++index) {
+    nsCOMPtr<nsIServerTiming> serverTiming = serverTimingArray.ElementAt(index);
+    MOZ_ASSERT(serverTiming);
+
+    aRetval.AppendElement(
+      new PerformanceServerTiming(GetParentObject(), serverTiming));
+  }
+}
+
+bool
+PerformanceResourceTiming::TimingAllowedForCaller(Maybe<nsIPrincipal*>& aCaller) const
+{
+  if (!mTimingData) {
+    return false;
+  }
+
+  if (mTimingData->TimingAllowed()) {
+    return true;
+  }
+
+  // Check if the addon has permission to access the cross-origin resource.
+  return mOriginalURI && aCaller.isSome() &&
+      BasePrincipal::Cast(aCaller.value())->AddonAllowsLoad(mOriginalURI);
+}
+
+bool
+PerformanceResourceTiming::ReportRedirectForCaller(Maybe<nsIPrincipal*>& aCaller) const
+{
+  if (!mTimingData) {
+    return false;
+  }
+
+  if (mTimingData->ShouldReportCrossOriginRedirect()) {
+    return true;
+  }
+
+  // Only report cross-origin redirect if the addon has <all_urls> permission.
+  return aCaller.isSome() &&
+      BasePrincipal::Cast(aCaller.value())->AddonHasPermission(nsGkAtoms::all_urlsPermission);
 }

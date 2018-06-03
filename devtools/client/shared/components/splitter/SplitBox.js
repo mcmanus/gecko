@@ -4,85 +4,132 @@
 
 "use strict";
 
-const React = require("devtools/client/shared/vendor/react");
+const { Component, createFactory } = require("devtools/client/shared/vendor/react");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
 const ReactDOM = require("devtools/client/shared/vendor/react-dom");
-const Draggable = React.createFactory(require("devtools/client/shared/components/splitter/Draggable"));
-const { DOM: dom, PropTypes } = React;
+const Draggable = createFactory(require("devtools/client/shared/components/splitter/Draggable"));
 
 /**
  * This component represents a Splitter. The splitter supports vertical
  * as well as horizontal mode.
  */
-const SplitBox = React.createClass({
-  displayName: "SplitBox",
+class SplitBox extends Component {
+  static get propTypes() {
+    return {
+      // Custom class name. You can use more names separated by a space.
+      className: PropTypes.string,
+      // Initial size of controlled panel.
+      initialSize: PropTypes.string,
+      // Initial width of controlled panel.
+      initialWidth: PropTypes.oneOfType([
+        PropTypes.number,
+        PropTypes.string
+      ]),
+      // Initial height of controlled panel.
+      initialHeight: PropTypes.oneOfType([
+        PropTypes.number,
+        PropTypes.string
+      ]),
+      // Left/top panel
+      startPanel: PropTypes.any,
+      // Min panel size.
+      minSize: PropTypes.oneOfType([
+        PropTypes.number,
+        PropTypes.string
+      ]),
+      // Max panel size.
+      maxSize: PropTypes.oneOfType([
+        PropTypes.number,
+        PropTypes.string
+      ]),
+      // Right/bottom panel
+      endPanel: PropTypes.any,
+      // True if the right/bottom panel should be controlled.
+      endPanelControl: PropTypes.bool,
+      // Size of the splitter handle bar.
+      splitterSize: PropTypes.number,
+      // True if the splitter bar is vertical (default is vertical).
+      vert: PropTypes.bool,
+      // Style object.
+      style: PropTypes.object,
+      // Call when controlled panel was resized.
+      onControlledPanelResized: PropTypes.func,
+    };
+  }
 
-  propTypes: {
-    // Custom class name. You can use more names separated by a space.
-    className: PropTypes.string,
-    // Initial size of controlled panel.
-    initialSize: PropTypes.string,
-    // Initial width of controlled panel.
-    initialWidth: PropTypes.string,
-    // Initial height of controlled panel.
-    initialHeight: PropTypes.string,
-    // Left/top panel
-    startPanel: PropTypes.any,
-    // Min panel size.
-    minSize: PropTypes.string,
-    // Max panel size.
-    maxSize: PropTypes.string,
-    // Right/bottom panel
-    endPanel: PropTypes.any,
-    // True if the right/bottom panel should be controlled.
-    endPanelControl: PropTypes.bool,
-    // Size of the splitter handle bar.
-    splitterSize: PropTypes.string,
-    // True if the splitter bar is vertical (default is vertical).
-    vert: PropTypes.bool,
-    // Style object.
-    style: PropTypes.object,
-  },
-
-  getDefaultProps() {
+  static get defaultProps() {
     return {
       splitterSize: 5,
       vert: true,
       endPanelControl: false
     };
-  },
+  }
 
-  /**
-   * The state stores the current orientation (vertical or horizontal)
-   * and the current size (width/height). All these values can change
-   * during the component's life time.
-   */
-  getInitialState() {
-    return {
-      vert: this.props.vert,
-      width: this.props.initialWidth || this.props.initialSize,
-      height: this.props.initialHeight || this.props.initialSize
+  constructor(props) {
+    super(props);
+
+    /**
+     * The state stores whether or not the end panel should be controlled, the current
+     * orientation (vertical or horizontal), the splitter size, and the current size
+     * (width/height). All these values can change during the component's life time.
+     */
+    this.state = {
+      // True if the right/bottom panel should be controlled.
+      endPanelControl: props.endPanelControl,
+      // True if the splitter bar is vertical (default is vertical).
+      vert: props.vert,
+      // Size of the splitter handle bar.
+      splitterSize: props.splitterSize,
+      // Width of controlled panel.
+      width: props.initialWidth || props.initialSize,
+      // Height of controlled panel.
+      height: props.initialHeight || props.initialSize
     };
-  },
+
+    this.onStartMove = this.onStartMove.bind(this);
+    this.onStopMove = this.onStopMove.bind(this);
+    this.onMove = this.onMove.bind(this);
+  }
 
   componentWillReceiveProps(nextProps) {
-    let { vert } = nextProps;
+    const {
+      endPanelControl,
+      splitterSize,
+      vert,
+    } = nextProps;
+
+    if (endPanelControl != this.props.endPanelControl) {
+      this.setState({ endPanelControl });
+    }
+
+    if (splitterSize != this.props.splitterSize) {
+      this.setState({ splitterSize });
+    }
 
     if (vert !== this.props.vert) {
       this.setState({ vert });
     }
-  },
+  }
 
   shouldComponentUpdate(nextProps, nextState) {
     return nextState.width != this.state.width ||
+      nextState.endPanelControl != this.props.endPanelControl ||
       nextState.height != this.state.height ||
       nextState.vert != this.state.vert ||
+      nextState.splitterSize != this.state.splitterSize ||
       nextProps.startPanel != this.props.startPanel ||
       nextProps.endPanel != this.props.endPanel ||
-      nextProps.endPanelControl != this.props.endPanelControl ||
       nextProps.minSize != this.props.minSize ||
-      nextProps.maxSize != this.props.maxSize ||
-      nextProps.splitterSize != this.props.splitterSize;
-  },
+      nextProps.maxSize != this.props.maxSize;
+  }
+
+  componentDidUpdate(prevProps, prevState) {
+    if (this.props.onControlledPanelResized && (prevState.width !== this.state.width ||
+                                                prevState.height !== this.state.height)) {
+      this.props.onControlledPanelResized(this.state.width, this.state.height);
+    }
+  }
 
   // Dragging Events
 
@@ -94,7 +141,7 @@ const SplitBox = React.createClass({
   onStartMove() {
     const splitBox = ReactDOM.findDOMNode(this);
     const doc = splitBox.ownerDocument;
-    let defaultCursor = doc.documentElement.style.cursor;
+    const defaultCursor = doc.documentElement.style.cursor;
     doc.documentElement.style.cursor = (this.state.vert ? "ew-resize" : "ns-resize");
 
     splitBox.classList.add("dragging");
@@ -102,7 +149,7 @@ const SplitBox = React.createClass({
     this.setState({
       defaultCursor: defaultCursor
     });
-  },
+  }
 
   onStopMove() {
     const splitBox = ReactDOM.findDOMNode(this);
@@ -110,7 +157,7 @@ const SplitBox = React.createClass({
     doc.documentElement.style.cursor = this.state.defaultCursor;
 
     splitBox.classList.remove("dragging");
-  },
+  }
 
   /**
    * Adjust size of the controlled panel. Depending on the current
@@ -119,17 +166,18 @@ const SplitBox = React.createClass({
    */
   onMove(x, y) {
     const node = ReactDOM.findDOMNode(this);
-    const doc = node.ownerDocument;
-    const win = doc.defaultView;
 
     let size;
-    let { endPanelControl } = this.props;
+    let { endPanelControl, vert } = this.state;
 
-    if (this.state.vert) {
+    if (vert) {
+      // Use the document owning the SplitBox to detect rtl. The global document might be
+      // the one bound to the toolbox shared BrowserRequire, which is irrelevant here.
+      const doc = node.ownerDocument;
+
       // Switch the control flag in case of RTL. Note that RTL
       // has impact on vertical splitter only.
-      let dir = win.getComputedStyle(doc.documentElement).direction;
-      if (dir == "rtl") {
+      if (doc.dir === "rtl") {
         endPanelControl = !endPanelControl;
       }
 
@@ -149,16 +197,15 @@ const SplitBox = React.createClass({
         height: size
       });
     }
-  },
+  }
 
   // Rendering
 
   render() {
-    const vert = this.state.vert;
-    const { startPanel, endPanel, endPanelControl, minSize,
-      maxSize, splitterSize } = this.props;
+    const { endPanelControl, splitterSize, vert } = this.state;
+    const { startPanel, endPanel, minSize, maxSize } = this.props;
 
-    let style = Object.assign({}, this.props.style);
+    const style = Object.assign({}, this.props.style);
 
     // Calculate class names list.
     let classNames = ["split-box"];
@@ -196,7 +243,7 @@ const SplitBox = React.createClass({
     }
 
     // Calculate splitter size
-    let splitterStyle = {
+    const splitterStyle = {
       flex: "0 0 " + splitterSize + "px"
     };
 
@@ -207,25 +254,34 @@ const SplitBox = React.createClass({
         startPanel ?
           dom.div({
             className: endPanelControl ? "uncontrolled" : "controlled",
-            style: leftPanelStyle},
+            style: leftPanelStyle,
+            role: "presentation",
+            ref: div => {
+              this.startPanelContainer = div;
+            }},
             startPanel
           ) : null,
-        Draggable({
-          className: "splitter",
-          style: splitterStyle,
-          onStart: this.onStartMove,
-          onStop: this.onStopMove,
-          onMove: this.onMove
-        }),
+        splitterSize > 0 ?
+          Draggable({
+            className: "splitter",
+            style: splitterStyle,
+            onStart: this.onStartMove,
+            onStop: this.onStopMove,
+            onMove: this.onMove
+          }) : null,
         endPanel ?
           dom.div({
             className: endPanelControl ? "controlled" : "uncontrolled",
-            style: rightPanelStyle},
+            style: rightPanelStyle,
+            role: "presentation",
+            ref: div => {
+              this.endPanelContainer = div;
+            }},
             endPanel
           ) : null
       )
     );
   }
-});
+}
 
 module.exports = SplitBox;

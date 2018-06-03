@@ -36,7 +36,7 @@ class EventEmitter {
       target[eventListeners] = new Map();
     }
 
-    let events = target[eventListeners];
+    const events = target[eventListeners];
 
     if (events.has(type)) {
       events.get(type).add(listener);
@@ -58,8 +58,8 @@ class EventEmitter {
    *    The listener that processes the event.
    */
   static off(target, type, listener) {
-    let length = arguments.length;
-    let events = target[eventListeners];
+    const length = arguments.length;
+    const events = target[eventListeners];
 
     if (!events) {
       return;
@@ -68,7 +68,7 @@ class EventEmitter {
     if (length === 3) {
       // Trying to remove from the `target` the `listener` specified for the
       // event's `type` given.
-      let listenersForType = events.get(type);
+      const listenersForType = events.get(type);
 
       // If we don't have listeners for the event's type, we bail out.
       if (!listenersForType) {
@@ -84,7 +84,7 @@ class EventEmitter {
         // in another function.
         // So we iterate all the listeners to check if any of them is a wrapper to
         // the `listener` given.
-        for (let value of listenersForType.values()) {
+        for (const value of listenersForType.values()) {
           if (onceOriginalListener in value && value[onceOriginalListener] === listener) {
             listenersForType.delete(value);
             break;
@@ -121,7 +121,7 @@ class EventEmitter {
     return new Promise(resolve => {
       // This is the actual listener that will be added to the target's listener, it wraps
       // the call to the original `listener` given.
-      let newListener = (first, ...rest) => {
+      const newListener = (first, ...rest) => {
         // To prevent side effects we're removing the listener upfront.
         EventEmitter.off(target, type, newListener);
 
@@ -157,16 +157,16 @@ class EventEmitter {
     if (target[eventListeners].has(type)) {
       // Creating a temporary Set with the original listeners, to avoiding side effects
       // in emit.
-      let listenersForType = new Set(target[eventListeners].get(type));
+      const listenersForType = new Set(target[eventListeners].get(type));
 
-      for (let listener of listenersForType) {
+      for (const listener of listenersForType) {
         // If the object was destroyed during event emission, stop emitting.
         if (!(eventListeners in target)) {
           break;
         }
 
-        let events = target[eventListeners];
-        let listeners = events.get(type);
+        const events = target[eventListeners];
+        const listeners = events.get(type);
 
         // If listeners were removed during emission, make sure the
         // event handler we're going to fire wasn't removed.
@@ -179,7 +179,7 @@ class EventEmitter {
             }
           } catch (ex) {
             // Prevent a bad listener from interfering with the others.
-            let msg = ex + ": " + ex.stack;
+            const msg = ex + ": " + ex.stack;
             console.error(msg);
             dump(msg + "\n");
           }
@@ -191,7 +191,7 @@ class EventEmitter {
     // will be called for any event. The arguments passed to the listener are the event
     // type followed by the actual arguments.
     // !!! This API will be removed by Bug 1391261.
-    let hasWildcardListeners = target[eventListeners].has("*");
+    const hasWildcardListeners = target[eventListeners].has("*");
     if (type !== "*" && hasWildcardListeners) {
       EventEmitter.emit(target, "*", type, ...rest);
     }
@@ -210,7 +210,7 @@ class EventEmitter {
    */
   static count(target, type) {
     if (eventListeners in target) {
-      let listenersForType = target[eventListeners].get(type);
+      const listenersForType = target[eventListeners].get(type);
 
       if (listenersForType) {
         return listenersForType.size;
@@ -230,7 +230,7 @@ class EventEmitter {
    *    The object given, mixed.
    */
   static decorate(target) {
-    let descriptors = Object.getOwnPropertyDescriptors(this.prototype);
+    const descriptors = Object.getOwnPropertyDescriptors(this.prototype);
     delete descriptors.constructor;
     return Object.defineProperties(target, descriptors);
   }
@@ -262,8 +262,8 @@ const isEventHandler = (listener) =>
   listener && handler in listener && typeof listener[handler] === "function";
 
 const Services = require("Services");
-const { describeNthCaller } = require("devtools/shared/platform/stack");
-let loggingEnabled = true;
+const { getNthPathExcluding } = require("devtools/shared/platform/stack");
+let loggingEnabled = false;
 
 if (!isWorker) {
   loggingEnabled = Services.prefs.getBoolPref("devtools.dump.emit");
@@ -275,20 +275,80 @@ if (!isWorker) {
 }
 
 function serialize(target) {
-  let out = String(target);
+  const MAXLEN = 60;
 
-  if (target && target.nodeName) {
-    out += " (" + target.nodeName;
+  // Undefined
+  if (typeof target === "undefined") {
+    return "undefined";
+  }
+
+  if (target === null) {
+    return "null";
+  }
+
+  // Number / String
+  if (typeof target === "string" ||
+      typeof target === "number") {
+    return truncate(target, MAXLEN);
+  }
+
+  // HTML Node
+  if (target.nodeName) {
+    let out = target.nodeName;
+
     if (target.id) {
       out += "#" + target.id;
     }
     if (target.className) {
       out += "." + target.className;
     }
-    out += ")";
+
+    return out;
   }
 
-  return out;
+  // Array
+  if (Array.isArray(target)) {
+    return truncate(target.toSource(), MAXLEN);
+  }
+
+  // Function
+  if (typeof target === "function") {
+    return `function ${target.name ? target.name : "anonymous"}()`;
+  }
+
+  // Window
+  if (target.constructor &&
+      target.constructor.name &&
+      target.constructor.name === "Window") {
+    return `window (${target.location.origin})`;
+  }
+
+  // Object
+  if (typeof target === "object") {
+    let out = "{";
+
+    const entries = Object.entries(target);
+    for (let i = 0; i < Math.min(10, entries.length); i++) {
+      const [name, value] = entries[i];
+
+      if (i > 0) {
+        out += ", ";
+      }
+
+      out += `${name}: ${truncate(value, MAXLEN)}`;
+    }
+
+    return out + "}";
+  }
+
+  // Other
+  return truncate(target.toSource(), MAXLEN);
+}
+
+function truncate(value, maxLen) {
+  // We don't use value.toString() because it can throw.
+  const str = String(value);
+  return str.length > maxLen ? str.substring(0, maxLen) + "..." : str;
 }
 
 function logEvent(type, args) {
@@ -297,15 +357,20 @@ function logEvent(type, args) {
   }
 
   let argsOut = "";
-  let description = describeNthCaller(2);
 
   // We need this try / catch to prevent any dead object errors.
   try {
-    argsOut = args.map(serialize).join(", ");
+    argsOut = `${args.map(serialize).join(", ")}`;
   } catch (e) {
     // Object is dead so the toolbox is most likely shutting down,
     // do nothing.
   }
 
-  dump(`EMITTING: emit(${type}${argsOut}) from ${description}\n`);
+  const path = getNthPathExcluding(0, "devtools/shared/event-emitter.js");
+
+  if (args.length > 0) {
+    dump(`EMITTING: emit(${type}, ${argsOut}) from ${path}\n`);
+  } else {
+    dump(`EMITTING: emit(${type}) from ${path}\n`);
+  }
 }

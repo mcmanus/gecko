@@ -7,13 +7,11 @@
 #ifndef vm_List_inl_h
 #define vm_List_inl_h
 
-#include "jscntxt.h"
-
 #include "gc/Rooting.h"
+#include "vm/JSContext.h"
 #include "vm/NativeObject.h"
 
-#include "jsobjinlines.h"
-
+#include "vm/JSObject-inl.h"
 #include "vm/NativeObject-inl.h"
 
 namespace js {
@@ -33,7 +31,7 @@ AppendToList(JSContext* cx, HandleNativeObject list, HandleValue value)
         return false;
 
     list->ensureDenseInitializedLength(cx, length, 1);
-    list->setDenseElement(length, value);
+    list->setDenseElementWithType(cx, length, value);
 
     return true;
 }
@@ -56,11 +54,11 @@ ShiftFromList(JSContext* cx, HandleNativeObject list)
     Rooted<T*> entry(cx, &list->getDenseElement(0).toObject().as<T>());
     if (!list->tryShiftDenseElements(1)) {
         list->moveDenseElements(0, 1, length - 1);
+        list->setDenseInitializedLength(length - 1);
         list->shrinkElements(cx, length - 1);
     }
 
-    list->setDenseInitializedLength(length - 1);
-
+    MOZ_ASSERT(list->getDenseInitializedLength() == length - 1);
     return entry;
 }
 

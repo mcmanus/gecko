@@ -36,7 +36,7 @@ public:
   ChildDNSRecord(const DNSRecord& reply, uint16_t flags);
 
 private:
-  virtual ~ChildDNSRecord();
+  virtual ~ChildDNSRecord() = default;
 
   nsCString mCanonicalName;
   nsTArray<NetAddr> mAddresses;
@@ -62,10 +62,6 @@ ChildDNSRecord::ChildDNSRecord(const DNSRecord& reply, uint16_t flags)
   }
 }
 
-ChildDNSRecord::~ChildDNSRecord()
-{
-}
-
 //-----------------------------------------------------------------------------
 // ChildDNSRecord::nsIDNSRecord
 //-----------------------------------------------------------------------------
@@ -79,6 +75,13 @@ ChildDNSRecord::GetCanonicalName(nsACString &result)
 
   result = mCanonicalName;
   return NS_OK;
+}
+
+NS_IMETHODIMP
+ChildDNSRecord::IsTRR(bool *retval)
+{
+  *retval = false;
+  return NS_ERROR_NOT_AVAILABLE;
 }
 
 NS_IMETHODIMP
@@ -177,7 +180,6 @@ public:
       mDnsRequest->SendCancelDNSRequest(mDnsRequest->mHost,
                                         mDnsRequest->mOriginAttributes,
                                         mDnsRequest->mFlags,
-                                        mDnsRequest->mNetworkInterface,
                                         mReasonForCancel);
     }
     return NS_OK;
@@ -191,10 +193,9 @@ private:
 // DNSRequestChild
 //-----------------------------------------------------------------------------
 
-DNSRequestChild::DNSRequestChild(const nsCString& aHost,
+DNSRequestChild::DNSRequestChild(const nsACString& aHost,
                                  const OriginAttributes& aOriginAttributes,
                                  const uint32_t& aFlags,
-                                 const nsCString& aNetworkInterface,
                                  nsIDNSListener *aListener,
                                  nsIEventTarget *target)
   : mListener(aListener)
@@ -203,7 +204,6 @@ DNSRequestChild::DNSRequestChild(const nsCString& aHost,
   , mHost(aHost)
   , mOriginAttributes(aOriginAttributes)
   , mFlags(aFlags)
-  , mNetworkInterface(aNetworkInterface)
   , mIPCOpen(false)
 {
 }
@@ -234,7 +234,7 @@ DNSRequestChild::StartRequest()
 
   // Send request to Parent process.
   gNeckoChild->SendPDNSRequestConstructor(this, mHost, mOriginAttributes,
-                                          mFlags, mNetworkInterface);
+                                          mFlags);
   mIPCOpen = true;
 
   // IPDL holds a reference until IPDL channel gets destroyed

@@ -6,13 +6,14 @@
 
 #include "mozilla/dom/cache/FileUtils.h"
 
+#include "DBSchema.h"
 #include "mozilla/dom/InternalResponse.h"
 #include "mozilla/dom/quota/FileStreams.h"
 #include "mozilla/dom/quota/QuotaManager.h"
 #include "mozilla/SnappyCompressOutputStream.h"
 #include "mozilla/Unused.h"
-#include "nsIBinaryInputStream.h"
-#include "nsIBinaryOutputStream.h"
+#include "nsIObjectInputStream.h"
+#include "nsIObjectOutputStream.h"
 #include "nsIFile.h"
 #include "nsIUUIDGenerator.h"
 #include "nsNetCID.h"
@@ -25,9 +26,6 @@
 namespace mozilla {
 namespace dom {
 namespace cache {
-
-#define PADDING_FILE_NAME ".padding"
-#define PADDING_TMP_FILE_NAME ".padding-tmp"
 
 using mozilla::dom::quota::FileInputStream;
 using mozilla::dom::quota::FileOutputStream;
@@ -299,6 +297,8 @@ BodyMaybeUpdatePaddingSize(const QuotaInfo& aQuotaInfo, nsIFile* aBaseDir,
                                  aQuotaInfo.mOrigin, bodyFile, &fileSize);
   MOZ_DIAGNOSTIC_ASSERT(quotaObject);
   MOZ_DIAGNOSTIC_ASSERT(fileSize >= 0);
+  // XXXtt: bug: https://bugzilla.mozilla.org/show_bug.cgi?id=1422815
+  if (!quotaObject) { return NS_ERROR_UNEXPECTED; }
 
   if (*aPaddingSizeOut == InternalResponse::UNKNOWN_PADDING_SIZE) {
     *aPaddingSizeOut = BodyGeneratePadding(fileSize, aPaddingInfo);
@@ -420,14 +420,10 @@ LockedDirectoryPaddingWrite(nsIFile* aBaseDir, DirPaddingFile aPaddingFileType,
   rv = NS_NewLocalFileOutputStream(getter_AddRefs(outputStream), file);
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-  nsCOMPtr<nsIBinaryOutputStream> binaryStream =
-    do_CreateInstance("@mozilla.org/binaryoutputstream;1");
-  if (NS_WARN_IF(!binaryStream)) { return NS_ERROR_FAILURE; }
+  nsCOMPtr<nsIObjectOutputStream> objectStream =
+    NS_NewObjectOutputStream(outputStream);
 
-  rv = binaryStream->SetOutputStream(outputStream);
-  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
-
-  rv = binaryStream->Write64(aPaddingSize);
+  rv = objectStream->Write64(aPaddingSize);
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
   return rv;
@@ -454,19 +450,13 @@ BodyDeleteOrphanedFiles(const QuotaInfo& aQuotaInfo, nsIFile* aBaseDir,
   rv = dir->Append(NS_LITERAL_STRING("morgue"));
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-  nsCOMPtr<nsISimpleEnumerator> entries;
+  nsCOMPtr<nsIDirectoryEnumerator> entries;
   rv = dir->GetDirectoryEntries(getter_AddRefs(entries));
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
   // Iterate over all the intermediate morgue subdirs
-  bool hasMore = false;
-  while (NS_SUCCEEDED(rv = entries->HasMoreElements(&hasMore)) && hasMore) {
-    nsCOMPtr<nsISupports> entry;
-    rv = entries->GetNext(getter_AddRefs(entry));
-    if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
-
-    nsCOMPtr<nsIFile> subdir = do_QueryInterface(entry);
-
+  nsCOMPtr<nsIFile> subdir;
+  while (NS_SUCCEEDED(rv = entries->GetNextFile(getter_AddRefs(subdir))) && subdir) {
     bool isDir = false;
     rv = subdir->IsDirectory(&isDir);
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
@@ -478,20 +468,14 @@ BodyDeleteOrphanedFiles(const QuotaInfo& aQuotaInfo, nsIFile* aBaseDir,
       continue;
     }
 
-    nsCOMPtr<nsISimpleEnumerator> subEntries;
+    nsCOMPtr<nsIDirectoryEnumerator> subEntries;
     rv = subdir->GetDirectoryEntries(getter_AddRefs(subEntries));
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
     // Now iterate over all the files in the subdir
-    bool subHasMore = false;
-    while(NS_SUCCEEDED(rv = subEntries->HasMoreElements(&subHasMore)) &&
-          subHasMore) {
-      nsCOMPtr<nsISupports> subEntry;
-      rv = subEntries->GetNext(getter_AddRefs(subEntry));
-      if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
-
-      nsCOMPtr<nsIFile> file = do_QueryInterface(subEntry);
-
+    nsCOMPtr<nsIFile> file;
+    while(NS_SUCCEEDED(rv = subEntries->GetNextFile(getter_AddRefs(file))) &&
+          file) {
       nsAutoCString leafName;
       rv = file->GetNativeLeafName(leafName);
       if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
@@ -629,19 +613,12 @@ RemoveNsIFileRecursively(const QuotaInfo& aQuotaInfo, nsIFile* aFile)
 
   // Unfortunately, we need to traverse all the entries and delete files one by
   // one to update their usages to the QuotaManager.
-  nsCOMPtr<nsISimpleEnumerator> entries;
+  nsCOMPtr<nsIDirectoryEnumerator> entries;
   rv = aFile->GetDirectoryEntries(getter_AddRefs(entries));
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-  bool hasMore = false;
-  while (NS_SUCCEEDED((rv = entries->HasMoreElements(&hasMore))) && hasMore) {
-    nsCOMPtr<nsISupports> entry;
-    rv = entries->GetNext(getter_AddRefs(entry));
-    if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
-
-    nsCOMPtr<nsIFile> file = do_QueryInterface(entry);
-    MOZ_ASSERT(file);
-
+  nsCOMPtr<nsIFile> file;
+  while (NS_SUCCEEDED((rv = entries->GetNextFile(getter_AddRefs(file)))) && file) {
     rv = RemoveNsIFileRecursively(aQuotaInfo, file);
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
   }
@@ -741,18 +718,15 @@ LockedDirectoryPaddingGet(nsIFile* aBaseDir, int64_t* aPaddingSizeOut)
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
   nsCOMPtr<nsIInputStream> bufferedStream;
-  rv = NS_NewBufferedInputStream(getter_AddRefs(bufferedStream), stream, 512);
+  rv = NS_NewBufferedInputStream(getter_AddRefs(bufferedStream), stream.forget(),
+                                 512);
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-  nsCOMPtr<nsIBinaryInputStream> binaryStream =
-    do_CreateInstance("@mozilla.org/binaryinputstream;1");
-  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
-
-  rv = binaryStream->SetInputStream(bufferedStream);
-  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+  nsCOMPtr<nsIObjectInputStream> objectStream =
+    NS_NewObjectInputStream(bufferedStream);
 
   uint64_t paddingSize = 0;
-  rv = binaryStream->Read64(&paddingSize);
+  rv = objectStream->Read64(&paddingSize);
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
   *aPaddingSizeOut = paddingSize;

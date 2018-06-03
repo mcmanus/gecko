@@ -7,7 +7,6 @@
 
 #include "mozilla/Attributes.h"
 #include <vector>
-#include "nsIDOMCanvasRenderingContext2D.h"
 #include "nsICanvasRenderingContextInternal.h"
 #include "mozilla/RefPtr.h"
 #include "nsColor.h"
@@ -31,7 +30,7 @@
 #include "Layers.h"
 #include "nsBidi.h"
 
-class nsGlobalWindow;
+class nsGlobalWindowInner;
 class nsXULElement;
 
 namespace mozilla {
@@ -204,10 +203,16 @@ public:
   bool DrawCustomFocusRing(mozilla::dom::Element& aElement);
   void Clip(const CanvasWindingRule& aWinding);
   void Clip(const CanvasPath& aPath, const CanvasWindingRule& aWinding);
-  bool IsPointInPath(double aX, double aY, const CanvasWindingRule& aWinding);
-  bool IsPointInPath(const CanvasPath& aPath, double aX, double aY, const CanvasWindingRule& aWinding);
-  bool IsPointInStroke(double aX, double aY);
-  bool IsPointInStroke(const CanvasPath& aPath, double aX, double aY);
+  bool IsPointInPath(JSContext* aCx, double aX, double aY,
+                     const CanvasWindingRule& aWinding,
+                     nsIPrincipal& aSubjectPrincipal);
+  bool IsPointInPath(JSContext* aCx, const CanvasPath& aPath,
+                     double aX, double aY,
+                     const CanvasWindingRule& aWinding, nsIPrincipal&);
+  bool IsPointInStroke(JSContext* aCx, double aX, double aY,
+                       nsIPrincipal& aSubjectPrincipal);
+  bool IsPointInStroke(JSContext* aCx, const CanvasPath& aPath,
+                       double aX, double aY, nsIPrincipal&);
   void FillText(const nsAString& aText, double aX, double aY,
                 const Optional<double>& aMaxWidth,
                 mozilla::ErrorResult& aError);
@@ -249,7 +254,7 @@ public:
                     mozilla::ErrorResult& aError);
   already_AddRefed<ImageData>
     GetImageData(JSContext* aCx, double aSx, double aSy, double aSw, double aSh,
-                 mozilla::ErrorResult& aError);
+                 nsIPrincipal& aSubjectPrincipal, mozilla::ErrorResult& aError);
   void PutImageData(ImageData& aImageData,
                     double aDx, double aDy, mozilla::ErrorResult& aError);
   void PutImageData(ImageData& aImageData,
@@ -408,7 +413,7 @@ public:
     }
   }
 
-  void DrawWindow(nsGlobalWindow& aWindow, double aX, double aY,
+  void DrawWindow(nsGlobalWindowInner& aWindow, double aX, double aY,
                   double aW, double aH,
                   const nsAString& aBgColor, uint32_t aFlags,
                   mozilla::ErrorResult& aError);
@@ -426,15 +431,15 @@ public:
 
   nsresult Redraw();
 
-  virtual int32_t GetWidth() const override;
-  virtual int32_t GetHeight() const override;
   gfx::IntSize GetSize() const { return gfx::IntSize(mWidth, mHeight); }
+  virtual int32_t GetWidth() override { return GetSize().width; }
+  virtual int32_t GetHeight() override { return GetSize().height; }
 
   // nsICanvasRenderingContextInternal
   /**
     * Gets the pres shell from either the canvas element or the doc shell
     */
-  virtual nsIPresShell *GetPresShell() override {
+  nsIPresShell* GetPresShell() final {
     if (mCanvasElement) {
       return mCanvasElement->OwnerDoc()->GetShell();
     }
@@ -461,12 +466,16 @@ public:
     return mTarget->Snapshot();
   }
 
-  virtual void SetIsOpaque(bool aIsOpaque) override;
+  virtual void SetOpaqueValueFromOpaqueAttr(bool aOpaqueAttrValue) override;
   bool GetIsOpaque() override { return mOpaque; }
   NS_IMETHOD Reset() override;
   already_AddRefed<Layer> GetCanvasLayer(nsDisplayListBuilder* aBuilder,
                                          Layer* aOldLayer,
                                          LayerManager* aManager) override;
+
+  bool UpdateWebRenderCanvasData(nsDisplayListBuilder* aBuilder,
+                                 WebRenderCanvasData* aCanvasData) override;
+
   bool InitializeCanvasRenderer(nsDisplayListBuilder* aBuilder,
                                 CanvasRenderer* aRenderer) override;
   virtual bool ShouldForceInactiveLayer(LayerManager* aManager) override;
@@ -556,6 +565,7 @@ public:
 protected:
   nsresult GetImageDataArray(JSContext* aCx, int32_t aX, int32_t aY,
                              uint32_t aWidth, uint32_t aHeight,
+                             nsIPrincipal& aSubjectPrincipal,
                              JSObject** aRetval);
 
   nsresult PutImageData_explicit(int32_t aX, int32_t aY, uint32_t aW, uint32_t aH,
@@ -616,6 +626,9 @@ protected:
   // Returns whether the font was successfully updated.
   bool SetFontInternal(const nsAString& aFont, mozilla::ErrorResult& aError);
 
+  // Clears the target and updates mOpaque based on mOpaqueAttrValue and
+  // mContextAttributesHasAlpha.
+  void UpdateIsOpaque();
 
   /**
    * Creates the error target, if it doesn't exist
@@ -684,8 +697,11 @@ protected:
 
   /**
    * Disposes an old target and prepares to lazily create a new target.
+   *
+   * Parameters are the new dimensions to be used, or if either is negative,
+   * existing dimensions will be left unchanged.
    */
-  void ClearTarget();
+  void ClearTarget(int32_t aWidth = -1, int32_t aHeight = -1);
 
   /*
    * Returns the target to the buffer provider. i.e. this will queue a frame for
@@ -761,6 +777,17 @@ protected:
   // specific behavior on some operations.
   bool mZero;
 
+  // The two ways to set the opaqueness of the canvas.
+  // mOpaqueAttrValue: Whether the <canvas> element has the moz-opaque attribute
+  // set. Can change during the lifetime of the context. Non-standard, should
+  // hopefully go away soon.
+  // mContextAttributesHasAlpha: The standard way of setting canvas opaqueness.
+  // Set at context initialization time and never changes.
+  bool mOpaqueAttrValue;
+  bool mContextAttributesHasAlpha;
+
+  // Determines the context's opaqueness. Is computed from mOpaqueAttrValue and
+  // mContextAttributesHasAlpha in UpdateIsOpaque().
   bool mOpaque;
 
   // This is true when the next time our layer is retrieved we need to
@@ -1154,7 +1181,7 @@ protected:
     pc = ps->GetPresContext();
     if (!pc) goto FINISH;
     devPixel = pc->AppUnitsPerDevPixel();
-    cssPixel = pc->AppUnitsPerCSSPixel();
+    cssPixel = nsPresContext::AppUnitsPerCSSPixel();
 
   FINISH:
     if (aPerDevPixel)

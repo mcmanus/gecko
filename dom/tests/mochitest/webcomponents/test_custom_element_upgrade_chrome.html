@@ -11,7 +11,6 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=1299363
 <body>
 <a target="_blank" href="https://bugzilla.mozilla.org/show_bug.cgi?id=1299363">Bug 1299363</a>
 <script type="text/javascript">
-var Cu = Components.utils;
 SimpleTest.waitForExplicitFinish();
 
 var promises = [];
@@ -21,8 +20,12 @@ function test_with_new_window(f, msg) {
     iframe.setAttribute('type', 'content');
     iframe.setAttribute('src', 'http://example.org/chrome/dom/tests/mochitest/webcomponents/test_upgrade_page.html');
     iframe.onload = function() {
-      // Use window from iframe to isolate the test.
-      f(iframe.contentWindow, msg);
+      try {
+        // Use window from iframe to isolate the test.
+        f(iframe.contentWindow, msg);
+      } catch (e) {
+        SimpleTest.ok(false, e);
+      }
       aResolve();
     };
     document.body.appendChild(iframe);

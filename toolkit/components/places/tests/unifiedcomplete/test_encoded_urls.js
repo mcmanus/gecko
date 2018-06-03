@@ -1,5 +1,5 @@
 add_task(async function test_encoded() {
-  do_print("Searching for over encoded url should not break it");
+  info("Searching for over encoded url should not break it");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("https://www.mozilla.com/search/top/?q=%25%32%35"),
     title: "https://www.mozilla.com/search/top/?q=%25%32%35",
@@ -17,7 +17,7 @@ add_task(async function test_encoded() {
 });
 
 add_task(async function test_encoded_trimmed() {
-  do_print("Searching for over encoded url should not break it");
+  info("Searching for over encoded url should not break it");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("https://www.mozilla.com/search/top/?q=%25%32%35"),
     title: "https://www.mozilla.com/search/top/?q=%25%32%35",
@@ -25,9 +25,13 @@ add_task(async function test_encoded_trimmed() {
   });
   await check_autocomplete({
     search: "mozilla.com/search/top/?q=%25%32%35",
-    matches: [ { uri: NetUtil.newURI("https://www.mozilla.com/search/top/?q=%25%32%35"),
-                 title: "https://www.mozilla.com/search/top/?q=%25%32%35",
-                 style: [ "autofill", "heuristic" ] }],
+    matches: [
+      {
+        value: "mozilla.com/search/top/?q=%25%32%35",
+        comment: "https://www.mozilla.com/search/top/?q=%25%32%35",
+        style: ["autofill", "heuristic"],
+      },
+    ],
     autofilled: "mozilla.com/search/top/?q=%25%32%35",
     completed: "https://www.mozilla.com/search/top/?q=%25%32%35"
   });
@@ -35,7 +39,7 @@ add_task(async function test_encoded_trimmed() {
 });
 
 add_task(async function test_encoded_partial() {
-  do_print("Searching for over encoded url should not break it");
+  info("Searching for over encoded url should not break it");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("https://www.mozilla.com/search/top/?q=%25%32%35"),
     title: "https://www.mozilla.com/search/top/?q=%25%32%35",
@@ -53,7 +57,7 @@ add_task(async function test_encoded_partial() {
 });
 
 add_task(async function test_encoded_path() {
-  do_print("Searching for over encoded url should not break it");
+  info("Searching for over encoded url should not break it");
   await PlacesTestUtils.addVisits({
     uri: NetUtil.newURI("https://www.mozilla.com/%25%32%35/top/"),
     title: "https://www.mozilla.com/%25%32%35/top/",

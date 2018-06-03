@@ -1,7 +1,7 @@
-use std::{usize, u8, u16, u32, u64};
-use std::{isize, i8, i16, i32, i64};
-use std::{f32, f64};
-use std::num::Wrapping;
+use core::{usize, u8, u16, u32, u64};
+use core::{isize, i8, i16, i32, i64};
+use core::{f32, f64};
+use core::num::Wrapping;
 
 /// Numbers which have upper and lower bounds
 pub trait Bounded {
@@ -77,17 +77,17 @@ for_each_tuple!(bounded_tuple);
 bounded_impl!(f64, f64::MIN, f64::MAX);
 
 
-macro_rules! test_wrapping_bounded {
-    ($($t:ty)+) => {
-        $(
-            assert_eq!(Wrapping::<$t>::min_value().0, <$t>::min_value());
-            assert_eq!(Wrapping::<$t>::max_value().0, <$t>::max_value());
-        )+   
-    };
-}
-
 #[test]
 fn wrapping_bounded() {
+    macro_rules! test_wrapping_bounded {
+        ($($t:ty)+) => {
+            $(
+                assert_eq!(Wrapping::<$t>::min_value().0, <$t>::min_value());
+                assert_eq!(Wrapping::<$t>::max_value().0, <$t>::max_value());
+            )+
+        };
+    }
+
     test_wrapping_bounded!(usize u8 u16 u32 u64 isize i8 i16 i32 i64);
 }
 

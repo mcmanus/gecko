@@ -14,16 +14,13 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/UniquePtr.h"
+#include "nsExceptionHandler.h"
 #include "nsReadableUtils.h"
 #include "nsThreadUtils.h"
 #include "mozilla/StackWalk.h"
 #include "nsThreadUtils.h"
 #include "nsXULAppAPI.h"
 #include "GeckoProfiler.h"
-
-#ifdef MOZ_CRASHREPORTER
-#include "nsExceptionHandler.h"
-#endif
 
 #ifdef XP_WIN
 #include <windows.h>
@@ -110,14 +107,13 @@ Crash()
   }
 #endif
 
-#ifdef MOZ_CRASHREPORTER
   // If you change this, you must also deal with the threadsafety of AnnotateCrashReport in
   // non-chrome processes!
   if (GeckoProcessType_Default == XRE_GetProcessType()) {
     CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("Hang"),
                                        NS_LITERAL_CSTRING("1"));
+    CrashReporter::SetMinidumpAnalysisAllThreads();
   }
-#endif
 
   MOZ_CRASH("HangMonitor triggered");
 }
@@ -258,7 +254,7 @@ ThreadMain(void*)
       if (waitCount >= 2) {
         uint32_t hangDuration = PR_IntervalToSeconds(now - lastTimestamp);
         Telemetry::RecordChromeHang(hangDuration, stack, systemUptime,
-                                    firefoxUptime, Move(annotations));
+                                    firefoxUptime, std::move(annotations));
         stack.Clear();
       }
 #endif
@@ -266,11 +262,11 @@ ThreadMain(void*)
       waitCount = 0;
     }
 
-    PRIntervalTime timeout;
+    TimeDuration timeout;
     if (gTimeout <= 0) {
-      timeout = PR_INTERVAL_NO_TIMEOUT;
+      timeout = TimeDuration::Forever();
     } else {
-      timeout = PR_MillisecondsToInterval(gTimeout * 500);
+      timeout = TimeDuration::FromMilliseconds(gTimeout * 500);
     }
     lock.Wait(timeout);
   }

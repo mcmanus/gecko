@@ -1,25 +1,22 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+"use strict";
 
 // TODO:
 // * find out how the Chrome implementation deals with conflicts
 
-"use strict";
-
 /* exported extensionIdToCollectionId */
 
-this.EXPORTED_SYMBOLS = ["ExtensionStorageSync", "extensionStorageSync"];
+var EXPORTED_SYMBOLS = ["ExtensionStorageSync", "extensionStorageSync"];
 
-const Ci = Components.interfaces;
-const Cc = Components.classes;
-const Cu = Components.utils;
-const Cr = Components.results;
 const global = this;
 
 Cu.importGlobalProperties(["atob", "btoa"]);
 
-Cu.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
 const KINTO_PROD_SERVER_URL = "https://webextensions.settings.services.mozilla.com/v1";
 const KINTO_DEFAULT_SERVER_URL = KINTO_PROD_SERVER_URL;
 
@@ -41,13 +38,12 @@ const SCALAR_STORAGE_CONSUMED = "storage.sync.api.usage.storage_consumed";
 // Default is 5sec, which seems a bit aggressive on the open internet
 const KINTO_REQUEST_TIMEOUT = 30000;
 
-Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Log.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/ExtensionUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
-  AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
   BulkKeyBundle: "resource://services-sync/keys.js",
   CollectionKeyManager: "resource://services-sync/record.js",
   CommonUtils: "resource://services-common/utils.js",
@@ -66,7 +62,7 @@ XPCOMUtils.defineLazyPreferenceGetter(this, "prefStorageSyncServerURL",
                                       STORAGE_SYNC_SERVER_URL_PREF,
                                       KINTO_DEFAULT_SERVER_URL);
 XPCOMUtils.defineLazyGetter(this, "WeaveCrypto", function() {
-  let {WeaveCrypto} = Cu.import("resource://services-crypto/WeaveCrypto.js", {});
+  let {WeaveCrypto} = ChromeUtils.import("resource://services-crypto/WeaveCrypto.js", {});
   return new WeaveCrypto();
 });
 
@@ -111,7 +107,7 @@ function throwIfNoFxA(fxAccounts, action) {
 // Global ExtensionStorageSync instance that extensions and Fx Sync use.
 // On Android, because there's no FXAccounts instance, any syncing
 // operations will fail.
-this.extensionStorageSync = null;
+var extensionStorageSync = null;
 
 /**
  * Utility function to enforce an order of fields when computing an HMAC.
@@ -140,15 +136,11 @@ const getKBHash = async function(fxaService) {
     throw new Error("User isn't signed in!");
   }
 
-  if (!signedInUser.kB) {
-    throw new Error("User doesn't have kB??");
+  if (!signedInUser.kExtKbHash) {
+    throw new Error("User doesn't have KbHash??");
   }
 
-  let kBbytes = CommonUtils.hexToBytes(signedInUser.kB);
-  let hasher = Cc["@mozilla.org/security/hash;1"]
-      .createInstance(Ci.nsICryptoHash);
-  hasher.init(hasher.SHA256);
-  return CommonUtils.bytesAsHex(CryptoUtils.digestBytes(signedInUser.uid + kBbytes, hasher));
+  return signedInUser.kExtKbHash;
 };
 
 /**
@@ -270,18 +262,11 @@ class KeyRingEncryptionRemoteTransformer extends EncryptionRemoteTransformer {
         throw new Error("user isn't signed in to FxA; can't sync");
       }
 
-      if (!user.kB) {
-        throw new Error("user doesn't have kB");
+      if (!user.kExtSync) {
+        throw new Error("user doesn't have kExtSync");
       }
 
-      let kB = CommonUtils.hexToBytes(user.kB);
-
-      let keyMaterial = CryptoUtils.hkdf(kB, undefined,
-                                       "identity.mozilla.com/picl/v1/chrome.storage.sync", 2 * 32);
-      let bundle = new BulkKeyBundle();
-      // [encryptionKey, hmacKey]
-      bundle.keyPair = [keyMaterial.slice(0, 32), keyMaterial.slice(32, 64)];
-      return bundle;
+      return BulkKeyBundle.fromHexKey(user.kExtSync);
     })();
   }
   // Pass through the kbHash field from the unencrypted record. If
@@ -338,22 +323,30 @@ global.KeyRingEncryptionRemoteTransformer = KeyRingEncryptionRemoteTransformer;
  */
 async function storageSyncInit() {
   // Memoize the result to share the connection.
-  if (storageSyncInit.result === undefined) {
+  if (storageSyncInit.promise === undefined) {
     const path = "storage-sync.sqlite";
-    const connection = await FirefoxAdapter.openConnection({path});
-    storageSyncInit.result = {
-      connection,
-      kinto: new Kinto({
-        adapter: FirefoxAdapter,
-        adapterOptions: {sqliteHandle: connection},
-        timeout: KINTO_REQUEST_TIMEOUT,
-      }),
-    };
+    storageSyncInit.promise = FirefoxAdapter.openConnection({path})
+    .then(connection => {
+      return {
+        connection,
+        kinto: new Kinto({
+          adapter: FirefoxAdapter,
+          adapterOptions: {sqliteHandle: connection},
+          timeout: KINTO_REQUEST_TIMEOUT,
+          retry: 0,
+        }),
+      };
+    }).catch(e => {
+      // Ensure one failure doesn't break us forever.
+      Cu.reportError(e);
+      storageSyncInit.promise = undefined;
+      throw e;
+    });
   }
-  return storageSyncInit.result;
+  return storageSyncInit.promise;
 }
 
-// Kinto record IDs have two condtions:
+// Kinto record IDs have two conditions:
 //
 // - They must contain only ASCII alphanumerics plus - and _. To fix
 // this, we encode all non-letters using _C_, where C is the
@@ -1050,7 +1043,7 @@ class ExtensionStorageSync {
         }
 
         if (keyResolution.accepted.uuid != cryptoKeyRecord.uuid) {
-          log.info(`Detected a new UUID (${keyResolution.accepted.uuid}, was ${cryptoKeyRecord.uuid}). Reseting sync status for everything.`);
+          log.info(`Detected a new UUID (${keyResolution.accepted.uuid}, was ${cryptoKeyRecord.uuid}). Resetting sync status for everything.`);
           await this.cryptoCollection.resetSyncStatus();
 
           // Server version is now correct. Return that result.
@@ -1170,6 +1163,25 @@ class ExtensionStorageSync {
     histogram.add(extension.id, keys.length);
   }
 
+  /* Wipe local data for all collections without causing the changes to be synced */
+  async clearAll() {
+    const extensions = extensionContexts.keys();
+    const extIds = Array.from(extensions, extension => extension.id);
+    log.debug(`Clearing extension data for ${JSON.stringify(extIds)}`);
+    if (extIds.length) {
+      const promises = Array.from(extensionContexts.keys(), extension => {
+        return openCollection(this.cryptoCollection, extension).then(coll => {
+          return coll.clear();
+        });
+      });
+      await Promise.all(promises);
+    }
+
+    // and clear the crypto collection.
+    const cc = await this.cryptoCollection.getCollection();
+    await cc.clear();
+  }
+
   async clear(extension, context) {
     // We can't call Collection#clear here, because that just clears
     // the local database. We have to explicitly delete everything so
@@ -1243,4 +1255,4 @@ class ExtensionStorageSync {
   }
 }
 this.ExtensionStorageSync = ExtensionStorageSync;
-this.extensionStorageSync = new ExtensionStorageSync(_fxaService, Services.telemetry);
+extensionStorageSync = new ExtensionStorageSync(_fxaService, Services.telemetry);

@@ -9,7 +9,6 @@
 #include "nsXBLContentSink.h"
 #include "nsIDocument.h"
 #include "nsBindingManager.h"
-#include "nsIDOMNode.h"
 #include "nsGkAtoms.h"
 #include "nsNameSpaceManager.h"
 #include "nsIURI.h"
@@ -170,7 +169,7 @@ nsXBLContentSink::ReportError(const char16_t* aErrorText,
                               nsIScriptError *aError,
                               bool *_retval)
 {
-  NS_PRECONDITION(aError && aSourceText && aErrorText, "Check arguments!!!");
+  MOZ_ASSERT(aError && aSourceText && aErrorText, "Check arguments!!!");
 
   // XXX FIXME This function overrides and calls on
   // nsXMLContentSink::ReportError, and probably should die.  See bug 347826.
@@ -535,7 +534,8 @@ nsXBLContentSink::OnOpenContainer(const char16_t **aAtts,
 nsresult
 nsXBLContentSink::ConstructBinding(uint32_t aLineNumber)
 {
-  nsCOMPtr<nsIContent> binding = GetCurrentContent();
+  // This is only called from HandleStartElement, so it'd better be an element.
+  RefPtr<Element> binding = GetCurrentContent()->AsElement();
   binding->GetAttr(kNameSpaceID_None, nsGkAtoms::id, mCurrentBindingID);
   NS_ConvertUTF16toUTF8 cid(mCurrentBindingID);
 
@@ -873,20 +873,19 @@ nsXBLContentSink::CreateElement(const char16_t** aAtts, uint32_t aAttsCount,
   AddAttributesToXULPrototype(aAtts, aAttsCount, prototype);
 
   Element* result;
-  nsresult rv = nsXULElement::Create(prototype, mDocument, false, false, &result);
+  nsresult rv = nsXULElement::CreateFromPrototype(prototype, mDocument, false, false, &result);
   *aResult = result;
   return rv;
 #endif
 }
 
 nsresult
-nsXBLContentSink::AddAttributes(const char16_t** aAtts,
-                                nsIContent* aContent)
+nsXBLContentSink::AddAttributes(const char16_t** aAtts, Element* aElement)
 {
-  if (aContent->IsXULElement())
+  if (aElement->IsXULElement())
     return NS_OK; // Nothing to do, since the proto already has the attrs.
 
-  return nsXMLContentSink::AddAttributes(aAtts, aContent);
+  return nsXMLContentSink::AddAttributes(aAtts, aElement);
 }
 
 #ifdef MOZ_XUL
@@ -922,7 +921,7 @@ nsXBLContentSink::AddAttributesToXULPrototype(const char16_t **aAtts,
     else {
       RefPtr<NodeInfo> ni;
       ni = mNodeInfoManager->GetNodeInfo(localName, prefix, nameSpaceID,
-                                         nsIDOMNode::ATTRIBUTE_NODE);
+                                         nsINode::ATTRIBUTE_NODE);
       attrs[i].mName.SetTo(ni);
     }
 

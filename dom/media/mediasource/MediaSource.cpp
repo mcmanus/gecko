@@ -30,6 +30,7 @@
 #include "nsIRunnable.h"
 #include "nsIScriptObjectPrincipal.h"
 #include "nsPIDOMWindow.h"
+#include "nsMimeTypes.h"
 #include "nsString.h"
 #include "nsThreadUtils.h"
 #include "mozilla/Logging.h"
@@ -56,8 +57,18 @@ mozilla::LogModule* GetMediaSourceAPILog()
   return sLogModule;
 }
 
-#define MSE_DEBUG(arg, ...) MOZ_LOG(GetMediaSourceLog(), mozilla::LogLevel::Debug, ("MediaSource(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
-#define MSE_API(arg, ...) MOZ_LOG(GetMediaSourceAPILog(), mozilla::LogLevel::Debug, ("MediaSource(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
+#define MSE_DEBUG(arg, ...)                                                    \
+  DDMOZ_LOG(GetMediaSourceLog(),                                               \
+            mozilla::LogLevel::Debug,                                          \
+            "::%s: " arg,                                                      \
+            __func__,                                                          \
+            ##__VA_ARGS__)
+#define MSE_API(arg, ...)                                                      \
+  DDMOZ_LOG(GetMediaSourceAPILog(),                                            \
+            mozilla::LogLevel::Debug,                                          \
+            "::%s: " arg,                                                      \
+            __func__,                                                          \
+            ##__VA_ARGS__)
 
 // Arbitrary limit.
 static const unsigned int MAX_SOURCE_BUFFERS = 16;
@@ -76,7 +87,7 @@ static bool
 IsWebMForced(DecoderDoctorDiagnostics* aDiagnostics)
 {
   bool mp4supported =
-    DecoderTraits::IsMP4SupportedType(MediaContainerType(MEDIAMIMETYPE("video/mp4")),
+    DecoderTraits::IsMP4SupportedType(MediaContainerType(MEDIAMIMETYPE(VIDEO_MP4)),
                                       aDiagnostics);
   bool hwsupported = gfx::gfxVars::CanUseHardwareVideoDecoding();
 #ifdef MOZ_WIDGET_ANDROID
@@ -260,6 +271,7 @@ MediaSource::AddSourceBuffer(const nsAString& aType, ErrorResult& aRv)
     return nullptr;
   }
   mSourceBuffers->Append(sourceBuffer);
+  DDLINKCHILD("sourcebuffer[]", sourceBuffer.get());
   MSE_DEBUG("sourceBuffer=%p", sourceBuffer.get());
   return sourceBuffer.forget();
 }
@@ -294,7 +306,7 @@ MediaSource::SourceBufferIsActive(SourceBuffer* aSourceBuffer)
   // It will be resolved once the HTMLMediaElement modifies its readyState.
   MozPromiseHolder<ActiveCompletionPromise> holder;
   RefPtr<ActiveCompletionPromise> promise = holder.Ensure(__func__);
-  mCompletionPromises.AppendElement(Move(holder));
+  mCompletionPromises.AppendElement(std::move(holder));
   return promise;
 }
 
@@ -335,6 +347,7 @@ MediaSource::RemoveSourceBuffer(SourceBuffer& aSourceBuffer, ErrorResult& aRv)
     mActiveSourceBuffers->Remove(sourceBuffer);
   }
   mSourceBuffers->Remove(sourceBuffer);
+  DDUNLINKCHILD(sourceBuffer);
   // TODO: Free all resources associated with sourceBuffer
 }
 
@@ -360,7 +373,7 @@ MediaSource::EndOfStream(const Optional<MediaSourceEndOfStreamError>& aError, Er
   }
   switch (aError.Value()) {
   case MediaSourceEndOfStreamError::Network:
-    mDecoder->NetworkError();
+    mDecoder->NetworkError(MediaResult(NS_ERROR_FAILURE, "MSE network"));
     break;
   case MediaSourceEndOfStreamError::Decode:
     mDecoder->DecodeError(NS_ERROR_DOM_MEDIA_FATAL_ERR);
@@ -390,10 +403,12 @@ MediaSource::IsTypeSupported(const GlobalObject& aOwner, const nsAString& aType)
   nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aOwner.GetAsSupports());
   diagnostics.StoreFormatDiagnostics(window ? window->GetExtantDoc() : nullptr,
                                      aType, NS_SUCCEEDED(rv), __func__);
-#define this nullptr
-  MSE_API("IsTypeSupported(aType=%s)%s ",
-          NS_ConvertUTF16toUTF8(aType).get(), rv == NS_OK ? "OK" : "[not supported]");
-#undef this // don't ever remove this line !
+  MOZ_LOG(GetMediaSourceAPILog(),
+          mozilla::LogLevel::Debug,
+          ("MediaSource::%s: IsTypeSupported(aType=%s) %s",
+           __func__,
+           NS_ConvertUTF16toUTF8(aType).get(),
+           rv == NS_OK ? "OK" : "[not supported]"));
   return NS_SUCCEEDED(rv);
 }
 
@@ -401,6 +416,12 @@ MediaSource::IsTypeSupported(const GlobalObject& aOwner, const nsAString& aType)
 MediaSource::Enabled(JSContext* cx, JSObject* aGlobal)
 {
   return Preferences::GetBool("media.mediasource.enabled");
+}
+
+/* static */ bool
+MediaSource::ExperimentalEnabled(JSContext* cx, JSObject* aGlobal)
+{
+  return Preferences::GetBool("media.mediasource.experimental.enabled");
 }
 
 void

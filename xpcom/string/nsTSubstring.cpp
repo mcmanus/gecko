@@ -4,12 +4,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsASCIIMask.h"
+#include "double-conversion/double-conversion.h"
 #include "mozilla/CheckedInt.h"
-#include "mozilla/double-conversion.h"
+#include "mozilla/MathAlgorithms.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Printf.h"
-#include "mozilla/MathAlgorithms.h"
+
+#include "nsASCIIMask.h"
 
 using double_conversion::DoubleToStringConverter;
 
@@ -120,7 +121,8 @@ nsTSubstring<T>::MutatePrep(size_type aCapacity, char_type** aOldData,
   //
   // several cases:
   //
-  //  (1) we have a shared buffer (this->mDataFlags & DataFlags::SHARED)
+  //  (1) we have a refcounted shareable buffer (this->mDataFlags &
+  //      DataFlags::REFCOUNTED)
   //  (2) we have an owned buffer (this->mDataFlags & DataFlags::OWNED)
   //  (3) we have an inline buffer (this->mDataFlags & DataFlags::INLINE)
   //  (4) we have a readonly buffer
@@ -132,7 +134,7 @@ nsTSubstring<T>::MutatePrep(size_type aCapacity, char_type** aOldData,
   size_type storageSize = (aCapacity + 1) * sizeof(char_type);
 
   // case #1
-  if (this->mDataFlags & DataFlags::SHARED) {
+  if (this->mDataFlags & DataFlags::REFCOUNTED) {
     nsStringBuffer* hdr = nsStringBuffer::FromData(this->mData);
     if (!hdr->IsReadonly()) {
       nsStringBuffer* newHdr = nsStringBuffer::Realloc(hdr, storageSize);
@@ -168,7 +170,7 @@ nsTSubstring<T>::MutatePrep(size_type aCapacity, char_type** aOldData,
     }
 
     newData = (char_type*)newHdr->Data();
-    newDataFlags = DataFlags::TERMINATED | DataFlags::SHARED;
+    newDataFlags = DataFlags::TERMINATED | DataFlags::REFCOUNTED;
   }
 
   // save old data and flags
@@ -275,7 +277,7 @@ nsTSubstring<T>::Capacity() const
   // return 0 to indicate an immutable or 0-sized buffer
 
   size_type capacity;
-  if (this->mDataFlags & DataFlags::SHARED) {
+  if (this->mDataFlags & DataFlags::REFCOUNTED) {
     // if the string is readonly, then we pretend that it has no capacity.
     nsStringBuffer* hdr = nsStringBuffer::FromData(this->mData);
     if (hdr->IsReadonly()) {
@@ -306,7 +308,7 @@ nsTSubstring<T>::EnsureMutable(size_type aNewLen)
     if (this->mDataFlags & (DataFlags::INLINE | DataFlags::OWNED)) {
       return true;
     }
-    if ((this->mDataFlags & DataFlags::SHARED) &&
+    if ((this->mDataFlags & DataFlags::REFCOUNTED) &&
         !nsStringBuffer::FromData(this->mData)->IsReadonly()) {
       return true;
     }
@@ -459,7 +461,7 @@ nsTSubstring<T>::Assign(const self_type& aStr, const fallible_t& aFallible)
     return true;
   }
 
-  if (aStr.mDataFlags & DataFlags::SHARED) {
+  if (aStr.mDataFlags & DataFlags::REFCOUNTED) {
     // nice! we can avoid a string copy :-)
 
     // |aStr| should be null-terminated
@@ -468,7 +470,7 @@ nsTSubstring<T>::Assign(const self_type& aStr, const fallible_t& aFallible)
     ::ReleaseData(this->mData, this->mDataFlags);
 
     SetData(aStr.mData, aStr.mLength,
-            DataFlags::TERMINATED | DataFlags::SHARED);
+            DataFlags::TERMINATED | DataFlags::REFCOUNTED);
 
     // get an owning reference to the this->mData
     nsStringBuffer::FromData(this->mData)->AddRef();
@@ -482,6 +484,60 @@ nsTSubstring<T>::Assign(const self_type& aStr, const fallible_t& aFallible)
 
   // else, treat this like an ordinary assignment.
   return Assign(aStr.Data(), aStr.Length(), aFallible);
+}
+
+template <typename T>
+void
+nsTSubstring<T>::Assign(self_type&& aStr)
+{
+  if (!Assign(std::move(aStr), mozilla::fallible)) {
+    AllocFailed(aStr.Length());
+  }
+}
+
+template <typename T>
+bool
+nsTSubstring<T>::Assign(self_type&& aStr, const fallible_t& aFallible)
+{
+  // We're moving |aStr| in this method, so we need to try to steal the data,
+  // and in the fallback perform a copy-assignment followed by a truncation of
+  // the original string.
+
+  if (&aStr == this) {
+    NS_WARNING("Move assigning a string to itself?");
+    return true;
+  }
+
+  if (aStr.mDataFlags & (DataFlags::REFCOUNTED | DataFlags::OWNED)) {
+    // If they have a REFCOUNTED or OWNED buffer, we can avoid a copy - so steal
+    // their buffer and reset them to the empty string.
+
+    // |aStr| should be null-terminated
+    NS_ASSERTION(aStr.mDataFlags & DataFlags::TERMINATED,
+                 "shared or owned, but not terminated");
+
+    ::ReleaseData(this->mData, this->mDataFlags);
+
+    SetData(aStr.mData, aStr.mLength, aStr.mDataFlags);
+    aStr.SetToEmptyBuffer();
+    return true;
+  }
+
+  // Otherwise treat this as a normal assignment, and truncate the moved string.
+  // We don't truncate the source string if the allocation failed.
+  if (!Assign(aStr, aFallible)) {
+    return false;
+  }
+  aStr.Truncate();
+  return true;
+}
+
+// NOTE(nika): gcc 4.9 workaround. Remove when support is dropped.
+template <typename T>
+void
+nsTSubstring<T>::Assign(const literalstring_type& aStr)
+{
+  Assign(aStr.AsString());
 }
 
 template <typename T>
@@ -1167,7 +1223,7 @@ size_t
 nsTSubstring<T>::SizeOfExcludingThisIfUnshared(
     mozilla::MallocSizeOf aMallocSizeOf) const
 {
-  if (this->mDataFlags & DataFlags::SHARED) {
+  if (this->mDataFlags & DataFlags::REFCOUNTED) {
     return nsStringBuffer::FromData(this->mData)->
       SizeOfIncludingThisIfUnshared(aMallocSizeOf);
   }
@@ -1179,7 +1235,7 @@ nsTSubstring<T>::SizeOfExcludingThisIfUnshared(
   // - DataFlags::VOIDED is set, and this->mData points to sEmptyBuffer;
   // - DataFlags::INLINE is set, and this->mData points to a buffer within a
   //   string object (e.g. nsAutoString);
-  // - None of DataFlags::SHARED, DataFlags::OWNED, DataFlags::INLINE is set,
+  // - None of DataFlags::REFCOUNTED, DataFlags::OWNED, DataFlags::INLINE is set,
   //   and this->mData points to a buffer owned by something else.
   //
   // In all three cases, we don't measure it.
@@ -1192,8 +1248,8 @@ nsTSubstring<T>::SizeOfExcludingThisEvenIfShared(
     mozilla::MallocSizeOf aMallocSizeOf) const
 {
   // This is identical to SizeOfExcludingThisIfUnshared except for the
-  // DataFlags::SHARED case.
-  if (this->mDataFlags & DataFlags::SHARED) {
+  // DataFlags::REFCOUNTED case.
+  if (this->mDataFlags & DataFlags::REFCOUNTED) {
     return nsStringBuffer::FromData(this->mData)->
       SizeOfIncludingThisEvenIfShared(aMallocSizeOf);
   }
@@ -1265,4 +1321,122 @@ const nsTDependentSubstring<T>&
 nsTSubstringSplitter<T>::nsTSubstringSplit_Iter::operator* () const
 {
    return mObj.Get(mPos);
+}
+
+// Common logic for nsTSubstring<T>::ToInteger and nsTSubstring<T>::ToInteger64.
+template<typename T, typename int_type>
+int_type
+ToIntegerCommon(const nsTSubstring<T>& aSrc, nsresult* aErrorCode, uint32_t aRadix)
+{
+  MOZ_ASSERT(aRadix == 10 || aRadix == 16);
+
+  // Initial value, override if we find an integer.
+  *aErrorCode = NS_ERROR_ILLEGAL_VALUE;
+
+  // Begin by skipping over leading chars that shouldn't be part of the number.
+  auto cp = aSrc.BeginReading();
+  auto endcp = aSrc.EndReading();
+  bool negate = false;
+  bool done = false;
+
+  // NB: For backwards compatibility I'm not going to change this logic but
+  //     it seems really odd. Previously there was logic to auto-detect the
+  //     radix if kAutoDetect was passed in. In practice this value was never
+  //     used, so it pretended to auto detect and skipped some preceding
+  //     letters (excluding valid hex digits) but never used the result.
+  //
+  //     For example if you pass in "Get the number: 10", aRadix = 10 we'd
+  //     skip the 'G', and then fail to parse "et the number: 10". If aRadix =
+  //     16 we'd skip the 'G', and parse just 'e' returning 14.
+  while ((cp < endcp) && (!done)) {
+    switch (*cp++) {
+      // clang-format off
+      case 'a': case 'b': case 'c': case 'd': case 'e': case 'f':
+      case 'A': case 'B': case 'C': case 'D': case 'E': case 'F':
+      case '0': case '1': case '2': case '3': case '4':
+      case '5': case '6': case '7': case '8': case '9':
+        done = true;
+        break;
+      // clang-format on
+      case '-':
+        negate = true;
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (!done) {
+    // No base 16 or base 10 digits were found.
+    return 0;
+  }
+
+  // Step back.
+  cp--;
+
+  mozilla::CheckedInt<int_type> result;
+
+  // Now iterate the numeric chars and build our result.
+  while (cp < endcp) {
+    auto theChar = *cp++;
+    if (('0' <= theChar) && (theChar <= '9')) {
+      result = (aRadix * result) + (theChar - '0');
+    } else if ((theChar >= 'A') && (theChar <= 'F')) {
+      if (10 == aRadix) {
+        // Invalid base 10 digit, error out.
+        return 0;
+      } else {
+        result = (aRadix * result) + ((theChar - 'A') + 10);
+      }
+    } else if ((theChar >= 'a') && (theChar <= 'f')) {
+      if (10 == aRadix) {
+        // Invalid base 10 digit, error out.
+        return 0;
+      } else {
+        result = (aRadix * result) + ((theChar - 'a') + 10);
+      }
+    } else if ((('X' == theChar) || ('x' == theChar)) && result == 0) {
+      // For some reason we support a leading 'x' regardless of radix. For
+      // example: "000000x500", aRadix = 10 would be parsed as 500 rather
+      // than 0.
+      continue;
+    } else {
+      // We've encountered a char that's not a legal number or sign and we can
+      // terminate processing.
+      break;
+    }
+
+    if (!result.isValid()) {
+      // Overflow!
+      return 0;
+    }
+  }
+
+  // Integer found.
+  *aErrorCode = NS_OK;
+
+  if (negate) {
+    result = -result;
+  }
+
+  return result.value();
+}
+
+
+template <typename T>
+int32_t
+nsTSubstring<T>::ToInteger(nsresult* aErrorCode, uint32_t aRadix) const
+{
+  return ToIntegerCommon<T, int32_t>(*this, aErrorCode, aRadix);
+}
+
+
+/**
+ * nsTSubstring::ToInteger64
+ */
+template <typename T>
+int64_t
+nsTSubstring<T>::ToInteger64(nsresult* aErrorCode, uint32_t aRadix) const
+{
+  return ToIntegerCommon<T, int64_t>(*this, aErrorCode, aRadix);
 }

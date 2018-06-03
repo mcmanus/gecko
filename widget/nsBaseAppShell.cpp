@@ -6,13 +6,12 @@
 #include "base/message_loop.h"
 
 #include "nsBaseAppShell.h"
-#if defined(MOZ_CRASHREPORTER)
 #include "nsExceptionHandler.h"
-#endif
 #include "nsThreadUtils.h"
 #include "nsIObserverService.h"
 #include "nsServiceManagerUtils.h"
 #include "mozilla/Services.h"
+#include "nsXULAppAPI.h"
 
 // When processing the next thread event, the appshell may process native
 // events (if not in performance mode), which can result in suppressing the
@@ -319,18 +318,14 @@ void
 nsBaseAppShell::IncrementEventloopNestingLevel()
 {
   ++mEventloopNestingLevel;
-#if defined(MOZ_CRASHREPORTER)
   CrashReporter::SetEventloopNestingLevel(mEventloopNestingLevel);
-#endif
 }
 
 void
 nsBaseAppShell::DecrementEventloopNestingLevel()
 {
   --mEventloopNestingLevel;
-#if defined(MOZ_CRASHREPORTER)
   CrashReporter::SetEventloopNestingLevel(mEventloopNestingLevel);
-#endif
 }
 
 // Called from the main thread

@@ -5,89 +5,214 @@
 "use strict";
 
 const Services = require("Services");
-const { TimelineFront } = require("devtools/shared/fronts/timeline");
 const { ACTIVITY_TYPE, EVENTS } = require("../constants");
-const { getDisplayedRequestById } = require("../selectors/index");
 const FirefoxDataProvider = require("./firefox-data-provider");
+const { getDisplayedTimingMarker } = require("../selectors/index");
 
+// To be removed once FF60 is deprecated
+loader.lazyRequireGetter(this, "TimelineFront", "devtools/shared/fronts/timeline", true);
+
+// Network throttling
+loader.lazyRequireGetter(this, "throttlingProfiles", "devtools/client/shared/components/throttling/profiles");
+loader.lazyRequireGetter(this, "EmulationFront", "devtools/shared/fronts/emulation", true);
+
+/**
+ * Connector to Firefox backend.
+ */
 class FirefoxConnector {
   constructor() {
     // Public methods
     this.connect = this.connect.bind(this);
     this.disconnect = this.disconnect.bind(this);
     this.willNavigate = this.willNavigate.bind(this);
+    this.navigate = this.navigate.bind(this);
     this.displayCachedEvents = this.displayCachedEvents.bind(this);
     this.onDocLoadingMarker = this.onDocLoadingMarker.bind(this);
+    this.onDocEvent = this.onDocEvent.bind(this);
     this.sendHTTPRequest = this.sendHTTPRequest.bind(this);
     this.setPreferences = this.setPreferences.bind(this);
     this.triggerActivity = this.triggerActivity.bind(this);
-    this.inspectRequest = this.inspectRequest.bind(this);
     this.getTabTarget = this.getTabTarget.bind(this);
     this.viewSourceInDebugger = this.viewSourceInDebugger.bind(this);
+    this.requestData = this.requestData.bind(this);
+    this.getTimingMarker = this.getTimingMarker.bind(this);
+    this.updateNetworkThrottling = this.updateNetworkThrottling.bind(this);
 
     // Internals
     this.getLongString = this.getLongString.bind(this);
     this.getNetworkRequest = this.getNetworkRequest.bind(this);
   }
 
+  /**
+   * Connect to the backend.
+   *
+   * @param {Object} connection object with e.g. reference to the Toolbox.
+   * @param {Object} actions (optional) is used to fire Redux actions to update store.
+   * @param {Object} getState (optional) is used to get access to the state.
+   */
   async connect(connection, actions, getState) {
     this.actions = actions;
     this.getState = getState;
     this.tabTarget = connection.tabConnection.tabTarget;
     this.toolbox = connection.toolbox;
 
+    // The owner object (NetMonitorAPI) received all events.
+    this.owner = connection.owner;
+
     this.webConsoleClient = this.tabTarget.activeConsole;
 
     this.dataProvider = new FirefoxDataProvider({
       webConsoleClient: this.webConsoleClient,
       actions: this.actions,
+      owner: this.owner,
     });
 
-    this.tabTarget.on("will-navigate", this.willNavigate);
+    // Register all listeners
+    await this.addListeners();
+
+    // Listener for `will-navigate` event is (un)registered outside
+    // of the `addListeners` and `removeListeners` methods since
+    // these are used to pause/resume the connector.
+    // Paused network panel should be automatically resumed when page
+    // reload, so `will-navigate` listener needs to be there all the time.
+    if (this.tabTarget) {
+      this.tabTarget.on("will-navigate", this.willNavigate);
+      this.tabTarget.on("navigate", this.navigate);
+
+      // Initialize Emulation front for network throttling.
+      const { tab } = await this.tabTarget.client.getTab();
+      this.emulationFront = EmulationFront(this.tabTarget.client, tab);
+    }
+
+    // Displaying cache events is only intended for the UI panel.
+    if (this.actions) {
+      this.displayCachedEvents();
+    }
+  }
+
+  async disconnect() {
+    if (this.actions) {
+      this.actions.batchReset();
+    }
+
+    await this.removeListeners();
+
+    if (this.emulationFront) {
+      this.emulationFront.destroy();
+      this.emulationFront = null;
+    }
+
+    if (this.tabTarget) {
+      this.tabTarget.off("will-navigate", this.willNavigate);
+      this.tabTarget.off("navigate", this.navigate);
+      this.tabTarget = null;
+    }
+
+    this.webConsoleClient = null;
+    this.dataProvider = null;
+  }
+
+  async pause() {
+    await this.removeListeners();
+  }
+
+  async resume() {
+    await this.addListeners();
+  }
+
+  async addListeners() {
     this.tabTarget.on("close", this.disconnect);
     this.webConsoleClient.on("networkEvent",
       this.dataProvider.onNetworkEvent);
     this.webConsoleClient.on("networkEventUpdate",
       this.dataProvider.onNetworkEventUpdate);
+    this.webConsoleClient.on("documentEvent", this.onDocEvent);
+
+    // With FF60+ console actor supports listening to document events like
+    // DOMContentLoaded and load. We used to query Timeline actor, but it was too CPU
+    // intensive.
+    const { startedListeners } = await this.webConsoleClient.startListeners(
+      ["DocumentEvents"]);
+    // Allows to know if we are on FF60 and support these events.
+    const supportsDocEvents = startedListeners.includes("DocumentEvents");
 
     // Don't start up waiting for timeline markers if the server isn't
-    // recent enough to emit the markers we're interested in.
-    if (this.tabTarget.getTrait("documentLoadingMarkers")) {
+    // recent enough (<FF45) to emit the markers we're interested in.
+    if (!supportsDocEvents && !this.timelineFront &&
+        this.tabTarget.getTrait("documentLoadingMarkers")) {
       this.timelineFront = new TimelineFront(this.tabTarget.client, this.tabTarget.form);
       this.timelineFront.on("doc-loading", this.onDocLoadingMarker);
       await this.timelineFront.start({ withDocLoadingEvents: true });
     }
-
-    this.displayCachedEvents();
   }
 
-  async disconnect() {
-    this.actions.batchReset();
-
-    // The timeline front wasn't initialized and started if the server wasn't
-    // recent enough to emit the markers we were interested in.
-    if (this.tabTarget.getTrait("documentLoadingMarkers") && this.timelineFront) {
+  async removeListeners() {
+    if (this.tabTarget) {
+      this.tabTarget.off("close");
+    }
+    if (this.timelineFront) {
       this.timelineFront.off("doc-loading", this.onDocLoadingMarker);
       await this.timelineFront.destroy();
+      this.timelineFront = null;
     }
+    if (this.webConsoleClient) {
+      this.webConsoleClient.off("networkEvent");
+      this.webConsoleClient.off("networkEventUpdate");
+      this.webConsoleClient.off("docEvent");
+    }
+  }
 
-    this.tabTarget.off("will-navigate");
-    this.tabTarget.off("close");
-    this.tabTarget = null;
-    this.webConsoleClient.off("networkEvent");
-    this.webConsoleClient.off("networkEventUpdate");
-    this.webConsoleClient = null;
-    this.timelineFront = null;
-    this.dataProvider = null;
+  enableActions(enable) {
+    this.dataProvider.enableActions(enable);
   }
 
   willNavigate() {
-    if (!Services.prefs.getBoolPref("devtools.netmonitor.persistlog")) {
-      this.actions.batchReset();
-      this.actions.clearRequests();
-    } else {
-      // If the log is persistent, just clear all accumulated timing markers.
-      this.actions.clearTimingMarkers();
+    if (this.actions) {
+      if (!Services.prefs.getBoolPref("devtools.netmonitor.persistlog")) {
+        this.actions.batchReset();
+        this.actions.clearRequests();
+      } else {
+        // If the log is persistent, just clear all accumulated timing markers.
+        this.actions.clearTimingMarkers();
+      }
+    }
+
+    // Resume is done automatically on page reload/navigation.
+    if (this.actions && this.getState) {
+      const state = this.getState();
+      if (!state.requests.recording) {
+        this.actions.toggleRecording();
+      }
+    }
+  }
+
+  navigate() {
+    if (this.dataProvider.isPayloadQueueEmpty()) {
+      this.onReloaded();
+      return;
+    }
+    const listener = () => {
+      if (this.dataProvider && !this.dataProvider.isPayloadQueueEmpty()) {
+        return;
+      }
+      if (this.owner) {
+        this.owner.off(EVENTS.PAYLOAD_READY, listener);
+      }
+      // Netmonitor may already be destroyed,
+      // so do not try to notify the listeners
+      if (this.dataProvider) {
+        this.onReloaded();
+      }
+    };
+    if (this.owner) {
+      this.owner.on(EVENTS.PAYLOAD_READY, listener);
+    }
+  }
+
+  onReloaded() {
+    const panel = this.toolbox.getPanel("netmonitor");
+    if (panel) {
+      panel.emit("reloaded");
     }
   }
 
@@ -95,12 +220,12 @@ class FirefoxConnector {
    * Display any network events already in the cache.
    */
   displayCachedEvents() {
-    for (let networkInfo of this.webConsoleClient.getNetworkEvents()) {
+    for (const networkInfo of this.webConsoleClient.getNetworkEvents()) {
       // First add the request to the timeline.
-      this.dataProvider.onNetworkEvent("networkEvent", networkInfo);
+      this.dataProvider.onNetworkEvent(networkInfo);
       // Then replay any updates already received.
-      for (let updateType of networkInfo.updates) {
-        this.dataProvider.onNetworkEventUpdate("networkEventUpdate", {
+      for (const updateType of networkInfo.updates) {
+        this.dataProvider.onNetworkEventUpdate({
           packet: { updateType },
           networkInfo,
         });
@@ -111,11 +236,39 @@ class FirefoxConnector {
   /**
    * The "DOMContentLoaded" and "Load" events sent by the timeline actor.
    *
+   * To be removed once FF60 is deprecated.
+   *
    * @param {object} marker
    */
   onDocLoadingMarker(marker) {
-    window.emit(EVENTS.TIMELINE_EVENT, marker);
-    this.actions.addTimingMarker(marker);
+    // Translate marker into event similar to newer "docEvent" event sent by the console
+    // actor
+    const event = {
+      name: marker.name == "document::DOMContentLoaded" ?
+            "dom-interactive" : "dom-complete",
+      time: marker.unixTime / 1000
+    };
+
+    if (this.actions) {
+      this.actions.addTimingMarker(event);
+    }
+
+    this.emit(EVENTS.TIMELINE_EVENT, event);
+  }
+
+  /**
+   * The "DOMContentLoaded" and "Load" events sent by the console actor.
+   *
+   * Only used by FF60+.
+   *
+   * @param {object} marker
+   */
+  onDocEvent(event) {
+    if (this.actions) {
+      this.actions.addTimingMarker(event);
+    }
+
+    this.emit(EVENTS.TIMELINE_EVENT, event);
   }
 
   /**
@@ -148,12 +301,12 @@ class FirefoxConnector {
    */
   triggerActivity(type) {
     // Puts the frontend into "standby" (when there's no particular activity).
-    let standBy = () => {
+    const standBy = () => {
       this.currentActivity = ACTIVITY_TYPE.NONE;
     };
 
     // Waits for a series of "navigation start" and "navigation stop" events.
-    let waitForNavigation = () => {
+    const waitForNavigation = () => {
       return new Promise((resolve) => {
         this.tabTarget.once("will-navigate", () => {
           this.tabTarget.once("navigate", () => {
@@ -164,16 +317,16 @@ class FirefoxConnector {
     };
 
     // Reconfigures the tab, optionally triggering a reload.
-    let reconfigureTab = (options) => {
+    const reconfigureTab = (options) => {
       return new Promise((resolve) => {
         this.tabTarget.activeTab.reconfigure(options, resolve);
       });
     };
 
     // Reconfigures the tab and waits for the target to finish navigating.
-    let reconfigureTabAndWaitForNavigation = (options) => {
+    const reconfigureTabAndWaitForNavigation = (options) => {
       options.performReload = true;
-      let navigationFinished = waitForNavigation();
+      const navigationFinished = waitForNavigation();
       return reconfigureTab(options).then(() => navigationFinished);
     };
     switch (type) {
@@ -212,42 +365,6 @@ class FirefoxConnector {
     }
     this.currentActivity = ACTIVITY_TYPE.NONE;
     return Promise.reject(new Error("Invalid activity type"));
-  }
-
-  /**
-   * Selects the specified request in the waterfall and opens the details view.
-   *
-   * @param {string} requestId The actor ID of the request to inspect.
-   * @return {object} A promise resolved once the task finishes.
-   */
-  inspectRequest(requestId) {
-    // Look for the request in the existing ones or wait for it to appear, if
-    // the network monitor is still loading.
-    return new Promise((resolve) => {
-      let request = null;
-      let inspector = () => {
-        request = getDisplayedRequestById(this.getState(), requestId);
-        if (!request) {
-          // Reset filters so that the request is visible.
-          this.actions.toggleRequestFilterType("all");
-          request = getDisplayedRequestById(this.getState(), requestId);
-        }
-
-        // If the request was found, select it. Otherwise this function will be
-        // called again once new requests arrive.
-        if (request) {
-          window.off(EVENTS.REQUEST_ADDED, inspector);
-          this.actions.selectRequest(request.id);
-          resolve();
-        }
-      };
-
-      inspector();
-
-      if (!request) {
-        window.on(EVENTS.REQUEST_ADDED, inspector);
-      }
-    });
   }
 
   /**
@@ -293,6 +410,48 @@ class FirefoxConnector {
       this.toolbox.viewSourceInDebugger(sourceURL, sourceLine);
     }
   }
+
+  /**
+   * Fetch networkEventUpdate websocket message from back-end when
+   * data provider is connected.
+   * @param {object} request network request instance
+   * @param {string} type NetworkEventUpdate type
+   */
+  requestData(request, type) {
+    return this.dataProvider.requestData(request, type);
+  }
+
+  getTimingMarker(name) {
+    if (!this.getState) {
+      return -1;
+    }
+
+    const state = this.getState();
+    return getDisplayedTimingMarker(state, name);
+  }
+
+  async updateNetworkThrottling(enabled, profile) {
+    if (!enabled) {
+      await this.emulationFront.clearNetworkThrottling();
+    } else {
+      const data = throttlingProfiles.find(({ id }) => id == profile);
+      const { download, upload, latency } = data;
+      await this.emulationFront.setNetworkThrottling({
+        downloadThroughput: download,
+        uploadThroughput: upload,
+        latency,
+      });
+    }
+  }
+
+  /**
+   * Fire events for the owner object.
+   */
+  emit(type, data) {
+    if (this.owner) {
+      this.owner.emit(type, data);
+    }
+  }
 }
 
-module.exports = new FirefoxConnector();
+module.exports = FirefoxConnector;

@@ -6,6 +6,7 @@
 
 #include "mozilla/dom/SVGAnimationElement.h"
 #include "mozilla/dom/SVGSVGElement.h"
+#include "mozilla/dom/ElementInlines.h"
 #include "nsSMILTimeContainer.h"
 #include "nsSMILAnimationController.h"
 #include "nsSMILAnimationFunction.h"
@@ -59,25 +60,6 @@ SVGAnimationElement::Init()
 
 //----------------------------------------------------------------------
 
-const nsAttrValue*
-SVGAnimationElement::GetAnimAttr(nsAtom* aName) const
-{
-  return mAttrsAndChildren.GetAttr(aName, kNameSpaceID_None);
-}
-
-bool
-SVGAnimationElement::GetAnimAttr(nsAtom* aAttName,
-                                 nsAString& aResult) const
-{
-  return GetAttr(kNameSpaceID_None, aAttName, aResult);
-}
-
-bool
-SVGAnimationElement::HasAnimAttr(nsAtom* aAttName) const
-{
-  return HasAttr(kNameSpaceID_None, aAttName);
-}
-
 Element*
 SVGAnimationElement::GetTargetElementContent()
 {
@@ -90,8 +72,7 @@ SVGAnimationElement::GetTargetElementContent()
              "if we don't have an xlink:href or href attribute");
 
   // No "href" or "xlink:href" attribute --> I should target my parent.
-  nsIContent* parent = GetFlattenedTreeParent();
-  return parent && parent->IsElement() ? parent->AsElement() : nullptr;
+  return GetFlattenedTreeParentElement();
 }
 
 bool
@@ -244,6 +225,7 @@ bool
 SVGAnimationElement::ParseAttribute(int32_t aNamespaceID,
                                     nsAtom* aAttribute,
                                     const nsAString& aValue,
+                                    nsIPrincipal* aMaybeScriptedPrincipal,
                                     nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None) {
@@ -278,17 +260,29 @@ SVGAnimationElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return SVGAnimationElementBase::ParseAttribute(aNamespaceID, aAttribute,
-                                                 aValue, aResult);
+                                                 aValue,
+                                                 aMaybeScriptedPrincipal,
+                                                 aResult);
 }
 
 nsresult
 SVGAnimationElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
                                   const nsAttrValue* aValue,
-                                  const nsAttrValue* aOldValue, bool aNotify)
+                                  const nsAttrValue* aOldValue,
+                                  nsIPrincipal* aSubjectPrincipal,
+                                  bool aNotify)
 {
+  if (!aValue && aNamespaceID == kNameSpaceID_None) {
+    // Attribute is being removed.
+    if (AnimationFunction().UnsetAttr(aName) ||
+        mTimedElement.UnsetAttr(aName)) {
+      AnimationNeedsResample();
+    }
+  }
+
   nsresult rv =
     SVGAnimationElementBase::AfterSetAttr(aNamespaceID, aName, aValue,
-                                          aOldValue, aNotify);
+                                          aOldValue, aSubjectPrincipal, aNotify);
 
   if (SVGTests::IsConditionalProcessingAttribute(aName)) {
     bool isDisabled = !SVGTests::PassesConditionalProcessingTests();
@@ -334,37 +328,10 @@ SVGAnimationElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
   return rv;
 }
 
-nsresult
-SVGAnimationElement::UnsetAttr(int32_t aNamespaceID,
-                               nsAtom* aAttribute, bool aNotify)
-{
-  nsresult rv = SVGAnimationElementBase::UnsetAttr(aNamespaceID, aAttribute,
-                                                   aNotify);
-  NS_ENSURE_SUCCESS(rv,rv);
-
-  if (aNamespaceID == kNameSpaceID_None) {
-    if (AnimationFunction().UnsetAttr(aAttribute) ||
-        mTimedElement.UnsetAttr(aAttribute)) {
-      AnimationNeedsResample();
-    }
-  }
-
-  return NS_OK;
-}
-
 bool
 SVGAnimationElement::IsNodeOfType(uint32_t aFlags) const
 {
-  return !(aFlags & ~(eCONTENT | eANIMATION));
-}
-
-//----------------------------------------------------------------------
-// SVGTests methods
-
-bool
-SVGAnimationElement::IsInChromeDoc() const
-{
-  return nsContentUtils::IsChromeDoc(OwnerDoc());
+  return !(aFlags & ~eANIMATION);
 }
 
 //----------------------------------------------------------------------
@@ -391,8 +358,7 @@ SVGAnimationElement::ActivateByHyperlink()
     // else, silently fail. We mustn't be part of an SVG document fragment that
     // is attached to the document tree so there's nothing we can do here
   } else {
-    IgnoredErrorResult rv;
-    BeginElement(rv);
+    BeginElement(IgnoreErrors());
   }
 }
 

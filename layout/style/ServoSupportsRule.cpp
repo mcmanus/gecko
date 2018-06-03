@@ -18,7 +18,7 @@ ServoSupportsRule::ServoSupportsRule(RefPtr<RawServoSupportsRule> aRawRule,
                                      uint32_t aLine, uint32_t aColumn)
   : CSSSupportsRule(Servo_SupportsRule_GetRules(aRawRule).Consume(),
                     aLine, aColumn)
-  , mRawRule(Move(aRawRule))
+  , mRawRule(std::move(aRawRule))
 {
 }
 
@@ -33,26 +33,6 @@ NS_IMPL_RELEASE_INHERITED(ServoSupportsRule, CSSSupportsRule)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ServoSupportsRule)
 NS_INTERFACE_MAP_END_INHERITING(CSSSupportsRule)
 
-/* virtual */ already_AddRefed<css::Rule>
-ServoSupportsRule::Clone() const
-{
-  // Rule::Clone is only used when CSSStyleSheetInner is cloned in
-  // preparation of being mutated. However, ServoStyleSheet never clones
-  // anything, so this method should never be called.
-  MOZ_ASSERT_UNREACHABLE("Shouldn't be cloning ServoSupportsRule");
-  return nullptr;
-}
-
-/* virtual */ bool
-ServoSupportsRule::UseForPresentation(nsPresContext* aPresContext,
-                                      nsMediaQueryResultCacheKey& aKey)
-{
-  // GroupRule::UseForPresentation is only used in nsCSSRuleProcessor,
-  // so this should never be called.
-  MOZ_ASSERT_UNREACHABLE("Shouldn't be calling UseForPresentation");
-  return false;
-}
-
 #ifdef DEBUG
 /* virtual */ void
 ServoSupportsRule::List(FILE* out, int32_t aIndent) const
@@ -66,23 +46,21 @@ ServoSupportsRule::List(FILE* out, int32_t aIndent) const
 }
 #endif
 
-// nsIDOMCSSConditionRule methods
-
-NS_IMETHODIMP
+void
 ServoSupportsRule::GetConditionText(nsAString& aConditionText)
 {
   Servo_SupportsRule_GetConditionText(mRawRule, &aConditionText);
-  return NS_OK;
 }
 
-NS_IMETHODIMP
-ServoSupportsRule::SetConditionText(const nsAString& aConditionText)
+void
+ServoSupportsRule::SetConditionText(const nsAString& aConditionText,
+                                    ErrorResult& aRv)
 {
-  return NS_ERROR_NOT_IMPLEMENTED;
+  aRv.Throw(NS_ERROR_NOT_IMPLEMENTED);
 }
 
 /* virtual */ void
-ServoSupportsRule::GetCssTextImpl(nsAString& aCssText) const
+ServoSupportsRule::GetCssText(nsAString& aCssText) const
 {
   Servo_SupportsRule_GetCssText(mRawRule, &aCssText);
 }

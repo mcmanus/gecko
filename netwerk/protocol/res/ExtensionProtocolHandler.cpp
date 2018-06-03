@@ -91,7 +91,7 @@ class ExtensionStreamGetter : public RefCounted<ExtensionStreamGetter>
                           nsIFile* aJarFile)
       : mURI(aURI)
       , mLoadInfo(aLoadInfo)
-      , mJarChannel(Move(aJarChannel))
+      , mJarChannel(std::move(aJarChannel))
       , mJarFile(aJarFile)
       , mIsJarChannel(true)
     {
@@ -103,7 +103,7 @@ class ExtensionStreamGetter : public RefCounted<ExtensionStreamGetter>
       SetupEventTarget();
     }
 
-    ~ExtensionStreamGetter() {}
+    ~ExtensionStreamGetter() = default;
 
     void SetupEventTarget()
     {
@@ -119,7 +119,7 @@ class ExtensionStreamGetter : public RefCounted<ExtensionStreamGetter>
                                   nsIChannel* aChannel);
 
     // Handle an input stream being returned from the parent
-    void OnStream(nsIInputStream* aStream);
+    void OnStream(already_AddRefed<nsIInputStream> aStream);
 
     // Handle file descriptor being returned from the parent
     void OnFD(const FileDescriptor& aFD);
@@ -137,7 +137,7 @@ class ExtensionStreamGetter : public RefCounted<ExtensionStreamGetter>
     bool mIsJarChannel;
 };
 
-class ExtensionJARFileOpener : public nsISupports
+class ExtensionJARFileOpener final : public nsISupports
 {
 public:
   ExtensionJARFileOpener(nsIFile* aFile,
@@ -190,7 +190,7 @@ public:
   NS_DECL_THREADSAFE_ISUPPORTS
 
 private:
-  virtual ~ExtensionJARFileOpener() {}
+  virtual ~ExtensionJARFileOpener() = default;
 
   nsCOMPtr<nsIFile> mFile;
   NeckoParent::GetExtensionFDResolver mResolve;
@@ -228,7 +228,7 @@ ExtensionStreamGetter::GetAsync(nsIStreamListener* aListener,
       [self] (const FileDescriptor& fd) {
         self->OnFD(fd);
       },
-      [self] (const mozilla::ipc::PromiseRejectReason) {
+      [self] (const mozilla::ipc::ResponseRejectReason) {
         self->OnFD(FileDescriptor());
       }
     );
@@ -239,14 +239,10 @@ ExtensionStreamGetter::GetAsync(nsIStreamListener* aListener,
   gNeckoChild->SendGetExtensionStream(uri)->Then(
     mMainThreadEventTarget,
     __func__,
-    [self] (const OptionalIPCStream& stream) {
-      nsCOMPtr<nsIInputStream> inputStream;
-      if (stream.type() == OptionalIPCStream::OptionalIPCStream::TIPCStream) {
-        inputStream = ipc::DeserializeIPCStream(stream);
-      }
-      self->OnStream(inputStream);
+    [self] (const RefPtr<nsIInputStream>& stream) {
+      self->OnStream(do_AddRef(stream));
     },
-    [self] (const mozilla::ipc::PromiseRejectReason) {
+    [self] (const mozilla::ipc::ResponseRejectReason) {
       self->OnStream(nullptr);
     }
   );
@@ -268,11 +264,13 @@ CancelRequest(nsIStreamListener* aListener,
 
 // Handle an input stream sent from the parent.
 void
-ExtensionStreamGetter::OnStream(nsIInputStream* aStream)
+ExtensionStreamGetter::OnStream(already_AddRefed<nsIInputStream> aStream)
 {
   MOZ_ASSERT(IsNeckoChild());
   MOZ_ASSERT(mListener);
   MOZ_ASSERT(mMainThreadEventTarget);
+
+  nsCOMPtr<nsIInputStream> stream = std::move(aStream);
 
   // We must keep an owning reference to the listener
   // until we pass it on to AsyncRead.
@@ -280,15 +278,15 @@ ExtensionStreamGetter::OnStream(nsIInputStream* aStream)
 
   MOZ_ASSERT(mChannel);
 
-  if (!aStream) {
+  if (!stream) {
     // The parent didn't send us back a stream.
     CancelRequest(listener, mChannel, NS_ERROR_FILE_ACCESS_DENIED);
     return;
   }
 
   nsCOMPtr<nsIInputStreamPump> pump;
-  nsresult rv = NS_NewInputStreamPump(getter_AddRefs(pump), aStream, 0, 0,
-                                      false, mMainThreadEventTarget);
+  nsresult rv = NS_NewInputStreamPump(getter_AddRefs(pump), stream.forget(),
+                                      0, 0, false, mMainThreadEventTarget);
   if (NS_FAILED(rv)) {
     CancelRequest(listener, mChannel, rv);
     return;
@@ -338,7 +336,7 @@ ExtensionProtocolHandler::GetSingleton()
     sSingleton = new ExtensionProtocolHandler();
     ClearOnShutdown(&sSingleton);
   }
-  return do_AddRef(sSingleton.get());
+  return do_AddRef(sSingleton);
 }
 
 ExtensionProtocolHandler::ExtensionProtocolHandler()
@@ -377,7 +375,9 @@ ExtensionProtocolHandler::GetFlagsForURI(nsIURI* aURI, uint32_t* aFlags)
     loadableByAnyone = policy->IsPathWebAccessible(url.FilePath());
   }
 
-  *aFlags = URI_STD | URI_IS_LOCAL_RESOURCE | (loadableByAnyone ? (URI_LOADABLE_BY_ANYONE | URI_FETCHABLE_BY_ANYONE) : URI_DANGEROUS_TO_LOAD);
+  *aFlags = URI_STD | URI_IS_LOCAL_RESOURCE | URI_IS_POTENTIALLY_TRUSTWORTHY |
+    (loadableByAnyone ? (URI_LOADABLE_BY_ANYONE |
+                         URI_FETCHABLE_BY_ANYONE) : URI_DANGEROUS_TO_LOAD);
   return NS_OK;
 }
 
@@ -607,13 +607,9 @@ LogExternalResourceError(nsIFile* aExtensionDir, nsIFile* aRequestedFile)
   MOZ_ASSERT(aExtensionDir);
   MOZ_ASSERT(aRequestedFile);
 
-  nsAutoCString extensionDirPath, requestedFilePath;
-  Unused << aExtensionDir->GetNativePath(extensionDirPath);
-  Unused << aRequestedFile->GetNativePath(requestedFilePath);
-
   LOG("Rejecting external unpacked extension resource [%s] from "
-      "extension directory [%s]", requestedFilePath.get(),
-      extensionDirPath.get());
+      "extension directory [%s]", aRequestedFile->HumanReadablePath().get(),
+      aExtensionDir->HumanReadablePath().get());
 }
 
 Result<nsCOMPtr<nsIInputStream>, nsresult>

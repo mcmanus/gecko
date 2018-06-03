@@ -25,7 +25,7 @@ function StackFramesView(DebuggerController, DebuggerView) {
   this._getStackAsString = this._getStackAsString.bind(this);
 }
 
-StackFramesView.prototype = Heritage.extend(WidgetMethods, {
+StackFramesView.prototype = extend(WidgetMethods, {
   /**
    * Initialization function, called when the debugger is started.
    */
@@ -179,7 +179,7 @@ StackFramesView.prototype = Heritage.extend(WidgetMethods, {
    *        The frame depth in the stack.
    * @param boolean aIsBlackBoxed
    *        Whether or not the frame is black boxed.
-   * @return nsIDOMNode
+   * @return Node
    *         The stack frame view.
    */
   _createFrameView: function (aTitle, aUrl, aLine, aDepth, aIsBlackBoxed) {

@@ -7,7 +7,6 @@
 import os
 import types
 
-from mozbuild.compilation import util
 from mozbuild.backend.common import CommonBackend
 from mozbuild.frontend.data import (
     ComputedFlags,
@@ -34,8 +33,6 @@ from collections import (
 class CompileDBBackend(CommonBackend):
     def _init(self):
         CommonBackend._init(self)
-        if not util.check_top_objdir(self.environment.topobjdir):
-            raise Exception()
 
         # The database we're going to dump out to.
         self._db = OrderedDict()
@@ -49,7 +46,7 @@ class CompileDBBackend(CommonBackend):
 
     def consume_object(self, obj):
         # Those are difficult directories, that will be handled later.
-        if obj.relativedir in (
+        if obj.relsrcdir in (
                 'build/unix/elfhack',
                 'build/unix/elfhack/inject',
                 'build/clang-plugin',
@@ -63,26 +60,17 @@ class CompileDBBackend(CommonBackend):
 
         if isinstance(obj, DirectoryTraversal):
             self._envs[obj.objdir] = obj.config
-            for var in ('WARNINGS_AS_ERRORS',):
-                value = obj.config.substs.get(var)
-                if value:
-                    self._local_flags[obj.objdir][var] = value
 
         elif isinstance(obj, (Sources, GeneratedSources)):
             # For other sources, include each source file.
             for f in obj.files:
-                self._build_db_line(obj.objdir, obj.relativedir, obj.config, f,
+                self._build_db_line(obj.objdir, obj.relsrcdir, obj.config, f,
                                     obj.canonical_suffix)
 
         elif isinstance(obj, VariablePassthru):
-            for var in ('MOZBUILD_CFLAGS', 'MOZBUILD_CXXFLAGS',
-                        'MOZBUILD_CMFLAGS', 'MOZBUILD_CMMFLAGS',
-                        'RTL_FLAGS'):
+            for var in ('MOZBUILD_CMFLAGS', 'MOZBUILD_CMMFLAGS'):
                 if var in obj.variables:
                     self._local_flags[obj.objdir][var] = obj.variables[var]
-            if (obj.variables.get('ALLOW_COMPILER_WARNINGS') and
-                    'WARNINGS_AS_ERRORS' in self._local_flags[obj.objdir]):
-                del self._local_flags[obj.objdir]['WARNINGS_AS_ERRORS']
 
         elif isinstance(obj, PerSourceFlag):
             self._per_source_flags[obj.file_name].extend(obj.flags)
@@ -141,17 +129,17 @@ class CompileDBBackend(CommonBackend):
         # For unified sources, only include the unified source file.
         # Note that unified sources are never used for host sources.
         for f in obj.unified_source_mapping:
-            self._build_db_line(obj.objdir, obj.relativedir, obj.config, f[0],
+            self._build_db_line(obj.objdir, obj.relsrcdir, obj.config, f[0],
                                 obj.canonical_suffix)
             for entry in f[1]:
-                self._build_db_line(obj.objdir, obj.relativedir, obj.config,
+                self._build_db_line(obj.objdir, obj.relsrcdir, obj.config,
                                     entry, obj.canonical_suffix, unified=f[0])
 
     def _handle_idl_manager(self, idl_manager):
         pass
 
-    def _handle_ipdl_sources(self, ipdl_dir, sorted_ipdl_sources,
-                             unified_ipdl_cppsrcs_mapping):
+    def _handle_ipdl_sources(self, ipdl_dir, sorted_ipdl_sources, sorted_nonstatic_ipdl_sources,
+                             sorted_static_ipdl_sources, unified_ipdl_cppsrcs_mapping):
         for f in unified_ipdl_cppsrcs_mapping:
             self._build_db_line(ipdl_dir, None, self.environment, f[0],
                                 '.cpp')
@@ -195,19 +183,6 @@ class CompileDBBackend(CommonBackend):
             db.extend(value)
 
         db.append('$(COMPUTED_%s)' % self.CFLAGS[canonical_suffix])
-
-        append_var('DSO_CFLAGS')
-        append_var('DSO_PIC_CFLAGS')
-        if canonical_suffix in ('.c', '.cpp'):
-            db.append('$(RTL_FLAGS)')
-        append_var('OS_COMPILE_%s' % self.CFLAGS[canonical_suffix])
-        append_var('OS_CPPFLAGS')
-        append_var('OS_%s' % self.CFLAGS[canonical_suffix])
-        append_var('MOZ_DEBUG_FLAGS')
-        append_var('MOZ_OPTIMIZE_FLAGS')
-        append_var('MOZ_FRAMEPTR_FLAGS')
-        db.append('$(WARNINGS_AS_ERRORS)')
-        db.append('$(MOZBUILD_%s)' % self.CFLAGS[canonical_suffix])
         if canonical_suffix == '.m':
             append_var('OS_COMPILE_CMFLAGS')
             db.append('$(MOZBUILD_CMFLAGS)')

@@ -1,7 +1,8 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-* This Source Code Form is subject to the terms of the Mozilla Public
-* License, v. 2.0. If a copy of the MPL was not distributed with this
-* file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "MLGDevice.h"
 #include "mozilla/layers/TextureHost.h"
@@ -10,8 +11,10 @@
 #include "gfxConfig.h"
 #include "gfxPrefs.h"
 #include "gfxUtils.h"
+#include "LayersLogging.h"
 #include "ShaderDefinitionsMLGPU.h"
 #include "SharedBufferMLGPU.h"
+#include "UtilityMLGPU.h"
 
 namespace mozilla {
 namespace layers {
@@ -36,7 +39,7 @@ MLGSwapChain::ApplyNewInvalidRegion(nsIntRegion&& aRegion, const Maybe<gfx::IntR
   // We clamp the invalid region to the backbuffer size, otherwise the present
   // can fail.
   IntRect bounds(IntPoint(0, 0), GetSize());
-  nsIntRegion invalid = Move(aRegion);
+  nsIntRegion invalid = std::move(aRegion);
   invalid.AndWith(bounds);
   if (invalid.IsEmpty()) {
     return false;
@@ -302,7 +305,7 @@ MLGDevice::PrepareClearRegion(ClearRegionHelper* aOut,
                               const Maybe<int32_t>& aSortIndex)
 {
   if (CanUseClearView() && !aSortIndex) {
-    aOut->mRects = Move(aRects);
+    aOut->mRects = std::move(aRects);
     return;
   }
 

@@ -2,12 +2,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-XPCOMUtils.defineLazyModuleGetter(this, "AppMenuNotifications",
-                                  "resource://gre/modules/AppMenuNotifications.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "NewTabUtils",
-                                  "resource://gre/modules/NewTabUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ScrollbarSampler",
-                                  "resource:///modules/ScrollbarSampler.jsm");
+ChromeUtils.defineModuleGetter(this, "AppMenuNotifications",
+                               "resource://gre/modules/AppMenuNotifications.jsm");
+ChromeUtils.defineModuleGetter(this, "NewTabUtils",
+                               "resource://gre/modules/NewTabUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "PanelMultiView",
+                               "resource:///modules/PanelMultiView.jsm");
+ChromeUtils.defineModuleGetter(this, "ScrollbarSampler",
+                               "resource:///modules/ScrollbarSampler.jsm");
 
 /**
  * Maintains the state and dispatches events for the main menu panel.
@@ -28,6 +30,7 @@ const PanelUI = {
       multiView: "appMenu-multiView",
       helpView: "PanelUI-helpView",
       libraryView: "appMenu-libraryView",
+      libraryRecentHighlights: "appMenu-library-recentHighlights",
       menuButton: "PanelUI-menu-button",
       panel: "appMenu-popup",
       notificationPanel: "appMenu-notification-popup",
@@ -163,19 +166,6 @@ const PanelUI = {
   },
 
   /**
-   * Customize mode extracts the mainView and puts it somewhere else while the
-   * user customizes. Upon completion, this function can be called to put the
-   * panel back to where it belongs in normal browsing mode.
-   *
-   * @param aMainView
-   *        The mainView node to put back into place.
-   */
-  setMainView(aMainView) {
-    this._ensureEventListenersAdded();
-    this.multiView.setMainView(aMainView);
-  },
-
-  /**
    * Opens the menu panel if it's closed, or closes it if it's
    * open.
    *
@@ -204,34 +194,24 @@ const PanelUI = {
    */
   show(aEvent) {
     this._ensureShortcutsShown();
-    return new Promise(resolve => {
-      this.ensureReady().then(() => {
-        if (this.panel.state == "open" ||
-            document.documentElement.hasAttribute("customizing")) {
-          resolve();
-          return;
-        }
+    (async () => {
+      await this.ensureReady();
 
-        let anchor;
-        let domEvent = null;
-        if (!aEvent ||
-            aEvent.type == "command") {
-          anchor = this.menuButton;
-        } else {
-          domEvent = aEvent;
-          anchor = aEvent.target;
-        }
+      if (this.panel.state == "open" ||
+          document.documentElement.hasAttribute("customizing")) {
+        return;
+      }
 
-        this.panel.addEventListener("popupshown", function() {
-          resolve();
-        }, {once: true});
+      let domEvent = null;
+      if (aEvent && aEvent.type != "command") {
+        domEvent = aEvent;
+      }
 
-        anchor = this._getPanelAnchor(anchor);
-        this.panel.openPopup(anchor, { triggerEvent: domEvent });
-      }, (reason) => {
-        console.error("Error showing the PanelUI menu", reason);
+      let anchor = this._getPanelAnchor(this.menuButton);
+      await PanelMultiView.openPopup(this.panel, anchor, {
+        triggerEvent: domEvent,
       });
-    });
+    })().catch(Cu.reportError);
   },
 
   /**
@@ -242,7 +222,7 @@ const PanelUI = {
       return;
     }
 
-    this.panel.hidePopup();
+    PanelMultiView.hidePopup(this.panel);
   },
 
   observe(subject, topic, status) {
@@ -305,7 +285,7 @@ const PanelUI = {
         break;
       case "ViewShowing":
         if (aEvent.target == this.libraryView) {
-          this.onLibraryViewShowing(aEvent.target);
+          this.onLibraryViewShowing(aEvent.target).catch(Cu.reportError);
         }
         break;
     }
@@ -345,15 +325,6 @@ const PanelUI = {
   },
 
   /**
-   * Switch the panel to the main view if it's not already
-   * in that view.
-   */
-  showMainView() {
-    this._ensureEventListenersAdded();
-    this.multiView.showMainView();
-  },
-
-  /**
    * Switch the panel to the help view if it's not already
    * in that view.
    */
@@ -367,11 +338,9 @@ const PanelUI = {
    *
    * @param aViewId the ID of the subview to show.
    * @param aAnchor the element that spawned the subview.
-   * @param aPlacementArea the CustomizableUI area that aAnchor is in.
    * @param aEvent the event triggering the view showing.
    */
-  async showSubView(aViewId, aAnchor, aPlacementArea, aEvent) {
-
+  async showSubView(aViewId, aAnchor, aEvent) {
     let domEvent = null;
     if (aEvent) {
       if (aEvent.type == "mousedown" && aEvent.button != 0) {
@@ -401,7 +370,7 @@ const PanelUI = {
 
     this.ensureLibraryInitialized(viewNode);
 
-    let container = aAnchor.closest("panelmultiview,photonpanelmultiview");
+    let container = aAnchor.closest("panelmultiview");
     if (container) {
       container.showSubView(aViewId, aAnchor);
     } else if (!aAnchor.open) {
@@ -425,26 +394,14 @@ const PanelUI = {
       tempPanel.classList.toggle("cui-widget-panelWithFooter",
                                  viewNode.querySelector(".panel-subview-footer"));
 
-      // If the panelview is already selected in another PanelMultiView instance
-      // as a subview, make sure to properly hide it there.
-      let oldMultiView = viewNode.panelMultiView;
-      if (oldMultiView && oldMultiView.current == viewNode) {
-        await oldMultiView.showMainView();
-      }
-
-      let viewShown = false;
-      let listener = () => viewShown = true;
-      viewNode.addEventListener("ViewShown", listener, {once: true});
-
-      let multiView = document.createElement("photonpanelmultiview");
+      let multiView = document.createElement("panelmultiview");
       multiView.setAttribute("id", "customizationui-widget-multiview");
       multiView.setAttribute("viewCacheId", "appMenu-viewCache");
       multiView.setAttribute("mainViewId", viewNode.id);
-      multiView.setAttribute("ephemeral", true);
-      document.getElementById("appMenu-viewCache").appendChild(viewNode);
       tempPanel.appendChild(multiView);
       viewNode.classList.add("cui-widget-panelview");
 
+      let viewShown = false;
       let panelRemover = () => {
         viewNode.classList.remove("cui-widget-panelview");
         if (viewShown) {
@@ -453,23 +410,12 @@ const PanelUI = {
         }
         aAnchor.open = false;
 
-        // Ensure we run the destructor:
-        multiView.instance.destructor();
-
-        tempPanel.remove();
+        PanelMultiView.removePopup(tempPanel);
       };
 
-      // Wait until all the tasks needed to show a view are done.
-      await multiView.currentShowPromise;
-
-      if (!viewShown) {
-        viewNode.removeEventListener("ViewShown", listener);
-        panelRemover();
-        return;
+      if (aAnchor.parentNode.id == "PersonalToolbar") {
+        tempPanel.classList.add("bookmarks-toolbar");
       }
-
-      CustomizableUI.addPanelCloseListeners(tempPanel);
-      tempPanel.addEventListener("popuphidden", panelRemover);
 
       let anchor = this._getPanelAnchor(aAnchor);
 
@@ -477,10 +423,21 @@ const PanelUI = {
         anchor.setAttribute("consumeanchor", aAnchor.id);
       }
 
-      tempPanel.openPopup(anchor, {
-        position: "bottomcenter topright",
-        triggerEvent: domEvent,
-      });
+      try {
+        viewShown = await PanelMultiView.openPopup(tempPanel, anchor, {
+          position: "bottomcenter topright",
+          triggerEvent: domEvent,
+        });
+      } catch (ex) {
+        Cu.reportError(ex);
+      }
+
+      if (viewShown) {
+        CustomizableUI.addPanelCloseListeners(tempPanel);
+        tempPanel.addEventListener("popuphidden", panelRemover);
+      } else {
+        panelRemover();
+      }
     }
   },
 
@@ -505,32 +462,52 @@ const PanelUI = {
    * @param {panelview} viewNode The library view.
    */
   async onLibraryViewShowing(viewNode) {
-    if (this._loadingRecentHighlights) {
-      return;
-    }
-    this._loadingRecentHighlights = true;
-
     // Since the library is the first view shown, we don't want to add a blocker
-    // to the event, which would make PanelMultiView wait to show it.
-    let container = this.clearLibraryRecentHighlights();
-    if (!this.libraryRecentHighlightsEnabled) {
-      this._loadingRecentHighlights = false;
+    // to the event, which would make PanelMultiView wait to show it. Instead,
+    // we keep the space currently reserved for the items, but we hide them.
+    if (this._loadingRecentHighlights || !this.libraryRecentHighlightsEnabled) {
       return;
     }
 
+    // Make the elements invisible synchronously, before the view is shown.
+    this.makeLibraryRecentHighlightsInvisible();
+
+    // Perform the rest asynchronously while protecting from re-entrancy.
+    this._loadingRecentHighlights = true;
+    try {
+      await this.fetchAndPopulateLibraryRecentHighlights();
+    } finally {
+      this._loadingRecentHighlights = false;
+    }
+  },
+
+  /**
+   * Fetches the list of Recent Highlights and replaces the items in the Library
+   * view with the results.
+   */
+  async fetchAndPopulateLibraryRecentHighlights() {
     let highlights = await NewTabUtils.activityStreamLinks.getHighlights({
       // As per bug 1402023, hard-coded limit, until Activity Stream develops a
       // richer list.
       numItems: 6,
-      withFavicons: true
+      withFavicons: true,
+      excludePocket: true
+    }).catch(ex => {
+      // Just hide the section if we can't retrieve the items from the database.
+      Cu.reportError(ex);
+      return [];
     });
-    // If there's nothing to display, or the panel is already hidden, get out.
-    let multiView = viewNode.panelMultiView;
-    if (!highlights.length || (multiView && multiView.getAttribute("panelopen") != "true")) {
-      this._loadingRecentHighlights = false;
+
+    // Since the call above is asynchronous, the panel may be already hidden
+    // at this point, but we still prepare the items for the next time the
+    // panel is shown, so their space is reserved. The part of this function
+    // that adds the elements is the least expensive anyways.
+    this.clearLibraryRecentHighlights();
+    if (!highlights.length) {
       return;
     }
 
+    let container = this.libraryRecentHighlights;
     container.hidden = container.previousSibling.hidden =
       container.previousSibling.previousSibling.hidden = false;
     let fragment = document.createDocumentFragment();
@@ -549,21 +526,29 @@ const PanelUI = {
       fragment.appendChild(button);
     }
     container.appendChild(fragment);
+  },
 
-    this._loadingRecentHighlights = false;
+  /**
+   * Make all nodes from the 'Recent Highlights' section invisible while we
+   * refresh its contents. This is done while the Library view is opening to
+   * avoid showing potentially stale items, but still keep the space reserved.
+   */
+  makeLibraryRecentHighlightsInvisible() {
+    for (let button of this.libraryRecentHighlights.children) {
+      button.style.visibility = "hidden";
+    }
   },
 
   /**
    * Remove all the nodes from the 'Recent Highlights' section and hide it as well.
    */
   clearLibraryRecentHighlights() {
-    let container = document.getElementById("appMenu-library-recentHighlights")
+    let container = this.libraryRecentHighlights;
     while (container.firstChild) {
       container.firstChild.remove();
     }
     container.hidden = container.previousSibling.hidden =
       container.previousSibling.previousSibling.hidden = true;
-    return container;
   },
 
   /**
@@ -576,7 +561,13 @@ const PanelUI = {
     if (event.button > 1 || !button._highlight) {
       return;
     }
-    window.openUILink(button._highlight.url, event);
+    if (event.button == 1) {
+      // Bug 1402849, close library panel on mid mouse click
+      CustomizableUI.hidePanelForNode(button);
+    }
+    window.openUILink(button._highlight.url, event, {
+      triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal({})
+    });
   },
 
   /**
@@ -598,9 +589,7 @@ const PanelUI = {
       this.navbar.setAttribute("nonemptyoverflow", "true");
       this.overflowPanel.setAttribute("hasfixeditems", "true");
     } else if (!hasKids && this.navbar.hasAttribute("nonemptyoverflow")) {
-      if (this.overflowPanel.state != "closed") {
-        this.overflowPanel.hidePopup();
-      }
+      PanelMultiView.hidePopup(this.overflowPanel);
       this.overflowPanel.removeAttribute("hasfixeditems");
       this.navbar.removeAttribute("nonemptyoverflow");
     }
@@ -712,7 +701,7 @@ const PanelUI = {
     if (this.panel.state == "showing" || this.panel.state == "open") {
       // If the menu is already showing, then we need to dismiss all notifications
       // since we don't want their doorhangers competing for attention
-      doorhangers.forEach(n => { n.dismissed = true; })
+      doorhangers.forEach(n => { n.dismissed = true; });
       this._hidePopup();
       this._clearBadge();
       if (!notifications[0].options.badgeOnly) {
@@ -846,6 +835,8 @@ const PanelUI = {
 
   _getPanelAnchor(candidate) {
     let iconAnchor =
+      document.getAnonymousElementByAttribute(candidate, "class",
+                                              "toolbarbutton-badge-stack") ||
       document.getAnonymousElementByAttribute(candidate, "class",
                                               "toolbarbutton-icon");
     return iconAnchor || candidate;

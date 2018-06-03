@@ -9,17 +9,17 @@ function test() {
   waitForExplicitFinish();
 
   gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
-  gBrowser.selectedBrowser.addEventListener("load", function () {
+  BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser).then(function() {
     Services.prefs.setIntPref("devtools.editor.tabsize", 5);
 
     openScratchpad(runTests);
-  }, {capture: true, once: true});
+  });
 
-  content.location = "data:text/html,Scratchpad test for the Tab key, bug 660560";
+  gBrowser.loadURI("data:text/html,Scratchpad test for the Tab key, bug 660560");
 }
 
 function runTests() {
-  let sp = gScratchpadWindow.Scratchpad;
+  const sp = gScratchpadWindow.Scratchpad;
   ok(sp, "Scratchpad object exists in new window");
 
   ok(sp.editor.hasFocus(), "the editor has focus");
@@ -66,7 +66,7 @@ function runTests() {
 }
 
 function runTests2() {
-  let sp = gScratchpadWindow.Scratchpad;
+  const sp = gScratchpadWindow.Scratchpad;
 
   sp.setText("window.foo;");
   sp.editor.setCursor({ line: 0, ch: 0 });

@@ -2,14 +2,14 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
-                                  "resource://gre/modules/PrivateBrowsingUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "PrivateBrowsingUtils",
+                               "resource://gre/modules/PrivateBrowsingUtils.jsm");
 
 /* globals TabBase, WindowBase, TabTrackerBase, WindowTrackerBase, TabManagerBase, WindowManagerBase */
 /* globals EventDispatcher */
-Cu.import("resource://gre/modules/Messaging.jsm");
+ChromeUtils.import("resource://gre/modules/Messaging.jsm");
 
-Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+ChromeUtils.import("resource://gre/modules/ExtensionUtils.jsm");
 
 var {
   DefaultWeakMap,
@@ -159,7 +159,6 @@ class ProgressListenerWrapper {
       this.addBrowserProgressListener(event.originalTarget);
     }
   }
-
 }
 
 class WindowTracker extends WindowTrackerBase {
@@ -188,11 +187,11 @@ class WindowTracker extends WindowTrackerBase {
 }
 
 /**
- * An event manager API provider which listens for an event in the Android
- * global EventDispatcher, and calls the given listener function whenever an event
- * is received. That listener function receives a `fire` object, which it can
- * use to dispatch events to the extension, and an object detailing the
- * EventDispatcher event that was received.
+ * Helper to create an event manager which listens for an event in the Android
+ * global EventDispatcher, and calls the given listener function whenever the
+ * event is received. That listener function receives a `fire` object,
+ * which it can use to dispatch events to the extension, and an object
+ * detailing the EventDispatcher event that was received.
  *
  * @param {BaseContext} context
  *        The extension context which the event manager belongs to.
@@ -203,10 +202,14 @@ class WindowTracker extends WindowTrackerBase {
  * @param {function} listener
  *        The listener function to call when an EventDispatcher event is
  *        recieved.
+ *
+ * @returns {object} An injectable api for the new event.
  */
-global.GlobalEventManager = class extends EventManager {
-  constructor(context, name, event, listener) {
-    super(context, name, fire => {
+global.makeGlobalEvent = function makeGlobalEvent(context, name, event, listener) {
+  return new EventManager({
+    context,
+    name,
+    register: fire => {
       let listener2 = {
         onEvent(event, data, callback) {
           listener(fire, data);
@@ -217,36 +220,8 @@ global.GlobalEventManager = class extends EventManager {
       return () => {
         GlobalEventDispatcher.unregisterListener(listener2, [event]);
       };
-    });
-  }
-};
-
-/**
- * An event manager API provider which listens for a DOM event in any browser
- * window, and calls the given listener function whenever an event is received.
- * That listener function receives a `fire` object, which it can use to dispatch
- * events to the extension, and a DOM event object.
- *
- * @param {BaseContext} context
- *        The extension context which the event manager belongs to.
- * @param {string} name
- *        The API name of the event manager, e.g.,"runtime.onMessage".
- * @param {string} event
- *        The name of the DOM event to listen for.
- * @param {function} listener
- *        The listener function to call when a DOM event is received.
- */
-global.WindowEventManager = class extends EventManager {
-  constructor(context, name, event, listener) {
-    super(context, name, fire => {
-      let listener2 = listener.bind(null, fire);
-
-      windowTracker.addListener(event, listener2);
-      return () => {
-        windowTracker.removeListener(event, listener2);
-      };
-    });
-  }
+    },
+  }).api();
 };
 
 class TabTracker extends TabTrackerBase {
@@ -255,6 +230,8 @@ class TabTracker extends TabTrackerBase {
 
     // Keep track of the extension popup tab.
     this._extensionPopupTabWeak = null;
+    // Keep track of the selected tabId
+    this._selectedTabId = null;
   }
 
   init() {
@@ -372,6 +349,8 @@ class TabTracker extends TabTrackerBase {
 
     switch (event) {
       case "Tab:Selected": {
+        this._selectedTabId = data.id;
+
         // If a new tab has been selected while an extension popup tab is still open,
         // close it immediately.
         const nativeTab = BrowserApp.getTabForId(data.id);
@@ -413,6 +392,12 @@ class TabTracker extends TabTrackerBase {
 
     if (this.extensionPopupTab && this.extensionPopupTab === nativeTab) {
       this._extensionPopupTabWeak = null;
+
+      // Do not switch to the parent tab of the extension popup tab
+      // if the popup tab is not the selected tab.
+      if (this._selectedTabId !== tabId) {
+        return;
+      }
 
       // Select the parent tab when the closed tab was an extension popup tab.
       const {BrowserApp} = windowTracker.topWindow;
@@ -567,15 +552,26 @@ class Tab extends TabBase {
   get isInReaderMode() {
     return false;
   }
+
+  get hidden() {
+    return false;
+  }
+
+  get sharingState() {
+    return {
+      screen: undefined,
+      microphone: false,
+      camera: false,
+    };
+  }
 }
 
 // Manages tab-specific context data and dispatches tab select and close events.
 class TabContext extends EventEmitter {
-  constructor(getDefaults, extension) {
+  constructor(getDefaultPrototype) {
     super();
 
-    this.extension = extension;
-    this.getDefaults = getDefaults;
+    this.getDefaultPrototype = getDefaultPrototype;
     this.tabData = new Map();
 
     GlobalEventDispatcher.registerListener(this, [
@@ -586,7 +582,8 @@ class TabContext extends EventEmitter {
 
   get(tabId) {
     if (!this.tabData.has(tabId)) {
-      this.tabData.set(tabId, this.getDefaults());
+      let data = Object.create(this.getDefaultPrototype(tabId));
+      this.tabData.set(tabId, data);
     }
 
     return this.tabData.get(tabId);
@@ -667,9 +664,24 @@ class Window extends WindowBase {
   }
 
   get activeTab() {
-    let {tabManager} = this.extension;
+    let {BrowserApp} = this.window;
+    let {selectedTab} = BrowserApp;
 
-    return tabManager.getWrapper(this.window.BrowserApp.selectedTab);
+    // If the current tab is an extension popup tab, we use the parentId to retrieve
+    // and return the tab that was selected when the popup tab has been opened.
+    if (selectedTab === tabTracker.extensionPopupTab) {
+      selectedTab = BrowserApp.getTabForId(selectedTab.parentId);
+    }
+
+    let {tabManager} = this.extension;
+    return tabManager.getWrapper(selectedTab);
+  }
+
+  getTabAtIndex(index) {
+    let nativeTab = this.window.BrowserApp.tabs[index];
+    if (nativeTab) {
+      return this.extension.tabManager.getWrapper(nativeTab);
+    }
   }
 }
 

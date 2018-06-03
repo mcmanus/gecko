@@ -1,3 +1,5 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,31 +11,28 @@
  * between ExtensionParent.jsm and ExtensionChild.jsm.
  */
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
-
 /* exported ExtensionCommon */
 
-this.EXPORTED_SYMBOLS = ["ExtensionCommon"];
+var EXPORTED_SYMBOLS = ["ExtensionCommon"];
 
 Cu.importGlobalProperties(["fetch"]);
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
-  ConsoleAPI: "resource://gre/modules/Console.jsm",
+  AppConstants: "resource://gre/modules/AppConstants.jsm",
   MessageChannel: "resource://gre/modules/MessageChannel.jsm",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
   Schemas: "resource://gre/modules/Schemas.jsm",
+  SchemaRoot: "resource://gre/modules/Schemas.jsm",
 });
 
 XPCOMUtils.defineLazyServiceGetter(this, "styleSheetService",
                                    "@mozilla.org/content/style-sheet-service;1",
                                    "nsIStyleSheetService");
 
-const global = Cu.getGlobalForObject(this);
-
-Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+ChromeUtils.import("resource://gre/modules/ExtensionUtils.jsm");
 
 var {
   DefaultMap,
@@ -49,6 +48,9 @@ var {
 } = ExtensionUtils;
 
 XPCOMUtils.defineLazyGetter(this, "console", getConsole);
+
+XPCOMUtils.defineLazyPreferenceGetter(this, "DELAYED_BG_STARTUP",
+                                      "extensions.webextensions.background-delayed-startup");
 
 var ExtensionCommon;
 
@@ -83,6 +85,11 @@ class NoCloneSpreadArgs {
   }
 }
 
+/**
+ * Base class for WebExtension APIs.  Each API creates a new class
+ * that inherits from this class, the derived class is instantiated
+ * once for each extension that uses the API.
+ */
 class ExtensionAPI extends ExtensionUtils.EventEmitter {
   constructor(extension) {
     super();
@@ -108,73 +115,13 @@ class ExtensionAPI extends ExtensionUtils.EventEmitter {
   }
 }
 
-var ExtensionAPIs = {
-  apis: new Map(),
-
-  load(apiName) {
-    let api = this.apis.get(apiName);
-
-    if (api.loadPromise) {
-      return api.loadPromise;
-    }
-
-    let {script, schema} = api;
-
-    let addonId = `${apiName}@experiments.addons.mozilla.org`;
-    api.sandbox = Cu.Sandbox(global, {
-      wantXrays: false,
-      sandboxName: script,
-      addonId,
-      metadata: {addonID: addonId},
-    });
-
-    api.sandbox.ExtensionAPI = ExtensionAPI;
-
-    // Create a console getter which lazily provide a ConsoleAPI instance.
-    XPCOMUtils.defineLazyGetter(api.sandbox, "console", () => {
-      return new ConsoleAPI({prefix: addonId});
-    });
-
-    Services.scriptloader.loadSubScript(script, api.sandbox, "UTF-8");
-
-    api.loadPromise = Schemas.load(schema).then(() => {
-      let API = Cu.evalInSandbox("API", api.sandbox);
-      API.prototype.namespace = apiName;
-      return API;
-    });
-
-    return api.loadPromise;
-  },
-
-  unload(apiName) {
-    let api = this.apis.get(apiName);
-
-    let {schema} = api;
-
-    Schemas.unload(schema);
-    Cu.nukeSandbox(api.sandbox);
-
-    api.sandbox = null;
-    api.loadPromise = null;
-  },
-
-  register(namespace, schema, script) {
-    if (this.apis.has(namespace)) {
-      throw new Error(`API namespace already exists: ${namespace}`);
-    }
-
-    this.apis.set(namespace, {schema, script});
-  },
-
-  unregister(namespace) {
-    if (!this.apis.has(namespace)) {
-      throw new Error(`API namespace does not exist: ${namespace}`);
-    }
-
-    this.apis.delete(namespace);
-  },
-};
-
+/**
+ * This class contains the information we have about an individual
+ * extension.  It is never instantiated directly, instead subclasses
+ * for each type of process extend this class and add members that are
+ * relevant for that process.
+ * @abstract
+ */
 class BaseContext {
   constructor(envType, extension) {
     this.envType = envType;
@@ -255,11 +202,13 @@ class BaseContext {
     return this.applySafeWithoutClone(callback, args);
   }
 
-  applySafe(callback, args) {
+  applySafe(callback, args, caller) {
     if (this.unloaded) {
-      Cu.reportError("context.runSafe called after context unloaded");
+      Cu.reportError("context.runSafe called after context unloaded",
+                     caller);
     } else if (!this.active) {
-      Cu.reportError("context.runSafe called while context is inactive");
+      Cu.reportError("context.runSafe called while context is inactive",
+                     caller);
     } else {
       try {
         let {cloneScope} = this;
@@ -269,15 +218,17 @@ class BaseContext {
         dump(`runSafe failure: cloning into ${this.cloneScope}: ${e}\n\n${filterStack(Error())}`);
       }
 
-      return this.applySafeWithoutClone(callback, args);
+      return this.applySafeWithoutClone(callback, args, caller);
     }
   }
 
-  applySafeWithoutClone(callback, args) {
+  applySafeWithoutClone(callback, args, caller) {
     if (this.unloaded) {
-      Cu.reportError("context.runSafeWithoutClone called after context unloaded");
+      Cu.reportError("context.runSafeWithoutClone called after context unloaded",
+                     caller);
     } else if (!this.active) {
-      Cu.reportError("context.runSafeWithoutClone called while context is inactive");
+      Cu.reportError("context.runSafeWithoutClone called while context is inactive",
+                     caller);
     } else {
       try {
         return Reflect.apply(callback, null, args);
@@ -368,23 +319,36 @@ class BaseContext {
    * exception error.
    *
    * @param {Error|object} error
+   * @param {SavedFrame?} [caller]
    * @returns {Error}
    */
-  normalizeError(error) {
+  normalizeError(error, caller) {
     if (error instanceof this.cloneScope.Error) {
       return error;
     }
     let message, fileName;
-    if (error && typeof error === "object" &&
-        (ChromeUtils.getClassName(error) === "Object" ||
-         error instanceof ExtensionError ||
-         this.principal.subsumes(Cu.getObjectPrincipal(error)))) {
-      message = error.message;
-      fileName = error.fileName;
-    } else {
-      Cu.reportError(error);
+    if (error && typeof error === "object") {
+      const isPlain = ChromeUtils.getClassName(error) === "Object";
+      if (isPlain && error.mozWebExtLocation) {
+        caller = error.mozWebExtLocation;
+      }
+      if (isPlain && caller && (error.mozWebExtLocation || !error.fileName)) {
+        caller = Cu.cloneInto(caller, this.cloneScope);
+        return ChromeUtils.createError(error.message, caller);
+      }
+
+      if (isPlain ||
+          error instanceof ExtensionError ||
+          this.principal.subsumes(Cu.getObjectPrincipal(error))) {
+        message = error.message;
+        fileName = error.fileName;
+      }
     }
-    message = message || "An unexpected error occurred";
+
+    if (!message) {
+      Cu.reportError(error);
+      message = "An unexpected error occurred";
+    }
     return new this.cloneScope.Error(message, fileName);
   }
 
@@ -395,19 +359,31 @@ class BaseContext {
    *
    * @param {object} error An object with a `message` property. May
    *     optionally be an `Error` object belonging to the target scope.
+   * @param {SavedFrame?} caller
+   *        The optional caller frame which triggered this callback, to be used
+   *        in error reporting.
    * @param {function} callback The callback to call.
    * @returns {*} The return value of callback.
    */
-  withLastError(error, callback) {
+  withLastError(error, caller, callback) {
     this.lastError = this.normalizeError(error);
     try {
       return callback();
     } finally {
       if (!this.checkedLastError) {
-        Cu.reportError(`Unchecked lastError value: ${this.lastError}`);
+        Cu.reportError(`Unchecked lastError value: ${this.lastError}`, caller);
       }
       this.lastError = null;
     }
+  }
+
+  /**
+   * Captures the most recent stack frame which belongs to the extension.
+   *
+   * @returns {SavedFrame?}
+   */
+  getCaller() {
+    return ChromeUtils.getCallerLocation(this.principal);
   }
 
   /**
@@ -436,6 +412,7 @@ class BaseContext {
    *     belonging to the target scope. Otherwise, undefined.
    */
   wrapPromise(promise, callback = null) {
+    let caller = this.getCaller();
     let applySafe = this.applySafe.bind(this);
     if (Cu.getGlobalForObject(promise) === this.cloneScope) {
       applySafe = this.applySafeWithoutClone.bind(this);
@@ -445,25 +422,29 @@ class BaseContext {
       promise.then(
         args => {
           if (this.unloaded) {
-            dump(`Promise resolved after context unloaded\n`);
+            Cu.reportError(`Promise resolved after context unloaded\n`,
+                           caller);
           } else if (!this.active) {
-            dump(`Promise resolved while context is inactive\n`);
+            Cu.reportError(`Promise resolved while context is inactive\n`,
+                           caller);
           } else if (args instanceof NoCloneSpreadArgs) {
-            this.applySafeWithoutClone(callback, args.unwrappedValues);
+            this.applySafeWithoutClone(callback, args.unwrappedValues, caller);
           } else if (args instanceof SpreadArgs) {
-            applySafe(callback, args);
+            applySafe(callback, args, caller);
           } else {
-            applySafe(callback, [args]);
+            applySafe(callback, [args], caller);
           }
         },
         error => {
-          this.withLastError(error, () => {
+          this.withLastError(error, caller, () => {
             if (this.unloaded) {
-              dump(`Promise rejected after context unloaded\n`);
+              Cu.reportError(`Promise rejected after context unloaded\n`,
+                             caller);
             } else if (!this.active) {
-              dump(`Promise rejected while context is inactive\n`);
+              Cu.reportError(`Promise rejected while context is inactive\n`,
+                             caller);
             } else {
-              this.applySafeWithoutClone(callback, []);
+              this.applySafeWithoutClone(callback, [], caller);
             }
           });
         });
@@ -472,25 +453,32 @@ class BaseContext {
         promise.then(
           value => {
             if (this.unloaded) {
-              dump(`Promise resolved after context unloaded\n`);
+              Cu.reportError(`Promise resolved after context unloaded\n`,
+                             caller);
             } else if (!this.active) {
-              dump(`Promise resolved while context is inactive\n`);
+              Cu.reportError(`Promise resolved while context is inactive\n`,
+                             caller);
             } else if (value instanceof NoCloneSpreadArgs) {
               let values = value.unwrappedValues;
-              this.applySafeWithoutClone(resolve, values.length == 1 ? [values[0]] : [values]);
+              this.applySafeWithoutClone(resolve, values.length == 1 ? [values[0]] : [values],
+                                         caller);
             } else if (value instanceof SpreadArgs) {
-              applySafe(resolve, value.length == 1 ? value : [value]);
+              applySafe(resolve, value.length == 1 ? value : [value],
+                        caller);
             } else {
-              applySafe(resolve, [value]);
+              applySafe(resolve, [value], caller);
             }
           },
           value => {
             if (this.unloaded) {
-              dump(`Promise rejected after context unloaded: ${value && value.message}\n`);
+              Cu.reportError(`Promise rejected after context unloaded: ${value && value.message}\n`,
+                             caller);
             } else if (!this.active) {
-              dump(`Promise rejected while context is inactive: ${value && value.message}\n`);
+              Cu.reportError(`Promise rejected while context is inactive: ${value && value.message}\n`,
+                             caller);
             } else {
-              this.applySafeWithoutClone(reject, [this.normalizeError(value)]);
+              this.applySafeWithoutClone(reject, [this.normalizeError(value, caller)],
+                                         caller);
             }
           });
       });
@@ -739,6 +727,17 @@ function getPath(map, path) {
   return map;
 }
 
+function mergePaths(dest, source) {
+  for (let name of source.modules) {
+    dest.modules.add(name);
+  }
+
+  for (let [name, child] of source.children.entries()) {
+    mergePaths(getChild(dest, name),
+               child);
+  }
+}
+
 /**
  * Manages loading and accessing a set of APIs for a specific extension
  * context.
@@ -829,7 +828,8 @@ class CanOfAPIs {
     let obj = this.root;
     let modules = this.apiManager.modulePaths;
 
-    for (let key of path.split(".")) {
+    let parts = path.split(".");
+    for (let [i, key] of parts.entries()) {
       if (!obj) {
         return;
       }
@@ -841,6 +841,9 @@ class CanOfAPIs {
         }
       }
 
+      if (!(key in obj) && i < parts.length - 1) {
+        obj[key] = {};
+      }
       obj = obj[key];
     }
 
@@ -865,7 +868,8 @@ class CanOfAPIs {
     let obj = this.root;
     let modules = this.apiManager.modulePaths;
 
-    for (let key of path.split(".")) {
+    let parts = path.split(".");
+    for (let [i, key] of parts.entries()) {
       if (!obj) {
         return;
       }
@@ -875,6 +879,10 @@ class CanOfAPIs {
         if (!this.apis.has(name)) {
           await this.asyncLoadAPI(name);
         }
+      }
+
+      if (!(key in obj) && i < parts.length - 1) {
+        obj[key] = {};
       }
 
       if (typeof obj[key] === "function") {
@@ -938,11 +946,15 @@ class SchemaAPIManager extends EventEmitter {
    *     "content" - A content process.
    *     "devtools" - A devtools process.
    *     "proxy" - A proxy script process.
+   * @param {SchemaRoot} schema
    */
-  constructor(processType) {
+  constructor(processType, schema) {
     super();
     this.processType = processType;
-    this.global = this._createExtGlobal();
+    this.global = null;
+    if (schema) {
+      this.schema = schema;
+    }
 
     this.modules = new Map();
     this.modulePaths = {children: new Map(), modules: new Set()};
@@ -958,12 +970,27 @@ class SchemaAPIManager extends EventEmitter {
     this._scriptScopes = [];
   }
 
-  async loadModuleJSON(urls) {
-    function fetchJSON(url) {
-      return fetch(url).then(resp => resp.json());
+  onStartup(extension) {
+    let promises = [];
+    for (let apiName of this.eventModules.get("startup")) {
+      promises.push(extension.apiManager.asyncGetAPI(apiName, extension).then(api => {
+        if (api) {
+          api.onStartup();
+        }
+      }));
     }
 
-    for (let json of await Promise.all(urls.map(fetchJSON))) {
+    return Promise.all(promises);
+  }
+
+  async loadModuleJSON(urls) {
+    let promises = urls.map(url => fetch(url).then(resp => resp.json()));
+
+    return this.initModuleJSON(await Promise.all(promises));
+  }
+
+  initModuleJSON(blobs) {
+    for (let json of blobs) {
       this.registerModules(json);
     }
 
@@ -1054,7 +1081,7 @@ class SchemaAPIManager extends EventEmitter {
   emitManifestEntry(extension, entry) {
     let apiName = this.manifestKeys.get(entry);
     if (apiName) {
-      let api = this.getAPI(apiName, extension);
+      let api = extension.apiManager.getAPI(apiName, extension);
       return api.onManifestEntry(entry);
     }
   }
@@ -1076,7 +1103,7 @@ class SchemaAPIManager extends EventEmitter {
   async asyncEmitManifestEntry(extension, entry) {
     let apiName = this.manifestKeys.get(entry);
     if (apiName) {
-      let api = await this.asyncGetAPI(apiName, extension);
+      let api = await extension.apiManager.asyncGetAPI(apiName, extension);
       return api.onManifestEntry(entry);
     }
   }
@@ -1166,6 +1193,8 @@ class SchemaAPIManager extends EventEmitter {
 
     this._checkLoadModule(module, name);
 
+    this.initGlobal();
+
     Services.scriptloader.loadSubScript(module.url, this.global, "UTF-8");
 
     module.loaded = true;
@@ -1193,6 +1222,7 @@ class SchemaAPIManager extends EventEmitter {
     this._checkLoadModule(module, name);
 
     module.asyncLoaded = ChromeUtils.compileScript(module.url).then(script => {
+      this.initGlobal();
       script.executeInGlobal(this.global);
 
       module.loaded = true;
@@ -1201,6 +1231,10 @@ class SchemaAPIManager extends EventEmitter {
     });
 
     return module.asyncLoaded;
+  }
+
+  getModule(name) {
+    return this.modules.get(name);
   }
 
   /**
@@ -1219,7 +1253,7 @@ class SchemaAPIManager extends EventEmitter {
    *        Whether the module may be loaded.
    */
   _checkGetAPI(name, extension, scope = null) {
-    let module = this.modules.get(name);
+    let module = this.getModule(name);
 
     if (module.permissions && !module.permissions.some(perm => extension.hasPermission(perm))) {
       return false;
@@ -1247,7 +1281,7 @@ class SchemaAPIManager extends EventEmitter {
     if (module.asyncLoaded) {
       throw new Error(`Module '${name}' currently being lazily loaded`);
     }
-    if (this.global[name]) {
+    if (this.global && this.global[name]) {
       throw new Error(`Module '${name}' conflicts with existing global property`);
     }
   }
@@ -1262,12 +1296,28 @@ class SchemaAPIManager extends EventEmitter {
   _createExtGlobal() {
     let global = Cu.Sandbox(Services.scriptSecurityManager.getSystemPrincipal(), {
       wantXrays: false,
+      wantGlobalProperties: ["ChromeUtils"],
       sandboxName: `Namespace of ext-*.js scripts for ${this.processType} (from: resource://gre/modules/ExtensionCommon.jsm)`,
     });
 
-    Object.assign(global, {global, Cc, Ci, Cu, Cr, XPCOMUtils, ChromeUtils, ChromeWorker, ExtensionAPI, ExtensionCommon, MatchPattern, MatchPatternSet, StructuredCloneHolder, extensions: this});
+    Object.assign(global, {
+      Cc,
+      ChromeWorker,
+      Ci,
+      Cr,
+      Cu,
+      ExtensionAPI,
+      ExtensionCommon,
+      MatchGlob,
+      MatchPattern,
+      MatchPatternSet,
+      StructuredCloneHolder,
+      XPCOMUtils,
+      extensions: this,
+      global,
+    });
 
-    Cu.import("resource://gre/modules/AppConstants.jsm", global);
+    ChromeUtils.import("resource://gre/modules/AppConstants.jsm", global);
 
     XPCOMUtils.defineLazyGetter(global, "console", getConsole);
 
@@ -1277,6 +1327,12 @@ class SchemaAPIManager extends EventEmitter {
     });
 
     return global;
+  }
+
+  initGlobal() {
+    if (!this.global) {
+      this.global = this._createExtGlobal();
+    }
   }
 
   /**
@@ -1296,27 +1352,97 @@ class SchemaAPIManager extends EventEmitter {
     // Save the scope to avoid it being garbage collected.
     this._scriptScopes.push(scope);
   }
+}
 
-  /**
-   * Mash together all the APIs from `apis` into `obj`.
-   *
-   * @param {BaseContext} context The context for which the API bindings are
-   *     generated.
-   * @param {Array} apis A list of objects, see `registerSchemaAPI`.
-   * @param {object} obj The destination of the API.
-   */
-  static generateAPIs(context, apis, obj) {
-    function hasPermission(perm) {
-      return context.extension.hasPermission(perm, true);
+class LazyAPIManager extends SchemaAPIManager {
+  constructor(processType, moduleData, schemaURLs) {
+    super(processType);
+
+    this.initialized = false;
+
+    this.initModuleData(moduleData);
+
+    this.schemaURLs = schemaURLs;
+  }
+}
+
+defineLazyGetter(LazyAPIManager.prototype, "schema", function() {
+  let root = new SchemaRoot(Schemas.rootSchema, this.schemaURLs);
+  root.parseSchemas();
+  return root;
+});
+
+class MultiAPIManager extends SchemaAPIManager {
+  constructor(processType, children) {
+    super(processType);
+
+    this.initialized = false;
+
+    this.children = children;
+  }
+
+  async lazyInit() {
+    if (!this.initialized) {
+      this.initialized = true;
+
+      for (let child of this.children) {
+        if (child.lazyInit) {
+          let res = child.lazyInit();
+          if (res && typeof res.then === "function") {
+            await res;
+          }
+        }
+
+        mergePaths(this.modulePaths, child.modulePaths);
+      }
     }
-    for (let api of apis) {
-      if (Schemas.checkPermissions(api.namespace, {hasPermission})) {
-        api = api.getAPI(context);
-        deepCopy(obj, api);
+  }
+
+  onStartup(extension) {
+    return Promise.all(this.children.map(
+      child => child.onStartup(extension)));
+  }
+
+  getModule(name) {
+    for (let child of this.children) {
+      if (child.modules.has(name)) {
+        return child.modules.get(name);
+      }
+    }
+  }
+
+  loadModule(name) {
+    for (let child of this.children) {
+      if (child.modules.has(name)) {
+        return child.loadModule(name);
+      }
+    }
+  }
+
+  asyncLoadModule(name) {
+    for (let child of this.children) {
+      if (child.modules.has(name)) {
+        return child.asyncLoadModule(name);
       }
     }
   }
 }
+
+defineLazyGetter(MultiAPIManager.prototype, "schema", function() {
+  let bases = this.children.map(child => child.schema);
+
+  // All API manager schema roots should derive from the global schema root,
+  // so it doesn't need its own entry.
+  if (bases[bases.length - 1] === Schemas) {
+    bases.pop();
+  }
+
+  if (bases.length === 1) {
+    bases = bases[0];
+  }
+  return new SchemaRoot(bases, new Map());
+});
+
 
 function LocaleData(data) {
   this.defaultLocale = data.defaultLocale;
@@ -1518,36 +1644,239 @@ defineLazyGetter(LocaleData.prototype, "availableLocales", function() {
                  .filter(locale => this.messages.has(locale)));
 });
 
-// This is a generic class for managing event listeners. Example usage:
-//
-// new EventManager(context, "api.subAPI", fire => {
-//   let listener = (...) => {
-//     // Fire any listeners registered with addListener.
-//     fire.async(arg1, arg2);
-//   };
-//   // Register the listener.
-//   SomehowRegisterListener(listener);
-//   return () => {
-//     // Return a way to unregister the listener.
-//     SomehowUnregisterListener(listener);
-//   };
-// }).api()
-//
-// The result is an object with addListener, removeListener, and
-// hasListener methods. |context| is an add-on scope (either an
-// ExtensionContext in the chrome process or ExtensionContext in a
-// content process). |name| is for debugging. |register| is a function
-// to register the listener. |register| should return an
-// unregister function that will unregister the listener.
-function EventManager(context, name, register) {
-  this.context = context;
-  this.name = name;
-  this.register = register;
-  this.unregister = new Map();
-  this.inputHandling = false;
-}
+/**
+ * This is a generic class for managing event listeners.
+ *
+ * @example
+ * new EventManager({
+ *   context,
+ *   name: "api.subAPI",
+ *   register:  fire => {
+ *     let listener = (...) => {
+ *       // Fire any listeners registered with addListener.
+ *       fire.async(arg1, arg2);
+ *     };
+ *     // Register the listener.
+ *     SomehowRegisterListener(listener);
+ *     return () => {
+ *       // Return a way to unregister the listener.
+ *       SomehowUnregisterListener(listener);
+ *     };
+ *   }
+ * }).api()
+ *
+ * The result is an object with addListener, removeListener, and
+ * hasListener methods. `context` is an add-on scope (either an
+ * ExtensionContext in the chrome process or ExtensionContext in a
+ * content process).
+ */
+class EventManager {
+  /*
+   * @param {object} params
+   *        Parameters that control this EventManager.
+   * @param {BaseContext} params.context
+   *        An object representing the extension instance using this event.
+   * @param {string} params.name
+   *        A name used only for debugging.
+   * @param {functon} params.register
+   *        A function called whenever a new listener is added.
+   * @param {boolean} [params.inputHandling=false]
+   *        If true, the "handling user input" flag is set while handlers
+   *        for this event are executing.
+   * @param {object} [params.persistent]
+   *        Details for persistent event listeners
+   * @param {string} params.persistent.module
+   *        The name of the module in which this event is defined.
+   * @param {string} params.persistent.event
+   *        The name of this event.
+   */
+  constructor(params) {
+    // Maintain compatibility with the old EventManager API in which
+    // the constructor took parameters (contest, name, register).
+    // Remove this in bug 1451212.
+    if (arguments.length > 1) {
+      [this.context, this.name, this.register] = arguments;
+      this.inputHandling = false;
+      this.persistent = null;
+    } else {
+      let {context, name, register, inputHandling = false, persistent = null} = params;
+      this.context = context;
+      this.name = name;
+      this.register = register;
+      this.inputHandling = inputHandling;
+      this.persistent = persistent;
+    }
 
-EventManager.prototype = {
+    // Don't bother with persistent event handling if delayed background
+    // startup is not enabled.
+    if (!DELAYED_BG_STARTUP) {
+      this.persistent = null;
+    }
+
+    this.unregister = new Map();
+    this.remove = new Map();
+
+    if (this.persistent) {
+      if (this.context.viewType !== "background") {
+        this.persistent = null;
+      }
+      if (AppConstants.DEBUG) {
+        if (this.context.envType !== "addon_parent") {
+          throw new Error("Persistent event managers can only be created for addon_parent");
+        }
+        if (!this.persistent.module || !this.persistent.event) {
+          throw new Error("Persistent event manager must specify module and event");
+        }
+      }
+    }
+  }
+
+  /*
+   * Information about listeners to persistent events is associated with
+   * the extension to which they belong.  Any extension thas has such
+   * listeners has a property called `persistentListeners` that is a
+   * 3-level Map.  The first 2 keys are the module name (e.g., webRequest)
+   * and the name of the event within the module (e.g., onBeforeRequest).
+   * The third level of the map is used to track multiple listeners for
+   * the same event, these listeners are distinguished by the extra arguments
+   * passed to addListener().  For quick lookups, the key to the third Map
+   * is the result of calling uneval() on the array of extra arguments.
+   *
+   * The value stored in the Map is a plain object with a property called
+   * `params` that is the original (ie, not uneval()ed) extra arguments to
+   * addListener().  For a primed listener (i.e., the stub listener created
+   * during browser startup before the extension background page is started,
+   * the object also has a `primed` property that holds the things needed
+   * to handle events during startup and eventually connect the listener
+   * with a callback registered from the extension.
+   */
+  static _initPersistentListeners(extension) {
+    if (extension.persistentListeners) {
+      return;
+    }
+
+    let listeners = new DefaultMap(() => new DefaultMap(() => new Map()));
+    extension.persistentListeners = listeners;
+
+    let {persistentListeners} = extension.startupData;
+    if (!persistentListeners) {
+      return;
+    }
+
+    for (let [module, entry] of Object.entries(persistentListeners)) {
+      for (let [event, paramlists] of Object.entries(entry)) {
+        for (let paramlist of paramlists) {
+          let key = uneval(paramlist);
+          listeners.get(module).get(event).set(key, {params: paramlist});
+        }
+      }
+    }
+  }
+
+  // Extract just the information needed at startup for all persistent
+  // listeners, and arrange for it to be saved.  This should be called
+  // whenever the set of persistent listeners for an extension changes.
+  static _writePersistentListeners(extension) {
+    let startupListeners = {};
+    for (let [module, moduleEntry] of extension.persistentListeners) {
+      startupListeners[module] = {};
+      for (let [event, eventEntry] of moduleEntry) {
+        startupListeners[module][event] = Array.from(eventEntry.values(),
+                                                     listener => listener.params);
+      }
+    }
+
+    extension.startupData.persistentListeners = startupListeners;
+    extension.saveStartupData();
+  }
+
+  // Set up "primed" event listeners for any saved event listeners
+  // in an extension's startup data.
+  // This function is only called during browser startup, it stores details
+  // about all primed listeners in the extension's persistentListeners Map.
+  static primeListeners(extension) {
+    EventManager._initPersistentListeners(extension);
+
+    for (let [module, moduleEntry] of extension.persistentListeners) {
+      let api = extension.apiManager.getAPI(module, extension, "addon_parent");
+      for (let [event, eventEntry] of moduleEntry) {
+        for (let listener of eventEntry.values()) {
+          let primed = {pendingEvents: []};
+          listener.primed = primed;
+
+          let wakeup = () => new Promise(resolve => {
+            extension.once("startup", resolve);
+            extension.emit("background-page-event");
+          });
+
+          let fireEvent = (...args) => new Promise((resolve, reject) => {
+            primed.pendingEvents.push({args, resolve, reject});
+            extension.emit("background-page-event");
+          });
+
+          let fire = {
+            wakeup,
+            sync: fireEvent,
+            async: fireEvent,
+          };
+
+          let {unregister, convert} = api.primeListener(extension, event, fire, listener.params);
+          Object.assign(primed, {unregister, convert});
+        }
+      }
+    }
+  }
+
+  // Remove any primed listeners that were not re-registered.
+  // This function is called after the background page has started.
+  static clearPrimedListeners(extension) {
+    for (let [module, moduleEntry] of extension.persistentListeners) {
+      for (let [event, listeners] of moduleEntry) {
+        for (let [key, listener] of listeners) {
+          let {primed} = listener;
+          if (!primed) {
+            continue;
+          }
+
+          for (let evt of primed.pendingEvents) {
+            evt.reject(new Error("listener not re-registered"));
+          }
+
+          EventManager.clearPersistentListener(extension, module, event, key);
+          primed.unregister();
+        }
+      }
+    }
+  }
+
+  // Record the fact that there is a listener for the given event in
+  // the given extension.  `args` is an Array containing any extra
+  // arguments that were passed to addListener().
+  static savePersistentListener(extension, module, event, args) {
+    EventManager._initPersistentListeners(extension);
+    let key = uneval(args);
+    extension.persistentListeners.get(module).get(event).set(key, {params: args});
+    EventManager._writePersistentListeners(extension);
+  }
+
+  // Remove the record for the given event listener from the extension's
+  // startup data.  `key` must be a string, the result of calling uneval()
+  // on the array of extra arguments originally passed to addListener().
+  static clearPersistentListener(extension, module, event, key) {
+    let listeners = extension.persistentListeners.get(module).get(event);
+    listeners.delete(key);
+
+    if (listeners.size == 0) {
+      let moduleEntry = extension.persistentListeners.get(module);
+      moduleEntry.delete(event);
+      if (moduleEntry.size == 0) {
+        extension.persistentListeners.delete(module);
+      }
+    }
+
+    EventManager._writePersistentListeners(extension);
+  }
+
   addListener(callback, ...args) {
     if (this.unregister.has(callback)) {
       return;
@@ -1592,13 +1921,66 @@ EventManager.prototype = {
       },
     };
 
+    let {extension} = this.context;
 
-    let unregister = this.register(fire, ...args);
+    let unregister = null;
+    let recordStartupData = false;
+
+    // If this is a persistent event, check for a listener that was already
+    // created during startup.  If there is one, use it and don't create a
+    // new one.
+    if (this.persistent) {
+      recordStartupData = true;
+      let {module, event} = this.persistent;
+
+      let key = uneval(args);
+      EventManager._initPersistentListeners(extension);
+      let listener = extension.persistentListeners
+                              .get(module).get(event).get(key);
+
+      if (listener) {
+        // If extensions.webextensions.background-delayed-startup is disabled,
+        // we can have stored info here but no primed listener.  This check
+        // can be removed if/when we make delayed background startup the only
+        // supported setting.
+        let {primed} = listener;
+        if (primed) {
+          listener.primed = null;
+
+          primed.convert(fire, this.context);
+          unregister = primed.unregister;
+
+          for (let evt of primed.pendingEvents) {
+            evt.resolve(fire.async(...evt.args));
+          }
+        }
+
+        recordStartupData = false;
+        this.remove.set(callback, () => {
+          EventManager.clearPersistentListener(extension, module, event, uneval(args));
+        });
+      }
+    }
+
+    if (!unregister) {
+      unregister = this.register(fire, ...args);
+    }
+
     this.unregister.set(callback, unregister);
     this.context.callOnClose(this);
-  },
 
-  removeListener(callback) {
+    // If this is a new listener for a persistent event, record
+    // the details for subsequent startups.
+    if (recordStartupData) {
+      let {module, event} = this.persistent;
+      EventManager.savePersistentListener(extension, module, event, args);
+      this.remove.set(callback, () => {
+        EventManager.clearPersistentListener(extension, module, event, uneval(args));
+      });
+    }
+  }
+
+  removeListener(callback, clearPersistentListener = true) {
     if (!this.unregister.has(callback)) {
       return;
     }
@@ -1610,24 +1992,31 @@ EventManager.prototype = {
     } catch (e) {
       Cu.reportError(e);
     }
+
+    if (clearPersistentListener && this.remove.has(callback)) {
+      let cleanup = this.remove.get(callback);
+      this.remove.delete(callback);
+      cleanup();
+    }
+
     if (this.unregister.size == 0) {
       this.context.forgetOnClose(this);
     }
-  },
+  }
 
   hasListener(callback) {
     return this.unregister.has(callback);
-  },
+  }
 
   revoke() {
     for (let callback of this.unregister.keys()) {
-      this.removeListener(callback);
+      this.removeListener(callback, false);
     }
-  },
+  }
 
   close() {
     this.revoke();
-  },
+  }
 
   api() {
     return {
@@ -1637,8 +2026,8 @@ EventManager.prototype = {
       setUserInput: this.inputHandling,
       [Schemas.REVOKE]: () => this.revoke(),
     };
-  },
-};
+  }
+}
 
 // Simple API for event listeners where events never fire.
 function ignoreEvent(context, name) {
@@ -1652,9 +2041,7 @@ function ignoreEvent(context, name) {
       scriptError.init(msg, frame.filename, null, frame.lineNumber,
                        frame.columnNumber, Ci.nsIScriptError.warningFlag,
                        "content javascript");
-      let consoleService = Cc["@mozilla.org/consoleservice;1"]
-        .getService(Ci.nsIConsoleService);
-      consoleService.logMessage(scriptError);
+      Services.console.logMessage(scriptError);
     },
     removeListener: function(callback) {},
     hasListener: function(callback) {},
@@ -1673,7 +2060,6 @@ ExtensionCommon = {
   CanOfAPIs,
   EventManager,
   ExtensionAPI,
-  ExtensionAPIs,
   LocalAPIImplementation,
   LocaleData,
   NoCloneSpreadArgs,
@@ -1682,4 +2068,7 @@ ExtensionCommon = {
   SpreadArgs,
   ignoreEvent,
   stylesheetMap,
+
+  MultiAPIManager,
+  LazyAPIManager,
 };

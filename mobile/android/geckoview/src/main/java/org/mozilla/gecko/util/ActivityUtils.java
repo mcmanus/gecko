@@ -14,8 +14,6 @@ import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 
-import org.mozilla.gecko.AppConstants;
-
 public class ActivityUtils {
     private ActivityUtils() {
     }
@@ -37,10 +35,12 @@ public class ActivityUtils {
                 newVis |= View.SYSTEM_UI_FLAG_LOW_PROFILE;
             }
         } else {
+            // no need to prevent status bar to appear when exiting full screen
+            preventDisplayStatusbar(activity, false);
             newVis = View.SYSTEM_UI_FLAG_VISIBLE;
         }
 
-        if (AppConstants.Versions.feature23Plus) {
+        if (Build.VERSION.SDK_INT >= 23) {
             // We also have to set SYSTEM_UI_FLAG_LIGHT_STATUS_BAR with to current system ui status
             // to support both light and dark status bar.
             final int oldVis = window.getDecorView().getSystemUiVisibility();
@@ -76,5 +76,22 @@ public class ActivityUtils {
             context = ((ContextWrapper) context).getBaseContext();
         }
         return null;
+    }
+
+    public static void preventDisplayStatusbar(final Activity activity, boolean registering) {
+        final View decorView = activity.getWindow().getDecorView();
+        if (registering) {
+            decorView.setOnSystemUiVisibilityChangeListener(new View.OnSystemUiVisibilityChangeListener() {
+                @Override
+                public void onSystemUiVisibilityChange(int visibility) {
+                    if ((visibility & View.SYSTEM_UI_FLAG_FULLSCREEN) == 0) {
+                        setFullScreen(activity, true);
+                    }
+                }
+            });
+        } else {
+            decorView.setOnSystemUiVisibilityChangeListener(null);
+        }
+
     }
 }

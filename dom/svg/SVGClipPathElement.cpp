@@ -8,12 +8,15 @@
 
 #include "mozilla/dom/SVGClipPathElement.h"
 #include "mozilla/dom/SVGClipPathElementBinding.h"
+#include "mozilla/dom/SVGUnitTypesBinding.h"
 #include "nsGkAtoms.h"
 
 NS_IMPL_NS_NEW_NAMESPACED_SVG_ELEMENT(ClipPath)
 
 namespace mozilla {
 namespace dom {
+
+using namespace SVGUnitTypesBinding;
 
 JSObject*
 SVGClipPathElement::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto)
@@ -50,8 +53,15 @@ SVGClipPathElement::GetEnumInfo()
                             ArrayLength(sEnumInfo));
 }
 
+bool
+SVGClipPathElement::IsUnitsObjectBoundingBox() const
+{
+  return mEnumAttributes[CLIPPATHUNITS].GetAnimValue() == SVG_UNIT_TYPE_OBJECTBOUNDINGBOX;
+}
+
+
 //----------------------------------------------------------------------
-// nsIDOMNode methods
+// nsINode methods
 
 NS_IMPL_ELEMENT_CLONE_WITH_INIT(SVGClipPathElement)
 

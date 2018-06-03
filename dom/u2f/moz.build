@@ -10,14 +10,10 @@ with Files("**"):
 EXPORTS.mozilla.dom += [
     'U2F.h',
     'U2FAuthenticator.h',
-    'U2FUtil.h',
 ]
 
 UNIFIED_SOURCES += [
     'U2F.cpp',
-    'U2FManager.cpp',
-    'U2FTransactionChild.cpp',
-    'U2FTransactionParent.cpp',
 ]
 
 include('/ipc/chromium/chromium-config.mozbuild')
@@ -34,3 +30,4 @@ LOCAL_INCLUDES += [
 ]
 
 MOCHITEST_MANIFESTS += ['tests/mochitest.ini']
+BROWSER_CHROME_MANIFESTS += ['tests/browser/browser.ini']

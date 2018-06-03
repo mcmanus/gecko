@@ -110,12 +110,10 @@ txKeyFunctionCall::isSensitiveTo(ContextSensitivity aContext)
 }
 
 #ifdef TX_TO_STRING
-nsresult
-txKeyFunctionCall::getNameAtom(nsAtom** aAtom)
+void
+txKeyFunctionCall::appendName(nsAString& aDest)
 {
-    *aAtom = nsGkAtoms::key;
-    NS_ADDREF(*aAtom);
-    return NS_OK;
+    aDest.Append(nsGkAtoms::key->GetUTF16String());
 }
 #endif
 
@@ -261,8 +259,8 @@ bool txXSLKey::addKey(nsAutoPtr<txPattern>&& aMatch, nsAutoPtr<Expr>&& aUse)
     if (!key)
         return false;
 
-    key->matchPattern = Move(aMatch);
-    key->useExpr = Move(aUse);
+    key->matchPattern = std::move(aMatch);
+    key->useExpr = std::move(aUse);
 
     return true;
 }

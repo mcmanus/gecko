@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim:set ts=2 sts=2 sw=2 et cin:
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -30,7 +30,6 @@
 #include "nsGkAtoms.h"
 #include "nsIPluginInstanceOwner.h"
 #include "nsNPAPIPluginInstance.h"
-#include "nsIDOMElement.h"
 #include "npapi.h"
 #include "nsIObjectLoadingContent.h"
 #include "nsContentUtils.h"
@@ -140,8 +139,8 @@ protected:
   nsPluginFrame* mFrame;
 };
 
-nsPluginFrame::nsPluginFrame(nsStyleContext* aContext)
-  : nsFrame(aContext, kClassID)
+nsPluginFrame::nsPluginFrame(ComputedStyle* aStyle)
+  : nsFrame(aStyle, kClassID)
   , mInstanceOwner(nullptr)
   , mOuterView(nullptr)
   , mInnerView(nullptr)
@@ -192,10 +191,10 @@ nsPluginFrame::Init(nsIContent*       aContent,
 }
 
 void
-nsPluginFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsPluginFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   if (mReflowCallbackPosted) {
-    PresContext()->PresShell()->CancelReflowCallback(this);
+    PresShell()->CancelReflowCallback(this);
   }
 
   // Ensure our DidComposite observer is gone.
@@ -217,11 +216,11 @@ nsPluginFrame::DestroyFrom(nsIFrame* aDestructRoot)
     mBackgroundSink->Destroy();
   }
 
-  nsFrame::DestroyFrom(aDestructRoot);
+  nsFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 /* virtual */ void
-nsPluginFrame::DidSetStyleContext(nsStyleContext* aOldStyleContext)
+nsPluginFrame::DidSetComputedStyle(ComputedStyle* aOldComputedStyle)
 {
   if (HasView()) {
     nsView* view = GetView();
@@ -233,7 +232,7 @@ nsPluginFrame::DidSetStyleContext(nsStyleContext* aOldStyleContext)
     }
   }
 
-  nsFrame::DidSetStyleContext(aOldStyleContext);
+  nsFrame::DidSetComputedStyle(aOldComputedStyle);
 }
 
 #ifdef DEBUG_FRAME_DUMP
@@ -280,7 +279,7 @@ nsPluginFrame::PrepForDrawing(nsIWidget *aWidget)
 
   if (mWidget) {
     // Disallow windowed plugins in popups
-    nsIFrame* rootFrame = rpc->PresShell()->FrameManager()->GetRootFrame();
+    nsIFrame* rootFrame = rpc->PresShell()->GetRootFrame();
     nsIWidget* parentWidget = rootFrame->GetNearestWidget();
     if (!parentWidget || nsLayoutUtils::GetDisplayRootFrame(this) != rootFrame) {
       return NS_ERROR_FAILURE;
@@ -359,7 +358,7 @@ nsPluginFrame::PrepForDrawing(nsIWidget *aWidget)
 #ifdef ACCESSIBILITY
   nsAccessibilityService* accService = nsIPresShell::AccService();
   if (accService) {
-    accService->RecreateAccessible(PresContext()->PresShell(), mContent);
+    accService->RecreateAccessible(PresShell(), mContent);
   }
 #endif
 
@@ -632,7 +631,7 @@ nsPluginFrame::CallSetWindow(bool aCheckIsHidden)
   if (!rootPC)
     return NS_ERROR_FAILURE;
   int32_t appUnitsPerDevPixel = presContext->AppUnitsPerDevPixel();
-  nsIFrame* rootFrame = rootPC->PresShell()->FrameManager()->GetRootFrame();
+  nsIFrame* rootFrame = rootPC->PresShell()->GetRootFrame();
   nsRect bounds = GetContentRectRelativeToSelf() + GetOffsetToCrossDoc(rootFrame);
   nsIntRect intBounds = bounds.ToNearestPixels(appUnitsPerDevPixel);
 
@@ -771,7 +770,9 @@ nsPluginFrame::IsHidden(bool aCheckVisibilityStyle) const
     // compatibility w/ 4.x and IE so we don't create a non-painting
     // widget in layout. See bug 188959.
     nsAutoString hidden;
-    if (mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::hidden, hidden) &&
+    if (mContent->AsElement()->GetAttr(kNameSpaceID_None,
+                                       nsGkAtoms::hidden,
+                                       hidden) &&
        (hidden.IsEmpty() ||
         (!hidden.LowerCaseEqualsLiteral("false") &&
          !hidden.LowerCaseEqualsLiteral("no") &&
@@ -792,7 +793,7 @@ nsPluginFrame::GetRemoteTabChromeOffset()
       if (nsCOMPtr<nsPIDOMWindowOuter> topWindow = window->GetTop()) {
         dom::TabChild* tc = dom::TabChild::GetFrom(topWindow);
         if (tc) {
-          offset += tc->GetChromeDisplacement();
+          offset += tc->GetChromeOffset();
         }
       }
     }
@@ -833,25 +834,18 @@ nsPluginFrame::GetWindowOriginInPixels(bool aWindowless)
 }
 
 void
-nsPluginFrame::DidReflow(nsPresContext*            aPresContext,
-                         const ReflowInput*  aReflowInput,
-                         nsDidReflowStatus         aStatus)
+nsPluginFrame::DidReflow(nsPresContext*     aPresContext,
+                         const ReflowInput* aReflowInput)
 {
   // Do this check before calling the superclass, as that clears
   // NS_FRAME_FIRST_REFLOW
-  if (aStatus == nsDidReflowStatus::FINISHED &&
-      (GetStateBits() & NS_FRAME_FIRST_REFLOW)) {
+  if (GetStateBits() & NS_FRAME_FIRST_REFLOW) {
     nsCOMPtr<nsIObjectLoadingContent> objContent(do_QueryInterface(mContent));
     NS_ASSERTION(objContent, "Why not an object loading content?");
     objContent->HasNewFrame(this);
   }
 
-  nsFrame::DidReflow(aPresContext, aReflowInput, aStatus);
-
-  // The view is created hidden; once we have reflowed it and it has been
-  // positioned then we show it.
-  if (aStatus != nsDidReflowStatus::FINISHED)
-    return;
+  nsFrame::DidReflow(aPresContext, aReflowInput);
 
   if (HasView()) {
     nsView* view = GetView();
@@ -871,7 +865,7 @@ nsPluginFrame::PaintPrintPlugin(nsIFrame* aFrame, gfxContext* aCtx,
     nsLayoutUtils::PointToGfxPoint(pt, aFrame->PresContext()->AppUnitsPerDevPixel());
 
   gfxContextMatrixAutoSaveRestore autoSR(aCtx);
-  aCtx->SetMatrix(aCtx->CurrentMatrix().PreTranslate(devPixelPt));
+  aCtx->SetMatrixDouble(aCtx->CurrentMatrixDouble().PreTranslate(devPixelPt));
 
   // FIXME - Bug 385435: Doesn't aDirtyRect need translating too?
 
@@ -915,6 +909,11 @@ public:
   {
     return LAYER_ACTIVE;
   }
+
+  virtual nsDisplayItemGeometry* AllocateGeometry(nsDisplayListBuilder* aBuilder) override
+  {
+    return new nsDisplayPluginGeometry(this, aBuilder);
+  }
 };
 
 static nsRect
@@ -947,7 +946,7 @@ nsDisplayPlugin::Paint(nsDisplayListBuilder* aBuilder,
 {
   nsPluginFrame* f = static_cast<nsPluginFrame*>(mFrame);
   bool snap;
-  f->PaintPlugin(aBuilder, *aCtx, mVisibleRect, GetBounds(aBuilder, &snap));
+  f->PaintPlugin(aBuilder, *aCtx, GetPaintRect(), GetBounds(aBuilder, &snap));
 }
 
 static nsRect
@@ -1187,9 +1186,9 @@ nsPluginFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 
   // determine if we are printing
   if (type == nsPresContext::eContext_Print) {
-    aLists.Content()->AppendNewToTop(new (aBuilder)
-      nsDisplayGeneric(aBuilder, this, PaintPrintPlugin, "PrintPlugin",
-                       DisplayItemType::TYPE_PRINT_PLUGIN));
+    aLists.Content()->AppendToTop(
+      MakeDisplayItem<nsDisplayGeneric>(aBuilder, this, PaintPrintPlugin, "PrintPlugin",
+                                        DisplayItemType::TYPE_PRINT_PLUGIN));
   } else {
     LayerState state = GetLayerState(aBuilder, nullptr);
     if (state == LAYER_INACTIVE &&
@@ -1199,12 +1198,12 @@ nsPluginFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     if (aBuilder->IsPaintingToWindow() &&
         state == LAYER_ACTIVE &&
         IsTransparentMode()) {
-      aLists.Content()->AppendNewToTop(new (aBuilder)
-        nsDisplayPluginReadback(aBuilder, this));
+      aLists.Content()->AppendToTop(
+        MakeDisplayItem<nsDisplayPluginReadback>(aBuilder, this));
     }
 
-    aLists.Content()->AppendNewToTop(new (aBuilder)
-      nsDisplayPlugin(aBuilder, this));
+    aLists.Content()->AppendToTop(
+      MakeDisplayItem<nsDisplayPlugin>(aBuilder, this));
   }
 }
 
@@ -1309,9 +1308,7 @@ nsPluginFrame::PrintPlugin(gfxContext& aRenderingContext,
 
   // XXX Nav 4.x always sent a SetWindow call after print. Should we do the same?
   // XXX Calling DidReflow here makes no sense!!!
-  nsDidReflowStatus status = nsDidReflowStatus::FINISHED; // should we use a special status?
-  frame->DidReflow(presContext,
-                   nullptr, status);  // DidReflow will take care of it
+  frame->DidReflow(presContext, nullptr);  // DidReflow will take care of it
 }
 
 nsRect
@@ -1444,8 +1441,12 @@ nsPluginFrame::CreateWebRenderCommands(nsDisplayItem* aItem,
   }
   lm->AddDidCompositeObserver(mDidCompositeObserver.get());
 
-  LayerRect dest(r.x, r.y, size.width, size.height);
-  return aManager->CommandBuilder().PushImage(aItem, container, aBuilder, aResources, aSc, dest);
+  // If the image container is empty, we don't want to fallback. Any other
+  // failure will be due to resource constraints and fallback is unlikely to
+  // help us. Hence we can ignore the return value from PushImage.
+  LayoutDeviceRect dest(r.x, r.y, size.width, size.height);
+  aManager->CommandBuilder().PushImage(aItem, container, aBuilder, aResources, aSc, dest);
+  return true;
 }
 
 
@@ -1592,15 +1593,16 @@ nsPluginFrame::HandleEvent(nsPresContext* aPresContext,
 
   if (anEvent->mMessage == ePluginActivate) {
     nsIFocusManager* fm = nsFocusManager::GetFocusManager();
-    nsCOMPtr<nsIDOMElement> elem = do_QueryInterface(GetContent());
-    if (fm && elem)
+    if (fm) {
+      RefPtr<Element> elem = GetContent()->AsElement();
       return fm->SetFocus(elem, 0);
+    }
   }
   else if (anEvent->mMessage == ePluginFocus) {
     nsIFocusManager* fm = nsFocusManager::GetFocusManager();
     if (fm) {
-      nsCOMPtr<nsIContent> content = GetContent();
-      return fm->FocusPlugin(content);
+      RefPtr<Element> elem = GetContent()->AsElement();
+      return fm->FocusPlugin(elem);
     }
   }
 
@@ -1760,7 +1762,7 @@ nsPluginFrame::GetNextObjectFrame(nsPresContext* aPresContext, nsIFrame* aRoot)
 /*static*/ void
 nsPluginFrame::BeginSwapDocShells(nsISupports* aSupports, void*)
 {
-  NS_PRECONDITION(aSupports, "");
+  MOZ_ASSERT(aSupports, "null parameter");
   nsCOMPtr<nsIContent> content(do_QueryInterface(aSupports));
   if (!content) {
     return;
@@ -1781,7 +1783,7 @@ nsPluginFrame::BeginSwapDocShells(nsISupports* aSupports, void*)
 /*static*/ void
 nsPluginFrame::EndSwapDocShells(nsISupports* aSupports, void*)
 {
-  NS_PRECONDITION(aSupports, "");
+  MOZ_ASSERT(aSupports, "null parameter");
   nsCOMPtr<nsIContent> content(do_QueryInterface(aSupports));
   if (!content) {
     return;
@@ -1815,9 +1817,9 @@ nsPluginFrame::EndSwapDocShells(nsISupports* aSupports, void*)
 }
 
 nsIFrame*
-NS_NewObjectFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewObjectFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsPluginFrame(aContext);
+  return new (aPresShell) nsPluginFrame(aStyle);
 }
 
 bool

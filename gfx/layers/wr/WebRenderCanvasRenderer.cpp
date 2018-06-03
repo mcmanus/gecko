@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -7,6 +8,7 @@
 
 #include "GLContext.h"
 #include "GLScreenBuffer.h"
+#include "mozilla/layers/CompositorBridgeChild.h"
 #include "SharedSurfaceGL.h"
 #include "WebRenderBridgeChild.h"
 #include "WebRenderLayerManager.h"
@@ -24,70 +26,6 @@ void
 WebRenderCanvasRenderer::Initialize(const CanvasInitializeData& aData)
 {
   ShareableCanvasRenderer::Initialize(aData);
-}
-
-WebRenderCanvasRendererSync::~WebRenderCanvasRendererSync()
-{
-  Destroy();
-}
-
-void
-WebRenderCanvasRendererSync::Initialize(const CanvasInitializeData& aData)
-{
-  WebRenderCanvasRenderer::Initialize(aData);
-
-  if (mExternalImageId.isSome()) {
-    mManager->WrBridge()->DeallocExternalImageId(mExternalImageId.ref());
-    mExternalImageId.reset();
-  }
-}
-
-bool
-WebRenderCanvasRendererSync::CreateCompositable()
-{
-  if (!mCanvasClient) {
-    TextureFlags flags = TextureFlags::DEFAULT;
-    if (mOriginPos == gl::OriginPos::BottomLeft) {
-      flags |= TextureFlags::ORIGIN_BOTTOM_LEFT;
-    }
-
-    if (!mIsAlphaPremultiplied) {
-      flags |= TextureFlags::NON_PREMULTIPLIED;
-    }
-
-    mCanvasClient = CanvasClient::CreateCanvasClient(GetCanvasClientType(),
-                                                     GetForwarder(),
-                                                     flags);
-    if (!mCanvasClient) {
-      return false;
-    }
-
-    mCanvasClient->Connect();
-  }
-
-  if (mExternalImageId.isNothing()) {
-    mExternalImageId = Some(mManager->WrBridge()->AllocExternalImageIdForCompositable(mCanvasClient));
-  }
-
-  return true;
-}
-
-void
-WebRenderCanvasRendererSync::ClearCachedResources()
-{
-  if (mExternalImageId.isSome()) {
-    mManager->WrBridge()->DeallocExternalImageId(mExternalImageId.ref());
-    mExternalImageId.reset();
-  }
-}
-
-void
-WebRenderCanvasRendererSync::Destroy()
-{
-  if (mExternalImageId.isSome()) {
-    mManager->WrBridge()->DeallocExternalImageId(mExternalImageId.ref());
-    mExternalImageId.reset();
-  }
 }
 
 WebRenderCanvasRendererAsync::~WebRenderCanvasRendererAsync()

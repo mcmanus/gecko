@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,7 +12,9 @@
 #include "AutoReferenceChainGuard.h"
 #include "gfxPattern.h"
 #include "mozilla/dom/SVGGradientElement.h"
+#include "mozilla/dom/SVGGradientElementBinding.h"
 #include "mozilla/dom/SVGStopElement.h"
+#include "mozilla/dom/SVGUnitTypesBinding.h"
 #include "nsContentUtils.h"
 #include "SVGObserverUtils.h"
 #include "nsSVGAnimatedTransformList.h"
@@ -20,14 +23,16 @@
 
 using namespace mozilla;
 using namespace mozilla::dom;
+using namespace mozilla::dom::SVGGradientElementBinding;
+using namespace mozilla::dom::SVGUnitTypesBinding;
 using namespace mozilla::gfx;
 
 //----------------------------------------------------------------------
 // Implementation
 
-nsSVGGradientFrame::nsSVGGradientFrame(nsStyleContext* aContext,
+nsSVGGradientFrame::nsSVGGradientFrame(ComputedStyle* aStyle,
                                        ClassID aID)
-  : nsSVGPaintServerFrame(aContext, aID)
+  : nsSVGPaintServerFrame(aStyle, aID)
   , mSource(nullptr)
   , mLoopFlag(false)
   , mNoHRefURI(false)
@@ -220,9 +225,10 @@ static void GetStopInformation(nsIFrame* aStopFrame,
   static_cast<SVGStopElement*>(stopContent)->
     GetAnimatedNumberValues(aOffset, nullptr);
 
+  const nsStyleSVGReset* styleSVGReset = aStopFrame->StyleSVGReset();
   *aOffset = mozilla::clamped(*aOffset, 0.0f, 1.0f);
-  *aStopColor = aStopFrame->StyleSVGReset()->mStopColor;
-  *aStopOpacity = aStopFrame->StyleSVGReset()->mStopOpacity;
+  *aStopColor = styleSVGReset->mStopColor.CalcColor(aStopFrame);
+  *aStopOpacity = styleSVGReset->mStopOpacity;
 }
 
 already_AddRefed<gfxPattern>
@@ -241,7 +247,7 @@ nsSVGGradientFrame::GetPaintServerPattern(nsIFrame* aSource,
     // Set mSource for this consumer.
     // If this gradient is applied to text, our caller will be the glyph, which
     // is not an element, so we need to get the parent
-    mSource = aSource->GetContent()->IsNodeOfType(nsINode::eTEXT) ?
+    mSource = aSource->GetContent()->IsText() ?
                 aSource->GetParent() : aSource;
   }
 
@@ -258,10 +264,12 @@ nsSVGGradientFrame::GetPaintServerPattern(nsIFrame* aSource,
   }
 
   if (nStops == 1 || GradientVectorLengthIsZero()) {
+    auto lastStopFrame = stopFrames[nStops-1];
+    auto svgReset = lastStopFrame->StyleSVGReset();
     // The gradient paints a single colour, using the stop-color of the last
     // gradient step if there are more than one.
-    float stopOpacity = stopFrames[nStops-1]->StyleSVGReset()->mStopOpacity;
-    nscolor stopColor = stopFrames[nStops-1]->StyleSVGReset()->mStopColor;
+    float stopOpacity = svgReset->mStopOpacity;
+    nscolor stopColor = svgReset->mStopColor.CalcColor(lastStopFrame);
 
     Color stopColor2 = Color::FromABGR(stopColor);
     stopColor2.a *= stopOpacity * aGraphicOpacity;
@@ -660,18 +668,18 @@ nsSVGRadialGradientFrame::CreateGradient()
 
 nsIFrame*
 NS_NewSVGLinearGradientFrame(nsIPresShell*   aPresShell,
-                             nsStyleContext* aContext)
+                             ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsSVGLinearGradientFrame(aContext);
+  return new (aPresShell) nsSVGLinearGradientFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsSVGLinearGradientFrame)
 
 nsIFrame*
 NS_NewSVGRadialGradientFrame(nsIPresShell*   aPresShell,
-                             nsStyleContext* aContext)
+                             ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsSVGRadialGradientFrame(aContext);
+  return new (aPresShell) nsSVGRadialGradientFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsSVGRadialGradientFrame)

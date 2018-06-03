@@ -20,40 +20,40 @@ const TEST_URI = `
   Testing the color picker tooltip!
 `;
 
-add_task(function* () {
-  yield addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
-  let {view} = yield openRuleView();
-  yield testColorChangeIsntRevertedWhenOtherTooltipIsShown(view);
+add_task(async function() {
+  await addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
+  const {view} = await openRuleView();
+  await testColorChangeIsntRevertedWhenOtherTooltipIsShown(view);
 });
 
-function* testColorChangeIsntRevertedWhenOtherTooltipIsShown(ruleView) {
+async function testColorChangeIsntRevertedWhenOtherTooltipIsShown(ruleView) {
   let swatch = getRuleViewProperty(ruleView, "body", "background").valueSpan
     .querySelector(".ruleview-colorswatch");
 
   info("Open the color picker tooltip and change the color");
-  let picker = ruleView.tooltips.getTooltip("colorPicker");
-  let onColorPickerReady = picker.once("ready");
+  const picker = ruleView.tooltips.getTooltip("colorPicker");
+  const onColorPickerReady = picker.once("ready");
   swatch.click();
-  yield onColorPickerReady;
+  await onColorPickerReady;
 
-  yield simulateColorPickerChange(ruleView, picker, [0, 0, 0, 1], {
+  await simulateColorPickerChange(ruleView, picker, [0, 0, 0, 1], {
     selector: "body",
     name: "background-color",
     value: "rgb(0, 0, 0)"
   });
 
-  let spectrum = picker.spectrum;
+  const spectrum = picker.spectrum;
 
-  let onModifications = waitForNEvents(ruleView, "ruleview-changed", 2);
-  let onHidden = picker.tooltip.once("hidden");
+  const onModifications = waitForNEvents(ruleView, "ruleview-changed", 2);
+  const onHidden = picker.tooltip.once("hidden");
   focusAndSendKey(spectrum.element.ownerDocument.defaultView, "RETURN");
-  yield onHidden;
-  yield onModifications;
+  await onHidden;
+  await onModifications;
 
   info("Open the image preview tooltip");
-  let value = getRuleViewProperty(ruleView, "body", "background").valueSpan;
-  let url = value.querySelector(".theme-link");
-  let previewTooltip = yield assertShowPreviewTooltip(ruleView, url);
+  const value = getRuleViewProperty(ruleView, "body", "background").valueSpan;
+  const url = value.querySelector(".theme-link");
+  const previewTooltip = await assertShowPreviewTooltip(ruleView, url);
 
   info("Image tooltip is shown, verify that the swatch is still correct");
   swatch = value.querySelector(".ruleview-colorswatch");
@@ -61,5 +61,5 @@ function* testColorChangeIsntRevertedWhenOtherTooltipIsShown(ruleView) {
     "The swatch's color is correct");
   is(swatch.nextSibling.textContent, "black", "The color name is correct");
 
-  yield assertTooltipHiddenOnMouseOut(previewTooltip, url);
+  await assertTooltipHiddenOnMouseOut(previewTooltip, url);
 }

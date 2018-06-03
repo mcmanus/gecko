@@ -4,8 +4,10 @@
 
 "use strict";
 
-const I = require("devtools/client/shared/vendor/immutable");
-const { getUrlDetails } = require("../utils/request-utils");
+const {
+  getUrlDetails,
+  processNetworkUpdates,
+} = require("../utils/request-utils");
 const {
   ADD_REQUEST,
   CLEAR_REQUESTS,
@@ -14,201 +16,170 @@ const {
   REMOVE_SELECTED_CUSTOM_REQUEST,
   SELECT_REQUEST,
   SEND_CUSTOM_REQUEST,
+  TOGGLE_RECORDING,
   UPDATE_REQUEST,
-  UPDATE_PROPS,
 } = require("../constants");
 
-const Request = I.Record({
-  id: null,
-  // Set to true in case of a request that's being edited as part of "edit and resend"
-  isCustom: false,
-  // Request properties - at the beginning, they are unknown and are gradually filled in
-  startedMillis: undefined,
-  endedMillis: undefined,
-  method: undefined,
-  url: undefined,
-  urlDetails: undefined,
-  remotePort: undefined,
-  remoteAddress: undefined,
-  isXHR: undefined,
-  cause: undefined,
-  fromCache: undefined,
-  fromServiceWorker: undefined,
-  status: undefined,
-  statusText: undefined,
-  httpVersion: undefined,
-  securityState: undefined,
-  securityInfo: undefined,
-  mimeType: "text/plain",
-  contentSize: undefined,
-  transferredSize: undefined,
-  totalTime: undefined,
-  eventTimings: undefined,
-  headersSize: undefined,
-  // Text value is used for storing custom request query
-  // which only appears when user edit the custom requst form
-  customQueryValue: undefined,
-  requestHeaders: undefined,
-  requestHeadersFromUploadStream: undefined,
-  requestCookies: undefined,
-  requestPostData: undefined,
-  responseHeaders: undefined,
-  responseCookies: undefined,
-  responseContent: undefined,
-  responseContentDataUri: undefined,
-  formDataSections: undefined,
-});
-
-const Requests = I.Record({
-  // The collection of requests (keyed by id)
-  requests: I.Map(),
-  // Selection state
-  selectedId: null,
-  preselectedId: null,
-  // Auxiliary fields to hold requests stats
-  firstStartedMillis: +Infinity,
-  lastEndedMillis: -Infinity,
-});
-
 /**
- * Remove the currently selected custom request.
+ * This structure stores list of all HTTP requests received
+ * from the backend. It's using plain JS structures to store
+ * data instead of ImmutableJS, which is performance expensive.
  */
-function closeCustomRequest(state) {
-  let { requests, selectedId } = state;
-
-  if (!selectedId) {
-    return state;
-  }
-
-  let removedRequest = requests.get(selectedId);
-
-  // Only custom requests can be removed
-  if (!removedRequest || !removedRequest.isCustom) {
-    return state;
-  }
-
-  return state.withMutations(st => {
-    st.requests = st.requests.delete(selectedId);
-    st.selectedId = null;
-  });
+function Requests() {
+  return {
+    // Map with all requests (key = actor ID, value = request object)
+    requests: new Map(),
+    // Selected request ID
+    selectedId: null,
+    preselectedId: null,
+    // True if the monitor is recording HTTP traffic
+    recording: true,
+    // Auxiliary fields to hold requests stats
+    firstStartedMillis: +Infinity,
+    lastEndedMillis: -Infinity,
+  };
 }
 
-function requestsReducer(state = new Requests(), action) {
+/**
+ * This reducer is responsible for maintaining list of request
+ * within the Network panel.
+ */
+function requestsReducer(state = Requests(), action) {
   switch (action.type) {
+    // Appending new request into the list/map.
     case ADD_REQUEST: {
-      return state.withMutations(st => {
-        let newRequest = new Request(Object.assign(
-          { id: action.id },
-          action.data,
-          { urlDetails: getUrlDetails(action.data.url) }
-        ));
-        st.requests = st.requests.set(newRequest.id, newRequest);
+      const nextState = { ...state };
 
-        // Update the started/ended timestamps
-        let { startedMillis } = action.data;
-        if (startedMillis < st.firstStartedMillis) {
-          st.firstStartedMillis = startedMillis;
-        }
-        if (startedMillis > st.lastEndedMillis) {
-          st.lastEndedMillis = startedMillis;
-        }
+      const newRequest = {
+        id: action.id,
+        ...action.data,
+        urlDetails: getUrlDetails(action.data.url),
+      };
 
-        // Select the request if it was preselected and there is no other selection
-        if (st.preselectedId && st.preselectedId === action.id) {
-          st.selectedId = st.selectedId || st.preselectedId;
-          st.preselectedId = null;
-        }
-      });
+      nextState.requests = mapSet(state.requests, newRequest.id, newRequest);
+
+      // Update the started/ended timestamps.
+      const { startedMillis } = action.data;
+      if (startedMillis < state.firstStartedMillis) {
+        nextState.firstStartedMillis = startedMillis;
+      }
+      if (startedMillis > state.lastEndedMillis) {
+        nextState.lastEndedMillis = startedMillis;
+      }
+
+      // Select the request if it was preselected and there is no other selection.
+      if (state.preselectedId && state.preselectedId === action.id) {
+        nextState.selectedId = state.selectedId || state.preselectedId;
+        nextState.preselectedId = null;
+      }
+
+      return nextState;
     }
-    case UPDATE_REQUEST: {
-      let { requests, lastEndedMillis } = state;
 
-      let updatedRequest = requests.get(action.id);
-      if (!updatedRequest) {
+    // Update an existing request (with received data).
+    case UPDATE_REQUEST: {
+      const { requests, lastEndedMillis } = state;
+
+      let request = requests.get(action.id);
+      if (!request) {
         return state;
       }
 
-      updatedRequest = updatedRequest.withMutations(request => {
-        for (let [key, value] of Object.entries(action.data)) {
-          if (!UPDATE_PROPS.includes(key)) {
-            continue;
-          }
+      request = {
+        ...request,
+        ...processNetworkUpdates(action.data),
+      };
+      const requestEndTime = request.startedMillis +
+        (request.eventTimings ? request.eventTimings.totalTime : 0);
 
-          request[key] = value;
-
-          switch (key) {
-            case "url":
-              // Compute the additional URL details
-              request.urlDetails = getUrlDetails(value);
-              break;
-            case "totalTime":
-              request.endedMillis = request.startedMillis + value;
-              lastEndedMillis = Math.max(lastEndedMillis, request.endedMillis);
-              break;
-            case "requestPostData":
-              request.requestHeadersFromUploadStream = {
-                headers: [],
-                headersSize: 0,
-              };
-              break;
-          }
-        }
-      });
-
-      return state.withMutations(st => {
-        st.requests = requests.set(updatedRequest.id, updatedRequest);
-        st.lastEndedMillis = lastEndedMillis;
-      });
+      return {
+        ...state,
+        requests: mapSet(state.requests, action.id, request),
+        lastEndedMillis: requestEndTime > lastEndedMillis ?
+          requestEndTime : lastEndedMillis,
+      };
     }
+
+    // Remove all requests in the list. Create fresh new state
+    // object, but keep value of the `recording` field.
     case CLEAR_REQUESTS: {
-      return new Requests();
+      return {
+        ...Requests(),
+        recording: state.recording,
+      };
     }
+
+    // Select specific request.
     case SELECT_REQUEST: {
-      return state.set("selectedId", action.id);
+      return {
+        ...state,
+        selectedId: action.id,
+      };
     }
+
+    // Clone selected request for re-send.
     case CLONE_SELECTED_REQUEST: {
-      let { requests, selectedId } = state;
+      const { requests, selectedId } = state;
 
       if (!selectedId) {
         return state;
       }
 
-      let clonedRequest = requests.get(selectedId);
+      const clonedRequest = requests.get(selectedId);
       if (!clonedRequest) {
         return state;
       }
 
-      let newRequest = new Request({
+      const newRequest = {
         id: clonedRequest.id + "-clone",
         method: clonedRequest.method,
         url: clonedRequest.url,
         urlDetails: clonedRequest.urlDetails,
         requestHeaders: clonedRequest.requestHeaders,
         requestPostData: clonedRequest.requestPostData,
+        requestPostDataAvailable: clonedRequest.requestPostDataAvailable,
         isCustom: true
-      });
+      };
 
-      return state.withMutations(st => {
-        st.requests = requests.set(newRequest.id, newRequest);
-        st.selectedId = newRequest.id;
-      });
+      return {
+        ...state,
+        requests: mapSet(requests, newRequest.id, newRequest),
+        selectedId: newRequest.id,
+      };
     }
+
+    // Removing temporary cloned request (created for re-send, but canceled).
     case REMOVE_SELECTED_CUSTOM_REQUEST: {
       return closeCustomRequest(state);
     }
+
+    // Re-sending an existing request.
     case SEND_CUSTOM_REQUEST: {
       // When a new request with a given id is added in future, select it immediately.
       // where we know in advance the ID of the request, at a time when it
       // wasn't sent yet.
-      return closeCustomRequest(state.set("preselectedId", action.id));
+      return closeCustomRequest({...state, preselectedId: action.id});
     }
+
+    // Pause/resume button clicked.
+    case TOGGLE_RECORDING: {
+      return {
+        ...state,
+        recording: !state.recording,
+      };
+    }
+
+    // Side bar with request details opened.
     case OPEN_NETWORK_DETAILS: {
+      const nextState = { ...state };
       if (!action.open) {
-        return state.set("selectedId", null);
+        nextState.selectedId = null;
+        return nextState;
       }
 
-      if (!state.selectedId && !state.requests.isEmpty()) {
-        return state.set("selectedId", state.requests.first().id);
+      if (!state.selectedId && action.defaultSelectedId) {
+        nextState.selectedId = action.defaultSelectedId;
+        return nextState;
       }
 
       return state;
@@ -217,6 +188,49 @@ function requestsReducer(state = new Requests(), action) {
     default:
       return state;
   }
+}
+
+// Helpers
+
+/**
+ * Remove the currently selected custom request.
+ */
+function closeCustomRequest(state) {
+  const { requests, selectedId } = state;
+
+  if (!selectedId) {
+    return state;
+  }
+
+  const removedRequest = requests.get(selectedId);
+
+  // Only custom requests can be removed
+  if (!removedRequest || !removedRequest.isCustom) {
+    return state;
+  }
+
+  return {
+    ...state,
+    requests: mapDelete(state.requests, selectedId),
+    selectedId: null,
+  };
+}
+
+/**
+ * Append new item into existing map and return new map.
+ */
+function mapSet(map, key, value) {
+  const newMap = new Map(map);
+  return newMap.set(key, value);
+}
+
+/**
+ * Remove an item from existing map and return new map.
+ */
+function mapDelete(map, key) {
+  const newMap = new Map(map);
+  newMap.delete(key);
+  return newMap;
 }
 
 module.exports = {

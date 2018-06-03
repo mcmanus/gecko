@@ -9,30 +9,23 @@
 
 "use strict";
 
-this.EXPORTED_SYMBOLS = [
+var EXPORTED_SYMBOLS = [
   "DownloadsViewUI",
 ];
 
-const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
+  Downloads: "resource://gre/modules/Downloads.jsm",
+  DownloadUtils: "resource://gre/modules/DownloadUtils.jsm",
+  DownloadsCommon: "resource:///modules/DownloadsCommon.jsm",
+  FileUtils: "resource://gre/modules/FileUtils.jsm",
+  OS: "resource://gre/modules/osfile.jsm",
+  PlacesUtils: "resource://gre/modules/PlacesUtils.jsm"
+});
 
-XPCOMUtils.defineLazyModuleGetter(this, "Downloads",
-                                  "resource://gre/modules/Downloads.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "DownloadUtils",
-                                  "resource://gre/modules/DownloadUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "DownloadsCommon",
-                                  "resource:///modules/DownloadsCommon.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
-                                  "resource://gre/modules/FileUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "OS",
-                                  "resource://gre/modules/osfile.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
-                                  "resource://gre/modules/PlacesUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
-                                  "resource:///modules/RecentWindow.jsm");
-
-this.DownloadsViewUI = {
+var DownloadsViewUI = {
   /**
    * Returns true if the given string is the name of a command that can be
    * handled by the Downloads user interface, including standard commands.
@@ -72,7 +65,7 @@ this.DownloadsViewUI.BaseView = class {
  * HistoryDownloadElementShell and the DownloadsViewItem for the panel. The
  * history view may use a HistoryDownload object in place of a Download object.
  */
-this.DownloadsViewUI.DownloadElementShell = function() {}
+this.DownloadsViewUI.DownloadElementShell = function() {};
 
 this.DownloadsViewUI.DownloadElementShell.prototype = {
   /**
@@ -111,8 +104,30 @@ this.DownloadsViewUI.DownloadElementShell.prototype = {
     return OS.Path.basename(this.download.target.path);
   },
 
+  /**
+   * The user-facing label for the size (if any) of the download. The return value
+   * is an object 'sizeStrings' with 2 strings:
+   *   1. stateLabel - The size with the units (e.g. "1.5 MB").
+   *   2. status - The status of the download (e.g. "Completed");
+   */
+  get sizeStrings() {
+    let s = DownloadsCommon.strings;
+    let sizeStrings = {};
+
+    if (this.download.target.size !== undefined) {
+      let [size, unit] = DownloadUtils.convertByteUnits(this.download.target.size);
+      sizeStrings.stateLabel = s.sizeWithUnits(size, unit);
+      sizeStrings.status = s.statusSeparator(s.stateCompleted, sizeStrings.stateLabel);
+    } else {
+      // History downloads may not have a size defined.
+      sizeStrings.stateLabel = s.sizeUnknown;
+      sizeStrings.status = s.stateCompleted;
+    }
+    return sizeStrings;
+  },
+
   get browserWindow() {
-    return RecentWindow.getMostRecentBrowserWindow();
+    return BrowserWindowTracker.getTopWindow();
   },
 
   /**
@@ -247,17 +262,10 @@ this.DownloadsViewUI.DownloadElementShell.prototype = {
         stateLabel = s.fileMovedOrMissing;
         hoverStatus = stateLabel;
       } else if (this.download.succeeded) {
-        // For completed downloads, show the file size (e.g. "1.5 MB").
-        if (this.download.target.size !== undefined) {
-          let [size, unit] =
-            DownloadUtils.convertByteUnits(this.download.target.size);
-          stateLabel = s.sizeWithUnits(size, unit);
-          status = s.statusSeparator(s.stateCompleted, stateLabel);
-        } else {
-          // History downloads may not have a size defined.
-          stateLabel = s.sizeUnknown;
-          status = s.stateCompleted;
-        }
+        // For completed downloads, show the file size
+        let sizeStrings = this.sizeStrings;
+        stateLabel = sizeStrings.stateLabel;
+        status = sizeStrings.status;
         hoverStatus = status;
       } else if (this.download.canceled) {
         stateLabel = s.stateCanceled;

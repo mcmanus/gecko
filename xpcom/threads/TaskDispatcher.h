@@ -54,11 +54,10 @@ public:
 
   // Regular tasks are dispatched asynchronously, and run after state change
   // tasks.
-  virtual void AddTask(AbstractThread* aThread,
-                       already_AddRefed<nsIRunnable> aRunnable,
-                       AbstractThread::DispatchFailureHandling aFailureHandling = AbstractThread::AssertDispatchSuccess) = 0;
+  virtual nsresult AddTask(AbstractThread* aThread,
+                           already_AddRefed<nsIRunnable> aRunnable) = 0;
 
-  virtual void DispatchTasksFor(AbstractThread* aThread) = 0;
+  virtual nsresult DispatchTasksFor(AbstractThread* aThread) = 0;
   virtual bool HasTasksFor(AbstractThread* aThread) = 0;
   virtual void DrainDirectTasks() = 0;
 };
@@ -88,7 +87,7 @@ public:
     MOZ_ASSERT(!HaveDirectTasks());
 
     for (size_t i = 0; i < mTaskGroups.Length(); ++i) {
-      DispatchTaskGroup(Move(mTaskGroups[i]));
+      DispatchTaskGroup(std::move(mTaskGroups[i]));
     }
   }
 
@@ -111,7 +110,7 @@ public:
     if (mDirectTasks.isNothing()) {
       mDirectTasks.emplace();
     }
-    mDirectTasks->push(Move(aRunnable));
+    mDirectTasks->push(std::move(aRunnable));
   }
 
   void AddStateChangeTask(AbstractThread* aThread,
@@ -122,9 +121,8 @@ public:
     EnsureTaskGroup(aThread).mStateChangeTasks.AppendElement(r.forget());
   }
 
-  void AddTask(AbstractThread* aThread,
-               already_AddRefed<nsIRunnable> aRunnable,
-               AbstractThread::DispatchFailureHandling aFailureHandling) override
+  nsresult AddTask(AbstractThread* aThread,
+                   already_AddRefed<nsIRunnable> aRunnable) override
   {
     nsCOMPtr<nsIRunnable> r = aRunnable;
     MOZ_RELEASE_ASSERT(r);
@@ -139,11 +137,7 @@ public:
     PerThreadTaskGroup& group = *mTaskGroups.LastElement();
     group.mRegularTasks.AppendElement(r.forget());
 
-    // The task group needs to assert dispatch success if any of the runnables
-    // it's dispatching want to assert it.
-    if (aFailureHandling == AbstractThread::AssertDispatchSuccess) {
-      group.mFailureHandling = AbstractThread::AssertDispatchSuccess;
-    }
+    return NS_OK;
   }
 
   bool HasTasksFor(AbstractThread* aThread) override
@@ -152,15 +146,27 @@ public:
            (aThread == AbstractThread::GetCurrent() && HaveDirectTasks());
   }
 
-  void DispatchTasksFor(AbstractThread* aThread) override
+  nsresult DispatchTasksFor(AbstractThread* aThread) override
   {
+    nsresult rv = NS_OK;
+
     // Dispatch all groups that match |aThread|.
     for (size_t i = 0; i < mTaskGroups.Length(); ++i) {
       if (mTaskGroups[i]->mThread == aThread) {
-        DispatchTaskGroup(Move(mTaskGroups[i]));
+        nsresult rv2 = DispatchTaskGroup(std::move(mTaskGroups[i]));
+
+        if (NS_WARN_IF(NS_FAILED(rv2)) && NS_SUCCEEDED(rv)) {
+          // We should try our best to call DispatchTaskGroup() as much as
+          // possible and return an error if any of DispatchTaskGroup() calls
+          // failed.
+          rv = rv2;
+        }
+
         mTaskGroups.RemoveElementAt(i--);
       }
     }
+
+    return rv;
   }
 
 private:
@@ -169,7 +175,7 @@ private:
   {
   public:
     explicit PerThreadTaskGroup(AbstractThread* aThread)
-      : mThread(aThread), mFailureHandling(AbstractThread::DontAssertDispatchSuccess)
+      : mThread(aThread)
     {
       MOZ_COUNT_CTOR(PerThreadTaskGroup);
     }
@@ -179,7 +185,6 @@ private:
     RefPtr<AbstractThread> mThread;
     nsTArray<nsCOMPtr<nsIRunnable>> mStateChangeTasks;
     nsTArray<nsCOMPtr<nsIRunnable>> mRegularTasks;
-    AbstractThread::DispatchFailureHandling mFailureHandling;
   };
 
   class TaskGroupRunnable : public Runnable
@@ -187,7 +192,7 @@ private:
     public:
       explicit TaskGroupRunnable(UniquePtr<PerThreadTaskGroup>&& aTasks)
         : Runnable("AutoTaskDispatcher::TaskGroupRunnable")
-        , mTasks(Move(aTasks))
+        , mTasks(std::move(aTasks))
       {
       }
 
@@ -250,15 +255,14 @@ private:
     return nullptr;
   }
 
-  void DispatchTaskGroup(UniquePtr<PerThreadTaskGroup> aGroup)
+  nsresult DispatchTaskGroup(UniquePtr<PerThreadTaskGroup> aGroup)
   {
     RefPtr<AbstractThread> thread = aGroup->mThread;
 
-    AbstractThread::DispatchFailureHandling failureHandling = aGroup->mFailureHandling;
     AbstractThread::DispatchReason reason = mIsTailDispatcher ? AbstractThread::TailDispatch
                                                               : AbstractThread::NormalDispatch;
-    nsCOMPtr<nsIRunnable> r = new TaskGroupRunnable(Move(aGroup));
-    thread->Dispatch(r.forget(), failureHandling, reason);
+    nsCOMPtr<nsIRunnable> r = new TaskGroupRunnable(std::move(aGroup));
+    return thread->Dispatch(r.forget(), reason);
   }
 
   // Direct tasks. We use a Maybe<> because (a) this class is hot, (b)

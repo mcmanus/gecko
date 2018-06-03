@@ -14,7 +14,7 @@ add_task(async function test_query_node_tags_property() {
   // get toolbar node
   var options = histsvc.getNewQueryOptions();
   var query = histsvc.getNewQuery();
-  query.setFolders([PlacesUtils.toolbarFolderId], 1);
+  query.setParents([PlacesUtils.bookmarks.toolbarGuid], 1);
   var result = histsvc.executeQuery(query, options);
   var toolbarNode = result.root;
   toolbarNode.containerOpen = true;
@@ -29,22 +29,22 @@ add_task(async function test_query_node_tags_property() {
 
   // get the node for the new bookmark
   var node = toolbarNode.getChild(toolbarNode.childCount - 1);
-  do_check_eq(node.bookmarkGuid, bookmark.guid);
+  Assert.equal(node.bookmarkGuid, bookmark.guid);
 
   // confirm there's no tags via the .tags property
-  do_check_eq(node.tags, null);
+  Assert.equal(node.tags, null);
 
   // add a tag
   tagssvc.tagURI(bookmarkURI, ["foo"]);
-  do_check_eq(node.tags, "foo");
+  Assert.equal(node.tags, "foo");
 
   // add another tag, to test delimiter and sorting
   tagssvc.tagURI(bookmarkURI, ["bar"]);
-  do_check_eq(node.tags, "bar, foo");
+  Assert.equal(node.tags, "bar, foo");
 
   // remove the tags, confirming the property is cleared
   tagssvc.untagURI(bookmarkURI, null);
-  do_check_eq(node.tags, null);
+  Assert.equal(node.tags, null);
 
   toolbarNode.containerOpen = false;
 });

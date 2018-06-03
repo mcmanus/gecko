@@ -6,26 +6,26 @@
 
 // Avoid leaks by using tmp for imports...
 var tmp = {};
-Cu.import("resource://gre/modules/Promise.jsm", tmp);
-Cu.import("resource:///modules/CustomizableUI.jsm", tmp);
-Cu.import("resource://gre/modules/AppConstants.jsm", tmp);
-var {Promise, CustomizableUI, AppConstants} = tmp;
+ChromeUtils.import("resource://gre/modules/Promise.jsm", tmp);
+ChromeUtils.import("resource:///modules/CustomizableUI.jsm", tmp);
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm", tmp);
+ChromeUtils.import("resource://testing-common/CustomizableUITestUtils.jsm", tmp);
+var {Promise, CustomizableUI, AppConstants, CustomizableUITestUtils} = tmp;
 
 var EventUtils = {};
 Services.scriptloader.loadSubScript("chrome://mochikit/content/tests/SimpleTest/EventUtils.js", EventUtils);
 
+/**
+ * Instance of CustomizableUITestUtils for the current browser window.
+ */
+var gCUITestUtils = new CustomizableUITestUtils(window);
+
 Services.prefs.setBoolPref("browser.uiCustomization.skipSourceNodeCheck", true);
 registerCleanupFunction(() => Services.prefs.clearUserPref("browser.uiCustomization.skipSourceNodeCheck"));
-
-// Remove temporary e10s related new window options in customize ui,
-// they break a lot of tests.
-CustomizableUI.destroyWidget("e10s-button");
-CustomizableUI.removeWidgetFromArea("e10s-button");
 
 var {synthesizeDragStart, synthesizeDrop} = EventUtils;
 
 const kNSXUL = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
-const kTabEventFailureTimeoutInMs = 20000;
 
 const kForceOverflowWidthPx = 300;
 
@@ -108,10 +108,6 @@ function removeCustomToolbars() {
   gAddedToolbars.clear();
 }
 
-function getToolboxCustomToolbarId(toolbarName) {
-  return "__customToolbar_" + toolbarName.replace(" ", "_");
-}
-
 function resetCustomization() {
   return CustomizableUI.reset();
 }
@@ -128,10 +124,6 @@ function removeNonReleaseButtons(areaPanelPlacements) {
 
 function removeNonOriginalButtons() {
   CustomizableUI.removeWidgetFromArea("sync-button");
-}
-
-function restoreNonOriginalButtons() {
-  CustomizableUI.addWidgetToArea("sync-button", CustomizableUI.AREA_PANEL);
 }
 
 function assertAreaPlacements(areaId, expectedPlacements) {
@@ -182,8 +174,22 @@ function getAreaWidgetIds(areaId) {
   return CustomizableUI.getWidgetIdsInArea(areaId);
 }
 
-function simulateItemDrag(aToDrag, aTarget) {
-  synthesizeDrop(aToDrag.parentNode, aTarget);
+function simulateItemDrag(aToDrag, aTarget, aEvent = {}) {
+  let ev = aEvent;
+  if (ev == "end" || ev == "start") {
+    let win = aTarget.ownerGlobal;
+    win.QueryInterface(Ci.nsIInterfaceRequestor);
+    const dwu = win.getInterface(Ci.nsIDOMWindowUtils);
+    let bounds = dwu.getBoundsWithoutFlushing(aTarget);
+    if (ev == "end") {
+      ev = {clientX: bounds.right - 2, clientY: bounds.bottom - 2};
+    } else {
+      ev = {clientX: bounds.left + 2, clientY: bounds.top + 2};
+    }
+  }
+  ev._domDispatchOnly = true;
+  synthesizeDrop(aToDrag.parentNode, aTarget, null, null,
+                 aToDrag.ownerGlobal, aTarget.ownerGlobal, ev);
 }
 
 function endCustomizing(aWindow = window) {
@@ -253,11 +259,6 @@ function promiseWindowClosed(win) {
   });
 }
 
-function promisePanelShown(win) {
-  let panelEl = win.PanelUI.panel;
-  return promisePanelElementShown(win, panelEl);
-}
-
 function promiseOverflowShown(win) {
   let panelEl = win.document.getElementById("widget-overflow");
   return promisePanelElementShown(win, panelEl);
@@ -277,11 +278,6 @@ function promisePanelElementShown(win, aPanel) {
   });
 }
 
-function promisePanelHidden(win) {
-  let panelEl = win.PanelUI.panel;
-  return promisePanelElementHidden(win, panelEl);
-}
-
 function promiseOverflowHidden(win) {
   let panelEl = win.PanelUI.overflowPanel;
   return promisePanelElementHidden(win, panelEl);
@@ -295,7 +291,7 @@ function promisePanelElementHidden(win, aPanel) {
     function onPanelClose(e) {
       aPanel.removeEventListener("popuphidden", onPanelClose);
       win.clearTimeout(timeoutId);
-      resolve();
+      executeSoon(resolve);
     }
     aPanel.addEventListener("popuphidden", onPanelClose);
   });
@@ -379,40 +375,6 @@ function promiseTabLoadEvent(aTab, aURL) {
 
   BrowserTestUtils.loadURI(browser, aURL);
   return BrowserTestUtils.browserLoaded(browser);
-}
-
-/**
- * Navigate back or forward in tab history and wait for it to finish.
- *
- * @param aDirection   Number to indicate to move backward or forward in history.
- * @param aConditionFn Function that returns the result of an evaluated condition
- *                     that needs to be `true` to resolve the promise.
- * @return {Promise} resolved when navigation has finished.
- */
-function promiseTabHistoryNavigation(aDirection = -1, aConditionFn) {
-  return new Promise((resolve, reject) => {
-
-    let timeoutId = setTimeout(() => {
-      gBrowser.removeEventListener("pageshow", listener, true);
-      reject("Pageshow did not happen within " + kTabEventFailureTimeoutInMs + "ms");
-    }, kTabEventFailureTimeoutInMs);
-
-    function listener(event) {
-      gBrowser.removeEventListener("pageshow", listener, true);
-      clearTimeout(timeoutId);
-
-      if (aConditionFn) {
-        waitForCondition(aConditionFn).then(() => resolve(),
-                                            aReason => reject(aReason));
-      } else {
-        resolve();
-      }
-    }
-    gBrowser.addEventListener("pageshow", listener, true);
-
-    content.history.go(aDirection);
-
-  });
 }
 
 /**
@@ -510,12 +472,16 @@ function checkContextMenu(aContextMenu, aExpectedEntries, aWindow = window) {
 }
 
 function waitForOverflowButtonShown(win = window) {
+  let ov = win.document.getElementById("nav-bar-overflow-button");
+  let icon = win.document.getAnonymousElementByAttribute(ov, "class", "toolbarbutton-icon");
+  return waitForElementShown(icon);
+}
+function waitForElementShown(element) {
+  let win = element.ownerGlobal;
   let dwu = win.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils);
   return BrowserTestUtils.waitForCondition(() => {
     info("Waiting for overflow button to have non-0 size");
-    let ov = win.document.getElementById("nav-bar-overflow-button");
-    let icon = win.document.getAnonymousElementByAttribute(ov, "class", "toolbarbutton-icon");
-    let bounds = dwu.getBoundsWithoutFlushing(icon);
+    let bounds = dwu.getBoundsWithoutFlushing(element);
     return bounds.width > 0 && bounds.height > 0;
   });
 }

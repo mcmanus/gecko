@@ -12,6 +12,7 @@
 #include "sslerr.h"
 #include "sslexp.h"
 #include "sslproto.h"
+#include "tls_filter.h"
 #include "tls_parser.h"
 
 extern "C" {
@@ -32,11 +33,11 @@ const char* TlsAgent::states[] = {"INIT", "CONNECTING", "CONNECTED", "ERROR"};
 
 const std::string TlsAgent::kClient = "client";    // both sign and encrypt
 const std::string TlsAgent::kRsa2048 = "rsa2048";  // bigger
+const std::string TlsAgent::kRsa8192 = "rsa8192";  // biggest allowed
 const std::string TlsAgent::kServerRsa = "rsa";    // both sign and encrypt
 const std::string TlsAgent::kServerRsaSign = "rsa_sign";
 const std::string TlsAgent::kServerRsaPss = "rsa_pss";
 const std::string TlsAgent::kServerRsaDecrypt = "rsa_decrypt";
-const std::string TlsAgent::kServerRsaChain = "rsa_chain";
 const std::string TlsAgent::kServerEcdsa256 = "ecdsa256";
 const std::string TlsAgent::kServerEcdsa384 = "ecdsa384";
 const std::string TlsAgent::kServerEcdsa521 = "ecdsa521";
@@ -44,13 +45,22 @@ const std::string TlsAgent::kServerEcdhRsa = "ecdh_rsa";
 const std::string TlsAgent::kServerEcdhEcdsa = "ecdh_ecdsa";
 const std::string TlsAgent::kServerDsa = "dsa";
 
-TlsAgent::TlsAgent(const std::string& name, Role role,
-                   SSLProtocolVariant variant)
-    : name_(name),
-      variant_(variant),
-      role_(role),
+static const uint8_t kCannedTls13ServerHello[] = {
+    0x03, 0x03, 0x9c, 0xbc, 0x14, 0x9b, 0x0e, 0x2e, 0xfa, 0x0d, 0xf3,
+    0xf0, 0x5c, 0x70, 0x7a, 0xe0, 0xd1, 0x9b, 0x3e, 0x5a, 0x44, 0x6b,
+    0xdf, 0xe5, 0xc2, 0x28, 0x64, 0xf7, 0x00, 0xc1, 0x9c, 0x08, 0x76,
+    0x08, 0x00, 0x13, 0x01, 0x00, 0x00, 0x2e, 0x00, 0x33, 0x00, 0x24,
+    0x00, 0x1d, 0x00, 0x20, 0xc2, 0xcf, 0x23, 0x17, 0x64, 0x23, 0x03,
+    0xf0, 0xfb, 0x45, 0x98, 0x26, 0xd1, 0x65, 0x24, 0xa1, 0x6c, 0xa9,
+    0x80, 0x8f, 0x2c, 0xac, 0x0a, 0xea, 0x53, 0x3a, 0xcb, 0xe3, 0x08,
+    0x84, 0xae, 0x19, 0x00, 0x2b, 0x00, 0x02, 0x7f, kD13};
+
+TlsAgent::TlsAgent(const std::string& nm, Role rl, SSLProtocolVariant var)
+    : name_(nm),
+      variant_(var),
+      role_(rl),
       server_key_bits_(0),
-      adapter_(new DummyPrSocket(role_str(), variant)),
+      adapter_(new DummyPrSocket(role_str(), var)),
       ssl_fd_(nullptr),
       state_(STATE_INIT),
       timer_handle_(nullptr),
@@ -67,6 +77,7 @@ TlsAgent::TlsAgent(const std::string& name, Role role,
       expected_sent_alert_(kTlsAlertCloseNotify),
       expected_sent_alert_level_(kTlsAlertWarning),
       handshake_callback_called_(false),
+      resumption_callback_called_(false),
       error_code_(0),
       send_ctr_(0),
       recv_ctr_(0),
@@ -74,7 +85,8 @@ TlsAgent::TlsAgent(const std::string& name, Role role,
       handshake_callback_(),
       auth_certificate_callback_(),
       sni_callback_(),
-      skip_version_checks_(false) {
+      skip_version_checks_(false),
+      resumption_token_() {
   memset(&info_, 0, sizeof(info_));
   memset(&csinfo_, 0, sizeof(csinfo_));
   SECStatus rv = SSL_VersionRangeGetDefault(variant_, &vrange_);
@@ -101,11 +113,11 @@ TlsAgent::~TlsAgent() {
   }
 }
 
-void TlsAgent::SetState(State state) {
-  if (state_ == state) return;
+void TlsAgent::SetState(State s) {
+  if (state_ == s) return;
 
-  LOG("Changing state from " << state_ << " to " << state);
-  state_ = state;
+  LOG("Changing state from " << state_ << " to " << s);
+  state_ = s;
 }
 
 /*static*/ bool TlsAgent::LoadCertificate(const std::string& name,
@@ -122,11 +134,11 @@ void TlsAgent::SetState(State state) {
   return true;
 }
 
-bool TlsAgent::ConfigServerCert(const std::string& name, bool updateKeyBits,
+bool TlsAgent::ConfigServerCert(const std::string& id, bool updateKeyBits,
                                 const SSLExtraServerCertData* serverCertData) {
   ScopedCERTCertificate cert;
   ScopedSECKEYPrivateKey priv;
-  if (!TlsAgent::LoadCertificate(name, &cert, &priv)) {
+  if (!TlsAgent::LoadCertificate(id, &cert, &priv)) {
     return false;
   }
 
@@ -173,6 +185,10 @@ bool TlsAgent::EnsureTlsSetup(PRFileDesc* modelSocket) {
     if (rv != SECSuccess) return false;
   }
 
+  ScopedCERTCertList anchors(CERT_NewCertList());
+  rv = SSL_SetTrustAnchors(ssl_fd(), anchors.get());
+  if (rv != SECSuccess) return false;
+
   if (role_ == SERVER) {
     EXPECT_TRUE(ConfigServerCert(name_, true));
 
@@ -180,8 +196,8 @@ bool TlsAgent::EnsureTlsSetup(PRFileDesc* modelSocket) {
     EXPECT_EQ(SECSuccess, rv);
     if (rv != SECSuccess) return false;
 
-    ScopedCERTCertList anchors(CERT_NewCertList());
-    rv = SSL_SetTrustAnchors(ssl_fd(), anchors.get());
+    rv = SSL_SetMaxEarlyDataSize(ssl_fd(), 1024);
+    EXPECT_EQ(SECSuccess, rv);
     if (rv != SECSuccess) return false;
   } else {
     rv = SSL_SetURL(ssl_fd(), "server");
@@ -208,6 +224,29 @@ bool TlsAgent::EnsureTlsSetup(PRFileDesc* modelSocket) {
   return true;
 }
 
+bool TlsAgent::MaybeSetResumptionToken() {
+  if (!resumption_token_.empty()) {
+    SECStatus rv = SSL_SetResumptionToken(ssl_fd(), resumption_token_.data(),
+                                          resumption_token_.size());
+
+    // rv is SECFailure with error set to SSL_ERROR_BAD_RESUMPTION_TOKEN_ERROR
+    // if the resumption token was bad (expired/malformed/etc.).
+    if (expect_resumption_) {
+      // Only in case we expect resumption this has to be successful. We might
+      // not expect resumption due to some reason but the token is totally fine.
+      EXPECT_EQ(SECSuccess, rv);
+    }
+    if (rv != SECSuccess) {
+      EXPECT_EQ(SSL_ERROR_BAD_RESUMPTION_TOKEN_ERROR, PORT_GetError());
+      resumption_token_.clear();
+      EXPECT_FALSE(expect_resumption_);
+      if (expect_resumption_) return false;
+    }
+  }
+
+  return true;
+}
+
 void TlsAgent::SetupClientAuth() {
   EXPECT_TRUE(EnsureTlsSetup());
   ASSERT_EQ(CLIENT, role_);
@@ -217,6 +256,17 @@ void TlsAgent::SetupClientAuth() {
                                       reinterpret_cast<void*>(this)));
 }
 
+void CheckCertReqAgainstDefaultCAs(const CERTDistNames* caNames) {
+  ScopedCERTDistNames expected(CERT_GetSSLCACerts(nullptr));
+
+  ASSERT_EQ(expected->nnames, caNames->nnames);
+
+  for (size_t i = 0; i < static_cast<size_t>(expected->nnames); ++i) {
+    EXPECT_EQ(SECEqual,
+              SECITEM_CompareItem(&(expected->names[i]), &(caNames->names[i])));
+  }
+}
+
 SECStatus TlsAgent::GetClientAuthDataHook(void* self, PRFileDesc* fd,
                                           CERTDistNames* caNames,
                                           CERTCertificate** clientCert,
@@ -224,6 +274,9 @@ SECStatus TlsAgent::GetClientAuthDataHook(void* self, PRFileDesc* fd,
   TlsAgent* agent = reinterpret_cast<TlsAgent*>(self);
   ScopedCERTCertificate peerCert(SSL_PeerCertificate(agent->ssl_fd()));
   EXPECT_TRUE(peerCert) << "Client should be able to see the server cert";
+
+  // See bug 1457716
+  // CheckCertReqAgainstDefaultCAs(caNames);
 
   ScopedCERTCertificate cert;
   ScopedSECKEYPrivateKey priv;
@@ -253,18 +306,15 @@ bool TlsAgent::GetPeerChainLength(size_t* count) {
   return true;
 }
 
-void TlsAgent::CheckCipherSuite(uint16_t cipher_suite) {
-  EXPECT_EQ(csinfo_.cipherSuite, cipher_suite);
+void TlsAgent::CheckCipherSuite(uint16_t suite) {
+  EXPECT_EQ(csinfo_.cipherSuite, suite);
 }
 
 void TlsAgent::RequestClientAuth(bool requireAuth) {
-  EXPECT_TRUE(EnsureTlsSetup());
   ASSERT_EQ(SERVER, role_);
 
-  EXPECT_EQ(SECSuccess,
-            SSL_OptionSet(ssl_fd(), SSL_REQUEST_CERTIFICATE, PR_TRUE));
-  EXPECT_EQ(SECSuccess, SSL_OptionSet(ssl_fd(), SSL_REQUIRE_CERTIFICATE,
-                                      requireAuth ? PR_TRUE : PR_FALSE));
+  SetOption(SSL_REQUEST_CERTIFICATE, PR_TRUE);
+  SetOption(SSL_REQUIRE_CERTIFICATE, requireAuth ? PR_TRUE : PR_FALSE);
 
   EXPECT_EQ(SECSuccess, SSL_AuthCertificateHook(
                             ssl_fd(), &TlsAgent::ClientAuthenticated, this));
@@ -376,42 +426,8 @@ void TlsAgent::ConfigNamedGroups(const std::vector<SSLNamedGroup>& groups) {
   EXPECT_EQ(SECSuccess, rv);
 }
 
-void TlsAgent::SetSessionTicketsEnabled(bool en) {
-  EXPECT_TRUE(EnsureTlsSetup());
-
-  SECStatus rv = SSL_OptionSet(ssl_fd(), SSL_ENABLE_SESSION_TICKETS,
-                               en ? PR_TRUE : PR_FALSE);
-  EXPECT_EQ(SECSuccess, rv);
-}
-
-void TlsAgent::SetSessionCacheEnabled(bool en) {
-  EXPECT_TRUE(EnsureTlsSetup());
-
-  SECStatus rv = SSL_OptionSet(ssl_fd(), SSL_NO_CACHE, en ? PR_FALSE : PR_TRUE);
-  EXPECT_EQ(SECSuccess, rv);
-}
-
 void TlsAgent::Set0RttEnabled(bool en) {
-  EXPECT_TRUE(EnsureTlsSetup());
-
-  SECStatus rv =
-      SSL_OptionSet(ssl_fd(), SSL_ENABLE_0RTT_DATA, en ? PR_TRUE : PR_FALSE);
-  EXPECT_EQ(SECSuccess, rv);
-}
-
-void TlsAgent::SetFallbackSCSVEnabled(bool en) {
-  EXPECT_TRUE(role_ == CLIENT && EnsureTlsSetup());
-
-  SECStatus rv = SSL_OptionSet(ssl_fd(), SSL_ENABLE_FALLBACK_SCSV,
-                               en ? PR_TRUE : PR_FALSE);
-  EXPECT_EQ(SECSuccess, rv);
-}
-
-void TlsAgent::SetAltHandshakeTypeEnabled() {
-  EXPECT_TRUE(EnsureTlsSetup());
-
-  SECStatus rv = SSL_UseAltServerHelloType(ssl_fd(), true);
-  EXPECT_EQ(SECSuccess, rv);
+  SetOption(SSL_ENABLE_0RTT_DATA, en ? PR_TRUE : PR_FALSE);
 }
 
 void TlsAgent::SetVersionRange(uint16_t minver, uint16_t maxver) {
@@ -424,14 +440,33 @@ void TlsAgent::SetVersionRange(uint16_t minver, uint16_t maxver) {
   }
 }
 
+SECStatus ResumptionTokenCallback(PRFileDesc* fd,
+                                  const PRUint8* resumptionToken,
+                                  unsigned int len, void* ctx) {
+  EXPECT_NE(nullptr, resumptionToken);
+  if (!resumptionToken) {
+    return SECFailure;
+  }
+
+  std::vector<uint8_t> new_token(resumptionToken, resumptionToken + len);
+  reinterpret_cast<TlsAgent*>(ctx)->SetResumptionToken(new_token);
+  reinterpret_cast<TlsAgent*>(ctx)->SetResumptionCallbackCalled();
+  return SECSuccess;
+}
+
+void TlsAgent::SetResumptionTokenCallback() {
+  EXPECT_TRUE(EnsureTlsSetup());
+  SECStatus rv =
+      SSL_SetResumptionTokenCallback(ssl_fd(), ResumptionTokenCallback, this);
+  EXPECT_EQ(SECSuccess, rv);
+}
+
 void TlsAgent::GetVersionRange(uint16_t* minver, uint16_t* maxver) {
   *minver = vrange_.min;
   *maxver = vrange_.max;
 }
 
-void TlsAgent::SetExpectedVersion(uint16_t version) {
-  expected_version_ = version;
-}
+void TlsAgent::SetExpectedVersion(uint16_t ver) { expected_version_ = ver; }
 
 void TlsAgent::SetServerKeyBits(uint16_t bits) { server_key_bits_ = bits; }
 
@@ -478,10 +513,10 @@ void TlsAgent::SetSignatureSchemes(const SSLSignatureScheme* schemes,
   EXPECT_EQ(i, configuredCount) << "schemes in use were all set";
 }
 
-void TlsAgent::CheckKEA(SSLKEAType kea_type, SSLNamedGroup kea_group,
+void TlsAgent::CheckKEA(SSLKEAType kea, SSLNamedGroup kea_group,
                         size_t kea_size) const {
   EXPECT_EQ(STATE_CONNECTED, state_);
-  EXPECT_EQ(kea_type, info_.keaType);
+  EXPECT_EQ(kea, info_.keaType);
   if (kea_size == 0) {
     switch (kea_group) {
       case ssl_grp_ec_curve25519:
@@ -502,7 +537,7 @@ void TlsAgent::CheckKEA(SSLKEAType kea_type, SSLNamedGroup kea_group,
       case ssl_grp_ffdhe_custom:
         break;
       default:
-        if (kea_type == ssl_kea_rsa) {
+        if (kea == ssl_kea_rsa) {
           kea_size = server_key_bits_;
         } else {
           EXPECT_TRUE(false) << "need to update group sizes";
@@ -515,13 +550,19 @@ void TlsAgent::CheckKEA(SSLKEAType kea_type, SSLNamedGroup kea_group,
   }
 }
 
-void TlsAgent::CheckAuthType(SSLAuthType auth_type,
+void TlsAgent::CheckOriginalKEA(SSLNamedGroup kea_group) const {
+  if (kea_group != ssl_grp_ffdhe_custom) {
+    EXPECT_EQ(kea_group, info_.originalKeaGroup);
+  }
+}
+
+void TlsAgent::CheckAuthType(SSLAuthType auth,
                              SSLSignatureScheme sig_scheme) const {
   EXPECT_EQ(STATE_CONNECTED, state_);
-  EXPECT_EQ(auth_type, info_.authType);
+  EXPECT_EQ(auth, info_.authType);
   EXPECT_EQ(server_key_bits_, info_.authKeyBits);
   if (expected_version_ < SSL_LIBRARY_VERSION_TLS_1_2) {
-    switch (auth_type) {
+    switch (auth) {
       case ssl_auth_rsa_sign:
         sig_scheme = ssl_sig_rsa_pkcs1_sha1md5;
         break;
@@ -539,9 +580,8 @@ void TlsAgent::CheckAuthType(SSLAuthType auth_type,
   }
 
   // Check authAlgorithm, which is the old value for authType.  This is a second
-  // switch
-  // statement because default label is different.
-  switch (auth_type) {
+  // switch statement because default label is different.
+  switch (auth) {
     case ssl_auth_rsa_sign:
       EXPECT_EQ(ssl_auth_rsa_decrypt, csinfo_.authAlgorithm)
           << "authAlgorithm for RSA is always decrypt";
@@ -555,7 +595,7 @@ void TlsAgent::CheckAuthType(SSLAuthType auth_type,
           << "authAlgorithm for ECDH_ECDSA is ECDSA (i.e., wrong)";
       break;
     default:
-      EXPECT_EQ(auth_type, csinfo_.authAlgorithm)
+      EXPECT_EQ(auth, csinfo_.authAlgorithm)
           << "authAlgorithm is (usually) the same as authType";
       break;
   }
@@ -567,30 +607,27 @@ void TlsAgent::EnableFalseStart() {
   falsestart_enabled_ = true;
   EXPECT_EQ(SECSuccess, SSL_SetCanFalseStartCallback(
                             ssl_fd(), CanFalseStartCallback, this));
-  EXPECT_EQ(SECSuccess,
-            SSL_OptionSet(ssl_fd(), SSL_ENABLE_FALSE_START, PR_TRUE));
+  SetOption(SSL_ENABLE_FALSE_START, PR_TRUE);
 }
 
 void TlsAgent::ExpectResumption() { expect_resumption_ = true; }
 
 void TlsAgent::EnableAlpn(const uint8_t* val, size_t len) {
   EXPECT_TRUE(EnsureTlsSetup());
-
-  EXPECT_EQ(SECSuccess, SSL_OptionSet(ssl_fd(), SSL_ENABLE_ALPN, PR_TRUE));
   EXPECT_EQ(SECSuccess, SSL_SetNextProtoNego(ssl_fd(), val, len));
 }
 
 void TlsAgent::CheckAlpn(SSLNextProtoState expected_state,
                          const std::string& expected) const {
-  SSLNextProtoState state;
+  SSLNextProtoState alpn_state;
   char chosen[10];
   unsigned int chosen_len;
-  SECStatus rv = SSL_GetNextProto(ssl_fd(), &state,
+  SECStatus rv = SSL_GetNextProto(ssl_fd(), &alpn_state,
                                   reinterpret_cast<unsigned char*>(chosen),
                                   &chosen_len, sizeof(chosen));
   EXPECT_EQ(SECSuccess, rv);
-  EXPECT_EQ(expected_state, state);
-  if (state == SSL_NEXT_PROTO_NO_SUPPORT) {
+  EXPECT_EQ(expected_state, alpn_state);
+  if (alpn_state == SSL_NEXT_PROTO_NO_SUPPORT) {
     EXPECT_EQ("", expected);
   } else {
     EXPECT_NE("", expected);
@@ -724,6 +761,50 @@ void TlsAgent::ResetPreliminaryInfo() {
   expected_cipher_suite_ = 0;
 }
 
+void TlsAgent::ValidateCipherSpecs() {
+  PRInt32 cipherSpecs = SSLInt_CountCipherSpecs(ssl_fd());
+  // We use one ciphersuite in each direction.
+  PRInt32 expected = 2;
+  if (variant_ == ssl_variant_datagram) {
+    // For DTLS 1.3, the client retains the cipher spec for early data and the
+    // handshake so that it can retransmit EndOfEarlyData and its final flight.
+    // It also retains the handshake read cipher spec so that it can read ACKs
+    // from the server. The server retains the handshake read cipher spec so it
+    // can read the client's retransmitted Finished.
+    if (expected_version_ >= SSL_LIBRARY_VERSION_TLS_1_3) {
+      if (role_ == CLIENT) {
+        expected = info_.earlyDataAccepted ? 5 : 4;
+      } else {
+        expected = 3;
+      }
+    } else {
+      // For DTLS 1.1 and 1.2, the last endpoint to send maintains a cipher spec
+      // until the holddown timer runs down.
+      if (expect_resumption_) {
+        if (role_ == CLIENT) {
+          expected = 3;
+        }
+      } else {
+        if (role_ == SERVER) {
+          expected = 3;
+        }
+      }
+    }
+  }
+  // This function will be run before the handshake completes if false start is
+  // enabled.  In that case, the client will still be reading cleartext, but
+  // will have a spec prepared for reading ciphertext.  With DTLS, the client
+  // will also have a spec retained for retransmission of handshake messages.
+  if (role_ == CLIENT && falsestart_enabled_ && !handshake_callback_called_) {
+    EXPECT_GT(SSL_LIBRARY_VERSION_TLS_1_3, expected_version_);
+    expected = (variant_ == ssl_variant_datagram) ? 4 : 3;
+  }
+  EXPECT_EQ(expected, cipherSpecs);
+  if (expected != cipherSpecs) {
+    SSLInt_PrintCipherSpecs(role_str().c_str(), ssl_fd());
+  }
+}
+
 void TlsAgent::Connected() {
   if (state_ == STATE_CONNECTED) {
     return;
@@ -737,6 +818,8 @@ void TlsAgent::Connected() {
   EXPECT_EQ(SECSuccess, rv);
   EXPECT_EQ(sizeof(info_), info_.length);
 
+  EXPECT_EQ(expect_resumption_, info_.resumed == PR_TRUE);
+
   // Preliminary values are exposed through callbacks during the handshake.
   // If either expected values were set or the callbacks were called, check
   // that the final values are correct.
@@ -747,31 +830,13 @@ void TlsAgent::Connected() {
   EXPECT_EQ(SECSuccess, rv);
   EXPECT_EQ(sizeof(csinfo_), csinfo_.length);
 
-  if (expected_version_ >= SSL_LIBRARY_VERSION_TLS_1_3) {
-    PRInt32 cipherSuites = SSLInt_CountTls13CipherSpecs(ssl_fd());
-    // We use one ciphersuite in each direction.
-    PRInt32 expected = 2;
-    // For DTLS, the client retains the cipher spec for early data and the
-    // handshake so that it can retransmit EndOfEarlyData and its final flight.
-    if (variant_ == ssl_variant_datagram && role_ == CLIENT) {
-      expected = info_.earlyDataAccepted ? 4 : 3;
-    }
-    EXPECT_EQ(expected, cipherSuites);
-    if (expected != cipherSuites) {
-      SSLInt_PrintTls13CipherSpecs(ssl_fd());
-    }
-  }
+  ValidateCipherSpecs();
 
   SetState(STATE_CONNECTED);
 }
 
 void TlsAgent::EnableExtendedMasterSecret() {
-  ASSERT_TRUE(EnsureTlsSetup());
-
-  SECStatus rv =
-      SSL_OptionSet(ssl_fd(), SSL_ENABLE_EXTENDED_MASTER_SECRET, PR_TRUE);
-
-  ASSERT_EQ(SECSuccess, rv);
+  SetOption(SSL_ENABLE_EXTENDED_MASTER_SECRET, PR_TRUE);
 }
 
 void TlsAgent::CheckExtendedMasterSecret(bool expected) {
@@ -794,25 +859,10 @@ void TlsAgent::CheckSecretsDestroyed() {
   ASSERT_EQ(PR_TRUE, SSLInt_CheckSecretsDestroyed(ssl_fd()));
 }
 
-void TlsAgent::DisableRollbackDetection() {
+void TlsAgent::SetDowngradeCheckVersion(uint16_t ver) {
   ASSERT_TRUE(EnsureTlsSetup());
 
-  SECStatus rv = SSL_OptionSet(ssl_fd(), SSL_ROLLBACK_DETECTION, PR_FALSE);
-
-  ASSERT_EQ(SECSuccess, rv);
-}
-
-void TlsAgent::EnableCompression() {
-  ASSERT_TRUE(EnsureTlsSetup());
-
-  SECStatus rv = SSL_OptionSet(ssl_fd(), SSL_ENABLE_DEFLATE, PR_TRUE);
-  ASSERT_EQ(SECSuccess, rv);
-}
-
-void TlsAgent::SetDowngradeCheckVersion(uint16_t version) {
-  ASSERT_TRUE(EnsureTlsSetup());
-
-  SECStatus rv = SSL_SetDowngradeCheckVersion(ssl_fd(), version);
+  SECStatus rv = SSL_SetDowngradeCheckVersion(ssl_fd(), ver);
   ASSERT_EQ(SECSuccess, rv);
 }
 
@@ -876,14 +926,22 @@ void TlsAgent::SendDirect(const DataBuffer& buf) {
   }
 }
 
+void TlsAgent::SendRecordDirect(const TlsRecord& record) {
+  DataBuffer buf;
+
+  auto rv = record.header.Write(&buf, 0, record.buffer);
+  EXPECT_EQ(record.header.header_length() + record.buffer.len(), rv);
+  SendDirect(buf);
+}
+
 static bool ErrorIsNonFatal(PRErrorCode code) {
   return code == PR_WOULD_BLOCK_ERROR || code == SSL_ERROR_RX_SHORT_DTLS_READ;
 }
 
 void TlsAgent::SendData(size_t bytes, size_t blocksize) {
-  uint8_t block[4096];
+  uint8_t block[16385];  // One larger than the maximum record size.
 
-  ASSERT_LT(blocksize, sizeof(block));
+  ASSERT_LE(blocksize, sizeof(block));
 
   while (bytes) {
     size_t tosend = std::min(blocksize, bytes);
@@ -909,6 +967,28 @@ void TlsAgent::SendBuffer(const DataBuffer& buf) {
   } else {
     ASSERT_EQ(buf.len(), static_cast<size_t>(rv));
   }
+}
+
+bool TlsAgent::SendEncryptedRecord(const std::shared_ptr<TlsCipherSpec>& spec,
+                                   uint64_t seq, uint8_t ct,
+                                   const DataBuffer& buf) {
+  LOGV("Encrypting " << buf.len() << " bytes");
+  // Ensure that we are doing TLS 1.3.
+  EXPECT_GE(expected_version_, SSL_LIBRARY_VERSION_TLS_1_3);
+  TlsRecordHeader header(variant_, expected_version_, kTlsApplicationDataType,
+                         seq);
+  DataBuffer padded = buf;
+  padded.Write(padded.len(), ct, 1);
+  DataBuffer ciphertext;
+  if (!spec->Protect(header, padded, &ciphertext)) {
+    return false;
+  }
+
+  DataBuffer record;
+  auto rv = header.Write(&record, 0, ciphertext);
+  EXPECT_EQ(header.header_length() + ciphertext.len(), rv);
+  SendDirect(record);
+  return true;
 }
 
 void TlsAgent::ReadBytes(size_t amount) {
@@ -944,23 +1024,20 @@ void TlsAgent::ReadBytes(size_t amount) {
 
 void TlsAgent::ResetSentBytes() { send_ctr_ = 0; }
 
+void TlsAgent::SetOption(int32_t option, int value) {
+  ASSERT_TRUE(EnsureTlsSetup());
+  EXPECT_EQ(SECSuccess, SSL_OptionSet(ssl_fd(), option, value));
+}
+
 void TlsAgent::ConfigureSessionCache(SessionResumptionMode mode) {
-  EXPECT_TRUE(EnsureTlsSetup());
-
-  SECStatus rv = SSL_OptionSet(ssl_fd(), SSL_NO_CACHE,
-                               mode & RESUME_SESSIONID ? PR_FALSE : PR_TRUE);
-  EXPECT_EQ(SECSuccess, rv);
-
-  rv = SSL_OptionSet(ssl_fd(), SSL_ENABLE_SESSION_TICKETS,
-                     mode & RESUME_TICKET ? PR_TRUE : PR_FALSE);
-  EXPECT_EQ(SECSuccess, rv);
+  SetOption(SSL_NO_CACHE, mode & RESUME_SESSIONID ? PR_FALSE : PR_TRUE);
+  SetOption(SSL_ENABLE_SESSION_TICKETS,
+            mode & RESUME_TICKET ? PR_TRUE : PR_FALSE);
 }
 
 void TlsAgent::DisableECDHEServerKeyReuse() {
-  ASSERT_TRUE(EnsureTlsSetup());
   ASSERT_EQ(TlsAgent::SERVER, role_);
-  SECStatus rv = SSL_OptionSet(ssl_fd(), SSL_REUSE_SERVER_ECDHE_KEY, PR_FALSE);
-  EXPECT_EQ(SECSuccess, rv);
+  SetOption(SSL_REUSE_SERVER_ECDHE_KEY, PR_FALSE);
 }
 
 static const std::string kTlsRolesAllArr[] = {"CLIENT", "SERVER"};
@@ -1021,15 +1098,20 @@ void TlsAgentTestBase::ProcessMessage(const DataBuffer& buffer,
 void TlsAgentTestBase::MakeRecord(SSLProtocolVariant variant, uint8_t type,
                                   uint16_t version, const uint8_t* buf,
                                   size_t len, DataBuffer* out,
-                                  uint64_t seq_num) {
+                                  uint64_t sequence_number) {
   size_t index = 0;
   index = out->Write(index, type, 1);
   if (variant == ssl_variant_stream) {
     index = out->Write(index, version, 2);
+  } else if (version >= SSL_LIBRARY_VERSION_TLS_1_3 &&
+             type == kTlsApplicationDataType) {
+    uint32_t epoch = (sequence_number >> 48) & 0x3;
+    uint32_t seqno = sequence_number & ((1ULL << 30) - 1);
+    index = out->Write(index, (epoch << 30) | seqno, 4);
   } else {
     index = out->Write(index, TlsVersionToDtlsVersion(version), 2);
-    index = out->Write(index, seq_num >> 32, 4);
-    index = out->Write(index, seq_num & PR_UINT32_MAX, 4);
+    index = out->Write(index, sequence_number >> 32, 4);
+    index = out->Write(index, sequence_number & PR_UINT32_MAX, 4);
   }
   index = out->Write(index, len, 2);
   out->Write(index, buf, len);
@@ -1085,6 +1167,14 @@ void TlsAgentTestBase::MakeTrivialHandshakeRecord(uint8_t hs_type,
   for (size_t i = 0; i < hs_len; ++i) {
     index = out->Write(index, 1, 1);
   }
+}
+
+DataBuffer TlsAgentTestBase::MakeCannedTls13ServerHello() {
+  DataBuffer sh(kCannedTls13ServerHello, sizeof(kCannedTls13ServerHello));
+  if (variant_ == ssl_variant_datagram) {
+    sh.Write(0, SSL_LIBRARY_VERSION_DTLS_1_2_WIRE, 2);
+  }
+  return sh;
 }
 
 }  // namespace nss_test

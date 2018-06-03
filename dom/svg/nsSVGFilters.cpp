@@ -22,7 +22,7 @@
 #include "nsSVGFilters.h"
 #include "nsLayoutUtils.h"
 #include "nsSVGUtils.h"
-#include "nsStyleContext.h"
+#include "mozilla/ComputedStyle.h"
 #include "nsIFrame.h"
 #include "imgIContainer.h"
 #include "mozilla/dom/SVGFilterElement.h"
@@ -38,6 +38,7 @@
 #include "mozilla/dom/SVGFEFuncRElementBinding.h"
 #include "mozilla/dom/SVGFEPointLightElement.h"
 #include "mozilla/dom/SVGFESpotLightElement.h"
+#include "mozilla/dom/SVGLengthBinding.h"
 
 #if defined(XP_WIN)
 // Prevent Windows redefining LoadImage
@@ -52,10 +53,10 @@ using namespace mozilla::gfx;
 
 nsSVGElement::LengthInfo nsSVGFE::sLengthInfo[4] =
 {
-  { &nsGkAtoms::x, 0, nsIDOMSVGLength::SVG_LENGTHTYPE_PERCENTAGE, SVGContentUtils::X },
-  { &nsGkAtoms::y, 0, nsIDOMSVGLength::SVG_LENGTHTYPE_PERCENTAGE, SVGContentUtils::Y },
-  { &nsGkAtoms::width, 100, nsIDOMSVGLength::SVG_LENGTHTYPE_PERCENTAGE, SVGContentUtils::X },
-  { &nsGkAtoms::height, 100, nsIDOMSVGLength::SVG_LENGTHTYPE_PERCENTAGE, SVGContentUtils::Y }
+  { &nsGkAtoms::x, 0, SVGLengthBinding::SVG_LENGTHTYPE_PERCENTAGE, SVGContentUtils::X },
+  { &nsGkAtoms::y, 0, SVGLengthBinding::SVG_LENGTHTYPE_PERCENTAGE, SVGContentUtils::Y },
+  { &nsGkAtoms::width, 100, SVGLengthBinding::SVG_LENGTHTYPE_PERCENTAGE, SVGContentUtils::X },
+  { &nsGkAtoms::height, 100, SVGLengthBinding::SVG_LENGTHTYPE_PERCENTAGE, SVGContentUtils::Y }
 };
 
 //----------------------------------------------------------------------
@@ -65,11 +66,7 @@ NS_IMPL_ADDREF_INHERITED(nsSVGFE,nsSVGFEBase)
 NS_IMPL_RELEASE_INHERITED(nsSVGFE,nsSVGFEBase)
 
 NS_INTERFACE_MAP_BEGIN(nsSVGFE)
-   // nsISupports is an ambiguous base of nsSVGFE so we have to work
-   // around that
-   if ( aIID.Equals(NS_GET_IID(nsSVGFE)) )
-     foundInterface = static_cast<nsISupports*>(static_cast<void*>(this));
-   else
+   NS_INTERFACE_MAP_ENTRY_CONCRETE(nsSVGFE)
 NS_INTERFACE_MAP_END_INHERITING(nsSVGFEBase)
 
 //----------------------------------------------------------------------
@@ -160,7 +157,7 @@ nsSVGFE::StyleIsSetToSRGB()
   nsIFrame* frame = GetPrimaryFrame();
   if (!frame) return false;
 
-  nsStyleContext* style = frame->StyleContext();
+  ComputedStyle* style = frame->Style();
   return style->StyleSVG()->mColorInterpolationFilters ==
            NS_STYLE_COLOR_INTERPOLATION_SRGB;
 }
@@ -244,11 +241,7 @@ NS_IMPL_ADDREF_INHERITED(SVGComponentTransferFunctionElement,SVGComponentTransfe
 NS_IMPL_RELEASE_INHERITED(SVGComponentTransferFunctionElement,SVGComponentTransferFunctionElementBase)
 
 NS_INTERFACE_MAP_BEGIN(SVGComponentTransferFunctionElement)
-   // nsISupports is an ambiguous base of nsSVGFE so we have to work
-   // around that
-   if ( aIID.Equals(NS_GET_IID(SVGComponentTransferFunctionElement)) )
-     foundInterface = static_cast<nsISupports*>(static_cast<void*>(this));
-   else
+   NS_INTERFACE_MAP_ENTRY_CONCRETE(SVGComponentTransferFunctionElement)
 NS_INTERFACE_MAP_END_INHERITING(SVGComponentTransferFunctionElementBase)
 
 
@@ -454,21 +447,13 @@ nsSVGElement::StringInfo nsSVGFELightingElement::sStringInfo[2] =
 };
 
 //----------------------------------------------------------------------
-// nsISupports methods
-
-NS_IMPL_ADDREF_INHERITED(nsSVGFELightingElement,nsSVGFELightingElementBase)
-NS_IMPL_RELEASE_INHERITED(nsSVGFELightingElement,nsSVGFELightingElementBase)
-
-NS_INTERFACE_MAP_BEGIN(nsSVGFELightingElement)
-NS_INTERFACE_MAP_END_INHERITING(nsSVGFELightingElementBase)
-
-//----------------------------------------------------------------------
 // Implementation
 
 NS_IMETHODIMP_(bool)
 nsSVGFELightingElement::IsAttributeMapped(const nsAtom* name) const
 {
   static const MappedAttributeEntry* const map[] = {
+    sColorMap,
     sLightingEffectsMap
   };
 
@@ -510,8 +495,8 @@ nsSVGFELightingElement::AddLightingAttributes(const FilterPrimitiveDescription& 
     return FilterPrimitiveDescription(PrimitiveType::Empty);
   }
 
-  nsStyleContext* style = frame->StyleContext();
-  Color color(Color::FromABGR(style->StyleSVGReset()->mLightingColor));
+  const nsStyleSVGReset* styleSVGReset = frame->Style()->StyleSVGReset();
+  Color color(Color::FromABGR(styleSVGReset->mLightingColor.CalcColor(frame)));
   color.a = 1.f;
   float surfaceScale = mNumberAttributes[SURFACE_SCALE].GetAnimValue();
   Size kernelUnitLength =

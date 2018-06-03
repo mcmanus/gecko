@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "Last ned"
   },
+  "downloadOnlyNotice": {
+    "message": "Du er for tiden i nedlastingsmodus."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots endres automatisk til nedlastingsmodus i disse situasjonene:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "I et privat nettlesingsvindu."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Tredjeparts infokapsler er deaktivert."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "«Husk aldri historikk» er aktivert."
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "Du bruker Firefox ESR."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "Opplastinger er slått av."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Lenke kopiert"
   },
@@ -36,6 +57,28 @@
     "message": "Lenken til skjermbildet ditt er kopiert til utklippstavlen. Trykk på $META_KEY$-V for å lime inn.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Kopier"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Bilde kopiert"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Bildet ditt er kopiert til utklippstavlen. Trykk på $META_KEY$-V for å lime det inn.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Dette bildet har blitt beskåret til $PIXELS$px.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }

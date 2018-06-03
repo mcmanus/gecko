@@ -11,11 +11,11 @@ const { ThreadNode } = require("devtools/client/performance/modules/logic/tree-m
 const { CallView } = require("devtools/client/performance/modules/widgets/tree-view");
 const RecordingUtils = require("devtools/shared/performance/recording-utils");
 
-add_task(function () {
-  let threadNode = new ThreadNode(gProfile.threads[0], { startTime: 0, endTime: 20,
-                                                         invertTree: true });
-  let treeRoot = new CallView({ frame: threadNode, inverted: true });
-  let container = document.createElement("vbox");
+add_task(function() {
+  const threadNode = new ThreadNode(gProfile.threads[0], { startTime: 0, endTime: 20,
+                                                           invertTree: true });
+  const treeRoot = new CallView({ frame: threadNode, inverted: true });
+  const container = document.createElement("vbox");
   treeRoot.attachTo(container);
 
   is(treeRoot.getChild(0).frame.location, "B",

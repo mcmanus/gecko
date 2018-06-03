@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -6,8 +7,8 @@
 // Keep in (case-insensitive) order:
 #include "gfxMatrix.h"
 #include "mozilla/dom/SVGAElement.h"
+#include "mozilla/dom/MutationEventBinding.h"
 #include "nsAutoPtr.h"
-#include "nsIDOMMutationEvent.h"
 #include "nsSVGContainerFrame.h"
 #include "nsSVGIntegrationUtils.h"
 #include "nsSVGUtils.h"
@@ -18,10 +19,10 @@ using namespace mozilla;
 class nsSVGAFrame : public nsSVGDisplayContainerFrame
 {
   friend nsIFrame*
-  NS_NewSVGAFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
+  NS_NewSVGAFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle);
 protected:
-  explicit nsSVGAFrame(nsStyleContext* aContext)
-    : nsSVGDisplayContainerFrame(aContext, kClassID)
+  explicit nsSVGAFrame(ComputedStyle* aStyle)
+    : nsSVGDisplayContainerFrame(aStyle, kClassID)
   {}
 
 public:
@@ -50,9 +51,9 @@ public:
 // Implementation
 
 nsIFrame*
-NS_NewSVGAFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewSVGAFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsSVGAFrame(aContext);
+  return new (aPresShell) nsSVGAFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsSVGAFrame)
@@ -90,7 +91,7 @@ nsSVGAFrame::AttributeChanged(int32_t         aNameSpaceID,
   // Currently our SMIL implementation does not modify the DOM attributes. Once
   // we implement the SVG 2 SMIL behaviour this can be removed
   // SVGAElement::SetAttr/UnsetAttr's ResetLinkState() call will be sufficient.
-  if (aModType == nsIDOMMutationEvent::SMIL &&
+  if (aModType == dom::MutationEventBinding::SMIL &&
       aAttribute == nsGkAtoms::href &&
       (aNameSpaceID == kNameSpaceID_None ||
        aNameSpaceID == kNameSpaceID_XLink)) {

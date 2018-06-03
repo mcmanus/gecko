@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -23,18 +24,19 @@
 #include "nsExpirationTracker.h"
 #include "TextOverflow.h"
 #include "ScrollVelocityQueue.h"
+#include "mozilla/PresState.h"
 
 class nsPresContext;
 class nsIPresShell;
 class nsIContent;
 class nsAtom;
-class nsPresState;
 class nsIScrollPositionListener;
 
 namespace mozilla {
 struct ScrollReflowInput;
 namespace layers {
 class Layer;
+class LayerManager;
 } // namespace layers
 namespace layout {
 class ScrollbarActivity;
@@ -48,6 +50,7 @@ public:
   typedef mozilla::layers::FrameMetrics FrameMetrics;
   typedef mozilla::layers::ScrollSnapInfo ScrollSnapInfo;
   typedef mozilla::layers::Layer Layer;
+  typedef mozilla::layers::LayerManager LayerManager;
 
   class AsyncScroll;
   class AsyncSmoothMSDScroll;
@@ -66,8 +69,11 @@ public:
     nsTArray<nsIAnonymousContentCreator::ContentInfo>& aElements);
   void AppendAnonymousContentTo(nsTArray<nsIContent*>& aElements, uint32_t aFilter);
   nsresult FireScrollPortEvent();
+  void PostScrollEndEvent();
+  void FireScrollEndEvent();
   void PostOverflowEvent();
-  void Destroy();
+  using PostDestroyData = nsIFrame::PostDestroyData;
+  void Destroy(PostDestroyData& aPostDestroyData);
 
   void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                         const nsDisplayListSet& aLists);
@@ -88,7 +94,7 @@ public:
    * @note This method might destroy the frame, pres shell and other objects.
    * Called when the 'curpos' attribute on one of the scrollbars changes.
    */
-  void CurPosAttributeChanged(nsIContent* aChild);
+  void CurPosAttributeChanged(nsIContent* aChild, bool aDoScroll = true);
 
   void PostScrollEvent();
   void FireScrollEvent();
@@ -126,6 +132,15 @@ public:
     ScrollFrameHelper* mHelper;
   };
 
+  class ScrollEndEvent : public Runnable {
+  public:
+    NS_DECL_NSIRUNNABLE
+    explicit ScrollEndEvent(ScrollFrameHelper* aHelper);
+    void Revoke() { mHelper = nullptr; }
+  private:
+    ScrollFrameHelper* mHelper;
+  };
+
   class AsyncScrollPortEvent : public Runnable {
   public:
     NS_DECL_NSIRUNNABLE
@@ -155,18 +170,20 @@ public:
   /**
    * @note This method might destroy the frame, pres shell and other objects.
    */
-  void FinishReflowForScrollbar(nsIContent* aContent, nscoord aMinXY,
-                                nscoord aMaxXY, nscoord aCurPosXY,
-                                nscoord aPageIncrement,
+  void FinishReflowForScrollbar(mozilla::dom::Element* aElement,
+                                nscoord aMinXY, nscoord aMaxXY,
+                                nscoord aCurPosXY, nscoord aPageIncrement,
                                 nscoord aIncrement);
   /**
    * @note This method might destroy the frame, pres shell and other objects.
    */
-  void SetScrollbarEnabled(nsIContent* aContent, nscoord aMaxPos);
+  void SetScrollbarEnabled(mozilla::dom::Element* aElement, nscoord aMaxPos);
   /**
    * @note This method might destroy the frame, pres shell and other objects.
    */
-  void SetCoordAttribute(nsIContent* aContent, nsAtom* aAtom, nscoord aSize);
+  void SetCoordAttribute(mozilla::dom::Element* aElement,
+                         nsAtom* aAtom,
+                         nscoord aSize);
 
   nscoord GetCoordAttribute(nsIFrame* aFrame, nsAtom* aAtom, nscoord aDefaultValue,
                             nscoord* aRangeStart, nscoord* aRangeLength);
@@ -280,8 +297,8 @@ public:
   nsSize GetLineScrollAmount() const;
   nsSize GetPageScrollAmount() const;
 
-  nsPresState* SaveState() const;
-  void RestoreState(nsPresState* aState);
+  mozilla::UniquePtr<mozilla::PresState> SaveState() const;
+  void RestoreState(mozilla::PresState* aState);
 
   nsIFrame* GetScrolledFrame() const { return mScrolledFrame; }
   nsIFrame* GetScrollbarBox(bool aVertical) const {
@@ -350,6 +367,11 @@ private:
 public:
   bool IsScrollbarOnRight() const;
   bool IsScrollingActive(nsDisplayListBuilder* aBuilder) const;
+  bool IsMaybeAsynchronouslyScrolled() const {
+    // If this is true, then we'll build an ASR, and that's what we want
+    // to know I think.
+    return mWillBuildScrollableLayer;
+  }
   bool IsMaybeScrollingActive() const;
   bool IsProcessingAsyncScroll() const {
     return mAsyncScroll != nullptr || mAsyncSmoothMSDScroll != nullptr;
@@ -391,6 +413,9 @@ public:
   nsExpirationState* GetExpirationState() { return &mActivityExpirationState; }
 
   void SetTransformingByAPZ(bool aTransforming) {
+    if (mTransformingByAPZ && !aTransforming) {
+      PostScrollEndEvent();
+    }
     mTransformingByAPZ = aTransforming;
     if (!mozilla::css::TextOverflow::HasClippedOverflow(mOuter)) {
       // If the block has some text-overflow stuff we should kick off a paint
@@ -403,14 +428,17 @@ public:
   }
   void SetScrollableByAPZ(bool aScrollable);
   void SetZoomableByAPZ(bool aZoomable);
+  void SetHasOutOfFlowContentInsideFilter();
 
   bool UsesContainerScrolling() const;
 
   ScrollSnapInfo GetScrollSnapInfo() const;
 
   bool DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
+                             nsRect* aVisibleRect,
                              nsRect* aDirtyRect,
-                             bool aSetBase);
+                             bool aSetBase,
+                             bool* aDirtyRectHasBeenOverriden = nullptr);
   void NotifyApproximateFrameVisibilityUpdate(bool aIgnoreDisplayPort);
   bool GetDisplayPortAtLastApproximateFrameVisibilityUpdate(nsRect* aDisplayPort);
 
@@ -436,10 +464,13 @@ public:
   }
   bool WantAsyncScroll() const;
   Maybe<mozilla::layers::ScrollMetadata> ComputeScrollMetadata(
-    Layer* aLayer,
+    LayerManager* aLayerManager,
     const nsIFrame* aContainerReferenceFrame,
     const ContainerLayerParameters& aParameters,
     const mozilla::DisplayItemClip* aClip) const;
+  void ClipLayerToDisplayPort(Layer* aLayer,
+                              const mozilla::DisplayItemClip* aClip,
+                              const ContainerLayerParameters& aParameters) const;
 
   // nsIScrollbarMediator
   void ScrollByPage(nsScrollbarFrame* aScrollbar, int32_t aDirection,
@@ -473,12 +504,13 @@ public:
   bool IsRootScrollFrameOfDocument() const { return mIsRoot; }
 
   // owning references to the nsIAnonymousContentCreator-built content
-  nsCOMPtr<nsIContent> mHScrollbarContent;
-  nsCOMPtr<nsIContent> mVScrollbarContent;
-  nsCOMPtr<nsIContent> mScrollCornerContent;
-  nsCOMPtr<nsIContent> mResizerContent;
+  nsCOMPtr<mozilla::dom::Element> mHScrollbarContent;
+  nsCOMPtr<mozilla::dom::Element> mVScrollbarContent;
+  nsCOMPtr<mozilla::dom::Element> mScrollCornerContent;
+  nsCOMPtr<mozilla::dom::Element> mResizerContent;
 
   RefPtr<ScrollEvent> mScrollEvent;
+  RefPtr<ScrollEndEvent> mScrollEndEvent;
   nsRevocableEventPtr<AsyncScrollPortEvent> mAsyncScrollPortEvent;
   nsRevocableEventPtr<ScrolledAreaEvent> mScrolledAreaEvent;
   nsIFrame* mHScrollbarBox;
@@ -584,7 +616,7 @@ public:
   // will already have the necessary frame metrics.
   bool mIsScrollableLayerInRootContainer:1;
 
-  // If true, add clipping in ScrollFrameHelper::ComputeFrameMetrics.
+  // If true, add clipping in ScrollFrameHelper::ClipLayerToDisplayPort.
   bool mAddClipRectToLayer:1;
 
   // True if this frame has been scrolled at least once
@@ -604,6 +636,10 @@ public:
 
   // True if the APZ is allowed to zoom this scrollframe.
   bool mZoomableByAPZ:1;
+
+  // True if the scroll frame contains out-of-flow content and is inside
+  // a CSS filter.
+  bool mHasOutOfFlowContentInsideFilter:1;
 
   // True if we don't want the scrollbar to repaint itself right now.
   bool mSuppressScrollbarRepaints:1;
@@ -645,7 +681,9 @@ protected:
   void CompleteAsyncScroll(const nsRect &aRange, nsAtom* aOrigin = nullptr);
 
   bool HasPluginFrames();
-  bool HasPerspective() const;
+  bool HasPerspective() const {
+    return mOuter->ChildrenHavePerspective();
+  }
   bool HasBgAttachmentLocal() const;
   uint8_t GetScrolledFrameDir() const;
 
@@ -680,7 +718,7 @@ public:
   typedef mozilla::CSSIntPoint CSSIntPoint;
   typedef mozilla::ScrollReflowInput ScrollReflowInput;
   friend nsHTMLScrollFrame* NS_NewHTMLScrollFrame(nsIPresShell* aPresShell,
-                                                  nsStyleContext* aContext,
+                                                  ComputedStyle* aStyle,
                                                   bool aIsRoot);
 
   NS_DECL_QUERYFRAME
@@ -749,7 +787,7 @@ public:
   virtual void RemoveFrame(ChildListID     aListID,
                            nsIFrame*       aOldFrame) override;
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
   virtual nsIScrollableFrame* GetScrollTargetFrame() override {
     return this;
@@ -762,7 +800,7 @@ public:
   virtual bool DoesClipChildren() override { return true; }
   virtual nsSplittableType GetSplittableType() const override;
 
-  virtual nsPoint GetPositionOfChildIgnoringScrolling(nsIFrame* aChild) override
+  nsPoint GetPositionOfChildIgnoringScrolling(const nsIFrame* aChild) override
   { nsPoint pt = aChild->GetPosition();
     if (aChild == mHelper.GetScrolledFrame()) pt += GetScrollPosition();
     return pt;
@@ -890,6 +928,12 @@ public:
   virtual bool IsScrollingActive(nsDisplayListBuilder* aBuilder) override {
     return mHelper.IsScrollingActive(aBuilder);
   }
+  virtual bool IsMaybeScrollingActive() const override {
+    return mHelper.IsMaybeScrollingActive();
+  }
+  virtual bool IsMaybeAsynchronouslyScrolled() override {
+    return mHelper.IsMaybeAsynchronouslyScrolled();
+  }
   virtual bool IsProcessingAsyncScroll() override {
     return mHelper.IsProcessingAsyncScroll();
   }
@@ -930,12 +974,18 @@ public:
     return mHelper.WantAsyncScroll();
   }
   virtual mozilla::Maybe<mozilla::layers::ScrollMetadata> ComputeScrollMetadata(
-    Layer* aLayer,
+    LayerManager* aLayerManager,
     const nsIFrame* aContainerReferenceFrame,
     const ContainerLayerParameters& aParameters,
     const mozilla::DisplayItemClip* aClip) const override
   {
-    return mHelper.ComputeScrollMetadata(aLayer, aContainerReferenceFrame, aParameters, aClip);
+    return mHelper.ComputeScrollMetadata(aLayerManager, aContainerReferenceFrame, aParameters, aClip);
+  }
+  virtual void ClipLayerToDisplayPort(Layer* aLayer,
+                                      const mozilla::DisplayItemClip* aClip,
+                                      const ContainerLayerParameters& aParameters) const override
+  {
+    mHelper.ClipLayerToDisplayPort(aLayer, aClip, aParameters);
   }
   virtual bool IsIgnoringViewportClipping() const override {
     return mHelper.IsIgnoringViewportClipping();
@@ -947,9 +997,10 @@ public:
     return mHelper.UsesContainerScrolling();
   }
   virtual bool DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
+                                     nsRect* aVisibleRect,
                                      nsRect* aDirtyRect,
                                      bool aSetBase) override {
-    return mHelper.DecideScrollableLayer(aBuilder, aDirtyRect, aSetBase);
+    return mHelper.DecideScrollableLayer(aBuilder, aVisibleRect, aDirtyRect, aSetBase);
   }
   virtual void NotifyApproximateFrameVisibilityUpdate(bool aIgnoreDisplayPort) override {
     mHelper.NotifyApproximateFrameVisibilityUpdate(aIgnoreDisplayPort);
@@ -962,12 +1013,10 @@ public:
   }
 
   // nsIStatefulFrame
-  NS_IMETHOD SaveState(nsPresState** aState) override {
-    NS_ENSURE_ARG_POINTER(aState);
-    *aState = mHelper.SaveState();
-    return NS_OK;
+  mozilla::UniquePtr<mozilla::PresState> SaveState() override {
+    return mHelper.SaveState();
   }
-  NS_IMETHOD RestoreState(nsPresState* aState) override {
+  NS_IMETHOD RestoreState(mozilla::PresState* aState) override {
     NS_ENSURE_ARG_POINTER(aState);
     mHelper.RestoreState(aState);
     return NS_OK;
@@ -1027,6 +1076,9 @@ public:
   void SetZoomableByAPZ(bool aZoomable) override {
     mHelper.SetZoomableByAPZ(aZoomable);
   }
+  void SetHasOutOfFlowContentInsideFilter() override {
+    mHelper.SetHasOutOfFlowContentInsideFilter();
+  }
 
   ScrollSnapInfo GetScrollSnapInfo() const override {
     return mHelper.GetScrollSnapInfo();
@@ -1058,11 +1110,11 @@ public:
 #endif
 
 protected:
-  nsHTMLScrollFrame(nsStyleContext* aContext, bool aIsRoot)
-    : nsHTMLScrollFrame(aContext, kClassID, aIsRoot)
+  nsHTMLScrollFrame(ComputedStyle* aStyle, bool aIsRoot)
+    : nsHTMLScrollFrame(aStyle, kClassID, aIsRoot)
   {}
 
-  nsHTMLScrollFrame(nsStyleContext* aContext,
+  nsHTMLScrollFrame(ComputedStyle* aStyle,
                     nsIFrame::ClassID aID,
                     bool aIsRoot);
   void SetSuppressScrollbarUpdate(bool aSuppress) {
@@ -1113,7 +1165,7 @@ public:
   NS_DECL_FRAMEARENA_HELPERS(nsXULScrollFrame)
 
   friend nsXULScrollFrame* NS_NewXULScrollFrame(nsIPresShell* aPresShell,
-                                                nsStyleContext* aContext,
+                                                ComputedStyle* aStyle,
                                                 bool aIsRoot,
                                                 bool aClipAllDescendants);
 
@@ -1149,7 +1201,7 @@ public:
   virtual void RemoveFrame(ChildListID     aListID,
                            nsIFrame*       aOldFrame) override;
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
 
   virtual nsIScrollableFrame* GetScrollTargetFrame() override {
@@ -1163,7 +1215,7 @@ public:
   virtual bool DoesClipChildren() override { return true; }
   virtual nsSplittableType GetSplittableType() const override;
 
-  virtual nsPoint GetPositionOfChildIgnoringScrolling(nsIFrame* aChild) override
+  nsPoint GetPositionOfChildIgnoringScrolling(const nsIFrame* aChild) override
   { nsPoint pt = aChild->GetPosition();
     if (aChild == mHelper.GetScrolledFrame())
       pt += mHelper.GetLogicalScrollPosition();
@@ -1324,6 +1376,12 @@ public:
   virtual bool IsScrollingActive(nsDisplayListBuilder* aBuilder) override {
     return mHelper.IsScrollingActive(aBuilder);
   }
+  virtual bool IsMaybeScrollingActive() const override {
+    return mHelper.IsMaybeScrollingActive();
+  }
+  virtual bool IsMaybeAsynchronouslyScrolled() override {
+    return mHelper.IsMaybeAsynchronouslyScrolled();
+  }
   virtual bool IsProcessingAsyncScroll() override {
     return mHelper.IsProcessingAsyncScroll();
   }
@@ -1364,12 +1422,17 @@ public:
     return mHelper.WantAsyncScroll();
   }
   virtual mozilla::Maybe<mozilla::layers::ScrollMetadata> ComputeScrollMetadata(
-    Layer* aLayer,
+    LayerManager* aLayerManager,
     const nsIFrame* aContainerReferenceFrame,
     const ContainerLayerParameters& aParameters,
     const mozilla::DisplayItemClip* aClip) const override
   {
-    return mHelper.ComputeScrollMetadata(aLayer, aContainerReferenceFrame, aParameters, aClip);
+    return mHelper.ComputeScrollMetadata(aLayerManager, aContainerReferenceFrame, aParameters, aClip);
+  }
+  virtual void ClipLayerToDisplayPort(Layer* aLayer,
+                                      const mozilla::DisplayItemClip* aClip,
+                                      const ContainerLayerParameters& aParameters) const override {
+    mHelper.ClipLayerToDisplayPort(aLayer, aClip, aParameters);
   }
   virtual bool IsIgnoringViewportClipping() const override {
     return mHelper.IsIgnoringViewportClipping();
@@ -1379,12 +1442,10 @@ public:
   }
 
   // nsIStatefulFrame
-  NS_IMETHOD SaveState(nsPresState** aState) override {
-    NS_ENSURE_ARG_POINTER(aState);
-    *aState = mHelper.SaveState();
-    return NS_OK;
+  mozilla::UniquePtr<mozilla::PresState> SaveState() override {
+    return mHelper.SaveState();
   }
-  NS_IMETHOD RestoreState(nsPresState* aState) override {
+  NS_IMETHOD RestoreState(mozilla::PresState* aState) override {
     NS_ENSURE_ARG_POINTER(aState);
     mHelper.RestoreState(aState);
     return NS_OK;
@@ -1455,10 +1516,14 @@ public:
   void SetZoomableByAPZ(bool aZoomable) override {
     mHelper.SetZoomableByAPZ(aZoomable);
   }
+  void SetHasOutOfFlowContentInsideFilter() override {
+    mHelper.SetHasOutOfFlowContentInsideFilter();
+  }
   virtual bool DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
+                                     nsRect* aVisibleRect,
                                      nsRect* aDirtyRect,
                                      bool aSetBase) override {
-    return mHelper.DecideScrollableLayer(aBuilder, aDirtyRect, aSetBase);
+    return mHelper.DecideScrollableLayer(aBuilder, aVisibleRect, aDirtyRect, aSetBase);
   }
   virtual void NotifyApproximateFrameVisibilityUpdate(bool aIgnoreDisplayPort) override {
     mHelper.NotifyApproximateFrameVisibilityUpdate(aIgnoreDisplayPort);
@@ -1496,7 +1561,7 @@ public:
 #endif
 
 protected:
-  nsXULScrollFrame(nsStyleContext* aContext, bool aIsRoot,
+  nsXULScrollFrame(ComputedStyle* aStyle, bool aIsRoot,
                    bool aClipAllDescendants);
 
   void ClampAndSetBounds(nsBoxLayoutState& aState,

@@ -9,9 +9,7 @@
 #include "nsFind.h"
 #include "nsContentCID.h"
 #include "nsIContent.h"
-#include "nsIDOMNode.h"
-#include "nsIDOMNodeList.h"
-#include "nsISelection.h"
+#include "nsINode.h"
 #include "nsISelectionController.h"
 #include "nsIFrame.h"
 #include "nsITextControlFrame.h"
@@ -21,18 +19,17 @@
 #include "nsAtom.h"
 #include "nsServiceManagerUtils.h"
 #include "nsUnicharUtils.h"
-#include "nsIDOMElement.h"
-#include "nsIWordBreaker.h"
 #include "nsCRT.h"
 #include "nsRange.h"
 #include "nsContentUtils.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/TextEditor.h"
+#include "mozilla/dom/Element.h"
 
 using namespace mozilla;
 
 // Yikes!  Casting a char to unichar can fill with ones!
-#define CHAR_TO_UNICHAR(c) ((char16_t)(const unsigned char)c)
+#define CHAR_TO_UNICHAR(c) ((char16_t)(unsigned char)c)
 
 static NS_DEFINE_CID(kCContentIteratorCID, NS_CONTENTITERATOR_CID);
 static NS_DEFINE_CID(kCPreContentIteratorCID, NS_PRECONTENTITERATOR_CID);
@@ -96,7 +93,7 @@ public:
     NS_NOTREACHED("internal error");
     return NS_ERROR_NOT_IMPLEMENTED;
   }
-  virtual nsresult Init(nsIDOMRange* aRange) override
+  virtual nsresult Init(nsRange* aRange) override
   {
     NS_NOTREACHED("internal error");
     return NS_ERROR_NOT_IMPLEMENTED;
@@ -114,8 +111,8 @@ public:
     return NS_ERROR_NOT_IMPLEMENTED;
   }
   // Not a range because one of the endpoints may be anonymous.
-  nsresult Init(nsIDOMNode* aStartNode, int32_t aStartOffset,
-                nsIDOMNode* aEndNode, int32_t aEndOffset);
+  nsresult Init(nsINode* aStartNode, int32_t aStartOffset,
+                nsINode* aEndNode, int32_t aEndOffset);
   virtual void First() override;
   virtual void Last() override;
   virtual void Next() override;
@@ -128,7 +125,7 @@ protected:
   virtual ~nsFindContentIterator() {}
 
 private:
-  static already_AddRefed<nsIDOMRange> CreateRange(nsINode* aNode)
+  static already_AddRefed<nsRange> CreateRange(nsINode* aNode)
   {
     RefPtr<nsRange> range = new nsRange(aNode);
     range->SetMaySpanAnonymousSubtrees(true);
@@ -139,9 +136,9 @@ private:
   nsCOMPtr<nsIContentIterator> mInnerIterator;
   // Can't use a range here, since we want to represent part of the flattened
   // tree, including native anonymous content.
-  nsCOMPtr<nsIDOMNode> mStartNode;
+  nsCOMPtr<nsINode> mStartNode;
   int32_t mStartOffset;
-  nsCOMPtr<nsIDOMNode> mEndNode;
+  nsCOMPtr<nsINode> mEndNode;
   int32_t mEndOffset;
 
   nsCOMPtr<nsIContent> mStartOuterContent;
@@ -166,8 +163,8 @@ NS_IMPL_CYCLE_COLLECTION(nsFindContentIterator, mOuterIterator, mInnerIterator,
                          mStartNode)
 
 nsresult
-nsFindContentIterator::Init(nsIDOMNode* aStartNode, int32_t aStartOffset,
-                            nsIDOMNode* aEndNode, int32_t aEndOffset)
+nsFindContentIterator::Init(nsINode* aStartNode, int32_t aStartOffset,
+                            nsINode* aEndNode, int32_t aEndOffset)
 {
   NS_ENSURE_ARG_POINTER(aStartNode);
   NS_ENSURE_ARG_POINTER(aEndNode);
@@ -296,12 +293,12 @@ nsFindContentIterator::Reset()
   // Note: OK to just set up the outer iterator here; if our range has a native
   // anonymous endpoint we'll end up setting up an inner iterator, and reset the
   // outer one in the process.
-  nsCOMPtr<nsINode> node = do_QueryInterface(mStartNode);
+  nsCOMPtr<nsINode> node = mStartNode;
   NS_ENSURE_TRUE_VOID(node);
 
-  nsCOMPtr<nsIDOMRange> range = CreateRange(node);
-  range->SetStart(mStartNode, mStartOffset);
-  range->SetEnd(mEndNode, mEndOffset);
+  RefPtr<nsRange> range = CreateRange(node);
+  range->SetStart(*mStartNode, mStartOffset, IgnoreErrors());
+  range->SetEnd(*mEndNode, mEndOffset, IgnoreErrors());
   mOuterIterator->Init(range);
 
   if (!mFindBackward) {
@@ -390,11 +387,14 @@ nsFindContentIterator::SetupInnerIterator(nsIContent* aContent)
     return;
   }
 
-  nsCOMPtr<nsIDOMElement> rootElement;
-  textEditor->GetRootElement(getter_AddRefs(rootElement));
+  RefPtr<dom::Element> rootElement = textEditor->GetRoot();
 
-  nsCOMPtr<nsIDOMRange> innerRange = CreateRange(aContent);
-  nsCOMPtr<nsIDOMRange> outerRange = CreateRange(aContent);
+  if (!rootElement) {
+    return;
+  }
+
+  RefPtr<nsRange> innerRange = CreateRange(aContent);
+  RefPtr<nsRange> outerRange = CreateRange(aContent);
   if (!innerRange || !outerRange) {
     return;
   }
@@ -403,33 +403,32 @@ nsFindContentIterator::SetupInnerIterator(nsIContent* aContent)
   mInnerIterator = do_CreateInstance(kCPreContentIteratorCID);
 
   if (mInnerIterator) {
-    innerRange->SelectNodeContents(rootElement);
+    innerRange->SelectNodeContents(*rootElement, IgnoreErrors());
 
     // fix up the inner bounds, we may have to only lookup a portion
     // of the text control if the current node is a boundary point
     if (aContent == mStartOuterContent) {
-      innerRange->SetStart(mStartNode, mStartOffset);
+      innerRange->SetStart(*mStartNode, mStartOffset, IgnoreErrors());
     }
     if (aContent == mEndOuterContent) {
-      innerRange->SetEnd(mEndNode, mEndOffset);
+      innerRange->SetEnd(*mEndNode, mEndOffset, IgnoreErrors());
     }
     // Note: we just init here. We do First() or Last() later.
     mInnerIterator->Init(innerRange);
 
     // make sure to place the outer-iterator outside the text control so that we
     // don't go there again.
-    nsresult res1, res2;
-    nsCOMPtr<nsIDOMNode> outerNode(do_QueryInterface(aContent));
+    IgnoredErrorResult res1, res2;
     if (!mFindBackward) { // find forward
       // cut the outer-iterator after the current node
-      res1 = outerRange->SetEnd(mEndNode, mEndOffset);
-      res2 = outerRange->SetStartAfter(outerNode);
+      outerRange->SetEnd(*mEndNode, mEndOffset, res1);
+      outerRange->SetStartAfter(*aContent, res2);
     } else { // find backward
       // cut the outer-iterator before the current node
-      res1 = outerRange->SetStart(mStartNode, mStartOffset);
-      res2 = outerRange->SetEndBefore(outerNode);
+      outerRange->SetStart(*mStartNode, mStartOffset, res1);
+      outerRange->SetEndBefore(*aContent, res2);
     }
-    if (NS_FAILED(res1) || NS_FAILED(res2)) {
+    if (res1.Failed() || res2.Failed()) {
       // we are done with the outer-iterator, the inner-iterator will traverse
       // what we want
       outerRange->Collapse(true);
@@ -471,40 +470,120 @@ NS_IMPL_CYCLE_COLLECTION(nsFind, mLastBlockParent, mIterNode, mIterator)
 nsFind::nsFind()
   : mFindBackward(false)
   , mCaseSensitive(false)
+  , mWordBreaker(nullptr)
   , mIterOffset(0)
 {
 }
 
-nsFind::~nsFind()
-{
-}
+nsFind::~nsFind() = default;
 
 #ifdef DEBUG_FIND
+#define DEBUG_FIND_PRINTF(...) printf(__VA_ARGS__)
+#else
+#define DEBUG_FIND_PRINTF(...) /* nothing */
+#endif
+
 static void
-DumpNode(nsIDOMNode* aNode)
+DumpNode(nsINode* aNode)
 {
+#ifdef DEBUG_FIND
   if (!aNode) {
     printf(">>>> Node: NULL\n");
     return;
   }
-  nsAutoString nodeName;
-  aNode->GetNodeName(nodeName);
-  nsCOMPtr<nsIContent> textContent(do_QueryInterface(aNode));
-  if (textContent && textContent->IsNodeOfType(nsINode::eTEXT)) {
+  nsString nodeName = aNode->NodeName();
+  if (aNode->IsText()) {
     nsAutoString newText;
-    textContent->AppendTextTo(newText);
+    aNode->AsText()->AppendTextTo(newText);
     printf(">>>> Text node (node name %s): '%s'\n",
            NS_LossyConvertUTF16toASCII(nodeName).get(),
            NS_LossyConvertUTF16toASCII(newText).get());
   } else {
     printf(">>>> Node: %s\n", NS_LossyConvertUTF16toASCII(nodeName).get());
   }
-}
 #endif
+}
+
+static bool
+IsBlockNode(nsIContent* aContent)
+{
+  if (aContent->IsElement() && aContent->AsElement()->IsDisplayContents()) {
+    return false;
+  }
+
+  // FIXME(emilio): This is dubious...
+  if (aContent->IsAnyOfHTMLElements(nsGkAtoms::img,
+                                    nsGkAtoms::hr,
+                                    nsGkAtoms::th,
+                                    nsGkAtoms::td)) {
+    return true;
+  }
+
+  nsIFrame* frame = aContent->GetPrimaryFrame();
+  return frame && frame->StyleDisplay()->IsBlockOutsideStyle();
+}
+
+static bool
+IsDisplayedNode(nsINode* aNode)
+{
+  if (!aNode->IsContent()) {
+    return false;
+  }
+
+  nsIFrame* frame = aNode->AsContent()->GetPrimaryFrame();
+  if (!frame) {
+    // No frame! Not visible then, unless it's display: contents.
+    return aNode->IsElement() && aNode->AsElement()->IsDisplayContents();
+  }
+
+  return true;
+}
+
+static bool
+IsVisibleNode(nsINode* aNode)
+{
+  if (!IsDisplayedNode(aNode)) {
+    return false;
+  }
+
+  nsIFrame* frame = aNode->AsContent()->GetPrimaryFrame();
+  if (!frame) {
+    // display: contents
+    return true;
+  }
+
+  return frame->StyleVisibility()->IsVisible();
+}
+
+static bool
+SkipNode(nsIContent* aContent)
+{
+  nsIContent* content = aContent;
+  while (content) {
+    if (!IsDisplayedNode(content) ||
+        content->IsComment() ||
+        content->IsAnyOfHTMLElements(nsGkAtoms::script,
+                                     nsGkAtoms::noframes,
+                                     nsGkAtoms::select)) {
+      DEBUG_FIND_PRINTF("Skipping node: ");
+      DumpNode(content);
+      return true;
+    }
+
+    // Only climb to the nearest block node
+    if (IsBlockNode(content)) {
+      return false;
+    }
+
+    content = content->GetParent();
+  }
+
+  return false;
+}
 
 nsresult
-nsFind::InitIterator(nsIDOMNode* aStartNode, int32_t aStartOffset,
-                     nsIDOMNode* aEndNode, int32_t aEndOffset)
+nsFind::InitIterator(nsINode* aStartNode, int32_t aStartOffset,
+                     nsINode* aEndNode, int32_t aEndOffset)
 {
   if (!mIterator) {
     mIterator = new nsFindContentIterator(mFindBackward);
@@ -515,11 +594,13 @@ nsFind::InitIterator(nsIDOMNode* aStartNode, int32_t aStartOffset,
   NS_ENSURE_ARG_POINTER(aEndNode);
 
 #ifdef DEBUG_FIND
-  printf("InitIterator search range:\n");
-  printf(" -- start %d, ", aStartOffset);
-  DumpNode(aStartNode);
-  printf(" -- end %d, ", aEndOffset);
-  DumpNode(aEndNode);
+  DEBUG_FIND_PRINTF("InitIterator search range:\n");
+  DEBUG_FIND_PRINTF(" -- start %d, ", aStartOffset);
+  nsCOMPtr<nsINode> start = do_QueryInterface(aStartNode);
+  DumpNode(start);
+  DEBUG_FIND_PRINTF(" -- end %d, ", aEndOffset);
+  nsCOMPtr<nsINode> end = do_QueryInterface(aEndNode);
+  DumpNode(end);
 #endif
 
   nsresult rv = mIterator->Init(aStartNode, aStartOffset, aEndNode, aEndOffset);
@@ -599,8 +680,8 @@ nsFind::SetEntireWord(bool aEntireWord)
 // intermixed strings, so all the handling is done explicitly here.
 
 nsresult
-nsFind::NextNode(nsIDOMRange* aSearchRange,
-                 nsIDOMRange* aStartPoint, nsIDOMRange* aEndPoint,
+nsFind::NextNode(nsRange* aSearchRange,
+                 nsRange* aStartPoint, nsRange* aEndPoint,
                  bool aContinueOk)
 {
   nsresult rv;
@@ -611,30 +692,28 @@ nsFind::NextNode(nsIDOMRange* aSearchRange,
     // If we are continuing, that means we have a match in progress. In that
     // case, we want to continue from the end point (where we are now) to the
     // beginning/end of the search range.
-    nsCOMPtr<nsIDOMNode> startNode;
-    nsCOMPtr<nsIDOMNode> endNode;
+    nsCOMPtr<nsINode> startNode;
+    nsCOMPtr<nsINode> endNode;
     uint32_t startOffset, endOffset;
     if (aContinueOk) {
-#ifdef DEBUG_FIND
-      printf("Match in progress: continuing past endpoint\n");
-#endif
+      DEBUG_FIND_PRINTF("Match in progress: continuing past endpoint\n");
       if (mFindBackward) {
-        aSearchRange->GetStartContainer(getter_AddRefs(startNode));
-        aSearchRange->GetStartOffset(&startOffset);
-        aEndPoint->GetStartContainer(getter_AddRefs(endNode));
-        aEndPoint->GetStartOffset(&endOffset);
+        startNode = aSearchRange->GetStartContainer();
+        startOffset = aSearchRange->StartOffset();
+        endNode = aEndPoint->GetStartContainer();
+        endOffset = aEndPoint->StartOffset();
       } else { // forward
-        aEndPoint->GetEndContainer(getter_AddRefs(startNode));
-        aEndPoint->GetEndOffset(&startOffset);
-        aSearchRange->GetEndContainer(getter_AddRefs(endNode));
-        aSearchRange->GetEndOffset(&endOffset);
+        startNode = aEndPoint->GetEndContainer();
+        startOffset = aEndPoint->EndOffset();
+        endNode = aSearchRange->GetEndContainer();
+        endOffset = aSearchRange->EndOffset();
       }
     } else { // Normal, not continuing
       if (mFindBackward) {
-        aSearchRange->GetStartContainer(getter_AddRefs(startNode));
-        aSearchRange->GetStartOffset(&startOffset);
-        aStartPoint->GetEndContainer(getter_AddRefs(endNode));
-        aStartPoint->GetEndOffset(&endOffset);
+        startNode = aSearchRange->GetStartContainer();
+        startOffset = aSearchRange->StartOffset();
+        endNode = aStartPoint->GetEndContainer();
+        endOffset = aStartPoint->EndOffset();
         // XXX Needs work: Problem with this approach: if there is a match which
         // starts just before the current selection and continues into the
         // selection, we will miss it, because our search algorithm only starts
@@ -642,10 +721,10 @@ nsFind::NextNode(nsIDOMRange* aSearchRange,
         // current selection but discount any matches that fall entirely inside
         // it.
       } else { // forward
-        aStartPoint->GetStartContainer(getter_AddRefs(startNode));
-        aStartPoint->GetStartOffset(&startOffset);
-        aEndPoint->GetEndContainer(getter_AddRefs(endNode));
-        aEndPoint->GetEndOffset(&endOffset);
+        startNode = aStartPoint->GetStartContainer();
+        startOffset = aStartPoint->StartOffset();
+        endNode = aEndPoint->GetEndContainer();
+        endOffset = aEndPoint->EndOffset();
       }
     }
 
@@ -657,38 +736,31 @@ nsFind::NextNode(nsIDOMRange* aSearchRange,
     }
 
     content = do_QueryInterface(mIterator->GetCurrentNode());
-#ifdef DEBUG_FIND
-    nsCOMPtr<nsIDOMNode> dnode(do_QueryInterface(content));
-    printf(":::::: Got the first node ");
-    DumpNode(dnode);
-#endif
-    if (content && content->IsNodeOfType(nsINode::eTEXT) &&
-        !SkipNode(content)) {
-      mIterNode = do_QueryInterface(content);
+    DEBUG_FIND_PRINTF(":::::: Got the first node ");
+    DumpNode(content);
+
+    if (content && content->IsText() && !SkipNode(content)) {
+      mIterNode = content;
       // Also set mIterOffset if appropriate:
-      nsCOMPtr<nsIDOMNode> node;
+      nsCOMPtr<nsINode> node;
       if (mFindBackward) {
-        aStartPoint->GetEndContainer(getter_AddRefs(node));
-        if (mIterNode.get() == node.get()) {
-          uint32_t endOffset;
-          aStartPoint->GetEndOffset(&endOffset);
+        node = aStartPoint->GetEndContainer();
+        if (mIterNode == node) {
+          uint32_t endOffset = aStartPoint->EndOffset();
           mIterOffset = static_cast<int32_t>(endOffset);
         } else {
           mIterOffset = -1; // sign to start from end
         }
       } else {
-        aStartPoint->GetStartContainer(getter_AddRefs(node));
-        if (mIterNode.get() == node.get()) {
-          uint32_t startOffset;
-          aStartPoint->GetStartOffset(&startOffset);
+        node = aStartPoint->GetStartContainer();
+        if (mIterNode == node) {
+          uint32_t startOffset = aStartPoint->StartOffset();
           mIterOffset = static_cast<int32_t>(startOffset);
         } else {
           mIterOffset = 0;
         }
       }
-#ifdef DEBUG_FIND
-      printf("Setting initial offset to %d\n", mIterOffset);
-#endif
+      DEBUG_FIND_PRINTF("Setting initial offset to %d\n", mIterOffset);
       return NS_OK;
     }
   }
@@ -705,11 +777,8 @@ nsFind::NextNode(nsIDOMRange* aSearchRange,
       break;
     }
 
-#ifdef DEBUG_FIND
-    nsCOMPtr<nsIDOMNode> dnode(do_QueryInterface(content));
-    printf(":::::: Got another node ");
-    DumpNode(dnode);
-#endif
+    DEBUG_FIND_PRINTF(":::::: Got another node ");
+    DumpNode(content);
 
     // If we ever cross a block node, we might want to reset the match anchor:
     // we don't match patterns extending across block boundaries. But we can't
@@ -725,27 +794,18 @@ nsFind::NextNode(nsIDOMRange* aSearchRange,
       continue;
     }
 
-    if (content->IsNodeOfType(nsINode::eTEXT)) {
+    if (content->IsText()) {
       break;
     }
-#ifdef DEBUG_FIND
-    dnode = do_QueryInterface(content);
-    printf("Not a text node: ");
-    DumpNode(dnode);
-#endif
+    DEBUG_FIND_PRINTF("Not a text node: ");
+    DumpNode(content);
   }
 
-  if (content) {
-    mIterNode = do_QueryInterface(content);
-  } else {
-    mIterNode = nullptr;
-  }
+  mIterNode = content;
   mIterOffset = -1;
 
-#ifdef DEBUG_FIND
-  printf("Iterator gave: ");
+  DEBUG_FIND_PRINTF("Iterator gave: ");
   DumpNode(mIterNode);
-#endif
   return NS_OK;
 }
 
@@ -769,15 +829,15 @@ public:
 
 private:
   int32_t mIterOffset;
-  nsCOMPtr<nsIDOMNode> mIterNode;
+  nsCOMPtr<nsINode> mIterNode;
   nsCOMPtr<nsINode> mCurrNode;
   RefPtr<nsFind> mFind;
 };
 
 char16_t
-nsFind::PeekNextChar(nsIDOMRange* aSearchRange,
-                     nsIDOMRange* aStartPoint,
-                     nsIDOMRange* aEndPoint)
+nsFind::PeekNextChar(nsRange* aSearchRange,
+                     nsRange* aStartPoint,
+                     nsRange* aEndPoint)
 {
   // We need to restore the necessary member variables before this function
   // returns.
@@ -797,7 +857,7 @@ nsFind::PeekNextChar(nsIDOMRange* aSearchRange,
     tc = do_QueryInterface(mIterNode);
 
     // Get the block parent.
-    nsCOMPtr<nsIDOMNode> blockParent;
+    nsCOMPtr<nsINode> blockParent;
     rv = GetBlockParent(mIterNode, getter_AddRefs(blockParent));
     if (NS_FAILED(rv))
       return L'\0';
@@ -825,101 +885,17 @@ nsFind::PeekNextChar(nsIDOMRange* aSearchRange,
   return t1b ? CHAR_TO_UNICHAR(t1b[index]) : t2b[index];
 }
 
-bool
-nsFind::IsBlockNode(nsIContent* aContent)
-{
-  if (aContent->IsAnyOfHTMLElements(nsGkAtoms::img,
-                                    nsGkAtoms::hr,
-                                    nsGkAtoms::th,
-                                    nsGkAtoms::td)) {
-    return true;
-  }
-
-  return nsContentUtils::IsHTMLBlock(aContent);
-}
-
-bool
-nsFind::IsTextNode(nsIDOMNode* aNode)
-{
-  uint16_t nodeType;
-  aNode->GetNodeType(&nodeType);
-
-  return nodeType == nsIDOMNode::TEXT_NODE ||
-         nodeType == nsIDOMNode::CDATA_SECTION_NODE;
-}
-
-bool
-nsFind::IsVisibleNode(nsIDOMNode* aDOMNode)
-{
-  nsCOMPtr<nsIContent> content(do_QueryInterface(aDOMNode));
-  if (!content) {
-    return false;
-  }
-
-  nsIFrame* frame = content->GetPrimaryFrame();
-  if (!frame) {
-    // No frame! Not visible then.
-    return false;
-  }
-
-  return frame->StyleVisibility()->IsVisible();
-}
-
-bool
-nsFind::SkipNode(nsIContent* aContent)
-{
-#ifdef HAVE_BIDI_ITERATOR
-  // We may not need to skip comment nodes, now that IsTextNode distinguishes
-  // them from real text nodes.
-  return aContent->IsNodeOfType(nsINode::eCOMMENT) ||
-         aContent->IsAnyOfHTMLElements(sScriptAtom, sNoframesAtom, sSelectAtom);
-
-#else /* HAVE_BIDI_ITERATOR */
-  // Temporary: eventually we will have an iterator to do this, but for now, we
-  // have to climb up the tree for each node and see whether any parent is a
-  // skipped node, and take the performance hit.
-
-  nsIContent* content = aContent;
-  while (content) {
-    if (aContent->IsNodeOfType(nsINode::eCOMMENT) ||
-        content->IsAnyOfHTMLElements(nsGkAtoms::script,
-                                     nsGkAtoms::noframes,
-                                     nsGkAtoms::select)) {
-#ifdef DEBUG_FIND
-      printf("Skipping node: ");
-      nsCOMPtr<nsIDOMNode> node(do_QueryInterface(content));
-      DumpNode(node);
-#endif
-
-      return true;
-    }
-
-    // Only climb to the nearest block node
-    if (IsBlockNode(content)) {
-      return false;
-    }
-
-    content = content->GetParent();
-  }
-
-  return false;
-#endif /* HAVE_BIDI_ITERATOR */
-}
-
 nsresult
-nsFind::GetBlockParent(nsIDOMNode* aNode, nsIDOMNode** aParent)
+nsFind::GetBlockParent(nsINode* aNode, nsINode** aParent)
 {
-  while (aNode) {
-    nsCOMPtr<nsIDOMNode> parent;
-    nsresult rv = aNode->GetParentNode(getter_AddRefs(parent));
-    NS_ENSURE_SUCCESS(rv, rv);
-    nsCOMPtr<nsIContent> content(do_QueryInterface(parent));
-    if (content && IsBlockNode(content)) {
-      *aParent = parent;
-      NS_ADDREF(*aParent);
+  nsINode* curNode = aNode;
+  while (curNode) {
+    nsIContent* parent = curNode->GetParent();
+    if (parent && IsBlockNode(parent)) {
+      *aParent = do_AddRef(parent).take();
       return NS_OK;
     }
-    aNode = parent;
+    curNode = parent;
   }
   return NS_ERROR_FAILURE;
 }
@@ -941,16 +917,14 @@ nsFind::ResetAll()
 // Take nodes out of the tree with NextNode, until null (NextNode will return 0
 // at the end of our range).
 NS_IMETHODIMP
-nsFind::Find(const char16_t* aPatText, nsIDOMRange* aSearchRange,
-             nsIDOMRange* aStartPoint, nsIDOMRange* aEndPoint,
-             nsIDOMRange** aRangeRet)
+nsFind::Find(const char16_t* aPatText, nsRange* aSearchRange,
+             nsRange* aStartPoint, nsRange* aEndPoint,
+             nsRange** aRangeRet)
 {
-#ifdef DEBUG_FIND
-  printf("============== nsFind::Find('%s'%s, %p, %p, %p)\n",
-         NS_LossyConvertUTF16toASCII(aPatText).get(),
-         mFindBackward ? " (backward)" : " (forward)",
-         (void*)aSearchRange, (void*)aStartPoint, (void*)aEndPoint);
-#endif
+  DEBUG_FIND_PRINTF("============== nsFind::Find('%s'%s, %p, %p, %p)\n",
+                    NS_LossyConvertUTF16toASCII(aPatText).get(),
+                    mFindBackward ? " (backward)" : " (forward)",
+                    (void*)aSearchRange, (void*)aStartPoint, (void*)aEndPoint);
 
   NS_ENSURE_ARG(aSearchRange);
   NS_ENSURE_ARG(aStartPoint);
@@ -1000,23 +974,19 @@ nsFind::Find(const char16_t* aPatText, nsIDOMRange* aSearchRange,
   bool wordBreakPrev = false;
 
   // Place to save the range start point in case we find a match:
-  nsCOMPtr<nsIDOMNode> matchAnchorNode;
+  nsCOMPtr<nsINode> matchAnchorNode;
   int32_t matchAnchorOffset = 0;
 
   // Get the end point, so we know when to end searches:
-  nsCOMPtr<nsIDOMNode> endNode;
-  uint32_t endOffset;
-  aEndPoint->GetEndContainer(getter_AddRefs(endNode));
-  aEndPoint->GetEndOffset(&endOffset);
+  nsCOMPtr<nsINode> endNode = aEndPoint->GetEndContainer();;
+  uint32_t endOffset = aEndPoint->EndOffset();
 
   char16_t c = 0;
   char16_t patc = 0;
   char16_t prevChar = 0;
   char16_t prevCharInMatch = 0;
   while (1) {
-#ifdef DEBUG_FIND
-    printf("Loop ...\n");
-#endif
+    DEBUG_FIND_PRINTF("Loop ...\n");
 
     // If this is our first time on a new node, reset the pointers:
     if (!frag) {
@@ -1038,20 +1008,19 @@ nsFind::Find(const char16_t* aPatText, nsIDOMRange* aSearchRange,
       // We have a new text content. If its block parent is different from the
       // block parent of the last text content, then we need to clear the match
       // since we don't want to find across block boundaries.
-      nsCOMPtr<nsIDOMNode> blockParent;
+      nsCOMPtr<nsINode> blockParent;
       GetBlockParent(mIterNode, getter_AddRefs(blockParent));
-#ifdef DEBUG_FIND
-      printf("New node: old blockparent = %p, new = %p\n",
-             (void*)mLastBlockParent.get(), (void*)blockParent.get());
-#endif
+      DEBUG_FIND_PRINTF("New node: old blockparent = %p, new = %p\n",
+                        (void*)mLastBlockParent.get(), (void*)blockParent.get());
       if (blockParent != mLastBlockParent) {
-#ifdef DEBUG_FIND
-        printf("Different block parent!\n");
-#endif
+        DEBUG_FIND_PRINTF("Different block parent!\n");
         mLastBlockParent = blockParent;
         // End any pending match:
         matchAnchorNode = nullptr;
         matchAnchorOffset = 0;
+        c = 0;
+        prevChar = 0;
+        prevCharInMatch = 0;
         pindex = (mFindBackward ? patLen : 0);
         inWhitespace = false;
       }
@@ -1094,43 +1063,35 @@ nsFind::Find(const char16_t* aPatText, nsIDOMRange* aSearchRange,
 
       // If this is outside the bounds of the string, then skip this node:
       if (findex < 0 || findex > fragLen - 1) {
-#ifdef DEBUG_FIND
-        printf("At the end of a text node -- skipping to the next\n");
-#endif
+        DEBUG_FIND_PRINTF("At the end of a text node -- skipping to the next\n");
         frag = 0;
         continue;
       }
 
-#ifdef DEBUG_FIND
-      printf("Starting from offset %d\n", findex);
-#endif
+      DEBUG_FIND_PRINTF("Starting from offset %d\n", findex);
       if (frag->Is2b()) {
         t2b = frag->Get2b();
         t1b = nullptr;
 #ifdef DEBUG_FIND
         nsAutoString str2(t2b, fragLen);
-        printf("2 byte, '%s'\n", NS_LossyConvertUTF16toASCII(str2).get());
+        DEBUG_FIND_PRINTF("2 byte, '%s'\n", NS_LossyConvertUTF16toASCII(str2).get());
 #endif
       } else {
         t1b = frag->Get1b();
         t2b = nullptr;
 #ifdef DEBUG_FIND
         nsAutoCString str1(t1b, fragLen);
-        printf("1 byte, '%s'\n", str1.get());
+        DEBUG_FIND_PRINTF("1 byte, '%s'\n", str1.get());
 #endif
       }
     } else {
       // Still on the old node. Advance the pointers, then see if we need to
       // pull a new node.
       findex += incr;
-#ifdef DEBUG_FIND
-      printf("Same node -- (%d, %d)\n", pindex, findex);
-#endif
+      DEBUG_FIND_PRINTF("Same node -- (%d, %d)\n", pindex, findex);
       if (mFindBackward ? (findex < 0) : (findex >= fragLen)) {
-#ifdef DEBUG_FIND
-        printf("Will need to pull a new node: mAO = %d, frag len=%d\n",
-               matchAnchorOffset, fragLen);
-#endif
+        DEBUG_FIND_PRINTF("Will need to pull a new node: mAO = %d, frag len=%d\n",
+                          matchAnchorOffset, fragLen);
         // Done with this node.  Pull a new one.
         frag = nullptr;
         continue;
@@ -1152,11 +1113,9 @@ nsFind::Find(const char16_t* aPatText, nsIDOMRange* aSearchRange,
     c = (t2b ? t2b[findex] : CHAR_TO_UNICHAR(t1b[findex]));
     patc = patStr[pindex];
 
-#ifdef DEBUG_FIND
-    printf("Comparing '%c'=%x to '%c' (%d of %d), findex=%d%s\n",
+    DEBUG_FIND_PRINTF("Comparing '%c'=%x to '%c' (%d of %d), findex=%d%s\n",
            (char)c, (int)c, patc, pindex, patLen, findex,
            inWhitespace ? " (inWhitespace)" : "");
-#endif
 
     // Do we need to go back to non-whitespace mode? If inWhitespace, then this
     // space in the pat str has already matched at least one space in the
@@ -1239,13 +1198,11 @@ nsFind::Find(const char16_t* aPatText, nsIDOMRange* aSearchRange,
         (inWhitespace && IsSpace(c)))
     {
       prevCharInMatch = c;
-#ifdef DEBUG_FIND
       if (inWhitespace) {
-        printf("YES (whitespace)(%d of %d)\n", pindex, patLen);
+        DEBUG_FIND_PRINTF("YES (whitespace)(%d of %d)\n", pindex, patLen);
       } else {
-        printf("YES! '%c' == '%c' (%d of %d)\n", c, patc, pindex, patLen);
+        DEBUG_FIND_PRINTF("YES! '%c' == '%c' (%d of %d)\n", c, patc, pindex, patLen);
       }
-#endif
 
       // Save the range anchors if we haven't already:
       if (!matchAnchorNode) {
@@ -1256,13 +1213,11 @@ nsFind::Find(const char16_t* aPatText, nsIDOMRange* aSearchRange,
       // Are we done?
       if (DONE_WITH_PINDEX) {
         // Matched the whole string!
-#ifdef DEBUG_FIND
-        printf("Found a match!\n");
-#endif
+        DEBUG_FIND_PRINTF("Found a match!\n");
 
         // Make the range:
-        nsCOMPtr<nsIDOMNode> startParent;
-        nsCOMPtr<nsIDOMNode> endParent;
+        nsCOMPtr<nsINode> startParent;
+        nsCOMPtr<nsINode> endParent;
 
         // Check for word break (if necessary)
         if (mWordBreaker) {
@@ -1286,26 +1241,26 @@ nsFind::Find(const char16_t* aPatText, nsIDOMRange* aSearchRange,
           }
         }
 
-        nsCOMPtr<nsIDOMRange> range = new nsRange(tc);
+        RefPtr<nsRange> range = new nsRange(tc);
         if (range) {
           int32_t matchStartOffset, matchEndOffset;
           // convert char index to range point:
           int32_t mao = matchAnchorOffset + (mFindBackward ? 1 : 0);
           if (mFindBackward) {
-            startParent = do_QueryInterface(tc);
+            startParent = tc;
             endParent = matchAnchorNode;
             matchStartOffset = findex;
             matchEndOffset = mao;
           } else {
             startParent = matchAnchorNode;
-            endParent = do_QueryInterface(tc);
+            endParent = tc;
             matchStartOffset = mao;
             matchEndOffset = findex + 1;
           }
           if (startParent && endParent &&
               IsVisibleNode(startParent) && IsVisibleNode(endParent)) {
-            range->SetStart(startParent, matchStartOffset);
-            range->SetEnd(endParent, matchEndOffset);
+            range->SetStart(*startParent, matchStartOffset, IgnoreErrors());
+            range->SetEnd(*endParent, matchEndOffset, IgnoreErrors());
             *aRangeRet = range.get();
             NS_ADDREF(*aRangeRet);
           } else {
@@ -1319,10 +1274,8 @@ nsFind::Find(const char16_t* aPatText, nsIDOMRange* aSearchRange,
           // or, we didn't make a range because the start or end node were
           // invisible. Reset the offset to the other end of the found string:
           mIterOffset = findex + (mFindBackward ? 1 : 0);
-#ifdef DEBUG_FIND
-          printf("mIterOffset = %d, mIterNode = ", mIterOffset);
+          DEBUG_FIND_PRINTF("mIterOffset = %d, mIterNode = ", mIterOffset);
           DumpNode(mIterNode);
-#endif
 
           ResetAll();
           return NS_OK;
@@ -1338,18 +1291,14 @@ nsFind::Find(const char16_t* aPatText, nsIDOMRange* aSearchRange,
             IsSpace(patStr[pindex + incr])) {
           pindex += incr;
           inWhitespace = false;
-#ifdef DEBUG_FIND
-          printf("Advancing pindex to %d\n", pindex);
-#endif
+          DEBUG_FIND_PRINTF("Advancing pindex to %d\n", pindex);
         }
 
         continue;
       }
     }
 
-#ifdef DEBUG_FIND
-    printf("NOT: %c == %c\n", c, patc);
-#endif
+    DEBUG_FIND_PRINTF("NOT: %c == %c\n", c, patc);
 
     // If we didn't match, go back to the beginning of patStr, and set findex
     // back to the next char after we started the current match.
@@ -1367,23 +1316,16 @@ nsFind::Find(const char16_t* aPatText, nsIDOMRange* aSearchRange,
         }
         frag = 0;
         NS_ASSERTION(NS_SUCCEEDED(rv), "Text content wasn't nsIContent!");
-#ifdef DEBUG_FIND
-        printf("Repositioned anchor node\n");
-#endif
+        DEBUG_FIND_PRINTF("Repositioned anchor node\n");
       }
-#ifdef DEBUG_FIND
-      printf("Ending a partial match; findex -> %d, mIterOffset -> %d\n",
-             findex, mIterOffset);
-#endif
+      DEBUG_FIND_PRINTF("Ending a partial match; findex -> %d, mIterOffset -> %d\n",
+                        findex, mIterOffset);
     }
     matchAnchorNode = nullptr;
     matchAnchorOffset = 0;
     inWhitespace = false;
     pindex = (mFindBackward ? patLen : 0);
-#ifdef DEBUG_FIND
-    printf("Setting findex back to %d, pindex to %d\n", findex, pindex);
-
-#endif
+    DEBUG_FIND_PRINTF("Setting findex back to %d, pindex to %d\n", findex, pindex);
   }
 
   // Out of nodes, and didn't match.

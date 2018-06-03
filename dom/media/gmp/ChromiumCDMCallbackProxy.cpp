@@ -90,7 +90,7 @@ ChromiumCDMCallbackProxy::SessionMessage(const nsACString& aSessionId,
                        &ChromiumCDMProxy::OnSessionMessage,
                        NS_ConvertUTF8toUTF16(aSessionId),
                        ToDOMMessageType(aMessageType),
-                       Move(aMessage));
+                       std::move(aMessage));
 }
 
 static dom::MediaKeyStatus
@@ -117,18 +117,28 @@ ToDOMMediaKeyStatus(uint32_t aStatus)
 }
 
 void
+ChromiumCDMCallbackProxy::ResolvePromiseWithKeyStatus(uint32_t aPromiseId,
+                                                      uint32_t aKeyStatus)
+{
+  DispatchToMainThread("ChromiumCDMProxy::OnResolvePromiseWithKeyStatus",
+                       &ChromiumCDMProxy::OnResolvePromiseWithKeyStatus,
+                       aPromiseId,
+                       ToDOMMediaKeyStatus(aKeyStatus));
+}
+
+void
 ChromiumCDMCallbackProxy::SessionKeysChange(const nsCString& aSessionId,
                                             nsTArray<mozilla::gmp::CDMKeyInformation> && aKeysInfo)
 {
   bool keyStatusesChange = false;
   {
-    CDMCaps::AutoLock caps(mProxy->Capabilites());
+    auto caps = mProxy->Capabilites().Lock();
     for (const auto& keyInfo : aKeysInfo) {
       keyStatusesChange |=
-        caps.SetKeyStatus(keyInfo.mKeyId(),
-                          NS_ConvertUTF8toUTF16(aSessionId),
-                          dom::Optional<dom::MediaKeyStatus>(
-                            ToDOMMediaKeyStatus(keyInfo.mStatus())));
+        caps->SetKeyStatus(keyInfo.mKeyId(),
+                           NS_ConvertUTF8toUTF16(aSessionId),
+                           dom::Optional<dom::MediaKeyStatus>(
+                             ToDOMMediaKeyStatus(keyInfo.mStatus())));
     }
   }
   if (keyStatusesChange) {

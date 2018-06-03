@@ -7,9 +7,8 @@ import subprocess
 import sys
 from ConfigParser import SafeConfigParser
 
-import requests
-
-wpt_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
+here = os.path.dirname(__file__)
+wpt_root = os.path.abspath(os.path.join(here, os.pardir, os.pardir))
 sys.path.insert(0, wpt_root)
 
 from tools.wpt import testfiles
@@ -21,11 +20,13 @@ from tools.wpt import markdown
 from tools import localpaths
 
 logger = None
-run, write_inconsistent, write_results = None, None, None
+stability_run, write_inconsistent, write_results = None, None, None
 wptrunner = None
 
 def setup_logging():
     """Set up basic debug logger."""
+    global logger
+    logger = logging.getLogger(here)
     handler = logging.StreamHandler(sys.stdout)
     formatter = logging.Formatter(logging.BASIC_FORMAT, None)
     handler.setFormatter(formatter)
@@ -34,8 +35,9 @@ def setup_logging():
 
 
 def do_delayed_imports():
-    global run, write_inconsistent, write_results, wptrunner
-    from tools.wpt.stability import run, write_inconsistent, write_results
+    global stability_run, write_inconsistent, write_results, wptrunner
+    from tools.wpt.stability import run as stability_run
+    from tools.wpt.stability import write_inconsistent, write_results
     from wptrunner import wptrunner
 
 
@@ -129,11 +131,6 @@ def get_sha1():
     return git("rev-parse", "HEAD").strip()
 
 
-def install_wptrunner():
-    """Install wptrunner."""
-    call("pip", "install", wptrunner_root)
-
-
 def deepen_checkout(user):
     """Convert from a shallow checkout to a full one"""
     fetch_args = [user, "+refs/heads/*:refs/remotes/origin/*"]
@@ -174,71 +171,28 @@ def get_parser():
     return parser
 
 
-def set_default_args(kwargs):
-    kwargs.set_if_none("sauce_platform",
-                       os.environ.get("PLATFORM"))
-    kwargs.set_if_none("sauce_build",
-                       os.environ.get("TRAVIS_BUILD_NUMBER"))
-    python_version = os.environ.get("TRAVIS_PYTHON_VERSION")
-    kwargs.set_if_none("sauce_tags",
-                       [python_version] if python_version else [])
-    kwargs.set_if_none("sauce_tunnel_id",
-                       os.environ.get("TRAVIS_JOB_NUMBER"))
-    kwargs.set_if_none("sauce_user",
-                       os.environ.get("SAUCE_USERNAME"))
-    kwargs.set_if_none("sauce_key",
-                       os.environ.get("SAUCE_ACCESS_KEY"))
-
-
 def pr():
     pr = os.environ.get("TRAVIS_PULL_REQUEST", "false")
     return pr if pr != "false" else None
 
 
-def post_results(results, pr_number, iterations, product, url, status):
-    """Post stability results to a given URL."""
-    payload_results = []
+def get_changed_files(manifest_path, rev, ignore_changes, skip_tests):
+    if not rev:
+        branch_point = testfiles.branch_point()
+        revish = "%s..HEAD" % branch_point
+    else:
+        revish = rev
 
-    for test_name, test in results.iteritems():
-        subtests = []
-        for subtest_name, subtest in test['subtests'].items():
-            subtests.append({
-                'test': subtest_name,
-                'result': {
-                    'messages': list(subtest['messages']),
-                    'status': subtest['status']
-                },
-            })
-        payload_results.append({
-            'test': test_name,
-            'result': {
-                'status': test['status'],
-                'subtests': subtests
-            }
-        })
+    files_changed, files_ignored = testfiles.files_changed(revish, ignore_changes)
 
-    payload = {
-        "pull": {
-            "number": int(pr_number),
-            "sha": os.environ.get("TRAVIS_PULL_REQUEST_SHA"),
-        },
-        "job": {
-            "id": int(os.environ.get("TRAVIS_JOB_ID")),
-            "number": os.environ.get("TRAVIS_JOB_NUMBER"),
-            "allow_failure": os.environ.get("TRAVIS_ALLOW_FAILURE") == 'true',
-            "status": status,
-        },
-        "build": {
-            "id": int(os.environ.get("TRAVIS_BUILD_ID")),
-            "number": os.environ.get("TRAVIS_BUILD_NUMBER"),
-        },
-        "product": product,
-        "iterations": iterations,
-        "message": "All results were stable." if status == "passed" else "Unstable results.",
-        "results": payload_results,
-    }
+    if files_ignored:
+        logger.info("Ignoring %s changed files:\n%s" %
+                    (len(files_ignored), "".join(" * %s\n" % item for item in files_ignored)))
 
-    requests.post(url, json=payload)
+    tests_changed, files_affected = testfiles.affected_testfiles(files_changed, skip_tests,
+                                                                 manifest_path=manifest_path)
+
+    return tests_changed, files_affected
 
 
 def main():
@@ -246,19 +200,15 @@ def main():
 
     venv = Virtualenv(os.environ.get("VIRTUAL_ENV", os.path.join(wpt_root, "_venv")))
     venv.install_requirements(os.path.join(wpt_root, "tools", "wptrunner", "requirements.txt"))
-    venv.install("requests")
 
     args, wpt_args = get_parser().parse_known_args()
     return run(venv, wpt_args, **vars(args))
 
 
 def run(venv, wpt_args, **kwargs):
-    global logger
-
     do_delayed_imports()
 
     retcode = 0
-    parser = get_parser()
 
     wpt_args = create_parser().parse_args(wpt_args)
 
@@ -267,7 +217,6 @@ def run(venv, wpt_args, **kwargs):
         config.readfp(config_fp)
         skip_tests = config.get("file detection", "skip_tests").split()
         ignore_changes = set(config.get("file detection", "ignore_changes").split())
-        results_url = config.get("file detection", "results_url")
 
     if kwargs["output_bytes"] is not None:
         replace_streams(kwargs["output_bytes"],
@@ -280,15 +229,7 @@ def run(venv, wpt_args, **kwargs):
     except OSError:
         pass
 
-    logger = logging.getLogger(os.path.splitext(__file__)[0])
-
     setup_logging()
-
-    browser_name = wpt_args.product.split(":")[0]
-
-    if browser_name == "sauce" and not wpt_args.sauce_key:
-        logger.warning("Cannot run tests on Sauce Labs. No access key.")
-        return retcode
 
     pr_number = pr()
 
@@ -304,30 +245,24 @@ def run(venv, wpt_args, **kwargs):
         head_sha1 = get_sha1()
         logger.info("Testing web-platform-tests at revision %s" % head_sha1)
 
-        if not kwargs["rev"]:
-            branch_point = testfiles.branch_point()
-            revish = "%s..HEAD" % branch_point
-        else:
-            revish = kwargs["rev"]
-
-        files_changed, files_ignored = testfiles.files_changed(revish, ignore_changes)
-
-        if files_ignored:
-            logger.info("Ignoring %s changed files:\n%s" % (len(files_ignored),
-                                                            "".join(" * %s\n" % item for item in files_ignored)))
-
-        tests_changed, files_affected = testfiles.affected_testfiles(files_changed, skip_tests,
-                                                                     manifest_path=os.path.join(
-                                                                         wpt_args.metadata_root,
-                                                                         "MANIFEST.json"))
-
-        if not (tests_changed or files_affected):
-            logger.info("No tests changed")
-            return 0
-
         wpt_kwargs = Kwargs(vars(wpt_args))
-        wpt_kwargs["test_list"] = list(tests_changed | files_affected)
-        set_default_args(wpt_kwargs)
+
+        if not wpt_kwargs["test_list"]:
+            manifest_path = os.path.join(wpt_kwargs["metadata_root"], "MANIFEST.json")
+            tests_changed, files_affected = get_changed_files(manifest_path, kwargs["rev"],
+                                                              ignore_changes, skip_tests)
+
+            if not (tests_changed or files_affected):
+                logger.info("No tests changed")
+                return 0
+
+            if tests_changed:
+                logger.debug("Tests changed:\n%s" % "".join(" * %s\n" % item for item in tests_changed))
+
+            if files_affected:
+                logger.debug("Affected tests:\n%s" % "".join(" * %s\n" % item for item in files_affected))
+
+            wpt_kwargs["test_list"] = list(tests_changed | files_affected)
 
         do_delayed_imports()
 
@@ -340,19 +275,13 @@ def run(venv, wpt_args, **kwargs):
 
         logger.info("Using binary %s" % wpt_kwargs["binary"])
 
-        if tests_changed:
-            logger.debug("Tests changed:\n%s" % "".join(" * %s\n" % item for item in tests_changed))
-
-        if files_affected:
-            logger.debug("Affected tests:\n%s" % "".join(" * %s\n" % item for item in files_affected))
-
 
     with TravisFold("running_tests"):
         logger.info("Starting tests")
 
 
         wpt_logger = wptrunner.logger
-        iterations, results, inconsistent = run(venv, wpt_logger, **wpt_kwargs)
+        iterations, results, inconsistent = stability_run(venv, wpt_logger, **wpt_kwargs)
 
     if results:
         if inconsistent:
@@ -364,22 +293,19 @@ def run(venv, wpt_args, **kwargs):
             write_results(logger.info, results, iterations,
                           pr_number=pr_number,
                           use_details=True)
-            if pr_number:
-                post_results(results, iterations=iterations, url=results_url,
-                             product=wpt_args.product, pr_number=pr_number,
-                             status="failed" if inconsistent else "passed")
     else:
         logger.info("No tests run.")
+        # Be conservative and only return errors when we know for sure tests are changed.
+        if tests_changed:
+            retcode = 3
 
     return retcode
 
 
 if __name__ == "__main__":
     try:
-        retcode = main()
-    except:
+        sys.exit(main())
+    except Exception:
         import traceback
         traceback.print_exc()
         sys.exit(1)
-    else:
-        sys.exit(retcode)

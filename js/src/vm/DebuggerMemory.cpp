@@ -12,12 +12,9 @@
 
 #include <stdlib.h>
 
-#include "jsalloc.h"
-#include "jscntxt.h"
-#include "jscompartment.h"
-
 #include "builtin/MapObject.h"
 #include "gc/Marking.h"
+#include "js/AllocPolicy.h"
 #include "js/Debug.h"
 #include "js/TracingAPI.h"
 #include "js/UbiNode.h"
@@ -25,6 +22,8 @@
 #include "js/Utility.h"
 #include "vm/Debugger.h"
 #include "vm/GlobalObject.h"
+#include "vm/JSCompartment.h"
+#include "vm/JSContext.h"
 #include "vm/SavedStacks.h"
 
 #include "vm/Debugger-inl.h"
@@ -32,13 +31,8 @@
 
 using namespace js;
 
-using JS::ubi::BreadthFirst;
-using JS::ubi::Edge;
-using JS::ubi::Node;
-
 using mozilla::Forward;
 using mozilla::Maybe;
-using mozilla::Move;
 using mozilla::Nothing;
 
 /* static */ DebuggerMemory*
@@ -46,14 +40,14 @@ DebuggerMemory::create(JSContext* cx, Debugger* dbg)
 {
     Value memoryProtoValue = dbg->object->getReservedSlot(Debugger::JSSLOT_DEBUG_MEMORY_PROTO);
     RootedObject memoryProto(cx, &memoryProtoValue.toObject());
-    RootedNativeObject memory(cx, NewNativeObjectWithGivenProto(cx, &class_, memoryProto));
+    Rooted<DebuggerMemory*> memory(cx, NewObjectWithGivenProto<DebuggerMemory>(cx, memoryProto));
     if (!memory)
         return nullptr;
 
     dbg->object->setReservedSlot(Debugger::JSSLOT_DEBUG_MEMORY_INSTANCE, ObjectValue(*memory));
     memory->setReservedSlot(JSSLOT_DEBUGGER, ObjectValue(*dbg->object));
 
-    return &memory->as<DebuggerMemory>();
+    return memory;
 }
 
 Debugger*
@@ -314,10 +308,10 @@ DebuggerMemory::setAllocationSamplingProbability(JSContext* cx, unsigned argc, V
         dbg->allocationSamplingProbability = probability;
 
         // If this is a change any debuggees would observe, have all debuggee
-        // compartments recompute their sampling probabilities.
+        // realms recompute their sampling probabilities.
         if (dbg->enabled && dbg->trackingAllocationSites) {
             for (auto r = dbg->debuggees.all(); !r.empty(); r.popFront())
-                r.front()->compartment()->chooseAllocationSamplingProbability();
+                r.front()->realm()->chooseAllocationSamplingProbability();
         }
     }
 
@@ -381,6 +375,13 @@ bool
 DebuggerMemory::takeCensus(JSContext* cx, unsigned argc, Value* vp)
 {
     THIS_DEBUGGER_MEMORY(cx, argc, vp, "Debugger.Memory.prototype.census", args, memory);
+
+#ifdef ENABLE_WASM_GC
+    if (gc::GCRuntime::temporaryAbortIfWasmGc(cx)) {
+        JS_ReportErrorASCII(cx, "API temporarily unavailable under wasm gc");
+        return false;
+    }
+#endif
 
     Census census(cx);
     if (!census.init())

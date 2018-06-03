@@ -33,6 +33,7 @@ InternalResponse::InternalResponse(uint16_t aStatus, const nsACString& aStatusTe
   , mHeaders(new InternalHeaders(HeadersGuardEnum::Response))
   , mBodySize(UNKNOWN_BODY_SIZE)
   , mPaddingSize(UNKNOWN_PADDING_SIZE)
+  , mErrorCode(NS_OK)
 {
 }
 
@@ -40,7 +41,7 @@ already_AddRefed<InternalResponse>
 InternalResponse::FromIPC(const IPCInternalResponse& aIPCResponse)
 {
   if (aIPCResponse.type() == ResponseType::Error) {
-    return InternalResponse::NetworkError();
+    return InternalResponse::NetworkError(aIPCResponse.errorCode());
   }
 
   RefPtr<InternalResponse> response =
@@ -55,7 +56,7 @@ InternalResponse::FromIPC(const IPCInternalResponse& aIPCResponse)
   response->InitChannelInfo(aIPCResponse.channelInfo());
   if (aIPCResponse.principalInfo().type() == mozilla::ipc::OptionalPrincipalInfo::TPrincipalInfo) {
     UniquePtr<mozilla::ipc::PrincipalInfo> info(new mozilla::ipc::PrincipalInfo(aIPCResponse.principalInfo().get_PrincipalInfo()));
-    response->SetPrincipalInfo(Move(info));
+    response->SetPrincipalInfo(std::move(info));
   }
 
   nsCOMPtr<nsIInputStream> stream = DeserializeIPCStream(aIPCResponse.body());
@@ -280,7 +281,7 @@ InternalResponse::SetPaddingSize(int64_t aPaddingSize)
 void
 InternalResponse::SetPrincipalInfo(UniquePtr<mozilla::ipc::PrincipalInfo> aPrincipalInfo)
 {
-  mPrincipalInfo = Move(aPrincipalInfo);
+  mPrincipalInfo = std::move(aPrincipalInfo);
 }
 
 LoadTainting

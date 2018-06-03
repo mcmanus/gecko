@@ -11,35 +11,31 @@
 
 "use strict";
 
-this.EXPORTED_SYMBOLS = [
+var EXPORTED_SYMBOLS = [
   "TelemetrySend",
 ];
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm", this);
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+ChromeUtils.import("resource://gre/modules/ClientID.jsm");
+ChromeUtils.import("resource://gre/modules/Log.jsm", this);
+ChromeUtils.import("resource://gre/modules/PromiseUtils.jsm");
+ChromeUtils.import("resource://gre/modules/ServiceRequest.jsm", this);
+ChromeUtils.import("resource://gre/modules/Services.jsm", this);
+ChromeUtils.import("resource://gre/modules/TelemetryUtils.jsm", this);
+ChromeUtils.import("resource://gre/modules/Timer.jsm", this);
 
-Cu.import("resource://gre/modules/AppConstants.jsm", this);
-Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
-Cu.import("resource://gre/modules/ClientID.jsm");
-Cu.import("resource://gre/modules/Log.jsm", this);
-Cu.import("resource://gre/modules/PromiseUtils.jsm");
-Cu.import("resource://gre/modules/ServiceRequest.jsm", this);
-Cu.import("resource://gre/modules/Services.jsm", this);
-Cu.import("resource://gre/modules/TelemetryUtils.jsm", this);
-Cu.import("resource://gre/modules/Timer.jsm", this);
-
-XPCOMUtils.defineLazyModuleGetter(this, "AsyncShutdown",
-                                  "resource://gre/modules/AsyncShutdown.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "TelemetryStorage",
-                                  "resource://gre/modules/TelemetryStorage.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "TelemetryReportingPolicy",
-                                  "resource://gre/modules/TelemetryReportingPolicy.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "OS",
-                                  "resource://gre/modules/osfile.jsm");
+ChromeUtils.defineModuleGetter(this, "TelemetryStorage",
+                               "resource://gre/modules/TelemetryStorage.jsm");
+ChromeUtils.defineModuleGetter(this, "TelemetryReportingPolicy",
+                               "resource://gre/modules/TelemetryReportingPolicy.jsm");
+ChromeUtils.defineModuleGetter(this, "OS",
+                               "resource://gre/modules/osfile.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "Telemetry",
                                    "@mozilla.org/base/telemetry;1",
                                    "nsITelemetry");
-XPCOMUtils.defineLazyModuleGetter(this, "TelemetryHealthPing",
-                                  "resource://gre/modules/TelemetryHealthPing.jsm");
+ChromeUtils.defineModuleGetter(this, "TelemetryHealthPing",
+                               "resource://gre/modules/TelemetryHealthPing.jsm");
 
 
 const Utils = TelemetryUtils;
@@ -91,12 +87,15 @@ const OVERDUE_PING_FILE_AGE = 7 * 24 * 60 * MS_IN_A_MINUTE; // 1 week
 
 // Strings to map from XHR.errorCode to TELEMETRY_SEND_FAILURE_TYPE.
 // Echoes XMLHttpRequestMainThread's ErrorType enum.
+// Make sure that any additions done to XHR_ERROR_TYPE enum are also mirrored in
+// TELEMETRY_SEND_FAILURE_TYPE's labels.
 const XHR_ERROR_TYPE = [
   "eOK",
   "eRequest",
   "eUnreachable",
   "eChannelOpen",
   "eRedirect",
+  "eTerminated",
 ];
 
 /**
@@ -110,6 +109,7 @@ var Policy = {
   pingSubmissionTimeout: () => PING_SUBMIT_TIMEOUT_MS,
   setSchedulerTickTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
   clearSchedulerTickTimeout: (id) => clearTimeout(id),
+  gzipCompressString: (data) => gzipCompressString(data),
 };
 
 /**
@@ -149,7 +149,12 @@ function gzipCompressString(string) {
   let observer = {
     buffer: "",
     onStreamComplete(loader, context, status, length, result) {
-      this.buffer = String.fromCharCode.apply(this, result);
+      // String.fromCharCode can only deal with 500,000 characters at
+      // a time, so chunk the result into parts of that size.
+      const chunkSize = 500000;
+      for (let offset = 0; offset < result.length; offset += chunkSize) {
+        this.buffer += String.fromCharCode.apply(String, result.slice(offset, offset + chunkSize));
+      }
     }
   };
 
@@ -169,7 +174,7 @@ function gzipCompressString(string) {
   return observer.buffer;
 }
 
-this.TelemetrySend = {
+var TelemetrySend = {
 
   /**
    * Age in ms of a pending ping to be considered overdue.
@@ -530,7 +535,7 @@ var SendScheduler = {
         nextSendDelay = this._backoffDelay;
       }
 
-      this._log.trace("_doSendTask - waiting for next send opportunity, timeout is " + nextSendDelay)
+      this._log.trace("_doSendTask - waiting for next send opportunity, timeout is " + nextSendDelay);
       this._sendTaskState = "wait on next send opportunity";
       const cancelled = await CancellableTimeout.promiseWaitOnTimeout(nextSendDelay);
       if (cancelled) {
@@ -647,18 +652,18 @@ var TelemetrySendImpl = {
     Services.obs.addObserver(this, TOPIC_QUIT_APPLICATION_GRANTED);
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsISupportsWeakReference]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsISupportsWeakReference]),
 
   async setup(testing) {
     this._log.trace("setup");
 
     this._testMode = testing;
-    this._sendingEnabled = true;
 
     Services.obs.addObserver(this, TOPIC_IDLE_DAILY);
     Services.obs.addObserver(this, TOPIC_PROFILE_CHANGE_NET_TEARDOWN);
 
     this._server = Services.prefs.getStringPref(TelemetryUtils.Preferences.Server, undefined);
+    this._sendingEnabled = true;
 
     // Annotate crash reports so that crash pings are sent correctly and listen
     // to pref changes to adjust the annotations accordingly.
@@ -781,11 +786,13 @@ var TelemetrySendImpl = {
     this._overduePingCount = 0;
     this._tooLateToSend = false;
     this._isOSShutdown = false;
+    this._sendingEnabled = true;
 
     const histograms = [
       "TELEMETRY_SUCCESS",
       "TELEMETRY_SEND_SUCCESS",
       "TELEMETRY_SEND_FAILURE",
+      "TELEMETRY_SEND_FAILURE_TYPE",
     ];
 
     histograms.forEach(h => Telemetry.getHistogramById(h).clear());
@@ -797,6 +804,10 @@ var TelemetrySendImpl = {
    * Notify that we can start submitting data to the servers.
    */
   notifyCanUpload() {
+    if (!this._sendingEnabled) {
+      this._log.trace("notifyCanUpload - notifying before sending is enabled. Ignoring.");
+      return Promise.resolve();
+    }
     // Let the scheduler trigger sending pings if possible, also inform the
     // crash reporter that it can send crash pings if appropriate.
     SendScheduler.triggerSendingPings(true);
@@ -1093,9 +1104,10 @@ var TelemetrySendImpl = {
     }
 
     if (this._tooLateToSend) {
+      // Too late to send now. Reject so we pend the ping to send it next time.
       this._log.trace("_doPing - Too late to send ping " + ping.id);
       Telemetry.getHistogramById("TELEMETRY_SEND_FAILURE_TYPE").add("eTooLate");
-      return Promise.resolve();
+      return Promise.reject();
     }
 
     this._log.trace("_doPing - server: " + this._server + ", persisted: " + isPersisted +
@@ -1103,7 +1115,8 @@ var TelemetrySendImpl = {
 
     const url = this._buildSubmissionURL(ping);
 
-    let request = new ServiceRequest();
+    // Don't send cookies with these requests.
+    let request = new ServiceRequest({mozAnon: true});
     request.mozBackgroundRequest = true;
     request.timeout = Policy.pingSubmissionTimeout();
 
@@ -1199,24 +1212,24 @@ var TelemetrySendImpl = {
     utf8Payload += converter.Finish();
     Telemetry.getHistogramById("TELEMETRY_STRINGIFY").add(Utils.monotonicNow() - startTime);
 
+    let payloadStream = Cc["@mozilla.org/io/string-input-stream;1"]
+                        .createInstance(Ci.nsIStringInputStream);
+    startTime = Utils.monotonicNow();
+    payloadStream.data = Policy.gzipCompressString(utf8Payload);
+
     // Check the size and drop pings which are too big.
-    const pingSizeBytes = utf8Payload.length;
-    if (pingSizeBytes > TelemetryStorage.MAXIMUM_PING_SIZE) {
-      this._log.error("_doPing - submitted ping exceeds the size limit, size: " + pingSizeBytes);
+    const compressedPingSizeBytes = payloadStream.data.length;
+    if (compressedPingSizeBytes > TelemetryStorage.MAXIMUM_PING_SIZE) {
+      this._log.error("_doPing - submitted ping exceeds the size limit, size: " + compressedPingSizeBytes);
       Telemetry.getHistogramById("TELEMETRY_PING_SIZE_EXCEEDED_SEND").add();
       Telemetry.getHistogramById("TELEMETRY_DISCARDED_SEND_PINGS_SIZE_MB")
-               .add(Math.floor(pingSizeBytes / 1024 / 1024));
+               .add(Math.floor(compressedPingSizeBytes / 1024 / 1024));
       // We don't need to call |request.abort()| as it was not sent yet.
       this._pendingPingRequests.delete(id);
 
       TelemetryHealthPing.recordDiscardedPing(ping.type);
       return TelemetryStorage.removePendingPing(id);
     }
-
-    let payloadStream = Cc["@mozilla.org/io/string-input-stream;1"]
-                        .createInstance(Ci.nsIStringInputStream);
-    startTime = Utils.monotonicNow();
-    payloadStream.data = gzipCompressString(utf8Payload);
 
     const compressedPingSizeKB = Math.floor(payloadStream.data.length / 1024);
     Telemetry.getHistogramById("TELEMETRY_COMPRESS").add(Utils.monotonicNow() - startTime);

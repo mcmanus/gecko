@@ -6,7 +6,8 @@
 
 use cssparser::Parser;
 use parser::{Parse, ParserContext};
-use style_traits::ParseError;
+use std::fmt::{self, Write};
+use style_traits::{CssWriter, ParseError, ToCss};
 use values::computed::{self, Context, ToComputedValue};
 use values::generics::border::BorderCornerRadius as GenericBorderCornerRadius;
 use values::generics::border::BorderImageSideWidth as GenericBorderImageSideWidth;
@@ -19,9 +20,7 @@ use values::specified::{AllowQuirks, Number, NumberOrPercentage};
 use values::specified::length::{Length, LengthOrPercentage, NonNegativeLength};
 
 /// A specified value for a single side of the `border-width` property.
-#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
-#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-#[derive(Clone, Debug, PartialEq, ToCss)]
+#[derive(Clone, Debug, MallocSizeOf, PartialEq, SpecifiedValueInfo, ToCss)]
 pub enum BorderSideWidth {
     /// `thin`
     Thin,
@@ -56,13 +55,14 @@ impl BorderSideWidth {
     pub fn parse_quirky<'i, 't>(
         context: &ParserContext,
         input: &mut Parser<'i, 't>,
-        allow_quirks: AllowQuirks)
-        -> Result<Self, ParseError<'i>>
-    {
-        if let Ok(length) = input.try(|i| Length::parse_non_negative_quirky(context, i, allow_quirks)) {
+        allow_quirks: AllowQuirks,
+    ) -> Result<Self, ParseError<'i>> {
+        if let Ok(length) =
+            input.try(|i| Length::parse_non_negative_quirky(context, i, allow_quirks))
+        {
             return Ok(BorderSideWidth::Length(length));
         }
-        try_match_ident_ignore_ascii_case! { input.expect_ident()?,
+        try_match_ident_ignore_ascii_case! { input,
             "thin" => Ok(BorderSideWidth::Thin),
             "medium" => Ok(BorderSideWidth::Medium),
             "thick" => Ok(BorderSideWidth::Thick),
@@ -71,7 +71,10 @@ impl BorderSideWidth {
 }
 
 impl Parse for BorderSideWidth {
-    fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>) -> Result<Self, ParseError<'i>> {
+    fn parse<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Self, ParseError<'i>> {
         Self::parse_quirky(context, input, AllowQuirks::No)
     }
 }
@@ -107,7 +110,10 @@ impl BorderImageSideWidth {
 }
 
 impl Parse for BorderImageSideWidth {
-    fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>) -> Result<Self, ParseError<'i>> {
+    fn parse<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Self, ParseError<'i>> {
         if input.try(|i| i.expect_ident_matching("auto")).is_ok() {
             return Ok(GenericBorderImageSideWidth::Auto);
         }
@@ -122,7 +128,10 @@ impl Parse for BorderImageSideWidth {
 }
 
 impl Parse for BorderImageSlice {
-    fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>) -> Result<Self, ParseError<'i>> {
+    fn parse<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Self, ParseError<'i>> {
         let mut fill = input.try(|i| i.expect_ident_matching("fill")).is_ok();
         let offsets = Rect::parse_with(context, input, NumberOrPercentage::parse_non_negative)?;
         if !fill {
@@ -136,7 +145,10 @@ impl Parse for BorderImageSlice {
 }
 
 impl Parse for BorderRadius {
-    fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>) -> Result<Self, ParseError<'i>> {
+    fn parse<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Self, ParseError<'i>> {
         let widths = Rect::parse_with(context, input, LengthOrPercentage::parse_non_negative)?;
         let heights = if input.try(|i| i.expect_delim('/')).is_ok() {
             Rect::parse_with(context, input, LengthOrPercentage::parse_non_negative)?
@@ -156,7 +168,7 @@ impl Parse for BorderRadius {
 impl Parse for BorderCornerRadius {
     fn parse<'i, 't>(
         context: &ParserContext,
-        input: &mut Parser<'i, 't>
+        input: &mut Parser<'i, 't>,
     ) -> Result<Self, ParseError<'i>> {
         Size::parse_with(context, input, LengthOrPercentage::parse_non_negative)
             .map(GenericBorderCornerRadius)
@@ -166,10 +178,68 @@ impl Parse for BorderCornerRadius {
 impl Parse for BorderSpacing {
     fn parse<'i, 't>(
         context: &ParserContext,
-        input: &mut Parser<'i, 't>
+        input: &mut Parser<'i, 't>,
     ) -> Result<Self, ParseError<'i>> {
         Size::parse_with(context, input, |context, input| {
             Length::parse_non_negative_quirky(context, input, AllowQuirks::Yes).map(From::from)
         }).map(GenericBorderSpacing)
+    }
+}
+
+/// A single border-image-repeat keyword.
+#[allow(missing_docs)]
+#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
+#[derive(Clone, Copy, Debug, Eq, MallocSizeOf, Parse, PartialEq,
+         SpecifiedValueInfo, ToCss)]
+pub enum BorderImageRepeatKeyword {
+    Stretch,
+    Repeat,
+    Round,
+    Space,
+}
+
+/// The specified value for the `border-image-repeat` property.
+///
+/// https://drafts.csswg.org/css-backgrounds/#the-border-image-repeat
+#[derive(Clone, Copy, Debug, MallocSizeOf, PartialEq, SpecifiedValueInfo,
+         ToComputedValue)]
+pub struct BorderImageRepeat(pub BorderImageRepeatKeyword, pub BorderImageRepeatKeyword);
+
+impl ToCss for BorderImageRepeat {
+    fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
+    where
+        W: Write,
+    {
+        self.0.to_css(dest)?;
+        if self.0 != self.1 {
+            dest.write_str(" ")?;
+            self.1.to_css(dest)?;
+        }
+        Ok(())
+    }
+}
+
+impl BorderImageRepeat {
+    /// Returns the `stretch` value.
+    #[inline]
+    pub fn stretch() -> Self {
+        BorderImageRepeat(
+            BorderImageRepeatKeyword::Stretch,
+            BorderImageRepeatKeyword::Stretch,
+        )
+    }
+}
+
+impl Parse for BorderImageRepeat {
+    fn parse<'i, 't>(
+        _context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Self, ParseError<'i>> {
+        let horizontal = BorderImageRepeatKeyword::parse(input)?;
+        let vertical = input.try(BorderImageRepeatKeyword::parse).ok();
+        Ok(BorderImageRepeat(
+            horizontal,
+            vertical.unwrap_or(horizontal),
+        ))
     }
 }

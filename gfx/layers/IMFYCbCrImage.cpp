@@ -1,14 +1,16 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "IMFYCbCrImage.h"
+#include "mozilla/gfx/DeviceManagerDx.h"
+#include "mozilla/gfx/gfxVars.h"
+#include "mozilla/gfx/Types.h"
 #include "mozilla/layers/TextureD3D11.h"
 #include "mozilla/layers/CompositableClient.h"
 #include "mozilla/layers/CompositableForwarder.h"
-#include "mozilla/gfx/DeviceManagerDx.h"
-#include "mozilla/gfx/Types.h"
 #include "mozilla/layers/TextureClient.h"
 #include "d3d9.h"
 
@@ -31,94 +33,14 @@ IMFYCbCrImage::~IMFYCbCrImage()
   }
 }
 
-static already_AddRefed<IDirect3DTexture9>
-InitTextures(IDirect3DDevice9* aDevice,
-             const IntSize &aSize,
-            _D3DFORMAT aFormat,
-            RefPtr<IDirect3DSurface9>& aSurface,
-            HANDLE& aHandle,
-            D3DLOCKED_RECT& aLockedRect)
-{
-  if (!aDevice) {
-    return nullptr;
-  }
-
-  RefPtr<IDirect3DTexture9> result;
-  if (FAILED(aDevice->CreateTexture(aSize.width, aSize.height,
-                                    1, 0, aFormat, D3DPOOL_DEFAULT,
-                                    getter_AddRefs(result), &aHandle))) {
-    return nullptr;
-  }
-  if (!result) {
-    return nullptr;
-  }
-
-  RefPtr<IDirect3DTexture9> tmpTexture;
-  if (FAILED(aDevice->CreateTexture(aSize.width, aSize.height,
-                                    1, 0, aFormat, D3DPOOL_SYSTEMMEM,
-                                    getter_AddRefs(tmpTexture), nullptr))) {
-    return nullptr;
-  }
-  if (!tmpTexture) {
-    return nullptr;
-  }
-
-  tmpTexture->GetSurfaceLevel(0, getter_AddRefs(aSurface));
-  if (FAILED(aSurface->LockRect(&aLockedRect, nullptr, 0)) ||
-      !aLockedRect.pBits) {
-    NS_WARNING("Could not lock surface");
-    return nullptr;
-  }
-
-  return result.forget();
-}
-
-static bool
-FinishTextures(IDirect3DDevice9* aDevice,
-               IDirect3DTexture9* aTexture,
-               IDirect3DSurface9* aSurface)
-{
-  if (!aDevice) {
-    return false;
-  }
-
-  HRESULT hr = aSurface->UnlockRect();
-  if (FAILED(hr)) {
-    return false;
-  }
-
-  RefPtr<IDirect3DSurface9> dstSurface;
-  hr = aTexture->GetSurfaceLevel(0, getter_AddRefs(dstSurface));
-  if (FAILED(hr)) {
-    return false;
-  }
-
-  hr = aDevice->UpdateSurface(aSurface, nullptr, dstSurface, nullptr);
-  if (FAILED(hr)) {
-    return false;
-  }
-  return true;
-}
-
 DXGIYCbCrTextureData*
 IMFYCbCrImage::GetD3D11TextureData(Data aData, gfx::IntSize aSize)
 {
   HRESULT hr;
   RefPtr<ID3D10Multithread> mt;
 
-  RefPtr<ID3D11Device> device = gfx::DeviceManagerDx::Get()->GetContentDevice();
-
+  RefPtr<ID3D11Device> device = gfx::DeviceManagerDx::Get()->GetImageDevice();
   if (!device) {
-    device = gfx::DeviceManagerDx::Get()->GetCompositorDevice();
-  }
-
-  hr = device->QueryInterface((ID3D10Multithread**)getter_AddRefs(mt));
-
-  if (FAILED(hr)) {
-    return nullptr;
-  }
-
-  if (!mt->GetMultithreadProtected()) {
     return nullptr;
   }
 
@@ -134,7 +56,9 @@ IMFYCbCrImage::GetD3D11TextureData(Data aData, gfx::IntSize aSize)
   CD3D11_TEXTURE2D_DESC newDesc(DXGI_FORMAT_R8_UNORM,
                                 aData.mYSize.width, aData.mYSize.height, 1, 1);
 
-  if (device == gfx::DeviceManagerDx::Get()->GetCompositorDevice()) {
+  // WebRender requests keyed mutex
+  if (device == gfx::DeviceManagerDx::Get()->GetCompositorDevice() &&
+      !gfxVars::UseWebRender()) {
     newDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
   } else {
     newDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
@@ -186,7 +110,8 @@ IMFYCbCrImage::GetD3D11TextureData(Data aData, gfx::IntSize aSize)
   }
 
   return DXGIYCbCrTextureData::Create(textureY, textureCb, textureCr,
-                                      aSize, aData.mYSize, aData.mCbCrSize);
+                                      aSize, aData.mYSize, aData.mCbCrSize,
+                                      aData.mYUVColorSpace);
 }
 
 TextureClient*
@@ -213,15 +138,8 @@ IMFYCbCrImage::GetTextureClient(KnowsCompositor* aForwarder)
     return mTextureClient;
   }
 
-  RefPtr<ID3D11Device> device =
-    gfx::DeviceManagerDx::Get()->GetContentDevice();
-  if (!device) {
-    device =
-      gfx::DeviceManagerDx::Get()->GetCompositorDevice();
-  }
-
-  LayersBackend backend = aForwarder->GetCompositorBackendType();
-  if (!device || backend != LayersBackend::LAYERS_D3D11) {
+  RefPtr<ID3D11Device> device = gfx::DeviceManagerDx::Get()->GetImageDevice();
+  if (!device || !aForwarder->SupportsD3D11()) {
     return nullptr;
   }
   return GetD3D11TextureClient(aForwarder);

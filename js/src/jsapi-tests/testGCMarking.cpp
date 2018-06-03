@@ -6,11 +6,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "jsapi.h"
-#include "jscompartment.h"
 
 #include "js/RootingAPI.h"
 #include "js/SliceBudget.h"
 #include "jsapi-tests/tests.h"
+#include "vm/JSCompartment.h"
 
 static bool
 ConstructCCW(JSContext* cx, const JSClass* globalClasp,
@@ -23,7 +23,7 @@ ConstructCCW(JSContext* cx, const JSClass* globalClasp,
     }
 
     // Define a second global in a different zone.
-    JS::CompartmentOptions options;
+    JS::RealmOptions options;
     global2.set(JS_NewGlobalObject(cx, globalClasp, nullptr,
                                    JS::FireOnNewGlobalHook, options));
     if (!global2) {
@@ -45,7 +45,7 @@ ConstructCCW(JSContext* cx, const JSClass* globalClasp,
 
     // Define an object in compartment 2, that is wrapped by a CCW into compartment 1.
     {
-        JSAutoCompartment ac(cx, global2);
+        JSAutoRealm ar(cx, global2);
         wrappee.set(JS_NewPlainObject(cx));
         if (wrappee->compartment() != global2->compartment()) {
             fprintf(stderr, "wrappee in wrong compartment");

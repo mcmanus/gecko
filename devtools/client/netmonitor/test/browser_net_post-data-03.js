@@ -8,33 +8,28 @@
  * for raw payloads with content-type headers attached to the upload stream.
  */
 
-add_task(function* () {
-  let { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
+add_task(async function() {
+  const { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
 
-  let { tab, monitor } = yield initNetMonitor(POST_RAW_WITH_HEADERS_URL);
+  const { tab, monitor } = await initNetMonitor(POST_RAW_WITH_HEADERS_URL);
   info("Starting test... ");
 
-  let { document, store, windowRequire } = monitor.panelWin;
-  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+  const { document, store, windowRequire } = monitor.panelWin;
+  const Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
 
   store.dispatch(Actions.batchEnable(false));
 
-  let wait = waitForNetworkEvents(monitor, 0, 1);
-  yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
-    content.wrappedJSObject.performRequests();
-  });
-  yield wait;
+  // Execute requests.
+  await performRequests(monitor, tab, 1);
 
   // Wait for all tree view updated by react
-  wait = waitForDOM(document, "#headers-panel");
-  EventUtils.sendMouseEvent({ type: "click" },
-    document.querySelector(".network-details-panel-toggle"));
+  wait = waitForDOM(document, "#headers-panel .tree-section .treeLabel", 3);
+  store.dispatch(Actions.toggleNetworkDetails());
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector("#headers-tab"));
-  yield wait;
+  await wait;
 
   let tabpanel = document.querySelector("#headers-panel");
-
   is(tabpanel.querySelectorAll(".tree-section .treeLabel").length, 3,
     "There should be 3 header sections displayed in this tabpanel.");
 
@@ -61,7 +56,7 @@ add_task(function* () {
   wait = waitForDOM(document, "#params-panel .tree-section");
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector("#params-tab"));
-  yield wait;
+  await wait;
 
   tabpanel = document.querySelector("#params-panel");
 

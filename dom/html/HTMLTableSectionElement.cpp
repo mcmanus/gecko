@@ -130,6 +130,7 @@ bool
 HTMLTableSectionElement::ParseAttribute(int32_t aNamespaceID,
                                         nsAtom* aAttribute,
                                         const nsAString& aValue,
+                                        nsIPrincipal* aMaybeScriptedPrincipal,
                                         nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None) {
@@ -157,20 +158,18 @@ HTMLTableSectionElement::ParseAttribute(int32_t aNamespaceID,
                                                         aAttribute, aValue,
                                                         aResult) ||
          nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                              aResult);
+                                              aMaybeScriptedPrincipal, aResult);
 }
 
 void
 HTMLTableSectionElement::MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
                                                GenericSpecifiedValues* aData)
 {
-  if (aData->ShouldComputeStyleStruct(NS_STYLE_INHERIT_BIT(Position))) {
-    // height: value
-    if (!aData->PropertyIsSet(eCSSProperty_height)) {
-      const nsAttrValue* value = aAttributes->GetAttr(nsGkAtoms::height);
-      if (value && value->Type() == nsAttrValue::eInteger)
-        aData->SetPixelValue(eCSSProperty_height, (float)value->GetIntegerValue());
-    }
+  // height: value
+  if (!aData->PropertyIsSet(eCSSProperty_height)) {
+    const nsAttrValue* value = aAttributes->GetAttr(nsGkAtoms::height);
+    if (value && value->Type() == nsAttrValue::eInteger)
+      aData->SetPixelValue(eCSSProperty_height, (float)value->GetIntegerValue());
   }
   nsGenericHTMLElement::MapDivAlignAttributeInto(aAttributes, aData);
   nsGenericHTMLElement::MapVAlignAttributeInto(aAttributes, aData);

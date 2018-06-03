@@ -3,7 +3,7 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
 # If we add unicode_literals, Python 2.6.1 (required for OS X 10.6) breaks.
-from __future__ import print_function
+from __future__ import absolute_import, print_function
 
 import platform
 import sys
@@ -29,35 +29,19 @@ from mozboot.util import (
 APPLICATION_CHOICE = '''
 Note on Artifact Mode:
 
-Firefox for Desktop and Android supports a fast build mode called
-artifact mode. Artifact mode downloads pre-built C++ components rather
-than building them locally, trading bandwidth for time.
+Artifact builds download prebuilt C++ components rather than building
+them locally.
 
-Artifact builds will be useful to many developers who are not working
-with compiled code. If you want to work on look-and-feel of Firefox,
-you want "Firefox for Desktop Artifact Mode".
-
-Similarly, if you want to work on the look-and-feel of Firefox for Android,
-you want "Firefox for Android Artifact Mode".
-
-To work on the Gecko technology platform, you would need to opt to full,
-non-artifact mode. Gecko is Mozilla's web rendering engine, similar to Edge,
-Blink, and WebKit. Gecko is implemented in C++ and JavaScript. If you
-want to work on web rendering, you want "Firefox for Desktop", or
-"Firefox for Android".
-
-If you don't know what you want, start with just Artifact Mode of the desired
-platform. Your builds will be much shorter than if you build Gecko as well.
-But don't worry! You can always switch configurations later.
-
-You can learn more about Artifact mode builds at
+Artifact builds are recommended for people working on Firefox or
+Firefox for Android frontends. They are unsuitable for those working
+on C++ code. For more information see:
 https://developer.mozilla.org/en-US/docs/Artifact_builds.
 
 Please choose the version of Firefox you want to build:
 %s
 Your choice: '''
 
-APPLICATIONS_LIST=[
+APPLICATIONS_LIST = [
     ('Firefox for Desktop Artifact Mode', 'browser_artifact_mode'),
     ('Firefox for Desktop', 'browser'),
     ('Firefox for Android Artifact Mode', 'mobile_android_artifact_mode'),
@@ -203,6 +187,7 @@ class Bootstrapper(object):
                 args['distro'] = distro
             elif distro in DEBIAN_DISTROS:
                 cls = DebianBootstrapper
+                args['distro'] = distro
             elif distro == 'Gentoo Base System':
                 cls = GentooBootstrapper
             elif os.path.exists('/etc/arch-release'):
@@ -269,8 +254,8 @@ class Bootstrapper(object):
                 print(CLONE_MERCURIAL_NOT_EMPTY_FALLBACK_FAILED.format(dest))
                 continue
 
-            choice = self.instance.prompt_int(prompt=CLONE_MERCURIAL_NOT_EMPTY.format(dest, newdest),
-                                              low=1, high=3)
+            choice = self.instance.prompt_int(prompt=CLONE_MERCURIAL_NOT_EMPTY.format(dest,
+                                              newdest), low=1, high=3)
             if choice == 1:
                 return newdest
             if choice == 2:
@@ -285,7 +270,8 @@ class Bootstrapper(object):
             prompt_choice = self.instance.prompt_int(prompt=prompt, low=1, high=len(APPLICATIONS))
             name, application = APPLICATIONS_LIST[prompt_choice-1]
         elif self.choice not in APPLICATIONS.keys():
-            raise Exception('Please pick a valid application choice: (%s)' % '/'.join(APPLICATIONS.keys()))
+            raise Exception('Please pick a valid application choice: (%s)' %
+                            '/'.join(APPLICATIONS.keys()))
         else:
             name, application = APPLICATIONS[self.choice]
 
@@ -318,7 +304,10 @@ class Bootstrapper(object):
 
         state_dir_available = os.path.exists(state_dir)
 
+        # We need to enable the loading of hgrc in case extensions are
+        # required to open the repo.
         r = current_firefox_checkout(check_output=self.instance.check_output,
+                                     env=self.instance._hg_cleanenv(load_hgrc=True),
                                      hg=self.instance.which('hg'))
         (checkout_type, checkout_root) = r
 
@@ -371,7 +360,8 @@ class Bootstrapper(object):
             self.instance.ensure_stylo_packages(state_dir, checkout_root)
 
         print(self.finished % name)
-        if not (self.instance.which('rustc') and self.instance._parse_version('rustc') >= MODERN_RUST_VERSION):
+        if not (self.instance.which('rustc') and self.instance._parse_version('rustc')
+                >= MODERN_RUST_VERSION):
             print("To build %s, please restart the shell (Start a new terminal window)" % name)
 
         # Like 'suggest_browser_mozconfig' or 'suggest_mobile_android_mozconfig'.
@@ -485,7 +475,8 @@ def clone_firefox(hg, dest):
     res = subprocess.call([hg, 'pull', 'https://hg.mozilla.org/mozilla-unified'], cwd=dest)
     print('')
     if res:
-        print('error pulling; try running `hg pull https://hg.mozilla.org/mozilla-unified` manually')
+        print('error pulling; try running `hg pull https://hg.mozilla.org/mozilla-unified` '
+              'manually')
         return False
 
     print('updating to "central" - the development head of Gecko and Firefox')
@@ -497,7 +488,7 @@ def clone_firefox(hg, dest):
     return True
 
 
-def current_firefox_checkout(check_output, hg=None):
+def current_firefox_checkout(check_output, env, hg=None):
     """Determine whether we're in a Firefox checkout.
 
     Returns one of None, ``git``, or ``hg``.
@@ -514,7 +505,9 @@ def current_firefox_checkout(check_output, hg=None):
         if hg and os.path.exists(hg_dir):
             # Verify the hg repo is a Firefox repo by looking at rev 0.
             try:
-                node = check_output([hg, 'log', '-r', '0', '--template', '{node}'], cwd=path)
+                node = check_output([hg, 'log', '-r', '0', '--template', '{node}'],
+                                    cwd=path,
+                                    env=env)
                 if node in HG_ROOT_REVISIONS:
                     return ('hg', path)
                 # Else the root revision is different. There could be nested

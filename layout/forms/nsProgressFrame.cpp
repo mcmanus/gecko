@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -19,9 +20,6 @@
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/HTMLProgressElement.h"
 #include "nsCSSPseudoElements.h"
-#include "nsStyleSet.h"
-#include "mozilla/StyleSetHandle.h"
-#include "mozilla/StyleSetHandleInlines.h"
 #include "nsThemeConstants.h"
 #include <algorithm>
 
@@ -29,15 +27,15 @@ using namespace mozilla;
 using namespace mozilla::dom;
 
 nsIFrame*
-NS_NewProgressFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewProgressFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsProgressFrame(aContext);
+  return new (aPresShell) nsProgressFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsProgressFrame)
 
-nsProgressFrame::nsProgressFrame(nsStyleContext* aContext)
-  : nsContainerFrame(aContext, kClassID)
+nsProgressFrame::nsProgressFrame(ComputedStyle* aStyle)
+  : nsContainerFrame(aStyle, kClassID)
   , mBarDiv(nullptr)
 {
 }
@@ -47,14 +45,14 @@ nsProgressFrame::~nsProgressFrame()
 }
 
 void
-nsProgressFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsProgressFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   NS_ASSERTION(!GetPrevContinuation(),
                "nsProgressFrame should not have continuations; if it does we "
                "need to call RegUnregAccessKey only for the first.");
   nsCheckboxRadioFrame::RegUnRegAccessKey(static_cast<nsIFrame*>(this), false);
-  DestroyAnonymousContent(mBarDiv.forget());
-  nsContainerFrame::DestroyFrom(aDestructRoot);
+  aPostDestroyData.AddAnonymousContent(mBarDiv.forget());
+  nsContainerFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 nsresult
@@ -211,7 +209,7 @@ nsProgressFrame::AttributeChanged(int32_t  aNameSpaceID,
 
   if (aNameSpaceID == kNameSpaceID_None &&
       (aAttribute == nsGkAtoms::value || aAttribute == nsGkAtoms::max)) {
-    auto shell = PresContext()->PresShell();
+    auto shell = PresShell();
     for (auto childFrame : PrincipalChildList()) {
       shell->FrameNeedsReflow(childFrame, nsIPresShell::eResize,
                               NS_FRAME_IS_DIRTY);
@@ -285,14 +283,4 @@ nsProgressFrame::ShouldUseNativeStyle() const
          barFrame->StyleDisplay()->mAppearance == NS_THEME_PROGRESSCHUNK &&
          !PresContext()->HasAuthorSpecifiedRules(barFrame,
                                                  NS_AUTHOR_SPECIFIED_BORDER | NS_AUTHOR_SPECIFIED_BACKGROUND);
-}
-
-Element*
-nsProgressFrame::GetPseudoElement(CSSPseudoElementType aType)
-{
-  if (aType == CSSPseudoElementType::mozProgressBar) {
-    return mBarDiv;
-  }
-
-  return nsContainerFrame::GetPseudoElement(aType);
 }

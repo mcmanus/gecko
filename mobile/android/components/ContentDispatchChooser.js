@@ -2,14 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const Ci = Components.interfaces;
-const Cu = Components.utils;
-const Cc = Components.classes;
-const Cr = Components.results;
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Messaging.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/Messaging.jsm");
 
 function ContentDispatchChooser() {}
 
@@ -17,7 +12,7 @@ ContentDispatchChooser.prototype =
 {
   classID: Components.ID("5a072a22-1e66-4100-afc1-07aed8b62fc5"),
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIContentDispatchChooser]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIContentDispatchChooser]),
 
   get protoSvc() {
     if (!this._protoSvc) {
@@ -90,8 +85,8 @@ ContentDispatchChooser.prototype =
         // we want to show the neterror page.
         let dwu = window.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils);
         let millis = dwu.millisSinceLastUserInput;
-        if (millis > 0 && millis >= 1000) {
-          window.location.href = data.uri;
+        if (millis < 0 || millis >= 1000) {
+          window.document.docShell.displayLoadError(Cr.NS_ERROR_UNKNOWN_PROTOCOL, aURI, null);
         } else {
           this._closeBlankWindow(window);
         }

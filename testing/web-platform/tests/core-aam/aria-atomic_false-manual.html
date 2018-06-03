@@ -3,7 +3,6 @@
   <head>
     <title>aria-atomic=false</title>
     <meta content="text/html; charset=utf-8" http-equiv="Content-Type"/>
-    <link rel="stylesheet" href="/resources/testharness.css">
     <link rel="stylesheet" href="/wai-aria/scripts/manual.css">
     <script src="/resources/testharness.js"></script>
     <script src="/resources/testharnessreport.js"></script>
@@ -74,7 +73,7 @@
   </head>
   <body>
   <p>This test examines the ARIA properties for aria-atomic=false.</p>
-    <div role='group' id='test' aria-atomic='false'>
+    <div role='group' id='test' aria-atomic='false' aria-live='polite'>
     <div role='group' id='child'>content</div>
   </div>
 
@@ -83,4 +82,3 @@
   <div id="ATTAmessages"></div>
   </body>
 </html>
-

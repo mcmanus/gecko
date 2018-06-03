@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,14 +16,12 @@
 #include "mozilla/dom/PromiseWorkerProxy.h"
 #include "mozilla/dom/PushSubscriptionOptions.h"
 #include "mozilla/dom/PushUtil.h"
+#include "mozilla/dom/WorkerCommon.h"
 #include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/dom/WorkerScope.h"
-#include "mozilla/dom/workers/Workers.h"
 
 namespace mozilla {
 namespace dom {
-
-using namespace workers;
 
 namespace {
 
@@ -65,7 +65,7 @@ public:
                             nsresult aStatus,
                             bool aSuccess)
     : WorkerRunnable(aWorkerPrivate)
-    , mProxy(Move(aProxy))
+    , mProxy(std::move(aProxy))
     , mStatus(aStatus)
     , mSuccess(aSuccess)
   {
@@ -203,8 +203,8 @@ PushSubscription::PushSubscription(nsIGlobalObject* aGlobal,
                                    nsTArray<uint8_t>&& aAppServerKey)
   : mEndpoint(aEndpoint)
   , mScope(aScope)
-  , mRawP256dhKey(Move(aRawP256dhKey))
-  , mAuthSecret(Move(aAuthSecret))
+  , mRawP256dhKey(std::move(aRawP256dhKey))
+  , mAuthSecret(std::move(aAuthSecret))
 {
   if (NS_IsMainThread()) {
     mGlobal = aGlobal;
@@ -217,7 +217,7 @@ PushSubscription::PushSubscription(nsIGlobalObject* aGlobal,
     worker->AssertIsOnWorkerThread();
 #endif
   }
-  mOptions = new PushSubscriptionOptions(mGlobal, Move(aAppServerKey));
+  mOptions = new PushSubscriptionOptions(mGlobal, std::move(aAppServerKey));
 }
 
 PushSubscription::~PushSubscription()
@@ -277,9 +277,9 @@ PushSubscription::Constructor(GlobalObject& aGlobal,
   RefPtr<PushSubscription> sub = new PushSubscription(global,
                                                       aInitDict.mEndpoint,
                                                       aInitDict.mScope,
-                                                      Move(rawKey),
-                                                      Move(authSecret),
-                                                      Move(appServerKey));
+                                                      std::move(rawKey),
+                                                      std::move(authSecret),
+                                                      std::move(appServerKey));
 
   return sub.forget();
 }

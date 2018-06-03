@@ -30,6 +30,63 @@ with Files("**"):
         'web-platform-tests-wdspec',
     ]
 
+with Files("moz.build"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("README.md"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("wptrunner.ini"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("meta/**"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("products/README"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("outbound/README"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("outbound/meta/**"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("outbound/tests/placeholder"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("mozilla/README"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("mozilla/meta/**"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("mozilla/tests/dom/**"):
+    BUG_COMPONENT = ("Core", "DOM")
+
+with Files("mozilla/tests/editor/**"):
+    BUG_COMPONENT = ("Core", "Editor")
+
+with Files("mozilla/tests/fetch/**"):
+    BUG_COMPONENT = ("Core", "DOM")
+
+with Files("mozilla/tests/focus/**"):
+    BUG_COMPONENT = ("Core", "Editor")
+
+with Files("mozilla/tests/html/**"):
+    BUG_COMPONENT = ("Core", "DOM")
+
+with Files("mozilla/tests/html/semantics/forms/**"):
+    BUG_COMPONENT = ("Core", "Layout: Form Controls")
+
+with Files("mozilla/tests/html/semantics/scripting-1/**"):
+    BUG_COMPONENT = ("Core", "DOM")
+
+with Files("mozilla/tests/placeholder"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("mozilla/tests/wasm/**"):
+    BUG_COMPONENT = ("Core", "JavaScript Engine: JIT")
+
 with Files("update/**"):
     BUG_COMPONENT = ("Testing", "web-platform-tests")
 
@@ -45,13 +102,14 @@ with Files("*.py"):
 with Files("tests/*.md"):
     BUG_COMPONENT = ("Testing", "web-platform-tests")
 
+with Files("tests/**"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+    SCHEDULES.inclusive += ['test-verify-wpt']
+
 with Files("tests/LICENSE"):
     BUG_COMPONENT = ("Testing", "web-platform-tests")
 
 with Files("tests/check_stability.ini"):
-    BUG_COMPONENT = ("Testing", "web-platform-tests")
-
-with Files("tests/config.default.json"):
     BUG_COMPONENT = ("Testing", "web-platform-tests")
 
 with Files("tests/lint.whitelist"):
@@ -67,6 +125,9 @@ with Files("tests/update-built-tests.sh"):
     BUG_COMPONENT = ("Testing", "web-platform-tests")
 
 with Files("tests/wpt"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("tests/wpt.py"):
     BUG_COMPONENT = ("Testing", "web-platform-tests")
 
 
@@ -85,7 +146,7 @@ with Files("tests/WebCryptoAPI/**"):
 with Files("tests/WebIDL/**"):
     BUG_COMPONENT = ("Core", "DOM")
 
-with Files("tests/XMLHttpRequest/**"):
+with Files("tests/xhr/**"):
     BUG_COMPONENT = ("Core", "DOM")
 
 with Files("tests/accelerometer/**"):
@@ -106,8 +167,8 @@ with Files("tests/annotation-vocab/**"):
 with Files("tests/apng/**"):
     BUG_COMPONENT = ("Core", "ImageLib")
 
-with Files("tests/assumptions/**"):
-    BUG_COMPONENT = ("Testing", "web-platform-tests")
+with Files("tests/audio-output/**"):
+    BUG_COMPONENT = ("Core", "Audio/Video: Playback")
 
 with Files("tests/background-fetch/**"):
     BUG_COMPONENT = ("Core", "DOM: Service Workers")
@@ -146,6 +207,9 @@ with Files("tests/content-security-policy/**"):
 with Files("tests/cookies/**"):
     BUG_COMPONENT = ("Core", "Networking: Cookies")
 
+with Files("tests/core-aam/**"):
+    BUG_COMPONENT = ("Core", "Disability Access APIs")
+
 with Files("tests/cors/**"):
     BUG_COMPONENT = ("Core", "DOM: Security")
 
@@ -155,29 +219,38 @@ with Files("tests/credential-management/**"):
 with Files("tests/css/**"):
     BUG_COMPONENT = ("Core", "CSS Parsing and Computation")
 
-with Files("tests/css-cascade/**"):
-    BUG_COMPONENT = ("Core", "CSS Parsing and Computation")
-
-with Files("tests/css-font-loading/**"):
-    BUG_COMPONENT = ("Core", "Layout: Text")
-
-with Files("tests/css-fonts/**"):
-    BUG_COMPONENT = ("Core", "Layout: Text")
-
-with Files("tests/css-paint-api/**"):
-    BUG_COMPONENT = ("Core", "Layout: Web Painting")
-
-with Files("tests/css-timing/**"):
+with Files("tests/css/css-backgrounds/**"):
     BUG_COMPONENT = ("Core", "Layout")
 
-with Files("tests/css-typed-om/**"):
+with Files("tests/css/css-cascade/**"):
+    BUG_COMPONENT = ("Core", "CSS Parsing and Computation")
+
+with Files("tests/css/css-font-loading/**"):
+    BUG_COMPONENT = ("Core", "Layout: Text")
+
+with Files("tests/css/css-fonts/**"):
+    BUG_COMPONENT = ("Core", "Layout: Text")
+
+with Files("tests/css/css-paint-api/**"):
+    BUG_COMPONENT = ("Core", "Layout: Web Painting")
+
+with Files("tests/css/css-scoping/**"):
+    BUG_COMPONENT = ("Core", "CSS Parsing and Computation")
+
+with Files("tests/css/css-timing/**"):
+    BUG_COMPONENT = ("Core", "Layout")
+
+with Files("tests/css/css-typed-om/**"):
     BUG_COMPONENT = ("Core", "DOM: CSS Object Model")
 
-with Files("tests/cssom/**"):
+with Files("tests/css/cssom/**"):
     BUG_COMPONENT = ("Core", "DOM: CSS Object Model")
 
-with Files("tests/cssom-view/**"):
+with Files("tests/css/cssom-view/**"):
     BUG_COMPONENT = ("Core", "DOM: CSS Object Model")
+
+with Files("tests/css/selectors/**"):
+    BUG_COMPONENT = ("Core", "CSS Parsing and Computation")
 
 with Files("tests/custom-elements/**"):
     BUG_COMPONENT = ("Core", "DOM")
@@ -210,13 +283,12 @@ with Files("tests/encoding/**"):
 with Files("tests/encrypted-media/**"):
     BUG_COMPONENT = ("Core", "Audio/Video: Playback")
 
+with Files("tests/entries-api/**"):
+    BUG_COMPONENT = ("Core", "DOM")
+
 with Files("tests/eventsource/**"):
     BUG_COMPONENT = ("Core", "DOM")
 
-with Files("tests/ext-xhtml-pubid/**"):
-    BUG_COMPONENT = ("Core", "XML")
-
-# usb and payments ?
 with Files("tests/feature-policy/**"):
     BUG_COMPONENT = ("Core", "DOM")
 
@@ -236,9 +308,6 @@ with Files("tests/gamepad/**"):
     BUG_COMPONENT = ("Core", "DOM: Device Interfaces")
 
 # Bug 1359076 - Deleting this feature due to security
-with Files("tests/generic-sensor/**"):
-    BUG_COMPONENT = ("Core", "DOM: Device Interfaces")
-
 with Files("tests/geolocation-API/**"):
     BUG_COMPONENT = ("Core", "Geolocation")
 
@@ -261,9 +330,6 @@ with Files("tests/html-longdesc/**"):
 with Files("tests/html-media-capture/**"):
     BUG_COMPONENT = ("Core", "DOM: Core & HTML")
 
-with Files("tests/http/**"):
-    BUG_COMPONENT = ("Core", "DOM")
-
 with Files("tests/imagebitmap-renderingcontext/**"):
     BUG_COMPONENT = ("Core", "Canvas: 2D")
 
@@ -273,11 +339,6 @@ with Files("tests/images/**"):
 with Files("tests/infrastructure/**"):
     BUG_COMPONENT = ("Testing", "web-platform-tests")
 
-with Files("tests/innerText/**"):
-    BUG_COMPONENT = ("Core", "DOM: Core & HTML")
-
-
-#not implemented yet, see Bug 970802
 with Files("tests/input-events/**"):
     BUG_COMPONENT = ("Core", "General")
 
@@ -345,48 +406,14 @@ with Files("tests/offscreen-canvas/**"):
     BUG_COMPONENT = ("Core", "Canvas: 2D")
 
 # No tests are run here
-with Files("tests/old-tests/submission/Infraware/Session_History/**"):
-    BUG_COMPONENT = ("Core", "Document Navigation")
-
-with Files("tests/old-tests/submission/Infraware/Forms/**"):
-    BUG_COMPONENT = ("Core", "DOM: Core & HTML")
-
-with Files("tests/old-tests/submission/Opera/**"):
-    BUG_COMPONENT = ("Core", "DOM: Core & HTML")
-
-# No tests are run here
-with Files("tests/old-tests/submission/Microsoft/dragdrop/**"):
-    BUG_COMPONENT = ("Core", "Drag & Drop")
-
-# No tests are run here
 with Files("tests/old-tests/submission/Microsoft/foreigncontent/**"):
     BUG_COMPONENT = ("Core", "SVG")
 
 with Files("tests/old-tests/submission/Microsoft/history/**"):
     BUG_COMPONENT = ("Core", "Document Navigation")
 
-with Files("tests/old-tests/submission/Microsoft/images/**"):
-    BUG_COMPONENT = ("Testing", "web-platform-tests")
-
-with Files("tests/old-tests/submission/Microsoft/sandbox/**"):
-    BUG_COMPONENT = ("Core", "DOM: Security")
-
-# No tests are run here
 with Files("tests/old-tests/submission/Microsoft/selection/**"):
     BUG_COMPONENT = ("Core", "Selection")
-
-with Files("tests/old-tests/submission/Microsoft/structuredclone/**"):
-    BUG_COMPONENT = ("Core", "Javascript Engine")
-
-# No tests are run here
-with Files("tests/old-tests/submission/Microsoft/xhtml5/**"):
-    BUG_COMPONENT = ("Core", "Layout")
-
-with Files("tests/old-tests/submission/migration.txt"):
-    BUG_COMPONENT = ("Testing", "web-platform-tests")
-
-with Files("tests/old-tests/webdriver/**"):
-    BUG_COMPONENT = ("Testing", "geckodriver")
 
 with Files("tests/orientation-event/**"):
     BUG_COMPONENT = ("Core", "DOM: Device Interfaces")
@@ -396,6 +423,17 @@ with Files("tests/orientation-sensor/**"):
 
 with Files("tests/page-visibility/**"):
     BUG_COMPONENT = ("Core", "DOM")
+
+with Files("tests/paint-timing/**"):
+    BUG_COMPONENT = ("Core", "DOM")
+
+# No tests in here
+with Files("tests/payment-handler/**"):
+    BUG_COMPONENT = ("Core", "DOM: Web Payments")
+
+# No tests in here
+with Files("tests/payment-method-basic-card/**"):
+    BUG_COMPONENT = ("Core", "DOM: Web Payments")
 
 # No tests in here
 with Files("tests/payment-method-id/**"):
@@ -419,13 +457,10 @@ with Files("tests/preload/**"):
 with Files("tests/presentation-api/**"):
     BUG_COMPONENT = ("Core", "DOM")
 
-with Files("tests/progress-events/**"):
-    BUG_COMPONENT = ("Core", "DOM: Events")
-
 with Files("tests/proximity/**"):
     BUG_COMPONENT = ("Core", "DOM: Device Interfaces")
 
-with Files("tests/quirks-mode/**"):
+with Files("tests/quirks/**"):
     BUG_COMPONENT = ("Core", "Layout")
 
 with Files("tests/remote-playback/**"):
@@ -433,6 +468,13 @@ with Files("tests/remote-playback/**"):
 
 with Files("tests/referrer-policy/**"):
     BUG_COMPONENT = ("Core", "DOM: Security")
+
+with Files("tests/requestidlecallback/**"):
+    BUG_COMPONENT = ("Core", "DOM")
+
+# To be implemented in bug 1272409
+with Files("tests/resize-observer/**"):
+    BUG_COMPONENT = ("Core", "Layout")
 
 with Files("tests/resource-timing/**"):
     BUG_COMPONENT = ("Core", "DOM")
@@ -443,17 +485,11 @@ with Files("tests/resources/**"):
 with Files("tests/screen-orientation/**"):
     BUG_COMPONENT = ("Core", "DOM")
 
-with Files("tests/scroll-anchoring/**"):
-    BUG_COMPONENT = ("Core", "Layout")
-
 with Files("tests/secure-contexts/**"):
     BUG_COMPONENT = ("Core", "DOM")
 
 with Files("tests/selection/**"):
     BUG_COMPONENT = ("Core", "Selection")
-
-with Files("tests/selectors/**"):
-    BUG_COMPONENT = ("Core", "DOM")
 
 with Files("tests/server-timing/**"):
     BUG_COMPONENT = ("Core", "DOM")
@@ -464,8 +500,8 @@ with Files("tests/service-workers/**"):
 with Files("tests/shadow-dom/**"):
     BUG_COMPONENT = ("Core", "DOM")
 
-with Files("tests/staticrange/**"):
-    BUG_COMPONENT = ("Core", "DOM")
+with Files("tests/speech-api/**"):
+    BUG_COMPONENT = ("Core", "Web Speech")
 
 with Files("tests/storage/**"):
     BUG_COMPONENT = ("Core", "DOM")
@@ -488,6 +524,9 @@ with Files("tests/touch-events/**"):
 with Files("tests/tools/**"):
     BUG_COMPONENT = ("Testing", "web-platform-tests")
 
+with Files("tests/trusted-types/**"):
+    BUG_COMPONENT = ("Core", "DOM: Security")
+
 with Files("tests/uievents/**"):
     BUG_COMPONENT = ("Core", "DOM: Events")
 
@@ -503,7 +542,7 @@ with Files("tests/user-timing/**"):
 with Files("tests/vibration/**"):
     BUG_COMPONENT = ("Core", "DOM")
 
-with Files("tests/viewport/**"):
+with Files("tests/visual-viewport/**"):
     BUG_COMPONENT = ("Core", "Layout")
 
 with Files("tests/wai-aria/**"):
@@ -556,6 +595,10 @@ with Files("tests/webvtt/**"):
 
 with Files("tests/workers/**"):
     BUG_COMPONENT = ("Core", "DOM: Workers")
+
+# to be implemented in bug 1315239
+with Files("tests/worklets/**"):
+    BUG_COMPONENT = ("Core", "DOM")
 
 with Files("tests/x-frame-options/**"):
     BUG_COMPONENT = ("Core", "DOM: Security")

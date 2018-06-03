@@ -21,7 +21,7 @@ class nsInputStreamPump final : public nsIInputStreamPump
                               , public nsIInputStreamCallback
                               , public nsIThreadRetargetableRequest
 {
-    ~nsInputStreamPump();
+    ~nsInputStreamPump() = default;
 
 public:
     typedef mozilla::RecursiveMutexAutoLock RecursiveMutexAutoLock;
@@ -85,7 +85,6 @@ protected:
     nsCOMPtr<nsIEventTarget>      mLabeledMainThreadTarget;
     nsCOMPtr<nsIInputStream>      mStream;
     nsCOMPtr<nsIAsyncInputStream> mAsyncStream;
-    nsCOMPtr<nsIInputStream>      mBufferedStream;
     uint64_t                      mStreamOffset;
     uint64_t                      mStreamLength;
     uint32_t                      mSegSize;
@@ -101,6 +100,7 @@ protected:
     bool                          mWaitingForInputStreamReady;
     bool                          mCloseWhenDone;
     bool                          mRetargeting;
+    bool                          mAsyncStreamIsBuffered;
     // Protects state/member var accesses across multiple threads.
     mozilla::RecursiveMutex       mMutex;
 };

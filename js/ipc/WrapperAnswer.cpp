@@ -39,7 +39,7 @@ MaybeForceDebugGC()
     if (sDebugGCs) {
         JSContext* cx = XPCJSContext::Get()->Context();
         PrepareForFullGC(cx);
-        GCForReason(cx, GC_NORMAL, gcreason::COMPONENT_UTILS);
+        NonIncrementalGC(cx, GC_NORMAL, gcreason::COMPONENT_UTILS);
     }
 }
 
@@ -61,11 +61,6 @@ WrapperAnswer::fail(AutoJSAPI& jsapi, ReturnStatus* rs)
 
     if (!jsapi.StealException(&exn))
         return true;
-
-    if (JS_IsStopIteration(exn)) {
-        *rs = ReturnStatus(ReturnStopIteration());
-        return true;
-    }
 
     // If this fails, we still don't want to exit. Just return an invalid
     // exception.

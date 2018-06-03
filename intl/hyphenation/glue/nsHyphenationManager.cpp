@@ -21,6 +21,7 @@
 #include "nsCRT.h"
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsDirectoryServiceUtils.h"
+#include "nsMemory.h"
 
 using namespace mozilla;
 
@@ -250,14 +251,9 @@ nsHyphenationManager::LoadPatternListFromDir(nsIFile *aDir)
     return;
   }
 
-  nsCOMPtr<nsISimpleEnumerator> e;
-  rv = aDir->GetDirectoryEntries(getter_AddRefs(e));
+  nsCOMPtr<nsIDirectoryEnumerator> files;
+  rv = aDir->GetDirectoryEntries(getter_AddRefs(files));
   if (NS_FAILED(rv)) {
-    return;
-  }
-
-  nsCOMPtr<nsIDirectoryEnumerator> files(do_QueryInterface(e));
-  if (!files) {
     return;
   }
 

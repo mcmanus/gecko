@@ -34,6 +34,7 @@
 #include "nsIContentPolicy.h"
 #include "nsContentUtils.h"
 #include "nsIPrincipal.h"
+#include "nsNativeCharsetUtils.h"
 
 #include "WinUtils.h"
 #include "mozilla/LazyIdleThread.h"
@@ -76,6 +77,7 @@ nsresult nsDataObj::CStream::Init(nsIURI *pSourceURI,
                      aRequestingPrincipal,
                      nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_INHERITS,
                      aContentPolicyType,
+                     nullptr,   // PerformanceStorage
                      nullptr,   // loadGroup
                      nullptr,   // aCallbacks
                      nsIRequest::LOAD_FROM_CACHE);
@@ -455,11 +457,11 @@ public:
     // We need to listen to both the xpcom shutdown message and our timer, and
     // fire when the first of either of these two messages is received.
     nsresult rv;
-    mTimer = do_CreateInstance(NS_TIMER_CONTRACTID, &rv);
+    rv = NS_NewTimerWithObserver(getter_AddRefs(mTimer),
+                                 this, 500, nsITimer::TYPE_ONE_SHOT);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return;
     }
-    mTimer->Init(this, 500, nsITimer::TYPE_ONE_SHOT);
 
     nsCOMPtr<nsIObserverService> observerService =
       do_GetService("@mozilla.org/observer-service;1");
@@ -1213,7 +1215,7 @@ nsDataObj :: GetFileContentsInternetShortcut ( FORMATETC& aFE, STGMEDIUM& aSTG )
 
   const char *shortcutFormatStr;
   int totalLen;
-  nsCString path;
+  nsCString asciiPath;
   if (!Preferences::GetBool(kShellIconPref, true)) {
     shortcutFormatStr = "[InternetShortcut]\r\nURL=%s\r\n";
     const int formatLen = strlen(shortcutFormatStr) - 2;  // don't include %s
@@ -1227,15 +1229,29 @@ nsDataObj :: GetFileContentsInternetShortcut ( FORMATETC& aFE, STGMEDIUM& aSTG )
 
     rv = mozilla::widget::FaviconHelper::GetOutputIconPath(aUri, icoFile, true);
     NS_ENSURE_SUCCESS(rv, E_FAIL);
-    rv = icoFile->GetNativePath(path);
+    nsString path;
+    rv = icoFile->GetPath(path);
     NS_ENSURE_SUCCESS(rv, E_FAIL);
 
-    shortcutFormatStr = "[InternetShortcut]\r\nURL=%s\r\n"
-                        "IDList=\r\nHotKey=0\r\nIconFile=%s\r\n"
-                        "IconIndex=0\r\n";
+    if (NS_IsAscii(path.get())) {
+      LossyCopyUTF16toASCII(path, asciiPath);
+      shortcutFormatStr = "[InternetShortcut]\r\nURL=%s\r\n"
+                          "IDList=\r\nHotKey=0\r\nIconFile=%s\r\n"
+                          "IconIndex=0\r\n";
+    } else {
+      int len = WideCharToMultiByte(CP_UTF7, 0, char16ptr_t(path.BeginReading()),
+                                    path.Length(), nullptr, 0, nullptr, nullptr);
+      NS_ENSURE_TRUE(len > 0, E_FAIL);
+      asciiPath.SetLength(len);
+      WideCharToMultiByte(CP_UTF7, 0, char16ptr_t(path.BeginReading()), path.Length(),
+                          asciiPath.BeginWriting(), len, nullptr, nullptr);
+      shortcutFormatStr = "[InternetShortcut]\r\nURL=%s\r\n"
+                          "IDList=\r\nHotKey=0\r\nIconIndex=0\r\n"
+                          "[InternetShortcut.W]\r\nIconFile=%s\r\n";
+    }
     const int formatLen = strlen(shortcutFormatStr) - 2 * 2; // no %s twice
     totalLen = formatLen + asciiUrl.Length() +
-               path.Length(); // we don't want a null character on the end
+               asciiPath.Length(); // we don't want a null character on the end
   }
 
   // create a global memory area and build up the file contents w/in it
@@ -1257,7 +1273,7 @@ nsDataObj :: GetFileContentsInternetShortcut ( FORMATETC& aFE, STGMEDIUM& aSTG )
   if (!Preferences::GetBool(kShellIconPref, true)) {
     _snprintf(contents, totalLen, shortcutFormatStr, asciiUrl.get());
   } else {
-    _snprintf(contents, totalLen, shortcutFormatStr, asciiUrl.get(), path.get());
+    _snprintf(contents, totalLen, shortcutFormatStr, asciiUrl.get(), asciiPath.get());
   }
 
   ::GlobalUnlock(hGlobalMemory);

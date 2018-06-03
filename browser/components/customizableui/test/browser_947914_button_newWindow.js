@@ -20,7 +20,7 @@ add_task(async function() {
   let observerWindowOpened = {
     observe(aSubject, aTopic, aData) {
       if (aTopic == "domwindowopened") {
-        newWindow = aSubject.QueryInterface(Components.interfaces.nsIDOMWindow);
+        newWindow = aSubject.QueryInterface(Ci.nsIDOMWindow);
         newWindow.addEventListener("load", function() {
           is(newWindow.location.href, "chrome://browser/content/browser.xul",
              "A new browser window was opened");
@@ -29,7 +29,7 @@ add_task(async function() {
         }, {once: true});
       }
     }
-  }
+  };
 
   Services.ww.registerNotification(observerWindowOpened);
 

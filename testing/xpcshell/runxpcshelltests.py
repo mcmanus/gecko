@@ -253,7 +253,7 @@ class XPCShellTestThread(Thread):
           On a remote system, this is more complex and we need to overload this function.
         """
         # timeout is needed by remote xpcshell to extend the
-        # devicemanager.shell() timeout. It is not used in this function.
+        # remote device timeout. It is not used in this function.
         if HAVE_PSUTIL:
             popen_func = psutil.Popen
         else:
@@ -371,7 +371,7 @@ class XPCShellTestThread(Thread):
             try:
                 # This could be left over from previous runs
                 self.removeDir(profileDir)
-            except:
+            except Exception:
                 pass
             os.makedirs(profileDir)
         else:
@@ -653,23 +653,8 @@ class XPCShellTestThread(Thread):
             self.complete_command = cmdH + cmdT + cmdI + args
 
         if self.test_object.get('dmd') == 'true':
-            if sys.platform.startswith('linux'):
-                preloadEnvVar = 'LD_PRELOAD'
-                libdmd = os.path.join(self.xrePath, 'libdmd.so')
-            elif sys.platform == 'osx' or sys.platform == 'darwin':
-                preloadEnvVar = 'DYLD_INSERT_LIBRARIES'
-                # self.xrePath is <prefix>/Contents/Resources.
-                # We need <prefix>/Contents/MacOS/libdmd.dylib.
-                contents_dir = os.path.dirname(self.xrePath)
-                libdmd = os.path.join(contents_dir, 'MacOS', 'libdmd.dylib')
-            elif sys.platform == 'win32':
-                preloadEnvVar = 'MOZ_REPLACE_MALLOC_LIB'
-                libdmd = os.path.join(self.xrePath, 'dmd.dll')
-
             self.env['PYTHON'] = sys.executable
             self.env['BREAKPAD_SYMBOLS_PATH'] = self.symbolsPath
-            self.env['DMD_PRELOAD_VAR'] = preloadEnvVar
-            self.env['DMD_PRELOAD_VALUE'] = libdmd
 
         if self.test_object.get('subprocess') == 'true':
             self.env['PYTHON'] = sys.executable
@@ -1453,6 +1438,8 @@ class XPCShellTests(object):
                 self.log.info('::: Test verification %s' % finalResult)
                 self.log.info(':::')
 
+        self.shutdownNode()
+
         return status
 
     def runTestList(self, tests_queue, sequential_tests, testClass,
@@ -1474,7 +1461,7 @@ class XPCShellTests(object):
         tests_by_manifest = defaultdict(list)
         for test in self.alltests:
             tests_by_manifest[test['manifest']].append(test['id'])
-        self.log.suite_start(tests_by_manifest)
+        self.log.suite_start(tests_by_manifest, name='xpcshell')
 
         while tests_queue or running_tests:
             # if we're not supposed to continue and all of the running tests
@@ -1562,7 +1549,6 @@ class XPCShellTests(object):
         # restore default SIGINT behaviour
         signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-        self.shutdownNode()
         # Clean up any slacker directories that might be lying around
         # Some might fail because of windows taking too long to unlock them.
         # We don't do anything if this fails because the test slaves will have
@@ -1570,7 +1556,7 @@ class XPCShellTests(object):
         for directory in self.cleanup_dir_list:
             try:
                 shutil.rmtree(directory)
-            except:
+            except Exception:
                 self.log.info("%s could not be cleaned up." % directory)
 
         if exceptions:

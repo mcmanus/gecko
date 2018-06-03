@@ -4,10 +4,8 @@
 
 "use strict";
 
-const { utils: Cu, interfaces: Ci, classes: Cc, results: Cr } = Components;
-
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 const FRAME_SCRIPT_URL = "chrome://gfxsanity/content/gfxFrameScript.js";
@@ -260,8 +258,8 @@ var listener = {
 function SanityTest() {}
 SanityTest.prototype = {
   classID: Components.ID("{f3a8ca4d-4c83-456b-aee2-6a2cbf11e9bd}"),
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver,
-                                         Ci.nsISupportsWeakReference]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIObserver,
+                                          Ci.nsISupportsWeakReference]),
 
   shouldRunTest() {
     // Only test gfx features if firefox has updated, or if the user has a new

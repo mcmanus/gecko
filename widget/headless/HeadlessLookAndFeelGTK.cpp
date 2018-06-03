@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "HeadlessLookAndFeel.h"
+#include "mozilla/FontPropertyTypes.h"
 #include "nsIContent.h"
 
 using mozilla::LookAndFeel;
@@ -263,12 +264,6 @@ HeadlessLookAndFeel::GetIntImpl(IntID aID, int32_t &aResult)
     case eIntID_SwipeAnimationEnabled:
       aResult = 0;
       break;
-    case eIntID_ColorPickerAvailable:
-      aResult = 1;
-      break;
-    case eIntID_PhysicalHomeButton:
-      aResult = 0;
-      break;
     case eIntID_ScrollbarDisplayOnMouseMove:
       aResult = 0;
       break;
@@ -282,6 +277,18 @@ HeadlessLookAndFeel::GetIntImpl(IntID aID, int32_t &aResult)
       aResult = -6;
       break;
     case eIntID_ContextMenuOffsetHorizontal:
+      aResult = 1;
+      break;
+    case eIntID_GTKCSDAvailable:
+      aResult = 0;
+      break;
+    case eIntID_GTKCSDMinimizeButton:
+      aResult = 0;
+      break;
+    case eIntID_GTKCSDMaximizeButton:
+      aResult = 0;
+      break;
+    case eIntID_GTKCSDCloseButton:
       aResult = 1;
       break;
     default:
@@ -329,19 +336,14 @@ HeadlessLookAndFeel::GetFontImpl(FontID aID, nsString& aFontName,
                gfxFontStyle& aFontStyle,
                float aDevPixPerCSSPixel)
 {
-  // Copied over from the Cocoa equivalent to this file. Hopefully it's good
-  // enough here.
-  if (aID == eFont_Window || aID == eFont_Document) {
-      aFontStyle.style      = NS_FONT_STYLE_NORMAL;
-      aFontStyle.weight     = NS_FONT_WEIGHT_NORMAL;
-      aFontStyle.stretch    = NS_FONT_STRETCH_NORMAL;
-      aFontStyle.size       = 14 * aDevPixPerCSSPixel;
-      aFontStyle.systemFont = true;
+  // Default to san-serif for everything.
+  aFontStyle.style      = FontSlantStyle::Normal();
+  aFontStyle.weight     = FontWeight::Normal();
+  aFontStyle.stretch    = FontStretch::Normal();
+  aFontStyle.size       = 14 * aDevPixPerCSSPixel;
+  aFontStyle.systemFont = true;
 
-      aFontName.AssignLiteral("sans-serif");
-      return true;
-  }
-
+  aFontName.AssignLiteral("sans-serif");
   return true;
 }
 

@@ -4,28 +4,26 @@ var gClient;
 
 function test() {
   waitForExplicitFinish();
-  let {ActorRegistryFront} = require("devtools/shared/fronts/actor-registry");
-  let actorURL = "chrome://mochitests/content/chrome/devtools/server/tests/mochitest/hello-actor.js";
+  const {ActorRegistryFront} = require("devtools/shared/fronts/actor-registry");
+  const actorURL = "chrome://mochitests/content/chrome/devtools/server/tests/mochitest/hello-actor.js";
 
-  if (!DebuggerServer.initialized) {
-    DebuggerServer.init();
-    DebuggerServer.addBrowserActors();
-  }
+  DebuggerServer.init();
+  DebuggerServer.registerAllActors();
 
   gClient = new DebuggerClient(DebuggerServer.connectPipe());
   gClient.connect()
     .then(() => gClient.listTabs())
     .then(response => {
-      let options = {
+      const options = {
         prefix: "helloActor",
         constructor: "HelloActor",
         type: { tab: true }
       };
 
-      let registry = ActorRegistryFront(gClient, response);
+      const registry = ActorRegistryFront(gClient, response);
       registry.registerActor(actorURL, options).then(actorFront => {
-        gClient.listTabs(res => {
-          let tab = res.tabs[res.selected];
+        gClient.listTabs().then(res => {
+          const tab = res.tabs[res.selected];
           ok(!!tab.helloActor, "Hello actor must exist");
 
           // Make sure actor's state is maintained across listTabs requests.
@@ -53,22 +51,22 @@ function getCount(actor, callback) {
   }, callback);
 }
 
-var checkActorState = Task.async(function* (helloActor, callback) {
-  let response = yield getCount(helloActor);
+var checkActorState = async function(helloActor, callback) {
+  let response = await getCount(helloActor);
   ok(!response.error, "No error");
   is(response.count, 1, "The counter must be valid");
 
-  response = yield getCount(helloActor);
+  response = await getCount(helloActor);
   ok(!response.error, "No error");
   is(response.count, 2, "The counter must be valid");
 
-  let {tabs, selected} = yield gClient.listTabs();
-  let tab = tabs[selected];
+  const {tabs, selected} = await gClient.listTabs();
+  const tab = tabs[selected];
   is(tab.helloActor, helloActor, "Hello actor must be valid");
 
-  response = yield getCount(helloActor);
+  response = await getCount(helloActor);
   ok(!response.error, "No error");
   is(response.count, 3, "The counter must be valid");
 
   callback();
-});
+};

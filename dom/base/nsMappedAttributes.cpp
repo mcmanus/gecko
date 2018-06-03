@@ -11,12 +11,10 @@
 
 #include "nsMappedAttributes.h"
 #include "nsHTMLStyleSheet.h"
-#include "nsRuleData.h"
-#include "nsRuleWalker.h"
+#include "mozilla/DeclarationBlock.h"
 #include "mozilla/GenericSpecifiedValues.h"
 #include "mozilla/HashFunctions.h"
 #include "mozilla/MemoryReporting.h"
-#include "mozilla/ServoDeclarationBlock.h"
 #include "mozilla/ServoSpecifiedValues.h"
 
 using namespace mozilla;
@@ -56,7 +54,7 @@ nsMappedAttributes::nsMappedAttributes(const nsMappedAttributes& aCopy)
     mSheet(aCopy.mSheet),
     mRuleMapper(aCopy.mRuleMapper),
     // This is only called by ::Clone, which is used to create independent
-    // nsMappedAttributes objects which should not share a ServoDeclarationBlock
+    // nsMappedAttributes objects which should not share a DeclarationBlock
     mServoStyle(nullptr)
 {
   NS_ASSERTION(mBufferSize >= aCopy.mAttrCount, "can't fit attributes");
@@ -149,17 +147,12 @@ nsMappedAttributes::LastRelease()
   delete this;
 }
 
-NS_IMPL_ADDREF(nsMappedAttributes)
-NS_IMPL_RELEASE_WITH_DESTROY(nsMappedAttributes, LastRelease())
-
-NS_IMPL_QUERY_INTERFACE(nsMappedAttributes,
-                        nsIStyleRule)
 
 void
 nsMappedAttributes::SetAndSwapAttr(nsAtom* aAttrName, nsAttrValue& aValue,
                                    bool* aValueWasSet)
 {
-  NS_PRECONDITION(aAttrName, "null name");
+  MOZ_ASSERT(aAttrName, "null name");
   *aValueWasSet = false;
   uint32_t i;
   for (i = 0; i < mAttrCount && !Attrs()[i].mName.IsSmaller(aAttrName); ++i) {
@@ -185,7 +178,7 @@ nsMappedAttributes::SetAndSwapAttr(nsAtom* aAttrName, nsAttrValue& aValue,
 const nsAttrValue*
 nsMappedAttributes::GetAttr(nsAtom* aAttrName) const
 {
-  NS_PRECONDITION(aAttrName, "null name");
+  MOZ_ASSERT(aAttrName, "null name");
 
   for (uint32_t i = 0; i < mAttrCount; ++i) {
     if (Attrs()[i].mName.Equals(aAttrName)) {
@@ -254,54 +247,6 @@ nsMappedAttributes::SetStyleSheet(nsHTMLStyleSheet* aSheet)
   mSheet = aSheet;  // not ref counted
 }
 
-/* virtual */ void
-nsMappedAttributes::MapRuleInfoInto(nsRuleData* aRuleData)
-{
-  if (mRuleMapper) {
-    (*mRuleMapper)(this, aRuleData);
-  }
-}
-
-/* virtual */ bool
-nsMappedAttributes::MightMapInheritedStyleData()
-{
-  // Just assume that we do, rather than adding checks to all of the different
-  // kinds of attribute mapping functions we have.
-  return true;
-}
-
-/* virtual */ bool
-nsMappedAttributes::GetDiscretelyAnimatedCSSValue(nsCSSPropertyID aProperty,
-                                                  nsCSSValue* aValue)
-{
-  MOZ_ASSERT(false, "GetDiscretelyAnimatedCSSValue is not implemented yet");
-  return false;
-}
-
-#ifdef DEBUG
-/* virtual */ void
-nsMappedAttributes::List(FILE* out, int32_t aIndent) const
-{
-  nsAutoCString str;
-  nsAutoString tmp;
-  uint32_t i;
-
-  for (i = 0; i < mAttrCount; ++i) {
-    int32_t indent;
-    for (indent = aIndent; indent > 0; --indent) {
-      str.AppendLiteral("  ");
-    }
-
-    Attrs()[i].mName.GetQualifiedName(tmp);
-    LossyAppendUTF16toASCII(tmp, str);
-
-    Attrs()[i].mValue.ToString(tmp);
-    LossyAppendUTF16toASCII(tmp, str);
-    str.Append('\n');
-    fprintf_stderr(out, "%s", str.get());
-  }
-}
-#endif
 
 void
 nsMappedAttributes::RemoveAttrAt(uint32_t aPos, nsAttrValue& aValue)
@@ -360,14 +305,14 @@ nsMappedAttributes::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
 }
 
 void
-nsMappedAttributes::LazilyResolveServoDeclaration(nsPresContext* aContext)
+nsMappedAttributes::LazilyResolveServoDeclaration(nsIDocument* aDoc)
 {
 
   MOZ_ASSERT(!mServoStyle,
              "LazilyResolveServoDeclaration should not be called if mServoStyle is already set");
   if (mRuleMapper) {
     mServoStyle = Servo_DeclarationBlock_CreateEmpty().Consume();
-    ServoSpecifiedValues servo = ServoSpecifiedValues(aContext, mServoStyle.get());
+    ServoSpecifiedValues servo = ServoSpecifiedValues(aDoc, mServoStyle.get());
     (*mRuleMapper)(this, &servo);
   }
 }

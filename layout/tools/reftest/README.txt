@@ -49,16 +49,14 @@ must be one of the following:
 
 1. Inclusion of another manifest
 
-   <failure-type>* include <relative_path>
+   <skip-type>* include <relative_path>
 
-   <failure-type> is the same as listed below for a test item.  As for
-   test items, multiple failure types listed on the same line are
-   combined by using the last matching failure type listed on the line.
-   However, the failure type on a manifest is combined with the failure
-   type on the test (or on a nested manifest) with the rule that the
-   last in the following list wins:  fails, random, skip.  (In other
-   words, when combining <failure-type> from the manifest include and
-   the test line, skip always wins, and random beats fails.)
+   <skip-type> is one of the skip or skip-if items (see their definitions
+   in <failure-type> below). If any of the skip types evaluate to true (i.e.
+   they are a plain "skip" or they are a "skip-if" with a condition that
+   evaluates to true), then the include statement is skipped. Otherwise,
+   reftests in the specified manifest are included in the set of reftests
+   that are run.
 
 2. A test item
 
@@ -667,3 +665,20 @@ to push a layer-tree update to the compositor before taking the snapshot.
 Setting the "reftest-no-sync-layers" attribute on the root element skips this
 step, enabling testing that layer-tree updates are being correctly generated.
 However the test must manually wait for a MozAfterPaint event before ending.
+
+Avoid hanging on long/infinite animation tests: reftest-ignore-pending-paints
+=============================================================================
+
+If a test contains a long animation, and the desired behaviour is to take a
+snapshot partway through the animation, the usual procedure is to have a part
+of the animation that is visually unchanging, and when the test page reaches that
+part, it removes the reftest-wait to allow the harness to finish. However, this
+relies on an optimization inside Gecko that stops repaints if it detects that
+nothing will visually change (by detecting an empty invalidation area, for
+example). In some cases, this optimization may not trigger (e.g. with WebRender
+enabled). For such cases, the reftest-wait class attribute can be replaced by
+reftest-ignore-pending-paints on the root html element, and this will make the
+harness ignore any pending repaints (i.e. stop listening for MozAfterPaint) and
+just go ahead and finish the test.
+Note that any reftest that attempts to use this feature without animations will
+fail with an error.

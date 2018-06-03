@@ -4,24 +4,14 @@
 
 "use strict";
 
-this.EXPORTED_SYMBOLS = ["GeckoViewTab"];
+var EXPORTED_SYMBOLS = ["GeckoViewTab"];
 
-const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
-
-Cu.import("resource://gre/modules/GeckoViewModule.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-XPCOMUtils.defineLazyGetter(this, "dump", () =>
-    Cu.import("resource://gre/modules/AndroidLog.jsm",
-              {}).AndroidLog.d.bind(null, "ViewTab"));
-
-function debug(aMsg) {
-  // dump(aMsg);
-}
+ChromeUtils.import("resource://gre/modules/GeckoViewModule.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 // Stub BrowserApp implementation for WebExtensions support.
 class GeckoViewTab extends GeckoViewModule {
-  init() {
+  onInit() {
     this.browser.tab = { id: 0, browser: this.browser };
 
     this.window.gBrowser = this.window.BrowserApp = {

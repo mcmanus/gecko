@@ -1,7 +1,8 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-* This Source Code Form is subject to the terms of the Mozilla Public
-* License, v. 2.0. If a copy of the MPL was not distributed with this
-* file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef MOZILLA_GFX_PAINTEDLAYERMLGPU_H
 #define MOZILLA_GFX_PAINTEDLAYERMLGPU_H
@@ -14,6 +15,8 @@
 
 namespace mozilla {
 namespace layers {
+
+class TiledLayerBufferComposite;
 
 class PaintedLayerMLGPU final
   : public PaintedLayer,
@@ -47,9 +50,8 @@ public:
     MOZ_ASSERT(HasComponentAlpha());
     return mTextureOnWhite;
   }
-  ContentHostTexture* GetContentHost() const {
-    return mHost;
-  }
+  gfx::Point GetDestOrigin() const;
+
   SamplerMode GetSamplerMode() {
     // Note that when resamping, we must break the texture coordinates into
     // no-repeat rects. When we have simple integer translations we can
@@ -59,10 +61,12 @@ public:
            : SamplerMode::LinearRepeat;
   }
 
-  // This can return a different region than GetShadowVisibleRegion or
-  // GetLocalVisibleRegion, since we make sure to clamp it to the
-  // texture size and account for resampling.
-  nsIntRegion GetRenderRegion();
+  void SetRenderRegion(LayerIntRegion&& aRegion) override;
+
+  // To avoid sampling issues with complex regions and transforms, we
+  // squash the visible region for PaintedLayers into a single draw
+  // rect. RenderPasses should use this method instead of GetRenderRegion.
+  const LayerIntRegion& GetDrawRects();
 
   MOZ_LAYER_DECL_NAME("PaintedLayerMLGPU", TYPE_PAINTED)
 
@@ -72,14 +76,33 @@ protected:
   void PrintInfo(std::stringstream& aStream, const char* aPrefix) override;
   bool OnPrepareToRender(FrameBuilder* aBuilder) override;
 
+  // We override this to support tiling.
+  void AssignToView(FrameBuilder* aBuilder,
+                    RenderViewMLGPU* aView,
+                    Maybe<gfx::Polygon>&& aGeometry) override;
+
+  void AssignHighResTilesToView(FrameBuilder* aBuilder,
+                                RenderViewMLGPU* aView,
+                                TiledContentHost* aTileHost,
+                                const Maybe<gfx::Polygon>& aGeometry);
+
+  // Helper for Assign*TilesToView.
+  void AssignTileBufferToView(FrameBuilder* aBuilder,
+                              RenderViewMLGPU* aView,
+                              TiledLayerBufferComposite& aTiles,
+                              const LayerIntRegion& aCompositeRegion,
+                              const Maybe<gfx::Polygon>& aGeometry);
+
   void CleanupResources();
 
 private:
-  RefPtr<ContentHostTexture> mHost;
+  RefPtr<ContentHost> mHost;
   RefPtr<TextureSource> mTexture;
   RefPtr<TextureSource> mTextureOnWhite;
-  gfx::IntRegion mLocalDrawRegion;
-  gfx::IntRegion mTextureRegion;
+#ifndef MOZ_IGNORE_PAINT_WILL_RESAMPLE
+  LayerIntRegion mDrawRects;
+#endif
+  gfx::IntPoint mDestOrigin;
 };
 
 } // namespace layers

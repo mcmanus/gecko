@@ -6,6 +6,9 @@ glob:tools/docs/**
 
 # Potential docs sources
 glob:**/*.rst
+glob:**/*.md
+glob:**/*.js
+glob:**/*.jsm
 
 # Python API docs.
 glob:**/*.py

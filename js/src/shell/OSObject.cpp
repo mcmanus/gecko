@@ -22,22 +22,24 @@
 #include "jsapi.h"
 // For JSFunctionSpecWithHelp
 #include "jsfriendapi.h"
-#include "jsobj.h"
-#include "jsstr.h"
-#ifdef XP_WIN
-# include "jswin.h"
-#endif
-#include "jswrapper.h"
 
+#include "builtin/String.h"
+#include "gc/FreeOp.h"
 #include "js/Conversions.h"
+#include "js/Wrapper.h"
 #include "shell/jsshell.h"
-#include "vm/StringBuffer.h"
+#include "util/StringBuffer.h"
+#include "util/Text.h"
+#include "util/Windows.h"
+#include "vm/JSObject.h"
 #include "vm/TypedArrayObject.h"
 
-#include "jsobjinlines.h"
+#include "vm/JSObject-inl.h"
 
 #ifdef XP_WIN
-# define PATH_MAX (MAX_PATH > _MAX_DIR ? MAX_PATH : _MAX_DIR)
+# ifndef PATH_MAX
+#  define PATH_MAX (MAX_PATH > _MAX_DIR ? MAX_PATH : _MAX_DIR)
+# endif
 # define getcwd _getcwd
 #else
 # include <libgen.h>
@@ -391,7 +393,8 @@ RCFile::release()
     return true;
 }
 
-class FileObject : public JSObject {
+class FileObject : public NativeObject
+{
     enum : uint32_t {
         FILE_SLOT = 0,
         NUM_SLOTS
@@ -401,14 +404,13 @@ class FileObject : public JSObject {
     static const js::Class class_;
 
     static FileObject* create(JSContext* cx, RCFile* file) {
-        JSObject* obj = js::NewObjectWithClassProto(cx, &class_, nullptr);
+        FileObject* obj = js::NewObjectWithClassProto<FileObject>(cx, nullptr);
         if (!obj)
             return nullptr;
 
-        FileObject* fileObj = &obj->as<FileObject>();
-        fileObj->setRCFile(file);
+        obj->setRCFile(file);
         file->acquire();
-        return fileObj;
+        return obj;
     }
 
     static void finalize(FreeOp* fop, JSObject* obj) {

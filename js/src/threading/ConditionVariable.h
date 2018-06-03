@@ -98,7 +98,7 @@ public:
   // encounter substantially longer delays, depending on system load.
   CVStatus wait_for(UniqueLock<Mutex>& lock,
                     const mozilla::TimeDuration& rel_time) {
-    return impl_.wait_for(lock.lock, rel_time) == mozilla::detail::CVStatus::Timeout
+    return impl_.wait_for(lock.lock, rel_time) == mozilla::CVStatus::Timeout
       ? CVStatus::Timeout : CVStatus::NoTimeout;
   }
 
@@ -110,14 +110,14 @@ public:
   bool wait_for(UniqueLock<Mutex>& lock, const mozilla::TimeDuration& rel_time,
                 Predicate pred) {
     return wait_until(lock, mozilla::TimeStamp::Now() + rel_time,
-                      mozilla::Move(pred));
+                      std::move(pred));
   }
 
 
 private:
   ConditionVariable(const ConditionVariable&) = delete;
   ConditionVariable& operator=(const ConditionVariable&) = delete;
-  template <class T> friend class ExclusiveData;
+  template <class T> friend class ExclusiveWaitableData;
 
   mozilla::detail::ConditionVariableImpl impl_;
 };

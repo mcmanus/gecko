@@ -4,11 +4,10 @@
 
 "use strict";
 
-const {utils: Cu} = Components;
-Cu.import("resource:///modules/AboutNewTab.jsm");
-Cu.import("resource://gre/modules/RemotePageManager.jsm");
+ChromeUtils.import("resource:///modules/AboutNewTab.jsm");
+ChromeUtils.import("resource://gre/modules/RemotePageManager.jsm");
 
-const {actionCreators: ac, actionTypes: at, actionUtils: au} = Cu.import("resource://activity-stream/common/Actions.jsm", {});
+const {actionCreators: ac, actionTypes: at, actionUtils: au} = ChromeUtils.import("resource://activity-stream/common/Actions.jsm", {});
 
 const ABOUT_NEW_TAB_URL = "about:newtab";
 const ABOUT_HOME_URL = "about:home";
@@ -23,11 +22,10 @@ const DEFAULT_OPTIONS = {
 };
 
 this.ActivityStreamMessageChannel = class ActivityStreamMessageChannel {
-
   /**
    * ActivityStreamMessageChannel - This module connects a Redux store to a RemotePageManager in Firefox.
    *                  Call .createChannel to start the connection, and .destroyChannel to destroy it.
-   *                  You should use the BroadcastToContent, SendToContent, and SendToMain action creators
+   *                  You should use the BroadcastToContent, AlsoToOneContent, and AlsoToMain action creators
    *                  in common/Actions.jsm to help you create actions that will be automatically routed
    *                  to the correct location.
    *
@@ -52,7 +50,7 @@ this.ActivityStreamMessageChannel = class ActivityStreamMessageChannel {
   }
 
   /**
-   * middleware - Redux middleware that looks for SendToContent and BroadcastToContent type
+   * middleware - Redux middleware that looks for AlsoToOneContent and BroadcastToContent type
    *              actions, and sends them out.
    *
    * @param  {object} store A redux store
@@ -65,10 +63,12 @@ this.ActivityStreamMessageChannel = class ActivityStreamMessageChannel {
         next(action);
         return;
       }
-      if (au.isSendToContent(action)) {
+      if (au.isSendToOneContent(action)) {
         this.send(action);
       } else if (au.isBroadcastToContent(action)) {
         this.broadcast(action);
+      } else if (au.isSendToPreloaded(action)) {
+        this.sendToPreloaded(action);
       }
 
       if (!skipMain) {
@@ -84,7 +84,7 @@ this.ActivityStreamMessageChannel = class ActivityStreamMessageChannel {
    * @param  {string} targetId The portID of the port that sent the message
    */
   onActionFromContent(action, targetId) {
-    this.dispatch(ac.SendToMain(action, targetId));
+    this.dispatch(ac.AlsoToMain(action, targetId));
   }
 
   /**
@@ -127,6 +127,52 @@ this.ActivityStreamMessageChannel = class ActivityStreamMessageChannel {
   }
 
   /**
+   * sendToPreloaded - Sends an action to each preloaded browser, if any
+   *
+   * @param  {obj} action A redux action
+   */
+  sendToPreloaded(action) {
+    const preloadedBrowsers = this.getPreloadedBrowser();
+    if (preloadedBrowsers && action.data) {
+      for (let preloadedBrowser of preloadedBrowsers) {
+        try {
+          preloadedBrowser.sendAsyncMessage(this.outgoingMessageName, action);
+        } catch (e) {
+          // The preloaded page is no longer available, so just ignore.
+        }
+      }
+    }
+  }
+
+  /**
+   * getPreloadedBrowser - Retrieve the port of any preloaded browsers
+   *
+   * @return {Array|null} An array of ports belonging to the preloaded browsers, or null
+   *                      if there aren't any preloaded browsers
+   */
+  getPreloadedBrowser() {
+    let preloadedPorts = [];
+    for (let port of this.channel.messagePorts) {
+      if (this.isPreloadedBrowser(port.browser)) {
+        preloadedPorts.push(port);
+      }
+    }
+    return preloadedPorts.length ? preloadedPorts : null;
+  }
+
+  /**
+   * isPreloadedBrowser - Returns true if the passed browser has been preloaded
+   *                      for faster rendering of new tabs.
+   *
+   * @param {<browser>} A <browser> to check.
+   * @return {bool} True if the browser is preloaded.
+   *                      if there aren't any preloaded browsers
+   */
+  isPreloadedBrowser(browser) {
+    return browser.getAttribute("preloadedState") === "preloaded";
+  }
+
+  /**
    * createChannel - Create RemotePages channel to establishing message passing
    *                 between the main process and child pages
    */
@@ -138,10 +184,12 @@ this.ActivityStreamMessageChannel = class ActivityStreamMessageChannel {
     this.channel.addMessageListener("RemotePage:Load", this.onNewTabLoad);
     this.channel.addMessageListener("RemotePage:Unload", this.onNewTabUnload);
     this.channel.addMessageListener(this.incomingMessageName, this.onMessage);
+  }
 
+  simulateMessagesForExistingTabs() {
     // Some pages might have already loaded, so we won't get the usual message
     for (const target of this.channel.messagePorts) {
-      const simulatedMsg = {target};
+      const simulatedMsg = {target: Object.assign({simulated: true}, target)};
       this.onNewTabInit(simulatedMsg);
       if (target.loaded) {
         this.onNewTabLoad(simulatedMsg);
@@ -184,6 +232,15 @@ this.ActivityStreamMessageChannel = class ActivityStreamMessageChannel {
    * @param  {obj} msg The messsage from a page that was just loaded
    */
   onNewTabLoad(msg) {
+    let {browser} = msg.target;
+    if (this.isPreloadedBrowser(browser)) {
+      // As a perceived performance optimization, if this loaded Activity Stream
+      // happens to be a preloaded browser, have it render its layers to the
+      // compositor now to increase the odds that by the time we switch to
+      // the tab, the layers are already ready to present to the user.
+      browser.renderLayers = true;
+    }
+
     this.onActionFromContent({type: at.NEW_TAB_LOAD}, msg.target.portID);
   }
 
@@ -220,4 +277,4 @@ this.ActivityStreamMessageChannel = class ActivityStreamMessageChannel {
 };
 
 this.DEFAULT_OPTIONS = DEFAULT_OPTIONS;
-this.EXPORTED_SYMBOLS = ["ActivityStreamMessageChannel", "DEFAULT_OPTIONS"];
+const EXPORTED_SYMBOLS = ["ActivityStreamMessageChannel", "DEFAULT_OPTIONS"];

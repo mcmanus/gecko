@@ -262,10 +262,6 @@ nsSocketInputStream::nsSocketInputStream(nsSocketTransport *trans)
 {
 }
 
-nsSocketInputStream::~nsSocketInputStream()
-{
-}
-
 // called on the socket transport thread...
 //
 //   condition : failure code if socket has been closed
@@ -289,8 +285,7 @@ nsSocketInputStream::OnSocketReady(nsresult condition)
 
         // ignore event if only waiting for closure and not closed.
         if (NS_FAILED(mCondition) || !(mCallbackFlags & WAIT_CLOSURE_ONLY)) {
-            callback = mCallback;
-            mCallback = nullptr;
+            callback = mCallback.forget();
             mCallbackFlags = 0;
         }
     }
@@ -527,10 +522,6 @@ nsSocketOutputStream::nsSocketOutputStream(nsSocketTransport *trans)
 {
 }
 
-nsSocketOutputStream::~nsSocketOutputStream()
-{
-}
-
 // called on the socket transport thread...
 //
 //   condition : failure code if socket has been closed
@@ -554,8 +545,7 @@ nsSocketOutputStream::OnSocketReady(nsresult condition)
 
         // ignore event if only waiting for closure and not closed.
         if (NS_FAILED(mCondition) || !(mCallbackFlags & WAIT_CLOSURE_ONLY)) {
-            callback = mCallback;
-            mCallback = nullptr;
+            callback = mCallback.forget();
             mCallbackFlags = 0;
         }
     }
@@ -776,6 +766,7 @@ nsSocketTransport::nsSocketTransport()
     , mProxyTransparentResolvesHost(false)
     , mHttpsProxy(false)
     , mConnectionFlags(0)
+    , mResetFamilyPreference(false)
     , mTlsFlags(0)
     , mReuseAddrPort(false)
     , mState(STATE_CLOSED)
@@ -785,7 +776,6 @@ nsSocketTransport::nsSocketTransport()
     , mResolving(false)
     , mNetAddrIsSet(false)
     , mSelfAddrIsSet(false)
-    , mNetAddrPreResolved(false)
     , mLock("nsSocketTransport.mLock")
     , mFD(this)
     , mFDref(0)
@@ -802,7 +792,7 @@ nsSocketTransport::nsSocketTransport()
     , mQUIC(false)
     , mFastOpenCallback(nullptr)
     , mFastOpenLayerHasBufferedData(false)
-    , mFastOpenStatus(TFO_NOT_TRIED)
+    , mFastOpenStatus(TFO_NOT_SET)
     , mFirstRetryError(NS_OK)
     , mDoNotRetryToConnect(false)
 {
@@ -936,27 +926,10 @@ nsSocketTransport::Init(const char **types, uint32_t typeCount,
     return NS_OK;
 }
 
-nsresult
-nsSocketTransport::InitPreResolved(const char **socketTypes, uint32_t typeCount,
-                                   const nsACString &host, uint16_t port,
-                                   const nsACString &hostRoute, uint16_t portRoute,
-                                   nsIProxyInfo *proxyInfo,
-                                   const mozilla::net::NetAddr* addr)
-{
-  nsresult rv = Init(socketTypes, typeCount, host, port, hostRoute, portRoute, proxyInfo);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  mNetAddr = *addr;
-  mNetAddrPreResolved = true;
-  return NS_OK;
-}
-
+#if defined(XP_UNIX)
 nsresult
 nsSocketTransport::InitWithFilename(const char *filename)
 {
-#if defined(XP_UNIX)
     size_t filenameLength = strlen(filename);
 
     if (filenameLength > sizeof(mNetAddr.local.path) - 1)
@@ -972,10 +945,8 @@ nsSocketTransport::InitWithFilename(const char *filename)
     mNetAddrIsSet = true;
 
     return NS_OK;
-#else
-    return NS_ERROR_SOCKET_ADDRESS_NOT_SUPPORTED;
-#endif
 }
+#endif
 
 nsresult
 nsSocketTransport::InitWithConnectedSocket(PRFileDesc *fd, const NetAddr *addr)
@@ -1009,7 +980,7 @@ nsSocketTransport::InitWithConnectedSocket(PRFileDesc *fd, const NetAddr *addr)
 
         mFD = fd;
         mFDref = 1;
-        mFDconnected = 1;
+        mFDconnected = true;
     }
 
     // make sure new socket is non-blocking
@@ -1094,11 +1065,6 @@ nsSocketTransport::ResolveHost()
 
     nsresult rv;
 
-    if (mNetAddrPreResolved) {
-        mState = STATE_RESOLVING;
-        return PostEvent(MSG_DNS_LOOKUP_COMPLETE, NS_OK, nullptr);
-    }
-
     if (!mProxyHost.IsEmpty()) {
         if (!mProxyTransparent || mProxyTransparentResolvesHost) {
 #if defined(XP_UNIX)
@@ -1137,10 +1103,14 @@ nsSocketTransport::ResolveHost()
     uint32_t dnsFlags = 0;
     if (mConnectionFlags & nsSocketTransport::BYPASS_CACHE)
         dnsFlags = nsIDNSService::RESOLVE_BYPASS_CACHE;
+    if (mConnectionFlags & nsSocketTransport::REFRESH_CACHE)
+        dnsFlags = nsIDNSService::RESOLVE_REFRESH_CACHE;
     if (mConnectionFlags & nsSocketTransport::DISABLE_IPV6)
         dnsFlags |= nsIDNSService::RESOLVE_DISABLE_IPV6;
     if (mConnectionFlags & nsSocketTransport::DISABLE_IPV4)
         dnsFlags |= nsIDNSService::RESOLVE_DISABLE_IPV4;
+    if (mConnectionFlags & nsSocketTransport::DISABLE_TRR)
+        dnsFlags |= nsIDNSService::RESOLVE_DISABLE_TRR;
 
     NS_ASSERTION(!(dnsFlags & nsIDNSService::RESOLVE_DISABLE_IPV6) ||
                  !(dnsFlags & nsIDNSService::RESOLVE_DISABLE_IPV4),
@@ -1152,9 +1122,9 @@ nsSocketTransport::ResolveHost()
         SOCKET_LOG(("nsSocketTransport %p origin %s doing dns for %s\n",
                     this, mOriginHost.get(), SocketHost().get()));
     }
-    rv = dns->AsyncResolveExtendedNative(SocketHost(), dnsFlags, mNetworkInterfaceId,
-                                         this, nullptr, mOriginAttributes,
-                                         getter_AddRefs(mDNSRequest));
+    rv = dns->AsyncResolveNative(SocketHost(), dnsFlags,
+                                 this, nullptr, mOriginAttributes,
+                                 getter_AddRefs(mDNSRequest));
     if (NS_SUCCEEDED(rv)) {
         SOCKET_LOG(("  advancing to STATE_RESOLVING\n"));
         mState = STATE_RESOLVING;
@@ -1197,7 +1167,7 @@ nsSocketTransport::BuildSocket(PRFileDesc *&fd, bool &proxyTransparent, bool &us
         uint32_t    controlFlags = 0;
 
         uint32_t i;
-        for (i=0; i<mTypeCount; ++i) {
+        for (i = 0; i < mTypeCount; ++i) {
             nsCOMPtr<nsISocketProvider> provider;
 
             SOCKET_LOG(("  pushing io layer [%u:%s]\n", i, mTypes[i]));
@@ -1226,12 +1196,30 @@ nsSocketTransport::BuildSocket(PRFileDesc *&fd, bool &proxyTransparent, bool &us
                 // if this is the first type, we'll want the
                 // service to allocate a new socket
 
+                // Most layers _ESPECIALLY_ PSM want the origin name here as they
+                // will use it for secure checks, etc.. and any connection management
+                // differences between the origin name and the routed name can be
+                // taken care of via DNS. However, SOCKS is a special case as there is
+                // no DNS. in the case of SOCKS and PSM the PSM is a separate layer
+                // and receives the origin name.
+                const char *socketProviderHost = host;
+                int32_t socketProviderPort = port;
+                if (mProxyTransparentResolvesHost &&
+                    (!strcmp(mTypes[0], "socks") || !strcmp(mTypes[0], "socks4"))) {
+                    SOCKET_LOG(("SOCKS %d Host/Route override: %s:%d -> %s:%d\n",
+                                mHttpsProxy,
+                                socketProviderHost, socketProviderPort,
+                                mHost.get(), mPort));
+                    socketProviderHost = mHost.get();
+                    socketProviderPort = mPort;
+                }
+
                 // when https proxying we want to just connect to the proxy as if
                 // it were the end host (i.e. expect the proxy's cert)
 
                 rv = provider->NewSocket(mNetAddr.raw.family,
-                                         mHttpsProxy ? mProxyHost.get() : host,
-                                         mHttpsProxy ? mProxyPort : port,
+                                         mHttpsProxy ? mProxyHost.get() : socketProviderHost,
+                                         mHttpsProxy ? mProxyPort : socketProviderPort,
                                          proxyInfo, mOriginAttributes,
                                          controlFlags, mTlsFlags, &fd,
                                          getter_AddRefs(secinfo));
@@ -1240,8 +1228,7 @@ nsSocketTransport::BuildSocket(PRFileDesc *&fd, bool &proxyTransparent, bool &us
                     NS_NOTREACHED("NewSocket succeeded but failed to create a PRFileDesc");
                     rv = NS_ERROR_UNEXPECTED;
                 }
-            }
-            else {
+            } else {
                 // the socket has already been allocated,
                 // so we just want the service to add itself
                 // to the stack (such as pushing an io layer)
@@ -1272,9 +1259,8 @@ nsSocketTransport::BuildSocket(PRFileDesc *&fd, bool &proxyTransparent, bool &us
                     secCtrl->SetNotificationCallbacks(callbacks);
                 // remember if socket type is SSL so we can ProxyStartSSL if need be.
                 usingSSL = isSSL;
-            }
-            else if ((strcmp(mTypes[i], "socks") == 0) ||
-                     (strcmp(mTypes[i], "socks4") == 0)) {
+            } else if ((strcmp(mTypes[i], "socks") == 0) ||
+                       (strcmp(mTypes[i], "socks4") == 0)) {
                 // since socks is transparent, any layers above
                 // it do not have to worry about proxy stuff
                 proxyInfo = nullptr;
@@ -1286,7 +1272,8 @@ nsSocketTransport::BuildSocket(PRFileDesc *&fd, bool &proxyTransparent, bool &us
             SOCKET_LOG(("  error pushing io layer [%u:%s rv=%" PRIx32 "]\n", i, mTypes[i],
                         static_cast<uint32_t>(rv)));
             if (fd) {
-                CloseSocket(fd, mSocketTransportService); 
+                CloseSocket(fd,
+                    mSocketTransportService->IsTelemetryEnabledAndNotSleepPhase());
             }
         }
     }
@@ -1480,7 +1467,8 @@ nsSocketTransport::InitiateSocket()
     // inform socket transport about this newly created socket...
     rv = mSocketTransportService->AttachSocket(fd, this);
     if (NS_FAILED(rv)) {
-        CloseSocket(fd, mSocketTransportService);
+        CloseSocket(fd,
+            mSocketTransportService->IsTelemetryEnabledAndNotSleepPhase());
         return rv;
     }
     mAttached = true;
@@ -1558,6 +1546,9 @@ nsSocketTransport::InitiateSocket()
     bool connectCalled = true; // This is only needed for telemetry.
     status = PR_Connect(fd, &prAddr, NS_SOCKET_CONNECT_TIMEOUT);
     PRErrorCode code = PR_GetError();
+    if (status == PR_SUCCESS) {
+        PR_SetFDInheritable(fd, false);
+    }
     if ((status == PR_SUCCESS) && tfo) {
         {
             MutexAutoLock lock(mLock);
@@ -1590,6 +1581,10 @@ nsSocketTransport::InitiateSocket()
         // event in order.
         mFastOpenLayerHasBufferedData = TCPFastOpenGetCurrentBufferSize(fd);
 
+        MOZ_ASSERT((mFastOpenStatus == TFO_NOT_TRIED) ||
+                   (mFastOpenStatus == TFO_DISABLED) ||
+                   (mFastOpenStatus == TFO_DATA_SENT) ||
+                   (mFastOpenStatus == TFO_TRIED));
         mFastOpenCallback->SetFastOpenStatus(mFastOpenStatus);
         SOCKET_LOG(("called StartFastOpen - code=%d; fastOpen is %s "
                     "supported.\n", code,
@@ -1724,8 +1719,10 @@ nsSocketTransport::RecoverFromError()
 #endif
 
     // can only recover from errors in these states
-    if (mState != STATE_RESOLVING && mState != STATE_CONNECTING)
+    if (mState != STATE_RESOLVING && mState != STATE_CONNECTING) {
+        SOCKET_LOG(("  not in a recoverable state"));
         return false;
+    }
 
     nsresult rv;
 
@@ -1750,15 +1747,19 @@ nsSocketTransport::RecoverFromError()
         mCondition != NS_ERROR_NET_TIMEOUT &&
         mCondition != NS_ERROR_UNKNOWN_HOST &&
         mCondition != NS_ERROR_UNKNOWN_PROXY_HOST &&
-        !(mFDFastOpenInProgress && (mCondition == NS_ERROR_FAILURE)))
+        !(mFDFastOpenInProgress && (mCondition == NS_ERROR_FAILURE))) {
+        SOCKET_LOG(("  not a recoverable error %" PRIx32, static_cast<uint32_t>(mCondition)));
         return false;
+    }
 #else
     if (mCondition != NS_ERROR_CONNECTION_REFUSED &&
         mCondition != NS_ERROR_PROXY_CONNECTION_REFUSED &&
         mCondition != NS_ERROR_NET_TIMEOUT &&
         mCondition != NS_ERROR_UNKNOWN_HOST &&
-        mCondition != NS_ERROR_UNKNOWN_PROXY_HOST)
+        mCondition != NS_ERROR_UNKNOWN_PROXY_HOST) {
+        SOCKET_LOG(("  not a recoverable error %" PRIx32, static_cast<uint32_t>(mCondition)));
         return false;
+    }
 #endif
 
     bool tryAgain = false;
@@ -1800,12 +1801,15 @@ nsSocketTransport::RecoverFromError()
             }
         }
 
-        if (mConnectionFlags & (DISABLE_IPV6 | DISABLE_IPV4) &&
+        if (mConnectionFlags & RETRY_WITH_DIFFERENT_IP_FAMILY &&
             mCondition == NS_ERROR_UNKNOWN_HOST &&
             mState == STATE_RESOLVING &&
             !mProxyTransparentResolvesHost) {
-            SOCKET_LOG(("  trying lookup again with both ipv4/ipv6 enabled\n"));
-            mConnectionFlags &= ~(DISABLE_IPV6 | DISABLE_IPV4);
+            SOCKET_LOG(("  trying lookup again with opposite ip family\n"));
+            mConnectionFlags ^= (DISABLE_IPV6 | DISABLE_IPV4);
+            mConnectionFlags &= ~RETRY_WITH_DIFFERENT_IP_FAMILY;
+            // This will tell the consuming half-open to reset preference on the connection entry
+            mResetFamilyPreference = true;
             tryAgain = true;
         }
 
@@ -1815,18 +1819,28 @@ nsSocketTransport::RecoverFromError()
             if (NS_SUCCEEDED(rv)) {
                 SOCKET_LOG(("  trying again with next ip address\n"));
                 tryAgain = true;
-            }
-            else if (mConnectionFlags & (DISABLE_IPV6 | DISABLE_IPV4)) {
+            } else if (mConnectionFlags & RETRY_WITH_DIFFERENT_IP_FAMILY) {
+                SOCKET_LOG(("  failed to connect, trying with opposite ip family\n"));
                 // Drop state to closed.  This will trigger new round of DNS
                 // resolving bellow.
-                // XXX Could be optimized to only switch the flags to save
-                // duplicate connection attempts.
-                SOCKET_LOG(("  failed to connect all ipv4-only or ipv6-only "
-                            "hosts, trying lookup/connect again with both "
-                            "ipv4/ipv6\n"));
                 mState = STATE_CLOSED;
-                mConnectionFlags &= ~(DISABLE_IPV6 | DISABLE_IPV4);
+                mConnectionFlags ^= (DISABLE_IPV6 | DISABLE_IPV4);
+                mConnectionFlags &= ~RETRY_WITH_DIFFERENT_IP_FAMILY;
+                // This will tell the consuming half-open to reset preference on the connection entry
+                mResetFamilyPreference = true;
                 tryAgain = true;
+            } else if (!(mConnectionFlags & DISABLE_TRR)) {
+                bool trrEnabled;
+                mDNSRecord->IsTRR(&trrEnabled);
+                if (trrEnabled) {
+                    // Drop state to closed.  This will trigger a new round of
+                    // DNS resolving. Bypass the cache this time since the
+                    // cached data came from TRR and failed already!
+                    SOCKET_LOG(("  failed to connect with TRR enabled, try w/o\n"));
+                    mState = STATE_CLOSED;
+                    mConnectionFlags |= DISABLE_TRR | BYPASS_CACHE | REFRESH_CACHE;
+                    tryAgain = true;
+                }
             }
         }
     }
@@ -2007,7 +2021,8 @@ public:
 
   NS_IMETHOD Run() override
   {
-    nsSocketTransport::CloseSocket(mFD, gSocketTransportService);
+    nsSocketTransport::CloseSocket(mFD,
+      gSocketTransportService->IsTelemetryEnabledAndNotSleepPhase());
     return NS_OK;
   }
 private:
@@ -2041,7 +2056,8 @@ nsSocketTransport::ReleaseFD_Locked(PRFileDesc *fd)
           SOCKET_LOG(("Intentional leak"));
         } else if (OnSocketThread()) {
             SOCKET_LOG(("nsSocketTransport: calling PR_Close [this=%p]\n", this));
-            CloseSocket(mFD, mSocketTransportService);
+            CloseSocket(mFD,
+                mSocketTransportService->IsTelemetryEnabledAndNotSleepPhase());
         } else {
             // Can't PR_Close() a socket off STS thread. Thunk it to STS to die
             STS_PRCloseOnSocketTransport(mFD);
@@ -2186,9 +2202,9 @@ nsSocketTransport::OnSocketReady(PRFileDesc *fd, int16_t outFlags)
         mFastOpenLayerHasBufferedData = TCPFastOpenFlushBuffer(fd);
         if (mFastOpenLayerHasBufferedData) {
             return;
-        } else {
-            SendStatus(NS_NET_STATUS_SENDING_TO);
         }
+        SendStatus(NS_NET_STATUS_SENDING_TO);
+
         // If we are done sending the buffered data continue with the normal
         // path.
         // In case of an error, TCPFastOpenFlushBuffer will return false and
@@ -2239,9 +2255,9 @@ nsSocketTransport::OnSocketReady(PRFileDesc *fd, int16_t outFlags)
             BOOL option = 0;
             int len = sizeof(option);
             PRInt32 rv = getsockopt((SOCKET)osfd, IPPROTO_TCP, TCP_FASTOPEN, (char*)&option, &len);
-            if ((rv != 0) && !option) {
+            if (!rv && !option) {
                 // On error, I will let the normal necko paths pickup the error.
-                mFastOpenCallback->SetFastOpenStatus(TFO_NOT_TRIED);
+                mFastOpenCallback->SetFastOpenStatus(TFO_DATA_COOKIE_NOT_ACCEPTED);
             }
         }
 #endif
@@ -2333,6 +2349,8 @@ nsSocketTransport::OnSocketDetached(PRFileDesc *fd)
                 this, static_cast<uint32_t>(mCondition)));
 
     MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+    mAttached = false;
 
     // if we didn't initiate this detach, then be sure to pass an error
     // condition up to our consumers.  (e.g., STS is shutting down.)
@@ -2558,6 +2576,9 @@ nsSocketTransport::OpenOutputStream(uint32_t flags,
 NS_IMETHODIMP
 nsSocketTransport::Close(nsresult reason)
 {
+    SOCKET_LOG(("nsSocketTransport::Close %p reason=%" PRIx32,
+                this, static_cast<uint32_t>(reason)));
+
     if (NS_SUCCEEDED(reason))
         reason = NS_BASE_STREAM_CLOSED;
 
@@ -2673,22 +2694,6 @@ NS_IMETHODIMP
 nsSocketTransport::GetPort(int32_t *port)
 {
     *port = (int32_t) SocketPort();
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-nsSocketTransport::GetNetworkInterfaceId(nsACString &aNetworkInterfaceId)
-{
-    MOZ_ASSERT(OnSocketThread(), "not on socket thread");
-    aNetworkInterfaceId = mNetworkInterfaceId;
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-nsSocketTransport::SetNetworkInterfaceId(const nsACString &aNetworkInterfaceId)
-{
-    MOZ_ASSERT(OnSocketThread(), "not on socket thread");
-    mNetworkInterfaceId = aNetworkInterfaceId;
     return NS_OK;
 }
 
@@ -2830,6 +2835,9 @@ NS_IMETHODIMP
 nsSocketTransport::SetTimeout(uint32_t type, uint32_t value)
 {
     NS_ENSURE_ARG_MAX(type, nsISocketTransport::TIMEOUT_READ_WRITE);
+
+    SOCKET_LOG(("nsSocketTransport::SetTimeout %p type=%u, value=%u", this, type, value));
+
     // truncate overly large timeout values.
     mTimeouts[type] = (uint16_t) std::min<uint32_t>(value, UINT16_MAX);
     PostEvent(MSG_TIMEOUT_CHANGED);
@@ -2988,16 +2996,16 @@ nsSocketTransport::GetScriptableHelper(nsIXPCScriptable **_retval)
 }
 
 NS_IMETHODIMP
-nsSocketTransport::GetContractID(char * *aContractID)
+nsSocketTransport::GetContractID(nsACString& aContractID)
 {
-    *aContractID = nullptr;
+    aContractID.SetIsVoid(true);
     return NS_OK;
 }
 
 NS_IMETHODIMP
-nsSocketTransport::GetClassDescription(char * *aClassDescription)
+nsSocketTransport::GetClassDescription(nsACString& aClassDescription)
 {
-    *aClassDescription = nullptr;
+    aClassDescription.SetIsVoid(true);
     return NS_OK;
 }
 
@@ -3032,8 +3040,11 @@ nsSocketTransport::GetConnectionFlags(uint32_t *value)
 NS_IMETHODIMP
 nsSocketTransport::SetConnectionFlags(uint32_t value)
 {
+    SOCKET_LOG(("nsSocketTransport::SetConnectionFlags %p flags=%u", this, value));
+
     mConnectionFlags = value;
     mIsPrivate = value & nsISocketTransport::NO_PERMANENT_STORAGE;
+
     return NS_OK;
 }
 
@@ -3517,10 +3528,8 @@ nsSocketTransport::GetContainsQUIC(bool *aQUIC)
 }
 
 void
-nsSocketTransport::CloseSocket(PRFileDesc *aFd, nsSocketTransportService *aSTS)
+nsSocketTransport::CloseSocket(PRFileDesc *aFd, bool aTelemetryEnabled)
 {
-    bool telemetryEnabled = aSTS->IsTelemetryEnabledAndNotSleepPhase();
-
 #if defined(XP_WIN)
     AttachShutdownLayer(aFd);
 #endif
@@ -3529,67 +3538,14 @@ nsSocketTransport::CloseSocket(PRFileDesc *aFd, nsSocketTransportService *aSTS)
     // nsIOService::LastOfflineStateChange time and
     // nsIOService::LastConectivityChange time to be atomic.
     PRIntervalTime closeStarted;
-    if (telemetryEnabled) {
+    if (aTelemetryEnabled) {
         closeStarted = PR_IntervalNow();
     }
 
-#if defined(_WIN64) && defined(WIN95)
-    bool canClose = false;
-    if (aSTS->HasFileDesc2PlatformOverlappedIOHandleFunc()) {
-      LPOVERLAPPED ol = nullptr;
-      if (aSTS->CallFileDesc2PlatformOverlappedIOHandleFunc(aFd, (void**)&ol) == PR_SUCCESS) {
-        SOCKET_LOG(("nsSocketTransport::CloseSocket - we have an overlapped "
-                    "structure=%p aFd=%p\n", ol, aFd));
-        PROsfd osfd = PR_FileDesc2NativeHandle(aFd);
-        if (telemetryEnabled) {
-            Telemetry::ScalarAdd(Telemetry::ScalarID::NETWORK_TCP_OVERLAPPED_IO_CANCELED_BEFORE_FINISHED, 1);
-        }
-        if (CancelIo((HANDLE) osfd) == TRUE) {
-            SOCKET_LOG(("nsSocketTransport::CloseSocket - "
-                        "CancelIo succeeded\n"));
-        } else {
-            int err = WSAGetLastError();
-            SOCKET_LOG(("nsSocketTransport::CloseSocket - "
-                        "CancelIo failed err=%x\n", err));
-        }
-
-        DWORD rvSent;
-        if (GetOverlappedResult((HANDLE) osfd, ol, &rvSent, FALSE) == TRUE) {
-            SOCKET_LOG(("nsSocketTransport::CloseSocket - "
-                        "GetOverlappedResult done\n"));
-            canClose = true;
-        } else {
-            int err = WSAGetLastError();
-            SOCKET_LOG(("nsSocketTransport::CloseSocket - "
-                        "GetOverlappedResult err=%x\n", err));
-            if (err != ERROR_IO_INCOMPLETE) {
-                canClose = true;
-            }
-        }
-
-      } else {
-        SOCKET_LOG(("nsSocketTransport::CloseSocket - no overlapped struct\n"));
-        canClose = true;
-      }
-    } else {
-      SOCKET_LOG(("nsSocketTransport::CloseSocket - there is no "
-                  "PR_EXPERIMENTAL_ONLY_IN_4_17_GetOverlappedIOHandle function.\n"));
-      canClose = true;
-    }
-
-    if (canClose) {
-        PR_Close(aFd);
-    } else {
-        if (telemetryEnabled) {
-            Telemetry::ScalarAdd(Telemetry::ScalarID::NETWORK_TCP_OVERLAPPED_RESULT_DELAYED, 1);
-        }
-        aSTS->AddOverlappedPendingSocket(aFd);
-    }
-#else
     PR_Close(aFd);
-#endif
 
-    if (telemetryEnabled) {
+
+    if (aTelemetryEnabled) {
         SendPRBlockingTelemetry(closeStarted,
             Telemetry::PRCLOSE_TCP_BLOCKING_TIME_NORMAL,
             Telemetry::PRCLOSE_TCP_BLOCKING_TIME_SHUTDOWN,
@@ -3642,6 +3598,13 @@ NS_IMETHODIMP
 nsSocketTransport::GetFirstRetryError(nsresult *aFirstRetryError)
 {
   *aFirstRetryError = mFirstRetryError;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsSocketTransport::GetResetIPFamilyPreference(bool *aReset)
+{
+  *aReset = mResetFamilyPreference;
   return NS_OK;
 }
 

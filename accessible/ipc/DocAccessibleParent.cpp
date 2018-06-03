@@ -94,10 +94,10 @@ DocAccessibleParent::RecvShowEvent(const ShowEventData& aData,
   uint32_t type = nsIAccessibleEvent::EVENT_SHOW;
   xpcAccessibleGeneric* xpcAcc = GetXPCAccessible(target);
   xpcAccessibleDocument* doc = GetAccService()->GetXPCDocument(this);
-  nsIDOMNode* node = nullptr;
+  nsINode* node = nullptr;
   RefPtr<xpcAccEvent> event = new xpcAccEvent(type, xpcAcc, doc, node,
                                               aFromUser);
-  nsCoreUtils::DispatchAccEvent(Move(event));
+  nsCoreUtils::DispatchAccEvent(std::move(event));
 
   return IPC_OK();
 }
@@ -113,21 +113,14 @@ DocAccessibleParent::AddSubtree(ProxyAccessible* aParent,
   }
 
   const AccessibleData& newChild = aNewTree[aIdx];
-  if (newChild.Role() > roles::LAST_ROLE) {
-    NS_ERROR("invalid role");
-    return 0;
-  }
 
   if (mAccessibles.Contains(newChild.ID())) {
     NS_ERROR("ID already in use");
     return 0;
   }
 
-  auto role = static_cast<a11y::role>(newChild.Role());
-
-  ProxyAccessible* newProxy =
-    new ProxyAccessible(newChild.ID(), aParent, this, role,
-                        newChild.Interfaces());
+  ProxyAccessible* newProxy = new ProxyAccessible(
+    newChild.ID(), aParent, this, newChild.Role(), newChild.Interfaces());
 
   aParent->AddChildAt(aIdxInParent, newProxy);
   mAccessibles.PutEntry(newChild.ID())->mProxy = newProxy;
@@ -192,7 +185,7 @@ DocAccessibleParent::RecvHideEvent(const uint64_t& aRootID,
     ProxyAccessible* prev = root->PrevSibling();
     xpcAccessibleGeneric* xpcPrev = prev ? GetXPCAccessible(prev) : nullptr;
     xpcAccessibleDocument* doc = GetAccService()->GetXPCDocument(this);
-    nsIDOMNode* node = nullptr;
+    nsINode* node = nullptr;
     event = new xpcAccHideEvent(type, xpcAcc, doc, node, aFromUser, xpcParent,
                                 xpcNext, xpcPrev);
   }
@@ -203,7 +196,7 @@ DocAccessibleParent::RecvHideEvent(const uint64_t& aRootID,
   MOZ_ASSERT(CheckDocTree());
 
   if (event) {
-    nsCoreUtils::DispatchAccEvent(Move(event));
+    nsCoreUtils::DispatchAccEvent(std::move(event));
   }
 
   return IPC_OK();
@@ -230,11 +223,11 @@ DocAccessibleParent::RecvEvent(const uint64_t& aID, const uint32_t& aEventType)
 
   xpcAccessibleGeneric* xpcAcc = GetXPCAccessible(proxy);
   xpcAccessibleDocument* doc = GetAccService()->GetXPCDocument(this);
-  nsIDOMNode* node = nullptr;
+  nsINode* node = nullptr;
   bool fromUser = true; // XXX fix me
   RefPtr<xpcAccEvent> event = new xpcAccEvent(aEventType, xpcAcc, doc, node,
                                               fromUser);
-  nsCoreUtils::DispatchAccEvent(Move(event));
+  nsCoreUtils::DispatchAccEvent(std::move(event));
 
   return IPC_OK();
 }
@@ -266,11 +259,11 @@ DocAccessibleParent::RecvStateChangeEvent(const uint64_t& aID,
   bool extra;
   uint32_t state = nsAccUtils::To32States(aState, &extra);
   bool fromUser = true; // XXX fix this
-  nsIDOMNode* node = nullptr; // XXX can we do better?
+  nsINode* node = nullptr; // XXX can we do better?
   RefPtr<xpcAccStateChangeEvent> event =
     new xpcAccStateChangeEvent(type, xpcAcc, doc, node, fromUser, state, extra,
                                aEnabled);
-  nsCoreUtils::DispatchAccEvent(Move(event));
+  nsCoreUtils::DispatchAccEvent(std::move(event));
 
   return IPC_OK();
 }
@@ -304,12 +297,12 @@ DocAccessibleParent::RecvCaretMoveEvent(const uint64_t& aID,
 
   xpcAccessibleGeneric* xpcAcc = GetXPCAccessible(proxy);
   xpcAccessibleDocument* doc = GetAccService()->GetXPCDocument(this);
-  nsIDOMNode* node = nullptr;
+  nsINode* node = nullptr;
   bool fromUser = true; // XXX fix me
   uint32_t type = nsIAccessibleEvent::EVENT_TEXT_CARET_MOVED;
   RefPtr<xpcAccCaretMoveEvent> event =
     new xpcAccCaretMoveEvent(type, xpcAcc, doc, node, fromUser, aOffset);
-  nsCoreUtils::DispatchAccEvent(Move(event));
+  nsCoreUtils::DispatchAccEvent(std::move(event));
 
   return IPC_OK();
 }
@@ -342,11 +335,11 @@ DocAccessibleParent::RecvTextChangeEvent(const uint64_t& aID,
   xpcAccessibleDocument* doc = GetAccService()->GetXPCDocument(this);
   uint32_t type = aIsInsert ? nsIAccessibleEvent::EVENT_TEXT_INSERTED :
                               nsIAccessibleEvent::EVENT_TEXT_REMOVED;
-  nsIDOMNode* node = nullptr;
+  nsINode* node = nullptr;
   RefPtr<xpcAccTextChangeEvent> event =
     new xpcAccTextChangeEvent(type, xpcAcc, doc, node, aFromUser, aStart, aLen,
                               aIsInsert, aStr);
-  nsCoreUtils::DispatchAccEvent(Move(event));
+  nsCoreUtils::DispatchAccEvent(std::move(event));
 
   return IPC_OK();
 }
@@ -390,24 +383,20 @@ DocAccessibleParent::RecvSelectionEvent(const uint64_t& aID,
   xpcAccessibleDocument* xpcDoc = GetAccService()->GetXPCDocument(this);
   RefPtr<xpcAccEvent> event = new xpcAccEvent(aType, xpcTarget, xpcDoc,
                                               nullptr, false);
-  nsCoreUtils::DispatchAccEvent(Move(event));
+  nsCoreUtils::DispatchAccEvent(std::move(event));
 
   return IPC_OK();
 }
 
 mozilla::ipc::IPCResult
-DocAccessibleParent::RecvRoleChangedEvent(const uint32_t& aRole)
+DocAccessibleParent::RecvRoleChangedEvent(const a11y::role& aRole)
 {
   if (mShutdown) {
     return IPC_OK();
   }
 
- if (aRole > roles::LAST_ROLE) {
-   return IPC_FAIL(this, "Child sent bad role in RoleChangedEvent");
- }
-
- mRole = static_cast<a11y::role>(aRole);
- return IPC_OK();
+  mRole = aRole;
+  return IPC_OK();
 }
 
 mozilla::ipc::IPCResult
@@ -623,8 +612,8 @@ DocAccessibleParent::MaybeInitWindowEmulation()
   if (Compatibility::IsDolphin()) {
     rect = Bounds();
     nsIntRect rootRect = rootDocument->Bounds();
-    rect.x = rootRect.x - rect.x;
-    rect.y -= rootRect.y;
+    rect.MoveToX(rootRect.X() - rect.X());
+    rect.MoveToY(rect.Y() - rootRect.Y());
 
     auto tab = static_cast<dom::TabParent*>(Manager());
     tab->GetDocShellIsActive(&isActive);
@@ -642,7 +631,7 @@ DocAccessibleParent::MaybeInitWindowEmulation()
                                                IID_IAccessible,
                                                getter_AddRefs(hwndAcc)))) {
       RefPtr<IDispatch> wrapped(mscom::PassthruProxy::Wrap<IDispatch>(WrapNotNull(hwndAcc)));
-      hWndAccHolder.Set(IDispatchHolder::COMPtrType(mscom::ToProxyUniquePtr(Move(wrapped))));
+      hWndAccHolder.Set(IDispatchHolder::COMPtrType(mscom::ToProxyUniquePtr(std::move(wrapped))));
     }
 
     Unused << SendEmulatedWindow(reinterpret_cast<uintptr_t>(mEmulatedWindowHandle),
@@ -652,8 +641,8 @@ DocAccessibleParent::MaybeInitWindowEmulation()
   HWND parentWnd = reinterpret_cast<HWND>(rootDocument->GetNativeWindow());
   DebugOnly<HWND> hWnd = nsWinUtils::CreateNativeWindow(kClassNameTabContent,
                                                         parentWnd,
-                                                        rect.x, rect.y,
-                                                        rect.width, rect.height,
+                                                        rect.X(), rect.Y(),
+                                                        rect.Width(), rect.Height(),
                                                         isActive, &onCreate);
   MOZ_ASSERT(hWnd);
 }
@@ -682,14 +671,14 @@ DocAccessibleParent::SendParentCOMProxy()
 
   RefPtr<IDispatch> wrapped(mscom::PassthruProxy::Wrap<IDispatch>(WrapNotNull(nativeAcc)));
 
-  IDispatchHolder::COMPtrType ptr(mscom::ToProxyUniquePtr(Move(wrapped)));
-  IDispatchHolder holder(Move(ptr));
+  IDispatchHolder::COMPtrType ptr(mscom::ToProxyUniquePtr(std::move(wrapped)));
+  IDispatchHolder holder(std::move(ptr));
   if (!PDocAccessibleParent::SendParentCOMProxy(holder)) {
     return;
   }
 
 #if defined(MOZ_CONTENT_SANDBOX)
-  mParentProxyStream = Move(holder.GetPreservedStream());
+  mParentProxyStream = std::move(holder.GetPreservedStream());
 #endif // defined(MOZ_CONTENT_SANDBOX)
 }
 
@@ -756,11 +745,11 @@ DocAccessibleParent::RecvFocusEvent(const uint64_t& aID,
 
   xpcAccessibleGeneric* xpcAcc = GetXPCAccessible(proxy);
   xpcAccessibleDocument* doc = GetAccService()->GetXPCDocument(this);
-  nsIDOMNode* node = nullptr;
+  nsINode* node = nullptr;
   bool fromUser = true; // XXX fix me
   RefPtr<xpcAccEvent> event = new xpcAccEvent(nsIAccessibleEvent::EVENT_FOCUS,
                                               xpcAcc, doc, node, fromUser);
-  nsCoreUtils::DispatchAccEvent(Move(event));
+  nsCoreUtils::DispatchAccEvent(std::move(event));
 
   return IPC_OK();
 }

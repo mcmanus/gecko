@@ -21,6 +21,7 @@
 #include "nsThreadManager.h"
 #include "PrioritizedEventQueue.h"
 #include "xpcpublic.h"
+#include "xpccomponents.h"
 
 // Windows silliness. winbase.h defines an empty no-argument Yield macro.
 #undef Yield
@@ -38,7 +39,7 @@ public:
   explicit SchedulerEventQueue(UniquePtr<AbstractEventQueue> aQueue)
     : mLock("Scheduler")
     , mNonCooperativeCondVar(mLock, "SchedulerNonCoop")
-    , mQueue(Move(aQueue))
+    , mQueue(std::move(aQueue))
     , mScheduler(nullptr)
   {}
 
@@ -93,6 +94,7 @@ public:
   explicit SchedulerImpl(SchedulerEventQueue* aQueue);
 
   void Start();
+  void Stop(already_AddRefed<nsIRunnable> aStoppedCallback);
   void Shutdown();
 
   void Dispatch(already_AddRefed<nsIRunnable> aEvent);
@@ -118,11 +120,13 @@ public:
   static bool UnlabeledEventRunning() { return sUnlabeledEventRunning; }
   static bool AnyEventRunning() { return sNumThreadsRunning > 0; }
 
+  void BlockThreadedExecution(nsIBlockThreadedExecutionCallback* aCallback);
+  void UnblockThreadedExecution();
+
   CooperativeThreadPool::Resource* GetQueueResource() { return &mQueueResource; }
   bool UseCooperativeScheduling() const { return mQueue->UseCooperativeScheduling(); }
 
   // Preferences.
-  static bool sPrefScheduler;
   static bool sPrefChaoticScheduling;
   static bool sPrefPreemption;
   static size_t sPrefThreadCount;
@@ -142,6 +146,9 @@ private:
   CondVar mShutdownCondVar;
 
   bool mShuttingDown;
+
+  // Runnable to call when the scheduler has finished shutting down.
+  nsTArray<nsCOMPtr<nsIRunnable>> mShutdownCallbacks;
 
   UniquePtr<CooperativeThreadPool> mThreadPool;
 
@@ -202,10 +209,14 @@ private:
   static size_t sNumThreadsRunning;
   static bool sUnlabeledEventRunning;
 
+  // Number of times that BlockThreadedExecution has been called without
+  // corresponding calls to UnblockThreadedExecution. If this is non-zero,
+  // scheduling is disabled.
+  size_t mNumSchedulerBlocks = 0;
+
   JSContext* mContexts[CooperativeThreadPool::kMaxThreads];
 };
 
-bool SchedulerImpl::sPrefScheduler = false;
 bool SchedulerImpl::sPrefChaoticScheduling = false;
 bool SchedulerImpl::sPrefPreemption = false;
 bool SchedulerImpl::sPrefUseMultipleQueues = false;
@@ -220,7 +231,7 @@ SchedulerEventQueue::PutEvent(already_AddRefed<nsIRunnable>&& aEvent,
 {
   // We want to leak the reference when we fail to dispatch it, so that
   // we won't release the event in a wrong thread.
-  LeakRefPtr<nsIRunnable> event(Move(aEvent));
+  LeakRefPtr<nsIRunnable> event(std::move(aEvent));
   nsCOMPtr<nsIThreadObserver> obs;
 
   {
@@ -327,14 +338,14 @@ already_AddRefed<nsIThreadObserver>
 SchedulerEventQueue::GetObserver()
 {
   MutexAutoLock lock(mLock);
-  return do_AddRef(mObserver.get());
+  return do_AddRef(mObserver);
 }
 
 already_AddRefed<nsIThreadObserver>
 SchedulerEventQueue::GetObserverOnThread()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  return do_AddRef(mObserver.get());
+  return do_AddRef(mObserver);
 }
 
 void
@@ -430,7 +441,7 @@ SchedulerImpl::Switcher()
       }
     }
 
-    mShutdownCondVar.Wait(PR_MicrosecondsToInterval(50));
+    mShutdownCondVar.Wait(TimeDuration::FromMicroseconds(50));
   }
 }
 
@@ -443,6 +454,8 @@ SchedulerImpl::SwitcherThread(void* aData)
 void
 SchedulerImpl::Start()
 {
+  MOZ_ASSERT(mNumSchedulerBlocks == 0);
+
   NS_DispatchToMainThread(NS_NewRunnableFunction("Scheduler::Start", [this]() -> void {
     // Let's pretend the runnable here isn't actually running.
     MOZ_ASSERT(sUnlabeledEventRunning);
@@ -492,16 +505,40 @@ SchedulerImpl::Start()
     MOZ_ASSERT(sNumThreadsRunning == 0);
     sNumThreadsRunning = 1;
 
-    // Delete the SchedulerImpl. Don't use it after this point.
-    Scheduler::sScheduler = nullptr;
+    mShuttingDown = false;
+    nsTArray<nsCOMPtr<nsIRunnable>> callbacks = std::move(mShutdownCallbacks);
+    for (nsIRunnable* runnable : callbacks) {
+      runnable->Run();
+    }
   }));
+}
+
+void
+SchedulerImpl::Stop(already_AddRefed<nsIRunnable> aStoppedCallback)
+{
+  MOZ_ASSERT(mNumSchedulerBlocks > 0);
+
+  // Note that this may be called when mShuttingDown is already true. We still
+  // want to invoke the callback in that case.
+
+  MutexAutoLock lock(mLock);
+  mShuttingDown = true;
+  mShutdownCallbacks.AppendElement(aStoppedCallback);
+  mShutdownCondVar.Notify();
 }
 
 void
 SchedulerImpl::Shutdown()
 {
+  MOZ_ASSERT(mNumSchedulerBlocks == 0);
+
   MutexAutoLock lock(mLock);
   mShuttingDown = true;
+
+  // Delete the SchedulerImpl once shutdown is complete.
+  mShutdownCallbacks.AppendElement(NS_NewRunnableFunction("SchedulerImpl::Shutdown",
+                                                          [] { Scheduler::sScheduler = nullptr; }));
+
   mShutdownCondVar.Notify();
 }
 
@@ -519,7 +556,9 @@ SchedulerImpl::SystemZoneResource::IsAvailable(const MutexAutoLock& aProofOfLock
 {
   mScheduler->mLock.AssertCurrentThreadOwns();
 
-  JSContext* cx = dom::danger::GetJSContext();
+  // It doesn't matter which context we pick; we really just some main-thread
+  // JSContext.
+  JSContext* cx = mScheduler->mContexts[0];
   return js::SystemZoneAvailable(cx);
 }
 
@@ -644,7 +683,6 @@ SchedulerImpl::ThreadController::OnStartThread(size_t aIndex, const nsACString& 
   if (sPrefPreemption) {
     JS_AddInterruptCallback(cx, SchedulerImpl::InterruptCallback);
   }
-  js::SetCooperativeYieldCallback(cx, SchedulerImpl::YieldCallback);
   Servo_InitializeCooperativeThread();
 }
 
@@ -679,6 +717,27 @@ SchedulerImpl::Yield()
 {
   MutexAutoLock lock(mLock);
   CooperativeThreadPool::Yield(nullptr, lock);
+}
+
+void
+SchedulerImpl::BlockThreadedExecution(nsIBlockThreadedExecutionCallback* aCallback)
+{
+  if (mNumSchedulerBlocks++ == 0 || mShuttingDown) {
+    Stop(NewRunnableMethod("BlockThreadedExecution", aCallback,
+                           &nsIBlockThreadedExecutionCallback::Callback));
+  } else {
+    // The scheduler is already blocked.
+    nsCOMPtr<nsIBlockThreadedExecutionCallback> kungFuDeathGrip(aCallback);
+    aCallback->Callback();
+  }
+}
+
+void
+SchedulerImpl::UnblockThreadedExecution()
+{
+  if (--mNumSchedulerBlocks == 0) {
+    Start();
+  }
 }
 
 /* static */ already_AddRefed<nsThread>
@@ -717,8 +776,7 @@ Scheduler::GetPrefs()
 {
   MOZ_ASSERT(XRE_IsParentProcess());
   nsPrintfCString result("%d%d%d%d,%d",
-                         Preferences::GetBool("dom.ipc.scheduler",
-                                              SchedulerImpl::sPrefScheduler),
+                         false, // XXX The scheduler is always disabled.
                          Preferences::GetBool("dom.ipc.scheduler.chaoticScheduling",
                                               SchedulerImpl::sPrefChaoticScheduling),
                          Preferences::GetBool("dom.ipc.scheduler.preemption",
@@ -746,7 +804,6 @@ Scheduler::SetPrefs(const char* aPrefs)
     return;
   }
 
-  SchedulerImpl::sPrefScheduler = aPrefs[0] == '1';
   SchedulerImpl::sPrefChaoticScheduling = aPrefs[1] == '1';
   SchedulerImpl::sPrefPreemption = aPrefs[2] == '1';
   SchedulerImpl::sPrefUseMultipleQueues = aPrefs[3] == '1';
@@ -757,7 +814,8 @@ Scheduler::SetPrefs(const char* aPrefs)
 /* static */ bool
 Scheduler::IsSchedulerEnabled()
 {
-  return SchedulerImpl::sPrefScheduler;
+  // XXX We never enable the scheduler because it will crash immediately.
+  return false;
 }
 
 /* static */ bool
@@ -788,4 +846,26 @@ Scheduler::UnlabeledEventRunning()
 Scheduler::AnyEventRunning()
 {
   return SchedulerImpl::AnyEventRunning();
+}
+
+/* static */ void
+Scheduler::BlockThreadedExecution(nsIBlockThreadedExecutionCallback* aCallback)
+{
+  if (!sScheduler) {
+    nsCOMPtr<nsIBlockThreadedExecutionCallback> kungFuDeathGrip(aCallback);
+    aCallback->Callback();
+    return;
+  }
+
+  sScheduler->BlockThreadedExecution(aCallback);
+}
+
+/* static */ void
+Scheduler::UnblockThreadedExecution()
+{
+  if (!sScheduler) {
+    return;
+  }
+
+  sScheduler->UnblockThreadedExecution();
 }

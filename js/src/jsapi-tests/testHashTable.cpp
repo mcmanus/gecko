@@ -312,7 +312,7 @@ struct MoveOnlyType {
     MoveOnlyType& operator=(MoveOnlyType&& rhs) {
         MOZ_ASSERT(&rhs != this);
         this->~MoveOnlyType();
-        new(this) MoveOnlyType(mozilla::Move(rhs));
+        new(this) MoveOnlyType(std::move(rhs));
         return *this;
     }
 
@@ -342,7 +342,7 @@ BEGIN_TEST(testHashSetOfMoveOnlyType)
 
     MoveOnlyType a(1);
 
-    CHECK(set.put(mozilla::Move(a))); // This shouldn't generate a compiler error.
+    CHECK(set.put(std::move(a))); // This shouldn't generate a compiler error.
 
     return true;
 }
@@ -381,7 +381,7 @@ BEGIN_TEST(testHashMapLookupWithDefaultOOM)
 {
     uint32_t timeToFail;
     for (timeToFail = 1; timeToFail < 1000; timeToFail++) {
-        js::oom::SimulateOOMAfter(timeToFail, js::THREAD_TYPE_COOPERATING, false);
+        js::oom::SimulateOOMAfter(timeToFail, js::THREAD_TYPE_MAIN, false);
         LookupWithDefaultUntilResize();
     }
 
@@ -394,12 +394,13 @@ END_TEST(testHashMapLookupWithDefaultOOM)
 
 BEGIN_TEST(testHashTableMovableEnum)
 {
+    IntSet set;
     CHECK(set.init());
 
     // Exercise returning a hash table Enum object from a function.
 
     CHECK(set.put(1));
-    for (auto e = enumerateSet(); !e.empty(); e.popFront())
+    for (auto e = enumerateSet(set); !e.empty(); e.popFront())
         e.removeFront();
     CHECK(set.count() == 0);
 
@@ -415,7 +416,7 @@ BEGIN_TEST(testHashTableMovableEnum)
         e1.removeFront();
         e1.popFront();
 
-        auto e2 = mozilla::Move(e1);
+        auto e2 = std::move(e1);
         CHECK(!e2.empty());
         e2.removeFront();
         e2.popFront();
@@ -425,9 +426,7 @@ BEGIN_TEST(testHashTableMovableEnum)
     return true;
 }
 
-IntSet set;
-
-IntSet::Enum enumerateSet()
+IntSet::Enum enumerateSet(IntSet& set)
 {
     return IntSet::Enum(set);
 }

@@ -19,9 +19,10 @@
 #include "jspubtd.h"
 
 #include "js/GCAnnotations.h"
-#include "js/GCAPI.h"
 #include "js/GCPolicyAPI.h"
 #include "js/HeapAPI.h"
+#include "js/ProfilingStack.h"
+#include "js/Realm.h"
 #include "js/TypeDecls.h"
 #include "js/UniquePtr.h"
 #include "js/Utility.h"
@@ -169,7 +170,7 @@ struct PersistentRootedMarker;
         return *this;                                                                             \
     }                                                                                             \
     Wrapper<T>& operator=(T&& p) {                                                                \
-        set(mozilla::Move(p));                                                                    \
+        set(std::move(p));                                                                    \
         return *this;                                                                             \
     }                                                                                             \
     Wrapper<T>& operator=(const Wrapper<T>& other) {                                              \
@@ -196,10 +197,42 @@ namespace JS {
 template <typename T> class Rooted;
 template <typename T> class PersistentRooted;
 
-/* This is exposing internal state of the GC for inlining purposes. */
-JS_FRIEND_API(bool) isGCEnabled();
-
 JS_FRIEND_API(void) HeapObjectPostBarrier(JSObject** objp, JSObject* prev, JSObject* next);
+JS_FRIEND_API(void) HeapStringPostBarrier(JSString** objp, JSString* prev, JSString* next);
+
+/**
+ * Create a safely-initialized |T|, suitable for use as a default value in
+ * situations requiring a safe but arbitrary |T| value.
+ */
+template<typename T>
+inline T
+SafelyInitialized()
+{
+    // This function wants to presume that |T()| -- which value-initializes a
+    // |T| per C++11 [expr.type.conv]p2 -- will produce a safely-initialized,
+    // safely-usable T that it can return.
+
+#if defined(XP_WIN) || defined(XP_MACOSX) || (defined(XP_UNIX) && !defined(__clang__))
+
+    // That presumption holds for pointers, where value initialization produces
+    // a null pointer.
+    constexpr bool IsPointer = std::is_pointer<T>::value;
+
+    // For classes and unions we *assume* that if |T|'s default constructor is
+    // non-trivial it'll initialize correctly. (This is unideal, but C++
+    // doesn't offer a type trait indicating whether a class's constructor is
+    // user-defined, which better approximates our desired semantics.)
+    constexpr bool IsNonTriviallyDefaultConstructibleClassOrUnion =
+        (std::is_class<T>::value || std::is_union<T>::value) &&
+        !std::is_trivially_default_constructible<T>::value;
+
+    static_assert(IsPointer || IsNonTriviallyDefaultConstructibleClassOrUnion,
+                  "T() must evaluate to a safely-initialized T");
+
+#endif
+
+    return T();
+}
 
 #ifdef JS_DEBUG
 /**
@@ -209,12 +242,12 @@ JS_FRIEND_API(void) HeapObjectPostBarrier(JSObject** objp, JSObject* prev, JSObj
 extern JS_FRIEND_API(void)
 AssertGCThingMustBeTenured(JSObject* obj);
 extern JS_FRIEND_API(void)
-AssertGCThingIsNotAnObjectSubclass(js::gc::Cell* cell);
+AssertGCThingIsNotNurseryAllocable(js::gc::Cell* cell);
 #else
 inline void
 AssertGCThingMustBeTenured(JSObject* obj) {}
 inline void
-AssertGCThingIsNotAnObjectSubclass(js::gc::Cell* cell) {}
+AssertGCThingIsNotNurseryAllocable(js::gc::Cell* cell) {}
 #endif
 
 /**
@@ -237,7 +270,7 @@ AssertGCThingIsNotAnObjectSubclass(js::gc::Cell* cell) {}
  * Type T must be a public GC pointer type.
  */
 template <typename T>
-class Heap : public js::HeapBase<T, Heap<T>>
+class MOZ_NON_MEMMOVABLE Heap : public js::HeapBase<T, Heap<T>>
 {
     // Please note: this can actually also be used by nsXBLMaybeCompiled<T>, for legacy reasons.
     static_assert(js::IsHeapConstructibleType<T>::value,
@@ -248,7 +281,7 @@ class Heap : public js::HeapBase<T, Heap<T>>
     Heap() {
         static_assert(sizeof(T) == sizeof(Heap<T>),
                       "Heap<T> must be binary compatible with T.");
-        init(GCPolicy<T>::initial());
+        init(SafelyInitialized<T>());
     }
     explicit Heap(const T& p) { init(p); }
 
@@ -261,7 +294,7 @@ class Heap : public js::HeapBase<T, Heap<T>>
     explicit Heap(const Heap<T>& p) { init(p.ptr); }
 
     ~Heap() {
-        post(ptr, GCPolicy<T>::initial());
+        post(ptr, SafelyInitialized<T>());
     }
 
     DECLARE_POINTER_CONSTREF_OPS(T);
@@ -292,7 +325,7 @@ class Heap : public js::HeapBase<T, Heap<T>>
   private:
     void init(const T& newPtr) {
         ptr = newPtr;
-        post(GCPolicy<T>::initial(), ptr);
+        post(SafelyInitialized<T>(), ptr);
     }
 
     void set(const T& newPtr) {
@@ -581,7 +614,7 @@ class MOZ_STACK_CLASS MutableHandle : public js::MutableHandleBase<T, MutableHan
         MOZ_ASSERT(GCPolicy<T>::isValid(*ptr));
     }
     void set(T&& v) {
-        *ptr = mozilla::Move(v);
+        *ptr = std::move(v);
         MOZ_ASSERT(GCPolicy<T>::isValid(*ptr));
     }
 
@@ -625,7 +658,7 @@ struct BarrierMethods<T*>
     }
     static void postBarrier(T** vp, T* prev, T* next) {
         if (next)
-            JS::AssertGCThingIsNotAnObjectSubclass(reinterpret_cast<js::gc::Cell*>(next));
+            JS::AssertGCThingIsNotNurseryAllocable(reinterpret_cast<js::gc::Cell*>(next));
     }
     static void exposeToJS(T* t) {
         if (t)
@@ -670,6 +703,25 @@ struct BarrierMethods<JSFunction*>
     static void exposeToJS(JSFunction* fun) {
         if (fun)
             JS::ExposeObjectToActiveJS(reinterpret_cast<JSObject*>(fun));
+    }
+};
+
+template <>
+struct BarrierMethods<JSString*>
+{
+    static JSString* initial() { return nullptr; }
+    static gc::Cell* asGCThingOrNull(JSString* v) {
+        if (!v)
+            return nullptr;
+        MOZ_ASSERT(uintptr_t(v) > 32);
+        return reinterpret_cast<gc::Cell*>(v);
+    }
+    static void postBarrier(JSString** vp, JSString* prev, JSString* next) {
+        JS::HeapStringPostBarrier(vp, prev, next);
+    }
+    static void exposeToJS(JSString* v) {
+        if (v)
+            js::gc::ExposeGCThingToActiveJS(JS::GCCellPtr(v));
     }
 };
 
@@ -771,6 +823,124 @@ class alignas(8) DispatchWrapper
 
 namespace JS {
 
+class JS_PUBLIC_API(AutoGCRooter);
+
+// Our instantiations of Rooted<void*> and PersistentRooted<void*> require an
+// instantiation of MapTypeToRootKind.
+template <>
+struct MapTypeToRootKind<void*> {
+    static const RootKind kind = RootKind::Traceable;
+};
+
+using RootedListHeads = mozilla::EnumeratedArray<RootKind, RootKind::Limit,
+                                                 Rooted<void*>*>;
+
+// Superclass of JSContext which can be used for rooting data in use by the
+// current thread but that does not provide all the functions of a JSContext.
+class RootingContext
+{
+    // Stack GC roots for Rooted GC heap pointers.
+    RootedListHeads stackRoots_;
+    template <typename T> friend class JS::Rooted;
+
+    // Stack GC roots for AutoFooRooter classes.
+    JS::AutoGCRooter* autoGCRooters_;
+    friend class JS::AutoGCRooter;
+
+    // Gecko profiling metadata.
+    // This isn't really rooting related. It's only here because we want
+    // GetContextProfilingStack to be inlineable into non-JS code, and we
+    // didn't want to add another superclass of JSContext just for this.
+    js::GeckoProfilerThread geckoProfiler_;
+
+  public:
+    RootingContext();
+
+    void traceStackRoots(JSTracer* trc);
+    void checkNoGCRooters();
+
+    js::GeckoProfilerThread& geckoProfiler() { return geckoProfiler_; }
+
+  protected:
+    // The remaining members in this class should only be accessed through
+    // JSContext pointers. They are unrelated to rooting and are in place so
+    // that inlined API functions can directly access the data.
+
+    /* The current realm. */
+    JS::Realm*          realm_;
+
+    /* The current zone. */
+    JS::Zone*           zone_;
+
+  public:
+    /* Limit pointer for checking native stack consumption. */
+    uintptr_t nativeStackLimit[StackKindCount];
+
+    static const RootingContext* get(const JSContext* cx) {
+        return reinterpret_cast<const RootingContext*>(cx);
+    }
+
+    static RootingContext* get(JSContext* cx) {
+        return reinterpret_cast<RootingContext*>(cx);
+    }
+
+    friend JS::Realm* js::GetContextRealm(const JSContext* cx);
+    friend JS::Zone* js::GetContextZone(const JSContext* cx);
+};
+
+class JS_PUBLIC_API(AutoGCRooter)
+{
+  protected:
+    enum class Tag : uint8_t {
+        Array,          /* js::AutoArrayRooter */
+        ValueArray,     /* js::AutoValueArray */
+        Parser,         /* js::frontend::Parser */
+#if defined(JS_BUILD_BINAST)
+        BinParser,      /* js::frontend::BinSource */
+#endif // defined(JS_BUILD_BINAST)
+        WrapperVector,  /* js::AutoWrapperVector */
+        Wrapper,        /* js::AutoWrapperRooter */
+        Custom          /* js::CustomAutoRooter */
+  };
+
+  public:
+    AutoGCRooter(JSContext* cx, Tag tag)
+      : AutoGCRooter(JS::RootingContext::get(cx), tag)
+    {}
+    AutoGCRooter(JS::RootingContext* cx, Tag tag)
+      : down(cx->autoGCRooters_),
+        stackTop(&cx->autoGCRooters_),
+        tag_(tag)
+    {
+        MOZ_ASSERT(this != *stackTop);
+        *stackTop = this;
+    }
+
+    ~AutoGCRooter() {
+        MOZ_ASSERT(this == *stackTop);
+        *stackTop = down;
+    }
+
+    /* Implemented in gc/RootMarking.cpp. */
+    inline void trace(JSTracer* trc);
+    static void traceAll(JSContext* cx, JSTracer* trc);
+    static void traceAllWrappers(JSContext* cx, JSTracer* trc);
+
+  private:
+    AutoGCRooter* const down;
+    AutoGCRooter** const stackTop;
+
+    /*
+     * Discriminates actual subclass of this being used. The meaning is
+     * indicated by the corresponding value in the Tag enum.
+     */
+    Tag tag_;
+
+    /* No copy or assignment semantics. */
+    AutoGCRooter(AutoGCRooter& ida) = delete;
+    void operator=(AutoGCRooter& ida) = delete;
+};
+
 namespace detail {
 
 /*
@@ -818,7 +988,7 @@ class MOZ_RAII Rooted : public js::RootedBase<T, Rooted<T>>
 
     template <typename RootingContext>
     explicit Rooted(const RootingContext& cx)
-      : ptr(GCPolicy<T>::initial())
+      : ptr(SafelyInitialized<T>())
     {
         registerWithRootLists(rootLists(cx));
     }
@@ -847,7 +1017,7 @@ class MOZ_RAII Rooted : public js::RootedBase<T, Rooted<T>>
         MOZ_ASSERT(GCPolicy<T>::isValid(ptr));
     }
     void set(T&& value) {
-        ptr = mozilla::Move(value);
+        ptr = std::move(value);
         MOZ_ASSERT(GCPolicy<T>::isValid(ptr));
     }
 
@@ -873,6 +1043,40 @@ class MOZ_RAII Rooted : public js::RootedBase<T, Rooted<T>>
 } /* namespace JS */
 
 namespace js {
+
+/*
+ * Inlinable accessors for JSContext.
+ *
+ * - These must not be available on the more restricted superclasses of
+ *   JSContext, so we can't simply define them on RootingContext.
+ *
+ * - They're perfectly ordinary JSContext functionality, so ought to be
+ *   usable without resorting to jsfriendapi.h, and when JSContext is an
+ *   incomplete type.
+ */
+inline JS::Realm*
+GetContextRealm(const JSContext* cx)
+{
+    return JS::RootingContext::get(cx)->realm_;
+}
+
+inline JSCompartment*
+GetContextCompartment(const JSContext* cx)
+{
+    return GetCompartmentForRealm(GetContextRealm(cx));
+}
+
+inline JS::Zone*
+GetContextZone(const JSContext* cx)
+{
+    return JS::RootingContext::get(cx)->zone_;
+}
+
+inline ProfilingStack*
+GetContextProfilingStack(JSContext* cx)
+{
+    return JS::RootingContext::get(cx)->geckoProfiler().getProfilingStack();
+}
 
 /**
  * Augment the generic Rooted<T> interface when T = JSObject* with
@@ -1059,16 +1263,16 @@ class PersistentRooted : public js::RootedBase<T, PersistentRooted<T>>,
   public:
     using ElementType = T;
 
-    PersistentRooted() : ptr(GCPolicy<T>::initial()) {}
+    PersistentRooted() : ptr(SafelyInitialized<T>()) {}
 
     explicit PersistentRooted(RootingContext* cx)
-      : ptr(GCPolicy<T>::initial())
+      : ptr(SafelyInitialized<T>())
     {
         registerWithRootLists(cx);
     }
 
     explicit PersistentRooted(JSContext* cx)
-      : ptr(GCPolicy<T>::initial())
+      : ptr(SafelyInitialized<T>())
     {
         registerWithRootLists(RootingContext::get(cx));
     }
@@ -1088,7 +1292,7 @@ class PersistentRooted : public js::RootedBase<T, PersistentRooted<T>>,
     }
 
     explicit PersistentRooted(JSRuntime* rt)
-      : ptr(GCPolicy<T>::initial())
+      : ptr(SafelyInitialized<T>())
     {
         registerWithRootLists(rt);
     }
@@ -1120,7 +1324,7 @@ class PersistentRooted : public js::RootedBase<T, PersistentRooted<T>>,
     }
 
     void init(JSContext* cx) {
-        init(cx, GCPolicy<T>::initial());
+        init(cx, SafelyInitialized<T>());
     }
 
     template <typename U>
@@ -1131,7 +1335,7 @@ class PersistentRooted : public js::RootedBase<T, PersistentRooted<T>>,
 
     void reset() {
         if (initialized()) {
-            set(GCPolicy<T>::initial());
+            set(SafelyInitialized<T>());
             ListBase::remove();
         }
     }
@@ -1172,6 +1376,14 @@ class JS_PUBLIC_API(ObjectPtr)
     ObjectPtr() : value(nullptr) {}
 
     explicit ObjectPtr(JSObject* obj) : value(obj) {}
+
+    ObjectPtr(const ObjectPtr& other) : value(other.value) {}
+
+    ObjectPtr(ObjectPtr&& other)
+      : value(other.value)
+    {
+        other.value = nullptr;
+    }
 
     /* Always call finalize before the destructor. */
     ~ObjectPtr() { MOZ_ASSERT(!value); }

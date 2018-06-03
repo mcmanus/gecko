@@ -21,6 +21,8 @@ SEC_BEGIN_PROTOS
     (SSL_GetExperimentalAPI(name)                                   \
          ? ((SECStatus(*) arglist)SSL_GetExperimentalAPI(name))args \
          : SECFailure)
+#define SSL_DEPRECATED_EXPERIMENTAL_API \
+    (PR_SetError(SSL_ERROR_UNSUPPORTED_EXPERIMENTAL_API, 0), SECFailure)
 
 /*
  * SSL_GetExtensionSupport() returns whether NSS supports a particular TLS
@@ -338,15 +340,121 @@ typedef SSLHelloRetryRequestAction(PR_CALLBACK *SSLHelloRetryRequestCallback)(
                           SSLHelloRetryRequestCallback _cb, void *_arg), \
                          (fd, cb, arg))
 
-/* Allow the ServerHello to be record type 24. Experiment to test:
- * https://github.com/tlswg/tls13-spec/pull/1051
- * This will either become part of the standard or be disabled
- * after we have tested it.
+/* Update traffic keys (TLS 1.3 only).
+ *
+ * The |requestUpdate| flag determines whether to request an update from the
+ * remote peer.
  */
-#define SSL_UseAltServerHelloType(fd, enable)                \
-    SSL_EXPERIMENTAL_API("SSL_UseAltServerHelloType",        \
-                         (PRFileDesc * _fd, PRBool _enable), \
-                         (fd, enable))
+#define SSL_KeyUpdate(fd, requestUpdate)                            \
+    SSL_EXPERIMENTAL_API("SSL_KeyUpdate",                           \
+                         (PRFileDesc * _fd, PRBool _requestUpdate), \
+                         (fd, requestUpdate))
+
+/*
+ * Session cache API.
+ */
+
+/*
+ * Information that can be retrieved about a resumption token.
+ * See SSL_GetResumptionTokenInfo for details about how to use this API.
+ * Note that peerCert points to a certificate in the NSS database and must be
+ * copied by the application if it should be used after NSS shutdown or after
+ * calling SSL_DestroyResumptionTokenInfo.
+ */
+typedef struct SSLResumptionTokenInfoStr {
+    PRUint16 length;
+    CERTCertificate *peerCert;
+    PRUint8 *alpnSelection;
+    PRUint32 alpnSelectionLen;
+    PRUint32 maxEarlyDataSize;
+} SSLResumptionTokenInfo;
+
+/*
+ * Allows applications to retrieve information about a resumption token.
+ * This does not require a TLS session.
+ *
+ * - The |tokenData| argument is a pointer to the resumption token as byte array
+ *   of length |tokenLen|.
+ * - The |token| argument is a pointer to a SSLResumptionTokenInfo struct of
+ *   of |len|. The struct gets filled by this function.
+ * See SSL_DestroyResumptionTokenInfo for information about how to manage the
+ * |token| memory.
+ */
+#define SSL_GetResumptionTokenInfo(tokenData, tokenLen, token, len)          \
+    SSL_EXPERIMENTAL_API("SSL_GetResumptionTokenInfo",                       \
+                         (const PRUint8 *_tokenData, unsigned int _tokenLen, \
+                          SSLResumptionTokenInfo *_token, PRUintn _len),     \
+                         (tokenData, tokenLen, token, len))
+
+/*
+ * SSL_GetResumptionTokenInfo allocates memory in order to populate |tokenInfo|.
+ * Any SSLResumptionTokenInfo struct filled with SSL_GetResumptionTokenInfo
+ * has to be freed with SSL_DestroyResumptionTokenInfo.
+ */
+#define SSL_DestroyResumptionTokenInfo(tokenInfo) \
+    SSL_EXPERIMENTAL_API(                         \
+        "SSL_DestroyResumptionTokenInfo",         \
+        (SSLResumptionTokenInfo * _tokenInfo),    \
+        (tokenInfo))
+
+/*
+ * This is the function signature for function pointers used as resumption
+ * token callback. The caller has to copy the memory at |resumptionToken| with
+ * length |len| before returning.
+ *
+ * - The |fd| argument is the socket file descriptor.
+ * - The |resumptionToken| is a pointer to the resumption token as byte array
+ *   of length |len|.
+ * - The |ctx| is a void pointer to the context set by the application in
+ *   SSL_SetResumptionTokenCallback.
+ */
+typedef SECStatus(PR_CALLBACK *SSLResumptionTokenCallback)(
+    PRFileDesc *fd, const PRUint8 *resumptionToken, unsigned int len,
+    void *ctx);
+
+/*
+ * This allows setting a callback for external session caches to store
+ * resumption tokens.
+ *
+ * - The |fd| argument is the socket file descriptor.
+ * - The |cb| is a function pointer to an implementation of
+ *   SSLResumptionTokenCallback.
+ * - The |ctx| is a pointer to some application specific context, which is
+ *   returned when |cb| is called.
+ */
+#define SSL_SetResumptionTokenCallback(fd, cb, ctx)                     \
+    SSL_EXPERIMENTAL_API(                                               \
+        "SSL_SetResumptionTokenCallback",                               \
+        (PRFileDesc * _fd, SSLResumptionTokenCallback _cb, void *_ctx), \
+        (fd, cb, ctx))
+
+/*
+ * This allows setting a resumption token for a session.
+ * The function returns SECSuccess iff the resumption token can be used,
+ * SECFailure in any other case. The caller should remove the |token| from its
+ * cache when the function returns SECFailure.
+ *
+ * - The |fd| argument is the socket file descriptor.
+ * - The |token| is a pointer to the resumption token as byte array
+ *   of length |len|.
+ */
+#define SSL_SetResumptionToken(fd, token, len)                              \
+    SSL_EXPERIMENTAL_API(                                                   \
+        "SSL_SetResumptionToken",                                           \
+        (PRFileDesc * _fd, const PRUint8 *_token, const unsigned int _len), \
+        (fd, token, len))
+
+/* TLS 1.3 allows a server to set a limit on the number of bytes of early data
+ * that can be received. This allows that limit to be set. This function has no
+ * effect on a client. */
+#define SSL_SetMaxEarlyDataSize(fd, size)                    \
+    SSL_EXPERIMENTAL_API("SSL_SetMaxEarlyDataSize",          \
+                         (PRFileDesc * _fd, PRUint32 _size), \
+                         (fd, size))
+
+/* Deprecated experimental APIs */
+
+#define SSL_UseAltServerHelloType(fd, enable) SSL_DEPRECATED_EXPERIMENTAL_API
 
 SEC_END_PROTOS
 

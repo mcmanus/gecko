@@ -11,19 +11,16 @@
 
 #include "ds/LifoAlloc.h"
 
-#include "vm/Printer.h"
+#include "js/HashTable.h"
+#include "js/TypeDecls.h"
 
-struct JSCompartment;
-class JSScript;
-class JSObject;
+#include "vm/Printer.h"
 
 namespace js {
 
 class ScriptSourceObject;
 
 namespace coverage {
-
-class LCovCompartment;
 
 class LCovSource
 {
@@ -70,22 +67,26 @@ class LCovSource
     size_t numBranchesFound_;
     size_t numBranchesHit_;
 
-    // LifoAlloc string which hold lines statistics.
-    LSprinter outDA_;
+    // Holds lines statistics. When processing a line hit count, the hit count
+    // is added to any hit count already in the hash map so that we handle
+    // lines that belong to more than one JSScript or function in the same
+    // source file.
+    HashMap<size_t, uint64_t, DefaultHasher<size_t>, SystemAllocPolicy> linesHit_;
     size_t numLinesInstrumented_;
     size_t numLinesHit_;
+    size_t maxLineHit_;
 
     // Status flags.
     bool hasTopLevelScript_ : 1;
 };
 
-class LCovCompartment
+class LCovRealm
 {
   public:
-    LCovCompartment();
+    LCovRealm();
 
     // Collect code coverage information for the given source.
-    void collectCodeCoverageInfo(JSCompartment* comp, JSScript* topLevel, const char* name);
+    void collectCodeCoverageInfo(JS::Realm* realm, JSScript* topLevel, const char* name);
 
     // Write the Lcov output in a buffer, such as the one associated with
     // the runtime code coverage trace file.
@@ -93,10 +94,10 @@ class LCovCompartment
 
   private:
     // Write the script name in out.
-    bool writeCompartmentName(JSCompartment* comp);
+    bool writeRealmName(JS::Realm* realm);
 
     // Return the LCovSource entry which matches the given ScriptSourceObject.
-    LCovSource* lookupOrAdd(JSCompartment* comp, const char* name);
+    LCovSource* lookupOrAdd(JS::Realm* realm, const char* name);
 
   private:
     typedef mozilla::Vector<LCovSource, 16, LifoAllocPolicy<Fallible>> LCovSourceVector;
@@ -105,10 +106,10 @@ class LCovCompartment
     // strings to be written in the file.
     LifoAlloc alloc_;
 
-    // LifoAlloc string which hold the name of the compartment.
+    // LifoAlloc string which hold the name of the realm.
     LSprinter outTN_;
 
-    // Vector of all sources which are used in this compartment.
+    // Vector of all sources which are used in this realm.
     LCovSourceVector* sources_;
 };
 
@@ -130,9 +131,9 @@ class LCovRuntime
     // Check if we should collect code coverage information.
     bool isEnabled() const { return out_.isInitialized(); }
 
-    // Write the aggregated result of the code coverage of a compartment
+    // Write the aggregated result of the code coverage of a realm
     // into a file.
-    void writeLCovResult(LCovCompartment& comp);
+    void writeLCovResult(LCovRealm& realm);
 
   private:
     // When a process forks, the file will remain open, but 2 processes will

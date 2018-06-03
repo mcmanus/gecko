@@ -95,7 +95,7 @@ include('/ipc/chromium/chromium-config.mozbuild')
 
 FINAL_LIBRARY = 'xul'
 
-if CONFIG['GNU_CC']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     # Suppress gcc warning about a comparison being always false due to the
     # range of the data type
     SOURCES['Key.cpp'].flags += ['-Wno-error=type-limits']
@@ -105,8 +105,13 @@ LOCAL_INCLUDES += [
     '/db/sqlite3/src',
     '/dom/base',
     '/dom/storage',
-    '/dom/workers',
     '/ipc/glue',
     '/xpcom/build',
     '/xpcom/threads',
 ]
+
+XPIDL_SOURCES += [
+    'nsIIDBPermissionsRequest.idl',
+]
+
+XPIDL_MODULE = 'dom_indexeddb'

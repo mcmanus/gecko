@@ -25,15 +25,12 @@ struct RedirEntry
   URI_SAFE_FOR_UNTRUSTED_CONTENT in the third argument to each map item below
   unless your about: page really needs chrome privileges. Security review is
   required before adding new map entries without
-  URI_SAFE_FOR_UNTRUSTED_CONTENT.  Also note, however, that adding
-  URI_SAFE_FOR_UNTRUSTED_CONTENT will allow random web sites to link to that
-  URI.  Perhaps we should separate the two concepts out...
+  URI_SAFE_FOR_UNTRUSTED_CONTENT.
+
+  URI_SAFE_FOR_UNTRUSTED_CONTENT is not enough to let web pages load that page,
+  for that you need MAKE_LINKABLE.
  */
 static const RedirEntry kRedirMap[] = {
-  {
-    "", "chrome://global/content/about.xhtml",
-    nsIAboutModule::ALLOW_SCRIPT
-  },
   { "about", "chrome://global/content/aboutAbout.xhtml", 0 },
   {
     "addons", "chrome://mozapps/content/extensions/extensions.xul",
@@ -87,11 +84,6 @@ static const RedirEntry kRedirMap[] = {
     nsIAboutModule::ALLOW_SCRIPT
   },
   {
-    "newaddon", "chrome://mozapps/content/extensions/newaddon.xul",
-    nsIAboutModule::ALLOW_SCRIPT |
-      nsIAboutModule::HIDE_FROM_ABOUTABOUT
-  },
-  {
     "performance", "chrome://global/content/aboutPerformance.xhtml",
     nsIAboutModule::ALLOW_SCRIPT
   },
@@ -142,6 +134,18 @@ static const RedirEntry kRedirMap[] = {
     nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |
     nsIAboutModule::HIDE_FROM_ABOUTABOUT |
     nsIAboutModule::URI_CAN_LOAD_IN_CHILD
+  },
+  {
+    "crashparent", "about:blank",
+    nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |
+    nsIAboutModule::HIDE_FROM_ABOUTABOUT
+  },
+  {
+    "crashcontent", "about:blank",
+    nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |
+    nsIAboutModule::HIDE_FROM_ABOUTABOUT |
+    nsIAboutModule::URI_CAN_LOAD_IN_CHILD |
+    nsIAboutModule::URI_MUST_LOAD_IN_CHILD
   }
 };
 static const int kRedirTotal = mozilla::ArrayLength(kRedirMap);
@@ -161,6 +165,14 @@ nsAboutRedirector::NewChannel(nsIURI* aURI,
 
   nsCOMPtr<nsIIOService> ioService = do_GetIOService(&rv);
   NS_ENSURE_SUCCESS(rv, rv);
+
+  if (XRE_IsParentProcess() && path.EqualsASCII("crashparent")) {
+    MOZ_CRASH("Crash via about:crashparent");
+  }
+
+  if (XRE_IsContentProcess() && path.EqualsASCII("crashcontent")) {
+    MOZ_CRASH("Crash via about:crashcontent");
+  }
 
   for (int i = 0; i < kRedirTotal; i++) {
     if (!strcmp(path.get(), kRedirMap[i].id)) {

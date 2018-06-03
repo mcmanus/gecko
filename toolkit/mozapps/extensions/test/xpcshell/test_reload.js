@@ -1,14 +1,14 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
-Components.utils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
 
 createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "42");
 
 const sampleAddon = {
   id: "webextension1@tests.mozilla.org",
   name: "webextension_1",
-}
+};
 
 const manifestSample = {
   id: "bootstrap1@tests.mozilla.org",
@@ -27,7 +27,7 @@ async function installAddon(fixtureName, addonID) {
 }
 
 async function tearDownAddon(addon) {
-  addon.uninstall();
+  await addon.uninstall();
   await promiseShutdownManager();
 }
 
@@ -36,7 +36,7 @@ add_task(async function test_reloading_a_temp_addon() {
     return;
   await promiseRestartManager();
   await AddonManager.installTemporaryAddon(do_get_addon(sampleAddon.name));
-  const addon = await promiseAddonByID(sampleAddon.id)
+  const addon = await promiseAddonByID(sampleAddon.id);
 
   var receivedOnUninstalled = false;
   var receivedOnUninstalling = false;
@@ -66,14 +66,11 @@ add_task(async function test_reloading_a_temp_addon() {
         AddonManager.removeAddonListener(listener);
         resolve();
       },
-    }
+    };
     AddonManager.addAddonListener(listener);
   });
 
-  await Promise.all([
-    addon.reload(),
-    promiseWebExtensionStartup(),
-  ]);
+  await addon.reload();
   await onReload;
 
   // Make sure reload() doesn't trigger uninstall events.
@@ -95,22 +92,19 @@ add_task(async function test_can_reload_permanent_addon() {
   let enabledCalled = false;
   AddonManager.addAddonListener({
     onDisabled: (aAddon) => {
-      do_check_false(enabledCalled);
-      disabledCalled = true
+      Assert.ok(!enabledCalled);
+      disabledCalled = true;
     },
     onEnabled: (aAddon) => {
-      do_check_true(disabledCalled);
-      enabledCalled = true
+      Assert.ok(disabledCalled);
+      enabledCalled = true;
     }
-  })
+  });
 
-  await Promise.all([
-    addon.reload(),
-    promiseWebExtensionStartup(),
-  ]);
+  await addon.reload();
 
-  do_check_true(disabledCalled);
-  do_check_true(enabledCalled);
+  Assert.ok(disabledCalled);
+  Assert.ok(enabledCalled);
 
   notEqual(addon, null);
   equal(addon.appDisabled, false);
@@ -139,7 +133,6 @@ add_task(async function test_reload_to_invalid_version_fails() {
 
   let addonDir = await promiseWriteWebManifestForExtension(manifest, tempdir, "invalid_version");
   await AddonManager.installTemporaryAddon(addonDir);
-  await promiseWebExtensionStartup();
 
   let addon = await promiseAddonByID(addonId);
   notEqual(addon, null);
@@ -180,7 +173,7 @@ add_task(async function test_manifest_changes_are_refreshed() {
   await promiseRestartManager();
   let tempdir = gTmpD.clone();
 
-  const unpackedAddon = writeInstallRDFToDir(
+  const unpackedAddon = await promiseWriteInstallRDFToDir(
     Object.assign({}, manifestSample, {
       name: "Test Bootstrap 1",
     }), tempdir, manifestSample.id, "bootstrap.js");
@@ -190,7 +183,7 @@ add_task(async function test_manifest_changes_are_refreshed() {
   notEqual(addon, null);
   equal(addon.name, "Test Bootstrap 1");
 
-  writeInstallRDFToDir(Object.assign({}, manifestSample, {
+  await promiseWriteInstallRDFToDir(Object.assign({}, manifestSample, {
     name: "Test Bootstrap 1 (reloaded)",
   }), tempdir, manifestSample.id);
 
@@ -211,7 +204,7 @@ add_task(async function test_reload_fails_on_installation_errors() {
   await promiseRestartManager();
   let tempdir = gTmpD.clone();
 
-  const unpackedAddon = writeInstallRDFToDir(
+  const unpackedAddon = await promiseWriteInstallRDFToDir(
     Object.assign({}, manifestSample, {
       name: "Test Bootstrap 1",
     }), tempdir, manifestSample.id, "bootstrap.js");
@@ -221,7 +214,7 @@ add_task(async function test_reload_fails_on_installation_errors() {
   notEqual(addon, null);
 
   // Trigger an installation error with an empty manifest.
-  writeInstallRDFToDir({}, tempdir, manifestSample.id);
+  await promiseWriteInstallRDFToDir({}, tempdir, manifestSample.id);
 
   await Assert.rejects(addon.reload(), /No ID in install manifest/);
 

@@ -11,7 +11,6 @@
 
 #include "nsIDocument.h"
 #include "nsIPluginDocument.h"
-#include "nsIDOMDocument.h"
 #include "nsThreadUtils.h"
 #include "nsIScriptError.h"
 #include "nsIWidget.h"
@@ -63,7 +62,6 @@ NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(HTMLEmbedElement,
                                              nsIObjectLoadingContent,
                                              imgINotificationObserver,
                                              nsIImageLoadingContent,
-                                             imgIOnloadBlocker,
                                              nsIChannelEventSink)
 
 NS_IMPL_ELEMENT_CLONE(HTMLEmbedElement)
@@ -135,6 +133,7 @@ nsresult
 HTMLEmbedElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
                                const nsAttrValue* aValue,
                                const nsAttrValue* aOldValue,
+                               nsIPrincipal* aSubjectPrincipal,
                                bool aNotify)
 {
   if (aValue) {
@@ -143,7 +142,7 @@ HTMLEmbedElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
   }
 
   return nsGenericHTMLElement::AfterSetAttr(aNamespaceID, aName, aValue,
-                                            aOldValue, aNotify);
+                                            aOldValue, aSubjectPrincipal, aNotify);
 }
 
 nsresult
@@ -221,6 +220,7 @@ bool
 HTMLEmbedElement::ParseAttribute(int32_t aNamespaceID,
                                  nsAtom *aAttribute,
                                  const nsAString &aValue,
+                                 nsIPrincipal* aMaybeScriptedPrincipal,
                                  nsAttrValue &aResult)
 {
   if (aNamespaceID == kNameSpaceID_None) {
@@ -233,7 +233,7 @@ HTMLEmbedElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                              aResult);
+                                              aMaybeScriptedPrincipal, aResult);
 }
 
 static void

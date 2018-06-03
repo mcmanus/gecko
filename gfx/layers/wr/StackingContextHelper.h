@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -12,14 +13,10 @@
 #include "mozilla/webrender/WebRenderTypes.h"
 #include "Units.h"
 
-class nsDisplayListBuilder;
-class nsDisplayItem;
-class nsDisplayList;
+class nsDisplayTransform;
 
 namespace mozilla {
 namespace layers {
-
-class WebRenderLayer;
 
 /**
  * This is a helper class that pushes/pops a stacking context, and manages
@@ -30,17 +27,19 @@ class MOZ_RAII StackingContextHelper
 public:
   StackingContextHelper(const StackingContextHelper& aParentSC,
                         wr::DisplayListBuilder& aBuilder,
-                        nsDisplayListBuilder* aDisplayListBuilder,
-                        nsDisplayItem* aItem,
-                        nsDisplayList* aDisplayList,
-                        const gfx::Matrix4x4* aBoundTransform,
-                        uint64_t aAnimationsId,
-                        float* aOpacityPtr,
-                        gfx::Matrix4x4* aTransformPtr,
-                        gfx::Matrix4x4* aPerspectivePtr = nullptr,
                         const nsTArray<wr::WrFilterOp>& aFilters = nsTArray<wr::WrFilterOp>(),
+                        const LayoutDeviceRect& aBounds = LayoutDeviceRect(),
+                        const gfx::Matrix4x4* aBoundTransform = nullptr,
+                        const wr::WrAnimationProperty* aAnimation = nullptr,
+                        const float* aOpacityPtr = nullptr,
+                        const gfx::Matrix4x4* aTransformPtr = nullptr,
+                        const gfx::Matrix4x4* aPerspectivePtr = nullptr,
                         const gfx::CompositionOp& aMixBlendMode = gfx::CompositionOp::OP_OVER,
-                        bool aBackfaceVisible = true);
+                        bool aBackfaceVisible = true,
+                        bool aIsPreserve3D = false,
+                        const Maybe<nsDisplayTransform*>& aDeferredTransformItem = Nothing(),
+                        const wr::WrClipId* aClipNodeId = nullptr,
+                        bool aRasterizeLocally = false);
   // This version of the constructor should only be used at the root level
   // of the tree, so that we have a StackingContextHelper to pass down into
   // the RenderLayer traversal, but don't actually want it to push a stacking
@@ -50,33 +49,40 @@ public:
   // Pops the stacking context, if one was pushed during the constructor.
   ~StackingContextHelper();
 
-  void AdjustOrigin(const LayerPoint& aDelta);
-
-  // When this StackingContextHelper is in scope, this function can be used
-  // to convert a rect from the layer system's coordinate space to a LayoutRect
-  // that is relative to the stacking context. This is useful because most
-  // things that are pushed inside the stacking context need to be relative
-  // to the stacking context.
-  // We allow passing in a LayoutDeviceRect for convenience because in a lot of
-  // cases with WebRender display item generate the layout device space is the
-  // same as the layer space. (TODO: try to make this more explicit somehow).
-  // We also round the rectangle to ints after transforming since the output
-  // is the final destination rect.
-  wr::LayoutRect ToRelativeLayoutRect(const LayerRect& aRect) const;
-  wr::LayoutRect ToRelativeLayoutRect(const LayoutDeviceRect& aRect) const;
-  // Same but for points
-  wr::LayoutPoint ToRelativeLayoutPoint(const LayerPoint& aPoint) const;
-
   // Export the inherited scale
   gfx::Size GetInheritedScale() const { return mScale; }
 
-  bool IsBackfaceVisible() const { return mTransform.IsBackfaceVisible(); }
+  const gfx::Matrix& GetInheritedTransform() const
+  {
+    return mInheritedTransform;
+  }
+
+  const gfx::Matrix& GetSnappingSurfaceTransform() const
+  {
+    return mSnappingSurfaceTransform;
+  }
+
+  const Maybe<nsDisplayTransform*>& GetDeferredTransformItem() const;
+
+  bool AffectsClipPositioning() const { return mAffectsClipPositioning; }
+  Maybe<wr::WrClipId> ReferenceFrameId() const { return mReferenceFrameId; }
 
 private:
   wr::DisplayListBuilder* mBuilder;
-  LayerPoint mOrigin;
-  gfx::Matrix4x4 mTransform;
   gfx::Size mScale;
+  gfx::Matrix mInheritedTransform;
+
+  // The "snapping surface" defines the space that we want to snap in.
+  // You can think of it as the nearest physical surface.
+  // Animated transforms create a new snapping surface, so that changes to their transform don't affect the snapping of their contents.
+  // Non-animated transforms do *not* create a new snapping surface,
+  // so that for example the existence of a non-animated identity transform does not affect snapping.
+  gfx::Matrix mSnappingSurfaceTransform;
+  bool mAffectsClipPositioning;
+  Maybe<wr::WrClipId> mReferenceFrameId;
+  Maybe<nsDisplayTransform*> mDeferredTransformItem;
+  bool mIsPreserve3D;
+  bool mRasterizeLocally;
 };
 
 } // namespace layers

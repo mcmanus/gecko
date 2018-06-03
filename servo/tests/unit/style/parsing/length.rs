@@ -7,10 +7,8 @@ use parsing::parse;
 use style::context::QuirksMode;
 use style::parser::{Parse, ParserContext};
 use style::stylesheets::{CssRuleType, Origin};
-use style::values::Either;
-use style::values::specified::{LengthOrPercentageOrNumber, Number};
 use style::values::specified::length::{AbsoluteLength, Length, NoCalcLength};
-use style_traits::{PARSING_MODE_ALLOW_UNITLESS_LENGTH, ToCss};
+use style_traits::{ParsingMode, ToCss};
 
 #[test]
 fn test_calc() {
@@ -41,16 +39,11 @@ fn test_parsing_modes() {
     // In SVG length mode, non-zero lengths are assumed to be px.
     let url = ::servo_url::ServoUrl::parse("http://localhost").unwrap();
     let context = ParserContext::new(Origin::Author, &url,
-                                     Some(CssRuleType::Style), PARSING_MODE_ALLOW_UNITLESS_LENGTH,
+                                     Some(CssRuleType::Style), ParsingMode::ALLOW_UNITLESS_LENGTH,
                                      QuirksMode::NoQuirks);
     let mut input = ParserInput::new("1");
     let mut parser = Parser::new(&mut input);
     let result = Length::parse(&context, &mut parser);
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), Length::NoCalc(NoCalcLength::Absolute(AbsoluteLength::Px(1.))));
-}
-
-#[test]
-fn test_zero_percentage_length_or_number() {
-    assert_eq!(parse(LengthOrPercentageOrNumber::parse, "0"), Ok(Either::First(Number::new(0.))));
 }

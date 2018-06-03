@@ -10,6 +10,7 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/DebugOnly.h"
 #include "mozilla/Sprintf.h"
 
 #include <sys/types.h>
@@ -67,10 +68,6 @@ static nsresult MacErrorMapper(OSErr inErr);
 #include <linux/magic.h>
 #endif
 
-#ifdef MOZ_ENABLE_CONTENTACTION
-#include <contentaction/contentaction.h>
-#endif
-
 #include "nsNativeCharsetUtils.h"
 #include "nsTraceRefcnt.h"
 #include "nsHashKeys.h"
@@ -91,8 +88,7 @@ using namespace mozilla;
 
 /* directory enumerator */
 class nsDirEnumeratorUnix final
-  : public nsISimpleEnumerator
-  , public nsIDirectoryEnumerator
+  : public nsIDirectoryEnumerator
 {
 public:
   nsDirEnumeratorUnix();
@@ -228,6 +224,11 @@ nsDirEnumeratorUnix::Close()
 
 nsLocalFile::nsLocalFile()
 {
+}
+
+nsLocalFile::nsLocalFile(const nsACString& aFilePath)
+{
+  InitWithNativePath(aFilePath);
 }
 
 nsLocalFile::nsLocalFile(const nsLocalFile& aOther)
@@ -595,11 +596,26 @@ nsLocalFile::SetNativeLeafName(const nsACString& aLeafName)
   return NS_OK;
 }
 
-NS_IMETHODIMP
-nsLocalFile::GetNativePath(nsACString& aResult)
+nsCString
+nsLocalFile::NativePath()
 {
-  aResult = mPath;
+  return mPath;
+}
+
+nsresult
+nsIFile::GetNativePath(nsACString& aResult)
+{
+  aResult = NativePath();
   return NS_OK;
+}
+
+nsCString
+nsIFile::HumanReadablePath()
+{
+  nsCString path;
+  DebugOnly<nsresult> rv = GetNativePath(path);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
+  return path;
 }
 
 nsresult
@@ -713,20 +729,13 @@ nsLocalFile::CopyDirectoryTo(nsIFile* aNewParent)
     }
   }
 
-  nsCOMPtr<nsISimpleEnumerator> dirIterator;
+  nsCOMPtr<nsIDirectoryEnumerator> dirIterator;
   if (NS_FAILED(rv = GetDirectoryEntries(getter_AddRefs(dirIterator)))) {
     return rv;
   }
 
-  bool hasMore = false;
-  while (NS_SUCCEEDED(dirIterator->HasMoreElements(&hasMore)) && hasMore) {
-    nsCOMPtr<nsISupports> supports;
-    nsCOMPtr<nsIFile> entry;
-    rv = dirIterator->GetNext(getter_AddRefs(supports));
-    entry = do_QueryInterface(supports);
-    if (NS_FAILED(rv) || !entry) {
-      continue;
-    }
+  nsCOMPtr<nsIFile> entry;
+  while (NS_SUCCEEDED(dirIterator->GetNextFile(getter_AddRefs(entry))) && entry) {
     if (NS_FAILED(rv = entry->IsSymlink(&isSymlink))) {
       return rv;
     }
@@ -1833,7 +1842,7 @@ nsLocalFile::SetFollowLinks(bool aFollowLinks)
 }
 
 NS_IMETHODIMP
-nsLocalFile::GetDirectoryEntries(nsISimpleEnumerator** aEntries)
+nsLocalFile::GetDirectoryEntriesImpl(nsIDirectoryEnumerator** aEntries)
 {
   RefPtr<nsDirEnumeratorUnix> dir = new nsDirEnumeratorUnix();
 
@@ -1992,17 +2001,6 @@ nsLocalFile::Launch()
   }
 
   return giovfs->ShowURIForInput(mPath);
-#elif defined(MOZ_ENABLE_CONTENTACTION)
-  QUrl uri = QUrl::fromLocalFile(QString::fromUtf8(mPath.get()));
-  ContentAction::Action action =
-    ContentAction::Action::defaultActionForFile(uri);
-
-  if (action.isValid()) {
-    action.trigger();
-    return NS_OK;
-  }
-
-  return NS_ERROR_FAILURE;
 #elif defined(MOZ_WIDGET_ANDROID)
   // Try to get a mimetype, if this fails just use the file uri alone
   nsresult rv;
@@ -2198,20 +2196,6 @@ NS_NewLocalFile(const nsAString& aPath, bool aFollowLinks, nsIFile** aResult)
     return rv;
   }
   return NS_NewNativeLocalFile(buf, aFollowLinks, aResult);
-}
-
-//-----------------------------------------------------------------------------
-// global init/shutdown
-//-----------------------------------------------------------------------------
-
-void
-nsLocalFile::GlobalInit()
-{
-}
-
-void
-nsLocalFile::GlobalShutdown()
-{
 }
 
 // nsILocalFileMac

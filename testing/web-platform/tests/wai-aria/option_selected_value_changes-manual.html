@@ -2,7 +2,7 @@
 <html>
   <head>
     <title>option selected value changes</title>
-    <link rel="stylesheet" href="/resources/testharness.css">
+    <meta content="text/html; charset=utf-8" http-equiv="Content-Type"/>
     <link rel="stylesheet" href="/wai-aria/scripts/manual.css">
     <script src="/resources/testharness.js"></script>
     <script src="/resources/testharnessreport.js"></script>
@@ -51,14 +51,6 @@
                   "1"
                ]
             ],
-            "AXAPI" : [
-               [
-                  "event",
-                  "type",
-                  "is",
-                  "AXSelectedChildrenChanged"
-               ]
-            ],
             "MSAA" : [
                [
                   "event",
@@ -96,7 +88,14 @@
                   "object:selection-changed"
                ]
             ],
-            "AXAPI" : []
+            "AXAPI" : [
+               [
+                  "event",
+                  "type",
+                  "is",
+                  "AXSelectedChildrenChanged"
+               ]
+            ]
          },
          "title" : "step 5",
          "type" : "test"
@@ -145,4 +144,3 @@
   <div id="ATTAmessages"></div>
   </body>
 </html>
-

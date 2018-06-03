@@ -12,7 +12,6 @@
 #include "nsIDocument.h"
 #include "nsGkAtoms.h"
 #include "nsIFormControl.h"
-#include "nsIDOMHTMLFormElement.h"
 #include "nsError.h"
 #include "nsGenericHTMLElement.h"
 #include "nsAttrValueInlines.h"
@@ -20,6 +19,7 @@
 #include "nsDirectoryServiceDefs.h"
 #include "nsStringStream.h"
 #include "nsIURI.h"
+#include "nsIURIMutator.h"
 #include "nsIURL.h"
 #include "nsNetUtil.h"
 #include "nsLinebreakConverter.h"
@@ -36,6 +36,7 @@
 #include "nsContentUtils.h"
 
 #include "mozilla/dom/Directory.h"
+#include "mozilla/dom/DOMPrefs.h"
 #include "mozilla/dom/File.h"
 
 namespace mozilla {
@@ -94,7 +95,7 @@ public:
   FSURLEncoded(NotNull<const Encoding*> aEncoding,
                int32_t aMethod,
                nsIDocument* aDocument,
-               nsIContent* aOriginatingElement)
+               Element* aOriginatingElement)
     : EncodingFormSubmission(aEncoding, aOriginatingElement)
     , mMethod(aMethod)
     , mDocument(aDocument)
@@ -113,7 +114,7 @@ public:
 
   virtual nsresult
   GetEncodedSubmission(nsIURI* aURI, nsIInputStream** aPostDataStream,
-                       int64_t* aPostDataStreamLength) override;
+                       nsCOMPtr<nsIURI>& aOutURI) override;
 
 protected:
 
@@ -268,12 +269,12 @@ HandleMailtoSubject(nsCString& aPath)
 nsresult
 FSURLEncoded::GetEncodedSubmission(nsIURI* aURI,
                                    nsIInputStream** aPostDataStream,
-                                   int64_t* aPostDataStreamLength)
+                                   nsCOMPtr<nsIURI>& aOutURI)
 {
   nsresult rv = NS_OK;
+  aOutURI = aURI;
 
   *aPostDataStream = nullptr;
-  *aPostDataStreamLength = -1;
 
   if (mMethod == NS_FORM_METHOD_POST) {
 
@@ -295,16 +296,14 @@ FSURLEncoded::GetEncodedSubmission(nsIURI* aURI,
 
       path += NS_LITERAL_CSTRING("&force-plain-text=Y&body=") + escapedBody;
 
-      rv = aURI->SetPathQueryRef(path);
-
+      return NS_MutateURI(aURI)
+               .SetPathQueryRef(path)
+               .Finalize(aOutURI);
     } else {
-
       nsCOMPtr<nsIInputStream> dataStream;
-      // XXX We *really* need to either get the string to disown its data (and
-      // not destroy it), or make a string input stream that owns the CString
-      // that is passed to it.  Right now this operation does a copy.
-      rv = NS_NewCStringInputStream(getter_AddRefs(dataStream), mQueryString);
+      rv = NS_NewCStringInputStream(getter_AddRefs(dataStream), std::move(mQueryString));
       NS_ENSURE_SUCCESS(rv, rv);
+      mQueryString.Truncate();
 
       nsCOMPtr<nsIMIMEInputStream> mimeStream(
         do_CreateInstance("@mozilla.org/network/mime-input-stream;1", &rv));
@@ -314,10 +313,7 @@ FSURLEncoded::GetEncodedSubmission(nsIURI* aURI,
                             "application/x-www-form-urlencoded");
       mimeStream->SetData(dataStream);
 
-      *aPostDataStream = mimeStream;
-      NS_ADDREF(*aPostDataStream);
-
-      *aPostDataStreamLength = mQueryString.Length();
+      mimeStream.forget(aPostDataStream);
     }
 
   } else {
@@ -331,7 +327,9 @@ FSURLEncoded::GetEncodedSubmission(nsIURI* aURI,
 
     nsCOMPtr<nsIURL> url = do_QueryInterface(aURI);
     if (url) {
-      url->SetQuery(mQueryString);
+      rv = NS_MutateURI(aURI)
+             .SetQuery(mQueryString)
+             .Finalize(aOutURI);
     }
     else {
       nsAutoCString path;
@@ -356,7 +354,9 @@ FSURLEncoded::GetEncodedSubmission(nsIURI* aURI,
       // Bug 42616: Add named anchor to end after query string
       path.Append(mQueryString + namedAnchor);
 
-      aURI->SetPathQueryRef(path);
+      rv = NS_MutateURI(aURI)
+             .SetPathQueryRef(path)
+             .Finalize(aOutURI);
     }
   }
 
@@ -396,7 +396,7 @@ FSURLEncoded::URLEncode(const nsAString& aStr, nsACString& aEncoded)
 // --------------------------------------------------------------------------
 
 FSMultipartFormData::FSMultipartFormData(NotNull<const Encoding*> aEncoding,
-                                         nsIContent* aOriginatingElement)
+                                         Element* aOriginatingElement)
   : EncodingFormSubmission(aEncoding, aOriginatingElement)
 {
   mPostData =
@@ -487,7 +487,7 @@ FSMultipartFormData::AddNameBlobOrNullPair(const nsAString& aName, Blob* aBlob)
     if (file) {
       nsAutoString relativePath;
       file->GetRelativePath(relativePath);
-      if (Directory::WebkitBlinkDirectoryPickerEnabled(nullptr, nullptr) &&
+      if (DOMPrefs::WebkitBlinkDirectoryPickerEnabled() &&
           !relativePath.IsEmpty()) {
         filename16 = relativePath;
       }
@@ -529,7 +529,7 @@ FSMultipartFormData::AddNameBlobOrNullPair(const nsAString& aName, Blob* aBlob)
       // Create buffered stream (for efficiency)
       nsCOMPtr<nsIInputStream> bufferedStream;
       rv = NS_NewBufferedInputStream(getter_AddRefs(bufferedStream),
-                                     fileStream, 8192);
+                                     fileStream.forget(), 8192);
       NS_ENSURE_SUCCESS(rv, rv);
 
       fileStream = bufferedStream;
@@ -546,7 +546,7 @@ nsresult
 FSMultipartFormData::AddNameDirectoryPair(const nsAString& aName,
                                           Directory* aDirectory)
 {
-  if (!Directory::WebkitBlinkDirectoryPickerEnabled(nullptr, nullptr)) {
+  if (!DOMPrefs::WebkitBlinkDirectoryPickerEnabled()) {
     return NS_OK;
   }
 
@@ -621,9 +621,10 @@ FSMultipartFormData::AddDataChunk(const nsACString& aName,
 nsresult
 FSMultipartFormData::GetEncodedSubmission(nsIURI* aURI,
                                           nsIInputStream** aPostDataStream,
-                                          int64_t* aPostDataStreamLength)
+                                          nsCOMPtr<nsIURI>& aOutURI)
 {
   nsresult rv;
+  aOutURI = aURI;
 
   // Make header
   nsCOMPtr<nsIMIMEInputStream> mimeStream
@@ -636,7 +637,6 @@ FSMultipartFormData::GetEncodedSubmission(nsIURI* aURI,
 
   uint64_t bodySize;
   mimeStream->SetData(GetSubmissionBody(&bodySize));
-  *aPostDataStreamLength = bodySize;
 
   mimeStream.forget(aPostDataStream);
 
@@ -670,7 +670,7 @@ class FSTextPlain : public EncodingFormSubmission
 {
 public:
   FSTextPlain(NotNull<const Encoding*> aEncoding,
-              nsIContent* aOriginatingElement)
+              Element* aOriginatingElement)
     : EncodingFormSubmission(aEncoding, aOriginatingElement)
   {
   }
@@ -686,7 +686,7 @@ public:
 
   virtual nsresult
   GetEncodedSubmission(nsIURI* aURI, nsIInputStream** aPostDataStream,
-                       int64_t* aPostDataStreaLength) override;
+                       nsCOMPtr<nsIURI>& aOutURI) override;
 
 private:
   nsString mBody;
@@ -726,12 +726,12 @@ FSTextPlain::AddNameDirectoryPair(const nsAString& aName,
 nsresult
 FSTextPlain::GetEncodedSubmission(nsIURI* aURI,
                                   nsIInputStream** aPostDataStream,
-                                  int64_t* aPostDataStreamLength)
+                                  nsCOMPtr<nsIURI>& aOutURI)
 {
   nsresult rv = NS_OK;
+  aOutURI = aURI;
 
   *aPostDataStream = nullptr;
-  *aPostDataStreamLength = -1;
 
   // XXX HACK We are using the standard URL mechanism to give the body to the
   // mailer instead of passing the post data stream to it, since that sounds
@@ -754,8 +754,9 @@ FSTextPlain::GetEncodedSubmission(nsIURI* aURI,
 
     path += NS_LITERAL_CSTRING("&force-plain-text=Y&body=") + escapedBody;
 
-    rv = aURI->SetPathQueryRef(path);
-
+    rv = NS_MutateURI(aURI)
+           .SetPathQueryRef(path)
+           .Finalize(aOutURI);
   } else {
     // Create data stream.
     // We do want to send the data through the charset encoder and we want to
@@ -770,7 +771,7 @@ FSTextPlain::GetEncodedSubmission(nsIURI* aURI,
                                   nsLinebreakConverter::eLinebreakAny,
                                   nsLinebreakConverter::eLinebreakNet));
     nsCOMPtr<nsIInputStream> bodyStream;
-    rv = NS_NewCStringInputStream(getter_AddRefs(bodyStream), cbody);
+    rv = NS_NewCStringInputStream(getter_AddRefs(bodyStream), std::move(cbody));
     if (!bodyStream) {
       return NS_ERROR_OUT_OF_MEMORY;
     }
@@ -783,8 +784,6 @@ FSTextPlain::GetEncodedSubmission(nsIURI* aURI,
     mimeStream->AddHeader("Content-Type", "text/plain");
     mimeStream->SetData(bodyStream);
     CallQueryInterface(mimeStream, aPostDataStream);
-
-    *aPostDataStreamLength = cbody.Length();
   }
 
   return rv;
@@ -796,7 +795,7 @@ FSTextPlain::GetEncodedSubmission(nsIURI* aURI,
 
 EncodingFormSubmission::EncodingFormSubmission(
   NotNull<const Encoding*> aEncoding,
-  nsIContent* aOriginatingElement)
+  Element* aOriginatingElement)
   : HTMLFormSubmission(aEncoding, aOriginatingElement)
 {
   if (!aEncoding->CanEncodeEverything()) {

@@ -23,29 +23,90 @@
 using namespace mozilla;
 using namespace mozilla::gfx;
 
+template<class T>
+struct TagEquals {
+    bool Equals(const T& aIter, uint32_t aTag) const {
+        return aIter.mTag == aTag;
+    }
+};
+
 gfxMacFont::gfxMacFont(const RefPtr<UnscaledFontMac>& aUnscaledFont,
                        MacOSFontEntry *aFontEntry,
-                       const gfxFontStyle *aFontStyle,
-                       bool aNeedsBold)
+                       const gfxFontStyle *aFontStyle)
     : gfxFont(aUnscaledFont, aFontEntry, aFontStyle),
       mCGFont(nullptr),
       mCTFont(nullptr),
       mFontFace(nullptr),
+      mFontSmoothingBackgroundColor(aFontStyle->fontSmoothingBackgroundColor),
       mVariationFont(aFontEntry->HasVariations())
 {
-    mApplySyntheticBold = aNeedsBold;
+    mApplySyntheticBold = aFontStyle->NeedsSyntheticBold(aFontEntry);
 
-    if (mVariationFont && aFontStyle->variationSettings.Length() > 0) {
+    if (mVariationFont) {
         CGFontRef baseFont = aUnscaledFont->GetFont();
         if (!baseFont) {
             mIsValid = false;
             return;
         }
+
+        // Get the variation settings needed to instantiate the fontEntry
+        // for a particular fontStyle.
+        AutoTArray<gfxFontVariation,4> vars;
+        aFontEntry->GetVariationsForStyle(vars, *aFontStyle);
+
+        // Because of a Core Text bug, we need to ensure that if the font has
+        // an 'opsz' axis, it is always explicitly set, and NOT to the font's
+        // default value. (See bug 1457417.)
+        // We record the result of searching the font's axes in the font entry,
+        // so that this only has to be done by the first instance created for
+        // a given font resource.
+        const uint32_t kOpszTag = HB_TAG('o','p','s','z');
+
+        if (!aFontEntry->mCheckedForOpszAxis) {
+            aFontEntry->mCheckedForOpszAxis = true;
+            AutoTArray<gfxFontVariationAxis,4> axes;
+            aFontEntry->GetVariationAxes(axes);
+            auto index =
+                axes.IndexOf(kOpszTag, 0, TagEquals<gfxFontVariationAxis>());
+            if (index == axes.NoIndex) {
+                aFontEntry->mHasOpszAxis = false;
+            } else {
+                const auto& axis = axes[index];
+                aFontEntry->mHasOpszAxis = true;
+                aFontEntry->mOpszAxis = axis;
+                // Pick a slightly-adjusted version of the default that we'll
+                // use to work around Core Text's habit of ignoring any attempt
+                // to explicitly set the default value.
+                aFontEntry->mAdjustedDefaultOpsz =
+                    axis.mDefaultValue == axis.mMinValue
+                        ? axis.mDefaultValue + 0.001f
+                        : axis.mDefaultValue - 0.001f;
+            }
+        }
+
+        // Add 'opsz' if not present, or tweak its value if it looks too close
+        // to the default (after clamping to the font's available range).
+        if (aFontEntry->mHasOpszAxis) {
+            auto index =
+                vars.IndexOf(kOpszTag, 0, TagEquals<gfxFontVariation>());
+            if (index == vars.NoIndex) {
+                gfxFontVariation opsz{kOpszTag, aFontEntry->mAdjustedDefaultOpsz};
+                vars.AppendElement(opsz);
+            } else {
+                // Figure out a "safe" value that Core Text won't ignore.
+                auto& value = vars[index].mValue;
+                auto& axis = aFontEntry->mOpszAxis;
+                value = fmin(fmax(value, axis.mMinValue), axis.mMaxValue);
+                if (std::abs(value - axis.mDefaultValue) < 0.001f) {
+                    value = aFontEntry->mAdjustedDefaultOpsz;
+                }
+            }
+        }
+
         mCGFont =
-            UnscaledFontMac::CreateCGFontWithVariations(
-                baseFont,
-                aFontStyle->variationSettings.Length(),
-                aFontStyle->variationSettings.Elements());
+            UnscaledFontMac::CreateCGFontWithVariations(baseFont,
+                                                        vars.Length(),
+                                                        vars.Elements());
         if (!mCGFont) {
           ::CFRetain(baseFont);
           mCGFont = baseFont;
@@ -83,24 +144,6 @@ gfxMacFont::gfxMacFont(const RefPtr<UnscaledFontMac>& aUnscaledFont,
     cairo_matrix_t sizeMatrix, ctm;
     cairo_matrix_init_identity(&ctm);
     cairo_matrix_init_scale(&sizeMatrix, mAdjustedSize, mAdjustedSize);
-
-    // synthetic oblique by skewing via the font matrix
-    bool needsOblique = mFontEntry != nullptr &&
-                        mFontEntry->IsUpright() &&
-                        mStyle.style != NS_FONT_STYLE_NORMAL &&
-                        mStyle.allowSyntheticStyle;
-
-    if (needsOblique) {
-        cairo_matrix_t style;
-        cairo_matrix_init(&style,
-                          1,                //xx
-                          0,                //yx
-                          -1 * OBLIQUE_SKEW_FACTOR, //xy
-                          1,                //yy
-                          0,                //x0
-                          0);               //y0
-        cairo_matrix_multiply(&sizeMatrix, &sizeMatrix, &style);
-    }
 
     cairo_font_options_t *fontOptions = cairo_font_options_create();
 
@@ -421,44 +464,85 @@ gfxMacFont::GetCharWidth(CFDataRef aCmap, char16_t aUniChar,
 CTFontRef
 gfxMacFont::CreateCTFontFromCGFontWithVariations(CGFontRef aCGFont,
                                                  CGFloat aSize,
+                                                 bool aInstalledFont,
                                                  CTFontDescriptorRef aFontDesc)
 {
     // Avoid calling potentially buggy variation APIs on pre-Sierra macOS
-    // versions (see bug 1331683)
-    if (!nsCocoaFeatures::OnSierraOrLater()) {
-        return CTFontCreateWithGraphicsFont(aCGFont, aSize, nullptr, aFontDesc);
-    }
+    // versions (see bug 1331683).
+    //
+    // And on HighSierra, CTFontCreateWithGraphicsFont properly carries over
+    // variation settings from the CGFont to CTFont, so we don't need to do
+    // the extra work here -- and this seems to avoid Core Text crashiness
+    // seen in bug 1454094.
+    //
+    // However, for installed fonts it seems we DO need to copy the variations
+    // explicitly even on 10.13, otherwise fonts fail to render (as in bug
+    // 1455494) when non-default values are used. Fortunately, the crash
+    // mentioned above occurs with data fonts, not (AFAICT) with system-
+    // installed fonts.
+    //
+    // So we only need to do this "the hard way" on Sierra, and on HighSierra
+    // for system-installed fonts; in other cases just let the standard CTFont
+    // function do its thing.
+    //
+    // NOTE in case this ever needs further adjustment: there is similar logic
+    // in four places in the tree (sadly):
+    //    CreateCTFontFromCGFontWithVariations in gfxMacFont.cpp
+    //    CreateCTFontFromCGFontWithVariations in ScaledFontMac.cpp
+    //    CreateCTFontFromCGFontWithVariations in cairo-quartz-font.c
+    //    ctfont_create_exact_copy in SkFontHost_mac.cpp
 
-    CFDictionaryRef variations = ::CGFontCopyVariations(aCGFont);
     CTFontRef ctFont;
-    if (variations) {
-        CFDictionaryRef varAttr =
-            ::CFDictionaryCreate(nullptr,
-                                 (const void**)&kCTFontVariationAttribute,
-                                 (const void**)&variations, 1,
-                                 &kCFTypeDictionaryKeyCallBacks,
-                                 &kCFTypeDictionaryValueCallBacks);
-        ::CFRelease(variations);
+    if (nsCocoaFeatures::OnSierraExactly() ||
+        (aInstalledFont && nsCocoaFeatures::OnHighSierraOrLater())) {
+        CFDictionaryRef variations = ::CGFontCopyVariations(aCGFont);
+        if (variations) {
+            CFDictionaryRef varAttr =
+                ::CFDictionaryCreate(nullptr,
+                                     (const void**)&kCTFontVariationAttribute,
+                                     (const void**)&variations, 1,
+                                     &kCFTypeDictionaryKeyCallBacks,
+                                     &kCFTypeDictionaryValueCallBacks);
+            ::CFRelease(variations);
 
-        CTFontDescriptorRef varDesc = aFontDesc
-            ? ::CTFontDescriptorCreateCopyWithAttributes(aFontDesc, varAttr)
-            : ::CTFontDescriptorCreateWithAttributes(varAttr);
-        ::CFRelease(varAttr);
+            CTFontDescriptorRef varDesc = aFontDesc
+                ? ::CTFontDescriptorCreateCopyWithAttributes(aFontDesc, varAttr)
+                : ::CTFontDescriptorCreateWithAttributes(varAttr);
+            ::CFRelease(varAttr);
 
-        ctFont = ::CTFontCreateWithGraphicsFont(aCGFont, aSize, nullptr, varDesc);
-        ::CFRelease(varDesc);
+            ctFont = ::CTFontCreateWithGraphicsFont(aCGFont, aSize, nullptr,
+                                                    varDesc);
+            ::CFRelease(varDesc);
+        } else {
+            ctFont = ::CTFontCreateWithGraphicsFont(aCGFont, aSize, nullptr,
+                                                    aFontDesc);
+        }
     } else {
         ctFont = ::CTFontCreateWithGraphicsFont(aCGFont, aSize, nullptr,
                                                 aFontDesc);
     }
+
     return ctFont;
 }
 
 int32_t
 gfxMacFont::GetGlyphWidth(DrawTarget& aDrawTarget, uint16_t aGID)
 {
+    if (mVariationFont) {
+        // Avoid a potential Core Text crash (bug 1450209) by using
+        // CoreGraphics glyph advance API. This is inferior for 'sbix'
+        // fonts, but those won't have variations, so it's OK.
+        int cgAdvance;
+        if (::CGFontGetGlyphAdvances(mCGFont, &aGID, 1, &cgAdvance)) {
+            return cgAdvance * mFUnitsConvFactor * 0x10000;
+        }
+    }
+
     if (!mCTFont) {
-        mCTFont = CreateCTFontFromCGFontWithVariations(mCGFont, mAdjustedSize);
+        bool isInstalledFont =
+            !mFontEntry->IsUserFont() || mFontEntry->IsLocalUserFont();
+        mCTFont = CreateCTFontFromCGFontWithVariations(mCGFont, mAdjustedSize,
+                                                       isInstalledFont);
         if (!mCTFont) { // shouldn't happen, but let's be safe
             NS_WARNING("failed to create CTFontRef to measure glyph width");
             return 0;
@@ -519,28 +603,23 @@ gfxMacFont::InitMetricsFromPlatform()
 already_AddRefed<ScaledFont>
 gfxMacFont::GetScaledFont(DrawTarget *aTarget)
 {
-  if (!mAzureScaledFont) {
-    NativeFont nativeFont;
-    nativeFont.mType = NativeFontType::MAC_FONT_FACE;
-    nativeFont.mFont = GetCGFontRef();
-    mAzureScaledFont =
-      Factory::CreateScaledFontWithCairo(nativeFont,
-                                         GetUnscaledFont(),
-                                         GetAdjustedSize(),
-                                         mScaledFont);
-  }
+    if (!mAzureScaledFont) {
+        mAzureScaledFont =
+            Factory::CreateScaledFontForMacFont(GetCGFontRef(),
+                                                GetUnscaledFont(),
+                                                GetAdjustedSize(),
+                                                Color::FromABGR(mFontSmoothingBackgroundColor),
+                                                !mStyle.useGrayscaleAntialiasing,
+                                                IsSyntheticBold());
+        if (!mAzureScaledFont) {
+            return nullptr;
+        }
 
-  RefPtr<ScaledFont> scaledFont(mAzureScaledFont);
-  return scaledFont.forget();
-}
-
-already_AddRefed<GlyphRenderingOptions>
-gfxMacFont::GetGlyphRenderingOptions(const TextRunDrawParams* aRunParams)
-{
-    if (aRunParams) {
-        return Factory::CreateCGGlyphRenderingOptions(aRunParams->fontSmoothingBGColor);
+        mAzureScaledFont->SetCairoScaledFont(mScaledFont);
     }
-    return nullptr;
+
+    RefPtr<ScaledFont> scaledFont(mAzureScaledFont);
+    return scaledFont.forget();
 }
 
 void

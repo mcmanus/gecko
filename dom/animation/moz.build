@@ -12,23 +12,20 @@ MOCHITEST_CHROME_MANIFESTS += ['test/chrome.ini']
 
 EXPORTS.mozilla.dom += [
     'Animation.h',
-    'AnimationEffectReadOnly.h',
-    'AnimationEffectTiming.h',
-    'AnimationEffectTimingReadOnly.h',
+    'AnimationEffect.h',
     'AnimationTimeline.h',
     'CSSPseudoElement.h',
     'DocumentTimeline.h',
     'KeyframeEffect.h',
-    'KeyframeEffectReadOnly.h',
 ]
 
 EXPORTS.mozilla += [
     'AnimationComparator.h',
+    'AnimationEventDispatcher.h',
     'AnimationPerformanceWarning.h',
     'AnimationPropertySegment.h',
     'AnimationTarget.h',
     'AnimationUtils.h',
-    'AnimValuesStyleRule.h',
     'ComputedTiming.h',
     'ComputedTimingFunction.h',
     'EffectCompositor.h',
@@ -43,20 +40,17 @@ EXPORTS.mozilla += [
 
 UNIFIED_SOURCES += [
     'Animation.cpp',
-    'AnimationEffectReadOnly.cpp',
-    'AnimationEffectTiming.cpp',
-    'AnimationEffectTimingReadOnly.cpp',
+    'AnimationEffect.cpp',
+    'AnimationEventDispatcher.cpp',
     'AnimationPerformanceWarning.cpp',
     'AnimationTimeline.cpp',
     'AnimationUtils.cpp',
-    'AnimValuesStyleRule.cpp',
     'ComputedTimingFunction.cpp',
     'CSSPseudoElement.cpp',
     'DocumentTimeline.cpp',
     'EffectCompositor.cpp',
     'EffectSet.cpp',
     'KeyframeEffect.cpp',
-    'KeyframeEffectReadOnly.cpp',
     'KeyframeUtils.cpp',
     'PendingAnimationTracker.cpp',
     'TimingParams.cpp',

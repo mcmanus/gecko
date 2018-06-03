@@ -9,10 +9,6 @@
  *       a PKCS #11 module to be loaded into Firefox.
  */
 
-const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
-
-const { Services } = Cu.import("resource://gre/modules/Services.jsm", {});
-
 function onBrowseBtnPress() {
   let bundle = document.getElementById("pippki_bundle");
   let fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
@@ -50,4 +46,21 @@ function onDialogAccept() {
   }
 
   return true;
+}
+
+function validateModuleName() {
+  let bundle = document.getElementById("pippki_bundle");
+  let name = document.getElementById("device_name").value;
+  let helpText = document.getElementById("helpText");
+  helpText.value = "";
+  let dialogNode = document.querySelector("dialog");
+  dialogNode.removeAttribute("buttondisabledaccept");
+  if (name == "") {
+    helpText.value = bundle.getString("loadModuleHelp_emptyModuleName");
+    dialogNode.setAttribute("buttondisabledaccept", true);
+  }
+  if (name == "Root Certs") {
+    helpText.value = bundle.getString("loadModuleHelp_rootCertsModuleName");
+    dialogNode.setAttribute("buttondisabledaccept", true);
+  }
 }

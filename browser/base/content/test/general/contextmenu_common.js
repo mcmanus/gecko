@@ -290,8 +290,8 @@ async function test_contextmenu(selector, menuItems, options = {}) {
     info("Waiting for spell check");
     await ContentTask.spawn(gBrowser.selectedBrowser, selector, async function(contentSelector) {
       let {onSpellCheck} =
-        Cu.import("resource://testing-common/AsyncSpellCheckTestHelper.jsm",
-                  {});
+        ChromeUtils.import("resource://testing-common/AsyncSpellCheckTestHelper.jsm",
+                           {});
       let element = content.document.querySelector(contentSelector);
       await new Promise(resolve => onSpellCheck(element, resolve));
       info("Spell check running");
@@ -319,6 +319,12 @@ async function test_contextmenu(selector, menuItems, options = {}) {
       let inspectItems = ["---", null,
                           "context-inspect", true];
       menuItems = menuItems.concat(inspectItems);
+    }
+
+    if (Services.prefs.getBoolPref("devtools.accessibility.enabled", true) &&
+        Services.appinfo.accessibilityEnabled) {
+      let inspectA11YItems = ["context-inspect-a11y", true];
+      menuItems = menuItems.concat(inspectA11YItems);
     }
 
     if (options.maybeScreenshotsPresent &&

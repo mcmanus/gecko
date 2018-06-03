@@ -4,8 +4,9 @@
 
 "use strict";
 
-Cu.import("resource://formautofill/FormAutofillParent.jsm");
-Cu.import("resource://formautofill/ProfileStorage.jsm");
+let {FormAutofillParent} = ChromeUtils.import("resource://formautofill/FormAutofillParent.jsm", {});
+ChromeUtils.import("resource://formautofill/MasterPassword.jsm");
+ChromeUtils.import("resource://formautofill/FormAutofillStorage.jsm");
 
 const TEST_ADDRESS_1 = {
   "given-name": "Timothy",
@@ -48,7 +49,7 @@ add_task(async function test_getRecords() {
   let formAutofillParent = new FormAutofillParent();
 
   await formAutofillParent.init();
-  await formAutofillParent.profileStorage.initialize();
+  await formAutofillParent.formAutofillStorage.initialize();
   let fakeResult = {
     addresses: [{
       "given-name": "Timothy",
@@ -65,7 +66,7 @@ add_task(async function test_getRecords() {
   };
 
   for (let collectionName of ["addresses", "creditCards", "nonExisting"]) {
-    let collection = profileStorage[collectionName];
+    let collection = formAutofillParent.formAutofillStorage[collectionName];
     let expectedResult = fakeResult[collectionName] || [];
     let mock = sinon.mock(target);
     mock.expects("sendAsyncMessage").once().withExactArgs("FormAutofill:Records", expectedResult);
@@ -77,7 +78,7 @@ add_task(async function test_getRecords() {
     await formAutofillParent._getRecords({collectionName}, target);
     mock.verify();
     if (collection) {
-      do_check_eq(collection.getAll.called, true);
+      Assert.equal(collection.getAll.called, true);
       collection.getAll.restore();
     }
   }
@@ -87,9 +88,9 @@ add_task(async function test_getRecords_addresses() {
   let formAutofillParent = new FormAutofillParent();
 
   await formAutofillParent.init();
-  await formAutofillParent.profileStorage.initialize();
+  await formAutofillParent.formAutofillStorage.initialize();
   let mockAddresses = [TEST_ADDRESS_1, TEST_ADDRESS_2];
-  let collection = profileStorage.addresses;
+  let collection = formAutofillParent.formAutofillStorage.addresses;
   sinon.stub(collection, "getAll");
   collection.getAll.returns(mockAddresses);
 
@@ -151,7 +152,7 @@ add_task(async function test_getRecords_addresses() {
   ];
 
   for (let testCase of testCases) {
-    do_print("Starting testcase: " + testCase.description);
+    info("Starting testcase: " + testCase.description);
     let mock = sinon.mock(target);
     mock.expects("sendAsyncMessage").once().withExactArgs("FormAutofill:Records",
                                                           testCase.expectedResult);
@@ -164,15 +165,18 @@ add_task(async function test_getRecords_creditCards() {
   let formAutofillParent = new FormAutofillParent();
 
   await formAutofillParent.init();
-  await formAutofillParent.profileStorage.initialize();
-  let collection = profileStorage.creditCards;
-  let decryptedCCNumber = [TEST_CREDIT_CARD_1["cc-number"], TEST_CREDIT_CARD_2["cc-number"]];
-  await collection.normalizeCCNumberFields(TEST_CREDIT_CARD_1);
-  await collection.normalizeCCNumberFields(TEST_CREDIT_CARD_2);
-  sinon.stub(collection, "getAll", () => [Object.assign({}, TEST_CREDIT_CARD_1), Object.assign({}, TEST_CREDIT_CARD_2)]);
+  await formAutofillParent.formAutofillStorage.initialize();
+  let collection = formAutofillParent.formAutofillStorage.creditCards;
+  let encryptedCCRecords = [TEST_CREDIT_CARD_1, TEST_CREDIT_CARD_2].map(record => {
+    let clonedRecord = Object.assign({}, record);
+    clonedRecord["cc-number"] = collection._getMaskedCCNumber(record["cc-number"]);
+    clonedRecord["cc-number-encrypted"] = MasterPassword.encryptSync(record["cc-number"]);
+    return clonedRecord;
+  });
+  sinon.stub(collection, "getAll", () => [Object.assign({}, encryptedCCRecords[0]), Object.assign({}, encryptedCCRecords[1])]);
   let CreditCardsWithDecryptedNumber = [
-    Object.assign({}, TEST_CREDIT_CARD_1, {"cc-number-decrypted": decryptedCCNumber[0]}),
-    Object.assign({}, TEST_CREDIT_CARD_2, {"cc-number-decrypted": decryptedCCNumber[1]}),
+    Object.assign({}, encryptedCCRecords[0], {"cc-number-decrypted": TEST_CREDIT_CARD_1["cc-number"]}),
+    Object.assign({}, encryptedCCRecords[1], {"cc-number-decrypted": TEST_CREDIT_CARD_2["cc-number"]}),
   ];
 
   let testCases = [
@@ -229,7 +233,7 @@ add_task(async function test_getRecords_creditCards() {
         searchString: "John Doe",
       },
       mpEnabled: true,
-      expectedResult: [TEST_CREDIT_CARD_1],
+      expectedResult: encryptedCCRecords.slice(0, 1),
     },
     {
       description: "Return all creditCards if focused field is cc number (with masterpassword)",
@@ -239,12 +243,12 @@ add_task(async function test_getRecords_creditCards() {
         searchString: "123",
       },
       mpEnabled: true,
-      expectedResult: [TEST_CREDIT_CARD_1, TEST_CREDIT_CARD_2],
+      expectedResult: encryptedCCRecords,
     },
   ];
 
   for (let testCase of testCases) {
-    do_print("Starting testcase: " + testCase.description);
+    info("Starting testcase: " + testCase.description);
     if (testCase.mpEnabled) {
       let tokendb = Cc["@mozilla.org/security/pk11tokendb;1"].createInstance(Ci.nsIPK11TokenDB);
       let token = tokendb.getInternalKeyToken();
@@ -258,4 +262,3 @@ add_task(async function test_getRecords_creditCards() {
     mock.verify();
   }
 });
-

@@ -1,6 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -22,6 +22,18 @@ class nsDeviceContext;
 class nsIFrame;
 class nsAtom;
 class nsIWidget;
+
+namespace mozilla {
+class ComputedStyle;
+namespace layers {
+class StackingContextHelper;
+class WebRenderLayerManager;
+}
+namespace wr {
+class DisplayListBuilder;
+class IpcResourceUpdateQueue;
+}
+}
 
 // IID for the nsITheme interface
 // {7329f760-08cb-450f-8225-dae729096dec}
@@ -62,12 +74,34 @@ public:
                                   const nsRect& aDirtyRect) = 0;
 
   /**
-   * Get the computed CSS border for the widget, in pixels.
+   * Get the used color of the given widget when it's specified as auto.
+   * It's currently only used for scrollbar-*-color properties.
+   */
+  virtual nscolor GetWidgetAutoColor(mozilla::ComputedStyle* aStyle,
+                                     uint8_t aWidgetType)
+  { return NS_RGB(0, 0, 0); }
+
+  /**
+   * Create WebRender commands for the theme background.
+   * @return true if the theme knows how to create WebRender commands for the
+   *         given widget type, false if DrawWidgetBackground need sto be called
+   *         instead.
+   */
+  virtual bool CreateWebRenderCommandsForWidget(mozilla::wr::DisplayListBuilder& aBuilder,
+                                                mozilla::wr::IpcResourceUpdateQueue& aResources,
+                                                const mozilla::layers::StackingContextHelper& aSc,
+                                                mozilla::layers::WebRenderLayerManager* aManager,
+                                                nsIFrame* aFrame,
+                                                uint8_t aWidgetType,
+                                                const nsRect& aRect) { return false; }
+
+  /**
+   * Get the border for the widget, in device pixels.
    */
   NS_IMETHOD GetWidgetBorder(nsDeviceContext* aContext, 
                              nsIFrame* aFrame,
                              uint8_t aWidgetType,
-                             nsIntMargin* aResult)=0;
+                             mozilla::LayoutDeviceIntMargin* aResult) = 0;
 
   /**
    * This method can return false to indicate that the CSS padding
@@ -81,7 +115,7 @@ public:
   virtual bool GetWidgetPadding(nsDeviceContext* aContext,
                                   nsIFrame* aFrame,
                                   uint8_t aWidgetType,
-                                  nsIntMargin* aResult) = 0;
+                                  mozilla::LayoutDeviceIntMargin* aResult) = 0;
 
   /**
    * On entry, *aResult is positioned at 0,0 and sized to the new size
@@ -191,12 +225,6 @@ public:
     * Should we insert a dropmarker inside of combobox button?
    */
   virtual bool ThemeNeedsComboboxDropmarker()=0;
-
-  /**
-   * Should we hide scrollbars?
-   */
-  virtual bool ShouldHideScrollbars()
-  { return false; }
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsITheme, NS_ITHEME_IID)

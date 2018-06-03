@@ -22,6 +22,9 @@ LOCAL_INCLUDES += [
   '/media/mtransport/third_party/nrappkit/src/util/libekr',
 ]
 
+# Add libFuzzer configuration directives
+include('/tools/fuzzing/libfuzzer-config.mozbuild')
+
 SOURCES += [
     'stun_parser_libfuzz.cpp',
 ]

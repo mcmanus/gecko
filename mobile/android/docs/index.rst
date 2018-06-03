@@ -18,9 +18,9 @@ Contents:
    adjust
    mma
    defaultdomains
-   bouncer
    shutdown
    push
+   gradle
 
 Indices and tables
 ==================

@@ -1,43 +1,22 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
+
+/* eslint no-unused-vars: [2, {"vars": "local"}] */
+/* import-globals-from ../../shared/test/shared-head.js */
+
 "use strict";
 
-var { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
+// Load the shared-head file first.
+Services.scriptloader.loadSubScript(
+  "chrome://mochitests/content/browser/devtools/client/shared/test/shared-head.js",
+  this);
 
-// There are shutdown issues for which multiple rejections are left uncaught.
-// This bug should be fixed, but for the moment devtools are whitelisted.
-//
-// NOTE: Entire directory whitelisting should be kept to a minimum. Normally you
-//       should use "expectUncaughtRejection" to flag individual failures.
-const { PromiseTestUtils } = Cu.import("resource://testing-common/PromiseTestUtils.jsm", {});
-PromiseTestUtils.whitelistRejectionsGlobally(/Component not initialized/);
-PromiseTestUtils.whitelistRejectionsGlobally(/Connection closed/);
-PromiseTestUtils.whitelistRejectionsGlobally(/destroy/);
-PromiseTestUtils.whitelistRejectionsGlobally(/File closed/);
-PromiseTestUtils.whitelistRejectionsGlobally(/is no longer, usable/);
-PromiseTestUtils.whitelistRejectionsGlobally(/NS_ERROR_FAILURE/);
-PromiseTestUtils.whitelistRejectionsGlobally(/this\._urls is null/);
-PromiseTestUtils.whitelistRejectionsGlobally(/this\.tabTarget is null/);
-PromiseTestUtils.whitelistRejectionsGlobally(/this\.toolbox is null/);
-PromiseTestUtils.whitelistRejectionsGlobally(/this\.webConsoleClient is null/);
-PromiseTestUtils.whitelistRejectionsGlobally(/this\.worker is null/);
-
-var { require } = Cu.import("resource://devtools/shared/Loader.jsm", {});
-var { Task } = require("devtools/shared/task");
-var Services = require("Services");
-var { gDevTools } = require("devtools/client/framework/devtools");
-var { TargetFactory } = require("devtools/client/framework/target");
 var { DebuggerServer } = require("devtools/server/main");
 var { generateUUID } = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
 
-var Services = require("Services");
 var { WebAudioFront } = require("devtools/shared/fronts/webaudio");
-var DevToolsUtils = require("devtools/shared/DevToolsUtils");
-var flags = require("devtools/shared/flags");
 var audioNodes = require("devtools/server/actors/utils/audionodes.json");
-var mm = null;
 
-const FRAME_SCRIPT_UTILS_URL = "chrome://devtools/content/shared/frame-script-utils.js";
 const EXAMPLE_URL = "http://example.com/browser/devtools/client/webaudioeditor/test/";
 const SIMPLE_CONTEXT_URL = EXAMPLE_URL + "doc_simple-context.html";
 const COMPLEX_CONTEXT_URL = EXAMPLE_URL + "doc_complex-context.html";
@@ -55,85 +34,13 @@ const AUTOMATION_URL = EXAMPLE_URL + "doc_automation.html";
 var gEnableLogging = Services.prefs.getBoolPref("devtools.debugger.log");
 Services.prefs.setBoolPref("devtools.debugger.log", false);
 
-// All tests are asynchronous.
-waitForExplicitFinish();
-
 var gToolEnabled = Services.prefs.getBoolPref("devtools.webaudioeditor.enabled");
 
-flags.testing = true;
-
 registerCleanupFunction(() => {
-  flags.testing = false;
-  info("finish() was called, cleaning up...");
   Services.prefs.setBoolPref("devtools.debugger.log", gEnableLogging);
   Services.prefs.setBoolPref("devtools.webaudioeditor.enabled", gToolEnabled);
   Cu.forceGC();
 });
-
-/**
- * Call manually in tests that use frame script utils after initializing
- * the web audio editor. Call after init but before navigating to a different page.
- */
-function loadFrameScripts() {
-  mm = gBrowser.selectedBrowser.messageManager;
-  mm.loadFrameScript(FRAME_SCRIPT_UTILS_URL, false);
-}
-
-function addTab(aUrl, aWindow) {
-  info("Adding tab: " + aUrl);
-
-  let targetWindow = aWindow || window;
-  let targetBrowser = targetWindow.gBrowser;
-
-  targetWindow.focus();
-  let tab = targetBrowser.selectedTab = targetBrowser.addTab(aUrl);
-  let linkedBrowser = tab.linkedBrowser;
-
-  return new Promise((resolve, reject) => {
-    BrowserTestUtils.browserLoaded(linkedBrowser).then(function () {
-      info("Tab added and finished loading: " + aUrl);
-      resolve(tab);
-    });
-  });
-}
-
-function removeTab(aTab, aWindow) {
-  info("Removing tab.");
-
-  let targetWindow = aWindow || window;
-  let targetBrowser = targetWindow.gBrowser;
-  let tabContainer = targetBrowser.tabContainer;
-
-  return new Promise((resolve, reject) => {
-    tabContainer.addEventListener("TabClose", function (aEvent) {
-      info("Tab removed and finished closing.");
-      resolve();
-    }, {once: true});
-
-    targetBrowser.removeTab(aTab);
-  });
-}
-
-function once(aTarget, aEventName, aUseCapture = false) {
-  info("Waiting for event: '" + aEventName + "' on " + aTarget + ".");
-
-  return new Promise((resolve, reject) => {
-    for (let [add, remove] of [
-      ["on", "off"], // Use event emitter before DOM events for consistency
-      ["addEventListener", "removeEventListener"],
-      ["addListener", "removeListener"]
-    ]) {
-      if ((add in aTarget) && (remove in aTarget)) {
-        aTarget[add](aEventName, function onEvent(...aArgs) {
-          aTarget[remove](aEventName, onEvent, aUseCapture);
-          info("Got event: '" + aEventName + "' on " + aTarget + ".");
-          resolve(...aArgs);
-        }, aUseCapture);
-        break;
-      }
-    }
-  });
-}
 
 function reload(aTarget, aWaitForTargetEvent = "navigate") {
   aTarget.activeTab.reload();
@@ -146,35 +53,24 @@ function navigate(aTarget, aUrl, aWaitForTargetEvent = "navigate") {
 }
 
 /**
- * Call manually in tests that use frame script utils after initializing
- * the shader editor. Call after init but before navigating to different pages.
- */
-function loadFrameScripts() {
-  mm = gBrowser.selectedBrowser.messageManager;
-  mm.loadFrameScript(FRAME_SCRIPT_UTILS_URL, false);
-}
-
-/**
  * Adds a new tab, and instantiate a WebAudiFront object.
  * This requires calling removeTab before the test ends.
  */
 function initBackend(aUrl) {
   info("Initializing a web audio editor front.");
 
-  if (!DebuggerServer.initialized) {
-    DebuggerServer.init();
-    DebuggerServer.addBrowserActors();
-  }
+  DebuggerServer.init();
+  DebuggerServer.registerAllActors();
 
-  return Task.spawn(function* () {
-    let tab = yield addTab(aUrl);
-    let target = TargetFactory.forTab(tab);
+  return (async function() {
+    const tab = await addTab(aUrl);
+    const target = TargetFactory.forTab(tab);
 
-    yield target.makeRemote();
+    await target.makeRemote();
 
-    let front = new WebAudioFront(target.client, target.form);
+    const front = new WebAudioFront(target.client, target.form);
     return { target, front };
-  });
+  })();
 }
 
 /**
@@ -185,17 +81,17 @@ function initBackend(aUrl) {
 function initWebAudioEditor(aUrl) {
   info("Initializing a web audio editor pane.");
 
-  return Task.spawn(function* () {
-    let tab = yield addTab(aUrl);
-    let target = TargetFactory.forTab(tab);
+  return (async function() {
+    const tab = await addTab(aUrl);
+    const target = TargetFactory.forTab(tab);
 
-    yield target.makeRemote();
+    await target.makeRemote();
 
     Services.prefs.setBoolPref("devtools.webaudioeditor.enabled", true);
-    let toolbox = yield gDevTools.showToolbox(target, "webaudioeditor");
-    let panel = toolbox.getCurrentPanel();
+    const toolbox = await gDevTools.showToolbox(target, "webaudioeditor");
+    const panel = toolbox.getCurrentPanel();
     return { target, panel, toolbox };
-  });
+  })();
 }
 
 /**
@@ -219,12 +115,12 @@ function teardown(aTarget) {
 // programs that should be listened to and waited on, and an optional
 // `onAdd` function that calls with the entire actors array on program link
 function getN(front, eventName, count, spread) {
-  let actors = [];
+  const actors = [];
   info(`Waiting for ${count} ${eventName} events`);
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     front.on(eventName, function onEvent(...args) {
-      let actor = args[0];
+      const actor = args[0];
       if (actors.length !== count) {
         actors.push(spread ? args : actor);
       }
@@ -237,13 +133,27 @@ function getN(front, eventName, count, spread) {
   });
 }
 
-function get(front, eventName) { return getN(front, eventName, 1); }
-function get2(front, eventName) { return getN(front, eventName, 2); }
-function get3(front, eventName) { return getN(front, eventName, 3); }
-function getSpread(front, eventName) { return getN(front, eventName, 1, true); }
-function get2Spread(front, eventName) { return getN(front, eventName, 2, true); }
-function get3Spread(front, eventName) { return getN(front, eventName, 3, true); }
-function getNSpread(front, eventName, count) { return getN(front, eventName, count, true); }
+function get(front, eventName) {
+  return getN(front, eventName, 1);
+}
+function get2(front, eventName) {
+  return getN(front, eventName, 2);
+}
+function get3(front, eventName) {
+  return getN(front, eventName, 3);
+}
+function getSpread(front, eventName) {
+  return getN(front, eventName, 1, true);
+}
+function get2Spread(front, eventName) {
+  return getN(front, eventName, 2, true);
+}
+function get3Spread(front, eventName) {
+  return getN(front, eventName, 3, true);
+}
+function getNSpread(front, eventName, count) {
+  return getN(front, eventName, count, true);
+}
 
 /**
  * Waits for the UI_GRAPH_RENDERED event to fire, but only
@@ -251,12 +161,12 @@ function getNSpread(front, eventName, count) { return getN(front, eventName, cou
  * nodes and edges.
  */
 function waitForGraphRendered(front, nodeCount, edgeCount, paramEdgeCount) {
-  let eventName = front.EVENTS.UI_GRAPH_RENDERED;
+  const eventName = front.EVENTS.UI_GRAPH_RENDERED;
   info(`Wait for graph rendered with ${nodeCount} nodes, ${edgeCount} edges`);
 
-  return new Promise((resolve, reject) => {
-    front.on(eventName, function onGraphRendered(_, nodes, edges, pEdges) {
-      let paramEdgesDone = paramEdgeCount != null ? paramEdgeCount === pEdges : true;
+  return new Promise((resolve) => {
+    front.on(eventName, function onGraphRendered(nodes, edges, pEdges) {
+      const paramEdgesDone = paramEdgeCount != null ? paramEdgeCount === pEdges : true;
       info(`Got graph rendered with ${nodes} / ${nodeCount} nodes, ` +
            `${edges} / ${edgeCount} edges`);
       if (nodes === nodeCount && edges === edgeCount && paramEdgesDone) {
@@ -269,8 +179,8 @@ function waitForGraphRendered(front, nodeCount, edgeCount, paramEdgeCount) {
 
 function checkVariableView(view, index, hash, description = "") {
   info("Checking Variable View");
-  let scope = view.getScopeAtIndex(index);
-  let variables = Object.keys(hash);
+  const scope = view.getScopeAtIndex(index);
+  const variables = Object.keys(hash);
 
   // If node shouldn't display any properties, ensure that the 'empty' message is
   // visible
@@ -282,7 +192,7 @@ function checkVariableView(view, index, hash, description = "") {
 
   // Otherwise, iterate over expected properties
   variables.forEach(variable => {
-    let aVar = scope.get(variable);
+    const aVar = scope.get(variable);
     is(aVar.target.querySelector(".name").getAttribute("value"), variable,
       "Correct property name for " + variable);
     let value = aVar.target.querySelector(".value").getAttribute("value");
@@ -292,13 +202,11 @@ function checkVariableView(view, index, hash, description = "") {
     // and "Float32Array", but will match the original value.
     try {
       value = JSON.parse(value);
-    }
-    catch (e) {}
+    } catch (e) {}
     if (typeof hash[variable] === "function") {
       ok(hash[variable](value),
         "Passing property value of " + value + " for " + variable + " " + description);
-    }
-    else {
+    } else {
       is(value, hash[variable],
         "Correct property value of " + hash[variable] + " for " + variable + " " + description);
     }
@@ -306,13 +214,22 @@ function checkVariableView(view, index, hash, description = "") {
 }
 
 function modifyVariableView(win, view, index, prop, value) {
-  let scope = view.getScopeAtIndex(index);
-  let aVar = scope.get(prop);
+  const scope = view.getScopeAtIndex(index);
+  const aVar = scope.get(prop);
   scope.expand();
 
   return new Promise((resolve, reject) => {
-    win.on(win.EVENTS.UI_SET_PARAM, handleSetting);
-    win.on(win.EVENTS.UI_SET_PARAM_ERROR, handleSetting);
+    const onParamSetSuccess = () => {
+      win.off(win.EVENTS.UI_SET_PARAM_ERROR, onParamSetError);
+      resolve();
+    };
+
+    const onParamSetError = () => {
+      win.off(win.EVENTS.UI_SET_PARAM, onParamSetSuccess);
+      reject();
+    };
+    win.once(win.EVENTS.UI_SET_PARAM, onParamSetSuccess);
+    win.once(win.EVENTS.UI_SET_PARAM_ERROR, onParamSetError);
 
     // Focus and select the variable to begin editing
     win.focus();
@@ -323,20 +240,11 @@ function modifyVariableView(win, view, index, prop, value) {
     // events
     executeSoon(() => {
       info("Setting " + value + " for " + prop + "....");
-      for (let c of (value + "")) {
+      for (const c of (value + "")) {
         EventUtils.synthesizeKey(c, {}, win);
       }
       EventUtils.sendKey("RETURN", win);
     });
-
-    function handleSetting(eventName) {
-      win.off(win.EVENTS.UI_SET_PARAM, handleSetting);
-      win.off(win.EVENTS.UI_SET_PARAM_ERROR, handleSetting);
-      if (eventName === win.EVENTS.UI_SET_PARAM)
-        resolve();
-      if (eventName === win.EVENTS.UI_SET_PARAM_ERROR)
-        reject();
-    }
   });
 }
 
@@ -349,7 +257,7 @@ function findGraphEdge(win, source, target, param) {
 }
 
 function findGraphNode(win, node) {
-  let selector = ".nodes > g[data-id='" + node + "']";
+  const selector = ".nodes > g[data-id='" + node + "']";
   return win.document.querySelector(selector);
 }
 
@@ -362,7 +270,7 @@ function mouseOver(win, element) {
 }
 
 function command(button) {
-  let ev = button.ownerDocument.createEvent("XULCommandEvent");
+  const ev = button.ownerDocument.createEvent("XULCommandEvent");
   ev.initCommandEvent("command", true, true, button.ownerDocument.defaultView, 0, false, false, false, false, null, 0);
   button.dispatchEvent(ev);
 }
@@ -372,22 +280,12 @@ function isVisible(element) {
 }
 
 /**
- * Used in debugging, returns a promise that resolves in `n` milliseconds.
- */
-function wait(n) {
-  return new Promise((resolve, reject) => {
-    setTimeout(resolve, n);
-    info("Waiting " + n / 1000 + " seconds.");
-  });
-}
-
-/**
  * Clicks a graph node based on actorID or passing in an element.
  * Returns a promise that resolves once UI_INSPECTOR_NODE_SET is fired and
  * the tabs have rendered, completing all RDP requests for the node.
  */
 function clickGraphNode(panelWin, el, waitForToggle = false) {
-  let promises = [
+  const promises = [
     once(panelWin, panelWin.EVENTS.UI_INSPECTOR_NODE_SET),
     once(panelWin, panelWin.EVENTS.UI_PROPERTIES_TAB_RENDERED),
     once(panelWin, panelWin.EVENTS.UI_AUTOMATION_TAB_RENDERED)
@@ -399,7 +297,7 @@ function clickGraphNode(panelWin, el, waitForToggle = false) {
 
   // Use `el` as the element if it is one, otherwise
   // assume it's an ID and find the related graph node
-  let element = el.tagName ? el : findGraphNode(panelWin, el);
+  const element = el.tagName ? el : findGraphNode(panelWin, el);
   click(panelWin, element);
 
   return Promise.all(promises);
@@ -439,7 +337,7 @@ function countGraphObjects(win) {
 * Forces cycle collection and GC, used in AudioNode destruction tests.
 */
 function forceNodeCollection() {
-  ContentTask.spawn(gBrowser.selectedBrowser, {}, function*() {
+  ContentTask.spawn(gBrowser.selectedBrowser, {}, async function() {
     // Kill the reference keeping stuff alive.
     content.wrappedJSObject.keepAlive = null;
 
@@ -458,9 +356,9 @@ function forceNodeCollection() {
  */
 function checkAutomationValue(values, time, expected) {
   // Remain flexible on values as we can approximate points
-  let EPSILON = 0.01;
+  const EPSILON = 0.01;
 
-  let value = getValueAt(values, time);
+  const value = getValueAt(values, time);
   ok(Math.abs(value - expected) < EPSILON, "Timeline value at " + time + " with value " + value + " should have value very close to " + expected);
 
   /**
@@ -492,44 +390,21 @@ function waitForInspectorRender(panelWin, EVENTS) {
 }
 
 /**
- * Takes a string `script` and evaluates it directly in the content
- * in potentially a different process.
- */
-function evalInDebuggee(script) {
-  if (!mm) {
-    throw new Error("`loadFrameScripts()` must be called when using MessageManager.");
-  }
-
-  return new Promise((resolve, reject) => {
-    let id = generateUUID().toString();
-    mm.sendAsyncMessage("devtools:test:eval", { script: script, id: id });
-    mm.addMessageListener("devtools:test:eval:response", handler);
-
-    function handler({ data }) {
-      if (id !== data.id) {
-        return;
-      }
-
-      mm.removeMessageListener("devtools:test:eval:response", handler);
-      resolve(data.value);
-    }
-  });
-}
-
-/**
  * Takes an AudioNode type and returns it's properties (from audionode.json)
  * as keys and their default values as keys
  */
 function nodeDefaultValues(nodeName) {
-  let fn = NODE_CONSTRUCTORS[nodeName];
+  const fn = NODE_CONSTRUCTORS[nodeName];
 
-  if (typeof fn === "undefined") return {};
+  if (typeof fn === "undefined") {
+    return {};
+  }
 
-  let init = nodeName === "AudioDestinationNode" ? "destination" : `create${fn}()`;
+  const init = nodeName === "AudioDestinationNode" ? "destination" : `create${fn}()`;
 
-  let definition = JSON.stringify(audioNodes[nodeName].properties);
+  const definition = JSON.stringify(audioNodes[nodeName].properties);
 
-  let evalNode = evalInDebuggee(`
+  const evalNode = evalInDebuggee(`
     let ins = (new AudioContext()).${init};
     let props = ${definition};
     let answer = {};

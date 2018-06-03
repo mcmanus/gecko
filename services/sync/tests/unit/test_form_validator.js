@@ -1,7 +1,7 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-Components.utils.import("resource://services-sync/engines/forms.js");
+ChromeUtils.import("resource://services-sync/engines/forms.js");
 
 function getDummyServerAndClient() {
   return {
@@ -60,7 +60,7 @@ add_task(async function test_valid() {
   let { problemData, clientRecords, records, deletedRecords } =
       await validator.compareClientWithServer(client, server);
   equal(clientRecords.length, 3);
-  equal(records.length, 3)
+  equal(records.length, 3);
   equal(deletedRecords.length, 0);
   deepEqual(problemData, validator.emptyProblemData());
 });

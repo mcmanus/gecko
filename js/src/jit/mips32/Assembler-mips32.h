@@ -51,14 +51,20 @@ static constexpr Register ABINonArgReg0 = t0;
 static constexpr Register ABINonArgReg1 = t1;
 static constexpr Register ABINonArgReg2 = t2;
 
+// This register may be volatile or nonvolatile. Avoid f18 which is the
+// ScratchDoubleReg.
+static constexpr FloatRegister ABINonArgDoubleReg { FloatRegisters::f16, FloatRegister::Double };
+
 // These registers may be volatile or nonvolatile.
 // Note: these three registers are all guaranteed to be different
 static constexpr Register ABINonArgReturnReg0 = t0;
 static constexpr Register ABINonArgReturnReg1 = t1;
+static constexpr Register ABINonVolatileReg = s0;
 
-// This register is guaranteed to be clobberable during the prologue of an ABI
-// call which must preserve both ABI argument and non-volatile registers.
-static constexpr Register NativeABIPrologueClobberable = t0;
+// This register is guaranteed to be clobberable during the prologue and
+// epilogue of an ABI call which must preserve both ABI argument, return
+// and non-volatile registers.
+static constexpr Register ABINonArgReturnVolatileReg = t0;
 
 // TLS pointer argument register for WebAssembly functions. This must not alias
 // any other register used for passing function arguments or return values.
@@ -78,8 +84,13 @@ static constexpr FloatRegister ReturnFloat32Reg = { FloatRegisters::f0, FloatReg
 static constexpr FloatRegister ReturnDoubleReg = { FloatRegisters::f0, FloatRegister::Double };
 static constexpr FloatRegister ScratchFloat32Reg = { FloatRegisters::f18, FloatRegister::Single };
 static constexpr FloatRegister ScratchDoubleReg = { FloatRegisters::f18, FloatRegister::Double };
-static constexpr FloatRegister SecondScratchFloat32Reg = { FloatRegisters::f16, FloatRegister::Single };
-static constexpr FloatRegister SecondScratchDoubleReg = { FloatRegisters::f16, FloatRegister::Double };
+
+struct ScratchFloat32Scope : public AutoFloatRegisterScope
+{
+    explicit ScratchFloat32Scope(MacroAssembler& masm)
+      : AutoFloatRegisterScope(masm, ScratchFloat32Reg)
+    { }
+};
 
 struct ScratchDoubleScope : public AutoFloatRegisterScope
 {
@@ -87,12 +98,6 @@ struct ScratchDoubleScope : public AutoFloatRegisterScope
       : AutoFloatRegisterScope(masm, ScratchDoubleReg)
     { }
 };
-
-// Registers used in the GenerateFFIIonExit Disable Activation block.
-// None of these may be the second scratch register (t8).
-static constexpr Register WasmIonExitRegReturnData = JSReturnReg_Data;
-static constexpr Register WasmIonExitRegReturnType = JSReturnReg_Type;
-static constexpr Register WasmIonExitTlsReg = s5;
 
 static constexpr FloatRegister f0  = { FloatRegisters::f0, FloatRegister::Double };
 static constexpr FloatRegister f2  = { FloatRegisters::f2, FloatRegister::Double };
@@ -125,6 +130,7 @@ static_assert(JitStackAlignment % sizeof(Value) == 0 && JitStackValueAlignment >
 // TODO Copy the static_asserts from x64/x86 assembler files.
 static constexpr uint32_t SimdMemoryAlignment = 8;
 static constexpr uint32_t WasmStackAlignment = SimdMemoryAlignment;
+static const uint32_t WasmTrapInstructionLength = 4;
 
 // Does this architecture support SIMD conversions between Uint32x4 and Float32x4?
 static constexpr bool SupportsUint32x4FloatConversions = false;
@@ -146,9 +152,6 @@ class Assembler : public AssemblerMIPSShared
     static Condition UnsignedCondition(Condition cond);
     static Condition ConditionWithoutEqual(Condition cond);
 
-    // MacroAssemblers hold onto gcthings, so they are traced by the GC.
-    void trace(JSTracer* trc);
-
     static uintptr_t GetPointer(uint8_t*);
 
   protected:
@@ -156,14 +159,16 @@ class Assembler : public AssemblerMIPSShared
     // precision registers that make one double register.
     FloatRegister getOddPair(FloatRegister reg) {
         MOZ_ASSERT(reg.isDouble());
-        return reg.singleOverlay(1);
+        MOZ_ASSERT(reg.id() % 2 == 0);
+        FloatRegister odd(reg.id() | 1, FloatRegister::Single);
+        return odd;
     }
 
   public:
     using AssemblerMIPSShared::bind;
 
     void bind(RepatchLabel* label);
-    static void Bind(uint8_t* rawCode, CodeOffset label, CodeOffset target);
+    static void Bind(uint8_t* rawCode, const CodeLabel& label);
 
     void processCodeLabels(uint8_t* rawCode);
 

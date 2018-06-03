@@ -16,9 +16,7 @@
 #if defined(MOZ_CONTENT_SANDBOX)
 #include "mozilla/SandboxSettings.h"
 #endif // defined(MOZ_CONTENT_SANDBOX)
-#if defined(MOZ_CRASHREPORTER)
 #include "nsExceptionHandler.h"
-#endif // defined(MOZ_CRASHREPORTER)
 
 namespace mozilla {
 namespace mscom {
@@ -75,21 +73,21 @@ public:
   void PreserveStream(PreservedStreamPtr aPtr) const
   {
     MOZ_ASSERT(!mMarshaledStream);
-    mMarshaledStream = Move(aPtr);
+    mMarshaledStream = std::move(aPtr);
   }
 
   PreservedStreamPtr GetPreservedStream()
   {
-    return Move(mMarshaledStream);
+    return std::move(mMarshaledStream);
   }
 #endif // defined(MOZ_CONTENT_SANDBOX)
 
   COMPtrHolder(const COMPtrHolder& aOther) = delete;
 
   COMPtrHolder(COMPtrHolder&& aOther)
-    : mPtr(Move(aOther.mPtr))
+    : mPtr(std::move(aOther.mPtr))
 #if defined(MOZ_CONTENT_SANDBOX)
-    , mMarshaledStream(Move(aOther.mMarshaledStream))
+    , mMarshaledStream(std::move(aOther.mMarshaledStream))
 #endif // defined(MOZ_CONTENT_SANDBOX)
   {
   }
@@ -103,10 +101,10 @@ public:
   // when used as a member of an IPDL struct.
   ThisType& operator=(const ThisType& aOther)
   {
-    Set(Move(aOther.mPtr));
+    Set(std::move(aOther.mPtr));
 
 #if defined(MOZ_CONTENT_SANDBOX)
-    mMarshaledStream = Move(aOther.mMarshaledStream);
+    mMarshaledStream = std::move(aOther.mMarshaledStream);
 #endif // defined(MOZ_CONTENT_SANDBOX)
 
     return *this;
@@ -114,10 +112,10 @@ public:
 
   ThisType& operator=(ThisType&& aOther)
   {
-    Set(Move(aOther.mPtr));
+    Set(std::move(aOther.mPtr));
 
 #if defined(MOZ_CONTENT_SANDBOX)
-    mMarshaledStream = Move(aOther.mMarshaledStream);
+    mMarshaledStream = std::move(aOther.mMarshaledStream);
 #endif // defined(MOZ_CONTENT_SANDBOX)
 
     return *this;
@@ -212,10 +210,8 @@ struct ParamTraits<mozilla::mscom::COMPtrHolder<Interface, _IID>>
 
     mozilla::mscom::ProxyStream proxyStream(_IID, buf.get(), length, &env);
     if (!proxyStream.IsValid()) {
-#if defined(MOZ_CRASHREPORTER)
       CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("ProxyStreamValid"),
                                          NS_LITERAL_CSTRING("false"));
-#endif // defined(MOZ_CRASHREPORTER)
       return false;
     }
 
@@ -224,7 +220,7 @@ struct ParamTraits<mozilla::mscom::COMPtrHolder<Interface, _IID>>
       return false;
     }
 
-    aResult->Set(mozilla::Move(ptr));
+    aResult->Set(std::move(ptr));
     return true;
   }
 };

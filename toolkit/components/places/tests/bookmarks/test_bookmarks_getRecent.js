@@ -35,11 +35,13 @@ add_task(async function getRecent_returns_recent_bookmarks() {
   PlacesUtils.tagging.tagURI(uri(bm4.url), ["Test Tag"]);
 
   // Add a separator.
-  PlacesUtils.bookmarks.insertSeparator(PlacesUtils.unfiledBookmarksFolderId,
-                                        PlacesUtils.bookmarks.DEFAULT_INDEX);
+  await PlacesUtils.bookmarks.insert({
+    parentGuid: PlacesUtils.bookmarks.unfiledGuid,
+    type: PlacesUtils.bookmarks.TYPE_SEPARATOR
+  });
 
   // Add a query bookmark.
-  let queryURL = `place:folder=${PlacesUtils.bookmarksMenuFolderId}&queryType=1`;
+  let queryURL = `place:parent=${PlacesUtils.bookmarks.menuGuid}&queryType=1`;
   let bm5 = await PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                                  url: queryURL,
                                                  title: "a test query" });

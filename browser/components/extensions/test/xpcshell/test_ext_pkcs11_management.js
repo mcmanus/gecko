@@ -13,7 +13,7 @@ tmpDir.createUnique(Ci.nsIFile.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
 let baseDir = OS.Path.join(tmpDir.path, slug);
 OS.File.makeDir(baseDir);
 
-do_register_cleanup(() => {
+registerCleanupFunction(() => {
   tmpDir.remove(true);
 });
 
@@ -57,7 +57,7 @@ async function setupManifests(modules) {
       };
 
       Services.dirsvc.registerProvider(dirProvider);
-      do_register_cleanup(() => {
+      registerCleanupFunction(() => {
         Services.dirsvc.unregisterProvider(dirProvider);
       });
 
@@ -70,7 +70,7 @@ async function setupManifests(modules) {
       const REGKEY = String.raw`Software\Mozilla\PKCS11Modules`;
 
       let registry = new MockRegistry();
-      do_register_cleanup(() => {
+      registerCleanupFunction(() => {
         registry.shutdown();
       });
 
@@ -102,6 +102,7 @@ add_task(async function test_pkcs11() {
       browser.test.assertEq("Test PKCS11 Slot", slots[0].name, "The first slot name matches the expected name");
       browser.test.assertEq("Test PKCS11 Slot 二", slots[1].name, "The second slot name matches the expected name");
       browser.test.assertTrue(slots[1].token, "The second slot has a token");
+      browser.test.assertFalse(slots[2].token, "The third slot has no token");
       browser.test.assertEq("Test PKCS11 Tokeñ 2 Label", slots[1].token.name, "The token name matches the expected name");
       browser.test.assertEq("Test PKCS11 Manufacturer ID", slots[1].token.manufacturer, "The token manufacturer matches the expected manufacturer");
       browser.test.assertEq("0.0", slots[1].token.HWVersion, "The token hardware version matches the expected version");

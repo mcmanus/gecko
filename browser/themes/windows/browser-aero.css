@@ -7,8 +7,8 @@
 %define glassInactiveBorderColor rgb(102, 102, 102)
 
 @media (-moz-os-version: windows-win7) {
-  @media not all and (-moz-windows-classic) {
-    #main-window[sizemode="normal"] > #tab-view-deck > #browser-panel > #navigator-toolbox > #toolbar-menubar {
+  @media (-moz-windows-classic: 0) {
+    #main-window[sizemode="normal"] > #navigator-toolbox > #toolbar-menubar {
       margin-top: 1px;
     }
   }
@@ -40,14 +40,18 @@
         @media (-moz-windows-accent-color-in-titlebar: 0) {
           :root[tabsintitlebar]:not(:-moz-lwtheme) {
             background-color: hsl(235,33%,19%);
-            --titlebar-text-color: hsl(240,9%,98%);
+          }
+          :root[tabsintitlebar] .titlebar-color:not(:-moz-lwtheme) {
+            color: hsl(240,9%,98%);
           }
         }
 
         @media (-moz-windows-accent-color-in-titlebar) {
           :root[tabsintitlebar]:not(:-moz-window-inactive):not(:-moz-lwtheme) {
             background-color: -moz-win-accentcolor;
-            --titlebar-text-color: -moz-win-accentcolortext;
+          }
+          :root[tabsintitlebar] .titlebar-color:not(:-moz-window-inactive):not(:-moz-lwtheme) {
+            color: -moz-win-accentcolortext;
           }
         }
 
@@ -82,7 +86,7 @@
         margin: 0 !important;
         padding: 8px 17px;
         -moz-context-properties: stroke;
-        stroke: var(--titlebar-text-color);
+        stroke: currentColor;
       }
 
       .titlebar-button > .toolbarbutton-icon {
@@ -106,19 +110,19 @@
         list-style-image: url(chrome://browser/skin/window-controls/close.svg);
       }
 
-      .titlebar-button:-moz-lwtheme {
+      :root[lwtheme-image] .titlebar-button {
         -moz-context-properties: unset;
       }
-      #titlebar-min:-moz-lwtheme {
+      :root[lwtheme-image] #titlebar-min {
         list-style-image: url(chrome://browser/skin/window-controls/minimize-themes.svg);
       }
-      #titlebar-max:-moz-lwtheme {
+      :root[lwtheme-image] #titlebar-max {
         list-style-image: url(chrome://browser/skin/window-controls/maximize-themes.svg);
       }
-      :root[sizemode="maximized"] #titlebar-max:-moz-lwtheme {
+      :root[lwtheme-image][sizemode="maximized"] #titlebar-max {
         list-style-image: url(chrome://browser/skin/window-controls/restore-themes.svg);
       }
-      #titlebar-close:-moz-lwtheme {
+      :root[lwtheme-image] #titlebar-close {
         list-style-image: url(chrome://browser/skin/window-controls/close-themes.svg);
       }
 
@@ -170,7 +174,7 @@
 
       @media (-moz-windows-default-theme) {
         #main-menubar > menu {
-          -moz-appearance: none;
+          color: inherit;
         }
 
         #main-menubar > menu[_moz-menuactive="true"],
@@ -258,29 +262,13 @@
   @media (-moz-os-version: windows-win8) {
     /* Artificially draw window borders that are covered by lwtheme, see bug 591930.
      * Borders for win7 are below, win10 doesn't need them. */
-    #main-window[sizemode="normal"] > #tab-view-deck > #browser-panel:-moz-lwtheme {
+    #main-window[sizemode="normal"] > #navigator-toolbox:-moz-lwtheme {
       border-top: 1px solid @glassShadowColor@;
     }
   }
 
-  @media (-moz-windows-default-theme) {
-    #main-menubar > menu:not(:-moz-lwtheme) {
-      color: inherit;
-    }
-
-    /* Use a different color only on Windows 8 and higher for inactive windows.
-     * On Win 7, the menubar fog disappears for inactive windows, and renders gray
-     * illegible.
-     */
-    @media not all and (-moz-os-version: windows-win7) {
-      #toolbar-menubar:not(:-moz-lwtheme):-moz-window-inactive {
-        color: ThreeDShadow;
-      }
-    }
-  }
-
-  :root[darkwindowframe="true"]:not(:-moz-lwtheme):not(:-moz-window-inactive) {
-    --titlebar-text-color: white;
+  :root[darkwindowframe="true"] .titlebar-color:not(:-moz-window-inactive):not(:-moz-lwtheme) {
+    color: white;
   }
 
   /* Show borders on Win 7 & 8, but not on 10 and later: */
@@ -337,13 +325,14 @@
 
   /* Artificially draw window borders that are covered by lwtheme, see bug 591930.
    * We use a different border for win8, and this is not necessary on win10+ */
-  #main-window[sizemode="normal"] > #tab-view-deck > #browser-panel:-moz-lwtheme {
-    border-top: 2px solid;
-    -moz-border-top-colors: @glassActiveBorderColor@ rgba(255,255,255,.6);
+  #main-window[sizemode="normal"] > #navigator-toolbox:-moz-lwtheme {
+    border-top: 1px solid @glassActiveBorderColor@;
+    padding-top: 1px;
+    box-shadow: 0 1px 0 rgba(255,255,255,.6) inset;
   }
 
-  #main-window[sizemode="normal"] > #tab-view-deck > #browser-panel:-moz-lwtheme:-moz-window-inactive {
-    -moz-border-top-colors: @glassInactiveBorderColor@ rgba(255,255,255,.6);
+  #main-window[sizemode="normal"] > #navigator-toolbox:-moz-lwtheme:-moz-window-inactive {
+    border-top-color: @glassInactiveBorderColor@;
   }
 }
 
@@ -358,13 +347,13 @@
     }
 
     /* Render a window top border for lwthemes: */
-    #main-window[tabsintitlebar][sizemode="normal"] > #tab-view-deck > #browser-panel:-moz-lwtheme {
+    #main-window[tabsintitlebar][sizemode="normal"] > #navigator-toolbox:-moz-lwtheme {
       background-image: linear-gradient(to bottom,
             @glassActiveBorderColor@ 0, @glassActiveBorderColor@ 1px,
             rgba(255,255,255,.6) 1px, rgba(255,255,255,.6) 2px, transparent 2px);
     }
 
-    #main-window[tabsintitlebar][sizemode="normal"] > #tab-view-deck > #browser-panel:-moz-lwtheme:-moz-window-inactive {
+    #main-window[tabsintitlebar][sizemode="normal"] > #navigator-toolbox:-moz-lwtheme:-moz-window-inactive {
       background-image: linear-gradient(to bottom,
             @glassInactiveBorderColor@ 0, @glassInactiveBorderColor@ 1px,
             rgba(255,255,255,.6) 1px, rgba(255,255,255,.6) 2px, transparent 2px);

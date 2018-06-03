@@ -21,9 +21,9 @@ const { breakpointSpec } = require("devtools/shared/specs/breakpoint");
  *        An array of objects of the form `{ script, offsets }`.
  */
 function setBreakpointAtEntryPoints(actor, entryPoints) {
-  for (let { script, offsets } of entryPoints) {
+  for (const { script, offsets } of entryPoints) {
     actor.addScript(script);
-    for (let offset of offsets) {
+    for (const offset of offsets) {
       script.setBreakpoint(offset, actor);
     }
   }
@@ -36,7 +36,7 @@ exports.setBreakpointAtEntryPoints = setBreakpointAtEntryPoints;
  * responsible for deleting breakpoints, handling breakpoint hits and
  * associating breakpoints with scripts.
  */
-let BreakpointActor = ActorClassWithSpec(breakpointSpec, {
+const BreakpointActor = ActorClassWithSpec(breakpointSpec, {
   /**
    * Create a Breakpoint actor.
    *
@@ -45,7 +45,7 @@ let BreakpointActor = ActorClassWithSpec(breakpointSpec, {
    * @param OriginalLocation originalLocation
    *        The original location of the breakpoint.
    */
-  initialize: function (threadActor, originalLocation) {
+  initialize: function(threadActor, originalLocation) {
     // The set of Debugger.Script instances that this breakpoint has been set
     // upon.
     this.scripts = new Set();
@@ -56,11 +56,11 @@ let BreakpointActor = ActorClassWithSpec(breakpointSpec, {
     this.isPending = true;
   },
 
-  destroy: function () {
+  destroy: function() {
     this.removeScripts();
   },
 
-  hasScript: function (script) {
+  hasScript: function(script) {
     return this.scripts.has(script);
   },
 
@@ -71,7 +71,7 @@ let BreakpointActor = ActorClassWithSpec(breakpointSpec, {
    * @param script Debugger.Script
    *        The new source script on which the breakpoint has been set.
    */
-  addScript: function (script) {
+  addScript: function(script) {
     this.scripts.add(script);
     this.isPending = false;
   },
@@ -79,8 +79,8 @@ let BreakpointActor = ActorClassWithSpec(breakpointSpec, {
   /**
    * Remove the breakpoints from associated scripts and clear the script cache.
    */
-  removeScripts: function () {
-    for (let script of this.scripts) {
+  removeScripts: function() {
+    for (const script of this.scripts) {
       script.clearBreakpoint(this);
     }
     this.scripts.clear();
@@ -100,8 +100,8 @@ let BreakpointActor = ActorClassWithSpec(breakpointSpec, {
    *          - message: string
    *            If the condition throws, this is the thrown message.
    */
-  checkCondition: function (frame) {
-    let completion = frame.eval(this.condition);
+  checkCondition: function(frame) {
+    const completion = frame.eval(this.condition);
     if (completion) {
       if (completion.throw) {
         // The evaluation failed and threw
@@ -136,19 +136,20 @@ let BreakpointActor = ActorClassWithSpec(breakpointSpec, {
    * @param frame Debugger.Frame
    *        The stack frame that contained the breakpoint.
    */
-  hit: function (frame) {
+  hit: function(frame) {
     // Don't pause if we are currently stepping (in or over) or the frame is
     // black-boxed.
-    let generatedLocation = this.threadActor.sources.getFrameLocation(frame);
-    let {
+    const generatedLocation = this.threadActor.sources.getFrameLocation(frame);
+    const {
       originalSourceActor,
       originalLine,
       originalColumn
     } = this.threadActor.unsafeSynchronize(
       this.threadActor.sources.getOriginalLocation(generatedLocation));
-    let url = originalSourceActor.url;
+    const url = originalSourceActor.url;
 
     if (this.threadActor.sources.isBlackBoxed(url)
+        || this.threadActor.skipBreakpoints
         || frame.onStep) {
       return undefined;
     }
@@ -162,7 +163,7 @@ let BreakpointActor = ActorClassWithSpec(breakpointSpec, {
       return undefined;
     }
 
-    let reason = {};
+    const reason = {};
 
     if (this.threadActor._hiddenBreakpoints.has(this.actorID)) {
       reason.type = "pauseOnDOMEvents";
@@ -171,7 +172,7 @@ let BreakpointActor = ActorClassWithSpec(breakpointSpec, {
       // TODO: add the rest of the breakpoints on that line (bug 676602).
       reason.actors = [ this.actorID ];
     } else {
-      let { result, message } = this.checkCondition(frame);
+      const { result, message } = this.checkCondition(frame);
 
       if (result) {
         if (!message) {
@@ -191,7 +192,7 @@ let BreakpointActor = ActorClassWithSpec(breakpointSpec, {
   /**
    * Handle a protocol request to remove this breakpoint.
    */
-  delete: function () {
+  delete: function() {
     // Remove from the breakpoint store.
     if (this.originalLocation) {
       this.threadActor.breakpointActorMap.deleteActor(this.originalLocation);

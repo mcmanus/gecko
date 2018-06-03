@@ -4,16 +4,12 @@
 "use strict";
 requestLongerTimeout(3);
 
-var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
-
-const scriptLoader = Cc["@mozilla.org/moz/jssubscript-loader;1"].
-                     getService(Ci.mozIJSSubScriptLoader);
 /* import-globals-from classifierHelper.js */
-scriptLoader.loadSubScript(
+Services.scriptloader.loadSubScript(
   "chrome://mochitests/content/browser/toolkit/components/url-classifier/tests/browser/classifierHelper.js",
   this);
-  /* import-globals-from classifierTester.js */
-scriptLoader.loadSubScript(
+/* import-globals-from classifierTester.js */
+Services.scriptloader.loadSubScript(
   "chrome://mochitests/content/browser/toolkit/components/url-classifier/tests/browser/classifierTester.js",
   this);
 
@@ -39,6 +35,6 @@ add_task(async function checkFlashBlockLists() {
                                      "unknown",
                                      classifierTester.ASK_TO_ACTIVATE_PREF_VALUE);
 
-    await BrowserTestUtils.removeTab(tab);
+    BrowserTestUtils.removeTab(tab);
   }
 });

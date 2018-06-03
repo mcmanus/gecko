@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -41,7 +42,10 @@ public:
   StructuredCloneHolderBase(StructuredCloneScope aScope = StructuredCloneScope::SameProcessSameThread);
   virtual ~StructuredCloneHolderBase();
 
-  StructuredCloneHolderBase(StructuredCloneHolderBase&& aOther) = default;
+  // Note, it is unsafe to std::move() a StructuredCloneHolderBase since a raw
+  // this pointer is passed to mBuffer as a callback closure.  That must
+  // be fixed if you want to implement a move constructor here.
+  StructuredCloneHolderBase(StructuredCloneHolderBase&& aOther) = delete;
 
   // These methods should be implemented in order to clone data.
   // Read more documentation in js/public/StructuredClone.h.
@@ -86,6 +90,10 @@ public:
                             JS::TransferableOwnership aOwnership,
                             void* aContent,
                             uint64_t aExtraData);
+
+  virtual bool
+  CustomCanTransferHandler(JSContext* aCx,
+                           JS::Handle<JSObject*> aObj);
 
   // These methods are what you should use to read/write data.
 
@@ -168,7 +176,7 @@ public:
                                  StructuredCloneScope aStructuredCloneScope);
   virtual ~StructuredCloneHolder();
 
-  StructuredCloneHolder(StructuredCloneHolder&& aOther) = default;
+  StructuredCloneHolder(StructuredCloneHolder&& aOther) = delete;
 
   // Normally you should just use Write() and Read().
 
@@ -232,7 +240,7 @@ public:
   nsTArray<RefPtr<MessagePort>>&& TakeTransferredPorts()
   {
     MOZ_ASSERT(mSupportsTransferring);
-    return Move(mTransferredPorts);
+    return std::move(mTransferredPorts);
   }
 
   // This method uses TakeTransferredPorts() to populate a sequence of
@@ -281,6 +289,9 @@ public:
                                          JS::TransferableOwnership aOwnership,
                                          void* aContent,
                                          uint64_t aExtraData) override;
+
+  virtual bool CustomCanTransferHandler(JSContext* aCx,
+                                        JS::Handle<JSObject*> aObj) override;
 
   // These 2 static methods are useful to read/write fully serializable objects.
   // They can be used by custom StructuredCloneHolderBase classes to

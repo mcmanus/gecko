@@ -7,18 +7,18 @@
 #include "vm/TraceLogging.h"
 
 #include "mozilla/DebugOnly.h"
+#include "mozilla/EndianUtils.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/ScopeExit.h"
 
 #include <string.h>
 
 #include "jsapi.h"
-#include "jsprf.h"
-#include "jsscript.h"
 
 #include "jit/BaselineJIT.h"
 #include "jit/CompileWrappers.h"
 #include "threading/LockGuard.h"
+#include "vm/JSScript.h"
 #include "vm/Runtime.h"
 #include "vm/Time.h"
 #include "vm/TraceLoggingGraph.h"
@@ -29,7 +29,6 @@ using namespace js;
 using namespace js::jit;
 
 using mozilla::DebugOnly;
-using mozilla::NativeEndian;
 
 TraceLoggerThreadState* traceLoggerState = nullptr;
 
@@ -870,7 +869,7 @@ TraceLoggerThreadState::init()
                 "\n"
                 "usage: TLOPTIONS=option,option,option,... where options can be:\n"
                 "\n"
-                "  EnableActiveThread      Start logging cooperating threads immediately.\n"
+                "  EnableMainThread        Start logging main threads immediately.\n"
                 "  EnableOffThread         Start logging helper threads immediately.\n"
                 "  EnableGraph             Enable spewing the tracelogging graph to a file.\n"
                 "  Errors                  Report errors during tracing to stderr.\n"
@@ -880,8 +879,8 @@ TraceLoggerThreadState::init()
             /*NOTREACHED*/
         }
 
-        if (strstr(options, "EnableActiveThread"))
-            cooperatingThreadEnabled = true;
+        if (strstr(options, "EnableMainThread"))
+            mainThreadEnabled = true;
         if (strstr(options, "EnableOffThread"))
             helperThreadEnabled = true;
         if (strstr(options, "EnableGraph"))
@@ -986,7 +985,7 @@ TraceLoggerThreadState::forCurrentThread(JSContext* maybecx)
         if (graphSpewingEnabled)
             logger->initGraph();
 
-        if (CurrentHelperThread() ? helperThreadEnabled : cooperatingThreadEnabled)
+        if (CurrentHelperThread() ? helperThreadEnabled : mainThreadEnabled)
             logger->enable();
     }
 

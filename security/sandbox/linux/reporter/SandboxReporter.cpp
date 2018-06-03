@@ -200,6 +200,7 @@ SubmitToTelemetry(const SandboxReport& aReport)
     ARG_HEX(clone, 0); // flags
     ARG_DECIMAL(prctl, 0); // option
     ARG_HEX(ioctl, 1); // request
+    ARG_DECIMAL(fcntl, 1); // cmd
     ARG_DECIMAL(madvise, 2); // advice
     ARG_CLOCKID(clock_gettime, 0); // clk_id
 
@@ -292,7 +293,7 @@ SandboxReporter::GetSnapshot()
   // doesn't require it; so, instead of possibly copying the entire
   // array contents, invoke the move constructor and copy at most a
   // few words.
-  return Move(snapshot);
+  return std::move(snapshot);
 }
 
 } // namespace mozilla

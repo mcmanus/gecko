@@ -57,7 +57,8 @@ public:
 
   void InitializePoints(nsPresContext* aPresContext, WidgetEvent* aEvent);
 
-  void SetTarget(EventTarget* aTarget);
+  // Note, this sets both mOriginalTarget and mTarget.
+  void SetTouchTarget(EventTarget* aTarget);
 
   bool Equals(Touch* aTouch);
 
@@ -79,9 +80,16 @@ public:
   float RotationAngle(CallerType aCallerType) const;
   float Force(CallerType aCallerType) const;
 
+  nsCOMPtr<EventTarget> mOriginalTarget;
   nsCOMPtr<EventTarget> mTarget;
   LayoutDeviceIntPoint mRefPoint;
   bool mChanged;
+
+  // Is this touch instance being suppressed to dispatch touch event to content.
+  // We can't remove touch instance from WidgetTouchEvent::mTouches because we
+  // still need it when dispatching pointer events.
+  bool mIsTouchEventSuppressed;
+
   uint32_t mMessage;
   int32_t mIdentifier;
   CSSIntPoint mPagePoint;

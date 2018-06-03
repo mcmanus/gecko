@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -29,6 +30,9 @@ namespace mozilla {
 
 struct ActiveScrolledRoot;
 
+namespace dom {
+class TabGroup;
+}
 
 namespace layers {
 
@@ -59,13 +63,15 @@ public:
   WebRenderLayerManager* AsWebRenderLayerManager() override { return this; }
   virtual CompositorBridgeChild* GetCompositorBridgeChild() override;
 
-  virtual int32_t GetMaxTextureSize() const override;
+  // WebRender can handle images larger than the max texture size via tiling.
+  virtual int32_t GetMaxTextureSize() const override { return INT32_MAX; }
 
   virtual bool BeginTransactionWithTarget(gfxContext* aTarget) override;
   virtual bool BeginTransaction() override;
   virtual bool EndEmptyTransaction(EndTransactionFlags aFlags = END_DEFAULT) override;
   void EndTransactionWithoutLayer(nsDisplayList* aDisplayList,
-                                  nsDisplayListBuilder* aDisplayListBuilder);
+                                  nsDisplayListBuilder* aDisplayListBuilder,
+                                  const nsTArray<wr::WrFilterOp>& aFilters = nsTArray<wr::WrFilterOp>());
   virtual void EndTransaction(DrawPaintedLayerCallback aCallback,
                               void* aCallbackData,
                               EndTransactionFlags aFlags = END_DEFAULT) override;
@@ -80,7 +86,6 @@ public:
   already_AddRefed<ContainerLayer> CreateContainerLayer() override { return nullptr; }
   already_AddRefed<ImageLayer> CreateImageLayer() override { return nullptr; }
   already_AddRefed<ColorLayer> CreateColorLayer() override { return nullptr; }
-  already_AddRefed<TextLayer> CreateTextLayer() override { return nullptr; }
   already_AddRefed<BorderLayer> CreateBorderLayer() override { return nullptr; }
   already_AddRefed<CanvasLayer> CreateCanvasLayer() override { return nullptr; }
 
@@ -88,17 +93,16 @@ public:
 
   virtual void SetLayerObserverEpoch(uint64_t aLayerObserverEpoch) override;
 
-  virtual void DidComposite(uint64_t aTransactionId,
+  virtual void DidComposite(TransactionId aTransactionId,
                             const mozilla::TimeStamp& aCompositeStart,
                             const mozilla::TimeStamp& aCompositeEnd) override;
 
   virtual void ClearCachedResources(Layer* aSubtree = nullptr) override;
-  virtual void UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier,
-                                              uint64_t aDeviceResetSeqNo) override;
+  virtual void UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier) override;
   virtual TextureFactoryIdentifier GetTextureFactoryIdentifier() override;
 
-  virtual void SetTransactionIdAllocator(TransactionIdAllocator* aAllocator) override
-  { mTransactionIdAllocator = aAllocator; }
+  virtual void SetTransactionIdAllocator(TransactionIdAllocator* aAllocator) override;
+  virtual TransactionId GetLastTransactionId() override;
 
   virtual void AddDidCompositeObserver(DidCompositeObserver* aObserver) override;
   virtual void RemoveDidCompositeObserver(DidCompositeObserver* aObserver) override;
@@ -118,6 +122,9 @@ public:
   virtual void SetIsFirstPaint() override { mIsFirstPaint = true; }
   virtual void SetFocusTarget(const FocusTarget& aFocusTarget) override;
 
+  virtual already_AddRefed<PersistentBufferProvider>
+  CreatePersistentBufferProvider(const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat) override;
+
   bool AsyncPanZoomEnabled() const override;
 
   // adds an imagekey to a list of keys that will be discarded on the next
@@ -135,8 +142,6 @@ public:
 
   WebRenderBridgeChild* WrBridge() const { return mWrChild; }
 
-  void SetTransactionIncomplete() { mTransactionIncomplete = true; }
-
   // See equivalent function in ClientLayerManager
   void LogTestDataForCurrentPaint(FrameMetrics::ViewID aScrollId,
                                   const std::string& aKey,
@@ -148,12 +153,15 @@ public:
   const APZTestData& GetAPZTestData() const
   { return mApzTestData; }
 
-  bool SetPendingScrollUpdateForNextTransaction(FrameMetrics::ViewID aScrollId,
-                                                const ScrollUpdateInfo& aUpdateInfo) override;
-
   WebRenderCommandBuilder& CommandBuilder() { return mWebRenderCommandBuilder; }
   WebRenderUserDataRefTable* GetWebRenderUserDataTable() { return mWebRenderCommandBuilder.GetWebRenderUserDataTable(); }
   WebRenderScrollData& GetScrollData() { return mScrollData; }
+
+  void WrUpdated();
+  void WindowOverlayChanged() { mWindowOverlayChanged = true; }
+  nsIWidget* GetWidget() { return mWidget; }
+
+  dom::TabGroup* GetTabGroup();
 
 private:
   /**
@@ -162,16 +170,9 @@ private:
    */
   void MakeSnapshotIfRequired(LayoutDeviceIntSize aSize);
 
-  void ClearLayer(Layer* aLayer);
-
 private:
   nsIWidget* MOZ_NON_OWNING_REF mWidget;
   nsTArray<wr::ImageKey> mImageKeysToDelete;
-  // TODO - This is needed because we have some code that creates image keys
-  // and enqueues them for deletion right away which is bad not only because
-  // of poor texture cache usage, but also because images end up deleted before
-  // they are used. This should hopfully be temporary.
-  nsTArray<wr::ImageKey> mImageKeysToDeleteLater;
 
   // Set of compositor animation ids for which there are active animations (as
   // of the last transaction) on the compositor side.
@@ -183,7 +184,7 @@ private:
   RefPtr<WebRenderBridgeChild> mWrChild;
 
   RefPtr<TransactionIdAllocator> mTransactionIdAllocator;
-  uint64_t mLatestTransactionId;
+  TransactionId mLatestTransactionId;
 
   nsTArray<DidCompositeObserver*> mDidCompositeObservers;
 
@@ -191,8 +192,7 @@ private:
   // APZ to do it's job
   WebRenderScrollData mScrollData;
 
-  bool mTransactionIncomplete;
-
+  bool mWindowOverlayChanged;
   bool mNeedsComposite;
   bool mIsFirstPaint;
   FocusTarget mFocusTarget;

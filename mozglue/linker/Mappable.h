@@ -76,7 +76,7 @@ public:
 
   virtual Kind GetKind() const { return MAPPABLE_FILE; };
 protected:
-  MappableFile(int fd): fd(fd) { }
+  explicit MappableFile(int fd): fd(fd) { }
 
 private:
   /* File descriptor */
@@ -157,7 +157,7 @@ private:
   mozilla::UniquePtr<_MappableBuffer> buffer;
 
   /* Zlib data */
-  zxx_stream zStream;
+  z_stream zStream;
 };
 
 #endif /* Mappable_h */

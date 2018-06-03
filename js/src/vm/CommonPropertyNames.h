@@ -9,7 +9,7 @@
 #ifndef vm_CommonPropertyNames_h
 #define vm_CommonPropertyNames_h
 
-#include "jsprototypes.h"
+#include "js/ProtoKey.h"
 
 #define FOR_EACH_COMMON_PROPERTYNAME(macro) \
     macro(add, add, "add") \
@@ -29,7 +29,6 @@
     macro(ArrayToLocaleString, ArrayToLocaleString, "ArrayToLocaleString") \
     macro(ArrayType, ArrayType, "ArrayType") \
     macro(ArrayValues, ArrayValues, "ArrayValues") \
-    macro(ArrayValuesAt, ArrayValuesAt, "ArrayValuesAt") \
     macro(as, as, "as") \
     macro(Async, Async, "Async") \
     macro(AsyncFromSyncIterator, AsyncFromSyncIterator, "Async-from-Sync Iterator") \
@@ -66,7 +65,6 @@
     macro(caseFirst, caseFirst, "caseFirst") \
     macro(catch, catch_, "catch") \
     macro(class, class_, "class") \
-    macro(close, close, "close") \
     macro(Collator, Collator, "Collator") \
     macro(collections, collections, "collections") \
     macro(columnNumber, columnNumber, "columnNumber") \
@@ -155,13 +153,19 @@
     macro(gcCycleNumber, gcCycleNumber, "gcCycleNumber") \
     macro(Generator, Generator, "Generator") \
     macro(GeneratorFunction, GeneratorFunction, "GeneratorFunction") \
+    macro(GeneratorNext, GeneratorNext, "GeneratorNext") \
+    macro(GeneratorReturn, GeneratorReturn, "GeneratorReturn") \
+    macro(GeneratorThrow, GeneratorThrow, "GeneratorThrow") \
     macro(get, get, "get") \
+    macro(GetInternalError, GetInternalError, "GetInternalError") \
     macro(getInternals, getInternals, "getInternals") \
     macro(getOwnPropertyDescriptor, getOwnPropertyDescriptor, "getOwnPropertyDescriptor") \
     macro(getOwnPropertyNames, getOwnPropertyNames, "getOwnPropertyNames") \
     macro(getPrefix, getPrefix, "get ") \
     macro(getPropertyDescriptor, getPropertyDescriptor, "getPropertyDescriptor") \
+    macro(getPropertySuper, getPropertySuper, "getPropertySuper") \
     macro(getPrototypeOf, getPrototypeOf, "getPrototypeOf") \
+    macro(GetTypeError, GetTypeError, "GetTypeError") \
     macro(global, global, "global") \
     macro(group, group, "group") \
     macro(Handle, Handle, "Handle") \
@@ -185,6 +189,7 @@
     macro(InitializeDateTimeFormat, InitializeDateTimeFormat, "InitializeDateTimeFormat") \
     macro(InitializeNumberFormat, InitializeNumberFormat, "InitializeNumberFormat") \
     macro(InitializePluralRules, InitializePluralRules, "InitializePluralRules") \
+    macro(InitializeRelativeTimeFormat, InitializeRelativeTimeFormat, "InitializeRelativeTimeFormat") \
     macro(innermost, innermost, "innermost") \
     macro(inNursery, inNursery, "inNursery") \
     macro(input, input, "input") \
@@ -210,7 +215,6 @@
     macro(keys, keys, "keys") \
     macro(label, label, "label") \
     macro(lastIndex, lastIndex, "lastIndex") \
-    macro(LegacyGeneratorCloseInternal, LegacyGeneratorCloseInternal, "LegacyGeneratorCloseInternal") \
     macro(length, length, "length") \
     macro(let, let, "let") \
     macro(line, line, "line") \
@@ -226,6 +230,7 @@
     macro(maximumFractionDigits, maximumFractionDigits, "maximumFractionDigits") \
     macro(maximumSignificantDigits, maximumSignificantDigits, "maximumSignificantDigits") \
     macro(message, message, "message") \
+    macro(meta, meta, "meta") \
     macro(minDays, minDays, "minDays") \
     macro(minimumFractionDigits, minimumFractionDigits, "minimumFractionDigits") \
     macro(minimumIntegerDigits, minimumIntegerDigits, "minimumIntegerDigits") \
@@ -258,6 +263,7 @@
     macro(numeric, numeric, "numeric") \
     macro(objectArguments, objectArguments, "[object Arguments]") \
     macro(objectArray, objectArray, "[object Array]") \
+    macro(objectBigInt, objectBigInt, "[object BigInt]") \
     macro(objectBoolean, objectBoolean, "[object Boolean]") \
     macro(objectDate, objectDate, "[object Date]") \
     macro(objectError, objectError, "[object Error]") \
@@ -349,6 +355,8 @@
     macro(Reify, Reify, "Reify") \
     macro(reject, reject, "reject") \
     macro(rejected, rejected, "rejected") \
+    macro(RelativeTimeFormat, RelativeTimeFormat, "RelativeTimeFormat") \
+    macro(RelativeTimeFormatFormat, RelativeTimeFormatFormat, "Intl_RelativeTimeFormat_Format") \
     macro(RequireObjectCoercible, RequireObjectCoercible, "RequireObjectCoercible") \
     macro(resolve, resolve, "resolve") \
     macro(resumeGenerator, resumeGenerator, "resumeGenerator") \
@@ -371,10 +379,6 @@
     macro(SpeciesConstructor, SpeciesConstructor, "SpeciesConstructor") \
     macro(stack, stack, "stack") \
     macro(star, star, "*") \
-    macro(starDefaultStar, starDefaultStar, "*default*") \
-    macro(StarGeneratorNext, StarGeneratorNext, "StarGeneratorNext") \
-    macro(StarGeneratorReturn, StarGeneratorReturn, "StarGeneratorReturn") \
-    macro(StarGeneratorThrow, StarGeneratorThrow, "StarGeneratorThrow") \
     macro(start, start, "start") \
     macro(startTimestamp, startTimestamp, "startTimestamp") \
     macro(state, state, "state") \
@@ -396,6 +400,10 @@
     macro(timestamp, timestamp, "timestamp") \
     macro(timeZone, timeZone, "timeZone") \
     macro(timeZoneName, timeZoneName, "timeZoneName") \
+    macro(trimEnd, trimEnd, "trimEnd") \
+    macro(trimLeft, trimLeft, "trimLeft") \
+    macro(trimRight, trimRight, "trimRight") \
+    macro(trimStart, trimStart, "trimStart") \
     macro(toGMTString, toGMTString, "toGMTString") \
     macro(toISOString, toISOString, "toISOString") \
     macro(toJSON, toJSON, "toJSON") \
@@ -417,6 +425,7 @@
     macro(unescape, unescape, "unescape") \
     macro(uneval, uneval, "uneval") \
     macro(unicode, unicode, "unicode") \
+    macro(unit, unit, "unit") \
     macro(uninitialized, uninitialized, "uninitialized") \
     macro(unsized, unsized, "unsized") \
     macro(unwatch, unwatch, "unwatch") \
@@ -456,6 +465,7 @@
     macro(boolean, boolean, "boolean") \
     macro(null, null, "null") \
     macro(symbol, symbol, "symbol") \
-    macro(defineDataPropertyIntrinsic, defineDataPropertyIntrinsic, "_DefineDataProperty") \
+    macro(bigint, bigint, "bigint") \
+    macro(defineDataPropertyIntrinsic, defineDataPropertyIntrinsic, "_DefineDataProperty")
 
 #endif /* vm_CommonPropertyNames_h */

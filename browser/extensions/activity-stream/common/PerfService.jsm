@@ -2,10 +2,8 @@
 "use strict";
 
 /* istanbul ignore if */
-// Note: normally we would just feature detect Components.utils here, but
-// unfortunately that throws an ugly warning in content if we do.
-if (typeof Window === "undefined" && typeof Components !== "undefined" && Components.utils) {
-  Components.utils.import("resource://gre/modules/Services.jsm");
+if (typeof ChromeUtils !== "undefined") {
+  ChromeUtils.import("resource://gre/modules/Services.jsm");
 }
 
 let usablePerfObj;
@@ -17,6 +15,7 @@ if (typeof Services !== "undefined") {
   usablePerfObj = Services.appShell.hiddenDOMWindow.performance;
 } else if (typeof performance !== "undefined") {
   // we must be running in content space
+  // eslint-disable-next-line no-undef
   usablePerfObj = performance;
 } else {
   // This is a dummy object so this file doesn't crash in the node prerendering
@@ -27,7 +26,7 @@ if (typeof Services !== "undefined") {
   };
 }
 
-this._PerfService = function _PerfService(options) {
+function _PerfService(options) {
   // For testing, so that we can use a fake Window.performance object with
   // known state.
   if (options && options.performanceObj) {
@@ -35,7 +34,7 @@ this._PerfService = function _PerfService(options) {
   } else {
     this._perf = usablePerfObj;
   }
-};
+}
 
 _PerfService.prototype = {
   /**
@@ -123,4 +122,4 @@ _PerfService.prototype = {
 };
 
 this.perfService = new _PerfService();
-this.EXPORTED_SYMBOLS = ["_PerfService", "perfService"];
+const EXPORTED_SYMBOLS = ["_PerfService", "perfService"];

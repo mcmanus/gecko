@@ -3,20 +3,23 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-var Cu = Components.utils;
-const loaders = Cu.import("resource://devtools/shared/base-loader.js", {});
-const { devtools } = Cu.import("resource://devtools/shared/Loader.jsm", {});
+const loaders = ChromeUtils.import("resource://devtools/shared/base-loader.js", {});
+const { devtools } = ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
 const { joinURI } = devtools.require("devtools/shared/path");
 const { assert } = devtools.require("devtools/shared/DevToolsUtils");
 const { AppConstants } = devtools.require("resource://gre/modules/AppConstants.jsm");
 
 const BROWSER_BASED_DIRS = [
   "resource://devtools/client/inspector/boxmodel",
+  "resource://devtools/client/inspector/changes",
   "resource://devtools/client/inspector/computed",
+  "resource://devtools/client/inspector/events",
+  "resource://devtools/client/inspector/flexbox",
   "resource://devtools/client/inspector/fonts",
   "resource://devtools/client/inspector/grids",
   "resource://devtools/client/inspector/layout",
   "resource://devtools/client/jsonview",
+  "resource://devtools/client/netmonitor/src/utils",
   "resource://devtools/client/shared/source-map",
   "resource://devtools/client/shared/redux",
   "resource://devtools/client/shared/vendor",
@@ -97,9 +100,17 @@ function BrowserLoaderBuilder({ baseURI, window, useOnlyShared, commonLibRequire
   const loaderOptions = devtools.require("@loader/options");
   const dynamicPaths = {};
 
-  if (AppConstants.DEBUG || AppConstants.DEBUG_JS_MODULES) {
+  if (AppConstants.DEBUG_JS_MODULES) {
     dynamicPaths["devtools/client/shared/vendor/react"] =
       "resource://devtools/client/shared/vendor/react-dev";
+    dynamicPaths["devtools/client/shared/vendor/react-dom"] =
+      "resource://devtools/client/shared/vendor/react-dom-dev";
+    dynamicPaths["devtools/client/shared/vendor/react-dom-server"] =
+      "resource://devtools/client/shared/vendor/react-dom-server-dev";
+    dynamicPaths["devtools/client/shared/vendor/react-prop-types"] =
+      "resource://devtools/client/shared/vendor/react-prop-types-dev";
+    dynamicPaths["devtools/client/shared/vendor/react-dom-test-utils"] =
+      "resource://devtools/client/shared/vendor/react-dom-test-utils-dev";
   }
 
   const opts = {
@@ -122,7 +133,7 @@ function BrowserLoaderBuilder({ baseURI, window, useOnlyShared, commonLibRequire
       }
 
       // Check if the URI matches one of hardcoded paths or a regexp.
-      let isBrowserDir = BROWSER_BASED_DIRS.some(dir => uri.startsWith(dir)) ||
+      const isBrowserDir = BROWSER_BASED_DIRS.some(dir => uri.startsWith(dir)) ||
                          uri.match(browserBasedDirsRegExp) != null;
 
       if ((useOnlyShared || !uri.startsWith(baseURI)) && !isBrowserDir) {
@@ -181,7 +192,7 @@ BrowserLoaderBuilder.prototype = {
    * @param Boolean destructure
    *    Pass true if the property name is a member of the module's exports.
    */
-  lazyRequireGetter: function (obj, property, module, destructure) {
+  lazyRequireGetter: function(obj, property, module, destructure) {
     devtools.lazyGetter(obj, property, () => {
       return destructure
           ? this.require(module)[property]

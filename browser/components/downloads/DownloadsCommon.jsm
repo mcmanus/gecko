@@ -6,7 +6,7 @@
 
 "use strict";
 
-this.EXPORTED_SYMBOLS = [
+var EXPORTED_SYMBOLS = [
   "DownloadsCommon",
 ];
 
@@ -32,29 +32,23 @@ this.EXPORTED_SYMBOLS = [
 
 // Globals
 
-const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   NetUtil: "resource://gre/modules/NetUtil.jsm",
   PluralForm: "resource://gre/modules/PluralForm.jsm",
   AppConstants: "resource://gre/modules/AppConstants.jsm",
-  AppMenuNotifications: "resource://gre/modules/AppMenuNotifications.jsm",
-  CustomizableUI: "resource:///modules/CustomizableUI.jsm",
+  BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
   DownloadHistory: "resource://gre/modules/DownloadHistory.jsm",
   Downloads: "resource://gre/modules/Downloads.jsm",
   DownloadUIHelper: "resource://gre/modules/DownloadUIHelper.jsm",
   DownloadUtils: "resource://gre/modules/DownloadUtils.jsm",
-  FileUtils: "resource://gre/modules/FileUtils.jsm",
-  OS: "resource://gre/modules/osfile.jsm",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
-  RecentWindow: "resource:///modules/RecentWindow.jsm",
 });
 
 XPCOMUtils.defineLazyGetter(this, "DownloadsLogger", () => {
-  let { ConsoleAPI } = Cu.import("resource://gre/modules/Console.jsm", {});
+  let { ConsoleAPI } = ChromeUtils.import("resource://gre/modules/Console.jsm", {});
   let consoleOptions = {
     maxLogLevelPref: "browser.download.loglevel",
     prefix: "Downloads"
@@ -76,15 +70,13 @@ const kDownloadsStringsRequiringPluralForm = {
   otherDownloads3: true
 };
 
-const kPartialDownloadSuffix = ".part";
-
 const kMaxHistoryResultsForLimitedView = 42;
 
 const kPrefBranch = Services.prefs.getBranch("browser.download.");
 
 var PrefObserver = {
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver,
-                                         Ci.nsISupportsWeakReference]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIObserver,
+                                          Ci.nsISupportsWeakReference]),
   getPref(name) {
     try {
       switch (typeof this.prefs[name]) {
@@ -124,7 +116,7 @@ PrefObserver.register({
  * This object is exposed directly to the consumers of this JavaScript module,
  * and provides shared methods for all the instances of the user interface.
  */
-this.DownloadsCommon = {
+var DownloadsCommon = {
   // The following legacy constants are still returned by stateOfDownload, but
   // individual properties of the Download object should normally be used.
   DOWNLOAD_NOTSTARTED: -1,
@@ -324,7 +316,7 @@ this.DownloadsCommon = {
       slowestSpeed: Infinity,
       rawTimeLeft: -1,
       percentComplete: -1
-    }
+    };
 
     for (let download of downloads) {
       summary.numActive++;
@@ -353,8 +345,8 @@ this.DownloadsCommon = {
     }
 
     if (summary.totalSize != 0) {
-      summary.percentComplete = (summary.totalTransferred /
-                                 summary.totalSize) * 100;
+      summary.percentComplete =
+        Math.floor((summary.totalTransferred / summary.totalSize) * 100);
     }
 
     if (summary.slowestSpeed == Infinity) {
@@ -625,12 +617,11 @@ XPCOMUtils.defineLazyGetter(this.DownloadsCommon, "error", () => {
  * Returns true if we are executing on Windows Vista or a later version.
  */
 XPCOMUtils.defineLazyGetter(DownloadsCommon, "isWinVistaOrHigher", function() {
-  let os = Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime).OS;
+  let os = Services.appinfo.OS;
   if (os != "WINNT") {
     return false;
   }
-  let sysInfo = Cc["@mozilla.org/system-info;1"].getService(Ci.nsIPropertyBag2);
-  return parseFloat(sysInfo.getProperty("version")) >= 6;
+  return parseFloat(Services.sysinfo.getProperty("version")) >= 6;
 });
 
 // DownloadsData
@@ -833,7 +824,7 @@ DownloadsDataCtor.prototype = {
     DownloadsCommon.log("Attempting to notify that a new download has started or finished.");
 
     // Show the panel in the most recent browser window, if present.
-    let browserWin = RecentWindow.getMostRecentBrowserWindow({ private: this._isPrivate });
+    let browserWin = BrowserWindowTracker.getTopWindow({ private: this._isPrivate });
     if (!browserWin) {
       return;
     }
@@ -1007,7 +998,7 @@ const DownloadsViewPrototype = {
    * @note Subclasses should override this.
    */
   onDownloadStateChanged(download) {
-    throw Components.results.NS_ERROR_NOT_IMPLEMENTED;
+    throw Cr.NS_ERROR_NOT_IMPLEMENTED;
   },
 
   /**
@@ -1039,7 +1030,7 @@ const DownloadsViewPrototype = {
    * @note Subclasses should override this.
    */
   onDownloadRemoved(download) {
-    throw Components.results.NS_ERROR_NOT_IMPLEMENTED;
+    throw Cr.NS_ERROR_NOT_IMPLEMENTED;
   },
 
   /**
@@ -1049,7 +1040,7 @@ const DownloadsViewPrototype = {
    * @note Subclasses should override this.
    */
   _refreshProperties() {
-    throw Components.results.NS_ERROR_NOT_IMPLEMENTED;
+    throw Cr.NS_ERROR_NOT_IMPLEMENTED;
   },
 
   /**
@@ -1058,7 +1049,20 @@ const DownloadsViewPrototype = {
    * @note Subclasses should override this.
    */
   _updateView() {
-    throw Components.results.NS_ERROR_NOT_IMPLEMENTED;
+    throw Cr.NS_ERROR_NOT_IMPLEMENTED;
+  },
+
+  /**
+   * Computes aggregate values and propagates the changes to our views.
+   */
+  _updateViews() {
+    // Do not update the status indicators during batch loads of download items.
+    if (this._loading) {
+      return;
+    }
+
+    this._refreshProperties();
+    this._views.forEach(this._updateView, this);
   },
 };
 
@@ -1172,31 +1176,6 @@ DownloadsIndicatorDataCtor.prototype = {
     return aValue;
   },
   _attentionSuppressed: false,
-
-  /**
-   * Computes aggregate values and propagates the changes to our views.
-   */
-  _updateViews() {
-    // Do not update the status indicators during batch loads of download items.
-    if (this._loading) {
-      return;
-    }
-
-    this._refreshProperties();
-
-    let widgetGroup = CustomizableUI.getWidget("downloads-button");
-    let inMenu = widgetGroup.areaType == CustomizableUI.TYPE_MENU_PANEL;
-    if (inMenu) {
-      if (this._attention == DownloadsCommon.ATTENTION_NONE) {
-        AppMenuNotifications.removeNotification(/^download-/);
-      } else {
-        let badgeClass = "download-" + this._attention;
-        AppMenuNotifications.showBadgeOnlyNotification(badgeClass);
-      }
-    }
-
-    this._views.forEach(this._updateView, this);
-  },
 
   /**
    * Updates the specified view with the current aggregate values.
@@ -1358,19 +1337,6 @@ DownloadsSummaryData.prototype = {
   // Propagation of properties to our views
 
   /**
-   * Computes aggregate values and propagates the changes to our views.
-   */
-  _updateViews() {
-    // Do not update the status indicators during batch loads of download items.
-    if (this._loading) {
-      return;
-    }
-
-    this._refreshProperties();
-    this._views.forEach(this._updateView, this);
-  },
-
-  /**
    * Updates the specified view with the current aggregate values.
    *
    * @param aView
@@ -1433,4 +1399,4 @@ DownloadsSummaryData.prototype = {
         this._lastTimeLeft);
     }
   },
-}
+};

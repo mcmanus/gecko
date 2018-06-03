@@ -6,10 +6,13 @@
 
 #include "mozilla/dom/cache/QuotaClient.h"
 
+#include "DBAction.h"
+#include "FileUtils.h"
 #include "mozilla/dom/cache/Manager.h"
 #include "mozilla/dom/quota/QuotaManager.h"
 #include "mozilla/dom/quota/UsageInfo.h"
 #include "mozilla/ipc/BackgroundParent.h"
+#include "mozilla/Unused.h"
 #include "nsIFile.h"
 #include "nsISimpleEnumerator.h"
 #include "nsThreadUtils.h"
@@ -36,19 +39,13 @@ GetBodyUsage(nsIFile* aDir, const Atomic<bool>& aCanceled,
 {
   AssertIsOnIOThread();
 
-  nsCOMPtr<nsISimpleEnumerator> entries;
+  nsCOMPtr<nsIDirectoryEnumerator> entries;
   nsresult rv = aDir->GetDirectoryEntries(getter_AddRefs(entries));
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-  bool hasMore;
-  while (NS_SUCCEEDED(rv = entries->HasMoreElements(&hasMore)) && hasMore &&
-         !aCanceled) {
-    nsCOMPtr<nsISupports> entry;
-    rv = entries->GetNext(getter_AddRefs(entry));
-    if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
-
-    nsCOMPtr<nsIFile> file = do_QueryInterface(entry);
-
+  nsCOMPtr<nsIFile> file;
+  while (NS_SUCCEEDED(rv = entries->GetNextFile(getter_AddRefs(file))) &&
+         file && !aCanceled) {
     bool isDir;
     rv = file->IsDirectory(&isDir);
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
@@ -184,19 +181,13 @@ public:
 
     aUsageInfo->AppendToFileUsage(paddingSize);
 
-    nsCOMPtr<nsISimpleEnumerator> entries;
+    nsCOMPtr<nsIDirectoryEnumerator> entries;
     rv = dir->GetDirectoryEntries(getter_AddRefs(entries));
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-    bool hasMore;
-    while (NS_SUCCEEDED(rv = entries->HasMoreElements(&hasMore)) && hasMore &&
-           !aCanceled) {
-      nsCOMPtr<nsISupports> entry;
-      rv = entries->GetNext(getter_AddRefs(entry));
-      if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
-
-      nsCOMPtr<nsIFile> file = do_QueryInterface(entry);
-
+    nsCOMPtr<nsIFile> file;
+    while (NS_SUCCEEDED(rv = entries->GetNextFile(getter_AddRefs(file))) &&
+           file && !aCanceled) {
       nsAutoString leafName;
       rv = file->GetLeafName(leafName);
       if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
@@ -301,7 +292,7 @@ public:
   }
 
   nsresult
-  UpgradeStorageFrom2_0To3_0(nsIFile* aDirectory) override
+  UpgradeStorageFrom2_0To2_1(nsIFile* aDirectory) override
   {
     AssertIsOnIOThread();
     MOZ_DIAGNOSTIC_ASSERT(aDirectory);

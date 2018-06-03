@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -33,8 +34,8 @@ class nsCanvasFrame final : public nsContainerFrame,
                             public nsIAnonymousContentCreator
 {
 public:
-  explicit nsCanvasFrame(nsStyleContext* aContext)
-    : nsContainerFrame(aContext, kClassID)
+  explicit nsCanvasFrame(ComputedStyle* aStyle)
+    : nsContainerFrame(aStyle, kClassID)
     , mDoPaintFocus(false)
     , mAddedScrollPositionListener(false)
   {}
@@ -43,7 +44,7 @@ public:
   NS_DECL_FRAMEARENA_HELPERS(nsCanvasFrame)
 
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
   virtual void SetInitialChildList(ChildListID     aListID,
                                    nsFrameList&    aChildList) override;
@@ -167,8 +168,7 @@ public:
                                    LayerManager* aManager,
                                    const ContainerLayerParameters& aParameters) override
   {
-    if (ShouldUseAdvancedLayer(aManager, gfxPrefs::LayersAllowCanvasBackgroundColorLayers) ||
-        ForceActiveLayers()) {
+    if (ForceActiveLayers()) {
       return mozilla::LAYER_ACTIVE;
     }
     return mozilla::LAYER_NONE;
@@ -189,17 +189,12 @@ public:
 
 class nsDisplayCanvasBackgroundImage : public nsDisplayBackgroundImage {
 public:
-  explicit nsDisplayCanvasBackgroundImage(const InitData& aInitData)
-    : nsDisplayBackgroundImage(aInitData)
+  explicit nsDisplayCanvasBackgroundImage(nsDisplayListBuilder* aBuilder, const InitData& aInitData)
+    : nsDisplayBackgroundImage(aBuilder, aInitData)
   {
   }
 
   virtual void Paint(nsDisplayListBuilder* aBuilder, gfxContext* aCtx) override;
-
-  virtual void NotifyRenderingChanged() const override
-  {
-    mFrame->DeleteProperty(nsIFrame::CachedBackgroundImageDT());
-  }
 
   // We still need to paint a background color as well as an image for this item,
   // so we can't support this yet.

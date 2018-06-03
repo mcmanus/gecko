@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -66,7 +67,7 @@ public:
     mTextureHostOnWhite = o.mTextureHostOnWhite;
     mTextureSource = o.mTextureSource;
     mTextureSourceOnWhite = o.mTextureSourceOnWhite;
-    mTilePosition = o.mTilePosition;
+    mTileCoord = o.mTileCoord;
   }
   TileHost& operator=(const TileHost& o) {
     if (this == &o) {
@@ -76,7 +77,7 @@ public:
     mTextureHostOnWhite = o.mTextureHostOnWhite;
     mTextureSource = o.mTextureSource;
     mTextureSourceOnWhite = o.mTextureSourceOnWhite;
-    mTilePosition = o.mTilePosition;
+    mTileCoord = o.mTileCoord;
     return *this;
   }
 
@@ -98,6 +99,9 @@ public:
     CompositableHost::DumpTextureHost(aStream, mTextureHost);
   }
 
+  RefPtr<TextureSource> AcquireTextureSource() const;
+  RefPtr<TextureSource> AcquireTextureSourceOnWhite() const;
+
   /**
    * This does a linear tween of the passed opacity (which is assumed
    * to be between 0.0 and 1.0). The duration of the fade is controlled
@@ -111,7 +115,7 @@ public:
   mutable CompositableTextureSourceRef mTextureSource;
   mutable CompositableTextureSourceRef mTextureSourceOnWhite;
   // This is not strictly necessary but makes debugging whole lot easier.
-  TileIntPoint mTilePosition;
+  TileCoordIntPoint mTileCoord;
   TimeStamp mFadeStart;
 };
 
@@ -232,6 +236,13 @@ public:
   virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix) override;
 
   virtual void AddAnimationInvalidation(nsIntRegion& aRegion) override;
+
+  TiledLayerBufferComposite& GetLowResBuffer() {
+    return mLowPrecisionTiledBuffer;
+  }
+  TiledLayerBufferComposite& GetHighResBuffer() {
+    return mTiledBuffer;
+  }
 
 private:
 

@@ -14,10 +14,10 @@
 #include "js/CallArgs.h"
 #include "js/CharacterEncoding.h"
 #include "vm/GlobalObject.h"
-#include "vm/String.h"
+#include "vm/SelfHosting.h"
+#include "vm/StringType.h"
 
-#include "jsobjinlines.h"
-
+#include "vm/JSObject-inl.h"
 #include "vm/NativeObject-inl.h"
 #include "vm/SavedStacks-inl.h"
 #include "vm/Shape-inl.h"
@@ -150,7 +150,7 @@ js::ErrorObject::getOrCreateErrorReport(JSContext* cx)
     if (!message->ensureFlat(cx))
         return nullptr;
 
-    UniquePtr<char[], JS::FreePolicy> utf8 = StringToNewUTF8CharsZ(cx, *message);
+    UniqueChars utf8 = StringToNewUTF8CharsZ(cx, *message);
     if (!utf8)
         return nullptr;
     report.initOwnedMessage(utf8.release());
@@ -243,16 +243,15 @@ js::ErrorObject::getStack_impl(JSContext* cx, const CallArgs& args)
         // When emulating V8 stack frames, we also need to prepend the
         // stringified Error to the stack string.
         HandlePropertyName name = cx->names().ErrorToStringWithTrailingNewline;
-        RootedValue val(cx);
-        if (!GlobalObject::getSelfHostedFunction(cx, cx->global(), name, name, 0, &val))
-            return false;
-
+        FixedInvokeArgs<0> args2(cx);
         RootedValue rval(cx);
-        if (!js::Call(cx, val, args.thisv(), &rval))
+        if (!CallSelfHostedFunction(cx, name, args.thisv(), args2, &rval))
             return false;
 
-        if (!rval.isString())
-            return false;
+        if (!rval.isString()) {
+            args.rval().setString(cx->runtime()->emptyString);
+            return true;
+        }
 
         RootedString stringified(cx, rval.toString());
         stackString = ConcatStrings<CanGC>(cx, stringified, stackString);

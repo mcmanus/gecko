@@ -9,7 +9,6 @@
 #include "MFTDecoder.h"
 #include "MP4Decoder.h"
 #include "MediaInfo.h"
-#include "MediaPrefs.h"
 #include "VPXDecoder.h"
 #include "WMF.h"
 #include "WMFAudioMFTManager.h"
@@ -20,6 +19,7 @@
 #include "mozilla/Maybe.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticMutex.h"
+#include "mozilla/StaticPrefs.h"
 #include "mozilla/WindowsVersion.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "nsAutoPtr.h"
@@ -55,7 +55,7 @@ WMFDecoderModule::Init()
     // If we're in the content process and the UseGPUDecoder pref is set, it
     // means that we've given up on the GPU process (it's been crashing) so we
     // should disable DXVA
-    sDXVAEnabled = !MediaPrefs::PDMUseGPUDecoder();
+    sDXVAEnabled = !StaticPrefs::MediaGpuProcessDecoder();
   } else if (XRE_IsGPUProcess()) {
     // Always allow DXVA in the GPU process.
     sDXVAEnabled = true;
@@ -74,15 +74,9 @@ WMFDecoderModule::GetNumDecoderThreads()
   int32_t numCores = PR_GetNumberOfProcessors();
 
   // If we have more than 4 cores, let the decoder decide how many threads.
-  // On an 8 core machine, WMF chooses 4 decoder threads
-  const int WMF_DECODER_DEFAULT = -1;
-  int32_t prefThreadCount = WMF_DECODER_DEFAULT;
-  if (XRE_GetProcessType() != GeckoProcessType_GPU) {
-    prefThreadCount = MediaPrefs::PDMWMFThreadCount();
-  }
-  if (prefThreadCount != WMF_DECODER_DEFAULT) {
-    return std::max(prefThreadCount, 1);
-  } else if (numCores > 4) {
+  // On an 8 core machine, WMF chooses 4 decoder threads.
+  static const int WMF_DECODER_DEFAULT = -1;
+  if (numCores > 4) {
     return WMF_DECODER_DEFAULT;
   }
   return std::max(numCores - 1, 1);
@@ -202,6 +196,11 @@ bool
 WMFDecoderModule::Supports(const TrackInfo& aTrackInfo,
                            DecoderDoctorDiagnostics* aDiagnostics) const
 {
+  const auto videoInfo = aTrackInfo.GetAsVideoInfo();
+  if (videoInfo && !SupportsBitDepth(videoInfo->mBitDepth, aDiagnostics)) {
+    return false;
+  }
+
   if ((aTrackInfo.mMimeType.EqualsLiteral("audio/mp4a-latm") ||
        aTrackInfo.mMimeType.EqualsLiteral("audio/mp4")) &&
        WMFDecoderModule::HasAAC()) {
@@ -214,7 +213,13 @@ WMFDecoderModule::Supports(const TrackInfo& aTrackInfo,
       CanCreateWMFDecoder<CLSID_CMP3DecMediaObject>()) {
     return true;
   }
-  if (MediaPrefs::PDMWMFVP9DecoderEnabled()) {
+  if (StaticPrefs::MediaWmfVp9Enabled()) {
+    static const uint32_t VP8_USABLE_BUILD = 16287;
+    if (VPXDecoder::IsVP8(aTrackInfo.mMimeType) &&
+        IsWindowsBuildOrLater(VP8_USABLE_BUILD) &&
+        CanCreateWMFDecoder<CLSID_WebmMfVpxDec>()) {
+      return true;
+    }
     if (VPXDecoder::IsVP9(aTrackInfo.mMimeType) &&
         ((gfxPrefs::PDMWMFAMDVP9DecoderEnabled() &&
           CanCreateWMFDecoder<CLSID_AMDWebmMfVp9Dec>()) ||

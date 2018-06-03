@@ -46,7 +46,6 @@ MACH_MODULES = [
     'python/mozbuild/mozbuild/backend/mach_commands.py',
     'python/mozbuild/mozbuild/compilation/codecomplete.py',
     'python/mozbuild/mozbuild/frontend/mach_commands.py',
-    'services/common/tests/mach_commands.py',
     'taskcluster/mach_commands.py',
     'testing/awsy/mach_commands.py',
     'testing/firefox-ui/mach_commands.py',
@@ -55,6 +54,8 @@ MACH_MODULES = [
     'testing/marionette/mach_commands.py',
     'testing/mochitest/mach_commands.py',
     'testing/mozharness/mach_commands.py',
+    'testing/raptor/mach_commands.py',
+    'testing/tps/mach_commands.py',
     'testing/talos/mach_commands.py',
     'testing/web-platform/mach_commands.py',
     'testing/xpcshell/mach_commands.py',
@@ -106,7 +107,9 @@ CATEGORIES = {
     },
     'disabled': {
         'short': 'Disabled',
-        'long': 'The disabled commands are hidden by default. Use -v to display them. These commands are unavailable for your current context, run "mach <command>" to see why.',
+        'long': 'The disabled commands are hidden by default. Use -v to display them. '
+        'These commands are unavailable for your current context, '
+        'run "mach <command>" to see why.',
         'priority': 0,
     }
 }
@@ -120,7 +123,14 @@ def search_path(mozilla_dir, packages_txt):
     with open(os.path.join(mozilla_dir, packages_txt)) as f:
         packages = [line.rstrip().split(':') for line in f]
 
-    for package in packages:
+    def handle_package(package):
+        if package[0] == 'optional':
+            try:
+                for path in handle_package(package[1:]):
+                    yield path
+            except Exception:
+                pass
+
         if package[0] == 'packages.txt':
             assert len(package) == 2
             for p in search_path(mozilla_dir, package[1]):
@@ -129,6 +139,10 @@ def search_path(mozilla_dir, packages_txt):
         if package[0].endswith('.pth'):
             assert len(package) == 2
             yield os.path.join(mozilla_dir, package[1])
+
+    for package in packages:
+        for path in handle_package(package):
+            yield path
 
 
 def bootstrap(topsrcdir, mozilla_dir=None):
@@ -206,7 +220,7 @@ def bootstrap(topsrcdir, mozilla_dir=None):
             dist = list(platform.linux_distribution())
             data['system']['linux_distribution'] = dist
         elif platform.system() == 'Windows':
-            win32_ver=list((platform.win32_ver())),
+            win32_ver = list((platform.win32_ver())),
             data['system']['win32_ver'] = win32_ver
         elif platform.system() == 'Darwin':
             # mac version is a special Cupertino snowflake
@@ -260,7 +274,7 @@ def bootstrap(topsrcdir, mozilla_dir=None):
                               os.path.join(topsrcdir, 'build',
                                            'submit_telemetry_data.py'),
                               get_state_dir()[0]],
-                              stdout=devnull, stderr=devnull)
+                             stdout=devnull, stderr=devnull)
 
     def populate_context(context, key=None):
         if key is None:
@@ -311,7 +325,7 @@ def bootstrap(topsrcdir, mozilla_dir=None):
 
     for category, meta in CATEGORIES.items():
         driver.define_category(category, meta['short'], meta['long'],
-            meta['priority'])
+                               meta['priority'])
 
     repo = resolve_repository()
 

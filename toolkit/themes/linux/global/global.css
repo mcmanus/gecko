@@ -13,10 +13,6 @@
 
 /* ::::: XBL bindings ::::: */
 
-radio {
-  -moz-binding: url("chrome://global/skin/globalBindings.xml#radio-with-spacing");
-}
-
 menulist > menupopup {
   -moz-binding: url("chrome://global/content/bindings/popup.xml#popup-scrollbars");
 }
@@ -25,8 +21,10 @@ progressmeter[mode="undetermined"] {
   -moz-binding: url("chrome://global/content/bindings/progressmeter.xml#progressmeter-undetermined");
 }
 
-toolbar[type="menubar"]:not([autohide="true"]):not(:-moz-lwtheme):-moz-system-metric(menubar-drag) {
-  -moz-binding: url("chrome://global/content/bindings/toolbar.xml#toolbar-drag");
+@media (-moz-menubar-drag) {
+  toolbar[type="menubar"]:not([autohide="true"]) {
+    -moz-binding: url("chrome://global/content/bindings/toolbar.xml#toolbar-drag");
+  }
 }
 
 /* ::::: Variables ::::: */
@@ -35,6 +33,7 @@ toolbar[type="menubar"]:not([autohide="true"]):not(:-moz-lwtheme):-moz-system-me
   --arrowpanel-background: -moz-field;
   --arrowpanel-color: -moz-fieldText;
   --arrowpanel-border-color: ThreeDShadow;
+  --panel-disabled-color: GrayText;
 }
 
 /* ::::: root elements ::::: */
@@ -42,8 +41,7 @@ toolbar[type="menubar"]:not([autohide="true"]):not(:-moz-lwtheme):-moz-system-me
 window,
 page,
 dialog,
-wizard,
-prefwindow {
+wizard {
   -moz-appearance: window;
   background-color: -moz-Dialog;
   color: -moz-DialogText;
@@ -64,7 +62,7 @@ window.dialog {
   list-style-image: url("moz-icon://stock/gtk-dialog-info?size=dialog");
 }
 
-.alert-dialog #info\.icon,
+.alert-dialog #infoIcon,
 .alert-icon {
   list-style-image: url("moz-icon://stock/gtk-dialog-warning?size=dialog");
 }
@@ -91,35 +89,12 @@ iframe {
   min-height: 10px;
 }
 
-/* ::::: statusbar ::::: */
-
-statusbar {
-  -moz-appearance: statusbar;
-  min-height: 22px;
-}
-
-statusbar:-moz-lwtheme {
-  -moz-appearance: none;
-}
-
-statusbarpanel {
-  -moz-appearance: statusbarpanel;
-  -moz-box-align: center;
-  -moz-box-pack: center;
-  padding: 0 4px;
-}
-
-.statusbar-resizerpanel {
-  -moz-box-align: end;
-  -moz-box-pack: end;
-  -moz-appearance: resizerpanel;
-  padding: 0;
-}
-
-.statusbarpanel-iconic,
-.statusbarpanel-iconic-text,
-.statusbarpanel-menu-iconic {
-  padding: 0 1px;
+@supports -moz-bool-pref("layout.css.emulate-moz-box-with-flex") {
+  /* In emulation, <iframe> is block instead of inline, so reset the width/height */
+  iframe {
+    width: auto;
+    height: auto;
+  }
 }
 
 /* XXXBlake yeah, shoot me -- these don't belong here.  I'll move them later. */
@@ -144,16 +119,15 @@ toolbar[mode="text"] .toolbarbutton-text {
 
 /* ::::: miscellaneous formatting ::::: */
 
-:root:-moz-lwtheme,
-statusbarpanel:-moz-lwtheme {
+:root:-moz-lwtheme {
   -moz-appearance: none;
 }
 
-:root:-moz-lwtheme-darktext {
+:root[lwtheme-image]:-moz-lwtheme-darktext {
   text-shadow: 0 -0.5px 1.5px white;
 }
 
-:root:-moz-lwtheme-brighttext {
+:root[lwtheme-image]:-moz-lwtheme-brighttext {
   text-shadow: 1px 1px 1.5px black;
 }
 
@@ -251,10 +225,6 @@ label[disabled="true"] {
   margin: 3px 5px 4px;
 }
 
-.wizard-box {
-  padding: 20px 44px 10px;
-}
-
 .text-link {
   color: -moz-nativehyperlinktext;
   cursor: pointer;
@@ -282,14 +252,12 @@ popupnotificationcontent {
 /* :::::: autoscroll popup ::::: */
 
 .autoscroller {
-  height: 28px;
-  width: 28px;
   border: none;
-  margin: -14px;
   padding: 0;
   background-image: url("chrome://global/skin/icons/autoscroll.svg");
   background-size: contain;
   background-color: transparent;
+  background-repeat: no-repeat;
   -moz-appearance: none;
 }
 

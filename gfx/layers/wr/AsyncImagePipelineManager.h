@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -47,7 +48,16 @@ public:
   void RemovePipeline(const wr::PipelineId& aPipelineId, const wr::Epoch& aEpoch);
 
   void HoldExternalImage(const wr::PipelineId& aPipelineId, const wr::Epoch& aEpoch, WebRenderTextureHost* aTexture);
-  void Update(const wr::PipelineId& aPipelineId, const wr::Epoch& aEpoch);
+  void HoldExternalImage(const wr::PipelineId& aPipelineId, const wr::Epoch& aEpoch, const wr::ExternalImageId& aImageId);
+
+  // This is called from the Renderer thread to notify this class about the
+  // pipelines in the most recently completed render. A copy of the update
+  // information is put into mUpdatesQueue.
+  void NotifyPipelinesUpdated(wr::WrPipelineInfo aInfo);
+
+  // This is run on the compositor thread to process mUpdatesQueue. We make
+  // this a public entry point because we need to invoke it from other places.
+  void ProcessPipelineUpdates();
 
   TimeStamp GetCompositionTime() const {
     return mCompositionTime;
@@ -70,15 +80,15 @@ public:
   }
 
   void AddAsyncImagePipeline(const wr::PipelineId& aPipelineId, WebRenderImageHost* aImageHost);
-  void RemoveAsyncImagePipeline(const wr::PipelineId& aPipelineId);
+  void RemoveAsyncImagePipeline(const wr::PipelineId& aPipelineId, wr::TransactionBuilder& aTxn);
 
   void UpdateAsyncImagePipeline(const wr::PipelineId& aPipelineId,
-                                const LayerRect& aScBounds,
+                                const LayoutDeviceRect& aScBounds,
                                 const gfx::Matrix4x4& aScTransform,
                                 const gfx::MaybeIntSize& aScaleToSize,
                                 const wr::ImageRendering& aFilter,
                                 const wr::MixBlendMode& aMixBlendMode);
-  void ApplyAsyncImages();
+  void ApplyAsyncImages(wr::TransactionBuilder& aTxn);
 
   void AppendImageCompositeNotification(const ImageCompositeNotificationInfo& aNotification)
   {
@@ -87,11 +97,17 @@ public:
 
   void FlushImageNotifications(nsTArray<ImageCompositeNotificationInfo>* aNotifications)
   {
-    aNotifications->AppendElements(Move(mImageCompositeNotifications));
+    aNotifications->AppendElements(std::move(mImageCompositeNotifications));
   }
 
-private:
+  void SetWillGenerateFrame();
+  bool GetAndResetWillGenerateFrame();
 
+private:
+  void ProcessPipelineRendered(const wr::PipelineId& aPipelineId, const wr::Epoch& aEpoch);
+  void ProcessPipelineRemoved(const wr::PipelineId& aPipelineId);
+
+  wr::Epoch GetNextImageEpoch();
   uint32_t GetNextResourceId() { return ++mResourceId; }
   wr::IdNamespace GetNamespace() { return mIdNamespace; }
   wr::ImageKey GenerateImageKey()
@@ -111,19 +127,47 @@ private:
     CompositableTextureHostRef mTexture;
   };
 
+  struct ForwardingExternalImage {
+    ForwardingExternalImage(const wr::Epoch& aEpoch, const wr::ExternalImageId& aImageId)
+      : mEpoch(aEpoch)
+      , mImageId(aImageId)
+    {}
+    wr::Epoch mEpoch;
+    wr::ExternalImageId mImageId;
+  };
+
   struct PipelineTexturesHolder {
     // Holds forwarding WebRenderTextureHosts.
     std::queue<ForwardingTextureHost> mTextureHosts;
+    std::queue<ForwardingExternalImage> mExternalImages;
     Maybe<wr::Epoch> mDestroyedEpoch;
   };
 
   struct AsyncImagePipeline {
     AsyncImagePipeline();
+    void Update(const LayoutDeviceRect& aScBounds,
+                const gfx::Matrix4x4& aScTransform,
+                const gfx::MaybeIntSize& aScaleToSize,
+                const wr::ImageRendering& aFilter,
+                const wr::MixBlendMode& aMixBlendMode)
+    {
+      mIsChanged |= !mScBounds.IsEqualEdges(aScBounds) ||
+                    mScTransform != aScTransform ||
+                    mScaleToSize != aScaleToSize ||
+                    mFilter != aFilter ||
+                    mMixBlendMode != aMixBlendMode;
+      mScBounds = aScBounds;
+      mScTransform = aScTransform;
+      mScaleToSize = aScaleToSize;
+      mFilter = aFilter;
+      mMixBlendMode = aMixBlendMode;
+    }
 
     bool mInitialised;
+    bool mSentDL;
     bool mIsChanged;
     bool mUseExternalImage;
-    LayerRect mScBounds;
+    LayoutDeviceRect mScBounds;
     gfx::Matrix4x4 mScTransform;
     gfx::MaybeIntSize mScaleToSize;
     wr::ImageRendering mFilter;
@@ -134,11 +178,11 @@ private:
   };
 
   Maybe<TextureHost::ResourceUpdateOp>
-  UpdateImageKeys(wr::ResourceUpdateQueue& aResourceUpdates,
+  UpdateImageKeys(wr::TransactionBuilder& aResourceUpdates,
                   AsyncImagePipeline* aPipeline,
                   nsTArray<wr::ImageKey>& aKeys);
   Maybe<TextureHost::ResourceUpdateOp>
-  UpdateWithoutExternalImage(wr::ResourceUpdateQueue& aResources,
+  UpdateWithoutExternalImage(wr::TransactionBuilder& aResources,
                              TextureHost* aTexture,
                              wr::ImageKey aKey,
                              TextureHost::ResourceUpdateOp);
@@ -149,7 +193,8 @@ private:
 
   nsClassHashtable<nsUint64HashKey, PipelineTexturesHolder> mPipelineTexturesHolders;
   nsClassHashtable<nsUint64HashKey, AsyncImagePipeline> mAsyncImagePipelines;
-  uint32_t mAsyncImageEpoch;
+  wr::Epoch mAsyncImageEpoch;
+  bool mWillGenerateFrame;
   bool mDestroyed;
 
   // Render time for the current composition.
@@ -161,6 +206,15 @@ private:
   TimeStamp mCompositeUntilTime;
 
   nsTArray<ImageCompositeNotificationInfo> mImageCompositeNotifications;
+
+  // The lock that protects mUpdatesQueue
+  Mutex mUpdatesLock;
+  // Queue to store rendered pipeline epoch information. This is populated from
+  // the Renderer thread after a render, and is read from the compositor thread
+  // to free resources (e.g. textures) that are no longer needed. Each entry
+  // in the queue is a pair that holds the pipeline id and Some(x) for
+  // a render of epoch x, or Nothing() for a removed pipeline.
+  std::queue<std::pair<wr::PipelineId, Maybe<wr::Epoch>>> mUpdatesQueue;
 };
 
 } // namespace layers

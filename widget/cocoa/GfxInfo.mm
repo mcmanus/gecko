@@ -10,7 +10,9 @@
 
 #include "GfxInfo.h"
 #include "nsUnicharUtils.h"
+#include "nsExceptionHandler.h"
 #include "nsCocoaFeatures.h"
+#include "nsICrashReporter.h"
 #include "mozilla/Preferences.h"
 #include <algorithm>
 
@@ -18,11 +20,7 @@
 #import <IOKit/IOKitLib.h>
 #import <Cocoa/Cocoa.h>
 
-#if defined(MOZ_CRASHREPORTER)
-#include "nsExceptionHandler.h"
-#include "nsICrashReporter.h"
 #define NS_CRASHREPORTER_CONTRACTID "@mozilla.org/toolkit/crash-reporter;1"
-#endif
 
 using namespace mozilla;
 using namespace mozilla::widget;
@@ -31,7 +29,7 @@ using namespace mozilla::widget;
 NS_IMPL_ISUPPORTS_INHERITED(GfxInfo, GfxInfoBase, nsIGfxInfoDebug)
 #endif
 
-GfxInfo::GfxInfo()
+GfxInfo::GfxInfo() : mOSXVersion{0}
 {
 }
 
@@ -275,7 +273,6 @@ GfxInfo::GetIsGPU2Active(bool* aIsGPU2Active)
 void
 GfxInfo::AddCrashReportAnnotations()
 {
-#if defined(MOZ_CRASHREPORTER)
   nsString deviceID, vendorID, driverVersion;
   nsAutoCString narrowDeviceID, narrowVendorID, narrowDriverVersion;
 
@@ -301,7 +298,6 @@ GfxInfo::AddCrashReportAnnotations()
   note.AppendLiteral(", AdapterDeviceID: ");
   note.Append(narrowDeviceID);
   CrashReporter::AppendAppNotesToCrashReport(note);
-#endif
 }
 
 // We don't support checking driver versions on Mac.
@@ -313,7 +309,7 @@ GfxInfo::AddCrashReportAnnotations()
 const nsTArray<GfxDriverInfo>&
 GfxInfo::GetGfxDriverInfo()
 {
-  if (!mDriverInfo->Length()) {
+  if (!sDriverInfo->Length()) {
     IMPLEMENT_MAC_DRIVER_BLOCKLIST(OperatingSystem::OSX,
       (nsAString&) GfxDriverInfo::GetDeviceVendor(VendorATI), GfxDriverInfo::allDevices,
       nsIGfxInfo::FEATURE_WEBGL_MSAA, nsIGfxInfo::FEATURE_BLOCKED_OS_VERSION, "FEATURE_FAILURE_MAC_ATI_NO_MSAA");
@@ -324,7 +320,7 @@ GfxInfo::GetGfxDriverInfo()
       (nsAString&) GfxDriverInfo::GetDeviceVendor(VendorNVIDIA), (GfxDeviceFamily*) GfxDriverInfo::GetDeviceFamily(Geforce7300GT),
       nsIGfxInfo::FEATURE_WEBGL_OPENGL, nsIGfxInfo::FEATURE_BLOCKED_DEVICE, "FEATURE_FAILURE_MAC_7300_NO_WEBGL");
   }
-  return *mDriverInfo;
+  return *sDriverInfo;
 }
 
 nsresult
@@ -341,6 +337,10 @@ GfxInfo::GetFeatureStatusImpl(int32_t aFeature,
   OperatingSystem os = OSXVersionToOperatingSystem(mOSXVersion);
   if (aOS)
     *aOS = os;
+
+  if (sShutdownOccurred) {
+    return NS_OK;
+  }
 
   // Don't evaluate special cases when we're evaluating the downloaded blocklist.
   if (!aDriverInfo.Length()) {
@@ -366,6 +366,10 @@ GfxInfo::GetFeatureStatusImpl(int32_t aFeature,
           *aStatus = nsIGfxInfo::FEATURE_STATUS_OK;
           break;
       }
+      return NS_OK;
+    } else if (aFeature == nsIGfxInfo::FEATURE_WEBRENDER) {
+      *aStatus = nsIGfxInfo::FEATURE_BLOCKED_OS_VERSION;
+      aFailureId = "FEATURE_UNQUALIFIED_WEBRENDER_MAC";
       return NS_OK;
     }
   }

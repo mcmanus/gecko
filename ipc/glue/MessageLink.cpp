@@ -14,9 +14,7 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/DebugOnly.h"
 #include "nsDebug.h"
-#ifdef MOZ_CRASHREPORTER
 #include "nsExceptionHandler.h"
-#endif
 #include "nsISupportsImpl.h"
 #include "nsPrintfCString.h"
 #include "nsXULAppAPI.h"
@@ -74,7 +72,7 @@ ProcessLink::Open(mozilla::ipc::Transport* aTransport, MessageLoop *aIOLoop, Sid
 {
     mChan->AssertWorkerThread();
 
-    NS_PRECONDITION(aTransport, "need transport layer");
+    MOZ_ASSERT(aTransport, "need transport layer");
 
     // FIXME need to check for valid channel
 
@@ -89,7 +87,7 @@ ProcessLink::Open(mozilla::ipc::Transport* aTransport, MessageLoop *aIOLoop, Sid
         needOpen = true;
         mChan->mSide = (aSide == UnknownSide) ? ChildSide : aSide;
     } else {
-        NS_PRECONDITION(aSide == UnknownSide, "expected default side arg");
+        MOZ_ASSERT(aSide == UnknownSide, "expected default side arg");
 
         // parent
         mChan->mSide = ParentSide;
@@ -161,10 +159,8 @@ void
 ProcessLink::SendMessage(Message *msg)
 {
     if (msg->size() > IPC::Channel::kMaximumMessageSize) {
-#ifdef MOZ_CRASHREPORTER
       CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("IPCMessageName"), nsDependentCString(msg->name()));
       CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("IPCMessageSize"), nsPrintfCString("%d", msg->size()));
-#endif
       MOZ_CRASH("IPC message size is too large");
     }
 
@@ -228,7 +224,7 @@ ThreadLink::EchoMessage(Message *msg)
     mChan->AssertWorkerThread();
     mChan->mMonitor->AssertCurrentThreadOwns();
 
-    mChan->OnMessageReceivedFromLink(Move(*msg));
+    mChan->OnMessageReceivedFromLink(std::move(*msg));
     delete msg;
 }
 
@@ -241,7 +237,7 @@ ThreadLink::SendMessage(Message *msg)
     mChan->mMonitor->AssertCurrentThreadOwns();
 
     if (mTargetChan)
-        mTargetChan->OnMessageReceivedFromLink(Move(*msg));
+        mTargetChan->OnMessageReceivedFromLink(std::move(*msg));
     delete msg;
 }
 
@@ -286,14 +282,14 @@ ProcessLink::OnMessageReceived(Message&& msg)
     AssertIOThread();
     NS_ASSERTION(mChan->mChannelState != ChannelError, "Shouldn't get here!");
     MonitorAutoLock lock(*mChan->mMonitor);
-    mChan->OnMessageReceivedFromLink(Move(msg));
+    mChan->OnMessageReceivedFromLink(std::move(msg));
 }
 
 void
 ProcessLink::OnEchoMessage(Message* msg)
 {
     AssertIOThread();
-    OnMessageReceived(Move(*msg));
+    OnMessageReceived(std::move(*msg));
     delete msg;
 }
 
@@ -340,7 +336,7 @@ ProcessLink::OnTakeConnectedChannel()
 
     // Dispatch whatever messages the previous listener had queued up.
     while (!pending.empty()) {
-        OnMessageReceived(Move(pending.front()));
+        OnMessageReceived(std::move(pending.front()));
         pending.pop();
     }
 }

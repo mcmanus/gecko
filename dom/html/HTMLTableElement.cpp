@@ -32,13 +32,13 @@ public:
   explicit TableRowsCollection(HTMLTableElement* aParent);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_NSIDOMHTMLCOLLECTION
 
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTAPPENDED
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTINSERTED
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTREMOVED
   NS_DECL_NSIMUTATIONOBSERVER_NODEWILLBEDESTROYED
 
+  virtual uint32_t Length() override;
   virtual Element* GetElementAt(uint32_t aIndex) override;
   virtual nsINode* GetParentObject() override
   {
@@ -177,9 +177,9 @@ TableRowsCollection::EnsureInitialized()
   }
 
   mBodyStart = mRows.Length();
-  mRows.AppendElements(Move(body));
+  mRows.AppendElements(std::move(body));
   mFootStart = mRows.Length();
-  mRows.AppendElements(Move(foot));
+  mRows.AppendElements(std::move(foot));
 
   mParent->AddMutationObserver(this);
 }
@@ -217,17 +217,15 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE_WITH_LAST_RELEASE(TableRowsCollection,
 
 NS_INTERFACE_TABLE_HEAD(TableRowsCollection)
   NS_WRAPPERCACHE_INTERFACE_TABLE_ENTRY
-  NS_INTERFACE_TABLE(TableRowsCollection, nsIHTMLCollection,
-                     nsIDOMHTMLCollection, nsIMutationObserver)
+  NS_INTERFACE_TABLE(TableRowsCollection, nsIHTMLCollection, nsIMutationObserver)
   NS_INTERFACE_TABLE_TO_MAP_SEGUE_CYCLE_COLLECTION(TableRowsCollection)
 NS_INTERFACE_MAP_END
 
-NS_IMETHODIMP
-TableRowsCollection::GetLength(uint32_t* aLength)
+uint32_t
+TableRowsCollection::Length()
 {
   EnsureInitialized();
-  *aLength = mRows.Length();
-  return NS_OK;
+  return mRows.Length();
 }
 
 Element*
@@ -240,19 +238,6 @@ TableRowsCollection::GetElementAt(uint32_t aIndex)
   return nullptr;
 }
 
-NS_IMETHODIMP
-TableRowsCollection::Item(uint32_t aIndex, nsIDOMNode** aReturn)
-{
-  nsISupports* node = GetElementAt(aIndex);
-  if (!node) {
-    *aReturn = nullptr;
-
-    return NS_OK;
-  }
-
-  return CallQueryInterface(node, aReturn);
-}
-
 Element*
 TableRowsCollection::GetFirstNamedElement(const nsAString& aName, bool& aFound)
 {
@@ -262,10 +247,10 @@ TableRowsCollection::GetFirstNamedElement(const nsAString& aName, bool& aFound)
   NS_ENSURE_TRUE(nameAtom, nullptr);
 
   for (auto& node : mRows) {
-    if (node->AttrValueIs(kNameSpaceID_None, nsGkAtoms::name,
-                          nameAtom, eCaseMatters) ||
-        node->AttrValueIs(kNameSpaceID_None, nsGkAtoms::id,
-                          nameAtom, eCaseMatters)) {
+    if (node->AsElement()->AttrValueIs(kNameSpaceID_None, nsGkAtoms::name,
+                                       nameAtom, eCaseMatters) ||
+        node->AsElement()->AttrValueIs(kNameSpaceID_None, nsGkAtoms::id,
+                                       nameAtom, eCaseMatters)) {
       aFound = true;
       return node->AsElement();
     }
@@ -289,7 +274,7 @@ TableRowsCollection::GetSupportedNames(nsTArray<nsString>& aNames)
       }
     }
 
-    nsGenericHTMLElement* el = nsGenericHTMLElement::FromContent(node);
+    nsGenericHTMLElement* el = nsGenericHTMLElement::FromNode(node);
     if (el) {
       const nsAttrValue* val = el->GetParsedAttr(nsGkAtoms::name);
       if (val && val->Type() == nsAttrValue::eAtom) {
@@ -305,21 +290,6 @@ TableRowsCollection::GetSupportedNames(nsTArray<nsString>& aNames)
   }
 }
 
-
-NS_IMETHODIMP
-TableRowsCollection::NamedItem(const nsAString& aName,
-                               nsIDOMNode** aReturn)
-{
-  bool found;
-  nsISupports* node = GetFirstNamedElement(aName, found);
-  if (!node) {
-    *aReturn = nullptr;
-
-    return NS_OK;
-  }
-
-  return CallQueryInterface(node, aReturn);
-}
 
 NS_IMETHODIMP
 TableRowsCollection::ParentDestroyed()
@@ -477,12 +447,11 @@ TableRowsCollection::HandleInsert(nsIContent* aContainer,
 // nsIMutationObserver
 
 void
-TableRowsCollection::ContentAppended(nsIDocument* aDocument,
-                                     nsIContent* aContainer,
-                                     nsIContent* aFirstNewContent)
+TableRowsCollection::ContentAppended(nsIContent* aFirstNewContent)
 {
+  nsIContent* container = aFirstNewContent->GetParent();
   if (!nsContentUtils::IsInSameAnonymousTree(mParent, aFirstNewContent) ||
-      !InterestingContainer(aContainer)) {
+      !InterestingContainer(container)) {
     return;
   }
 
@@ -490,37 +459,33 @@ TableRowsCollection::ContentAppended(nsIDocument* aDocument,
   // appending into mParent, in which case we can provide the guess that we
   // should insert at the end of the body, which can help us avoid potentially
   // expensive work in the common case.
-  int32_t indexGuess = mParent == aContainer ? mFootStart : -1;
+  int32_t indexGuess = mParent == container ? mFootStart : -1;
 
   // Insert each of the newly added content one at a time. The indexGuess should
   // make insertions of a large number of elements cheaper.
   for (nsIContent* content = aFirstNewContent;
        content; content = content->GetNextSibling()) {
-    indexGuess = HandleInsert(aContainer, content, indexGuess);
+    indexGuess = HandleInsert(container, content, indexGuess);
   }
 }
 
 void
-TableRowsCollection::ContentInserted(nsIDocument* aDocument,
-                                     nsIContent* aContainer,
-                                     nsIContent* aChild)
+TableRowsCollection::ContentInserted(nsIContent* aChild)
 {
   if (!nsContentUtils::IsInSameAnonymousTree(mParent, aChild) ||
-      !InterestingContainer(aContainer)) {
+      !InterestingContainer(aChild->GetParent())) {
     return;
   }
 
-  HandleInsert(aContainer, aChild);
+  HandleInsert(aChild->GetParent(), aChild);
 }
 
 void
-TableRowsCollection::ContentRemoved(nsIDocument* aDocument,
-                                    nsIContent* aContainer,
-                                    nsIContent* aChild,
+TableRowsCollection::ContentRemoved(nsIContent* aChild,
                                     nsIContent* aPreviousSibling)
 {
   if (!nsContentUtils::IsInSameAnonymousTree(mParent, aChild) ||
-      !InterestingContainer(aContainer)) {
+      !InterestingContainer(aChild->GetParent())) {
     return;
   }
 
@@ -672,8 +637,7 @@ HTMLTableElement::CreateTHead()
       }
     }
 
-    IgnoredErrorResult rv;
-    nsINode::InsertBefore(*head, refNode, rv);
+    nsINode::InsertBefore(*head, refNode, IgnoreErrors());
   }
   return head.forget();
 }
@@ -735,9 +699,8 @@ HTMLTableElement::CreateCaption()
       return nullptr;
     }
 
-    IgnoredErrorResult rv;
     nsCOMPtr<nsINode> firsChild = nsINode::GetFirstChild();
-    nsINode::InsertBefore(*caption, firsChild, rv);
+    nsINode::InsertBefore(*caption, firsChild, IgnoreErrors());
   }
   return caption.forget();
 }
@@ -759,7 +722,7 @@ HTMLTableElement::CreateTBody()
   RefPtr<mozilla::dom::NodeInfo> nodeInfo =
     OwnerDoc()->NodeInfoManager()->GetNodeInfo(nsGkAtoms::tbody, nullptr,
                                                kNameSpaceID_XHTML,
-                                               nsIDOMNode::ELEMENT_NODE);
+                                               ELEMENT_NODE);
   MOZ_ASSERT(nodeInfo);
 
   RefPtr<nsGenericHTMLElement> newBody =
@@ -776,8 +739,7 @@ HTMLTableElement::CreateTBody()
     }
   }
 
-  IgnoredErrorResult rv;
-  nsINode::InsertBefore(*newBody, referenceNode, rv);
+  nsINode::InsertBefore(*newBody, referenceNode, IgnoreErrors());
 
   return newBody.forget();
 }
@@ -921,6 +883,7 @@ bool
 HTMLTableElement::ParseAttribute(int32_t aNamespaceID,
                                  nsAtom* aAttribute,
                                  const nsAString& aValue,
+                                 nsIPrincipal* aMaybeScriptedPrincipal,
                                  nsAttrValue& aResult)
 {
   /* ignore summary, just a string */
@@ -962,7 +925,7 @@ HTMLTableElement::ParseAttribute(int32_t aNamespaceID,
                                                         aAttribute, aValue,
                                                         aResult) ||
          nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                              aResult);
+                                              aMaybeScriptedPrincipal, aResult);
 }
 
 
@@ -977,81 +940,73 @@ HTMLTableElement::MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
   // WalkContentStyleRules so that this happens.)  This violates the
   // nsIStyleRule contract, since it's the same style rule object doing
   // the mapping in two different ways.  It's also incorrect since it's
-  // testing the display type of the style context rather than checking
+  // testing the display type of the ComputedStyle rather than checking
   // which *element* it's matching (style rules should not stop matching
   // when the display type is changed).
 
-  nsPresContext* presContext = aData->PresContext();
-  nsCompatibility mode = presContext->CompatibilityMode();
+  nsCompatibility mode = aData->Document()->GetCompatibilityMode();
 
-  if (aData->ShouldComputeStyleStruct(NS_STYLE_INHERIT_BIT(TableBorder))) {
-    // cellspacing
-    const nsAttrValue* value = aAttributes->GetAttr(nsGkAtoms::cellspacing);
-    if (value && value->Type() == nsAttrValue::eInteger &&
-        !aData->PropertyIsSet(eCSSProperty_border_spacing)) {
-      aData->SetPixelValue(eCSSProperty_border_spacing, float(value->GetIntegerValue()));
+  // cellspacing
+  const nsAttrValue* value = aAttributes->GetAttr(nsGkAtoms::cellspacing);
+  if (value && value->Type() == nsAttrValue::eInteger &&
+      !aData->PropertyIsSet(eCSSProperty_border_spacing)) {
+    aData->SetPixelValue(eCSSProperty_border_spacing, float(value->GetIntegerValue()));
+  }
+  // align; Check for enumerated type (it may be another type if
+  // illegal)
+  value = aAttributes->GetAttr(nsGkAtoms::align);
+  if (value && value->Type() == nsAttrValue::eEnum) {
+    if (value->GetEnumValue() == NS_STYLE_TEXT_ALIGN_CENTER ||
+        value->GetEnumValue() == NS_STYLE_TEXT_ALIGN_MOZ_CENTER) {
+      aData->SetAutoValueIfUnset(eCSSProperty_margin_left);
+      aData->SetAutoValueIfUnset(eCSSProperty_margin_right);
     }
   }
-  if (aData->ShouldComputeStyleStruct(NS_STYLE_INHERIT_BIT(Margin))) {
-    // align; Check for enumerated type (it may be another type if
-    // illegal)
-    const nsAttrValue* value = aAttributes->GetAttr(nsGkAtoms::align);
 
-    if (value && value->Type() == nsAttrValue::eEnum) {
-      if (value->GetEnumValue() == NS_STYLE_TEXT_ALIGN_CENTER ||
-          value->GetEnumValue() == NS_STYLE_TEXT_ALIGN_MOZ_CENTER) {
-        aData->SetAutoValueIfUnset(eCSSProperty_margin_left);
-        aData->SetAutoValueIfUnset(eCSSProperty_margin_right);
-      }
+  // hspace is mapped into left and right margin,
+  // vspace is mapped into top and bottom margins
+  // - *** Quirks Mode only ***
+  if (eCompatibility_NavQuirks == mode) {
+    value = aAttributes->GetAttr(nsGkAtoms::hspace);
+
+    if (value && value->Type() == nsAttrValue::eInteger) {
+      aData->SetPixelValueIfUnset(eCSSProperty_margin_left, (float)value->GetIntegerValue());
+      aData->SetPixelValueIfUnset(eCSSProperty_margin_right, (float)value->GetIntegerValue());
     }
 
-    // hspace is mapped into left and right margin,
-    // vspace is mapped into top and bottom margins
-    // - *** Quirks Mode only ***
-    if (eCompatibility_NavQuirks == mode) {
-      value = aAttributes->GetAttr(nsGkAtoms::hspace);
+    value = aAttributes->GetAttr(nsGkAtoms::vspace);
 
-      if (value && value->Type() == nsAttrValue::eInteger) {
-        aData->SetPixelValueIfUnset(eCSSProperty_margin_left, (float)value->GetIntegerValue());
-        aData->SetPixelValueIfUnset(eCSSProperty_margin_right, (float)value->GetIntegerValue());
-      }
-
-      value = aAttributes->GetAttr(nsGkAtoms::vspace);
-
-      if (value && value->Type() == nsAttrValue::eInteger) {
-        aData->SetPixelValueIfUnset(eCSSProperty_margin_top, (float)value->GetIntegerValue());
-        aData->SetPixelValueIfUnset(eCSSProperty_margin_bottom, (float)value->GetIntegerValue());
-      }
+    if (value && value->Type() == nsAttrValue::eInteger) {
+      aData->SetPixelValueIfUnset(eCSSProperty_margin_top, (float)value->GetIntegerValue());
+      aData->SetPixelValueIfUnset(eCSSProperty_margin_bottom, (float)value->GetIntegerValue());
     }
   }
-  if (aData->ShouldComputeStyleStruct(NS_STYLE_INHERIT_BIT(Border))) {
-    // bordercolor
-    const nsAttrValue* value = aAttributes->GetAttr(nsGkAtoms::bordercolor);
-    nscolor color;
-    if (value && presContext->UseDocumentColors() &&
-        value->GetColorValue(color)) {
-      aData->SetColorValueIfUnset(eCSSProperty_border_top_color, color);
-      aData->SetColorValueIfUnset(eCSSProperty_border_left_color, color);
-      aData->SetColorValueIfUnset(eCSSProperty_border_bottom_color, color);
-      aData->SetColorValueIfUnset(eCSSProperty_border_right_color, color);
-    }
-
-    // border
-    const nsAttrValue* borderValue = aAttributes->GetAttr(nsGkAtoms::border);
-    if (borderValue) {
-      // border = 1 pixel default
-      int32_t borderThickness = 1;
-
-      if (borderValue->Type() == nsAttrValue::eInteger)
-        borderThickness = borderValue->GetIntegerValue();
-
-      // by default, set all border sides to the specified width
-      aData->SetPixelValueIfUnset(eCSSProperty_border_top_width, (float)borderThickness);
-      aData->SetPixelValueIfUnset(eCSSProperty_border_left_width, (float)borderThickness);
-      aData->SetPixelValueIfUnset(eCSSProperty_border_bottom_width, (float)borderThickness);
-      aData->SetPixelValueIfUnset(eCSSProperty_border_right_width, (float)borderThickness);
-    }
+  // bordercolor
+  value = aAttributes->GetAttr(nsGkAtoms::bordercolor);
+  nscolor color;
+  if (value && value->GetColorValue(color)) {
+    aData->SetColorValueIfUnset(eCSSProperty_border_top_color, color);
+    aData->SetColorValueIfUnset(eCSSProperty_border_left_color, color);
+    aData->SetColorValueIfUnset(eCSSProperty_border_bottom_color, color);
+    aData->SetColorValueIfUnset(eCSSProperty_border_right_color, color);
   }
+
+  // border
+  const nsAttrValue* borderValue = aAttributes->GetAttr(nsGkAtoms::border);
+  if (borderValue) {
+    // border = 1 pixel default
+    int32_t borderThickness = 1;
+
+    if (borderValue->Type() == nsAttrValue::eInteger)
+      borderThickness = borderValue->GetIntegerValue();
+
+    // by default, set all border sides to the specified width
+    aData->SetPixelValueIfUnset(eCSSProperty_border_top_width, (float)borderThickness);
+    aData->SetPixelValueIfUnset(eCSSProperty_border_left_width, (float)borderThickness);
+    aData->SetPixelValueIfUnset(eCSSProperty_border_bottom_width, (float)borderThickness);
+    aData->SetPixelValueIfUnset(eCSSProperty_border_right_width, (float)borderThickness);
+  }
+
   nsGenericHTMLElement::MapImageSizeAttributesInto(aAttributes, aData);
   nsGenericHTMLElement::MapBackgroundAttributesInto(aAttributes, aData);
   nsGenericHTMLElement::MapCommonAttributesInto(aAttributes, aData);
@@ -1094,18 +1049,16 @@ static void
 MapInheritedTableAttributesIntoRule(const nsMappedAttributes* aAttributes,
                                     GenericSpecifiedValues* aData)
 {
-  if (aData->ShouldComputeStyleStruct(NS_STYLE_INHERIT_BIT(Padding))) {
-    const nsAttrValue* value = aAttributes->GetAttr(nsGkAtoms::cellpadding);
-    if (value && value->Type() == nsAttrValue::eInteger) {
-      // We have cellpadding.  This will override our padding values if we
-      // don't have any set.
-      float pad = float(value->GetIntegerValue());
+  const nsAttrValue* value = aAttributes->GetAttr(nsGkAtoms::cellpadding);
+  if (value && value->Type() == nsAttrValue::eInteger) {
+    // We have cellpadding.  This will override our padding values if we
+    // don't have any set.
+    float pad = float(value->GetIntegerValue());
 
-      aData->SetPixelValueIfUnset(eCSSProperty_padding_top, pad);
-      aData->SetPixelValueIfUnset(eCSSProperty_padding_right, pad);
-      aData->SetPixelValueIfUnset(eCSSProperty_padding_bottom, pad);
-      aData->SetPixelValueIfUnset(eCSSProperty_padding_left, pad);
-    }
+    aData->SetPixelValueIfUnset(eCSSProperty_padding_top, pad);
+    aData->SetPixelValueIfUnset(eCSSProperty_padding_right, pad);
+    aData->SetPixelValueIfUnset(eCSSProperty_padding_bottom, pad);
+    aData->SetPixelValueIfUnset(eCSSProperty_padding_left, pad);
   }
 }
 
@@ -1196,13 +1149,15 @@ HTMLTableElement::BeforeSetAttr(int32_t aNameSpaceID, nsAtom* aName,
 nsresult
 HTMLTableElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                                const nsAttrValue* aValue,
-                               const nsAttrValue* aOldValue, bool aNotify)
+                               const nsAttrValue* aOldValue,
+                               nsIPrincipal* aSubjectPrincipal,
+                               bool aNotify)
 {
   if (aName == nsGkAtoms::cellpadding && aNameSpaceID == kNameSpaceID_None) {
     BuildInheritedAttributes();
   }
   return nsGenericHTMLElement::AfterSetAttr(aNameSpaceID, aName, aValue,
-                                            aOldValue, aNotify);
+                                            aOldValue, aSubjectPrincipal, aNotify);
 }
 
 } // namespace dom

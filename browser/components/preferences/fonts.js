@@ -18,6 +18,12 @@ const kFontSizeFmtVariable      = "font.size.variable.%LANG%";
 const kFontSizeFmtFixed         = "font.size.fixed.%LANG%";
 const kFontMinSizeFmt           = "font.minimum-size.%LANG%";
 
+Preferences.addAll([
+  { id: "font.language.group", type: "wstring" },
+  { id: "browser.display.use_document_fonts", type: "int" },
+  { id: "intl.charset.fallback.override", type: "string" },
+]);
+
 var gFontsDialog = {
   _selectLanguageGroupPromise: Promise.resolve(),
 
@@ -44,16 +50,11 @@ var gFontsDialog = {
         { format: kFontSizeFmtFixed,         type: "int",      element: "sizeMono",   fonttype: null          },
         { format: kFontMinSizeFmt,           type: "int",      element: "minSize",    fonttype: null          }
       ];
-      var preferences = document.getElementById("fontPreferences");
       for (var i = 0; i < prefs.length; ++i) {
-        var preference = document.getElementById(prefs[i].format.replace(/%LANG%/, aLanguageGroup));
+        var name = prefs[i].format.replace(/%LANG%/, aLanguageGroup);
+        var preference = Preferences.get(name);
         if (!preference) {
-          preference = document.createElement("preference");
-          var name = prefs[i].format.replace(/%LANG%/, aLanguageGroup);
-          preference.id = name;
-          preference.setAttribute("name", name);
-          preference.setAttribute("type", prefs[i].type);
-          preferences.appendChild(preference);
+          preference = Preferences.add({ id: name, type: prefs[i].type });
         }
 
         if (!prefs[i].element)
@@ -70,17 +71,17 @@ var gFontsDialog = {
         }
       }
     })()
-      .catch(Components.utils.reportError);
+      .catch(Cu.reportError);
   },
 
   readFontLanguageGroup() {
-    var languagePref = document.getElementById("font.language.group");
+    var languagePref = Preferences.get("font.language.group");
     this._selectLanguageGroup(languagePref.value);
     return undefined;
   },
 
   readUseDocumentFonts() {
-    var preference = document.getElementById("browser.display.use_document_fonts");
+    var preference = Preferences.get("browser.display.use_document_fonts");
     return preference.value == 1;
   },
 
@@ -89,28 +90,29 @@ var gFontsDialog = {
     return useDocumentFonts.checked ? 1 : 0;
   },
 
-  onBeforeAccept() {
-    let preferences = document.querySelectorAll("preference[id*='font.minimum-size']");
-    // It would be good if we could avoid touching languages the pref pages won't use, but
-    // unfortunately the language group APIs (deducing language groups from language codes)
-    // are C++ - only. So we just check all the things the user touched:
-    // Don't care about anything up to 24px, or if this value is the same as set previously:
-    preferences = Array.filter(preferences, prefEl => {
-      return prefEl.value > 24 && prefEl.value != prefEl.valueFromPreferences;
-    });
-    if (!preferences.length) {
-      return true;
+  async confirmMinSizeChange() {
+    let menulist = document.getElementById("minSize");
+    let preference = menulist.getAttribute("preference");
+    let defaultValue = Preferences.get(preference).valueFromPreferences;
+    let oldValue = Preferences.get(preference).value;
+    let newValue = menulist.value;
+
+    if (newValue <= 24 || newValue == defaultValue) {
+      return;
     }
 
-    let strings = document.getElementById("bundlePreferences");
-    let title = strings.getString("veryLargeMinimumFontTitle");
-    let confirmLabel = strings.getString("acceptVeryLargeMinimumFont");
-    let warningMessage = strings.getString("veryLargeMinimumFontWarning");
-    let {Services} = Components.utils.import("resource://gre/modules/Services.jsm", {});
+    let [title, warningMessage, confirmLabel] = await document.l10n.formatValues([
+      {id: "fonts-very-large-warning-title"},
+      {id: "fonts-very-large-warning-message"},
+      {id: "fonts-very-large-warning-accept"},
+    ]);
+    let {Services} = ChromeUtils.import("resource://gre/modules/Services.jsm", {});
     let flags = Services.prompt.BUTTON_POS_1 * Services.prompt.BUTTON_TITLE_CANCEL |
                 Services.prompt.BUTTON_POS_0 * Services.prompt.BUTTON_TITLE_IS_STRING |
                 Services.prompt.BUTTON_POS_1_DEFAULT;
     let buttonChosen = Services.prompt.confirmEx(window, title, warningMessage, flags, confirmLabel, null, "", "", {});
-    return buttonChosen == 0;
+    if (buttonChosen != 0) {
+      menulist.value = oldValue;
+    }
   },
 };

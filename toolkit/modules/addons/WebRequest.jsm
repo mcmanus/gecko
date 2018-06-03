@@ -10,24 +10,16 @@ const EXPORTED_SYMBOLS = ["WebRequest"];
 
 /* globals ChannelWrapper */
 
-const Ci = Components.interfaces;
-const Cc = Components.classes;
-const Cu = Components.utils;
-const Cr = Components.results;
-
 const {nsIHttpActivityObserver, nsISocketTransport} = Ci;
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "ExtensionUtils",
-                                  "resource://gre/modules/ExtensionUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "WebRequestCommon",
-                                  "resource://gre/modules/WebRequestCommon.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "WebRequestUpload",
-                                  "resource://gre/modules/WebRequestUpload.jsm");
-
-XPCOMUtils.defineLazyGetter(this, "ExtensionError", () => ExtensionUtils.ExtensionError);
+XPCOMUtils.defineLazyModuleGetters(this, {
+  ExtensionUtils: "resource://gre/modules/ExtensionUtils.jsm",
+  WebRequestUpload: "resource://gre/modules/WebRequestUpload.jsm",
+  SecurityInfo: "resource://gre/modules/SecurityInfo.jsm",
+});
 
 function runLater(job) {
   Services.tm.dispatchToMainThread(job);
@@ -45,15 +37,15 @@ function parseFilter(filter) {
 function parseExtra(extra, allowed = [], optionsObj = {}) {
   if (extra) {
     for (let ex of extra) {
-      if (allowed.indexOf(ex) == -1) {
-        throw new ExtensionError(`Invalid option ${ex}`);
+      if (!allowed.includes(ex)) {
+        throw new ExtensionUtils.ExtensionError(`Invalid option ${ex}`);
       }
     }
   }
 
   let result = Object.assign({}, optionsObj);
   for (let al of allowed) {
-    if (extra && extra.indexOf(al) != -1) {
+    if (extra && extra.includes(al)) {
       result[al] = true;
     }
   }
@@ -124,23 +116,38 @@ class HeaderChanger {
       }
     }
 
-    // Set new or changed headers.
+    // Set new or changed headers.  If there are multiple headers with the same
+    // name (e.g. Set-Cookie), merge them, instead of having new values
+    // overwrite previous ones.
+    //
+    // When the new value of a header is equal the existing value of the header
+    // (e.g. the initial response set "Set-Cookie: examplename=examplevalue",
+    // and an extension also added the header
+    // "Set-Cookie: examplename=examplevalue") then the header value is not
+    // re-set, but subsequent headers of the same type will be merged in.
+    let headersAlreadySet = new Set();
     for (let {name, value, binaryValue} of headers) {
       if (binaryValue) {
         value = String.fromCharCode(...binaryValue);
       }
-      let original = origHeaders.get(name.toLowerCase());
+
+      let lowerCaseName = name.toLowerCase();
+      let original = origHeaders.get(lowerCaseName);
+
       if (!original || value !== original.value) {
-        this.setHeader(name, value);
+        let shouldMerge = headersAlreadySet.has(lowerCaseName);
+        this.setHeader(name, value, shouldMerge);
       }
+
+      headersAlreadySet.add(lowerCaseName);
     }
   }
 }
 
 class RequestHeaderChanger extends HeaderChanger {
-  setHeader(name, value) {
+  setHeader(name, value, merge) {
     try {
-      this.channel.setRequestHeader(name, value);
+      this.channel.setRequestHeader(name, value, merge);
     } catch (e) {
       Cu.reportError(new Error(`Error setting request header ${name}: ${e}`));
     }
@@ -152,9 +159,9 @@ class RequestHeaderChanger extends HeaderChanger {
 }
 
 class ResponseHeaderChanger extends HeaderChanger {
-  setHeader(name, value) {
+  setHeader(name, value, merge) {
     try {
-      this.channel.setResponseHeader(name, value);
+      this.channel.setResponseHeader(name, value, merge);
     } catch (e) {
       Cu.reportError(new Error(`Error setting response header ${name}: ${e}`));
     }
@@ -166,12 +173,12 @@ class ResponseHeaderChanger extends HeaderChanger {
 }
 
 const MAYBE_CACHED_EVENTS = new Set([
-  "onResponseStarted", "onBeforeRedirect", "onCompleted", "onErrorOccurred",
+  "onResponseStarted", "onHeadersReceived", "onBeforeRedirect", "onCompleted", "onErrorOccurred",
 ]);
 
 const OPTIONAL_PROPERTIES = [
   "requestHeaders", "responseHeaders", "statusCode", "statusLine", "error", "redirectUrl",
-  "requestBody", "scheme", "realm", "isProxy", "challenger", "proxyInfo", "ip",
+  "requestBody", "scheme", "realm", "isProxy", "challenger", "proxyInfo", "ip", "frameAncestors",
 ];
 
 function serializeRequestData(eventName) {
@@ -217,7 +224,7 @@ var ContentPolicyManager = {
   },
 
   receiveMessage(msg) {
-    let browser = msg.target instanceof Ci.nsIDOMXULElement ? msg.target : null;
+    let browser = ChromeUtils.getClassName(msg.target) == "XULElement" ? msg.target : null;
 
     let requestId = `fakeRequest-${++nextFakeRequestId}`;
     for (let id of msg.data.ids) {
@@ -313,8 +320,8 @@ var ChannelEventSink = {
   _classID: Components.ID("115062f8-92f1-11e5-8b7f-080027b0f7ec"),
   _contractID: "@mozilla.org/webrequest/channel-event-sink;1",
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIChannelEventSink,
-                                         Ci.nsIFactory]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIChannelEventSink,
+                                          Ci.nsIFactory]),
 
   init() {
     Components.manager.QueryInterface(Ci.nsIComponentRegistrar)
@@ -358,19 +365,6 @@ class AuthRequestor {
     this.notificationCallbacks = channel.notificationCallbacks;
     this.loadGroupCallbacks = channel.loadGroup && channel.loadGroup.notificationCallbacks;
     this.httpObserver = httpObserver;
-  }
-
-  QueryInterface(iid) {
-    if (iid.equals(Ci.nsISupports) ||
-        iid.equals(Ci.nsIInterfaceRequestor) ||
-        iid.equals(Ci.nsIAuthPromptProvider) ||
-        iid.equals(Ci.nsIAuthPrompt2)) {
-      return this;
-    }
-    try {
-      return this.notificationCallbacks.QueryInterface(iid);
-    } catch (e) {}
-    throw Cr.NS_ERROR_NO_INTERFACE;
   }
 
   getInterface(iid) {
@@ -465,7 +459,7 @@ class AuthRequestor {
         } catch (e) {
           Cu.reportError(`webRequest onAuthAvailable failure ${e}`);
         }
-        // At least one addon has responded, so we wont forward to the regular
+        // At least one addon has responded, so we won't forward to the regular
         // prompt handlers.
         wrapper.authPromptForward = null;
         wrapper.authPromptCallback = null;
@@ -475,7 +469,7 @@ class AuthRequestor {
     this.httpObserver.runChannelListener(wrapper, "authRequired", data);
 
     return {
-      QueryInterface: XPCOMUtils.generateQI([Ci.nsICancelable]),
+      QueryInterface: ChromeUtils.generateQI([Ci.nsICancelable]),
       cancel() {
         try {
           callback.onAuthCancelled(context, false);
@@ -489,6 +483,12 @@ class AuthRequestor {
   }
 }
 
+AuthRequestor.prototype.QueryInterface = ChromeUtils.generateQI(
+  ["nsIInterfaceRequestor",
+   "nsIAuthPromptProvider",
+   "nsIAuthPrompt2"]);
+
+
 HttpObserverManager = {
   openingInitialized: false,
   modifyInitialized: false,
@@ -496,6 +496,7 @@ HttpObserverManager = {
   redirectInitialized: false,
   activityInitialized: false,
   needTracing: false,
+  hasRedirects: false,
 
   listeners: {
     opening: new Map(),
@@ -576,7 +577,11 @@ HttpObserverManager = {
       Services.obs.removeObserver(this, "http-on-examine-merged-response");
     }
 
-    let needRedirect = this.listeners.onRedirect.size || haveBlocking;
+    // If we have any listeners, we need the channelsink so the channelwrapper is
+    // updated properly. Otherwise events for channels that are redirected will not
+    // happen correctly.  If we have no listeners, shut it down.
+    this.hasRedirects = this.listeners.onRedirect.size > 0;
+    let needRedirect = this.hasRedirects || needExamine || needOpening || needModify;
     if (needRedirect && !this.redirectInitialized) {
       this.redirectInitialized = true;
       ChannelEventSink.register();
@@ -655,7 +660,8 @@ HttpObserverManager = {
       Services.tm.dispatchToMainThread(() => {
         channel.errorCheck();
         if (!channel.errorString) {
-          this.runChannelListener(channel, "onError",
+          this.runChannelListener(
+            channel, "onError",
             {error: this.activityErrorsMap.get(lastActivity) ||
                     `NS_ERROR_NET_UNKNOWN_${lastActivity}`});
         }
@@ -740,7 +746,9 @@ HttpObserverManager = {
         let data = Object.create(commonData);
 
         if (registerFilter && opts.blocking && opts.extension) {
-          channel.registerTraceableChannel(opts.extension, opts.tabParent);
+          data.registerTraceableChannel = (extension, tabParent) => {
+            channel.registerTraceableChannel(extension, tabParent);
+          };
         }
 
         if (opts.requestHeaders) {
@@ -753,7 +761,7 @@ HttpObserverManager = {
           data.responseHeaders = responseHeaders.toArray();
         }
 
-        if (opts.requestBody) {
+        if (opts.requestBody && channel.canModify) {
           requestBody = requestBody || WebRequestUpload.createRequestBody(channel.channel);
           data.requestBody = requestBody;
         }
@@ -787,7 +795,15 @@ HttpObserverManager = {
           try {
             result = await result;
           } catch (e) {
-            Cu.reportError(e);
+            let error;
+
+            if (e instanceof Error) {
+              error = e;
+            } else if (typeof e === "object" && e.message) {
+              error = new Error(e.message, e.fileName, e.lineNumber);
+            }
+
+            Cu.reportError(error);
             continue;
           }
           if (!result || typeof result !== "object") {
@@ -815,7 +831,24 @@ HttpObserverManager = {
           try {
             channel.suspended = false;
             channel.redirectTo(Services.io.newURI(result.redirectUrl));
+            // Web Extensions using the WebRequest API are allowed
+            // to redirect a channel to a data: URI, hence we mark
+            // the channel to let the redirect blocker know. Please
+            // note that this markind needs to happen after the
+            // channel.redirectTo is called because the channel's
+            // RedirectTo() implementation explicitly drops the flag
+            // to avoid additional redirects not caused by the
+            // Web Extension.
+            channel.loadInfo.allowInsecureRedirectToDataURI = true;
             return;
+          } catch (e) {
+            Cu.reportError(e);
+          }
+        }
+
+        if (result.upgradeToSecure && kind === "opening") {
+          try {
+            channel.upgradeToSecure();
           } catch (e) {
             Cu.reportError(e);
           }
@@ -881,7 +914,9 @@ HttpObserverManager = {
 
     // We want originalURI, this will provide a moz-ext rather than jar or file
     // uri on redirects.
-    this.runChannelListener(channel, "onRedirect", {redirectUrl: newChannel.originalURI.spec});
+    if (this.hasRedirects) {
+      this.runChannelListener(channel, "onRedirect", {redirectUrl: newChannel.originalURI.spec});
+    }
     channel.channel = newChannel;
   },
 };
@@ -957,6 +992,13 @@ var WebRequest = {
 
   // nsIHttpActivityObserver.
   onErrorOccurred: onErrorOccurred,
+
+  getSecurityInfo: (details) => {
+    let channel = ChannelWrapper.getRegisteredChannel(details.id, details.extension, details.tabParent);
+    if (channel) {
+      return SecurityInfo.getSecurityInfo(channel.channel, details.options);
+    }
+  },
 };
 
 Services.ppmm.loadProcessScript("resource://gre/modules/WebRequestContent.js", true);

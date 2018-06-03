@@ -2,11 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* exported UtteranceGenerator, BrailleGenerator */
+/* exported UtteranceGenerator */
 
 "use strict";
-
-const {utils: Cu, interfaces: Ci} = Components;
 
 const INCLUDE_DESC = 0x01;
 const INCLUDE_NAME = 0x02;
@@ -17,19 +15,18 @@ const IGNORE_EXPLICIT_NAME = 0x20;
 const OUTPUT_DESC_FIRST = 0;
 const OUTPUT_DESC_LAST = 1;
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Utils", // jshint ignore:line
+ChromeUtils.defineModuleGetter(this, "Utils", // jshint ignore:line
   "resource://gre/modules/accessibility/Utils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PrefCache", // jshint ignore:line
+ChromeUtils.defineModuleGetter(this, "PrefCache", // jshint ignore:line
   "resource://gre/modules/accessibility/Utils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Logger", // jshint ignore:line
+ChromeUtils.defineModuleGetter(this, "Logger", // jshint ignore:line
   "resource://gre/modules/accessibility/Utils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Roles", // jshint ignore:line
+ChromeUtils.defineModuleGetter(this, "Roles", // jshint ignore:line
   "resource://gre/modules/accessibility/Constants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "States", // jshint ignore:line
+ChromeUtils.defineModuleGetter(this, "States", // jshint ignore:line
   "resource://gre/modules/accessibility/Constants.jsm");
 
-this.EXPORTED_SYMBOLS = ["UtteranceGenerator", "BrailleGenerator"]; // jshint ignore:line
+var EXPORTED_SYMBOLS = ["UtteranceGenerator"]; // jshint ignore:line
 
 var OutputGenerator = {
 
@@ -177,10 +174,13 @@ var OutputGenerator = {
       // so we can make sure we don't speak duplicated descriptions
       let tmpName = name || aAccessible.name;
       if (tmpName && (description !== tmpName)) {
-        name = name || "";
-        name = this.outputOrder === OUTPUT_DESC_FIRST ?
-          description + " - " + name :
-          name + " - " + description;
+        if (name) {
+          name = this.outputOrder === OUTPUT_DESC_FIRST ?
+            description + " - " + name :
+            name + " - " + description;
+        } else {
+          name = description;
+        }
       }
     }
 
@@ -580,7 +580,7 @@ var OutputGenerator = {
  * clicked event. Speaking only 'clicked' makes sense. Speaking 'button' does
  * not.
  */
-this.UtteranceGenerator = {  // jshint ignore:line
+var UtteranceGenerator = {  // jshint ignore:line
   __proto__: OutputGenerator, // jshint ignore:line
 
   gActionMap: {
@@ -837,165 +837,4 @@ this.UtteranceGenerator = {  // jshint ignore:line
 
       return utterance;
     }
-};
-
-this.BrailleGenerator = {  // jshint ignore:line
-  __proto__: OutputGenerator, // jshint ignore:line
-
-  genForContext: function genForContext(aContext) {
-    let output = OutputGenerator.genForContext.apply(this, arguments);
-
-    let acc = aContext.accessible;
-
-    // add the static text indicating a list item; do this for both listitems or
-    // direct first children of listitems, because these are both common
-    // browsing scenarios
-    let addListitemIndicator = function addListitemIndicator(indicator = "*") {
-      output.unshift(indicator);
-    };
-
-    if (acc.indexInParent === 1 &&
-        acc.parent.role == Roles.LISTITEM &&
-        acc.previousSibling.role == Roles.STATICTEXT) {
-      if (acc.parent.parent && acc.parent.parent.DOMNode &&
-          acc.parent.parent.DOMNode.nodeName == "UL") {
-        addListitemIndicator();
-      } else {
-        addListitemIndicator(acc.previousSibling.name.trim());
-      }
-    } else if (acc.role == Roles.LISTITEM && acc.firstChild &&
-               acc.firstChild.role == Roles.STATICTEXT) {
-      if (acc.parent.DOMNode.nodeName == "UL") {
-        addListitemIndicator();
-      } else {
-        addListitemIndicator(acc.firstChild.name.trim());
-      }
-    }
-
-    return output;
-  },
-
-  objectOutputFunctions: {
-
-    __proto__: OutputGenerator.objectOutputFunctions, // jshint ignore:line
-
-    defaultFunc: function defaultFunc() {
-      return this.objectOutputFunctions._generateBaseOutput.apply(
-        this, arguments);
-    },
-
-    listitem: function listitem(aAccessible, aRoleStr, aState, aFlags) {
-      let braille = [];
-
-      this._addName(braille, aAccessible, aFlags);
-      this._addLandmark(braille, aAccessible);
-
-      return braille;
-    },
-
-    cell: function cell(aAccessible, aRoleStr, aState, aFlags, aContext) {
-      let braille = [];
-      let cell = aContext.getCellInfo(aAccessible);
-      if (cell) {
-        let addHeaders = function addHeaders(aBraille, aHeaders) {
-          if (aHeaders.length > 0) {
-            aBraille.push.apply(aBraille, aHeaders);
-          }
-        };
-
-        braille.push({
-          string: this._getOutputName("cellInfo"),
-          args: [cell.columnIndex + 1, cell.rowIndex + 1]
-        });
-
-        addHeaders(braille, cell.columnHeaders);
-        addHeaders(braille, cell.rowHeaders);
-      }
-
-      this._addName(braille, aAccessible, aFlags);
-      this._addLandmark(braille, aAccessible);
-      return braille;
-    },
-
-    columnheader: function columnheader() {
-      return this.objectOutputFunctions.cell.apply(this, arguments);
-    },
-
-    rowheader: function rowheader() {
-      return this.objectOutputFunctions.cell.apply(this, arguments);
-    },
-
-    statictext: function statictext(aAccessible) {
-      // Since we customize the list bullet's output, we add the static
-      // text from the first node in each listitem, so skip it here.
-      if (Utils.isListItemDecorator(aAccessible)) {
-        return [];
-      }
-
-      return this.objectOutputFunctions._useStateNotRole.apply(this, arguments);
-    },
-
-    _useStateNotRole:
-      function _useStateNotRole(aAccessible, aRoleStr, aState, aFlags) {
-        let braille = [];
-        this._addState(braille, aState, aRoleStr);
-        this._addName(braille, aAccessible, aFlags);
-        this._addLandmark(braille, aAccessible);
-
-        return braille;
-      },
-
-    switch: function braille_generator_object_output_functions_switch() {
-      return this.objectOutputFunctions._useStateNotRole.apply(this, arguments);
-    },
-
-    checkbutton: function checkbutton() {
-      return this.objectOutputFunctions._useStateNotRole.apply(this, arguments);
-    },
-
-    radiobutton: function radiobutton() {
-      return this.objectOutputFunctions._useStateNotRole.apply(this, arguments);
-    },
-
-    togglebutton: function togglebutton() {
-      return this.objectOutputFunctions._useStateNotRole.apply(this, arguments);
-    }
-  },
-
-  _getContextStart: function _getContextStart(aContext) {
-    if (aContext.accessible.parent.role == Roles.LINK) {
-      return [aContext.accessible.parent];
-    }
-
-    return [];
-  },
-
-  _getOutputName: function _getOutputName(aName) {
-    return OutputGenerator._getOutputName(aName) + "Abbr";
-  },
-
-  _addRole: function _addRole(aBraille, aAccessible, aRoleStr) {
-    if (this.mathmlRolesSet.has(aAccessible.role)) {
-      this._addMathRoles(aBraille, aAccessible, aRoleStr);
-    } else {
-      aBraille.push({string: this._getOutputName(aRoleStr)});
-    }
-  },
-
-  _addState: function _addState(aBraille, aState, aRoleStr) {
-    if (aState.contains(States.CHECKABLE)) {
-      aBraille.push({
-        string: aState.contains(States.CHECKED) ?
-          this._getOutputName("stateChecked") :
-          this._getOutputName("stateUnchecked")
-      });
-    }
-    if (aRoleStr === "toggle button") {
-      aBraille.push({
-        string: aState.contains(States.PRESSED) ?
-          this._getOutputName("statePressed") :
-          this._getOutputName("stateUnpressed")
-      });
-    }
-  }
 };

@@ -142,7 +142,7 @@
           { role: ROLE_TEXT_LEAF }, // plain text
           { role: ROLE_TEXT_LEAF } // HTML:b text
         ]
-      }
+      };
       testElm("b_container", obj);
 
       // ////////////////////////////////////////////////////////////////////////
@@ -158,7 +158,7 @@
           { role: ROLE_TEXT_LEAF }, // HTML:bdi text
           { role: ROLE_TEXT_LEAF } // plain text
         ]
-      }
+      };
       testElm("bdi_container", obj);
 
       // ////////////////////////////////////////////////////////////////////////
@@ -173,7 +173,7 @@
         children: [
           { role: ROLE_TEXT_LEAF }, // plain text
         ]
-      }
+      };
       testElm("bdo_container", obj);
 
       // ////////////////////////////////////////////////////////////////////////
@@ -543,9 +543,18 @@
       // HTML:form
 
       obj = {
-        role: ROLE_FORM
+        role: ROLE_FORM,
+        absentAttributes: { "xml-roles": "form" }
       };
       testElm("form", obj);
+
+      // HTML:form with an accessible name
+
+      obj = {
+        role: ROLE_FORM,
+        attributes: { "xml-roles": "form" }
+      };
+      testElm("named_form", obj);
 
       // ////////////////////////////////////////////////////////////////////////
       // // HTML:frameset, HTML:frame and HTML:iframe
@@ -651,7 +660,7 @@
           { role: ROLE_TEXT_LEAF }, // plain text
           { role: ROLE_TEXT_LEAF } // HTML:i text
         ]
-      }
+      };
       testElm("i_container", obj);
 
       // ////////////////////////////////////////////////////////////////////////
@@ -833,6 +842,38 @@
         absentStates: STATE_DEFAULT
       };
       testElm("input_reset", obj);
+
+      // ////////////////////////////////////////////////////////////////////////
+      // HTML:input@type="time"
+
+      obj = {
+        role: ROLE_GROUPING,
+        children: [
+          { role: ROLE_SPINBUTTON },
+          { role: ROLE_TEXT_LEAF },
+          { role: ROLE_SPINBUTTON },
+          { role: ROLE_TEXT_LEAF },
+          { role: ROLE_ENTRY },
+          { role: ROLE_PUSHBUTTON }
+        ]
+      };
+      testElm("input_time", obj);
+
+      // ////////////////////////////////////////////////////////////////////////
+      // HTML:input@type="date"
+
+      obj = {
+        role: ROLE_DATE_EDITOR,
+        children: [
+          { role: ROLE_SPINBUTTON },
+          { role: ROLE_TEXT_LEAF },
+          { role: ROLE_SPINBUTTON },
+          { role: ROLE_TEXT_LEAF },
+          { role: ROLE_SPINBUTTON },
+          { role: ROLE_PUSHBUTTON }
+        ]
+      };
+      testElm("input_date", obj);
 
       // ////////////////////////////////////////////////////////////////////////
       // HTML:ins contained by paragraph
@@ -1478,10 +1519,11 @@
     <input />
   </fieldset>
 
-  <figure id="figure">
-    <img src="../moz.png" alt="An awesome picture">
-    <figcaption id="figcaption">Caption for the awesome picture</figcaption>
-  </figure>
+  <!-- Depending on whether or not the image is cached, layout may be able to
+       optimize away spaces between the figure, img and figcaption tags. As
+       such, we should keep everything on one line to get consistent results.
+  -->
+  <figure id="figure"><img src="../moz.png" alt="An awesome picture"><figcaption id="figcaption">Caption for the awesome picture</figcaption></figure>
 
   <footer id="footer">Some copyright info</footer>
   <article>
@@ -1516,6 +1558,7 @@
   </td></tr></table>
 
   <form id="form"></form>
+  <form id="named_form" aria-label="New form"></form>
 
   <iframe id="frameset_container"
           src="data:text/html,<html><frameset><frame src='data:text/html,hi'></frame></frameset></html>">
@@ -1590,6 +1633,8 @@
   <form>
     <input id="input_reset" type="reset">
   </form>
+  <input id="input_time" type="time" value="23:23">
+  <input id="input_date" type="date" value="2017-11-10">
 
   <p id="ins_container">normal<ins>Inserted</ins></p>
   <p id="kbd_container">normal<kbd>cmd</kbd></p>

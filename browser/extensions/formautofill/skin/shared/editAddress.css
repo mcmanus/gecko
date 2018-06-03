@@ -2,6 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+html {
+  width: 620px;
+}
 
 label > span {
   flex: 0 0 9.5em;
@@ -9,6 +12,7 @@ label > span {
 
 input,
 select {
+  flex: 1 0 auto;
   width: calc(50% - 9.5em);
   margin: 0;
 }
@@ -26,13 +30,11 @@ select {
   flex: 0 1 50%;
 }
 
-#family-name-container,
-#organization-container,
-#address-level2-container,
 #tel-container {
   padding-inline-end: 50%;
 }
 
+#name-container,
 #street-address-container,
 #email-container {
   flex: 0 1 100%;

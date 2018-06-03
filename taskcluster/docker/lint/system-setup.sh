@@ -4,7 +4,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 set -ve
 
-test `whoami` == 'root'
+test "$(whoami)" == 'root'
 
 mkdir -p /setup
 cd /setup
@@ -17,12 +17,13 @@ apt_packages+=('python')
 apt_packages+=('python-pip')
 apt_packages+=('python3')
 apt_packages+=('python3-pip')
+apt_packages+=('shellcheck')
 apt_packages+=('sudo')
 apt_packages+=('wget')
 apt_packages+=('xz-utils')
 
 apt-get update
-apt-get install -y ${apt_packages[@]}
+apt-get install -y "${apt_packages[@]}"
 
 # Without this we get spurious "LC_ALL: cannot change locale (en_US.UTF-8)" errors,
 # and python scripts raise UnicodeEncodeError when trying to print unicode characters.
@@ -39,6 +40,7 @@ tooltool_fetch() {
 }
 
 cd /build
+# shellcheck disable=SC1091
 . install-mercurial.sh
 
 ###
@@ -46,8 +48,14 @@ cd /build
 ###
 
 # install node
-
+# shellcheck disable=SC1091
 . install-node.sh
+
+###
+# jsdoc Setup
+###
+
+npm install -g jsdoc@3.5.5
 
 /build/tooltool.py fetch -m /tmp/eslint.tt
 mv /build/node_modules /build/node_modules_eslint
@@ -78,6 +86,14 @@ mv fzf /usr/local/bin
 cd /setup
 
 pip install --require-hashes -r /tmp/flake8_requirements.txt
+
+###
+# codespell Setup
+###
+
+cd /setup
+
+pip install --require-hashes -r /tmp/codespell_requirements.txt
 
 ###
 # tox Setup

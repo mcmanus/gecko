@@ -21,25 +21,21 @@
 #include <chrono>
 #include <thread>
 
-#include "jsnspr.h"
-
 #include "jit/JitOptions.h"
 #include "threading/LockGuard.h"
+#include "util/NSPR.h"
 #include "wasm/WasmCompile.h"
 #include "wasm/WasmInstance.h"
 #include "wasm/WasmJS.h"
 #include "wasm/WasmSerialize.h"
 
-#include "jsatominlines.h"
-
 #include "vm/ArrayBufferObject-inl.h"
 #include "vm/Debugger-inl.h"
+#include "vm/JSAtom-inl.h"
 
 using namespace js;
 using namespace js::jit;
 using namespace js::wasm;
-
-using mozilla::IsNaN;
 
 size_t
 LinkDataTier::SymbolicLinkArray::serializedSize() const
@@ -114,85 +110,53 @@ LinkDataTier::sizeOfExcludingThis(MallocSizeOf mallocSizeOf) const
 }
 
 void
-LinkData::setTier2(UniqueLinkDataTier linkData) const
+LinkData::setTier2(UniqueLinkDataTier tier) const
 {
-    MOZ_RELEASE_ASSERT(linkData->tier == Tier::Ion && linkData1_->tier != Tier::Ion);
-    MOZ_RELEASE_ASSERT(!linkData2_.get());
-    linkData2_ = Move(linkData);
-}
-
-Tiers
-LinkData::tiers() const
-{
-    if (hasTier2())
-        return Tiers(linkData1_->tier, linkData2_->tier);
-    return Tiers(linkData1_->tier);
+    MOZ_RELEASE_ASSERT(tier->tier == Tier::Ion && tier1_->tier == Tier::Baseline);
+    MOZ_RELEASE_ASSERT(!tier2_.get());
+    tier2_ = std::move(tier);
 }
 
 const LinkDataTier&
-LinkData::linkData(Tier tier) const
+LinkData::tier(Tier tier) const
 {
     switch (tier) {
       case Tier::Baseline:
-        if (linkData1_->tier == Tier::Baseline)
-            return *linkData1_;
+        if (tier1_->tier == Tier::Baseline)
+            return *tier1_;
         MOZ_CRASH("No linkData at this tier");
       case Tier::Ion:
-        if (linkData1_->tier == Tier::Ion)
-            return *linkData1_;
-        if (hasTier2())
-            return *linkData2_;
+        if (tier1_->tier == Tier::Ion)
+            return *tier1_;
+        if (tier2_)
+            return *tier2_;
         MOZ_CRASH("No linkData at this tier");
       default:
         MOZ_CRASH();
     }
-}
-
-LinkDataTier&
-LinkData::linkData(Tier tier)
-{
-    switch (tier) {
-      case Tier::Baseline:
-        if (linkData1_->tier == Tier::Baseline)
-            return *linkData1_;
-        MOZ_CRASH("No linkData at this tier");
-      case Tier::Ion:
-        if (linkData1_->tier == Tier::Ion)
-            return *linkData1_;
-        if (hasTier2())
-            return *linkData2_;
-        MOZ_CRASH("No linkData at this tier");
-      default:
-        MOZ_CRASH();
-    }
-}
-
-bool
-LinkData::initTier1(Tier tier, const Metadata& metadata)
-{
-    MOZ_ASSERT(!linkData1_);
-    metadata_ = &metadata;
-    linkData1_ = js::MakeUnique<LinkDataTier>(tier);
-    return linkData1_ != nullptr;
 }
 
 size_t
 LinkData::serializedSize() const
 {
-    return linkData(Tier::Serialized).serializedSize();
+    return tier(Tier::Serialized).serializedSize();
 }
 
 uint8_t*
 LinkData::serialize(uint8_t* cursor) const
 {
-    cursor = linkData(Tier::Serialized).serialize(cursor);
+    cursor = tier(Tier::Serialized).serialize(cursor);
     return cursor;
 }
 
 const uint8_t*
 LinkData::deserialize(const uint8_t* cursor)
 {
-    (cursor = linkData(Tier::Serialized).deserialize(cursor));
+    MOZ_ASSERT(!tier1_);
+    tier1_ = js::MakeUnique<LinkDataTier>(Tier::Serialized);
+    if (!tier1_)
+        return nullptr;
+    cursor = tier1_->deserialize(cursor);
     return cursor;
 }
 
@@ -200,8 +164,9 @@ size_t
 LinkData::sizeOfExcludingThis(MallocSizeOf mallocSizeOf) const
 {
     size_t sum = 0;
-    for (auto t : tiers())
-        sum += linkData(t).sizeOfExcludingThis(mallocSizeOf);
+    sum += tier1_->sizeOfExcludingThis(mallocSizeOf);
+    if (tier2_)
+        sum += tier2_->sizeOfExcludingThis(mallocSizeOf);
     return sum;
 }
 
@@ -231,7 +196,7 @@ class Module::Tier2GeneratorTaskImpl : public Tier2GeneratorTask
 
     void execute() override {
         MOZ_ASSERT(!finished_);
-        finished_ = CompileTier2(*module_, *compileArgs_, &cancelled_);
+        finished_ = CompileTier2(*compileArgs_, *module_, &cancelled_);
     }
 };
 
@@ -241,9 +206,9 @@ Module::startTier2(const CompileArgs& args)
     MOZ_ASSERT(!tiering_.lock()->active);
 
     // If a Module initiates tier-2 compilation, we must ensure that eventually
-    // unblockOnTier2GeneratorFinished() is called. Since we must ensure
+    // notifyCompilationListeners() is called. Since we must ensure
     // Tier2GeneratorTaskImpl objects are destroyed *anyway*, we use
-    // ~Tier2GeneratorTaskImpl() to call unblockOnTier2GeneratorFinished() if it
+    // ~Tier2GeneratorTaskImpl() to call notifyCompilationListeners() if it
     // hasn't been already.
 
     UniqueTier2GeneratorTask task(js_new<Tier2GeneratorTaskImpl>(*this, args));
@@ -252,7 +217,7 @@ Module::startTier2(const CompileArgs& args)
 
     tiering_.lock()->active = true;
 
-    StartOffThreadWasmTier2Generator(Move(task));
+    StartOffThreadWasmTier2Generator(std::move(task));
 }
 
 void
@@ -269,45 +234,100 @@ Module::notifyCompilationListeners()
         tiering->active = false;
 
         Swap(listeners, tiering->listeners);
+
+        tiering.notify_all(/* inactive */);
     }
 
     for (RefPtr<JS::WasmModuleListener>& listener : listeners)
         listener->onCompilationComplete();
 }
 
-void
-Module::finishTier2(UniqueLinkDataTier linkData2, UniqueMetadataTier metadata2,
-                    UniqueCodeSegment code2, ModuleEnvironment* env2)
+bool
+Module::finishTier2(UniqueLinkDataTier linkData2, UniqueCodeTier tier2Arg, ModuleEnvironment* env2)
 {
-    // Install the data in the data structures. They will not be visible yet.
+    MOZ_ASSERT(code().bestTier() == Tier::Baseline && tier2Arg->tier() == Tier::Ion);
 
-    metadata().setTier2(Move(metadata2));
-    linkData().setTier2(Move(linkData2));
-    code().setTier2(Move(code2));
+    // Install the data in the data structures. They will not be visible
+    // until commitTier2().
+
+    if (!code().setTier2(std::move(tier2Arg), *bytecode_, *linkData2))
+        return false;
+    linkData().setTier2(std::move(linkData2));
     for (uint32_t i = 0; i < elemSegments_.length(); i++)
-        elemSegments_[i].setTier2(Move(env2->elemSegments[i].elemCodeRangeIndices(Tier::Ion)));
+        elemSegments_[i].setTier2(std::move(env2->elemSegments[i].elemCodeRangeIndices(Tier::Ion)));
 
-    // Now that all the code and metadata is valid, make tier 2 code visible and
-    // unblock anyone waiting on it.
+    // Before we can make tier-2 live, we need to compile tier2 versions of any
+    // extant tier1 lazy stubs (otherwise, tiering would break the assumption
+    // that any extant exported wasm function has had a lazy entry stub already
+    // compiled for it).
+    {
+        // We need to prevent new tier1 stubs generation until we've committed
+        // the newer tier2 stubs, otherwise we might not generate one tier2
+        // stub that has been generated for tier1 before we committed.
 
-    metadata().commitTier2();
+        const MetadataTier& metadataTier1 = metadata(Tier::Baseline);
+
+        auto stubs1 = code().codeTier(Tier::Baseline).lazyStubs().lock();
+        auto stubs2 = code().codeTier(Tier::Ion).lazyStubs().lock();
+
+        MOZ_ASSERT(stubs2->empty());
+
+        Uint32Vector funcExportIndices;
+        for (size_t i = 0; i < metadataTier1.funcExports.length(); i++) {
+            const FuncExport& fe = metadataTier1.funcExports[i];
+            if (fe.hasEagerStubs())
+                continue;
+            MOZ_ASSERT(!env2->isAsmJS(), "only wasm functions are lazily exported");
+            if (!stubs1->hasStub(fe.funcIndex()))
+                continue;
+            if (!funcExportIndices.emplaceBack(i))
+                return false;
+        }
+
+        HasGcTypes gcTypesEnabled = code().metadata().temporaryHasGcTypes;
+        const CodeTier& tier2 = code().codeTier(Tier::Ion);
+
+        Maybe<size_t> stub2Index;
+        if (!stubs2->createTier2(gcTypesEnabled, funcExportIndices, tier2, &stub2Index))
+            return false;
+
+        // Now that we can't fail or otherwise abort tier2, make it live.
+
+        MOZ_ASSERT(!code().hasTier2());
+        code().commitTier2();
+
+        // Now tier2 is committed and we can update jump tables entries to
+        // start making tier2 live.  Because lazy stubs are protected by a lock
+        // and notifyCompilationListeners should be called without any lock
+        // held, do it before.
+
+        stubs2->setJitEntries(stub2Index, code());
+    }
     notifyCompilationListeners();
 
     // And we update the jump vector.
 
-    void** jumpTable = code().jumpTable();
     uint8_t* base = code().segment(Tier::Ion).base();
-
-    for (auto cr : metadata(Tier::Ion).codeRanges) {
-        if (!cr.isFunction())
-            continue;
-
-        // This is a racy write that we just want to be visible, atomically,
+    for (const CodeRange& cr : metadata(Tier::Ion).codeRanges) {
+        // These are racy writes that we just want to be visible, atomically,
         // eventually.  All hardware we care about will do this right.  But
-        // we depend on the compiler not splitting the store.
-
-        jumpTable[cr.funcIndex()] = base + cr.funcTierEntry();
+        // we depend on the compiler not splitting the stores hidden inside the
+        // set*Entry functions.
+        if (cr.isFunction())
+            code().setTieringEntry(cr.funcIndex(), base + cr.funcTierEntry());
+        else if (cr.isJitEntry())
+            code().setJitEntry(cr.funcIndex(), base + cr.begin());
     }
+
+    return true;
+}
+
+void
+Module::blockOnTier2Complete() const
+{
+    auto tiering = tiering_.lock();
+    while (tiering->active)
+        tiering.wait(/* inactive */);
 }
 
 /* virtual */ size_t
@@ -426,7 +446,8 @@ Module::deserialize(const uint8_t* bytecodeBegin, size_t bytecodeSize,
     if (!bytecode || !bytecode->bytes.initLengthUninitialized(bytecodeSize))
         return nullptr;
 
-    memcpy(bytecode->bytes.begin(), bytecodeBegin, bytecodeSize);
+    if (bytecodeSize)
+        memcpy(bytecode->bytes.begin(), bytecodeBegin, bytecodeSize);
 
     Assumptions assumptions;
     const uint8_t* cursor = assumptions.deserialize(compiledBegin, compiledSize);
@@ -435,19 +456,12 @@ Module::deserialize(const uint8_t* bytecodeBegin, size_t bytecodeSize,
 
     MutableMetadata metadata(maybeMetadata);
     if (!metadata) {
-        auto tierMetadata = js::MakeUnique<MetadataTier>(Tier::Ion);
-        if (!tierMetadata)
-            return nullptr;
-
-        metadata = js_new<Metadata>(Move(tierMetadata));
+        metadata = js_new<Metadata>();
         if (!metadata)
             return nullptr;
     }
 
     LinkData linkData;
-    if (!linkData.initTier1(Tier::Serialized, *metadata))
-        return nullptr;
-
     cursor = linkData.deserialize(cursor);
     if (!cursor)
         return nullptr;
@@ -472,22 +486,22 @@ Module::deserialize(const uint8_t* bytecodeBegin, size_t bytecodeSize,
     if (!cursor)
         return nullptr;
 
-    MutableCode code = js_new<Code>();
-    cursor = code->deserialize(cursor, bytecode, linkData, *metadata);
+    SharedCode code;
+    cursor = Code::deserialize(cursor, *bytecode, linkData, *metadata, &code);
     if (!cursor)
         return nullptr;
 
     MOZ_RELEASE_ASSERT(cursor == compiledBegin + compiledSize);
     MOZ_RELEASE_ASSERT(!!maybeMetadata == code->metadata().isAsmJS());
 
-    return js_new<Module>(Move(assumptions),
+    return js_new<Module>(std::move(assumptions),
                           *code,
                           nullptr,            // Serialized code is never debuggable
-                          Move(linkData),
-                          Move(imports),
-                          Move(exports),
-                          Move(dataSegments),
-                          Move(elemSegments),
+                          std::move(linkData),
+                          std::move(imports),
+                          std::move(exports),
+                          std::move(dataSegments),
+                          std::move(elemSegments),
                           *bytecode);
 }
 
@@ -537,14 +551,14 @@ wasm::CompiledModuleAssumptionsMatch(PRFileDesc* compiled, JS::BuildIdCharVector
     if (!mapping)
         return false;
 
-    Assumptions assumptions(Move(buildId));
+    Assumptions assumptions(std::move(buildId));
     return Module::assumptionsMatch(assumptions, mapping.get(), info.size);
 }
 
 SharedModule
 wasm::DeserializeModule(PRFileDesc* bytecodeFile, PRFileDesc* maybeCompiledFile,
                         JS::BuildIdCharVector&& buildId, UniqueChars filename,
-                        unsigned line, unsigned column)
+                        unsigned line)
 {
     PRFileInfo bytecodeInfo;
     UniqueMapping bytecodeMapping = MapFile(bytecodeFile, &bytecodeInfo);
@@ -563,7 +577,7 @@ wasm::DeserializeModule(PRFileDesc* bytecodeFile, PRFileDesc* maybeCompiledFile,
 
     // Since the compiled file's assumptions don't match, we must recompile from
     // bytecode. The bytecode file format is simply that of a .wasm (see
-    // Module::serialize).
+    // Module::bytecodeSerialize).
 
     MutableBytes bytecode = js_new<ShareableBytes>();
     if (!bytecode || !bytecode->bytes.initLengthUninitialized(bytecodeInfo.size))
@@ -572,16 +586,29 @@ wasm::DeserializeModule(PRFileDesc* bytecodeFile, PRFileDesc* maybeCompiledFile,
     memcpy(bytecode->bytes.begin(), bytecodeMapping.get(), bytecodeInfo.size);
 
     ScriptedCaller scriptedCaller;
-    scriptedCaller.filename = Move(filename);
+    scriptedCaller.filename = std::move(filename);
     scriptedCaller.line = line;
-    scriptedCaller.column = column;
 
-    SharedCompileArgs args = js_new<CompileArgs>(Assumptions(Move(buildId)), Move(scriptedCaller));
+    MutableCompileArgs args = js_new<CompileArgs>(Assumptions(std::move(buildId)), std::move(scriptedCaller));
     if (!args)
         return nullptr;
 
+    // The true answer to whether shared memory is enabled is provided by
+    // cx->realm()->creationOptions().getSharedMemoryAndAtomicsEnabled()
+    // where cx is the context that originated the call that caused this
+    // deserialization attempt to happen.  We don't have that context here, so
+    // we assume that shared memory is enabled; we will catch a wrong assumption
+    // later, during instantiation.
+    //
+    // (We would prefer to store this value with the Assumptions when
+    // serializing, and for the caller of the deserialization machinery to
+    // provide the value from the originating context.)
+
+    args->sharedMemoryEnabled = true;
+
     UniqueChars error;
-    return CompileInitialTier(*bytecode, *args, &error);
+    UniqueCharsVector warnings;
+    return CompileBuffer(*args, *bytecode, &error, &warnings);
 }
 
 /* virtual */ void
@@ -618,21 +645,20 @@ Module::extractCode(JSContext* cx, Tier tier, MutableHandleValue vp) const
         return false;
 
     // This function is only used for testing purposes so we can simply
-    // busy-wait on tiered compilation to complete.
-    while (!compilationComplete())
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    // block on tiered compilation to complete.
+    blockOnTier2Complete();
 
     if (!code_->hasTier(tier)) {
         vp.setNull();
         return true;
     }
 
-    const CodeSegment& codeSegment = code_->segment(tier);
-    RootedObject code(cx, JS_NewUint8Array(cx, codeSegment.length()));
+    const ModuleSegment& moduleSegment = code_->segment(tier);
+    RootedObject code(cx, JS_NewUint8Array(cx, moduleSegment.length()));
     if (!code)
         return false;
 
-    memcpy(code->as<TypedArrayObject>().viewDataUnshared(), codeSegment.base(), codeSegment.length());
+    memcpy(code->as<TypedArrayObject>().viewDataUnshared(), moduleSegment.base(), moduleSegment.length());
 
     RootedValue value(cx, ObjectValue(*code));
     if (!JS_DefineProperty(cx, result, "code", value, JSPROP_ENUMERATE))
@@ -686,13 +712,13 @@ Module::extractCode(JSContext* cx, Tier tier, MutableHandleValue vp) const
 }
 
 static uint32_t
-EvaluateInitExpr(const ValVector& globalImports, InitExpr initExpr)
+EvaluateInitExpr(const ValVector& globalImportValues, InitExpr initExpr)
 {
     switch (initExpr.kind()) {
       case InitExpr::Kind::Constant:
         return initExpr.val().i32();
       case InitExpr::Kind::GetGlobal:
-        return globalImports[initExpr.globalIndex()].i32();
+        return globalImportValues[initExpr.globalIndex()].i32();
     }
 
     MOZ_CRASH("bad initializer expression");
@@ -703,7 +729,7 @@ Module::initSegments(JSContext* cx,
                      HandleWasmInstanceObject instanceObj,
                      Handle<FunctionVector> funcImports,
                      HandleWasmMemoryObject memoryObj,
-                     const ValVector& globalImports) const
+                     const ValVector& globalImportValues) const
 {
     Instance& instance = instanceObj->instance();
     const SharedTableVector& tables = instance.tables();
@@ -717,23 +743,23 @@ Module::initSegments(JSContext* cx,
         uint32_t numElems = seg.elemCodeRangeIndices(tier).length();
 
         uint32_t tableLength = tables[seg.tableIndex]->length();
-        uint32_t offset = EvaluateInitExpr(globalImports, seg.offset);
+        uint32_t offset = EvaluateInitExpr(globalImportValues, seg.offset);
 
         if (offset > tableLength || tableLength - offset < numElems) {
-            JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WASM_BAD_FIT,
-                                      "elem", "table");
+            JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr, JSMSG_WASM_BAD_FIT,
+                                     "elem", "table");
             return false;
         }
     }
 
     if (memoryObj) {
+        uint32_t memoryLength = memoryObj->volatileMemoryLength();
         for (const DataSegment& seg : dataSegments_) {
-            uint32_t memoryLength = memoryObj->buffer().byteLength();
-            uint32_t offset = EvaluateInitExpr(globalImports, seg.offset);
+            uint32_t offset = EvaluateInitExpr(globalImportValues, seg.offset);
 
             if (offset > memoryLength || memoryLength - offset < seg.length) {
-                JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WASM_BAD_FIT,
-                                          "data", "memory");
+                JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr, JSMSG_WASM_BAD_FIT,
+                                         "data", "memory");
                 return false;
             }
         }
@@ -746,7 +772,7 @@ Module::initSegments(JSContext* cx,
 
     for (const ElemSegment& seg : elemSegments_) {
         Table& table = *tables[seg.tableIndex];
-        uint32_t offset = EvaluateInitExpr(globalImports, seg.offset);
+        uint32_t offset = EvaluateInitExpr(globalImportValues, seg.offset);
         const CodeRangeVector& codeRanges = metadata(tier).codeRanges;
         uint8_t* codeBase = instance.codeBase(tier);
 
@@ -778,7 +804,7 @@ Module::initSegments(JSContext* cx,
         for (const DataSegment& seg : dataSegments_) {
             MOZ_ASSERT(seg.bytecodeOffset <= bytecode_->length());
             MOZ_ASSERT(seg.length <= bytecode_->length() - seg.bytecodeOffset);
-            uint32_t offset = EvaluateInitExpr(globalImports, seg.offset);
+            uint32_t offset = EvaluateInitExpr(globalImportValues, seg.offset);
             memcpy(memoryBase + offset, bytecode_->begin() + seg.bytecodeOffset, seg.length);
         }
     }
@@ -819,12 +845,14 @@ Module::instantiateFunctions(JSContext* cx, Handle<FunctionVector> funcImports) 
 
         uint32_t funcIndex = ExportedFunctionToFuncIndex(f);
         Instance& instance = ExportedFunctionToInstance(f);
-        const FuncExport& funcExport = instance.metadata(tier).lookupFuncExport(funcIndex);
+        Tier otherTier = instance.code().stableTier();
+
+        const FuncExport& funcExport = instance.metadata(otherTier).lookupFuncExport(funcIndex);
 
         if (funcExport.sig() != metadata(tier).funcImports[i].sig()) {
             const Import& import = FindImportForFuncImport(imports_, i);
-            JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WASM_BAD_IMPORT_SIG,
-                                      import.module.get(), import.field.get());
+            JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr, JSMSG_WASM_BAD_IMPORT_SIG,
+                                     import.module.get(), import.field.get());
             return false;
         }
     }
@@ -844,12 +872,33 @@ CheckLimits(JSContext* cx, uint32_t declaredMin, const Maybe<uint32_t>& declared
     }
 
     if (actualLength < declaredMin || actualLength > declaredMax.valueOr(UINT32_MAX)) {
-        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WASM_BAD_IMP_SIZE, kind);
+        JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr, JSMSG_WASM_BAD_IMP_SIZE, kind);
         return false;
     }
 
     if ((actualMax && declaredMax && *actualMax > *declaredMax) || (!actualMax && declaredMax)) {
-        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WASM_BAD_IMP_MAX, kind);
+        JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr, JSMSG_WASM_BAD_IMP_MAX, kind);
+        return false;
+    }
+
+    return true;
+}
+
+static bool
+CheckSharing(JSContext* cx, bool declaredShared, bool isShared)
+{
+    if (isShared && !cx->realm()->creationOptions().getSharedMemoryAndAtomicsEnabled()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WASM_NO_SHMEM_LINK);
+        return false;
+    }
+
+    if (declaredShared && !isShared) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WASM_IMP_SHARED_REQD);
+        return false;
+    }
+
+    if (!declaredShared && isShared) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WASM_IMP_SHARED_BANNED);
         return false;
     }
 
@@ -870,27 +919,31 @@ Module::instantiateMemory(JSContext* cx, MutableHandleWasmMemoryObject memory) c
 
     uint32_t declaredMin = metadata().minMemoryLength;
     Maybe<uint32_t> declaredMax = metadata().maxMemoryLength;
+    bool declaredShared = metadata().memoryUsage == MemoryUsage::Shared;
 
     if (memory) {
-        ArrayBufferObjectMaybeShared& buffer = memory->buffer();
-        MOZ_ASSERT_IF(metadata().isAsmJS(), buffer.isPreparedForAsmJS());
-        MOZ_ASSERT_IF(!metadata().isAsmJS(), buffer.as<ArrayBufferObject>().isWasm());
+        MOZ_ASSERT_IF(metadata().isAsmJS(), memory->buffer().isPreparedForAsmJS());
+        MOZ_ASSERT_IF(!metadata().isAsmJS(), memory->buffer().isWasm());
 
-        if (!CheckLimits(cx, declaredMin, declaredMax, buffer.byteLength(), buffer.wasmMaxSize(),
-                         metadata().isAsmJS(), "Memory")) {
+        if (!CheckLimits(cx, declaredMin, declaredMax, memory->volatileMemoryLength(),
+                         memory->buffer().wasmMaxSize(), metadata().isAsmJS(), "Memory"))
+        {
             return false;
         }
+
+        if (!CheckSharing(cx, declaredShared, memory->isShared()))
+            return false;
     } else {
         MOZ_ASSERT(!metadata().isAsmJS());
-        MOZ_ASSERT(metadata().memoryUsage == MemoryUsage::Unshared);
 
-        RootedArrayBufferObjectMaybeShared buffer(cx,
-            ArrayBufferObject::createForWasm(cx, declaredMin, declaredMax));
-        if (!buffer)
+        RootedArrayBufferObjectMaybeShared buffer(cx);
+        Limits l(declaredMin,
+                 declaredMax,
+                 declaredShared ? Shareable::True : Shareable::False);
+        if (!CreateWasmBuffer(cx, l, &buffer))
             return false;
 
         RootedObject proto(cx, &cx->global()->getPrototype(JSProto_WasmMemory).toObject());
-
         memory.set(WasmMemoryObject::create(cx, buffer, proto));
         if (!memory)
             return false;
@@ -948,6 +1001,93 @@ Module::instantiateTable(JSContext* cx, MutableHandleWasmTableObject tableObj,
     return true;
 }
 
+static Val
+ExtractGlobalValue(const ValVector& globalImportValues, uint32_t globalIndex, const GlobalDesc& global)
+{
+    switch (global.kind()) {
+      case GlobalKind::Import: {
+        return globalImportValues[globalIndex];
+      }
+      case GlobalKind::Variable: {
+        const InitExpr& init = global.initExpr();
+        switch (init.kind()) {
+          case InitExpr::Kind::Constant:
+            return init.val();
+          case InitExpr::Kind::GetGlobal:
+            return globalImportValues[init.globalIndex()];
+        }
+        break;
+      }
+      case GlobalKind::Constant: {
+        return global.constantValue();
+      }
+    }
+    MOZ_CRASH("Not a global value");
+}
+
+static bool
+EnsureGlobalObject(JSContext* cx, const ValVector& globalImportValues, size_t globalIndex,
+                   const GlobalDesc& global, WasmGlobalObjectVector& globalObjs)
+{
+    if (globalIndex < globalObjs.length() && globalObjs[globalIndex])
+        return true;
+
+    Val val = ExtractGlobalValue(globalImportValues, globalIndex, global);
+    RootedWasmGlobalObject go(cx, WasmGlobalObject::create(cx, val, global.isMutable()));
+    if (!go)
+        return false;
+
+    if (globalObjs.length() <= globalIndex && !globalObjs.resize(globalIndex + 1)) {
+        ReportOutOfMemory(cx);
+        return false;
+    }
+
+    globalObjs[globalIndex] = go;
+    return true;
+}
+
+bool
+Module::instantiateGlobals(JSContext* cx, const ValVector& globalImportValues,
+                           WasmGlobalObjectVector& globalObjs) const
+{
+    // If there are exported globals that aren't in globalObjs because they
+    // originate in this module or because they were immutable imports that came
+    // in as primitive values then we must create cells in the globalObjs for
+    // them here, as WasmInstanceObject::create() and CreateExportObject() will
+    // need the cells to exist.
+
+    const GlobalDescVector& globals = metadata().globals;
+
+    for (const Export& exp : exports_) {
+        if (exp.kind() != DefinitionKind::Global)
+            continue;
+        unsigned globalIndex = exp.globalIndex();
+        const GlobalDesc& global = globals[globalIndex];
+        if (!EnsureGlobalObject(cx, globalImportValues, globalIndex, global, globalObjs))
+            return false;
+    }
+
+    // Imported globals that are not re-exported may also have received only a
+    // primitive value; these globals are always immutable.  Assert that we do
+    // not need to create any additional Global objects for such imports.
+
+#ifdef DEBUG
+    size_t numGlobalImports = 0;
+    for (const Import& import : imports_) {
+        if (import.kind != DefinitionKind::Global)
+            continue;
+        size_t globalIndex = numGlobalImports++;
+        const GlobalDesc& global = globals[globalIndex];
+        MOZ_ASSERT(global.importIndex() == globalIndex);
+        MOZ_ASSERT_IF(global.isIndirect(),
+                      globalIndex < globalObjs.length() || globalObjs[globalIndex]);
+    }
+    MOZ_ASSERT_IF(!metadata().isAsmJS(),
+                  numGlobalImports == globals.length() || !globals[numGlobalImports].isImport());
+#endif
+    return true;
+}
+
 static bool
 GetFunctionExport(JSContext* cx,
                   HandleWasmInstanceObject instanceObj,
@@ -971,61 +1111,15 @@ GetFunctionExport(JSContext* cx,
 }
 
 static bool
-GetGlobalExport(JSContext* cx, const GlobalDescVector& globals, uint32_t globalIndex,
-                const ValVector& globalImports, MutableHandleValue jsval)
+GetGlobalExport(JSContext* cx,
+                const GlobalDescVector& globals,
+                uint32_t globalIndex,
+                const ValVector& globalImportValues,
+                const WasmGlobalObjectVector& globalObjs,
+                MutableHandleValue jsval)
 {
-    const GlobalDesc& global = globals[globalIndex];
-
-    // Imports are located upfront in the globals array.
-    Val val;
-    switch (global.kind()) {
-      case GlobalKind::Import:   val = globalImports[globalIndex]; break;
-      case GlobalKind::Variable: MOZ_CRASH("mutable variables can't be exported");
-      case GlobalKind::Constant: val = global.constantValue(); break;
-    }
-
-    switch (global.type()) {
-      case ValType::I32: {
-        jsval.set(Int32Value(val.i32()));
-        return true;
-      }
-      case ValType::I64: {
-        MOZ_ASSERT(JitOptions.wasmTestMode, "no int64 in asm.js/wasm");
-        RootedObject obj(cx, CreateI64Object(cx, val.i64()));
-        if (!obj)
-            return false;
-        jsval.set(ObjectValue(*obj));
-        return true;
-      }
-      case ValType::F32: {
-        float f = val.f32();
-        if (JitOptions.wasmTestMode && IsNaN(f)) {
-            RootedObject obj(cx, CreateCustomNaNObject(cx, &f));
-            if (!obj)
-                return false;
-            jsval.set(ObjectValue(*obj));
-            return true;
-        }
-        jsval.set(DoubleValue(JS::CanonicalizeNaN(double(f))));
-        return true;
-      }
-      case ValType::F64: {
-        double d = val.f64();
-        if (JitOptions.wasmTestMode && IsNaN(d)) {
-            RootedObject obj(cx, CreateCustomNaNObject(cx, &d));
-            if (!obj)
-                return false;
-            jsval.set(ObjectValue(*obj));
-            return true;
-        }
-        jsval.set(DoubleValue(JS::CanonicalizeNaN(d)));
-        return true;
-      }
-      default: {
-        break;
-      }
-    }
-    MOZ_CRASH("unexpected type when creating global exports");
+    jsval.setObject(*globalObjs[globalIndex]);
+    return true;
 }
 
 static bool
@@ -1034,7 +1128,8 @@ CreateExportObject(JSContext* cx,
                    Handle<FunctionVector> funcImports,
                    HandleWasmTableObject tableObj,
                    HandleWasmMemoryObject memoryObj,
-                   const ValVector& globalImports,
+                   const ValVector& globalImportValues,
+                   const WasmGlobalObjectVector& globalObjs,
                    const ExportVector& exports)
 {
     const Instance& instance = instanceObj->instance();
@@ -1075,8 +1170,11 @@ CreateExportObject(JSContext* cx,
             val = ObjectValue(*memoryObj);
             break;
           case DefinitionKind::Global:
-            if (!GetGlobalExport(cx, metadata.globals, exp.globalIndex(), globalImports, &val))
+            if (!GetGlobalExport(cx, metadata.globals, exp.globalIndex(), globalImportValues,
+                                 globalObjs, &val))
+            {
                 return false;
+            }
             break;
         }
 
@@ -1098,7 +1196,8 @@ Module::instantiate(JSContext* cx,
                     Handle<FunctionVector> funcImports,
                     HandleWasmTableObject tableImport,
                     HandleWasmMemoryObject memoryImport,
-                    const ValVector& globalImports,
+                    const ValVector& globalImportValues,
+                    WasmGlobalObjectVector& globalObjs,
                     HandleObject instanceProto,
                     MutableHandleWasmInstanceObject instance) const
 {
@@ -1114,8 +1213,11 @@ Module::instantiate(JSContext* cx,
     if (!instantiateTable(cx, &table, &tables))
         return false;
 
-    auto globalSegment = GlobalSegment::create(metadata().globalDataLength);
-    if (!globalSegment) {
+    if (!instantiateGlobals(cx, globalImportValues, globalObjs))
+        return false;
+
+    UniqueTlsData tlsData = CreateTlsData(metadata().globalDataLength);
+    if (!tlsData) {
         ReportOutOfMemory(cx);
         return false;
     }
@@ -1128,35 +1230,45 @@ Module::instantiate(JSContext* cx,
         // bytes that we keep around for debugging instead, because the debugger
         // may patch the pre-linked code at any time.
         if (!codeIsBusy_.compareExchange(false, true)) {
-            auto codeSegment = CodeSegment::create(Tier::Baseline,
-                                                   *unlinkedCodeForDebugging_,
-                                                   *bytecode_,
-                                                   linkData_.linkData(Tier::Baseline),
-                                                   metadata());
-            if (!codeSegment) {
+            Tier tier = Tier::Baseline;
+            auto segment = ModuleSegment::create(tier, *unlinkedCodeForDebugging_, linkData(tier));
+            if (!segment) {
                 ReportOutOfMemory(cx);
                 return false;
             }
 
-            UniqueJumpTable maybeJumpTable;
-            code = js_new<Code>(Move(codeSegment), metadata(), Move(maybeJumpTable));
-            if (!code) {
+            UniqueMetadataTier metadataTier = js::MakeUnique<MetadataTier>(tier);
+            if (!metadataTier || !metadataTier->clone(metadata(tier)))
+                return false;
+
+            auto codeTier = js::MakeUnique<CodeTier>(std::move(metadataTier), std::move(segment));
+            if (!codeTier)
+                return false;
+
+            JumpTables jumpTables;
+            if (!jumpTables.init(CompileMode::Once, codeTier->segment(), metadata(tier).codeRanges))
+                return false;
+
+            MutableCode debugCode = js_new<Code>(std::move(codeTier), metadata(), std::move(jumpTables));
+            if (!debugCode || !debugCode->initialize(*bytecode_, linkData(tier))) {
                 ReportOutOfMemory(cx);
                 return false;
             }
+
+            code = debugCode;
         }
     }
 
     // To support viewing the source of an instance (Instance::createText), the
     // instance must hold onto a ref of the bytecode (keeping it alive). This
     // wastes memory for most users, so we try to only save the source when a
-    // developer actually cares: when the compartment is debuggable (which is
-    // true when the web console is open), has code compiled with debug flag
+    // developer actually cares: when the realm is debuggable (which is true
+    // when the web console is open), has code compiled with debug flag
     // enabled or a names section is present (since this going to be stripped
     // for non-developer builds).
 
     const ShareableBytes* maybeBytecode = nullptr;
-    if (cx->compartment()->isDebuggee() || metadata().debugEnabled ||
+    if (cx->realm()->isDebuggee() || metadata().debugEnabled ||
         !metadata().funcNames.empty())
     {
         maybeBytecode = bytecode_.get();
@@ -1166,39 +1278,44 @@ Module::instantiate(JSContext* cx,
     // provides the lazily created source text for the program, even if that
     // text is a placeholder message when debugging is not enabled.
 
-    bool binarySource = cx->compartment()->debuggerObservesBinarySource();
+    bool binarySource = cx->realm()->debuggerObservesBinarySource();
     auto debug = cx->make_unique<DebugState>(code, maybeBytecode, binarySource);
     if (!debug)
         return false;
 
     instance.set(WasmInstanceObject::create(cx,
                                             code,
-                                            Move(debug),
-                                            Move(globalSegment),
+                                            std::move(debug),
+                                            std::move(tlsData),
                                             memory,
-                                            Move(tables),
+                                            std::move(tables),
                                             funcImports,
-                                            globalImports,
+                                            metadata().globals,
+                                            globalImportValues,
+                                            globalObjs,
                                             instanceProto));
     if (!instance)
         return false;
 
-    if (!CreateExportObject(cx, instance, funcImports, table, memory, globalImports, exports_))
+    if (!CreateExportObject(cx, instance, funcImports, table, memory, globalImportValues,
+                            globalObjs, exports_))
+    {
         return false;
+    }
 
-    // Register the instance with the JSCompartment so that it can find out
-    // about global events like profiling being enabled in the compartment.
-    // Registration does not require a fully-initialized instance and must
-    // precede initSegments as the final pre-requisite for a live instance.
+    // Register the instance with the Realm so that it can find out about global
+    // events like profiling being enabled in the realm. Registration does not
+    // require a fully-initialized instance and must precede initSegments as the
+    // final pre-requisite for a live instance.
 
-    if (!cx->compartment()->wasm.registerInstance(cx, instance))
+    if (!cx->realm()->wasm.registerInstance(cx, instance))
         return false;
 
     // Perform initialization as the final step after the instance is fully
     // constructed since this can make the instance live to content (even if the
     // start function fails).
 
-    if (!initSegments(cx, instance, funcImports, memory, globalImports))
+    if (!initSegments(cx, instance, funcImports, memory, globalImportValues))
         return false;
 
     // Now that the instance is fully live and initialized, the start function.
@@ -1211,11 +1328,11 @@ Module::instantiate(JSContext* cx,
             return false;
     }
 
-    uint32_t mode = uint32_t(metadata().isAsmJS() ? Telemetry::ASMJS : Telemetry::WASM);
-    cx->runtime()->addTelemetry(JS_TELEMETRY_AOT_USAGE, mode);
-
     JSUseCounter useCounter = metadata().isAsmJS() ? JSUseCounter::ASMJS : JSUseCounter::WASM;
     cx->runtime()->setUseCounter(instance, useCounter);
+
+    if (cx->options().testWasmAwaitTier2())
+        blockOnTier2Complete();
 
     return true;
 }

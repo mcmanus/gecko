@@ -27,26 +27,7 @@ add_task(async function test_onboarding_overlay_button() {
       "Onboarding button icon should have presentation only semantics");
   });
 
-  await BrowserTestUtils.removeTab(tab);
-});
-
-add_task(async function test_onboarding_overlay_button_no_activity_steam() {
-  /* https://bugzilla.mozilla.org/show_bug.cgi?id=1393564 */
-  resetOnboardingDefaultState();
-  Preferences.set("browser.newtabpage.activity-stream.enabled", false);
-
-  info("Wait for onboarding overlay loaded");
-  let tab = await openTab(ABOUT_NEWTAB_URL);
-  let browser = tab.linkedBrowser;
-  await promiseOnboardingOverlayLoaded(browser);
-
-  info("Click on overlay button and ensure dialog opens");
-  await BrowserTestUtils.synthesizeMouseAtCenter("#onboarding-overlay-button",
-                                                 {}, browser);
-  await promiseOnboardingOverlayOpened(browser);
-
-  Preferences.reset("browser.newtabpage.activity-stream.enabled");
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });
 
 add_task(async function test_onboarding_notification_bar() {
@@ -77,7 +58,7 @@ add_task(async function test_onboarding_notification_bar() {
         "Element is only used for presentation"));
   });
 
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });
 
 add_task(async function test_onboarding_overlay_dialog() {
@@ -104,5 +85,5 @@ add_task(async function test_onboarding_overlay_dialog() {
   await promiseOnboardingOverlayClosed(browser);
   await assertModalDialog(browser, { visible: false });
 
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });

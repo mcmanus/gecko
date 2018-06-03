@@ -19,7 +19,7 @@ namespace mozilla {
 namespace a11y {
 
 inline mozilla::a11y::role
-Accessible::Role()
+Accessible::Role() const
 {
   const nsRoleMapEntry* roleMapEntry = ARIARoleMap();
   if (!roleMapEntry || roleMapEntry->roleRule != kUseMapRole)
@@ -76,8 +76,8 @@ Accessible::IsSearchbox() const
   const nsRoleMapEntry* roleMapEntry = ARIARoleMap();
   return (roleMapEntry && roleMapEntry->Is(nsGkAtoms::searchbox)) ||
     (mContent->IsHTMLElement(nsGkAtoms::input) &&
-     mContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
-                           nsGkAtoms::search, eCaseMatters));
+     mContent->AsElement()->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
+                                        nsGkAtoms::search, eCaseMatters));
 }
 
 inline bool
@@ -102,6 +102,15 @@ Accessible::HasNumericValue() const
     return InteractiveState() & states::FOCUSABLE;
 
   return true;
+}
+
+inline bool
+Accessible::IsDefunct() const
+{
+  MOZ_ASSERT(mStateFlags & eIsDefunct || IsApplication() || IsDoc() ||
+             mStateFlags & eSharedNode || mContent,
+             "No content");
+  return mStateFlags & eIsDefunct;
 }
 
 inline void

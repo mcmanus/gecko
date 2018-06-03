@@ -6,14 +6,14 @@
 // The ext-* files are imported into the same scopes.
 /* import-globals-from ext-utils.js */
 
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
-                                  "resource://gre/modules/Services.jsm");
+ChromeUtils.defineModuleGetter(this, "Services",
+                               "resource://gre/modules/Services.jsm");
 
 // Import the android PageActions module.
-XPCOMUtils.defineLazyModuleGetter(this, "PageActions",
-                                  "resource://gre/modules/PageActions.jsm");
+ChromeUtils.defineModuleGetter(this, "PageActions",
+                               "resource://gre/modules/PageActions.jsm");
 
-Cu.import("resource://gre/modules/ExtensionParent.jsm");
+ChromeUtils.import("resource://gre/modules/ExtensionParent.jsm");
 
 var {
   IconDetails,
@@ -38,7 +38,7 @@ class PageAction extends EventEmitter {
     this.tabManager = extension.tabManager;
     this.context = null;
 
-    this.tabContext = new TabContext(() => Object.create(this.defaults), extension);
+    this.tabContext = new TabContext(tabId => this.defaults);
 
     this.options = {
       title: manifest.default_title || extension.name,
@@ -232,14 +232,18 @@ this.pageAction = class extends ExtensionAPI {
 
     return {
       pageAction: {
-        onClicked: new EventManager(context, "pageAction.onClicked", fire => {
-          let listener = (event, tab) => {
-            fire.async(tabManager.convert(tab));
-          };
-          pageActionMap.get(extension).on("click", listener);
-          return () => {
-            pageActionMap.get(extension).off("click", listener);
-          };
+        onClicked: new EventManager({
+          context,
+          name: "pageAction.onClicked",
+          register: fire => {
+            let listener = (event, tab) => {
+              fire.async(tabManager.convert(tab));
+            };
+            pageActionMap.get(extension).on("click", listener);
+            return () => {
+              pageActionMap.get(extension).off("click", listener);
+            };
+          },
         }).api(),
 
         show(tabId) {

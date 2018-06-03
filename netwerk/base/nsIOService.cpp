@@ -4,11 +4,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/ArrayUtils.h"
 #include "mozilla/DebugOnly.h"
 
 #include "nsIOService.h"
-#include "nsIDOMNode.h"
 #include "nsIProtocolHandler.h"
 #include "nsIFileProtocolHandler.h"
 #include "nscore.h"
@@ -31,7 +29,6 @@
 #include "nsIConsoleService.h"
 #include "nsIUploadChannel2.h"
 #include "nsXULAppAPI.h"
-#include "nsIScriptError.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsIProtocolProxyCallback.h"
 #include "nsICancelable.h"
@@ -39,7 +36,6 @@
 #include "nsPISocketTransportService.h"
 #include "nsAsyncRedirectVerifyHelper.h"
 #include "nsURLHelper.h"
-#include "nsPIDNSService.h"
 #include "nsIProtocolProxyService2.h"
 #include "MainThreadUtils.h"
 #include "nsINode.h"
@@ -52,7 +48,10 @@
 #include "mozilla/net/DNS.h"
 #include "mozilla/ipc/URIUtils.h"
 #include "mozilla/net/NeckoChild.h"
+#include "mozilla/net/NeckoParent.h"
+#include "mozilla/dom/ClientInfo.h"
 #include "mozilla/dom/ContentParent.h"
+#include "mozilla/dom/ServiceWorkerDescriptor.h"
 #include "mozilla/net/CaptivePortalService.h"
 #include "mozilla/Unused.h"
 #include "ReferrerPolicy.h"
@@ -62,6 +61,10 @@
 
 namespace mozilla {
 namespace net {
+
+using mozilla::Maybe;
+using mozilla::dom::ClientInfo;
+using mozilla::dom::ServiceWorkerDescriptor;
 
 #define PORT_PREF_PREFIX           "network.security.ports."
 #define PORT_PREF(x)               PORT_PREF_PREFIX x
@@ -78,7 +81,7 @@ namespace net {
 
 #define MAX_RECURSION_COUNT 50
 
-nsIOService* gIOService = nullptr;
+nsIOService* gIOService;
 static bool gHasWarnedUploadChannel2;
 static bool gCaptivePortalEnabled = false;
 static LazyLogModule gIOServiceLog("nsIOService");
@@ -169,6 +172,7 @@ uint32_t   nsIOService::gDefaultSegmentCount = 24;
 
 bool nsIOService::sIsDataURIUniqueOpaqueOrigin = false;
 bool nsIOService::sBlockToplevelDataUriNavigations = false;
+bool nsIOService::sBlockFTPSubresources = false;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -198,18 +202,6 @@ nsIOService::nsIOService()
 nsresult
 nsIOService::Init()
 {
-    nsresult rv;
-
-    // We need to get references to the DNS service so that we can shut it
-    // down later. If we wait until the nsIOService is being shut down,
-    // GetService will fail at that point.
-
-    mDNSService = do_GetService(NS_DNSSERVICE_CONTRACTID, &rv);
-    if (NS_FAILED(rv)) {
-        NS_WARNING("failed to get DNS service");
-        return rv;
-    }
-
     // XXX hack until xpidl supports error info directly (bug 13423)
     nsCOMPtr<nsIErrorService> errorService = do_GetService(NS_ERRORSERVICE_CONTRACTID);
     if (errorService) {
@@ -254,6 +246,8 @@ nsIOService::Init()
                                  "security.data_uri.unique_opaque_origin", false);
     Preferences::AddBoolVarCache(&sBlockToplevelDataUriNavigations,
                                  "security.data_uri.block_toplevel_data_uri_navigations", false);
+    Preferences::AddBoolVarCache(&sBlockFTPSubresources,
+                                 "security.block_ftp_subresources", true);
     Preferences::AddBoolVarCache(&mOfflineMirrorsConnectivity, OFFLINE_MIRRORS_CONNECTIVITY, true);
 
     gIOService = this;
@@ -269,7 +263,10 @@ nsIOService::Init()
 
 nsIOService::~nsIOService()
 {
-    gIOService = nullptr;
+    if (gIOService) {
+        MOZ_ASSERT(gIOService == this);
+        gIOService = nullptr;
+    }
 }
 
 nsresult
@@ -351,28 +348,20 @@ nsIOService::InitializeProtocolProxyService()
     return rv;
 }
 
-nsIOService*
+already_AddRefed<nsIOService>
 nsIOService::GetInstance() {
     if (!gIOService) {
-        gIOService = new nsIOService();
-        if (!gIOService)
-            return nullptr;
-        NS_ADDREF(gIOService);
-
-        nsresult rv = gIOService->Init();
-        if (NS_FAILED(rv)) {
-            NS_RELEASE(gIOService);
-            return nullptr;
+        RefPtr<nsIOService> ios = new nsIOService();
+        if (NS_SUCCEEDED(ios->Init())) {
+            MOZ_ASSERT(gIOService == ios.get());
+            return ios.forget();
         }
-        return gIOService;
     }
-    NS_ADDREF(gIOService);
-    return gIOService;
+    return do_AddRef(gIOService);
 }
 
 NS_IMPL_ISUPPORTS(nsIOService,
                   nsIIOService,
-                  nsIIOService2,
                   nsINetUtil,
                   nsISpeculativeConnect,
                   nsIObserver,
@@ -531,6 +520,12 @@ UsesExternalProtocolHandler(const char* aScheme)
         return false;
     }
 
+    for (const auto & forcedExternalScheme : gForcedExternalSchemes) {
+      if (!nsCRT::strcasecmp(forcedExternalScheme, aScheme)) {
+        return true;
+      }
+    }
+
     nsAutoCString pref("network.protocol-handler.external.");
     pref += aScheme;
 
@@ -551,7 +546,7 @@ nsIOService::GetProtocolHandler(const char* scheme, nsIProtocolHandler* *result)
     if (NS_SUCCEEDED(rv))
         return rv;
 
-    if (!UsesExternalProtocolHandler(scheme)) {
+    if (scheme[0] != '\0' && !UsesExternalProtocolHandler(scheme)) {
         nsAutoCString contractID(NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX);
         contractID += scheme;
         ToLowerCase(contractID);
@@ -722,7 +717,7 @@ nsIOService::NewFileURI(nsIFile *file, nsIURI **result)
 
 NS_IMETHODIMP
 nsIOService::NewChannelFromURI2(nsIURI* aURI,
-                                nsIDOMNode* aLoadingNode,
+                                nsINode* aLoadingNode,
                                 nsIPrincipal* aLoadingPrincipal,
                                 nsIPrincipal* aTriggeringPrincipal,
                                 uint32_t aSecurityFlags,
@@ -739,40 +734,28 @@ nsIOService::NewChannelFromURI2(nsIURI* aURI,
                                             aContentPolicyType,
                                             result);
 }
-
-/*  ***** DEPRECATED *****
- * please use NewChannelFromURI2 providing the right arguments for:
- *        * aLoadingNode
- *        * aLoadingPrincipal
- *        * aTriggeringPrincipal
- *        * aSecurityFlags
- *        * aContentPolicyType
- *
- * See nsIIoService.idl for a detailed description of those arguments
- */
-NS_IMETHODIMP
-nsIOService::NewChannelFromURI(nsIURI *aURI, nsIChannel **result)
+nsresult
+nsIOService::NewChannelFromURIWithClientAndController(nsIURI* aURI,
+                                                      nsINode* aLoadingNode,
+                                                      nsIPrincipal* aLoadingPrincipal,
+                                                      nsIPrincipal* aTriggeringPrincipal,
+                                                      const Maybe<ClientInfo>& aLoadingClientInfo,
+                                                      const Maybe<ServiceWorkerDescriptor>& aController,
+                                                      uint32_t aSecurityFlags,
+                                                      uint32_t aContentPolicyType,
+                                                      nsIChannel** aResult)
 {
-  NS_ASSERTION(false, "Deprecated, use NewChannelFromURI2 providing loadInfo arguments!");
-
-  const char16_t* params[] = {
-    u"nsIOService::NewChannelFromURI()",
-    u"nsIOService::NewChannelFromURI2()"
-  };
-  nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
-                                  NS_LITERAL_CSTRING("Security by Default"),
-                                  nullptr, // aDocument
-                                  nsContentUtils::eNECKO_PROPERTIES,
-                                  "APIDeprecationWarning",
-                                  params, ArrayLength(params));
-
-  return NewChannelFromURI2(aURI,
-                            nullptr, // aLoadingNode
-                            nsContentUtils::GetSystemPrincipal(),
-                            nullptr, // aTriggeringPrincipal
-                            nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
-                            nsIContentPolicy::TYPE_OTHER,
-                            result);
+    return NewChannelFromURIWithProxyFlagsInternal(aURI,
+                                                   nullptr, // aProxyURI
+                                                   0,       // aProxyFlags
+                                                   aLoadingNode,
+                                                   aLoadingPrincipal,
+                                                   aTriggeringPrincipal,
+                                                   aLoadingClientInfo,
+                                                   aController,
+                                                   aSecurityFlags,
+                                                   aContentPolicyType,
+                                                   aResult);
 }
 
 NS_IMETHODIMP
@@ -785,6 +768,51 @@ nsIOService::NewChannelFromURIWithLoadInfo(nsIURI* aURI,
                                                  0,       // aProxyFlags
                                                  aLoadInfo,
                                                  result);
+}
+
+
+nsresult
+nsIOService::NewChannelFromURIWithProxyFlagsInternal(nsIURI* aURI,
+                                                     nsIURI* aProxyURI,
+                                                     uint32_t aProxyFlags,
+                                                     nsINode* aLoadingNode,
+                                                     nsIPrincipal* aLoadingPrincipal,
+                                                     nsIPrincipal* aTriggeringPrincipal,
+                                                     const Maybe<ClientInfo>& aLoadingClientInfo,
+                                                     const Maybe<ServiceWorkerDescriptor>& aController,
+                                                     uint32_t aSecurityFlags,
+                                                     uint32_t aContentPolicyType,
+                                                     nsIChannel** result)
+{
+    // Ideally all callers of NewChannelFromURIWithProxyFlagsInternal provide
+    // the necessary arguments to create a loadinfo.
+    //
+    // Note, historically this could be called with nullptr aLoadingNode,
+    // aLoadingPrincipal, and aTriggeringPrincipal from addons using
+    // newChannelFromURIWithProxyFlags().  This code tried to accomodate
+    // by not creating a LoadInfo in such cases.  Now that both the legacy
+    // addons and that API are gone we could possibly require always creating a
+    // LoadInfo here.  See bug 1432205.
+    nsCOMPtr<nsILoadInfo> loadInfo;
+
+    // TYPE_DOCUMENT loads don't require a loadingNode or principal, but other
+    // types do.
+    if (aLoadingNode || aLoadingPrincipal ||
+        aContentPolicyType == nsIContentPolicy::TYPE_DOCUMENT) {
+      loadInfo = new LoadInfo(aLoadingPrincipal,
+                              aTriggeringPrincipal,
+                              aLoadingNode,
+                              aSecurityFlags,
+                              aContentPolicyType,
+                              aLoadingClientInfo,
+                              aController);
+    }
+    NS_ASSERTION(loadInfo, "Please pass security info when creating a channel");
+    return NewChannelFromURIWithProxyFlagsInternal(aURI,
+                                                   aProxyURI,
+                                                   aProxyFlags,
+                                                   loadInfo,
+                                                   result);
 }
 
 nsresult
@@ -905,91 +933,31 @@ NS_IMETHODIMP
 nsIOService::NewChannelFromURIWithProxyFlags2(nsIURI* aURI,
                                               nsIURI* aProxyURI,
                                               uint32_t aProxyFlags,
-                                              nsIDOMNode* aLoadingNode,
+                                              nsINode* aLoadingNode,
                                               nsIPrincipal* aLoadingPrincipal,
                                               nsIPrincipal* aTriggeringPrincipal,
                                               uint32_t aSecurityFlags,
                                               uint32_t aContentPolicyType,
                                               nsIChannel** result)
 {
-    // Ideally all callers of NewChannelFromURIWithProxyFlags2 provide the
-    // necessary arguments to create a loadinfo. Keep in mind that addons
-    // might still call NewChannelFromURIWithProxyFlags() which forwards
-    // its calls to NewChannelFromURIWithProxyFlags2 using *null* values
-    // as the arguments for aLoadingNode, aLoadingPrincipal, and also
-    // aTriggeringPrincipal.
-    // We do not want to break those addons, hence we only create a Loadinfo
-    // if 'aLoadingNode' or 'aLoadingPrincipal' are provided. Note, that
-    // either aLoadingNode or aLoadingPrincipal is required to succesfully
-    // create a LoadInfo object.
-    // Except in the case of top level TYPE_DOCUMENT loads, where the
-    // loadingNode and loadingPrincipal are allowed to have null values.
-    nsCOMPtr<nsILoadInfo> loadInfo;
-
-    // TYPE_DOCUMENT loads don't require a loadingNode or principal, but other
-    // types do.
-    if (aLoadingNode || aLoadingPrincipal ||
-        aContentPolicyType == nsIContentPolicy::TYPE_DOCUMENT) {
-      nsCOMPtr<nsINode> loadingNode(do_QueryInterface(aLoadingNode));
-      loadInfo = new LoadInfo(aLoadingPrincipal,
-                              aTriggeringPrincipal,
-                              loadingNode,
-                              aSecurityFlags,
-                              aContentPolicyType);
-    }
-    NS_ASSERTION(loadInfo, "Please pass security info when creating a channel");
     return NewChannelFromURIWithProxyFlagsInternal(aURI,
                                                    aProxyURI,
                                                    aProxyFlags,
-                                                   loadInfo,
+                                                   aLoadingNode,
+                                                   aLoadingPrincipal,
+                                                   aTriggeringPrincipal,
+                                                   Maybe<ClientInfo>(),
+                                                   Maybe<ServiceWorkerDescriptor>(),
+                                                   aSecurityFlags,
+                                                   aContentPolicyType,
                                                    result);
-}
-
-/*  ***** DEPRECATED *****
- * please use NewChannelFromURIWithProxyFlags2 providing the right arguments for:
- *        * aLoadingNode
- *        * aLoadingPrincipal
- *        * aTriggeringPrincipal
- *        * aSecurityFlags
- *        * aContentPolicyType
- *
- * See nsIIoService.idl for a detailed description of those arguments
- */
-NS_IMETHODIMP
-nsIOService::NewChannelFromURIWithProxyFlags(nsIURI *aURI,
-                                             nsIURI *aProxyURI,
-                                             uint32_t aProxyFlags,
-                                             nsIChannel **result)
-{
-  NS_ASSERTION(false, "Deprecated, use NewChannelFromURIWithProxyFlags2 providing loadInfo arguments!");
-
-  const char16_t* params[] = {
-    u"nsIOService::NewChannelFromURIWithProxyFlags()",
-    u"nsIOService::NewChannelFromURIWithProxyFlags2()"
-  };
-  nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
-                                  NS_LITERAL_CSTRING("Security by Default"),
-                                  nullptr, // aDocument
-                                  nsContentUtils::eNECKO_PROPERTIES,
-                                  "APIDeprecationWarning",
-                                  params, ArrayLength(params));
-
-  return NewChannelFromURIWithProxyFlags2(aURI,
-                                          aProxyURI,
-                                          aProxyFlags,
-                                          nullptr, // aLoadingNode
-                                          nsContentUtils::GetSystemPrincipal(),
-                                          nullptr, // aTriggeringPrincipal
-                                          nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
-                                          nsIContentPolicy::TYPE_OTHER,
-                                          result);
 }
 
 NS_IMETHODIMP
 nsIOService::NewChannel2(const nsACString& aSpec,
                          const char* aCharset,
                          nsIURI* aBaseURI,
-                         nsIDOMNode* aLoadingNode,
+                         nsINode* aLoadingNode,
                          nsIPrincipal* aLoadingPrincipal,
                          nsIPrincipal* aTriggeringPrincipal,
                          uint32_t aSecurityFlags,
@@ -1008,44 +976,6 @@ nsIOService::NewChannel2(const nsACString& aSpec,
                               aSecurityFlags,
                               aContentPolicyType,
                               result);
-}
-
-/*  ***** DEPRECATED *****
- * please use NewChannel2 providing the right arguments for:
- *        * aLoadingNode
- *        * aLoadingPrincipal
- *        * aTriggeringPrincipal
- *        * aSecurityFlags
- *        * aContentPolicyType
- *
- * See nsIIoService.idl for a detailed description of those arguments
- */
-NS_IMETHODIMP
-nsIOService::NewChannel(const nsACString &aSpec, const char *aCharset, nsIURI *aBaseURI, nsIChannel **result)
-{
-  NS_ASSERTION(false, "Deprecated, use NewChannel2 providing loadInfo arguments!");
-
-  const char16_t* params[] = {
-    u"nsIOService::NewChannel()",
-    u"nsIOService::NewChannel2()"
-  };
-  nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
-                                  NS_LITERAL_CSTRING("Security by Default"),
-                                  nullptr, // aDocument
-                                  nsContentUtils::eNECKO_PROPERTIES,
-                                  "APIDeprecationWarning",
-                                  params, ArrayLength(params));
-
-  // Call NewChannel2 providing default arguments for the loadInfo.
-  return NewChannel2(aSpec,
-                     aCharset,
-                     aBaseURI,
-                     nullptr, // aLoadingNode
-                     nsContentUtils::GetSystemPrincipal(), // aLoadingPrincipal
-                     nullptr, // aTriggeringPrincipal
-                     nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
-                     nsIContentPolicy::TYPE_OTHER,
-                     result);
 }
 
 bool
@@ -1136,10 +1066,6 @@ nsIOService::SetOffline(bool offline)
         }
         else if (!offline && mOffline) {
             // go online
-            if (mDNSService) {
-                DebugOnly<nsresult> rv = mDNSService->Init();
-                NS_ASSERTION(NS_SUCCEEDED(rv), "DNS service init failed");
-            }
             InitializeSocketTransportService();
             mOffline = false;    // indicate success only AFTER we've
                                     // brought up the services
@@ -1157,12 +1083,6 @@ nsIOService::SetOffline(bool offline)
 
     // Don't notify here, as the above notifications (if used) suffice.
     if ((mShutdown || mOfflineForProfileChange) && mOffline) {
-        // be sure to try and shutdown both (even if the first fails)...
-        // shutdown dns service first, because it has callbacks for socket transport
-        if (mDNSService) {
-            DebugOnly<nsresult> rv = mDNSService->Shutdown();
-            NS_ASSERTION(NS_SUCCEEDED(rv), "DNS service shutdown failed");
-        }
         if (mSocketTransportService) {
             DebugOnly<nsresult> rv = mSocketTransportService->Shutdown(mShutdown);
             NS_ASSERTION(NS_SUCCEEDED(rv), "socket transport service shutdown failed");
@@ -1364,10 +1284,10 @@ nsIOService::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
 void
 nsIOService::ParsePortList(nsIPrefBranch *prefBranch, const char *pref, bool remove)
 {
-    nsCString portList;
+    nsAutoCString portList;
 
     // Get a pref string and chop it up into a list of ports.
-    prefBranch->GetCharPref(pref, getter_Copies(portList));
+    prefBranch->GetCharPref(pref, portList);
     if (!portList.IsVoid()) {
         nsTArray<nsCString> portListArray;
         ParseString(portList, ',', portListArray);
@@ -1421,7 +1341,7 @@ public:
   NS_IMETHOD Run() override { return mIOService->NotifyWakeup(); }
 
 private:
-    virtual ~nsWakeupNotifier() { }
+    virtual ~nsWakeupNotifier() = default;
     nsCOMPtr<nsIIOServiceInternal> mIOService;
 };
 
@@ -1489,6 +1409,11 @@ nsIOService::Observe(nsISupports *subject,
             nsCOMPtr<nsIPrefBranch> prefBranch;
             GetPrefBranch(getter_AddRefs(prefBranch));
             PrefsChanged(prefBranch, MANAGE_OFFLINE_STATUS_PREF);
+
+            // Bug 870460 - Read cookie database at an early-as-possible time
+            // off main thread. Hence, we have more chance to finish db query
+            // before something calls into the cookie service.
+            nsCOMPtr<nsISupports> cookieServ = do_GetService(NS_COOKIESERVICE_CONTRACTID);
         }
     } else if (!strcmp(topic, NS_XPCOM_SHUTDOWN_OBSERVER_ID)) {
         // Remember we passed XPCOM shutdown notification to prevent any
@@ -1600,34 +1525,6 @@ nsIOService::URIChainHasFlags(nsIURI   *uri,
 }
 
 NS_IMETHODIMP
-nsIOService::ToImmutableURI(nsIURI* uri, nsIURI** result)
-{
-    if (!uri) {
-        *result = nullptr;
-        return NS_OK;
-    }
-
-    nsresult rv = NS_EnsureSafeToReturn(uri, result);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    NS_TryToSetImmutable(*result);
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-nsIOService::NewSimpleNestedURI(nsIURI* aURI, nsIURI** aResult)
-{
-    NS_ENSURE_ARG(aURI);
-
-    nsCOMPtr<nsIURI> safeURI;
-    nsresult rv = NS_EnsureSafeToReturn(aURI, getter_AddRefs(safeURI));
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    NS_IF_ADDREF(*aResult = new nsSimpleNestedURI(safeURI));
-    return *aResult ? NS_OK : NS_ERROR_OUT_OF_MEMORY;
-}
-
-NS_IMETHODIMP
 nsIOService::SetManageOfflineStatus(bool aManage)
 {
     LOG(("nsIOService::SetManageOfflineStatus aManage=%d\n", aManage));
@@ -1658,12 +1555,30 @@ nsIOService::GetManageOfflineStatus(bool* aManage)
 nsresult
 nsIOService::OnNetworkLinkEvent(const char *data)
 {
-    LOG(("nsIOService::OnNetworkLinkEvent data:%s\n", data));
-    if (!mNetworkLinkService)
-        return NS_ERROR_FAILURE;
+    if (IsNeckoChild()) {
+        // There is nothing IO service could do on the child process
+        // with this at the moment.  Feel free to add functionality
+        // here at will, though.
+        return NS_OK;
+    }
 
-    if (mShutdown)
+    if (mShutdown) {
         return NS_ERROR_NOT_AVAILABLE;
+    }
+
+    nsCString dataAsString(data);
+    for (auto* cp : mozilla::dom::ContentParent::AllProcesses(mozilla::dom::ContentParent::eLive)) {
+        PNeckoParent* neckoParent = SingleManagedOrNull(cp->ManagedPNeckoParent());
+        if (!neckoParent) {
+            continue;
+        }
+        Unused << neckoParent->SendNetworkChangeNotification(dataAsString);
+    }
+
+    LOG(("nsIOService::OnNetworkLinkEvent data:%s\n", data));
+    if (!mNetworkLinkService) {
+        return NS_ERROR_FAILURE;
+    }
 
     if (!mManageLinkStatus) {
         LOG(("nsIOService::OnNetworkLinkEvent mManageLinkStatus=false\n"));
@@ -1677,7 +1592,8 @@ nsIOService::OnNetworkLinkEvent(const char *data)
         // but the status of the captive portal may have changed.
         RecheckCaptivePortal();
         return NS_OK;
-    } else if (!strcmp(data, NS_NETWORK_LINK_DATA_DOWN)) {
+    }
+    if (!strcmp(data, NS_NETWORK_LINK_DATA_DOWN)) {
         isUp = false;
     } else if (!strcmp(data, NS_NETWORK_LINK_DATA_UP)) {
         isUp = true;
@@ -1759,7 +1675,7 @@ nsIOService::ParseAttributePolicyString(const nsAString& policyString,
 // nsISpeculativeConnect
 class IOServiceProxyCallback final : public nsIProtocolProxyCallback
 {
-    ~IOServiceProxyCallback() {}
+    ~IOServiceProxyCallback() = default;
 
 public:
     NS_DECL_ISUPPORTS
@@ -1884,7 +1800,7 @@ nsIOService::SpeculativeConnectInternal(nsIURI *aURI,
                             loadingPrincipal,
                             nullptr, //aTriggeringPrincipal,
                             nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
-                            nsIContentPolicy::TYPE_OTHER,
+                            nsIContentPolicy::TYPE_SPECULATIVE,
                             getter_AddRefs(channel));
     NS_ENSURE_SUCCESS(rv, rv);
 
@@ -1947,6 +1863,18 @@ nsIOService::IsDataURIUniqueOpaqueOrigin()
 nsIOService::BlockToplevelDataUriNavigations()
 {
   return sBlockToplevelDataUriNavigations;
+}
+
+/*static*/ bool
+nsIOService::BlockFTPSubresources()
+{
+  return sBlockFTPSubresources;
+}
+
+NS_IMETHODIMP
+nsIOService::NotImplemented()
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 } // namespace net

@@ -21,7 +21,7 @@ class HTMLTableElement final : public nsGenericHTMLElement
 public:
   explicit HTMLTableElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
 
-  NS_IMPL_FROMCONTENT_HTML_WITH_TAG(HTMLTableElement, table)
+  NS_IMPL_FROMNODE_HTML_WITH_TAG(HTMLTableElement, table)
 
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
@@ -185,6 +185,7 @@ public:
   virtual bool ParseAttribute(int32_t aNamespaceID,
                                 nsAtom* aAttribute,
                                 const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 nsAttrValue& aResult) override;
   virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const override;
   NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* aAttribute) const override;
@@ -209,6 +210,7 @@ public:
   virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
                                 const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
                                 bool aNotify) override;
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLTableElement,

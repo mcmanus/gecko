@@ -5,27 +5,19 @@
 
 "use strict";
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cr = Components.results;
-const Cu = Components.utils;
-
-Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://gre/modules/Services.jsm", this);
-Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
-Cu.import("resource://gre/modules/DeferredTask.jsm", this);
-Cu.import("resource://gre/modules/Timer.jsm");
-Cu.import("resource://gre/modules/TelemetryUtils.jsm", this);
-Cu.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/Log.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm", this);
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+ChromeUtils.import("resource://gre/modules/DeferredTask.jsm", this);
+ChromeUtils.import("resource://gre/modules/Timer.jsm");
+ChromeUtils.import("resource://gre/modules/TelemetryUtils.jsm", this);
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   TelemetrySend: "resource://gre/modules/TelemetrySend.jsm",
   AddonManagerPrivate: "resource://gre/modules/AddonManager.jsm",
-  AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
   TelemetryController: "resource://gre/modules/TelemetryController.jsm",
   TelemetryStorage: "resource://gre/modules/TelemetryStorage.jsm",
-  TelemetryLog: "resource://gre/modules/TelemetryLog.jsm",
-  ThirdPartyCookieProbe: "resource://gre/modules/ThirdPartyCookieProbe.jsm",
   UITelemetry: "resource://gre/modules/UITelemetry.jsm",
   GCTelemetry: "resource://gre/modules/GCTelemetry.jsm",
   TelemetryEnvironment: "resource://gre/modules/TelemetryEnvironment.jsm",
@@ -52,25 +44,17 @@ const REASON_SHUTDOWN = "shutdown";
 
 const ENVIRONMENT_CHANGE_LISTENER = "TelemetrySession::onEnvironmentChange";
 
-const MS_IN_ONE_HOUR  = 60 * 60 * 1000;
 const MIN_SUBSESSION_LENGTH_MS = Services.prefs.getIntPref("toolkit.telemetry.minSubsessionLength", 5 * 60) * 1000;
 
 const LOGGER_NAME = "Toolkit.Telemetry";
 const LOGGER_PREFIX = "TelemetrySession" + (Utils.isContentProcess ? "#content::" : "::");
 
-const MESSAGE_TELEMETRY_PAYLOAD = "Telemetry:Payload";
 const MESSAGE_TELEMETRY_USS = "Telemetry:USS";
 const MESSAGE_TELEMETRY_GET_CHILD_USS = "Telemetry:GetChildUSS";
-
-const DATAREPORTING_DIRECTORY = "datareporting";
-const ABORTED_SESSION_FILE_NAME = "aborted-session-ping";
 
 // Whether the FHR/Telemetry unification features are enabled.
 // Changing this pref requires a restart.
 const IS_UNIFIED_TELEMETRY = Services.prefs.getBoolPref(TelemetryUtils.Preferences.Unified, false);
-
-// Maximum number of content payloads that we are willing to store.
-const MAX_NUM_CONTENT_PAYLOADS = 10;
 
 // Do not gather data more than once a minute (ms)
 const TELEMETRY_INTERVAL = 60 * 1000;
@@ -111,10 +95,6 @@ var gWasDebuggerAttached = false;
 XPCOMUtils.defineLazyServiceGetters(this, {
   Telemetry: ["@mozilla.org/base/telemetry;1", "nsITelemetry"],
   idleService: ["@mozilla.org/widget/idleservice;1", "nsIIdleService"],
-  cpmm: ["@mozilla.org/childprocessmessagemanager;1", "nsIMessageSender"],
-  cpml: ["@mozilla.org/childprocessmessagemanager;1", "nsIMessageListenerManager"],
-  ppmm: ["@mozilla.org/parentprocessmessagemanager;1", "nsIMessageBroadcaster"],
-  ppml: ["@mozilla.org/parentprocessmessagemanager;1", "nsIMessageListenerManager"],
 });
 
 function generateUUID() {
@@ -184,14 +164,14 @@ var processInfo = {
   _GetProcessIoCounters: null,
   _GetCurrentProcess: null,
   getCounters() {
-    let isWindows = ("@mozilla.org/windows-registry-key;1" in Components.classes);
+    let isWindows = ("@mozilla.org/windows-registry-key;1" in Cc);
     if (isWindows)
       return this.getCounters_Windows();
     return null;
   },
   getCounters_Windows() {
     if (!this._initialized) {
-      Cu.import("resource://gre/modules/ctypes.jsm");
+      ChromeUtils.import("resource://gre/modules/ctypes.jsm");
       this._IO_COUNTERS = new ctypes.StructType("IO_COUNTERS", [
         {"readOps": ctypes.unsigned_long_long},
         {"writeOps": ctypes.unsigned_long_long},
@@ -450,7 +430,7 @@ var TelemetryScheduler = {
           Services.tm.idleDispatchToMainThread(() => {
             return this._idleDispatch
               ? this._idleDispatch.dispatch(resolve, reject)
-              : Promise.resolve().then(resolve, reject)
+              : Promise.resolve().then(resolve, reject);
             },
             SCHEDULER_TICK_MAX_IDLE_DELAY_MS));
       } else {
@@ -537,9 +517,9 @@ var TelemetryScheduler = {
   },
 };
 
-this.EXPORTED_SYMBOLS = ["TelemetrySession"];
+var EXPORTED_SYMBOLS = ["TelemetrySession"];
 
-this.TelemetrySession = Object.freeze({
+var TelemetrySession = Object.freeze({
   /**
    * Send a ping to a test server. Used only for testing.
    */
@@ -667,7 +647,6 @@ this.TelemetrySession = Object.freeze({
 });
 
 var Impl = {
-  _histograms: {},
   _initialized: false,
   _logger: null,
   _prevValues: {},
@@ -679,11 +658,6 @@ var Impl = {
   // The previous build ID, if this is the first run with a new build.
   // Null if this is the first run, or the previous build ID is unknown.
   _previousBuildId: null,
-  // Telemetry payloads sent by child processes.
-  // Each element is in the format {source: <weak-ref>, payload: <object>},
-  // where source is a weak reference to the child process,
-  // and payload is the telemetry payload from that child process.
-  _childTelemetry: [],
   // Unique id that identifies this session so the server can cope with duplicate
   // submissions, orphaning and other oddities. The id is shared across subsessions.
   _sessionId: null,
@@ -727,13 +701,13 @@ var Impl = {
   _observedTopics: new Set(),
 
   addObserver(aTopic) {
-    Services.obs.addObserver(this, aTopic)
-    this._observedTopics.add(aTopic)
+    Services.obs.addObserver(this, aTopic);
+    this._observedTopics.add(aTopic);
   },
 
   removeObserver(aTopic) {
-    Services.obs.removeObserver(this, aTopic)
-    this._observedTopics.delete(aTopic)
+    Services.obs.removeObserver(this, aTopic);
+    this._observedTopics.delete(aTopic);
   },
 
   get _log() {
@@ -759,13 +733,13 @@ var Impl = {
     var ret = {
       totalTime: Math.round(elapsedTime / 1000), // totalTime, in seconds
       uptime: Math.round(elapsedTime / 60000) // uptime in minutes
-    }
+    };
 
     // Look for app-specific timestamps
     var appTimestamps = {};
     try {
       let o = {};
-      Cu.import("resource://gre/modules/TelemetryTimestamps.jsm", o);
+      ChromeUtils.import("resource://gre/modules/TelemetryTimestamps.jsm", o);
       appTimestamps = o.TelemetryTimestamps.get();
     } catch (ex) {}
 
@@ -773,7 +747,6 @@ var Impl = {
     if (!Utils.isContentProcess && Telemetry.canRecordExtended) {
       try {
         ret.addonManager = AddonManagerPrivate.getSimpleMeasures();
-        ret.UITelemetry = UITelemetry.getSimpleMeasures();
       } catch (ex) {}
     }
 
@@ -781,7 +754,7 @@ var Impl = {
       for (let field of Object.keys(si)) {
         if (field == "process")
           continue;
-        ret[field] = si[field] - si.process
+        ret[field] = si[field] - si.process;
       }
 
       for (let p in appTimestamps) {
@@ -791,8 +764,6 @@ var Impl = {
     }
 
     ret.startupInterrupted = Number(Services.startup.interrupted);
-
-    ret.js = Cu.getJSEngineTelemetryValue();
 
     let maximalNumberOfConcurrentThreads = Telemetry.maximalNumberOfConcurrentThreads;
     if (maximalNumberOfConcurrentThreads) {
@@ -900,8 +871,8 @@ var Impl = {
                                        : Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTOUT;
   },
 
-  getHistograms: function getHistograms(subsession, clearSubsession) {
-    let hls = Telemetry.snapshotHistograms(this.getDatasetType(), subsession, clearSubsession);
+  getHistograms: function getHistograms(clearSubsession) {
+    let hls = Telemetry.snapshotHistograms(this.getDatasetType(), clearSubsession);
     let ret = {};
 
     for (let [process, histograms] of Object.entries(hls)) {
@@ -916,8 +887,8 @@ var Impl = {
     return ret;
   },
 
-  getKeyedHistograms(subsession, clearSubsession) {
-    let khs = Telemetry.snapshotKeyedHistograms(this.getDatasetType(), subsession, clearSubsession);
+  getKeyedHistograms(clearSubsession) {
+    let khs = Telemetry.snapshotKeyedHistograms(this.getDatasetType(), clearSubsession);
     let ret = {};
 
     for (let [process, histograms] of Object.entries(khs)) {
@@ -964,7 +935,7 @@ var Impl = {
     let ret = {};
     for (let processName in scalarsSnapshot) {
       for (let name in scalarsSnapshot[processName]) {
-        if (name.startsWith("telemetry.test") && this._testing == false) {
+        if (name.startsWith("telemetry.test") && !this._testing) {
           continue;
         }
         // Finally arrange the data in the returned object.
@@ -1097,7 +1068,7 @@ var Impl = {
         boundHandleMemoryReport(id, units, amount);
       } catch (e) {
       }
-    }
+    };
     let b = (id, n) => h(id, Ci.nsIMemoryReporter.UNITS_BYTES, n);
     let c = (id, n) => h(id, Ci.nsIMemoryReporter.UNITS_COUNT, n);
     let cc = (id, n) => h(id, Ci.nsIMemoryReporter.UNITS_COUNT_CUMULATIVE, n);
@@ -1111,16 +1082,19 @@ var Impl = {
     }
 
     b("MEMORY_VSIZE", "vsize");
-    b("MEMORY_VSIZE_MAX_CONTIGUOUS", "vsizeMaxContiguous");
+    if (!Services.appinfo.is64Bit || AppConstants.platform !== "win") {
+      b("MEMORY_VSIZE_MAX_CONTIGUOUS", "vsizeMaxContiguous");
+    }
     b("MEMORY_RESIDENT_FAST", "residentFast");
     b("MEMORY_UNIQUE", "residentUnique");
     p("MEMORY_HEAP_OVERHEAD_FRACTION", "heapOverheadFraction");
     b("MEMORY_JS_GC_HEAP", "JSMainRuntimeGCHeap");
-    c("MEMORY_JS_COMPARTMENTS_SYSTEM", "JSMainRuntimeCompartmentsSystem");
-    c("MEMORY_JS_COMPARTMENTS_USER", "JSMainRuntimeCompartmentsUser");
+    c("MEMORY_JS_COMPARTMENTS_SYSTEM", "JSMainRuntimeRealmsSystem");
+    c("MEMORY_JS_COMPARTMENTS_USER", "JSMainRuntimeRealmsUser");
     b("MEMORY_IMAGES_CONTENT_USED_UNCOMPRESSED", "imagesContentUsedUncompressed");
     b("MEMORY_STORAGE_SQLITE", "storageSQLite");
     cc("LOW_MEMORY_EVENTS_VIRTUAL", "lowMemoryEventsVirtual");
+    cc("LOW_MEMORY_EVENTS_COMMIT_SPACE", "lowMemoryEventsCommitSpace");
     cc("LOW_MEMORY_EVENTS_PHYSICAL", "lowMemoryEventsPhysical");
     cc("PAGE_FAULTS_HARD", "pageFaultsHard");
 
@@ -1137,7 +1111,7 @@ var Impl = {
       // Only the chrome process should gather total memory
       // total = parent RSS + sum(child USS)
       this._totalMemory = mgr.residentFast;
-      if (ppmm.childCount > 1) {
+      if (Services.ppmm.childCount > 1) {
         // Do not report If we time out waiting for the children to call
         this._totalMemoryTimeout = setTimeout(
           () => {
@@ -1147,8 +1121,8 @@ var Impl = {
           TOTAL_MEMORY_COLLECTOR_TIMEOUT);
         this._USSFromChildProcesses = [];
         this._childrenToHearFrom = new Set();
-        for (let i = 1; i < ppmm.childCount; i++) {
-          let child = ppmm.getChildAt(i);
+        for (let i = 1; i < Services.ppmm.childCount; i++) {
+          let child = Services.ppmm.getChildAt(i);
           try {
             child.sendAsyncMessage(MESSAGE_TELEMETRY_GET_CHILD_USS, {id: this._nextTotalMemoryId});
             this._childrenToHearFrom.add(this._nextTotalMemoryId);
@@ -1198,25 +1172,12 @@ var Impl = {
       return;
     }
 
-    let h = this._histograms[id];
-    if (!h) {
-      if (key) {
-        h = Telemetry.getKeyedHistogramById(id);
-      } else {
-        h = Telemetry.getHistogramById(id);
-      }
-      this._histograms[id] = h;
-    }
-
     if (key) {
-      h.add(key, val);
-    } else {
-      h.add(val);
+      Telemetry.getKeyedHistogramById(id).add(key, val);
+      return;
     }
-  },
 
-  getChildPayloads: function getChildPayloads() {
-    return this._childTelemetry.map(child => child.payload);
+    Telemetry.getHistogramById(id).add(val);
   },
 
   /**
@@ -1251,7 +1212,7 @@ var Impl = {
     // Add extended set measurements common to chrome & content processes
     if (Telemetry.canRecordExtended) {
       payloadObj.chromeHangs = protect(() => Telemetry.chromeHangs);
-      payloadObj.log = protect(() => TelemetryLog.entries());
+      payloadObj.log = [];
       payloadObj.webrtc = protect(() => Telemetry.webrtcStats);
     }
 
@@ -1261,8 +1222,8 @@ var Impl = {
 
     // Additional payload for chrome process.
     let measurements = {
-      histograms: protect(() => this.getHistograms(isSubsession, clearSubsession), {}),
-      keyedHistograms: protect(() => this.getKeyedHistograms(isSubsession, clearSubsession), {}),
+      histograms: protect(() => this.getHistograms(clearSubsession), {}),
+      keyedHistograms: protect(() => this.getKeyedHistograms(clearSubsession), {}),
       scalars: protect(() => this.getScalars(isSubsession, clearSubsession), {}),
       keyedScalars: protect(() => this.getScalars(isSubsession, clearSubsession, true), {}),
       events: protect(() => this.getEvents(isSubsession, clearSubsession)),
@@ -1337,10 +1298,6 @@ var Impl = {
       if (stacks && ("captures" in stacks) && (stacks.captures.length > 0)) {
         payloadObj.processes.parent.capturedStacks = stacks;
       }
-    }
-
-    if (this._childTelemetry.length) {
-      payloadObj.childPayloads = protect(() => this.getChildPayloads());
     }
 
     return payloadObj;
@@ -1465,10 +1422,6 @@ var Impl = {
 
     annotateCrashReport(this._sessionId);
 
-    // Initialize some probes that are kept in their own modules
-    this._thirdPartyCookies = new ThirdPartyCookieProbe();
-    this._thirdPartyCookies.init();
-
     // Record old value and update build ID preference if this is the first
     // run with a new build ID.
     let previousBuildId = Services.prefs.getStringPref(TelemetryUtils.Preferences.PreviousBuildID, null);
@@ -1481,8 +1434,7 @@ var Impl = {
 
     this.attachEarlyObservers();
 
-    ppml.addMessageListener(MESSAGE_TELEMETRY_PAYLOAD, this);
-    ppml.addMessageListener(MESSAGE_TELEMETRY_USS, this);
+    Services.ppmm.addMessageListener(MESSAGE_TELEMETRY_USS, this);
   },
 
   /**
@@ -1568,7 +1520,7 @@ var Impl = {
     }
 
     this.addObserver("content-child-shutdown");
-    cpml.addMessageListener(MESSAGE_TELEMETRY_GET_CHILD_USS, this);
+    Services.cpmm.addMessageListener(MESSAGE_TELEMETRY_GET_CHILD_USS, this);
 
     let delayedTask = new DeferredTask(() => {
       this._initialized = true;
@@ -1600,24 +1552,6 @@ var Impl = {
   receiveMessage: function receiveMessage(message) {
     this._log.trace("receiveMessage - Message name " + message.name);
     switch (message.name) {
-    case MESSAGE_TELEMETRY_PAYLOAD:
-    {
-      // In parent process, receive Telemetry payload from child
-      let source = message.data.childUUID;
-      delete message.data.childUUID;
-
-      this._childTelemetry.push({
-        source,
-        payload: message.data,
-      });
-
-      if (this._childTelemetry.length == MAX_NUM_CONTENT_PAYLOADS + 1) {
-        this._childTelemetry.shift();
-        Telemetry.getHistogramById("TELEMETRY_DISCARDED_CONTENT_PINGS_COUNT").add();
-      }
-
-      break;
-    }
     case MESSAGE_TELEMETRY_USS:
     {
       // In parent process, receive the USS report from the child
@@ -1672,14 +1606,12 @@ var Impl = {
     {
       // In child process, send the requested USS report
       this.sendContentProcessUSS(message.data.id);
-      break
+      break;
     }
     default:
       throw new Error("Telemetry.receiveMessage: bad message name");
     }
   },
-
-  _processUUID: generateUUID(),
 
   sendContentProcessUSS: function sendContentProcessUSS(aMessageId) {
     this._log.trace("sendContentProcessUSS");
@@ -1693,31 +1625,23 @@ var Impl = {
       return;
     }
 
-    cpmm.sendAsyncMessage(
+    Services.cpmm.sendAsyncMessage(
       MESSAGE_TELEMETRY_USS,
       {bytes: mgr.residentUnique, id: aMessageId}
     );
   },
 
-  sendContentProcessPing: function sendContentProcessPing(reason) {
-    this._log.trace("sendContentProcessPing - Reason " + reason);
-    const isSubsession = !this._isClassicReason(reason);
-    let payload = this.getSessionPayload(reason, isSubsession);
-    payload.childUUID = this._processUUID;
-    cpmm.sendAsyncMessage(MESSAGE_TELEMETRY_PAYLOAD, payload);
-  },
-
    /**
-    * Save both the "saved-session" and the "shutdown" pings to disk.
+    * On Desktop: Save the "shutdown" ping to disk.
+    * On Android: Save the "saved-session" ping to disk.
     * This needs to be called after TelemetrySend shuts down otherwise pings
     * would be sent instead of getting persisted to disk.
     */
   saveShutdownPings() {
     this._log.trace("saveShutdownPings");
 
-    // We don't wait for "shutdown" pings to be written to disk before gathering the
-    // "saved-session" payload. Instead we append the promises to this list and wait
-    // on both to be saved after kicking off their collection.
+    // We append the promises to this list and wait
+    // on all pings to be saved after kicking off their collection.
     let p = [];
 
     if (IS_UNIFIED_TELEMETRY) {
@@ -1757,9 +1681,7 @@ var Impl = {
       }
     }
 
-    // As a temporary measure, we want to submit saved-session too if extended Telemetry is enabled
-    // to keep existing performance analysis working.
-    if (Telemetry.canRecordExtended) {
+    if (AppConstants.platform == "android" && Telemetry.canRecordExtended) {
       let payload = this.getSessionPayload(REASON_SAVED_SESSION, false);
 
       let options = {
@@ -1860,7 +1782,6 @@ var Impl = {
       // content-child-shutdown is only registered for content processes.
       this.uninstall();
       Telemetry.flushBatchedChildTelemetry();
-      this.sendContentProcessPing(REASON_SAVED_SESSION);
       break;
     case TOPIC_CYCLE_COLLECTOR_BEGIN:
       let now = new Date();

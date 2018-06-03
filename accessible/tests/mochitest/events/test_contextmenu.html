@@ -33,11 +33,11 @@
 
       this.invoke = function showContextMenu_invoke() {
         synthesizeMouse(this.DOMNode, 4, 4, { type: "contextmenu", button: 2 });
-      }
+      };
 
       this.getID = function showContextMenu_getID() {
         return "show context menu";
-      }
+      };
     }
 
     function selectMenuItem() {
@@ -46,12 +46,12 @@
       ];
 
       this.invoke = function selectMenuItem_invoke() {
-        synthesizeKey("VK_DOWN", { });
-      }
+        synthesizeKey("KEY_ArrowDown");
+      };
 
       this.getID = function selectMenuItem_getID() {
         return "select first menuitem";
-      }
+      };
     }
 
     function closeContextMenu(aID) {
@@ -61,12 +61,12 @@
       ];
 
       this.invoke = function closeContextMenu_invoke() {
-        synthesizeKey("VK_ESCAPE", { });
-      }
+        synthesizeKey("KEY_Escape");
+      };
 
       this.getID = function closeContextMenu_getID() {
         return "close context menu";
-      }
+      };
     }
 
     function getContextMenuNode() {

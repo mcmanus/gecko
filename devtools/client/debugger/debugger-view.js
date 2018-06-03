@@ -218,7 +218,7 @@ var DebuggerView = {
     });
 
     // Relay events from the VariablesView.
-    this.Variables.on("fetched", (aEvent, aType) => {
+    this.Variables.on("fetched", aType => {
       switch (aType) {
         case "scopes":
           window.emit(EVENTS.FETCHED_SCOPES);
@@ -274,7 +274,7 @@ var DebuggerView = {
       callback();
     });
 
-    this.editor.on("gutterClick", (ev, line, button) => {
+    this.editor.on("gutterClick", (line, button) => {
       // A right-click shouldn't do anything but keep track of where
       // it was clicked.
       if (button == 2) {
@@ -846,10 +846,10 @@ var DebuggerView = {
 function ResultsPanelContainer() {
 }
 
-ResultsPanelContainer.prototype = Heritage.extend(WidgetMethods, {
+ResultsPanelContainer.prototype = extend(WidgetMethods, {
   /**
    * Sets the anchor node for this container panel.
-   * @param nsIDOMNode aNode
+   * @param Node aNode
    */
   set anchor(aNode) {
     this._anchor = aNode;
@@ -882,7 +882,7 @@ ResultsPanelContainer.prototype = Heritage.extend(WidgetMethods, {
 
   /**
    * Gets the anchor node for this container panel.
-   * @return nsIDOMNode
+   * @return Node
    */
   get anchor() {
     return this._anchor;

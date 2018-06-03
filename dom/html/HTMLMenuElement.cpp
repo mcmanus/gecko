@@ -55,8 +55,6 @@ HTMLMenuElement::~HTMLMenuElement()
 {
 }
 
-NS_IMPL_ISUPPORTS_INHERITED0(HTMLMenuElement, nsGenericHTMLElement)
-
 NS_IMPL_ELEMENT_CLONE(HTMLMenuElement)
 
 
@@ -72,12 +70,11 @@ HTMLMenuElement::SendShowEvent()
   event.mFlags.mBubbles = false;
   event.mFlags.mCancelable = false;
 
-  nsCOMPtr<nsIPresShell> shell = document->GetShell();
-  if (!shell) {
+  RefPtr<nsPresContext> presContext = document->GetPresContext();
+  if (!presContext) {
     return;
   }
 
-  RefPtr<nsPresContext> presContext = shell->GetPresContext();
   nsEventStatus status = nsEventStatus_eIgnore;
   EventDispatcher::Dispatch(static_cast<nsIContent*>(this), presContext,
                             &event, nullptr, &status);
@@ -108,7 +105,9 @@ HTMLMenuElement::Build(nsIMenuBuilder* aBuilder)
 nsresult
 HTMLMenuElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                               const nsAttrValue* aValue,
-                              const nsAttrValue* aOldValue, bool aNotify)
+                              const nsAttrValue* aOldValue,
+                              nsIPrincipal* aSubjectPrincipal,
+                              bool aNotify)
 {
   if (aNameSpaceID == kNameSpaceID_None && aName == nsGkAtoms::type) {
     if (aValue) {
@@ -119,13 +118,14 @@ HTMLMenuElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
   }
 
   return nsGenericHTMLElement::AfterSetAttr(aNameSpaceID, aName, aValue,
-                                            aOldValue, aNotify);
+                                            aOldValue, aSubjectPrincipal, aNotify);
 }
 
 bool
 HTMLMenuElement::ParseAttribute(int32_t aNamespaceID,
                                 nsAtom* aAttribute,
                                 const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None && aAttribute == nsGkAtoms::type) {
@@ -134,7 +134,7 @@ HTMLMenuElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                              aResult);
+                                              aMaybeScriptedPrincipal, aResult);
 }
 
 void
@@ -185,13 +185,13 @@ HTMLMenuElement::TraverseContent(nsIContent* aContent,
   nsCOMPtr<nsIContent> child;
   for (child = aContent->GetFirstChild(); child;
        child = child->GetNextSibling()) {
-    nsGenericHTMLElement* element = nsGenericHTMLElement::FromContent(child);
+    nsGenericHTMLElement* element = nsGenericHTMLElement::FromNode(child);
     if (!element) {
       continue;
     }
 
     if (child->IsHTMLElement(nsGkAtoms::menuitem)) {
-      HTMLMenuItemElement* menuitem = HTMLMenuItemElement::FromContent(child);
+      HTMLMenuItemElement* menuitem = HTMLMenuItemElement::FromNode(child);
 
       if (menuitem->IsHidden()) {
         continue;
@@ -212,9 +212,9 @@ HTMLMenuElement::TraverseContent(nsIContent* aContent,
     } else if (child->IsHTMLElement(nsGkAtoms::hr)) {
       aBuilder->AddSeparator();
     } else if (child->IsHTMLElement(nsGkAtoms::menu) && !element->IsHidden()) {
-      if (child->HasAttr(kNameSpaceID_None, nsGkAtoms::label)) {
+      if (child->AsElement()->HasAttr(kNameSpaceID_None, nsGkAtoms::label)) {
         nsAutoString label;
-        child->GetAttr(kNameSpaceID_None, nsGkAtoms::label, label);
+        child->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::label, label);
 
         BuildSubmenu(label, child, aBuilder);
 

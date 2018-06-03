@@ -6,6 +6,9 @@
 
 BROWSER_CHROME_MANIFESTS += ['test/browser.ini']
 XPCSHELL_TESTS_MANIFESTS += ['test/unit/xpcshell.ini']
+TEST_HARNESS_FILES.xpcshell.devtools.client.shared.test += [
+    'test/shared-redux-head.js',
+]
 
 DIRS += [
     'components',
@@ -26,16 +29,14 @@ DevToolsModules(
     'developer-toolbar.js',
     'devices.js',
     'DOMHelpers.jsm',
-    'doorhanger.js',
     'enum.js',
     'file-saver.js',
     'getjson.js',
     'inplace-editor.js',
-    'Jsbeautify.jsm',
     'key-shortcuts.js',
     'keycodes.js',
+    'link.js',
     'natural-sort.js',
-    'network-throttling-profiles.js',
     'node-attribute-parser.js',
     'options-view.js',
     'output-parser.js',
@@ -50,6 +51,7 @@ DevToolsModules(
     'telemetry.js',
     'theme.js',
     'undo.js',
+    'unicode-url.js',
     'view-source.js',
     'webgl-utils.js',
     'zoom-keys.js',

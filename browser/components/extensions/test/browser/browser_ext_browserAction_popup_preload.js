@@ -27,7 +27,7 @@ add_task(async function testBrowserActionClickCanceled() {
 
   await extension.startup();
 
-  const {GlobalManager, Management: {global: {browserActionFor}}} = Cu.import("resource://gre/modules/Extension.jsm", {});
+  const {GlobalManager, Management: {global: {browserActionFor}}} = ChromeUtils.import("resource://gre/modules/Extension.jsm", {});
 
   let ext = GlobalManager.extensionMap.get(extension.id);
   let browserAction = browserActionFor(ext);
@@ -82,7 +82,7 @@ add_task(async function testBrowserActionClickCanceled() {
 
   await extension.unload();
 
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });
 
 add_task(async function testBrowserActionDisabled() {
@@ -115,7 +115,7 @@ add_task(async function testBrowserActionDisabled() {
   await extension.awaitMessage("browserAction-disabled");
   await promiseAnimationFrame();
 
-  const {GlobalManager, Management: {global: {browserActionFor}}} = Cu.import("resource://gre/modules/Extension.jsm", {});
+  const {GlobalManager, Management: {global: {browserActionFor}}} = ChromeUtils.import("resource://gre/modules/Extension.jsm", {});
 
   let ext = GlobalManager.extensionMap.get(extension.id);
   let browserAction = browserActionFor(ext);

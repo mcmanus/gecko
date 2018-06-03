@@ -144,7 +144,7 @@ nsFontCache::GetMetricsFor(const nsFont& aFont,
     RefPtr<nsFontMetrics> fm = new nsFontMetrics(aFont, params, mContext);
     // the mFontMetrics list has the "head" at the end, because append
     // is cheaper than insert
-    mFontMetrics.AppendElement(do_AddRef(fm.get()).take());
+    mFontMetrics.AppendElement(do_AddRef(fm).take());
     return fm.forget();
 }
 
@@ -204,6 +204,7 @@ nsDeviceContext::nsDeviceContext()
       mAppUnitsPerDevPixel(-1), mAppUnitsPerDevPixelAtUnitFullZoom(-1),
       mAppUnitsPerPhysicalInch(-1),
       mFullZoom(1.0f), mPrintingScale(1.0f),
+      mPrintingTranslate(gfxPoint(0, 0)),
       mIsCurrentlyPrintingDoc(false)
 #ifdef DEBUG
     , mIsInitialized(false)
@@ -276,6 +277,7 @@ nsDeviceContext::SetDPI(double* aScale)
     if (mDeviceContextSpec) {
         dpi = mDeviceContextSpec->GetDPI();
         mPrintingScale = mDeviceContextSpec->GetPrintingScale();
+        mPrintingTranslate = mDeviceContextSpec->GetPrintingTranslate();
         mAppUnitsPerDevPixelAtUnitFullZoom =
             NS_lround((AppUnitsPerCSSPixel() * 96) / dpi);
     } else {
@@ -382,14 +384,13 @@ nsDeviceContext::CreateRenderingContextCommon(bool aWantReferenceContext)
     MOZ_ASSERT(IsPrinterContext());
     MOZ_ASSERT(mWidth > 0 && mHeight > 0);
 
-    // This will usually be null, depending on the pref print.print_via_parent.
-    RefPtr<DrawEventRecorder> recorder;
-    mDeviceContextSpec->GetDrawEventRecorder(getter_AddRefs(recorder));
-
     RefPtr<gfx::DrawTarget> dt;
     if (aWantReferenceContext) {
-      dt = mPrintTarget->GetReferenceDrawTarget(recorder);
+      dt = mPrintTarget->GetReferenceDrawTarget();
     } else {
+      // This will be null if e10s is disabled or print.print_via_parent=false.
+      RefPtr<DrawEventRecorder> recorder;
+      mDeviceContextSpec->GetDrawEventRecorder(getter_AddRefs(recorder));
       dt = mPrintTarget->MakeDrawTarget(gfx::IntSize(mWidth, mHeight), recorder);
     }
 
@@ -415,6 +416,7 @@ nsDeviceContext::CreateRenderingContextCommon(bool aWantReferenceContext)
     MOZ_ASSERT(pContext); // already checked draw target above
 
     gfxMatrix transform;
+    transform.PreTranslate(mPrintingTranslate);
     if (mPrintTarget->RotateNeededForLandscape()) {
       // Rotate page 90 degrees to draw landscape page on portrait paper
       IntSize size = mPrintTarget->GetSize();
@@ -426,7 +428,7 @@ nsDeviceContext::CreateRenderingContextCommon(bool aWantReferenceContext)
     }
     transform.PreScale(mPrintingScale, mPrintingScale);
 
-    pContext->SetMatrix(transform);
+    pContext->SetMatrixDouble(transform);
     return pContext.forget();
 }
 
@@ -465,10 +467,7 @@ nsresult
 nsDeviceContext::GetRect(nsRect &aRect)
 {
     if (IsPrinterContext()) {
-        aRect.x = 0;
-        aRect.y = 0;
-        aRect.SetWidth(mWidth);
-        aRect.SetHeight(mHeight);
+        aRect.SetRect(0, 0, mWidth, mHeight);
     } else
         ComputeFullAreaUsingScreen ( &aRect );
 
@@ -479,10 +478,7 @@ nsresult
 nsDeviceContext::GetClientRect(nsRect &aRect)
 {
     if (IsPrinterContext()) {
-        aRect.x = 0;
-        aRect.y = 0;
-        aRect.SetWidth(mWidth);
-        aRect.SetHeight(mHeight);
+        aRect.SetRect(0, 0, mWidth, mHeight);
     }
     else
         ComputeClientRectUsingScreen(&aRect);
@@ -535,6 +531,10 @@ nsDeviceContext::BeginDocument(const nsAString& aTitle,
         }
         mIsCurrentlyPrintingDoc = true;
     }
+
+    // Warn about any failure (except user cancelling):
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv) || rv == NS_ERROR_ABORT,
+                         "nsDeviceContext::BeginDocument failed");
 
     return rv;
 }
@@ -621,10 +621,10 @@ nsDeviceContext::ComputeClientRectUsingScreen(nsRect* outRect)
         screen->GetAvailRect(&x, &y, &width, &height);
 
         // convert to device units
-        outRect->y = NSIntPixelsToAppUnits(y, AppUnitsPerDevPixel());
-        outRect->x = NSIntPixelsToAppUnits(x, AppUnitsPerDevPixel());
-        outRect->SetWidth(NSIntPixelsToAppUnits(width, AppUnitsPerDevPixel()));
-        outRect->SetHeight(NSIntPixelsToAppUnits(height, AppUnitsPerDevPixel()));
+        outRect->SetRect(NSIntPixelsToAppUnits(x, AppUnitsPerDevPixel()),
+                         NSIntPixelsToAppUnits(y, AppUnitsPerDevPixel()),
+                         NSIntPixelsToAppUnits(width, AppUnitsPerDevPixel()),
+                         NSIntPixelsToAppUnits(height, AppUnitsPerDevPixel()));
     }
 }
 
@@ -642,11 +642,10 @@ nsDeviceContext::ComputeFullAreaUsingScreen(nsRect* outRect)
         screen->GetRect ( &x, &y, &width, &height );
 
         // convert to device units
-        outRect->y = NSIntPixelsToAppUnits(y, AppUnitsPerDevPixel());
-        outRect->x = NSIntPixelsToAppUnits(x, AppUnitsPerDevPixel());
-        outRect->SetWidth(NSIntPixelsToAppUnits(width, AppUnitsPerDevPixel()));
-        outRect->SetHeight(NSIntPixelsToAppUnits(height, AppUnitsPerDevPixel()));
-
+        outRect->SetRect(NSIntPixelsToAppUnits(x, AppUnitsPerDevPixel()),
+                         NSIntPixelsToAppUnits(y, AppUnitsPerDevPixel()),
+                         NSIntPixelsToAppUnits(width, AppUnitsPerDevPixel()),
+                         NSIntPixelsToAppUnits(height, AppUnitsPerDevPixel()));
         mWidth = outRect->Width();
         mHeight = outRect->Height();
     }
@@ -734,4 +733,25 @@ nsDeviceContext::GetDesktopToDeviceScale()
     }
 
     return DesktopToLayoutDeviceScale(1.0);
+}
+
+bool
+nsDeviceContext::IsSyncPagePrinting() const
+{
+  MOZ_ASSERT(mPrintTarget);
+  return mPrintTarget->IsSyncPagePrinting();
+}
+
+void
+nsDeviceContext::RegisterPageDoneCallback(PrintTarget::PageDoneCallback&& aCallback)
+{
+  MOZ_ASSERT(mPrintTarget && aCallback && !IsSyncPagePrinting());
+  mPrintTarget->RegisterPageDoneCallback(std::move(aCallback));
+}
+void
+nsDeviceContext::UnregisterPageDoneCallback()
+{
+  if (mPrintTarget) {
+    mPrintTarget->UnregisterPageDoneCallback();
+  }
 }

@@ -391,7 +391,7 @@ TexUnpackBlob::ConvertIfNeeded(WebGLContext* webgl, const char* funcName,
     }
 
     *out_begin = dstBegin;
-    *out_anchoredBuffer = Move(dstBuffer);
+    *out_anchoredBuffer = std::move(dstBuffer);
     return true;
 }
 
@@ -623,7 +623,6 @@ TexUnpackImage::TexOrSubImage(bool isSubImage, bool needsRespec, const char* fun
     WebGLContext* webgl = tex->mContext;
 
     gl::GLContext* gl = webgl->GL();
-    gl->MakeCurrent();
 
     if (needsRespec) {
         *out_error = DoTexOrSubImage(isSubImage, gl, target.get(), level, dui, xOffset,
@@ -702,10 +701,10 @@ TexUnpackImage::TexOrSubImage(bool isSubImage, bool needsRespec, const char* fun
             break;
         }
 
-        const gfx::IntSize destSize(mWidth, mHeight);
+        const gfx::IntSize dstSize(mWidth, mHeight);
         const auto dstOrigin = (webgl->mPixelStore_FlipY ? gl::OriginPos::TopLeft
                                                          : gl::OriginPos::BottomLeft);
-        if (!gl->BlitHelper()->BlitImageToFramebuffer(mImage, destSize, dstOrigin)) {
+        if (!gl->BlitHelper()->BlitImageToFramebuffer(mImage, dstSize, dstOrigin)) {
             fallbackReason = "likely bug: failed to blit";
             break;
         }

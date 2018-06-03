@@ -3,20 +3,19 @@
 "use strict";
 
 XPCOMUtils.defineLazyGetter(this, "Management", () => {
-  const {Management} = Cu.import("resource://gre/modules/Extension.jsm", {});
+  // eslint-disable-next-line no-shadow
+  const {Management} = ChromeUtils.import("resource://gre/modules/Extension.jsm", {});
   return Management;
 });
 
-XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
-                                  "resource://gre/modules/AddonManager.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
-                                  "resource://gre/modules/Preferences.jsm");
+ChromeUtils.defineModuleGetter(this, "AddonManager",
+                               "resource://gre/modules/AddonManager.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "aboutNewTabService",
                                    "@mozilla.org/browser/aboutnewtab-service;1",
                                    "nsIAboutNewTabService");
 
-Cu.import("resource://testing-common/AddonTestUtils.jsm");
+ChromeUtils.import("resource://testing-common/AddonTestUtils.jsm");
 
 const {
   createAppInfo,
@@ -28,7 +27,7 @@ const {
 AddonTestUtils.init(this);
 AddonTestUtils.overrideCertDB();
 
-createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "42");
+createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "42", "42");
 
 function awaitEvent(eventName) {
   return new Promise(resolve => {
@@ -44,9 +43,9 @@ add_task(async function test_multiple_extensions_overriding_newtab_page() {
   const EXT_2_ID = "ext2@tests.mozilla.org";
   const EXT_3_ID = "ext3@tests.mozilla.org";
 
-  const CONTROLLABLE = "controllable_by_this_extension";
   const CONTROLLED_BY_THIS = "controlled_by_this_extension";
   const CONTROLLED_BY_OTHER = "controlled_by_other_extensions";
+  const NOT_CONTROLLABLE = "not_controllable";
 
   function background() {
     browser.test.onMessage.addListener(async msg => {
@@ -56,11 +55,13 @@ add_task(async function test_multiple_extensions_overriding_newtab_page() {
           browser.test.sendMessage("newTabPage", newTabPage);
           break;
         case "trySet":
-          await browser.browserSettings.newTabPageOverride.set({value: "foo"});
+          let setResult = await browser.browserSettings.newTabPageOverride.set({value: "foo"});
+          browser.test.assertFalse(setResult, "Calling newTabPageOverride.set returns false.");
           browser.test.sendMessage("newTabPageSet");
           break;
         case "tryClear":
-          await browser.browserSettings.newTabPageOverride.clear({});
+          let clearResult = await browser.browserSettings.newTabPageOverride.clear({});
+          browser.test.assertFalse(clearResult, "Calling newTabPageOverride.clear returns false.");
           browser.test.sendMessage("newTabPageCleared");
           break;
       }
@@ -97,19 +98,19 @@ add_task(async function test_multiple_extensions_overriding_newtab_page() {
   let ext3 = ExtensionTestUtils.loadExtension(extObj);
 
   equal(aboutNewTabService.newTabURL, DEFAULT_NEW_TAB_URL,
-     "newTabURL is set to the default.");
+        "newTabURL is set to the default.");
 
   await promiseStartupManager();
 
   await ext1.startup();
   equal(aboutNewTabService.newTabURL, DEFAULT_NEW_TAB_URL,
-       "newTabURL is still set to the default.");
+        "newTabURL is still set to the default.");
 
-  await checkNewTabPageOverride(ext1, aboutNewTabService.newTabURL, CONTROLLABLE);
+  await checkNewTabPageOverride(ext1, aboutNewTabService.newTabURL, NOT_CONTROLLABLE);
 
   await ext2.startup();
   ok(aboutNewTabService.newTabURL.endsWith(NEWTAB_URI_2),
-     "newTabURL is overriden by the second extension.");
+     "newTabURL is overridden by the second extension.");
   await checkNewTabPageOverride(ext1, NEWTAB_URI_2, CONTROLLED_BY_OTHER);
 
   // Verify that calling set and clear do nothing.
@@ -124,54 +125,54 @@ add_task(async function test_multiple_extensions_overriding_newtab_page() {
   // Disable the second extension.
   let addon = await AddonManager.getAddonByID(EXT_2_ID);
   let disabledPromise = awaitEvent("shutdown");
-  addon.userDisabled = true;
+  await addon.disable();
   await disabledPromise;
   equal(aboutNewTabService.newTabURL, DEFAULT_NEW_TAB_URL,
         "newTabURL url is reset to the default after second extension is disabled.");
-  await checkNewTabPageOverride(ext1, aboutNewTabService.newTabURL, CONTROLLABLE);
+  await checkNewTabPageOverride(ext1, aboutNewTabService.newTabURL, NOT_CONTROLLABLE);
 
   // Re-enable the second extension.
   let enabledPromise = awaitEvent("ready");
-  addon.userDisabled = false;
+  await addon.enable();
   await enabledPromise;
   ok(aboutNewTabService.newTabURL.endsWith(NEWTAB_URI_2),
-     "newTabURL is overriden by the second extension.");
+     "newTabURL is overridden by the second extension.");
   await checkNewTabPageOverride(ext2, NEWTAB_URI_2, CONTROLLED_BY_THIS);
 
   await ext1.unload();
   ok(aboutNewTabService.newTabURL.endsWith(NEWTAB_URI_2),
-     "newTabURL is still overriden by the second extension.");
+     "newTabURL is still overridden by the second extension.");
   await checkNewTabPageOverride(ext2, NEWTAB_URI_2, CONTROLLED_BY_THIS);
 
   await ext3.startup();
   ok(aboutNewTabService.newTabURL.endsWith(NEWTAB_URI_3),
-   "newTabURL is overriden by the third extension.");
+     "newTabURL is overridden by the third extension.");
   await checkNewTabPageOverride(ext2, NEWTAB_URI_3, CONTROLLED_BY_OTHER);
 
   // Disable the second extension.
   disabledPromise = awaitEvent("shutdown");
-  addon.userDisabled = true;
+  await addon.disable();
   await disabledPromise;
   ok(aboutNewTabService.newTabURL.endsWith(NEWTAB_URI_3),
-   "newTabURL is still overriden by the third extension.");
+     "newTabURL is still overridden by the third extension.");
   await checkNewTabPageOverride(ext3, NEWTAB_URI_3, CONTROLLED_BY_THIS);
 
   // Re-enable the second extension.
   enabledPromise = awaitEvent("ready");
-  addon.userDisabled = false;
+  await addon.enable();
   await enabledPromise;
   ok(aboutNewTabService.newTabURL.endsWith(NEWTAB_URI_3),
-   "newTabURL is still overriden by the third extension.");
+     "newTabURL is still overridden by the third extension.");
   await checkNewTabPageOverride(ext3, NEWTAB_URI_3, CONTROLLED_BY_THIS);
 
   await ext3.unload();
   ok(aboutNewTabService.newTabURL.endsWith(NEWTAB_URI_2),
-     "newTabURL reverts to being overriden by the second extension.");
+     "newTabURL reverts to being overridden by the second extension.");
   await checkNewTabPageOverride(ext2, NEWTAB_URI_2, CONTROLLED_BY_THIS);
 
   await ext2.unload();
   equal(aboutNewTabService.newTabURL, DEFAULT_NEW_TAB_URL,
-     "newTabURL url is reset to the default.");
+        "newTabURL url is reset to the default.");
 
   await promiseShutdownManager();
 });

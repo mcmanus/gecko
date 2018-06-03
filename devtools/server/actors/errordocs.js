@@ -39,7 +39,7 @@ const ErrorDocs = {
   JSMSG_NO_PROPERTIES: "No_properties",
   JSMSG_ALREADY_HAS_PRAGMA: "Already_has_pragma",
   JSMSG_BAD_RETURN_OR_YIELD: "Bad_return_or_yield",
-  JSMSG_SEMI_BEFORE_STMNT: "Missing_semicolon_before_statement",
+  JSMSG_UNEXPECTED_TOKEN_NO_EXPECT: "Missing_semicolon_before_statement",
   JSMSG_OVER_RECURSED: "Too_much_recursion",
   JSMSG_BRACKET_AFTER_LIST: "Missing_bracket_after_list",
   JSMSG_PAREN_AFTER_ARGS: "Missing_parenthesis_after_argument_list",
@@ -73,7 +73,6 @@ const ErrorDocs = {
   JSMSG_GETTER_ONLY: "Getter_only",
   JSMSG_INVALID_DATE: "Invalid_date",
   JSMSG_DEPRECATED_STRING_METHOD: "Deprecated_String_generics",
-  JSMSG_DEPRECATED_TOLOCALEFORMAT: "Deprecated_toLocaleFormat",
   JSMSG_RESERVED_ID: "Reserved_identifier",
   JSMSG_BAD_CONST_ASSIGN: "Invalid_const_assignment",
   JSMSG_BAD_CONST_DECL: "Missing_initializer_in_const",
@@ -84,6 +83,8 @@ const ErrorDocs = {
   JSMSG_CANT_TRUNCATE_ARRAY: "Non_configurable_array_element",
   JSMSG_INCOMPATIBLE_PROTO: "Called_on_incompatible_type",
   JSMSG_INCOMPATIBLE_METHOD: "Called_on_incompatible_type",
+  JSMSG_BAD_INSTANCEOF_RHS: "invalid_right_hand_side_instanceof_operand",
+  JSMSG_EMPTY_ARRAY_REDUCE: "Reduce_of_empty_array_with_no_initial_value",
 };
 
 const MIXED_CONTENT_LEARN_MORE = "https://developer.mozilla.org/docs/Web/Security/Mixed_content";
@@ -111,12 +112,12 @@ exports.GetURL = (error) => {
     return undefined;
   }
 
-  let doc = ErrorDocs[error.errorMessageName];
+  const doc = ErrorDocs[error.errorMessageName];
   if (doc) {
     return baseURL + doc + params;
   }
 
-  let categoryURL = ErrorCategories[error.category];
+  const categoryURL = ErrorCategories[error.category];
   if (categoryURL) {
     return categoryURL + params;
   }

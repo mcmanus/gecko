@@ -23,7 +23,9 @@ const callExpressionDefinitions = [
   /^loader\.lazyRequireGetter\(this, "(\w+)"/,
   /^XPCOMUtils\.defineLazyGetter\(this, "(\w+)"/,
   /^XPCOMUtils\.defineLazyModuleGetter\(this, "(\w+)"/,
+  /^ChromeUtils\.defineModuleGetter\(this, "(\w+)"/,
   /^XPCOMUtils\.defineLazyPreferenceGetter\(this, "(\w+)"/,
+  /^XPCOMUtils\.defineLazyProxy\(this, "(\w+)"/,
   /^XPCOMUtils\.defineLazyScriptGetter\(this, "(\w+)"/,
   /^XPCOMUtils\.defineLazyServiceGetter\(this, "(\w+)"/,
   /^XPCOMUtils\.defineConstant\(this, "(\w+)"/,
@@ -40,7 +42,7 @@ const callExpressionMultiDefinitions = [
 ];
 
 const imports = [
-  /^(?:Cu|Components\.utils)\.import\(".*\/((.*?)\.jsm?)"(?:, this)?\)/
+  /^(?:Cu|Components\.utils|ChromeUtils)\.import\(".*\/((.*?)\.jsm?)"(?:, this)?\)/
 ];
 
 const workerImportFilenameMatch = /(.*\/)*(.*?\.jsm?)/;
@@ -248,6 +250,23 @@ module.exports = {
    *                     If the global is writeable or not.
    */
   convertCallExpressionToGlobals(node, isGlobal) {
+    let express = node.expression;
+    if (express.type === "CallExpression" &&
+        express.callee.type === "MemberExpression" &&
+        express.callee.object &&
+        express.callee.object.type === "Identifier" &&
+        express.arguments.length === 1 &&
+        express.arguments[0].type === "ArrayExpression" &&
+        express.callee.property.type === "Identifier" &&
+        express.callee.property.name === "importGlobalProperties") {
+      return express.arguments[0].elements.map(literal => {
+        return {
+          name: literal.value,
+          writable: false
+        };
+      });
+    }
+
     let source;
     try {
       source = this.getASTSource(node);
@@ -282,7 +301,7 @@ module.exports = {
     for (let reg of callExpressionDefinitions) {
       let match = source.match(reg);
       if (match) {
-        return [{ name: match[1], writable: true }];
+        return [{ name: match[1], writable: true, explicit: true }];
       }
     }
 
@@ -290,7 +309,7 @@ module.exports = {
         node.expression.arguments[1] &&
         node.expression.arguments[1].type === "ObjectExpression") {
       return node.expression.arguments[1].properties
-                 .map(p => ({ name: p.type === "Property" && p.key.name, writable: true }))
+                 .map(p => ({ name: p.type === "Property" && p.key.name, writable: true, explicit: true }))
                  .filter(g => g.name);
     }
 
@@ -299,7 +318,7 @@ module.exports = {
         node.expression.callee.property.name == "defineLazyScriptGetter") {
       // The case where we have a single symbol as a string has already been
       // handled by the regexp, so we have an array of symbols here.
-      return node.expression.arguments[1].elements.map(n => ({ name: n.value, writable: true }));
+      return node.expression.arguments[1].elements.map(n => ({ name: n.value, writable: true, explicit: true }));
     }
 
     return [];
@@ -315,13 +334,19 @@ module.exports = {
    *        The scope to add to.
    * @param {boolean} writable
    *        Whether the global can be overwritten.
+   * @param {Object} [node]
+   *        The AST node that defined the globals.
    */
-  addVarToScope(name, scope, writable) {
+  addVarToScope(name, scope, writable, node) {
     scope.__defineGeneric(name, scope.set, scope.variables, null, null);
 
     let variable = scope.set.get(name);
     variable.eslintExplicitGlobal = false;
     variable.writeable = writable;
+    if (node) {
+      variable.defs.push({node, name: {name}});
+      variable.identifiers.push(node);
+    }
 
     // Walk to the global scope which holds all undeclared variables.
     while (scope.type != "global") {
@@ -349,9 +374,11 @@ module.exports = {
    *        An array of global variable names.
    * @param {ASTScope} scope
    *        The scope.
+   * @param {Object} [node]
+   *        The AST node that defined the globals.
    */
-  addGlobals(globalVars, scope) {
-    globalVars.forEach(v => this.addVarToScope(v.name, scope, v.writable));
+  addGlobals(globalVars, scope, node) {
+    globalVars.forEach(v => this.addVarToScope(v.name, scope, v.writable, v.explicit && node));
   },
 
   /**
@@ -367,13 +394,28 @@ module.exports = {
       loc: true,
       comment: true,
       attachComment: true,
-      ecmaVersion: 8,
-      sourceType: "script",
-      ecmaFeatures: {
-        experimentalObjectRestSpread: true,
-        globalReturn: true
-      }
+      ecmaVersion: 9,
+      sourceType: "script"
     };
+  },
+
+  /**
+   * Check whether a node is a function.
+   *
+   * @param {Object} node
+   *        The AST node to check
+   *
+   * @return {Boolean}
+   *         True or false
+   */
+  getIsFunctionNode(node) {
+    switch (node.type) {
+      case "ArrowFunctionExpression":
+      case "FunctionDeclaration":
+      case "FunctionExpression":
+        return true;
+    }
+    return false;
   },
 
   /**
@@ -387,8 +429,7 @@ module.exports = {
    */
   getIsGlobalScope(ancestors) {
     for (let parent of ancestors) {
-      if (parent.type == "FunctionExpression" ||
-          parent.type == "FunctionDeclaration") {
+      if (this.getIsFunctionNode(parent)) {
         return false;
       }
     }
@@ -671,5 +712,9 @@ module.exports = {
 
   getSavedEnvironmentItems(environment) {
     return require("./environments/saved-globals.json").environments[environment];
+  },
+
+  getSavedRuleData(rule) {
+    return require("./rules/saved-rules-data.json").rulesData[rule];
   }
 };

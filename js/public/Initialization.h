@@ -13,7 +13,12 @@
 namespace JS {
 namespace detail {
 
-enum class InitState { Uninitialized = 0, Running, ShutDown };
+enum class InitState {
+    Uninitialized = 0,
+    Initializing,
+    Running,
+    ShutDown
+};
 
 /**
  * SpiderMonkey's initialization status is tracked here, and it controls things
@@ -47,6 +52,26 @@ extern JS_PUBLIC_API(bool)
 JS_SetICUMemoryFunctions(JS_ICUAllocFn allocFn,
                          JS_ICUReallocFn reallocFn,
                          JS_ICUFreeFn freeFn);
+
+#ifdef ENABLE_BIGINT
+namespace JS {
+
+// These types are documented as allocate_function, reallocate_function,
+// and free_function in the Info node `(gmp)Custom Allocation`.
+using GMPAllocFn = void* (*)(size_t allocSize);
+using GMPReallocFn = void* (*)(void* p, size_t oldSize, size_t newSize);
+using GMPFreeFn = void (*)(void* p, size_t size);
+
+// This function can be used to track memory used by GMP. If it is
+// called, it *must* be called before JS_Init so that same functions are
+// used for all allocations.
+extern JS_PUBLIC_API(void)
+SetGMPMemoryFunctions(GMPAllocFn allocFn,
+                      GMPReallocFn reallocFn,
+                      GMPFreeFn freeFn);
+
+}; // namespace JS
+#endif
 
 /**
  * Initialize SpiderMonkey, returning true only if initialization succeeded.
@@ -99,7 +124,7 @@ JS_InitWithFailureDiagnostic(void)
 inline bool
 JS_IsInitialized(void)
 {
-  return JS::detail::libraryInitState != JS::detail::InitState::Uninitialized;
+  return JS::detail::libraryInitState >= JS::detail::InitState::Running;
 }
 
 /**

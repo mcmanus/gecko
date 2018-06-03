@@ -29,6 +29,18 @@
   "downloadScreenshot": {
     "message": "Λήψη"
   },
+  "downloadOnlyDetailsPrivate": {
+    "message": "Σε ένα παράθυρο ιδιωτικής περιήγησης."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Τα cookies τρίτων είναι απενεργοποιημένα."
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "Χρησιμοποιείτε το Firefox ESR."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "Οι μεταφορτώσεις έχουν απενεργοποιηθεί."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Ο σύνδεσμος αντιγράφηκε"
   },
@@ -36,6 +48,20 @@
     "message": "Ο σύνδεσμος προς την λήψη σας αντιγράφηκε στο πρόχειρο. Πατήστε $META_KEY$-V για επικόλληση.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Αντιγραφή"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Το στιγμιότυπο αντιγράφηκε"
+  },
+  "imageCroppedWarning": {
+    "message": "Αυτή η εικόνα έχει περικοπεί σε $PIXELS$px.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -81,6 +107,9 @@
   },
   "tourBodyIntro": {
     "message": "Λήψη, αποθήκευση και διαμοιρασμός στιγμιοτύπων μέσα από το Firefox."
+  },
+  "tourHeaderPageAction": {
+    "message": "Ένας νέος τρόπος αποθήκευσης"
   },
   "tourHeaderClickAndDrag": {
     "message": "Καταγράψτε αυτό που εσείς επιθυμείτε"

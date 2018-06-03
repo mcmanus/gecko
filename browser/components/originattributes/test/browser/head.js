@@ -215,6 +215,7 @@ this.IsolationTestTools = {
       await SpecialPowers.pushPrefEnv({"set": aPref});
 
       await SpecialPowers.pushPrefEnv({"set": [["dom.ipc.processCount", 1]]});
+      await SpecialPowers.pushPrefEnv({"set": [["network.auth.non-web-content-triggered-resources-http-auth-allow", true]]});
 
       await aTask(aMode);
     });
@@ -361,8 +362,8 @@ this.IsolationTestTools = {
         }
 
         // Close Tabs.
-        await BrowserTestUtils.removeTab(tabInfoA.tab);
-        await BrowserTestUtils.removeTab(tabInfoB.tab);
+        BrowserTestUtils.removeTab(tabInfoA.tab);
+        BrowserTestUtils.removeTab(tabInfoB.tab);
       }
     });
   }

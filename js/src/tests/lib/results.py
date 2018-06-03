@@ -1,8 +1,10 @@
 from __future__ import print_function
 
-import re
-from progressbar import NullProgressBar, ProgressBar
 import pipes
+import re
+
+from progressbar import NullProgressBar, ProgressBar
+from structuredlog import TestLogger
 
 # subprocess.list2cmdline does not properly escape for sh-like shells
 def escape_cmdline(args):
@@ -10,7 +12,7 @@ def escape_cmdline(args):
 
 class TestOutput:
     """Output from a test run."""
-    def __init__(self, test, cmd, out, err, rc, dt, timed_out):
+    def __init__(self, test, cmd, out, err, rc, dt, timed_out, extra=None):
         self.test = test   # Test
         self.cmd = cmd     # str:   command line of test
         self.out = out     # str:   stdout
@@ -18,6 +20,7 @@ class TestOutput:
         self.rc = rc       # int:   return code
         self.dt = dt       # float: run time
         self.timed_out = timed_out # bool: did the test time out
+        self.extra = extra # includes the pid on some platforms
 
     def describe_failure(self):
         if self.timed_out:
@@ -106,9 +109,12 @@ class TestDuration:
         self.duration = duration
 
 class ResultsSink:
-    def __init__(self, options, testcount):
+    def __init__(self, testsuite, options, testcount):
         self.options = options
         self.fp = options.output_fp
+        if self.options.format == 'automation':
+            self.slog = TestLogger(testsuite)
+            self.slog.suite_start()
 
         self.groups = {}
         self.output_dict = {}
@@ -207,8 +213,7 @@ class ResultsSink:
                             label, result.test, time=output.dt,
                             message=msg)
                 tup = (result.result, result.test.expect, result.test.random)
-                self.print_automation_result(
-                    self.LABELS[tup][0], result.test, time=output.dt)
+                self.print_automation_result(self.LABELS[tup][0], result.test, time=output.dt, extra=getattr(output, 'extra', None))
                 return
 
             if dev_label:
@@ -221,7 +226,9 @@ class ResultsSink:
 
     def finish(self, completed):
         self.pb.finish(completed)
-        if not self.options.format == 'automation':
+        if self.options.format == 'automation':
+            self.slog.suite_end()
+        else:
             self.list(completed)
 
     # Conceptually, this maps (test result x test expection) to text labels.
@@ -286,7 +293,7 @@ class ResultsSink:
         return 'REGRESSIONS' not in self.groups and 'TIMEOUTS' not in self.groups
 
     def print_automation_result(self, label, test, message=None, skip=False,
-                                time=None):
+                                time=None, extra=None):
         result = label
         result += " | " + test.path
         args = []
@@ -302,3 +309,13 @@ class ResultsSink:
             result += ' | (TIMEOUT)'
         result += ' [{:.1f} s]'.format(time)
         print(result)
+
+        details = { 'extra': extra.copy() if extra else {} }
+        if self.options.shell_args:
+            details['extra']['shell_args'] = self.options.shell_args
+        details['extra']['jitflags'] = test.jitflags
+        if message:
+            details['message'] = message
+        status = 'FAIL' if 'TEST-UNEXPECTED' in label else 'PASS'
+
+        self.slog.test(test.path, status, time or 0, **details)

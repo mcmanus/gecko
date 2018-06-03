@@ -81,10 +81,6 @@ public:
   const uint8_t* GetExtraField(uint16_t aTag, uint16_t *aBlockSize);
   PRTime   LastModTime();
 
-#ifdef XP_UNIX
-  bool     IsSymlink();
-#endif
-
   nsZipItem*         next;
   const ZipCentral*  central;
   uint16_t           nameLength;
@@ -164,7 +160,7 @@ public:
    * @param   outname    Name of file to write to
    * @return  status code
    */
-  nsresult ExtractFile(nsZipItem * zipEntry, const char *outname, PRFileDesc * outFD);
+  nsresult ExtractFile(nsZipItem * zipEntry, nsIFile* outFile, PRFileDesc * outFD);
 
   /**
    * FindInit

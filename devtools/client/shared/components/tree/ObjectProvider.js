@@ -6,15 +6,15 @@
 "use strict";
 
 // Make this available to both AMD and CJS environments
-define(function (require, exports, module) {
+define(function(require, exports, module) {
   /**
    * Implementation of the default data provider. A provider is state less
    * object responsible for transformation data (usually a state) to
    * a structure that can be directly consumed by the tree-view component.
    */
-  let ObjectProvider = {
-    getChildren: function (object) {
-      let children = [];
+  const ObjectProvider = {
+    getChildren: function(object) {
+      const children = [];
 
       if (object instanceof ObjectProperty) {
         object = object.value;
@@ -28,7 +28,7 @@ define(function (require, exports, module) {
         return [];
       }
 
-      for (let prop in object) {
+      for (const prop in object) {
         try {
           children.push(new ObjectProperty(prop, object[prop]));
         } catch (e) {
@@ -38,7 +38,7 @@ define(function (require, exports, module) {
       return children;
     },
 
-    hasChildren: function (object) {
+    hasChildren: function(object) {
       if (object instanceof ObjectProperty) {
         object = object.value;
       }
@@ -58,22 +58,22 @@ define(function (require, exports, module) {
       return Object.keys(object).length > 0;
     },
 
-    getLabel: function (object) {
+    getLabel: function(object) {
       return (object instanceof ObjectProperty) ?
         object.name : null;
     },
 
-    getValue: function (object) {
+    getValue: function(object) {
       return (object instanceof ObjectProperty) ?
         object.value : null;
     },
 
-    getKey: function (object) {
+    getKey: function(object) {
       return (object instanceof ObjectProperty) ?
         object.name : null;
     },
 
-    getType: function (object) {
+    getType: function(object) {
       return (object instanceof ObjectProperty) ?
         typeof object.value : typeof object;
     }

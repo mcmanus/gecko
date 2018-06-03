@@ -12,7 +12,7 @@ const ADDON_NAME = "test-devtools";
 
 function mockFilePicker(window, file) {
   // Mock the file picker to select a test addon
-  let MockFilePicker = SpecialPowers.MockFilePicker;
+  const MockFilePicker = SpecialPowers.MockFilePicker;
   MockFilePicker.init(window);
   MockFilePicker.setFiles([file]);
 }
@@ -27,62 +27,53 @@ function mockFilePicker(window, file) {
  * @return {Promise} Promise that resolves to the output folder when done.
  */
 function promiseWriteWebManifestForExtension(manifest, dir) {
-  let files = {
+  const files = {
     "manifest.json": JSON.stringify(manifest),
   };
   return AddonTestUtils.promiseWriteFilesToExtension(
     dir.path, manifest.applications.gecko.id, files, true);
 }
 
-add_task(function* testLegacyInstallSuccess() {
-  let { tab, document } = yield openAboutDebugging("addons");
-  yield waitForInitialAddonList(document);
+add_task(async function testLegacyInstallSuccess() {
+  const { tab, document } = await openAboutDebugging("addons");
+  await waitForInitialAddonList(document);
 
   // Install this add-on, and verify that it appears in the about:debugging UI
-  yield installAddon({
+  await installAddon({
     document,
     path: "addons/unpacked/install.rdf",
     name: ADDON_NAME,
   });
 
   // Install the add-on, and verify that it disappears in the about:debugging UI
-  yield uninstallAddon({document, id: ADDON_ID, name: ADDON_NAME});
+  await uninstallAddon({document, id: ADDON_ID, name: ADDON_NAME});
 
-  yield closeAboutDebugging(tab);
+  await closeAboutDebugging(tab);
 });
 
-add_task(function* testWebextensionInstallError() {
-  let { tab, document, window } = yield openAboutDebugging("addons");
-  yield waitForInitialAddonList(document);
-
-  // Start an observer that looks for the install error before
-  // actually doing the install
-  let top = document.querySelector(".addons-top");
-  let promise = waitForMutation(top, { childList: true });
-
-  mockFilePicker(window, getSupportsFile("addons/bad/manifest.json").file);
+add_task(async function testWebextensionInstallError() {
+  const { tab, document, window } = await openAboutDebugging("addons");
+  await waitForInitialAddonList(document);
 
   // Trigger the file picker by clicking on the button
+  mockFilePicker(window, getSupportsFile("addons/bad/manifest.json").file);
   document.getElementById("load-addon-from-file").click();
 
-  // Now wait for the install error to appear.
-  yield promise;
+  info("wait for the install error to appear");
+  const top = document.querySelector(".addons-top");
+  await waitUntilElement(".addons-install-error", top);
 
-  // And check that it really is there.
-  let err = document.querySelector(".addons-install-error");
-  isnot(err, null, "Addon install error message appeared");
-
-  yield closeAboutDebugging(tab);
+  await closeAboutDebugging(tab);
 });
 
-add_task(function* testWebextensionInstallErrorRetry() {
-  let { tab, document, window } = yield openAboutDebugging("addons");
-  yield waitForInitialAddonList(document);
+add_task(async function testWebextensionInstallErrorRetry() {
+  const { tab, document, window } = await openAboutDebugging("addons");
+  await waitForInitialAddonList(document);
 
-  let tempdir = AddonTestUtils.tempDir.clone();
-  let addonId = "invalid-addon-install-retry@mozilla.org";
-  let addonName = "invalid-addon-install-retry";
-  let manifest = {
+  const tempdir = AddonTestUtils.tempDir.clone();
+  const addonId = "invalid-addon-install-retry@mozilla.org";
+  const addonName = "invalid-addon-install-retry";
+  const manifest = {
     name: addonName,
     description: "test invalid-addon-install-retry",
     // eslint-disable-next-line camelcase
@@ -94,28 +85,21 @@ add_task(function* testWebextensionInstallErrorRetry() {
     content_scripts: { matches: "http://*/", js: "foo.js" },
   };
 
-  yield promiseWriteWebManifestForExtension(manifest, tempdir);
-
-  // Start an observer that looks for the install error before
-  // actually doing the install.
-  let top = document.querySelector(".addons-top");
-  let contentUpdated = waitForMutation(top, { childList: true });
+  await promiseWriteWebManifestForExtension(manifest, tempdir);
 
   // Mock the file picker to select a test addon.
-  let manifestFile = tempdir.clone();
+  const manifestFile = tempdir.clone();
   manifestFile.append(addonId, "manifest.json");
   mockFilePicker(window, manifestFile);
 
   // Trigger the file picker by clicking on the button.
   document.getElementById("load-addon-from-file").click();
 
-  // Now wait for the install error to appear.
-  yield contentUpdated;
+  info("wait for the install error to appear");
+  const top = document.querySelector(".addons-top");
+  await waitUntilElement(".addons-install-error", top);
 
-  // Check that the error is shown.
-  let err = document.querySelector(".addons-install-error");
-  isnot(err, null, "Addon install error message appeared");
-  let retryButton = document.querySelector("button.addons-install-retry");
+  const retryButton = document.querySelector("button.addons-install-retry");
   is(retryButton.textContent, "Retry", "Retry button has a good label");
 
   // Fix the manifest so the add-on will install.
@@ -124,28 +108,21 @@ add_task(function* testWebextensionInstallErrorRetry() {
     matches: ["http://*/"],
     js: ["foo.js"],
   }];
-  yield promiseWriteWebManifestForExtension(manifest, tempdir);
+  await promiseWriteWebManifestForExtension(manifest, tempdir);
 
-  let getAddonEl = () => document.querySelector(`[data-addon-id="${addonId}"]`);
-
+  const addonEl = document.querySelector(`[data-addon-id="${addonId}"]`);
   // Verify this add-on isn't installed yet.
-  ok(!getAddonEl(), "Addon is not installed yet");
-
-  // Prepare to wait for the add-on to be added to the temporary list.
-  let addonAdded = waitForMutation(
-    getTemporaryAddonList(document), { childList: true });
+  ok(!addonEl, "Addon is not installed yet");
 
   // Retry the install.
   retryButton.click();
 
-  // Wait for the add-on to be shown.
-  yield addonAdded;
-
-  // Verify the add-on is installed.
-  ok(getAddonEl(), "Addon is installed");
+  info("Wait for the add-on to be shown");
+  await waitUntilElement(`[data-addon-id="${addonId}"]`, document);
+  info("Addon is installed");
 
   // Install the add-on, and verify that it disappears in the about:debugging UI
-  yield uninstallAddon({document, id: addonId, name: addonName});
+  await uninstallAddon({document, id: addonId, name: addonName});
 
-  yield closeAboutDebugging(tab);
+  await closeAboutDebugging(tab);
 });

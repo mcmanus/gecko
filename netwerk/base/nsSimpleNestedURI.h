@@ -6,11 +6,7 @@
 /**
  * URI class to be used for cases when a simple URI actually resolves to some
  * other sort of URI, with the latter being what's loaded when the load
- * happens.  All objects of this class should always be immutable, so that the
- * inner URI and this URI don't get out of sync.  The Clone() implementation
- * will guarantee this for the clone, but it's up to the protocol handlers
- * creating these URIs to ensure that in the first place.  The innerURI passed
- * to this URI will be set immutable if possible.
+ * happens.
  */
 
 #ifndef nsSimpleNestedURI_h__
@@ -19,6 +15,7 @@
 #include "nsCOMPtr.h"
 #include "nsSimpleURI.h"
 #include "nsINestedURI.h"
+#include "nsIURIMutator.h"
 
 #include "nsIIPCSerializableURI.h"
 
@@ -29,19 +26,11 @@ class nsSimpleNestedURI : public nsSimpleURI,
                           public nsINestedURI
 {
 protected:
-    ~nsSimpleNestedURI() {}
-
-public:
-    // To be used by deserialization only.  Leaves this object in an
-    // uninitialized state that will throw on most accesses.
-    nsSimpleNestedURI()
-    {
-    }
-
-    // Constructor that should generally be used when constructing an object of
-    // this class with |operator new|.
+    nsSimpleNestedURI() = default;
     explicit nsSimpleNestedURI(nsIURI* innerURI);
 
+    ~nsSimpleNestedURI() = default;
+public:
     NS_DECL_ISUPPORTS_INHERITED
     NS_DECL_NSINESTEDURI
 
@@ -53,6 +42,7 @@ public:
                                     bool* result) override;
     virtual nsSimpleURI* StartClone(RefHandlingEnum refHandlingMode,
                                     const nsACString& newRef) override;
+    NS_IMETHOD Mutate(nsIURIMutator * *_retval) override;
 
     // nsISerializable overrides
     NS_IMETHOD Read(nsIObjectInputStream* aStream) override;
@@ -67,6 +57,72 @@ public:
 
 protected:
     nsCOMPtr<nsIURI> mInnerURI;
+
+    nsresult SetPathQueryRef(const nsACString &aPathQueryRef) override;
+    nsresult SetQuery(const nsACString &aQuery) override;
+    nsresult SetRef(const nsACString &aRef) override;
+    bool Deserialize(const mozilla::ipc::URIParams&);
+    nsresult ReadPrivate(nsIObjectInputStream *stream);
+
+public:
+    class Mutator final
+        : public nsIURIMutator
+        , public BaseURIMutator<nsSimpleNestedURI>
+        , public nsISerializable
+        , public nsINestedURIMutator
+    {
+        NS_DECL_ISUPPORTS
+        NS_FORWARD_SAFE_NSIURISETTERS_RET(mURI)
+
+        explicit Mutator() = default;
+    private:
+        virtual ~Mutator() = default;
+
+        MOZ_MUST_USE NS_IMETHOD
+        Deserialize(const mozilla::ipc::URIParams& aParams) override
+        {
+            return InitFromIPCParams(aParams);
+        }
+
+        NS_IMETHOD
+        Write(nsIObjectOutputStream *aOutputStream) override
+        {
+            return NS_ERROR_NOT_IMPLEMENTED;
+        }
+
+        MOZ_MUST_USE NS_IMETHOD
+        Read(nsIObjectInputStream* aStream) override
+        {
+            return InitFromInputStream(aStream);
+        }
+
+        MOZ_MUST_USE NS_IMETHOD
+        Finalize(nsIURI** aURI) override
+        {
+            mURI.forget(aURI);
+            return NS_OK;
+        }
+
+        MOZ_MUST_USE NS_IMETHOD
+        SetSpec(const nsACString& aSpec, nsIURIMutator** aMutator) override
+        {
+            if (aMutator) {
+                NS_ADDREF(*aMutator = this);
+            }
+            return InitFromSpec(aSpec);
+        }
+
+        MOZ_MUST_USE NS_IMETHOD
+        Init(nsIURI* innerURI) override
+        {
+            mURI = new nsSimpleNestedURI(innerURI);
+            return NS_OK;
+        }
+
+        friend class nsSimpleNestedURI;
+    };
+
+    friend BaseURIMutator<nsSimpleNestedURI>;
 };
 
 } // namespace net

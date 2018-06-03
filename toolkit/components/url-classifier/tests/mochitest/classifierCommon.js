@@ -3,7 +3,7 @@
 
 /* eslint-env mozilla/frame-script */
 
-const { classes: Cc, interfaces: Ci, results: Cr } = Components;
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 var dbService = Cc["@mozilla.org/url-classifier/dbservice;1"]
                 .getService(Ci.nsIUrlClassifierDBService);
@@ -18,13 +18,7 @@ function setTimeout(callback, delay) {
 
 function doUpdate(update) {
   let listener = {
-    QueryInterface(iid) {
-      if (iid.equals(Ci.nsISupports) ||
-          iid.equals(Ci.nsIUrlClassifierUpdateObserver))
-        return this;
-
-      throw Cr.NS_ERROR_NO_INTERFACE;
-    },
+    QueryInterface: ChromeUtils.generateQI(["nsIUrlClassifierUpdateObserver"]),
     updateUrlRequested(url) { },
     streamFinished(status) { },
     updateError(errorCode) {
@@ -62,10 +56,7 @@ function doReload() {
 // after the event had already been notified, we lookup entries to see if
 // they are already added to database.
 function waitForInit() {
-  let observerService = Cc["@mozilla.org/observer-service;1"]
-                        .getService(Ci.nsIObserverService);
-
-  observerService.addObserver(function() {
+  Services.obs.addObserver(function() {
     sendAsyncMessage("safeBrowsingInited");
   }, "mozentries-update-finished");
 
@@ -73,21 +64,11 @@ function waitForInit() {
   const table = "test-phish-simple";
   const url = "http://itisatrap.org/firefox/its-a-trap.html";
 
-  let secMan = Cc["@mozilla.org/scriptsecuritymanager;1"]
-               .getService(Ci.nsIScriptSecurityManager);
-  let iosvc = Cc["@mozilla.org/network/io-service;1"]
-              .getService(Ci.nsIIOService);
-
-  let principal = secMan.createCodebasePrincipal(
-    iosvc.newURI(url), {});
+  let principal = Services.scriptSecurityManager.createCodebasePrincipal(
+    Services.io.newURI(url), {});
 
   let listener = {
-    QueryInterface(iid) {
-      if (iid.equals(Ci.nsISupports) ||
-        iid.equals(Ci.nsIUrlClassifierUpdateObserver))
-        return this;
-      throw Cr.NS_ERROR_NO_INTERFACE;
-    },
+    QueryInterface: ChromeUtils.generateQI(["nsIUrlClassifierUpdateObserver"]),
 
     handleEvent(value) {
       if (value === table) {

@@ -52,10 +52,12 @@ void EnqueueTask(already_AddRefed<nsIRunnable> aTask, int aDelayMs);
 class AndroidUiThread : public nsThread
 {
 public:
-  NS_DECL_ISUPPORTS_INHERITED
+  NS_INLINE_DECL_REFCOUNTING_INHERITED(AndroidUiThread, nsThread)
   AndroidUiThread()
-    : nsThread(WrapNotNull(new ThreadEventQueue<mozilla::EventQueue>(MakeUnique<mozilla::EventQueue>())),
-               nsThread::NOT_MAIN_THREAD, 0)
+    : nsThread(MakeNotNull<ThreadEventQueue<mozilla::EventQueue>*>(
+                 MakeUnique<mozilla::EventQueue>()),
+               nsThread::NOT_MAIN_THREAD,
+               0)
   {}
 
   nsresult Dispatch(already_AddRefed<nsIRunnable> aEvent, uint32_t aFlags) override;
@@ -66,15 +68,13 @@ private:
   {}
 };
 
-NS_IMPL_ISUPPORTS_INHERITED0(AndroidUiThread, nsThread)
-
 NS_IMETHODIMP
 AndroidUiThread::Dispatch(already_AddRefed<nsIRunnable> aEvent, uint32_t aFlags)
 {
   if (aFlags & NS_DISPATCH_SYNC) {
-    return nsThread::Dispatch(Move(aEvent), aFlags);
+    return nsThread::Dispatch(std::move(aEvent), aFlags);
   } else {
-    EnqueueTask(Move(aEvent), 0);
+    EnqueueTask(std::move(aEvent), 0);
     return NS_OK;
   }
 }
@@ -82,7 +82,7 @@ AndroidUiThread::Dispatch(already_AddRefed<nsIRunnable> aEvent, uint32_t aFlags)
 NS_IMETHODIMP
 AndroidUiThread::DelayedDispatch(already_AddRefed<nsIRunnable> aEvent, uint32_t aDelayMs)
 {
-  EnqueueTask(Move(aEvent), aDelayMs);
+  EnqueueTask(std::move(aEvent), aDelayMs);
   return NS_OK;
 }
 
@@ -131,7 +131,7 @@ class AndroidUiTask : public LinkedListElement<AndroidUiTask> {
     using TimeDuration = mozilla::TimeDuration;
 
 public:
-  AndroidUiTask(already_AddRefed<nsIRunnable> aTask)
+  explicit AndroidUiTask(already_AddRefed<nsIRunnable> aTask)
     : mTask(aTask)
     , mRunTime() // Null timestamp representing no delay.
   {}
@@ -240,8 +240,8 @@ EnqueueTask(already_AddRefed<nsIRunnable> aTask, int aDelayMs)
 
   // add the new task into the sTaskQueue, sorted with
   // the earliest task first in the queue
-  AndroidUiTask* newTask = (aDelayMs ? new AndroidUiTask(mozilla::Move(aTask), aDelayMs)
-                                 : new AndroidUiTask(mozilla::Move(aTask)));
+  AndroidUiTask* newTask = (aDelayMs ? new AndroidUiTask(std::move(aTask), aDelayMs)
+                                 : new AndroidUiTask(std::move(aTask)));
 
   bool headOfList = false;
   {

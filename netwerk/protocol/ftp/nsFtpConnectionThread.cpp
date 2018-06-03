@@ -40,6 +40,7 @@
 #include "nsIRunnable.h"
 #include "nsISocketTransportService.h"
 #include "nsIURI.h"
+#include "nsIURIMutator.h"
 #include "nsILoadInfo.h"
 #include "NullPrincipal.h"
 #include "nsIAuthPrompt2.h"
@@ -785,7 +786,7 @@ nsFtpState::S_pass() {
             // XXX Is UTF-8 the best choice?
             AppendUTF16toUTF8(mPassword, passwordStr);
         } else {
-            nsCString anonPassword;
+            nsAutoCString anonPassword;
             bool useRealEmail = false;
             nsCOMPtr<nsIPrefBranch> prefs =
                     do_GetService(NS_PREFSERVICE_CONTRACTID);
@@ -793,7 +794,7 @@ nsFtpState::S_pass() {
                 rv = prefs->GetBoolPref("advanced.mailftp", &useRealEmail);
                 if (NS_SUCCEEDED(rv) && useRealEmail) {
                     prefs->GetCharPref("network.ftp.anonymous_password",
-                                       getter_Copies(anonPassword));
+                                       anonPassword);
                 }
             }
             if (!anonPassword.IsEmpty()) {
@@ -1146,7 +1147,12 @@ nsFtpState::SetContentType()
         nsAutoCString filePath;
         if(NS_SUCCEEDED(url->GetFilePath(filePath))) {
             filePath.Append('/');
-            url->SetFilePath(filePath);
+            nsresult rv = NS_MutateURI(url)
+                            .SetFilePath(filePath)
+                            .Finalize(url);
+            if (NS_SUCCEEDED(rv)) {
+                mChannel->UpdateURI(url);
+            }
         }
     }
     return mChannel->SetContentType(
@@ -1528,13 +1534,14 @@ nsFtpState::R_pasv() {
             if (!stEventTarget)
                 return FTP_ERROR;
 
-            nsCOMPtr<nsIAsyncStreamCopier> copier;
-            rv = NS_NewAsyncStreamCopier(getter_AddRefs(copier),
-                                         mChannel->UploadStream(),
-                                         output,
-                                         stEventTarget,
-                                         true,   // upload stream is buffered
-                                         false); // output is NOT buffered
+            nsCOMPtr<nsIAsyncStreamCopier> copier =
+                do_CreateInstance(NS_ASYNCSTREAMCOPIER_CONTRACTID, &rv);
+            if (NS_SUCCEEDED(rv)) {
+                rv = copier->Init(mChannel->UploadStream(), output,
+                                  stEventTarget, true,
+                                  false /* output is NOT buffered */,
+                                  0, true, true);
+            }
             if (NS_FAILED(rv))
                 return FTP_ERROR;
 
@@ -1644,11 +1651,19 @@ nsFtpState::Init(nsFtpChannel *channel)
 
     removeParamsFromPath(path);
 
+    nsCOMPtr<nsIURI> outURI;
     // FTP parameters such as type=i are ignored
     if (url) {
-        url->SetFilePath(path);
+        rv = NS_MutateURI(url)
+               .SetFilePath(path)
+               .Finalize(outURI);
     } else {
-        mChannel->URI()->SetPathQueryRef(path);
+        rv = NS_MutateURI(mChannel->URI())
+               .SetPathQueryRef(path)
+               .Finalize(outURI);
+    }
+    if (NS_SUCCEEDED(rv)) {
+        mChannel->UpdateURI(outURI);
     }
 
     // Skip leading slash
@@ -1784,13 +1799,11 @@ public:
   nsFtpAsyncAlert(nsIPrompt* aPrompter, nsString aResponseMsg)
     : mozilla::Runnable("nsFtpAsyncAlert")
     , mPrompter(aPrompter)
-    , mResponseMsg(aResponseMsg)
+    , mResponseMsg(std::move(aResponseMsg))
   {
     }
 protected:
-    virtual ~nsFtpAsyncAlert()
-    {
-    }
+    virtual ~nsFtpAsyncAlert() = default;
 public:
     NS_IMETHOD Run() override
     {

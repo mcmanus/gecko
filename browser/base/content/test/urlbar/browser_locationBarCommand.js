@@ -159,9 +159,7 @@ add_task(async function load_in_new_tab_test() {
 function triggerCommand(shouldClick, event) {
   gURLBar.focus();
   gURLBar.value = "";
-  for (let c of TEST_VALUE) {
-    EventUtils.synthesizeKey(c, {});
-  }
+  EventUtils.sendString(TEST_VALUE);
 
   if (shouldClick) {
     ok(gURLBar.hasAttribute("usertyping"),
@@ -169,7 +167,7 @@ function triggerCommand(shouldClick, event) {
 
     EventUtils.synthesizeMouseAtCenter(gURLBar.goButton, event);
   } else {
-    EventUtils.synthesizeKey("VK_RETURN", event);
+    EventUtils.synthesizeKey("KEY_Enter", event);
   }
 }
 
@@ -210,8 +208,6 @@ function promiseCheckChildNoFocusedElement(browser) {
   }
 
   return ContentTask.spawn(browser, { }, async function() {
-    const fm = Components.classes["@mozilla.org/focus-manager;1"].
-                          getService(Components.interfaces.nsIFocusManager);
-    Assert.equal(fm.focusedElement, null, "There should be no focused element");
+    Assert.equal(Services.focus.focusedElement, null, "There should be no focused element");
   });
 }

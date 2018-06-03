@@ -24,6 +24,11 @@ interface nsIAboutNewTabService : nsISupports
   attribute ACString defaultURL;
 
   /**
+   * Returns true if opening the New Tab page will notify the user of a change.
+   */
+  attribute bool willNotifyUser;
+
+  /**
    * Returns true if the default resource got overridden.
    */
   readonly attribute bool overridden;
@@ -43,6 +48,11 @@ interface nsIAboutNewTabService : nsISupports
    * Returns true if the the debug pref for activity stream is true
    */
   readonly attribute bool activityStreamDebug;
+
+  /**
+   * Returns the locale of the activity stream interface
+   */
+  readonly attribute ACString activityStreamLocale;
 
   /**
    * Resets to the default resource and also resets the

@@ -48,6 +48,13 @@ Thread::GetCurrentId()
   return int(threadId);
 }
 
+void*
+GetStackTop(void* aGuess)
+{
+  PNT_TIB pTib = reinterpret_cast<PNT_TIB>(NtCurrentTeb());
+  return reinterpret_cast<void*>(pTib->StackBase);
+}
+
 static void
 PopulateRegsFromContext(Registers& aRegs, CONTEXT* aContext)
 {
@@ -120,10 +127,10 @@ Sampler::Disable(PSLockRef aLock)
 template<typename Func>
 void
 Sampler::SuspendAndSampleAndResumeThread(PSLockRef aLock,
-                                         const ThreadInfo& aThreadInfo,
+                                         const RegisteredThread& aRegisteredThread,
                                          const Func& aProcessRegs)
 {
-  HANDLE profiled_thread = aThreadInfo.GetPlatformData()->ProfiledThread();
+  HANDLE profiled_thread = aRegisteredThread.GetPlatformData()->ProfiledThread();
   if (profiled_thread == nullptr) {
     return;
   }

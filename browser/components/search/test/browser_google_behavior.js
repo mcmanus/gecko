@@ -9,7 +9,7 @@
 
 "use strict";
 
-const SEARCH_ENGINE_DETAILS = [{
+let searchEngineDetails = [{
   alias: "g",
   baseURL: "https://www.google.com/search?q=foo&ie=utf-8&oe=utf-8",
   codes: {
@@ -21,36 +21,24 @@ const SEARCH_ENGINE_DETAILS = [{
   name: "Google",
 }];
 
-function promiseStateChangeURI() {
-  return new Promise(resolve => {
-    let listener = {
-      onStateChange: function onStateChange(webProgress, req, flags, status) {
-        info("onStateChange");
-        // Only care about top-level document starts
-        let docStart = Ci.nsIWebProgressListener.STATE_IS_DOCUMENT |
-                       Ci.nsIWebProgressListener.STATE_START;
-        if (!(flags & docStart) || !webProgress.isTopLevel)
-          return;
+let countryCode = Services.prefs.getCharPref("browser.search.countryCode");
+let code = "";
+switch (countryCode) {
+  case "US":
+    code = "firefox-b-1";
+    break;
+  case "DE":
+    code = "firefox-b";
+    break;
+}
 
-        if (req.originalURI.spec == "about:blank")
-          return;
-
-        gBrowser.removeProgressListener(listener);
-
-        info("received document start");
-
-        Assert.ok(req instanceof Ci.nsIChannel, "req is a channel");
-
-        req.cancel(Components.results.NS_ERROR_FAILURE);
-
-        executeSoon(() => {
-          resolve(req.originalURI.spec);
-        });
-      }
-    }
-
-    gBrowser.addProgressListener(listener);
-  });
+if (code) {
+  let codes = searchEngineDetails[0].codes;
+  let suffix = `&client=${code}`;
+  codes.context = suffix;
+  codes.newTab = suffix;
+  codes.submission = suffix;
+  codes.keyword = `${suffix}-ab`;
 }
 
 function promiseContentSearchReady(browser) {
@@ -73,7 +61,7 @@ function promiseContentSearchReady(browser) {
   });
 }
 
-for (let engine of SEARCH_ENGINE_DETAILS) {
+for (let engine of searchEngineDetails) {
   add_task(async function() {
     let previouslySelectedEngine = Services.search.currentEngine;
 
@@ -114,7 +102,7 @@ async function testSearchEngine(engineDetails) {
       run() {
         gURLBar.value = "? foo";
         gURLBar.focus();
-        EventUtils.synthesizeKey("VK_RETURN", {});
+        EventUtils.synthesizeKey("KEY_Enter");
       }
     },
     {
@@ -123,29 +111,31 @@ async function testSearchEngine(engineDetails) {
       run() {
         gURLBar.value = `${engineDetails.alias} foo`;
         gURLBar.focus();
-        EventUtils.synthesizeKey("VK_RETURN", {});
+        EventUtils.synthesizeKey("KEY_Enter");
       }
     },
     {
       name: "search bar search",
       searchURL: base + engineDetails.codes.submission,
+      async preTest() {
+        await gCUITestUtils.addSearchBar();
+      },
       run() {
-        Services.prefs.setBoolPref("browser.search.widget.inNavBar", true);
         let sb = BrowserSearch.searchBar;
         sb.focus();
         sb.value = "foo";
-        EventUtils.synthesizeKey("VK_RETURN", {});
+        EventUtils.synthesizeKey("KEY_Enter");
       },
       postTest() {
         BrowserSearch.searchBar.value = "";
-        Services.prefs.setBoolPref("browser.search.widget.inNavBar", false);
+        gCUITestUtils.removeSearchBar();
       }
     },
     {
       name: "new tab search",
       searchURL: base + engineDetails.codes.newTab,
       async preTest(tab) {
-        let browser = tab.linkedBrowser
+        let browser = tab.linkedBrowser;
         await BrowserTestUtils.loadURI(browser, "about:newtab");
         await BrowserTestUtils.browserLoaded(browser);
 
@@ -157,7 +147,7 @@ async function testSearchEngine(engineDetails) {
           input.focus();
           input.value = "foo";
         });
-        EventUtils.synthesizeKey("VK_RETURN", {});
+        EventUtils.synthesizeKey("KEY_Enter");
       }
     }
   ];
@@ -185,5 +175,5 @@ async function testSearchEngine(engineDetails) {
   }
 
   engine.alias = undefined;
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 }

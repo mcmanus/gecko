@@ -18,8 +18,8 @@ function waitForFilePicker() {
       MockFilePicker.showCallback = null;
       ok(true, "Saw the file picker");
       resolve();
-    }
-  })
+    };
+  });
 }
 
 /**
@@ -37,7 +37,7 @@ add_task(async function preferred_API() {
     });
 
     saveImageURL(url, "image.jpg", null, true, false, null, null, null, null, false);
-    let channel = content.document.docShell.currentDocumentChannel;
+    let channel = gBrowser.contentDocumentAsCPOW.docShell.currentDocumentChannel;
     if (channel) {
       ok(true, channel.QueryInterface(Ci.nsIHttpChannelInternal)
                       .channelIsForDownload);
@@ -73,7 +73,7 @@ add_task(async function deprecated_API() {
     // pass the XUL document instead to test this interface.
     let doc = document;
 
-    let channel = content.document.docShell.currentDocumentChannel;
+    let channel = gBrowser.contentDocumentAsCPOW.docShell.currentDocumentChannel;
     if (channel) {
       ok(true, channel.QueryInterface(Ci.nsIHttpChannelInternal)
                       .channelIsForDownload);

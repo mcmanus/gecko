@@ -98,7 +98,7 @@ QuicSession::AddStream(nsAHttpTransaction *aHttpTransaction,
     mSocket->SetConnection(mConnection);
   }
   aHttpTransaction->SetConnection(this);
-  aHttpTransaction->OnActivated(true);
+  aHttpTransaction->OnActivated();
 
   mozquic_stream_t *stream = mSocket->NewStream();
   LOG3(("QuicSession::AddStream %p transaction %p ID %d\n", this, aHttpTransaction,

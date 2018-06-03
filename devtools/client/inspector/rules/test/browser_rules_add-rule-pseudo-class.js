@@ -19,49 +19,49 @@ const TEST_DATA = [
   [":focus"]
 ];
 
-add_task(function* () {
-  yield addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
-  let {inspector, view} = yield openRuleView();
-  yield selectNode("#element", inspector);
+add_task(async function() {
+  await addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
+  const {inspector, view} = await openRuleView();
+  await selectNode("#element", inspector);
 
-  for (let data of TEST_DATA) {
-    yield runTestData(inspector, view, data);
+  for (const data of TEST_DATA) {
+    await runTestData(inspector, view, data);
   }
 });
 
-function* runTestData(inspector, view, pseudoClasses) {
-  yield setPseudoLocks(inspector, view, pseudoClasses);
+async function runTestData(inspector, view, pseudoClasses) {
+  await setPseudoLocks(inspector, view, pseudoClasses);
 
-  let expected = EXPECTED_SELECTOR + pseudoClasses.join("");
-  yield addNewRuleAndDismissEditor(inspector, view, expected, 1);
+  const expected = EXPECTED_SELECTOR + pseudoClasses.join("");
+  await addNewRuleAndDismissEditor(inspector, view, expected, 1);
 
-  yield resetPseudoLocks(inspector, view);
+  await resetPseudoLocks(inspector, view);
 }
 
-function* setPseudoLocks(inspector, view, pseudoClasses) {
+async function setPseudoLocks(inspector, view, pseudoClasses) {
   if (pseudoClasses.length == 0) {
     return;
   }
 
-  for (let pseudoClass of pseudoClasses) {
+  for (const pseudoClass of pseudoClasses) {
     switch (pseudoClass) {
       case ":hover":
         view.hoverCheckbox.click();
-        yield inspector.once("rule-view-refreshed");
+        await inspector.once("rule-view-refreshed");
         break;
       case ":active":
         view.activeCheckbox.click();
-        yield inspector.once("rule-view-refreshed");
+        await inspector.once("rule-view-refreshed");
         break;
       case ":focus":
         view.focusCheckbox.click();
-        yield inspector.once("rule-view-refreshed");
+        await inspector.once("rule-view-refreshed");
         break;
     }
   }
 }
 
-function* resetPseudoLocks(inspector, view) {
+async function resetPseudoLocks(inspector, view) {
   if (!view.hoverCheckbox.checked &&
       !view.activeCheckbox.checked &&
       !view.focusCheckbox.checked) {
@@ -69,14 +69,14 @@ function* resetPseudoLocks(inspector, view) {
   }
   if (view.hoverCheckbox.checked) {
     view.hoverCheckbox.click();
-    yield inspector.once("rule-view-refreshed");
+    await inspector.once("rule-view-refreshed");
   }
   if (view.activeCheckbox.checked) {
     view.activeCheckbox.click();
-    yield inspector.once("rule-view-refreshed");
+    await inspector.once("rule-view-refreshed");
   }
   if (view.focusCheckbox.checked) {
     view.focusCheckbox.click();
-    yield inspector.once("rule-view-refreshed");
+    await inspector.once("rule-view-refreshed");
   }
 }

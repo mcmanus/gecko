@@ -451,7 +451,7 @@ public:
     : mGZWriter(aGZWriter)
   {}
 
-  void Write(const char* aStr)
+  void Write(const char* aStr) override
   {
     // Ignore any failure because JSONWriteFunc doesn't have a mechanism for
     // handling errors.
@@ -476,7 +476,7 @@ public:
   HandleReportAndFinishReportingCallbacks(UniquePtr<JSONWriter> aWriter,
                                           nsIFinishDumpingCallback* aFinishDumping,
                                           nsISupports* aFinishDumpingData)
-    : mWriter(Move(aWriter))
+    : mWriter(std::move(aWriter))
     , mFinishDumping(aFinishDumping)
     , mFinishDumpingData(aFinishDumpingData)
   {
@@ -671,7 +671,7 @@ DumpMemoryInfoToFile(
 
   RefPtr<HandleReportAndFinishReportingCallbacks>
     handleReportAndFinishReporting =
-      new HandleReportAndFinishReportingCallbacks(Move(jsonWriter),
+      new HandleReportAndFinishReportingCallbacks(std::move(jsonWriter),
                                                   aFinishDumping,
                                                   aFinishDumpingData);
   rv = mgr->GetReportsExtended(handleReportAndFinishReporting, nullptr,
@@ -805,12 +805,8 @@ nsMemoryInfoDumper::OpenDMDFile(const nsAString& aIdentifier, int aPid,
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "OpenANSIFileDesc failed");
 
   // Print the path, because on some platforms (e.g. Mac) it's not obvious.
-  nsCString path;
-  rv = dmdFile->GetNativePath(path);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-  dmd::StatusMsg("opened %s for writing\n", path.get());
+  dmd::StatusMsg("opened %s for writing\n",
+                 dmdFile->HumanReadablePath().get());
 
   return rv;
 }

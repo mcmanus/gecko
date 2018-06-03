@@ -124,7 +124,7 @@ class TransportLayerLossy : public TransportLayer {
   }
 
   void SetInspector(UniquePtr<Inspector> inspector) {
-    inspector_ = Move(inspector);
+    inspector_ = std::move(inspector);
   }
 
   void StateChange(TransportLayer *layer, State state) {
@@ -476,11 +476,13 @@ class TransportTestPeer : public sigslot::has_slots<> {
 
 
   void DestroyFlow() {
+    disconnect_all();
     if (flow_) {
       loopback_->Disconnect();
       flow_ = nullptr;
     }
     ice_ctx_ = nullptr;
+    streams_.clear();
   }
 
   void DisconnectDestroyFlow() {
@@ -614,8 +616,8 @@ class TransportTestPeer : public sigslot::has_slots<> {
         connect(this, &TransportTestPeer::GotCandidate);
 
     // Create the transport layer
-    ice_ = new TransportLayerIce(name);
-    ice_->SetParameters(ice_ctx_->ctx(), stream, 1);
+    ice_ = new TransportLayerIce();
+    ice_->SetParameters(stream, 1);
 
     // Assemble the stack
     nsAutoPtr<std::queue<mozilla::TransportLayer *> > layers(
@@ -733,13 +735,13 @@ class TransportTestPeer : public sigslot::has_slots<> {
   }
 
   void SetInspector(UniquePtr<Inspector> inspector) {
-    lossy_->SetInspector(Move(inspector));
+    lossy_->SetInspector(std::move(inspector));
   }
 
   void SetInspector(Inspector* in) {
     UniquePtr<Inspector> inspector(in);
 
-    lossy_->SetInspector(Move(inspector));
+    lossy_->SetInspector(std::move(inspector));
   }
 
   void SetCipherSuiteChanges(const std::vector<uint16_t>& enableThese,
@@ -830,6 +832,8 @@ class TransportTest : public MtransportTest {
   TransportTest() {
     fds_[0] = nullptr;
     fds_[1] = nullptr;
+    p1_ = nullptr;
+    p2_ = nullptr;
   }
 
   void TearDown() override {
@@ -858,6 +862,12 @@ class TransportTest : public MtransportTest {
   }
 
   void Reset() {
+    if (p1_) {
+      delete p1_;
+    }
+    if (p2_) {
+      delete p2_;
+    }
     p1_ = new TransportTestPeer(target_, "P1", test_utils_);
     p2_ = new TransportTestPeer(target_, "P2", test_utils_);
   }

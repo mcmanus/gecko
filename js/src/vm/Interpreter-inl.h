@@ -9,19 +9,18 @@
 
 #include "vm/Interpreter.h"
 
-#include "jscompartment.h"
 #include "jsnum.h"
-#include "jsstr.h"
 
+#include "builtin/String.h"
 #include "jit/Ion.h"
 #include "vm/ArgumentsObject.h"
-
-#include "jsatominlines.h"
-#include "jsobjinlines.h"
+#include "vm/JSCompartment.h"
 
 #include "vm/EnvironmentObject-inl.h"
+#include "vm/JSAtom-inl.h"
+#include "vm/JSObject-inl.h"
 #include "vm/Stack-inl.h"
-#include "vm/String-inl.h"
+#include "vm/StringType-inl.h"
 #include "vm/UnboxedObject-inl.h"
 
 namespace js {
@@ -181,7 +180,8 @@ FetchName(JSContext* cx, HandleObject receiver, HandleObject holder, HandlePrope
     if (!prop) {
         switch (mode) {
           case GetNameMode::Normal:
-            return ReportIsNotDefined(cx, name);
+            ReportIsNotDefined(cx, name);
+            return false;
           case GetNameMode::TypeOf:
             vp.setUndefined();
             return true;
@@ -399,14 +399,16 @@ InitGlobalLexicalOperation(JSContext* cx, LexicalEnvironmentObject* lexicalEnvAr
 }
 
 inline bool
-InitPropertyOperation(JSContext* cx, JSOp op, HandleObject obj, HandleId id, HandleValue rhs)
+InitPropertyOperation(JSContext* cx, JSOp op, HandleObject obj, HandlePropertyName name,
+                      HandleValue rhs)
 {
     if (obj->is<PlainObject>() || obj->is<JSFunction>()) {
         unsigned propAttrs = GetInitDataPropAttrs(op);
-        return NativeDefineDataProperty(cx, obj.as<NativeObject>(), id, rhs, propAttrs);
+        return NativeDefineDataProperty(cx, obj.as<NativeObject>(), name, rhs, propAttrs);
     }
 
-    MOZ_ASSERT(obj->as<UnboxedPlainObject>().layout().lookup(id));
+    MOZ_ASSERT(obj->as<UnboxedPlainObject>().layout().lookup(name));
+    RootedId id(cx, NameToId(name));
     return PutProperty(cx, obj, id, rhs, false);
 }
 
@@ -437,7 +439,7 @@ DefVarOperation(JSContext* cx, HandleObject varobj, HandlePropertyName dn, unsig
     }
 
     if (varobj->is<GlobalObject>()) {
-        if (!varobj->compartment()->addToVarNames(cx, dn))
+        if (!varobj->realm()->addToVarNames(cx, dn))
             return false;
     }
 
@@ -445,8 +447,7 @@ DefVarOperation(JSContext* cx, HandleObject varobj, HandlePropertyName dn, unsig
 }
 
 static MOZ_ALWAYS_INLINE bool
-NegOperation(JSContext* cx, HandleScript script, jsbytecode* pc, HandleValue val,
-             MutableHandleValue res)
+NegOperation(JSContext* cx, HandleValue val, MutableHandleValue res)
 {
     /*
      * When the operand is int jsval, INT32_FITS_IN_JSVAL(i) implies
@@ -467,8 +468,7 @@ NegOperation(JSContext* cx, HandleScript script, jsbytecode* pc, HandleValue val
 }
 
 static MOZ_ALWAYS_INLINE bool
-ToIdOperation(JSContext* cx, HandleScript script, jsbytecode* pc, HandleValue idval,
-              MutableHandleValue res)
+ToIdOperation(JSContext* cx, HandleValue idval, MutableHandleValue res)
 {
     if (idval.isInt32()) {
         res.set(idval);
@@ -682,6 +682,24 @@ InitArrayElemOperation(JSContext* cx, jsbytecode* pc, HandleObject obj, uint32_t
             return false;
     }
 
+    return true;
+}
+
+static MOZ_ALWAYS_INLINE bool
+ProcessCallSiteObjOperation(JSContext* cx, HandleObject cso, HandleObject raw)
+{
+    MOZ_ASSERT(cso->is<ArrayObject>());
+    MOZ_ASSERT(raw->is<ArrayObject>());
+
+    if (cso->nonProxyIsExtensible()) {
+        RootedValue rawValue(cx, ObjectValue(*raw));
+        if (!DefineDataProperty(cx, cso, cx->names().raw, rawValue, 0))
+            return false;
+        if (!FreezeObject(cx, raw))
+            return false;
+        if (!FreezeObject(cx, cso))
+            return false;
+    }
     return true;
 }
 

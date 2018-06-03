@@ -11,9 +11,9 @@
 #include "nsISerializable.h"
 #include "nsString.h"
 #include "nsIClassInfo.h"
-#include "nsIMutable.h"
 #include "nsISizeOf.h"
 #include "nsIIPCSerializableURI.h"
+#include "nsIURIMutator.h"
 
 namespace mozilla {
 namespace net {
@@ -30,26 +30,23 @@ class nsSimpleURI
     : public nsIURI
     , public nsISerializable
     , public nsIClassInfo
-    , public nsIMutable
     , public nsISizeOf
     , public nsIIPCSerializableURI
 {
 protected:
-    virtual ~nsSimpleURI();
+    nsSimpleURI();
+    virtual ~nsSimpleURI() = default;
 
 public:
-    NS_DECL_ISUPPORTS
+    NS_DECL_THREADSAFE_ISUPPORTS
     NS_DECL_NSIURI
     NS_DECL_NSISERIALIZABLE
     NS_DECL_NSICLASSINFO
-    NS_DECL_NSIMUTABLE
     NS_DECL_NSIIPCSERIALIZABLEURI
 
     static already_AddRefed<nsSimpleURI> From(nsIURI* aURI);
 
     // nsSimpleURI methods:
-
-    nsSimpleURI();
 
     bool Equals(nsSimpleURI* aOther)
     {
@@ -73,6 +70,21 @@ protected:
         eHonorRef,
         eReplaceRef
     };
+
+    virtual nsresult SetSpecInternal(const nsACString &input);
+    virtual nsresult SetScheme(const nsACString &input);
+    virtual nsresult SetUserPass(const nsACString &input);
+    nsresult SetUsername(const nsACString &input);
+    virtual nsresult SetPassword(const nsACString &input);
+    virtual nsresult SetHostPort(const nsACString &aValue);
+    virtual nsresult SetHost(const nsACString &input);
+    virtual nsresult SetPort(int32_t port);
+    virtual nsresult SetPathQueryRef(const nsACString &input);
+    virtual nsresult SetRef(const nsACString &input);
+    virtual nsresult SetFilePath(const nsACString &input);
+    virtual nsresult SetQuery(const nsACString &input);
+    virtual nsresult SetQueryWithEncoding(const nsACString &input, const Encoding* encoding);
+    nsresult ReadPrivate(nsIObjectInputStream *stream);
 
     // Helper to share code between Equals methods.
     virtual nsresult EqualsInternal(nsIURI* other,
@@ -102,6 +114,8 @@ protected:
 
     nsresult SetPathQueryRefEscaped(const nsACString &aPath, bool aNeedsEscape);
 
+    bool Deserialize(const mozilla::ipc::URIParams&);
+
     nsCString mScheme;
     nsCString mPath; // NOTE: mPath does not include ref, as an optimization
     nsCString mRef;  // so that URIs with different refs can share string data.
@@ -109,6 +123,38 @@ protected:
     bool mMutable;
     bool mIsRefValid; // To distinguish between empty-ref and no-ref.
     bool mIsQueryValid; // To distinguish between empty-query and no-query.
+
+
+public:
+    class Mutator final
+        : public nsIURIMutator
+        , public BaseURIMutator<nsSimpleURI>
+        , public nsISerializable
+    {
+        NS_DECL_ISUPPORTS
+        NS_FORWARD_SAFE_NSIURISETTERS_RET(mURI)
+        NS_DEFINE_NSIMUTATOR_COMMON
+
+        NS_IMETHOD
+        Write(nsIObjectOutputStream *aOutputStream) override
+        {
+            return NS_ERROR_NOT_IMPLEMENTED;
+        }
+
+        MOZ_MUST_USE NS_IMETHOD
+        Read(nsIObjectInputStream* aStream) override
+        {
+            return InitFromInputStream(aStream);
+        }
+
+        explicit Mutator() = default;
+    private:
+        virtual ~Mutator() = default;
+
+        friend class nsSimpleURI;
+    };
+
+    friend BaseURIMutator<nsSimpleURI>;
 };
 
 } // namespace net

@@ -4,6 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "nsTDependentSubstring.h"
+
 template <typename T>
 void
 nsTDependentSubstring<T>::Rebind(const substring_type& str,
@@ -60,7 +62,7 @@ nsTDependentSubstring<T>::nsTDependentSubstring(const char_type* aStart,
 
 #if defined(MOZ_USE_CHAR16_WRAPPER)
 template <typename T>
-template <typename EnableIfChar16>
+template <typename Q, typename EnableIfChar16>
 nsTDependentSubstring<T>::nsTDependentSubstring(char16ptr_t aStart,
                                                 char16ptr_t aEnd)
   : substring_type(static_cast<const char16_t*>(aStart),

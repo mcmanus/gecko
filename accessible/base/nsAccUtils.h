@@ -7,6 +7,7 @@
 #define nsAccUtils_h_
 
 #include "mozilla/a11y/Accessible.h"
+#include "mozilla/a11y/DocManager.h"
 
 #include "nsAccessibilityService.h"
 #include "nsCoreUtils.h"
@@ -64,13 +65,13 @@ public:
   /**
    * Get default value of the level for the given accessible.
    */
-  static int32_t GetDefaultLevel(Accessible* aAcc);
+  static int32_t GetDefaultLevel(const Accessible* aAcc);
 
   /**
    * Return ARIA level value or the default one if ARIA is missed for the
    * given accessible.
    */
-  static int32_t GetARIAOrDefaultLevel(Accessible* aAccessible);
+  static int32_t GetARIAOrDefaultLevel(const Accessible* aAccessible);
 
   /**
    * Compute group level for nsIDOMXULContainerItemElement node.

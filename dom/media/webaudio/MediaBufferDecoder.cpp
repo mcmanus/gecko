@@ -96,7 +96,7 @@ public:
     MOZ_ASSERT(NS_IsMainThread());
   }
 
-  NS_IMETHOD Run();
+  NS_IMETHOD Run() override;
   bool CreateReader();
   MediaFormatReader* Reader()
   {
@@ -473,7 +473,7 @@ WebAudioDecodeJob::AllocateBuffer()
 
   // Now create the AudioBuffer
   mOutput = AudioBuffer::Create(mContext->GetOwner(),
-                                mContext->SampleRate(), Move(mBuffer));
+                                mContext->SampleRate(), std::move(mBuffer));
   return mOutput != nullptr;
 }
 
@@ -510,7 +510,9 @@ AsyncDecodeWebAudio(const char* aContentType, uint8_t* aBuffer,
     // we might evaluate the task.forget() before calling Reader(). Enforce
     // a non-crashy order-of-operations.
     TaskQueue* taskQueue = task->Reader()->OwnerThread();
-    taskQueue->Dispatch(task.forget());
+    nsresult rv = taskQueue->Dispatch(task.forget());
+    MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+    Unused << rv;
   }
 }
 
@@ -560,13 +562,6 @@ WebAudioDecodeJob::OnFailure(ErrorCode aErrorCode)
 
   const char* errorMessage;
   switch (aErrorCode) {
-  case NoError:
-    MOZ_FALLTHROUGH_ASSERT("Who passed NoError to OnFailure?");
-    // Fall through to get some sort of a sane error message if this actually
-    // happens at runtime.
-  case UnknownError:
-    errorMessage = "MediaDecodeAudioDataUnknownError";
-    break;
   case UnknownContent:
     errorMessage = "MediaDecodeAudioDataUnknownContentType";
     break;
@@ -575,6 +570,15 @@ WebAudioDecodeJob::OnFailure(ErrorCode aErrorCode)
     break;
   case NoAudio:
     errorMessage = "MediaDecodeAudioDataNoAudio";
+    break;
+  case NoError:
+    MOZ_FALLTHROUGH_ASSERT("Who passed NoError to OnFailure?");
+    // Fall through to get some sort of a sane error message if this actually
+    // happens at runtime.
+  case UnknownError:
+    MOZ_FALLTHROUGH;
+  default:
+    errorMessage = "MediaDecodeAudioDataUnknownError";
     break;
   }
 

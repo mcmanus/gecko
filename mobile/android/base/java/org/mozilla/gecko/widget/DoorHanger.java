@@ -52,7 +52,6 @@ public abstract class DoorHanger extends LinearLayout {
         DESKTOPNOTIFICATION2,
         WEBRTC,
         VIBRATION,
-        FLYWEBPUBLISHSERVER,
         ADDON
     }
 
@@ -91,6 +90,7 @@ public abstract class DoorHanger extends LinearLayout {
     protected long mTimeout;
 
     public EventCallback callback;
+    public Integer defaultCallback;
 
     protected DoorHanger(Context context, DoorhangerConfig config, Type type) {
         super(context);

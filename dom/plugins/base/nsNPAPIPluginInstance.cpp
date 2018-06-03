@@ -18,7 +18,6 @@
 #include "nsPluginInstanceOwner.h"
 
 #include "nsThreadUtils.h"
-#include "nsIDOMElement.h"
 #include "nsIDocument.h"
 #include "nsIDocShell.h"
 #include "nsIScriptGlobalObject.h"
@@ -33,6 +32,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Unused.h"
 #include "nsILoadContext.h"
+#include "mozilla/dom/Element.h"
 #include "mozilla/dom/HTMLObjectElementBinding.h"
 #include "AudioChannelService.h"
 
@@ -42,8 +42,6 @@ using namespace mozilla::dom;
 using namespace mozilla;
 using namespace mozilla::plugins::parent;
 using namespace mozilla::layers;
-
-static NS_DEFINE_IID(kIOutputStreamIID, NS_IOUTPUTSTREAM_IID);
 
 NS_IMPL_ISUPPORTS(nsNPAPIPluginInstance, nsIAudioChannelAgentCallback)
 
@@ -61,7 +59,6 @@ nsNPAPIPluginInstance::nsNPAPIPluginInstance()
 #ifdef XP_MACOSX
   , mCurrentPluginEvent(nullptr)
 #endif
-  , mHaveJavaC2PJSObjectQuirk(false)
   , mCachedParamLength(0)
   , mCachedParamNames(nullptr)
   , mCachedParamValues(nullptr)
@@ -1033,18 +1030,17 @@ nsNPAPIPluginInstance::ScheduleTimer(uint32_t interval, NPBool repeat, void (*ti
 
   // create new xpcom timer, scheduled correctly
   nsresult rv;
-  nsCOMPtr<nsITimer> xpcomTimer = do_CreateInstance(NS_TIMER_CONTRACTID, &rv);
+  const short timerType = (repeat ? (short)nsITimer::TYPE_REPEATING_SLACK : (short)nsITimer::TYPE_ONE_SHOT);
+  rv = NS_NewTimerWithFuncCallback(getter_AddRefs(newTimer->timer),
+                                   PluginTimerCallback,
+                                   newTimer,
+                                   interval,
+                                   timerType,
+                                   "nsNPAPIPluginInstance::ScheduleTimer");
   if (NS_FAILED(rv)) {
     delete newTimer;
     return 0;
   }
-  const short timerType = (repeat ? (short)nsITimer::TYPE_REPEATING_SLACK : (short)nsITimer::TYPE_ONE_SHOT);
-  xpcomTimer->InitWithNamedFuncCallback(PluginTimerCallback,
-                                        newTimer,
-                                        interval,
-                                        timerType,
-                                        "nsNPAPIPluginInstance::ScheduleTimer");
-  newTimer->timer = xpcomTimer;
 
   // save callback function
   newTimer->callback = timerFunc;
@@ -1091,7 +1087,7 @@ nsNPAPIPluginInstance::ConvertPoint(double sourceX, double sourceY, NPCoordinate
 }
 
 nsresult
-nsNPAPIPluginInstance::GetDOMElement(nsIDOMElement* *result)
+nsNPAPIPluginInstance::GetDOMElement(Element** result)
 {
   if (!mOwner) {
     *result = nullptr;

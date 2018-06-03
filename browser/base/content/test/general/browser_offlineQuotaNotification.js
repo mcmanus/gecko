@@ -15,7 +15,7 @@ registerCleanupFunction(function() {
   Services.perms.removeFromPrincipal(principal, "offline-app");
   Services.prefs.clearUserPref("offline-apps.quota.warn");
   Services.prefs.clearUserPref("offline-apps.allow_by_default");
-  let {OfflineAppCacheHelper} = Components.utils.import("resource:///modules/offlineAppCache.jsm", {});
+  let {OfflineAppCacheHelper} = ChromeUtils.import("resource://gre/modules/offlineAppCache.jsm", {});
   OfflineAppCacheHelper.clear();
 });
 
@@ -69,7 +69,7 @@ function test() {
       newTabBrowser.addEventListener("Initialized", function() {
         executeSoon(function() {
           checkInContentPreferences(newTabBrowser.contentWindow);
-        })
+        });
       }, {capture: true, once: true});
     });
     onCachedAttached.then(function() {

@@ -1,7 +1,8 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-* This Source Code Form is subject to the terms of the Mozilla Public
-* License, v. 2.0. If a copy of the MPL was not distributed with this
-* file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef MOZILLA_GFX_TEXTUREHOST_H
 #define MOZILLA_GFX_TEXTUREHOST_H
@@ -25,7 +26,7 @@
 #include "mozilla/UniquePtr.h"          // for UniquePtr
 #include "mozilla/webrender/WebRenderTypes.h"
 #include "nsCOMPtr.h"                   // for already_AddRefed
-#include "nsDebug.h"                    // for NS_RUNTIMEABORT
+#include "nsDebug.h"                    // for NS_WARNING
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "nsRegion.h"                   // for nsIntRegion
 #include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
@@ -41,7 +42,7 @@ class Shmem;
 
 namespace wr {
 class DisplayListBuilder;
-class ResourceUpdateQueue;
+class TransactionBuilder;
 }
 
 namespace layers {
@@ -400,6 +401,7 @@ public:
    */
   static already_AddRefed<TextureHost> Create(
     const SurfaceDescriptor& aDesc,
+    const ReadLockDescriptor& aReadLock,
     ISurfaceAllocator* aDeallocator,
     LayersBackend aBackend,
     TextureFlags aFlags,
@@ -547,6 +549,7 @@ public:
    */
   static PTextureParent* CreateIPDLActor(HostIPCAllocator* aAllocator,
                                          const SurfaceDescriptor& aSharedData,
+                                         const ReadLockDescriptor& aDescriptor,
                                          LayersBackend aLayersBackend,
                                          TextureFlags aFlags,
                                          uint64_t aSerial,
@@ -611,7 +614,7 @@ public:
 
   void DeserializeReadLock(const ReadLockDescriptor& aDesc,
                            ISurfaceAllocator* aAllocator);
-  void SetReadLock(TextureReadLock* aReadLock);
+  void SetReadLocked();
 
   TextureReadLock* GetReadLock() { return mReadLock; }
 
@@ -636,7 +639,7 @@ public:
   };
 
   // Add all necessary TextureHost informations to the resource update queue.
-  virtual void PushResourceUpdates(wr::ResourceUpdateQueue& aResources,
+  virtual void PushResourceUpdates(wr::TransactionBuilder& aResources,
                                    ResourceUpdateOp aOp,
                                    const Range<wr::ImageKey>& aImageKeys,
                                    const wr::ExternalImageId& aExtID)
@@ -680,6 +683,7 @@ protected:
   TextureFlags mFlags;
   int mCompositableCount;
   uint64_t mFwdTransactionId;
+  bool mReadLocked;
 
   friend class Compositor;
   friend class TextureParent;
@@ -753,7 +757,7 @@ public:
 
   virtual uint32_t NumSubTextures() const override;
 
-  virtual void PushResourceUpdates(wr::ResourceUpdateQueue& aResources,
+  virtual void PushResourceUpdates(wr::TransactionBuilder& aResources,
                                    ResourceUpdateOp aOp,
                                    const Range<wr::ImageKey>& aImageKeys,
                                    const wr::ExternalImageId& aExtID) override;

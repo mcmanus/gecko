@@ -46,6 +46,7 @@
 #include "nsNetUtil.h"
 #include "nsNetCID.h"
 #include "mozilla/StaticPtr.h"
+#include "mozilla/StaticMutex.h"
 #include "mozilla/Unused.h"
 #ifdef MOZ_PEERCONNECTION
 #include "mtransport/runnable_utils.h"
@@ -71,19 +72,47 @@ static LazyLogModule gSCTPLog("SCTP");
 
 #define SCTP_LOG(args) MOZ_LOG(mozilla::gSCTPLog, mozilla::LogLevel::Debug, args)
 
+class DataChannelConnectionShutdown : public nsITimerCallback
+{
+public:
+  explicit DataChannelConnectionShutdown(DataChannelConnection* aConnection)
+    : mConnection(aConnection)
+  {
+    mTimer = NS_NewTimer(); // we'll crash if this fails
+    mTimer->InitWithCallback(this, 30*1000, nsITimer::TYPE_ONE_SHOT);
+  }
+
+  NS_IMETHODIMP Notify(nsITimer* aTimer) override;
+
+  NS_DECL_THREADSAFE_ISUPPORTS
+
+private:
+  virtual ~DataChannelConnectionShutdown()
+  {
+    mTimer->Cancel();
+  }
+
+  RefPtr<DataChannelConnection> mConnection;
+  nsCOMPtr<nsITimer> mTimer;
+};
+
+class DataChannelShutdown;
+
+StaticRefPtr<DataChannelShutdown> sDataChannelShutdown;
+
 class DataChannelShutdown : public nsIObserver
 {
 public:
-  // This needs to be tied to some form object that is guaranteed to be
+  // This needs to be tied to some object that is guaranteed to be
   // around (singleton likely) unless we want to shutdown sctp whenever
   // we're not using it (and in which case we'd keep a refcnt'd object
   // ref'd by each DataChannelConnection to release the SCTP usrlib via
   // sctp_finish). Right now, the single instance of this class is
-  // owned by the observer service.
+  // owned by the observer service and a StaticRefPtr.
 
   NS_DECL_ISUPPORTS
 
-  DataChannelShutdown() {}
+  DataChannelShutdown() = default;
 
   void Init()
     {
@@ -99,14 +128,10 @@ public:
       (void) rv;
     }
 
-private:
-  // The only instance of DataChannelShutdown is owned by the observer
-  // service, so there is no need to call RemoveObserver here.
-  virtual ~DataChannelShutdown() = default;
-
-public:
   NS_IMETHOD Observe(nsISupports* aSubject, const char* aTopic,
-                     const char16_t* aData) override {
+                     const char16_t* aData) override
+  {
+    // Note: MainThread
     if (strcmp(aTopic, "xpcom-will-shutdown") == 0) {
       LOG(("Shutting down SCTP"));
       if (sctp_initialized) {
@@ -122,12 +147,63 @@ public:
                                                     "xpcom-will-shutdown");
       MOZ_ASSERT(rv == NS_OK);
       (void) rv;
+
+      {
+        StaticMutexAutoLock lock(sLock);
+        sConnections = nullptr; // clears as well
+      }
+      sDataChannelShutdown = nullptr;
     }
     return NS_OK;
   }
+
+  void CreateConnectionShutdown(DataChannelConnection* aConnection)
+  {
+    StaticMutexAutoLock lock(sLock);
+    if (!sConnections) {
+      sConnections = new nsTArray<RefPtr<DataChannelConnectionShutdown>>();
+    }
+    sConnections->AppendElement(new DataChannelConnectionShutdown(aConnection));
+  }
+
+  void RemoveConnectionShutdown(DataChannelConnectionShutdown* aConnectionShutdown)
+  {
+    StaticMutexAutoLock lock(sLock);
+    if (sConnections) {
+      sConnections->RemoveElement(aConnectionShutdown);
+    }
+  }
+
+private:
+  // The only instance of DataChannelShutdown is owned by the observer
+  // service, so there is no need to call RemoveObserver here.
+  virtual ~DataChannelShutdown() = default;
+
+  // protects sConnections
+  static StaticMutex sLock;
+  static StaticAutoPtr<nsTArray<RefPtr<DataChannelConnectionShutdown>>> sConnections;
 };
 
+StaticMutex DataChannelShutdown::sLock;
+StaticAutoPtr<nsTArray<RefPtr<DataChannelConnectionShutdown>>> DataChannelShutdown::sConnections;
+
 NS_IMPL_ISUPPORTS(DataChannelShutdown, nsIObserver);
+
+NS_IMPL_ISUPPORTS(DataChannelConnectionShutdown, nsITimerCallback)
+
+NS_IMETHODIMP
+DataChannelConnectionShutdown::Notify(nsITimer* aTimer)
+{
+  // safely release reference to ourself
+  RefPtr<DataChannelConnectionShutdown> grip(this);
+  // Might not be set. We don't actually use the |this| pointer in
+  // RemoveConnectionShutdown right now, which makes this a bit gratuitous
+  // anyway...
+  if (sDataChannelShutdown) {
+    sDataChannelShutdown->RemoveConnectionShutdown(this);
+  }
+  return NS_OK;
+}
 
 OutgoingMsg::OutgoingMsg(struct sctp_sendv_spa &info, const uint8_t *data,
                          size_t length)
@@ -251,16 +327,12 @@ DataChannelConnection::~DataChannelConnection()
   ASSERT_WEBRTC(mState == CLOSED);
   MOZ_ASSERT(!mMasterSocket);
   MOZ_ASSERT(mPending.GetSize() == 0);
+  MOZ_ASSERT(!mTransportFlow);
 
   // Already disconnected from sigslot/mTransportFlow
   // TransportFlows must be released from the STS thread
   if (!IsSTSThread()) {
     ASSERT_WEBRTC(NS_IsMainThread());
-    if (mTransportFlow) {
-      ASSERT_WEBRTC(mSTS);
-      NS_ProxyRelease(
-        "DataChannelConnection::mTransportFlow", mSTS, mTransportFlow.forget());
-    }
 
     if (mInternalIOThread) {
       // Avoid spinning the event thread from here (which if we're mainthread
@@ -295,12 +367,6 @@ DataChannelConnection::Destroy()
 
   MOZ_ASSERT(mSTS);
   ASSERT_WEBRTC(NS_IsMainThread());
-  // Must do this in Destroy() since we may then delete this object.
-  // Do this before dispatching to create a consistent ordering of calls to
-  // the SCTP stack.
-  usrsctp_deregister_address(static_cast<void *>(this));
-  LOG(("Deregistered %p from the SCTP stack.", static_cast<void *>(this)));
-
   // Finish Destroy on STS thread to avoid bug 876167 - once that's fixed,
   // the usrsctp_close() calls can move back here (and just proxy the
   // disconnect_all())
@@ -327,7 +393,23 @@ void DataChannelConnection::DestroyOnSTS(struct socket *aMasterSocket,
   if (aMasterSocket)
     usrsctp_close(aMasterSocket);
 
+  usrsctp_deregister_address(static_cast<void *>(this));
+  LOG(("Deregistered %p from the SCTP stack.", static_cast<void *>(this)));
+
   disconnect_all();
+
+  // we may have queued packet sends on STS after this; dispatch to ourselves before finishing here
+  // so we can be sure there aren't anymore runnables active that can try to touch the flow.
+  // DON'T use RUN_ON_THREAD, it queue-jumps!
+  mSTS->Dispatch(WrapRunnable(RefPtr<DataChannelConnection>(this),
+                              &DataChannelConnection::DestroyOnSTSFinal),
+                 NS_DISPATCH_NORMAL);
+}
+
+void DataChannelConnection::DestroyOnSTSFinal()
+{
+  mTransportFlow = nullptr;
+  sDataChannelShutdown->CreateConnectionShutdown(this);
 }
 
 bool
@@ -354,6 +436,7 @@ DataChannelConnection::Init(unsigned short aPort, uint16_t aNumStreams, bool aMa
 
     mSendInterleaved = false;
     mPpidFragmentation = false;
+    mMaxMessageSizeSet = false;
     SetMaxMessageSize(aMaxMessageSizeSet, aMaxMessageSize);
 
     if (!sctp_initialized) {
@@ -386,8 +469,8 @@ DataChannelConnection::Init(unsigned short aPort, uint16_t aNumStreams, bool aMa
 
       sctp_initialized = true;
 
-      RefPtr<DataChannelShutdown> shutdown = new DataChannelShutdown();
-      shutdown->Init();
+      sDataChannelShutdown = new DataChannelShutdown();
+      sDataChannelShutdown->Init();
     }
   }
 
@@ -519,6 +602,11 @@ DataChannelConnection::SetMaxMessageSize(bool aMaxMessageSizeSet, uint64_t aMaxM
 {
   MutexAutoLock lock(mLock); // TODO: Needed?
 
+  if (mMaxMessageSizeSet && !aMaxMessageSizeSet) {
+    // Don't overwrite already set MMS with default values
+    return;
+  }
+
   mMaxMessageSizeSet = aMaxMessageSizeSet;
   mMaxMessageSize = aMaxMessageSize;
 
@@ -587,7 +675,7 @@ DataChannelConnection::ConnectViaTransportFlow(TransportFlow *aFlow, uint16_t lo
 {
   LOG(("Connect DTLS local %u, remote %u", localport, remoteport));
 
-  NS_PRECONDITION(mMasterSocket, "SCTP wasn't initialized before ConnectViaTransportFlow!");
+  MOZ_ASSERT(mMasterSocket, "SCTP wasn't initialized before ConnectViaTransportFlow!");
   if (NS_WARN_IF(!aFlow)) {
     return false;
   }
@@ -735,6 +823,7 @@ DataChannelConnection::SctpDtlsInput(TransportFlow *flow,
     }
   }
   // Pass the data to SCTP
+  MutexAutoLock lock(mLock);
   usrsctp_conninput(static_cast<void *>(this), data, len, 0);
 }
 
@@ -1142,7 +1231,7 @@ DataChannelConnection::SendDeferredMessages()
   RefPtr<DataChannel> channel; // we may null out the refs to this
 
   // This may block while something is modifying channels, but should not block for IO
-  MutexAutoLock lock(mLock);
+  mLock.AssertCurrentThreadOwns();
 
   LOG(("SendDeferredMessages called, pending type: %d", mPendingType));
   if (!mPendingType) {
@@ -2223,9 +2312,9 @@ DataChannelConnection::ReceiveCallback(struct socket* sock, void *data, size_t d
   ASSERT_WEBRTC(!NS_IsMainThread());
 
   if (!data) {
-    usrsctp_close(sock); // SCTP has finished shutting down
+    LOG(("ReceiveCallback: SCTP has finished shutting down"));
   } else {
-    MutexAutoLock lock(mLock);
+    mLock.AssertCurrentThreadOwns();
     if (flags & MSG_NOTIFICATION) {
       HandleNotification(static_cast<union sctp_notification *>(data), datalen);
     } else {
@@ -2827,19 +2916,14 @@ DataChannelConnection::ReadBlob(already_AddRefed<DataChannelConnection> aThis,
   // background thread, we may not want to block on one stream's data.
   // I.e. run non-blocking and service multiple channels.
 
-  // For now as a hack, send as a single blast of queued packets which may
-  // be deferred until buffer space is available.
-  uint64_t len;
-
   // Must not let Dispatching it cause the DataChannelConnection to get
   // released on the wrong thread.  Using WrapRunnable(RefPtr<DataChannelConnection>(aThis),...
   // will occasionally cause aThis to get released on this thread.  Also, an explicit Runnable
   // lets us avoid copying the blob data an extra time.
   RefPtr<DataChannelBlobSendRunnable> runnable = new DataChannelBlobSendRunnable(aThis,
-                                                                                   aStream);
+                                                                                 aStream);
   // avoid copying the blob data by passing the mData from the runnable
-  if (NS_FAILED(aBlob->Available(&len)) ||
-      NS_FAILED(NS_ReadInputStreamToString(aBlob, runnable->mData, len))) {
+  if (NS_FAILED(NS_ReadInputStreamToString(aBlob, runnable->mData, -1))) {
     // Bug 966602:  Doesn't return an error to the caller via onerror.
     // We must release DataChannelConnection on MainThread to avoid issues (bug 876167)
     // aThis is now owned by the runnable; release it there
@@ -2893,10 +2977,9 @@ DataChannelConnection::SendDataMsgCommon(uint16_t stream, const nsACString &aMsg
   if (isBinary) {
     return SendDataMsg(channel, data, len,
                        DATA_CHANNEL_PPID_BINARY_PARTIAL, DATA_CHANNEL_PPID_BINARY);
-  } else {
-    return SendDataMsg(channel, data, len,
-                       DATA_CHANNEL_PPID_DOMSTRING_PARTIAL, DATA_CHANNEL_PPID_DOMSTRING);
   }
+  return SendDataMsg(channel, data, len,
+                     DATA_CHANNEL_PPID_DOMSTRING_PARTIAL, DATA_CHANNEL_PPID_DOMSTRING);
 }
 
 void
@@ -3168,10 +3251,9 @@ DataChannel::EnsureValidStream(ErrorResult& aRv)
   MOZ_ASSERT(mConnection);
   if (mConnection && mStream != INVALID_STREAM) {
     return true;
-  } else {
-    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
-    return false;
   }
+  aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+  return false;
 }
 
 } // namespace mozilla

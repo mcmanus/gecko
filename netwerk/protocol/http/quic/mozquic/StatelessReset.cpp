@@ -6,6 +6,7 @@
 #include "Logging.h"
 #include "MozQuic.h"
 #include "MozQuicInternal.h"
+#include "Sender.h"
 
 #include <assert.h>
 #include <stdlib.h>
@@ -23,7 +24,7 @@ MozQuic::StatelessResetEnsureKey()
   assert(sizeof(empty) == sizeof(mStatelessResetKey));
   if (!memcmp(empty, mStatelessResetKey, 128)) {
     assert((sizeof(mStatelessResetKey) % sizeof(uint16_t)) == 0);
-    for (int i=0; i < (sizeof(mStatelessResetKey) / sizeof (uint16_t)); i++) {
+    for (unsigned int i=0; i < (sizeof(mStatelessResetKey) / sizeof (uint16_t)); i++) {
       ((uint16_t *)mStatelessResetKey)[i] = random() & 0xffff;
     }
   }
@@ -31,7 +32,7 @@ MozQuic::StatelessResetEnsureKey()
 }
 
 uint32_t
-MozQuic::StatelessResetSend(uint64_t connID, struct sockaddr_in *peer)
+MozQuic::StatelessResetSend(CID &connID, const struct sockaddr *peer)
 {
   if (mIsClient) {
     return MOZQUIC_ERR_GENERAL;
@@ -40,24 +41,32 @@ MozQuic::StatelessResetSend(uint64_t connID, struct sockaddr_in *peer)
   assert(!mParent);
   ConnectionLog1("Generate Stateless Reset of connection %lx\n", connID);
   unsigned char out[kMaxMTU];
-  uint32_t pad = mMTU - 25;
-  pad = (random() % pad) & ~0x1; // force even
-  assert((pad + 25) <= kMaxMTU);
-  out[0] = 0x41;
-  uint64_t tmp64 = PR_htonll(connID);
-  memcpy(out + 1, &tmp64, sizeof(tmp64));
+  out[0] = 0x30 | SHORT_1;
 
-  StatelessResetCalculateToken(mStatelessResetKey, connID, out + 9); // from key and CID
-
-  for (int i=0; i < pad; i++) {
-    out[25 + i] = random() & 0xff;
+  for (int i = 0; i < (18/2); i++) {
+    uint16_t tmp16 = random() & 0xffff;
+    memcpy(out + 1 + (i * 2), &tmp16, 2);
   }
-  return Transmit(out, 25 + pad, peer);
+  out[19] = random() & 0xff; // packet number
+
+  uint32_t pad = mMTU - 36;
+  pad = (random() % pad) & ~0x1; // force even
+  pad = (pad > 0) ? pad : 1;
+  assert((pad + 36) <= kMaxMTU);
+  assert((pad + 36) <= mMTU);
+
+  for (unsigned int i=0; i < pad; i++) {
+    out[20 + i] = random() & 0xff;
+  }
+
+  StatelessResetCalculateToken(mStatelessResetKey, connID, out + 20 + pad); // from key and CID
+
+  return mSendState->Transmit(0, true, false, false, out, 36 + pad, peer);
 }
 
 uint32_t
 MozQuic::StatelessResetCalculateToken(const unsigned char *key128,
-                                      uint64_t connID, unsigned char *out)
+                                      CID &connID, unsigned char *out)
 {
   // out needs to be at least 16
   // derive the public resetToken from the resetKey and connectionID
@@ -67,8 +76,7 @@ MozQuic::StatelessResetCalculateToken(const unsigned char *key128,
   HASHContext *hcontext = HASH_Create(HASH_AlgSHA256);
   HASH_Begin(hcontext);
   HASH_Update(hcontext, key128, 128);
-  uint64_t tmp64 = PR_htonll(connID);
-  HASH_Update(hcontext, reinterpret_cast<unsigned char *>(&tmp64), sizeof(tmp64));
+  HASH_Update(hcontext, connID.Data(), connID.Len());
   HASH_End(hcontext, digest, &digestLen, sizeof(digest));
   assert(digestLen == sizeof(digest));
   memcpy(out, digest, 16);
@@ -78,7 +86,7 @@ MozQuic::StatelessResetCalculateToken(const unsigned char *key128,
 bool
 MozQuic::StatelessResetCheckForReceipt(const unsigned char *pkt, uint32_t pktSize)
 {
-  if (pktSize < 25) {
+  if (pktSize < 36) {
     return false;
   }
   if (mConnectionState != CLIENT_STATE_CONNECTED) {
@@ -87,19 +95,17 @@ MozQuic::StatelessResetCheckForReceipt(const unsigned char *pkt, uint32_t pktSiz
   if ((pkt[0] & 0x80) != 0x00) { // only short form packets
     return false;
   }
-  uint64_t tmp64;
-  memcpy(&tmp64, pkt + 1, 8);
-  tmp64 = PR_ntohll(tmp64);
-  if (tmp64 != mConnectionID) {
+
+  if (mValidStatelessResetToken &&
+      memcmp(mStatelessResetToken, pkt + pktSize - 16, 16)) {
     return false;
   }
-  if (memcmp(mStatelessResetToken, pkt + 9, 16)) {
-    return false;
-  }
+
   ConnectionLog1("client recvd verified public reset\n");
   if (mConnEventCB) {
     mConnEventCB(mClosure, MOZQUIC_EVENT_ERROR, this);
   }
+
   return true;
 }
 

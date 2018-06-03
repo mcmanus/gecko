@@ -1,4 +1,4 @@
-Cu.import("resource://gre/modules/FormHistory.jsm");
+ChromeUtils.import("resource://gre/modules/FormHistory.jsm");
 
 const ENGINE_NAME = "engine-suggestions.xml";
 // This is fixed to match the port number in engine-suggestions.xml.
@@ -24,6 +24,9 @@ async function cleanUpSuggestions() {
 }
 
 add_task(async function setup() {
+  Services.prefs.setCharPref("browser.urlbar.matchBuckets", "general:5,suggestion:Infinity");
+  Services.prefs.setBoolPref("browser.urlbar.geoSpecificDefaults", false);
+
   // Set up a server that provides some suggestions by appending strings onto
   // the search query.
   let server = makeTestServer(SERVER_PORT);
@@ -43,7 +46,7 @@ add_task(async function setup() {
 
   // Install the test engine.
   let oldCurrentEngine = Services.search.currentEngine;
-  do_register_cleanup(() => Services.search.currentEngine = oldCurrentEngine);
+  registerCleanupFunction(() => Services.search.currentEngine = oldCurrentEngine);
   let engine = await addTestEngine(ENGINE_NAME, server);
   Services.search.currentEngine = engine;
 
@@ -559,13 +562,14 @@ add_task(async function mixup_frecency() {
     ],
   });
 
-  Services.prefs.clearUserPref("browser.urlbar.matchBuckets");
+  Services.prefs.setCharPref("browser.urlbar.matchBuckets", "general:5,suggestion:Infinity");
   Services.prefs.clearUserPref("browser.urlbar.matchBucketsSearch");
   await cleanUpSuggestions();
 });
 
 add_task(async function prohibit_suggestions() {
   Services.prefs.setBoolPref(SUGGEST_PREF, true);
+  Services.prefs.setBoolPref("browser.fixup.domainwhitelist.localhost", false);
 
   await check_autocomplete({
     search: "localhost",
@@ -597,8 +601,8 @@ add_task(async function prohibit_suggestions() {
     ],
   });
   Services.prefs.setBoolPref("browser.fixup.domainwhitelist.localhost", true);
-  do_register_cleanup(() => {
-    Services.prefs.clearUserPref("browser.fixup.domainwhitelist.localhost");
+  registerCleanupFunction(() => {
+    Services.prefs.setBoolPref("browser.fixup.domainwhitelist.localhost", false);
   });
   await check_autocomplete({
     search: "localhost",
@@ -642,9 +646,9 @@ add_task(async function prohibit_suggestions() {
 
   // Clear the whitelist for localhost, and try preferring DNS for any single
   // word instead:
-  Services.prefs.clearUserPref("browser.fixup.domainwhitelist.localhost");
+  Services.prefs.setBoolPref("browser.fixup.domainwhitelist.localhost", false);
   Services.prefs.setBoolPref("browser.fixup.dns_first_for_single_words", true);
-  do_register_cleanup(() => {
+  registerCleanupFunction(() => {
     Services.prefs.clearUserPref("browser.fixup.dns_first_for_single_words");
   });
 
@@ -778,6 +782,7 @@ add_task(async function avoid_url_suggestions() {
 
 add_task(async function avoid_http_url_suggestions() {
   Services.prefs.setBoolPref(SUGGEST_PREF, true);
+  Services.prefs.setBoolPref("browser.urlbar.autoFill", false);
 
   setSuggestionsFn(searchStr => {
     return [searchStr + "ed"];
@@ -849,11 +854,7 @@ add_task(async function avoid_http_url_suggestions() {
     search: "http:",
     searchParam: "enable-actions",
     matches: [
-      {
-        uri: makeActionURI("visiturl", { url: "http://http/", input: "http:" }),
-        style: [ "action", "visiturl", "heuristic" ],
-        title: "http://http/",
-      },
+      makeSearchMatch("http:", { engineName: ENGINE_NAME, heuristic: true }),
     ],
   });
 
@@ -861,23 +862,85 @@ add_task(async function avoid_http_url_suggestions() {
     search: "https:",
     searchParam: "enable-actions",
     matches: [
-      {
-        uri: makeActionURI("visiturl", { url: "http://https/", input: "https:" }),
-        style: [ "action", "visiturl", "heuristic" ],
-        title: "http://https/",
-      },
+      makeSearchMatch("https:", { engineName: ENGINE_NAME, heuristic: true }),
     ],
   });
+
+  // Check FTP enabled
+  Services.prefs.setBoolPref("network.ftp.enabled", true);
+  registerCleanupFunction(() => Services.prefs.clearUserPref("network.ftp.enabled"));
 
   await check_autocomplete({
     search: "ftp:",
     searchParam: "enable-actions",
     matches: [
+      makeSearchMatch("ftp:", { engineName: ENGINE_NAME, heuristic: true }),
+    ],
+  });
+
+  await check_autocomplete({
+    search: "ftp:/",
+    searchParam: "enable-actions",
+    matches: [
       {
-        uri: makeActionURI("visiturl", { url: "http://ftp/", input: "ftp:" }),
+        uri: makeActionURI("visiturl", { url: "http://ftp/", input: "ftp:/" }),
         style: [ "action", "visiturl", "heuristic" ],
         title: "http://ftp/",
       },
+    ],
+  });
+
+  await check_autocomplete({
+    search: "ftp://",
+    searchParam: "enable-actions",
+    matches: [
+      makeSearchMatch("ftp://", { engineName: ENGINE_NAME, heuristic: true }),
+    ],
+  });
+
+  await check_autocomplete({
+    search: "ftp://test",
+    searchParam: "enable-actions",
+    matches: [
+      {
+        uri: makeActionURI("visiturl", { url: "ftp://test/", input: "ftp://test" }),
+        style: [ "action", "visiturl", "heuristic" ],
+        title: "ftp://test/",
+      },
+    ],
+  });
+
+  // Check FTP disabled
+  Services.prefs.setBoolPref("network.ftp.enabled", false);
+  await check_autocomplete({
+    search: "ftp:",
+    searchParam: "enable-actions",
+    matches: [
+      makeSearchMatch("ftp:", { engineName: ENGINE_NAME, heuristic: true }),
+    ],
+  });
+
+  await check_autocomplete({
+    search: "ftp:/",
+    searchParam: "enable-actions",
+    matches: [
+      makeSearchMatch("ftp:/", { engineName: ENGINE_NAME, heuristic: true }),
+    ],
+  });
+
+  await check_autocomplete({
+    search: "ftp://",
+    searchParam: "enable-actions",
+    matches: [
+      makeSearchMatch("ftp://", { engineName: ENGINE_NAME, heuristic: true }),
+    ],
+  });
+
+  await check_autocomplete({
+    search: "ftp://test",
+    searchParam: "enable-actions",
+    matches: [
+      makeSearchMatch("ftp://test", { engineName: ENGINE_NAME, heuristic: true }),
     ],
   });
 
@@ -906,18 +969,6 @@ add_task(async function avoid_http_url_suggestions() {
   });
 
   await check_autocomplete({
-    search: "ftp:/",
-    searchParam: "enable-actions",
-    matches: [
-      {
-        uri: makeActionURI("visiturl", { url: "http://ftp/", input: "ftp:/" }),
-        style: [ "action", "visiturl", "heuristic" ],
-        title: "http://ftp/",
-      },
-    ],
-  });
-
-  await check_autocomplete({
     search: "http://",
     searchParam: "enable-actions",
     matches: [
@@ -930,14 +981,6 @@ add_task(async function avoid_http_url_suggestions() {
     searchParam: "enable-actions",
     matches: [
       makeSearchMatch("https://", { engineName: ENGINE_NAME, heuristic: true }),
-    ],
-  });
-
-  await check_autocomplete({
-    search: "ftp://",
-    searchParam: "enable-actions",
-    matches: [
-      makeSearchMatch("ftp://", { engineName: ENGINE_NAME, heuristic: true }),
     ],
   });
 
@@ -985,18 +1028,6 @@ add_task(async function avoid_http_url_suggestions() {
         uri: makeActionURI("visiturl", { url: "https://test/", input: "https://test" }),
         style: [ "action", "visiturl", "heuristic" ],
         title: "https://test/",
-      },
-    ],
-  });
-
-  await check_autocomplete({
-    search: "ftp://test",
-    searchParam: "enable-actions",
-    matches: [
-      {
-        uri: makeActionURI("visiturl", { url: "ftp://test/", input: "ftp://test" }),
-        style: [ "action", "visiturl", "heuristic" ],
-        title: "ftp://test/",
       },
     ],
   });

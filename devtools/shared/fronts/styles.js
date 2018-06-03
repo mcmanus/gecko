@@ -14,7 +14,6 @@ const {
   styleRuleSpec
 } = require("devtools/shared/specs/styles");
 const promise = require("promise");
-const { Task } = require("devtools/shared/task");
 
 loader.lazyRequireGetter(this, "RuleRewriter",
   "devtools/shared/css/parsing-utils", true);
@@ -23,12 +22,12 @@ loader.lazyRequireGetter(this, "RuleRewriter",
  * PageStyleFront, the front object for the PageStyleActor
  */
 const PageStyleFront = FrontClassWithSpec(pageStyleSpec, {
-  initialize: function (conn, form, ctx, detail) {
+  initialize: function(conn, form, ctx, detail) {
     Front.prototype.initialize.call(this, conn, form, ctx, detail);
     this.inspector = this.parent();
   },
 
-  form: function (form, detail) {
+  form: function(form, detail) {
     if (detail === "actorid") {
       this.actorID = form;
       return;
@@ -36,7 +35,7 @@ const PageStyleFront = FrontClassWithSpec(pageStyleSpec, {
     this._form = form;
   },
 
-  destroy: function () {
+  destroy: function() {
     Front.prototype.destroy.call(this);
   },
 
@@ -48,7 +47,23 @@ const PageStyleFront = FrontClassWithSpec(pageStyleSpec, {
     return this._form.traits && this._form.traits.authoredStyles;
   },
 
-  getMatchedSelectors: custom(function (node, property, options) {
+  get supportsFontStretchLevel4() {
+    return this._form.traits && this._form.traits.fontStretchLevel4;
+  },
+
+  get supportsFontStyleLevel4() {
+    return this._form.traits && this._form.traits.fontStyleLevel4;
+  },
+
+  get supportsFontVariations() {
+    return this._form.traits && this._form.traits.fontVariations;
+  },
+
+  get supportsFontWeightLevel4() {
+    return this._form.traits && this._form.traits.fontWeightLevel4;
+  },
+
+  getMatchedSelectors: custom(function(node, property, options) {
     return this._getMatchedSelectors(node, property, options).then(ret => {
       return ret.matched;
     });
@@ -56,21 +71,21 @@ const PageStyleFront = FrontClassWithSpec(pageStyleSpec, {
     impl: "_getMatchedSelectors"
   }),
 
-  getApplied: custom(Task.async(function* (node, options = {}) {
+  getApplied: custom(async function(node, options = {}) {
     // If the getApplied method doesn't recreate the style cache itself, this
     // means a call to cssLogic.highlight is required before trying to access
     // the applied rules. Issue a request to getLayout if this is the case.
     // See https://bugzilla.mozilla.org/show_bug.cgi?id=1103993#c16.
     if (!this._form.traits || !this._form.traits.getAppliedCreatesStyleCache) {
-      yield this.getLayout(node);
+      await this.getLayout(node);
     }
-    let ret = yield this._getApplied(node, options);
+    const ret = await this._getApplied(node, options);
     return ret.entries;
-  }), {
+  }, {
     impl: "_getApplied"
   }),
 
-  addNewRule: custom(function (node, pseudoClasses) {
+  addNewRule: custom(function(node, pseudoClasses) {
     let addPromise;
     if (this.supportsAuthoredStyles) {
       addPromise = this._addNewRule(node, pseudoClasses, true);
@@ -91,15 +106,15 @@ exports.PageStyleFront = PageStyleFront;
  * StyleRuleFront, the front for the StyleRule actor.
  */
 const StyleRuleFront = FrontClassWithSpec(styleRuleSpec, {
-  initialize: function (client, form, ctx, detail) {
+  initialize: function(client, form, ctx, detail) {
     Front.prototype.initialize.call(this, client, form, ctx, detail);
   },
 
-  destroy: function () {
+  destroy: function() {
     Front.prototype.destroy.call(this);
   },
 
-  form: function (form, detail) {
+  form: function(form, detail) {
     if (detail === "actorid") {
       this.actorID = form;
       return;
@@ -114,7 +129,7 @@ const StyleRuleFront = FrontClassWithSpec(styleRuleSpec, {
   /**
    * Ensure _form is updated when location-changed is emitted.
    */
-  _locationChangedPre: preEvent("location-changed", function (line, column) {
+  _locationChangedPre: preEvent("location-changed", function(line, column) {
     this._clearOriginalLocation();
     this._form.line = line;
     this._form.column = column;
@@ -130,7 +145,7 @@ const StyleRuleFront = FrontClassWithSpec(styleRuleSpec, {
    *                             This is needed by the RuleRewriter.
    * @return {RuleModificationList}
    */
-  startModifyingProperties: function (cssProperties) {
+  startModifyingProperties: function(cssProperties) {
     if (this.canSetRuleText) {
       return new RuleRewriter(cssProperties.isKnown, this, this.authoredText);
     }
@@ -194,12 +209,12 @@ const StyleRuleFront = FrontClassWithSpec(styleRuleSpec, {
     if (this._form.href) {
       return this._form.href;
     }
-    let sheet = this.parentStyleSheet;
+    const sheet = this.parentStyleSheet;
     return sheet ? sheet.href : "";
   },
 
   get nodeHref() {
-    let sheet = this.parentStyleSheet;
+    const sheet = this.parentStyleSheet;
     return sheet ? sheet.nodeHref : "";
   },
 
@@ -220,15 +235,15 @@ const StyleRuleFront = FrontClassWithSpec(styleRuleSpec, {
     };
   },
 
-  _clearOriginalLocation: function () {
+  _clearOriginalLocation: function() {
     this._originalLocation = null;
   },
 
-  getOriginalLocation: function () {
+  getOriginalLocation: function() {
     if (this._originalLocation) {
       return promise.resolve(this._originalLocation);
     }
-    let parentSheet = this.parentStyleSheet;
+    const parentSheet = this.parentStyleSheet;
     if (!parentSheet) {
       // This rule doesn't belong to a stylesheet so it is an inline style.
       // Inline styles do not have any mediaText so we can return early.
@@ -236,7 +251,7 @@ const StyleRuleFront = FrontClassWithSpec(styleRuleSpec, {
     }
     return parentSheet.getOriginalLocation(this.line, this.column)
       .then(({ fromSourceMap, source, line, column }) => {
-        let location = {
+        const location = {
           href: source,
           line: line,
           column: column,
@@ -253,28 +268,28 @@ const StyleRuleFront = FrontClassWithSpec(styleRuleSpec, {
       });
   },
 
-  modifySelector: custom(Task.async(function* (node, value) {
+  modifySelector: custom(async function(node, value) {
     let response;
     if (this.supportsModifySelectorUnmatched) {
       // If the debugee supports adding unmatched rules (post FF41)
       if (this.canSetRuleText) {
-        response = yield this.modifySelector2(node, value, true);
+        response = await this.modifySelector2(node, value, true);
       } else {
-        response = yield this.modifySelector2(node, value);
+        response = await this.modifySelector2(node, value);
       }
     } else {
-      response = yield this._modifySelector(value);
+      response = await this._modifySelector(value);
     }
 
     if (response.ruleProps) {
       response.ruleProps = response.ruleProps.entries[0];
     }
     return response;
-  }), {
+  }, {
     impl: "_modifySelector"
   }),
 
-  setRuleText: custom(function (newText) {
+  setRuleText: custom(function(newText) {
     this._form.authoredText = newText;
     return this._setRuleText(newText);
   }, {

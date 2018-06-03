@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -577,8 +577,7 @@ PresentationConnection::DoReceiveMessage(const nsACString& aData, bool aIsBinary
       }
       jsData.setObject(*arrayBuf);
     } else {
-      NS_RUNTIMEABORT("Unknown binary type!");
-      return NS_ERROR_UNEXPECTED;
+      MOZ_CRASH("Unknown binary type!");
     }
   } else {
     NS_ConvertUTF8toUTF16 utf16Data(aData);
@@ -616,12 +615,13 @@ PresentationConnection::DispatchConnectionCloseEvent(
   closedEvent->SetTrusted(true);
 
   if (aDispatchNow) {
-    bool ignore;
-    return DOMEventTargetHelper::DispatchEvent(closedEvent, &ignore);
+    ErrorResult rv;
+    DispatchEvent(*closedEvent, rv);
+    return rv.StealNSResult();
   }
 
   RefPtr<AsyncEventDispatcher> asyncDispatcher =
-    new AsyncEventDispatcher(this, static_cast<Event*>(closedEvent));
+    new AsyncEventDispatcher(this, closedEvent);
   return asyncDispatcher->PostDOMEvent();
 }
 
@@ -650,7 +650,7 @@ PresentationConnection::DispatchMessageEvent(JS::Handle<JS::Value> aData)
   messageEvent->SetTrusted(true);
 
   RefPtr<AsyncEventDispatcher> asyncDispatcher =
-    new AsyncEventDispatcher(this, static_cast<Event*>(messageEvent));
+    new AsyncEventDispatcher(this, messageEvent);
   return asyncDispatcher->PostDOMEvent();
 }
 

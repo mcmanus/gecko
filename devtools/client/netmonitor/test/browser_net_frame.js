@@ -146,9 +146,9 @@ const EXPECTED_REQUESTS_SUB = [
 
 const REQUEST_COUNT = EXPECTED_REQUESTS_TOP.length + EXPECTED_REQUESTS_SUB.length;
 
-add_task(function* () {
+add_task(async function() {
   // Async stacks aren't on by default in all builds
-  yield SpecialPowers.pushPrefEnv({ set: [["javascript.options.asyncstack", true]] });
+  await SpecialPowers.pushPrefEnv({ set: [["javascript.options.asyncstack", true]] });
 
   // the initNetMonitor function clears the network request list after the
   // page is loaded. That's why we first load a bogus page from SIMPLE_URL,
@@ -156,23 +156,29 @@ add_task(function* () {
   // all the requests the page is making, not only the XHRs.
   // We can't use about:blank here, because initNetMonitor checks that the
   // page has actually made at least one request.
-  let { tab, monitor } = yield initNetMonitor(SIMPLE_URL);
+  const { tab, monitor } = await initNetMonitor(SIMPLE_URL);
 
-  let { document, store, windowRequire } = monitor.panelWin;
-  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
-  let {
+  const { document, store, windowRequire, connector } = monitor.panelWin;
+  const Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+  const {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
   store.dispatch(Actions.batchEnable(false));
 
-  tab.linkedBrowser.loadURI(TOP_URL, null, null);
+  tab.linkedBrowser.loadURI(TOP_URL);
 
-  yield waitForNetworkEvents(monitor, REQUEST_COUNT);
+  await waitForNetworkEvents(monitor, REQUEST_COUNT);
 
   is(store.getState().requests.requests.size, REQUEST_COUNT,
     "All the page events should be recorded.");
+
+  // Fetch stack-trace data from the backend and wait till
+  // all packets are received.
+  const requests = getSortedRequests(store.getState());
+  await Promise.all(requests.map(requestItem =>
+    connector.requestData(requestItem.id, "stackTrace")));
 
   // While there is a defined order for requests in each document separately, the requests
   // from different documents may interleave in various ways that change per test run, so
@@ -180,17 +186,17 @@ add_task(function* () {
   let currentTop = 0;
   let currentSub = 0;
   for (let i = 0; i < REQUEST_COUNT; i++) {
-    let requestItem = getSortedRequests(store.getState()).get(i);
+    const requestItem = getSortedRequests(store.getState()).get(i);
 
-    let itemUrl = requestItem.url;
-    let itemCauseUri = requestItem.cause.loadingDocumentUri;
+    const itemUrl = requestItem.url;
+    const itemCauseUri = requestItem.cause.loadingDocumentUri;
     let spec;
     if (itemUrl == SUB_URL || itemCauseUri == SUB_URL) {
       spec = EXPECTED_REQUESTS_SUB[currentSub++];
     } else {
       spec = EXPECTED_REQUESTS_TOP[currentTop++];
     }
-    let { method, url, causeType, causeUri, stack } = spec;
+    const { method, url, causeType, causeUri, stack } = spec;
 
     verifyRequestItemTarget(
       document,
@@ -201,8 +207,8 @@ add_task(function* () {
       { cause: { type: causeType, loadingDocumentUri: causeUri } }
     );
 
-    let { stacktrace } = requestItem.cause;
-    let stackLen = stacktrace ? stacktrace.length : 0;
+    const { stacktrace } = requestItem;
+    const stackLen = stacktrace ? stacktrace.length : 0;
 
     if (stack) {
       ok(stacktrace, `Request #${i} has a stacktrace`);
@@ -227,5 +233,5 @@ add_task(function* () {
     }
   }
 
-  yield teardown(monitor);
+  await teardown(monitor);
 });

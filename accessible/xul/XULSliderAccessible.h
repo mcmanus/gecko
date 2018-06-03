@@ -8,8 +8,6 @@
 
 #include "AccessibleWrap.h"
 
-#include "nsIDOMElement.h"
-
 namespace mozilla {
 namespace a11y {
 
@@ -22,8 +20,8 @@ public:
   XULSliderAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
   // Accessible
-  virtual void Value(nsString& aValue) override;
-  virtual a11y::role NativeRole() override;
+  virtual void Value(nsString& aValue) const override;
+  virtual a11y::role NativeRole() const override;
   virtual uint64_t NativeInteractiveState() const override;
   virtual bool NativelyUnavailable() const override;
 
@@ -35,15 +33,15 @@ public:
   virtual bool SetCurValue(double aValue) override;
 
   // ActionAccessible
-  virtual uint8_t ActionCount() override;
+  virtual uint8_t ActionCount() const override;
   virtual void ActionNameAt(uint8_t aIndex, nsAString& aName) override;
-  virtual bool DoAction(uint8_t aIndex) override;
+  virtual bool DoAction(uint8_t aIndex) const override;
 
 protected:
   /**
    * Return anonymous slider element.
    */
-  nsIContent* GetSliderElement() const;
+  dom::Element* GetSliderElement() const;
 
   nsresult GetSliderAttr(nsAtom *aName, nsAString& aValue) const;
   nsresult SetSliderAttr(nsAtom *aName, const nsAString& aValue);
@@ -52,7 +50,7 @@ protected:
   bool SetSliderAttr(nsAtom *aName, double aValue);
 
 private:
-  mutable nsCOMPtr<nsIContent> mSliderNode;
+  mutable RefPtr<dom::Element> mSliderElement;
 };
 
 
@@ -65,7 +63,7 @@ public:
   XULThumbAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
   // Accessible
-  virtual a11y::role NativeRole() override;
+  virtual a11y::role NativeRole() const override;
 };
 
 } // namespace a11y

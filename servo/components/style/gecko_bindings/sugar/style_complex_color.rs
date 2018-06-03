@@ -8,6 +8,7 @@ use gecko::values::{convert_nscolor_to_rgba, convert_rgba_to_nscolor};
 use gecko_bindings::structs::{nscolor, StyleComplexColor};
 use values::{Auto, Either};
 use values::computed::Color as ComputedColor;
+use values::computed::ui::ColorOrAuto;
 
 impl From<nscolor> for StyleComplexColor {
     fn from(other: nscolor) -> Self {
@@ -59,16 +60,16 @@ impl From<StyleComplexColor> for ComputedColor {
     }
 }
 
-impl From<Either<ComputedColor, Auto>> for StyleComplexColor {
-    fn from(other: Either<ComputedColor, Auto>) -> Self {
+impl From<ColorOrAuto> for StyleComplexColor {
+    fn from(other: ColorOrAuto) -> Self {
         match other {
             Either::First(color) => color.into(),
-            Either::Second(_auto) => StyleComplexColor::auto(),
+            Either::Second(_) => StyleComplexColor::auto(),
         }
     }
 }
 
-impl From<StyleComplexColor> for Either<ComputedColor, Auto> {
+impl From<StyleComplexColor> for ColorOrAuto {
     fn from(other: StyleComplexColor) -> Self {
         if !other.mIsAuto {
             Either::First(other.into())

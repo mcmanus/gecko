@@ -11,21 +11,21 @@ const URL = "data:text/html;charset=utf8,test page for menu api";
 const Menu = require("devtools/client/framework/menu");
 const MenuItem = require("devtools/client/framework/menu-item");
 
-add_task(function* () {
+add_task(async function() {
   info("Create a test tab and open the toolbox");
-  let tab = yield addTab(URL);
-  let target = TargetFactory.forTab(tab);
-  let toolbox = yield gDevTools.showToolbox(target, "webconsole");
+  const tab = await addTab(URL);
+  const target = TargetFactory.forTab(tab);
+  const toolbox = await gDevTools.showToolbox(target, "webconsole");
 
-  yield testMenuItems();
-  yield testMenuPopup(toolbox);
-  yield testSubmenu(toolbox);
+  await testMenuItems();
+  await testMenuPopup(toolbox);
+  await testSubmenu(toolbox);
 });
 
-function* testMenuItems() {
-  let menu = new Menu();
-  let menuItem1 = new MenuItem();
-  let menuItem2 = new MenuItem();
+function testMenuItems() {
+  const menu = new Menu();
+  const menuItem1 = new MenuItem();
+  const menuItem2 = new MenuItem();
 
   menu.append(menuItem1);
   menu.append(menuItem2);
@@ -35,15 +35,15 @@ function* testMenuItems() {
   is(menu.items[1], menuItem2, "Correct reference to MenuItem");
 }
 
-function* testMenuPopup(toolbox) {
+async function testMenuPopup(toolbox) {
   let clickFired = false;
 
-  let menu = new Menu({
+  const menu = new Menu({
     id: "menu-popup",
   });
   menu.append(new MenuItem({ type: "separator" }));
 
-  let MENU_ITEMS = [
+  const MENU_ITEMS = [
     new MenuItem({
       id: "menu-item-1",
       label: "Normal Item",
@@ -67,7 +67,7 @@ function* testMenuPopup(toolbox) {
     }),
   ];
 
-  for (let item of MENU_ITEMS) {
+  for (const item of MENU_ITEMS) {
     menu.append(item);
   }
 
@@ -81,11 +81,11 @@ function* testMenuPopup(toolbox) {
 
   ok(toolbox.doc.querySelector("#menu-popup"), "A popup is in the DOM");
 
-  let menuSeparators =
+  const menuSeparators =
     toolbox.doc.querySelectorAll("#menu-popup > menuseparator");
   is(menuSeparators.length, 1, "A separator is in the menu");
 
-  let menuItems = toolbox.doc.querySelectorAll("#menu-popup > menuitem");
+  const menuItems = toolbox.doc.querySelectorAll("#menu-popup > menuitem");
   is(menuItems.length, MENU_ITEMS.length, "Correct number of menuitems");
 
   is(menuItems[0].id, MENU_ITEMS[0].id, "Correct id for menuitem");
@@ -102,21 +102,21 @@ function* testMenuPopup(toolbox) {
   is(menuItems[3].getAttribute("label"), MENU_ITEMS[3].label, "Correct label");
   is(menuItems[3].getAttribute("disabled"), "true", "disabled attr menuitem");
 
-  yield once(menu, "open");
-  let closed = once(menu, "close");
+  await once(menu, "open");
+  const closed = once(menu, "close");
   EventUtils.synthesizeMouseAtCenter(menuItems[0], {}, toolbox.win);
-  yield closed;
+  await closed;
   ok(clickFired, "Click has fired");
 
   ok(!toolbox.doc.querySelector("#menu-popup"), "Popup removed from the DOM");
 }
 
-function* testSubmenu(toolbox) {
+async function testSubmenu(toolbox) {
   let clickFired = false;
-  let menu = new Menu({
+  const menu = new Menu({
     id: "menu-popup",
   });
-  let submenu = new Menu({
+  const submenu = new Menu({
     id: "submenu-popup",
   });
   submenu.append(new MenuItem({
@@ -143,7 +143,7 @@ function* testSubmenu(toolbox) {
   is(toolbox.doc.querySelectorAll("#menu-popup > menuitem").length, 0,
     "No menuitem children");
 
-  let menus = toolbox.doc.querySelectorAll("#menu-popup > menu");
+  const menus = toolbox.doc.querySelectorAll("#menu-popup > menu");
   is(menus.length, 2, "Correct number of menus");
   is(menus[0].getAttribute("label"), "Submenu parent", "Correct label");
   ok(!menus[0].hasAttribute("disabled"), "Correct disabled state");
@@ -152,30 +152,30 @@ function* testSubmenu(toolbox) {
   ok(menus[1].hasAttribute("disabled"), "Correct disabled state");
   ok(menus[1].id, "submenu-parent-with-attrs", "Correct id");
 
-  let subMenuItems = menus[0].querySelectorAll("menupopup > menuitem");
+  const subMenuItems = menus[0].querySelectorAll("menupopup > menuitem");
   is(subMenuItems.length, 1, "Correct number of submenu items");
   is(subMenuItems[0].getAttribute("label"), "Submenu item", "Correct label");
 
-  yield once(menu, "open");
-  let closed = once(menu, "close");
+  await once(menu, "open");
+  const closed = once(menu, "close");
 
   info("Using keyboard navigation to open, close, and reopen the submenu");
   let shown = once(menus[0], "popupshown");
-  EventUtils.synthesizeKey("VK_DOWN", {});
-  EventUtils.synthesizeKey("VK_RIGHT", {});
-  yield shown;
+  EventUtils.synthesizeKey("KEY_ArrowDown");
+  EventUtils.synthesizeKey("KEY_ArrowRight");
+  await shown;
 
-  let hidden = once(menus[0], "popuphidden");
-  EventUtils.synthesizeKey("VK_LEFT", {});
-  yield hidden;
+  const hidden = once(menus[0], "popuphidden");
+  EventUtils.synthesizeKey("KEY_ArrowLeft");
+  await hidden;
 
   shown = once(menus[0], "popupshown");
-  EventUtils.synthesizeKey("VK_RIGHT", {});
-  yield shown;
+  EventUtils.synthesizeKey("KEY_ArrowRight");
+  await shown;
 
   info("Clicking the submenu item");
   EventUtils.synthesizeMouseAtCenter(subMenuItems[0], {}, toolbox.win);
 
-  yield closed;
+  await closed;
   ok(clickFired, "Click has fired");
 }

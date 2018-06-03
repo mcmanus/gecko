@@ -3,7 +3,10 @@
 /* global gBrowser SessionStore */
 "use strict";
 
-let lazyTabState = {entries: [{url: "http://example.com/", title: "Example Domain"}]};
+const {Utils} = ChromeUtils.import("resource://gre/modules/sessionstore/Utils.jsm", {});
+const triggeringPrincipal_base64 = Utils.SERIALIZED_SYSTEMPRINCIPAL;
+
+let lazyTabState = {entries: [{url: "http://example.com/", triggeringPrincipal_base64, title: "Example Domain"}]};
 
 add_task(async function test_discarded() {
   let extension = ExtensionTestUtils.loadExtension({
@@ -60,7 +63,7 @@ add_task(async function test_discarded() {
   await extension.awaitFinish("test-finished");
   await extension.unload();
 
-  await BrowserTestUtils.removeTab(tab1);
-  await BrowserTestUtils.removeTab(tab2);
+  BrowserTestUtils.removeTab(tab1);
+  BrowserTestUtils.removeTab(tab2);
 });
 

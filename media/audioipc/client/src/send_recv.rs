@@ -1,52 +1,68 @@
+use cubeb_backend::Error;
+use std::os::raw::c_int;
+
+#[doc(hidden)]
+pub fn _err<E>(e: E) -> Error
+where
+    E: Into<Option<c_int>>,
+{
+    match e.into() {
+        Some(e) => unsafe { Error::from_raw(e) },
+        None => Error::error(),
+    }
+}
+
 #[macro_export]
 macro_rules! send_recv {
-    ($conn:expr, $smsg:ident => $rmsg:ident) => {{
-        send_recv!(__send $conn, $smsg);
-        send_recv!(__recv $conn, $rmsg)
+    ($rpc:expr, $smsg:ident => $rmsg:ident) => {{
+        let resp = send_recv!(__send $rpc, $smsg);
+        send_recv!(__recv resp, $rmsg)
     }};
-    ($conn:expr, $smsg:ident => $rmsg:ident()) => {{
-        send_recv!(__send $conn, $smsg);
-        send_recv!(__recv $conn, $rmsg __result)
+    ($rpc:expr, $smsg:ident => $rmsg:ident()) => {{
+        let resp = send_recv!(__send $rpc, $smsg);
+        send_recv!(__recv resp, $rmsg __result)
     }};
-    ($conn:expr, $smsg:ident($($a:expr),*) => $rmsg:ident) => {{
-        send_recv!(__send $conn, $smsg, $($a),*);
-        send_recv!(__recv $conn, $rmsg)
+    ($rpc:expr, $smsg:ident($($a:expr),*) => $rmsg:ident) => {{
+        let resp = send_recv!(__send $rpc, $smsg, $($a),*);
+        send_recv!(__recv resp, $rmsg)
     }};
-    ($conn:expr, $smsg:ident($($a:expr),*) => $rmsg:ident()) => {{
-        send_recv!(__send $conn, $smsg, $($a),*);
-        send_recv!(__recv $conn, $rmsg __result)
+    ($rpc:expr, $smsg:ident($($a:expr),*) => $rmsg:ident()) => {{
+        let resp = send_recv!(__send $rpc, $smsg, $($a),*);
+        send_recv!(__recv resp, $rmsg __result)
     }};
     //
-    (__send $conn:expr, $smsg:ident) => ({
-        let r = $conn.send(ServerMessage::$smsg);
-        if r.is_err() {
-            debug!("send error - got={:?}", r);
-            return Err(ErrorCode::Error.into());
+    (__send $rpc:expr, $smsg:ident) => ({
+        $rpc.call(ServerMessage::$smsg)
+    });
+    (__send $rpc:expr, $smsg:ident, $($a:expr),*) => ({
+        $rpc.call(ServerMessage::$smsg($($a),*))
+    });
+    (__recv $resp:expr, $rmsg:ident) => ({
+        match $resp.wait() {
+            Ok(ClientMessage::$rmsg) => Ok(()),
+            Ok(ClientMessage::Error(e)) => Err($crate::send_recv::_err(e)),
+            Ok(m) => {
+                debug!("received wrong message - got={:?}", m);
+                Err($crate::send_recv::_err(None))
+            },
+            Err(e) => {
+                debug!("received error from rpc - got={:?}", e);
+                Err($crate::send_recv::_err(None))
+            },
         }
     });
-    (__send $conn:expr, $smsg:ident, $($a:expr),*) => ({
-        let r = $conn.send(ServerMessage::$smsg($($a),*));
-        if r.is_err() {
-            debug!("send error - got={:?}", r);
-            return Err(ErrorCode::Error.into());
-        }
-    });
-    (__recv $conn:expr, $rmsg:ident) => ({
-        let r = $conn.receive().unwrap();
-        if let ClientMessage::$rmsg = r {
-            Ok(())
-        } else {
-            debug!("receive error - got={:?}", r);
-            Err(ErrorCode::Error.into())
-        }
-    });
-    (__recv $conn:expr, $rmsg:ident __result) => ({
-        let r = $conn.receive().unwrap();
-        if let ClientMessage::$rmsg(v) = r {
-            Ok(v)
-        } else {
-            debug!("receive error - got={:?}", r);
-            Err(ErrorCode::Error.into())
+    (__recv $resp:expr, $rmsg:ident __result) => ({
+        match $resp.wait() {
+            Ok(ClientMessage::$rmsg(v)) => Ok(v),
+            Ok(ClientMessage::Error(e)) => Err($crate::send_recv::_err(e)),
+            Ok(m) => {
+                debug!("received wrong message - got={:?}", m);
+                Err($crate::send_recv::_err(None))
+            },
+            Err(e) => {
+                debug!("received error - got={:?}", e);
+                Err($crate::send_recv::_err(None))
+            },
         }
     })
 }

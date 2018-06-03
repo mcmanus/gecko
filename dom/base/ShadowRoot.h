@@ -8,11 +8,10 @@
 #define mozilla_dom_shadowroot_h__
 
 #include "mozilla/dom/DocumentFragment.h"
-#include "mozilla/dom/StyleSheetList.h"
-#include "mozilla/StyleSheet.h"
+#include "mozilla/dom/DocumentOrShadowRoot.h"
+#include "mozilla/dom/NameSpaceConstants.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
-#include "nsIContentInlines.h"
 #include "nsIdentifierMapEntry.h"
 #include "nsTHashtable.h"
 
@@ -21,17 +20,25 @@ class nsIContent;
 class nsXBLPrototypeBinding;
 
 namespace mozilla {
+
+class EventChainPreVisitor;
+class ServoStyleRuleMap;
+
+namespace css {
+class Rule;
+}
+
 namespace dom {
 
 class Element;
-class HTMLContentElement;
-class ShadowRootStyleSheetList;
 
 class ShadowRoot final : public DocumentFragment,
+                         public DocumentOrShadowRoot,
                          public nsStubMutationObserver
 {
-  friend class ShadowRootStyleSheetList;
 public:
+  NS_IMPL_FROMNODE_HELPER(ShadowRoot, IsShadowRoot());
+
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(ShadowRoot,
                                            DocumentFragment)
   NS_DECL_ISUPPORTS_INHERITED
@@ -41,97 +48,148 @@ public:
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTINSERTED
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTREMOVED
 
-  ShadowRoot(Element* aElement,
-             already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
-             nsXBLPrototypeBinding* aProtoBinding);
+  ShadowRoot(Element* aElement, ShadowRootMode aMode,
+             already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo);
 
-  void AddToIdTable(Element* aElement, nsAtom* aId);
-  void RemoveFromIdTable(Element* aElement, nsAtom* aId);
+  // Shadow DOM v1
+  Element* Host() const
+  {
+    MOZ_ASSERT(GetHost(), "ShadowRoot always has a host, how did we create "
+                          "this ShadowRoot?");
+    return GetHost();
+  }
+
+  ShadowRootMode Mode() const
+  {
+    return mMode;
+  }
+  bool IsClosed() const
+  {
+    return mMode == ShadowRootMode::Closed;
+  }
+
   void InsertSheet(StyleSheet* aSheet, nsIContent* aLinkingContent);
   void RemoveSheet(StyleSheet* aSheet);
-  bool ApplyAuthorStyles();
-  void SetApplyAuthorStyles(bool aApplyAuthorStyles);
-  StyleSheetList* StyleSheets();
+  void RuleAdded(StyleSheet&, css::Rule&);
+  void RuleRemoved(StyleSheet&, css::Rule&);
+  void RuleChanged(StyleSheet&, css::Rule*);
+  void StyleSheetApplicableStateChanged(StyleSheet&, bool aApplicable);
+
+  StyleSheetList* StyleSheets()
+  {
+    return &DocumentOrShadowRoot::EnsureDOMStyleSheets();
+  }
 
   /**
-   * Distributes a single explicit child of the pool host to the content
-   * insertion points in this ShadowRoot.
+   * Clones internal state, for example stylesheets, of aOther to 'this'.
    */
-  void DistributeSingleNode(nsIContent* aContent);
+  void CloneInternalDataFrom(ShadowRoot* aOther);
+private:
+  void InsertSheetIntoAuthorData(size_t aIndex, StyleSheet&);
+
+  void InsertSheetAt(size_t aIndex, StyleSheet&);
+  void AppendStyleSheet(StyleSheet&);
 
   /**
-   * Removes a single explicit child of the pool host from the content
-   * insertion points in this ShadowRoot.
+   * Try to reassign an element to a slot and returns whether the assignment
+   * changed.
    */
-  void RemoveDistributedNode(nsIContent* aContent);
+  void MaybeReassignElement(Element* aElement);
 
   /**
-   * Distributes all the explicit children of the pool host to the content
-   * insertion points in this ShadowRoot.
+   * Represents the insertion point in a slot for a given node.
    */
-  void DistributeAllNodes();
+  struct SlotAssignment
+  {
+    HTMLSlotElement* mSlot = nullptr;
+    Maybe<uint32_t> mIndex;
 
-  void AddInsertionPoint(HTMLContentElement* aInsertionPoint);
-  void RemoveInsertionPoint(HTMLContentElement* aInsertionPoint);
+    SlotAssignment() = default;
+    SlotAssignment(HTMLSlotElement* aSlot, const Maybe<uint32_t>& aIndex)
+      : mSlot(aSlot)
+      , mIndex(aIndex)
+    { }
+  };
 
-  void SetInsertionPointChanged() { mInsertionPointChanged = true; }
+  /**
+   * Return the assignment corresponding to the content node at this particular
+   * point in time.
+   *
+   * It's the caller's responsibility to actually call InsertAssignedNode /
+   * AppendAssignedNode in the slot as needed.
+   */
+  SlotAssignment SlotAssignmentFor(nsIContent* aContent);
 
-  void SetAssociatedBinding(nsXBLBinding* aBinding) { mAssociatedBinding = aBinding; }
+  /**
+   * Explicitly invalidates the style and layout of the flattened-tree subtree
+   * rooted at the element.
+   *
+   * You need to use this whenever the flat tree is going to be shuffled in a
+   * way that layout doesn't understand via the usual ContentInserted /
+   * ContentAppended / ContentRemoved notifications. For example, if removing an
+   * element will cause a change in the flat tree such that other element will
+   * start showing up (like fallback content), this method needs to be called on
+   * an ancestor of that element.
+   *
+   * It is important that this runs _before_ actually shuffling the flat tree
+   * around, so that layout knows the actual tree that it needs to invalidate.
+   */
+  void InvalidateStyleAndLayoutOnSubtree(Element*);
+
+public:
+  void AddSlot(HTMLSlotElement* aSlot);
+  void RemoveSlot(HTMLSlotElement* aSlot);
+
+  const RawServoAuthorStyles* ServoStyles() const
+  {
+    return mServoStyles.get();
+  }
+
+  RawServoAuthorStyles* ServoStyles()
+  {
+    return mServoStyles.get();
+  }
+
+  mozilla::ServoStyleRuleMap& ServoStyleRuleMap();
 
   JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
-  static bool IsPooledNode(nsIContent* aChild, nsIContent* aContainer,
-                           nsIContent* aHost);
-  static ShadowRoot* FromNode(nsINode* aNode);
-
-  static void RemoveDestInsertionPoint(nsIContent* aInsertionPoint,
-                                       nsTArray<nsIContent*>& aDestInsertionPoints);
+  void AddToIdTable(Element* aElement, nsAtom* aId);
+  void RemoveFromIdTable(Element* aElement, nsAtom* aId);
 
   // WebIDL methods.
-  Element* GetElementById(const nsAString& aElementId);
-  already_AddRefed<nsContentList>
-    GetElementsByTagName(const nsAString& aNamespaceURI);
-  already_AddRefed<nsContentList>
-    GetElementsByTagNameNS(const nsAString& aNamespaceURI,
-                           const nsAString& aLocalName);
-  already_AddRefed<nsContentList>
-    GetElementsByClassName(const nsAString& aClasses);
+  using mozilla::dom::DocumentOrShadowRoot::GetElementById;
+
+  Element* GetActiveElement();
   void GetInnerHTML(nsAString& aInnerHTML);
   void SetInnerHTML(const nsAString& aInnerHTML, ErrorResult& aError);
-  Element* Host();
-  void StyleSheetChanged();
 
-  bool IsComposedDocParticipant() { return mIsComposedDocParticipant; }
-  void SetIsComposedDocParticipant(bool aIsComposedDocParticipant)
+  bool IsComposedDocParticipant() const
   {
-    mIsComposedDocParticipant = aIsComposedDocParticipant;
+    return mIsComposedDocParticipant;
   }
 
+  void SetIsComposedDocParticipant(bool aIsComposedDocParticipant);
+
+  void GetEventTargetParent(EventChainPreVisitor& aVisitor) override;
+
 protected:
+  // FIXME(emilio): This will need to become more fine-grained.
+  void ApplicableRulesChanged();
+
   virtual ~ShadowRoot();
 
-  // An array of content insertion points that are a descendant of the ShadowRoot
-  // sorted in tree order. Insertion points are responsible for notifying
-  // the ShadowRoot when they are removed or added as a descendant. The insertion
-  // points are kept alive by the parent node, thus weak references are held
-  // by the array.
-  nsTArray<HTMLContentElement*> mInsertionPoints;
+  const ShadowRootMode mMode;
 
-  nsTHashtable<nsIdentifierMapEntry> mIdentifierMap;
-  nsXBLPrototypeBinding* mProtoBinding;
+  // The computed data from the style sheets.
+  UniquePtr<RawServoAuthorStyles> mServoStyles;
+  UniquePtr<mozilla::ServoStyleRuleMap> mStyleRuleMap;
 
-  // It is necessary to hold a reference to the associated nsXBLBinding
-  // because the binding holds a reference on the nsXBLDocumentInfo that
-  // owns |mProtoBinding|.
-  RefPtr<nsXBLBinding> mAssociatedBinding;
-
-  RefPtr<ShadowRootStyleSheetList> mStyleSheetList;
-
-  // A boolean that indicates that an insertion point was added or removed
-  // from this ShadowRoot and that the nodes need to be redistributed into
-  // the insertion points. After this flag is set, nodes will be distributed
-  // on the next mutation event.
-  bool mInsertionPointChanged;
+  using SlotArray = AutoTArray<HTMLSlotElement*, 1>;
+  // Map from name of slot to an array of all slots in the shadow DOM with with
+  // the given name. The slots are stored as a weak pointer because the elements
+  // are in the shadow tree and should be kept alive by its parent.
+  nsClassHashtable<nsStringHashKey, SlotArray> mSlotMap;
 
   // Flag to indicate whether the descendants of this shadow root are part of the
   // composed document. Ideally, we would use a node flag on nodes to
@@ -139,34 +197,11 @@ protected:
   // so instead we track it here.
   bool mIsComposedDocParticipant;
 
-  nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+  nsresult Clone(mozilla::dom::NodeInfo* aNodeInfo, nsINode** aResult,
                  bool aPreallocateChildren) const override;
-};
-
-class ShadowRootStyleSheetList : public StyleSheetList
-{
-public:
-  explicit ShadowRootStyleSheetList(ShadowRoot* aShadowRoot);
-
-  NS_DECL_ISUPPORTS_INHERITED
-  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(ShadowRootStyleSheetList, StyleSheetList)
-
-  virtual nsINode* GetParentObject() const override
-  {
-    return mShadowRoot;
-  }
-
-  uint32_t Length() override;
-  StyleSheet* IndexedGetter(uint32_t aIndex, bool& aFound) override;
-
-protected:
-  virtual ~ShadowRootStyleSheetList();
-
-  RefPtr<ShadowRoot> mShadowRoot;
 };
 
 } // namespace dom
 } // namespace mozilla
 
 #endif // mozilla_dom_shadowroot_h__
-

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,6 +12,8 @@
 #include "SVGObserverUtils.h"
 #include "nsSVGFilters.h"
 
+using namespace mozilla;
+
 /*
  * This frame is used by filter primitive elements that
  * have special child elements that provide parameters.
@@ -18,10 +21,10 @@
 class SVGFEContainerFrame : public nsContainerFrame
 {
   friend nsIFrame*
-  NS_NewSVGFEContainerFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
+  NS_NewSVGFEContainerFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle);
 protected:
-  explicit SVGFEContainerFrame(nsStyleContext* aContext)
-    : nsContainerFrame(aContext, kClassID)
+  explicit SVGFEContainerFrame(ComputedStyle* aStyle)
+    : nsContainerFrame(aStyle, kClassID)
   {
     AddStateBits(NS_FRAME_SVG_LAYOUT | NS_FRAME_IS_NONDISPLAY);
   }
@@ -59,9 +62,9 @@ public:
 };
 
 nsIFrame*
-NS_NewSVGFEContainerFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewSVGFEContainerFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) SVGFEContainerFrame(aContext);
+  return new (aPresShell) SVGFEContainerFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(SVGFEContainerFrame)

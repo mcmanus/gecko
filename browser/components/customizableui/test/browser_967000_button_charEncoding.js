@@ -37,7 +37,7 @@ add_task(async function() {
   charEncodingButton.click();
   await subviewShownPromise;
 
-  ok(characterEncodingView.hasAttribute("current"), "The Character encoding panel is displayed");
+  ok(characterEncodingView.hasAttribute("visible"), "The Character encoding panel is displayed");
 
   let pinnedEncodings = document.getElementById("PanelUI-characterEncodingView-pinned");
   let charsetsList = document.getElementById("PanelUI-characterEncodingView-charsets");
@@ -46,7 +46,7 @@ add_task(async function() {
 
   let checkedButtons = characterEncodingView.querySelectorAll("toolbarbutton[checked='true']");
   is(checkedButtons.length, 2, "There should be 2 checked items (1 charset, 1 detector).");
-  is(checkedButtons[0].getAttribute("label"), "Unicode", "The unicode encoding is correctly selected");
+  is(checkedButtons[0].getAttribute("label"), "Western", "The western encoding is correctly selected");
   is(characterEncodingView.querySelectorAll("#PanelUI-characterEncodingView-autodetect toolbarbutton[checked='true']").length,
      1,
      "There should be 1 checked detector.");
@@ -56,7 +56,7 @@ add_task(async function() {
   await panelHidePromise;
   info("Panel hidden");
 
-  await BrowserTestUtils.removeTab(newTab);
+  BrowserTestUtils.removeTab(newTab);
 });
 
 add_task(async function asyncCleanup() {

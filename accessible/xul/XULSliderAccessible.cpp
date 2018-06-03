@@ -13,7 +13,8 @@
 #include "mozilla/dom/Element.h"
 #include "mozilla/FloatingPoint.h"
 
-using namespace mozilla::a11y;
+namespace mozilla {
+namespace a11y {
 
 ////////////////////////////////////////////////////////////////////////////////
 // XULSliderAccessible
@@ -29,7 +30,7 @@ XULSliderAccessible::
 // Accessible
 
 role
-XULSliderAccessible::NativeRole()
+XULSliderAccessible::NativeRole() const
 {
   return roles::SLIDER;
 }
@@ -40,7 +41,7 @@ XULSliderAccessible::NativeInteractiveState() const
   if (NativelyUnavailable())
     return states::UNAVAILABLE;
 
-  nsIContent* sliderElm = GetSliderElement();
+  dom::Element* sliderElm = GetSliderElement();
   if (sliderElm) {
     nsIFrame* frame = sliderElm->GetPrimaryFrame();
     if (frame && frame->IsFocusable())
@@ -53,18 +54,18 @@ XULSliderAccessible::NativeInteractiveState() const
 bool
 XULSliderAccessible::NativelyUnavailable() const
 {
-  return mContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::disabled,
-                               nsGkAtoms::_true, eCaseMatters);
+  return mContent->AsElement()->AttrValueIs(kNameSpaceID_None, nsGkAtoms::disabled,
+                                            nsGkAtoms::_true, eCaseMatters);
 }
 
 void
-XULSliderAccessible::Value(nsString& aValue)
+XULSliderAccessible::Value(nsString& aValue) const
 {
   GetSliderAttr(nsGkAtoms::curpos, aValue);
 }
 
 uint8_t
-XULSliderAccessible::ActionCount()
+XULSliderAccessible::ActionCount() const
 {
   return 1;
 }
@@ -78,12 +79,12 @@ XULSliderAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName)
 }
 
 bool
-XULSliderAccessible::DoAction(uint8_t aIndex)
+XULSliderAccessible::DoAction(uint8_t aIndex) const
 {
   if (aIndex != 0)
     return false;
 
-  nsIContent* sliderElm = GetSliderElement();
+  dom::Element* sliderElm = GetSliderElement();
   if (sliderElm)
     DoCommand(sliderElm);
 
@@ -129,17 +130,17 @@ XULSliderAccessible::SetCurValue(double aValue)
 
 // Utils
 
-nsIContent*
+dom::Element*
 XULSliderAccessible::GetSliderElement() const
 {
-  if (!mSliderNode) {
+  if (!mSliderElement) {
     // XXX: we depend on anonymous content.
-    mSliderNode = mContent->OwnerDoc()->
+    mSliderElement = mContent->OwnerDoc()->
       GetAnonymousElementByAttribute(mContent, nsGkAtoms::anonid,
                                      NS_LITERAL_STRING("slider"));
   }
 
-  return mSliderNode;
+  return mSliderElement;
 }
 
 nsresult
@@ -150,7 +151,7 @@ XULSliderAccessible::GetSliderAttr(nsAtom* aName, nsAString& aValue) const
   if (IsDefunct())
     return NS_ERROR_FAILURE;
 
-  nsIContent* sliderElm = GetSliderElement();
+  Element* sliderElm = GetSliderElement();
   if (sliderElm)
     sliderElm->GetAttr(kNameSpaceID_None, aName, aValue);
 
@@ -163,8 +164,7 @@ XULSliderAccessible::SetSliderAttr(nsAtom* aName, const nsAString& aValue)
   if (IsDefunct())
     return NS_ERROR_FAILURE;
 
-  nsIContent* sliderElm = GetSliderElement();
-  if (sliderElm)
+  if (dom::Element* sliderElm = GetSliderElement())
     sliderElm->SetAttr(kNameSpaceID_None, aName, aValue, true);
 
   return NS_OK;
@@ -207,8 +207,10 @@ XULThumbAccessible::
 // XULThumbAccessible: Accessible
 
 role
-XULThumbAccessible::NativeRole()
+XULThumbAccessible::NativeRole() const
 {
   return roles::INDICATOR;
 }
 
+}
+}

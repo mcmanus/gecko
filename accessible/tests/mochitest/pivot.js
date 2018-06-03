@@ -1,4 +1,4 @@
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 // //////////////////////////////////////////////////////////////////////////////
 // Constants
@@ -23,33 +23,33 @@ const NS_ERROR_INVALID_ARG = 0x80070057;
  */
 var HeadersTraversalRule =
 {
-  getMatchRoles: function(aRules) {
+  getMatchRoles(aRules) {
     aRules.value = [ROLE_HEADING];
     return aRules.value.length;
   },
 
   preFilter: PREFILTER_INVISIBLE,
 
-  match: function(aAccessible) {
+  match(aAccessible) {
     return FILTER_MATCH;
   },
 
-  QueryInterface: XPCOMUtils.generateQI([nsIAccessibleTraversalRule])
-}
+  QueryInterface: ChromeUtils.generateQI([nsIAccessibleTraversalRule])
+};
 
 /**
  * Traversal rule for all focusable nodes or leafs.
  */
 var ObjectTraversalRule =
 {
-  getMatchRoles: function(aRules) {
+  getMatchRoles(aRules) {
     aRules.value = [];
     return 0;
   },
 
   preFilter: PREFILTER_INVISIBLE | PREFILTER_ARIA_HIDDEN | PREFILTER_TRANSPARENT,
 
-  match: function(aAccessible) {
+  match(aAccessible) {
     var rv = FILTER_IGNORE;
     var role = aAccessible.role;
     if (hasState(aAccessible, STATE_FOCUSABLE) &&
@@ -62,7 +62,7 @@ var ObjectTraversalRule =
     return rv;
   },
 
-  QueryInterface: XPCOMUtils.generateQI([nsIAccessibleTraversalRule])
+  QueryInterface: ChromeUtils.generateQI([nsIAccessibleTraversalRule])
 };
 
 // //////////////////////////////////////////////////////////////////////////////
@@ -200,7 +200,8 @@ function setVCRangeInvoker(aDocAcc, aTextAccessible, aTextOffsets) {
  */
 function setVCPosInvoker(aDocAcc, aPivotMoveMethod, aRule, aIdOrNameOrAcc,
                          aIsFromUserInput) {
-  var expectMove = (aIdOrNameOrAcc != false);
+  // eslint-disable-next-line mozilla/no-compare-against-boolean-literals
+  var expectMove = aIdOrNameOrAcc != false;
   this.invoke = function virtualCursorChangedInvoker_invoke() {
     VCChangedChecker.
       storePreviousPosAndOffset(aDocAcc.virtualCursor);
@@ -260,7 +261,8 @@ function setVCPosInvoker(aDocAcc, aPivotMoveMethod, aRule, aIdOrNameOrAcc,
  */
 function setVCTextInvoker(aDocAcc, aPivotMoveMethod, aBoundary, aTextOffsets,
                           aIdOrNameOrAcc, aIsFromUserInput) {
-  var expectMove = (aIdOrNameOrAcc != false);
+  // eslint-disable-next-line mozilla/no-compare-against-boolean-literals
+  var expectMove = aIdOrNameOrAcc != false;
   this.invoke = function virtualCursorChangedInvoker_invoke() {
     VCChangedChecker.storePreviousPosAndOffset(aDocAcc.virtualCursor);
     SimpleTest.info(aDocAcc.virtualCursor.position);
@@ -306,7 +308,8 @@ function setVCTextInvoker(aDocAcc, aPivotMoveMethod, aBoundary, aTextOffsets,
  */
 function moveVCCoordInvoker(aDocAcc, aX, aY, aIgnoreNoMatch,
                             aRule, aIdOrNameOrAcc) {
-  var expectMove = (aIdOrNameOrAcc != false);
+  // eslint-disable-next-line mozilla/no-compare-against-boolean-literals
+  var expectMove = aIdOrNameOrAcc != false;
   this.invoke = function virtualCursorChangedInvoker_invoke() {
     VCChangedChecker.
       storePreviousPosAndOffset(aDocAcc.virtualCursor);
@@ -384,8 +387,8 @@ function queueTraversalSequence(aQueue, aDocAcc, aRule, aModalRoot, aSequence) {
 
   aQueue.push(new setVCPosInvoker(aDocAcc, "moveFirst", aRule, aSequence[0]));
 
-  for (var i = 1; i < aSequence.length; i++) {
-    var invoker =
+  for (let i = 1; i < aSequence.length; i++) {
+    let invoker =
       new setVCPosInvoker(aDocAcc, "moveNext", aRule, aSequence[i]);
     aQueue.push(invoker);
   }
@@ -393,8 +396,8 @@ function queueTraversalSequence(aQueue, aDocAcc, aRule, aModalRoot, aSequence) {
   // No further more matches for given rule, expect no virtual cursor changes.
   aQueue.push(new setVCPosInvoker(aDocAcc, "moveNext", aRule, false));
 
-  for (var i = aSequence.length - 2; i >= 0; i--) {
-    var invoker =
+  for (let i = aSequence.length - 2; i >= 0; i--) {
+    let invoker =
       new setVCPosInvoker(aDocAcc, "movePrevious", aRule, aSequence[i]);
     aQueue.push(invoker);
   }
@@ -511,7 +514,7 @@ function dumpTraversalSequence(aPivot, aRule) {
   if (aPivot.moveFirst(aRule)) {
     do {
       sequence.push("'" + prettyName(aPivot.position) + "'");
-    } while (aPivot.moveNext(aRule))
+    } while (aPivot.moveNext(aRule));
   }
   SimpleTest.info("\n[" + sequence.join(", ") + "]\n");
 }

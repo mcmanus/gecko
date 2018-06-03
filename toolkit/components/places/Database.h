@@ -19,7 +19,7 @@
 
 // This is the schema version. Update it at any schema change and add a
 // corresponding migrateVxx method below.
-#define DATABASE_SCHEMA_VERSION 40
+#define DATABASE_SCHEMA_VERSION 50
 
 // Fired after Places inited.
 #define TOPIC_PLACES_INIT_COMPLETE "places-init-complete"
@@ -205,6 +205,31 @@ public:
 
   uint32_t MaxUrlLength();
 
+  int64_t GetRootFolderId() {
+    mozilla::Unused << EnsureConnection();
+    return mRootId;
+  }
+  int64_t GetMenuFolderId() {
+    mozilla::Unused << EnsureConnection();
+    return mMenuRootId;
+  }
+  int64_t GetTagsFolderId() {
+    mozilla::Unused << EnsureConnection();
+    return mTagsRootId;
+  }
+  int64_t GetUnfiledFolderId() {
+    mozilla::Unused << EnsureConnection();
+    return mUnfiledRootId;
+  }
+  int64_t GetToolbarFolderId() {
+    mozilla::Unused << EnsureConnection();
+    return mToolbarRootId;
+  }
+  int64_t GetMobileFolderId() {
+    mozilla::Unused << EnsureConnection();
+    return mMobileRootId;
+  }
+
 protected:
   /**
    * Finalizes the cached statements and closes the database connection.
@@ -215,25 +240,12 @@ protected:
   bool IsShutdownStarted() const;
 
   /**
-   * Initializes the database file.  If the database does not exist or is
-   * corrupt, a new one is created.  In case of corruption it also creates a
-   * backup copy of the database.
-   *
-   * @param aStorage
-   *        mozStorage service instance.
-   * @param aNewDatabaseCreated
-   *        whether a new database file has been created.
-   */
-  nsresult InitDatabaseFile(nsCOMPtr<mozIStorageService>& aStorage,
-                            bool* aNewDatabaseCreated);
-
-  /**
    * Ensure the favicons database file exists.
    *
    * @param aStorage
    *        mozStorage service instance.
    */
-  nsresult EnsureFaviconsDatabaseFile(nsCOMPtr<mozIStorageService>& aStorage);
+  nsresult EnsureFaviconsDatabaseAttached(const nsCOMPtr<mozIStorageService>& aStorage);
 
   /**
    * Creates a database backup and replaces the original file with a new
@@ -241,8 +253,28 @@ protected:
    *
    * @param aStorage
    *        mozStorage service instance.
+   * @param aDbfilename
+   *        the database file name to replace.
+   * @param aTryToClone
+   *        whether we should try to clone a corrupt database.
+   * @param aReopenConnection
+   *        whether we should open a new connection to the replaced database.
    */
-  nsresult BackupAndReplaceDatabaseFile(nsCOMPtr<mozIStorageService>& aStorage);
+  nsresult BackupAndReplaceDatabaseFile(nsCOMPtr<mozIStorageService>& aStorage,
+                                        const nsString& aDbFilename,
+                                        bool aTryToClone,
+                                        bool aReopenConnection);
+
+  /**
+   * Tries to recover tables and their contents from a corrupt database.
+   *
+   * @param aStorage
+   *        mozStorage service instance.
+   * @param aDatabaseFile
+   *        nsIFile pointing to the places.sqlite file considered corrupt.
+   */
+  nsresult TryToCloneTablesFromCorruptDatabase(const nsCOMPtr<mozIStorageService>& aStorage,
+                                               const nsCOMPtr<nsIFile>& aDatabaseFile);
 
   /**
    * Set up the connection environment through PRAGMAs.
@@ -263,9 +295,14 @@ protected:
   nsresult InitSchema(bool* aDatabaseMigrated);
 
   /**
+   * Checks the root bookmark folders are present, and saves the IDs for them.
+   */
+  nsresult CheckRoots();
+
+  /**
    * Creates bookmark roots in a new DB.
    */
-  nsresult CreateBookmarkRoots();
+  nsresult EnsureBookmarkRoots(const int32_t startPosition);
 
   /**
    * Initializes additionale SQLite functions, defined in SQLFunctions.h
@@ -280,21 +317,6 @@ protected:
   /**
    * Helpers used by schema upgrades.
    */
-  nsresult MigrateV13Up();
-  nsresult MigrateV15Up();
-  nsresult MigrateV17Up();
-  nsresult MigrateV18Up();
-  nsresult MigrateV19Up();
-  nsresult MigrateV20Up();
-  nsresult MigrateV21Up();
-  nsresult MigrateV22Up();
-  nsresult MigrateV23Up();
-  nsresult MigrateV24Up();
-  nsresult MigrateV25Up();
-  nsresult MigrateV26Up();
-  nsresult MigrateV27Up();
-  nsresult MigrateV28Up();
-  nsresult MigrateV30Up();
   nsresult MigrateV31Up();
   nsresult MigrateV32Up();
   nsresult MigrateV33Up();
@@ -305,12 +327,25 @@ protected:
   nsresult MigrateV38Up();
   nsresult MigrateV39Up();
   nsresult MigrateV40Up();
+  nsresult MigrateV41Up();
+  nsresult MigrateV42Up();
+  nsresult MigrateV43Up();
+  nsresult MigrateV44Up();
+  nsresult MigrateV45Up();
+  nsresult MigrateV46Up();
+  nsresult MigrateV47Up();
+  nsresult MigrateV48Up();
+  nsresult MigrateV49Up();
+  nsresult MigrateV50Up();
+
+  void MigrateV48Frecencies();
 
   nsresult UpdateBookmarkRootTitles();
 
   friend class ConnectionShutdownBlocker;
 
   int64_t CreateMobileRoot();
+  nsresult ConvertOldStyleQuery(nsCString& aURL);
   nsresult GetItemsWithAnno(const nsACString& aAnnoName, int32_t aItemType,
                             nsTArray<int64_t>& aItemIds);
   nsresult DeleteBookmarkItem(int32_t aItemId);
@@ -334,6 +369,12 @@ private:
   int32_t mDBPageSize;
   uint16_t mDatabaseStatus;
   bool mClosed;
+  // Used to track whether icon payloads should be converted at the end of
+  // schema migration.
+  bool mShouldConvertIconPayloads;
+  // Used to track whether the favicons database should be vacuumed at the end
+  // of the schema migration.
+  bool mShouldVacuumIcons;
 
   /**
    * Phases for shutting down the Database.
@@ -360,6 +401,14 @@ private:
 
   // Used to initialize components on places startup.
   nsCategoryCache<nsIObserver> mCacheObservers;
+
+  // Used to cache the places folder Ids when the connection is started.
+  int64_t mRootId;
+  int64_t mMenuRootId;
+  int64_t mTagsRootId;
+  int64_t mUnfiledRootId;
+  int64_t mToolbarRootId;
+  int64_t mMobileRootId;
 };
 
 } // namespace places

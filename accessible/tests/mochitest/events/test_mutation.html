@@ -60,7 +60,7 @@
           }
         }
         return -1;
-      }
+      };
 
       /**
        * Replace the default target currently registered for a given event type
@@ -71,10 +71,10 @@
 
         var type = this.getA11yEventType(aEventType);
         for (var i = 1; i < aTargets.length; i++) {
-          var checker = new invokerChecker(type, aTargets[i]);
+          let checker = new invokerChecker(type, aTargets[i]);
           this.getEventSeq().splice(++targetIdx, 0, checker);
         }
-      }
+      };
 
       // Implementation
       this.getA11yEventType = function mutateA11yTree_getA11yEventType(aEventType) {
@@ -86,26 +86,26 @@
 
         if (aEventType == kShowEvent)
           return nsIAccessibleEvent.EVENT_SHOW;
-      }
+      };
 
       this.getEventSeq = function mutateA11yTree_getEventSeq() {
         return this.doNotExpectEvents ? this.unexpectedEventSeq : this.eventSeq;
-      }
+      };
 
       if (aEventTypes & kHideEvent) {
-        var checker = new invokerChecker(this.getA11yEventType(kHideEvent),
+        let checker = new invokerChecker(this.getA11yEventType(kHideEvent),
                                          this.DOMNode);
         this.getEventSeq().push(checker);
       }
 
       if (aEventTypes & kShowEvent) {
-        var checker = new invokerChecker(this.getA11yEventType(kShowEvent),
+        let checker = new invokerChecker(this.getA11yEventType(kShowEvent),
                                          this.DOMNode);
         this.getEventSeq().push(checker);
       }
 
       if (aEventTypes & kReorderEvent) {
-        var checker = new invokerChecker(this.getA11yEventType(kReorderEvent),
+        let checker = new invokerChecker(this.getA11yEventType(kReorderEvent),
                                          this.DOMNode.parentNode);
         this.getEventSeq().push(checker);
       }
@@ -119,11 +119,11 @@
 
       this.invoke = function changeStyle_invoke() {
         this.DOMNode.style[aProp] = aValue;
-      }
+      };
 
       this.getID = function changeStyle_getID() {
         return aNodeOrID + " change style " + aProp + " on value " + aValue;
-      }
+      };
     }
 
     /**
@@ -134,11 +134,11 @@
 
       this.invoke = function changeClass_invoke() {
         this.parentDOMNode.className = aClassName;
-      }
+      };
 
       this.getID = function changeClass_getID() {
         return aNodeOrID + " change class " + aClassName;
-      }
+      };
 
       this.parentDOMNode = getNode(aParentNodeOrID);
     }
@@ -168,11 +168,11 @@
         }
 
         this.DOMNode.parentNode.appendChild(newElm);
-      }
+      };
 
       this.getID = function cloneAndAppendToDOM_getID() {
         return aNodeOrID + " clone and append to DOM.";
-      }
+      };
     }
 
     /**
@@ -188,11 +188,11 @@
 
       this.invoke = function removeFromDOM_invoke() {
         this.DOMNode.remove();
-      }
+      };
 
       this.getID = function removeFromDOM_getID() {
         return prettyName(aNodeOrID) + " remove from DOM.";
-      }
+      };
 
       if (aTargetsFunc && (eventTypes & kHideEvent))
         this.setTargets(kHideEvent, aTargetsFunc.call(null, this.DOMNode));
@@ -211,11 +211,11 @@
 
       this.invoke = function cloneAndReplaceInDOM_invoke() {
         this.DOMNode.parentNode.replaceChild(this.newElm, this.DOMNode);
-      }
+      };
 
       this.getID = function cloneAndReplaceInDOM_getID() {
         return aNodeOrID + " clone and replace in DOM.";
-      }
+      };
 
       this.newElm = this.DOMNode.cloneNode(true);
       this.newElm.removeAttribute("id");
@@ -241,12 +241,12 @@
         getComputedStyle(this.divNode, "").color;
         this.containerNode.removeChild(this.divNode);
         this.containerNode.appendChild(this.divNode);
-      }
+      };
 
       this.getID = function test1_getID() {
         return "fuzzy test #1: content insertion (flush layout), removal and" +
           "reinsertion";
-      }
+      };
     }
 
     /**
@@ -275,12 +275,12 @@
         getComputedStyle(this.divNode, "").color;
         this.tmpContainerNode.removeChild(this.divNode);
         this.containerNode.appendChild(this.divNode);
-      }
+      };
 
       this.getID = function test2_getID() {
         return "fuzzy test #2: content insertion (flush layout), removal and" +
           "reinsertion under another container";
-      }
+      };
     }
 
     /**
@@ -301,11 +301,11 @@
         this.containerNode.appendChild(this.divNode);
         getComputedStyle(this.divNode, "").color;
         this.containerNode.removeChild(this.divNode);
-      }
+      };
 
       this.getID = function test3_getID() {
         return "fuzzy test #3: content insertion (flush layout) and removal";
-      }
+      };
     }
 
     function insertReferredElm(aContainerID) {
@@ -318,13 +318,17 @@
       ];
 
       this.invoke = function insertReferredElm_invoke() {
-        this.containerNode.innerHTML =
-          "<span id='insertReferredElms_span'></span><input aria-labelledby='insertReferredElms_span'>";
-      }
+        let span = document.createElement("span");
+        span.setAttribute("id", "insertReferredElms_span");
+        let input = document.createElement("input");
+        input.setAttribute("aria-labelledby", "insertReferredElms_span");
+        this.containerNode.appendChild(span);
+        this.containerNode.appendChild(input);
+      };
 
       this.getID = function insertReferredElm_getID() {
         return "insert inaccessible element and then insert referring element to make it accessible";
-      }
+      };
     }
 
     function showHiddenParentOfVisibleChild() {
@@ -336,11 +340,11 @@
 
       this.invoke = function showHiddenParentOfVisibleChild_invoke() {
         getNode("c4_middle").style.visibility = "visible";
-      }
+      };
 
       this.getID = function showHiddenParentOfVisibleChild_getID() {
         return "show hidden parent of visible child";
-      }
+      };
     }
 
     function hideNDestroyDoc() {
@@ -352,15 +356,15 @@
       this.invoke = function hideNDestroyDoc_invoke() {
         this.txt = getAccessible("c5").firstChild.firstChild;
         this.txt.DOMNode.remove();
-      }
+      };
 
       this.check = function hideNDestroyDoc_check() {
         getNode("c5").remove();
-      }
+      };
 
       this.getID = function hideNDestroyDoc_getID() {
         return "remove text node and destroy a document on hide event";
-      }
+      };
     }
 
     function hideHideNDestroyDoc() {
@@ -376,15 +380,15 @@
         var l2 = doc.lastChild;
         l1.DOMNode.firstChild.remove();
         l2.DOMNode.firstChild.remove();
-      }
+      };
 
       this.check = function hideHideNDestroyDoc_check() {
         getNode("c6").remove();
-      }
+      };
 
       this.getID = function hideHideNDestroyDoc_getID() {
         return "remove text nodes (2 events in the queue) and destroy a document on first hide event";
-      }
+      };
     }
 
     /**
@@ -432,51 +436,51 @@
 
       // Show/hide events by changing of display style of accessible DOM node
       // from 'inline' to 'none', 'none' to 'inline'.
-      var id = "link1";
+      let id = "link1";
       getAccessible(id); // ensure accessible is created
       gQueue.push(new changeStyle(id, "display", "none", kHideEvents));
       gQueue.push(new changeStyle(id, "display", "inline", kShowEvents));
 
       // Show/hide events by changing of visibility style of accessible DOM node
       // from 'visible' to 'hidden', 'hidden' to 'visible'.
-      var id = "link2";
+      id = "link2";
       getAccessible(id);
       gQueue.push(new changeStyle(id, "visibility", "hidden", kHideEvents));
       gQueue.push(new changeStyle(id, "visibility", "visible", kShowEvents));
 
       // Show/hide events by changing of display style of accessible DOM node
       // from 'inline' to 'block', 'block' to 'inline'.
-      var id = "link3";
+      id = "link3";
       getAccessible(id); // ensure accessible is created
       gQueue.push(new changeStyle(id, "display", "block", kHideAndShowEvents));
       gQueue.push(new changeStyle(id, "display", "inline", kHideAndShowEvents));
 
       // Show/hide events by changing of visibility style of accessible DOM node
       // from 'collapse' to 'visible', 'visible' to 'collapse'.
-      var id = "link4";
+      id = "link4";
       gQueue.push(new changeStyle(id, "visibility", "visible", kShowEvents));
       gQueue.push(new changeStyle(id, "visibility", "collapse", kHideEvents));
 
       // Show/hide events by adding new accessible DOM node and removing old one.
-      var id = "link5";
+      id = "link5";
       gQueue.push(new cloneAndAppendToDOM(id));
       gQueue.push(new removeFromDOM(id));
 
       // No show/hide events by adding new not accessible DOM node and removing
       // old one, no reorder event for their parent.
-      var id = "child1";
+      id = "child1";
       gQueue.push(new cloneAndAppendToDOM(id, kNoEvents));
       gQueue.push(new removeFromDOM(id, kNoEvents));
 
       // Show/hide events by adding new accessible DOM node and removing
       // old one, there is reorder event for their parent.
-      var id = "child2";
+      id = "child2";
       gQueue.push(new cloneAndAppendToDOM(id));
       gQueue.push(new removeFromDOM(id));
 
       // Show/hide events by adding new DOM node containing accessible DOM and
       // removing old one, there is reorder event for their parent.
-      var id = "child3";
+      id = "child3";
       gQueue.push(new cloneAndAppendToDOM(id, kShowEvents, getFirstChild,
                                           getParent));
 

@@ -9,10 +9,7 @@
 #include "GeneratedJNIWrappers.h"
 #include "AndroidBuild.h"
 #include "nsAppShell.h"
-
-#ifdef MOZ_CRASHREPORTER
 #include "nsExceptionHandler.h"
-#endif
 
 namespace mozilla {
 namespace jni {
@@ -72,12 +69,11 @@ template<> const char ObjectBase<TypedObject<jdoubleArray>, jdoubleArray>::name[
 template<> const char ObjectBase<TypedObject<jobjectArray>, jobjectArray>::name[] = "[Ljava/lang/Object;";
 template<> const char ObjectBase<ByteBuffer, jobject>::name[] = "java/nio/ByteBuffer";
 
-
+JavaVM* sJavaVM;
 JNIEnv* sGeckoThreadEnv;
 
 namespace {
 
-JavaVM* sJavaVM;
 pthread_key_t sThreadEnvKey;
 jclass sOOMErrorClass;
 jobject sClassLoader;
@@ -207,7 +203,6 @@ bool ReportException(JNIEnv* aEnv, jthrowable aExc, jstring aStack)
 {
     bool result = true;
 
-#ifdef MOZ_CRASHREPORTER
     result &= NS_SUCCEEDED(CrashReporter::AnnotateCrashReport(
             NS_LITERAL_CSTRING("JavaStackTrace"),
             String::Ref::From(aStack)->ToCString()));
@@ -220,7 +215,6 @@ bool ReportException(JNIEnv* aEnv, jthrowable aExc, jstring aStack)
         CrashReporter::AppendAppNotesToCrashReport(NS_LITERAL_CSTRING("\n") +
                                                    appNotes->ToCString());
     }
-#endif // MOZ_CRASHREPORTER
 
     if (sOOMErrorClass && aEnv->IsInstanceOf(aExc, sOOMErrorClass)) {
         NS_ABORT_OOM(0); // Unknown OOM size
@@ -303,11 +297,11 @@ void DispatchToGeckoPriorityQueue(already_AddRefed<nsIRunnable> aCall)
     {
         nsCOMPtr<nsIRunnable> mCall;
     public:
-        RunnableEvent(already_AddRefed<nsIRunnable> aCall) : mCall(aCall) {}
+        explicit RunnableEvent(already_AddRefed<nsIRunnable> aCall) : mCall(aCall) {}
         void Run() override { NS_ENSURE_SUCCESS_VOID(mCall->Run()); }
     };
 
-    nsAppShell::PostEvent(MakeUnique<RunnableEvent>(Move(aCall)));
+    nsAppShell::PostEvent(MakeUnique<RunnableEvent>(std::move(aCall)));
 }
 
 bool IsFennec()

@@ -4,9 +4,11 @@ module.exports = {
   "extends": [
     "plugin:mozilla/browser-test"
   ],
+  "globals": {
+    "gBrowser": false
+  },
   "rules": {
     "mozilla/no-aArgs": "error",
-    "mozilla/no-cpows-in-tests": "error",
     "mozilla/reject-importGlobalProperties": "error",
     "mozilla/var-only-at-top-level": "error",
 
@@ -23,7 +25,7 @@ module.exports = {
     "func-names": "off",
     "func-style": "off",
     "handle-callback-err": ["error", "er"],
-    "indent": ["error", 2, {"SwitchCase": 1}],
+    "indent-legacy": ["error", 2, {"SwitchCase": 1}],
     "max-nested-callbacks": ["error", 4],
     "max-params": "off",
     "max-statements": "off",
@@ -73,7 +75,6 @@ module.exports = {
     "padded-blocks": ["error", "never"],
     "quote-props": "off",
     "radix": "error",
-    "semi": ["error", "always"],
     "semi-spacing": ["error", {"before": false, "after": true}],
     "sort-vars": "off",
     "space-in-brackets": "off",

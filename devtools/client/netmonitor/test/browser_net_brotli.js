@@ -10,26 +10,28 @@ const BROTLI_REQUESTS = 1;
  * Test brotli encoded response is handled correctly on HTTPS.
  */
 
-add_task(function* () {
-  let { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
+add_task(async function() {
+  const { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
 
-  let { tab, monitor } = yield initNetMonitor(BROTLI_URL);
+  const { tab, monitor } = await initNetMonitor(BROTLI_URL);
   info("Starting test... ");
 
-  let { document, store, windowRequire } = monitor.panelWin;
-  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
-  let {
+  const { document, store, windowRequire } = monitor.panelWin;
+  const Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+  const {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
   store.dispatch(Actions.batchEnable(false));
 
-  let wait = waitForNetworkEvents(monitor, BROTLI_REQUESTS);
-  yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
-    content.wrappedJSObject.performRequests();
-  });
-  yield wait;
+  // Execute requests.
+  await performRequests(monitor, tab, BROTLI_REQUESTS);
+
+  const requestItem = document.querySelector(".request-list-item");
+  const requestsListStatus = requestItem.querySelector(".status-code");
+  EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+  await waitUntil(() => requestsListStatus.title);
 
   verifyRequestItemTarget(
     document,
@@ -46,15 +48,16 @@ add_task(function* () {
     });
 
   wait = waitForDOM(document, ".CodeMirror-code");
-  EventUtils.sendMouseEvent({ type: "click" },
-    document.querySelector(".network-details-panel-toggle"));
+  const onResponseContent = monitor.panelWin.api.once(EVENTS.RECEIVED_RESPONSE_CONTENT);
+  store.dispatch(Actions.toggleNetworkDetails());
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector("#response-tab"));
-  yield wait;
-  yield testResponse("br");
-  yield teardown(monitor);
+  await wait;
+  await onResponseContent;
+  await testResponse("br");
+  await teardown(monitor);
 
-  function* testResponse(type) {
+  function testResponse(type) {
     switch (type) {
       case "br": {
         is(document.querySelector(".CodeMirror-line").textContent, "X".repeat(64),

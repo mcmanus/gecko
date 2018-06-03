@@ -111,7 +111,7 @@ ssl_ECPubKey2NamedGroup(const SECKEYPublicKey *pubKey)
 static SECStatus
 ssl3_ComputeECDHKeyHash(SSLHashType hashAlg,
                         SECItem ec_params, SECItem server_ecpoint,
-                        SSL3Random *client_rand, SSL3Random *server_rand,
+                        PRUint8 *client_rand, PRUint8 *server_rand,
                         SSL3Hashes *hashes)
 {
     PRUint8 *hashBuf;
@@ -175,8 +175,8 @@ ssl3_SendECDHClientKeyExchange(sslSocket *ss, SECKEYPublicKey *svrPubKey)
     PORT_Assert(ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss));
     PORT_Assert(ss->opt.noLocks || ssl_HaveXmitBufLock(ss));
 
-    isTLS = (PRBool)(ss->ssl3.pwSpec->version > SSL_LIBRARY_VERSION_3_0);
-    isTLS12 = (PRBool)(ss->ssl3.pwSpec->version >= SSL_LIBRARY_VERSION_TLS_1_2);
+    isTLS = (PRBool)(ss->version > SSL_LIBRARY_VERSION_3_0);
+    isTLS12 = (PRBool)(ss->version >= SSL_LIBRARY_VERSION_TLS_1_2);
 
     /* Generate ephemeral EC keypair */
     if (svrPubKey->keyType != ecKey) {
@@ -232,7 +232,7 @@ ssl3_SendECDHClientKeyExchange(sslSocket *ss, SECKEYPublicKey *svrPubKey)
         goto loser; /* err set by ssl3_AppendHandshake* */
     }
 
-    rv = ssl3_InitPendingCipherSpec(ss, pms);
+    rv = ssl3_InitPendingCipherSpecs(ss, pms, PR_TRUE);
     if (rv != SECSuccess) {
         ssl_MapLowLevelError(SSL_ERROR_CLIENT_KEY_EXCHANGE_FAILURE);
         goto loser;
@@ -313,7 +313,7 @@ ssl3_HandleECDHClientKeyExchange(sslSocket *ss, PRUint8 *b,
         return SECFailure;
     }
 
-    rv = ssl3_InitPendingCipherSpec(ss, pms);
+    rv = ssl3_InitPendingCipherSpecs(ss, pms, PR_TRUE);
     PK11_FreeSymKey(pms);
     if (rv != SECSuccess) {
         /* error code set by ssl3_InitPendingCipherSpec */
@@ -548,12 +548,14 @@ ssl3_HandleECDHServerKeyExchange(sslSocket *ss, PRUint8 *b, PRUint32 length)
     if (ss->ssl3.prSpec->version == SSL_LIBRARY_VERSION_TLS_1_2) {
         rv = ssl_ConsumeSignatureScheme(ss, &b, &length, &sigScheme);
         if (rv != SECSuccess) {
-            goto loser; /* malformed or unsupported. */
+            errCode = PORT_GetError();
+            goto alert_loser; /* malformed or unsupported. */
         }
         rv = ssl_CheckSignatureSchemeConsistency(ss, sigScheme,
                                                  ss->sec.peerCert);
         if (rv != SECSuccess) {
-            goto loser;
+            errCode = PORT_GetError();
+            goto alert_loser;
         }
         hashAlg = ssl_SignatureSchemeToHashType(sigScheme);
     } else {
@@ -584,8 +586,8 @@ ssl3_HandleECDHServerKeyExchange(sslSocket *ss, PRUint8 *b, PRUint32 length)
      *  check to make sure the hash is signed by right guy
      */
     rv = ssl3_ComputeECDHKeyHash(hashAlg, ec_params, ec_point,
-                                 &ss->ssl3.hs.client_random,
-                                 &ss->ssl3.hs.server_random,
+                                 ss->ssl3.hs.client_random,
+                                 ss->ssl3.hs.server_random,
                                  &hashes);
 
     if (rv != SECSuccess) {
@@ -690,7 +692,7 @@ ssl3_SendECDHServerKeyExchange(sslSocket *ss)
     ec_params.data[2] = keyPair->group->name & 0xff;
 
     pubKey = keyPair->keys->pubKey;
-    if (ss->ssl3.pwSpec->version == SSL_LIBRARY_VERSION_TLS_1_2) {
+    if (ss->version == SSL_LIBRARY_VERSION_TLS_1_2) {
         hashAlg = ssl_SignatureSchemeToHashType(ss->ssl3.hs.signatureScheme);
     } else {
         /* Use ssl_hash_none to represent the MD5+SHA1 combo. */
@@ -698,15 +700,15 @@ ssl3_SendECDHServerKeyExchange(sslSocket *ss)
     }
     rv = ssl3_ComputeECDHKeyHash(hashAlg, ec_params,
                                  pubKey->u.ec.publicValue,
-                                 &ss->ssl3.hs.client_random,
-                                 &ss->ssl3.hs.server_random,
+                                 ss->ssl3.hs.client_random,
+                                 ss->ssl3.hs.server_random,
                                  &hashes);
     if (rv != SECSuccess) {
         ssl_MapLowLevelError(SSL_ERROR_SERVER_KEY_EXCHANGE_FAILURE);
         goto loser;
     }
 
-    isTLS12 = (PRBool)(ss->ssl3.pwSpec->version >= SSL_LIBRARY_VERSION_TLS_1_2);
+    isTLS12 = (PRBool)(ss->version >= SSL_LIBRARY_VERSION_TLS_1_2);
 
     rv = ssl3_SignHashes(ss, &hashes,
                          ss->sec.serverCert->serverKeyPair->privKey, &signed_hash);

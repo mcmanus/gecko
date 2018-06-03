@@ -20,30 +20,30 @@ const TEST_URI = `
   </div>
 `;
 
-add_task(function* () {
-  yield addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
+add_task(async function() {
+  await addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
 
-  let { inspector, gridInspector } = yield openLayoutView();
-  let { document: doc } = gridInspector;
-  let { highlighters, store } = inspector;
+  const { inspector, gridInspector } = await openLayoutView();
+  const { document: doc } = gridInspector;
+  const { highlighters, store } = inspector;
 
-  yield selectNode("#grid", inspector);
-  let outline = doc.getElementById("grid-outline-container");
-  let gridList = doc.getElementById("grid-list");
-  let checkbox = gridList.children[0].querySelector("input");
+  await selectNode("#grid", inspector);
+  const outline = doc.getElementById("grid-outline-container");
+  const gridList = doc.getElementById("grid-list");
+  const checkbox = gridList.children[0].querySelector("input");
 
   info("Toggling ON the CSS grid highlighter from the layout panel.");
-  let onHighlighterShown = highlighters.once("grid-highlighter-shown");
-  let onGridOutlineRendered = waitForDOM(doc, ".grid-outline-text", 1);
-  let onCheckboxChange = waitUntilState(store, state =>
+  const onHighlighterShown = highlighters.once("grid-highlighter-shown");
+  const onGridOutlineRendered = waitForDOM(doc, ".grid-outline-text", 1);
+  const onCheckboxChange = waitUntilState(store, state =>
     state.grids.length == 1 &&
     state.grids[0].highlighted);
   checkbox.click();
-  yield onHighlighterShown;
-  yield onCheckboxChange;
-  let elements = yield onGridOutlineRendered;
+  await onHighlighterShown;
+  await onCheckboxChange;
+  const elements = await onGridOutlineRendered;
 
-  let cannotShowGridOutline = elements[0];
+  const cannotShowGridOutline = elements[0];
 
   info("Checking the grid outline is not rendered and an appropriate message is shown.");
   ok(!outline, "Outline component is not shown.");

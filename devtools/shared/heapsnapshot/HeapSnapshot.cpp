@@ -147,8 +147,8 @@ struct GetOrInternStringMatcher
     size_t length = str->length() / sizeof(CharT);
     auto tempString = reinterpret_cast<const CharT*>(str->data());
 
-    UniquePtr<CharT[], NSFreePolicy> owned(NS_strndup(tempString, length));
-    if (!owned || !internedStrings.append(Move(owned)))
+    UniqueFreePtr<CharT[]> owned(NS_strndup(tempString, length));
+    if (!owned || !internedStrings.append(std::move(owned)))
       return nullptr;
 
     return internedStrings.back().get();
@@ -285,7 +285,7 @@ HeapSnapshot::saveNode(const protobuf::Node& node, NodeIdSet& edgeReferents)
   }
 
   if (NS_WARN_IF(!nodes.putNew(id, DeserializedNode(id, coarseType, typeName,
-                                                    size, Move(edges),
+                                                    size, std::move(edges),
                                                     allocationStack,
                                                     jsObjectClassName,
                                                     scriptFilename, *this))))
@@ -568,7 +568,7 @@ HeapSnapshot::ComputeDominatorTree(ErrorResult& rv)
     return nullptr;
   }
 
-  return MakeAndAddRef<DominatorTree>(Move(*maybeTree), this, mParent);
+  return MakeAndAddRef<DominatorTree>(std::move(*maybeTree), this, mParent);
 }
 
 void
@@ -624,7 +624,7 @@ HeapSnapshot::ComputeShortestPaths(JSContext*cx, uint64_t start,
   {
     JS::AutoCheckCannotGC nogc(cx);
     maybeShortestPaths = ShortestPaths::Create(cx, nogc, maxNumPaths, *startNode,
-                                               Move(targetsSet));
+                                               std::move(targetsSet));
   }
 
   if (NS_WARN_IF(maybeShortestPaths.isNothing())) {
@@ -1032,7 +1032,7 @@ struct TwoByteString::HashPolicy {
   }
 
   static void rekey(TwoByteString& k, TwoByteString&& newKey) {
-    k = Move(newKey);
+    k = std::move(newKey);
   }
 };
 
@@ -1137,7 +1137,7 @@ class MOZ_STACK_CLASS StreamWriter : public CoreDumpWriter
     string.copyToBuffer(RangedPtr<char16_t>(buf, length), length);
 
     uint64_t ref = twoByteStringsAlreadySerialized.count();
-    if (!twoByteStringsAlreadySerialized.add(ptr, Move(string), ref))
+    if (!twoByteStringsAlreadySerialized.add(ptr, std::move(string), ref))
       return false;
 
     setString(stringData.release());
@@ -1255,14 +1255,14 @@ public:
 
   ~StreamWriter() override { }
 
-  virtual bool writeMetadata(uint64_t timestamp) final {
+  bool writeMetadata(uint64_t timestamp) final {
     protobuf::Metadata metadata;
     metadata.set_timestamp(timestamp);
     return writeMessage(metadata);
   }
 
-  virtual bool writeNode(const JS::ubi::Node& ubiNode,
-                         EdgePolicy includeEdges) override final {
+  bool writeNode(const JS::ubi::Node& ubiNode,
+                         EdgePolicy includeEdges) final {
     // NB: de-duplicated string properties must be written in the same order
     // here as they are read in `HeapSnapshot::saveNode` or else indices in
     // references to already serialized strings will be off.
@@ -1303,7 +1303,7 @@ public:
         protobufEdge->set_referent(ubiEdge.referent.identifier());
 
         if (wantNames && ubiEdge.name) {
-          TwoByteString edgeName(Move(ubiEdge.name));
+          TwoByteString edgeName(std::move(ubiEdge.name));
           if (NS_WARN_IF(!attachTwoByteString(edgeName,
                                               [&] (std::string* name) { protobufEdge->set_allocated_name(name); },
                                               [&] (uint64_t ref) { protobufEdge->set_nameref(ref); })))
@@ -1568,11 +1568,11 @@ using namespace JS;
 using namespace devtools;
 
 /* static */ void
-ThreadSafeChromeUtils::SaveHeapSnapshotShared(GlobalObject& global,
-                                              const HeapSnapshotBoundaries& boundaries,
-                                              nsAString& outFilePath,
-                                              nsAString& outSnapshotId,
-                                              ErrorResult& rv)
+ChromeUtils::SaveHeapSnapshotShared(GlobalObject& global,
+                                    const HeapSnapshotBoundaries& boundaries,
+                                    nsAString& outFilePath,
+                                    nsAString& outSnapshotId,
+                                    ErrorResult& rv)
 {
   auto start = TimeStamp::Now();
 
@@ -1637,29 +1637,29 @@ ThreadSafeChromeUtils::SaveHeapSnapshotShared(GlobalObject& global,
 }
 
 /* static */ void
-ThreadSafeChromeUtils::SaveHeapSnapshot(GlobalObject& global,
-                                        const HeapSnapshotBoundaries& boundaries,
-                                        nsAString& outFilePath,
-                                        ErrorResult& rv)
+ChromeUtils::SaveHeapSnapshot(GlobalObject& global,
+                              const HeapSnapshotBoundaries& boundaries,
+                              nsAString& outFilePath,
+                              ErrorResult& rv)
 {
   nsAutoString snapshotId;
   SaveHeapSnapshotShared(global, boundaries, outFilePath, snapshotId, rv);
 }
 
 /* static */ void
-ThreadSafeChromeUtils::SaveHeapSnapshotGetId(GlobalObject& global,
-                                             const HeapSnapshotBoundaries& boundaries,
-                                             nsAString& outSnapshotId,
-                                             ErrorResult& rv)
+ChromeUtils::SaveHeapSnapshotGetId(GlobalObject& global,
+                                   const HeapSnapshotBoundaries& boundaries,
+                                   nsAString& outSnapshotId,
+                                   ErrorResult& rv)
 {
   nsAutoString filePath;
   SaveHeapSnapshotShared(global, boundaries, filePath, outSnapshotId, rv);
 }
 
 /* static */ already_AddRefed<HeapSnapshot>
-ThreadSafeChromeUtils::ReadHeapSnapshot(GlobalObject& global,
-                                        const nsAString& filePath,
-                                        ErrorResult& rv)
+ChromeUtils::ReadHeapSnapshot(GlobalObject& global,
+                              const nsAString& filePath,
+                              ErrorResult& rv)
 {
   auto start = TimeStamp::Now();
 

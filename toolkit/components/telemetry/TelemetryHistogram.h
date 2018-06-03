@@ -12,6 +12,11 @@
 #include "mozilla/TelemetryComms.h"
 #include "nsXULAppAPI.h"
 
+namespace mozilla{
+// This is only used for the GeckoView persistence.
+class JSONWriter;
+}
+
 // This module is internal to Telemetry.  It encapsulates Telemetry's
 // histogram accumulation and storage logic.  It should only be used by
 // Telemetry.cpp.  These functions should not be used anywhere else.
@@ -36,12 +41,16 @@ void SetHistogramRecordingEnabled(mozilla::Telemetry::HistogramID aID, bool aEna
 nsresult SetHistogramRecordingEnabled(const nsACString &id, bool aEnabled);
 
 void Accumulate(mozilla::Telemetry::HistogramID aHistogram, uint32_t aSample);
+void Accumulate(mozilla::Telemetry::HistogramID aHistogram, const nsTArray<uint32_t>& aSamples);
 void Accumulate(mozilla::Telemetry::HistogramID aID, const nsCString& aKey,
                                             uint32_t aSample);
+void Accumulate(mozilla::Telemetry::HistogramID aID, const nsCString& aKey,
+                                          const nsTArray<uint32_t>& aSamples);
 void Accumulate(const char* name, uint32_t sample);
 void Accumulate(const char* name, const nsCString& key, uint32_t sample);
 
 void AccumulateCategorical(mozilla::Telemetry::HistogramID aId, const nsCString& aLabel);
+void AccumulateCategorical(mozilla::Telemetry::HistogramID aId, const nsTArray<nsCString>& aLabels);
 
 void AccumulateChild(mozilla::Telemetry::ProcessID aProcessType,
                      const nsTArray<mozilla::Telemetry::HistogramAccumulation>& aAccumulations);
@@ -61,17 +70,25 @@ GetHistogramName(mozilla::Telemetry::HistogramID id);
 
 nsresult
 CreateHistogramSnapshots(JSContext* aCx, JS::MutableHandleValue aResult, unsigned int aDataset,
-                         bool aSubsession, bool aClearSubsession);
+                         bool aClearSubsession);
 
 nsresult
 GetKeyedHistogramSnapshots(JSContext *aCx, JS::MutableHandleValue aResult, unsigned int aDataset,
-                           bool aSubsession, bool aClearSubsession);
+                           bool aClearSubsession);
 
 size_t
 GetMapShallowSizesOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf);
 
 size_t
 GetHistogramSizesofIncludingThis(mozilla::MallocSizeOf aMallocSizeOf);
+
+// These functions are only meant to be used for GeckoView persistence.
+// They are responsible for updating in-memory probes with the data persisted
+// on the disk and vice-versa.
+nsresult SerializeHistograms(mozilla::JSONWriter &aWriter);
+nsresult SerializeKeyedHistograms(mozilla::JSONWriter &aWriter);
+nsresult DeserializeHistograms(JSContext* aCx, JS::HandleValue aData);
+nsresult DeserializeKeyedHistograms(JSContext* aCx, JS::HandleValue aData);
 
 } // namespace TelemetryHistogram
 

@@ -13,18 +13,20 @@
 #include "nsStringStream.h"
 #include "nsIFile.h"
 #include "nsIFileURL.h"
+#include "nsIURIMutator.h"
 #include "nsEscape.h"
 #include "nsIDirIndex.h"
 #include "nsURLHelper.h"
-#include "nsIPlatformCharset.h"
 #include "nsIPrefService.h"
 #include "nsIPrefBranch.h"
 #include "nsIPrefLocalizedString.h"
 #include "nsIStringBundle.h"
 #include "nsITextToSubURI.h"
+#include "nsNativeCharsetUtils.h"
 #include "nsString.h"
 #include <algorithm>
 #include "nsIChannel.h"
+#include "mozilla/Unused.h"
 
 using mozilla::intl::LocaleService;
 
@@ -184,9 +186,9 @@ nsIndexedToHTML::DoOnStartRequest(nsIRequest* request, nsISupports *aContext,
         if (NS_FAILED(rv)) return rv;
         if (!pw.IsEmpty()) {
              nsCOMPtr<nsIURI> newUri;
-             rv = uri->Clone(getter_AddRefs(newUri));
-             if (NS_FAILED(rv)) return rv;
-             rv = newUri->SetPassword(EmptyCString());
+             rv = NS_MutateURI(uri)
+                    .SetPassword(EmptyCString())
+                    .Finalize(newUri);
              if (NS_FAILED(rv)) return rv;
              rv = newUri->GetAsciiSpec(titleUri);
              if (NS_FAILED(rv)) return rv;
@@ -249,7 +251,9 @@ nsIndexedToHTML::DoOnStartRequest(nsIRequest* request, nsISupports *aContext,
         if (baseUri.Last() != '/') {
             baseUri.Append('/');
             path.Append('/');
-            uri->SetPathQueryRef(path);
+            mozilla::Unused << NS_MutateURI(uri)
+                                 .SetPathQueryRef(path)
+                                 .Finalize(uri);
         }
         if (!path.EqualsLiteral("/")) {
             rv = uri->Resolve(NS_LITERAL_CSTRING(".."), parentStr);
@@ -351,7 +355,7 @@ nsIndexedToHTML::DoOnStartRequest(nsIRequest* request, nsISupports *aContext,
                          "  vertical-align: middle;\n"
                          "}\n"
                          ".dir::before {\n"
-                         "  content: url(resource://gre/res/html/folder.png);\n"
+                         "  content: url(resource://content-accessible/html/folder.png);\n"
                          "}\n"
                          "</style>\n"
                          "<link rel=\"stylesheet\" media=\"screen, projection\" type=\"text/css\""
@@ -437,7 +441,7 @@ nsIndexedToHTML::DoOnStartRequest(nsIRequest* request, nsISupports *aContext,
                          "}\n"
                          "</script>\n");
 
-    buffer.AppendLiteral("<link rel=\"icon\" type=\"image/png\" href=\"");
+    buffer.AppendLiteral(R"(<link rel="icon" type="image/png" href=")");
     nsCOMPtr<nsIURI> innerUri = NS_GetInnermostURI(uri);
     if (!innerUri)
         return NS_ERROR_UNEXPECTED;
@@ -500,13 +504,10 @@ nsIndexedToHTML::DoOnStartRequest(nsIRequest* request, nsISupports *aContext,
     // 1. file URL may be encoded in platform charset for backward compatibility
     // 2. query part may not be encoded in UTF-8 (see bug 261929)
     // so try the platform's default if this is file url
-    if (NS_FAILED(rv) && isSchemeFile) {
-        nsCOMPtr<nsIPlatformCharset> platformCharset(do_GetService(NS_PLATFORMCHARSET_CONTRACTID, &rv));
-        NS_ENSURE_SUCCESS(rv, rv);
+    if (NS_FAILED(rv) && isSchemeFile && !NS_IsNativeUTF8()) {
+        auto encoding = mozilla::dom::FallbackEncoding::FromLocale();
         nsAutoCString charset;
-        rv = platformCharset->GetCharset(kPlatformCharsetSel_FileName, charset);
-        NS_ENSURE_SUCCESS(rv, rv);
-
+        encoding->Name(charset);
         rv = mTextToSubURI->UnEscapeAndConvert(charset, titleUri, unEscapeSpec);
     }
     if (NS_FAILED(rv)) return rv;
@@ -585,7 +586,7 @@ nsIndexedToHTML::DoOnStartRequest(nsIRequest* request, nsISupports *aContext,
         rv = mBundle->GetStringFromName("DirGoUp", parentText);
         if (NS_FAILED(rv)) return rv;
 
-        buffer.AppendLiteral("<p id=\"UI_goUp\"><a class=\"up\" href=\"");
+        buffer.AppendLiteral(R"(<p id="UI_goUp"><a class="up" href=")");
         nsAppendEscapedHTML(parentStr, buffer);
         buffer.AppendLiteral("\">");
         AppendNonAsciiToNCR(parentText, buffer);
@@ -713,7 +714,7 @@ nsIndexedToHTML::OnIndexAvailable(nsIRequest *aRequest,
     nsAppendEscapedHTML(loc, escaped);
     pushBuffer.Append(escaped);
 
-    pushBuffer.AppendLiteral("\"><table class=\"ellipsis\"><tbody><tr><td><a class=\"");
+    pushBuffer.AppendLiteral(R"("><table class="ellipsis"><tbody><tr><td><a class=")");
     switch (type) {
         case nsIDirIndex::TYPE_DIRECTORY:
             pushBuffer.AppendLiteral("dir");
@@ -860,8 +861,3 @@ void nsIndexedToHTML::FormatSizeString(int64_t inSize, nsCString& outSizeString)
     }
 }
 
-nsIndexedToHTML::nsIndexedToHTML() {
-}
-
-nsIndexedToHTML::~nsIndexedToHTML() {
-}

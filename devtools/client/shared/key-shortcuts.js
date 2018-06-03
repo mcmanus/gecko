@@ -5,7 +5,7 @@
 "use strict";
 
 const Services = require("Services");
-const EventEmitter = require("devtools/shared/old-event-emitter");
+const EventEmitter = require("devtools/shared/event-emitter");
 const isOSX = Services.appinfo.OS === "Darwin";
 const {KeyCodes} = require("devtools/client/shared/keycodes");
 
@@ -93,11 +93,11 @@ function KeyShortcuts({ window, target }) {
  *        The shortcut string to parse, following this document:
  *        https://github.com/electron/electron/blob/master/docs/api/accelerator.md
  */
-KeyShortcuts.parseElectronKey = function (window, str) {
-  let modifiers = str.split("+");
+KeyShortcuts.parseElectronKey = function(window, str) {
+  const modifiers = str.split("+");
   let key = modifiers.pop();
 
-  let shortcut = {
+  const shortcut = {
     ctrl: false,
     meta: false,
     alt: false,
@@ -107,7 +107,7 @@ KeyShortcuts.parseElectronKey = function (window, str) {
     // Set for non-character keys
     keyCode: undefined,
   };
-  for (let mod of modifiers) {
+  for (const mod of modifiers) {
     if (mod === "Alt") {
       shortcut.alt = true;
     } else if (["Command", "Cmd"].includes(mod)) {
@@ -135,8 +135,16 @@ KeyShortcuts.parseElectronKey = function (window, str) {
   }
 
   if (typeof key === "string" && key.length === 1) {
-    // Match any single character
-    shortcut.key = key.toLowerCase();
+    if (shortcut.alt) {
+      // When Alt is involved, some platforms (macOS) give different printable characters
+      // for the `key` value, like `®` for the key `R`.  In this case, prefer matching by
+      // `keyCode` instead.
+      shortcut.keyCode = KeyCodes[`DOM_VK_${key.toUpperCase()}`];
+      shortcut.keyCodeString = key;
+    } else {
+      // Match any single character
+      shortcut.key = key.toLowerCase();
+    }
   } else if (key in ElectronKeysMapping) {
     // Maps the others manually to DOM API DOM_VK_*
     key = ElectronKeysMapping[key];
@@ -152,8 +160,8 @@ KeyShortcuts.parseElectronKey = function (window, str) {
   return shortcut;
 };
 
-KeyShortcuts.stringify = function (shortcut) {
-  let list = [];
+KeyShortcuts.stringify = function(shortcut) {
+  const list = [];
   if (shortcut.alt) {
     list.push("Alt");
   }
@@ -195,9 +203,9 @@ KeyShortcuts.prototype = {
     if (shortcut.shift != event.shiftKey) {
       // Shift is a special modifier, it may implicitely be required if the expected key
       // is a special character accessible via shift.
-      let isAlphabetical = event.key && event.key.match(/[a-zA-Z]/);
+      const isAlphabetical = event.key && event.key.match(/[a-zA-Z]/);
       // OSX: distinguish cmd+[key] from cmd+shift+[key] shortcuts (Bug 1300458)
-      let cmdShortcut = shortcut.meta && !shortcut.alt && !shortcut.ctrl;
+      const cmdShortcut = shortcut.meta && !shortcut.alt && !shortcut.ctrl;
       if (isAlphabetical || cmdShortcut) {
         return false;
       }
@@ -210,7 +218,7 @@ KeyShortcuts.prototype = {
     }
 
     // get the key from the keyCode if key is not provided.
-    let key = event.key || String.fromCharCode(event.keyCode);
+    const key = event.key || String.fromCharCode(event.keyCode);
 
     // For character keys, we match if the final character is the expected one.
     // But for digits we also accept indirect match to please azerty keyboard,
@@ -221,7 +229,7 @@ KeyShortcuts.prototype = {
   },
 
   handleEvent(event) {
-    for (let [key, shortcut] of this.keys) {
+    for (const [key, shortcut] of this.keys) {
       if (this.doesEventMatchShortcut(event, shortcut)) {
         this.eventEmitter.emit(key, event);
       }
@@ -234,7 +242,7 @@ KeyShortcuts.prototype = {
                       "second argument");
     }
     if (!this.keys.has(key)) {
-      let shortcut = KeyShortcuts.parseElectronKey(this.window, key);
+      const shortcut = KeyShortcuts.parseElectronKey(this.window, key);
       // The key string is wrong and we were unable to compute the key shortcut
       if (!shortcut) {
         return;

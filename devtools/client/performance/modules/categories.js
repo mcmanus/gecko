@@ -6,7 +6,7 @@
 const { L10N } = require("devtools/client/performance/modules/global");
 
 /**
- * Details about each profile pseudo-stack entry cateogry.
+ * Details about each label stack frame category.
  * @see CATEGORY_MAPPINGS.
  */
 const CATEGORIES = [{
@@ -49,26 +49,26 @@ const CATEGORIES = [{
 
 /**
  * Mapping from category bitmasks in the profiler data to additional details.
- * To be kept in sync with the js::ProfileEntry::Category in ProfilingStack.h
+ * To be kept in sync with the js::ProfilingStackFrame::Category in ProfilingStack.h
  */
 const CATEGORY_MAPPINGS = {
-  // js::ProfileEntry::Category::OTHER
+  // js::ProfilingStackFrame::Category::OTHER
   "16": CATEGORIES[0],
-  // js::ProfileEntry::Category::CSS
+  // js::ProfilingStackFrame::Category::CSS
   "32": CATEGORIES[1],
-  // js::ProfileEntry::Category::JS
+  // js::ProfilingStackFrame::Category::JS
   "64": CATEGORIES[2],
-  // js::ProfileEntry::Category::GC
+  // js::ProfilingStackFrame::Category::GC
   "128": CATEGORIES[3],
-  // js::ProfileEntry::Category::CC
+  // js::ProfilingStackFrame::Category::CC
   "256": CATEGORIES[3],
-  // js::ProfileEntry::Category::NETWORK
+  // js::ProfilingStackFrame::Category::NETWORK
   "512": CATEGORIES[4],
-  // js::ProfileEntry::Category::GRAPHICS
+  // js::ProfilingStackFrame::Category::GRAPHICS
   "1024": CATEGORIES[5],
-  // js::ProfileEntry::Category::STORAGE
+  // js::ProfilingStackFrame::Category::STORAGE
   "2048": CATEGORIES[6],
-  // js::ProfileEntry::Category::EVENTS
+  // js::ProfilingStackFrame::Category::EVENTS
   "4096": CATEGORIES[7],
   // non-bitmasks for specially-assigned categories
   "9000": CATEGORIES[8],
@@ -84,10 +84,10 @@ const CATEGORY_MAPPINGS = {
  * an additional argument specifying the desired id (in ascending order).
  */
 const [CATEGORY_MASK, CATEGORY_MASK_LIST] = (() => {
-  let bitmasksForCategory = {};
-  let all = Object.keys(CATEGORY_MAPPINGS);
+  const bitmasksForCategory = {};
+  const all = Object.keys(CATEGORY_MAPPINGS);
 
-  for (let category of CATEGORIES) {
+  for (const category of CATEGORIES) {
     bitmasksForCategory[category.abbrev] = all
       .filter(mask => CATEGORY_MAPPINGS[mask] == category)
       .map(mask => +mask)
@@ -95,7 +95,7 @@ const [CATEGORY_MASK, CATEGORY_MASK_LIST] = (() => {
   }
 
   return [
-    function (name, index) {
+    function(name, index) {
       if (!(name in bitmasksForCategory)) {
         throw new Error(`Category abbreviation "${name}" does not exist.`);
       }
@@ -113,7 +113,7 @@ const [CATEGORY_MASK, CATEGORY_MASK_LIST] = (() => {
       }
     },
 
-    function (name) {
+    function(name) {
       if (!(name in bitmasksForCategory)) {
         throw new Error(`Category abbreviation "${name}" does not exist.`);
       }

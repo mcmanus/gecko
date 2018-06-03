@@ -29,6 +29,7 @@ EXPORTS.mozilla.net += [
     'DNSRequestChild.h',
     'DNSRequestParent.h',
     'PDNSParams.h',
+    'TRRService.h',
 ]
 
 SOURCES += [
@@ -46,6 +47,8 @@ UNIFIED_SOURCES += [
     'nsDNSService2.cpp',
     'nsIDNService.cpp',
     'punycode.c',
+    'TRR.cpp',
+    'TRRService.cpp',
 ]
 
 IPDL_SOURCES = [
@@ -71,5 +74,5 @@ LOCAL_INCLUDES += [
 
 USE_LIBS += ['icu']
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,7 +13,6 @@
 
 #include "mozilla/dom/HTMLVideoElement.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
-#include "nsIDOMHTMLImageElement.h"
 #include "nsDisplayList.h"
 #include "nsGenericHTMLElement.h"
 #include "nsPresContext.h"
@@ -34,9 +33,9 @@ using namespace mozilla::dom;
 using namespace mozilla::gfx;
 
 nsIFrame*
-NS_NewHTMLVideoFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewHTMLVideoFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsVideoFrame(aContext);
+  return new (aPresShell) nsVideoFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsVideoFrame)
@@ -74,8 +73,8 @@ SwapScaleWidthHeightForRotation(IntSize& aSize, VideoInfo::Rotation aDegrees)
   }
 }
 
-nsVideoFrame::nsVideoFrame(nsStyleContext* aContext)
-  : nsContainerFrame(aContext, kClassID)
+nsVideoFrame::nsVideoFrame(ComputedStyle* aStyle)
+  : nsContainerFrame(aStyle, kClassID)
 {
   EnableVisibilityTracking();
 }
@@ -94,7 +93,6 @@ nsVideoFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
 {
   nsNodeInfoManager *nodeInfoManager = GetContent()->GetComposedDoc()->NodeInfoManager();
   RefPtr<NodeInfo> nodeInfo;
-  Element *element;
 
   if (HasVideoElement()) {
     // Create an anonymous image element as a child to hold the poster
@@ -103,10 +101,9 @@ nsVideoFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
     nodeInfo = nodeInfoManager->GetNodeInfo(nsGkAtoms::img,
                                             nullptr,
                                             kNameSpaceID_XHTML,
-                                            nsIDOMNode::ELEMENT_NODE);
+                                            nsINode::ELEMENT_NODE);
     NS_ENSURE_TRUE(nodeInfo, NS_ERROR_OUT_OF_MEMORY);
-    element = NS_NewHTMLImageElement(nodeInfo.forget());
-    mPosterImage = element;
+    mPosterImage = NS_NewHTMLImageElement(nodeInfo.forget());
     NS_ENSURE_TRUE(mPosterImage, NS_ERROR_OUT_OF_MEMORY);
 
     // Set the nsImageLoadingContent::ImageState() to 0. This means that the
@@ -118,7 +115,7 @@ nsVideoFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
 
     imgContent->ForceImageState(true, 0);
     // And now have it update its internal state
-    element->UpdateState(false);
+    mPosterImage->UpdateState(false);
 
     UpdatePosterSource(false);
 
@@ -129,7 +126,7 @@ nsVideoFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
     nodeInfo = nodeInfoManager->GetNodeInfo(nsGkAtoms::div,
                                             nullptr,
                                             kNameSpaceID_XHTML,
-                                            nsIDOMNode::ELEMENT_NODE);
+                                            nsINode::ELEMENT_NODE);
     NS_ENSURE_TRUE(nodeInfo, NS_ERROR_OUT_OF_MEMORY);
     mCaptionDiv = NS_NewHTMLDivElement(nodeInfo.forget());
     NS_ENSURE_TRUE(mCaptionDiv, NS_ERROR_OUT_OF_MEMORY);
@@ -146,7 +143,7 @@ nsVideoFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
   nodeInfo = nodeInfoManager->GetNodeInfo(nsGkAtoms::videocontrols,
                                           nullptr,
                                           kNameSpaceID_XUL,
-                                          nsIDOMNode::ELEMENT_NODE);
+                                          nsINode::ELEMENT_NODE);
   NS_ENSURE_TRUE(nodeInfo, NS_ERROR_OUT_OF_MEMORY);
 
   NS_TrustedNewXULElement(getter_AddRefs(mVideoControls), nodeInfo.forget());
@@ -174,12 +171,12 @@ nsVideoFrame::AppendAnonymousContentTo(nsTArray<nsIContent*>& aElements,
 }
 
 void
-nsVideoFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsVideoFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
-  DestroyAnonymousContent(mCaptionDiv.forget());
-  DestroyAnonymousContent(mVideoControls.forget());
-  DestroyAnonymousContent(mPosterImage.forget());
-  nsContainerFrame::DestroyFrom(aDestructRoot);
+  aPostDestroyData.AddAnonymousContent(mCaptionDiv.forget());
+  aPostDestroyData.AddAnonymousContent(mVideoControls.forget());
+  aPostDestroyData.AddAnonymousContent(mPosterImage.forget());
+  nsContainerFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 already_AddRefed<Layer>
@@ -293,7 +290,7 @@ nsVideoFrame::Reflow(nsPresContext* aPresContext,
                   aReflowInput.AvailableWidth(),
                   aReflowInput.AvailableHeight()));
 
-  NS_PRECONDITION(mState & NS_FRAME_IN_REFLOW, "frame is not in reflow");
+  MOZ_ASSERT(mState & NS_FRAME_IN_REFLOW, "frame is not in reflow");
 
   const WritingMode myWM = aReflowInput.GetWritingMode();
   nscoord contentBoxBSize = aReflowInput.ComputedBSize();
@@ -351,20 +348,6 @@ nsVideoFrame::Reflow(nsPresContext* aPresContext,
                         kidDesiredSize, &kidReflowInput,
                         posterRenderRect.x, posterRenderRect.y, 0);
 
-// Android still uses XUL media controls & hence needs this XUL-friendly
-// custom reflow code. This will go away in bug 1310907.
-#ifdef ANDROID
-    } else if (child->GetContent() == mVideoControls) {
-      // Reflow the video controls frame.
-      nsBoxLayoutState boxState(PresContext(), aReflowInput.mRenderingContext);
-      nsBoxFrame::LayoutChildAt(boxState,
-                                child,
-                                nsRect(borderPadding.left,
-                                       borderPadding.top,
-                                       aReflowInput.ComputedWidth(),
-                                       aReflowInput.ComputedHeight()));
-
-#endif // ANDROID
     } else if (child->GetContent() == mCaptionDiv ||
                child->GetContent() == mVideoControls) {
       // Reflow the caption and control bar frames.
@@ -454,12 +437,12 @@ public:
 
     nsIntSize videoSizeInPx;
     if (NS_FAILED(element->GetVideoSize(&videoSizeInPx)) || area.IsEmpty()) {
-      return false;
+      return true;
     }
 
     RefPtr<ImageContainer> container = element->GetImageContainer();
     if (!container) {
-      return false;
+      return true;
     }
 
     // Retrieve the size of the decoded video frame, before being scaled
@@ -487,7 +470,7 @@ public:
     gfxRect destGFXRect = Frame()->PresContext()->AppUnitsToGfxUnits(dest);
     destGFXRect.Round();
     if (destGFXRect.IsEmpty()) {
-      return false;
+      return true;
     }
 
     VideoInfo::Rotation rotationDeg = element->RotationDegrees();
@@ -497,8 +480,12 @@ public:
     SwapScaleWidthHeightForRotation(scaleHint, rotationDeg);
     container->SetScaleHint(scaleHint);
 
-    LayerRect rect(destGFXRect.x, destGFXRect.y, destGFXRect.width, destGFXRect.height);
-    return aManager->CommandBuilder().PushImage(this, container, aBuilder, aResources, aSc, rect);
+    // If the image container is empty, we don't want to fallback. Any other
+    // failure will be due to resource constraints and fallback is unlikely to
+    // help us. Hence we can ignore the return value from PushImage.
+    LayoutDeviceRect rect(destGFXRect.x, destGFXRect.y, destGFXRect.width, destGFXRect.height);
+    aManager->CommandBuilder().PushImage(this, container, aBuilder, aResources, aSc, rect);
+    return true;
   }
 
   // It would be great if we could override GetOpaqueRegion to return nonempty here,
@@ -572,8 +559,8 @@ nsVideoFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     clip(aBuilder, this, clipFlags);
 
   if (HasVideoElement() && !shouldDisplayPoster) {
-    aLists.Content()->AppendNewToTop(
-      new (aBuilder) nsDisplayVideo(aBuilder, this));
+    aLists.Content()->AppendToTop(
+      MakeDisplayItem<nsDisplayVideo>(aBuilder, this));
   }
 
   // Add child frames to display list. We expect various children,
@@ -585,6 +572,7 @@ nsVideoFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 
       nsDisplayListBuilder::AutoBuildingDisplayList
         buildingForChild(aBuilder, child,
+                         aBuilder->GetVisibleRect() - child->GetOffsetTo(this),
                          aBuilder->GetDirtyRect() - child->GetOffsetTo(this),
                          aBuilder->IsAtRootOfPseudoStackingContext());
 
@@ -619,10 +607,6 @@ nsVideoFrame::ComputeSize(gfxContext *aRenderingContext,
                           const LogicalSize& aPadding,
                           ComputeSizeFlags aFlags)
 {
-// When in no video scenario, it should fall back to inherited method.
-// We keep old codepath here since Android still uses XUL media controls.
-// This will go away in bug 1310907.
-#ifndef ANDROID
   if (!HasVideoElement()) {
     return nsContainerFrame::ComputeSize(aRenderingContext,
                                          aWM,
@@ -633,7 +617,6 @@ nsVideoFrame::ComputeSize(gfxContext *aRenderingContext,
                                          aPadding,
                                          aFlags);
   }
-#endif // ANDROID
 
   nsSize size = GetVideoIntrinsicSize(aRenderingContext);
 
@@ -741,21 +724,6 @@ nsVideoFrame::GetVideoIntrinsicSize(gfxContext *aRenderingContext)
   // Defaulting size to 300x150 if no size given.
   nsIntSize size(300, 150);
 
-// All media controls have been converted to HTML except Android. Hence
-// we keep this codepath for Android until removal in bug 1310907.
-#ifdef ANDROID
-  if (!HasVideoElement()) {
-    if (!mFrames.FirstChild()) {
-      return nsSize(0, 0);
-    }
-
-    // Ask the controls frame what its preferred height is
-    nsBoxLayoutState boxState(PresContext(), aRenderingContext, 0);
-    nscoord prefHeight = mFrames.LastChild()->GetXULPrefSize(boxState).height;
-    return nsSize(nsPresContext::CSSPixelsToAppUnits(size.width), prefHeight);
-  }
-#endif // ANDROID
-
   HTMLVideoElement* element = static_cast<HTMLVideoElement*>(GetContent());
   if (NS_FAILED(element->GetVideoSize(&size)) && ShouldDisplayPoster()) {
     // Use the poster image frame's size.
@@ -811,8 +779,7 @@ nsVideoFrame::OnVisibilityChange(Visibility aNewVisibility,
                                  const Maybe<OnNonvisible>& aNonvisibleAction)
 {
   if (HasVideoElement()) {
-    nsCOMPtr<nsIDOMHTMLMediaElement> mediaDomElement = do_QueryInterface(mContent);
-    mediaDomElement->OnVisibilityChange(aNewVisibility);
+    static_cast<HTMLMediaElement*>(GetContent())->OnVisibilityChange(aNewVisibility);
   }
 
   nsCOMPtr<nsIImageLoadingContent> imageLoader = do_QueryInterface(mPosterImage);
@@ -825,8 +792,7 @@ nsVideoFrame::OnVisibilityChange(Visibility aNewVisibility,
 }
 
 bool nsVideoFrame::HasVideoElement() {
-  nsCOMPtr<nsIDOMHTMLMediaElement> mediaDomElement = do_QueryInterface(mContent);
-  return mediaDomElement->IsVideo();
+  return static_cast<HTMLMediaElement*>(GetContent())->IsVideo();
 }
 
 bool nsVideoFrame::HasVideoData()
@@ -841,8 +807,5 @@ bool nsVideoFrame::HasVideoData()
 
 void nsVideoFrame::UpdateTextTrack()
 {
-  HTMLMediaElement* element = static_cast<HTMLMediaElement*>(GetContent());
-  if (element) {
-    element->NotifyCueDisplayStatesChanged();
-  }
+  static_cast<HTMLMediaElement*>(GetContent())->NotifyCueDisplayStatesChanged();
 }

@@ -5,12 +5,9 @@
 // The ext-* files are imported into the same scopes.
 /* import-globals-from ext-utils.js */
 
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
-                                  "resource://gre/modules/Services.jsm");
-
 // Import the android BrowserActions module.
-XPCOMUtils.defineLazyModuleGetter(this, "BrowserActions",
-                                  "resource://gre/modules/BrowserActions.jsm");
+ChromeUtils.defineModuleGetter(this, "BrowserActions",
+                               "resource://gre/modules/BrowserActions.jsm");
 
 // WeakMap[Extension -> BrowserAction]
 let browserActionMap = new WeakMap();
@@ -26,8 +23,7 @@ class BrowserAction extends EventEmitter {
       popup: options.default_popup,
     };
 
-    this.tabContext = new TabContext(tab => Object.create(this.defaults),
-                                     extension);
+    this.tabContext = new TabContext(tabId => this.defaults);
 
     this.tabManager = extension.tabManager;
 
@@ -156,14 +152,18 @@ this.browserAction = class extends ExtensionAPI {
 
     return {
       browserAction: {
-        onClicked: new EventManager(context, "browserAction.onClicked", fire => {
-          let listener = (event, tab) => {
-            fire.async(tabManager.convert(tab));
-          };
-          browserActionMap.get(extension).on("click", listener);
-          return () => {
-            browserActionMap.get(extension).off("click", listener);
-          };
+        onClicked: new EventManager({
+          context,
+          name: "browserAction.onClicked",
+          register: fire => {
+            let listener = (event, tab) => {
+              fire.async(tabManager.convert(tab));
+            };
+            browserActionMap.get(extension).on("click", listener);
+            return () => {
+              browserActionMap.get(extension).off("click", listener);
+            };
+          },
         }).api(),
 
         setTitle: function(details) {

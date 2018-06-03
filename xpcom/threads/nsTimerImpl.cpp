@@ -16,6 +16,7 @@
 #include "mozilla/Logging.h"
 #include "mozilla/Move.h"
 #include "mozilla/Mutex.h"
+#include "mozilla/ResultExtensions.h"
 #ifdef MOZ_TASK_TRACER
 #include "GeckoTaskTracerImpl.h"
 using namespace mozilla::tasktracer;
@@ -32,7 +33,7 @@ using namespace mozilla::tasktracer;
 
 using mozilla::Atomic;
 using mozilla::LogLevel;
-using mozilla::Move;
+using mozilla::MakeRefPtr;
 using mozilla::MutexAutoLock;
 using mozilla::TimeDuration;
 using mozilla::TimeStamp;
@@ -54,6 +55,193 @@ NS_GetTimerDeadlineHintOnCurrentThread(TimeStamp aDefault, uint32_t aSearchBound
   return gThread
            ? gThread->FindNextFireTimeForCurrentThread(aDefault, aSearchBound)
            : TimeStamp();
+}
+
+already_AddRefed<nsITimer>
+NS_NewTimer()
+{
+  return do_AddRef(new nsTimer());
+}
+
+already_AddRefed<nsITimer>
+NS_NewTimer(nsIEventTarget* aTarget)
+{
+  auto timer = MakeRefPtr<nsTimer>();
+  if (aTarget && MOZ_LIKELY(timer)) {
+    MOZ_ALWAYS_SUCCEEDS(timer->SetTarget(aTarget));
+  }
+  return timer.forget();
+}
+
+mozilla::Result<nsCOMPtr<nsITimer>, nsresult>
+NS_NewTimerWithObserver(nsIObserver* aObserver,
+                        uint32_t aDelay,
+                        uint32_t aType,
+                        nsIEventTarget* aTarget)
+{
+  nsCOMPtr<nsITimer> timer;
+  MOZ_TRY(NS_NewTimerWithObserver(getter_AddRefs(timer),
+                                  aObserver,
+                                  aDelay,
+                                  aType,
+                                  aTarget));
+  return std::move(timer);
+}
+nsresult
+NS_NewTimerWithObserver(nsITimer** aTimer,
+                        nsIObserver* aObserver,
+                        uint32_t aDelay,
+                        uint32_t aType,
+                        nsIEventTarget* aTarget)
+{
+  auto timer = MakeRefPtr<nsTimer>();
+  if (aTarget) {
+    MOZ_ALWAYS_SUCCEEDS(timer->SetTarget(aTarget));
+  }
+
+  MOZ_TRY(timer->Init(aObserver, aDelay, aType));
+  timer.forget(aTimer);
+  return NS_OK;
+}
+
+mozilla::Result<nsCOMPtr<nsITimer>, nsresult>
+NS_NewTimerWithCallback(nsITimerCallback* aCallback,
+                        uint32_t aDelay,
+                        uint32_t aType,
+                        nsIEventTarget* aTarget)
+{
+  nsCOMPtr<nsITimer> timer;
+  MOZ_TRY(NS_NewTimerWithCallback(getter_AddRefs(timer),
+                                  aCallback,
+                                  aDelay,
+                                  aType,
+                                  aTarget));
+  return std::move(timer);
+}
+nsresult
+NS_NewTimerWithCallback(nsITimer** aTimer,
+                        nsITimerCallback* aCallback,
+                        uint32_t aDelay,
+                        uint32_t aType,
+                        nsIEventTarget* aTarget)
+{
+  auto timer = MakeRefPtr<nsTimer>();
+  if (aTarget) {
+    MOZ_ALWAYS_SUCCEEDS(timer->SetTarget(aTarget));
+  }
+
+  MOZ_TRY(timer->InitWithCallback(aCallback, aDelay, aType));
+  timer.forget(aTimer);
+  return NS_OK;
+}
+
+mozilla::Result<nsCOMPtr<nsITimer>, nsresult>
+NS_NewTimerWithCallback(nsITimerCallback* aCallback,
+                        const TimeDuration& aDelay,
+                        uint32_t aType,
+                        nsIEventTarget* aTarget)
+{
+  nsCOMPtr<nsITimer> timer;
+  MOZ_TRY(NS_NewTimerWithCallback(getter_AddRefs(timer),
+                                  aCallback,
+                                  aDelay,
+                                  aType,
+                                  aTarget));
+  return std::move(timer);
+}
+nsresult
+NS_NewTimerWithCallback(nsITimer** aTimer,
+                        nsITimerCallback* aCallback,
+                        const TimeDuration& aDelay,
+                        uint32_t aType,
+                        nsIEventTarget* aTarget)
+{
+  auto timer = MakeRefPtr<nsTimer>();
+  if (aTarget) {
+    MOZ_ALWAYS_SUCCEEDS(timer->SetTarget(aTarget));
+  }
+
+  MOZ_TRY(timer->InitHighResolutionWithCallback(aCallback, aDelay, aType));
+  timer.forget(aTimer);
+  return NS_OK;
+}
+
+mozilla::Result<nsCOMPtr<nsITimer>, nsresult>
+NS_NewTimerWithFuncCallback(nsTimerCallbackFunc aCallback,
+                            void* aClosure,
+                            uint32_t aDelay,
+                            uint32_t aType,
+                            const char* aNameString,
+                            nsIEventTarget* aTarget)
+{
+  nsCOMPtr<nsITimer> timer;
+  MOZ_TRY(NS_NewTimerWithFuncCallback(getter_AddRefs(timer),
+                                      aCallback,
+                                      aClosure,
+                                      aDelay,
+                                      aType,
+                                      aNameString,
+                                      aTarget));
+  return std::move(timer);
+}
+nsresult
+NS_NewTimerWithFuncCallback(nsITimer** aTimer,
+                            nsTimerCallbackFunc aCallback,
+                            void* aClosure,
+                            uint32_t aDelay,
+                            uint32_t aType,
+                            const char* aNameString,
+                            nsIEventTarget* aTarget)
+{
+  auto timer = MakeRefPtr<nsTimer>();
+  if (aTarget) {
+    MOZ_ALWAYS_SUCCEEDS(timer->SetTarget(aTarget));
+  }
+
+  MOZ_TRY(timer->InitWithNamedFuncCallback(aCallback, aClosure,
+                                           aDelay, aType,
+                                           aNameString));
+  timer.forget(aTimer);
+  return NS_OK;
+}
+
+mozilla::Result<nsCOMPtr<nsITimer>, nsresult>
+NS_NewTimerWithFuncCallback(nsTimerCallbackFunc aCallback,
+            void* aClosure,
+            uint32_t aDelay,
+            uint32_t aType,
+            nsTimerNameCallbackFunc aNameCallback,
+            nsIEventTarget* aTarget)
+{
+  nsCOMPtr<nsITimer> timer;
+  MOZ_TRY(NS_NewTimerWithFuncCallback(getter_AddRefs(timer),
+                                      aCallback,
+                                      aClosure,
+                                      aDelay,
+                                      aType,
+                                      aNameCallback,
+                                      aTarget));
+  return std::move(timer);
+}
+nsresult
+NS_NewTimerWithFuncCallback(nsITimer** aTimer,
+                            nsTimerCallbackFunc aCallback,
+                            void* aClosure,
+                            uint32_t aDelay,
+                            uint32_t aType,
+                            nsTimerNameCallbackFunc aNameCallback,
+                            nsIEventTarget* aTarget)
+{
+  auto timer = MakeRefPtr<nsTimer>();
+  if (aTarget) {
+    MOZ_ALWAYS_SUCCEEDS(timer->SetTarget(aTarget));
+  }
+
+  MOZ_TRY(timer->InitWithNameableFuncCallback(aCallback, aClosure,
+                                              aDelay, aType,
+                                              aNameCallback));
+  timer.forget(aTimer);
+  return NS_OK;
 }
 
 // This module prints info about which timers are firing, which is useful for
@@ -197,7 +385,7 @@ nsTimerImpl::InitCommon(uint32_t aDelayMS, uint32_t aType,
                         Callback&& aNewCallback)
 {
   return InitCommon(TimeDuration::FromMilliseconds(aDelayMS),
-                    aType, Move(aNewCallback));
+                    aType, std::move(aNewCallback));
 }
 
 
@@ -245,7 +433,7 @@ nsTimerImpl::InitWithFuncCallbackCommon(nsTimerCallbackFunc aFunc,
   cb.mName = aName;
 
   MutexAutoLock lock(mMutex);
-  return InitCommon(aDelay, aType, mozilla::Move(cb));
+  return InitCommon(aDelay, aType, std::move(cb));
 }
 
 nsresult
@@ -295,7 +483,7 @@ nsTimerImpl::InitHighResolutionWithCallback(nsITimerCallback* aCallback,
   NS_ADDREF(cb.mCallback.i);
 
   MutexAutoLock lock(mMutex);
-  return InitCommon(aDelay, aType, mozilla::Move(cb));
+  return InitCommon(aDelay, aType, std::move(cb));
 }
 
 nsresult
@@ -311,7 +499,7 @@ nsTimerImpl::Init(nsIObserver* aObserver, uint32_t aDelay, uint32_t aType)
   NS_ADDREF(cb.mCallback.o);
 
   MutexAutoLock lock(mMutex);
-  return InitCommon(aDelay, aType, mozilla::Move(cb));
+  return InitCommon(aDelay, aType, std::move(cb));
 }
 
 nsresult

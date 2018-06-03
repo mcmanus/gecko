@@ -7,14 +7,14 @@
  * after delayed init.
  */
 
-"use strict"
+"use strict";
 
-Cu.import("resource://gre/modules/Services.jsm", this);
-Cu.import("resource://gre/modules/TelemetryStorage.jsm", this);
-Cu.import("resource://gre/modules/TelemetryController.jsm", this);
-Cu.import("resource://gre/modules/TelemetrySend.jsm", this);
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-const {OS: {File, Path, Constants}} = Cu.import("resource://gre/modules/osfile.jsm", {});
+ChromeUtils.import("resource://gre/modules/Services.jsm", this);
+ChromeUtils.import("resource://gre/modules/TelemetryStorage.jsm", this);
+ChromeUtils.import("resource://gre/modules/TelemetryController.jsm", this);
+ChromeUtils.import("resource://gre/modules/TelemetrySend.jsm", this);
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+const {OS: {File, Path, Constants}} = ChromeUtils.import("resource://gre/modules/osfile.jsm", {});
 
 // We increment TelemetryStorage's MAX_PING_FILE_AGE and
 // OVERDUE_PING_FILE_AGE by 1 minute so that our test pings exceed
@@ -85,7 +85,7 @@ var clearPings = async function(aPingIds) {
  * @param {Integer} aPendingQuota The new quota, in bytes.
  */
 function fakePendingPingsQuota(aPendingQuota) {
-  let storage = Cu.import("resource://gre/modules/TelemetryStorage.jsm", {});
+  let storage = ChromeUtils.import("resource://gre/modules/TelemetryStorage.jsm", {});
   storage.Policy.getPendingPingsQuota = () => aPendingQuota;
 }
 
@@ -106,7 +106,7 @@ function getSavePathForPingId(aPingId) {
  * @param aExpectedNum the number of pings we expect to receive.
  */
 function assertReceivedPings(aExpectedNum) {
-  do_check_eq(gSeenPings, aExpectedNum);
+  Assert.equal(gSeenPings, aExpectedNum);
 }
 
 /**
@@ -148,7 +148,6 @@ add_task(async function test_setup() {
   // Make sure we don't generate unexpected pings due to pref changes.
   await setEmptyPrefWatchlist();
 
-  Services.prefs.setBoolPref(TelemetryUtils.Preferences.TelemetryEnabled, true);
   Services.prefs.setCharPref(TelemetryUtils.Preferences.Server,
                               "http://localhost:" + PingServer.port);
 });
@@ -276,6 +275,7 @@ add_task(async function test_corrupted_pending_pings() {
 
   // Try to load a pending ping which isn't there anymore.
   await Assert.rejects(TelemetryStorage.loadPendingPing(pendingPingId),
+                       /PingReadError/,
                        "Telemetry must fail loading a ping which isn't there");
 
   h = Telemetry.getHistogramById("TELEMETRY_PENDING_LOAD_FAILURE_READ").snapshot();
@@ -291,6 +291,7 @@ add_task(async function test_corrupted_pending_pings() {
 
   // Try to load the ping with the corrupted JSON content.
   await Assert.rejects(TelemetryStorage.loadPendingPing(pendingPingId),
+                       /PingParseError/,
                        "Telemetry must fail loading a corrupted ping");
 
   h = Telemetry.getHistogramById("TELEMETRY_PENDING_LOAD_FAILURE_READ").snapshot();
@@ -403,6 +404,7 @@ add_task(async function test_pendingPingsQuota() {
     // Check that the pruned pings are not on disk anymore.
     for (let prunedPingId of expectedPrunedPings) {
       await Assert.rejects(TelemetryStorage.loadPendingPing(prunedPingId),
+                           /TelemetryStorage.loadPendingPing - no ping with id/,
                            "Ping " + prunedPingId + " should have been pruned.");
       const pingPath = getSavePathForPingId(prunedPingId);
       Assert.ok(!(await OS.File.exists(pingPath)), "The ping should not be on the disk anymore.");
@@ -510,6 +512,7 @@ add_task(async function test_pendingPingsQuota() {
 
   // Try to manually load the oversized ping.
   await Assert.rejects(TelemetryStorage.loadPendingPing(OVERSIZED_PING_ID),
+                       /loadPendingPing - exceeded the maximum ping size/,
                        "The oversized ping should have been pruned.");
   Assert.ok(!(await OS.File.exists(getSavePathForPingId(OVERSIZED_PING_ID))),
             "The ping should not be on the disk anymore.");

@@ -6,48 +6,42 @@
 
 #include "vm/ObjectGroup.h"
 
+#include "mozilla/Maybe.h"
+
 #include "jsexn.h"
-#include "jshashutil.h"
-#include "jsobj.h"
 
 #include "builtin/DataViewObject.h"
-#include "gc/Marking.h"
+#include "gc/FreeOp.h"
+#include "gc/HashUtil.h"
 #include "gc/Policy.h"
 #include "gc/StoreBuffer.h"
 #include "gc/Zone.h"
 #include "js/CharacterEncoding.h"
 #include "vm/ArrayObject.h"
+#include "vm/JSObject.h"
 #include "vm/RegExpObject.h"
 #include "vm/Shape.h"
 #include "vm/TaggedProto.h"
-#include "vm/UnboxedObject.h"
 
-#include "jsobjinlines.h"
-
+#include "gc/Marking-inl.h"
 #include "vm/UnboxedObject-inl.h"
 
 using namespace js;
-
-using mozilla::DebugOnly;
-using mozilla::PodZero;
 
 /////////////////////////////////////////////////////////////////////
 // ObjectGroup
 /////////////////////////////////////////////////////////////////////
 
-ObjectGroup::ObjectGroup(const Class* clasp, TaggedProto proto, JSCompartment* comp,
+ObjectGroup::ObjectGroup(const Class* clasp, TaggedProto proto, JS::Realm* realm,
                          ObjectGroupFlags initialFlags)
+  : clasp_(clasp),
+    proto_(proto),
+    realm_(realm),
+    flags_(initialFlags)
 {
-    PodZero(this);
-
     /* Windows may not appear on prototype chains. */
     MOZ_ASSERT_IF(proto.isObject(), !IsWindow(proto.toObject()));
     MOZ_ASSERT(JS::StringIsASCII(clasp->name));
-
-    this->clasp_ = clasp;
-    this->proto_ = proto;
-    this->compartment_ = comp;
-    this->flags_ = initialFlags;
 
     setGeneration(zone()->types.generation);
 }
@@ -99,12 +93,13 @@ ObjectGroup::setAddendum(AddendumKind kind, void* addendum, bool writeBarrier /*
     if (writeBarrier) {
         // Manually trigger barriers if we are clearing new script or
         // preliminary object information. Other addendums are immutable.
+        AutoSweepObjectGroup sweep(this);
         switch (addendumKind()) {
           case Addendum_PreliminaryObjects:
-            PreliminaryObjectArrayWithTemplate::writeBarrierPre(maybePreliminaryObjects());
+            PreliminaryObjectArrayWithTemplate::writeBarrierPre(maybePreliminaryObjects(sweep));
             break;
           case Addendum_NewScript:
-            TypeNewScript::writeBarrierPre(newScript());
+            TypeNewScript::writeBarrierPre(newScript(sweep));
             break;
           case Addendum_None:
             break;
@@ -163,8 +158,8 @@ ObjectGroup::useSingletonForClone(JSFunction* fun)
     } else {
         if (!fun->lazyScript()->isLikelyConstructorWrapper())
             return false;
-        begin = fun->lazyScript()->begin();
-        end = fun->lazyScript()->end();
+        begin = fun->lazyScript()->sourceStart();
+        end = fun->lazyScript()->sourceEnd();
     }
 
     return end - begin <= 100;
@@ -190,7 +185,7 @@ ObjectGroup::useSingletonForNewObject(JSContext* cx, JSScript* script, jsbytecod
      * Sub2 lets us continue to distinguish the two subclasses and any extra
      * properties added to those prototype objects.
      */
-    if (script->isStarGenerator() || script->isLegacyGenerator() || script->isAsync())
+    if (script->isGenerator() || script->isAsync())
         return false;
     if (JSOp(*pc) != JSOP_NEW)
         return false;
@@ -327,8 +322,8 @@ JSObject::makeLazyGroup(JSContext* cx, HandleObject obj)
         initialFlags |= OBJECT_FLAG_LENGTH_OVERFLOW;
 
     Rooted<TaggedProto> proto(cx, obj->taggedProto());
-    ObjectGroup* group = ObjectGroupCompartment::makeGroup(cx, obj->getClass(), proto,
-                                                           initialFlags);
+    ObjectGroup* group = ObjectGroupRealm::makeGroup(cx, obj->getClass(), proto,
+                                                     initialFlags);
     if (!group)
         return nullptr;
 
@@ -345,26 +340,27 @@ JSObject::makeLazyGroup(JSContext* cx, HandleObject obj)
 }
 
 /* static */ bool
-JSObject::setNewGroupUnknown(JSContext* cx, const js::Class* clasp, JS::HandleObject obj)
+JSObject::setNewGroupUnknown(JSContext* cx, ObjectGroupRealm& realm, const js::Class* clasp,
+                             JS::HandleObject obj)
 {
-    ObjectGroup::setDefaultNewGroupUnknown(cx, clasp, obj);
+    ObjectGroup::setDefaultNewGroupUnknown(cx, realm, clasp, obj);
     return JSObject::setFlags(cx, obj, BaseShape::NEW_GROUP_UNKNOWN);
 }
 
 /////////////////////////////////////////////////////////////////////
-// ObjectGroupCompartment NewTable
+// ObjectGroupRealm NewTable
 /////////////////////////////////////////////////////////////////////
 
 /*
- * Entries for the per-compartment set of groups which are the default
+ * Entries for the per-realm set of groups which are the default
  * types to use for some prototype. An optional associated object is used which
  * allows multiple groups to be created with the same prototype. The
  * associated object may be a function (for types constructed with 'new') or a
  * type descriptor (for typed objects). These entries are also used for the set
- * of lazy groups in the compartment, which use a null associated object
- * (though there are only a few of these per compartment).
+ * of lazy groups in the realm, which use a null associated object
+ * (though there are only a few of these per realm).
  */
-struct ObjectGroupCompartment::NewEntry
+struct ObjectGroupRealm::NewEntry
 {
     ReadBarrieredObjectGroup group;
 
@@ -410,7 +406,7 @@ struct ObjectGroupCompartment::NewEntry
         return mozilla::AddToHash(hash, mozilla::HashGeneric(lookup.clasp));
     }
 
-    static inline bool match(const ObjectGroupCompartment::NewEntry& key, const Lookup& lookup) {
+    static inline bool match(const ObjectGroupRealm::NewEntry& key, const Lookup& lookup) {
         if (lookup.clasp && key.group.unbarrieredGet()->clasp() != lookup.clasp)
             return false;
 
@@ -435,18 +431,18 @@ struct ObjectGroupCompartment::NewEntry
 
 namespace js {
 template <>
-struct FallibleHashMethods<ObjectGroupCompartment::NewEntry>
+struct FallibleHashMethods<ObjectGroupRealm::NewEntry>
 {
     template <typename Lookup> static bool hasHash(Lookup&& l) {
-        return ObjectGroupCompartment::NewEntry::hasHash(mozilla::Forward<Lookup>(l));
+        return ObjectGroupRealm::NewEntry::hasHash(mozilla::Forward<Lookup>(l));
     }
     template <typename Lookup> static bool ensureHash(Lookup&& l) {
-        return ObjectGroupCompartment::NewEntry::ensureHash(mozilla::Forward<Lookup>(l));
+        return ObjectGroupRealm::NewEntry::ensureHash(mozilla::Forward<Lookup>(l));
     }
 };
 } // namespace js
 
-class ObjectGroupCompartment::NewTable : public JS::WeakCache<js::GCHashSet<NewEntry, NewEntry,
+class ObjectGroupRealm::NewTable : public JS::WeakCache<js::GCHashSet<NewEntry, NewEntry,
                                                                             SystemAllocPolicy>>
 {
     using Table = js::GCHashSet<NewEntry, NewEntry, SystemAllocPolicy>;
@@ -456,8 +452,20 @@ class ObjectGroupCompartment::NewTable : public JS::WeakCache<js::GCHashSet<NewE
     explicit NewTable(Zone* zone) : Base(zone) {}
 };
 
+/* static*/ ObjectGroupRealm&
+ObjectGroupRealm::get(ObjectGroup* group)
+{
+    return group->realm()->objectGroups_;
+}
+
+/* static*/ ObjectGroupRealm&
+ObjectGroupRealm::getForNewObject(JSContext* cx)
+{
+    return cx->realm()->objectGroups_;
+}
+
 MOZ_ALWAYS_INLINE ObjectGroup*
-ObjectGroupCompartment::DefaultNewGroupCache::lookup(const Class* clasp, TaggedProto proto,
+ObjectGroupRealm::DefaultNewGroupCache::lookup(const Class* clasp, TaggedProto proto,
                                                      JSObject* associated)
 {
     if (group_ &&
@@ -508,17 +516,17 @@ ObjectGroup::defaultNewGroup(JSContext* cx, const Class* clasp,
             clasp = &PlainObject::class_;
     }
 
-    ObjectGroupCompartment& groups = cx->compartment()->objectGroups;
+    ObjectGroupRealm& groups = ObjectGroupRealm::getForNewObject(cx);
 
     if (ObjectGroup* group = groups.defaultNewGroupCache.lookup(clasp, proto, associated))
         return group;
 
     AutoEnterAnalysis enter(cx);
 
-    ObjectGroupCompartment::NewTable*& table = groups.defaultNewTable;
+    ObjectGroupRealm::NewTable*& table = groups.defaultNewTable;
 
     if (!table) {
-        table = cx->new_<ObjectGroupCompartment::NewTable>(cx->zone());
+        table = cx->new_<ObjectGroupRealm::NewTable>(cx->zone());
         if (!table || !table->init()) {
             js_delete(table);
             table = nullptr;
@@ -539,11 +547,19 @@ ObjectGroup::defaultNewGroup(JSContext* cx, const Class* clasp,
         if (protoObj->is<PlainObject>() && !protoObj->isSingleton()) {
             if (!JSObject::changeToSingleton(cx, protoObj))
                 return nullptr;
+
+            // |ReshapeForProtoMutation| ensures singletons will reshape when
+            // prototype is mutated so clear the UNCACHEABLE_PROTO flag.
+            if (protoObj->hasUncacheableProto()) {
+                HandleNativeObject nobj = protoObj.as<NativeObject>();
+                if (!NativeObject::clearFlag(cx, nobj, BaseShape::UNCACHEABLE_PROTO))
+                    return nullptr;
+            }
         }
     }
 
-    ObjectGroupCompartment::NewTable::AddPtr p =
-        table->lookupForAdd(ObjectGroupCompartment::NewEntry::Lookup(clasp, proto, associated));
+    ObjectGroupRealm::NewTable::AddPtr p =
+        table->lookupForAdd(ObjectGroupRealm::NewEntry::Lookup(clasp, proto, associated));
     if (p) {
         ObjectGroup* group = p->group;
         MOZ_ASSERT_IF(clasp, group->clasp() == clasp);
@@ -559,12 +575,12 @@ ObjectGroup::defaultNewGroup(JSContext* cx, const Class* clasp,
         initialFlags = OBJECT_FLAG_DYNAMIC_MASK;
 
     Rooted<TaggedProto> protoRoot(cx, proto);
-    ObjectGroup* group = ObjectGroupCompartment::makeGroup(cx, clasp ? clasp : &PlainObject::class_,
-                                                           protoRoot, initialFlags);
+    ObjectGroup* group = ObjectGroupRealm::makeGroup(cx, clasp ? clasp : &PlainObject::class_,
+                                                     protoRoot, initialFlags);
     if (!group)
         return nullptr;
 
-    if (!table->add(p, ObjectGroupCompartment::NewEntry(group, associated))) {
+    if (!table->add(p, ObjectGroupRealm::NewEntry(group, associated))) {
         ReportOutOfMemory(cx);
         return nullptr;
     }
@@ -602,14 +618,15 @@ ObjectGroup::defaultNewGroup(JSContext* cx, const Class* clasp,
 }
 
 /* static */ ObjectGroup*
-ObjectGroup::lazySingletonGroup(JSContext* cx, const Class* clasp, TaggedProto proto)
+ObjectGroup::lazySingletonGroup(JSContext* cx, ObjectGroupRealm& realm, const Class* clasp,
+                                TaggedProto proto)
 {
     MOZ_ASSERT_IF(proto.isObject(), cx->compartment() == proto.toObject()->compartment());
 
-    ObjectGroupCompartment::NewTable*& table = cx->compartment()->objectGroups.lazyTable;
+    ObjectGroupRealm::NewTable*& table = realm.lazyTable;
 
     if (!table) {
-        table = cx->new_<ObjectGroupCompartment::NewTable>(cx->zone());
+        table = cx->new_<ObjectGroupRealm::NewTable>(cx->zone());
         if (!table || !table->init()) {
             ReportOutOfMemory(cx);
             js_delete(table);
@@ -618,8 +635,8 @@ ObjectGroup::lazySingletonGroup(JSContext* cx, const Class* clasp, TaggedProto p
         }
     }
 
-    ObjectGroupCompartment::NewTable::AddPtr p =
-        table->lookupForAdd(ObjectGroupCompartment::NewEntry::Lookup(clasp, proto, nullptr));
+    ObjectGroupRealm::NewTable::AddPtr p =
+        table->lookupForAdd(ObjectGroupRealm::NewEntry::Lookup(clasp, proto, nullptr));
     if (p) {
         ObjectGroup* group = p->group;
         MOZ_ASSERT(group->lazy());
@@ -631,12 +648,12 @@ ObjectGroup::lazySingletonGroup(JSContext* cx, const Class* clasp, TaggedProto p
 
     Rooted<TaggedProto> protoRoot(cx, proto);
     ObjectGroup* group =
-        ObjectGroupCompartment::makeGroup(cx, clasp, protoRoot,
-                                          OBJECT_FLAG_SINGLETON | OBJECT_FLAG_LAZY_SINGLETON);
+        ObjectGroupRealm::makeGroup(cx, clasp, protoRoot,
+                                    OBJECT_FLAG_SINGLETON | OBJECT_FLAG_LAZY_SINGLETON);
     if (!group)
         return nullptr;
 
-    if (!table->add(p, ObjectGroupCompartment::NewEntry(group, nullptr))) {
+    if (!table->add(p, ObjectGroupRealm::NewEntry(group, nullptr))) {
         ReportOutOfMemory(cx);
         return nullptr;
     }
@@ -645,13 +662,14 @@ ObjectGroup::lazySingletonGroup(JSContext* cx, const Class* clasp, TaggedProto p
 }
 
 /* static */ void
-ObjectGroup::setDefaultNewGroupUnknown(JSContext* cx, const Class* clasp, HandleObject obj)
+ObjectGroup::setDefaultNewGroupUnknown(JSContext* cx, ObjectGroupRealm& realm, const Class* clasp,
+                                       HandleObject obj)
 {
     // If the object already has a new group, mark that group as unknown.
-    ObjectGroupCompartment::NewTable* table = cx->compartment()->objectGroups.defaultNewTable;
+    ObjectGroupRealm::NewTable* table = realm.defaultNewTable;
     if (table) {
         Rooted<TaggedProto> taggedProto(cx, TaggedProto(obj));
-        auto lookup = ObjectGroupCompartment::NewEntry::Lookup(clasp, taggedProto, nullptr);
+        auto lookup = ObjectGroupRealm::NewEntry::Lookup(clasp, taggedProto, nullptr);
         auto p = table->lookup(lookup);
         if (p)
             MarkObjectGroupUnknownProperties(cx, p->group);
@@ -662,10 +680,10 @@ ObjectGroup::setDefaultNewGroupUnknown(JSContext* cx, const Class* clasp, Handle
 /* static */ bool
 ObjectGroup::hasDefaultNewGroup(JSObject* proto, const Class* clasp, ObjectGroup* group)
 {
-    ObjectGroupCompartment::NewTable* table = proto->compartment()->objectGroups.defaultNewTable;
+    ObjectGroupRealm::NewTable* table = ObjectGroupRealm::get(group).defaultNewTable;
 
     if (table) {
-        auto lookup = ObjectGroupCompartment::NewEntry::Lookup(clasp, TaggedProto(proto), nullptr);
+        auto lookup = ObjectGroupRealm::NewEntry::Lookup(clasp, TaggedProto(proto), nullptr);
         auto p = table->lookup(lookup);
         return p && p->group == group;
     }
@@ -722,17 +740,20 @@ GetClassForProtoKey(JSProtoKey key)
 /* static */ ObjectGroup*
 ObjectGroup::defaultNewGroup(JSContext* cx, JSProtoKey key)
 {
-    RootedObject proto(cx);
-    if (key != JSProto_Null && !GetBuiltinPrototype(cx, key, &proto))
-        return nullptr;
-    return defaultNewGroup(cx, GetClassForProtoKey(key), TaggedProto(proto.get()));
+    JSObject* proto = nullptr;
+    if (key != JSProto_Null) {
+        proto = GlobalObject::getOrCreatePrototype(cx, key);
+        if (!proto)
+            return nullptr;
+    }
+    return defaultNewGroup(cx, GetClassForProtoKey(key), TaggedProto(proto));
 }
 
 /////////////////////////////////////////////////////////////////////
-// ObjectGroupCompartment ArrayObjectTable
+// ObjectGroupRealm ArrayObjectTable
 /////////////////////////////////////////////////////////////////////
 
-struct ObjectGroupCompartment::ArrayObjectKey : public DefaultHasher<ArrayObjectKey>
+struct ObjectGroupRealm::ArrayObjectKey : public DefaultHasher<ArrayObjectKey>
 {
     TypeSet::Type type;
 
@@ -827,11 +848,11 @@ ObjectGroup::newArrayObject(JSContext* cx,
         }
     }
 
-    ObjectGroupCompartment::ArrayObjectTable*& table =
-        cx->compartment()->objectGroups.arrayObjectTable;
+    ObjectGroupRealm& realm = ObjectGroupRealm::getForNewObject(cx);
+    ObjectGroupRealm::ArrayObjectTable*& table = realm.arrayObjectTable;
 
     if (!table) {
-        table = cx->new_<ObjectGroupCompartment::ArrayObjectTable>();
+        table = cx->new_<ObjectGroupRealm::ArrayObjectTable>();
         if (!table || !table->init()) {
             ReportOutOfMemory(cx);
             js_delete(table);
@@ -840,24 +861,24 @@ ObjectGroup::newArrayObject(JSContext* cx,
         }
     }
 
-    ObjectGroupCompartment::ArrayObjectKey key(elementType);
-    DependentAddPtr<ObjectGroupCompartment::ArrayObjectTable> p(cx, *table, key);
+    ObjectGroupRealm::ArrayObjectKey key(elementType);
+    DependentAddPtr<ObjectGroupRealm::ArrayObjectTable> p(cx, *table, key);
 
     RootedObjectGroup group(cx);
     if (p) {
         group = p->value();
     } else {
-        RootedObject proto(cx);
-        if (!GetBuiltinPrototype(cx, JSProto_Array, &proto))
+        JSObject* proto = GlobalObject::getOrCreateArrayPrototype(cx, cx->global());
+        if (!proto)
             return nullptr;
         Rooted<TaggedProto> taggedProto(cx, TaggedProto(proto));
-        group = ObjectGroupCompartment::makeGroup(cx, &ArrayObject::class_, taggedProto);
+        group = ObjectGroupRealm::makeGroup(cx, &ArrayObject::class_, taggedProto);
         if (!group)
             return nullptr;
 
         AddTypePropertyId(cx, group, nullptr, JSID_VOID, elementType);
 
-        if (!p.add(cx, *table, ObjectGroupCompartment::ArrayObjectKey(elementType), group))
+        if (!p.add(cx, *table, ObjectGroupRealm::ArrayObjectKey(elementType), group))
             return nullptr;
     }
 
@@ -1035,10 +1056,10 @@ js::CombinePlainObjectPropertyTypes(JSContext* cx, JSObject* newObj,
 }
 
 /////////////////////////////////////////////////////////////////////
-// ObjectGroupCompartment PlainObjectTable
+// ObjectGroupRealm PlainObjectTable
 /////////////////////////////////////////////////////////////////////
 
-struct ObjectGroupCompartment::PlainObjectKey
+struct ObjectGroupRealm::PlainObjectKey
 {
     jsid* properties;
     uint32_t nproperties;
@@ -1076,7 +1097,7 @@ struct ObjectGroupCompartment::PlainObjectKey
     }
 };
 
-struct ObjectGroupCompartment::PlainObjectEntry
+struct ObjectGroupRealm::PlainObjectEntry
 {
     ReadBarrieredObjectGroup group;
     ReadBarrieredShape shape;
@@ -1150,11 +1171,11 @@ ObjectGroup::newPlainObject(JSContext* cx, IdValuePair* properties, size_t nprop
     if (newKind == SingletonObject || nproperties == 0 || nproperties >= PropertyTree::MAX_HEIGHT)
         return NewPlainObjectWithProperties(cx, properties, nproperties, newKind);
 
-    ObjectGroupCompartment::PlainObjectTable*& table =
-        cx->compartment()->objectGroups.plainObjectTable;
+    ObjectGroupRealm& realm = ObjectGroupRealm::getForNewObject(cx);
+    ObjectGroupRealm::PlainObjectTable*& table = realm.plainObjectTable;
 
     if (!table) {
-        table = cx->new_<ObjectGroupCompartment::PlainObjectTable>();
+        table = cx->new_<ObjectGroupRealm::PlainObjectTable>();
         if (!table || !table->init()) {
             ReportOutOfMemory(cx);
             js_delete(table);
@@ -1163,20 +1184,20 @@ ObjectGroup::newPlainObject(JSContext* cx, IdValuePair* properties, size_t nprop
         }
     }
 
-    ObjectGroupCompartment::PlainObjectKey::Lookup lookup(properties, nproperties);
-    ObjectGroupCompartment::PlainObjectTable::Ptr p = table->lookup(lookup);
+    ObjectGroupRealm::PlainObjectKey::Lookup lookup(properties, nproperties);
+    ObjectGroupRealm::PlainObjectTable::Ptr p = table->lookup(lookup);
 
     if (!p) {
         if (!CanShareObjectGroup(properties, nproperties))
             return NewPlainObjectWithProperties(cx, properties, nproperties, newKind);
 
-        RootedObject proto(cx);
-        if (!GetBuiltinPrototype(cx, JSProto_Object, &proto))
+        JSObject* proto = GlobalObject::getOrCreatePrototype(cx, JSProto_Object);
+        if (!proto)
             return nullptr;
 
         Rooted<TaggedProto> tagged(cx, TaggedProto(proto));
-        RootedObjectGroup group(cx, ObjectGroupCompartment::makeGroup(cx, &PlainObject::class_,
-                                                                      tagged));
+        RootedObjectGroup group(cx, ObjectGroupRealm::makeGroup(cx, &PlainObject::class_,
+                                                                tagged));
         if (!group)
             return nullptr;
 
@@ -1228,17 +1249,17 @@ ObjectGroup::newPlainObject(JSContext* cx, IdValuePair* properties, size_t nprop
             AddTypePropertyId(cx, group, nullptr, IdToTypeId(ids[i]), types[i]);
         }
 
-        ObjectGroupCompartment::PlainObjectKey key;
+        ObjectGroupRealm::PlainObjectKey key;
         key.properties = ids;
         key.nproperties = nproperties;
-        MOZ_ASSERT(ObjectGroupCompartment::PlainObjectKey::match(key, lookup));
+        MOZ_ASSERT(ObjectGroupRealm::PlainObjectKey::match(key, lookup));
 
-        ObjectGroupCompartment::PlainObjectEntry entry;
+        ObjectGroupRealm::PlainObjectEntry entry;
         entry.group.set(group);
         entry.shape.set(obj->lastProperty());
         entry.types = types;
 
-        ObjectGroupCompartment::PlainObjectTable::AddPtr np = table->lookupForAdd(lookup);
+        ObjectGroupRealm::PlainObjectTable::AddPtr np = table->lookupForAdd(lookup);
         if (!table->add(np, key, entry)) {
             ReportOutOfMemory(cx);
             return nullptr;
@@ -1252,16 +1273,22 @@ ObjectGroup::newPlainObject(JSContext* cx, IdValuePair* properties, size_t nprop
 
     RootedObjectGroup group(cx, p->value().group);
 
+    // AutoSweepObjectGroup checks no GC happens in its scope, so we use Maybe
+    // and reset() it before GC calls.
+    mozilla::Maybe<AutoSweepObjectGroup> sweep;
+    sweep.emplace(group);
+
     // Watch for existing groups which now use an unboxed layout.
-    if (group->maybeUnboxedLayout()) {
-        MOZ_ASSERT(group->unboxedLayout().properties().length() == nproperties);
+    if (group->maybeUnboxedLayout(*sweep)) {
+        MOZ_ASSERT(group->maybeUnboxedLayout(*sweep)->properties().length() == nproperties);
+        sweep.reset();
         return UnboxedPlainObject::createWithProperties(cx, group, newKind, properties);
     }
 
     // Update property types according to the properties we are about to add.
     // Do this before we do anything which can GC, which might move or remove
     // this table entry.
-    if (!group->unknownProperties()) {
+    if (!group->unknownProperties(*sweep)) {
         for (size_t i = 0; i < nproperties; i++) {
             TypeSet::Type type = p->value().types[i];
             TypeSet::Type ntype = GetValueTypeForTable(properties[i].value);
@@ -1285,8 +1312,10 @@ ObjectGroup::newPlainObject(JSContext* cx, IdValuePair* properties, size_t nprop
 
     RootedShape shape(cx, p->value().shape);
 
-    if (group->maybePreliminaryObjects())
+    if (group->maybePreliminaryObjects(*sweep))
         newKind = TenuredObject;
+
+    sweep.reset();
 
     gc::AllocKind allocKind = gc::GetGCObjectKind(nproperties);
     RootedPlainObject obj(cx, NewObjectWithGroup<PlainObject>(cx, group, allocKind,
@@ -1298,19 +1327,21 @@ ObjectGroup::newPlainObject(JSContext* cx, IdValuePair* properties, size_t nprop
     for (size_t i = 0; i < nproperties; i++)
         obj->setSlot(i, properties[i].value);
 
-    if (group->maybePreliminaryObjects()) {
-        group->maybePreliminaryObjects()->registerNewObject(obj);
-        group->maybePreliminaryObjects()->maybeAnalyze(cx, group);
+    sweep.emplace(group);
+
+    if (group->maybePreliminaryObjects(*sweep)) {
+        group->maybePreliminaryObjects(*sweep)->registerNewObject(obj);
+        group->maybePreliminaryObjects(*sweep)->maybeAnalyze(cx, group);
     }
 
     return obj;
 }
 
 /////////////////////////////////////////////////////////////////////
-// ObjectGroupCompartment AllocationSiteTable
+// ObjectGroupRealm AllocationSiteTable
 /////////////////////////////////////////////////////////////////////
 
-struct ObjectGroupCompartment::AllocationSiteKey : public DefaultHasher<AllocationSiteKey> {
+struct ObjectGroupRealm::AllocationSiteKey : public DefaultHasher<AllocationSiteKey> {
     ReadBarrieredScript script;
 
     uint32_t offset : 24;
@@ -1334,17 +1365,17 @@ struct ObjectGroupCompartment::AllocationSiteKey : public DefaultHasher<Allocati
     { }
 
     AllocationSiteKey(AllocationSiteKey&& key)
-      : script(mozilla::Move(key.script)),
+      : script(std::move(key.script)),
         offset(key.offset),
         kind(key.kind),
-        proto(mozilla::Move(key.proto))
+        proto(std::move(key.proto))
     { }
 
     void operator=(AllocationSiteKey&& key) {
-        script = mozilla::Move(key.script);
+        script = std::move(key.script);
         offset = key.offset;
         kind = key.kind;
-        proto = mozilla::Move(key.proto);
+        proto = std::move(key.proto);
     }
 
     static inline uint32_t hash(AllocationSiteKey key) {
@@ -1378,7 +1409,7 @@ struct ObjectGroupCompartment::AllocationSiteKey : public DefaultHasher<Allocati
     }
 };
 
-class ObjectGroupCompartment::AllocationSiteTable
+class ObjectGroupRealm::AllocationSiteTable
   : public JS::WeakCache<js::GCHashMap<AllocationSiteKey, ReadBarrieredObjectGroup,
                                        AllocationSiteKey, SystemAllocPolicy>>
 {
@@ -1396,20 +1427,21 @@ ObjectGroup::allocationSiteGroup(JSContext* cx, JSScript* scriptArg, jsbytecode*
 {
     MOZ_ASSERT(!useSingletonForAllocationSite(scriptArg, pc, kind));
     MOZ_ASSERT_IF(protoArg, kind == JSProto_Array);
+    MOZ_ASSERT(cx->realm() == scriptArg->realm());
 
     uint32_t offset = scriptArg->pcToOffset(pc);
 
-    if (offset >= ObjectGroupCompartment::AllocationSiteKey::OFFSET_LIMIT) {
+    if (offset >= ObjectGroupRealm::AllocationSiteKey::OFFSET_LIMIT) {
         if (protoArg)
             return defaultNewGroup(cx, GetClassForProtoKey(kind), TaggedProto(protoArg));
         return defaultNewGroup(cx, kind);
     }
 
-    ObjectGroupCompartment::AllocationSiteTable*& table =
-        cx->compartment()->objectGroups.allocationSiteTable;
+    ObjectGroupRealm& realm = ObjectGroupRealm::getForNewObject(cx);
+    ObjectGroupRealm::AllocationSiteTable*& table = realm.allocationSiteTable;
 
     if (!table) {
-        table = cx->new_<ObjectGroupCompartment::AllocationSiteTable>(cx->zone());
+        table = cx->new_<ObjectGroupRealm::AllocationSiteTable>(cx->zone());
         if (!table || !table->init()) {
             ReportOutOfMemory(cx);
             js_delete(table);
@@ -1419,22 +1451,25 @@ ObjectGroup::allocationSiteGroup(JSContext* cx, JSScript* scriptArg, jsbytecode*
     }
 
     RootedScript script(cx, scriptArg);
-    RootedObject proto(cx, protoArg);
-    if (!proto && kind != JSProto_Null && !GetBuiltinPrototype(cx, kind, &proto))
-        return nullptr;
+    JSObject* proto = protoArg;
+    if (!proto && kind != JSProto_Null) {
+        proto = GlobalObject::getOrCreatePrototype(cx, kind);
+        if (!proto)
+            return nullptr;
+    }
 
-    Rooted<ObjectGroupCompartment::AllocationSiteKey> key(cx,
-        ObjectGroupCompartment::AllocationSiteKey(script, offset, kind, proto));
+    Rooted<ObjectGroupRealm::AllocationSiteKey> key(cx,
+        ObjectGroupRealm::AllocationSiteKey(script, offset, kind, proto));
 
-    ObjectGroupCompartment::AllocationSiteTable::AddPtr p = table->lookupForAdd(key);
+    ObjectGroupRealm::AllocationSiteTable::AddPtr p = table->lookupForAdd(key);
     if (p)
         return p->value();
 
     AutoEnterAnalysis enter(cx);
 
     Rooted<TaggedProto> tagged(cx, TaggedProto(proto));
-    ObjectGroup* res = ObjectGroupCompartment::makeGroup(cx, GetClassForProtoKey(kind), tagged,
-                                                         OBJECT_FLAG_FROM_ALLOCATION_SITE);
+    ObjectGroup* res = ObjectGroupRealm::makeGroup(cx, GetClassForProtoKey(kind), tagged,
+                                                   OBJECT_FLAG_FROM_ALLOCATION_SITE);
     if (!res)
         return nullptr;
 
@@ -1461,9 +1496,11 @@ ObjectGroup::allocationSiteGroup(JSContext* cx, JSScript* scriptArg, jsbytecode*
 }
 
 void
-ObjectGroupCompartment::replaceAllocationSiteGroup(JSScript* script, jsbytecode* pc,
-                                                   JSProtoKey kind, ObjectGroup* group)
+ObjectGroupRealm::replaceAllocationSiteGroup(JSScript* script, jsbytecode* pc,
+                                             JSProtoKey kind, ObjectGroup* group)
 {
+    MOZ_ASSERT(script->realm() == group->realm());
+
     AllocationSiteKey key(script, script->pcToOffset(pc), kind, group->proto().toObjectOrNull());
 
     AllocationSiteTable::Ptr p = allocationSiteTable->lookup(key);
@@ -1526,8 +1563,9 @@ ObjectGroup::getOrFixupCopyOnWriteObject(JSContext* cx, HandleScript script, jsb
     RootedArrayObject obj(cx, &script->getObject(GET_UINT32_INDEX(pc))->as<ArrayObject>());
     MOZ_ASSERT(obj->denseElementsAreCopyOnWrite());
 
-    if (obj->group()->fromAllocationSite()) {
-        MOZ_ASSERT(obj->group()->hasAnyFlags(OBJECT_FLAG_COPY_ON_WRITE));
+    AutoSweepObjectGroup sweepObjGroup(obj->group());
+    if (obj->group()->fromAllocationSite(sweepObjGroup)) {
+        MOZ_ASSERT(obj->group()->hasAnyFlags(sweepObjGroup, OBJECT_FLAG_COPY_ON_WRITE));
         return obj;
     }
 
@@ -1535,7 +1573,8 @@ ObjectGroup::getOrFixupCopyOnWriteObject(JSContext* cx, HandleScript script, jsb
     if (!group)
         return nullptr;
 
-    group->addFlags(OBJECT_FLAG_COPY_ON_WRITE);
+    AutoSweepObjectGroup sweepGroup(group);
+    group->addFlags(sweepGroup, OBJECT_FLAG_COPY_ON_WRITE);
 
     // Update type information in the initializer object group.
     MOZ_ASSERT(obj->slotSpan() == 0);
@@ -1569,13 +1608,13 @@ ObjectGroup::findAllocationSite(JSContext* cx, ObjectGroup* group,
     *script = nullptr;
     *offset = 0;
 
-    const ObjectGroupCompartment::AllocationSiteTable* table =
-        cx->compartment()->objectGroups.allocationSiteTable;
+    ObjectGroupRealm& realm = ObjectGroupRealm::get(group);
+    const ObjectGroupRealm::AllocationSiteTable* table = realm.allocationSiteTable;
 
     if (!table)
         return false;
 
-    for (ObjectGroupCompartment::AllocationSiteTable::Range r = table->all();
+    for (ObjectGroupRealm::AllocationSiteTable::Range r = table->all();
          !r.empty();
          r.popFront())
     {
@@ -1590,15 +1629,10 @@ ObjectGroup::findAllocationSite(JSContext* cx, ObjectGroup* group,
 }
 
 /////////////////////////////////////////////////////////////////////
-// ObjectGroupCompartment
+// ObjectGroupRealm
 /////////////////////////////////////////////////////////////////////
 
-ObjectGroupCompartment::ObjectGroupCompartment()
-{
-    PodZero(this);
-}
-
-ObjectGroupCompartment::~ObjectGroupCompartment()
+ObjectGroupRealm::~ObjectGroupRealm()
 {
     js_delete(defaultNewTable);
     js_delete(lazyTable);
@@ -1609,7 +1643,7 @@ ObjectGroupCompartment::~ObjectGroupCompartment()
 }
 
 void
-ObjectGroupCompartment::removeDefaultNewGroup(const Class* clasp, TaggedProto proto,
+ObjectGroupRealm::removeDefaultNewGroup(const Class* clasp, TaggedProto proto,
                                               JSObject* associated)
 {
     auto p = defaultNewTable->lookup(NewEntry::Lookup(clasp, proto, associated));
@@ -1620,7 +1654,7 @@ ObjectGroupCompartment::removeDefaultNewGroup(const Class* clasp, TaggedProto pr
 }
 
 void
-ObjectGroupCompartment::replaceDefaultNewGroup(const Class* clasp, TaggedProto proto,
+ObjectGroupRealm::replaceDefaultNewGroup(const Class* clasp, TaggedProto proto,
                                                JSObject* associated, ObjectGroup* group)
 {
     NewEntry::Lookup lookup(clasp, proto, associated);
@@ -1638,25 +1672,25 @@ ObjectGroupCompartment::replaceDefaultNewGroup(const Class* clasp, TaggedProto p
 
 /* static */
 ObjectGroup*
-ObjectGroupCompartment::makeGroup(JSContext* cx, const Class* clasp,
-                                  Handle<TaggedProto> proto,
-                                  ObjectGroupFlags initialFlags /* = 0 */)
+ObjectGroupRealm::makeGroup(JSContext* cx, const Class* clasp,
+                            Handle<TaggedProto> proto,
+                            ObjectGroupFlags initialFlags /* = 0 */)
 {
     MOZ_ASSERT_IF(proto.isObject(), cx->isInsideCurrentCompartment(proto.toObject()));
 
     ObjectGroup* group = Allocate<ObjectGroup>(cx);
     if (!group)
         return nullptr;
-    new(group) ObjectGroup(clasp, proto, cx->compartment(), initialFlags);
+    new(group) ObjectGroup(clasp, proto, cx->realm(), initialFlags);
 
     return group;
 }
 
 /* static */
 ObjectGroup*
-ObjectGroupCompartment::getStringSplitStringGroup(JSContext* cx)
+ObjectGroupRealm::getStringSplitStringGroup(JSContext* cx)
 {
-    ObjectGroupCompartment& groups = cx->compartment()->objectGroups;
+    ObjectGroupRealm& groups = ObjectGroupRealm::getForNewObject(cx);
 
     ObjectGroup* group = groups.stringSplitStringGroup.get();
     if (group) {
@@ -1668,8 +1702,8 @@ ObjectGroupCompartment::getStringSplitStringGroup(JSContext* cx)
 
     const Class* clasp = GetClassForProtoKey(JSProto_Array);
 
-    RootedObject proto(cx);
-    if (!GetBuiltinPrototype(cx, JSProto_Array, &proto))
+    JSObject* proto = GlobalObject::getOrCreateArrayPrototype(cx, cx->global());
+    if (!proto)
         return nullptr;
     Rooted<TaggedProto> tagged(cx, TaggedProto(proto));
 
@@ -1682,11 +1716,11 @@ ObjectGroupCompartment::getStringSplitStringGroup(JSContext* cx)
 }
 
 void
-ObjectGroupCompartment::addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf,
+ObjectGroupRealm::addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf,
                                                size_t* allocationSiteTables,
                                                size_t* arrayObjectGroupTables,
                                                size_t* plainObjectGroupTables,
-                                               size_t* compartmentTables)
+                                               size_t* realmTables)
 {
     if (allocationSiteTable)
         *allocationSiteTables += allocationSiteTable->sizeOfIncludingThis(mallocSizeOf);
@@ -1710,14 +1744,14 @@ ObjectGroupCompartment::addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeO
     }
 
     if (defaultNewTable)
-        *compartmentTables += defaultNewTable->sizeOfIncludingThis(mallocSizeOf);
+        *realmTables += defaultNewTable->sizeOfIncludingThis(mallocSizeOf);
 
     if (lazyTable)
-        *compartmentTables += lazyTable->sizeOfIncludingThis(mallocSizeOf);
+        *realmTables += lazyTable->sizeOfIncludingThis(mallocSizeOf);
 }
 
 void
-ObjectGroupCompartment::clearTables()
+ObjectGroupRealm::clearTables()
 {
     if (allocationSiteTable && allocationSiteTable->initialized())
         allocationSiteTable->clear();
@@ -1740,8 +1774,8 @@ ObjectGroupCompartment::clearTables()
 }
 
 /* static */ bool
-ObjectGroupCompartment::PlainObjectTableSweepPolicy::needsSweep(PlainObjectKey* key,
-                                                                PlainObjectEntry* entry)
+ObjectGroupRealm::PlainObjectTableSweepPolicy::needsSweep(PlainObjectKey* key,
+                                                          PlainObjectEntry* entry)
 {
     if (!(JS::GCPolicy<PlainObjectKey>::needsSweep(key) || entry->needsSweep(key->nproperties)))
         return false;
@@ -1751,7 +1785,7 @@ ObjectGroupCompartment::PlainObjectTableSweepPolicy::needsSweep(PlainObjectKey* 
 }
 
 void
-ObjectGroupCompartment::sweep(FreeOp* fop)
+ObjectGroupRealm::sweep()
 {
     /*
      * Iterate through the array/object group tables and remove all entries
@@ -1770,7 +1804,7 @@ ObjectGroupCompartment::sweep(FreeOp* fop)
 }
 
 void
-ObjectGroupCompartment::fixupNewTableAfterMovingGC(NewTable* table)
+ObjectGroupRealm::fixupNewTableAfterMovingGC(NewTable* table)
 {
     /*
      * Each entry's hash depends on the object's prototype and we can't tell
@@ -1801,7 +1835,7 @@ ObjectGroupCompartment::fixupNewTableAfterMovingGC(NewTable* table)
 #ifdef JSGC_HASH_TABLE_CHECKS
 
 void
-ObjectGroupCompartment::checkNewTableAfterMovingGC(NewTable* table)
+ObjectGroupRealm::checkNewTableAfterMovingGC(NewTable* table)
 {
     /*
      * Assert that nothing points into the nursery or needs to be relocated, and

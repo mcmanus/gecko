@@ -83,8 +83,8 @@ BaselineFrame::trace(JSTracer* trc, const JSJitFrameIter& frameIterator)
         TraceLocals(this, trc, 0, nlivefixed);
     }
 
-    if (script->compartment()->debugEnvs)
-        script->compartment()->debugEnvs->traceLiveFrame(trc, this);
+    if (auto* debugEnvs = script->realm()->debugEnvs())
+        debugEnvs->traceLiveFrame(trc, this);
 }
 
 bool
@@ -142,7 +142,7 @@ BaselineFrame::initForOsr(InterpreterFrame* fp, uint32_t numStackValues)
         // debugger, wants a valid return address, but it's okay to just pick one.
         // In debug mode there's always at least 1 ICEntry (since there are always
         // debug prologue/epilogue calls).
-        JSJitFrameIter frame(cx);
+        JSJitFrameIter frame(cx->activation()->asJit());
         MOZ_ASSERT(frame.returnAddress() == nullptr);
         BaselineScript* baseline = fp->script()->baselineScript();
         frame.current()->setReturnAddress(baseline->returnAddressForIC(baseline->icEntry(0)));

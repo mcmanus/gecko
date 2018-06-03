@@ -20,10 +20,8 @@ var gTabActor1, gTabActor2;
 function test() {
   waitForExplicitFinish();
 
-  if (!DebuggerServer.initialized) {
-    DebuggerServer.init();
-    DebuggerServer.addBrowserActors();
-  }
+  DebuggerServer.init();
+  DebuggerServer.registerAllActors();
 
   openTabs();
 }
@@ -61,13 +59,13 @@ function checkGetTab() {
               "getTab returns the same tab grip for first tab");
          })
          .then(() => {
-           let filter = {};
+           const filter = {};
            // Filter either by tabId or outerWindowID,
            // if we are running tests OOP or not.
            if (gTab1.linkedBrowser.frameLoader.tabParent) {
              filter.tabId = gTab1.linkedBrowser.frameLoader.tabParent.tabId;
            } else {
-             let windowUtils = gTab1.linkedBrowser.contentWindow
+             const windowUtils = gTab1.linkedBrowser.contentWindow
                .QueryInterface(Ci.nsIInterfaceRequestor)
                .getInterface(Ci.nsIDOMWindowUtils);
              filter.outerWindowID = windowUtils.outerWindowID;
@@ -104,7 +102,6 @@ function checkGetTabFailures() {
       }
     )
     .then(checkSelectedTabActor);
-
 }
 
 function checkSelectedTabActor() {
@@ -119,8 +116,8 @@ function checkSelectedTabActor() {
 
 function closeSecondTab() {
   // Close the second tab, currently selected
-  let container = gBrowser.tabContainer;
-  container.addEventListener("TabClose", function () {
+  const container = gBrowser.tabContainer;
+  container.addEventListener("TabClose", function() {
     checkFirstTabActor();
   }, {once: true});
   gBrowser.removeTab(gTab2);
@@ -137,8 +134,8 @@ function checkFirstTabActor() {
 }
 
 function cleanup() {
-  let container = gBrowser.tabContainer;
-  container.addEventListener("TabClose", function () {
+  const container = gBrowser.tabContainer;
+  container.addEventListener("TabClose", function() {
     gClient.close().then(finish);
   }, {once: true});
   gBrowser.removeTab(gTab1);

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,10 +14,10 @@
 class SVGFEUnstyledLeafFrame : public nsFrame
 {
   friend nsIFrame*
-  NS_NewSVGFEUnstyledLeafFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
+  NS_NewSVGFEUnstyledLeafFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle);
 protected:
-  explicit SVGFEUnstyledLeafFrame(nsStyleContext* aContext)
-    : nsFrame(aContext, kClassID)
+  explicit SVGFEUnstyledLeafFrame(ComputedStyle* aStyle)
+    : nsFrame(aStyle, kClassID)
   {
     AddStateBits(NS_FRAME_SVG_LAYOUT | NS_FRAME_IS_NONDISPLAY);
   }
@@ -50,9 +51,9 @@ public:
 };
 
 nsIFrame*
-NS_NewSVGFEUnstyledLeafFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewSVGFEUnstyledLeafFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) SVGFEUnstyledLeafFrame(aContext);
+  return new (aPresShell) SVGFEUnstyledLeafFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(SVGFEUnstyledLeafFrame)

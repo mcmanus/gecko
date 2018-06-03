@@ -1,13 +1,11 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: sw=2 ts=8 et :
- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "LayerTransactionParent.h"
 #include <vector>                       // for vector
-#include "apz/src/AsyncPanZoomController.h"
 #include "CompositableHost.h"           // for CompositableParent, Get, etc
 #include "ImageLayers.h"                // for ImageLayer
 #include "Layers.h"                     // for Layer, ContainerLayer, etc
@@ -30,7 +28,6 @@
 #include "mozilla/mozalloc.h"           // for operator delete, etc
 #include "mozilla/Unused.h"
 #include "nsCoord.h"                    // for NSAppUnitsToFloatPixels
-#include "nsDebug.h"                    // for NS_RUNTIMEABORT
 #include "nsISupportsImpl.h"            // for Layer::Release, etc
 #include "nsLayoutUtils.h"              // for nsLayoutUtils
 #include "nsMathUtils.h"                // for NS_round
@@ -51,17 +48,18 @@ namespace layers {
 LayerTransactionParent::LayerTransactionParent(HostLayerManager* aManager,
                                                CompositorBridgeParentBase* aBridge,
                                                CompositorAnimationStorage* aAnimStorage,
-                                               uint64_t aId)
+                                               LayersId aId)
   : mLayerManager(aManager)
   , mCompositorBridge(aBridge)
   , mAnimStorage(aAnimStorage)
   , mId(aId)
   , mChildEpoch(0)
   , mParentEpoch(0)
-  , mPendingTransaction(0)
+  , mPendingTransaction{0}
   , mDestroyed(false)
   , mIPCOpen(false)
 {
+  MOZ_ASSERT(mId.IsValid());
 }
 
 LayerTransactionParent::~LayerTransactionParent()
@@ -151,19 +149,10 @@ private:
 };
 
 mozilla::ipc::IPCResult
-LayerTransactionParent::RecvPaintTime(const uint64_t& aTransactionId,
+LayerTransactionParent::RecvPaintTime(const TransactionId& aTransactionId,
                                       const TimeDuration& aPaintTime)
 {
   mCompositorBridge->UpdatePaintTime(this, aPaintTime);
-  return IPC_OK();
-}
-
-mozilla::ipc::IPCResult
-LayerTransactionParent::RecvInitReadLocks(ReadLockArray&& aReadLocks)
-{
-  if (!AddReadLocks(Move(aReadLocks))) {
-    return IPC_FAIL_NO_REASON(this);
-  }
   return IPC_OK();
 }
 
@@ -178,7 +167,6 @@ LayerTransactionParent::RecvUpdate(const TransactionInfo& aInfo)
   MOZ_LAYERS_LOG(("[ParentSide] received txn with %zu edits", aInfo.cset().Length()));
 
   UpdateFwdTransactionId(aInfo.fwdTransactionId());
-  AutoClearReadLocks clearLocks(mReadLocks);
 
   if (mDestroyed || !mLayerManager || mLayerManager->IsDestroyed()) {
     for (const auto& op : aInfo.toDestroy()) {
@@ -246,17 +234,6 @@ LayerTransactionParent::RecvUpdate(const TransactionInfo& aInfo)
       }
 
       UpdateHitTestingTree(layer, "CreateColorLayer");
-      break;
-    }
-    case Edit::TOpCreateTextLayer: {
-      MOZ_LAYERS_LOG(("[ParentSide] CreateTextLayer"));
-
-      RefPtr<TextLayer> layer = mLayerManager->CreateTextLayer();
-      if (!BindLayer(layer, edit.get_OpCreateTextLayer())) {
-        return IPC_FAIL_NO_REASON(this);
-      }
-
-      UpdateHitTestingTree(layer, "CreateTextLayer");
       break;
     }
     case Edit::TOpCreateBorderLayer: {
@@ -611,10 +588,6 @@ LayerTransactionParent::SetLayerAttributes(const OpSetLayerAttributes& aOp)
     containerLayer->SetInheritedScale(attrs.inheritedXScale(), attrs.inheritedYScale());
     containerLayer->SetScaleToResolution(attrs.scaleToResolution(),
                                          attrs.presShellResolution());
-    if (attrs.eventRegionsOverride() != containerLayer->GetEventRegionsOverride()) {
-      UpdateHitTestingTree(layer, "event regions override changed");
-      containerLayer->SetEventRegionsOverride(attrs.eventRegionsOverride());
-    }
     break;
   }
   case Specific::TColorLayerAttributes: {
@@ -626,19 +599,6 @@ LayerTransactionParent::SetLayerAttributes(const OpSetLayerAttributes& aOp)
     }
     colorLayer->SetColor(specific.get_ColorLayerAttributes().color().value());
     colorLayer->SetBounds(specific.get_ColorLayerAttributes().bounds());
-    break;
-  }
-  case Specific::TTextLayerAttributes: {
-    MOZ_LAYERS_LOG(("[ParentSide]   text layer"));
-
-    TextLayer* textLayer = layer->AsTextLayer();
-    if (!textLayer) {
-      return false;
-    }
-    const auto& tla = specific.get_TextLayerAttributes();
-    textLayer->SetBounds(tla.bounds());
-    textLayer->SetGlyphs(Move(const_cast<nsTArray<GlyphArray>&>(tla.glyphs())));
-    textLayer->SetScaledFont(reinterpret_cast<gfx::ScaledFont*>(tla.scaledFont()));
     break;
   }
   case Specific::TBorderLayerAttributes: {
@@ -781,25 +741,6 @@ LayerTransactionParent::RecvGetAnimationTransform(const uint64_t& aCompositorAni
   return IPC_OK();
 }
 
-static AsyncPanZoomController*
-GetAPZCForViewID(Layer* aLayer, FrameMetrics::ViewID aScrollID)
-{
-  AsyncPanZoomController* resultApzc = nullptr;
-  ForEachNode<ForwardIterator>(
-      aLayer,
-      [aScrollID, &resultApzc] (Layer* layer)
-      {
-        for (uint32_t i = 0; i < layer->GetScrollMetadataCount(); i++) {
-          if (layer->GetFrameMetrics(i).GetScrollId() == aScrollID) {
-            resultApzc = layer->GetAsyncPanZoomController(i);
-            return TraversalFlag::Abort;
-          }
-        }
-        return TraversalFlag::Continue;
-      });
-  return resultApzc;
-}
-
 mozilla::ipc::IPCResult
 LayerTransactionParent::RecvSetAsyncScrollOffset(const FrameMetrics::ViewID& aScrollID,
                                                  const float& aX, const float& aY)
@@ -808,11 +749,7 @@ LayerTransactionParent::RecvSetAsyncScrollOffset(const FrameMetrics::ViewID& aSc
     return IPC_FAIL_NO_REASON(this);
   }
 
-  AsyncPanZoomController* controller = GetAPZCForViewID(mRoot, aScrollID);
-  if (!controller) {
-    return IPC_FAIL_NO_REASON(this);
-  }
-  controller->SetTestAsyncScrollOffset(CSSPoint(aX, aY));
+  mCompositorBridge->SetTestAsyncScrollOffset(GetId(), aScrollID, CSSPoint(aX, aY));
   return IPC_OK();
 }
 
@@ -824,11 +761,7 @@ LayerTransactionParent::RecvSetAsyncZoom(const FrameMetrics::ViewID& aScrollID,
     return IPC_FAIL_NO_REASON(this);
   }
 
-  AsyncPanZoomController* controller = GetAPZCForViewID(mRoot, aScrollID);
-  if (!controller) {
-    return IPC_FAIL_NO_REASON(this);
-  }
-  controller->SetTestAsyncZoom(LayerToParentLayerScale(aValue));
+  mCompositorBridge->SetTestAsyncZoom(GetId(), aScrollID, LayerToParentLayerScale(aValue));
   return IPC_OK();
 }
 
@@ -878,6 +811,10 @@ LayerTransactionParent::Attach(Layer* aLayer,
   TextureSourceProvider* provider =
     static_cast<HostLayerManager*>(aLayer->Manager())->GetTextureSourceProvider();
 
+  MOZ_ASSERT(!aCompositable->AsWebRenderImageHost());
+  if (aCompositable->AsWebRenderImageHost()) {
+    gfxCriticalNote << "Use WebRenderImageHost at LayerTransactionParent.";
+  }
   if (!layer->SetCompositableHost(aCompositable)) {
     // not all layer types accept a compositable, see bug 967824
     return false;
@@ -905,9 +842,9 @@ LayerTransactionParent::RecvClearCachedResources()
 }
 
 mozilla::ipc::IPCResult
-LayerTransactionParent::RecvForceComposite()
+LayerTransactionParent::RecvScheduleComposite()
 {
-  mCompositorBridge->ForceComposite(this);
+  mCompositorBridge->ScheduleComposite(this);
   return IPC_OK();
 }
 
@@ -954,11 +891,11 @@ bool LayerTransactionParent::IsSameProcess() const
   return OtherPid() == base::GetCurrentProcId();
 }
 
-uint64_t
+TransactionId
 LayerTransactionParent::FlushTransactionId(TimeStamp& aCompositeEnd)
 {
 #if defined(ENABLE_FRAME_LATENCY_LOG)
-  if (mPendingTransaction) {
+  if (mPendingTransaction.IsValid()) {
     if (mTxnStartTime) {
       uint32_t latencyMs = round((aCompositeEnd - mTxnStartTime).ToMilliseconds());
       printf_stderr("From transaction start to end of generate frame latencyMs %d this %p\n", latencyMs, this);
@@ -971,8 +908,8 @@ LayerTransactionParent::FlushTransactionId(TimeStamp& aCompositeEnd)
   mTxnStartTime = TimeStamp();
   mFwdTime = TimeStamp();
 #endif
-  uint64_t id = mPendingTransaction;
-  mPendingTransaction = 0;
+  TransactionId id = mPendingTransaction;
+  mPendingTransaction = TransactionId{0};
   return id;
 }
 
@@ -1042,6 +979,7 @@ LayerTransactionParent::RecvReleaseLayer(const LayerHandle& aHandle)
   if (mAnimStorage &&
       layer->GetCompositorAnimationsId()) {
     mAnimStorage->ClearById(layer->GetCompositorAnimationsId());
+    layer->ClearCompositorAnimations();
   }
   layer->Disconnect();
   return IPC_OK();

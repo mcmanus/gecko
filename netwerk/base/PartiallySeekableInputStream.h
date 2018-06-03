@@ -7,9 +7,11 @@
 #define PartiallySeekableInputStream_h
 
 #include "mozilla/Attributes.h"
+#include "mozilla/Mutex.h"
 #include "nsCOMPtr.h"
 #include "nsIAsyncInputStream.h"
 #include "nsICloneableInputStream.h"
+#include "nsIInputStreamLength.h"
 #include "nsIIPCSerializableInputStream.h"
 #include "nsISeekableStream.h"
 
@@ -17,12 +19,16 @@ namespace mozilla {
 namespace net {
 
 // A wrapper for making a stream seekable for the first |aBufferSize| bytes.
+// Note that this object takes the ownership of the underlying stream.
 
 class PartiallySeekableInputStream final : public nsISeekableStream
                                          , public nsIAsyncInputStream
                                          , public nsICloneableInputStream
                                          , public nsIIPCSerializableInputStream
                                          , public nsIInputStreamCallback
+                                         , public nsIInputStreamLength
+                                         , public nsIAsyncInputStreamLength
+                                         , public nsIInputStreamLengthCallback
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -32,12 +38,21 @@ public:
   NS_DECL_NSICLONEABLEINPUTSTREAM
   NS_DECL_NSIIPCSERIALIZABLEINPUTSTREAM
   NS_DECL_NSIINPUTSTREAMCALLBACK
+  NS_DECL_NSIINPUTSTREAMLENGTH
+  NS_DECL_NSIASYNCINPUTSTREAMLENGTH
+  NS_DECL_NSIINPUTSTREAMLENGTHCALLBACK
 
-  explicit PartiallySeekableInputStream(nsIInputStream* aInputStream,
+  explicit PartiallySeekableInputStream(already_AddRefed<nsIInputStream> aInputStream,
                                         uint64_t aBufferSize = 4096);
 
 private:
-  ~PartiallySeekableInputStream();
+  PartiallySeekableInputStream(already_AddRefed<nsIInputStream> aClonedBaseStream,
+                               PartiallySeekableInputStream* aClonedFrom);
+
+  ~PartiallySeekableInputStream() = default;
+
+  void
+  Init();
 
   nsCOMPtr<nsIInputStream> mInputStream;
 
@@ -45,14 +60,22 @@ private:
   nsICloneableInputStream* mWeakCloneableInputStream;
   nsIIPCSerializableInputStream* mWeakIPCSerializableInputStream;
   nsIAsyncInputStream* mWeakAsyncInputStream;
+  nsIInputStreamLength* mWeakInputStreamLength;
+  nsIAsyncInputStreamLength* mWeakAsyncInputStreamLength;
 
+  // Protected by mutex.
   nsCOMPtr<nsIInputStreamCallback> mAsyncWaitCallback;
+
+  // Protected by mutex.
+  nsCOMPtr<nsIInputStreamLengthCallback> mAsyncInputStreamLengthCallback;
 
   nsTArray<char> mCachedBuffer;
 
   uint64_t mBufferSize;
   uint64_t mPos;
   bool mClosed;
+
+  Mutex mMutex;
 };
 
 } // net namespace

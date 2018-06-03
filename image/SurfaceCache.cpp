@@ -168,7 +168,7 @@ public:
   bool IsDecoded() const { return !IsPlaceholder() && mProvider->IsFinished(); }
 
   ImageKey GetImageKey() const { return mProvider->GetImageKey(); }
-  SurfaceKey GetSurfaceKey() const { return mProvider->GetSurfaceKey(); }
+  const SurfaceKey& GetSurfaceKey() const { return mProvider->GetSurfaceKey(); }
   nsExpirationState* GetExpirationState() { return &mExpirationState; }
 
   CostEntry GetCostEntry()
@@ -207,7 +207,7 @@ public:
         ->AddSizeOfExcludingThis(mMallocSizeOf, heap, nonHeap, handles);
       counter.Values().SetDecodedHeap(heap);
       counter.Values().SetDecodedNonHeap(nonHeap);
-      counter.Values().SetSharedHandles(handles);
+      counter.Values().SetExternalHandles(handles);
 
       mCounters.AppendElement(counter);
     }
@@ -335,6 +335,7 @@ public:
         SurfaceKey compactKey = aIdealKey.CloneWithSize(suggestedSize);
         mSurfaces.Get(compactKey, getter_AddRefs(exactMatch));
         if (exactMatch && exactMatch->IsDecoded()) {
+          MOZ_ASSERT(suggestedSize != aIdealKey.Size());
           return MakeTuple(exactMatch.forget(),
                            MatchType::SUBSTITUTE_BECAUSE_BEST,
                            suggestedSize);
@@ -390,26 +391,21 @@ public:
     MatchType matchType;
     if (bestMatch) {
       if (!exactMatch) {
-        const IntSize& bestMatchSize = bestMatch->GetSurfaceKey().Size();
-        if (mFactor2Mode && suggestedSize == bestMatchSize) {
-          // No exact match, but this is the best we are willing to decode.
-          matchType = MatchType::SUBSTITUTE_BECAUSE_BEST;
-        } else {
-          // No exact match, but we found a substitute.
-          matchType = MatchType::SUBSTITUTE_BECAUSE_NOT_FOUND;
-        }
+        // No exact match, neither ideal nor factor of 2.
+        MOZ_ASSERT(suggestedSize != bestMatch->GetSurfaceKey().Size(),
+                   "No exact match despite the fact the sizes match!");
+        matchType = MatchType::SUBSTITUTE_BECAUSE_NOT_FOUND;
       } else if (exactMatch != bestMatch) {
         // The exact match is still decoding, but we found a substitute.
         matchType = MatchType::SUBSTITUTE_BECAUSE_PENDING;
+      } else if (aIdealKey.Size() != bestMatch->GetSurfaceKey().Size()) {
+        // The best factor of 2 match is still decoding, but the best we've got.
+        MOZ_ASSERT(suggestedSize != aIdealKey.Size());
+        MOZ_ASSERT(mFactor2Mode);
+        matchType = MatchType::SUBSTITUTE_BECAUSE_BEST;
       } else {
-        const IntSize& bestMatchSize = bestMatch->GetSurfaceKey().Size();
-        if (mFactor2Mode && aIdealKey.Size() != bestMatchSize) {
-          // The best factor of 2 match is still decoding.
-          matchType = MatchType::SUBSTITUTE_BECAUSE_BEST;
-        } else {
-          // The exact match is still decoding, but it's the best we've got.
-          matchType = MatchType::EXACT;
-        }
+        // The exact match is still decoding, but it's the best we've got.
+        matchType = MatchType::EXACT;
       }
     } else {
       if (exactMatch) {
@@ -775,8 +771,7 @@ public:
       aProvider->Availability().SetAvailable();
     }
 
-    NotNull<RefPtr<CachedSurface>> surface =
-      WrapNotNull(new CachedSurface(aProvider));
+    auto surface = MakeNotNull<RefPtr<CachedSurface>>(aProvider);
 
     // We require that locking succeed if the image is locked and we're not
     // inserting a placeholder; the caller may need to know this to handle
@@ -929,7 +924,7 @@ public:
 
     MOZ_ASSERT(surface->GetSurfaceKey() == aSurfaceKey,
                "Lookup() not returning an exact match?");
-    return LookupResult(Move(drawableSurface), MatchType::EXACT);
+    return LookupResult(std::move(drawableSurface), MatchType::EXACT);
   }
 
   LookupResult LookupBestMatch(const ImageKey         aImageKey,
@@ -985,15 +980,7 @@ public:
       }
     }
 
-    // When the caller may choose to decode at an uncached size because there is
-    // no pending decode at the requested size, we should give it the alternative
-    // size it should decode at.
-    if (matchType == MatchType::SUBSTITUTE_BECAUSE_NOT_FOUND ||
-        matchType == MatchType::NOT_FOUND) {
-      return LookupResult(Move(drawableSurface), matchType, suggestedSize);
-    }
-
-    return LookupResult(Move(drawableSurface), matchType);
+    return LookupResult(std::move(drawableSurface), matchType, suggestedSize);
   }
 
   bool CanHold(const Cost aCost) const
@@ -1144,7 +1131,7 @@ public:
                    const StaticMutexAutoLock& aAutoLock)
   {
     MOZ_ASSERT(aDiscard.IsEmpty());
-    aDiscard = Move(mCachedSurfacesDiscard);
+    aDiscard = std::move(mCachedSurfacesDiscard);
   }
 
   void LockSurface(NotNull<CachedSurface*> aSurface,
@@ -1334,7 +1321,7 @@ private:
 
     void NotifyHandlerEnd() override
     {
-      nsTArray<RefPtr<CachedSurface>> discard(Move(mDiscard));
+      nsTArray<RefPtr<CachedSurface>> discard(std::move(mDiscard));
     }
 
     StaticMutex& GetMutex() override

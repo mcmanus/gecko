@@ -1,15 +1,26 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: ft=cpp tw=78 sw=2 et ts=2
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef mozilla_css_SheetLoadData_h
 #define mozilla_css_SheetLoadData_h
 
-#include "nsIUnicharStreamLoader.h"
+#include "mozilla/css/Loader.h"
+#include "mozilla/css/SheetParsingMode.h"
+#include "mozilla/Encoding.h"
+#include "mozilla/NotNull.h"
 #include "nsIThreadInternal.h"
+#include "nsProxyRelease.h"
+
+namespace mozilla {
+class StyleSheet;
+}
+class nsICSSLoaderObserver;
+class nsINode;
+class nsIPrincipal;
+class nsIURI;
 
 namespace mozilla {
 namespace css {
@@ -25,11 +36,12 @@ static_assert(eAuthorSheetFeatures == 0 && eUserSheetFeatures == 1 &&
 
 class SheetLoadData final
   : public nsIRunnable
-  , public nsIUnicharStreamLoaderObserver
   , public nsIThreadObserver
 {
+  typedef nsIStyleSheetLinkingElement::MediaMatched MediaMatched;
+  typedef nsIStyleSheetLinkingElement::IsAlternate IsAlternate;
 protected:
-  virtual ~SheetLoadData(void);
+  virtual ~SheetLoadData();
 
 public:
   // Data for loading a sheet linked from a document
@@ -38,7 +50,8 @@ public:
                 nsIURI* aURI,
                 StyleSheet* aSheet,
                 nsIStyleSheetLinkingElement* aOwningElement,
-                bool aIsAlternate,
+                IsAlternate aIsAlternate,
+                MediaMatched aMediaMatched,
                 nsICSSLoaderObserver* aObserver,
                 nsIPrincipal* aLoaderPrincipal,
                 nsINode* aRequestingNode);
@@ -65,19 +78,21 @@ public:
 
   already_AddRefed<nsIURI> GetReferrerURI();
 
-  void ScheduleLoadEventIfNeeded(nsresult aStatus);
+  void ScheduleLoadEventIfNeeded();
 
   NotNull<const Encoding*> DetermineNonBOMEncoding(nsACString const& aSegment,
                                                    nsIChannel* aChannel);
 
+  // The caller may have the bytes for the stylesheet split across two strings,
+  // so aBytes1 and aBytes2 refer to those pieces.
   nsresult VerifySheetReadyToParse(nsresult aStatus,
-                                   const nsACString& aBytes,
+                                   const nsACString& aBytes1,
+                                   const nsACString& aBytes2,
                                    nsIChannel* aChannel);
 
   NS_DECL_ISUPPORTS
   NS_DECL_NSIRUNNABLE
   NS_DECL_NSITHREADOBSERVER
-  NS_DECL_NSIUNICHARSTREAMLOADEROBSERVER
 
   // Hold a ref to the CSSLoader so we can call back to it to let it
   // know the load finished
@@ -124,6 +139,9 @@ public:
   // completing or being cancelled).
   bool mIsLoading : 1;
 
+  // mIsBeingParsed is true if this stylesheet is currently being parsed.
+  bool mIsBeingParsed : 1;
+
   // mIsCancelled is set to true when a sheet load is stopped by
   // Stop() or StopLoadingSheet() (which was removed in Bug 556446).
   // SheetLoadData::OnStreamComplete() checks this to avoid parsing
@@ -141,6 +159,10 @@ public:
   // created.
   bool mWasAlternate : 1;
 
+  // mMediaMatched is true if the sheet matched its medialist when the load data
+  // was created.
+  bool mMediaMatched : 1;
+
   // mUseSystemPrincipal is true if the system principal should be used for
   // this sheet, no matter what the channel principal is.  Only true for sync
   // loads.
@@ -149,6 +171,22 @@ public:
   // If true, this SheetLoadData is being used as a way to handle
   // async observer notification for an already-complete sheet.
   bool mSheetAlreadyComplete : 1;
+
+  // If true, the sheet is being loaded cross-origin without CORS permissions.
+  // This is completely normal and CORS isn't needed for such loads.  This
+  // flag is simply useful in determining whether to set mBlockResourceTiming
+  // for a child sheet.
+  bool mIsCrossOriginNoCORS : 1;
+
+  // If this flag is true, LoadSheet will call SetReportResourceTiming(false)
+  // on the timedChannel. This is to mark resources that are loaded by a
+  // cross-origin stylesheet with a no-cors policy.
+  // https://www.w3.org/TR/resource-timing/#processing-model
+  bool mBlockResourceTiming : 1;
+
+  // Boolean flag indicating whether the load has failed.  This will be set
+  // to true if this load, or the load of any descendant import, fails.
+  bool mLoadFailed : 1;
 
   // This is the element that imported the sheet.  Needed to get the
   // charset set on it and to fire load/error events.
@@ -167,17 +205,28 @@ public:
   // is non-null.
   const Encoding* mPreloadEncoding;
 
-  // The status our load ended up with; this determines whether we
-  // should fire error events or load events.  This gets initialized
-  // by ScheduleLoadEventIfNeeded, and is only used after that has
-  // been called.
-  MOZ_INIT_OUTSIDE_CTOR nsresult mStatus;
+  bool ShouldDefer() const
+  {
+    return mWasAlternate || !mMediaMatched;
+  }
 
 private:
   void FireLoadEvent(nsIThreadInternal* aThread);
 };
 
+typedef nsMainThreadPtrHolder<SheetLoadData> SheetLoadDataHolder;
+
 } // namespace css
 } // namespace mozilla
+
+/**
+ * Casting SheetLoadData to nsISupports is ambiguous.
+ * This method handles that.
+ */
+inline nsISupports*
+ToSupports(mozilla::css::SheetLoadData* p)
+{
+  return NS_ISUPPORTS_CAST(nsIRunnable*, p);
+}
 
 #endif // mozilla_css_SheetLoadData_h

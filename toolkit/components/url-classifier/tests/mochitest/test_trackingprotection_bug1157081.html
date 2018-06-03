@@ -16,20 +16,17 @@
 
 <script class="testbody" type="text/javascript">
 
-var Cc = SpecialPowers.Cc;
-var Ci = SpecialPowers.Ci;
-
 var mainWindow = window.QueryInterface(Ci.nsIInterfaceRequestor)
                     .getInterface(Ci.nsIWebNavigation)
                     .QueryInterface(Ci.nsIDocShellTreeItem)
                     .rootTreeItem
                     .QueryInterface(Ci.nsIInterfaceRequestor)
                     .getInterface(Ci.nsIDOMWindow);
-var contentPage = "chrome://mochitests/content/chrome/toolkit/components/url-classifier/tests/mochitest/classifiedAnnotatedPBFrame.html"
+var contentPage = "chrome://mochitests/content/chrome/toolkit/components/url-classifier/tests/mochitest/classifiedAnnotatedPBFrame.html";
 
-Components.utils.import("resource://gre/modules/Services.jsm");
-Components.utils.import("resource://testing-common/UrlClassifierTestUtils.jsm");
-Components.utils.import("resource://testing-common/TestUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://testing-common/UrlClassifierTestUtils.jsm");
+ChromeUtils.import("resource://testing-common/TestUtils.jsm");
 
 function testOnWindow(aCallback) {
   var win = mainWindow.OpenBrowserWindow();

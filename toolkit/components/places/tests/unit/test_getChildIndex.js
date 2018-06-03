@@ -24,14 +24,14 @@ add_task(async function test_get_child_index() {
   });
 
   // Get the unfiled bookmark node.
-  let unfiledNode = getNodeAt(PlacesUtils.unfiledBookmarksFolderId, 0);
+  let unfiledNode = getNodeAt(PlacesUtils.bookmarks.unfiledGuid, 0);
   if (!unfiledNode)
     do_throw("Unable to find bookmark in hierarchy!");
-  do_check_eq(unfiledNode.title, "Unfiled bookmark");
+  Assert.equal(unfiledNode.title, "Unfiled bookmark");
 
   let hs = PlacesUtils.history;
   let query = hs.getNewQuery();
-  query.setFolders([PlacesUtils.bookmarksMenuFolderId], 1);
+  query.setParents([PlacesUtils.bookmarks.menuGuid], 1);
   let options = hs.getNewQueryOptions();
   options.queryType = options.QUERY_TYPE_BOOKMARKS;
   let root = hs.executeQuery(query, options).root;
@@ -41,7 +41,7 @@ add_task(async function test_get_child_index() {
   for (let i = 0; i < root.childCount; i++) {
     let node = root.getChild(i);
     print("Now testing: " + node.title);
-    do_check_eq(root.getChildIndex(node), i);
+    Assert.equal(root.getChildIndex(node), i);
   }
 
   // Now search for an invalid node and expect an exception.
@@ -55,10 +55,10 @@ add_task(async function test_get_child_index() {
   root.containerOpen = false;
 });
 
-function getNodeAt(aFolderId, aIndex) {
+function getNodeAt(aFolderGuid, aIndex) {
   let hs = PlacesUtils.history;
   let query = hs.getNewQuery();
-  query.setFolders([aFolderId], 1);
+  query.setParents([aFolderGuid], 1);
   let options = hs.getNewQueryOptions();
   options.queryType = options.QUERY_TYPE_BOOKMARKS;
   let root = hs.executeQuery(query, options).root;

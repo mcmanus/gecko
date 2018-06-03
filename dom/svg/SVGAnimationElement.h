@@ -48,24 +48,20 @@ public:
                               bool aCompileEventHandlers) override;
   virtual void UnbindFromTree(bool aDeep, bool aNullParent) override;
 
-  virtual nsresult UnsetAttr(int32_t aNamespaceID, nsAtom* aAttribute,
-                             bool aNotify) override;
-
   virtual bool IsNodeOfType(uint32_t aFlags) const override;
 
   // Element specializations
   virtual bool ParseAttribute(int32_t aNamespaceID,
                                 nsAtom* aAttribute,
                                 const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 nsAttrValue& aResult) override;
   virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
                                 const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
                                 bool aNotify) override;
 
-  const nsAttrValue* GetAnimAttr(nsAtom* aName) const;
-  bool GetAnimAttr(nsAtom* aAttName, nsAString& aResult) const;
-  bool HasAnimAttr(nsAtom* aAttName) const;
   Element* GetTargetElementContent();
   virtual bool GetTargetAttributeName(int32_t* aNamespaceID,
                                       nsAtom** aLocalName) const;
@@ -89,8 +85,7 @@ public:
   void EndElementAt(float offset, ErrorResult& rv);
 
   // SVGTests
-  virtual bool IsInChromeDoc() const override;
-
+  nsSVGElement* AsSVGElement() final { return this; }
 
  protected:
   // nsSVGElement overrides

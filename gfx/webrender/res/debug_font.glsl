@@ -9,11 +9,11 @@ varying vec4 vColor;
 
 #ifdef WR_VERTEX_SHADER
 in vec4 aColor;
-in vec4 aColorTexCoord;
+in vec2 aColorTexCoord;
 
 void main(void) {
     vColor = aColor;
-    vColorTexCoord = aColorTexCoord.xy;
+    vColorTexCoord = aColorTexCoord;
     vec4 pos = vec4(aPosition, 1.0);
     pos.xy = floor(pos.xy * uDevicePixelRatio + 0.5) / uDevicePixelRatio;
     gl_Position = uTransform * pos;
@@ -23,6 +23,6 @@ void main(void) {
 #ifdef WR_FRAGMENT_SHADER
 void main(void) {
     float alpha = texture(sColor0, vec3(vColorTexCoord.xy, 0.0)).r;
-    oFragColor = vec4(vColor.xyz, vColor.w * alpha);
+    oFragColor = vColor * alpha;
 }
 #endif

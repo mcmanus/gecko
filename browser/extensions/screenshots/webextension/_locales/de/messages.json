@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "Herunterladen"
   },
+  "downloadOnlyNotice": {
+    "message": "Sie sind aktuell im Modus „Nur herunterladen“."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots schaltet in diesen Fällen automatisch in den Modus „Nur herunterladen“:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "In einem privaten Fenster."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Cookies von Drittanbietern sind deaktiviert."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "„Chronik niemals anlegen“ ist aktiviert."
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "Sie verwenden Firefox ESR."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "Uploads wurden deaktiviert."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Link kopiert"
   },
@@ -36,6 +57,28 @@
     "message": "Der Link zu Ihrem Bildschirmfoto wurde in die Zwischenablage kopiert. Drücken Sie $META_KEY$-V zum Einfügen.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Kopieren"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Bildschirmfoto kopiert"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Ihr Bildschirmfoto wurde in die Zwischenablage kopiert. Drücken Sie Strg-V zum Einfügen.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Diese Grafik wurde auf $PIXELS$ px zugeschnitten.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }

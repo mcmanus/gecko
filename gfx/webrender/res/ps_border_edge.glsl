@@ -12,11 +12,7 @@ flat varying float vAlphaSelect;
 flat varying vec4 vClipParams;
 flat varying float vClipSelect;
 
-#ifdef WR_FEATURE_TRANSFORM
-varying vec3 vLocalPos;
-#else
 varying vec2 vLocalPos;
-#endif
 
 #ifdef WR_VERTEX_SHADER
 void write_edge_distance(float p0,
@@ -75,7 +71,7 @@ void write_color0(vec4 color, float style, bool flip) {
             break;
     }
 
-    vColor0 = vec4(color.rgb * modulate.x, color.a);
+    vColor0 = vec4(min(color.rgb * modulate.x, vec3(color.a)), color.a);
 }
 
 void write_color1(vec4 color, float style, bool flip) {
@@ -97,14 +93,16 @@ void write_color1(vec4 color, float style, bool flip) {
             break;
     }
 
-    vColor1 = vec4(color.rgb * modulate.y, color.a);
+    vColor1 = vec4(min(color.rgb * modulate.y, vec3(color.a)), color.a);
 }
 
 void write_clip_params(float style,
                        float border_width,
                        float edge_length,
                        float edge_offset,
-                       float center_line) {
+                       float center_line,
+                       bool start_corner_has_radius,
+                       bool end_corner_has_radius) {
     // x = offset
     // y = dash on + off length
     // z = dash length
@@ -125,13 +123,27 @@ void write_clip_params(float style,
         case BORDER_STYLE_DOTTED: {
             float diameter = border_width;
             float radius = 0.5 * diameter;
-            float dot_count = ceil(0.5 * edge_length / diameter);
-            float empty_space = edge_length - dot_count * diameter;
+
+            // If this edge connects a corner with a radius to a corner without a radius, we
+            // act as if we have space for one more dot. This will position the dots so that
+            // there is a half dot on one of the ends.
+            float full_edge_length = edge_length +
+                (float(start_corner_has_radius ^^ end_corner_has_radius) * diameter);
+
+            float dot_count = ceil(0.5 * full_edge_length / diameter);
+            float empty_space = full_edge_length - (dot_count * diameter);
             float distance_between_centers = diameter + empty_space / dot_count;
-            vClipParams = vec4(edge_offset - radius,
+
+            // If the starting corner has a radius, we want to position the half dot right
+            // against that edge.
+            float starting_offset =
+                edge_offset + radius + (-diameter * float(start_corner_has_radius));
+
+            vClipParams = vec4(starting_offset,
                                distance_between_centers,
                                radius,
                                center_line);
+
             vClipSelect = 1.0;
             break;
         }
@@ -142,6 +154,10 @@ void write_clip_params(float style,
     }
 }
 
+bool hasRadius(vec2 radius) {
+    return any(notEqual(radius, vec2(0.0)));
+}
+
 void main(void) {
     Primitive prim = load_primitive();
     Border border = fetch_border(prim.specific_prim_address);
@@ -149,13 +165,15 @@ void main(void) {
     BorderCorners corners = get_border_corners(border, prim.local_rect);
     vec4 color = border.colors[sub_part];
 
-    // TODO(gw): Now that all border styles are supported, the switch
+    // TODO(gw): Now that all border styles are supported, the
     //           statement below can be tidied up quite a bit.
 
     float style;
     bool color_flip;
 
     RectWithSize segment_rect;
+    vec4 edge_mask;
+
     switch (sub_part) {
         case 0: {
             segment_rect.p0 = vec2(corners.tl_outer.x, corners.tl_inner.y);
@@ -168,7 +186,10 @@ void main(void) {
                               border.widths.x,
                               segment_rect.size.y,
                               segment_rect.p0.y,
-                              segment_rect.p0.x + 0.5 * segment_rect.size.x);
+                              segment_rect.p0.x + 0.5 * segment_rect.size.x,
+                              hasRadius(border.radii[0].xy),
+                              hasRadius(border.radii[1].zw));
+            edge_mask = vec4(1.0, 0.0, 1.0, 0.0);
             break;
         }
         case 1: {
@@ -182,7 +203,10 @@ void main(void) {
                               border.widths.y,
                               segment_rect.size.x,
                               segment_rect.p0.x,
-                              segment_rect.p0.y + 0.5 * segment_rect.size.y);
+                              segment_rect.p0.y + 0.5 * segment_rect.size.y,
+                              hasRadius(border.radii[0].xy),
+                              hasRadius(border.radii[0].zw));
+            edge_mask = vec4(0.0, 1.0, 0.0, 1.0);
             break;
         }
         case 2: {
@@ -196,7 +220,10 @@ void main(void) {
                               border.widths.z,
                               segment_rect.size.y,
                               segment_rect.p0.y,
-                              segment_rect.p0.x + 0.5 * segment_rect.size.x);
+                              segment_rect.p0.x + 0.5 * segment_rect.size.x,
+                              hasRadius(border.radii[0].zw),
+                              hasRadius(border.radii[1].xy));
+            edge_mask = vec4(1.0, 0.0, 1.0, 0.0);
             break;
         }
         case 3: {
@@ -210,9 +237,17 @@ void main(void) {
                               border.widths.w,
                               segment_rect.size.x,
                               segment_rect.p0.x,
-                              segment_rect.p0.y + 0.5 * segment_rect.size.y);
+                              segment_rect.p0.y + 0.5 * segment_rect.size.y,
+                              hasRadius(border.radii[1].zw),
+                              hasRadius(border.radii[1].xy));
+            edge_mask = vec4(0.0, 1.0, 0.0, 1.0);
             break;
         }
+        default:
+            segment_rect.p0 = segment_rect.size = vec2(0.0);
+            style = 0.0;
+            color_flip = false;
+            edge_mask = vec4(0.0);
     }
 
     write_alpha_select(style);
@@ -220,17 +255,19 @@ void main(void) {
     write_color1(color, style, color_flip);
 
 #ifdef WR_FEATURE_TRANSFORM
-    TransformVertexInfo vi = write_transform_vertex(segment_rect,
-                                                    prim.local_clip_rect,
-                                                    prim.z,
-                                                    prim.layer,
-                                                    prim.task,
-                                                    prim.local_rect);
+    VertexInfo vi = write_transform_vertex(segment_rect,
+                                           prim.local_rect,
+                                           prim.local_clip_rect,
+                                           edge_mask,
+                                           prim.z,
+                                           prim.scroll_node,
+                                           prim.task,
+                                           true);
 #else
     VertexInfo vi = write_vertex(segment_rect,
                                  prim.local_clip_rect,
                                  prim.z,
-                                 prim.layer,
+                                 prim.scroll_node,
                                  prim.task,
                                  prim.local_rect);
 #endif
@@ -244,17 +281,13 @@ void main(void) {
 void main(void) {
     float alpha = 1.0;
 #ifdef WR_FEATURE_TRANSFORM
-    alpha = 0.0;
-    vec2 local_pos = init_transform_fs(vLocalPos, alpha);
-#else
-    vec2 local_pos = vLocalPos;
+    alpha = init_transform_fs(vLocalPos);
 #endif
 
-    alpha = min(alpha, do_clip());
+    alpha *= do_clip();
 
     // Find the appropriate distance to apply the step over.
-    vec2 fw = fwidth(local_pos);
-    float afwidth = length(fw);
+    float aa_range = compute_aa_range(vLocalPos);
 
     // Applies the math necessary to draw a style: double
     // border. In the case of a solid border, the vertex
@@ -262,7 +295,7 @@ void main(void) {
     // no effect.
 
     // Select the x/y coord, depending on which axis this edge is.
-    vec2 pos = mix(local_pos.xy, local_pos.yx, vAxisSelect);
+    vec2 pos = mix(vLocalPos.xy, vLocalPos.yx, vAxisSelect);
 
     // Get signed distance from each of the inner edges.
     float d0 = pos.x - vEdgeDistance.x;
@@ -291,13 +324,11 @@ void main(void) {
     // Get the dot alpha
     vec2 dot_relative_pos = vec2(x, pos.x) - vClipParams.zw;
     float dot_distance = length(dot_relative_pos) - vClipParams.z;
-    float dot_alpha = 1.0 - smoothstep(-0.5 * afwidth,
-                                        0.5 * afwidth,
-                                        dot_distance);
+    float dot_alpha = distance_aa(aa_range, dot_distance);
 
     // Select between dot/dash alpha based on clip mode.
     alpha = min(alpha, mix(dash_alpha, dot_alpha, vClipSelect));
 
-    oFragColor = color * vec4(1.0, 1.0, 1.0, alpha);
+    oFragColor = color * alpha;
 }
 #endif

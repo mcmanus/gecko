@@ -75,6 +75,12 @@ Thread::GetCurrentId()
   return gettid();
 }
 
+void*
+GetStackTop(void* aGuess)
+{
+  return aGuess;
+}
+
 static void
 PopulateRegsFromContext(Registers& aRegs, ucontext_t* aContext)
 {
@@ -97,11 +103,16 @@ PopulateRegsFromContext(Registers& aRegs, ucontext_t* aContext)
   aRegs.mSP = reinterpret_cast<Address>(mcontext.arm_sp);
   aRegs.mFP = reinterpret_cast<Address>(mcontext.arm_fp);
   aRegs.mLR = reinterpret_cast<Address>(mcontext.arm_lr);
-#elif defined(GP_ARCH_aarch64)
+#elif defined(GP_ARCH_arm64)
   aRegs.mPC = reinterpret_cast<Address>(mcontext.pc);
   aRegs.mSP = reinterpret_cast<Address>(mcontext.sp);
   aRegs.mFP = reinterpret_cast<Address>(mcontext.regs[29]);
   aRegs.mLR = reinterpret_cast<Address>(mcontext.regs[30]);
+#elif defined(GP_ARCH_mips64)
+  aRegs.mPC = reinterpret_cast<Address>(mcontext.pc);
+  aRegs.mSP = reinterpret_cast<Address>(mcontext.gregs[29]);
+  aRegs.mFP = reinterpret_cast<Address>(mcontext.gregs[30]);
+
 #else
 # error "bad platform"
 #endif
@@ -285,7 +296,7 @@ Sampler::Disable(PSLockRef aLock)
 template<typename Func>
 void
 Sampler::SuspendAndSampleAndResumeThread(PSLockRef aLock,
-                                         const ThreadInfo& aThreadInfo,
+                                         const RegisteredThread& aRegisteredThread,
                                          const Func& aProcessRegs)
 {
   // Only one sampler thread can be sampling at once.  So we expect to have
@@ -295,7 +306,7 @@ Sampler::SuspendAndSampleAndResumeThread(PSLockRef aLock,
   if (mSamplerTid == -1) {
     mSamplerTid = gettid();
   }
-  int sampleeTid = aThreadInfo.ThreadId();
+  int sampleeTid = aRegisteredThread.Info()->ThreadId();
   MOZ_RELEASE_ASSERT(sampleeTid != mSamplerTid);
 
   //----------------------------------------------------------------//
@@ -360,7 +371,7 @@ Sampler::SuspendAndSampleAndResumeThread(PSLockRef aLock,
     }
     MOZ_ASSERT(r == 0);
     break;
-   }
+  }
 
   // The profiler's critical section ends here.  After this point, none of the
   // critical section limitations documented above apply.

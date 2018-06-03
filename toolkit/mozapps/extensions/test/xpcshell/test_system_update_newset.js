@@ -1,6 +1,6 @@
 // Tests that system add-on upgrades work.
 
-Components.utils.import("resource://testing-common/httpd.js");
+ChromeUtils.import("resource://testing-common/httpd.js");
 
 BootstrapMonitor.init();
 
@@ -11,7 +11,7 @@ testserver.registerDirectory("/data/", do_get_file("data/system_addons"));
 testserver.start();
 var root = testserver.identity.primaryScheme + "://" +
            testserver.identity.primaryHost + ":" +
-           testserver.identity.primaryPort + "/data/"
+           testserver.identity.primaryPort + "/data/";
 Services.prefs.setCharPref(PREF_SYSTEM_ADDON_UPDATE_URL, root + "update.xml");
 
 let distroDir = FileUtils.getDir("ProfD", ["sysfeatures", "empty"], true);
@@ -136,19 +136,19 @@ const TESTS = {
       ]
     }
   }
-}
+};
 
 add_task(async function setup() {
   // Initialise the profile
-  awaitPromise(overrideBuiltIns({ "system": [] }));
-  startupManager();
+  await overrideBuiltIns({ "system": [] });
+  await promiseStartupManager();
   await promiseShutdownManager();
 });
 
 add_task(async function() {
   for (let setupName of Object.keys(TEST_CONDITIONS)) {
     for (let testName of Object.keys(TESTS)) {
-        do_print("Running test " + setupName + " " + testName);
+        info("Running test " + setupName + " " + testName);
 
         let setup = TEST_CONDITIONS[setupName];
         let test = TESTS[testName];

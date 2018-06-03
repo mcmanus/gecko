@@ -4,7 +4,6 @@ extern crate env_logger;
 #[macro_use]
 #[cfg(feature = "logging")]
 extern crate log;
-extern crate clang_sys;
 extern crate clap;
 
 use bindgen::clang_version;
@@ -20,12 +19,7 @@ use options::builder_from_flags;
 
 pub fn main() {
     #[cfg(feature = "logging")]
-    log::set_logger(|max_log_level| {
-        use env_logger::Logger;
-        let env_logger = Logger::new();
-        max_log_level.set(env_logger.filter());
-        Box::new(env_logger)
-    }).expect("Failed to set logger.");
+    env_logger::init();
 
     let bind_args: Vec<_> = env::args().collect();
 

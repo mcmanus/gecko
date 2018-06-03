@@ -6,20 +6,16 @@
 
 "use strict";
 
-this.EXPORTED_SYMBOLS = ["ContextMenu"];
-
-const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
+var EXPORTED_SYMBOLS = ["ContextMenu"];
 
 Cu.importGlobalProperties(["URL"]);
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
-  E10SUtils: "resource:///modules/E10SUtils.jsm",
-  CastingApps: "resource:///modules/CastingApps.jsm",
+  E10SUtils: "resource://gre/modules/E10SUtils.jsm",
   BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
-  PlacesUIUtils: "resource:///modules/PlacesUIUtils.jsm",
   findCssSelector: "resource://gre/modules/css-selector.js",
   SpellCheckHelper: "resource://gre/modules/InlineSpellChecker.jsm",
   LoginManagerContent: "resource://gre/modules/LoginManagerContent.jsm",
@@ -30,7 +26,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
 
 XPCOMUtils.defineLazyGetter(this, "PageMenuChild", () => {
   let tmp = {};
-  Cu.import("resource://gre/modules/PageMenu.jsm", tmp);
+  ChromeUtils.import("resource://gre/modules/PageMenu.jsm", tmp);
   return new tmp.PageMenuChild();
 });
 
@@ -39,8 +35,7 @@ const messageListeners = {
     let frame = this.getTarget(aMessage).ownerDocument;
 
     this.global.sendAsyncMessage("ContextMenu:BookmarkFrame:Result",
-                                 { title: frame.title,
-                                 description: PlacesUIUtils.getDescriptionFromDocument(frame) });
+                                 { title: frame.title });
   },
 
   "ContextMenu:Canvas:ToBlobURL": function(aMessage) {
@@ -105,7 +100,8 @@ const messageListeners = {
   },
 
   "ContextMenu:ReloadFrame": function(aMessage) {
-    this.getTarget(aMessage).ownerDocument.location.reload();
+    let forceReload = aMessage.objects && aMessage.objects.forceReload;
+    this.getTarget(aMessage).ownerDocument.location.reload(forceReload);
   },
 
   "ContextMenu:ReloadImage": function(aMessage) {
@@ -127,7 +123,6 @@ const messageListeners = {
                          (node.form.enctype == "application/x-www-form-urlencoded" ||
                           node.form.enctype == ""));
     let title = node.ownerDocument.title;
-    let description = PlacesUIUtils.getDescriptionFromDocument(node.ownerDocument);
     let formData = [];
 
     function escapeNameValuePair(aName, aValue, aIsFormUrlEncoded) {
@@ -174,7 +169,7 @@ const messageListeners = {
     }
 
     this.global.sendAsyncMessage("ContextMenu:SearchFieldBookmarkData:Result",
-                                 { spec, title, description, postData, charset });
+                                 { spec, title, postData, charset });
   },
 
   "ContextMenu:SaveVideoFrameAsImage": function(aMessage) {
@@ -234,11 +229,6 @@ class ContextMenu {
     this.global = global;
     this.content = global.content;
 
-    Cc["@mozilla.org/eventlistenerservice;1"]
-      .getService(Ci.nsIEventListenerService)
-      .addSystemEventListener(global, "contextmenu",
-                              this._handleContentContextMenu.bind(this), false);
-
     Object.keys(messageListeners).forEach(key =>
       global.addMessageListener(key, messageListeners[key].bind(this))
     );
@@ -272,7 +262,7 @@ class ContextMenu {
     if (href) {
       // Handle SVG links:
       if (typeof href == "object" && href.animVal) {
-        return href.animVal;
+        return this._makeURLAbsolute(this.context.link.baseURI, href.animVal);
       }
 
       return href;
@@ -343,7 +333,7 @@ class ContextMenu {
     let depth = 1;
     while (node && depth > 0) {
       // See if this node is text.
-      if (node.nodeType == Ci.nsIDOMNode.TEXT_NODE) {
+      if (node.nodeType == node.TEXT_NODE) {
         // Add this text to our collection.
         text += " " + node.data;
       } else if (node instanceof this.content.HTMLImageElement) {
@@ -380,18 +370,17 @@ class ContextMenu {
 
   // Returns a "url"-type computed style attribute value, with the url() stripped.
   _getComputedURL(aElem, aProp) {
-    let url = aElem.ownerGlobal.getComputedStyle(aElem).getPropertyCSSValue(aProp);
+    let urls = aElem.ownerGlobal.getComputedStyle(aElem).getCSSImageURLs(aProp);
 
-    if (url instanceof this.content.CSSValueList) {
-      if (url.length != 1) {
-        throw "found multiple URLs";
-      }
-
-      url = url[0];
+    if (!urls.length) {
+      return null;
     }
 
-    return url.primitiveType == this.content.CSSPrimitiveValue.CSS_URI ?
-           url.getStringValue() : null;
+    if (urls.length != 1) {
+      throw "found multiple URLs";
+    }
+
+    return urls[0];
   }
 
   _makeURLAbsolute(aBase, aUrl) {
@@ -455,8 +444,7 @@ class ContextMenu {
       return true;
     }
 
-    let request = aTarget.QueryInterface(Ci.nsIImageLoadingContent)
-                         .getRequest(Ci.nsIImageLoadingContent.CURRENT_REQUEST);
+    let request = aTarget.getRequest(Ci.nsIImageLoadingContent.CURRENT_REQUEST);
 
     if (!request) {
       return true;
@@ -466,36 +454,41 @@ class ContextMenu {
   }
 
   /**
-   * Retrieve the array of CSS selectors corresponding to the provided node. The first item
-   * of the array is the selector of the node in its owner document. Additional items are
-   * used if the node is inside a frame, each representing the CSS selector for finding the
-   * frame element in its parent document.
+   * Retrieve the array of CSS selectors corresponding to the provided node.
+   *
+   * The selectors are ordered starting with the root document and ending with the deepest
+   * nested frame. Additional items are used if the node is inside a frame, each
+   * representing the CSS selector for finding the frame element in its parent document.
    *
    * This format is expected by DevTools in order to handle the Inspect Node context menu
    * item.
    *
    * @param  {aNode}
    *         The node for which the CSS selectors should be computed
-   * @return {Array} array of css selectors (strings).
+   * @return {Array}
+   *         An array of CSS selectors to find the target node. Several selectors can be
+   *         needed if the element is nested in frames and not directly in the root
+   *         document. The selectors are ordered starting with the root document and
+   *         ending with the deepest nested frame.
    */
   _getNodeSelectors(aNode) {
     let selectors = [];
     while (aNode) {
-      selectors.push(findCssSelector(aNode));
+      selectors.unshift(findCssSelector(aNode));
       aNode = aNode.ownerGlobal.frameElement;
     }
 
     return selectors;
   }
 
-  _handleContentContextMenu(aEvent) {
+  handleEvent(aEvent) {
     let defaultPrevented = aEvent.defaultPrevented;
 
     if (!Services.prefs.getBoolPref("dom.event.contextmenu.enabled")) {
       let plugin = null;
 
       try {
-        plugin = aEvent.target.QueryInterface(Ci.nsIObjectLoadingContent);
+        plugin = aEvent.composedTarget.QueryInterface(Ci.nsIObjectLoadingContent);
       } catch (e) {}
 
       if (plugin && plugin.displayedType == Ci.nsIObjectLoadingContent.TYPE_PLUGIN) {
@@ -510,7 +503,7 @@ class ContextMenu {
       return;
     }
 
-    let doc = aEvent.target.ownerDocument;
+    let doc = aEvent.composedTarget.ownerDocument;
     let {
       mozDocumentURIIfNotForErrorPages: docLocation,
       characterSet: charSet,
@@ -520,14 +513,15 @@ class ContextMenu {
     } = doc;
     docLocation = docLocation && docLocation.spec;
     let frameOuterWindowID = WebNavigationFrames.getFrameId(doc.defaultView);
-    let loginFillInfo = LoginManagerContent.getFieldContext(aEvent.target);
+    let loginFillInfo = LoginManagerContent.getFieldContext(aEvent.composedTarget);
 
     // The same-origin check will be done in nsContextMenu.openLinkInTab.
     let parentAllowsMixedContent = !!this.global.docShell.mixedContentChannel;
 
     // Get referrer attribute from clicked link and parse it
-    let referrerAttrValue = Services.netUtils.parseAttributePolicyString(aEvent.target.
-                            getAttribute("referrerpolicy"));
+    let referrerAttrValue =
+      Services.netUtils.parseAttributePolicyString(aEvent.composedTarget.
+                                                   getAttribute("referrerpolicy"));
 
     if (referrerAttrValue !== Ci.nsIHttpChannel.REFERRER_POLICY_UNSET) {
       referrerPolicy = referrerAttrValue;
@@ -537,16 +531,18 @@ class ContextMenu {
 
     // Media related cache info parent needs for saving
     let contentType = null;
-    let contentDisposition = null
-    if (aEvent.target.nodeType == Ci.nsIDOMNode.ELEMENT_NODE &&
-        aEvent.target instanceof Ci.nsIImageLoadingContent &&
-        aEvent.target.currentURI) {
-      disableSetDesktopBg = this._disableSetDesktopBackground(aEvent.target);
+    let contentDisposition = null;
+    if (aEvent.composedTarget.nodeType == aEvent.composedTarget.ELEMENT_NODE &&
+        aEvent.composedTarget instanceof Ci.nsIImageLoadingContent &&
+        aEvent.composedTarget.currentURI) {
+      disableSetDesktopBg = this._disableSetDesktopBackground(aEvent.composedTarget);
 
       try {
         let imageCache = Cc["@mozilla.org/image/tools;1"].getService(Ci.imgITools)
                                                          .getImgCacheForDocument(doc);
-        let props = imageCache.findEntryProperties(aEvent.target.currentURI, doc);
+        // The image cache's notion of where this image is located is
+        // the currentURI of the image loading content.
+        let props = imageCache.findEntryProperties(aEvent.composedTarget.currentURI, doc);
 
         try {
           contentType = props.get("type", Ci.nsISupportsCString).data;
@@ -561,7 +557,7 @@ class ContextMenu {
     let selectionInfo = BrowserUtils.getSelectionDetails(this.content);
     let loadContext = this.global.docShell.QueryInterface(Ci.nsILoadContext);
     let userContextId = loadContext.originAttributes.userContextId;
-    let popupNodeSelectors = this._getNodeSelectors(aEvent.target);
+    let popupNodeSelectors = this._getNodeSelectors(aEvent.composedTarget);
 
     this._setContext(aEvent);
     let context = this.context;
@@ -580,10 +576,9 @@ class ContextMenu {
     let isRemote = Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT;
 
     if (isRemote) {
-      editFlags = SpellCheckHelper.isEditable(aEvent.target, this.content);
+      editFlags = SpellCheckHelper.isEditable(aEvent.composedTarget, this.content);
 
-      if (editFlags &
-          (SpellCheckHelper.EDITABLE | SpellCheckHelper.CONTENTEDITABLE)) {
+      if (editFlags & SpellCheckHelper.SPELLCHECKABLE) {
         spellInfo = InlineSpellCheckerContent.initContextMenu(aEvent, editFlags, this.global);
       }
 
@@ -591,10 +586,10 @@ class ContextMenu {
       // determine what was context-clicked on. Then, update the state of the
       // commands on the context menu.
       this.global.docShell.contentViewer.QueryInterface(Ci.nsIContentViewerEdit)
-                          .setCommandNode(aEvent.target);
-      aEvent.target.ownerGlobal.updateCommands("contentcontextmenu");
+                          .setCommandNode(aEvent.composedTarget);
+      aEvent.composedTarget.ownerGlobal.updateCommands("contentcontextmenu");
 
-      customMenuItems = PageMenuChild.build(aEvent.target);
+      customMenuItems = PageMenuChild.build(aEvent.composedTarget);
       principal = doc.nodePrincipal;
     }
 
@@ -659,7 +654,7 @@ class ContextMenu {
       contentType: context.target.ownerDocument.contentType,
 
       // used for nsContextMenu.saveLink
-      isPrivate: context.target.ownerDocument.isPrivate,
+      isPrivate: PrivateBrowsingUtils.isContentWindowPrivate(context.target.ownerGlobal),
     };
 
     // used for nsContextMenu.initMediaPlayerItems
@@ -693,7 +688,7 @@ class ContextMenu {
     context.target = cleanTarget;
 
     if (context.link) {
-      context.link = { href: context.link.href };
+      context.link = { href: context.linkURL };
     }
 
     delete context.linkURI;
@@ -707,13 +702,13 @@ class ContextMenu {
     context.screenY = aEvent.screenY;
     context.mozInputSource = aEvent.mozInputSource;
 
-    const node = aEvent.target;
+    const node = aEvent.composedTarget;
 
     const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 
     context.shouldDisplay = true;
 
-    if (node.nodeType == Ci.nsIDOMNode.DOCUMENT_NODE ||
+    if (node.nodeType == node.DOCUMENT_NODE ||
         // Don't display for XUL element unless <label class="text-link">
         (node.namespaceURI == XUL_NS && !this._isXULTextLinkLabel(node))) {
       context.shouldDisplay = false;
@@ -751,7 +746,7 @@ class ContextMenu {
     context.onCompletedImage    = false;
     context.onCTPPlugin         = false;
     context.onDRMMedia          = false;
-    context.onEditableArea      = false;
+    context.onEditable          = false;
     context.onImage             = false;
     context.onKeywordField      = false;
     context.onLink              = false;
@@ -762,6 +757,7 @@ class ContextMenu {
     context.onNumeric           = false;
     context.onPassword          = false;
     context.onSaveableLink      = false;
+    context.onSpellcheckable    = false;
     context.onTextInput         = false;
     context.onVideo             = false;
 
@@ -792,7 +788,7 @@ class ContextMenu {
   _setContextForNodesNoChildren(editFlags) {
     const context = this.context;
 
-    if (context.target.nodeType == Ci.nsIDOMNode.TEXT_NODE) {
+    if (context.target.nodeType == context.target.TEXT_NODE) {
       // For text nodes, look at the parent node to determine the spellcheck attribute.
       context.canSpellCheck = context.target.parentNode &&
                               this._isSpellCheckEnabled(context.target);
@@ -801,7 +797,7 @@ class ContextMenu {
 
     // We only deal with TEXT_NODE and ELEMENT_NODE in this function, so return
     // early if we don't have one.
-    if (context.target.nodeType != Ci.nsIDOMNode.ELEMENT_NODE) {
+    if (context.target.nodeType != context.target.ELEMENT_NODE) {
       return;
     }
 
@@ -809,7 +805,7 @@ class ContextMenu {
     // nsDocumentViewer::GetInImage. Make sure to update both if this is
     // changed.
     if (context.target instanceof Ci.nsIImageLoadingContent &&
-        context.target.currentURI) {
+        context.target.currentRequestFinalURI) {
       context.onImage = true;
 
       context.imageInfo = {
@@ -831,7 +827,10 @@ class ContextMenu {
         context.onCompletedImage = true;
       }
 
-      context.mediaURL = context.target.currentURI.spec;
+      // The actual URL the image was loaded from (after redirects) is the
+      // currentRequestFinalURI.  We should use that as the URL for purposes of
+      // deciding on the filename.
+      context.mediaURL = context.target.currentRequestFinalURI.spec;
 
       const descURL = context.target.getAttribute("longdesc");
 
@@ -875,10 +874,13 @@ class ContextMenu {
     } else if (editFlags & (SpellCheckHelper.INPUT | SpellCheckHelper.TEXTAREA)) {
       context.onTextInput = (editFlags & SpellCheckHelper.TEXTINPUT) !== 0;
       context.onNumeric = (editFlags & SpellCheckHelper.NUMERIC) !== 0;
-      context.onEditableArea = (editFlags & SpellCheckHelper.EDITABLE) !== 0;
+      context.onEditable = (editFlags & SpellCheckHelper.EDITABLE) !== 0;
       context.onPassword = (editFlags & SpellCheckHelper.PASSWORD) !== 0;
+      context.onSpellcheckable = (editFlags & SpellCheckHelper.SPELLCHECKABLE) !== 0;
 
-      if (context.onEditableArea) {
+      // This is guaranteed to be an input or textarea because of the condition above,
+      // so the no-children flag is always correct. We deal with contenteditable elsewhere.
+      if (context.onSpellcheckable) {
         context.shouldInitInlineSpellCheckerUINoChildren = true;
       }
 
@@ -926,7 +928,7 @@ class ContextMenu {
     let elem = context.target;
 
     while (elem) {
-      if (elem.nodeType == Ci.nsIDOMNode.ELEMENT_NODE) {
+      if (elem.nodeType == elem.ELEMENT_NODE) {
         // Link?
         const XLINK_NS = "http://www.w3.org/1999/xlink";
 
@@ -992,7 +994,7 @@ class ContextMenu {
     // See if the user clicked on MathML
     const MathML_NS = "http://www.w3.org/1998/Math/MathML";
 
-    if ((context.target.nodeType == Ci.nsIDOMNode.TEXT_NODE &&
+    if ((context.target.nodeType == context.target.TEXT_NODE &&
          context.target.parentNode.namespaceURI == MathML_NS) ||
          (context.target.namespaceURI == MathML_NS)) {
       context.onMathML = true;
@@ -1010,9 +1012,9 @@ class ContextMenu {
     }
 
     // if the document is editable, show context menu like in text inputs
-    if (!context.onEditableArea) {
+    if (!context.onEditable) {
       if (editFlags & SpellCheckHelper.CONTENTEDITABLE) {
-        // If this._onEditableArea is false but editFlags is CONTENTEDITABLE, then
+        // If this.onEditable is false but editFlags is CONTENTEDITABLE, then
         // the document itself must be editable.
         context.onTextInput       = true;
         context.onKeywordField    = false;
@@ -1024,7 +1026,8 @@ class ContextMenu {
         context.inSrcdocFrame     = false;
         context.hasBGImage        = false;
         context.isDesignMode      = true;
-        context.onEditableArea    = true;
+        context.onEditable        = true;
+        context.onSpellcheckable  = true;
         context.shouldInitInlineSpellCheckerUIWithChildren = true;
       }
     }

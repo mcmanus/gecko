@@ -1,6 +1,5 @@
-"use strict";
-const injector = require("inject!lib/UserDomainAffinityProvider.jsm");
-const {GlobalOverrider} = require("test/unit/utils");
+import {GlobalOverrider} from "test/unit/utils";
+import {UserDomainAffinityProvider} from "lib/UserDomainAffinityProvider.jsm";
 
 const TIME_SEGMENTS = [
   {"id": "hour", "startTime": 3600, "endTime": 0, "weightPosition": 1},
@@ -31,27 +30,19 @@ const PARAMETER_SETS = {
 };
 
 describe("User Domain Affinity Provider", () => {
-  let UserDomainAffinityProvider;
   let instance;
   let globals;
 
   beforeEach(() => {
     globals = new GlobalOverrider();
-    globals.set("Services", {locale: {getRequestedLocale: () => "en-CA"}, io: {newURI: u => ({host: "www.somedomain.org"})}});
-    globals.set("PlacesUtils", {
-      history: {
-        getNewQuery: () => ({"TIME_RELATIVE_NOW": 1}),
-        getNewQueryOptions: () => ({}),
-        executeQuery: () => ({root: {childCount: 1, getChild: index => ({uri: "www.somedomain.org", accessCount: 1})}})
-      }
-    });
-    global.Components.classes["@mozilla.org/browser/nav-history-service;1"] = {
-      getService() {
-        return global.PlacesUtils.history;
-      }
-    };
 
-    ({UserDomainAffinityProvider} = injector());
+    const testUrl = "www.somedomain.com";
+    globals.sandbox.stub(global.Services.io, "newURI").returns({host: testUrl});
+
+    globals.sandbox.stub(global.PlacesUtils.history, "executeQuery").returns({root: {childCount: 1, getChild: index => ({uri: testUrl, accessCount: 1})}});
+    globals.sandbox.stub(global.PlacesUtils.history, "getNewQuery").returns({"TIME_RELATIVE_NOW": 1});
+    globals.sandbox.stub(global.PlacesUtils.history, "getNewQueryOptions").returns({});
+
     instance = new UserDomainAffinityProvider(TIME_SEGMENTS, PARAMETER_SETS);
   });
   afterEach(() => {
@@ -111,6 +102,24 @@ describe("User Domain Affinity Provider", () => {
       const scores = instance.calculateAllUserDomainAffinityScores();
       assert.deepEqual(expectedScores, scores);
     });
+    it("should return domain affinities", () => {
+      const scores = {
+        "a.com": {
+          "paramSet1": 1,
+          "paramSet2": 0.9
+        }
+      };
+      instance = new UserDomainAffinityProvider(TIME_SEGMENTS, PARAMETER_SETS, 100, "v1", scores);
+
+      const expectedAffinities = {
+        "timeSegments": TIME_SEGMENTS,
+        "parameterSets": PARAMETER_SETS,
+        "maxHistoryQueryResults": 100,
+        "scores": scores,
+        "version": "v1"
+      };
+      assert.deepEqual(instance.getAffinities(), expectedAffinities);
+    });
   });
   describe("#score", () => {
     it("should calculate item relevance score", () => {
@@ -138,11 +147,10 @@ describe("User Domain Affinity Provider", () => {
       const itemScore = instance.calculateItemRelevanceScore(testItem);
       assert.equal(expectedItemScore, itemScore);
     });
-    it("should calculate relevance score of 1 if item has no domain affinities", () => {
-      const testItem = {};
-      const expectedItemScore = 1;
+    it("should calculate relevance score equal to item_score if item has no domain affinities", () => {
+      const testItem = {item_score: 0.985};
       const itemScore = instance.calculateItemRelevanceScore(testItem);
-      assert.equal(expectedItemScore, itemScore);
+      assert.equal(testItem.item_score, itemScore);
     });
     it("should calculate scores with factor", () => {
       assert.equal(1, instance.calculateScore(2, 1, 0.5));

@@ -10,6 +10,7 @@
  */
 
 const expressionSelectors = {
+  plusIcon: ".watch-expressions-pane button.plus",
   input: "input.input-expression"
 };
 
@@ -31,12 +32,13 @@ function assertEmptyValue(dbg, index) {
   is(value, null);
 }
 
-function toggleExpression(dbg, index) {
-  findElement(dbg, "expressionNode", index).click();
-}
-
 async function addExpression(dbg, input) {
   info("Adding an expression");
+
+  const plusIcon = findElementWithSelector(dbg, expressionSelectors.plusIcon);
+  if (plusIcon) {
+    plusIcon.click();
+  }
   findElementWithSelector(dbg, expressionSelectors.input).focus();
   type(dbg, input);
   pressKey(dbg, "Enter");
@@ -45,13 +47,14 @@ async function addExpression(dbg, input) {
 }
 
 async function editExpression(dbg, input) {
-  info("updating the expression");
+  info("Updating the expression");
   dblClickElement(dbg, "expressionNode", 1);
   // Position cursor reliably at the end of the text.
   pressKey(dbg, "End");
   type(dbg, input);
+  const evaluated = waitForDispatch(dbg, "EVALUATE_EXPRESSIONS");
   pressKey(dbg, "Enter");
-  await waitForDispatch(dbg, "EVALUATE_EXPRESSION");
+  await evaluated;
 }
 
 add_task(async function() {
@@ -75,8 +78,7 @@ add_task(async function() {
   ok(getValue(dbg, 2).includes("Location"), "has a value");
 
   // can expand an expression
-  toggleExpression(dbg, 2);
-  await waitForDispatch(dbg, "LOAD_OBJECT_PROPERTIES");
+  await toggleExpressionNode(dbg, 2);
 
   await deleteExpression(dbg, "foo");
   await deleteExpression(dbg, "location");
@@ -85,8 +87,8 @@ add_task(async function() {
   // Test expanding properties when the debuggee is active
   await resume(dbg);
   await addExpression(dbg, "location");
-  toggleExpression(dbg, 1);
-  await waitForDispatch(dbg, "LOAD_OBJECT_PROPERTIES");
+  await toggleExpressionNode(dbg, 1);
+
   is(findAllElements(dbg, "expressionNodes").length, 17);
 
   await deleteExpression(dbg, "location");

@@ -9,6 +9,7 @@
 #include "DecoderFactory.h"
 #include "decoders/nsBMPDecoder.h"
 #include "IDecodingTask.h"
+#include "ImageOps.h"
 #include "imgIContainer.h"
 #include "imgITools.h"
 #include "ImageFactory.h"
@@ -103,7 +104,7 @@ void WithSingleChunkDecode(const ImageTestCase& aTestCase,
   ASSERT_TRUE(NS_SUCCEEDED(rv));
 
   // Write the data into a SourceBuffer.
-  NotNull<RefPtr<SourceBuffer>> sourceBuffer = WrapNotNull(new SourceBuffer());
+  auto sourceBuffer = MakeNotNull<RefPtr<SourceBuffer>>();
   sourceBuffer->ExpectLength(length);
   rv = sourceBuffer->AppendFromInputStream(inputStream, length);
   ASSERT_TRUE(NS_SUCCEEDED(rv));
@@ -145,7 +146,7 @@ CheckDecoderMultiChunk(const ImageTestCase& aTestCase)
   ASSERT_TRUE(NS_SUCCEEDED(rv));
 
   // Create a SourceBuffer and a decoder.
-  NotNull<RefPtr<SourceBuffer>> sourceBuffer = WrapNotNull(new SourceBuffer());
+  auto sourceBuffer = MakeNotNull<RefPtr<SourceBuffer>>();
   sourceBuffer->ExpectLength(length);
   DecoderType decoderType =
     DecoderFactory::GetDecoderType(aTestCase.mMimeType);
@@ -466,8 +467,8 @@ TEST_F(ImageDecoders, AnimatedGIFWithFRAME_FIRST)
     EXPECT_TRUE(NS_SUCCEEDED(result.Surface().Seek(0)));
     EXPECT_TRUE(bool(result.Surface()));
 
-    EXPECT_TRUE(NS_SUCCEEDED(result.Surface().Seek(1)));
-    EXPECT_TRUE(bool(result.Surface()));
+    RawAccessFrameRef partialFrame = result.Surface().RawAccessRef(1);
+    EXPECT_TRUE(bool(partialFrame));
   }
 
   // Ensure that the static version is still around.
@@ -552,8 +553,8 @@ TEST_F(ImageDecoders, AnimatedGIFWithFRAME_CURRENT)
     EXPECT_TRUE(NS_SUCCEEDED(result.Surface().Seek(0)));
     EXPECT_TRUE(bool(result.Surface()));
 
-    EXPECT_TRUE(NS_SUCCEEDED(result.Surface().Seek(1)));
-    EXPECT_TRUE(bool(result.Surface()));
+    RawAccessFrameRef partialFrame = result.Surface().RawAccessRef(1);
+    EXPECT_TRUE(bool(partialFrame));
   }
 
   // Ensure that we didn't decode the static version of the image.
@@ -595,8 +596,8 @@ TEST_F(ImageDecoders, AnimatedGIFWithFRAME_CURRENT)
     EXPECT_TRUE(NS_SUCCEEDED(result.Surface().Seek(0)));
     EXPECT_TRUE(bool(result.Surface()));
 
-    EXPECT_TRUE(NS_SUCCEEDED(result.Surface().Seek(1)));
-    EXPECT_TRUE(bool(result.Surface()));
+    RawAccessFrameRef partialFrame = result.Surface().RawAccessRef(1);
+    EXPECT_TRUE(bool(partialFrame));
   }
 }
 
@@ -664,8 +665,8 @@ TEST_F(ImageDecoders, AnimatedGIFWithExtraImageSubBlocks)
   EXPECT_TRUE(NS_SUCCEEDED(result.Surface().Seek(0)));
   EXPECT_TRUE(bool(result.Surface()));
 
-  EXPECT_TRUE(NS_SUCCEEDED(result.Surface().Seek(1)));
-  EXPECT_TRUE(bool(result.Surface()));
+  RawAccessFrameRef partialFrame = result.Surface().RawAccessRef(1);
+  EXPECT_TRUE(bool(partialFrame));
 }
 
 TEST_F(ImageDecoders, TruncatedSmallGIFSingleChunk)

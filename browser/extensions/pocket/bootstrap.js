@@ -5,27 +5,25 @@
 
 /* global ADDON_ENABLE:false, ADDON_DISABLE:false, APP_SHUTDOWN: false */
 
-const {classes: Cc, interfaces: Ci, utils: Cu, manager: Cm} = Components;
+const Cm = Components.manager;
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://services-common/utils.js");
-Cu.import("resource://gre/modules/AppConstants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AboutPocket",
-                                  "chrome://pocket/content/AboutPocket.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AddonManagerPrivate",
-                                  "resource://gre/modules/AddonManager.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
-                                  "resource://gre/modules/BrowserUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PageActions",
-                                  "resource:///modules/PageActions.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Pocket",
-                                  "chrome://pocket/content/Pocket.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ReaderMode",
-                                  "resource://gre/modules/ReaderMode.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
-                                  "resource:///modules/RecentWindow.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
-                                  "resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://services-common/utils.js");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.defineModuleGetter(this, "AboutPocket",
+                               "chrome://pocket/content/AboutPocket.jsm");
+ChromeUtils.defineModuleGetter(this, "AddonManagerPrivate",
+                               "resource://gre/modules/AddonManager.jsm");
+ChromeUtils.defineModuleGetter(this, "BrowserUtils",
+                               "resource://gre/modules/BrowserUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "PageActions",
+                               "resource:///modules/PageActions.jsm");
+ChromeUtils.defineModuleGetter(this, "Pocket",
+                               "chrome://pocket/content/Pocket.jsm");
+ChromeUtils.defineModuleGetter(this, "ReaderMode",
+                               "resource://gre/modules/ReaderMode.jsm");
+ChromeUtils.defineModuleGetter(this, "Services",
+                               "resource://gre/modules/Services.jsm");
 XPCOMUtils.defineLazyGetter(this, "gPocketBundle", function() {
   return Services.strings.createBundle("chrome://pocket/locale/pocket.properties");
 });
@@ -41,8 +39,7 @@ const PREF_BRANCH = "extensions.pocket.";
 const PREFS = {
   enabled: true, // bug 1229937, figure out ui tour support
   api: "api.getpocket.com",
-  site: "getpocket.com",
-  oAuthConsumerKey: "40249-e88c401e1b1f2242d9e441c4"
+  site: "getpocket.com"
 };
 
 function setDefaultPrefs() {
@@ -70,7 +67,7 @@ function createElementWithAttrs(document, type, attrs) {
   let element = document.createElement(type);
   Object.keys(attrs).forEach(function(attr) {
     element.setAttribute(attr, attrs[attr]);
-  })
+  });
   return element;
 }
 
@@ -94,7 +91,7 @@ var PocketPageAction = {
       this.pageAction = PageActions.addAction(new PageActions.Action({
         id,
         title: gPocketBundle.GetStringFromName("saveToPocketCmd.label"),
-        shownInUrlbar: true,
+        pinnedToUrlbar: true,
         wantsIframe: true,
         urlbarIDOverride: "pocket-button-box",
         anchorIDOverride: "pocket-button",
@@ -110,10 +107,6 @@ var PocketPageAction = {
           let wrapper = doc.createElement("hbox");
           wrapper.id = "pocket-button-box";
           wrapper.classList.add("urlbar-icon-wrapper", "urlbar-page-action");
-          wrapper.setAttribute("context", "pageActionPanelContextMenu");
-          wrapper.addEventListener("contextmenu", event => {
-            window.BrowserPageActions.onContextMenu(event);
-          });
           let animatableBox = doc.createElement("hbox");
           animatableBox.id = "pocket-animatable-box";
           let animatableImage = doc.createElement("image");
@@ -140,10 +133,7 @@ var PocketPageAction = {
             BrowserPageActions.doCommandForAction(this, event, wrapper);
           });
         },
-        onPlacedInPanel(panelNode, urlbarNode) {
-          PocketOverlay.onWindowOpened(panelNode.ownerGlobal);
-        },
-        onIframeShown(iframe, panel) {
+        onIframeShowing(iframe, panel) {
           Pocket.onShownInPhotonPageActionPanel(panel, iframe);
 
           let doc = panel.ownerDocument;
@@ -159,23 +149,79 @@ var PocketPageAction = {
           if (Services.prefs.getBoolPref("toolkit.cosmeticAnimations.enabled")) {
             PocketPageAction.urlbarNode.setAttribute("animate", "true");
           }
+
+          let browser = panel.ownerGlobal.gBrowser.selectedBrowser;
+          PocketPageAction.pocketedBrowser = browser;
+          PocketPageAction.pocketedBrowserInnerWindowID = browser.innerWindowID;
         },
-        onIframeHiding(iframe, panel) {
+        onIframeHidden(iframe, panel) {
           if (iframe.getAttribute("itemAdded") == "true") {
             iframe.ownerGlobal.LibraryUI.triggerLibraryAnimation("pocket");
           }
-        },
-        onIframeHidden(iframe, panel) {
+
           if (!PocketPageAction.urlbarNode) {
             return;
           }
           PocketPageAction.urlbarNode.removeAttribute("animate");
           PocketPageAction.urlbarNode.removeAttribute("open");
-          PocketPageAction.urlbarNode = null;
+          delete PocketPageAction.urlbarNode;
+
+          if (iframe.getAttribute("itemAdded") == "true") {
+            PocketPageAction.innerWindowIDsByBrowser.set(
+              PocketPageAction.pocketedBrowser,
+              PocketPageAction.pocketedBrowserInnerWindowID
+            );
+          } else {
+            PocketPageAction.innerWindowIDsByBrowser.delete(
+              PocketPageAction.pocketedBrowser
+            );
+          }
+          PocketPageAction.updateUrlbarNodeState(panel.ownerGlobal);
+          delete PocketPageAction.pocketedBrowser;
+          delete PocketPageAction.pocketedBrowserInnerWindowID;
+        },
+        onLocationChange(browserWindow) {
+          PocketPageAction.updateUrlbarNodeState(browserWindow);
         },
       }));
     }
     Pocket.pageAction = this.pageAction;
+  },
+
+  // For pocketed inner windows, this maps their <browser>s to those inner
+  // window IDs.  If a browser's inner window changes, then the mapped ID will
+  // be out of date, meaning that the new inner window has not been pocketed.
+  // If a browser goes away, then it'll be gone from this map too since it's
+  // weak.  To tell whether a window has been pocketed then, look up its browser
+  // in this map and compare the mapped inner window ID to the ID of the current
+  // inner window.
+  get innerWindowIDsByBrowser() {
+    delete this.innerWindowIDsByBrowser;
+    return this.innerWindowIDsByBrowser = new WeakMap();
+  },
+
+  // Sets or removes the "pocketed" attribute on the Pocket urlbar button as
+  // necessary.
+  updateUrlbarNodeState(browserWindow) {
+    if (!this.pageAction) {
+      return;
+    }
+    let {BrowserPageActions} = browserWindow;
+    let urlbarNode = browserWindow.document.getElementById(
+      BrowserPageActions.urlbarButtonNodeIDForActionID(this.pageAction.id)
+    );
+    if (!urlbarNode) {
+      return;
+    }
+    let browser = browserWindow.gBrowser.selectedBrowser;
+    let pocketedInnerWindowID = this.innerWindowIDsByBrowser.get(browser);
+    if (pocketedInnerWindowID == browser.innerWindowID) {
+      // The current window in this browser is pocketed.
+      urlbarNode.setAttribute("pocketed", "true");
+    } else {
+      // The window isn't pocketed.
+      urlbarNode.removeAttribute("pocketed");
+    }
   },
 
   shutdown() {
@@ -265,7 +311,7 @@ var PocketContextMenu = {
     }
     menu.hidden = !showSaveLinkToPocket;
   }
-}
+};
 
 // PocketReader
 // Listen for reader mode setup and add our button to the reader toolbar
@@ -324,7 +370,7 @@ var PocketReader = {
       }
     }
   }
-}
+};
 
 
 function pktUIGetter(prop, window) {
@@ -350,6 +396,7 @@ var PocketOverlay = {
     this._cachedSheet = styleSheetService.preloadSheet(gPocketStyleURI,
                                                        this._sheetType);
     Services.ppmm.loadProcessScript(PROCESS_SCRIPT, true);
+    Services.obs.addObserver(this, "browser-delayed-startup-finished");
     PocketReader.startup();
     PocketPageAction.init();
     PocketContextMenu.init();
@@ -358,9 +405,8 @@ var PocketOverlay = {
     }
   },
   shutdown(reason) {
-    let ppmm = Cc["@mozilla.org/parentprocessmessagemanager;1"]
-                 .getService(Ci.nsIMessageBroadcaster);
-    ppmm.broadcastAsyncMessage("PocketShuttingDown");
+    Services.ppmm.broadcastAsyncMessage("PocketShuttingDown");
+    Services.obs.removeObserver(this, "browser-delayed-startup-finished");
     // Although the ppmm loads the scripts into the chrome process as well,
     // we need to manually unregister here anyway to ensure these aren't part
     // of the chrome process and avoid errors.
@@ -370,8 +416,7 @@ var PocketOverlay = {
     PocketPageAction.shutdown();
 
     for (let window of browserWindows()) {
-      for (let id of ["panelMenu_pocket", "panelMenu_pocketSeparator",
-                      "appMenu-library-pocket-button"]) {
+      for (let id of ["appMenu-library-pocket-button"]) {
         let element = window.document.getElementById(id) ||
                       window.gNavToolbox.palette.querySelector("#" + id);
         if (element)
@@ -388,6 +433,11 @@ var PocketOverlay = {
     PocketContextMenu.shutdown();
     PocketReader.shutdown();
   },
+  observe(subject, topic, detail) {
+    if (topic == "browser-delayed-startup-finished") {
+      this.onWindowOpened(subject);
+    }
+  },
   onWindowOpened(window) {
     if (window.hasOwnProperty("pktUI"))
       return;
@@ -396,8 +446,8 @@ var PocketOverlay = {
     this.updateWindow(window);
   },
   setWindowScripts(window) {
-    XPCOMUtils.defineLazyModuleGetter(window, "Pocket",
-                                      "chrome://pocket/content/Pocket.jsm");
+    ChromeUtils.defineModuleGetter(window, "Pocket",
+                                   "chrome://pocket/content/Pocket.jsm");
     // Can't use XPCOMUtils for these because the scripts try to define the variables
     // on window, and so the defineProperty inside defineLazyGetter fails.
     Object.defineProperty(window, "pktApi", pktUIGetter("pktApi", window));
@@ -410,29 +460,8 @@ var PocketOverlay = {
     let document = window.document;
     let hidden = !isPocketEnabled();
 
-    // add to PanelUI-bookmarks
-    let sib = document.getElementById("panelMenuBookmarkThisPage");
-    if (sib && !document.getElementById("panelMenu_pocket")) {
-      let menu = createElementWithAttrs(document, "toolbarbutton", {
-        "id": "panelMenu_pocket",
-        "label": gPocketBundle.GetStringFromName("pocketMenuitem.label"),
-        "class": "subviewbutton cui-withicon",
-        "oncommand": "Pocket.openList(event)",
-        "hidden": hidden
-      });
-      let sep = createElementWithAttrs(document, "toolbarseparator", {
-        "id": "panelMenu_pocketSeparator",
-        "hidden": hidden
-      });
-      // nextSibling is no-id toolbarseparator
-      // insert separator first then button
-      sib = sib.nextSibling;
-      sib.parentNode.insertBefore(sep, sib);
-      sib.parentNode.insertBefore(menu, sib);
-    }
-
     // Add to library panel
-    sib = document.getElementById("appMenu-library-history-button");
+    let sib = document.getElementById("appMenu-library-history-button");
     if (sib && !document.getElementById("appMenu-library-pocket-button")) {
       let menu = createElementWithAttrs(document, "toolbarbutton", {
         "id": "appMenu-library-pocket-button",
@@ -458,7 +487,7 @@ var PocketOverlay = {
     utils.removeSheet(gPocketStyleURI, this._sheetType);
   }
 
-}
+};
 
 // use enabled pref as a way for tests (e.g. test_contextmenu.html) to disable
 // the addon when running.

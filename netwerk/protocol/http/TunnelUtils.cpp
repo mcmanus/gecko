@@ -126,6 +126,10 @@ TLSFilterTransaction::Close(nsresult aReason)
     return;
   }
 
+  if (mTimer) {
+    mTimer->Cancel();
+    mTimer = nullptr;
+  }
   mTransaction->Close(aReason);
   mTransaction = nullptr;
 }
@@ -388,14 +392,15 @@ TLSFilterTransaction::NudgeTunnel(NudgeTunnelCallback *aCallback)
     return NS_ERROR_FAILURE;
   }
 
-  uint32_t notUsed;
-  int32_t written = PR_Write(mFD, "", 0);
-  if ((written < 0) && (PR_GetError() != PR_WOULD_BLOCK_ERROR)) {
+  nsCOMPtr<nsISSLSocketControl> ssl(do_QueryInterface(mSecInfo));
+  nsresult rv = ssl ? ssl->DriveHandshake() : NS_ERROR_FAILURE;
+  if (NS_FAILED(rv) && rv != NS_BASE_STREAM_WOULD_BLOCK) {
     // fatal handshake failure
     LOG(("TLSFilterTransaction %p Fatal Handshake Failure: %d\n", this, PR_GetError()));
     return NS_ERROR_FAILURE;
   }
 
+  uint32_t notUsed;
   Unused << OnReadSegment("", 0, &notUsed);
 
   // The SSL Layer does some unusual things with PR_Poll that makes it a bad
@@ -420,7 +425,7 @@ TLSFilterTransaction::NudgeTunnel(NudgeTunnelCallback *aCallback)
   }
 
   if(!mTimer) {
-    mTimer = do_CreateInstance("@mozilla.org/timer;1");
+    mTimer = NS_NewTimer();
   }
 
   mNudgeCallback = aCallback;
@@ -754,7 +759,7 @@ class SocketInWrapper : public nsIAsyncInputStream
   virtual nsresult OnWriteSegment(char *segment, uint32_t count, uint32_t *countWritten) override;
 
 private:
-  virtual ~SocketInWrapper() {};
+  virtual ~SocketInWrapper() = default;;
 
   nsCOMPtr<nsIAsyncInputStream> mStream;
   RefPtr<TLSFilterTransaction> mTLSFilter;
@@ -826,7 +831,7 @@ class SocketOutWrapper : public nsIAsyncOutputStream
   virtual nsresult OnReadSegment(const char *segment, uint32_t count, uint32_t *countRead) override;
 
 private:
-  virtual ~SocketOutWrapper() {};
+  virtual ~SocketOutWrapper() = default;;
 
   nsCOMPtr<nsIAsyncOutputStream> mStream;
   RefPtr<TLSFilterTransaction> mTLSFilter;
@@ -889,7 +894,7 @@ public:
   {};
 
 private:
-  virtual ~SocketTransportShim() {};
+  virtual ~SocketTransportShim() = default;;
 
   nsCOMPtr<nsISocketTransport> mWrapped;
 };
@@ -911,7 +916,7 @@ public:
   }
 
 private:
-  virtual ~OutputStreamShim() {};
+  virtual ~OutputStreamShim() = default;;
 
   nsWeakPtr mWeakTrans; // SpdyConnectTransaction *
   nsIOutputStreamCallback *mCallback;
@@ -935,7 +940,7 @@ public:
   }
 
 private:
-  virtual ~InputStreamShim() {};
+  virtual ~InputStreamShim() = default;;
 
   nsWeakPtr mWeakTrans; // SpdyConnectTransaction *
   nsIInputStreamCallback *mCallback;
@@ -1563,6 +1568,7 @@ FWD_TS_PTR(GetTlsFlags, uint32_t);
 FWD_TS(SetTlsFlags, uint32_t);
 FWD_TS_PTR(GetRecvBufferSize, uint32_t);
 FWD_TS(SetRecvBufferSize, uint32_t);
+FWD_TS_PTR(GetResetIPFamilyPreference, bool);
 
 nsresult
 SocketTransportShim::GetOriginAttributes(mozilla::OriginAttributes* aOriginAttributes)
@@ -1600,18 +1606,6 @@ NS_IMETHODIMP
 SocketTransportShim::GetTimeout(uint32_t aType, uint32_t *_retval)
 {
   return mWrapped->GetTimeout(aType, _retval);
-}
-
-NS_IMETHODIMP
-SocketTransportShim::GetNetworkInterfaceId(nsACString &aNetworkInterfaceId)
-{
-  return mWrapped->GetNetworkInterfaceId(aNetworkInterfaceId);
-}
-
-NS_IMETHODIMP
-SocketTransportShim::SetNetworkInterfaceId(const nsACString &aNetworkInterfaceId)
-{
-  return mWrapped->SetNetworkInterfaceId(aNetworkInterfaceId);
 }
 
 NS_IMETHODIMP

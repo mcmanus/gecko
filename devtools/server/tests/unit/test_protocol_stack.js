@@ -32,7 +32,7 @@ const rootSpec = protocol.generateActorSpec({
 });
 
 var RootActor = protocol.ActorClassWithSpec(rootSpec, {
-  initialize: function (conn) {
+  initialize: function(conn) {
     protocol.Actor.prototype.initialize.call(this, conn);
     // Root actor owns itself.
     this.manage(this);
@@ -42,13 +42,13 @@ var RootActor = protocol.ActorClassWithSpec(rootSpec, {
 
   sayHello: simpleHello,
 
-  simpleReturn: function () {
+  simpleReturn: function() {
     return this.sequence++;
   }
 });
 
 var RootFront = protocol.FrontClassWithSpec(rootSpec, {
-  initialize: function (client) {
+  initialize: function(client) {
     this.actorID = "root";
     protocol.Front.prototype.initialize.call(this, client);
     // Root owns itself.
@@ -58,15 +58,15 @@ var RootFront = protocol.FrontClassWithSpec(rootSpec, {
 
 function run_test() {
   if (!Services.prefs.getBoolPref("javascript.options.asyncstack")) {
-    do_print("Async stacks are disabled.");
+    info("Async stacks are disabled.");
     return;
   }
 
   DebuggerServer.createRootActor = RootActor;
   DebuggerServer.init();
 
-  let trace = connectPipeTracing();
-  let client = new DebuggerClient(trace);
+  const trace = connectPipeTracing();
+  const client = new DebuggerClient(trace);
   let rootClient;
 
   client.connect().then(function onConnect() {
@@ -75,8 +75,8 @@ function run_test() {
     rootClient.simpleReturn().then(() => {
       let stack = Components.stack;
       while (stack) {
-        do_print(stack.name);
-        if (stack.name == "onConnect") {
+        info(stack.name);
+        if (stack.name.includes("run_test/onConnect")) {
           // Reached back to outer function before request
           ok(true, "Complete stack");
           return;

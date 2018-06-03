@@ -22,7 +22,6 @@ config = {
     'tooltool_cache': "/builds/tooltool_cache",
     'exes': {
         'gittool.py': [os.path.join(external_tools_path, 'gittool.py')],
-        'tooltool.py': "/builds/tooltool.py",
         'python2.7': "/tools/python27/bin/python2.7",
     },
     'avoid_avx2': True,
@@ -30,16 +29,6 @@ config = {
     'arch': 'x86',
     # https://dxr.mozilla.org/mozilla-central/rev/5322c03f4c8587fe526172d3f87160031faa6d75/mobile/android/config/mozconfigs/android-x86/nightly#4
     'min_sdk': 16,
-    'use_mock': True,
-    'mock_target': 'mozilla-centos6-x86_64',
-    'mock_packages': ['make', 'git', 'nasm', 'glibc-devel.i686',
-                      'libstdc++-devel.i686', 'zip', 'yasm',
-                      'mozilla-python27'],
-    'mock_files': [
-        ('/home/cltbld/.ssh', '/home/mock_mozilla/.ssh'),
-        ('/builds/relengapi.tok', '/builds/relengapi.tok'),
-        ('/tools/tooltool.py', '/builds/tooltool.py'),
-    ],
     'operating_system': 'android',
     'partial_env': {
         'PATH': '%(abs_work_dir)s/android-sdk-linux/tools:%(PATH)s',

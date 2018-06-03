@@ -1,5 +1,6 @@
-/*-*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -70,20 +71,20 @@ GetTransformIn3DContext(Layer* aLayer) {
  * @return local transform for layers not participating 3D rendering
  * context, or the accmulated transform in the context for else.
  */
-static Matrix4x4
+static Matrix4x4Flagged
 GetTransformForInvalidation(Layer* aLayer) {
   return (!aLayer->Is3DContextLeaf() && !aLayer->Extend3DContext() ?
           aLayer->GetLocalTransform() : GetTransformIn3DContext(aLayer));
 }
 
 static IntRect
-TransformRect(const IntRect& aRect, const Matrix4x4& aTransform)
+TransformRect(const IntRect& aRect, const Matrix4x4Flagged& aTransform)
 {
   if (aRect.IsEmpty()) {
     return IntRect();
   }
 
-  Rect rect(aRect.x, aRect.y, aRect.Width(), aRect.Height());
+  Rect rect(aRect.X(), aRect.Y(), aRect.Width(), aRect.Height());
   rect = aTransform.TransformAndClipBounds(rect, Rect::MaxIntRect());
   rect.RoundOut();
 
@@ -96,7 +97,7 @@ TransformRect(const IntRect& aRect, const Matrix4x4& aTransform)
 }
 
 static void
-AddTransformedRegion(nsIntRegion& aDest, const nsIntRegion& aSource, const Matrix4x4& aTransform)
+AddTransformedRegion(nsIntRegion& aDest, const nsIntRegion& aSource, const Matrix4x4Flagged& aTransform)
 {
   for (auto iter = aSource.RectIter(); !iter.Done(); iter.Next()) {
     aDest.Or(aDest, TransformRect(iter.Get(), aTransform));
@@ -281,7 +282,7 @@ public:
       return false;
     }
 
-    aOutRegion = Move(result);
+    aOutRegion = std::move(result);
     return true;
   }
 
@@ -327,7 +328,7 @@ public:
   UniquePtr<LayerPropertiesBase> mMaskLayer;
   nsTArray<UniquePtr<LayerPropertiesBase>> mAncestorMaskLayers;
   nsIntRegion mVisibleRegion;
-  Matrix4x4 mTransform;
+  Matrix4x4Flagged mTransform;
   float mPostXScale;
   float mPostYScale;
   float mOpacity;
@@ -345,7 +346,7 @@ struct ContainerLayerProperties : public LayerPropertiesBase
   {
     for (Layer* child = aLayer->GetFirstChild(); child; child = child->GetNextSibling()) {
       child->CheckCanary();
-      mChildren.AppendElement(Move(CloneLayerTreePropertiesInternal(child)));
+      mChildren.AppendElement(std::move(CloneLayerTreePropertiesInternal(child)));
     }
   }
 
@@ -506,14 +507,14 @@ public:
 
     if (!mLayer->Extend3DContext()) {
       // |result| contains invalid regions only of children.
-      result.Transform(GetTransformForInvalidation(mLayer));
+      result.Transform(GetTransformForInvalidation(mLayer).GetMatrix());
     }
     // else, effective transforms have applied on children.
 
     LTI_DUMP(invalidOfLayer, "invalidOfLayer");
     result.OrWith(invalidOfLayer);
 
-    aOutRegion = Move(result);
+    aOutRegion = std::move(result);
     return true;
   }
 
@@ -648,49 +649,6 @@ public:
   LayerRect mRect;
   BorderCorners mCorners;
   BorderWidths mWidths;
-};
-
-struct TextLayerProperties : public LayerPropertiesBase
-{
-  explicit TextLayerProperties(TextLayer *aLayer)
-    : LayerPropertiesBase(aLayer)
-    , mBounds(aLayer->GetBounds())
-    , mGlyphs(aLayer->GetGlyphs())
-    , mFont(aLayer->GetScaledFont())
-  { }
-
-protected:
-  TextLayerProperties(const TextLayerProperties& a) = delete;
-  TextLayerProperties& operator=(const TextLayerProperties& a) = delete;
-
-public:
-  bool ComputeChangeInternal(const char* aPrefix,
-                             nsIntRegion& aOutRegion,
-                             NotifySubDocInvalidationFunc aCallback) override
-  {
-    TextLayer* text = static_cast<TextLayer*>(mLayer.get());
-
-    if (!text->GetLocalVisibleRegion().ToUnknownRegion().IsEqual(mVisibleRegion)) {
-      IntRect result = NewTransformedBoundsForLeaf();
-      result = result.Union(OldTransformedBoundsForLeaf());
-      aOutRegion = result;
-      return true;
-    }
-
-    if (!mBounds.IsEqualEdges(text->GetBounds()) ||
-        mGlyphs != text->GetGlyphs() ||
-        mFont != text->GetScaledFont()) {
-      LTI_DUMP(NewTransformedBoundsForLeaf(), "bounds");
-      aOutRegion = NewTransformedBoundsForLeaf();
-      return true;
-    }
-
-    return true;
-  }
-
-  gfx::IntRect mBounds;
-  nsTArray<GlyphArray> mGlyphs;
-  gfx::ScaledFont* mFont;
 };
 
 static ImageHost* GetImageHost(Layer* aLayer)
@@ -829,8 +787,6 @@ CloneLayerTreePropertiesInternal(Layer* aRoot, bool aIsMask /* = false */)
       return MakeUnique<CanvasLayerProperties>(static_cast<CanvasLayer*>(aRoot));
     case Layer::TYPE_BORDER:
       return MakeUnique<BorderLayerProperties>(static_cast<BorderLayer*>(aRoot));
-    case Layer::TYPE_TEXT:
-      return MakeUnique<TextLayerProperties>(static_cast<TextLayer*>(aRoot));
     case Layer::TYPE_DISPLAYITEM:
     case Layer::TYPE_READBACK:
     case Layer::TYPE_SHADOW:

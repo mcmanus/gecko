@@ -19,6 +19,7 @@
 #ifndef wasm_module_h
 #define wasm_module_h
 
+#include "jit/shared/Assembler-shared.h"
 #include "js/TypeDecls.h"
 #include "threading/ConditionVariable.h"
 #include "threading/Mutex.h"
@@ -33,7 +34,7 @@ namespace wasm {
 struct CompileArgs;
 
 // LinkData contains all the metadata necessary to patch all the locations
-// that depend on the absolute address of a CodeSegment.
+// that depend on the absolute address of a ModuleSegment.
 //
 // LinkData is built incrementally by ModuleGenerator and then stored immutably
 // in Module. LinkData is distinct from Metadata in that LinkData is owned and
@@ -42,11 +43,11 @@ struct CompileArgs;
 
 struct LinkDataTierCacheablePod
 {
-    uint32_t interruptOffset;
-    uint32_t outOfBoundsOffset;
-    uint32_t unalignedAccessOffset;
+    uint32_t outOfBoundsOffset = 0;
+    uint32_t unalignedAccessOffset = 0;
+    uint32_t trapOffset = 0;
 
-    LinkDataTierCacheablePod() { mozilla::PodZero(this); }
+    LinkDataTierCacheablePod() = default;
 };
 
 struct LinkDataTier : LinkDataTierCacheablePod
@@ -61,6 +62,9 @@ struct LinkDataTier : LinkDataTierCacheablePod
     struct InternalLink {
         uint32_t patchAtOffset;
         uint32_t targetOffset;
+#ifdef JS_CODELABEL_LINKMODE
+        uint32_t mode;
+#endif
     };
     typedef Vector<InternalLink, 0, SystemAllocPolicy> InternalLinkVector;
 
@@ -78,25 +82,15 @@ typedef UniquePtr<LinkDataTier> UniqueLinkDataTier;
 
 class LinkData
 {
-    SharedMetadata             metadata_;
-    UniqueLinkDataTier         linkData1_;     // Always present
-    mutable UniqueLinkDataTier linkData2_;     // Access only if hasTier2() is true
+    UniqueLinkDataTier         tier1_; // Always present
+    mutable UniqueLinkDataTier tier2_; // Access only if hasTier2() is true
 
   public:
-    bool initTier1(Tier tier, const Metadata& metadata);
+    LinkData() {}
+    explicit LinkData(UniqueLinkDataTier tier) : tier1_(std::move(tier)) {}
 
-    bool hasTier2() const { return metadata_->hasTier2(); }
     void setTier2(UniqueLinkDataTier linkData) const;
-    Tiers tiers() const;
-
-    const LinkDataTier& linkData(Tier tier) const;
-    LinkDataTier& linkData(Tier tier);
-
-    UniquePtr<LinkDataTier> takeLinkData(Tier tier) {
-        MOZ_ASSERT(!hasTier2());
-        MOZ_ASSERT(linkData1_->tier == tier);
-        return Move(linkData1_);
-    }
+    const LinkDataTier& tier(Tier tier) const;
 
     WASM_DECLARE_SERIALIZABLE(LinkData)
 };
@@ -116,6 +110,8 @@ struct Tiering
     bool active;
 };
 
+typedef ExclusiveWaitableData<Tiering> ExclusiveTiering;
+
 // Module represents a compiled wasm module and primarily provides two
 // operations: instantiation and serialization. A Module can be instantiated any
 // number of times to produce new Instance objects. A Module can be serialized
@@ -123,7 +119,7 @@ struct Tiering
 // to produce a new, equivalent Module.
 //
 // Fully linked-and-instantiated code (represented by Code and its owned
-// CodeSegment) can be shared between instances, provided none of those
+// ModuleSegment) can be shared between instances, provided none of those
 // instances are being debugged. If patchable code is needed then each instance
 // must have its own Code. Module eagerly creates a new Code and gives it to the
 // first instance; it then instantiates new Code objects from a copy of the
@@ -140,7 +136,7 @@ class Module : public JS::WasmModule
     const DataSegmentVector dataSegments_;
     const ElemSegmentVector elemSegments_;
     const SharedBytes       bytecode_;
-    ExclusiveData<Tiering>  tiering_;
+    ExclusiveTiering        tiering_;
 
     // `codeIsBusy_` is set to false initially and then to true when `code_` is
     // already being used for an instance and can't be shared because it may be
@@ -154,11 +150,13 @@ class Module : public JS::WasmModule
     bool instantiateTable(JSContext* cx,
                           MutableHandleWasmTableObject table,
                           SharedTableVector* tables) const;
+    bool instantiateGlobals(JSContext* cx, const ValVector& globalImportValues,
+                            WasmGlobalObjectVector& globalObjs) const;
     bool initSegments(JSContext* cx,
                       HandleWasmInstanceObject instance,
                       Handle<FunctionVector> funcImports,
                       HandleWasmMemoryObject memory,
-                      const ValVector& globalImports) const;
+                      const ValVector& globalImportValues) const;
 
     class Tier2GeneratorTaskImpl;
     void notifyCompilationListeners();
@@ -173,14 +171,14 @@ class Module : public JS::WasmModule
            DataSegmentVector&& dataSegments,
            ElemSegmentVector&& elemSegments,
            const ShareableBytes& bytecode)
-      : assumptions_(Move(assumptions)),
+      : assumptions_(std::move(assumptions)),
         code_(&code),
-        unlinkedCodeForDebugging_(Move(unlinkedCodeForDebugging)),
-        linkData_(Move(linkData)),
-        imports_(Move(imports)),
-        exports_(Move(exports)),
-        dataSegments_(Move(dataSegments)),
-        elemSegments_(Move(elemSegments)),
+        unlinkedCodeForDebugging_(std::move(unlinkedCodeForDebugging)),
+        linkData_(std::move(linkData)),
+        imports_(std::move(imports)),
+        exports_(std::move(exports)),
+        dataSegments_(std::move(dataSegments)),
+        elemSegments_(std::move(elemSegments)),
         bytecode_(&bytecode),
         tiering_(mutexid::WasmModuleTieringLock),
         codeIsBusy_(false)
@@ -190,11 +188,11 @@ class Module : public JS::WasmModule
     ~Module() override { /* Note: can be called on any thread */ }
 
     const Code& code() const { return *code_; }
-    const CodeSegment& codeSegment(Tier t) const { return code_->segment(t); }
+    const ModuleSegment& moduleSegment(Tier t) const { return code_->segment(t); }
     const Metadata& metadata() const { return code_->metadata(); }
     const MetadataTier& metadata(Tier t) const { return code_->metadata(t); }
     const LinkData& linkData() const { return linkData_; }
-    const LinkDataTier& linkData(Tier t) const { return linkData_.linkData(t); }
+    const LinkDataTier& linkData(Tier t) const { return linkData_.tier(t); }
     const ImportVector& imports() const { return imports_; }
     const ExportVector& exports() const { return exports_; }
     const ShareableBytes& bytecode() const { return *bytecode_; }
@@ -206,7 +204,8 @@ class Module : public JS::WasmModule
                      Handle<FunctionVector> funcImports,
                      HandleWasmTableObject tableImport,
                      HandleWasmMemoryObject memoryImport,
-                     const ValVector& globalImports,
+                     const ValVector& globalImportValues,
+                     WasmGlobalObjectVector& globalObjs,
                      HandleObject instanceProto,
                      MutableHandleWasmInstanceObject instanceObj) const;
 
@@ -217,22 +216,8 @@ class Module : public JS::WasmModule
     // and made visible.
 
     void startTier2(const CompileArgs& args);
-    void finishTier2(UniqueLinkDataTier linkData2, UniqueMetadataTier metadata2,
-                     UniqueCodeSegment code2, ModuleEnvironment* env2);
-
-    // Wait until Ion-compiled code is available, which will be true either
-    // immediately (first-level compile was Ion and is already done), not at all
-    // (first-level compile was Baseline and there's not a second level), or
-    // later (ongoing second-level compilation).  Once this returns, one can use
-    // code().hasTier() to check code availability - there is no guarantee that
-    // Ion code will be available, but if it isn't then it never will.
-
-    void blockOnIonCompileFinished() const;
-
-    // Signal all waiters that are waiting on tier-2 compilation to be done that
-    // they should wake up.  They will be waiting in blockOnIonCompileFinished.
-
-    void unblockOnTier2GeneratorFinished(CompileMode newMode) const;
+    bool finishTier2(UniqueLinkDataTier linkData2, UniqueCodeTier tier2, ModuleEnvironment* env2);
+    void blockOnTier2Complete() const;
 
     // JS API and JS::WasmModule implementation:
 
@@ -272,7 +257,7 @@ CompiledModuleAssumptionsMatch(PRFileDesc* compiled, JS::BuildIdCharVector&& bui
 
 SharedModule
 DeserializeModule(PRFileDesc* bytecode, PRFileDesc* maybeCompiled, JS::BuildIdCharVector&& buildId,
-                  UniqueChars filename, unsigned line, unsigned column);
+                  UniqueChars filename, unsigned line);
 
 } // namespace wasm
 } // namespace js

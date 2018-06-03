@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,9 +8,8 @@
 #include "nsSVGContainerFrame.h"
 
 // Keep others in (case-insensitive) order:
-#include "DrawResult.h"
+#include "ImgDrawResult.h"
 #include "mozilla/RestyleManager.h"
-#include "mozilla/RestyleManagerInlines.h"
 #include "nsCSSFrameConstructor.h"
 #include "SVGObserverUtils.h"
 #include "nsSVGElement.h"
@@ -31,10 +31,10 @@ NS_QUERYFRAME_TAIL_INHERITING(nsSVGContainerFrame)
 
 nsIFrame*
 NS_NewSVGContainerFrame(nsIPresShell* aPresShell,
-                        nsStyleContext* aContext)
+                        ComputedStyle* aStyle)
 {
   nsIFrame* frame =
-    new (aPresShell) nsSVGContainerFrame(aContext, nsSVGContainerFrame::kClassID);
+    new (aPresShell) nsSVGContainerFrame(aStyle, nsSVGContainerFrame::kClassID);
   // If we were called directly, then the frame is for a <defs> or
   // an unknown element type. In both cases we prevent the content
   // from displaying directly.
@@ -259,7 +259,7 @@ nsSVGDisplayContainerFrame::PaintSVG(gfxContext& aContext,
 {
   NS_ASSERTION(!NS_SVGDisplayListPaintingEnabled() ||
                (mState & NS_FRAME_IS_NONDISPLAY) ||
-               PresContext()->IsGlyph(),
+               PresContext()->Document()->IsSVGGlyphsDocument(),
                "If display lists are enabled, only painting of non-display "
                "SVG should take this code path");
 

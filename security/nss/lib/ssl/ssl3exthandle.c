@@ -182,7 +182,7 @@ ssl3_ClientSendSessionTicketXtn(const sslSocket *ss, TLSExtensionData *xtnData,
 
     /* Never send an extension with a ticket for TLS 1.3, but
      * OK to send the empty one in case the server does 1.2. */
-    if (sid->cached == in_client_cache &&
+    if ((sid->cached == in_client_cache || sid->cached == in_external_cache) &&
         sid->version >= SSL_LIBRARY_VERSION_TLS_1_3) {
         return SECSuccess;
     }
@@ -242,33 +242,11 @@ ssl_AlpnTagAllowed(const sslSocket *ss, const SECItem *tag)
     return PR_FALSE;
 }
 
-/* handle an incoming Next Protocol Negotiation extension. */
-SECStatus
-ssl3_ServerHandleNextProtoNegoXtn(const sslSocket *ss, TLSExtensionData *xtnData,
-                                  SECItem *data)
-{
-    PORT_Assert(ss->version < SSL_LIBRARY_VERSION_TLS_1_3);
-
-    if (ss->firstHsDone || data->len != 0) {
-        /* Clients MUST send an empty NPN extension, if any. */
-        PORT_SetError(SSL_ERROR_NEXT_PROTOCOL_DATA_INVALID);
-        return SECFailure;
-    }
-
-    xtnData->negotiated[xtnData->numNegotiated++] = ssl_next_proto_nego_xtn;
-
-    /* TODO: server side NPN support would require calling
-     * ssl3_RegisterServerHelloExtensionSender here in order to echo the
-     * extension back to the client. */
-
-    return SECSuccess;
-}
-
-/* ssl3_ValidateNextProtoNego checks that the given block of data is valid: none
+/* ssl3_ValidateAppProtocol checks that the given block of data is valid: none
  * of the lengths may be 0 and the sum of the lengths must equal the length of
  * the block. */
 SECStatus
-ssl3_ValidateNextProtoNego(const unsigned char *data, unsigned int length)
+ssl3_ValidateAppProtocol(const unsigned char *data, unsigned int length)
 {
     unsigned int offset = 0;
 
@@ -286,7 +264,7 @@ ssl3_ValidateNextProtoNego(const unsigned char *data, unsigned int length)
     return SECSuccess;
 }
 
-/* protocol selection handler for ALPN (server side) and NPN (client side) */
+/* Protocol selection handler for ALPN. */
 static SECStatus
 ssl3_SelectAppProtocol(const sslSocket *ss, TLSExtensionData *xtnData,
                        PRUint16 extension, SECItem *data)
@@ -295,7 +273,7 @@ ssl3_SelectAppProtocol(const sslSocket *ss, TLSExtensionData *xtnData,
     unsigned char resultBuffer[255];
     SECItem result = { siBuffer, resultBuffer, 0 };
 
-    rv = ssl3_ValidateNextProtoNego(data->data, data->len);
+    rv = ssl3_ValidateAppProtocol(data->data, data->len);
     if (rv != SECSuccess) {
         ssl3_ExtSendAlert(ss, alert_fatal, decode_error);
         PORT_SetError(SSL_ERROR_NEXT_PROTOCOL_DATA_INVALID);
@@ -303,11 +281,13 @@ ssl3_SelectAppProtocol(const sslSocket *ss, TLSExtensionData *xtnData,
     }
 
     PORT_Assert(ss->nextProtoCallback);
-    /* For ALPN, the cipher suite isn't selected yet.  Note that extensions
+    /* The cipher suite isn't selected yet.  Note that extensions
      * sometimes affect what cipher suite is selected, e.g., for ECC. */
     PORT_Assert((ss->ssl3.hs.preliminaryInfo &
                  ssl_preinfo_all & ~ssl_preinfo_cipher_suite) ==
                 (ssl_preinfo_all & ~ssl_preinfo_cipher_suite));
+    /* The callback has to make sure that either rv != SECSuccess or that result
+     * is not set if there is no common protocol. */
     rv = ss->nextProtoCallback(ss->nextProtoArg, ss->fd, data->data, data->len,
                                result.data, &result.len, sizeof(resultBuffer));
     if (rv != SECSuccess) {
@@ -320,21 +300,20 @@ ssl3_SelectAppProtocol(const sslSocket *ss, TLSExtensionData *xtnData,
      * stack. */
     if (result.len > sizeof(resultBuffer)) {
         PORT_SetError(SEC_ERROR_OUTPUT_LEN);
-        /* TODO: crash */
+        PORT_Assert(PR_FALSE);
         return SECFailure;
     }
 
     SECITEM_FreeItem(&xtnData->nextProto, PR_FALSE);
 
-    if (extension == ssl_app_layer_protocol_xtn &&
-        xtnData->nextProtoState != SSL_NEXT_PROTO_NEGOTIATED) {
-        /* The callback might say OK, but then it picks a default value - one
-         * that was not listed.  That's OK for NPN, but not ALPN. */
+    if (result.len < 1 || !result.data) {
+        /* Check that we actually got a result. */
         ssl3_ExtSendAlert(ss, alert_fatal, no_application_protocol);
         PORT_SetError(SSL_ERROR_NEXT_PROTOCOL_NO_PROTOCOL);
         return SECFailure;
     }
 
+    xtnData->nextProtoState = SSL_NEXT_PROTO_NEGOTIATED;
     xtnData->negotiated[xtnData->numNegotiated++] = extension;
     return SECITEM_CopyItem(NULL, &xtnData->nextProto, &result);
 }
@@ -356,7 +335,7 @@ ssl3_ServerHandleAppProtoXtn(const sslSocket *ss, TLSExtensionData *xtnData,
         return SECFailure;
     }
 
-    /* Unlike NPN, ALPN has extra redundant length information so that
+    /* ALPN has extra redundant length information so that
      * the extension is the same in both ClientHello and ServerHello. */
     rv = ssl3_ExtConsumeHandshakeNumber(ss, &count, 2, &data->data, &data->len);
     if (rv != SECSuccess || count != data->len) {
@@ -386,39 +365,6 @@ ssl3_ServerHandleAppProtoXtn(const sslSocket *ss, TLSExtensionData *xtnData,
         }
     }
     return SECSuccess;
-}
-
-SECStatus
-ssl3_ClientHandleNextProtoNegoXtn(const sslSocket *ss, TLSExtensionData *xtnData,
-                                  SECItem *data)
-{
-    PORT_Assert(ss->version < SSL_LIBRARY_VERSION_TLS_1_3);
-    PORT_Assert(!ss->firstHsDone);
-
-    if (ssl3_ExtensionNegotiated(ss, ssl_app_layer_protocol_xtn)) {
-        /* If the server negotiated ALPN then it has already told us what
-         * protocol to use, so it doesn't make sense for us to try to negotiate
-         * a different one by sending the NPN handshake message. However, if
-         * we've negotiated NPN then we're required to send the NPN handshake
-         * message. Thus, these two extensions cannot both be negotiated on the
-         * same connection. */
-        ssl3_ExtSendAlert(ss, alert_fatal, illegal_parameter);
-        PORT_SetError(SSL_ERROR_BAD_SERVER);
-        return SECFailure;
-    }
-
-    /* We should only get this call if we sent the extension, so
-     * ss->nextProtoCallback needs to be non-NULL.  However, it is possible
-     * that an application erroneously cleared the callback between the time
-     * we sent the ClientHello and now. */
-    if (!ss->nextProtoCallback) {
-        PORT_Assert(0);
-        ssl3_ExtSendAlert(ss, alert_fatal, internal_error);
-        PORT_SetError(SSL_ERROR_NEXT_PROTOCOL_NO_CALLBACK);
-        return SECFailure;
-    }
-
-    return ssl3_SelectAppProtocol(ss, xtnData, ssl_next_proto_nego_xtn, data);
 }
 
 SECStatus
@@ -475,19 +421,6 @@ ssl3_ClientHandleAppProtoXtn(const sslSocket *ss, TLSExtensionData *xtnData,
 }
 
 SECStatus
-ssl3_ClientSendNextProtoNegoXtn(const sslSocket *ss, TLSExtensionData *xtnData,
-                                sslBuffer *buf, PRBool *added)
-{
-    /* Renegotiations do not send this extension. */
-    if (!ss->opt.enableNPN || !ss->nextProtoCallback || ss->firstHsDone) {
-        return SECSuccess;
-    }
-
-    *added = PR_TRUE;
-    return SECSuccess;
-}
-
-SECStatus
 ssl3_ClientSendAppProtoXtn(const sslSocket *ss, TLSExtensionData *xtnData,
                            sslBuffer *buf, PRBool *added)
 {
@@ -499,35 +432,15 @@ ssl3_ClientSendAppProtoXtn(const sslSocket *ss, TLSExtensionData *xtnData,
         return SECSuccess;
     }
 
-    /* NPN requires that the client's fallback protocol is first in the
-     * list. However, ALPN sends protocols in preference order. So move the
-     * first protocol to the end of the list. */
-
     if (len > 0) {
         /* Each protocol string is prefixed with a single byte length. */
-        unsigned int i;
-
         rv = sslBuffer_AppendNumber(buf, len, 2);
         if (rv != SECSuccess) {
             return SECFailure;
         }
-
-        i = ss->opt.nextProtoNego.data[0] + 1;
-        if (i <= len) {
-            rv = sslBuffer_Append(buf, &ss->opt.nextProtoNego.data[i], len - i);
-            if (rv != SECSuccess) {
-                return SECFailure;
-            }
-            rv = sslBuffer_Append(buf, ss->opt.nextProtoNego.data, i);
-            if (rv != SECSuccess) {
-                return SECFailure;
-            }
-        } else {
-            /* This seems to be invalid data so we'll send as-is. */
-            rv = sslBuffer_Append(buf, ss->opt.nextProtoNego.data, len);
-            if (rv != SECSuccess) {
-                return SECFailure;
-            }
+        rv = sslBuffer_Append(buf, ss->opt.nextProtoNego.data, len);
+        if (rv != SECSuccess) {
+            return SECFailure;
         }
     }
 
@@ -654,7 +567,7 @@ ssl3_ClientHandleStatusRequestXtn(const sslSocket *ss, TLSExtensionData *xtnData
 }
 
 PRUint32 ssl_ticket_lifetime = 2 * 24 * 60 * 60; /* 2 days in seconds */
-#define TLS_EX_SESS_TICKET_VERSION (0x0106)
+#define TLS_EX_SESS_TICKET_VERSION (0x010a)
 
 /*
  * Called from ssl3_SendNewSessionTicket, tls13_SendNewSessionTicket
@@ -665,15 +578,14 @@ ssl3_EncodeSessionTicket(sslSocket *ss, const NewSessionTicket *ticket,
                          PK11SymKey *secret, SECItem *ticket_data)
 {
     SECStatus rv;
-    sslBuffer plaintext = { NULL, 0, 0 };
+    sslBuffer plaintext = SSL_BUFFER_EMPTY;
     SECItem ticket_buf = { 0, NULL, 0 };
-    PRBool ms_is_wrapped;
+    sslSessionID sid;
     unsigned char wrapped_ms[SSL3_MASTER_SECRET_LENGTH];
     SECItem ms_item = { 0, NULL, 0 };
     PRTime now;
     SECItem *srvName = NULL;
-    CK_MECHANISM_TYPE msWrapMech = 0; /* dummy default value,
-                                          * must be >= 0 */
+    CK_MECHANISM_TYPE msWrapMech;
     SECItem *alpnSelection = NULL;
     PRUint32 ticketAgeBaseline;
 
@@ -683,33 +595,23 @@ ssl3_EncodeSessionTicket(sslSocket *ss, const NewSessionTicket *ticket,
     PORT_Assert(ss->opt.noLocks || ssl_HaveXmitBufLock(ss));
     PORT_Assert(ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss));
 
-    if (ss->ssl3.pwSpec->msItem.len && ss->ssl3.pwSpec->msItem.data) {
-        PORT_Assert(ss->version < SSL_LIBRARY_VERSION_TLS_1_3);
-        /* The master secret is available unwrapped. */
-        ms_item.data = ss->ssl3.pwSpec->msItem.data;
-        ms_item.len = ss->ssl3.pwSpec->msItem.len;
-        ms_is_wrapped = PR_FALSE;
-    } else {
-        /* Extract the master secret wrapped. */
-        sslSessionID sid;
+    /* Extract the master secret wrapped. */
 
-        PORT_Memset(&sid, 0, sizeof(sslSessionID));
+    PORT_Memset(&sid, 0, sizeof(sslSessionID));
 
-        PORT_Assert(secret);
-        rv = ssl3_CacheWrappedSecret(ss, &sid, secret);
-        if (rv == SECSuccess) {
-            if (sid.u.ssl3.keys.wrapped_master_secret_len > sizeof(wrapped_ms))
-                goto loser;
-            memcpy(wrapped_ms, sid.u.ssl3.keys.wrapped_master_secret,
-                   sid.u.ssl3.keys.wrapped_master_secret_len);
-            ms_item.data = wrapped_ms;
-            ms_item.len = sid.u.ssl3.keys.wrapped_master_secret_len;
-            msWrapMech = sid.u.ssl3.masterWrapMech;
-        } else {
-            /* TODO: else send an empty ticket. */
+    PORT_Assert(secret);
+    rv = ssl3_CacheWrappedSecret(ss, &sid, secret);
+    if (rv == SECSuccess) {
+        if (sid.u.ssl3.keys.wrapped_master_secret_len > sizeof(wrapped_ms))
             goto loser;
-        }
-        ms_is_wrapped = PR_TRUE;
+        memcpy(wrapped_ms, sid.u.ssl3.keys.wrapped_master_secret,
+               sid.u.ssl3.keys.wrapped_master_secret_len);
+        ms_item.data = wrapped_ms;
+        ms_item.len = sid.u.ssl3.keys.wrapped_master_secret_len;
+        msWrapMech = sid.u.ssl3.masterWrapMech;
+    } else {
+        /* TODO: else send an empty ticket. */
+        goto loser;
     }
     /* Prep to send negotiated name */
     srvName = &ss->sec.ci.sid->u.ssl3.srvName;
@@ -732,11 +634,6 @@ ssl3_EncodeSessionTicket(sslSocket *ss, const NewSessionTicket *ticket,
     if (rv != SECSuccess)
         goto loser;
 
-    /* compression */
-    rv = sslBuffer_AppendNumber(&plaintext, ss->ssl3.hs.compression, 1);
-    if (rv != SECSuccess)
-        goto loser;
-
     /* cipher spec parameters */
     rv = sslBuffer_AppendNumber(&plaintext, ss->sec.authType, 1);
     if (rv != SECSuccess)
@@ -748,6 +645,19 @@ ssl3_EncodeSessionTicket(sslSocket *ss, const NewSessionTicket *ticket,
     if (rv != SECSuccess)
         goto loser;
     rv = sslBuffer_AppendNumber(&plaintext, ss->sec.keaKeyBits, 4);
+    if (rv != SECSuccess)
+        goto loser;
+    if (ss->sec.keaGroup) {
+        rv = sslBuffer_AppendNumber(&plaintext, ss->sec.keaGroup->name, 4);
+        if (rv != SECSuccess)
+            goto loser;
+    } else {
+        /* No kea group. Write 0 as invalid value. */
+        rv = sslBuffer_AppendNumber(&plaintext, 0, 4);
+        if (rv != SECSuccess)
+            goto loser;
+    }
+    rv = sslBuffer_AppendNumber(&plaintext, ss->sec.signatureScheme, 4);
     if (rv != SECSuccess)
         goto loser;
 
@@ -766,9 +676,6 @@ ssl3_EncodeSessionTicket(sslSocket *ss, const NewSessionTicket *ticket,
         goto loser;
 
     /* master_secret */
-    rv = sslBuffer_AppendNumber(&plaintext, ms_is_wrapped, 1);
-    if (rv != SECSuccess)
-        goto loser;
     rv = sslBuffer_AppendNumber(&plaintext, msWrapMech, 4);
     if (rv != SECSuccess)
         goto loser;
@@ -827,7 +734,7 @@ ssl3_EncodeSessionTicket(sslSocket *ss, const NewSessionTicket *ticket,
     if (rv != SECSuccess)
         goto loser;
 
-    rv = sslBuffer_AppendNumber(&plaintext, ssl_max_early_data_size, 4);
+    rv = sslBuffer_AppendNumber(&plaintext, ss->opt.maxEarlyDataSize, 4);
     if (rv != SECSuccess)
         goto loser;
 
@@ -974,14 +881,6 @@ ssl_ParseSessionTicket(sslSocket *ss, const SECItem *decryptedTicket,
     }
     parsedTicket->cipher_suite = (ssl3CipherSuite)temp;
 
-    /* Read compression_method. */
-    rv = ssl3_ExtConsumeHandshakeNumber(ss, &temp, 1, &buffer, &len);
-    if (rv != SECSuccess) {
-        PORT_SetError(SEC_ERROR_LIBRARY_FAILURE);
-        return SECFailure;
-    }
-    parsedTicket->compression_method = (SSLCompressionMethod)temp;
-
     /* Read cipher spec parameters. */
     rv = ssl3_ExtConsumeHandshakeNumber(ss, &temp, 1, &buffer, &len);
     if (rv != SECSuccess) {
@@ -1007,6 +906,18 @@ ssl_ParseSessionTicket(sslSocket *ss, const SECItem *decryptedTicket,
         return SECFailure;
     }
     parsedTicket->keaKeyBits = temp;
+    rv = ssl3_ExtConsumeHandshakeNumber(ss, &temp, 4, &buffer, &len);
+    if (rv != SECSuccess) {
+        PORT_SetError(SEC_ERROR_LIBRARY_FAILURE);
+        return SECFailure;
+    }
+    parsedTicket->originalKeaGroup = temp;
+    rv = ssl3_ExtConsumeHandshakeNumber(ss, &temp, 4, &buffer, &len);
+    if (rv != SECSuccess) {
+        PORT_SetError(SEC_ERROR_LIBRARY_FAILURE);
+        return SECFailure;
+    }
+    parsedTicket->signatureScheme = (SSLSignatureScheme)temp;
 
     /* Read the optional named curve. */
     rv = ssl3_ExtConsumeHandshakeNumber(ss, &temp, 1, &buffer, &len);
@@ -1027,14 +938,6 @@ ssl_ParseSessionTicket(sslSocket *ss, const SECItem *decryptedTicket,
     }
 
     /* Read the master secret (and how it is wrapped). */
-    rv = ssl3_ExtConsumeHandshakeNumber(ss, &temp, 1, &buffer, &len);
-    if (rv != SECSuccess) {
-        PORT_SetError(SEC_ERROR_LIBRARY_FAILURE);
-        return SECFailure;
-    }
-    PORT_Assert(temp == PR_TRUE || temp == PR_FALSE);
-    parsedTicket->ms_is_wrapped = (PRBool)temp;
-
     rv = ssl3_ExtConsumeHandshakeNumber(ss, &temp, 4, &buffer, &len);
     if (rv != SECSuccess) {
         PORT_SetError(SEC_ERROR_LIBRARY_FAILURE);
@@ -1179,12 +1082,13 @@ ssl_CreateSIDFromTicket(sslSocket *ss, const SECItem *rawTicket,
     sid->version = parsedTicket->ssl_version;
     sid->creationTime = parsedTicket->timestamp;
     sid->u.ssl3.cipherSuite = parsedTicket->cipher_suite;
-    sid->u.ssl3.compression = parsedTicket->compression_method;
     sid->authType = parsedTicket->authType;
     sid->authKeyBits = parsedTicket->authKeyBits;
     sid->keaType = parsedTicket->keaType;
     sid->keaKeyBits = parsedTicket->keaKeyBits;
+    sid->keaGroup = parsedTicket->originalKeaGroup;
     sid->namedCurve = parsedTicket->namedCurve;
+    sid->sigScheme = parsedTicket->signatureScheme;
 
     rv = SECITEM_CopyItem(NULL, &sid->u.ssl3.locked.sessionTicket.ticket,
                           rawTicket);
@@ -1203,7 +1107,6 @@ ssl_CreateSIDFromTicket(sslSocket *ss, const SECItem *rawTicket,
                 parsedTicket->master_secret, parsedTicket->ms_length);
     sid->u.ssl3.keys.wrapped_master_secret_len = parsedTicket->ms_length;
     sid->u.ssl3.masterWrapMech = parsedTicket->msWrapMech;
-    sid->u.ssl3.keys.msIsWrapped = parsedTicket->ms_is_wrapped;
     sid->u.ssl3.masterValid = PR_TRUE;
     sid->u.ssl3.keys.resumable = PR_TRUE;
     sid->u.ssl3.keys.extendedMasterSecretUsed = parsedTicket->extendedMasterSecretUsed;
@@ -1229,6 +1132,7 @@ ssl_CreateSIDFromTicket(sslSocket *ss, const SECItem *rawTicket,
         }
     }
     if (parsedTicket->alpnSelection.data != NULL) {
+        SECITEM_FreeItem(&sid->u.ssl3.alpnSelection, PR_FALSE);
         rv = SECITEM_CopyItem(NULL, &sid->u.ssl3.alpnSelection,
                               &parsedTicket->alpnSelection);
         if (rv != SECSuccess) {
@@ -1255,7 +1159,7 @@ ssl3_ProcessSessionTicketCommon(sslSocket *ss, const SECItem *ticket,
     SECStatus rv;
 
     if (ss->sec.ci.sid != NULL) {
-        ss->sec.uncache(ss->sec.ci.sid);
+        ssl_UncacheSessionID(ss);
         ssl_FreeSID(ss->sec.ci.sid);
         ss->sec.ci.sid = NULL;
     }
@@ -1378,14 +1282,12 @@ ssl3_SendRenegotiationInfoXtn(const sslSocket *ss, TLSExtensionData *xtnData,
     PRInt32 len = 0;
     SECStatus rv;
 
-    /* In draft-ietf-tls-renegotiation-03, it is NOT RECOMMENDED to send
-     * both the SCSV and the empty RI, so when we send SCSV in
-     * the initial handshake, we don't also send RI.
+    /* In RFC 5746, it is NOT RECOMMENDED to send both the SCSV and the empty
+     * RI, so when we send SCSV in the initial handshake, we don't also send RI.
      */
-    if (!ss || ss->ssl3.hs.sendingSCSV) {
-        return SECSuccess;
+    if (ss->ssl3.hs.sendingSCSV) {
+        return 0;
     }
-
     if (ss->firstHsDone) {
         len = ss->sec.isServer ? ss->ssl3.hs.finishedBytes * 2
                                : ss->ssl3.hs.finishedBytes;
@@ -1664,9 +1566,14 @@ ssl3_HandleSigAlgsXtn(const sslSocket *ss, TLSExtensionData *xtnData,
                                    &xtnData->sigSchemes,
                                    &xtnData->numSigSchemes,
                                    &data->data, &data->len);
-    if (rv != SECSuccess || xtnData->numSigSchemes == 0) {
+    if (rv != SECSuccess) {
         ssl3_ExtSendAlert(ss, alert_fatal, decode_error);
         PORT_SetError(SSL_ERROR_RX_MALFORMED_CLIENT_HELLO);
+        return SECFailure;
+    }
+    if (xtnData->numSigSchemes == 0) {
+        ssl3_ExtSendAlert(ss, alert_fatal, handshake_failure);
+        PORT_SetError(SSL_ERROR_UNSUPPORTED_SIGNATURE_ALGORITHM);
         return SECFailure;
     }
     /* Check for trailing data. */
@@ -1959,5 +1866,69 @@ ssl_HandleSupportedGroupsXtn(const sslSocket *ss, TLSExtensionData *xtnData,
     /* Remember that we negotiated this extension. */
     xtnData->negotiated[xtnData->numNegotiated++] = ssl_supported_groups_xtn;
 
+    return SECSuccess;
+}
+
+SECStatus
+ssl_HandleRecordSizeLimitXtn(const sslSocket *ss, TLSExtensionData *xtnData,
+                             SECItem *data)
+{
+    SECStatus rv;
+    PRUint32 limit;
+    PRUint32 maxLimit = (ss->version >= SSL_LIBRARY_VERSION_TLS_1_3)
+                            ? (MAX_FRAGMENT_LENGTH + 1)
+                            : MAX_FRAGMENT_LENGTH;
+
+    rv = ssl3_ExtConsumeHandshakeNumber(ss, &limit, 2, &data->data, &data->len);
+    if (rv != SECSuccess) {
+        return SECFailure;
+    }
+    if (data->len != 0 || limit < 64) {
+        ssl3_ExtSendAlert(ss, alert_fatal, illegal_parameter);
+        PORT_SetError(SSL_ERROR_RX_MALFORMED_HANDSHAKE);
+        return SECFailure;
+    }
+
+    if (ss->sec.isServer) {
+        rv = ssl3_RegisterExtensionSender(ss, xtnData, ssl_record_size_limit_xtn,
+                                          &ssl_SendRecordSizeLimitXtn);
+        if (rv != SECSuccess) {
+            return SECFailure; /* error already set. */
+        }
+    } else if (limit > maxLimit) {
+        /* The client can sensibly check the maximum. */
+        ssl3_ExtSendAlert(ss, alert_fatal, illegal_parameter);
+        PORT_SetError(SSL_ERROR_RX_MALFORMED_HANDSHAKE);
+        return SECFailure;
+    }
+
+    /* We can't enforce the maximum on a server. But we do need to ensure
+     * that we don't apply a limit that is too large. */
+    xtnData->recordSizeLimit = PR_MIN(maxLimit, limit);
+    xtnData->negotiated[xtnData->numNegotiated++] = ssl_record_size_limit_xtn;
+    return SECSuccess;
+}
+
+SECStatus
+ssl_SendRecordSizeLimitXtn(const sslSocket *ss, TLSExtensionData *xtnData,
+                           sslBuffer *buf, PRBool *added)
+{
+    PRUint32 maxLimit;
+    if (ss->sec.isServer) {
+        maxLimit = (ss->version >= SSL_LIBRARY_VERSION_TLS_1_3)
+                       ? (MAX_FRAGMENT_LENGTH + 1)
+                       : MAX_FRAGMENT_LENGTH;
+    } else {
+        maxLimit = (ss->vrange.max >= SSL_LIBRARY_VERSION_TLS_1_3)
+                       ? (MAX_FRAGMENT_LENGTH + 1)
+                       : MAX_FRAGMENT_LENGTH;
+    }
+    PRUint32 limit = PR_MIN(ss->opt.recordSizeLimit, maxLimit);
+    SECStatus rv = sslBuffer_AppendNumber(buf, limit, 2);
+    if (rv != SECSuccess) {
+        return SECFailure;
+    }
+
+    *added = PR_TRUE;
     return SECSuccess;
 }

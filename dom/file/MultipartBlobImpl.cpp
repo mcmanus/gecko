@@ -9,7 +9,6 @@
 #include "mozilla/dom/BlobSet.h"
 #include "mozilla/dom/FileBinding.h"
 #include "mozilla/dom/UnionTypes.h"
-#include "nsDOMClassInfoID.h"
 #include "nsIMultiplexInputStream.h"
 #include "nsRFPService.h"
 #include "nsStringStream.h"
@@ -23,8 +22,6 @@
 using namespace mozilla;
 using namespace mozilla::dom;
 
-NS_IMPL_ISUPPORTS_INHERITED0(MultipartBlobImpl, BlobImpl)
-
 /* static */ already_AddRefed<MultipartBlobImpl>
 MultipartBlobImpl::Create(nsTArray<RefPtr<BlobImpl>>&& aBlobImpls,
                           const nsAString& aName,
@@ -32,7 +29,7 @@ MultipartBlobImpl::Create(nsTArray<RefPtr<BlobImpl>>&& aBlobImpls,
                           ErrorResult& aRv)
 {
   RefPtr<MultipartBlobImpl> blobImpl =
-    new MultipartBlobImpl(Move(aBlobImpls), aName, aContentType);
+    new MultipartBlobImpl(std::move(aBlobImpls), aName, aContentType);
   blobImpl->SetLengthAndModifiedDate(aRv);
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
@@ -47,7 +44,7 @@ MultipartBlobImpl::Create(nsTArray<RefPtr<BlobImpl>>&& aBlobImpls,
                           ErrorResult& aRv)
 {
   RefPtr<MultipartBlobImpl> blobImpl =
-    new MultipartBlobImpl(Move(aBlobImpls), aContentType);
+    new MultipartBlobImpl(std::move(aBlobImpls), aContentType);
   blobImpl->SetLengthAndModifiedDate(aRv);
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
@@ -156,7 +153,7 @@ MultipartBlobImpl::CreateSlice(uint64_t aStart, uint64_t aLength,
   }
 
   // we can create our blob now
-  RefPtr<BlobImpl> impl = Create(Move(blobImpls), aContentType, aRv);
+  RefPtr<BlobImpl> impl = Create(std::move(blobImpls), aContentType, aRv);
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
   }
@@ -271,7 +268,8 @@ MultipartBlobImpl::SetLengthAndModifiedDate(ErrorResult& aRv)
     //   x.getTime() < f.dateModified.getTime()
     // could fail.
     mLastModificationDate = nsRFPService::ReduceTimePrecisionAsUSecs(
-      lastModifiedSet ? lastModified * PR_USEC_PER_MSEC : JS_Now());
+      lastModifiedSet ? lastModified * PR_USEC_PER_MSEC : JS_Now(), 0);
+    // mLastModificationDate is an absolute timestamp so we supply a zero context mix-in
   }
 }
 

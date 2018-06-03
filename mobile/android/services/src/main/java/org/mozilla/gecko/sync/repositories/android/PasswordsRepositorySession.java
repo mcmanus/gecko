@@ -14,9 +14,9 @@ import org.mozilla.gecko.sync.repositories.NoStoreDelegateException;
 import org.mozilla.gecko.sync.repositories.NullCursorException;
 import org.mozilla.gecko.sync.repositories.RecordFilter;
 import org.mozilla.gecko.sync.repositories.Repository;
+import org.mozilla.gecko.sync.repositories.RepositorySession;
 import org.mozilla.gecko.sync.repositories.StoreTrackingRepositorySession;
 import org.mozilla.gecko.sync.repositories.android.RepoUtils.QueryHelper;
-import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionCreationDelegate;
 import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionFetchRecordsDelegate;
 import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionFinishDelegate;
 import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionWipeDelegate;
@@ -36,11 +36,8 @@ public class PasswordsRepositorySession extends
 
   public static class PasswordsRepository extends Repository {
     @Override
-    public void createSession(RepositorySessionCreationDelegate delegate,
-        Context context) {
-      PasswordsRepositorySession session = new PasswordsRepositorySession(PasswordsRepository.this, context);
-      final RepositorySessionCreationDelegate deferredCreationDelegate = delegate.deferredCreationDelegate();
-      deferredCreationDelegate.onSessionCreated(session);
+    public RepositorySession createSession(Context context) {
+      return new PasswordsRepositorySession(this, context);
     }
   }
 
@@ -113,7 +110,7 @@ public class PasswordsRepositorySession extends
       }
     };
 
-    delegateQueue.execute(fetchSinceRunnable);
+    fetchWorkQueue.execute(fetchSinceRunnable);
   }
 
   @Override
@@ -130,7 +127,7 @@ public class PasswordsRepositorySession extends
   public void fetch(final String[] guids, final RepositorySessionFetchRecordsDelegate delegate) {
     if (guids == null || guids.length < 1) {
       Logger.error(LOG_TAG, "No guids to be fetched.");
-      delegateQueue.execute(new Runnable() {
+      fetchWorkQueue.execute(new Runnable() {
         @Override
         public void run() {
           delegate.onFetchCompleted();
@@ -180,7 +177,7 @@ public class PasswordsRepositorySession extends
       }
     };
 
-    delegateQueue.execute(fetchRunnable);
+    fetchWorkQueue.execute(fetchRunnable);
   }
 
   @Override
@@ -307,7 +304,7 @@ public class PasswordsRepositorySession extends
             return;
           }
           trackRecord(inserted);
-          storeDelegate.onRecordStoreSucceeded(inserted.guid);
+          storeDelegate.onRecordStoreSucceeded(1);
           return;
         }
 
@@ -343,7 +340,7 @@ public class PasswordsRepositorySession extends
         Logger.debug(LOG_TAG, "Calling delegate callback with guid " + replaced.guid +
                               "(" + replaced.androidID + ")");
         storeDelegate.onRecordStoreReconciled(record.guid, existingRecord.guid, null);
-        storeDelegate.onRecordStoreSucceeded(record.guid);
+        storeDelegate.onRecordStoreSucceeded(1);
         return;
       }
     };
@@ -601,7 +598,7 @@ public class PasswordsRepositorySession extends
       storeDelegate.onRecordStoreFailed(e, record.guid);
       return;
     }
-    storeDelegate.onRecordStoreSucceeded(record.guid);
+    storeDelegate.onRecordStoreSucceeded(1);
   }
 
   /**

@@ -1,4 +1,4 @@
-const {PrerenderData, _PrerenderData} = require("common/PrerenderData.jsm");
+import {_PrerenderData, PrerenderData} from "common/PrerenderData.jsm";
 
 describe("_PrerenderData", () => {
   describe("properties", () => {
@@ -84,6 +84,15 @@ describe("_PrerenderData", () => {
       });
 
       assert.isFalse(instance.arePrefsValid(getPrefs));
+    });
+    it("should return false if an indexedDB pref is changed", () => {
+      FAKE_PREFS = {foo: true, bar: false};
+      const instance = new _PrerenderData({
+        initialPrefs: {foo: true, bar: true},
+        validation: ["foo", {indexedDB: ["collapsed"]}]
+      });
+
+      assert.isFalse(instance.arePrefsValid(getPrefs, [{collapsed: true}]));
     });
   });
 });

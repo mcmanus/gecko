@@ -55,15 +55,17 @@ public:
 
     FT_Library GetFTLibrary() override;
 
-    virtual bool CanRenderContentToDataSurface() const override {
-      return true;
-    }
-
     virtual already_AddRefed<mozilla::gfx::VsyncSource> CreateHardwareVsyncSource() override;
 
 protected:
     bool AccelerateLayersByDefault() override {
       return true;
+    }
+
+    bool CheckVariationFontSupport() override {
+        // We build with in-tree FreeType, so we know it is a new enough
+        // version to support variations.
+        return true;
     }
 
 private:

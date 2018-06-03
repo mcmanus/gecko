@@ -129,6 +129,9 @@ Var AppLaunchWaitTickCount
 ; certificate attribute values were incorrect.
 !define ERR_PREINSTALL_CERT_UNTRUSTED_AND_ATTRIBUTES 23
 
+; Timed out while waiting for the certificate checks to run.
+!define ERR_PREINSTALL_CERT_TIMEOUT 24
+
 /**
  * The following errors prefixed with ERR_INSTALL apply to the install phase.
  */
@@ -153,6 +156,9 @@ Var AppLaunchWaitTickCount
 
 ; Interval for the download timer
 !define DownloadIntervalMS 200
+
+; Timeout for the certificate check
+!define PreinstallCertCheckMaxWaitSec 30
 
 ; Interval for the install timer
 !define InstallIntervalMS 100
@@ -237,8 +243,8 @@ Var AppLaunchWaitTickCount
 !ifdef BETA_UPDATE_CHANNEL
 !undef URLStubDownload32
 !undef URLStubDownload64
-!define URLStubDownload32 "http://download.mozilla.org/?os=win&lang=${AB_CD}&product=firefox-beta-latest"
-!define URLStubDownload64 "http://download.mozilla.org/?os=win64&lang=${AB_CD}&product=firefox-beta-latest"
+!define URLStubDownload32 "https://download.mozilla.org/?os=win&lang=${AB_CD}&product=firefox-beta-latest"
+!define URLStubDownload64 "https://download.mozilla.org/?os=win64&lang=${AB_CD}&product=firefox-beta-latest"
 !undef URLManualDownload
 !define URLManualDownload "https://www.mozilla.org/${AB_CD}/firefox/installer-help/?channel=beta&installer_lang=${AB_CD}"
 !undef Channel
@@ -320,14 +326,8 @@ Function .onInit
     Quit
   ${EndIf}
 
-  ; Check if we meet the RAM requirement for the 64-bit build.
-  System::Call "*(i 64, i, l 0, l, l, l, l, l, l)p.r0"
-  System::Call "Kernel32::GlobalMemoryStatusEx(p r0)"
-  System::Call "*$0(i, i, l.r1, l, l, l, l, l, l)"
-  System::Free $0
-
-  ${If} ${RunningX64}
-  ${AndIf} $1 L> ${RAM_NEEDED_FOR_64BIT}
+  Call ShouldInstall64Bit
+  ${If} $0 == 1
     StrCpy $DroplistArch "$(VERSION_64BIT)"
     StrCpy $INSTDIR "${DefaultInstDir64bit}"
   ${Else}
@@ -469,7 +469,8 @@ Function .onInit
   CreateFont $FontCheckbox   "$0" "10" "400"
 
   InitPluginsDir
-  File /oname=$PLUGINSDIR\bgstub.bmp "bgstub.bmp"
+  File /oname=$PLUGINSDIR\bgstub.jpg "bgstub.jpg"
+  File /oname=$PLUGINSDIR\bgstub_2x.jpg "bgstub_2x.jpg"
 
   SetShellVarContext all ; Set SHCTX to All Users
   ; If the user doesn't have write access to the installation directory set
@@ -514,7 +515,7 @@ Function .onInit
 
   Call CanWrite
   ${If} "$CanWriteToInstallDir" == "false"
-    MessageBox MB_OK|MB_ICONEXCLAMATION "$(WARN_WRITE_ACCESS_QUIT)\n\n$INSTDIR"
+    MessageBox MB_OK|MB_ICONEXCLAMATION "$(WARN_WRITE_ACCESS_QUIT)$\n$\n$INSTDIR"
     Quit
   ${EndIf}
 
@@ -554,15 +555,51 @@ Function .onUserAbort
   ${NSD_KillTimer} ClearBlurb
 
   ${If} "$IsDownloadFinished" != ""
-    Call DisplayDownloadError
+    ; Go ahead and cancel the download so it doesn't keep running while this
+    ; prompt is up. We'll resume it if the user decides to continue.
+    InetBgDL::Get /RESET /END
+
+    ${ShowTaskDialog} $(STUB_CANCEL_PROMPT_HEADING) \
+                      $(STUB_CANCEL_PROMPT_MESSAGE) \
+                      $(STUB_CANCEL_PROMPT_BUTTON_CONTINUE) \
+                      $(STUB_CANCEL_PROMPT_BUTTON_EXIT)
+    Pop $0
+    ${If} $0 == 1002
+      ; The cancel button was clicked
+      Call LaunchHelpPage
+      Call SendPing
+    ${Else}
+      ; Either the continue button was clicked or the dialog was dismissed
+      Call StartDownload
+    ${EndIf}
   ${Else}
     Call SendPing
   ${EndIf}
 
-  ; Aborting the abort will allow SendPing which is called by
-  ; DisplayDownloadError to hide the installer window and close the installer
-  ; after it sends the metrics ping.
+  ; Aborting the abort will allow SendPing to hide the installer window and
+  ; close the installer after it sends the metrics ping, or allow us to just go
+  ; back to installing if that's what the user selected.
   Abort
+FunctionEnd
+
+Function DrawBackgroundImage
+  ${NSD_CreateBitmap} 0 0 100% 100% ""
+  Pop $HwndBgBitmapControl
+
+  ; If the scaling factor is 100%, use the 1x image; the 2x images scaled down
+  ; by that much don't always look good because some of them use thinner lines
+  ; and a darker background (over which aliasing is more visible).
+  System::Call 'user32::GetWindowDC(i $HWNDPARENT) i .r0'
+  System::Call 'gdi32::GetDeviceCaps(i $0, i 88) i .r1' ; 88 = LOGPIXELSX
+  System::Call 'user32::ReleaseDC(i $HWNDPARENT, i $0)'
+  ${If} $1 <= 96
+    ${SetStretchedImageOLE} $HwndBgBitmapControl $PLUGINSDIR\bgstub.jpg $BgBitmapImage
+  ${Else}
+    ${SetStretchedImageOLE} $HwndBgBitmapControl $PLUGINSDIR\bgstub_2x.jpg $BgBitmapImage
+  ${EndIf}
+
+  ; transparent bg on control prevents flicker on redraw
+  SetCtlColors $HwndBgBitmapControl ${INSTALL_BLURB_TEXT_COLOR} transparent
 FunctionEnd
 
 Function createProfileCleanup
@@ -702,11 +739,7 @@ Function createProfileCleanup
   SendMessage $0 ${WM_SETFONT} $FontFooter 0
   SetCtlColors $0 ${INSTALL_BLURB_TEXT_COLOR} transparent
 
-  ${NSD_CreateBitmap} 0 0 100% 100% ""
-  Pop $HwndBgBitmapControl
-  ${NSD_SetStretchedImage} $HwndBgBitmapControl $PLUGINSDIR\bgstub.bmp $BgBitmapImage
-  ; transparent bg on control prevents flicker on redraw
-  SetCtlColors $HwndBgBitmapControl ${INSTALL_BLURB_TEXT_COLOR} transparent
+  Call DrawBackgroundImage
 
   LockWindow off
   nsDialogs::Show
@@ -784,11 +817,7 @@ Function createInstall
   SendMessage $Progressbar ${PBM_SETMARQUEE} 1 \
               $ProgressbarMarqueeIntervalMS ; start=1|stop=0 interval(ms)=+N
 
-  ${NSD_CreateBitmap} 0 0 100% 100% ""
-  Pop $HwndBgBitmapControl
-  ${NSD_SetStretchedImage} $HwndBgBitmapControl $PLUGINSDIR\bgstub.bmp $BgBitmapImage
-  ; transparent bg on control prevents flicker on redraw
-  SetCtlColors $HwndBgBitmapControl ${INSTALL_BLURB_TEXT_COLOR} transparent
+  Call DrawBackgroundImage
 
   GetDlgItem $0 $HWNDPARENT 1 ; Install button
   EnableWindow $0 0
@@ -858,7 +887,11 @@ Function createInstall
   ${ITBL3Create}
   ${ITBL3SetProgressState} "${TBPF_INDETERMINATE}"
 
+  ; Make sure the file we're about to try to download to doesn't already exist,
+  ; so we don't end up trying to "resume" on top of the wrong file.
+  Delete "$PLUGINSDIR\download.exe"
   ${NSD_CreateTimer} StartDownload ${DownloadIntervalMS}
+
   ${NSD_CreateTimer} ClearBlurb ${BlurbDisplayMS}
 
   LockWindow off
@@ -931,30 +964,38 @@ Function OnDownload
   # $2 = Remaining files
   # $3 = Number of downloaded bytes for the current file
   # $4 = Size of current file (Empty string if the size is unknown)
-  # /RESET must be used if status $0 > 299 (e.g. failure)
+  # /RESET must be used if status $0 > 299 (e.g. failure), even if resuming
   # When status is $0 =< 299 it is handled by InetBgDL
   StrCpy $DownloadServerIP "$5"
   ${If} $0 > 299
     ${NSD_KillTimer} OnDownload
     IntOp $DownloadRetryCount $DownloadRetryCount + 1
-    ${If} "$DownloadReset" != "true"
-      StrCpy $DownloadedBytes "0"
-      ${NSD_AddStyle} $Progressbar ${PBS_MARQUEE}
-      SendMessage $Progressbar ${PBM_SETMARQUEE} 1 \
-                  $ProgressbarMarqueeIntervalMS ; start=1|stop=0 interval(ms)=+N
-      ${ITBL3SetProgressState} "${TBPF_INDETERMINATE}"
-    ${EndIf}
-    InetBgDL::Get /RESET /END
-    StrCpy $DownloadSizeBytes ""
-    StrCpy $DownloadReset "true"
-
     ${If} $DownloadRetryCount >= ${DownloadMaxRetries}
       StrCpy $ExitCode "${ERR_DOWNLOAD_TOO_MANY_RETRIES}"
       ; Use a timer so the UI has a chance to update
       ${NSD_CreateTimer} DisplayDownloadError ${InstallIntervalMS}
-    ${Else}
-      ${NSD_CreateTimer} StartDownload ${DownloadRetryIntervalMS}
+      Return
     ${EndIf}
+
+    ; 1000 is a special code meaning InetBgDL lost the connection before it got
+    ; all the bytes it was expecting. We'll try to resume the transfer in that
+    ; case (assuming we aren't out of retries), so don't treat it as a reset
+    ; or clear the progress bar.
+    ${If} $0 != 1000
+      ${If} "$DownloadReset" != "true"
+        StrCpy $DownloadedBytes "0"
+        ${NSD_AddStyle} $Progressbar ${PBS_MARQUEE}
+        SendMessage $Progressbar ${PBM_SETMARQUEE} 1 \
+                    $ProgressbarMarqueeIntervalMS ; start=1|stop=0 interval(ms)=+N
+        ${ITBL3SetProgressState} "${TBPF_INDETERMINATE}"
+      ${EndIf}
+      StrCpy $DownloadSizeBytes ""
+      StrCpy $DownloadReset "true"
+      Delete "$PLUGINSDIR\download.exe"
+    ${EndIf}
+
+    InetBgDL::Get /RESET /END
+    ${NSD_CreateTimer} StartDownload ${DownloadRetryIntervalMS}
     Return
   ${EndIf}
 
@@ -1065,87 +1106,15 @@ Function OnDownload
 
       ${If} $HandleDownload == ${INVALID_HANDLE_VALUE}
         StrCpy $ExitCode "${ERR_PREINSTALL_INVALID_HANDLE}"
-        StrCpy $0 "0"
-        StrCpy $1 "0"
-      ${Else}
-        CertCheck::VerifyCertTrust "$PLUGINSDIR\download.exe"
-        Pop $0
-        CertCheck::VerifyCertNameIssuer "$PLUGINSDIR\download.exe" \
-                                        "${CertNameDownload}" "${CertIssuerDownload}"
-        Pop $1
-        ${If} $0 == 0
-        ${AndIf} $1 == 0
-          StrCpy $ExitCode "${ERR_PREINSTALL_CERT_UNTRUSTED_AND_ATTRIBUTES}"
-        ${ElseIf} $0 == 0
-          StrCpy $ExitCode "${ERR_PREINSTALL_CERT_UNTRUSTED}"
-        ${ElseIf}  $1 == 0
-          StrCpy $ExitCode "${ERR_PREINSTALL_CERT_ATTRIBUTES}"
-        ${EndIf}
-      ${EndIf}
-
-      System::Call "kernel32::GetTickCount()l .s"
-      Pop $EndPreInstallPhaseTickCount
-
-      ${If} $0 == 0
-      ${OrIf} $1 == 0
+        System::Call "kernel32::GetTickCount()l .s"
+        Pop $EndPreInstallPhaseTickCount
         ; Use a timer so the UI has a chance to update
         ${NSD_CreateTimer} DisplayDownloadError ${InstallIntervalMS}
-        Return
-      ${EndIf}
-
-      ; Instead of extracting the files we use the downloaded installer to
-      ; install in case it needs to perform operations that the stub doesn't
-      ; know about.
-      WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "InstallDirectoryPath" "$INSTDIR"
-      ; Don't create the QuickLaunch or Taskbar shortcut from the launched installer
-      WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "QuickLaunchShortcut" "false"
-
-      ; Always create a start menu shortcut, so the user always has some way
-      ; to access the application.
-      WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "StartMenuShortcuts" "true"
-
-      ; Either avoid or force adding a taskbar pin and desktop shortcut
-      ; based on the checkbox value.
-      ${If} $CheckboxShortcuts == 0
-        WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "TaskbarShortcut" "false"
-        WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "DesktopShortcut" "false"
       ${Else}
-        WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "TaskbarShortcut" "true"
-        WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "DesktopShortcut" "true"
+        CertCheck::CheckPETrustAndInfoAsync "$PLUGINSDIR\download.exe" \
+          "${CertNameDownload}" "${CertIssuerDownload}"
+        ${NSD_CreateTimer} OnCertCheck ${DownloadIntervalMS}
       ${EndIf}
-
-!ifdef MOZ_MAINTENANCE_SERVICE
-      ${If} $CheckboxInstallMaintSvc == 1
-        WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "MaintenanceService" "true"
-      ${Else}
-        WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "MaintenanceService" "false"
-      ${EndIf}
-!else
-      WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "MaintenanceService" "false"
-!endif
-
-      ; Delete the taskbar shortcut history to ensure we do the right thing based on
-      ; the config file above.
-      ${GetShortcutsLogPath} $0
-      Delete "$0"
-
-      ${RemovePrecompleteEntries} "false"
-
-      ; Delete the install.log and let the full installer create it. When the
-      ; installer closes it we can detect that it has completed.
-      Delete "$INSTDIR\install.log"
-
-      ; Delete firefox.exe.moz-upgrade and firefox.exe.moz-delete if it exists
-      ; since it being present will require an OS restart for the full
-      ; installer.
-      Delete "$INSTDIR\${FileMainEXE}.moz-upgrade"
-      Delete "$INSTDIR\${FileMainEXE}.moz-delete"
-
-      System::Call "kernel32::GetTickCount()l .s"
-      Pop $EndPreInstallPhaseTickCount
-
-      Exec "$\"$PLUGINSDIR\download.exe$\" /INI=$PLUGINSDIR\${CONFIG_INI}"
-      ${NSD_CreateTimer} CheckInstall ${InstallIntervalMS}
     ${Else}
       StrCpy $DownloadedBytes "$3"
       System::Int64Op $DownloadedBytes * ${PROGRESS_BAR_DOWNLOAD_END_STEP}
@@ -1155,6 +1124,102 @@ Function OnDownload
       Call SetProgressBars
     ${EndIf}
   ${EndIf}
+FunctionEnd
+
+Function OnCertCheck
+  System::Call "kernel32::GetTickCount()l .s"
+  Pop $EndPreInstallPhaseTickCount
+
+  CertCheck::GetStatus
+  Pop $0
+  ${If} $0 == 0
+    ${GetSecondsElapsed} "$EndDownloadPhaseTickCount" "$EndPreInstallPhaseTickCount" $0
+    ${If} $0 >= ${PreinstallCertCheckMaxWaitSec}
+      ${NSD_KillTimer} OnCertCheck
+      StrCpy $ExitCode "${ERR_PREINSTALL_CERT_TIMEOUT}"
+      ; Use a timer so the UI has a chance to update
+      ${NSD_CreateTimer} DisplayDownloadError ${InstallIntervalMS}
+    ${EndIf}
+    Return
+  ${EndIf}
+  Pop $0
+  Pop $1
+
+  ${If} $0 == 0
+  ${AndIf} $1 == 0
+    StrCpy $ExitCode "${ERR_PREINSTALL_CERT_UNTRUSTED_AND_ATTRIBUTES}"
+  ${ElseIf} $0 == 0
+    StrCpy $ExitCode "${ERR_PREINSTALL_CERT_UNTRUSTED}"
+  ${ElseIf} $1 == 0
+    StrCpy $ExitCode "${ERR_PREINSTALL_CERT_ATTRIBUTES}"
+  ${EndIf}
+
+  ${NSD_KillTimer} OnCertCheck
+
+  ${If} $0 == 0
+  ${OrIf} $1 == 0
+    ; Use a timer so the UI has a chance to update
+    ${NSD_CreateTimer} DisplayDownloadError ${InstallIntervalMS}
+    Return
+  ${EndIf}
+
+  Call LaunchFullInstaller
+FunctionEnd
+
+Function LaunchFullInstaller
+  ; Instead of extracting the files we use the downloaded installer to
+  ; install in case it needs to perform operations that the stub doesn't
+  ; know about.
+  WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "InstallDirectoryPath" "$INSTDIR"
+  ; Don't create the QuickLaunch or Taskbar shortcut from the launched installer
+  WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "QuickLaunchShortcut" "false"
+
+  ; Always create a start menu shortcut, so the user always has some way
+  ; to access the application.
+  WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "StartMenuShortcuts" "true"
+
+  ; Either avoid or force adding a taskbar pin and desktop shortcut
+  ; based on the checkbox value.
+  ${If} $CheckboxShortcuts == 0
+    WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "TaskbarShortcut" "false"
+    WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "DesktopShortcut" "false"
+  ${Else}
+    WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "TaskbarShortcut" "true"
+    WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "DesktopShortcut" "true"
+  ${EndIf}
+
+!ifdef MOZ_MAINTENANCE_SERVICE
+  ${If} $CheckboxInstallMaintSvc == 1
+    WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "MaintenanceService" "true"
+  ${Else}
+    WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "MaintenanceService" "false"
+  ${EndIf}
+!else
+  WriteINIStr "$PLUGINSDIR\${CONFIG_INI}" "Install" "MaintenanceService" "false"
+!endif
+
+  ; Delete the taskbar shortcut history to ensure we do the right thing based on
+  ; the config file above.
+  ${GetShortcutsLogPath} $0
+  Delete "$0"
+
+  ${RemovePrecompleteEntries} "false"
+
+  ; Delete the install.log and let the full installer create it. When the
+  ; installer closes it we can detect that it has completed.
+  Delete "$INSTDIR\install.log"
+
+  ; Delete firefox.exe.moz-upgrade and firefox.exe.moz-delete if it exists
+  ; since it being present will require an OS restart for the full
+  ; installer.
+  Delete "$INSTDIR\${FileMainEXE}.moz-upgrade"
+  Delete "$INSTDIR\${FileMainEXE}.moz-delete"
+
+  System::Call "kernel32::GetTickCount()l .s"
+  Pop $EndPreInstallPhaseTickCount
+
+  Exec "$\"$PLUGINSDIR\download.exe$\" /INI=$PLUGINSDIR\${CONFIG_INI}"
+  ${NSD_CreateTimer} CheckInstall ${InstallIntervalMS}
 FunctionEnd
 
 Function SendPing
@@ -1596,9 +1661,9 @@ Function LaunchApp
   ${GetOptions} "$0" "/UAC:" $1
   ${If} ${Errors}
     ${If} $CheckboxCleanupProfile == 1
-      Exec "$\"$INSTDIR\${FileMainEXE}$\" -reset-profile -migration"
+      ${ExecAndWaitForInputIdle} "$\"$INSTDIR\${FileMainEXE}$\" -reset-profile -migration"
     ${Else}
-      Exec "$\"$INSTDIR\${FileMainEXE}$\""
+      ${ExecAndWaitForInputIdle} "$\"$INSTDIR\${FileMainEXE}$\""
     ${EndIf}
   ${Else}
     StrCpy $R1 $CheckboxCleanupProfile
@@ -1614,9 +1679,9 @@ Function LaunchAppFromElevatedProcess
   ; Set the current working directory to the installation directory
   SetOutPath "$INSTDIR"
   ${If} $R1 == 1
-    Exec "$\"$INSTDIR\${FileMainEXE}$\" -reset-profile -migration"
+    ${ExecAndWaitForInputIdle} "$\"$INSTDIR\${FileMainEXE}$\" -reset-profile -migration"
   ${Else}
-    Exec "$\"$INSTDIR\${FileMainEXE}$\""
+    ${ExecAndWaitForInputIdle} "$\"$INSTDIR\${FileMainEXE}$\""
   ${EndIf}
 FunctionEnd
 
@@ -1666,22 +1731,23 @@ Function DisplayDownloadError
   ; value to the total value.
   ${ITBL3SetProgressValue} "100" "100"
   ${ITBL3SetProgressState} "${TBPF_ERROR}"
+
   MessageBox MB_OKCANCEL|MB_ICONSTOP "$(ERROR_DOWNLOAD_CONT)" IDCANCEL +2 IDOK +1
-  StrCpy $OpenedDownloadPage "1" ; Already initialized to 0
-
-  ${If} "$OpenedDownloadPage" == "1"
-    ClearErrors
-    ${GetParameters} $0
-    ${GetOptions} "$0" "/UAC:" $1
-    ${If} ${Errors}
-      Call OpenManualDownloadURL
-    ${Else}
-      GetFunctionAddress $0 OpenManualDownloadURL
-      UAC::ExecCodeSegment $0
-    ${EndIf}
-  ${EndIf}
-
+  Call LaunchHelpPage
   Call SendPing
+FunctionEnd
+
+Function LaunchHelpPage
+  StrCpy $OpenedDownloadPage "1" ; Already initialized to 0
+  ClearErrors
+  ${GetParameters} $0
+  ${GetOptions} "$0" "/UAC:" $1
+  ${If} ${Errors}
+    Call OpenManualDownloadURL
+  ${Else}
+    GetFunctionAddress $0 OpenManualDownloadURL
+    UAC::ExecCodeSegment $0
+  ${EndIf}
 FunctionEnd
 
 Function OpenManualDownloadURL
@@ -1844,6 +1910,40 @@ Function GetLatestReleasedVersion
   Pop $1
 
   end:
+FunctionEnd
+
+; Returns 1 in $0 if we should install the 64-bit build, or 0 if not.
+; The requirements for selecting the 64-bit build to install are:
+; 1) Running a 64-bit OS (we've already checked the OS version).
+; 2) An amount of RAM strictly greater than RAM_NEEDED_FOR_64BIT
+; 3) No third-party products installed that cause issues with the 64-bit build.
+;    Currently this includes Lenovo OneKey Theater and Lenovo Energy Management.
+Function ShouldInstall64Bit
+  StrCpy $0 0
+
+  ${IfNot} ${RunningX64}
+    Return
+  ${EndIf}
+
+  System::Call "*(i 64, i, l 0, l, l, l, l, l, l)p.r1"
+  System::Call "Kernel32::GlobalMemoryStatusEx(p r1)"
+  System::Call "*$1(i, i, l.r2, l, l, l, l, l, l)"
+  System::Free $1
+  ${If} $2 L<= ${RAM_NEEDED_FOR_64BIT}
+    Return
+  ${EndIf}
+
+  ; Lenovo OneKey Theater can theoretically be in a directory other than this
+  ; one, because some installer versions let you change it, but it's unlikely.
+  ${If} ${FileExists} "$PROGRAMFILES32\Lenovo\Onekey Theater\windowsapihookdll64.dll"
+    Return
+  ${EndIf}
+
+  ${If} ${FileExists} "$PROGRAMFILES32\Lenovo\Energy Management\Energy Management.exe"
+    Return
+  ${EndIf}
+
+  StrCpy $0 1
 FunctionEnd
 
 Section

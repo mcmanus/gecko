@@ -23,7 +23,9 @@
 #include "nsString.h"
 
 class nsIScriptContext;
+class nsIScriptElement;
 class nsIScriptGlobalObject;
+class nsXBLPrototypeBinding;
 
 namespace mozilla {
 namespace dom {
@@ -75,8 +77,8 @@ public:
 
     JSContext* mCx;
 
-    // Handles switching to our global's compartment.
-    JSAutoCompartment mCompartment;
+    // Handles switching to our global's realm.
+    JSAutoRealm mRealm;
 
     // Set to a valid handle if a return value is expected.
     JS::Rooted<JS::Value> mRetValue;
@@ -156,7 +158,7 @@ public:
     // thread before starting the execution of the script.
     //
     // The compiled script would be returned in the |aScript| out-param.
-    MOZ_MUST_USE nsresult JoinAndExec(void **aOffThreadToken,
+    MOZ_MUST_USE nsresult JoinAndExec(JS::OffThreadToken** aOffThreadToken,
                                       JS::MutableHandle<JSScript*> aScript);
 
     // Compile a script contained in a SourceBuffer, and execute it.
@@ -176,7 +178,15 @@ public:
     // After getting a notification that an off-thread decoding terminated, this
     // function will get the result of the decoder by moving it to the main
     // thread before starting the execution of the script.
-    MOZ_MUST_USE nsresult DecodeJoinAndExec(void **aOffThreadToken);
+    MOZ_MUST_USE nsresult DecodeJoinAndExec(JS::OffThreadToken** aOffThreadToken);
+
+    MOZ_MUST_USE nsresult DecodeBinASTJoinAndExec(JS::OffThreadToken** aOffThreadToken,
+                                                  JS::MutableHandle<JSScript*> aScript);
+
+    // Decode a BinAST encoded script contained in a buffer, and execute it.
+    nsresult DecodeBinASTAndExec(JS::CompileOptions& aCompileOptions,
+                                 const uint8_t* aBuf, size_t aLength,
+                                 JS::MutableHandle<JSScript*> aScript);
   };
 
   static nsresult CompileModule(JSContext* aCx,
@@ -184,6 +194,10 @@ public:
                                 JS::Handle<JSObject*> aEvaluationGlobal,
                                 JS::CompileOptions &aCompileOptions,
                                 JS::MutableHandle<JSObject*> aModule);
+
+  static nsresult InitModuleSourceElement(JSContext* aCx,
+                                          JS::Handle<JSObject*> aModule,
+                                          nsIScriptElement* aElement);
 
   static nsresult ModuleInstantiate(JSContext* aCx,
                                     JS::Handle<JSObject*> aModule);
@@ -196,6 +210,17 @@ public:
   static bool GetScopeChainForElement(JSContext* aCx,
                                       mozilla::dom::Element* aElement,
                                       JS::AutoObjectVector& aScopeChain);
+
+  // Returns a scope chain suitable for XBL execution.
+  //
+  // This is by default GetScopeChainForElemenet, but will be different if the
+  // <binding> element had the simpleScopeChain attribute.
+  //
+  // This is to prevent footguns like bug 1446342.
+  static bool GetScopeChainForXBL(JSContext* aCx,
+                                  mozilla::dom::Element* aBoundElement,
+                                  const nsXBLPrototypeBinding& aProtoBinding,
+                                  JS::AutoObjectVector& aScopeChain);
 
   static void ResetTimeZone();
 };

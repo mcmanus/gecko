@@ -112,7 +112,8 @@ interface nsIAnnotationService : nsISupports
      *
      * For item annotations, aSource should be a change source constant from
      * nsINavBookmarksService::SOURCE_*, and defaults to SOURCE_DEFAULT if
-     * omitted.
+     * omitted. Setting an item annotation also notifies
+     * `nsINavBookmarkObserver::onItemChanged` for the affected item.
      *
      * The annotation "favicon" is special. Favicons are stored in the favicon
      * service, but are special cased in the protocol handler so they look like
@@ -270,6 +271,7 @@ interface nsIAnnotationService : nsISupports
                                out unsigned short aType);
     void getItemAnnotationInfo(in long long aItemId,
                                in AUTF8String aName,
+                               out nsIVariant aValue,
                                out long aFlags,
                                out unsigned short aExpiration,
                                out unsigned short aType);
@@ -320,10 +322,6 @@ interface nsIAnnotationService : nsISupports
      * example JS:
      *   var annotations = annotator.getPageAnnotations(myURI, {});
      */
-    void getPageAnnotationNames(
-      in nsIURI aURI,
-      [optional] out unsigned long count,
-      [retval, array, size_is(count)] out nsIVariant result);
     void getItemAnnotationNames(
       in long long aItemId,
       [optional] out unsigned long count,
@@ -340,6 +338,9 @@ interface nsIAnnotationService : nsISupports
     /**
      * Removes a specific annotation. Succeeds even if the annotation is
      * not found.
+     *
+     * Removing an item annotation also notifies
+     * `nsINavBookmarkObserver::onItemChanged` for the affected item.
      */
     void removePageAnnotation(in nsIURI aURI,
                               in AUTF8String aName);
@@ -351,27 +352,13 @@ interface nsIAnnotationService : nsISupports
      * Removes all annotations for the given page/item.
      * We may want some other similar functions to get annotations with given
      * flags (once we have flags defined).
+     *
+     * Unlike the other item methods, `removeItemAnnotations` does *not* notify
+     * `nsINavBookmarkObserver::onItemChanged` for the affected item.
      */
     void removePageAnnotations(in nsIURI aURI);
     void removeItemAnnotations(in long long aItemId,
                                [optional] in unsigned short aSource);
-
-    /**
-     * Copies all annotations from the source to the destination URI/item. If
-     * the destination already has an annotation with the same name as one on
-     * the source, it will be overwritten if aOverwriteDest is set. Otherwise,
-     * the original annotation will be preferred.
-     *
-     * All the source annotations will stay as-is. If you don't want them
-     * any more, use removePageAnnotations on that URI.
-     */
-    void copyPageAnnotations(in nsIURI aSourceURI,
-                             in nsIURI aDestURI,
-                             in boolean aOverwriteDest);
-    void copyItemAnnotations(in long long aSourceItemId,
-                             in long long aDestItemId,
-                             in boolean aOverwriteDest,
-                             [optional] in unsigned short aSource);
 
     /**
      * Adds an annotation observer. The annotation service will keep an owning

@@ -17,6 +17,7 @@
 #include "mozilla/dom/Headers.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/URL.h"
+#include "mozilla/dom/WorkerPrivate.h"
 
 #include "nsDOMString.h"
 
@@ -24,7 +25,6 @@
 #include "FetchStream.h"
 #include "FetchStreamReader.h"
 #include "InternalResponse.h"
-#include "WorkerPrivate.h"
 
 namespace mozilla {
 namespace dom {
@@ -87,7 +87,7 @@ Response::~Response()
 Response::Error(const GlobalObject& aGlobal)
 {
   nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(aGlobal.GetAsSupports());
-  RefPtr<InternalResponse> error = InternalResponse::NetworkError();
+  RefPtr<InternalResponse> error = InternalResponse::NetworkError(NS_ERROR_FAILURE);
   RefPtr<Response> r = new Response(global, error, nullptr);
   return r.forget();
 }
@@ -100,7 +100,8 @@ Response::Redirect(const GlobalObject& aGlobal, const nsAString& aUrl,
 
   if (NS_IsMainThread()) {
     nsCOMPtr<nsIURI> baseURI;
-    nsIDocument* doc = GetEntryDocument();
+    nsCOMPtr<nsPIDOMWindowInner> inner(do_QueryInterface(aGlobal.GetAsSupports()));
+    nsIDocument* doc = inner ? inner->GetExtantDoc() : nullptr;
     if (doc) {
       baseURI = doc->GetBaseURI();
     }
@@ -118,7 +119,7 @@ Response::Redirect(const GlobalObject& aGlobal, const nsAString& aUrl,
 
     CopyUTF8toUTF16(spec, parsedURL);
   } else {
-    workers::WorkerPrivate* worker = workers::GetCurrentThreadWorkerPrivate();
+    WorkerPrivate* worker = GetCurrentThreadWorkerPrivate();
     MOZ_ASSERT(worker);
     worker->AssertIsOnWorkerThread();
 
@@ -128,11 +129,7 @@ Response::Redirect(const GlobalObject& aGlobal, const nsAString& aUrl,
       return nullptr;
     }
 
-    url->Stringify(parsedURL, aRv);
-  }
-
-  if (aRv.Failed()) {
-    return nullptr;
+    url->Stringify(parsedURL);
   }
 
   if (aStatus != 301 && aStatus != 302 && aStatus != 303 && aStatus != 307 && aStatus != 308) {
@@ -140,7 +137,7 @@ Response::Redirect(const GlobalObject& aGlobal, const nsAString& aUrl,
     return nullptr;
   }
 
-  Optional<fetch::ResponseBodyInit> body;
+  Optional<Nullable<fetch::ResponseBodyInit>> body;
   ResponseInit init;
   init.mStatus = aStatus;
   RefPtr<Response> r = Response::Constructor(aGlobal, body, init, aRv);
@@ -161,7 +158,7 @@ Response::Redirect(const GlobalObject& aGlobal, const nsAString& aUrl,
 
 /*static*/ already_AddRefed<Response>
 Response::Constructor(const GlobalObject& aGlobal,
-                      const Optional<fetch::ResponseBodyInit>& aBody,
+                      const Optional<Nullable<fetch::ResponseBodyInit>>& aBody,
                       const ResponseInit& aInit, ErrorResult& aRv)
 {
   nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(aGlobal.GetAsSupports());
@@ -203,7 +200,7 @@ Response::Constructor(const GlobalObject& aGlobal,
     }
     internalResponse->InitChannelInfo(info);
   } else {
-    workers::WorkerPrivate* worker = workers::GetCurrentThreadWorkerPrivate();
+    WorkerPrivate* worker = GetCurrentThreadWorkerPrivate();
     MOZ_ASSERT(worker);
     internalResponse->InitChannelInfo(worker->GetChannelInfo());
   }
@@ -227,7 +224,7 @@ Response::Constructor(const GlobalObject& aGlobal,
     }
   }
 
-  if (aBody.WasPassed()) {
+  if (aBody.WasPassed() && !aBody.Value().IsNull()) {
     if (aInit.mStatus == 204 || aInit.mStatus == 205 || aInit.mStatus == 304) {
       aRv.ThrowTypeError<MSG_RESPONSE_NULL_STATUS_WITH_BODY>();
       return nullptr;
@@ -237,9 +234,9 @@ Response::Constructor(const GlobalObject& aGlobal,
     nsCOMPtr<nsIInputStream> bodyStream;
     int64_t bodySize = InternalResponse::UNKNOWN_BODY_SIZE;
 
-    if (aBody.Value().IsReadableStream()) {
-      const ReadableStream& readableStream =
-        aBody.Value().GetAsReadableStream();
+    const fetch::ResponseBodyInit& body = aBody.Value().Value();
+    if (body.IsReadableStream()) {
+      const ReadableStream& readableStream = body.GetAsReadableStream();
 
       JS::Rooted<JSObject*> readableStreamObj(aGlobal.Context(),
                                               readableStream.Obj());
@@ -288,7 +285,7 @@ Response::Constructor(const GlobalObject& aGlobal,
       }
     } else {
       uint64_t size = 0;
-      aRv = ExtractByteStreamFromBody(aBody.Value(),
+      aRv = ExtractByteStreamFromBody(body,
                                       getter_AddRefs(bodyStream),
                                       contentTypeWithCharset,
                                       size);

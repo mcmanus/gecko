@@ -8,7 +8,7 @@
 "use strict";
 
 add_task(async function test() {
-  const TEST_URL = "http://mochi.test:8888/browser/browser/components/privatebrowsing/test/browser/browser_privatebrowsing_placesTitleNoUpdate.html"
+  const TEST_URL = "http://mochi.test:8888/browser/browser/components/privatebrowsing/test/browser/browser_privatebrowsing_placesTitleNoUpdate.html";
   const TITLE_1 = "Title 1";
   const TITLE_2 = "Title 2";
 
@@ -18,7 +18,7 @@ add_task(async function test() {
     "onTitleChanged", (uri, title) => uri.spec == TEST_URL, "history");
   let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, TEST_URL);
   registerCleanupFunction(async () => {
-    await BrowserTestUtils.removeTab(tab);
+    BrowserTestUtils.removeTab(tab);
   });
   info("Wait for a title change notification.");
   await promiseTitleChanged;

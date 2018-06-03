@@ -30,14 +30,22 @@ public:
                                   const nsRect& aRect,
                                   const nsRect& aDirtyRect) override;
 
+  bool CreateWebRenderCommandsForWidget(mozilla::wr::DisplayListBuilder& aBuilder,
+                                        mozilla::wr::IpcResourceUpdateQueue& aResources,
+                                        const mozilla::layers::StackingContextHelper& aSc,
+                                        mozilla::layers::WebRenderLayerManager* aManager,
+                                        nsIFrame* aFrame,
+                                        uint8_t aWidgetType,
+                                        const nsRect& aRect) override;
+
   NS_IMETHOD GetWidgetBorder(nsDeviceContext* aContext, nsIFrame* aFrame,
                              uint8_t aWidgetType,
-                             nsIntMargin* aResult) override;
+                             mozilla::LayoutDeviceIntMargin* aResult) override;
 
-  virtual bool GetWidgetPadding(nsDeviceContext* aContext,
-                                nsIFrame* aFrame,
-                                uint8_t aWidgetType,
-                                nsIntMargin* aResult) override;
+  bool GetWidgetPadding(nsDeviceContext* aContext,
+                        nsIFrame* aFrame,
+                        uint8_t aWidgetType,
+                        mozilla::LayoutDeviceIntMargin* aResult) override;
 
   virtual bool GetWidgetOverflow(nsDeviceContext* aContext,
                                  nsIFrame* aFrame,
@@ -49,7 +57,7 @@ public:
                                   mozilla::LayoutDeviceIntSize* aResult,
                                   bool* aIsOverridable) override;
 
-  NS_IMETHOD WidgetStateChanged(nsIFrame* aFrame, uint8_t aWidgetType, 
+  NS_IMETHOD WidgetStateChanged(nsIFrame* aFrame, uint8_t aWidgetType,
                                 nsAtom* aAttribute,
                                 bool* aShouldRepaint,
                                 const nsAttrValue* aOldValue) override;
@@ -61,14 +69,13 @@ public:
                                         uint8_t aWidgetType) override;
 
   NS_IMETHOD_(bool) WidgetIsContainer(uint8_t aWidgetType) override;
-  
+
   NS_IMETHOD_(bool) ThemeDrawsFocusForWidget(uint8_t aWidgetType) override;
 
   virtual bool ThemeNeedsComboboxDropmarker() override;
 
   virtual Transparency GetWidgetTransparency(nsIFrame* aFrame,
                                              uint8_t aWidgetType) override;
-
   nsNativeThemeGTK();
 
 protected:
@@ -94,9 +101,10 @@ private:
   // by widget type.  Each bit in mBorderCacheValid says whether the
   // corresponding entry in mBorderCache is valid.
   void GetCachedWidgetBorder(nsIFrame* aFrame, uint8_t aWidgetType,
-                             GtkTextDirection aDirection, nsIntMargin* aResult);
+                             GtkTextDirection aDirection,
+                             mozilla::LayoutDeviceIntMargin* aResult);
   uint8_t mBorderCacheValid[(MOZ_GTK_WIDGET_NODE_COUNT + 7) / 8];
-  nsIntMargin mBorderCache[MOZ_GTK_WIDGET_NODE_COUNT];
+  mozilla::LayoutDeviceIntMargin mBorderCache[MOZ_GTK_WIDGET_NODE_COUNT];
 };
 
 #endif

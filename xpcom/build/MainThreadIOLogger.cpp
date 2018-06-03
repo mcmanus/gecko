@@ -39,10 +39,7 @@ struct ObservationWithStack
     , mStack(aStack)
 #endif
   {
-    const char16_t* filename = aObs.Filename();
-    if (filename) {
-      mFilename = filename;
-    }
+    aObs.Filename(mFilename);
   }
 
   mozilla::IOInterposeObserver::Observation mObservation;
@@ -60,7 +57,7 @@ public:
 
   bool Init();
 
-  void Observe(Observation& aObservation);
+  void Observe(Observation& aObservation) override;
 
 private:
   static void sIOThreadFunc(void* aArg);
@@ -234,4 +231,3 @@ Init()
 } // namespace MainThreadIOLogger
 
 } // namespace mozilla
-

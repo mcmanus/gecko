@@ -18,19 +18,17 @@
 
 #include "wasm/WasmBinaryToAST.h"
 
-#include "mozilla/CheckedInt.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/Sprintf.h"
 
-#include "jscntxt.h"
-
-#include "wasm/WasmBinaryIterator.h"
+#include "vm/JSCompartment.h"
+#include "vm/JSContext.h"
+#include "wasm/WasmOpIter.h"
 #include "wasm/WasmValidate.h"
 
 using namespace js;
 using namespace js::wasm;
 
-using mozilla::CheckedInt;
 using mozilla::FloorLog2;
 
 enum AstDecodeTerminationKind
@@ -104,6 +102,10 @@ class AstDecodeContext
        lifo(lifo),
        d(d),
        generateNames(generateNames),
+       env_(CompileMode::Once, Tier::Ion, DebugEnabled::False, HasGcTypes::False,
+            cx->realm()->creationOptions().getSharedMemoryAndAtomicsEnabled()
+            ? Shareable::True
+            : Shareable::False),
        module_(module),
        iter_(nullptr),
        exprs_(lifo),
@@ -161,7 +163,7 @@ class AstDecodeContext
             if (!exprs.append(voidNode))
                 return nullptr;
 
-            return new(lifo) AstFirst(Move(exprs));
+            return new(lifo) AstFirst(std::move(exprs));
         }
 
         return voidNode;
@@ -318,7 +320,7 @@ AstDecodeCall(AstDecodeContext& c)
     if (!AstDecodeCallArgs(c, *sig, &args))
         return false;
 
-    AstCall* call = new(c.lifo) AstCall(Op::Call, sig->ret(), funcRef, Move(args));
+    AstCall* call = new(c.lifo) AstCall(Op::Call, sig->ret(), funcRef, std::move(args));
     if (!call)
         return false;
 
@@ -354,7 +356,7 @@ AstDecodeCallIndirect(AstDecodeContext& c)
     if (!AstDecodeCallArgs(c, sig, &args))
         return false;
 
-    AstCallIndirect* call = new(c.lifo) AstCallIndirect(sigRef, sig.ret(), Move(args), index.expr);
+    AstCallIndirect* call = new(c.lifo) AstCallIndirect(sigRef, sig.ret(), std::move(args), index.expr);
     if (!call)
         return false;
 
@@ -390,11 +392,16 @@ AstDecodeGetBlockRef(AstDecodeContext& c, uint32_t depth, AstRef* ref)
 static bool
 AstDecodeBrTable(AstDecodeContext& c)
 {
+    bool unreachable = c.iter().currentBlockHasPolymorphicBase();
+
     Uint32Vector depths;
     uint32_t defaultDepth;
     ExprType type;
     if (!c.iter().readBrTable(&depths, &defaultDepth, &type, nullptr, nullptr))
         return false;
+
+    if (unreachable)
+        return true;
 
     AstRefVector table(c.lifo);
     if (!table.resize(depths.length()))
@@ -414,7 +421,7 @@ AstDecodeBrTable(AstDecodeContext& c)
     if (!AstDecodeGetBlockRef(c, defaultDepth, &def))
         return false;
 
-    auto branchTable = new(c.lifo) AstBranchTable(*index.expr, def, Move(table), value.expr);
+    auto branchTable = new(c.lifo) AstBranchTable(*index.expr, def, std::move(table), value.expr);
     if (!branchTable)
         return false;
 
@@ -465,7 +472,7 @@ AstDecodeBlock(AstDecodeContext& c, Op op)
     c.exprs().shrinkTo(c.depths().popCopy());
 
     AstName name = c.blockLabels().popCopy();
-    AstBlock* block = new(c.lifo) AstBlock(op, type, name, Move(exprs));
+    AstBlock* block = new(c.lifo) AstBlock(op, type, name, std::move(exprs));
     if (!block)
         return false;
 
@@ -542,7 +549,7 @@ AstDecodeIf(AstDecodeContext& c)
 
     AstName name = c.blockLabels().popCopy();
 
-    AstIf* if_ = new(c.lifo) AstIf(type, cond.expr, name, Move(thenExprs), Move(elseExprs));
+    AstIf* if_ = new(c.lifo) AstIf(type, cond.expr, name, std::move(thenExprs), std::move(elseExprs));
     if (!if_)
         return false;
 
@@ -650,15 +657,19 @@ AstDecodeSelect(AstDecodeContext& c)
     if (!c.iter().readSelect(&type, nullptr, nullptr, nullptr))
         return false;
 
+    if (c.iter().currentBlockHasPolymorphicBase())
+        return true;
+
     AstDecodeStackItem selectFalse = c.popCopy();
     AstDecodeStackItem selectTrue = c.popCopy();
     AstDecodeStackItem cond = c.popCopy();
 
-    AstTernaryOperator* ternary = new(c.lifo) AstTernaryOperator(Op::Select, cond.expr, selectTrue.expr, selectFalse.expr);
-    if (!ternary)
+    auto* select = new(c.lifo) AstTernaryOperator(Op::Select, cond.expr, selectTrue.expr,
+                                                  selectFalse.expr);
+    if (!select)
         return false;
 
-    if (!c.push(AstDecodeStackItem(ternary)))
+    if (!c.push(AstDecodeStackItem(select)))
         return false;
 
     return true;
@@ -700,6 +711,27 @@ AstDecodeConversion(AstDecodeContext& c, ValType fromType, ValType toType, Op op
 
     return true;
 }
+
+#ifdef ENABLE_WASM_SATURATING_TRUNC_OPS
+static bool
+AstDecodeExtraConversion(AstDecodeContext& c, ValType fromType, ValType toType, MiscOp op)
+{
+    if (!c.iter().readConversion(fromType, toType, nullptr))
+        return false;
+
+    AstDecodeStackItem operand = c.popCopy();
+
+    AstExtraConversionOperator* conversion =
+        new(c.lifo) AstExtraConversionOperator(op, operand.expr);
+    if (!conversion)
+        return false;
+
+    if (!c.push(AstDecodeStackItem(conversion)))
+        return false;
+
+    return true;
+}
+#endif
 
 static AstLoadStoreAddress
 AstDecodeLoadStoreAddress(const LinearMemoryAddress<Nothing>& addr, const AstDecodeStackItem& item)
@@ -961,6 +993,305 @@ AstDecodeReturn(AstDecodeContext& c)
 
     return true;
 }
+
+static bool
+AstDecodeAtomicLoad(AstDecodeContext& c, ThreadOp op)
+{
+    ValType type;
+    uint32_t byteSize;
+    switch (op) {
+      case ThreadOp::I32AtomicLoad:    type = ValType::I32; byteSize = 4; break;
+      case ThreadOp::I64AtomicLoad:    type = ValType::I64; byteSize = 8; break;
+      case ThreadOp::I32AtomicLoad8U:  type = ValType::I32; byteSize = 1; break;
+      case ThreadOp::I32AtomicLoad16U: type = ValType::I32; byteSize = 2; break;
+      case ThreadOp::I64AtomicLoad8U:  type = ValType::I64; byteSize = 1; break;
+      case ThreadOp::I64AtomicLoad16U: type = ValType::I64; byteSize = 2; break;
+      case ThreadOp::I64AtomicLoad32U: type = ValType::I64; byteSize = 4; break;
+      default:
+        MOZ_CRASH("Should not happen");
+    }
+
+    LinearMemoryAddress<Nothing> addr;
+    if (!c.iter().readAtomicLoad(&addr, type, byteSize))
+        return false;
+
+    AstDecodeStackItem item = c.popCopy();
+
+    AstAtomicLoad* load = new(c.lifo) AstAtomicLoad(op, AstDecodeLoadStoreAddress(addr, item));
+    if (!load)
+        return false;
+
+    if (!c.push(AstDecodeStackItem(load)))
+        return false;
+
+    return true;
+}
+
+static bool
+AstDecodeAtomicStore(AstDecodeContext& c, ThreadOp op)
+{
+    ValType type;
+    uint32_t byteSize;
+    switch (op) {
+      case ThreadOp::I32AtomicStore:    type = ValType::I32; byteSize = 4; break;
+      case ThreadOp::I64AtomicStore:    type = ValType::I64; byteSize = 8; break;
+      case ThreadOp::I32AtomicStore8U:  type = ValType::I32; byteSize = 1; break;
+      case ThreadOp::I32AtomicStore16U: type = ValType::I32; byteSize = 2; break;
+      case ThreadOp::I64AtomicStore8U:  type = ValType::I64; byteSize = 1; break;
+      case ThreadOp::I64AtomicStore16U: type = ValType::I64; byteSize = 2; break;
+      case ThreadOp::I64AtomicStore32U: type = ValType::I64; byteSize = 4; break;
+      default:
+        MOZ_CRASH("Should not happen");
+    }
+
+    Nothing nothing;
+    LinearMemoryAddress<Nothing> addr;
+    if (!c.iter().readAtomicStore(&addr, type, byteSize, &nothing))
+        return false;
+
+    AstDecodeStackItem value = c.popCopy();
+    AstDecodeStackItem item = c.popCopy();
+
+    AstAtomicStore* store = new(c.lifo) AstAtomicStore(op, AstDecodeLoadStoreAddress(addr, item), value.expr);
+    if (!store)
+        return false;
+
+    AstExpr* wrapped = c.handleVoidExpr(store);
+    if (!wrapped)
+        return false;
+
+    if (!c.push(AstDecodeStackItem(wrapped)))
+        return false;
+
+    return true;
+}
+
+static bool
+AstDecodeAtomicRMW(AstDecodeContext& c, ThreadOp op)
+{
+    ValType type;
+    uint32_t byteSize;
+    switch (op) {
+      case ThreadOp::I32AtomicAdd:
+      case ThreadOp::I32AtomicSub:
+      case ThreadOp::I32AtomicAnd:
+      case ThreadOp::I32AtomicOr:
+      case ThreadOp::I32AtomicXor:
+      case ThreadOp::I32AtomicXchg:
+        type = ValType::I32;
+        byteSize = 4;
+        break;
+      case ThreadOp::I64AtomicAdd:
+      case ThreadOp::I64AtomicSub:
+      case ThreadOp::I64AtomicAnd:
+      case ThreadOp::I64AtomicOr:
+      case ThreadOp::I64AtomicXor:
+      case ThreadOp::I64AtomicXchg:
+        type = ValType::I64;
+        byteSize = 8;
+        break;
+      case ThreadOp::I32AtomicAdd8U:
+      case ThreadOp::I32AtomicSub8U:
+      case ThreadOp::I32AtomicOr8U:
+      case ThreadOp::I32AtomicXor8U:
+      case ThreadOp::I32AtomicXchg8U:
+      case ThreadOp::I32AtomicAnd8U:
+        type = ValType::I32;
+        byteSize = 1;
+        break;
+      case ThreadOp::I32AtomicAdd16U:
+      case ThreadOp::I32AtomicSub16U:
+      case ThreadOp::I32AtomicAnd16U:
+      case ThreadOp::I32AtomicOr16U:
+      case ThreadOp::I32AtomicXor16U:
+      case ThreadOp::I32AtomicXchg16U:
+        type = ValType::I32;
+        byteSize = 2;
+        break;
+      case ThreadOp::I64AtomicAdd8U:
+      case ThreadOp::I64AtomicSub8U:
+      case ThreadOp::I64AtomicAnd8U:
+      case ThreadOp::I64AtomicOr8U:
+      case ThreadOp::I64AtomicXor8U:
+      case ThreadOp::I64AtomicXchg8U:
+        type = ValType::I64;
+        byteSize = 1;
+        break;
+      case ThreadOp::I64AtomicAdd16U:
+      case ThreadOp::I64AtomicSub16U:
+      case ThreadOp::I64AtomicAnd16U:
+      case ThreadOp::I64AtomicOr16U:
+      case ThreadOp::I64AtomicXor16U:
+      case ThreadOp::I64AtomicXchg16U:
+        type = ValType::I64;
+        byteSize = 2;
+        break;
+      case ThreadOp::I64AtomicAdd32U:
+      case ThreadOp::I64AtomicSub32U:
+      case ThreadOp::I64AtomicAnd32U:
+      case ThreadOp::I64AtomicOr32U:
+      case ThreadOp::I64AtomicXor32U:
+      case ThreadOp::I64AtomicXchg32U:
+        type = ValType::I64;
+        byteSize = 4;
+        break;
+      default:
+        MOZ_CRASH("Should not happen");
+    }
+
+    Nothing nothing;
+    LinearMemoryAddress<Nothing> addr;
+    if (!c.iter().readAtomicRMW(&addr, type, byteSize, &nothing))
+        return false;
+
+    AstDecodeStackItem value = c.popCopy();
+    AstDecodeStackItem item = c.popCopy();
+
+    AstAtomicRMW* rmw = new(c.lifo) AstAtomicRMW(op, AstDecodeLoadStoreAddress(addr, item),
+                                                 value.expr);
+    if (!rmw)
+        return false;
+
+    if (!c.push(AstDecodeStackItem(rmw)))
+        return false;
+
+    return true;
+}
+
+static bool
+AstDecodeAtomicCmpXchg(AstDecodeContext& c, ThreadOp op)
+{
+    ValType type;
+    uint32_t byteSize;
+    switch (op) {
+      case ThreadOp::I32AtomicCmpXchg:    type = ValType::I32; byteSize = 4; break;
+      case ThreadOp::I64AtomicCmpXchg:    type = ValType::I64; byteSize = 8; break;
+      case ThreadOp::I32AtomicCmpXchg8U:  type = ValType::I32; byteSize = 1; break;
+      case ThreadOp::I32AtomicCmpXchg16U: type = ValType::I32; byteSize = 2; break;
+      case ThreadOp::I64AtomicCmpXchg8U:  type = ValType::I64; byteSize = 1; break;
+      case ThreadOp::I64AtomicCmpXchg16U: type = ValType::I64; byteSize = 2; break;
+      case ThreadOp::I64AtomicCmpXchg32U: type = ValType::I64; byteSize = 4; break;
+      default:
+        MOZ_CRASH("Should not happen");
+    }
+
+    Nothing nothing;
+    LinearMemoryAddress<Nothing> addr;
+    if (!c.iter().readAtomicCmpXchg(&addr, type, byteSize, &nothing, &nothing))
+        return false;
+
+    AstDecodeStackItem replacement = c.popCopy();
+    AstDecodeStackItem expected = c.popCopy();
+    AstDecodeStackItem item = c.popCopy();
+
+    AstAtomicCmpXchg* cmpxchg =
+        new(c.lifo) AstAtomicCmpXchg(op, AstDecodeLoadStoreAddress(addr, item), expected.expr,
+                                     replacement.expr);
+    if (!cmpxchg)
+        return false;
+
+    if (!c.push(AstDecodeStackItem(cmpxchg)))
+        return false;
+
+    return true;
+}
+
+static bool
+AstDecodeWait(AstDecodeContext& c, ThreadOp op)
+{
+    ValType type;
+    uint32_t byteSize;
+    switch (op) {
+      case ThreadOp::I32Wait: type = ValType::I32; byteSize = 4; break;
+      case ThreadOp::I64Wait: type = ValType::I64; byteSize = 8; break;
+      default:
+        MOZ_CRASH("Should not happen");
+    }
+
+    Nothing nothing;
+    LinearMemoryAddress<Nothing> addr;
+    if (!c.iter().readWait(&addr, type, byteSize, &nothing, &nothing))
+        return false;
+
+    AstDecodeStackItem timeout = c.popCopy();
+    AstDecodeStackItem value = c.popCopy();
+    AstDecodeStackItem item = c.popCopy();
+
+    AstWait* wait = new(c.lifo) AstWait(op, AstDecodeLoadStoreAddress(addr, item), value.expr,
+                                        timeout.expr);
+    if (!wait)
+        return false;
+
+    if (!c.push(AstDecodeStackItem(wait)))
+        return false;
+
+    return true;
+}
+
+static bool
+AstDecodeWake(AstDecodeContext& c)
+{
+    Nothing nothing;
+    LinearMemoryAddress<Nothing> addr;
+    if (!c.iter().readWake(&addr, &nothing))
+        return false;
+
+    AstDecodeStackItem count = c.popCopy();
+    AstDecodeStackItem item = c.popCopy();
+
+    AstWake* wake = new(c.lifo) AstWake(AstDecodeLoadStoreAddress(addr, item), count.expr);
+    if (!wake)
+        return false;
+
+    if (!c.push(AstDecodeStackItem(wake)))
+        return false;
+
+    return true;
+}
+
+#ifdef ENABLE_WASM_BULKMEM_OPS
+static bool
+AstDecodeMemCopy(AstDecodeContext& c)
+{
+    if (!c.iter().readMemCopy(nullptr, nullptr, nullptr))
+        return false;
+
+    AstDecodeStackItem dest = c.popCopy();
+    AstDecodeStackItem src  = c.popCopy();
+    AstDecodeStackItem len  = c.popCopy();
+
+    AstMemCopy* mc = new(c.lifo) AstMemCopy(dest.expr, src.expr, len.expr);
+
+    if (!mc)
+        return false;
+
+    if (!c.push(AstDecodeStackItem(mc)))
+        return false;
+
+    return true;
+}
+
+static bool
+AstDecodeMemFill(AstDecodeContext& c)
+{
+    if (!c.iter().readMemFill(nullptr, nullptr, nullptr))
+        return false;
+
+    AstDecodeStackItem len   = c.popCopy();
+    AstDecodeStackItem val   = c.popCopy();
+    AstDecodeStackItem start = c.popCopy();
+
+    AstMemFill* mf = new(c.lifo) AstMemFill(start.expr, val.expr, len.expr);
+
+    if (!mf)
+        return false;
+
+    if (!c.push(AstDecodeStackItem(mf)))
+        return false;
+
+    return true;
+}
+#endif
 
 static bool
 AstDecodeExpr(AstDecodeContext& c)
@@ -1253,7 +1584,7 @@ AstDecodeExpr(AstDecodeContext& c)
         if (!AstDecodeConversion(c, ValType::F32, ValType::F64, Op(op.b0)))
             return false;
         break;
-#ifdef ENABLE_WASM_THREAD_OPS
+#ifdef ENABLE_WASM_SIGNEXTEND_OPS
       case uint16_t(Op::I32Extend8S):
       case uint16_t(Op::I32Extend16S):
         if (!AstDecodeConversion(c, ValType::I32, ValType::I32, Op(op.b0)))
@@ -1381,6 +1712,136 @@ AstDecodeExpr(AstDecodeContext& c)
         if (!c.push(AstDecodeStackItem(tmp)))
             return false;
         break;
+      case uint16_t(Op::MiscPrefix):
+        switch (op.b1) {
+#ifdef ENABLE_WASM_SATURATING_TRUNC_OPS
+          case uint16_t(MiscOp::I32TruncSSatF32):
+          case uint16_t(MiscOp::I32TruncUSatF32):
+            if (!AstDecodeExtraConversion(c, ValType::F32, ValType::I32, MiscOp(op.b1)))
+                return false;
+            break;
+          case uint16_t(MiscOp::I32TruncSSatF64):
+          case uint16_t(MiscOp::I32TruncUSatF64):
+            if (!AstDecodeExtraConversion(c, ValType::F64, ValType::I32, MiscOp(op.b1)))
+                return false;
+            break;
+          case uint16_t(MiscOp::I64TruncSSatF32):
+          case uint16_t(MiscOp::I64TruncUSatF32):
+            if (!AstDecodeExtraConversion(c, ValType::F32, ValType::I64, MiscOp(op.b1)))
+                return false;
+            break;
+          case uint16_t(MiscOp::I64TruncSSatF64):
+          case uint16_t(MiscOp::I64TruncUSatF64):
+            if (!AstDecodeExtraConversion(c, ValType::F64, ValType::I64, MiscOp(op.b1)))
+                return false;
+            break;
+#endif
+#ifdef ENABLE_WASM_BULKMEM_OPS
+          case uint16_t(MiscOp::MemCopy):
+            if (!AstDecodeMemCopy(c))
+                return false;
+            break;
+          case uint16_t(MiscOp::MemFill):
+            if (!AstDecodeMemFill(c))
+                return false;
+            break;
+#endif
+          default:
+            return c.iter().unrecognizedOpcode(&op);
+        }
+        break;
+      case uint16_t(Op::ThreadPrefix):
+        switch (op.b1) {
+          case uint16_t(ThreadOp::Wake):
+            if (!AstDecodeWake(c))
+                return false;
+            break;
+          case uint16_t(ThreadOp::I32Wait):
+          case uint16_t(ThreadOp::I64Wait):
+            if (!AstDecodeWait(c, ThreadOp(op.b1)))
+                return false;
+            break;
+          case uint16_t(ThreadOp::I32AtomicLoad):
+          case uint16_t(ThreadOp::I64AtomicLoad):
+          case uint16_t(ThreadOp::I32AtomicLoad8U):
+          case uint16_t(ThreadOp::I32AtomicLoad16U):
+          case uint16_t(ThreadOp::I64AtomicLoad8U):
+          case uint16_t(ThreadOp::I64AtomicLoad16U):
+          case uint16_t(ThreadOp::I64AtomicLoad32U):
+            if (!AstDecodeAtomicLoad(c, ThreadOp(op.b1)))
+                return false;
+            break;
+          case uint16_t(ThreadOp::I32AtomicStore):
+          case uint16_t(ThreadOp::I64AtomicStore):
+          case uint16_t(ThreadOp::I32AtomicStore8U):
+          case uint16_t(ThreadOp::I32AtomicStore16U):
+          case uint16_t(ThreadOp::I64AtomicStore8U):
+          case uint16_t(ThreadOp::I64AtomicStore16U):
+          case uint16_t(ThreadOp::I64AtomicStore32U):
+            if (!AstDecodeAtomicStore(c, ThreadOp(op.b1)))
+                return false;
+            break;
+          case uint16_t(ThreadOp::I32AtomicAdd):
+          case uint16_t(ThreadOp::I64AtomicAdd):
+          case uint16_t(ThreadOp::I32AtomicAdd8U):
+          case uint16_t(ThreadOp::I32AtomicAdd16U):
+          case uint16_t(ThreadOp::I64AtomicAdd8U):
+          case uint16_t(ThreadOp::I64AtomicAdd16U):
+          case uint16_t(ThreadOp::I64AtomicAdd32U):
+          case uint16_t(ThreadOp::I32AtomicSub):
+          case uint16_t(ThreadOp::I64AtomicSub):
+          case uint16_t(ThreadOp::I32AtomicSub8U):
+          case uint16_t(ThreadOp::I32AtomicSub16U):
+          case uint16_t(ThreadOp::I64AtomicSub8U):
+          case uint16_t(ThreadOp::I64AtomicSub16U):
+          case uint16_t(ThreadOp::I64AtomicSub32U):
+          case uint16_t(ThreadOp::I32AtomicAnd):
+          case uint16_t(ThreadOp::I64AtomicAnd):
+          case uint16_t(ThreadOp::I32AtomicAnd8U):
+          case uint16_t(ThreadOp::I32AtomicAnd16U):
+          case uint16_t(ThreadOp::I64AtomicAnd8U):
+          case uint16_t(ThreadOp::I64AtomicAnd16U):
+          case uint16_t(ThreadOp::I64AtomicAnd32U):
+          case uint16_t(ThreadOp::I32AtomicOr):
+          case uint16_t(ThreadOp::I64AtomicOr):
+          case uint16_t(ThreadOp::I32AtomicOr8U):
+          case uint16_t(ThreadOp::I32AtomicOr16U):
+          case uint16_t(ThreadOp::I64AtomicOr8U):
+          case uint16_t(ThreadOp::I64AtomicOr16U):
+          case uint16_t(ThreadOp::I64AtomicOr32U):
+          case uint16_t(ThreadOp::I32AtomicXor):
+          case uint16_t(ThreadOp::I64AtomicXor):
+          case uint16_t(ThreadOp::I32AtomicXor8U):
+          case uint16_t(ThreadOp::I32AtomicXor16U):
+          case uint16_t(ThreadOp::I64AtomicXor8U):
+          case uint16_t(ThreadOp::I64AtomicXor16U):
+          case uint16_t(ThreadOp::I64AtomicXor32U):
+          case uint16_t(ThreadOp::I32AtomicXchg):
+          case uint16_t(ThreadOp::I64AtomicXchg):
+          case uint16_t(ThreadOp::I32AtomicXchg8U):
+          case uint16_t(ThreadOp::I32AtomicXchg16U):
+          case uint16_t(ThreadOp::I64AtomicXchg8U):
+          case uint16_t(ThreadOp::I64AtomicXchg16U):
+          case uint16_t(ThreadOp::I64AtomicXchg32U):
+            if (!AstDecodeAtomicRMW(c, ThreadOp(op.b1)))
+                return false;
+            break;
+          case uint16_t(ThreadOp::I32AtomicCmpXchg):
+          case uint16_t(ThreadOp::I64AtomicCmpXchg):
+          case uint16_t(ThreadOp::I32AtomicCmpXchg8U):
+          case uint16_t(ThreadOp::I32AtomicCmpXchg16U):
+          case uint16_t(ThreadOp::I64AtomicCmpXchg8U):
+          case uint16_t(ThreadOp::I64AtomicCmpXchg16U):
+          case uint16_t(ThreadOp::I64AtomicCmpXchg32U):
+            if (!AstDecodeAtomicCmpXchg(c, ThreadOp(op.b1)))
+                return false;
+            break;
+          default:
+            return c.iter().unrecognizedOpcode(&op);
+        }
+        break;
+      case uint16_t(Op::MozPrefix):
+        return c.iter().unrecognizedOpcode(&op);
       default:
         return c.iter().unrecognizedOpcode(&op);
     }
@@ -1417,7 +1878,7 @@ AstDecodeFunctionBody(AstDecodeContext &c, uint32_t funcIndex, AstFunc** func)
     if (!locals.appendAll(sig->args()))
         return false;
 
-    if (!DecodeLocalEntries(c.d, ModuleKind::Wasm, &locals))
+    if (!DecodeLocalEntries(c.d, ModuleKind::Wasm, c.env().gcTypesEnabled, &locals))
         return false;
 
     AstDecodeOpIter iter(c.env(), c.d);
@@ -1486,7 +1947,7 @@ AstDecodeFunctionBody(AstDecodeContext &c, uint32_t funcIndex, AstFunc** func)
     if (!GenerateRef(c, AstName(u"type"), sigIndex, &sigRef))
         return false;
 
-    *func = new(c.lifo) AstFunc(funcName, sigRef, Move(vars), Move(localsNames), Move(body));
+    *func = new(c.lifo) AstFunc(funcName, sigRef, std::move(vars), std::move(localsNames), std::move(body));
     if (!*func)
         return false;
     (*func)->setOffset(offset);
@@ -1510,13 +1971,13 @@ AstCreateSignatures(AstDecodeContext& c)
         if (!args.appendAll(sig.args()))
             return false;
 
-        AstSig sigNoName(Move(args), sig.ret());
+        AstSig sigNoName(std::move(args), sig.ret());
 
         AstName sigName;
         if (!GenerateName(c, AstName(u"type"), sigIndex, &sigName))
             return false;
 
-        AstSig* astSig = new(c.lifo) AstSig(sigName, Move(sigNoName));
+        AstSig* astSig = new(c.lifo) AstSig(sigName, std::move(sigNoName));
         if (!astSig || !c.module().append(astSig))
             return false;
     }
@@ -1549,10 +2010,11 @@ AstCreateImports(AstDecodeContext& c)
 
     Maybe<Limits> memory;
     if (c.env().usesMemory()) {
-        Limits limits;
-        limits.initial = c.env().minMemoryLength;
-        limits.maximum = c.env().maxMemoryLength;
-        memory = Some(limits);
+        memory = Some(Limits(c.env().minMemoryLength,
+                             c.env().maxMemoryLength,
+                             c.env().memoryUsage == MemoryUsage::Shared
+                               ? Shareable::True
+                               : Shareable::False));
     }
 
     for (size_t importIndex = 0; importIndex < c.env().imports.length(); importIndex++) {
@@ -1653,10 +2115,11 @@ AstCreateMemory(AstDecodeContext& c)
     if (!GenerateName(c, AstName(u"memory"), c.module().memories().length(), &name))
         return false;
 
-    Limits limits;
-    limits.initial = c.env().minMemoryLength;
-    limits.maximum = c.env().maxMemoryLength;
-    return c.module().addMemory(name, limits);
+    return c.module().addMemory(name, Limits(c.env().minMemoryLength,
+                                             c.env().maxMemoryLength,
+                                             c.env().memoryUsage == MemoryUsage::Shared
+                                               ? Shareable::True
+                                               : Shareable::False));
 }
 
 static AstExpr*
@@ -1755,7 +2218,7 @@ AstCreateElems(AstDecodeContext &c)
         if (!offset)
             return false;
 
-        AstElemSegment* segment = new(c.lifo) AstElemSegment(offset, Move(elems));
+        AstElemSegment* segment = new(c.lifo) AstElemSegment(offset, std::move(elems));
         if (!segment || !c.module().append(segment))
             return false;
     }
@@ -1835,8 +2298,11 @@ AstDecodeModuleTail(AstDecodeContext& c)
         return false;
 
     for (DataSegment& s : c.env().dataSegments) {
-        const uint8_t* src = c.d.begin() + s.bytecodeOffset;
         char16_t* buffer = static_cast<char16_t*>(c.lifo.alloc(s.length * sizeof(char16_t)));
+        if (!buffer)
+            return false;
+
+        const uint8_t* src = c.d.begin() + s.bytecodeOffset;
         for (size_t i = 0; i < s.length; i++)
             buffer[i] = src[i];
 
@@ -1851,7 +2317,7 @@ AstDecodeModuleTail(AstDecodeContext& c)
                 return false;
         }
 
-        AstDataSegment* segment = new(c.lifo) AstDataSegment(offset, Move(fragments));
+        AstDataSegment* segment = new(c.lifo) AstDataSegment(offset, std::move(fragments));
         if (!segment || !c.module().append(segment))
             return false;
     }
@@ -1868,7 +2334,7 @@ wasm::BinaryToAst(JSContext* cx, const uint8_t* bytes, uint32_t length, LifoAllo
         return false;
 
     UniqueChars error;
-    Decoder d(bytes, bytes + length, 0, &error, /* resilient */ true);
+    Decoder d(bytes, bytes + length, 0, &error, nullptr, /* resilient */ true);
     AstDecodeContext c(cx, lifo, d, *result, true);
 
     if (!AstDecodeEnvironment(c) ||
@@ -1876,8 +2342,8 @@ wasm::BinaryToAst(JSContext* cx, const uint8_t* bytes, uint32_t length, LifoAllo
         !AstDecodeModuleTail(c))
     {
         if (error) {
-            JS_ReportErrorNumberASCII(c.cx, GetErrorMessage, nullptr, JSMSG_WASM_COMPILE_ERROR,
-                                      error.get());
+            JS_ReportErrorNumberUTF8(c.cx, GetErrorMessage, nullptr, JSMSG_WASM_COMPILE_ERROR,
+                                     error.get());
             return false;
         }
         ReportOutOfMemory(c.cx);

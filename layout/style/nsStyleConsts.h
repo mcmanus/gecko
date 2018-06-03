@@ -1,18 +1,20 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* constants used in the style struct data provided by nsStyleContext */
+/* constants used in the style struct data provided by ComputedStyle */
 
 #ifndef nsStyleConsts_h___
 #define nsStyleConsts_h___
 
-#include "gfxRect.h"
-#include "nsFont.h"
+#include <inttypes.h>
+
+#include "gfxFontConstants.h"
 #include "X11UndefineNone.h"
 
-// XXX fold this into nsStyleContext and group by nsStyleXXX struct
+// XXX fold this into ComputedStyle and group by nsStyleXXX struct
 
 namespace mozilla {
 
@@ -153,7 +155,8 @@ enum class StyleShapeRadius : uint8_t {
 // Shape source type
 enum class StyleShapeSourceType : uint8_t {
   None,
-  URL,
+  URL,   // clip-path only
+  Image, // shape-outside only
   Shape,
   Box,
 };
@@ -203,8 +206,6 @@ enum class StyleUserSelect : uint8_t {
 // user-input
 enum class StyleUserInput : uint8_t {
   None,
-  Enabled,
-  Disabled,
   Auto,
 };
 
@@ -230,21 +231,6 @@ enum class StyleOrient : uint8_t {
   Vertical,
 };
 
-
-// See nsStyleColor
-#define NS_STYLE_COLOR_INHERIT_FROM_BODY  2  /* Can't come from CSS directly */
-
-// See nsStyleColor
-#define NS_COLOR_CURRENTCOLOR                   -1
-#define NS_COLOR_MOZ_DEFAULT_COLOR              -2
-#define NS_COLOR_MOZ_DEFAULT_BACKGROUND_COLOR   -3
-#define NS_COLOR_MOZ_HYPERLINKTEXT              -4
-#define NS_COLOR_MOZ_VISITEDHYPERLINKTEXT       -5
-#define NS_COLOR_MOZ_ACTIVEHYPERLINKTEXT        -6
-// Only valid as paints in SVG glyphs
-#define NS_COLOR_CONTEXT_FILL                   -7
-#define NS_COLOR_CONTEXT_STROKE                 -8
-
 // See nsStyleDisplay
 #define NS_STYLE_WILL_CHANGE_STACKING_CONTEXT   (1<<0)
 #define NS_STYLE_WILL_CHANGE_TRANSFORM          (1<<1)
@@ -253,8 +239,8 @@ enum class StyleOrient : uint8_t {
 #define NS_STYLE_WILL_CHANGE_FIXPOS_CB          (1<<4)
 #define NS_STYLE_WILL_CHANGE_ABSPOS_CB          (1<<5)
 
-// See AnimationEffectReadOnly.webidl
-// and mozilla/dom/AnimationEffectReadOnlyBinding.h
+// See AnimationEffect.webidl
+// and mozilla/dom/AnimationEffectBinding.h
 namespace dom {
 enum class PlaybackDirection : uint8_t;
 enum class FillMode : uint8_t;
@@ -268,9 +254,11 @@ enum class FillMode : uint8_t;
 #define NS_STYLE_ANIMATION_PLAY_STATE_PAUSED      1
 
 // See nsStyleImageLayers
-#define NS_STYLE_IMAGELAYER_ATTACHMENT_SCROLL        0
-#define NS_STYLE_IMAGELAYER_ATTACHMENT_FIXED         1
-#define NS_STYLE_IMAGELAYER_ATTACHMENT_LOCAL         2
+enum class StyleImageLayerAttachment : uint8_t {
+    Scroll,
+    Fixed,
+    Local
+};
 
 // A magic value that we use for our "pretend that background-clip is
 // 'padding' when we have a solid border" optimization.  This isn't
@@ -335,11 +323,13 @@ enum class StyleImageLayerRepeat : uint8_t {
 #define NS_STYLE_BORDER_STYLE_HIDDEN            9
 #define NS_STYLE_BORDER_STYLE_AUTO              10 // for outline-style only
 
-// See nsStyleBorder mBorderImage
-#define NS_STYLE_BORDER_IMAGE_REPEAT_STRETCH    0
-#define NS_STYLE_BORDER_IMAGE_REPEAT_REPEAT     1
-#define NS_STYLE_BORDER_IMAGE_REPEAT_ROUND      2
-#define NS_STYLE_BORDER_IMAGE_REPEAT_SPACE      3
+// border-image-repeat
+enum class StyleBorderImageRepeat : uint8_t {
+  Stretch,
+  Repeat,
+  Round,
+  Space
+};
 
 #define NS_STYLE_BORDER_IMAGE_SLICE_NOFILL      0
 #define NS_STYLE_BORDER_IMAGE_SLICE_FILL        1
@@ -418,7 +408,7 @@ enum class StyleContent : uint8_t {
 // See nsStyleDisplay
 //
 // NOTE: Order is important! If you change it, make sure to take a look at
-// the FrameConstructorDataByDisplay stuff (both the XUL and non-XUL version),
+// the FrameConstructionDataByDisplay stuff (both the XUL and non-XUL version),
 // and ensure it's still correct!
 enum class StyleDisplay : uint8_t {
   None = 0,
@@ -465,15 +455,21 @@ enum class StyleDisplay : uint8_t {
 };
 
 // See nsStyleDisplay
-// If these are re-ordered, nsComputedDOMStyle::DoGetContain() and
-// nsCSSValue::AppendToString() must be updated.
+// If these are re-ordered, nsComputedDOMStyle::DoGetContain() must be updated.
 #define NS_STYLE_CONTAIN_NONE                   0
-#define NS_STYLE_CONTAIN_STRICT                 0x1
-#define NS_STYLE_CONTAIN_LAYOUT                 0x2
-#define NS_STYLE_CONTAIN_STYLE                  0x4
-#define NS_STYLE_CONTAIN_PAINT                  0x8
+#define NS_STYLE_CONTAIN_SIZE                   0x01
+#define NS_STYLE_CONTAIN_LAYOUT                 0x02
+#define NS_STYLE_CONTAIN_STYLE                  0x04
+#define NS_STYLE_CONTAIN_PAINT                  0x08
+#define NS_STYLE_CONTAIN_STRICT                 0x10
+#define NS_STYLE_CONTAIN_CONTENT                0x20
 // NS_STYLE_CONTAIN_ALL_BITS does not correspond to a keyword.
 #define NS_STYLE_CONTAIN_ALL_BITS               (NS_STYLE_CONTAIN_LAYOUT | \
+                                                 NS_STYLE_CONTAIN_STYLE  | \
+                                                 NS_STYLE_CONTAIN_PAINT  | \
+                                                 NS_STYLE_CONTAIN_SIZE)
+// NS_STYLE_CONTAIN_CONTENT_BITS does not correspond to a keyword.
+#define NS_STYLE_CONTAIN_CONTENT_BITS           (NS_STYLE_CONTAIN_LAYOUT | \
                                                  NS_STYLE_CONTAIN_STYLE  | \
                                                  NS_STYLE_CONTAIN_PAINT)
 
@@ -570,9 +566,6 @@ enum class StyleDisplay : uint8_t {
 #define NS_STYLE_FONT_STYLE_OBLIQUE             NS_FONT_STYLE_OBLIQUE
 
 // See nsStyleFont
-// We should eventually stop using the NS_STYLE_* variants here.
-#define NS_STYLE_FONT_WEIGHT_NORMAL             NS_FONT_WEIGHT_NORMAL
-#define NS_STYLE_FONT_WEIGHT_BOLD               NS_FONT_WEIGHT_BOLD
 // The constants below appear only in style sheets and not computed style.
 #define NS_STYLE_FONT_WEIGHT_BOLDER             (-1)
 #define NS_STYLE_FONT_WEIGHT_LIGHTER            (-2)
@@ -589,18 +582,6 @@ enum class StyleDisplay : uint8_t {
 #define NS_STYLE_FONT_SIZE_LARGER               8
 #define NS_STYLE_FONT_SIZE_SMALLER              9
 #define NS_STYLE_FONT_SIZE_NO_KEYWORD          10 // Used by Servo to track the "no keyword" case
-
-// See nsStyleFont
-// We should eventually stop using the NS_STYLE_* variants here.
-#define NS_STYLE_FONT_STRETCH_ULTRA_CONDENSED   NS_FONT_STRETCH_ULTRA_CONDENSED
-#define NS_STYLE_FONT_STRETCH_EXTRA_CONDENSED   NS_FONT_STRETCH_EXTRA_CONDENSED
-#define NS_STYLE_FONT_STRETCH_CONDENSED         NS_FONT_STRETCH_CONDENSED
-#define NS_STYLE_FONT_STRETCH_SEMI_CONDENSED    NS_FONT_STRETCH_SEMI_CONDENSED
-#define NS_STYLE_FONT_STRETCH_NORMAL            NS_FONT_STRETCH_NORMAL
-#define NS_STYLE_FONT_STRETCH_SEMI_EXPANDED     NS_FONT_STRETCH_SEMI_EXPANDED
-#define NS_STYLE_FONT_STRETCH_EXPANDED          NS_FONT_STRETCH_EXPANDED
-#define NS_STYLE_FONT_STRETCH_EXTRA_EXPANDED    NS_FONT_STRETCH_EXTRA_EXPANDED
-#define NS_STYLE_FONT_STRETCH_ULTRA_EXPANDED    NS_FONT_STRETCH_ULTRA_EXPANDED
 
 // See nsStyleFont - system fonts
 #define NS_STYLE_FONT_CAPTION                   1   // css2
@@ -673,6 +654,12 @@ enum class StyleGridTrackBreadth : uint8_t {
 #define NS_STYLE_WIDTH_MIN_CONTENT              1
 #define NS_STYLE_WIDTH_FIT_CONTENT              2
 #define NS_STYLE_WIDTH_AVAILABLE                3
+// The 'content' keyword is only valid for 'flex-basis' (not for 'width').  But
+// aside from that, the 'flex-basis' property accepts exactly the same values
+// as 'width'. So I'm listing this one 'flex-basis'-specific enumerated value
+// alongside the 'width' ones, to be sure we don't accidentally overload this
+// numeric value with two different meanings if new 'width' keywords are added.
+#define NS_STYLE_FLEX_BASIS_CONTENT             4
 
 // See nsStyleDisplay.mPosition
 #define NS_STYLE_POSITION_STATIC                0
@@ -918,9 +905,6 @@ enum class StyleWhiteSpace : uint8_t {
 // See nsStyleText
 #define NS_STYLE_TEXT_COMBINE_UPRIGHT_NONE        0
 #define NS_STYLE_TEXT_COMBINE_UPRIGHT_ALL         1
-#define NS_STYLE_TEXT_COMBINE_UPRIGHT_DIGITS_2    2
-#define NS_STYLE_TEXT_COMBINE_UPRIGHT_DIGITS_3    3
-#define NS_STYLE_TEXT_COMBINE_UPRIGHT_DIGITS_4    4
 
 // See nsStyleText
 #define NS_STYLE_LINE_HEIGHT_BLOCK_HEIGHT       0
@@ -1187,6 +1171,13 @@ enum class StyleWhiteSpace : uint8_t {
 #define NS_STYLE_SCROLL_BEHAVIOR_AUTO       0
 #define NS_STYLE_SCROLL_BEHAVIOR_SMOOTH     1
 
+// See nsStyleDisplay::mOverscrollBehavior{X,Y}
+enum class StyleOverscrollBehavior : uint8_t {
+  Auto = 0,
+  Contain,
+  None,
+};
+
 // See nsStyleDisplay::mScrollSnapType{X,Y}
 #define NS_STYLE_SCROLL_SNAP_TYPE_NONE              0
 #define NS_STYLE_SCROLL_SNAP_TYPE_MANDATORY         1
@@ -1197,18 +1188,24 @@ enum class StyleWhiteSpace : uint8_t {
  *****************************************************************************/
 
 // orientation
-#define NS_STYLE_ORIENTATION_PORTRAIT           0
-#define NS_STYLE_ORIENTATION_LANDSCAPE          1
+enum class StyleOrientation : uint8_t {
+  Portrait = 0,
+  Landscape,
+};
 
 // scan
-#define NS_STYLE_SCAN_PROGRESSIVE               0
-#define NS_STYLE_SCAN_INTERLACE                 1
+enum class StyleScan : uint8_t {
+  Progressive = 0,
+  Interlace,
+};
 
 // display-mode
-#define NS_STYLE_DISPLAY_MODE_BROWSER           0
-#define NS_STYLE_DISPLAY_MODE_MINIMAL_UI        1
-#define NS_STYLE_DISPLAY_MODE_STANDALONE        2
-#define NS_STYLE_DISPLAY_MODE_FULLSCREEN        3
+enum class StyleDisplayMode : uint8_t {
+  Browser = 0,
+  MinimalUi,
+  Standalone,
+  Fullscreen,
+};
 
 } // namespace mozilla
 

@@ -39,7 +39,7 @@ public:
       }
     }
   }
-  void SetStyleSheet(ServoStyleSheet* aSheet)
+  void SetStyleSheet(StyleSheet* aSheet)
   {
     mStyleSheet = aSheet;
     for (css::Rule* rule : mRules) {
@@ -49,7 +49,7 @@ public:
     }
   }
 
-  ServoStyleSheet* GetParentObject() final { return mStyleSheet; }
+  StyleSheet* GetParentObject() final { return mStyleSheet; }
 
   ServoKeyframeRule* GetRule(uint32_t aIndex) {
     if (!mRules[aIndex]) {
@@ -90,7 +90,12 @@ public:
   {
     mStyleSheet = nullptr;
     mParentRule = nullptr;
-    DropAllRules();
+    for (css::Rule* rule : mRules) {
+      if (rule) {
+        rule->SetStyleSheet(nullptr);
+        rule->SetParentRule(nullptr);
+      }
+    }
   }
 
   size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
@@ -103,22 +108,23 @@ public:
   }
 
 private:
-  virtual ~ServoKeyframeList() {}
+  virtual ~ServoKeyframeList() {
+    MOZ_ASSERT(!mParentRule, "Backpointer should have been cleared");
+    MOZ_ASSERT(!mStyleSheet, "Backpointer should have been cleared");
+    DropAllRules();
+  }
 
   void DropAllRules()
   {
-    for (css::Rule* rule : mRules) {
-      if (rule) {
-        rule->SetStyleSheet(nullptr);
-        rule->SetParentRule(nullptr);
-      }
+    if (mParentRule || mStyleSheet) {
+      DropReference();
     }
     mRules.Clear();
     mRawRule = nullptr;
   }
 
   // may be nullptr when the style sheet drops the reference to us.
-  ServoStyleSheet* mStyleSheet = nullptr;
+  StyleSheet* mStyleSheet = nullptr;
   ServoKeyframesRule* mParentRule = nullptr;
   RefPtr<RawServoKeyframesRule> mRawRule;
   nsCOMArray<css::Rule> mRules;
@@ -152,17 +158,16 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 ServoKeyframesRule::ServoKeyframesRule(RefPtr<RawServoKeyframesRule> aRawRule,
                                        uint32_t aLine, uint32_t aColumn)
-  // Although this class inherits from GroupRule, we don't want to use
-  // it at all, so it is fine to call the constructor for Gecko. We can
-  // make CSSKeyframesRule inherit from Rule directly once we can get
-  // rid of nsCSSKeyframeRule.
   : dom::CSSKeyframesRule(aLine, aColumn)
-  , mRawRule(Move(aRawRule))
+  , mRawRule(std::move(aRawRule))
 {
 }
 
 ServoKeyframesRule::~ServoKeyframesRule()
 {
+  if (mKeyframeList) {
+    mKeyframeList->DropReference();
+  }
 }
 
 NS_IMPL_ADDREF_INHERITED(ServoKeyframesRule, dom::CSSKeyframesRule)
@@ -192,16 +197,6 @@ ServoKeyframesRule::IsCCLeaf() const
   return Rule::IsCCLeaf() && !mKeyframeList;
 }
 
-/* virtual */ already_AddRefed<css::Rule>
-ServoKeyframesRule::Clone() const
-{
-  // Rule::Clone is only used when CSSStyleSheetInner is cloned in
-  // preparation of being mutated. However, ServoStyleSheet never clones
-  // anything, so this method should never be called.
-  MOZ_ASSERT_UNREACHABLE("Shouldn't be cloning ServoKeyframesRule");
-  return nullptr;
-}
-
 #ifdef DEBUG
 /* virtual */ void
 ServoKeyframesRule::List(FILE* out, int32_t aIndent) const
@@ -219,7 +214,7 @@ ServoKeyframesRule::List(FILE* out, int32_t aIndent) const
 ServoKeyframesRule::SetStyleSheet(StyleSheet* aSheet)
 {
   if (mKeyframeList) {
-    mKeyframeList->SetStyleSheet(aSheet ? aSheet->AsServo() : nullptr);
+    mKeyframeList->SetStyleSheet(aSheet);
   }
   dom::CSSKeyframesRule::SetStyleSheet(aSheet);
 }
@@ -237,68 +232,58 @@ template<typename Func>
 void
 ServoKeyframesRule::UpdateRule(Func aCallback)
 {
-  nsIDocument* doc = GetDocument();
-  MOZ_AUTO_DOC_UPDATE(doc, UPDATE_STYLE, true);
-
   aCallback();
-
   if (StyleSheet* sheet = GetStyleSheet()) {
-    // FIXME sheet->AsGecko()->SetModifiedByChildRule();
-    if (doc) {
-      doc->StyleRuleChanged(sheet, this);
-    }
+    sheet->RuleChanged(this);
   }
 }
 
-NS_IMETHODIMP
-ServoKeyframesRule::GetName(nsAString& aName)
+void
+ServoKeyframesRule::GetName(nsAString& aName) const
 {
   nsAtom* name = Servo_KeyframesRule_GetName(mRawRule);
   aName = nsDependentAtomString(name);
-  return NS_OK;
 }
 
-NS_IMETHODIMP
+void
 ServoKeyframesRule::SetName(const nsAString& aName)
 {
   RefPtr<nsAtom> name = NS_Atomize(aName);
   nsAtom* oldName = Servo_KeyframesRule_GetName(mRawRule);
   if (name == oldName) {
-    return NS_OK;
+    return;
   }
 
   UpdateRule([this, &name]() {
     Servo_KeyframesRule_SetName(mRawRule, name.forget().take());
   });
-  return NS_OK;
 }
 
-NS_IMETHODIMP
+void
 ServoKeyframesRule::AppendRule(const nsAString& aRule)
 {
   StyleSheet* sheet = GetStyleSheet();
   if (!sheet) {
     // We cannot parse the rule if we don't have a stylesheet.
-    return NS_OK;
+    return;
   }
 
   NS_ConvertUTF16toUTF8 rule(aRule);
   UpdateRule([this, sheet, &rule]() {
     bool parsedOk = Servo_KeyframesRule_AppendRule(
-      mRawRule, sheet->AsServo()->RawContents(), &rule);
+      mRawRule, sheet->RawContents(), &rule);
     if (parsedOk && mKeyframeList) {
       mKeyframeList->AppendRule();
     }
   });
-  return NS_OK;
 }
 
-NS_IMETHODIMP
+void
 ServoKeyframesRule::DeleteRule(const nsAString& aKey)
 {
   auto index = FindRuleIndexForKey(aKey);
   if (index == kRuleNotFound) {
-    return NS_OK;
+    return;
   }
 
   UpdateRule([this, index]() {
@@ -307,11 +292,10 @@ ServoKeyframesRule::DeleteRule(const nsAString& aKey)
       mKeyframeList->RemoveRule(index);
     }
   });
-  return NS_OK;
 }
 
 /* virtual */ void
-ServoKeyframesRule::GetCssTextImpl(nsAString& aCssText) const
+ServoKeyframesRule::GetCssText(nsAString& aCssText) const
 {
   Servo_KeyframesRule_GetCssText(mRawRule, &aCssText);
 }
@@ -323,7 +307,7 @@ ServoKeyframesRule::CssRules()
     mKeyframeList = new ServoKeyframeList(do_AddRef(mRawRule));
     mKeyframeList->SetParentRule(this);
     if (StyleSheet* sheet = GetStyleSheet()) {
-      mKeyframeList->SetStyleSheet(sheet->AsServo());
+      mKeyframeList->SetStyleSheet(sheet);
     }
   }
   return mKeyframeList;
@@ -345,7 +329,6 @@ ServoKeyframesRule::FindRule(const nsAString& aKey)
 ServoKeyframesRule::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
 {
   size_t n = aMallocSizeOf(this);
-  n += GroupRule::SizeOfExcludingThis(aMallocSizeOf);
   if (mKeyframeList) {
     n += mKeyframeList->SizeOfIncludingThis(aMallocSizeOf);
   }

@@ -20,6 +20,10 @@ class nsSMILInstanceTime;
 class nsSMILInterval;
 
 namespace mozilla {
+namespace dom {
+class Event;
+} // namespace dom
+
 class EventListenerManager;
 } // namespace mozilla
 
@@ -28,7 +32,7 @@ class EventListenerManager;
 //
 // An individual element of a 'begin' or 'end' attribute, e.g. '5s', 'a.end'.
 // This class handles the parsing of such specifications and performs the
-// necessary event handling (for event, repeat, and accesskey specifications)
+// necessary event handling (for event and repeat specifications)
 // and synchronisation (for syncbase specifications).
 //
 // For an overview of how this class is related to other SMIL time classes see
@@ -38,6 +42,7 @@ class nsSMILTimeValueSpec
 {
 public:
   typedef mozilla::dom::Element Element;
+  typedef mozilla::dom::Event Event;
   typedef mozilla::dom::IDTracker IDTracker;
 
   nsSMILTimeValueSpec(nsSMILTimedElement& aOwner, bool aIsBegin);
@@ -70,11 +75,8 @@ protected:
   bool IsWhitelistedEvent();
   void RegisterEventListener(Element* aElement);
   void UnregisterEventListener(Element* aElement);
-  mozilla::EventListenerManager* GetEventListenerManager(Element* aElement);
-  void HandleEvent(nsIDOMEvent* aEvent);
-  bool CheckEventDetail(nsIDOMEvent* aEvent);
-  bool CheckRepeatEventDetail(nsIDOMEvent* aEvent);
-  bool CheckAccessKeyEventDetail(nsIDOMEvent* aEvent);
+  void HandleEvent(Event* aEvent);
+  bool CheckRepeatEventDetail(Event* aEvent);
   nsSMILTimeValue ConvertBetweenTimeContainers(const nsSMILTimeValue& aSrcTime,
                                       const nsSMILTimeContainer* aSrcContainer);
   bool ApplyOffset(nsSMILTimeValue& aTime) const;

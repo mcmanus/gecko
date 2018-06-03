@@ -7,29 +7,24 @@
 
 "use strict";
 
-var Ci = Components.interfaces;
-var Cc = Components.classes;
-var Cu = Components.utils;
-var Cr = Components.results;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "WebRequestCommon",
-                                  "resource://gre/modules/WebRequestCommon.jsm");
+ChromeUtils.defineModuleGetter(this, "WebRequestCommon",
+                               "resource://gre/modules/WebRequestCommon.jsm");
 
 // Websockets will get handled via httpchannel notifications same as http
 // requests, treat them the same as http in ContentPolicy.
-const IS_HTTP = /^https?:|wss?:/;
+const IS_HTTP = /^(?:http|ws)s?:/;
 
 var ContentPolicy = {
   _classDescription: "WebRequest content policy",
   _classID: Components.ID("938e5d24-9ccc-4b55-883e-c252a41f7ce9"),
   _contractID: "@mozilla.org/webrequest/policy;1",
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIContentPolicy,
-                                         Ci.nsIFactory,
-                                         Ci.nsISupportsWeakReference]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIContentPolicy,
+                                          Ci.nsIFactory,
+                                          Ci.nsISupportsWeakReference]),
 
   init() {
     let registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
@@ -81,15 +76,21 @@ var ContentPolicy = {
     catMan.deleteCategoryEntry("content-policy", this._contractID, false);
   },
 
-  shouldLoad(policyType, contentLocation, requestOrigin,
-             node, mimeTypeGuess, extra, requestPrincipal) {
+  shouldLoad(contentLocation, loadInfo, mimeTypeGuess) {
+    let policyType = loadInfo.externalContentPolicyType;
+    let node = loadInfo.loadingContext;
+    let loadingPrincipal = loadInfo.loadingPrincipal;
+    let requestPrincipal = loadInfo.triggeringPrincipal;
+    let requestOrigin = null;
+    if (loadingPrincipal) {
+      requestOrigin = loadingPrincipal.URI;
+    }
+
     // Loads of TYPE_DOCUMENT and TYPE_SUBDOCUMENT perform a ConPol check
     // within docshell as well as within the ContentSecurityManager. To avoid
     // duplicate evaluations we ignore ConPol checks performed within docShell.
-    if (extra instanceof Ci.nsISupportsString) {
-      if (extra.data === "conPolCheckFromDocShell") {
-        return Ci.nsIContentPolicy.ACCEPT;
-      }
+    if (loadInfo.skipContentPolicyCheckForWebRequest) {
+      return Ci.nsIContentPolicy.ACCEPT;
     }
 
     if (requestPrincipal &&
@@ -116,6 +117,7 @@ var ContentPolicy = {
 
     let windowId = 0;
     let parentWindowId = -1;
+    let frameAncestors = [];
     let mm = Services.cpmm;
 
     function getWindowId(window) {
@@ -125,7 +127,8 @@ var ContentPolicy = {
     }
 
     if (policyType == Ci.nsIContentPolicy.TYPE_SUBDOCUMENT ||
-        (node instanceof Ci.nsIDOMXULElement && node.localName == "browser")) {
+        (ChromeUtils.getClassName(node) == "XULElement" &&
+         node.localName == "browser")) {
       // Chrome sets frameId to the ID of the sub-window. But when
       // Firefox loads an iframe, it sets |node| to the <iframe>
       // element, whose window is the parent window. We adopt the
@@ -150,6 +153,18 @@ var ContentPolicy = {
       windowId = getWindowId(window);
       if (window.parent !== window) {
         parentWindowId = getWindowId(window.parent);
+
+        for (let frame = window.parent; ; frame = frame.parent) {
+          frameAncestors.push({
+            url: frame.document.documentURIObject.spec,
+            frameId: getWindowId(frame),
+          });
+          if (frame === frame.parent) {
+            // Set the last frameId to zero for top level frame.
+            frameAncestors[frameAncestors.length - 1].frameId = 0;
+            break;
+          }
+        }
       }
 
       let ir = window.QueryInterface(Ci.nsIInterfaceRequestor)
@@ -170,15 +185,21 @@ var ContentPolicy = {
                 type: WebRequestCommon.typeForPolicyType(policyType),
                 windowId,
                 parentWindowId};
+    if (frameAncestors.length > 0) {
+      data.frameAncestors = frameAncestors;
+    }
     if (requestOrigin) {
-      data.originUrl = requestOrigin.spec;
+      data.documentUrl = requestOrigin.spec;
+    }
+    if (requestPrincipal && requestPrincipal.URI) {
+      data.originUrl = requestPrincipal.URI.spec;
     }
     mm.sendAsyncMessage("WebRequest:ShouldLoad", data);
 
     return Ci.nsIContentPolicy.ACCEPT;
   },
 
-  shouldProcess: function(contentType, contentLocation, requestOrigin, insecNode, mimeType, extra) {
+  shouldProcess: function(contentLocation, loadInfo, mimeType) {
     return Ci.nsIContentPolicy.ACCEPT;
   },
 

@@ -71,9 +71,9 @@ public:
   NS_IMETHOD GetAddonPolicy(nsISupports** aResult) final;
   NS_IMETHOD GetCsp(nsIContentSecurityPolicy** aCsp) override;
   NS_IMETHOD SetCsp(nsIContentSecurityPolicy* aCsp) override;
-  NS_IMETHOD EnsureCSP(nsIDOMDocument* aDocument, nsIContentSecurityPolicy** aCSP) override;
+  NS_IMETHOD EnsureCSP(nsIDocument* aDocument, nsIContentSecurityPolicy** aCSP) override;
   NS_IMETHOD GetPreloadCsp(nsIContentSecurityPolicy** aPreloadCSP) override;
-  NS_IMETHOD EnsurePreloadCSP(nsIDOMDocument* aDocument, nsIContentSecurityPolicy** aCSP) override;
+  NS_IMETHOD EnsurePreloadCSP(nsIDocument* aDocument, nsIContentSecurityPolicy** aCSP) override;
   NS_IMETHOD GetCspJSON(nsAString& outCSPinJSON) override;
   NS_IMETHOD GetIsNullPrincipal(bool* aResult) override;
   NS_IMETHOD GetIsCodebasePrincipal(bool* aResult) override;
@@ -113,6 +113,10 @@ public:
 
   already_AddRefed<BasePrincipal> CloneStrippingUserContextIdAndFirstPartyDomain();
 
+  // If this is an add-on content script principal, returns its AddonPolicy.
+  // Otherwise returns null.
+  extensions::WebExtensionPolicy* ContentScriptAddonPolicy();
+
   // Helper to check whether this principal is associated with an addon that
   // allows unprivileged code to load aURI.  aExplicit == true will prevent
   // use of all_urls permission, requiring the domain in its permissions.
@@ -124,6 +128,39 @@ public:
   inline bool FastSubsumes(nsIPrincipal* aOther);
   inline bool FastSubsumesConsideringDomain(nsIPrincipal* aOther);
   inline bool FastSubsumesConsideringDomainIgnoringFPD(nsIPrincipal* aOther);
+
+  // Returns the principal to inherit when a caller with this principal loads
+  // the given URI.
+  //
+  // For most principal types, this returns the principal itself. For expanded
+  // principals, it returns the first sub-principal which subsumes the given URI
+  // (or, if no URI is given, the last whitelist principal).
+  nsIPrincipal* PrincipalToInherit(nsIURI* aRequestedURI = nullptr);
+
+  /**
+   * Returns true if this principal's CSP should override a document's CSP for
+   * loads that it triggers. Currently true for system principal, for expanded
+   * principals which subsume the document principal, and add-on codebase
+   * principals regardless of whether they subsume the document principal.
+   */
+  bool OverridesCSP(nsIPrincipal* aDocumentPrincipal)
+  {
+    // SystemPrincipal can override the page's CSP by definition.
+    if (mKind == eSystemPrincipal) {
+      return true;
+    }
+
+    // Expanded principals override CSP if and only if they subsume the document
+    // principal.
+    if (mKind == eExpandedPrincipal) {
+      return FastSubsumes(aDocumentPrincipal);
+    }
+    // Extension principals always override the CSP non-extension principals.
+    // This is primarily for the sake of their stylesheets, which are usually
+    // loaded from channels and cannot have expanded principals.
+    return (AddonPolicy() &&
+            !BasePrincipal::Cast(aDocumentPrincipal)->AddonPolicy());
+  }
 
 protected:
   virtual ~BasePrincipal();

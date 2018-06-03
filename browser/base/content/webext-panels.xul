@@ -7,8 +7,6 @@
 
 <?xml-stylesheet href="chrome://browser/skin/" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/content/usercontext/usercontext.css" type="text/css"?>
-<?xul-overlay href="chrome://global/content/editMenuOverlay.xul"?>
-<?xul-overlay href="chrome://browser/content/places/placesOverlay.xul"?>
 
 <!DOCTYPE page [
 <!ENTITY % browserDTD SYSTEM "chrome://browser/locale/browser.dtd">
@@ -19,16 +17,28 @@
 
 <page id="webextpanels-window"
         xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-        xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
-        onload="load()">
+        xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
   <script type="application/javascript" src="chrome://global/content/contentAreaUtils.js"/>
   <script type="application/javascript" src="chrome://browser/content/browser.js"/>
   <script type="application/javascript" src="chrome://browser/content/browser-places.js"/>
   <script type="application/javascript" src="chrome://browser/content/webext-panels.js"/>
+  <script type="application/javascript" src="chrome://global/content/globalOverlay.js"/>
+  <script type="application/javascript" src="chrome://browser/content/utilityOverlay.js"/>
+  <script type="application/javascript"><![CDATA[
+    ChromeUtils.defineModuleGetter(window,
+      "PlacesUtils", "resource://gre/modules/PlacesUtils.jsm");
+    ChromeUtils.defineModuleGetter(window,
+      "PlacesUIUtils", "resource:///modules/PlacesUIUtils.jsm");
+    ChromeUtils.defineModuleGetter(window,
+      "PlacesTransactions", "resource://gre/modules/PlacesTransactions.jsm");
 
-  <stringbundleset id="stringbundleset">
-    <stringbundle id="bundle_browser" src="chrome://browser/locale/browser.properties"/>
-  </stringbundleset>
+    ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+    XPCOMUtils.defineLazyScriptGetter(window, "PlacesTreeView",
+      "chrome://browser/content/places/treeView.js");
+    XPCOMUtils.defineLazyScriptGetter(window,
+      ["PlacesInsertionPoint", "PlacesController", "PlacesControllerDragHelper"],
+       "chrome://browser/content/places/controller.js");
+  ]]></script>
 
   <broadcasterset id="mainBroadcasterSet">
     <broadcaster id="isFrameImage"/>
@@ -84,5 +94,5 @@
     </menulist>
   </popupset>
 
-  <commandset id="editMenuCommands"/>
+#include ../../../toolkit/content/editMenuCommands.inc.xul
 </page>

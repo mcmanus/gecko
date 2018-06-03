@@ -105,7 +105,7 @@ public:
       // Get a buffered output stream 4096 bytes big, to optimize writes.
       nsCOMPtr<nsIOutputStream> bufferedOutputStream;
       res = NS_NewBufferedOutputStream(getter_AddRefs(bufferedOutputStream),
-                                       outStream, 4096);
+                                       outStream.forget(), 4096);
       if (NS_FAILED(res)) {
         return res;
       }
@@ -369,7 +369,7 @@ NS_IMETHODIMP mozPersonalDictionary::Save()
   }
 
   nsCOMPtr<nsIRunnable> runnable =
-    new mozPersonalDictionarySave(this, theFile, mozilla::Move(array));
+    new mozPersonalDictionarySave(this, theFile, std::move(array));
   res = target->Dispatch(runnable, NS_DISPATCH_NORMAL);
   if (NS_WARN_IF(NS_FAILED(res))) {
     return res;

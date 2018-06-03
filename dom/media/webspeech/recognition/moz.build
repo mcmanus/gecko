@@ -46,12 +46,11 @@ if CONFIG['MOZ_WEBSPEECH_TEST_BACKEND']:
 
 LOCAL_INCLUDES += [
     '/dom/base',
-    '/media/sphinxbase',
 ]
 
 include('/ipc/chromium/chromium-config.mozbuild')
 
 FINAL_LIBRARY = 'xul'
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

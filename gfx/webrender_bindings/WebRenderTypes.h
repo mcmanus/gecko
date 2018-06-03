@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -7,12 +8,12 @@
 #define GFX_WEBRENDERTYPES_H
 
 #include "FrameMetrics.h"
+#include "ImageTypes.h"
 #include "mozilla/webrender/webrender_ffi.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/gfx/Matrix.h"
 #include "mozilla/gfx/Types.h"
 #include "mozilla/gfx/Tools.h"
-#include "mozilla/layers/LayersTypes.h"
 #include "mozilla/PodOperations.h"
 #include "mozilla/Range.h"
 #include "mozilla/Variant.h"
@@ -21,6 +22,11 @@
 #include "nsStyleConsts.h"
 
 namespace mozilla {
+
+namespace ipc {
+class ByteBuf;
+} // namespace ipc
+
 namespace wr {
 
 typedef wr::WrWindowId WindowId;
@@ -28,7 +34,6 @@ typedef wr::WrPipelineId PipelineId;
 typedef wr::WrImageKey ImageKey;
 typedef wr::WrFontKey FontKey;
 typedef wr::WrFontInstanceKey FontInstanceKey;
-typedef wr::WrFontInstanceOptions FontInstanceOptions;
 typedef wr::WrEpoch Epoch;
 typedef wr::WrExternalImageId ExternalImageId;
 typedef wr::WrDebugFlags DebugFlags;
@@ -39,17 +44,8 @@ typedef Maybe<ExternalImageId> MaybeExternalImageId;
 typedef Maybe<FontInstanceOptions> MaybeFontInstanceOptions;
 typedef Maybe<FontInstancePlatformOptions> MaybeFontInstancePlatformOptions;
 
-inline WindowId NewWindowId(uint64_t aId) {
-  WindowId id;
-  id.mHandle = aId;
-  return id;
-}
-
-inline Epoch NewEpoch(uint32_t aEpoch) {
-  Epoch e;
-  e.mHandle = aEpoch;
-  return e;
-}
+/* Generate a brand new window id and return it. */
+WindowId NewWindowId();
 
 inline DebugFlags NewDebugFlags(uint32_t aFlags) {
   DebugFlags flags;
@@ -61,21 +57,20 @@ inline Maybe<wr::ImageFormat>
 SurfaceFormatToImageFormat(gfx::SurfaceFormat aFormat) {
   switch (aFormat) {
     case gfx::SurfaceFormat::R8G8B8X8:
-      // TODO: use RGBA + opaque flag
-      return Some(wr::ImageFormat::BGRA8);
+    case gfx::SurfaceFormat::R8G8B8A8:
+      // WebRender not support RGBA8 and RGBX8. Assert here.
+      MOZ_ASSERT(false);
+      return Nothing();
     case gfx::SurfaceFormat::B8G8R8X8:
       // TODO: WebRender will have a BGRA + opaque flag for this but does not
       // have it yet (cf. issue #732).
     case gfx::SurfaceFormat::B8G8R8A8:
       return Some(wr::ImageFormat::BGRA8);
-    case gfx::SurfaceFormat::B8G8R8:
-      return Some(wr::ImageFormat::RGB8);
     case gfx::SurfaceFormat::A8:
-      return Some(wr::ImageFormat::A8);
+      return Some(wr::ImageFormat::R8);
     case gfx::SurfaceFormat::R8G8:
       return Some(wr::ImageFormat::RG8);
     case gfx::SurfaceFormat::UNKNOWN:
-      return Some(wr::ImageFormat::Invalid);
     default:
       return Nothing();
   }
@@ -86,10 +81,8 @@ ImageFormatToSurfaceFormat(ImageFormat aFormat) {
   switch (aFormat) {
     case ImageFormat::BGRA8:
       return gfx::SurfaceFormat::B8G8R8A8;
-    case ImageFormat::A8:
+    case ImageFormat::R8:
       return gfx::SurfaceFormat::A8;
-    case ImageFormat::RGB8:
-      return gfx::SurfaceFormat::B8G8R8;
     default:
       return gfx::SurfaceFormat::UNKNOWN;
   }
@@ -99,7 +92,7 @@ struct ImageDescriptor: public wr::WrImageDescriptor {
   // We need a default constructor for ipdl serialization.
   ImageDescriptor()
   {
-    format = wr::ImageFormat::Invalid;
+    format = (ImageFormat)0;
     width = 0;
     height = 0;
     stride = 0;
@@ -192,10 +185,31 @@ inline PipelineId AsPipelineId(const uint64_t& aId) {
   return pipeline;
 }
 
+inline mozilla::layers::LayersId AsLayersId(const PipelineId& aId) {
+  return mozilla::layers::LayersId { AsUint64(aId) };
+}
+
+inline PipelineId AsPipelineId(const mozilla::layers::LayersId& aId) {
+  return AsPipelineId(uint64_t(aId));
+}
+
 inline ImageRendering ToImageRendering(gfx::SamplingFilter aFilter)
 {
   return aFilter == gfx::SamplingFilter::POINT ? ImageRendering::Pixelated
                                                : ImageRendering::Auto;
+}
+
+static inline FontRenderMode ToFontRenderMode(gfx::AntialiasMode aMode, bool aPermitSubpixelAA = true)
+{
+  switch (aMode) {
+    case gfx::AntialiasMode::NONE:
+      return FontRenderMode::Mono;
+    case gfx::AntialiasMode::GRAY:
+      return FontRenderMode::Alpha;
+    case gfx::AntialiasMode::SUBPIXEL:
+    default:
+      return aPermitSubpixelAA ? FontRenderMode::Subpixel : FontRenderMode::Alpha;
+  }
 }
 
 static inline MixBlendMode ToMixBlendMode(gfx::CompositionOp compositionOp)
@@ -247,8 +261,17 @@ static inline wr::ColorF ToColorF(const gfx::Color& color)
   return c;
 }
 
-template<class T>
-static inline wr::LayoutPoint ToLayoutPoint(const gfx::PointTyped<T>& point)
+static inline wr::ColorU ToColorU(const gfx::Color& color)
+{
+  wr::ColorU c;
+  c.r = uint8_t(color.r * 255.0f);
+  c.g = uint8_t(color.g * 255.0f);
+  c.b = uint8_t(color.b * 255.0f);
+  c.a = uint8_t(color.a * 255.0f);
+  return c;
+}
+
+static inline wr::LayoutPoint ToLayoutPoint(const mozilla::LayoutDevicePoint& point)
 {
   wr::LayoutPoint p;
   p.x = point.x;
@@ -256,14 +279,20 @@ static inline wr::LayoutPoint ToLayoutPoint(const gfx::PointTyped<T>& point)
   return p;
 }
 
-template<class T>
-static inline wr::LayoutPoint ToLayoutPoint(const gfx::IntPointTyped<T>& point)
+static inline wr::LayoutPoint ToLayoutPoint(const mozilla::LayoutDeviceIntPoint& point)
 {
-  return ToLayoutPoint(IntPointToPoint(point));
+  return ToLayoutPoint(LayoutDevicePoint(point));
 }
 
-template<class T>
-static inline wr::LayoutVector2D ToLayoutVector2D(const gfx::PointTyped<T>& point)
+static inline wr::WorldPoint ToWorldPoint(const mozilla::ScreenPoint& point)
+{
+  wr::WorldPoint p;
+  p.x = point.x;
+  p.y = point.y;
+  return p;
+}
+
+static inline wr::LayoutVector2D ToLayoutVector2D(const mozilla::LayoutDevicePoint& point)
 {
   wr::LayoutVector2D p;
   p.x = point.x;
@@ -271,41 +300,53 @@ static inline wr::LayoutVector2D ToLayoutVector2D(const gfx::PointTyped<T>& poin
   return p;
 }
 
-template<class T>
-static inline wr::LayoutVector2D ToLayoutVector2D(const gfx::IntPointTyped<T>& point)
+static inline wr::LayoutVector2D ToLayoutVector2D(const mozilla::LayoutDeviceIntPoint& point)
 {
-  return ToLayoutVector2D(IntPointToPoint(point));
+  return ToLayoutVector2D(LayoutDevicePoint(point));
 }
 
-template<class T>
-static inline wr::LayoutRect ToLayoutRect(const gfx::RectTyped<T>& rect)
+static inline wr::LayoutRect ToLayoutRect(const mozilla::LayoutDeviceRect& rect)
 {
   wr::LayoutRect r;
-  r.origin.x = rect.x;
-  r.origin.y = rect.y;
+  r.origin.x = rect.X();
+  r.origin.y = rect.Y();
   r.size.width = rect.Width();
   r.size.height = rect.Height();
   return r;
 }
 
-static inline wr::LayoutRect ToLayoutRect(const gfxRect rect)
+static inline wr::LayoutRect ToLayoutRect(const gfxRect& rect)
 {
   wr::LayoutRect r;
-  r.origin.x = rect.x;
-  r.origin.y = rect.y;
+  r.origin.x = rect.X();
+  r.origin.y = rect.Y();
   r.size.width = rect.Width();
   r.size.height = rect.Height();
   return r;
 }
 
-template<class T>
-static inline wr::LayoutRect ToLayoutRect(const gfx::IntRectTyped<T>& rect)
+static inline wr::DeviceUintRect ToDeviceUintRect(const mozilla::ImageIntRect& rect)
+{
+  wr::DeviceUintRect r;
+  r.origin.x = rect.X();
+  r.origin.y = rect.Y();
+  r.size.width = rect.Width();
+  r.size.height = rect.Height();
+  return r;
+}
+
+static inline wr::LayoutRect ToLayoutRect(const mozilla::LayoutDeviceIntRect& rect)
 {
   return ToLayoutRect(IntRectToRect(rect));
 }
 
-template<class T>
-static inline wr::LayoutSize ToLayoutSize(const gfx::SizeTyped<T>& size)
+static inline wr::LayoutRect ToRoundedLayoutRect(const mozilla::LayoutDeviceRect& aRect) {
+  auto rect = aRect;
+  rect.Round();
+  return wr::ToLayoutRect(rect);
+}
+
+static inline wr::LayoutSize ToLayoutSize(const mozilla::LayoutDeviceSize& size)
 {
   wr::LayoutSize ls;
   ls.width = size.width;
@@ -317,17 +358,17 @@ static inline wr::ComplexClipRegion ToComplexClipRegion(const RoundedRect& rect)
 {
   wr::ComplexClipRegion ret;
   ret.rect               = ToLayoutRect(rect.rect);
-  ret.radii.top_left     = ToLayoutSize(rect.corners.radii[mozilla::eCornerTopLeft]);
-  ret.radii.top_right    = ToLayoutSize(rect.corners.radii[mozilla::eCornerTopRight]);
-  ret.radii.bottom_left  = ToLayoutSize(rect.corners.radii[mozilla::eCornerBottomLeft]);
-  ret.radii.bottom_right = ToLayoutSize(rect.corners.radii[mozilla::eCornerBottomRight]);
+  ret.radii.top_left     = ToLayoutSize(LayoutDeviceSize::FromUnknownSize(rect.corners.radii[mozilla::eCornerTopLeft]));
+  ret.radii.top_right    = ToLayoutSize(LayoutDeviceSize::FromUnknownSize(rect.corners.radii[mozilla::eCornerTopRight]));
+  ret.radii.bottom_left  = ToLayoutSize(LayoutDeviceSize::FromUnknownSize(rect.corners.radii[mozilla::eCornerBottomLeft]));
+  ret.radii.bottom_right = ToLayoutSize(LayoutDeviceSize::FromUnknownSize(rect.corners.radii[mozilla::eCornerBottomRight]));
+  ret.mode = wr::ClipMode::Clip;
   return ret;
 }
 
-template<class T>
-static inline wr::LayoutSize ToLayoutSize(const gfx::IntSizeTyped<T>& size)
+static inline wr::LayoutSize ToLayoutSize(const mozilla::LayoutDeviceIntSize& size)
 {
-  return ToLayoutSize(IntSizeToSize(size));
+  return ToLayoutSize(LayoutDeviceSize(size));
 }
 
 template<class S, class T>
@@ -390,16 +431,6 @@ static inline wr::BorderSide ToBorderSide(const gfx::Color& color, const uint8_t
   return bs;
 }
 
-static inline wr::BorderRadius ToUniformBorderRadius(const mozilla::LayerSize& aSize)
-{
-  wr::BorderRadius br;
-  br.top_left = ToLayoutSize(aSize);
-  br.top_right = ToLayoutSize(aSize);
-  br.bottom_left = ToLayoutSize(aSize);
-  br.bottom_right = ToLayoutSize(aSize);
-  return br;
-}
-
 static inline wr::BorderRadius EmptyBorderRadius()
 {
   wr::BorderRadius br;
@@ -407,9 +438,10 @@ static inline wr::BorderRadius EmptyBorderRadius()
   return br;
 }
 
-template<class T>
-static inline wr::BorderRadius ToBorderRadius(const gfx::SizeTyped<T>& topLeft, const gfx::SizeTyped<T>& topRight,
-                                              const gfx::SizeTyped<T>& bottomLeft, const gfx::SizeTyped<T>& bottomRight)
+static inline wr::BorderRadius ToBorderRadius(const mozilla::LayoutDeviceSize& topLeft,
+                                              const mozilla::LayoutDeviceSize& topRight,
+                                              const mozilla::LayoutDeviceSize& bottomLeft,
+                                              const mozilla::LayoutDeviceSize& bottomRight)
 {
   wr::BorderRadius br;
   br.top_left = ToLayoutSize(topLeft);
@@ -429,19 +461,9 @@ static inline wr::BorderWidths ToBorderWidths(float top, float right, float bott
   return bw;
 }
 
-static inline wr::NinePatchDescriptor ToNinePatchDescriptor(uint32_t width, uint32_t height,
-                                                            const wr::SideOffsets2D_u32& slice)
+static inline wr::SideOffsets2D<uint32_t> ToSideOffsets2D_u32(uint32_t top, uint32_t right, uint32_t bottom, uint32_t left)
 {
-  NinePatchDescriptor patch;
-  patch.width = width;
-  patch.height = height;
-  patch.slice = slice;
-  return patch;
-}
-
-static inline wr::SideOffsets2D_u32 ToSideOffsets2D_u32(uint32_t top, uint32_t right, uint32_t bottom, uint32_t left)
-{
-  SideOffsets2D_u32 offset;
+  SideOffsets2D<uint32_t> offset;
   offset.top = top;
   offset.right = right;
   offset.bottom = bottom;
@@ -449,9 +471,9 @@ static inline wr::SideOffsets2D_u32 ToSideOffsets2D_u32(uint32_t top, uint32_t r
   return offset;
 }
 
-static inline wr::SideOffsets2D_f32 ToSideOffsets2D_f32(float top, float right, float bottom, float left)
+static inline wr::SideOffsets2D<float> ToSideOffsets2D_f32(float top, float right, float bottom, float left)
 {
-  SideOffsets2D_f32 offset;
+  SideOffsets2D<float> offset;
   offset.top = top;
   offset.right = right;
   offset.bottom = bottom;
@@ -459,16 +481,16 @@ static inline wr::SideOffsets2D_f32 ToSideOffsets2D_f32(float top, float right, 
   return offset;
 }
 
-static inline wr::RepeatMode ToRepeatMode(uint8_t repeatMode)
+static inline wr::RepeatMode ToRepeatMode(mozilla::StyleBorderImageRepeat repeatMode)
 {
   switch (repeatMode) {
-  case NS_STYLE_BORDER_IMAGE_REPEAT_STRETCH:
+  case mozilla::StyleBorderImageRepeat::Stretch:
     return wr::RepeatMode::Stretch;
-  case NS_STYLE_BORDER_IMAGE_REPEAT_REPEAT:
+  case mozilla::StyleBorderImageRepeat::Repeat:
     return wr::RepeatMode::Repeat;
-  case NS_STYLE_BORDER_IMAGE_REPEAT_ROUND:
+  case mozilla::StyleBorderImageRepeat::Round:
     return wr::RepeatMode::Round;
-  case NS_STYLE_BORDER_IMAGE_REPEAT_SPACE:
+  case mozilla::StyleBorderImageRepeat::Space:
     return wr::RepeatMode::Space;
   default:
     MOZ_ASSERT(false);
@@ -493,22 +515,6 @@ static inline wr::WrOpacityProperty ToWrOpacityProperty(uint64_t id, const float
   prop.id = id;
   prop.opacity = opacity;
   return prop;
-}
-
-static inline wr::ComplexClipRegion ToComplexClipRegion(const wr::LayoutRect& rect,
-                                                        const mozilla::LayerSize& size)
-{
-  wr::ComplexClipRegion complex_clip;
-  complex_clip.rect = rect;
-  complex_clip.radii = wr::ToUniformBorderRadius(size);
-  return complex_clip;
-}
-
-template<class T>
-static inline wr::ComplexClipRegion ToComplexClipRegion(const gfx::RectTyped<T>& rect,
-                                                        const mozilla::LayerSize& size)
-{
-  return ToComplexClipRegion(wr::ToLayoutRect(rect), size);
 }
 
 // Whenever possible, use wr::ExternalImageId instead of manipulating uint64_t.
@@ -544,6 +550,15 @@ static inline wr::WrExternalImage NativeTextureToWrExternalImage(uint32_t aHandl
   };
 }
 
+static inline wr::WrExternalImage InvalidToWrExternalImage()
+{
+  return wr::WrExternalImage {
+    wr::WrExternalImageType::Invalid,
+    0, 0, 0, 0, 0,
+    nullptr, 0
+  };
+}
+
 inline wr::ByteSlice RangeToByteSlice(mozilla::Range<uint8_t> aRange) {
   return wr::ByteSlice { aRange.begin().get(), aRange.length() };
 }
@@ -556,19 +571,29 @@ inline mozilla::Range<uint8_t> MutByteSliceToRange(wr::MutByteSlice aWrSlice) {
   return mozilla::Range<uint8_t>(aWrSlice.buffer, aWrSlice.len);
 }
 
-struct Vec_u8 {
+void Assign_WrVecU8(wr::WrVecU8& aVec, mozilla::ipc::ByteBuf&& aOther);
+
+template<typename T>
+struct Vec;
+
+template<>
+struct Vec<uint8_t> {
   wr::WrVecU8 inner;
-  Vec_u8() {
+  Vec() {
     SetEmpty();
   }
-  Vec_u8(Vec_u8&) = delete;
-  Vec_u8(Vec_u8&& src) {
+  Vec(Vec&) = delete;
+  Vec(Vec&& src) {
     inner = src.inner;
     src.SetEmpty();
   }
 
-  Vec_u8&
-  operator=(Vec_u8&& src) {
+  explicit Vec(mozilla::ipc::ByteBuf&& aSrc) {
+    Assign_WrVecU8(inner, std::move(aSrc));
+  }
+
+  Vec&
+  operator=(Vec&& src) {
     inner = src.inner;
     src.SetEmpty();
     return *this;
@@ -595,7 +620,7 @@ struct Vec_u8 {
     wr_vec_u8_push_bytes(&inner, RangeToByteSlice(aBytes));
   }
 
-  ~Vec_u8() {
+  ~Vec() {
     if (inner.data) {
       wr_vec_u8_free(inner);
     }
@@ -693,61 +718,71 @@ struct BuiltDisplayList {
   wr::BuiltDisplayListDescriptor dl_desc;
 };
 
-static inline wr::WrFilterOpType ToWrFilterOpType(const layers::CSSFilterType type) {
+static inline wr::WrFilterOpType ToWrFilterOpType(uint32_t type) {
   switch (type) {
-    case layers::CSSFilterType::BLUR:
+    case NS_STYLE_FILTER_BLUR:
       return wr::WrFilterOpType::Blur;
-    case layers::CSSFilterType::BRIGHTNESS:
+    case NS_STYLE_FILTER_BRIGHTNESS:
       return wr::WrFilterOpType::Brightness;
-    case layers::CSSFilterType::CONTRAST:
+    case NS_STYLE_FILTER_CONTRAST:
       return wr::WrFilterOpType::Contrast;
-    case layers::CSSFilterType::GRAYSCALE:
+    case NS_STYLE_FILTER_GRAYSCALE:
       return wr::WrFilterOpType::Grayscale;
-    case layers::CSSFilterType::HUE_ROTATE:
+    case NS_STYLE_FILTER_HUE_ROTATE:
       return wr::WrFilterOpType::HueRotate;
-    case layers::CSSFilterType::INVERT:
+    case NS_STYLE_FILTER_INVERT:
       return wr::WrFilterOpType::Invert;
-    case layers::CSSFilterType::OPACITY:
+    case NS_STYLE_FILTER_OPACITY:
       return wr::WrFilterOpType::Opacity;
-    case layers::CSSFilterType::SATURATE:
+    case NS_STYLE_FILTER_SATURATE:
       return wr::WrFilterOpType::Saturate;
-    case layers::CSSFilterType::SEPIA:
+    case NS_STYLE_FILTER_SEPIA:
       return wr::WrFilterOpType::Sepia;
+    case NS_STYLE_FILTER_DROP_SHADOW:
+      return wr::WrFilterOpType::DropShadow;
   }
   MOZ_ASSERT_UNREACHABLE("Tried to convert unknown filter type.");
   return wr::WrFilterOpType::Grayscale;
 }
 
-static inline wr::WrFilterOp ToWrFilterOp(const layers::CSSFilter& filter) {
-  return {
-    ToWrFilterOpType(filter.type),
-    filter.argument,
-  };
-}
-
 // Corresponds to an "internal" webrender clip id. That is, a
 // ClipId::Clip(x,pipeline_id) maps to a WrClipId{x}. We use a struct wrapper
-// instead of a typedef so that this is a distinct type from FrameMetrics::ViewID
-// and the compiler will catch accidental conversions between the two.
+// instead of a typedef so that this is a distinct type from ids generated
+// by scroll and position:sticky nodes and the compiler will catch accidental
+// conversions between them.
 struct WrClipId {
-  uint64_t id;
+  size_t id;
 
   bool operator==(const WrClipId& other) const {
     return id == other.id;
   }
+
+  bool operator!=(const WrClipId& other) const {
+    return !(*this == other);
+  }
+
+  static WrClipId RootScrollNode();
+
+  // Helper struct that allows this class to be used as a key in
+  // std::unordered_map like so:
+  //   std::unordered_map<WrClipId, ValueType, WrClipId::HashFn> myMap;
+  struct HashFn {
+    std::size_t operator()(const WrClipId& aKey) const
+    {
+      return std::hash<size_t>{}(aKey.id);
+    }
+  };
 };
 
-// Corresponds to a clip id for a position:sticky clip in webrender. Similar
-// to WrClipId but a separate struct so we don't get them mixed up in C++.
-struct WrStickyId {
+// Corresponds to a clip id for a clip chain in webrender. Similar to
+// WrClipId but a separate struct so we don't get them mixed up in C++.
+struct WrClipChainId {
   uint64_t id;
 
-  bool operator==(const WrClipId& other) const {
+  bool operator==(const WrClipChainId& other) const {
     return id == other.id;
   }
 };
-
-typedef Variant<layers::FrameMetrics::ViewID, WrClipId> ScrollOrClipId;
 
 enum class WebRenderError : int8_t {
   INITIALIZE = 0,
@@ -756,6 +791,18 @@ enum class WebRenderError : int8_t {
 
   Sentinel /* this must be last for serialization purposes. */
 };
+
+static inline wr::WrYuvColorSpace ToWrYuvColorSpace(YUVColorSpace aYUVColorSpace) {
+  switch (aYUVColorSpace) {
+    case YUVColorSpace::BT601:
+      return wr::WrYuvColorSpace::Rec601;
+    case YUVColorSpace::BT709:
+      return wr::WrYuvColorSpace::Rec709;
+    default:
+      MOZ_ASSERT_UNREACHABLE("Tried to convert invalid YUVColorSpace.");
+  }
+  return wr::WrYuvColorSpace::Rec601;
+}
 
 } // namespace wr
 } // namespace mozilla

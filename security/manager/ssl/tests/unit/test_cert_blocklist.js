@@ -12,14 +12,14 @@
 // * it does a sanity check to ensure other cert verifier behavior is
 //   unmodified
 
-const { setTimeout } = Cu.import("resource://gre/modules/Timer.jsm", {});
+const { setTimeout } = ChromeUtils.import("resource://gre/modules/Timer.jsm", {});
 
 // First, we need to setup appInfo for the blocklist service to work
 var id = "xpcshell@tests.mozilla.org";
 var appName = "XPCShell";
 var version = "1";
 var platformVersion = "1.9.2";
-Cu.import("resource://testing-common/AppInfo.jsm", this);
+ChromeUtils.import("resource://testing-common/AppInfo.jsm", this);
 /* global updateAppInfo:false */ // Imported via AppInfo.jsm.
 updateAppInfo({
   name: appName,
@@ -94,7 +94,7 @@ const certBlocklistJSON = `{
       "id": "5",
       "last_modified": 100000000000000000004,
       "issuerName": "MBIxEDAOBgNVBAMMB1Rlc3QgQ0E=",
-      "serialNumber": "BVio/iQ21GCi2iUven8oJ/gae74="
+      "serialNumber": "a0X7/7DlTaedpgrIJg25iBPOkIM="
     },` +
   // ... and some good
   // In this case, the issuer name and the valid serialNumber correspond
@@ -103,7 +103,7 @@ const certBlocklistJSON = `{
       "id": "6",
       "last_modified": 100000000000000000005,
       "issuerName": "MBgxFjAUBgNVBAMMDU90aGVyIHRlc3QgQ0E=",
-      "serialNumber": "exJUIJpq50jgqOwQluhVrAzTF74="
+      "serialNumber": "Rym6o+VN9xgZXT/QLrvN/nv1ZN4="
     },` +
   // These items correspond to an entry in sample_revocations.txt where:
   // isser name is "another imaginary issuer" base-64 encoded, and
@@ -166,18 +166,19 @@ converter.charset = "UTF-8";
 
 function verify_cert(file, expectedError) {
   let ee = constructCertFromFile(file);
-  checkCertErrorGeneric(certDB, ee, expectedError, certificateUsageSSLServer);
+  return checkCertErrorGeneric(certDB, ee, expectedError,
+                               certificateUsageSSLServer);
 }
 
 // The certificate blocklist currently only applies to TLS server certificates.
-function verify_non_tls_usage_succeeds(file) {
+async function verify_non_tls_usage_succeeds(file) {
   let ee = constructCertFromFile(file);
-  checkCertErrorGeneric(certDB, ee, PRErrorCodeSuccess,
-                        certificateUsageSSLClient);
-  checkCertErrorGeneric(certDB, ee, PRErrorCodeSuccess,
-                        certificateUsageEmailSigner);
-  checkCertErrorGeneric(certDB, ee, PRErrorCodeSuccess,
-                        certificateUsageEmailRecipient);
+  await checkCertErrorGeneric(certDB, ee, PRErrorCodeSuccess,
+                              certificateUsageSSLClient);
+  await checkCertErrorGeneric(certDB, ee, PRErrorCodeSuccess,
+                              certificateUsageEmailSigner);
+  await checkCertErrorGeneric(certDB, ee, PRErrorCodeSuccess,
+                              certificateUsageEmailRecipient);
 }
 
 function load_cert(cert, trust) {
@@ -203,8 +204,8 @@ function test_is_revoked(certList, issuerString, serialString, subjectString,
 }
 
 function fetch_blocklist() {
-  Services.prefs.setBoolPref("services.blocklist.load_dump", false);
-  Services.prefs.setBoolPref("services.blocklist.signing.enforced", false);
+  Services.prefs.setBoolPref("services.settings.load_dump", false);
+  Services.prefs.setBoolPref("services.settings.verify_signature", false);
   Services.prefs.setCharPref("services.settings.server",
                              `http://localhost:${port}/v1`);
   Services.prefs.setCharPref("extensions.blocklist.url",
@@ -213,15 +214,14 @@ function fetch_blocklist() {
                     .getService(Ci.nsITimerCallback);
 
   return new Promise((resolve) => {
-    let certblockObserver = {
+    const e = "remote-settings-changes-polled";
+    const changesPolledObserver = {
       observe(aSubject, aTopic, aData) {
-        Services.obs.removeObserver(this, "blocklist-updater-versions-checked");
+        Services.obs.removeObserver(this, e);
         resolve();
       }
     };
-
-    Services.obs.addObserver(certblockObserver, "blocklist-updater-versions-checked");
-
+    Services.obs.addObserver(changesPolledObserver, e);
     blocklist.notify(null);
   });
 }
@@ -302,15 +302,15 @@ function run_test() {
   let expected = { "MCIxIDAeBgNVBAMMF0Fub3RoZXIgVGVzdCBFbmQtZW50aXR5":
                      { "\tVCIlmPM9NkgFQtrs4Oa5TeFcDu6MWRTKSNdePEhOgD8=": true },
                    "MBgxFjAUBgNVBAMMDU90aGVyIHRlc3QgQ0E=":
-                     { " exJUIJpq50jgqOwQluhVrAzTF74=": true},
+                     { " Rym6o+VN9xgZXT/QLrvN/nv1ZN4=": true},
                    "MBIxEDAOBgNVBAMMB1Rlc3QgQ0E=":
-                     { " BVio/iQ21GCi2iUven8oJ/gae74=": true},
+                     { " a0X7/7DlTaedpgrIJg25iBPOkIM=": true},
                    "YW5vdGhlciBpbWFnaW5hcnkgaXNzdWVy":
                      { " YW5vdGhlciBzZXJpYWwu": true,
                        " c2VyaWFsMi4=": true }
                  };
 
-  add_test(function () {
+  add_task(async function() {
     // check some existing items in revocations.txt are blocked. Since the
     // CertBlocklistItems don't know about the data they contain, we can use
     // arbitrary data (not necessarily DER) to test if items are revoked or not.
@@ -337,27 +337,23 @@ function run_test() {
     // test-int-ee.pem.
     // Check the cert validates before we load the blocklist
     let file = "test_onecrl/test-int-ee.pem";
-    verify_cert(file, PRErrorCodeSuccess);
+    await verify_cert(file, PRErrorCodeSuccess);
 
     // The blocklist also revokes other-test-ca.pem, which issued
     // other-ca-ee.pem. Check the cert validates before we load the blocklist
     file = "bad_certs/other-issuer-ee.pem";
-    verify_cert(file, PRErrorCodeSuccess);
+    await verify_cert(file, PRErrorCodeSuccess);
 
     // The blocklist will revoke same-issuer-ee.pem via subject / pubKeyHash.
     // Check the cert validates before we load the blocklist
     file = "test_onecrl/same-issuer-ee.pem";
-    verify_cert(file, PRErrorCodeSuccess);
-
-    run_next_test();
+    await verify_cert(file, PRErrorCodeSuccess);
   });
 
   // blocklist load is async so we must use add_test from here
-  add_task(function* () {
-    yield fetch_blocklist();
-  });
+  add_task(fetch_blocklist);
 
-  add_test(function() {
+  add_task(async function() {
     // The blocklist will be loaded now. Let's check the data is sane.
     // In particular, we should still have the revoked issuer / serial pair
     // that was in both revocations.txt and the blocklist.
@@ -382,26 +378,26 @@ function run_test() {
 
     // Check the blocklisted intermediate now causes a failure
     let file = "test_onecrl/test-int-ee.pem";
-    verify_cert(file, SEC_ERROR_REVOKED_CERTIFICATE);
-    verify_non_tls_usage_succeeds(file);
+    await verify_cert(file, SEC_ERROR_REVOKED_CERTIFICATE);
+    await verify_non_tls_usage_succeeds(file);
 
     // Check the ee with the blocklisted root also causes a failure
     file = "bad_certs/other-issuer-ee.pem";
-    verify_cert(file, SEC_ERROR_REVOKED_CERTIFICATE);
-    verify_non_tls_usage_succeeds(file);
+    await verify_cert(file, SEC_ERROR_REVOKED_CERTIFICATE);
+    await verify_non_tls_usage_succeeds(file);
 
     // Check the ee blocked by subject / pubKey causes a failure
     file = "test_onecrl/same-issuer-ee.pem";
-    verify_cert(file, SEC_ERROR_REVOKED_CERTIFICATE);
-    verify_non_tls_usage_succeeds(file);
+    await verify_cert(file, SEC_ERROR_REVOKED_CERTIFICATE);
+    await verify_non_tls_usage_succeeds(file);
 
     // Check a non-blocklisted chain still validates OK
     file = "bad_certs/default-ee.pem";
-    verify_cert(file, PRErrorCodeSuccess);
+    await verify_cert(file, PRErrorCodeSuccess);
 
     // Check a bad cert is still bad (unknown issuer)
     file = "bad_certs/unknownissuer.pem";
-    verify_cert(file, SEC_ERROR_UNKNOWN_ISSUER);
+    await verify_cert(file, SEC_ERROR_UNKNOWN_ISSUER);
 
     // check that save with no further update is a no-op
     let lastModified = gRevocations.lastModifiedTime;
@@ -412,8 +408,6 @@ function run_test() {
     let newModified = gRevocations.lastModifiedTime;
     equal(lastModified, newModified,
           "saveEntries with no modifications should not update the backing file");
-
-    run_next_test();
   });
 
   add_test(function() {

@@ -26,14 +26,16 @@ PrintTargetWindows::PrintTargetWindows(cairo_surface_t* aCairoSurface,
 /* static */ already_AddRefed<PrintTargetWindows>
 PrintTargetWindows::CreateOrNull(HDC aDC)
 {
-  // Figure out the cairo surface size - Windows we need to use the printable
-  // area of the page.  Note: we only scale the printing using the LOGPIXELSY,
+  // Figure out the paper size, the actual surface size will be the printable
+  // area which is likely smaller, but the size here is later used to create the
+  // draw target where the full page size is needed.
+  // Note: we only scale the printing using the LOGPIXELSY,
   // so we use that when calculating the surface width as well as the height.
   int32_t heightDPI = ::GetDeviceCaps(aDC, LOGPIXELSY);
   float width =
-    (::GetDeviceCaps(aDC, HORZRES) * POINTS_PER_INCH_FLOAT) / heightDPI;
+    (::GetDeviceCaps(aDC, PHYSICALWIDTH) * POINTS_PER_INCH_FLOAT) / heightDPI;
   float height =
-    (::GetDeviceCaps(aDC, VERTRES) * POINTS_PER_INCH_FLOAT) / heightDPI;
+    (::GetDeviceCaps(aDC, PHYSICALHEIGHT) * POINTS_PER_INCH_FLOAT) / heightDPI;
   IntSize size = IntSize::Truncate(width, height);
 
   if (!Factory::CheckSurfaceSize(size)) {
@@ -76,8 +78,21 @@ PrintTargetWindows::BeginPrinting(const nsAString& aTitle,
   docinfo.lpszDatatype = nullptr;
   docinfo.fwType = 0;
 
-  ::StartDocW(mDC, &docinfo);
-
+  // If the user selected Microsoft Print to PDF or XPS Document Printer, then
+  // the following StartDoc call will put up a dialog window to prompt the
+  // user to provide the name and location of the file to be saved.  A zero or
+  // negative return value indicates failure.  In that case we want to check
+  // whether that is because the user hit Cancel, since we want to treat that
+  // specially to avoid notifying the user that the print "failed" in that
+  // case.
+  // XXX We should perhaps introduce a new NS_ERROR_USER_CANCELLED errer.
+  int result = ::StartDocW(mDC, &docinfo);
+  if (result <= 0) {
+    if (::GetLastError() == ERROR_CANCELLED) {
+      return NS_ERROR_ABORT;
+    }
+    return NS_ERROR_FAILURE;
+  }
   return NS_OK;
 }
 

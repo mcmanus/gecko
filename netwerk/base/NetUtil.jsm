@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-this.EXPORTED_SYMBOLS = [
+var EXPORTED_SYMBOLS = [
   "NetUtil",
 ];
 
@@ -15,15 +15,10 @@ this.EXPORTED_SYMBOLS = [
 ////////////////////////////////////////////////////////////////////////////////
 //// Constants
 
-const Ci = Components.interfaces;
-const Cc = Components.classes;
-const Cr = Components.results;
-const Cu = Components.utils;
-
 const PR_UINT32_MAX = 0xffffffff;
 
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
-Components.utils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 const BinaryInputStream = Components.Constructor("@mozilla.org/binaryinputstream;1",
                                                  "nsIBinaryInputStream", "setInputStream");
@@ -31,7 +26,7 @@ const BinaryInputStream = Components.Constructor("@mozilla.org/binaryinputstream
 ////////////////////////////////////////////////////////////////////////////////
 //// NetUtil Object
 
-this.NetUtil = {
+var NetUtil = {
     /**
      * Function to perform simple async copying from aSource (an input stream)
      * to aSink (an output stream).  The copy will happen on some background
@@ -239,48 +234,12 @@ this.NetUtil = {
      *            loadingNode are present.
      *            This should be used with care as it skips security checks.
      *        }
-     * @param aOriginCharset [deprecated]
-     *        The character set for the URI.  Only used if aWhatToLoad is a
-     *        string, which is a deprecated API.  Must be undefined otherwise.
-     *        Use NetUtil.newURI if you need to use this option.
-     * @param aBaseURI [deprecated]
-     *        The base URI for the spec.  Only used if aWhatToLoad is a string,
-     *        which is a deprecated API.  Must be undefined otherwise.  Use
-     *        NetUtil.newURI if you need to use this option.
      * @return an nsIChannel object.
      */
-    newChannel: function NetUtil_newChannel(aWhatToLoad, aOriginCharset, aBaseURI)
+    newChannel: function NetUtil_newChannel(aWhatToLoad)
     {
-        // Check for the deprecated API first.
-        if (typeof aWhatToLoad == "string" ||
-            (aWhatToLoad instanceof Ci.nsIFile) ||
-            (aWhatToLoad instanceof Ci.nsIURI)) {
-
-            let uri = (aWhatToLoad instanceof Ci.nsIURI)
-                      ? aWhatToLoad
-                      : this.newURI(aWhatToLoad, aOriginCharset, aBaseURI);
-
-            // log deprecation warning for developers.
-            Services.console.logStringMessage(
-              "Warning: NetUtil.newChannel(uri) deprecated, please provide argument 'aWhatToLoad'");
-
-            // Provide default loadinfo arguments and call the new API.
-            let systemPrincipal =
-              Services.scriptSecurityManager.getSystemPrincipal();
-
-            return this.ioService.newChannelFromURI2(
-                     uri,
-                     null, // loadingNode
-                     systemPrincipal, // loadingPrincipal
-                     null, // triggeringPrincipal
-                     Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
-                     Ci.nsIContentPolicy.TYPE_OTHER);
-        }
-
-        // We are using the updated API, that requires only the options object.
-        if (typeof aWhatToLoad != "object" ||
-             aOriginCharset !== undefined ||
-             aBaseURI !== undefined) {
+        // Make sure the API is called using only the options object.
+        if (typeof aWhatToLoad != "object" || arguments.length != 1) {
             throw new Components.Exception(
                 "newChannel requires a single object argument",
                 Cr.NS_ERROR_INVALID_ARG,
@@ -340,9 +299,15 @@ this.NetUtil = {
         }
 
         if (securityFlags === undefined) {
-            securityFlags = loadUsingSystemPrincipal
-                            ? Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL
-                            : Ci.nsILoadInfo.SEC_NORMAL;
+            if (!loadUsingSystemPrincipal) {
+                throw new Components.Exception(
+                    "newChannel requires the 'securityFlags' property on" +
+                    " the options object unless loading from system principal.",
+                    Cr.NS_ERROR_INVALID_ARG,
+                    Components.stack.caller
+                );
+            }
+            securityFlags = Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL;
         }
 
         if (contentPolicyType === undefined) {

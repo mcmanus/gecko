@@ -7,16 +7,20 @@
  * Makes sure Pie+Table Charts have the right internal structure.
  */
 
-add_task(function* () {
-  let { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
+add_task(async function() {
+  const { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
 
-  let { monitor } = yield initNetMonitor(SIMPLE_URL);
+  const { monitor, tab } = await initNetMonitor(SIMPLE_URL);
   info("Starting test... ");
 
-  let { document, windowRequire } = monitor.panelWin;
-  let { Chart } = windowRequire("devtools/client/shared/widgets/Chart");
+  const { document, windowRequire } = monitor.panelWin;
+  const { Chart } = windowRequire("devtools/client/shared/widgets/Chart");
 
-  let chart = Chart.PieTable(document, {
+  const wait = waitForNetworkEvents(monitor, 1);
+  tab.linkedBrowser.loadURI(SIMPLE_URL);
+  await wait;
+
+  const chart = Chart.PieTable(document, {
     title: "Table title",
     data: [{
       size: 1,
@@ -44,9 +48,9 @@ add_task(function* () {
   ok(chart.pie, "The pie chart proxy is accessible.");
   ok(chart.table, "The table chart proxy is accessible.");
 
-  let node = chart.node;
-  let rows = node.querySelectorAll(".table-chart-row");
-  let sums = node.querySelectorAll(".table-chart-summary-label");
+  const node = chart.node;
+  const rows = node.querySelectorAll(".table-chart-row");
+  const sums = node.querySelectorAll(".table-chart-summary-label");
 
   ok(node.classList.contains("pie-table-chart-container"),
     "A pie+table chart container was created successfully.");
@@ -62,5 +66,5 @@ add_task(function* () {
   is(rows.length, 4, "There should be 3 table chart rows and 1 header created.");
   is(sums.length, 2, "There should be 2 total summaries and 1 header created.");
 
-  yield teardown(monitor);
+  await teardown(monitor);
 });

@@ -374,7 +374,7 @@ enum GeckoProcessType
   GeckoProcessType_GMPlugin, // Gecko Media Plugin
 
   GeckoProcessType_GPU,      // GPU and compositor process
-
+  GeckoProcessType_PDFium,   // Gecko PDFium process
   GeckoProcessType_End,
   GeckoProcessType_Invalid = GeckoProcessType_End
 };
@@ -385,7 +385,8 @@ static const char* const kGeckoProcessTypeString[] = {
   "tab",
   "ipdlunittest",
   "geckomediaplugin",
-  "gpu"
+  "gpu",
+  "pdfium"
 };
 
 static_assert(MOZ_ARRAY_LENGTH(kGeckoProcessTypeString) ==
@@ -397,19 +398,25 @@ XRE_API(const char*,
 
 #if defined(MOZ_WIDGET_ANDROID)
 XRE_API(void,
-        XRE_SetAndroidChildFds, (JNIEnv* env, int crashFd, int ipcFd))
+        XRE_SetAndroidChildFds, (JNIEnv* env, int prefsFd, int ipcFd, int crashFd, int crashAnnotationFd))
 #endif // defined(MOZ_WIDGET_ANDROID)
 
 XRE_API(void,
         XRE_SetProcessType, (const char* aProcessTypeString))
 
-#if defined(MOZ_CRASHREPORTER)
 // Used in the "master" parent process hosting the crash server
 XRE_API(bool,
         XRE_TakeMinidumpForChild, (uint32_t aChildPid, nsIFile** aDump,
                                    uint32_t* aSequence))
 
 // Used in child processes.
+#if defined(XP_WIN)
+// Uses uintptr_t, even though it's really a HANDLE, because including
+// <windows.h> here caused compilation issues.
+XRE_API(bool,
+        XRE_SetRemoteExceptionHandler,
+        (const char* aPipe, uintptr_t aCrashTimeAnnotationFile))
+#else
 XRE_API(bool,
         XRE_SetRemoteExceptionHandler, (const char* aPipe))
 #endif
@@ -447,6 +454,9 @@ XRE_API(bool,
 
 XRE_API(bool,
         XRE_IsGPUProcess, ())
+
+XRE_API(bool,
+        XRE_IsPluginProcess, ())
 
 /**
  * Returns true if the appshell should run its own native event loop. Returns
@@ -513,14 +523,8 @@ XRE_API(int,
         XRE_XPCShellMain, (int argc, char** argv, char** envp,
                            const XREShellData* aShellData))
 
-#if MOZ_WIDGET_GTK == 2
-XRE_API(void,
-        XRE_GlibInit, ())
-#endif
-
-
 #ifdef LIBFUZZER
-#include "LibFuzzerRegistry.h"
+#include "FuzzerRegistry.h"
 
 XRE_API(void,
         XRE_LibFuzzerSetDriver, (LibFuzzerDriver))

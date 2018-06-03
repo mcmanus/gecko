@@ -41,13 +41,15 @@ class ImageURL;
 class imgCacheEntry
 {
 public:
+  static uint32_t SecondsFromPRTime(PRTime prTime);
+
   imgCacheEntry(imgLoader* loader, imgRequest* request,
                 bool aForcePrincipalCheck);
   ~imgCacheEntry();
 
   nsrefcnt AddRef()
   {
-    NS_PRECONDITION(int32_t(mRefCnt) >= 0, "illegal refcnt");
+    MOZ_ASSERT(int32_t(mRefCnt) >= 0, "illegal refcnt");
     NS_ASSERT_OWNINGTHREAD(imgCacheEntry);
     ++mRefCnt;
     NS_LOG_ADDREF(this, mRefCnt, "imgCacheEntry", sizeof(*this));
@@ -56,7 +58,7 @@ public:
 
   nsrefcnt Release()
   {
-    NS_PRECONDITION(0 != mRefCnt, "dup release");
+    MOZ_ASSERT(0 != mRefCnt, "dup release");
     NS_ASSERT_OWNINGTHREAD(imgCacheEntry);
     --mRefCnt;
     NS_LOG_RELEASE(this, mRefCnt, "imgCacheEntry");
@@ -555,6 +557,7 @@ public:
                     bool forcePrincipalCheckForCacheEntry);
 
   void AddProxy(imgRequestProxy* aProxy);
+  void RemoveProxy(imgRequestProxy* aProxy);
 
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSITHREADRETARGETABLESTREAMLISTENER
@@ -565,6 +568,7 @@ public:
   NS_DECL_NSIASYNCVERIFYREDIRECTCALLBACK
 
 private:
+  void UpdateProxies(bool aCancelRequest, bool aSyncNotify);
   virtual ~imgCacheValidator();
 
   nsCOMPtr<nsIStreamListener> mDestListener;
@@ -573,7 +577,7 @@ private:
   nsCOMPtr<nsIChannel> mRedirectChannel;
 
   RefPtr<imgRequest> mRequest;
-  nsCOMArray<imgIRequest> mProxies;
+  AutoTArray<RefPtr<imgRequestProxy>, 4> mProxies;
 
   RefPtr<imgRequest> mNewRequest;
   RefPtr<imgCacheEntry> mNewEntry;

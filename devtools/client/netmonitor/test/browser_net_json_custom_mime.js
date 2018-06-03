@@ -7,25 +7,27 @@
  * Tests if JSON responses with unusal/custom MIME types are handled correctly.
  */
 
-add_task(function* () {
-  let { tab, monitor } = yield initNetMonitor(JSON_CUSTOM_MIME_URL);
+add_task(async function() {
+  const { tab, monitor } = await initNetMonitor(JSON_CUSTOM_MIME_URL);
   info("Starting test... ");
 
-  let { document, store, windowRequire } = monitor.panelWin;
-  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
-  let { L10N } = windowRequire("devtools/client/netmonitor/src/utils/l10n");
-  let {
+  const { document, store, windowRequire } = monitor.panelWin;
+  const Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+  const { L10N } = windowRequire("devtools/client/netmonitor/src/utils/l10n");
+  const {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
   store.dispatch(Actions.batchEnable(false));
 
-  let wait = waitForNetworkEvents(monitor, 1);
-  yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
-    content.wrappedJSObject.performRequests();
-  });
-  yield wait;
+  // Execute requests.
+  await performRequests(monitor, tab, 1);
+
+  const requestItem = document.querySelector(".request-list-item");
+  const requestsListStatus = requestItem.querySelector(".status-code");
+  EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+  await waitUntil(() => requestsListStatus.title);
 
   verifyRequestItemTarget(
     document,
@@ -43,22 +45,21 @@ add_task(function* () {
     });
 
   wait = waitForDOM(document, "#response-panel .CodeMirror-code");
-  EventUtils.sendMouseEvent({ type: "click" },
-    document.querySelector(".network-details-panel-toggle"));
+  store.dispatch(Actions.toggleNetworkDetails());
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector("#response-tab"));
-  yield wait;
+  await wait;
 
   testResponseTab();
 
-  yield teardown(monitor);
+  await teardown(monitor);
 
   function testResponseTab() {
-    let tabpanel = document.querySelector("#response-panel");
+    const tabpanel = document.querySelector("#response-panel");
 
     is(tabpanel.querySelector(".response-error-header") === null, true,
       "The response error header doesn't have the intended visibility.");
-    let jsonView = tabpanel.querySelector(".tree-section .treeLabel") || {};
+    const jsonView = tabpanel.querySelector(".tree-section .treeLabel") || {};
     is(jsonView.textContent === L10N.getStr("jsonScopeName"), true,
       "The response json view has the intended visibility.");
     is(tabpanel.querySelector(".CodeMirror-code") === null, false,
@@ -73,9 +74,9 @@ add_task(function* () {
     is(tabpanel.querySelectorAll(".empty-notice").length, 0,
       "The empty notice should not be displayed in this tabpanel.");
 
-    let labels = tabpanel
+    const labels = tabpanel
       .querySelectorAll("tr:not(.tree-section) .treeLabelCell .treeLabel");
-    let values = tabpanel
+    const values = tabpanel
       .querySelectorAll("tr:not(.tree-section) .treeValueCell .objectBox");
 
     is(labels[0].textContent, "greeting",

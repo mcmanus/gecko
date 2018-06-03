@@ -14,9 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 
-class JSString;
-
-struct JSContext;
+#include "js/TypeDecls.h"
 
 namespace js {
 
@@ -32,7 +30,9 @@ class GenericPrinter
   protected:
     bool                  hadOOM_;     // whether reportOutOfMemory() has been called.
 
-    GenericPrinter();
+    constexpr GenericPrinter()
+      : hadOOM_(false)
+    {}
 
   public:
     // Puts |len| characters from |s| at the current position and
@@ -141,8 +141,15 @@ class Fprinter final : public GenericPrinter
 
   public:
     explicit Fprinter(FILE* fp);
-    Fprinter();
+
+    constexpr Fprinter()
+      : file_(nullptr),
+        init_(false)
+    {}
+
+#ifdef DEBUG
     ~Fprinter();
+#endif
 
     // Initialize this printer, returns false on error.
     MOZ_MUST_USE bool init(const char* path);

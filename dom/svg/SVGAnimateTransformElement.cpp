@@ -30,6 +30,7 @@ bool
 SVGAnimateTransformElement::ParseAttribute(int32_t aNamespaceID,
                                            nsAtom* aAttribute,
                                            const nsAString& aValue,
+                                           nsIPrincipal* aMaybeScriptedPrincipal,
                                            nsAttrValue& aResult)
 {
   // 'type' is an <animateTransform>-specific attribute, and we'll handle it
@@ -49,11 +50,12 @@ SVGAnimateTransformElement::ParseAttribute(int32_t aNamespaceID,
 
   return SVGAnimationElement::ParseAttribute(aNamespaceID,
                                              aAttribute, aValue,
+                                             aMaybeScriptedPrincipal,
                                              aResult);
 }
 
 //----------------------------------------------------------------------
-// nsIDOMNode methods
+// nsINode methods
 
 NS_IMPL_ELEMENT_CLONE_WITH_INIT(SVGAnimateTransformElement)
 

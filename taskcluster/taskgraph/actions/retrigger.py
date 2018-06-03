@@ -48,8 +48,9 @@ logger = logging.getLogger(__name__)
         }
     }
 )
-def retrigger_action(parameters, input, task_group_id, task_id, task):
-    decision_task_id, full_task_graph, label_to_taskid = fetch_graph_and_labels(parameters)
+def retrigger_action(parameters, graph_config, input, task_group_id, task_id, task):
+    decision_task_id, full_task_graph, label_to_taskid = fetch_graph_and_labels(
+        parameters, graph_config)
 
     label = task['metadata']['name']
     with_downstream = ' '
@@ -62,6 +63,6 @@ def retrigger_action(parameters, input, task_group_id, task_id, task):
 
     times = input.get('times', 1)
     for i in xrange(times):
-        create_tasks(to_run, full_task_graph, label_to_taskid, parameters, decision_task_id)
+        create_tasks(to_run, full_task_graph, label_to_taskid, parameters, decision_task_id, i)
 
         logger.info('Scheduled {}{}(time {}/{})'.format(label, with_downstream, i+1, times))

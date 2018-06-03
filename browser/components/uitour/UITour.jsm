@@ -4,36 +4,38 @@
 
 "use strict";
 
-this.EXPORTED_SYMBOLS = ["UITour"];
+var EXPORTED_SYMBOLS = ["UITour"];
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
-
-Cu.import("resource://gre/modules/AppConstants.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/TelemetryController.jsm");
-Cu.import("resource://gre/modules/Timer.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/TelemetryController.jsm");
+ChromeUtils.import("resource://gre/modules/Timer.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 Cu.importGlobalProperties(["URL"]);
 
-XPCOMUtils.defineLazyModuleGetter(this, "LightweightThemeManager",
-  "resource://gre/modules/LightweightThemeManager.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ResetProfile",
-  "resource://gre/modules/ResetProfile.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "CustomizableUI",
-  "resource:///modules/CustomizableUI.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "UITelemetry",
-  "resource://gre/modules/UITelemetry.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "BrowserUITelemetry",
+ChromeUtils.defineModuleGetter(this, "BrowserUITelemetry",
   "resource:///modules/BrowserUITelemetry.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
-  "resource://gre/modules/PrivateBrowsingUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ProfileAge",
-  "resource://gre/modules/ProfileAge.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ReaderParent",
-  "resource:///modules/ReaderParent.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PageActions",
+ChromeUtils.defineModuleGetter(this, "CustomizableUI",
+  "resource:///modules/CustomizableUI.jsm");
+ChromeUtils.defineModuleGetter(this, "FxAccounts",
+  "resource://gre/modules/FxAccounts.jsm");
+ChromeUtils.defineModuleGetter(this, "LightweightThemeManager",
+  "resource://gre/modules/LightweightThemeManager.jsm");
+ChromeUtils.defineModuleGetter(this, "PageActions",
   "resource:///modules/PageActions.jsm");
+ChromeUtils.defineModuleGetter(this, "PrivateBrowsingUtils",
+  "resource://gre/modules/PrivateBrowsingUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "ProfileAge",
+  "resource://gre/modules/ProfileAge.jsm");
+ChromeUtils.defineModuleGetter(this, "ReaderParent",
+  "resource:///modules/ReaderParent.jsm");
+ChromeUtils.defineModuleGetter(this, "ResetProfile",
+  "resource://gre/modules/ResetProfile.jsm");
+ChromeUtils.defineModuleGetter(this, "UITelemetry",
+  "resource://gre/modules/UITelemetry.jsm");
+ChromeUtils.defineModuleGetter(this, "UpdateUtils",
+  "resource://gre/modules/UpdateUtils.jsm");
 
 // See LOG_LEVELS in Console.jsm. Common examples: "All", "Info", "Warn", & "Error".
 const PREF_LOG_LEVEL      = "browser.uitour.loglevel";
@@ -69,7 +71,7 @@ const TARGET_SEARCHENGINE_PREFIX = "searchEngine-";
 
 // Create a new instance of the ConsoleAPI so we can control the maxLogLevel with a pref.
 XPCOMUtils.defineLazyGetter(this, "log", () => {
-  let ConsoleAPI = Cu.import("resource://gre/modules/Console.jsm", {}).ConsoleAPI;
+  let ConsoleAPI = ChromeUtils.import("resource://gre/modules/Console.jsm", {}).ConsoleAPI;
   let consoleOptions = {
     maxLogLevelPref: PREF_LOG_LEVEL,
     prefix: "UITour",
@@ -77,7 +79,7 @@ XPCOMUtils.defineLazyGetter(this, "log", () => {
   return new ConsoleAPI(consoleOptions);
 });
 
-this.UITour = {
+var UITour = {
   url: null,
   seenPageIDs: null,
   // This map is not persisted and is used for
@@ -115,13 +117,7 @@ this.UITour = {
       // to automatically open the appMenu when annotating this target.
       widgetName: "appMenu-fxa-label",
     }],
-    ["addons",      {
-      query: (aDocument) => {
-        // select toolbar icon if exist, fallback to appMenu item
-        let node = aDocument.getElementById("add-ons-button");
-        return node ? node : aDocument.getElementById("appMenu-addons-button");
-      },
-    }],
+    ["addons",      {query: "#appMenu-addons-button"}],
     ["appMenu",     {
       addTargetListener: (aDocument, aCallback) => {
         let panelPopup = aDocument.defaultView.PanelUI.panel;
@@ -152,22 +148,17 @@ this.UITour = {
     }],
     ["help",        {query: "#appMenu-help-button"}],
     ["home",        {query: "#home-button"}],
-    ["library",     {
-      query: (aDocument) => {
-        // select toolbar icon if exist, fallback to appMenu item
-        let node = aDocument.getElementById("library-button");
-        return node ? node : aDocument.getElementById("appMenu-library-button");
-      },
-    }],
+    ["library",     {query: "#appMenu-library-button"}],
     ["pocket", {
       allowAdd: true,
       query: (aDocument) => {
         // The pocket's urlbar page action button is pre-defined in the DOM.
         // It would be hidden if toggled off from the urlbar.
         let node = aDocument.getElementById("pocket-button-box");
-        if (node && node.hidden == false) {
+        if (node && !node.hidden) {
           return node;
         }
+        aDocument.ownerGlobal.BrowserPageActions.placeLazyActionsInPanel();
         return aDocument.getElementById("pageAction-panel-pocket");
       },
     }],
@@ -231,32 +222,37 @@ this.UITour = {
         // The bookmark's urlbar page action button is pre-defined in the DOM.
         // It would be hidden if toggled off from the urlbar.
         let node = aDocument.getElementById("star-button-box");
-        if (node && node.hidden == false) {
+        if (node && !node.hidden) {
           return node;
         }
+        aDocument.ownerGlobal.BrowserPageActions.placeLazyActionsInPanel();
         return aDocument.getElementById("pageAction-panel-bookmark");
       },
     }],
     ["pageAction-copyURL", {
       query: (aDocument) => {
+        aDocument.ownerGlobal.BrowserPageActions.placeLazyActionsInPanel();
         return aDocument.getElementById("pageAction-urlbar-copyURL") ||
                aDocument.getElementById("pageAction-panel-copyURL");
       },
     }],
     ["pageAction-emailLink", {
       query: (aDocument) => {
+        aDocument.ownerGlobal.BrowserPageActions.placeLazyActionsInPanel();
         return aDocument.getElementById("pageAction-urlbar-emailLink") ||
                aDocument.getElementById("pageAction-panel-emailLink");
       },
     }],
     ["pageAction-sendToDevice", {
       query: (aDocument) => {
+        aDocument.ownerGlobal.BrowserPageActions.placeLazyActionsInPanel();
         return aDocument.getElementById("pageAction-urlbar-sendToDevice") ||
                aDocument.getElementById("pageAction-panel-sendToDevice");
       },
     }],
     ["screenshots", {
       query: (aDocument) => {
+        aDocument.ownerGlobal.BrowserPageActions.placeLazyActionsInPanel();
         return aDocument.getElementById("pageAction-urlbar-screenshots") ||
                aDocument.getElementById("pageAction-panel-screenshots");
       },
@@ -423,7 +419,7 @@ this.UITour = {
             return;
           }
           let effect = undefined;
-          if (this.highlightEffects.indexOf(data.effect) !== -1) {
+          if (this.highlightEffects.includes(data.effect)) {
             effect = data.effect;
           }
           this.showHighlight(window, target, effect);
@@ -560,25 +556,35 @@ this.UITour = {
       }
 
       case "showFirefoxAccounts": {
-        let p;
-        if (data.email) {
-          // With email parameter added, we need to use 'email' action to help FxA determine
-          // whether the email is registered or not and direct the user down the correct flow
-          p =  new URLSearchParams("action=email&entrypoint=uitour");
-          p.append("email", data.email);
-        } else {
-          // 'signup' is the default action that makes sense currently, so we don't
-          // accept arbitrary actions just to be safe...
-          p =  new URLSearchParams("action=signup&entrypoint=uitour");
-        }
-        // Call our helper to validate extraURLCampaignParams and populate URLSearchParams
-        if (!this._populateCampaignParams(p, data.extraURLCampaignParams)) {
-          log.warn("showFirefoxAccounts: invalid campaign args specified");
-          return false;
-        }
+        Promise.resolve().then(() => {
+          return data.email ? FxAccounts.config.promiseEmailURI(data.email, "uitour") :
+                              FxAccounts.config.promiseSignUpURI("uitour");
+        }).then(uri => {
+          const url = new URL(uri);
+          // Call our helper to validate extraURLCampaignParams and populate URLSearchParams
+          if (!this._populateCampaignParams(url, data.extraURLCampaignParams)) {
+            log.warn("showFirefoxAccounts: invalid campaign args specified");
+            return;
+          }
 
-        // We want to replace the current tab.
-        browser.loadURI("about:accounts?" + p.toString());
+          // We want to replace the current tab.
+          browser.loadURI(url.href);
+        });
+        break;
+      }
+
+      case "showConnectAnotherDevice": {
+        FxAccounts.config.promiseConnectDeviceURI("uitour").then(uri => {
+          const url = new URL(uri);
+          // Call our helper to validate extraURLCampaignParams and populate URLSearchParams
+          if (!this._populateCampaignParams(url, data.extraURLCampaignParams)) {
+            log.warn("showConnectAnotherDevice: invalid campaign args specified");
+            return;
+          }
+
+          // We want to replace the current tab.
+          browser.loadURI(url.href);
+        });
         break;
       }
 
@@ -773,9 +779,9 @@ this.UITour = {
 
   // Given a string that is a JSONified represenation of an object with
   // additional utm_* URL params that should be appended, validate and append
-  // them to the passed URLSearchParams object. Returns true if the params
+  // them to the passed URL object. Returns true if the params
   // were validated and appended, and false if the request should be ignored.
-  _populateCampaignParams(urlSearchParams, extraURLCampaignParams) {
+  _populateCampaignParams(url, extraURLCampaignParams) {
     // We are extra paranoid about what params we allow to be appended.
     if (typeof extraURLCampaignParams == "undefined") {
       // no params, so it's all good.
@@ -811,7 +817,7 @@ this.UITour = {
           log.warn("_populateCampaignParams: invalid campaign param specified");
           return false;
         }
-        urlSearchParams.append(name, value);
+        url.searchParams.append(name, value);
       }
     }
     return true;
@@ -1495,6 +1501,7 @@ this.UITour = {
 
   showNewTab(aWindow, aBrowser) {
     aWindow.openLinkIn("about:newtab", "current", {targetBrowser: aBrowser});
+    aWindow.gURLBar.focus();
   },
 
   _hideAnnotationsForPanel(aEvent, aShouldClosePanel, aTargetPositionCallback) {
@@ -1634,10 +1641,8 @@ this.UITour = {
   },
 
   getAppInfo(aMessageManager, aWindow, aCallbackID) {
-    (async() => {
-      let props = ["defaultUpdateChannel", "version"];
-      let appinfo = {};
-      props.forEach(property => appinfo[property] = Services.appinfo[property]);
+    (async () => {
+      let appinfo = {version: Services.appinfo.version};
 
       // Identifier of the partner repack, as stored in preference "distribution.id"
       // and included in Firefox and other update pings. Note this is not the same as
@@ -1645,6 +1650,9 @@ this.UITour = {
       let distribution =
           Services.prefs.getDefaultBranch("distribution.").getCharPref("id", "default");
       appinfo.distribution = distribution;
+
+      // Update channel, in a way that preserves 'beta' for RC beta builds:
+      appinfo.defaultUpdateChannel = UpdateUtils.getUpdateChannel(false /* no partner ID */);
 
       let isDefaultBrowser = null;
       try {
@@ -1688,7 +1696,7 @@ this.UITour = {
     })().catch(err => {
       log.error(err);
       this.sendPageCallback(aMessageManager, aCallbackID, {});
-    })
+    });
   },
 
   getAvailableTargets(aMessageManager, aChromeWindow, aCallbackID) {

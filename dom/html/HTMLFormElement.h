@@ -15,7 +15,6 @@
 #include "nsIForm.h"
 #include "nsIFormControl.h"
 #include "nsGenericHTMLElement.h"
-#include "nsIDOMHTMLFormElement.h"
 #include "nsIWebProgressListener.h"
 #include "nsIRadioGroupContainer.h"
 #include "nsIWeakReferenceUtils.h"
@@ -36,7 +35,6 @@ class HTMLFormControlsCollection;
 class HTMLImageElement;
 
 class HTMLFormElement final : public nsGenericHTMLElement,
-                              public nsIDOMHTMLFormElement,
                               public nsIWebProgressListener,
                               public nsIForm,
                               public nsIRadioGroupContainer
@@ -44,6 +42,8 @@ class HTMLFormElement final : public nsGenericHTMLElement,
   friend class HTMLFormControlsCollection;
 
 public:
+  NS_IMPL_FROMNODE_HTML_WITH_TAG(HTMLFormElement, form)
+
   explicit HTMLFormElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
 
   enum {
@@ -52,9 +52,6 @@ public:
 
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
-
-  // nsIDOMHTMLFormElement
-  NS_DECL_NSIDOMHTMLFORMELEMENT
 
   // nsIWebProgressListener
   NS_DECL_NSIWEBPROGRESSLISTENER
@@ -94,11 +91,10 @@ public:
   virtual bool ParseAttribute(int32_t aNamespaceID,
                                 nsAtom* aAttribute,
                                 const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 nsAttrValue& aResult) override;
-  virtual nsresult GetEventTargetParent(
-                     EventChainPreVisitor& aVisitor) override;
-  virtual nsresult WillHandleEvent(
-                     EventChainPostVisitor& aVisitor) override;
+  void GetEventTargetParent(EventChainPreVisitor& aVisitor) override;
+  void WillHandleEvent(EventChainPostVisitor& aVisitor) override;
   virtual nsresult PostHandleEvent(
                      EventChainPostVisitor& aVisitor) override;
 
@@ -113,6 +109,7 @@ public:
   virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
                                 const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
                                 bool aNotify) override;
 
   /**
@@ -240,7 +237,7 @@ public:
    * submission. In that case the form will defer the submission until the
    * script handler returns and the return value is known.
    */
-  void OnSubmitClickBegin(nsIContent* aOriginatingElement);
+  void OnSubmitClickBegin(Element* aOriginatingElement);
   void OnSubmitClickEnd();
 
   /**
@@ -323,31 +320,33 @@ public:
   }
 
   void GetAction(nsString& aValue);
-
   void SetAction(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::action, aValue, aRv);
   }
 
-  // XPCOM GetAutocomplete() is OK
+  void GetAutocomplete(nsAString& aValue);
   void SetAutocomplete(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::autocomplete, aValue, aRv);
   }
 
-  // XPCOM GetEnctype() is OK
+  void GetEnctype(nsAString& aValue);
   void SetEnctype(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::enctype, aValue, aRv);
   }
 
-  // XPCOM GetEncoding() is OK
+  void GetEncoding(nsAString& aValue)
+  {
+    GetEnctype(aValue);
+  }
   void SetEncoding(const nsAString& aValue, ErrorResult& aRv)
   {
     SetEnctype(aValue, aRv);
   }
 
-  // XPCOM GetMethod() is OK
+  void GetMethod(nsAString& aValue);
   void SetMethod(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::method, aValue, aRv);
@@ -390,8 +389,7 @@ public:
   int32_t Length();
 
   void Submit(ErrorResult& aRv);
-
-  // XPCOM Reset() is OK
+  void Reset();
 
   bool CheckValidity()
   {
@@ -518,7 +516,7 @@ protected:
    * @param aActionURL the full, unadulterated URL you'll be submitting to [OUT]
    * @param aOriginatingElement the originating element of the form submission [IN]
    */
-  nsresult GetActionURL(nsIURI** aActionURL, nsIContent* aOriginatingElement);
+  nsresult GetActionURL(nsIURI** aActionURL, Element* aOriginatingElement);
 
   /**
    * Check the form validity following this algorithm:

@@ -5,7 +5,15 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 DevToolsModules(
-    'App.js',
     'Font.js',
+    'FontEditor.js',
     'FontList.js',
+    'FontMeta.js',
+    'FontOverview.js',
+    'FontPreview.js',
+    'FontPropertyValue.js',
+    'FontsApp.js',
+    'FontSize.js',
+    'FontStyle.js',
+    'FontWeight.js',
 )

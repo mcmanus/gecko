@@ -19,6 +19,9 @@ function PlacesViewBase(aPlace, aOptions = {}) {
   this._viewElt.controllers.appendController(this._controller);
 }
 
+PlacesViewBase.interfaces = [Ci.nsINavHistoryResultObserver,
+                             Ci.nsISupportsWeakReference];
+
 PlacesViewBase.prototype = {
   // The xul element that holds the entire view.
   _viewElt: null,
@@ -41,9 +44,8 @@ PlacesViewBase.prototype = {
   // the native mac menu).
   _nativeView: false,
 
-  QueryInterface: XPCOMUtils.generateQI(
-    [Components.interfaces.nsINavHistoryResultObserver,
-     Components.interfaces.nsISupportsWeakReference]),
+  QueryInterface: ChromeUtils.generateQI(
+    PlacesViewBase.interfaces),
 
   _place: "",
   get place() {
@@ -53,13 +55,9 @@ PlacesViewBase.prototype = {
     this._place = val;
 
     let history = PlacesUtils.history;
-    let queries = { }, options = { };
-    history.queryStringToQueries(val, queries, { }, options);
-    if (!queries.value.length)
-      queries.value = [history.getNewQuery()];
-
-    let result = history.executeQueries(queries.value, queries.value.length,
-                                        options.value);
+    let query = {}, options = {};
+    history.queryStringToQuery(val, query, options);
+    let result = history.executeQuery(query.value, options.value);
     result.addObserver(this);
     return val;
   },
@@ -209,18 +207,15 @@ PlacesViewBase.prototype = {
         container = selectedNode.parent;
         index = container.getChildIndex(selectedNode);
         if (PlacesUtils.nodeIsTagQuery(container)) {
-          tagName = container.title;
-          // TODO (Bug 1160193): properly support dropping on a tag root.
-          if (!tagName)
-            return null;
+          tagName = PlacesUtils.asQuery(container).query.tags[0];
         }
       }
     }
 
-    if (PlacesControllerDragHelper.disallowInsertion(container))
+    if (this.controller.disallowInsertion(container))
       return null;
 
-    return new InsertionPoint({
+    return new PlacesInsertionPoint({
       parentId: PlacesUtils.getConcreteItemId(container),
       parentGuid: PlacesUtils.getConcreteItemGuid(container),
       index, orientation, tagName
@@ -238,8 +233,13 @@ PlacesViewBase.prototype = {
   },
 
   clearAllContents(aPopup) {
-    while (aPopup.firstChild) {
-      aPopup.firstChild.remove();
+    let kid = aPopup.firstChild;
+    while (kid) {
+      let next = kid.nextSibling;
+      if (!kid.classList.contains("panel-header")) {
+        kid.remove();
+      }
+      kid = next;
     }
     aPopup._emptyMenuitem = aPopup._startMarker = aPopup._endMarker = null;
   },
@@ -438,7 +438,8 @@ PlacesViewBase.prototype = {
       }
       aPopup._siteURIMenuitem.setAttribute("targetURI", siteUrl);
       aPopup._siteURIMenuitem.setAttribute("oncommand",
-        "openUILink(this.getAttribute('targetURI'), event);");
+        "openUILink(this.getAttribute('targetURI'), event, {" +
+        " triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal({})});");
 
       // If a user middle-clicks this item we serve the oncommand event.
       // We are using checkForMiddleClick because of Bug 246720.
@@ -448,7 +449,7 @@ PlacesViewBase.prototype = {
         "checkForMiddleClick(this, event); event.stopPropagation();");
       let label =
         PlacesUIUtils.getFormattedString("menuOpenLivemarkOrigin.label",
-                                         [aPopup.parentNode.getAttribute("label")])
+                                         [aPopup.parentNode.getAttribute("label")]);
       aPopup._siteURIMenuitem.setAttribute("label", label);
       aPopup.insertBefore(aPopup._siteURIMenuitem, aPopup._startMarker);
 
@@ -684,6 +685,10 @@ PlacesViewBase.prototype = {
 
         PlacesUtils.livemarks.getLivemark({ id: aPlacesNode.itemId })
           .then(aLivemark => {
+            if (!this.controller) {
+              // We might have been destroyed in the interim...
+              return;
+            }
             let shouldInvalidate =
               !this.controller.hasCachedLivemarkInfo(aPlacesNode);
             this.controller.cacheLivemarkInfo(aPlacesNode, aLivemark);
@@ -728,14 +733,14 @@ PlacesViewBase.prototype = {
           else
             this._getDOMNodeForPlacesNode(child).removeAttribute("visited");
         }
-      }, Components.utils.reportError);
+      }, Cu.reportError);
   },
 
   /**
    * Checks whether the popup associated with the provided element is open.
    * This method may be overridden by classes that extend this base class.
    *
-   * @param  {nsIDOMElement} elt
+   * @param  {Element} elt
    * @return {Boolean}
    */
   _isPopupOpen(elt) {
@@ -903,8 +908,7 @@ PlacesViewBase.prototype = {
         break;
       }
 
-      if (child._placesNode && !child.hasAttribute("simulated-places-node") &&
-          !firstNonStaticNodeFound) {
+      if (child._placesNode && !firstNonStaticNodeFound) {
         firstNonStaticNodeFound = true;
         aPopup.insertBefore(aPopup._startMarker, child);
       }
@@ -928,6 +932,9 @@ PlacesViewBase.prototype = {
     }
 
     if (popup._placesNode && PlacesUIUtils.getViewForNode(popup) == this) {
+      if (this.controller.hasCachedLivemarkInfo(popup._placesNode)) {
+        Services.telemetry.scalarAdd("browser.feeds.livebookmark_opened", 1);
+      }
       if (!popup._placesNode.containerOpen)
         popup._placesNode.containerOpen = true;
       if (!popup._built)
@@ -989,6 +996,8 @@ function PlacesToolbar(aPlace) {
     this._addEventListeners(gBrowser.tabContainer, ["TabOpen", "TabClose"], false);
   }
 
+  this._updatingNodesVisibility = false;
+
   PlacesViewBase.call(this, aPlace);
 
   Services.telemetry.getHistogramById("FX_BOOKMARKS_TOOLBAR_INIT_MS")
@@ -1001,13 +1010,8 @@ PlacesToolbar.prototype = {
   _cbEvents: ["dragstart", "dragover", "dragexit", "dragend", "drop",
               "mousemove", "mouseover", "mouseout"],
 
-  QueryInterface: function PT_QueryInterface(aIID) {
-    if (aIID.equals(Ci.nsIDOMEventListener) ||
-        aIID.equals(Ci.nsITimerCallback))
-      return this;
-
-    return PlacesViewBase.prototype.QueryInterface.apply(this, arguments);
-  },
+  QueryInterface: ChromeUtils.generateQI(["nsITimerCallback",
+                                          ...PlacesViewBase.interfaces]),
 
   uninit: function PT_uninit() {
     this._removeEventListeners(this._viewElt, this._cbEvents, false);
@@ -1027,7 +1031,11 @@ PlacesToolbar.prototype = {
   _openedMenuButton: null,
   _allowPopupShowing: true,
 
-  _rebuild: function PT__rebuild() {
+  get _isAlive() {
+    return this._resultNode && this._rootElt;
+  },
+
+  async _rebuild() {
     // Clear out references to existing nodes, since they will be removed
     // and re-added.
     if (this._overFolder.elt)
@@ -1038,31 +1046,51 @@ PlacesToolbar.prototype = {
       this._rootElt.firstChild.remove();
     }
 
-    let fragment = document.createDocumentFragment();
     let cc = this._resultNode.childCount;
     if (cc > 0) {
       // There could be a lot of nodes, but we only want to build the ones that
-      // are likely to be shown, not all of them. Then we'll lazily create the
-      // missing nodes when needed.
-      // We don't want to cause reflows at every node insertion to calculate
-      // a precise size, thus we guess a size from the first node.
-      let button = this._insertNewItem(this._resultNode.getChild(0),
-                                       this._rootElt);
-      requestAnimationFrame(() => {
-        // May have been destroyed in the meanwhile.
-        if (!this._resultNode || !this._rootElt)
-          return;
-        // We assume a button with just the icon will be more or less a square,
-        // then compensate the measurement error by considering a larger screen
-        // width. Moreover the window could be bigger than the screen.
-        let size = button.clientHeight;
-        let limit = Math.min(cc, parseInt((window.screen.width * 1.5) / size));
-        for (let i = 1; i < limit; ++i) {
-          this._insertNewItem(this._resultNode.getChild(i), fragment);
-        }
-        this._rootElt.appendChild(fragment);
+      // are more likely to be shown, not all of them.
+      // We also don't want to wait for reflows at every node insertion, to
+      // calculate a precise number of visible items, thus we guess a size from
+      // the first non-separator node (because separators have flexible size).
+      let startIndex = 0;
+      let limit = await new Promise(resolve => window.requestAnimationFrame(() => {
+        if (!this._isAlive)
+          return resolve(cc);
 
-        this.updateNodesVisibility();
+        // Look for the first non-separator node.
+        let elt;
+        while (startIndex < cc) {
+          elt = this._insertNewItem(this._resultNode.getChild(startIndex),
+                                    this._rootElt);
+          ++startIndex;
+          if (elt.localName != "toolbarseparator")
+            break;
+        }
+        if (!elt)
+          return resolve(cc);
+
+        return window.promiseDocumentFlushed(() => {
+          // We assume a button with just the icon will be more or less a square,
+          // then compensate the measurement error by considering a larger screen
+          // width. Moreover the window could be bigger than the screen.
+          let size = elt.clientHeight || 1; // Sanity fallback.
+          resolve(Math.min(cc, parseInt((window.screen.width * 1.5) / size)));
+        });
+      }));
+
+      if (!this._isAlive)
+        return;
+
+      let fragment = document.createDocumentFragment();
+      for (let i = startIndex; i < limit; ++i) {
+        this._insertNewItem(this._resultNode.getChild(i), fragment);
+      }
+      window.requestAnimationFrame(() => {
+        if (this._isAlive) {
+          this._rootElt.appendChild(fragment);
+          this.updateNodesVisibility();
+        }
       });
     }
 
@@ -1166,11 +1194,15 @@ PlacesToolbar.prototype = {
       case "overflow":
         if (!this._isOverflowStateEventRelevant(aEvent))
           return;
+        // Avoid triggering overflow in containers if possible
+        aEvent.stopPropagation();
         this._onOverflow();
         break;
       case "underflow":
         if (!this._isOverflowStateEventRelevant(aEvent))
           return;
+        // Avoid triggering underflow in containers if possible
+        aEvent.stopPropagation();
         this._onUnderflow();
         break;
       case "TabOpen":
@@ -1242,34 +1274,55 @@ PlacesToolbar.prototype = {
     this._updateNodesVisibilityTimer = this._setTimer(100);
   },
 
-  _updateNodesVisibilityTimerCallback: function PT__updateNodesVisibilityTimerCallback() {
-    let scrollRect = this._rootElt.getBoundingClientRect();
-    let childOverflowed = false;
-    for (let child of this._rootElt.childNodes) {
-      // Once a child overflows, all the next ones will.
-      if (!childOverflowed) {
-        let childRect = child.getBoundingClientRect();
-        childOverflowed = this.isRTL ? (childRect.left < scrollRect.left)
-                                     : (childRect.right > scrollRect.right);
-      }
-
-      if (childOverflowed) {
-        child.removeAttribute("image");
-        child.style.visibility = "hidden";
-      } else {
-        let icon = child._placesNode.icon;
-        if (icon)
-          child.setAttribute("image", icon);
-        child.style.visibility = "visible";
-      }
+  async _updateNodesVisibilityTimerCallback() {
+    if (this._updatingNodesVisibility || window.closed) {
+      return;
     }
+    this._updatingNodesVisibility = true;
 
-    // We rebuild the chevron on popupShowing, so if it is open
-    // we must update it.
-    if (!this._chevron.collapsed && this._chevron.open)
-      this._updateChevronPopupNodesVisibility();
-    let event = new CustomEvent("BookmarksToolbarVisibilityUpdated", {bubbles: true});
-    this._viewElt.dispatchEvent(event);
+    let dwu = window.QueryInterface(Ci.nsIInterfaceRequestor)
+                    .getInterface(Ci.nsIDOMWindowUtils);
+
+    let scrollRect =
+      await window.promiseDocumentFlushed(() => dwu.getBoundsWithoutFlushing(this._rootElt));
+
+    let childOverflowed = false;
+
+    // We're about to potentially update a bunch of nodes, so we do it
+    // in a requestAnimationFrame so that other JS that's might execute
+    // in the same tick can avoid flushing styles and layout for these
+    // changes.
+    window.requestAnimationFrame(() => {
+      for (let child of this._rootElt.childNodes) {
+        // Once a child overflows, all the next ones will.
+        if (!childOverflowed) {
+          let childRect = dwu.getBoundsWithoutFlushing(child);
+          childOverflowed = this.isRTL ? (childRect.left < scrollRect.left)
+                                       : (childRect.right > scrollRect.right);
+        }
+
+        if (childOverflowed) {
+          child.removeAttribute("image");
+          child.style.visibility = "hidden";
+        } else {
+          let icon = child._placesNode.icon;
+          if (icon)
+            child.setAttribute("image", icon);
+          child.style.visibility = "visible";
+        }
+      }
+
+      // We rebuild the chevron on popupShowing, so if it is open
+      // we must update it.
+      if (!this._chevron.collapsed && this._chevron.open) {
+        this._updateChevronPopupNodesVisibility();
+      }
+
+      let event = new CustomEvent("BookmarksToolbarVisibilityUpdated", {bubbles: true});
+      this._viewElt.dispatchEvent(event);
+    });
+
+    this._updatingNodesVisibility = false;
   },
 
   nodeInserted:
@@ -1413,7 +1466,7 @@ PlacesToolbar.prototype = {
           .then(aLivemark => {
             this.controller.cacheLivemarkInfo(aPlacesNode, aLivemark);
             this.invalidateContainer(aPlacesNode);
-          }, Components.utils.reportError);
+          }, Cu.reportError);
       }
     } else {
       // Node is in a submenu.
@@ -1448,7 +1501,7 @@ PlacesToolbar.prototype = {
 
     if (elt == this._rootElt) {
       // Container is the toolbar itself.
-      this._rebuild();
+      this._rebuild().catch(Cu.reportError);
       return;
     }
 
@@ -1499,7 +1552,7 @@ PlacesToolbar.prototype = {
       let eltRect = elt.getBoundingClientRect();
       let eltIndex = Array.prototype.indexOf.call(this._rootElt.childNodes, elt);
       if (PlacesUtils.nodeIsFolder(elt._placesNode) &&
-          !PlacesUIUtils.isContentsReadOnly(elt._placesNode)) {
+          !PlacesUIUtils.isFolderReadOnly(elt._placesNode, this)) {
         // This is a folder.
         // If we are in the middle of it, drop inside it.
         // Otherwise, drop before it, with regards to RTL mode.
@@ -1508,7 +1561,7 @@ PlacesToolbar.prototype = {
                        : (aEvent.clientX < eltRect.left + threshold)) {
           // Drop before this folder.
           dropPoint.ip =
-            new InsertionPoint({
+            new PlacesInsertionPoint({
               parentId: PlacesUtils.getConcreteItemId(this._resultNode),
               parentGuid: PlacesUtils.getConcreteItemGuid(this._resultNode),
               index: eltIndex,
@@ -1521,7 +1574,7 @@ PlacesToolbar.prototype = {
           let tagName = PlacesUtils.nodeIsTagQuery(elt._placesNode) ?
                         elt._placesNode.title : null;
           dropPoint.ip =
-            new InsertionPoint({
+            new PlacesInsertionPoint({
               parentId: PlacesUtils.getConcreteItemId(elt._placesNode),
               parentGuid: PlacesUtils.getConcreteItemGuid(elt._placesNode),
               tagName
@@ -1535,7 +1588,7 @@ PlacesToolbar.prototype = {
             -1 : eltIndex + 1;
 
           dropPoint.ip =
-            new InsertionPoint({
+            new PlacesInsertionPoint({
               parentId: PlacesUtils.getConcreteItemId(this._resultNode),
               parentGuid: PlacesUtils.getConcreteItemGuid(this._resultNode),
               index: beforeIndex,
@@ -1551,7 +1604,7 @@ PlacesToolbar.prototype = {
                        : (aEvent.clientX < eltRect.left + threshold)) {
           // Drop before this bookmark.
           dropPoint.ip =
-            new InsertionPoint({
+            new PlacesInsertionPoint({
               parentId: PlacesUtils.getConcreteItemId(this._resultNode),
               parentGuid: PlacesUtils.getConcreteItemGuid(this._resultNode),
               index: eltIndex,
@@ -1564,7 +1617,7 @@ PlacesToolbar.prototype = {
             eltIndex == this._rootElt.childNodes.length - 1 ?
             -1 : eltIndex + 1;
           dropPoint.ip =
-            new InsertionPoint({
+            new PlacesInsertionPoint({
               parentId: PlacesUtils.getConcreteItemId(this._resultNode),
               parentGuid: PlacesUtils.getConcreteItemGuid(this._resultNode),
               index: beforeIndex,
@@ -1577,7 +1630,7 @@ PlacesToolbar.prototype = {
       // We are most likely dragging on the empty area of the
       // toolbar, we should drop after the last node.
       dropPoint.ip =
-        new InsertionPoint({
+        new PlacesInsertionPoint({
           parentId: PlacesUtils.getConcreteItemId(this._resultNode),
           parentGuid: PlacesUtils.getConcreteItemGuid(this._resultNode),
           orientation: Ci.nsITreeView.DROP_BEFORE
@@ -1597,11 +1650,7 @@ PlacesToolbar.prototype = {
   notify: function PT_notify(aTimer) {
     if (aTimer == this._updateNodesVisibilityTimer) {
       this._updateNodesVisibilityTimer = null;
-      // TODO: This should use promiseLayoutFlushed("layout"), so that
-      // _updateNodesVisibilityTimerCallback can use getBoundsWithoutFlush. But
-      // for yet unknown reasons doing that causes intermittent failures,
-      // apparently due the flush not happening in a meaningful time.
-      window.requestAnimationFrame(this._updateNodesVisibilityTimerCallback.bind(this));
+      this._updateNodesVisibilityTimerCallback();
     } else if (aTimer == this._ibTimer) {
       // * Timer to turn off indicator bar.
       this._dropIndicator.collapsed = true;
@@ -1774,7 +1823,7 @@ PlacesToolbar.prototype = {
     let dropPoint = this._getDropPoint(aEvent);
     if (dropPoint && dropPoint.ip) {
       PlacesControllerDragHelper.onDrop(dropPoint.ip, aEvent.dataTransfer)
-                                .catch(Components.utils.reportError);
+                                .catch(Cu.reportError);
       aEvent.preventDefault();
     }
 
@@ -1865,7 +1914,7 @@ PlacesToolbar.prototype = {
  */
 function PlacesMenu(aPopupShowingEvent, aPlace, aOptions) {
   this._rootElt = aPopupShowingEvent.target; // <menupopup>
-  this._viewElt = this._rootElt.parentNode;   // <menu>
+  this._viewElt = this._rootElt.parentNode; // <menu>
   this._viewElt._placesView = this;
   this._addEventListeners(this._rootElt, ["popupshowing", "popuphidden"], true);
   this._addEventListeners(window, ["unload"], false);
@@ -1886,13 +1935,6 @@ function PlacesMenu(aPopupShowingEvent, aPlace, aOptions) {
 
 PlacesMenu.prototype = {
   __proto__: PlacesViewBase.prototype,
-
-  QueryInterface: function PM_QueryInterface(aIID) {
-    if (aIID.equals(Ci.nsIDOMEventListener))
-      return this;
-
-    return PlacesViewBase.prototype.QueryInterface.apply(this, arguments);
-  },
 
   _removeChild: function PM_removeChild(aChild) {
     PlacesViewBase.prototype._removeChild.apply(this, arguments);
@@ -1954,10 +1996,6 @@ function PlacesPanelMenuView(aPlace, aViewId, aRootId, aOptions) {
 
 PlacesPanelMenuView.prototype = {
   __proto__: PlacesViewBase.prototype,
-
-  QueryInterface: function PAMV_QueryInterface(aIID) {
-    return PlacesViewBase.prototype.QueryInterface.apply(this, arguments);
-  },
 
   uninit: function PAMV_uninit() {
     PlacesViewBase.prototype.uninit.apply(this, arguments);
@@ -2062,7 +2100,7 @@ PlacesPanelMenuView.prototype = {
         .then(aLivemark => {
           this.controller.cacheLivemarkInfo(aPlacesNode, aLivemark);
           this.invalidateContainer(aPlacesNode);
-        }, Components.utils.reportError);
+        }, Cu.reportError);
     }
   },
 
@@ -2113,19 +2151,11 @@ this.PlacesPanelview = class extends PlacesViewBase {
     return this._events = ["click", "command", "dragend", "dragstart", "ViewHiding", "ViewShown"];
   }
 
-  get panel() {
-    return this.panelMultiView.parentNode;
-  }
-
-  get panelMultiView() {
-    return this._viewElt.panelMultiView;
-  }
-
   handleEvent(event) {
     switch (event.type) {
       case "click":
-        // For left and middle clicks, fall through to the command handler.
-        if (event.button >= 2) {
+        // For middle clicks, fall through to the command handler.
+        if (event.button != 1) {
           break;
         }
       case "command":
@@ -2154,8 +2184,22 @@ this.PlacesPanelview = class extends PlacesViewBase {
     if (!button._placesNode)
       return;
 
+    let modifKey = AppConstants.platform === "macosx" ? event.metaKey
+                                                      : event.ctrlKey;
+    if (!PlacesUIUtils.openInTabClosesMenu && modifKey) {
+      // If 'Recent Bookmarks' in Bookmarks Panel.
+      if (button.parentNode.id == "panelMenu_bookmarksMenu") {
+        button.setAttribute("closemenu", "none");
+      }
+    } else {
+      button.removeAttribute("closemenu");
+    }
     PlacesUIUtils.openNodeWithEvent(button._placesNode, event);
-    this.panelMultiView.closest("panel").hidePopup();
+    // Unlike left-click, middle-click requires manual menu closing.
+    if (button.parentNode.id != "panelMenu_bookmarksMenu" ||
+        (event.type == "click" && event.button == 1 && PlacesUIUtils.openInTabClosesMenu)) {
+      this.panelMultiView.closest("panel").hidePopup();
+    }
   }
 
   _onDragEnd() {
@@ -2178,6 +2222,7 @@ this.PlacesPanelview = class extends PlacesViewBase {
   uninit(event) {
     this._removeEventListeners(this.panelMultiView, this.events);
     this._removeEventListeners(window, ["unload"]);
+    delete this.panelMultiView;
     super.uninit(event);
   }
 
@@ -2238,7 +2283,7 @@ this.PlacesPanelview = class extends PlacesViewBase {
   }
 
   _isPopupOpen() {
-    return this.panel.state == "open" && this.panelMultiView.current == this._viewElt;
+    return PanelView.forNode(this._viewElt).active;
   }
 
   _onPopupHidden(event) {
@@ -2262,6 +2307,7 @@ this.PlacesPanelview = class extends PlacesViewBase {
     // we ever get here.
     if (event.originalTarget == this._rootElt) {
       // Start listening for events from all panels inside the panelmultiview.
+      this.panelMultiView = this._viewElt.panelMultiView;
       this._addEventListeners(this.panelMultiView, this.events);
     }
     super._onPopupShowing(event);
@@ -2277,4 +2323,4 @@ this.PlacesPanelview = class extends PlacesViewBase {
     if (!this.controllers.getControllerCount() && this._controller)
       this.controllers.appendController(this._controller);
   }
-}
+};

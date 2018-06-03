@@ -7,7 +7,6 @@
 #include "EffectSet.h"
 #include "mozilla/dom/Element.h" // For Element
 #include "mozilla/RestyleManager.h"
-#include "mozilla/RestyleManagerInlines.h"
 #include "nsCSSPseudoElements.h" // For CSSPseudoElementType
 #include "nsCycleCollectionNoteChild.h" // For CycleCollectionNoteChild
 #include "nsPresContext.h"
@@ -150,7 +149,7 @@ EffectSet::GetEffectSetPropertyAtom(CSSPseudoElementType aPseudoType)
 }
 
 void
-EffectSet::AddEffect(dom::KeyframeEffectReadOnly& aEffect)
+EffectSet::AddEffect(dom::KeyframeEffect& aEffect)
 {
   if (mEffects.Contains(&aEffect)) {
     return;
@@ -161,7 +160,7 @@ EffectSet::AddEffect(dom::KeyframeEffectReadOnly& aEffect)
 }
 
 void
-EffectSet::RemoveEffect(dom::KeyframeEffectReadOnly& aEffect)
+EffectSet::RemoveEffect(dom::KeyframeEffect& aEffect)
 {
   if (!mEffects.Contains(&aEffect)) {
     return;

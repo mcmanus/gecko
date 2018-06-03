@@ -40,11 +40,6 @@ public:
 
   virtual nsresult GetScriptLocation(nsACString& aStr) override;
 
-  /**
-   * Called at startup to setup static data, e.g. about:config pref-observers.
-   */
-  static void InitializeStatics();
-
   static nsresult
   GenerateOriginNoSuffixFromURI(nsIURI* aURI, nsACString& aOrigin);
 
@@ -52,9 +47,6 @@ public:
 
   nsCOMPtr<nsIURI> mDomain;
   nsCOMPtr<nsIURI> mCodebase;
-  // If mCodebaseImmutable is true, mCodebase is non-null and immutable
-  bool mCodebaseImmutable;
-  bool mDomainImmutable;
 
 protected:
   virtual ~ContentPrincipal();

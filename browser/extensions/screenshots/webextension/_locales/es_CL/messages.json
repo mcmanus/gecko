@@ -6,7 +6,7 @@
     "message": "Mozilla <screenshots-feedback@mozilla.com>"
   },
   "contextMenuLabel": {
-    "message": "Toma una captura de pantalla"
+    "message": "Tomar una captura de pantalla"
   },
   "myShotsLink": {
     "message": "Mis capturas"
@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "Descargar"
   },
+  "downloadOnlyNotice": {
+    "message": "Actualmente estás en el modo de solo descarga."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots cambia automáticamente al modo de solo descarga en estas situaciones:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "En una ventana de navegación privada."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Cookies de terceros desactivadas."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "Al estar activado \"Nunca recordar el historial\"."
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "Estás usando Firefox ESR."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "Las subidas han sido desactivadas."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Enlace copiado"
   },
@@ -36,6 +57,28 @@
     "message": "El enlace a tu captura ha sido copiado al portapapeles. Presiona $META_KEY$-V para pegarla.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Copiar"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Captura copiada"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Tu captura ha sido copiada al portapapeles. Presiona $META_KEY$-V para pegarla.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Esta imagen ha sido recortada a $PIXELS$px.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -81,6 +124,12 @@
   },
   "tourBodyIntro": {
     "message": "Toma, guarda y comparte capturas sin salir de Firefox."
+  },
+  "tourHeaderPageAction": {
+    "message": "Una nueva forma de guardar"
+  },
+  "tourBodyPageAction": {
+    "message": "Expande el menú de acciones de página en la barra de direcciones en cualquier momento en que quieras tomar una captura."
   },
   "tourHeaderClickAndDrag": {
     "message": "Captura lo que necesitas"

@@ -81,7 +81,7 @@ add_task(async function test_insert_error_cases() {
           date: futureDate,
         }
       ]}),
-    `TypeError: date: ${futureDate} is not a valid date`,
+    /cannot be a future date/,
     "passing a visit object with a future date to History.insert should throw a TypeError"
   );
   Assert.throws(
@@ -99,8 +99,8 @@ add_task(async function test_history_insert() {
   const TEST_URL = "http://mozilla.com/";
 
   let inserter = async function(name, filter, referrer, date, transition) {
-    do_print(name);
-    do_print(`filter: ${filter}, referrer: ${referrer}, date: ${date}, transition: ${transition}`);
+    info(name);
+    info(`filter: ${filter}, referrer: ${referrer}, date: ${date}, transition: ${transition}`);
 
     let uri = NetUtil.newURI(TEST_URL + Math.random());
     let title = "Visit " + Math.random();
@@ -146,6 +146,6 @@ add_task(async function test_history_insert() {
       }
     }
   } finally {
-    await PlacesTestUtils.clearHistory();
+    await PlacesUtils.history.clear();
   }
 });

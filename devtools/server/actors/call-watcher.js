@@ -5,9 +5,12 @@
 
 /* global XPCNativeWrapper */
 
-const {Ci, Cu} = require("chrome");
+const {Cu} = require("chrome");
 const protocol = require("devtools/shared/protocol");
-const {serializeStack, parseStack} = Cu.import("resource://devtools/shared/base-loader.js", {});
+const ChromeUtils = require("ChromeUtils");
+// base-loader.js is a JSM without .jsm file extension, so it has to be loaded
+// via ChromeUtils.import and not require() which would consider it as a CommonJS module
+const {serializeStack, parseStack} = ChromeUtils.import("resource://devtools/shared/base-loader.js", {});
 
 const { functionCallSpec, callWatcherSpec } = require("devtools/shared/specs/call-watcher");
 const { CallWatcherFront } = require("devtools/shared/fronts/call-watcher");
@@ -46,7 +49,7 @@ var FunctionCallActor = protocol.ActorClassWithSpec(functionCallSpec, {
    *        Determines whether or not FunctionCallActor stores a weak reference
    *        to the underlying objects.
    */
-  initialize: function (
+  initialize: function(
     conn,
     [window, global, caller, type, name, stack, timestamp, args, result],
     holdWeak
@@ -65,7 +68,7 @@ var FunctionCallActor = protocol.ActorClassWithSpec(functionCallSpec, {
     // prevent natural GC if `holdWeak` was passed into
     // setup as truthy.
     if (holdWeak) {
-      let weakRefs = {
+      const weakRefs = {
         window: Cu.getWeakReference(window),
         caller: Cu.getWeakReference(caller),
         args: Cu.getWeakReference(args),
@@ -101,7 +104,7 @@ var FunctionCallActor = protocol.ActorClassWithSpec(functionCallSpec, {
    * Customize the marshalling of this actor to provide some generic information
    * directly on the Front instance.
    */
-  form: function () {
+  form: function() {
     return {
       actor: this.actorID,
       type: this.details.type,
@@ -119,8 +122,8 @@ var FunctionCallActor = protocol.ActorClassWithSpec(functionCallSpec, {
    * Gets more information about this function call, which is not necessarily
    * available on the Front instance.
    */
-  getDetails: function () {
-    let { type, name, stack, timestamp } = this.details;
+  getDetails: function() {
+    const { type, name, stack, timestamp } = this.details;
 
     // Since not all calls on the stack have corresponding owner files (e.g.
     // callbacks of a requestAnimationFrame etc.), there's no benefit in
@@ -152,27 +155,27 @@ var FunctionCallActor = protocol.ActorClassWithSpec(functionCallSpec, {
    * @return string
    *         The arguments as a string.
    */
-  _generateArgsPreview: function (args) {
-    let { global, name, caller } = this.details;
+  _generateArgsPreview: function(args) {
+    const { global, name, caller } = this.details;
 
     // Get method signature to determine if there are any enums
     // used in this method.
     let methodSignatureEnums;
 
-    let knownGlobal = CallWatcherFront.KNOWN_METHODS[global];
+    const knownGlobal = CallWatcherFront.KNOWN_METHODS[global];
     if (knownGlobal) {
-      let knownMethod = knownGlobal[name];
+      const knownMethod = knownGlobal[name];
       if (knownMethod) {
-        let isOverloaded = typeof knownMethod.enums === "function";
+        const isOverloaded = typeof knownMethod.enums === "function";
         if (isOverloaded) {
-          methodSignatureEnums = methodSignatureEnums(args);
+          methodSignatureEnums = knownMethod.enums(args);
         } else {
           methodSignatureEnums = knownMethod.enums;
         }
       }
     }
 
-    let serializeArgs = () => args.map((arg, i) => {
+    const serializeArgs = () => args.map((arg, i) => {
       // XXX: Bug 978960.
       if (arg === undefined) {
         return "undefined";
@@ -206,7 +209,7 @@ var FunctionCallActor = protocol.ActorClassWithSpec(functionCallSpec, {
    * @return string
    *         The arguments as a string.
    */
-  _generateStringPreview: function (data) {
+  _generateStringPreview: function(data) {
     // XXX: Bug 978960.
     if (data === undefined) {
       return "undefined";
@@ -228,7 +231,7 @@ var FunctionCallActor = protocol.ActorClassWithSpec(functionCallSpec, {
  * This actor observes function calls on certain objects or globals.
  */
 exports.CallWatcherActor = protocol.ActorClassWithSpec(callWatcherSpec, {
-  initialize: function (conn, tabActor) {
+  initialize: function(conn, tabActor) {
     protocol.Actor.prototype.initialize.call(this, conn);
     this.tabActor = tabActor;
     this._onGlobalCreated = this._onGlobalCreated.bind(this);
@@ -237,7 +240,7 @@ exports.CallWatcherActor = protocol.ActorClassWithSpec(callWatcherSpec, {
     this.tabActor.on("window-ready", this._onGlobalCreated);
     this.tabActor.on("window-destroyed", this._onGlobalDestroyed);
   },
-  destroy: function (conn) {
+  destroy: function(conn) {
     protocol.Actor.prototype.destroy.call(this, conn);
     this.tabActor.off("window-ready", this._onGlobalCreated);
     this.tabActor.off("window-destroyed", this._onGlobalDestroyed);
@@ -256,7 +259,7 @@ exports.CallWatcherActor = protocol.ActorClassWithSpec(callWatcherSpec, {
    * created, in order to instrument the specified objects and become
    * aware of everything the content does with them.
    */
-  setup: function ({
+  setup: function({
     tracedGlobals, tracedFunctions, startRecording, performReload, holdWeak, storeCalls
   }) {
     if (this._initialized) {
@@ -284,7 +287,7 @@ exports.CallWatcherActor = protocol.ActorClassWithSpec(callWatcherSpec, {
    * to hibernation. This method is called automatically just before the
    * actor is destroyed.
    */
-  finalize: function () {
+  finalize: function() {
     if (!this._initialized) {
       return;
     }
@@ -298,28 +301,28 @@ exports.CallWatcherActor = protocol.ActorClassWithSpec(callWatcherSpec, {
   /**
    * Returns whether the instrumented function calls are currently recorded.
    */
-  isRecording: function () {
+  isRecording: function() {
     return this._recording;
   },
 
   /**
    * Initialize the timestamp epoch used to offset function call timestamps.
    */
-  initTimestampEpoch: function () {
+  initTimestampEpoch: function() {
     this._timestampEpoch = this.tabActor.window.performance.now();
   },
 
   /**
    * Starts recording function calls.
    */
-  resumeRecording: function () {
+  resumeRecording: function() {
     this._recording = true;
   },
 
   /**
    * Stops recording function calls.
    */
-  pauseRecording: function () {
+  pauseRecording: function() {
     this._recording = false;
     return this._functionCalls;
   },
@@ -328,14 +331,14 @@ exports.CallWatcherActor = protocol.ActorClassWithSpec(callWatcherSpec, {
    * Erases all the recorded function calls.
    * Calling `resumeRecording` or `pauseRecording` does not erase history.
    */
-  eraseRecording: function () {
+  eraseRecording: function() {
     this._functionCalls = [];
   },
 
   /**
    * Invoked whenever the current tab actor's document global is created.
    */
-  _onGlobalCreated: function ({window, id, isTopLevel}) {
+  _onGlobalCreated: function({window, id, isTopLevel}) {
     if (!this._initialized) {
       return;
     }
@@ -345,19 +348,19 @@ exports.CallWatcherActor = protocol.ActorClassWithSpec(callWatcherSpec, {
       return;
     }
 
-    let self = this;
+    const self = this;
     this._tracedWindowId = id;
 
-    let unwrappedWindow = XPCNativeWrapper.unwrap(window);
-    let callback = this._onContentFunctionCall;
+    const unwrappedWindow = XPCNativeWrapper.unwrap(window);
+    const callback = this._onContentFunctionCall;
 
-    for (let global of this._tracedGlobals) {
-      let prototype = unwrappedWindow[global].prototype;
-      let properties = Object.keys(prototype);
+    for (const global of this._tracedGlobals) {
+      const prototype = unwrappedWindow[global].prototype;
+      const properties = Object.keys(prototype);
       properties.forEach(name => overrideSymbol(global, prototype, name, callback));
     }
 
-    for (let name of this._tracedFunctions) {
+    for (const name of this._tracedFunctions) {
       overrideSymbol("window", unwrappedWindow, name, callback);
     }
 
@@ -366,7 +369,7 @@ exports.CallWatcherActor = protocol.ActorClassWithSpec(callWatcherSpec, {
      * invoke a callback whenever it is called.
      */
     function overrideSymbol(global, target, name, subcallback) {
-      let propertyDescriptor = Object.getOwnPropertyDescriptor(target, name);
+      const propertyDescriptor = Object.getOwnPropertyDescriptor(target, name);
 
       if (propertyDescriptor.get || propertyDescriptor.set) {
         overrideAccessor(global, target, name, propertyDescriptor, subcallback);
@@ -383,9 +386,9 @@ exports.CallWatcherActor = protocol.ActorClassWithSpec(callWatcherSpec, {
     function overrideFunction(global, target, name, descriptor, subcallback) {
       // Invoking .apply on an unxrayed content function doesn't work, because
       // the arguments array is inaccessible to it. Get Xrays back.
-      let originalFunc = Cu.unwaiveXrays(target[name]);
+      const originalFunc = Cu.unwaiveXrays(target[name]);
 
-      Cu.exportFunction(function (...args) {
+      Cu.exportFunction(function(...args) {
         let result;
         try {
           result = Cu.waiveXrays(originalFunc.apply(this, args));
@@ -394,9 +397,9 @@ exports.CallWatcherActor = protocol.ActorClassWithSpec(callWatcherSpec, {
         }
 
         if (self._recording) {
-          let type = CallWatcherFront.METHOD_FUNCTION;
-          let stack = getStack(name);
-          let timestamp = self.tabActor.window.performance.now() - self._timestampEpoch;
+          const type = CallWatcherFront.METHOD_FUNCTION;
+          const stack = getStack(name);
+          const timestamp = self.tabActor.window.performance.now() - self._timestampEpoch;
           subcallback(unwrappedWindow, global, this, type, name, stack, timestamp,
             args, result);
         }
@@ -416,35 +419,37 @@ exports.CallWatcherActor = protocol.ActorClassWithSpec(callWatcherSpec, {
     function overrideAccessor(global, target, name, descriptor, subcallback) {
       // Invoking .apply on an unxrayed content function doesn't work, because
       // the arguments array is inaccessible to it. Get Xrays back.
-      let originalGetter = Cu.unwaiveXrays(target.__lookupGetter__(name));
-      let originalSetter = Cu.unwaiveXrays(target.__lookupSetter__(name));
+      const originalGetter = Cu.unwaiveXrays(target.__lookupGetter__(name));
+      const originalSetter = Cu.unwaiveXrays(target.__lookupSetter__(name));
 
       Object.defineProperty(target, name, {
-        get: function (...args) {
+        get: function(...args) {
           if (!originalGetter) {
             return undefined;
           }
-          let result = Cu.waiveXrays(originalGetter.apply(this, args));
+          const result = Cu.waiveXrays(originalGetter.apply(this, args));
 
           if (self._recording) {
-            let type = CallWatcherFront.GETTER_FUNCTION;
-            let stack = getStack(name);
-            let timestamp = self.tabActor.window.performance.now() - self._timestampEpoch;
+            const type = CallWatcherFront.GETTER_FUNCTION;
+            const stack = getStack(name);
+            const timestamp =
+              self.tabActor.window.performance.now() - self._timestampEpoch;
             subcallback(unwrappedWindow, global, this, type, name, stack, timestamp,
               args, result);
           }
           return result;
         },
-        set: function (...args) {
+        set: function(...args) {
           if (!originalSetter) {
             return;
           }
           originalSetter.apply(this, args);
 
           if (self._recording) {
-            let type = CallWatcherFront.SETTER_FUNCTION;
-            let stack = getStack(name);
-            let timestamp = self.tabActor.window.performance.now() - self._timestampEpoch;
+            const type = CallWatcherFront.SETTER_FUNCTION;
+            const stack = getStack(name);
+            const timestamp =
+              self.tabActor.window.performance.now() - self._timestampEpoch;
             subcallback(unwrappedWindow, global, this, type, name, stack, timestamp,
               args, undefined);
           }
@@ -471,15 +476,15 @@ exports.CallWatcherActor = protocol.ActorClassWithSpec(callWatcherSpec, {
       // Of course, using a simple regex like /(.*?)@(.*):(\d*):\d*/ would be
       // much prettier, but this is a very hot function, so let's sqeeze
       // every drop of performance out of it.
-      let calls = [];
+      const calls = [];
       let callIndex = 0;
       let currNewLinePivot = stack.indexOf("\n") + 1;
       let nextNewLinePivot = stack.indexOf("\n", currNewLinePivot);
 
       while (nextNewLinePivot > 0) {
-        let nameDelimiterIndex = stack.indexOf("@", currNewLinePivot);
-        let columnDelimiterIndex = stack.lastIndexOf(":", nextNewLinePivot - 1);
-        let lineDelimiterIndex = stack.lastIndexOf(":", columnDelimiterIndex - 1);
+        const nameDelimiterIndex = stack.indexOf("@", currNewLinePivot);
+        const columnDelimiterIndex = stack.lastIndexOf(":", nextNewLinePivot - 1);
+        const lineDelimiterIndex = stack.lastIndexOf(":", columnDelimiterIndex - 1);
 
         if (!calls[callIndex]) {
           calls[callIndex] = { name: "", file: "", line: 0 };
@@ -489,9 +494,9 @@ exports.CallWatcherActor = protocol.ActorClassWithSpec(callWatcherSpec, {
         }
 
         if (callIndex > 0) {
-          let file = stack.substring(nameDelimiterIndex + 1, lineDelimiterIndex);
-          let line = stack.substring(lineDelimiterIndex + 1, columnDelimiterIndex);
-          let name = stack.substring(currNewLinePivot, nameDelimiterIndex);
+          const file = stack.substring(nameDelimiterIndex + 1, lineDelimiterIndex);
+          const line = stack.substring(lineDelimiterIndex + 1, columnDelimiterIndex);
+          const name = stack.substring(currNewLinePivot, nameDelimiterIndex);
           calls[callIndex].name = name;
           calls[callIndex - 1].file = file;
           calls[callIndex - 1].line = line;
@@ -513,7 +518,7 @@ exports.CallWatcherActor = protocol.ActorClassWithSpec(callWatcherSpec, {
   /**
    * Invoked whenever the current tab actor's inner window is destroyed.
    */
-  _onGlobalDestroyed: function ({window, id, isTopLevel}) {
+  _onGlobalDestroyed: function({window, id, isTopLevel}) {
     if (this._tracedWindowId == id) {
       this.pauseRecording();
       this.eraseRecording();
@@ -524,14 +529,14 @@ exports.CallWatcherActor = protocol.ActorClassWithSpec(callWatcherSpec, {
   /**
    * Invoked whenever an instrumented function is called.
    */
-  _onContentFunctionCall: function (...details) {
+  _onContentFunctionCall: function(...details) {
     // If the consuming tool has finalized call-watcher, ignore the
     // still-instrumented calls.
     if (this._finalized) {
       return;
     }
 
-    let functionCall = new FunctionCallActor(this.conn, details, this._holdWeak);
+    const functionCall = new FunctionCallActor(this.conn, details, this._holdWeak);
 
     if (this._storeCalls) {
       this._functionCalls.push(functionCall);
@@ -568,7 +573,7 @@ function getBitToEnumValue(type, object, arg) {
   if (!table) {
     table = gEnumsLookupTable[type] = {};
 
-    for (let key in object) {
+    for (const key in object) {
       if (key.match(gEnumRegex)) {
         // Maps `16384` to `"COLOR_BUFFER_BIT"`, etc.
         table[object[key]] = key;
@@ -583,9 +588,9 @@ function getBitToEnumValue(type, object, arg) {
 
   // Otherwise, attempt to reduce it to the original bit flags:
   // `16640` -> "COLOR_BUFFER_BIT | DEPTH_BUFFER_BIT"
-  let flags = [];
+  const flags = [];
   for (let flag in table) {
-    if (INVALID_ENUMS.indexOf(table[flag]) !== -1) {
+    if (INVALID_ENUMS.includes(table[flag])) {
       continue;
     }
 
@@ -614,13 +619,13 @@ function getBitToEnumValue(type, object, arg) {
  * is an optimized, hot function.
  */
 function createContentError(e, win) {
-  let { message, name, stack } = e;
-  let parsedStack = parseStack(stack);
-  let { fileName, lineNumber, columnNumber } = parsedStack[parsedStack.length - 1];
+  const { message, name, stack } = e;
+  const parsedStack = parseStack(stack);
+  const { fileName, lineNumber, columnNumber } = parsedStack[parsedStack.length - 1];
   let error;
 
-  let isDOMException = e instanceof Ci.nsIDOMDOMException;
-  let constructor = isDOMException ? win.DOMException : (win[e.name] || win.Error);
+  const isDOMException = ChromeUtils.getClassName(e) === "DOMException";
+  const constructor = isDOMException ? win.DOMException : (win[e.name] || win.Error);
 
   if (isDOMException) {
     error = new constructor(message, name);

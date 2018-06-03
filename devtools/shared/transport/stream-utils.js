@@ -8,7 +8,7 @@ const { Ci, Cc, Cr, CC } = require("chrome");
 const Services = require("Services");
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
 const { dumpv } = DevToolsUtils;
-const EventEmitter = require("devtools/shared/old-event-emitter");
+const EventEmitter = require("devtools/shared/event-emitter");
 const defer = require("devtools/shared/defer");
 
 DevToolsUtils.defineLazyGetter(this, "IOUtil", () => {
@@ -56,7 +56,7 @@ const BUFFER_SIZE = 0x8000;
  *         (unexpected) errors occur.
  */
 function copyStream(input, output, length) {
-  let copier = new StreamCopier(input, output, length);
+  const copier = new StreamCopier(input, output, length);
   return copier.copy();
 }
 
@@ -96,7 +96,7 @@ StreamCopier._nextId = 0;
 
 StreamCopier.prototype = {
 
-  copy: function () {
+  copy: function() {
     // Dispatch to the next tick so that it's possible to attach a progress
     // event listener, even for extremely fast copies (like when testing).
     Services.tm.dispatchToMainThread(() => {
@@ -109,9 +109,9 @@ StreamCopier.prototype = {
     return this;
   },
 
-  _copy: function () {
-    let bytesAvailable = this.input.available();
-    let amountToCopy = Math.min(bytesAvailable, this._amountLeft);
+  _copy: function() {
+    const bytesAvailable = this.input.available();
+    const amountToCopy = Math.min(bytesAvailable, this._amountLeft);
     this._debug("Trying to copy: " + amountToCopy);
 
     let bytesCopied;
@@ -142,14 +142,14 @@ StreamCopier.prototype = {
     this.input.asyncWait(this, 0, 0, Services.tm.currentThread);
   },
 
-  _emitProgress: function () {
+  _emitProgress: function() {
     this.emit("progress", {
       bytesSent: this._length - this._amountLeft,
       totalBytes: this._length
     });
   },
 
-  _flush: function () {
+  _flush: function() {
     try {
       this.output.flush();
     } catch (e) {
@@ -166,7 +166,7 @@ StreamCopier.prototype = {
     this._deferred.resolve();
   },
 
-  _destroy: function () {
+  _destroy: function() {
     this._destroy = null;
     this._copy = null;
     this._flush = null;
@@ -175,16 +175,16 @@ StreamCopier.prototype = {
   },
 
   // nsIInputStreamCallback
-  onInputStreamReady: function () {
+  onInputStreamReady: function() {
     this._streamReadyCallback();
   },
 
   // nsIOutputStreamCallback
-  onOutputStreamReady: function () {
+  onOutputStreamReady: function() {
     this._streamReadyCallback();
   },
 
-  _debug: function (msg) {
+  _debug: function(msg) {
     // Prefix logs with the copier ID, which makes logs much easier to
     // understand when several copiers are running simultaneously
     dumpv("Copier: " + this._id + " " + msg);

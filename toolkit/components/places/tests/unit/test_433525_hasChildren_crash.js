@@ -26,10 +26,10 @@ add_task(async function test_execute() {
   var root = result.root;
 
   // check hasChildren while the container is closed
-  do_check_eq(root.hasChildren, true);
+  Assert.equal(root.hasChildren, true);
 
   // now check via the saved search path
-  var queryURI = histsvc.queriesToQueryString([query], 1, options);
+  var queryURI = histsvc.queryToQueryString(query, options);
   await PlacesUtils.bookmarks.insert({
     parentGuid: PlacesUtils.bookmarks.toolbarGuid,
     title: "test query",
@@ -39,13 +39,13 @@ add_task(async function test_execute() {
   // query for that query
   options = histsvc.getNewQueryOptions();
   query = histsvc.getNewQuery();
-  query.setFolders([PlacesUtils.toolbarFolderId], 1);
+  query.setParents([PlacesUtils.bookmarks.toolbarGuid], 1);
   result = histsvc.executeQuery(query, options);
   root = result.root;
   root.containerOpen = true;
   var queryNode = root.getChild(0);
-  do_check_eq(queryNode.title, "test query");
+  Assert.equal(queryNode.title, "test query");
   queryNode.QueryInterface(Ci.nsINavHistoryContainerResultNode);
-  do_check_eq(queryNode.hasChildren, true);
+  Assert.equal(queryNode.hasChildren, true);
   root.containerOpen = false;
 });

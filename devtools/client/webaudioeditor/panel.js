@@ -6,7 +6,7 @@
 "use strict";
 
 const { Cc, Ci, Cu, Cr } = require("chrome");
-const EventEmitter = require("devtools/shared/old-event-emitter");
+const EventEmitter = require("devtools/shared/event-emitter");
 const { WebAudioFront } = require("devtools/shared/fronts/webaudio");
 
 function WebAudioEditorPanel(iframeWindow, toolbox) {
@@ -20,7 +20,7 @@ function WebAudioEditorPanel(iframeWindow, toolbox) {
 exports.WebAudioEditorPanel = WebAudioEditorPanel;
 
 WebAudioEditorPanel.prototype = {
-  open: function () {
+  open: function() {
     let targetPromise;
 
     // Local debugging needs to make the target remote.
@@ -55,7 +55,7 @@ WebAudioEditorPanel.prototype = {
     return this._toolbox.target;
   },
 
-  destroy: function () {
+  destroy: function() {
     // Make sure this panel is not already destroyed.
     if (this._destroyer) {
       return this._destroyer;

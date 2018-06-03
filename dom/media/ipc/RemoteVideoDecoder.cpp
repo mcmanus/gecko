@@ -3,13 +3,14 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 #include "RemoteVideoDecoder.h"
 #include "VideoDecoderChild.h"
 #include "VideoDecoderManagerChild.h"
 #include "mozilla/layers/TextureClient.h"
+#include "mozilla/StaticPrefs.h"
 #include "base/thread.h"
 #include "MediaInfo.h"
-#include "MediaPrefs.h"
 #include "ImageContainer.h"
 #include "mozilla/layers/SynchronousTask.h"
 
@@ -56,7 +57,7 @@ RemoteVideoDecoder::Init()
   RefPtr<RemoteVideoDecoder> self = this;
   return InvokeAsync(VideoDecoderManagerChild::GetManagerAbstractThread(),
                      __func__,
-                     [self, this]() { return mActor->Init(); })
+                     [self]() { return self->mActor->Init(); })
     ->Then(VideoDecoderManagerChild::GetManagerAbstractThread(),
            __func__,
            [self, this](TrackType aTrack) {
@@ -79,7 +80,7 @@ RemoteVideoDecoder::Decode(MediaRawData* aSample)
   RefPtr<MediaRawData> sample = aSample;
   return InvokeAsync(VideoDecoderManagerChild::GetManagerAbstractThread(),
                      __func__,
-                     [self, this, sample]() { return mActor->Decode(sample); });
+                     [self, sample]() { return self->mActor->Decode(sample); });
 }
 
 RefPtr<MediaDataDecoder::FlushPromise>
@@ -87,7 +88,7 @@ RemoteVideoDecoder::Flush()
 {
   RefPtr<RemoteVideoDecoder> self = this;
   return InvokeAsync(VideoDecoderManagerChild::GetManagerAbstractThread(),
-                     __func__, [self, this]() { return mActor->Flush(); });
+                     __func__, [self]() { return self->mActor->Flush(); });
 }
 
 RefPtr<MediaDataDecoder::DecodePromise>
@@ -95,7 +96,7 @@ RemoteVideoDecoder::Drain()
 {
   RefPtr<RemoteVideoDecoder> self = this;
   return InvokeAsync(VideoDecoderManagerChild::GetManagerAbstractThread(),
-                     __func__, [self, this]() { return mActor->Drain(); });
+                     __func__, [self]() { return self->mActor->Drain(); });
 }
 
 RefPtr<ShutdownPromise>
@@ -103,8 +104,8 @@ RemoteVideoDecoder::Shutdown()
 {
   RefPtr<RemoteVideoDecoder> self = this;
   return InvokeAsync(VideoDecoderManagerChild::GetManagerAbstractThread(),
-                     __func__, [self, this]() {
-                       mActor->Shutdown();
+                     __func__, [self]() {
+                       self->mActor->Shutdown();
                        return ShutdownPromise::CreateAndResolve(true, __func__);
                      });
 }
@@ -170,7 +171,7 @@ IsRemoteAcceleratedCompositor(KnowsCompositor* aKnows)
 already_AddRefed<MediaDataDecoder>
 RemoteDecoderModule::CreateVideoDecoder(const CreateDecoderParams& aParams)
 {
-  if (!MediaPrefs::PDMUseGPUDecoder() ||
+  if (!StaticPrefs::MediaGpuProcessDecoder() ||
       !aParams.mKnowsCompositor ||
       !IsRemoteAcceleratedCompositor(aParams.mKnowsCompositor))
   {

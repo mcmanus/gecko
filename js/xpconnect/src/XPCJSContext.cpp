@@ -25,7 +25,6 @@
 #include "nsIDebug2.h"
 #include "nsIDocShell.h"
 #include "nsIRunnable.h"
-#include "amIAddonManager.h"
 #include "nsPIDOMWindow.h"
 #include "nsPrintfCString.h"
 #include "mozilla/Preferences.h"
@@ -38,7 +37,6 @@
 #include "nsCycleCollectionNoteRootCallback.h"
 #include "nsCycleCollector.h"
 #include "jsapi.h"
-#include "jsprf.h"
 #include "js/MemoryMetrics.h"
 #include "mozilla/dom/GeneratedAtomList.h"
 #include "mozilla/dom/BindingUtils.h"
@@ -64,6 +62,12 @@
 #include "nsJSPrincipals.h"
 #include "ExpandedPrincipal.h"
 #include "SystemPrincipal.h"
+
+#if defined(XP_LINUX) && !defined(ANDROID)
+// For getrlimit and min/max.
+#include <algorithm>
+#include <sys/resource.h>
+#endif
 
 #ifdef XP_WIN
 #include <windows.h>
@@ -127,10 +131,11 @@ class Watchdog
         MOZ_ASSERT(NS_IsMainThread());
         mLock = PR_NewLock();
         if (!mLock)
-            NS_RUNTIMEABORT("PR_NewLock failed.");
+            MOZ_CRASH("PR_NewLock failed.");
+
         mWakeup = PR_NewCondVar(mLock);
         if (!mWakeup)
-            NS_RUNTIMEABORT("PR_NewCondVar failed.");
+            MOZ_CRASH("PR_NewCondVar failed.");
 
         {
             AutoLockWatchdog lock(this);
@@ -142,7 +147,7 @@ class Watchdog
                                       PR_PRIORITY_NORMAL, PR_GLOBAL_THREAD,
                                       PR_JOINABLE_THREAD, 0);
             if (!mThread)
-                NS_RUNTIMEABORT("PR_CreateThread failed!");
+                MOZ_CRASH("PR_CreateThread failed!");
 
             // WatchdogMain acquires the lock and then asserts mInitialized. So
             // make sure to set mInitialized before releasing the lock here so
@@ -564,36 +569,6 @@ XPCJSContext::ActivityCallback(void* arg, bool active)
     self->mWatchdogManager->RecordContextActivity(self, active);
 }
 
-static inline bool
-IsWebExtensionPrincipal(nsIPrincipal* principal, nsAString& addonId)
-{
-    if (auto policy = BasePrincipal::Cast(principal)->AddonPolicy()) {
-        policy->GetId(addonId);
-        return true;
-    }
-    return false;
-}
-
-static bool
-IsWebExtensionContentScript(BasePrincipal* principal, nsAString& addonId)
-{
-    if (!principal->Is<ExpandedPrincipal>()) {
-        return false;
-    }
-
-    auto expanded = principal->As<ExpandedPrincipal>();
-
-    nsTArray<nsCOMPtr<nsIPrincipal>>* principals;
-    expanded->GetWhiteList(&principals);
-    for (auto prin : *principals) {
-        if (IsWebExtensionPrincipal(prin, addonId)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 // static
 bool
 XPCJSContext::InterruptCallback(JSContext* cx)
@@ -633,7 +608,8 @@ XPCJSContext::InterruptCallback(JSContext* cx)
     if (chrome) {
         prefName = PREF_MAX_SCRIPT_RUN_TIME_CHROME;
         limit = Preferences::GetInt(prefName, 20);
-    } else if (IsWebExtensionContentScript(principal, addonId)) {
+    } else if (auto policy = principal->ContentScriptAddonPolicy()) {
+        policy->GetId(addonId);
         prefName = PREF_MAX_SCRIPT_RUN_TIME_EXT_CONTENT;
         limit = Preferences::GetInt(prefName, 5);
     } else {
@@ -663,7 +639,7 @@ XPCJSContext::InterruptCallback(JSContext* cx)
     // Get the DOM window associated with the running script. If the script is
     // running in a non-DOM scope, we have to just let it keep running.
     RootedObject global(cx, JS::CurrentGlobalOrNull(cx));
-    RefPtr<nsGlobalWindow> win = WindowOrNull(global);
+    RefPtr<nsGlobalWindowInner> win = WindowOrNull(global);
     if (!win && IsSandbox(global)) {
         // If this is a sandbox associated with a DOMWindow via a
         // sandboxPrototype, use that DOMWindow. This supports GreaseMonkey
@@ -691,13 +667,6 @@ XPCJSContext::InterruptCallback(JSContext* cx)
         return false;
     }
 
-    if (win->GetIsPrerendered()) {
-        // We cannot display a dialog if the page is being prerendered, so
-        // just kill the page.
-        mozilla::dom::HandlePrerenderingViolation(win->AsInner());
-        return false;
-    }
-
     // Accumulate slow script invokation delay.
     if (!chrome && !self->mTimeoutAccumulated) {
       uint32_t delay = uint32_t(self->mSlowScriptActualWait.ToMilliseconds() - (limit * 1000.0));
@@ -706,13 +675,13 @@ XPCJSContext::InterruptCallback(JSContext* cx)
     }
 
     // Show the prompt to the user, and kill if requested.
-    nsGlobalWindow::SlowScriptResponse response = win->ShowSlowScriptDialog(addonId);
-    if (response == nsGlobalWindow::KillSlowScript) {
+    nsGlobalWindowInner::SlowScriptResponse response = win->ShowSlowScriptDialog(addonId);
+    if (response == nsGlobalWindowInner::KillSlowScript) {
         if (Preferences::GetBool("dom.global_stop_script", true))
             xpc::Scriptability::Get(global).Block();
         return false;
     }
-    if (response == nsGlobalWindow::KillScriptGlobal) {
+    if (response == nsGlobalWindowInner::KillScriptGlobal) {
         nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
 
         if (!IsSandbox(global) || !obs)
@@ -737,10 +706,10 @@ XPCJSContext::InterruptCallback(JSContext* cx)
 
     // The user chose to continue the script. Reset the timer, and disable this
     // machinery with a pref of the user opted out of future slow-script dialogs.
-    if (response != nsGlobalWindow::ContinueSlowScriptAndKeepNotifying)
+    if (response != nsGlobalWindowInner::ContinueSlowScriptAndKeepNotifying)
         self->mSlowScriptCheckpoint = TimeStamp::NowLoRes();
 
-    if (response == nsGlobalWindow::AlwaysContinueSlowScript)
+    if (response == nsGlobalWindowInner::AlwaysContinueSlowScript)
         Preferences::SetInt(prefName, 0);
 
     return true;
@@ -777,6 +746,9 @@ ReloadPrefsCallback(const char* pref, void* data)
     bool useWasm = Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm");
     bool useWasmIon = Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_ionjit");
     bool useWasmBaseline = Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_baselinejit");
+#ifdef ENABLE_WASM_GC
+    bool useWasmGc = Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_gc");
+#endif
     bool throwOnAsmJSValidationFailure = Preferences::GetBool(JS_OPTIONS_DOT_STR
                                                               "throw_on_asmjs_validation_failure");
     bool useNativeRegExp = Preferences::GetBool(JS_OPTIONS_DOT_STR "native_regexp");
@@ -810,6 +782,16 @@ ReloadPrefsCallback(const char* pref, void* data)
 
     bool streams = Preferences::GetBool(JS_OPTIONS_DOT_STR "streams");
 
+    bool spectreIndexMasking = Preferences::GetBool(JS_OPTIONS_DOT_STR "spectre.index_masking");
+    bool spectreObjectMitigationsBarriers =
+        Preferences::GetBool(JS_OPTIONS_DOT_STR "spectre.object_mitigations.barriers");
+    bool spectreObjectMitigationsMisc =
+        Preferences::GetBool(JS_OPTIONS_DOT_STR "spectre.object_mitigations.misc");
+    bool spectreStringMitigations =
+        Preferences::GetBool(JS_OPTIONS_DOT_STR "spectre.string_mitigations");
+    bool spectreValueMasking = Preferences::GetBool(JS_OPTIONS_DOT_STR "spectre.value_masking");
+    bool spectreJitToCxxCalls = Preferences::GetBool(JS_OPTIONS_DOT_STR "spectre.jit_to_C++_calls");
+
     sSharedMemoryEnabled = Preferences::GetBool(JS_OPTIONS_DOT_STR "shared_memory");
 
 #ifdef DEBUG
@@ -830,12 +812,17 @@ ReloadPrefsCallback(const char* pref, void* data)
     bool fuzzingEnabled = Preferences::GetBool("fuzzing.enabled");
 #endif
 
+    bool arrayProtoValues = Preferences::GetBool(JS_OPTIONS_DOT_STR "array_prototype_values");
+
     JS::ContextOptionsRef(cx).setBaseline(useBaseline)
                              .setIon(useIon)
                              .setAsmJS(useAsmJS)
                              .setWasm(useWasm)
                              .setWasmIon(useWasmIon)
                              .setWasmBaseline(useWasmBaseline)
+#ifdef ENABLE_WASM_GC
+                             .setWasmGc(useWasmGc)
+#endif
                              .setThrowOnAsmJSValidationFailure(throwOnAsmJSValidationFailure)
                              .setNativeRegExp(useNativeRegExp)
                              .setAsyncStack(useAsyncStack)
@@ -846,7 +833,8 @@ ReloadPrefsCallback(const char* pref, void* data)
                              .setFuzzing(fuzzingEnabled)
 #endif
                              .setStreams(streams)
-                             .setExtraWarnings(extraWarnings);
+                             .setExtraWarnings(extraWarnings)
+                             .setArrayProtoValues(arrayProtoValues);
 
     nsCOMPtr<nsIXULRuntime> xr = do_GetService("@mozilla.org/xre/runtime;1");
     if (xr) {
@@ -866,6 +854,17 @@ ReloadPrefsCallback(const char* pref, void* data)
 #ifdef DEBUG
     JS_SetGlobalJitCompilerOption(cx, JSJITCOMPILER_FULL_DEBUG_CHECKS, fullJitDebugChecks);
 #endif
+
+    JS_SetGlobalJitCompilerOption(cx, JSJITCOMPILER_SPECTRE_INDEX_MASKING, spectreIndexMasking);
+    JS_SetGlobalJitCompilerOption(cx, JSJITCOMPILER_SPECTRE_OBJECT_MITIGATIONS_BARRIERS,
+                                  spectreObjectMitigationsBarriers);
+    JS_SetGlobalJitCompilerOption(cx, JSJITCOMPILER_SPECTRE_OBJECT_MITIGATIONS_MISC,
+                                  spectreObjectMitigationsMisc);
+    JS_SetGlobalJitCompilerOption(cx, JSJITCOMPILER_SPECTRE_STRING_MITIGATIONS,
+                                  spectreStringMitigations);
+    JS_SetGlobalJitCompilerOption(cx, JSJITCOMPILER_SPECTRE_VALUE_MASKING, spectreValueMasking);
+    JS_SetGlobalJitCompilerOption(cx, JSJITCOMPILER_SPECTRE_JIT_TO_CXX_CALLS,
+                                  spectreJitToCxxCalls);
 }
 
 XPCJSContext::~XPCJSContext()
@@ -1019,17 +1018,26 @@ XPCJSContext::Initialize(XPCJSContext* aPrimaryContext)
     // ordered by the effective categories in which they are grouped in the
     // JS_SetNativeStackQuota call (which predates this analysis).
     //
-    // (NB: These numbers may have drifted recently - see bug 938429)
-    // OSX 64-bit Debug: 7MB stack, 636 stack frames => ~11.3k per stack frame
-    // OSX64 Opt: 7MB stack, 2440 stack frames => ~3k per stack frame
+    // The following "Stack Frames" numbers come from `chromeLimit` in
+    // js/xpconnect/tests/chrome/test_bug732665.xul
     //
-    // Linux 32-bit Debug: 2MB stack, 426 stack frames => ~4.8k per stack frame
-    // Linux 64-bit Debug: 4MB stack, 455 stack frames => ~9.0k per stack frame
-    //
-    // Windows (Opt+Debug): 900K stack, 235 stack frames => ~3.4k per stack frame
-    //
-    // Linux 32-bit Opt: 1MB stack, 272 stack frames => ~3.8k per stack frame
-    // Linux 64-bit Opt: 2MB stack, 316 stack frames => ~6.5k per stack frame
+    //  Platform   | Build | Stack Quota | Stack Frames | Stack Frame Size
+    // ------------+-------+-------------+--------------+------------------
+    //  OSX 64     | Opt   | 7MB         | 1331         | ~5.4k
+    //  OSX 64     | Debug | 7MB         | 1202         | ~6.0k
+    // ------------+-------+-------------+--------------+------------------
+    //  Linux 32   | Opt   | 7.875MB     | 2513         | ~3.2k
+    //  Linux 32   | Debug | 7.875MB     | 2146         | ~3.8k
+    // ------------+-------+-------------+--------------+------------------
+    //  Linux 64   | Opt   | 7.875MB     | 1360         | ~5.9k
+    //  Linux 64   | Debug | 7.875MB     | 1180         | ~6.8k
+    //  Linux 64   | ASan  | 7.875MB     | 473          | ~17.0k
+    // ------------+-------+-------------+--------------+------------------
+    //  Windows 32 | Opt   | 984k        | 188          | ~5.2k
+    //  Windows 32 | Debug | 984k        | 208          | ~4.7k
+    // ------------+-------+-------------+--------------+------------------
+    //  Windows 64 | Opt   | 1.922MB     | 189          | ~10.4k
+    //  Windows 64 | Debug | 1.922MB     | 175          | ~11.2k
     //
     // We tune the trusted/untrusted quotas for each configuration to achieve our
     // invariants while attempting to minimize overhead. In contrast, our buffer
@@ -1050,6 +1058,35 @@ XPCJSContext::Initialize(XPCJSContext* aPrimaryContext)
     // and give trusted script 180k extra. The stack is huge on mac anyway.
     const size_t kStackQuota = 7 * 1024 * 1024;
     const size_t kTrustedScriptBuffer = 180 * 1024;
+#elif defined(XP_LINUX) && !defined(ANDROID)
+    // Most Linux distributions set default stack size to 8MB.  Use it as the
+    // maximum value.
+    const size_t kStackQuotaMax = 8 * 1024 * 1024;
+#  if defined(MOZ_ASAN) || defined(DEBUG)
+    // Bug 803182: account for the 4x difference in the size of js::Interpret
+    // between optimized and debug builds.  We use 2x since the JIT part
+    // doesn't increase much.
+    // See the standalone MOZ_ASAN branch below for the ASan case.
+    const size_t kStackQuotaMin = 2 * kDefaultStackQuota;
+#  else
+    const size_t kStackQuotaMin = kDefaultStackQuota;
+#  endif
+    // Allocate 128kB margin for the safe space.
+    const size_t kStackSafeMargin = 128 * 1024;
+
+    struct rlimit rlim;
+    const size_t kStackQuota =
+        getrlimit(RLIMIT_STACK, &rlim) == 0
+        ? std::max(std::min(size_t(rlim.rlim_cur - kStackSafeMargin),
+                            kStackQuotaMax - kStackSafeMargin),
+                   kStackQuotaMin)
+        : kStackQuotaMin;
+#  if defined(MOZ_ASAN)
+    // See the standalone MOZ_ASAN branch below for the ASan case.
+    const size_t kTrustedScriptBuffer = 450 * 1024;
+#  else
+    const size_t kTrustedScriptBuffer = 180 * 1024;
+#  endif
 #elif defined(MOZ_ASAN)
     // ASan requires more stack space due to red-zones, so give it double the
     // default (1MB on 32-bit, 2MB on 64-bit). ASAN stack frame measurements
@@ -1057,30 +1094,33 @@ XPCJSContext::Initialize(XPCJSContext* aPrimaryContext)
     // ASAN builds have roughly thrice the stack overhead as normal builds.
     // On normal builds, the largest stack frame size we might encounter is
     // 9.0k (see above), so let's use a buffer of 9.0 * 5 * 10 = 450k.
+    //
+    // FIXME: Does this branch make sense for Windows and Android?
+    // (See bug 1415195)
     const size_t kStackQuota =  2 * kDefaultStackQuota;
     const size_t kTrustedScriptBuffer = 450 * 1024;
 #elif defined(XP_WIN)
-    // 1MB is the default stack size on Windows. We use the /STACK linker flag
-    // to request a larger stack, so we determine the stack size at runtime.
+    // 1MB is the default stack size on Windows. We use the -STACK linker flag
+    // (see WIN32_EXE_LDFLAGS in config/config.mk) to request a larger stack,
+    // so we determine the stack size at runtime.
     const size_t kStackQuota = GetWindowsStackSize();
     const size_t kTrustedScriptBuffer = (sizeof(size_t) == 8) ? 180 * 1024   //win64
                                                               : 120 * 1024;  //win32
-    // The following two configurations are linux-only. Given the numbers above,
-    // we use 50k and 100k trusted buffers on 32-bit and 64-bit respectively.
 #elif defined(ANDROID)
     // Android appears to have 1MB stacks. Allow the use of 3/4 of that size
     // (768KB on 32-bit), since otherwise we can crash with a stack overflow
     // when nearing the 1MB limit.
     const size_t kStackQuota = kDefaultStackQuota + kDefaultStackQuota / 2;
     const size_t kTrustedScriptBuffer = sizeof(size_t) * 12800;
-#elif defined(DEBUG)
-    // Bug 803182: account for the 4x difference in the size of js::Interpret
-    // between optimized and debug builds.
-    // XXXbholley - Then why do we only account for 2x of difference?
-    const size_t kStackQuota = 2 * kDefaultStackQuota;
-    const size_t kTrustedScriptBuffer = sizeof(size_t) * 12800;
 #else
+    // Catch-all configuration for other environments.
+#  if defined(DEBUG)
+    const size_t kStackQuota = 2 * kDefaultStackQuota;
+#  else
     const size_t kStackQuota = kDefaultStackQuota;
+#  endif
+    // Given the numbers above, we use 50k and 100k trusted buffers on 32-bit
+    // and 64-bit respectively.
     const size_t kTrustedScriptBuffer = sizeof(size_t) * 12800;
 #endif
 
@@ -1150,37 +1190,19 @@ XPCJSContext::NewXPCJSContext(XPCJSContext* aPrimaryContext)
     XPCJSContext* self = new XPCJSContext();
     nsresult rv = self->Initialize(aPrimaryContext);
     if (NS_FAILED(rv)) {
-        NS_RUNTIMEABORT("new XPCJSContext failed to initialize.");
-        delete self;
-        return nullptr;
+        MOZ_CRASH("new XPCJSContext failed to initialize.");
     }
 
     if (self->Context())
         return self;
 
-    NS_RUNTIMEABORT("new XPCJSContext failed to initialize.");
-    return nullptr;
+    MOZ_CRASH("new XPCJSContext failed to initialize.");
 }
 
 void
 XPCJSContext::BeforeProcessTask(bool aMightBlock)
 {
     MOZ_ASSERT(NS_IsMainThread());
-
-    // If ProcessNextEvent was called during a Promise "then" callback, we
-    // must process any pending microtasks before blocking in the event loop,
-    // otherwise we may deadlock until an event enters the queue later.
-    if (aMightBlock) {
-        if (Promise::PerformMicroTaskCheckpoint()) {
-            // If any microtask was processed, we post a dummy event in order to
-            // force the ProcessNextEvent call not to block.  This is required
-            // to support nested event loops implemented using a pattern like
-            // "while (condition) thread.processNextEvent(true)", in case the
-            // condition is triggered here by a Promise "then" callback.
-
-            NS_DispatchToMainThread(new Runnable("Empty_microtask_runnable"));
-        }
-    }
 
     // Start the slow script timer.
     mSlowScriptCheckpoint = mozilla::TimeStamp::NowLoRes();
@@ -1213,4 +1235,10 @@ XPCJSContext::AfterProcessTask(uint32_t aNewRecursionDepth)
     js::FlushPerformanceMonitoring(Context());
 
     mozilla::jsipc::AfterProcessTask();
+}
+
+bool
+XPCJSContext::IsSystemCaller() const
+{
+    return nsContentUtils::IsSystemCaller(Context());
 }

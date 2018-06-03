@@ -1,7 +1,8 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-* This Source Code Form is subject to the terms of the Mozilla Public
-* License, v. 2.0. If a copy of the MPL was not distributed with this
-* file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "LayerManagerMLGPU.h"
 #include "LayerTreeInvalidation.h"
@@ -163,13 +164,6 @@ LayerManagerMLGPU::CreateBorderLayer()
   return nullptr;
 }
 
-already_AddRefed<TextLayer>
-LayerManagerMLGPU::CreateTextLayer()
-{
-  MOZ_ASSERT_UNREACHABLE("Not yet implemented");
-  return nullptr;
-}
-
 already_AddRefed<CanvasLayer>
 LayerManagerMLGPU::CreateCanvasLayer()
 {
@@ -183,7 +177,6 @@ LayerManagerMLGPU::GetTextureFactoryIdentifier()
   if (mDevice) {
     ident = mDevice->GetTextureFactoryIdentifier();
   }
-  ident.mSupportsBackdropCopyForComponentAlpha = SupportsBackdropCopyForComponentAlpha();
   ident.mUsingAdvancedLayers = true;
   return ident;
 }
@@ -310,7 +303,7 @@ LayerManagerMLGPU::Composite()
 
   // Now that we have the final invalid region, give it to the swap chain which
   // will tell us if we still need to render.
-  if (!mSwapChain->ApplyNewInvalidRegion(Move(mInvalidRegion), diagnosticRect)) {
+  if (!mSwapChain->ApplyNewInvalidRegion(std::move(mInvalidRegion), diagnosticRect)) {
     return;
   }
 
@@ -337,6 +330,20 @@ LayerManagerMLGPU::Composite()
   RecordFrame();
 
   mDevice->EndFrame();
+
+  // Free the old cloned property tree, then clone a new one. Note that we do
+  // this after compositing, since layer preparation actually mutates the layer
+  // tree (for example, ImageHost::mLastFrameID). We want the property tree to
+  // pick up these changes. Similarly, we are careful to not mutate the tree
+  // in any way that we *don't* want LayerProperties to catch, lest we cause
+  // extra invalidation.
+  //
+  // Note that the old Compositor performs occlusion culling directly on the
+  // shadow visible region, and does this *before* cloning layer tree
+  // properties. Advanced Layers keeps the occlusion region separate and
+  // performs invalidation against the clean layer tree.
+  mClonedLayerTreeProperties = nullptr;
+  mClonedLayerTreeProperties = LayerProperties::CloneFrom(mRoot);
 }
 
 void
@@ -476,23 +483,9 @@ LayerManagerMLGPU::ComputeInvalidRegion()
     mInvalidRegion = mTargetRect;
     mNextFrameInvalidRegion.OrWith(changed);
   } else {
-    mInvalidRegion = Move(mNextFrameInvalidRegion);
+    mInvalidRegion = std::move(mNextFrameInvalidRegion);
     mInvalidRegion.OrWith(changed);
   }
-
-  // Free the old cloned property tree, then clone a new one. Note that we do
-  // this before compositing since our CPU-based occlusion culling will update
-  // the visible region to contain non-occluded draw rects. If a layer will not
-  // be drawn, it will have no visible region. LTI might save this, and if the
-  // layer is removed next frame, LTI will invalidate the wrong area.
-  //
-  // Instead, we always invalidate based on the full shadow tree.
-  //
-  // Note that the old compositor performs CPU-based occlusion culling *before*
-  // invalidation. This maintains consistency, but we have more accurate draw
-  // regions.
-  mClonedLayerTreeProperties = nullptr;
-  mClonedLayerTreeProperties = LayerProperties::CloneFrom(mRoot);
 }
 
 void
@@ -523,12 +516,6 @@ bool
 LayerManagerMLGPU::BlendingRequiresIntermediateSurface()
 {
   return true;
-}
-
-bool
-LayerManagerMLGPU::SupportsBackdropCopyForComponentAlpha()
-{
-  return false;
 }
 
 void

@@ -4,12 +4,10 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://formautofill/FormAutofillUtils.jsm");
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://formautofill/FormAutofillUtils.jsm");
-
-let {profileStorage} = Cu.import("resource://formautofill/ProfileStorage.jsm", {});
+let {formAutofillStorage} = ChromeUtils.import("resource://formautofill/FormAutofillStorage.jsm", {});
 
 const {ADDRESSES_COLLECTION_NAME, CREDITCARDS_COLLECTION_NAME} = FormAutofillUtils;
 
@@ -33,6 +31,14 @@ var ParentUtils = {
           return;
         }
 
+        // every notification type should have the collection name.
+        let allowedNames = [ADDRESSES_COLLECTION_NAME, CREDITCARDS_COLLECTION_NAME];
+        assert.ok(allowedNames.includes(subject.wrappedJSObject.collectionName),
+                  "should include the collection name");
+        // every notification except removeAll should have a guid.
+        if (data != "removeAll") {
+          assert.ok(subject.wrappedJSObject.guid, "should have a guid");
+        }
         Services.obs.removeObserver(observer, obsTopic);
         resolve();
       }, topic);
@@ -89,29 +95,39 @@ var ParentUtils = {
   async cleanUpAddresses() {
     const guids = (await this._getRecords(ADDRESSES_COLLECTION_NAME)).map(record => record.guid);
 
+    if (guids.length == 0) {
+      sendAsyncMessage("FormAutofillTest:AddressesCleanedUp");
+      return;
+    }
+
     await this.operateAddress("remove", {guids}, "FormAutofillTest:AddressesCleanedUp");
   },
 
   async cleanUpCreditCards() {
     const guids = (await this._getRecords(CREDITCARDS_COLLECTION_NAME)).map(record => record.guid);
 
+    if (guids.length == 0) {
+      sendAsyncMessage("FormAutofillTest:CreditCardsCleanedUp");
+      return;
+    }
+
     await this.operateCreditCard("remove", {guids}, "FormAutofillTest:CreditCardsCleanedUp");
   },
 
   async cleanup() {
-    Services.obs.removeObserver(this, "formautofill-storage-changed");
     await this.cleanUpAddresses();
     await this.cleanUpCreditCards();
+    Services.obs.removeObserver(this, "formautofill-storage-changed");
   },
 
   _areRecordsMatching(recordA, recordB, collectionName) {
-    for (let field of profileStorage[collectionName].VALID_FIELDS) {
+    for (let field of formAutofillStorage[collectionName].VALID_FIELDS) {
       if (recordA[field] !== recordB[field]) {
         return false;
       }
     }
     // Check the internal field if both addresses have valid value.
-    for (let field of profileStorage.INTERNAL_FIELDS) {
+    for (let field of formAutofillStorage.INTERNAL_FIELDS) {
       if (field in recordA && field in recordB && (recordA[field] !== recordB[field])) {
         return false;
       }
@@ -159,6 +175,10 @@ var ParentUtils = {
 
 Services.obs.addObserver(ParentUtils, "formautofill-storage-changed");
 
+Services.mm.addMessageListener("FormAutofill:FieldsIdentified", () => {
+  sendAsyncMessage("FormAutofillTest:FieldsIdentified");
+});
+
 addMessageListener("FormAutofillTest:AddAddress", (msg) => {
   ParentUtils.operateAddress("add", msg, "FormAutofillTest:AddressAdded");
 });
@@ -196,5 +216,7 @@ addMessageListener("FormAutofillTest:CleanUpCreditCards", (msg) => {
 });
 
 addMessageListener("cleanup", () => {
-  ParentUtils.cleanup();
+  ParentUtils.cleanup().then(() => {
+    sendAsyncMessage("cleanup-finished", {});
+  });
 });

@@ -7,12 +7,11 @@
 #ifndef mozilla_EffectSet_h
 #define mozilla_EffectSet_h
 
-#include "mozilla/AnimValuesStyleRule.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/EffectCompositor.h"
 #include "mozilla/EnumeratedArray.h"
 #include "mozilla/TimeStamp.h"
-#include "mozilla/dom/KeyframeEffectReadOnly.h"
+#include "mozilla/dom/KeyframeEffect.h"
 #include "nsHashKeys.h" // For nsPtrHashKey
 #include "nsTHashtable.h" // For nsTHashtable
 
@@ -67,8 +66,8 @@ public:
   static void DestroyEffectSet(dom::Element* aElement,
                                CSSPseudoElementType aPseudoType);
 
-  void AddEffect(dom::KeyframeEffectReadOnly& aEffect);
-  void RemoveEffect(dom::KeyframeEffectReadOnly& aEffect);
+  void AddEffect(dom::KeyframeEffect& aEffect);
+  void RemoveEffect(dom::KeyframeEffect& aEffect);
 
   void SetMayHaveOpacityAnimation() { mMayHaveOpacityAnim = true; }
   bool MayHaveOpacityAnimation() const { return mMayHaveOpacityAnim; }
@@ -76,7 +75,7 @@ public:
   bool MayHaveTransformAnimation() const { return mMayHaveTransformAnim; }
 
 private:
-  typedef nsTHashtable<nsRefPtrHashKey<dom::KeyframeEffectReadOnly>>
+  typedef nsTHashtable<nsRefPtrHashKey<dom::KeyframeEffect>>
     OwningEffectSet;
 
 public:
@@ -91,7 +90,7 @@ public:
   public:
     explicit Iterator(EffectSet& aEffectSet)
       : mEffectSet(aEffectSet)
-      , mHashIterator(mozilla::Move(aEffectSet.mEffects.Iter()))
+      , mHashIterator(std::move(aEffectSet.mEffects.Iter()))
       , mIsEndIterator(false)
     {
 #ifdef DEBUG
@@ -101,7 +100,7 @@ public:
 
     Iterator(Iterator&& aOther)
       : mEffectSet(aOther.mEffectSet)
-      , mHashIterator(mozilla::Move(aOther.mHashIterator))
+      , mHashIterator(std::move(aOther.mHashIterator))
       , mIsEndIterator(aOther.mIsEndIterator)
     {
 #ifdef DEBUG
@@ -137,7 +136,7 @@ public:
       return *this;
     }
 
-    dom::KeyframeEffectReadOnly* operator* ()
+    dom::KeyframeEffect* operator*()
     {
       MOZ_ASSERT(!Done());
       return mHashIterator.Get()->GetKey();
@@ -170,11 +169,6 @@ public:
 
   size_t Count() const { return mEffects.Count(); }
 
-  RefPtr<AnimValuesStyleRule>&
-  AnimationRule(EffectCompositor::CascadeLevel aCascadeLevel)
-  {
-    return mAnimationRule[aCascadeLevel];
-  }
 
   const TimeStamp& LastTransformSyncTime() const
   {
@@ -212,15 +206,6 @@ private:
 
   OwningEffectSet mEffects;
 
-  // These style rules contain the style data for currently animating
-  // values.  They only match when styling with animation.  When we
-  // style without animation, we need to not use them so that we can
-  // detect any new changes; if necessary we restyle immediately
-  // afterwards with animation.
-  EnumeratedArray<EffectCompositor::CascadeLevel,
-                  EffectCompositor::CascadeLevel(
-                    EffectCompositor::kCascadeLevelCount),
-                  RefPtr<AnimValuesStyleRule>> mAnimationRule;
 
   // Refresh driver timestamp from the moment when transform animations in this
   // effect set were last updated and sent to the compositor. This is used for

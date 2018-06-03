@@ -11,19 +11,19 @@ const { ThreadNode } = require("devtools/client/performance/modules/logic/tree-m
 const { CallView } = require("devtools/client/performance/modules/widgets/tree-view");
 const RecordingUtils = require("devtools/shared/performance/recording-utils");
 
-add_task(function () {
-  let threadNode = new ThreadNode(gProfile.threads[0], { startTime: 0, endTime: 50,
-                                                         invertTree: true });
-  let treeRoot = new CallView({ frame: threadNode, inverted: true });
-  let container = document.createElement("vbox");
+add_task(function() {
+  const threadNode = new ThreadNode(gProfile.threads[0], { startTime: 0, endTime: 50,
+                                                           invertTree: true });
+  const treeRoot = new CallView({ frame: threadNode, inverted: true });
+  const container = document.createElement("vbox");
   treeRoot.attachTo(container);
 
   // Add 1 to each index to skip the hidden root node
-  let $$nam = i => container.querySelectorAll(
+  const $$nam = i => container.querySelectorAll(
     ".call-tree-cell[type=function] > .call-tree-name")[i + 1];
-  let $$per = i => container.querySelectorAll(
+  const $$per = i => container.querySelectorAll(
     ".call-tree-cell[type=percentage]")[i + 1];
-  let $$selfper = i => container.querySelectorAll(
+  const $$selfper = i => container.querySelectorAll(
     ".call-tree-cell[type='self-percentage']")[i + 1];
 
   /**
@@ -63,7 +63,7 @@ add_task(function () {
     [ 40, 0, "    A"],
     [ 10, 10, "B"],
     [ 10, 0, "  A"],
-  ].forEach(function (def, i) {
+  ].forEach(function(def, i) {
     info(`Checking ${i}th tree item.`);
 
     let [total, self, name] = def;

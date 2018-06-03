@@ -10,7 +10,6 @@
   --lwt-additional-images: none;
   --lwt-background-alignment: right top;
   --lwt-background-tiling: no-repeat;
-  --tab-min-width: 50px;
 }
 
 :root:-moz-lwtheme {
@@ -19,9 +18,17 @@
 
 :root:-moz-lwtheme {
   background-color: var(--lwt-accent-color) !important;
-  background-image: var(--lwt-header-image), var(--lwt-additional-images) !important;
+  background-image: var(--lwt-additional-images) !important;
   background-position: var(--lwt-background-alignment) !important;
   background-repeat: var(--lwt-background-tiling) !important;
+}
+
+:root:-moz-lwtheme[lwtheme-image] {
+  background-image: var(--lwt-header-image), var(--lwt-additional-images) !important;
+}
+
+:root:-moz-lwtheme:-moz-window-inactive {
+  background-color: var(--lwt-accent-color-inactive, var(--lwt-accent-color)) !important;
 }
 
 #main-window:not([chromehidden~="toolbar"]) {
@@ -38,6 +45,19 @@
 
 searchbar {
   -moz-binding: url("chrome://browser/content/search/search.xml#searchbar");
+}
+
+.searchbar-textbox {
+  -moz-binding: url("chrome://browser/content/search/search.xml#searchbar-textbox");
+}
+
+.search-one-offs {
+  -moz-binding: url("chrome://browser/content/search/search.xml#search-one-offs");
+}
+
+.search-setting-button[compact=true],
+.search-setting-button-compact:not([compact=true]) {
+  display: none;
 }
 
 /* Prevent shrinking the page content to 0 height and width */
@@ -69,52 +89,63 @@ toolbar[customizable="true"] {
 }
 
 panelmultiview {
-  -moz-binding: url("chrome://browser/content/customizableui/panelUI.xml#panelmultiview");
+  -moz-box-align: start;
 }
 
-photonpanelmultiview {
-  -moz-binding: url("chrome://browser/content/customizableui/panelUI.xml#photonpanelmultiview");
+panelmultiview[transitioning] {
+  pointer-events: none;
 }
 
 panelview {
-  -moz-binding: url("chrome://browser/content/customizableui/panelUI.xml#panelview");
   -moz-box-orient: vertical;
 }
 
-panel[hidden] panelmultiview,
-panel[hidden] photonpanelmultiview,
-panel[hidden] panelview {
-  -moz-binding: none;
-}
-
-.panel-mainview {
-  transition: transform var(--panelui-subview-transition-duration);
-}
-
-panelview:not([mainview]):not([current]):not([in-transition]) {
-  transition: visibility 0s linear var(--panelui-subview-transition-duration);
+panelview:not([visible]) {
   visibility: collapse;
 }
 
-photonpanelmultiview panelview:not([current]):not([in-transition]) {
-  transition: none;
-  visibility: collapse;
-}
-
-panelview[mainview] > .panel-header,
-panelview:not([title]) > .panel-header {
+/* Hide the header when a subview is reused as a main view. */
+panelview[mainview] > .panel-header {
   display: none;
 }
 
-tabbrowser {
-  -moz-binding: url("chrome://browser/content/tabbrowser.xml#tabbrowser");
+.panel-viewcontainer {
+  overflow: hidden;
 }
 
-.tabbrowser-tabs {
+.panel-viewcontainer[panelopen] {
+  transition-property: height;
+  transition-timing-function: var(--animation-easing-function);
+  transition-duration: var(--panelui-subview-transition-duration);
+  will-change: height;
+}
+
+.panel-viewcontainer.offscreen {
+  position: absolute;
+}
+
+.panel-viewstack {
+  overflow: visible;
+  transition: height var(--panelui-subview-transition-duration);
+}
+
+#tabbrowser-tabs {
   -moz-binding: url("chrome://browser/content/tabbrowser.xml#tabbrowser-tabs");
 }
 
-#tabbrowser-tabs:not([overflow="true"]) ~ #alltabs-button,
+@supports -moz-bool-pref("layout.css.emulate-moz-box-with-flex") {
+  #tabbrowser-tabs {
+    /* Without this, the tabs container width extends beyond the window width */
+    width: 0;
+  }
+  .tab-stack {
+    /* Without this, pinned tabs get a bit too tall when the tabstrip overflows. */
+    vertical-align: top;
+  }
+}
+
+
+#tabbrowser-tabs:not([overflow="true"]):not([hashiddentabs]) ~ #alltabs-button,
 #tabbrowser-tabs[hasadjacentnewtabbutton]:not([overflow="true"]) ~ #new-tab-button,
 #tabbrowser-tabs[overflow="true"] > .tabbrowser-arrowscrollbox > .tabs-newtab-button,
 #tabbrowser-tabs:not([hasadjacentnewtabbutton]) > .tabbrowser-arrowscrollbox > .tabs-newtab-button,
@@ -139,49 +170,60 @@ tabbrowser {
               max-width 100ms ease-out;
 }
 
+:root[uidensity=touch] .tabbrowser-tab:not([pinned]) {
+  /* Touch mode needs additional space for the close button. */
+  min-width: calc(var(--tab-min-width) + 10px);
+}
+
 .tabbrowser-tab:not([pinned]):not([fadein]) {
   max-width: 0.1px;
   min-width: 0.1px;
   visibility: hidden;
 }
 
-.tab-close-button,
-.tab-background {
-  /* Explicitly set the visibility to override the value (collapsed)
-   * we inherit from #TabsToolbar[collapsed] upon opening a browser window. */
-  visibility: visible;
-}
-
+.tab-icon-image[fadein],
 .tab-close-button[fadein],
+.tabbrowser-tab[fadein]::after,
 .tab-background[fadein] {
   /* This transition is only wanted for opening tabs. */
   transition: visibility 0ms 25ms;
 }
 
+.tab-icon-image:not([fadein]),
 .tab-close-button:not([fadein]),
+.tabbrowser-tab:not([fadein])::after,
 .tab-background:not([fadein]) {
   visibility: hidden;
 }
 
 .tab-label:not([fadein]),
 .tab-throbber:not([fadein]),
-.tab-icon-image:not([fadein]) {
+.tab-throbber-fallback:not([fadein]) {
   display: none;
 }
 
-.tabbrowser-tabs[positionpinnedtabs] > .tabbrowser-tab[pinned] {
+%ifdef NIGHTLY_BUILD
+@supports -moz-bool-pref("browser.tabs.hideThrobber") {
+  .tab-throbber,
+  .tab-throbber-fallback {
+    display: none;
+  }
+}
+%endif
+
+#tabbrowser-tabs[positionpinnedtabs] > .tabbrowser-tab[pinned] {
   position: fixed !important;
   display: block; /* position:fixed already does this (bug 579776), but let's be explicit */
 }
 
-.tabbrowser-tabs[movingtab] > .tabbrowser-tab[selected] {
+#tabbrowser-tabs[movingtab] > .tabbrowser-tab[selected] {
   position: relative;
   z-index: 2;
   pointer-events: none; /* avoid blocking dragover events on scroll buttons */
 }
 
 .tabbrowser-tab[tabdrop-samewindow],
-.tabbrowser-tabs[movingtab] > .tabbrowser-tab[fadein]:not([selected]) {
+#tabbrowser-tabs[movingtab] > .tabbrowser-tab[fadein]:not([selected]) {
   transition: transform 200ms var(--animation-easing-function);
 }
 
@@ -191,7 +233,7 @@ tabbrowser {
   padding-bottom: 15px;
 }
 
-#TabsToolbar[movingtab] > .tabbrowser-tabs {
+#TabsToolbar[movingtab] > #tabbrowser-tabs {
   padding-bottom: 15px;
   margin-bottom: -15px;
 }
@@ -202,6 +244,7 @@ tabbrowser {
 }
 
 /* Allow dropping a tab on buttons with associated drop actions. */
+#TabsToolbar[movingtab] + #nav-bar > #nav-bar-customization-target > #personal-bookmarks,
 #TabsToolbar[movingtab] + #nav-bar > #nav-bar-customization-target > #home-button,
 #TabsToolbar[movingtab] + #nav-bar > #nav-bar-customization-target > #downloads-button,
 #TabsToolbar[movingtab] + #nav-bar > #nav-bar-customization-target > #bookmarks-menu-button {
@@ -240,9 +283,8 @@ window:not([chromehidden~="toolbar"]) #nav-bar[nonemptyoverflow] > .overflow-but
 }
 
 
-%ifdef CAN_DRAW_IN_TITLEBAR
 %ifdef MENUBAR_CAN_AUTOHIDE
-#toolbar-menubar:not([autohide=true]) ~ #TabsToolbar > .titlebar-placeholder,
+#toolbar-menubar:not([autohide=true]) + #TabsToolbar > .titlebar-placeholder,
 %endif
 %ifndef MOZ_WIDGET_COCOA
 #main-window:not([sizemode=normal]) .titlebar-placeholder[type="pre-tabs"],
@@ -255,7 +297,6 @@ window:not([chromehidden~="toolbar"]) #nav-bar[nonemptyoverflow] > .overflow-but
 }
 
 #titlebar {
-  -moz-binding: url("chrome://global/content/bindings/general.xml#windowdragbox");
   -moz-window-dragging: drag;
 }
 
@@ -298,12 +339,6 @@ toolbarpaletteitem {
 .titlebar-placeholder[type="fullscreen-button"]:-moz-locale-dir(rtl) {
   -moz-box-ordinal-group: 0;
 }
-
-%else
-/* On non-OSX, these should be start-aligned */
-#titlebar-buttonbox-container {
-  -moz-box-align: start;
-}
 %endif
 
 %ifdef XP_WIN
@@ -317,13 +352,10 @@ toolbarpaletteitem {
 }
 %endif
 
-%endif
-
 #main-window[inFullscreen][inDOMFullscreen] #navigator-toolbox,
 #main-window[inFullscreen][inDOMFullscreen] #fullscr-toggler,
 #main-window[inFullscreen][inDOMFullscreen] #sidebar-box,
 #main-window[inFullscreen][inDOMFullscreen] #sidebar-splitter,
-#main-window[inFullscreen][inDOMFullscreen] #developer-toolbar,
 #main-window[inFullscreen]:not([OSXLionFullscreen]) toolbar:not([fullscreentoolbar=true]),
 #main-window[inFullscreen] #global-notificationbox,
 #main-window[inFullscreen] #high-priority-global-notificationbox {
@@ -334,20 +366,7 @@ toolbarpaletteitem {
   transition: 1.5s margin-top ease-out;
 }
 
-/* Rules to help integrate SDK widgets */
-toolbaritem[sdkstylewidget="true"] > toolbarbutton,
-toolbarpaletteitem > toolbaritem[sdkstylewidget="true"] > iframe,
-toolbarpaletteitem > toolbaritem[sdkstylewidget="true"] > .toolbarbutton-text {
-  display: none;
-}
-
-toolbarpaletteitem:-moz-any([place="palette"], [place="panel"]) > toolbaritem[sdkstylewidget="true"] > toolbarbutton {
-  display: -moz-box;
-}
-
-toolbarpaletteitem > toolbaritem[sdkstylewidget="true"][cui-areatype="toolbar"] > .toolbarbutton-text {
-  display: -moz-box;
-}
+/* Rules to help integrate WebExtension buttons */
 
 .webextension-browser-action > .toolbarbutton-badge-stack > .toolbarbutton-icon {
   height: 16px;
@@ -372,22 +391,17 @@ toolbarpaletteitem > toolbaritem[sdkstylewidget="true"][cui-areatype="toolbar"] 
     list-style-image: var(--webextension-menupanel-image, inherit);
   }
 
-  .webextension-browser-action[cui-areatype="menu-panel"],
   toolbarpaletteitem[place="palette"] > .webextension-browser-action:-moz-lwtheme-brighttext {
     list-style-image: var(--webextension-menupanel-image-light, inherit);
   }
 
-  .webextension-browser-action[cui-areatype="menu-panel"],
+  .webextension-browser-action[cui-areatype="menu-panel"]:-moz-lwtheme-darktext,
   toolbarpaletteitem[place="palette"] > .webextension-browser-action:-moz-lwtheme-darktext {
     list-style-image: var(--webextension-menupanel-image-dark, inherit);
   }
 
-  .webextension-page-action {
-    list-style-image: var(--webextension-urlbar-image, inherit);
-  }
-
   .webextension-menuitem {
-    list-style-image: var(--webextension-menuitem-image, inherit);
+    list-style-image: var(--webextension-menuitem-image, inherit) !important;
   }
 }
 
@@ -409,22 +423,17 @@ toolbarpaletteitem > toolbaritem[sdkstylewidget="true"][cui-areatype="toolbar"] 
     list-style-image: var(--webextension-menupanel-image-2x, inherit);
   }
 
-  .webextension-browser-action[cui-areatype="menu-panel"],
   toolbarpaletteitem[place="palette"] > .webextension-browser-action:-moz-lwtheme-brighttext {
     list-style-image: var(--webextension-menupanel-image-2x-light, inherit);
   }
 
-  .webextension-browser-action[cui-areatype="menu-panel"],
+  .webextension-browser-action[cui-areatype="menu-panel"]:-moz-lwtheme-darktext,
   toolbarpaletteitem[place="palette"] > .webextension-browser-action:-moz-lwtheme-darktext {
     list-style-image: var(--webextension-menupanel-image-2x-dark, inherit);
   }
 
-  .webextension-page-action {
-    list-style-image: var(--webextension-urlbar-image-2x, inherit);
-  }
-
   .webextension-menuitem {
-    list-style-image: var(--webextension-menuitem-image-2x, inherit);
+    list-style-image: var(--webextension-menuitem-image-2x, inherit) !important;
   }
 }
 
@@ -439,7 +448,7 @@ toolbarpaletteitem[removable="false"] {
 
 %ifndef XP_MACOSX
 toolbarpaletteitem[place="palette"],
-toolbarpaletteitem[place="panel"],
+toolbarpaletteitem[place="menu-panel"],
 toolbarpaletteitem[place="toolbar"] {
   -moz-user-focus: normal;
 }
@@ -604,17 +613,39 @@ html|input.urlbar-input[textoverflow]:not([focused]) {
   direction: ltr !important;
 }
 
-/* For non-action items, hide the action text; for action items, hide the URL
-   text. */
-.ac-url[actiontype],
-.ac-action:not([actiontype]) {
-  display: none;
-}
-
 /* Never show a scrollbar for the Location Bar popup.  This overrides the
    richlistbox inline overflow: auto style.*/
 #PopupAutoCompleteRichResult > richlistbox > scrollbox {
   overflow: hidden !important;
+}
+
+/* For non-action items, hide the action text; for action items, hide the URL
+   text. Don't show the separator for keyword results. */
+#PopupAutoCompleteRichResult > richlistbox > richlistitem > .ac-type-icon,
+#PopupAutoCompleteRichResult > richlistbox > richlistitem > .ac-site-icon,
+#PopupAutoCompleteRichResult > richlistbox > richlistitem > .ac-tags:not([empty]),
+#PopupAutoCompleteRichResult > richlistbox > richlistitem > .ac-separator:not([type=keyword]),
+#PopupAutoCompleteRichResult > richlistbox > richlistitem > .ac-url:not([actiontype]),
+#PopupAutoCompleteRichResult > richlistbox > richlistitem > .ac-action[actiontype],
+#PopupAutoCompleteRichResult > richlistbox > richlistitem[selected] > .ac-url[actiontype=remotetab],
+#PopupAutoCompleteRichResult > richlistbox > richlistitem:hover > .ac-url[actiontype=remotetab]
+{
+  display: -moz-box;
+}
+
+#PopupAutoCompleteRichResult > richlistbox > richlistitem[selected] > .ac-action[actiontype=remotetab],
+#PopupAutoCompleteRichResult > richlistbox > richlistitem:hover > .ac-action[actiontype=remotetab] {
+  display: none;
+}
+
+/* Only show the "Search with" label on hover or selection. */
+#PopupAutoCompleteRichResult > richlistbox > richlistitem:not([selected]):not(:hover) > .ac-action[actiontype=searchengine],
+#PopupAutoCompleteRichResult > richlistbox > richlistitem:not([selected]):not(:hover) > .ac-separator[actiontype=searchengine] {
+  display: none;
+}
+
+#PopupAutoCompleteRichResult > richlistbox > richlistitem > .ac-site-icon {
+  margin-inline-start: 0;
 }
 
 /* For action items in a noactions popup, show the URL text and hide the action
@@ -635,14 +666,6 @@ html|input.urlbar-input[textoverflow]:not([focused]) {
   display: none;
 }
 
-#PopupAutoComplete > richlistbox > richlistitem > .ac-type-icon,
-#PopupAutoComplete > richlistbox > richlistitem > .ac-site-icon,
-#PopupAutoComplete > richlistbox > richlistitem > .ac-tags,
-#PopupAutoComplete > richlistbox > richlistitem > .ac-separator,
-#PopupAutoComplete > richlistbox > richlistitem > .ac-url {
-  display: none;
-}
-
 #PopupAutoComplete[firstresultstyle="insecureWarning"] {
   min-width: 200px;
 }
@@ -653,6 +676,7 @@ html|input.urlbar-input[textoverflow]:not([focused]) {
 }
 
 #PopupAutoComplete > richlistbox > richlistitem[originaltype="insecureWarning"] > .ac-site-icon {
+  margin-inline-start: 0;
   display: initial;
 }
 
@@ -667,14 +691,6 @@ html|input.urlbar-input[textoverflow]:not([focused]) {
 
 #PopupSearchAutoComplete {
   -moz-binding: url("chrome://browser/content/search/search.xml#browser-search-autocomplete-result-popup");
-}
-
-/* Overlay a badge on top of the icon of additional open search providers
-   in the search panel. */
-.addengine-item > .button-box > .button-icon,
-.addengine-item[type="menu"] > .button-box > .box-inherit > .button-icon {
-  -moz-binding: url("chrome://browser/content/search/search.xml#addengine-icon");
-  display: -moz-stack;
 }
 
 #PopupAutoCompleteRichResult {
@@ -798,10 +814,6 @@ html|input.urlbar-input[textoverflow]:not([focused]) {
   margin-inline-end: 0.25em !important;
 }
 
-#main-window[customizing] :-moz-any(#urlbar, .searchbar-textbox) > .autocomplete-textbox-container > .textbox-input-box {
-  visibility: hidden;
-}
-
 /* Flexible spacer sizing (matching url bar) */
 toolbarpaletteitem[place=toolbar][id^=wrapper-customizableui-special-spring],
 toolbarspring {
@@ -874,24 +886,17 @@ window[chromehidden~="toolbar"] toolbar:not(#nav-bar):not(#TabsToolbar):not(#pri
 
 #historySwipeAnimationContainer {
   overflow: hidden;
+  pointer-events: none;
 }
 
-#historySwipeAnimationPreviousPage,
-#historySwipeAnimationCurrentPage,
-#historySwipeAnimationNextPage {
-  background: none top left no-repeat white;
+#historySwipeAnimationPreviousArrow {
+  background: url("chrome://browser/content/history-swipe-arrow.svg")
+              center left / 64px 128px no-repeat transparent;
 }
-
-#historySwipeAnimationPreviousPage {
-  background-image: -moz-element(#historySwipeAnimationPreviousPageSnapshot);
-}
-
-#historySwipeAnimationCurrentPage {
-  background-image: -moz-element(#historySwipeAnimationCurrentPageSnapshot);
-}
-
-#historySwipeAnimationNextPage {
-  background-image: -moz-element(#historySwipeAnimationNextPageSnapshot);
+#historySwipeAnimationNextArrow {
+  background: url("chrome://browser/content/history-swipe-arrow.svg")
+              center left / 64px 128px no-repeat transparent;
+  transform: rotate(180deg);
 }
 
 /*  Full Screen UI */
@@ -946,37 +951,8 @@ html|*#fullscreen-exit-button {
 
 /* ::::: Ctrl-Tab Panel ::::: */
 
-.ctrlTab-preview > html|img,
-.ctrlTab-preview > html|canvas {
-  min-width: inherit;
-  max-width: inherit;
-  min-height: inherit;
-  max-height: inherit;
-}
-
-.ctrlTab-favicon-container {
-  -moz-box-align: start;
-%ifdef XP_MACOSX
-  -moz-box-pack: end;
-%else
-  -moz-box-pack: start;
-%endif
-}
-
-.ctrlTab-favicon {
-  width: 16px;
-  height: 16px;
-}
-
-/* Apply crisp rendering for favicons at exactly 2dppx resolution */
-@media (resolution: 2dppx) {
-  .ctrlTab-favicon {
-    image-rendering: -moz-crisp-edges;
-  }
-}
-
 .ctrlTab-preview {
-  -moz-binding: url("chrome://browser/content/browser-tabPreviews.xml#ctrlTab-preview");
+  -moz-binding: url("chrome://global/content/bindings/button.xml#button-base");
 }
 
 
@@ -1006,104 +982,64 @@ html|*#fullscreen-exit-button {
   -moz-binding: url("chrome://browser/content/urlbarBindings.xml#addon-progress-notification");
 }
 
-#click-to-play-plugins-notification {
-  -moz-binding: url("chrome://browser/content/urlbarBindings.xml#click-to-play-plugins-notification");
-}
-
-
-.plugin-popupnotification-centeritem {
-  -moz-binding: url("chrome://browser/content/urlbarBindings.xml#plugin-popupnotification-center-item");
-}
-
 browser[tabmodalPromptShowing] {
   -moz-user-focus: none !important;
 }
 
 /* Status panel */
 
-statuspanel {
-  -moz-binding: url("chrome://browser/content/tabbrowser.xml#statuspanel");
+#statuspanel {
   position: fixed;
   margin-top: -3em;
   max-width: calc(100% - 5px);
   pointer-events: none;
 }
 
-statuspanel[mirror] {
+#statuspanel[mirror] {
   offset-inline-start: auto;
   offset-inline-end: 0;
 }
 
-statuspanel[sizelimit] {
+#statuspanel[sizelimit] {
   max-width: 50%;
 }
 
-statuspanel[type=status] {
+#statuspanel[type=status] {
   min-width: 23em;
 }
 
 @media all and (max-width: 800px) {
-  statuspanel[type=status] {
+  #statuspanel[type=status] {
     min-width: 33%;
   }
 }
 
-statuspanel[type=overLink] {
+#statuspanel[type=overLink] {
   transition: opacity 120ms ease-out;
 }
 
-statuspanel[type=overLink] > .statuspanel-inner {
+#statuspanel[type=overLink] > #statuspanel-inner {
   direction: ltr;
 }
 
-statuspanel[inactive] {
+#statuspanel[inactive] {
   transition: none;
   opacity: 0;
 }
 
-statuspanel[inactive][previoustype=overLink] {
+#statuspanel[inactive][previoustype=overLink] {
   transition: opacity 200ms ease-out;
 }
 
-.statuspanel-inner {
+#statuspanel-inner {
   height: 3em;
   width: 100%;
   -moz-box-align: end;
 }
 
-/* gcli */
-
-html|*#gcli-tooltip-frame,
-html|*#gcli-output-frame,
-#gcli-output,
-#gcli-tooltip {
-  overflow-x: hidden;
-}
-
-.gclitoolbar-input-node,
-.gclitoolbar-complete-node {
-  direction: ltr;
-}
-
-#developer-toolbar-toolbox-button[error-count] > .toolbarbutton-icon {
-  display: none;
-}
-
-#developer-toolbar-toolbox-button[error-count]:before {
-  content: attr(error-count);
-  display: -moz-box;
-  -moz-box-pack: center;
-}
-
 /* Translation */
 notification[value="translation"] {
   -moz-binding: url("chrome://browser/content/translation-infobar.xml#translationbar");
-}
-
-/** See bug 872317 for why the following rule is necessary. */
-
-#downloads-button {
-  -moz-binding: url("chrome://browser/content/downloads/download.xml#download-toolbarbutton");
 }
 
 /*** Visibility of downloads indicator controls ***/
@@ -1183,6 +1119,10 @@ toolbarpaletteitem[place="palette"] > #downloads-button[indicator] > #downloads-
 
 %elifndef MOZ_WIDGET_GTK
 
+#BMB_bookmarksPopup {
+  will-change: transform, opacity; /* workaround for bug 1414033 */
+}
+
 #BMB_bookmarksPopup:not([animate="false"]) {
   opacity: 0;
   transform: translateY(-70px);
@@ -1208,11 +1148,6 @@ toolbarpaletteitem[place="palette"] > #downloads-button[indicator] > #downloads-
   transform: none;
 }
 %endif
-
-/* Customize mode */
-#PanelUI-contents > .panel-customization-placeholder > .panel-customization-placeholder-child {
-  list-style-image: none;
-}
 
 /* Apply crisp rendering for favicons at exactly 2dppx resolution */
 @media (resolution: 2dppx) {
@@ -1259,7 +1194,7 @@ toolbarpaletteitem[place="palette"] > #downloads-button[indicator] > #downloads-
 #customization-panelHolder {
   flex-direction: column;
   display: flex;
-  min-height: calc(174px + 8em);
+  min-height: calc(174px + 9em);
 }
 
 #customization-panelWrapper {
@@ -1313,8 +1248,12 @@ toolbarpaletteitem[dragover] {
   display: -moz-box;
 }
 
+toolbarpaletteitem {
+  -moz-binding: url("chrome://browser/content/customizableui/toolbar.xml#toolbarpaletteitem");
+}
+
 toolbarpaletteitem[place="palette"] {
-  -moz-binding: url("chrome://global/content/bindings/toolbar.xml#toolbarpaletteitem-palette-wrapping-label");
+  -moz-box-orient: vertical;
   width: 7em;
   /* icon (16) + margin (9 + 12) + 3 lines of text: */
   height: calc(39px + 3em);
@@ -1325,14 +1264,24 @@ toolbarpaletteitem[place="palette"] {
   vertical-align: top;
 }
 
+toolbarpaletteitem:not([place="palette"]) > .toolbarpaletteitem-label,
 toolbarpaletteitem[place="palette"][hidden] {
   display: none;
 }
 
-#customization-palette .toolbarpaletteitem-box {
+.toolbarpaletteitem-box {
+  /* Prevent children from getting events */
+  pointer-events: none;
+}
+
+toolbarpaletteitem[place="palette"] > .toolbarpaletteitem-box {
   -moz-box-pack: center;
   width: 7em;
   max-width: 7em;
+}
+
+toolbarpaletteitem:not([place="palette"]) > .toolbarpaletteitem-box {
+  -moz-box-flex: 1;
 }
 
 #main-window[customizing=true] .addon-banner-item,
@@ -1419,6 +1368,10 @@ toolbarpaletteitem[place="palette"][hidden] {
   box-shadow: 0 0 2px 2px rgba(255,0,0,0.4);
 }
 
+.popup-notification-description[popupid=webauthn-prompt-register-direct] {
+  white-space: pre-line;
+}
+
 .dragfeedback-tab {
   -moz-appearance: none;
   opacity: 0.65;
@@ -1426,9 +1379,46 @@ toolbarpaletteitem[place="palette"][hidden] {
 }
 
 /* Page action panel */
-#pageAction-panel-sendToDevice-subview-body:not([state="notready"]) > #pageAction-panel-sendToDevice-notReady,
-#pageAction-urlbar-sendToDevice-subview-body:not([state="notready"]) > #pageAction-urlbar-sendToDevice-notReady {
+#pageAction-panel-sendToDevice-subview-body:not([state="notready"]) > .pageAction-sendToDevice-notReady,
+#pageAction-urlbar-sendToDevice-subview-body:not([state="notready"]) > .pageAction-sendToDevice-notReady {
   display: none;
+}
+
+/* Page action buttons */
+.pageAction-panel-button > .toolbarbutton-icon {
+  list-style-image: var(--pageAction-image-16px, inherit);
+}
+.urlbar-page-action {
+  list-style-image: var(--pageAction-image-16px, inherit);
+}
+@media (min-resolution: 1.1dppx) {
+  .pageAction-panel-button > .toolbarbutton-icon {
+    list-style-image: var(--pageAction-image-32px, inherit);
+  }
+  .urlbar-page-action {
+    list-style-image: var(--pageAction-image-32px, inherit);
+  }
+}
+
+/* Page action context menu */
+#pageActionContextMenu > .pageActionContextMenuItem {
+  visibility: collapse;
+}
+#pageActionContextMenu[state=builtInPinned] > .pageActionContextMenuItem.builtInPinned,
+#pageActionContextMenu[state=builtInUnpinned] > .pageActionContextMenuItem.builtInUnpinned,
+#pageActionContextMenu[state=extensionPinned] > .pageActionContextMenuItem.extensionPinned,
+#pageActionContextMenu[state=extensionUnpinned] > .pageActionContextMenuItem.extensionUnpinned {
+  visibility: visible;
+}
+
+
+/* Favicon in Open Bookmark in Sidebar */
+#sidebar-box[sidebarcommand="viewWebPanelsSidebar"] > #sidebar-header > #sidebar-switcher-target > #sidebar-icon {
+  list-style-image: var(--sidebar-webpage-icon, url(chrome://mozapps/skin/places/defaultFavicon.svg) );
+  -moz-context-properties: fill;
+  fill: currentColor;
+  width: 16px;
+  height: 16px;
 }
 
 /* WebExtension Sidebars */

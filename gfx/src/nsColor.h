@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -84,10 +85,6 @@ inline uint32_t RoundingDivideBy255(uint32_t n)
   // machine with a modern compiler.
   return (n + 127) / 255;
 }
-
-// Blend one RGBA color with another based on a given ratio.
-// It is a linear interpolation on each channel with alpha premultipled.
-nscolor LinearBlendColors(nscolor aBg, nscolor aFg, uint_fast8_t aFgRatio);
 
 } // namespace mozilla
 

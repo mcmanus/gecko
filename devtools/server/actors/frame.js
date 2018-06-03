@@ -7,14 +7,14 @@
 "use strict";
 
 const { ActorPool } = require("devtools/server/actors/common");
-const { createValueGrip } = require("devtools/server/actors/object");
+const { createValueGrip } = require("devtools/server/actors/object/utils");
 const { ActorClassWithSpec } = require("devtools/shared/protocol");
 const { frameSpec } = require("devtools/shared/specs/frame");
 
 /**
  * An actor for a specified stack frame.
  */
-let FrameActor = ActorClassWithSpec(frameSpec, {
+const FrameActor = ActorClassWithSpec(frameSpec, {
   /**
    * Creates the Frame actor.
    *
@@ -23,7 +23,7 @@ let FrameActor = ActorClassWithSpec(frameSpec, {
    * @param threadActor ThreadActor
    *        The parent thread actor for this frame.
    */
-  initialize: function (frame, threadActor) {
+  initialize: function(frame, threadActor) {
     this.frame = frame;
     this.threadActor = threadActor;
   },
@@ -44,17 +44,17 @@ let FrameActor = ActorClassWithSpec(frameSpec, {
    * Finalization handler that is called when the actor is being evicted from
    * the pool.
    */
-  destroy: function () {
+  destroy: function() {
     this.conn.removeActorPool(this._frameLifetimePool);
     this._frameLifetimePool = null;
   },
 
-  getEnvironment: function () {
+  getEnvironment: function() {
     if (!this.frame.environment) {
       return {};
     }
 
-    let envActor = this.threadActor.createEnvironmentActor(
+    const envActor = this.threadActor.createEnvironmentActor(
       this.frame.environment,
       this.frameLifetimePool
     );
@@ -65,10 +65,10 @@ let FrameActor = ActorClassWithSpec(frameSpec, {
   /**
    * Returns a frame form for use in a protocol message.
    */
-  form: function () {
-    let threadActor = this.threadActor;
-    let form = { actor: this.actorID,
-                 type: this.frame.type };
+  form: function() {
+    const threadActor = this.threadActor;
+    const form = { actor: this.actorID,
+                   type: this.frame.type };
     if (this.frame.type === "call") {
       form.callee = createValueGrip(this.frame.callee, threadActor._pausePool,
         threadActor.objectGrip);
@@ -90,7 +90,7 @@ let FrameActor = ActorClassWithSpec(frameSpec, {
 
     form.arguments = this._args();
     if (this.frame.script) {
-      let generatedLocation = this.threadActor.sources.getFrameLocation(this.frame);
+      const generatedLocation = this.threadActor.sources.getFrameLocation(this.frame);
       form.where = {
         source: generatedLocation.generatedSourceActor.form(),
         line: generatedLocation.generatedLine,
@@ -105,7 +105,7 @@ let FrameActor = ActorClassWithSpec(frameSpec, {
     return form;
   },
 
-  _args: function () {
+  _args: function() {
     if (!this.frame.arguments) {
       return [];
     }

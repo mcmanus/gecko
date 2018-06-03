@@ -15,6 +15,7 @@
 #include "nsNetUtil.h"
 #include "imgINotificationObserver.h"
 #include "mozilla/dom/SVGImageElementBinding.h"
+#include "mozilla/dom/SVGLengthBinding.h"
 #include "nsContentUtils.h"
 
 NS_IMPL_NS_NEW_NAMESPACED_SVG_ELEMENT(Image)
@@ -32,10 +33,10 @@ SVGImageElement::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto)
 
 nsSVGElement::LengthInfo SVGImageElement::sLengthInfo[4] =
 {
-  { &nsGkAtoms::x, 0, nsIDOMSVGLength::SVG_LENGTHTYPE_NUMBER, SVGContentUtils::X },
-  { &nsGkAtoms::y, 0, nsIDOMSVGLength::SVG_LENGTHTYPE_NUMBER, SVGContentUtils::Y },
-  { &nsGkAtoms::width, 0, nsIDOMSVGLength::SVG_LENGTHTYPE_NUMBER, SVGContentUtils::X },
-  { &nsGkAtoms::height, 0, nsIDOMSVGLength::SVG_LENGTHTYPE_NUMBER, SVGContentUtils::Y },
+  { &nsGkAtoms::x, 0, SVGLengthBinding::SVG_LENGTHTYPE_NUMBER, SVGContentUtils::X },
+  { &nsGkAtoms::y, 0, SVGLengthBinding::SVG_LENGTHTYPE_NUMBER, SVGContentUtils::Y },
+  { &nsGkAtoms::width, 0, SVGLengthBinding::SVG_LENGTHTYPE_NUMBER, SVGContentUtils::X },
+  { &nsGkAtoms::height, 0, SVGLengthBinding::SVG_LENGTHTYPE_NUMBER, SVGContentUtils::Y },
 };
 
 nsSVGElement::StringInfo SVGImageElement::sStringInfo[2] =
@@ -48,10 +49,8 @@ nsSVGElement::StringInfo SVGImageElement::sStringInfo[2] =
 // nsISupports methods
 
 NS_IMPL_ISUPPORTS_INHERITED(SVGImageElement, SVGImageElementBase,
-                            nsIDOMNode, nsIDOMElement,
-                            nsIDOMSVGElement,
                             imgINotificationObserver,
-                            nsIImageLoadingContent, imgIOnloadBlocker)
+                            nsIImageLoadingContent)
 
 //----------------------------------------------------------------------
 // Implementation
@@ -69,7 +68,7 @@ SVGImageElement::~SVGImageElement()
 }
 
 //----------------------------------------------------------------------
-// nsIDOMNode methods
+// nsINode methods
 
 
 NS_IMPL_ELEMENT_CLONE_WITH_INIT(SVGImageElement)
@@ -156,7 +155,9 @@ SVGImageElement::AsyncEventRunning(AsyncEventDispatcher* aEvent)
 nsresult
 SVGImageElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
                               const nsAttrValue* aValue,
-                              const nsAttrValue* aOldValue, bool aNotify)
+                              const nsAttrValue* aOldValue,
+                              nsIPrincipal* aSubjectPrincipal,
+                              bool aNotify)
 {
   if (aName == nsGkAtoms::href &&
       (aNamespaceID == kNameSpaceID_None ||
@@ -169,7 +170,8 @@ SVGImageElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
     }
   }
   return SVGImageElementBase::AfterSetAttr(aNamespaceID, aName,
-                                           aValue, aOldValue, aNotify);
+                                           aValue, aOldValue,
+                                           aSubjectPrincipal, aNotify);
 }
 
 void

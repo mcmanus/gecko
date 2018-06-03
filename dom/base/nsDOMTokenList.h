@@ -22,7 +22,9 @@
 
 namespace mozilla {
 class ErrorResult;
-
+namespace dom {
+class DocGroup;
+} // namespace dom
 } // namespace mozilla
 
 class nsAttrValue;
@@ -35,6 +37,7 @@ class nsDOMTokenList : public nsISupports,
 {
 protected:
   typedef mozilla::dom::Element Element;
+  typedef mozilla::dom::DocGroup DocGroup;
   typedef nsWhitespaceTokenizerTemplate<nsContentUtils::IsHTMLWhitespace>
     WhitespaceTokenizer;
 
@@ -51,6 +54,8 @@ public:
   {
     return mElement;
   }
+
+  DocGroup* GetDocGroup() const;
 
   void RemoveDuplicates(const nsAttrValue* aAttr);
   uint32_t Length();
@@ -70,7 +75,7 @@ public:
   void Remove(const nsAString& aToken, mozilla::ErrorResult& aError);
   void Remove(const nsTArray<nsString>& aTokens,
               mozilla::ErrorResult& aError);
-  void Replace(const nsAString& aToken,
+  bool Replace(const nsAString& aToken,
                const nsAString& aNewToken,
                mozilla::ErrorResult& aError);
   bool Toggle(const nsAString& aToken,
@@ -94,7 +99,7 @@ protected:
                    const nsTArray<nsString>& aTokens);
   void RemoveInternal(const nsAttrValue* aAttr,
                       const nsTArray<nsString>& aTokens);
-  void ReplaceInternal(const nsAttrValue* aAttr,
+  bool ReplaceInternal(const nsAttrValue* aAttr,
                        const nsAString& aToken,
                        const nsAString& aNewToken);
   inline const nsAttrValue* GetParsedAttr();

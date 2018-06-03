@@ -11,7 +11,6 @@ loader.lazyRequireGetter(this, "cssColors",
 
 const { FrontClassWithSpec, Front } = require("devtools/shared/protocol");
 const { cssPropertiesSpec } = require("devtools/shared/specs/css-properties");
-const { Task } = require("devtools/shared/task");
 
 /**
  * Build up a regular expression that matches a CSS variable token. This is an
@@ -44,7 +43,7 @@ var cachedCssProperties = new WeakMap();
  * properties the current server supports.
  */
 const CssPropertiesFront = FrontClassWithSpec(cssPropertiesSpec, {
-  initialize: function (client, { cssPropertiesActor }) {
+  initialize: function(client, { cssPropertiesActor }) {
     Front.prototype.initialize.call(this, client, {actor: cssPropertiesActor});
     this.manage(this);
   }
@@ -228,7 +227,7 @@ CssProperties.prototype = {
  * @param {Toolbox} The current toolbox.
  * @returns {Promise} Resolves to {cssProperties, cssPropertiesFront}.
  */
-const initCssProperties = Task.async(function* (toolbox) {
+const initCssProperties = async function(toolbox) {
   const client = toolbox.target.client;
   if (cachedCssProperties.has(client)) {
     return cachedCssProperties.get(client);
@@ -239,7 +238,7 @@ const initCssProperties = Task.async(function* (toolbox) {
   // Get the list dynamically if the cssProperties actor exists.
   if (toolbox.target.hasActor("cssProperties")) {
     front = CssPropertiesFront(client, toolbox.target.form);
-    db = yield front.getCSSDatabase();
+    db = await front.getCSSDatabase();
   } else {
     // The target does not support this actor, so require a static list of supported
     // properties.
@@ -249,7 +248,7 @@ const initCssProperties = Task.async(function* (toolbox) {
   const cssProperties = new CssProperties(normalizeCssData(db));
   cachedCssProperties.set(client, {cssProperties, front});
   return {cssProperties, front};
-});
+};
 
 /**
  * Synchronously get a cached and initialized CssProperties.
@@ -294,16 +293,16 @@ function normalizeCssData(db) {
       db = { properties: db };
     }
 
-    let missingSupports = !db.properties.color.supports;
-    let missingValues = !db.properties.color.values;
-    let missingSubproperties = !db.properties.background.subproperties;
-    let missingIsInherited = !db.properties.font.isInherited;
+    const missingSupports = !db.properties.color.supports;
+    const missingValues = !db.properties.color.values;
+    const missingSubproperties = !db.properties.background.subproperties;
+    const missingIsInherited = !db.properties.font.isInherited;
 
-    let missingSomething = missingSupports || missingValues || missingSubproperties ||
+    const missingSomething = missingSupports || missingValues || missingSubproperties ||
       missingIsInherited;
 
     if (missingSomething) {
-      for (let name in db.properties) {
+      for (const name in db.properties) {
         // Skip the current property if we can't find it in CSS_PROPERTIES_DB.
         if (typeof CSS_PROPERTIES_DB.properties[name] !== "object") {
           continue;
@@ -349,7 +348,7 @@ function reattachCssColorValues(db) {
   if (db.properties.color.values[0] === "COLOR") {
     const colors = Object.keys(cssColors);
 
-    for (let name in db.properties) {
+    for (const name in db.properties) {
       const property = db.properties[name];
       // "values" can be undefined if {name} was not found in CSS_PROPERTIES_DB.
       if (property.values && property.values[0] === "COLOR") {

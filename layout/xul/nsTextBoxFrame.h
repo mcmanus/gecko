@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -26,13 +27,13 @@ public:
 
   enum CroppingStyle { CropNone, CropLeft, CropRight, CropCenter, CropAuto };
 
-  friend nsIFrame* NS_NewTextBoxFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
+  friend nsIFrame* NS_NewTextBoxFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle);
 
   virtual void Init(nsIContent*       aContent,
                     nsContainerFrame* aParent,
                     nsIFrame*         asPrevInFlow) override;
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
   virtual nsresult AttributeChanged(int32_t         aNameSpaceID,
                                     nsAtom*        aAttribute,
@@ -62,7 +63,7 @@ public:
 
   void GetCroppedTitle(nsString& aTitle) const { aTitle = mCroppedTitle; }
 
-  virtual void DidSetStyleContext(nsStyleContext* aOldStyleContext) override;
+  virtual void DidSetComputedStyle(ComputedStyle* aOldComputedStyle) override;
 
 protected:
   friend class nsAsyncAccesskeyUpdate;
@@ -88,7 +89,7 @@ protected:
 
   void CalcDrawRect(gfxContext &aRenderingContext);
 
-  explicit nsTextBoxFrame(nsStyleContext* aContext);
+  explicit nsTextBoxFrame(ComputedStyle* aStyle);
 
   nscoord CalculateTitleForWidth(gfxContext&          aRenderingContext,
                                  nscoord              aWidth);

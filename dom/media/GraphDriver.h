@@ -15,6 +15,8 @@
 #include "mozilla/SharedThreadPool.h"
 #include "mozilla/StaticPtr.h"
 
+#include <thread>
+
 #if defined(XP_WIN)
 #include "mozilla/audio/AudioNotificationReceiver.h"
 #endif
@@ -119,19 +121,12 @@ public:
   virtual void WaitForNextIteration() = 0;
   /* Wakes up the graph if it is waiting. */
   virtual void WakeUp() = 0;
-  virtual void Destroy() {}
   /* Start the graph, init the driver, start the thread. */
   virtual void Start() = 0;
-  /* Stop the graph, shutting down the thread. */
-  virtual void Stop() = 0;
-  /* Resume after a stop */
-  virtual void Resume() = 0;
   /* Revive this driver, as more messages just arrived. */
   virtual void Revive() = 0;
-  /* Remove Mixer callbacks when switching */
-  virtual void RemoveCallback() = 0;
   /* Shutdown GraphDriver (synchronously) */
-  void Shutdown();
+  virtual void Shutdown() = 0;
   /* Rate at which the GraphDriver runs, in ms. This can either be user
    * controlled (because we are using a {System,Offline}ClockDriver, and decide
    * how often we want to wakeup/how much we want to process per iteration), or
@@ -142,6 +137,8 @@ public:
 
   /* Return whether we are switching or not. */
   bool Switching();
+  /* Implement the switching of the driver and the necessary updates */
+  void SwitchToNextDriver();
 
   // Those are simply or setting the associated pointer, but assert that the
   // lock is held.
@@ -149,9 +146,6 @@ public:
   GraphDriver* PreviousDriver();
   void SetNextDriver(GraphDriver* aNextDriver);
   void SetPreviousDriver(GraphDriver* aPreviousDriver);
-
-  /* Return whether we have been scheduled to start. */
-  bool Scheduled();
 
   /**
    * If we are running a real time graph, get the current time stamp to schedule
@@ -222,22 +216,6 @@ protected:
   // monitor.
   MediaStreamGraphImpl* mGraphImpl;
 
-  // This enum specifies the wait state of the driver.
-  enum WaitState {
-    // RunThread() is running normally
-    WAITSTATE_RUNNING,
-    // RunThread() is paused waiting for its next iteration, which will
-    // happen soon
-    WAITSTATE_WAITING_FOR_NEXT_ITERATION,
-    // RunThread() is paused indefinitely waiting for something to change
-    WAITSTATE_WAITING_INDEFINITELY,
-    // Something has signaled RunThread() to wake up immediately,
-    // but it hasn't done so yet
-    WAITSTATE_WAKING_UP
-  };
-  // This must be access with the monitor.
-  WaitState mWaitState;
-
   // This is used on the main thread (during initialization), and the graph
   // thread. No monitor needed because we know the graph thread does not run
   // during the initialization.
@@ -256,9 +234,6 @@ protected:
   // driver at the end of this iteration.
   // This must be accessed using the {Set,Get}NextDriver methods.
   RefPtr<GraphDriver> mNextDriver;
-  // This is initially false, but set to true as soon the driver has been
-  // scheduled to start through GraphDriver::Start().
-  bool mScheduled;
   virtual ~GraphDriver()
   { }
 };
@@ -274,10 +249,8 @@ public:
   explicit ThreadedDriver(MediaStreamGraphImpl* aGraphImpl);
   virtual ~ThreadedDriver();
   void Start() override;
-  void Stop() override;
-  void Resume() override;
   void Revive() override;
-  void RemoveCallback() override;
+  void Shutdown() override;
   /**
    * Runs main control loop on the graph thread. Normally a single invocation
    * of this runs for the entire lifetime of the graph thread.
@@ -322,6 +295,23 @@ private:
   // graph thread does not run during the initialization.
   TimeStamp mInitialTimeStamp;
   TimeStamp mLastTimeStamp;
+
+  // This enum specifies the wait state of the driver.
+  enum WaitState {
+    // RunThread() is running normally
+    WAITSTATE_RUNNING,
+    // RunThread() is paused waiting for its next iteration, which will
+    // happen soon
+    WAITSTATE_WAITING_FOR_NEXT_ITERATION,
+    // RunThread() is paused indefinitely waiting for something to change
+    WAITSTATE_WAITING_INDEFINITELY,
+    // Something has signaled RunThread() to wake up immediately,
+    // but it hasn't done so yet
+    WAITSTATE_WAKING_UP
+  };
+  // This must be access with the monitor.
+  WaitState mWaitState;
+
   // This is true if this SystemClockDriver runs the graph because we could not
   // open an audio stream.
   bool mIsFallback;
@@ -394,14 +384,11 @@ public:
   explicit AudioCallbackDriver(MediaStreamGraphImpl* aGraphImpl);
   virtual ~AudioCallbackDriver();
 
-  void Destroy() override;
   void Start() override;
-  void Stop() override;
-  void Resume() override;
   void Revive() override;
-  void RemoveCallback() override;
   void WaitForNextIteration() override;
   void WakeUp() override;
+  void Shutdown() override;
 #if defined(XP_WIN)
   void ResetDefaultDevice() override;
 #endif
@@ -438,7 +425,7 @@ public:
 
   // These are invoked on the MSG thread (we don't call this if not LIFECYCLE_RUNNING)
   virtual void SetInputListener(AudioDataListener *aListener) {
-    MOZ_ASSERT(OnThread());
+    MOZ_ASSERT(!IsStarted());
     mAudioInput = aListener;
   }
   // XXX do we need the param?  probably no
@@ -463,12 +450,10 @@ public:
                                          void* aPromise,
                                          dom::AudioContextOperation aOperation);
 
-  /**
-   * Whether the audio callback is processing. This is for asserting only.
-   */
-  bool InCallback();
-
-  bool OnThread() override { return !mStarted || InCallback(); }
+  bool OnThread() override
+  {
+    return mAudioThreadId.load() == std::this_thread::get_id();
+  }
 
   /* Whether the underlying cubeb stream has been started. See comment for
    * mStarted for details. */
@@ -479,7 +464,14 @@ public:
   void SetMicrophoneActive(bool aActive);
 
   void CompleteAudioContextOperations(AsyncCubebOperation aOperation);
+
+  /* Fetch, or create a shared thread pool with up to one thread for
+   * AsyncCubebTask. */
+  SharedThreadPool* GetInitShutdownThread();
+
 private:
+  /* Remove Mixer callbacks when switching */
+  void RemoveCallback() ;
   /**
    * On certain MacBookPro, the microphone is located near the left speaker.
    * We need to pan the sound output to the right speaker if we are using the
@@ -492,6 +484,12 @@ private:
   bool StartStream();
   friend class AsyncCubebTask;
   bool Init();
+  void Stop();
+  /**
+   *  Fall back to a SystemClockDriver using a normal thread. If needed,
+   *  the graph will try to re-open an audio stream later. */
+  void FallbackToSystemClockDriver();
+
   /* MediaStreamGraphs are always down/up mixed to output channels. */
   uint32_t mOutputChannels;
   /* The size of this buffer comes from the fact that some audio backends can
@@ -531,7 +529,7 @@ private:
    * driver back to a SystemClockDriver).
    * This is synchronized by the Graph's monitor.
    * */
-  bool mStarted;
+  Atomic<bool> mStarted;
   /* Listener for mic input, if any. */
   RefPtr<AudioDataListener> mAudioInput;
 
@@ -542,21 +540,29 @@ private:
     AudioCallbackDriver* mDriver;
   };
 
-  /* Thread for off-main-thread initialization and
-   * shutdown of the audio stream. */
-  nsCOMPtr<nsIThread> mInitShutdownThread;
+  /* Shared thread pool with up to one thread for off-main-thread
+   * initialization and shutdown of the audio stream via AsyncCubebTask. */
+  RefPtr<SharedThreadPool> mInitShutdownThread;
   /* This must be accessed with the graph monitor held. */
   AutoTArray<StreamAndPromiseForOperation, 1> mPromisesForOperation;
   /* Used to queue us to add the mixer callback on first run. */
   bool mAddedMixer;
 
-  /* This is atomic and is set by the audio callback thread. It can be read by
-   * any thread safely. */
-  Atomic<bool> mInCallback;
+  /* Contains the id of the audio thread for as long as the callback
+   * is taking place, after that it is reseted to an invalid value. */
+  std::atomic<std::thread::id> mAudioThreadId;
   /**
    * True if microphone is being used by this process. This is synchronized by
    * the graph's monitor. */
   Atomic<bool> mMicrophoneActive;
+  /* Indication of whether a fallback SystemClockDriver should be started if
+   * StateCallback() receives an error.  No mutex need be held during access.
+   * The transition to true happens before cubeb_stream_start() is called.
+   * After transitioning to false on the last DataCallback(), the stream is
+   * not accessed from another thread until the graph thread either signals
+   * main thread cleanup or dispatches an event to switch to another
+   * driver. */
+  bool mShouldFallbackIfError;
   /* True if this driver was created from a driver created because of a previous
    * AudioCallbackDriver failure. */
   bool mFromFallback;
@@ -570,21 +576,19 @@ public:
 
   nsresult Dispatch(uint32_t aFlags = NS_DISPATCH_NORMAL)
   {
-    nsresult rv = EnsureThread();
-    if (!NS_FAILED(rv)) {
-      rv = sThreadPool->Dispatch(this, aFlags);
+    SharedThreadPool* threadPool = mDriver->GetInitShutdownThread();
+    if (!threadPool) {
+      return NS_ERROR_FAILURE;
     }
-    return rv;
+    return threadPool->Dispatch(this, aFlags);
   }
 
 protected:
   virtual ~AsyncCubebTask();
 
 private:
-  static nsresult EnsureThread();
+  NS_IMETHOD Run() final;
 
-  NS_IMETHOD Run() override final;
-  static StaticRefPtr<nsIThreadPool> sThreadPool;
   RefPtr<AudioCallbackDriver> mDriver;
   AsyncCubebOperation mOperation;
   RefPtr<MediaStreamGraphImpl> mShutdownGrip;

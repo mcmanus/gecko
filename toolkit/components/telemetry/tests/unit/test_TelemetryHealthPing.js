@@ -6,15 +6,15 @@
 
 "use strict";
 
-Cu.import("resource://gre/modules/TelemetryController.jsm", this);
-Cu.import("resource://gre/modules/TelemetryStorage.jsm", this);
-Cu.import("resource://gre/modules/TelemetryUtils.jsm", this);
-Cu.import("resource://gre/modules/Preferences.jsm", this);
-Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
-Cu.import("resource://testing-common/TelemetryArchiveTesting.jsm", this);
+ChromeUtils.import("resource://gre/modules/TelemetryController.jsm", this);
+ChromeUtils.import("resource://gre/modules/TelemetryStorage.jsm", this);
+ChromeUtils.import("resource://gre/modules/TelemetryUtils.jsm", this);
+ChromeUtils.import("resource://gre/modules/Preferences.jsm", this);
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+ChromeUtils.import("resource://testing-common/TelemetryArchiveTesting.jsm", this);
 
-XPCOMUtils.defineLazyModuleGetter(this, "TelemetryHealthPing",
-                                  "resource://gre/modules/TelemetryHealthPing.jsm");
+ChromeUtils.defineModuleGetter(this, "TelemetryHealthPing",
+                               "resource://gre/modules/TelemetryHealthPing.jsm");
 
 function checkHealthPingStructure(ping, expectedFailuresDict) {
   let payload = ping.payload;
@@ -26,7 +26,7 @@ function checkHealthPingStructure(ping, expectedFailuresDict) {
 }
 
 function fakeHealthSchedulerTimer(set, clear) {
-  let telemetryHealthPing = Cu.import("resource://gre/modules/TelemetryHealthPing.jsm", {});
+  let telemetryHealthPing = ChromeUtils.import("resource://gre/modules/TelemetryHealthPing.jsm", {});
   telemetryHealthPing.Policy.setSchedulerTickTimeout = set;
   telemetryHealthPing.Policy.clearSchedulerTickTimeout = clear;
 }
@@ -44,7 +44,7 @@ async function waitForConditionWithPromise(promiseFn, timeoutMsg, tryCount = 30)
 }
 
 function fakeSendSubmissionTimeout(timeOut) {
-  let telemetryHealthPing = Cu.import("resource://gre/modules/TelemetrySend.jsm", {});
+  let telemetryHealthPing = ChromeUtils.import("resource://gre/modules/TelemetrySend.jsm", {});
   telemetryHealthPing.Policy.pingSubmissionTimeout = () => timeOut;
 }
 
@@ -53,7 +53,6 @@ add_task(async function setup() {
   do_get_profile(true);
   // Make sure we don't generate unexpected pings due to pref changes.
   await setEmptyPrefWatchlist();
-  Services.prefs.setBoolPref("toolkit.telemetry.enabled", true);
   Preferences.set(TelemetryUtils.Preferences.HealthPingEnabled, true);
 
   await TelemetryController.testSetup();
@@ -143,7 +142,7 @@ add_task(async function test_healthPingOnTop() {
   // Now trigger sending pings again.
   fakeNow(futureDate(now, 5 * 60 * 1000));
   await TelemetrySend.notifyCanUpload();
-  let scheduler = Cu.import("resource://gre/modules/TelemetrySend.jsm", {});
+  let scheduler = ChromeUtils.import("resource://gre/modules/TelemetrySend.jsm", {});
   scheduler.SendScheduler.triggerSendingPings(true);
 
   let pings = await PingServer.promiseNextPings(4);
@@ -183,7 +182,7 @@ add_task(async function test_sendOnTimeout() {
     response.finish();
   }
 
-  let telemetryHealthPing = Cu.import("resource://gre/modules/TelemetrySend.jsm", {});
+  let telemetryHealthPing = ChromeUtils.import("resource://gre/modules/TelemetrySend.jsm", {});
   fakeSendSubmissionTimeout(telemetryHealthPing.PING_SUBMIT_TIMEOUT_MS);
   PingServer.resetPingHandler();
   TelemetrySend.notifyCanUpload();
@@ -267,6 +266,7 @@ add_task(async function test_discardedForSizePending() {
   await TelemetryStorage.savePendingPing(OVERSIZED_PING);
   // Try to manually load the oversized ping.
   await Assert.rejects(TelemetryStorage.loadPendingPing(OVERSIZED_PING_ID),
+    /loadPendingPing - exceeded the maximum ping size/,
     "The oversized ping should have been pruned.");
 
   let ping = await PingServer.promiseNextPing();

@@ -11,6 +11,9 @@
 #include "DanglingOnTemporaryChecker.h"
 #include "ExplicitImplicitChecker.h"
 #include "ExplicitOperatorBoolChecker.h"
+#ifdef _WIN32
+#include "LoadLibraryUsageChecker.h"
+#endif
 #include "KungFuDeathGripChecker.h"
 #include "MustOverrideChecker.h"
 #include "MustReturnFromCallerChecker.h"
@@ -26,6 +29,7 @@
 #include "NonParamInsideFunctionDeclChecker.h"
 #include "OverrideBaseCallChecker.h"
 #include "OverrideBaseCallUsageChecker.h"
+#include "ParamTraitsEnumChecker.h"
 #include "RefCountedCopyConstructorChecker.h"
 #include "RefCountedInsideLambdaChecker.h"
 #include "ScopeChecker.h"

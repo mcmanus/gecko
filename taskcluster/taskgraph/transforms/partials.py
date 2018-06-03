@@ -9,7 +9,7 @@ from __future__ import absolute_import, print_function, unicode_literals
 from taskgraph.transforms.base import TransformSequence
 from taskgraph.util.attributes import copy_attributes_from_dependent_job
 from taskgraph.util.partials import get_balrog_platform_name, get_builds
-from taskgraph.util.taskcluster import get_taskcluster_artifact_prefix
+from taskgraph.util.taskcluster import get_taskcluster_artifact_prefix, get_artifact_prefix
 
 import logging
 logger = logging.getLogger(__name__)
@@ -17,20 +17,21 @@ logger = logging.getLogger(__name__)
 transforms = TransformSequence()
 
 
-def _generate_task_output_files(filenames, locale=None):
+def _generate_task_output_files(job, filenames, locale=None):
     locale_output_path = '{}/'.format(locale) if locale else ''
+    artifact_prefix = get_artifact_prefix(job)
 
     data = list()
     for filename in filenames:
         data.append({
             'type': 'file',
             'path': '/home/worker/artifacts/{}'.format(filename),
-            'name': 'public/build/{}{}'.format(locale_output_path, filename)
+            'name': '{}/{}{}'.format(artifact_prefix, locale_output_path, filename)
         })
     data.append({
         'type': 'file',
         'path': '/home/worker/artifacts/manifest.json',
-        'name': 'public/build/{}manifest.json'.format(locale_output_path)
+        'name': '{}/{}manifest.json'.format(artifact_prefix, locale_output_path)
     })
     return data
 
@@ -88,11 +89,11 @@ def make_task_description(config, jobs):
         extra = {'funsize': {'partials': list()}}
         update_number = 1
         artifact_path = "{}{}".format(
-            get_taskcluster_artifact_prefix(signing_task_ref, locale=locale),
+            get_taskcluster_artifact_prefix(dep_job, signing_task_ref, locale=locale),
             'target.complete.mar'
         )
-        for build in builds:
-            extra['funsize']['partials'].append({
+        for build in sorted(builds):
+            partial_info = {
                 'locale': build_locale,
                 'from_mar': builds[build]['mar_url'],
                 'to_mar': {'task-reference': artifact_path},
@@ -100,26 +101,46 @@ def make_task_description(config, jobs):
                 'branch': config.params['project'],
                 'update_number': update_number,
                 'dest_mar': build,
-            })
+            }
+            if 'product' in builds[build]:
+                partial_info['product'] = builds[build]['product']
+            if 'previousVersion' in builds[build]:
+                partial_info['previousVersion'] = builds[build]['previousVersion']
+            if 'previousBuildNumber' in builds[build]:
+                partial_info['previousBuildNumber'] = builds[build]['previousBuildNumber']
+            extra['funsize']['partials'].append(partial_info)
             update_number += 1
 
-        cot = extra.setdefault('chainOfTrust', {})
-        cot.setdefault('inputs', {})['docker-image'] = {"task-reference": "<docker-image>"}
+        mar_channel_id = None
+        if config.params['project'] == 'mozilla-beta':
+            if 'devedition' in label:
+                mar_channel_id = 'firefox-mozilla-aurora'
+            else:
+                mar_channel_id = 'firefox-mozilla-beta'
+        elif config.params['project'] == 'mozilla-release':
+            mar_channel_id = 'firefox-mozilla-release'
+        elif 'esr' in config.params['project']:
+            mar_channel_id = 'firefox-mozilla-esr'
+
+        level = config.params['level']
 
         worker = {
-            'artifacts': _generate_task_output_files(builds.keys(), locale),
+            'artifacts': _generate_task_output_files(dep_job, builds.keys(), locale),
             'implementation': 'docker-worker',
             'docker-image': {'in-tree': 'funsize-update-generator'},
             'os': 'linux',
             'max-run-time': 3600,
             'chain-of-trust': True,
+            'taskcluster-proxy': True,
             'env': {
                 'SHA1_SIGNING_CERT': 'nightly_sha1',
-                'SHA384_SIGNING_CERT': 'nightly_sha384'
+                'SHA384_SIGNING_CERT': 'nightly_sha384',
+                'DATADOG_API_SECRET':
+                    'project/releng/gecko/build/level-{}/datadog-api-key'.format(level),
             }
         }
-
-        level = config.params['level']
+        if mar_channel_id:
+            worker['env']['ACCEPTED_MAR_CHANNEL_IDS'] = mar_channel_id
 
         task = {
             'label': label,
@@ -127,11 +148,19 @@ def make_task_description(config, jobs):
                 dep_job.task["metadata"]["description"]),
             'worker-type': 'aws-provisioner-v1/gecko-%s-b-linux' % level,
             'dependencies': dependencies,
+            'scopes': [
+                'secrets:get:project/releng/gecko/build/level-%s/datadog-api-key' % level
+            ],
             'attributes': attributes,
             'run-on-projects': dep_job.attributes.get('run_on_projects'),
             'treeherder': treeherder,
             'extra': extra,
             'worker': worker,
         }
+
+        # We only want caching on linux/windows due to bug 1436977
+        if level == 3 and any([platform in dep_th_platform for platform in ['linux', 'windows']]):
+            task['scopes'].append(
+                'auth:aws-s3:read-write:tc-gp-private-1d-us-east-1/releng/mbsdiff-cache/')
 
         yield task

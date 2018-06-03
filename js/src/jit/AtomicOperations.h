@@ -14,8 +14,6 @@
 namespace js {
 namespace jit {
 
-class RegionLock;
-
 /*
  * The atomic operations layer defines types and functions for
  * JIT-compatible atomic operation.
@@ -85,9 +83,6 @@ class RegionLock;
  */
 class AtomicOperations
 {
-    friend class RegionLock;
-
-  private:
     // The following functions are defined for T = int8_t, uint8_t,
     // int16_t, uint16_t, int32_t, uint32_t, int64_t, and uint64_t.
 
@@ -289,34 +284,6 @@ class AtomicOperations
 #endif
 };
 
-/* A data type representing a lock on some region of a SharedArrayRawBuffer's
- * memory, to be used only when the hardware does not provide necessary
- * atomicity.
- */
-class RegionLock
-{
-  public:
-    RegionLock() : spinlock(0) {}
-
-    /* Addr is the address to be locked, nbytes the number of bytes we
-     * need to lock.  The lock that is taken may cover a larger range
-     * of bytes, indeed it may cover all of memory.
-     */
-    template<size_t nbytes>
-    void acquire(void* addr);
-
-    /* Addr is the address to be unlocked, nbytes the number of bytes
-     * we need to unlock.  The lock must be held by the calling thread,
-     * at the given address and for the number of bytes.
-     */
-    template<size_t nbytes>
-    void release(void* addr);
-
-  private:
-    /* For now, a simple spinlock that covers the entire buffer. */
-    uint32_t spinlock;
-};
-
 inline bool
 AtomicOperations::isLockfreeJS(int32_t size)
 {
@@ -374,7 +341,13 @@ AtomicOperations::isLockfreeJS(int32_t size)
 // participate in the memory exclusivity monitors implemented by the simulator.
 // Such a solution is likely to be difficult.
 
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(JS_SIMULATOR_MIPS32)
+# if defined(__clang__) || defined(__GNUC__)
+#  include "jit/mips-shared/AtomicOperations-mips-shared.h"
+# else
+#  error "No AtomicOperations support for this platform+compiler combination"
+# endif
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 # if defined(__clang__) || defined(__GNUC__)
 #  include "jit/x86-shared/AtomicOperations-x86-shared-gcc.h"
 # elif defined(_MSC_VER)

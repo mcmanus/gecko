@@ -5,16 +5,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
- * structs that contain the data provided by nsStyleContext, the
+ * structs that contain the data provided by ComputedStyle, the
  * internal API for computed style data for an element
  */
 
 #ifndef nsStyleStruct_h___
 #define nsStyleStruct_h___
 
-#include "mozilla/ArenaObjectID.h"
 #include "mozilla/Attributes.h"
-#include "mozilla/CSSVariableValues.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/SheetType.h"
 #include "mozilla/StaticPtr.h"
@@ -28,7 +26,7 @@
 #include "nsStyleCoord.h"
 #include "nsStyleConsts.h"
 #include "nsChangeHint.h"
-#include "nsPresContext.h"
+#include "nsTimingFunction.h"
 #include "nsCOMPtr.h"
 #include "nsCOMArray.h"
 #include "nsTArray.h"
@@ -42,82 +40,17 @@
 
 class nsIFrame;
 class nsIURI;
-class nsStyleContext;
 class nsTextFrame;
 class imgIContainer;
+class nsPresContext;
+struct nsStyleDisplay;
 struct nsStyleVisibility;
 namespace mozilla {
+class ComputedStyle;
 namespace dom {
 class ImageTracker;
 } // namespace dom
 } // namespace mozilla
-
-// Includes nsStyleStructID.
-#include "nsStyleStructFwd.h"
-
-// Bits for each struct.
-// NS_STYLE_INHERIT_BIT defined in nsStyleStructFwd.h
-#define NS_STYLE_INHERIT_MASK              0x000ffffff
-
-// Bits for inherited structs.
-#define NS_STYLE_INHERITED_STRUCT_MASK \
-  ((nsStyleStructID_size_t(1) << nsStyleStructID_Inherited_Count) - 1)
-// Bits for reset structs.
-#define NS_STYLE_RESET_STRUCT_MASK \
-  (((nsStyleStructID_size_t(1) << nsStyleStructID_Reset_Count) - 1) \
-   << nsStyleStructID_Inherited_Count)
-
-// Additional bits for nsStyleContext's mBits:
-// See nsStyleContext::HasTextDecorationLines
-#define NS_STYLE_HAS_TEXT_DECORATION_LINES 0x001000000
-// See nsStyleContext::HasPseudoElementData.
-#define NS_STYLE_HAS_PSEUDO_ELEMENT_DATA   0x002000000
-// See nsStyleContext::RelevantLinkIsVisited
-#define NS_STYLE_RELEVANT_LINK_VISITED     0x004000000
-// See nsStyleContext::IsStyleIfVisited
-#define NS_STYLE_IS_STYLE_IF_VISITED       0x008000000
-// See nsStyleContext::HasChildThatUsesGrandancestorStyle
-#define NS_STYLE_CHILD_USES_GRANDANCESTOR_STYLE 0x010000000
-// See nsStyleContext::IsShared
-#define NS_STYLE_IS_SHARED                 0x020000000
-// See nsStyleContext::AssertStructsNotUsedElsewhere
-// (This bit is currently only used in #ifdef DEBUG code.)
-#define NS_STYLE_IS_GOING_AWAY             0x040000000
-// See nsStyleContext::ShouldSuppressLineBreak
-#define NS_STYLE_SUPPRESS_LINEBREAK        0x080000000
-// See nsStyleContext::IsInDisplayNoneSubtree
-#define NS_STYLE_IN_DISPLAY_NONE_SUBTREE   0x100000000
-// See nsStyleContext::FindChildWithRules
-#define NS_STYLE_INELIGIBLE_FOR_SHARING    0x200000000
-// See nsStyleContext::HasChildThatUsesResetStyle
-#define NS_STYLE_HAS_CHILD_THAT_USES_RESET_STYLE 0x400000000
-// See nsStyleContext::IsTextCombined
-#define NS_STYLE_IS_TEXT_COMBINED          0x800000000
-// Whether a style context is a Gecko or Servo context
-#define NS_STYLE_CONTEXT_IS_GECKO          0x1000000000
-// See nsStyleContext::GetPseudoEnum
-#define NS_STYLE_CONTEXT_TYPE_SHIFT        37
-
-// Additional bits for nsRuleNode's mDependentBits:
-#define NS_RULE_NODE_IS_ANIMATION_RULE      0x01000000
-// Free bit                                 0x02000000
-#define NS_RULE_NODE_USED_DIRECTLY          0x04000000
-#define NS_RULE_NODE_IS_IMPORTANT           0x08000000
-#define NS_RULE_NODE_LEVEL_MASK             0xf0000000
-#define NS_RULE_NODE_LEVEL_SHIFT            28
-
-// Additional bits for nsRuleNode's mNoneBits:
-#define NS_RULE_NODE_HAS_ANIMATION_DATA     0x80000000
-
-static_assert(int(mozilla::SheetType::Count) - 1 <=
-                (NS_RULE_NODE_LEVEL_MASK >> NS_RULE_NODE_LEVEL_SHIFT),
-              "NS_RULE_NODE_LEVEL_MASK cannot fit SheetType");
-
-static_assert(NS_STYLE_INHERIT_MASK == (1 << nsStyleStructID_Length) - 1,
-              "NS_STYLE_INHERIT_MASK is not correct");
-
-static_assert((NS_RULE_NODE_IS_ANIMATION_RULE & NS_STYLE_INHERIT_MASK) == 0,
-  "NS_RULE_NODE_IS_ANIMATION_RULE must not overlap the style struct bits.");
 
 namespace mozilla {
 
@@ -154,7 +87,6 @@ struct Position {
 
 } // namespace mozilla
 
-// The lifetime of these objects is managed by the presshell's arena.
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleFont
 {
   nsStyleFont(const nsFont& aFont, const nsPresContext* aContext);
@@ -163,7 +95,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleFont
   ~nsStyleFont() {
     MOZ_COUNT_DTOR(nsStyleFont);
   }
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStyleFont*) {}
   const static bool kHasFinishStyle = false;
 
   nsChangeHint CalcDifference(const nsStyleFont& aNewData) const;
@@ -181,13 +113,6 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleFont
    */
   static nscoord UnZoomText(nsPresContext* aPresContext, nscoord aSize);
   static already_AddRefed<nsAtom> GetLanguage(const nsPresContext* aPresContext);
-
-  void* operator new(size_t sz, nsStyleFont* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleFont, sz);
-  }
-  void Destroy(nsPresContext* aContext);
 
   void EnableZoom(nsPresContext* aContext, bool aEnable);
 
@@ -291,30 +216,21 @@ private:
  * A wrapper for an imgRequestProxy that supports off-main-thread creation
  * and equality comparison.
  *
- * An nsStyleImageRequest can be created in two ways:
+ * An nsStyleImageRequest can be created using the constructor that takes the
+ * URL, base URI, referrer and principal that can be used to initiate an image
+ * load and produce an imgRequestProxy later.
  *
- * 1. Using the constructor that takes an imgRequestProxy.  This must
- *    be called from the main thread.  The nsStyleImageRequest is
- *    immediately considered "resolved", and the get() method that
- *    returns the imgRequestProxy can be called.
- *
- * 2. Using the constructor that takes the URL, base URI, referrer
- *    and principal that can be used to inititiate an image load and
- *    produce an imgRequestProxy later.  This can be called from
- *    any thread.  The nsStyleImageRequest is not considered "resolved"
- *    at this point, and the Resolve() method must be called later
- *    to initiate the image load and make calls to get() valid.
+ * This can be called from any thread.  The nsStyleImageRequest is not
+ * considered "resolved" at this point, and the Resolve() method must be called
+ * later to initiate the image load and make calls to get() valid.
  *
  * Calls to TrackImage(), UntrackImage(), LockImage(), UnlockImage() and
  * RequestDiscard() are made to the imgRequestProxy and ImageTracker as
  * appropriate, according to the mode flags passed in to the constructor.
  *
- * The main thread constructor takes a pointer to the css::ImageValue that
- * is the specified url() value, while the off-main-thread constructor
- * creates a new css::ImageValue to represent the url() information passed
- * to the constructor.  This ImageValue is held on to for the comparisons done
- * in DefinitelyEquals(), so that we don't need to call into the non-OMT-safe
- * Equals() on the nsIURI objects returned from imgRequestProxy::GetURI().
+ * The constructor receives a css::ImageValue to represent the url()
+ * information, which is held on to for the comparisons done in
+ * DefinitelyEquals().
  */
 class nsStyleImageRequest
 {
@@ -342,21 +258,11 @@ public:
     Discard = 0x2,
   };
 
-  // Must be called from the main thread.
-  //
-  // aImageTracker must be non-null iff aModeFlags contains Track.
-  nsStyleImageRequest(Mode aModeFlags,
-                      imgRequestProxy* aRequestProxy,
-                      mozilla::css::ImageValue* aImageValue,
-                      mozilla::dom::ImageTracker* aImageTracker);
-
   // Can be called from any thread, but Resolve() must be called later
   // on the main thread before get() can be used.
-  nsStyleImageRequest(
-      Mode aModeFlags,
-      mozilla::css::ImageValue* aImageValue);
+  nsStyleImageRequest(Mode aModeFlags, mozilla::css::ImageValue* aImageValue);
 
-  bool Resolve(nsPresContext* aPresContext);
+  bool Resolve(nsPresContext*, const nsStyleImageRequest* aOldImageRequest);
   bool IsResolved() const { return mResolved; }
 
   imgRequestProxy* get() {
@@ -453,30 +359,33 @@ struct nsStyleImage
   void SetCropRect(mozilla::UniquePtr<nsStyleSides> aCropRect);
   void SetURLValue(already_AddRefed<URLValue> aData);
 
-  void ResolveImage(nsPresContext* aContext) {
+  void ResolveImage(nsPresContext* aContext, const nsStyleImage* aOldImage) {
     MOZ_ASSERT(mType != eStyleImageType_Image || mImage);
     if (mType == eStyleImageType_Image && !mImage->IsResolved()) {
-      mImage->Resolve(aContext);
+      const nsStyleImageRequest* oldRequest =
+        (aOldImage && aOldImage->GetType() == eStyleImageType_Image)
+        ? aOldImage->ImageRequest() : nullptr;
+      mImage->Resolve(aContext, oldRequest);
     }
   }
 
   nsStyleImageType GetType() const {
     return mType;
   }
-  nsStyleImageRequest* GetImageRequest() const {
+  nsStyleImageRequest* ImageRequest() const {
     MOZ_ASSERT(mType == eStyleImageType_Image, "Data is not an image!");
     MOZ_ASSERT(mImage);
     return mImage;
   }
   imgRequestProxy* GetImageData() const {
-    return GetImageRequest()->get();
+    return ImageRequest()->get();
   }
   nsStyleGradient* GetGradientData() const {
     NS_ASSERTION(mType == eStyleImageType_Gradient, "Data is not a gradient!");
     return mGradient;
   }
   bool IsResolved() const {
-    return mType != eStyleImageType_Image || GetImageRequest()->IsResolved();
+    return mType != eStyleImageType_Image || ImageRequest()->IsResolved();
   }
   const nsAtom* GetElementId() const {
     NS_ASSERTION(mType == eStyleImageType_Element, "Data is not an element!");
@@ -592,26 +501,10 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleColor
   ~nsStyleColor() {
     MOZ_COUNT_DTOR(nsStyleColor);
   }
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStyleColor*) {}
   const static bool kHasFinishStyle = false;
 
-  nscolor CalcComplexColor(const mozilla::StyleComplexColor& aColor) const {
-    return mozilla::LinearBlendColors(aColor.mColor, mColor,
-                                      aColor.mForegroundRatio);
-  }
-
   nsChangeHint CalcDifference(const nsStyleColor& aNewData) const;
-
-  void* operator new(size_t sz, nsStyleColor* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleColor, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStyleColor();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStyleColor, this);
-  }
 
   // Don't add ANY members to this struct!  We can achieve caching in the rule
   // tree (rather than the style tree) by letting color stay by itself! -dwh
@@ -742,6 +635,7 @@ struct nsStyleImageLayers {
 
   struct Layer {
     typedef mozilla::StyleGeometryBox StyleGeometryBox;
+    typedef mozilla::StyleImageLayerAttachment StyleImageLayerAttachment;
 
     nsStyleImage  mImage;         // [reset]
     mozilla::Position mPosition;  // [reset]
@@ -749,12 +643,13 @@ struct nsStyleImageLayers {
     StyleGeometryBox  mClip;      // [reset] See nsStyleConsts.h
     MOZ_INIT_OUTSIDE_CTOR
       StyleGeometryBox mOrigin;   // [reset] See nsStyleConsts.h
-    uint8_t       mAttachment;    // [reset] See nsStyleConsts.h
+    StyleImageLayerAttachment mAttachment;
+                                  // [reset] See nsStyleConsts.h
                                   // background-only property
                                   // This property is used for background layer
                                   // only. For a mask layer, it should always
                                   // be the initial value, which is
-                                  // NS_STYLE_IMAGELAYER_ATTACHMENT_SCROLL.
+                                  // StyleImageLayerAttachment::Scroll.
     uint8_t       mBlendMode;     // [reset] See nsStyleConsts.h
                                   // background-only property
                                   // This property is used for background layer
@@ -783,10 +678,8 @@ struct nsStyleImageLayers {
     // Initialize mRepeat and mOrigin by specified layer type
     void Initialize(LayerType aType);
 
-    void ResolveImage(nsPresContext* aContext) {
-      if (mImage.GetType() == eStyleImageType_Image) {
-        mImage.ResolveImage(aContext);
-      }
+    void ResolveImage(nsPresContext* aContext, const Layer* aOldLayer) {
+      mImage.ResolveImage(aContext, aOldLayer ? &aOldLayer->mImage : nullptr);
     }
 
     // True if the rendering of this layer might change when the size
@@ -835,11 +728,19 @@ struct nsStyleImageLayers {
 
   const Layer& BottomLayer() const { return mLayers[mImageCount - 1]; }
 
-  void ResolveImages(nsPresContext* aContext) {
+  void ResolveImages(nsPresContext* aContext, const nsStyleImageLayers* aOldLayers) {
     for (uint32_t i = 0; i < mImageCount; ++i) {
-      mLayers[i].ResolveImage(aContext);
+      const Layer* oldLayer =
+        (aOldLayers && aOldLayers->mLayers.Length() > i)
+        ? &aOldLayers->mLayers[i]
+        : nullptr;
+      mLayers[i].ResolveImage(aContext, oldLayer);
     }
   }
+
+  // Fill unspecified layers by cycling through their values
+  // till they all are of length aMaxItemCount
+  void FillAllLayers(uint32_t aMaxItemCount);
 
   nsChangeHint CalcDifference(const nsStyleImageLayers& aNewLayers,
                               nsStyleImageLayers::LayerType aType) const;
@@ -867,25 +768,18 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleBackground {
   // Resolves and tracks the images in mImage.  Only called with a Servo-backed
   // style system, where those images must be resolved later than the OMT
   // nsStyleBackground constructor call.
-  void FinishStyle(nsPresContext* aPresContext);
+  void FinishStyle(nsPresContext*, const nsStyleBackground*);
   const static bool kHasFinishStyle = true;
-
-  void* operator new(size_t sz, nsStyleBackground* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleBackground, sz);
-  }
-  void Destroy(nsPresContext* aContext);
 
   nsChangeHint CalcDifference(const nsStyleBackground& aNewData) const;
 
   // Return the background color as nscolor.
   nscolor BackgroundColor(const nsIFrame* aFrame) const;
-  nscolor BackgroundColor(nsStyleContext* aContext) const;
+  nscolor BackgroundColor(mozilla::ComputedStyle* aStyle) const;
 
   // True if this background is completely transparent.
   bool IsTransparent(const nsIFrame* aFrame) const;
-  bool IsTransparent(nsStyleContext* aContext) const;
+  bool IsTransparent(mozilla::ComputedStyle* aStyle) const;
 
   // We have to take slower codepaths for fixed background attachment,
   // but we don't want to do that when there's no image.
@@ -910,15 +804,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleMargin
   ~nsStyleMargin() {
     MOZ_COUNT_DTOR(nsStyleMargin);
   }
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStyleMargin*) {}
   const static bool kHasFinishStyle = false;
-
-  void* operator new(size_t sz, nsStyleMargin* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleMargin, sz);
-  }
-  void Destroy(nsPresContext* aContext);
 
   nsChangeHint CalcDifference(const nsStyleMargin& aNewData) const;
 
@@ -949,15 +836,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStylePadding
   ~nsStylePadding() {
     MOZ_COUNT_DTOR(nsStylePadding);
   }
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStylePadding*) {}
   const static bool kHasFinishStyle = false;
-
-  void* operator new(size_t sz, nsStylePadding* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStylePadding, sz);
-  }
-  void Destroy(nsPresContext* aContext);
 
   nsChangeHint CalcDifference(const nsStylePadding& aNewData) const;
 
@@ -1107,26 +987,6 @@ static bool IsVisibleBorderStyle(uint8_t aStyle)
           aStyle != NS_STYLE_BORDER_STYLE_HIDDEN);
 }
 
-struct nsBorderColors
-{
-  nsBorderColors() = default;
-
-  // GCC cannot generate this copy constructor correctly, since nsTArray
-  // has explicit copy constructor, and we use array of nsTArray here.
-  // See https://gcc.gnu.org/bugzilla/show_bug.cgi?id=82235
-  nsBorderColors(const nsBorderColors& aOther) {
-    NS_FOR_CSS_SIDES(side) {
-      mColors[side] = aOther.mColors[side];
-    }
-  }
-
-  const nsTArray<nscolor>& operator[](mozilla::Side aSide) const {
-    return mColors[aSide];
-  }
-
-  nsTArray<nscolor> mColors[4];
-};
-
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleBorder
 {
   explicit nsStyleBorder(const nsPresContext* aContext);
@@ -1136,29 +996,10 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleBorder
   // Resolves and tracks mBorderImageSource.  Only called with a Servo-backed
   // style system, where those images must be resolved later than the OMT
   // nsStyleBorder constructor call.
-  void FinishStyle(nsPresContext* aPresContext);
+  void FinishStyle(nsPresContext*, const nsStyleBorder*);
   const static bool kHasFinishStyle = true;
 
-  void* operator new(size_t sz, nsStyleBorder* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleBorder, sz);
-  }
-  void Destroy(nsPresContext* aContext);
-
   nsChangeHint CalcDifference(const nsStyleBorder& aNewData) const;
-
-  void EnsureBorderColors() {
-    if (!mBorderColors) {
-      mBorderColors.reset(new nsBorderColors);
-    }
-  }
-
-  void ClearBorderColors(mozilla::Side aSide) {
-    if (mBorderColors) {
-      mBorderColors->mColors[aSide].Clear();
-    }
-  }
 
   // Return whether aStyle is a visible style.  Invisible styles cause
   // the relevant computed border width to be 0.
@@ -1222,13 +1063,6 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleBorder
     return mBorderImageSource.IsLoaded();
   }
 
-  void ResolveImage(nsPresContext* aContext)
-  {
-    if (mBorderImageSource.GetType() == eStyleImageType_Image) {
-      mBorderImageSource.ResolveImage(aContext);
-    }
-  }
-
   nsMargin GetImageOutset() const;
 
   imgIRequest* GetBorderImageRequest() const
@@ -1240,8 +1074,6 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleBorder
   }
 
 public:
-  // [reset] composite (stripe) colors
-  mozilla::UniquePtr<nsBorderColors> mBorderColors;
   nsStyleCorners mBorderRadius;       // [reset] coord, percent
   nsStyleImage   mBorderImageSource;  // [reset]
   nsStyleSides   mBorderImageSlice;   // [reset] factor, percent
@@ -1249,8 +1081,8 @@ public:
   nsStyleSides   mBorderImageOutset;  // [reset] length, factor
 
   uint8_t        mBorderImageFill;    // [reset]
-  uint8_t        mBorderImageRepeatH; // [reset] see nsStyleConsts.h
-  uint8_t        mBorderImageRepeatV; // [reset]
+  mozilla::StyleBorderImageRepeat mBorderImageRepeatH; // [reset]
+  mozilla::StyleBorderImageRepeat mBorderImageRepeatV; // [reset]
   mozilla::StyleFloatEdge mFloatEdge; // [reset]
   mozilla::StyleBoxDecorationBreak mBoxDecorationBreak; // [reset]
 
@@ -1335,19 +1167,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleOutline
   ~nsStyleOutline() {
     MOZ_COUNT_DTOR(nsStyleOutline);
   }
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStyleOutline*) {}
   const static bool kHasFinishStyle = false;
-
-  void* operator new(size_t sz, nsStyleOutline* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleOutline, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStyleOutline();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStyleOutline, this);
-  }
 
   void RecalcData();
   nsChangeHint CalcDifference(const nsStyleOutline& aNewData) const;
@@ -1388,7 +1209,7 @@ protected:
 /**
  * An object that allows sharing of arrays that store 'quotes' property
  * values.  This is particularly important for inheritance, where we want
- * to share the same 'quotes' value with a parent style context.
+ * to share the same 'quotes' value with a parent ComputedStyle.
  */
 class nsStyleQuoteValues
 {
@@ -1407,19 +1228,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleList
   nsStyleList(const nsStyleList& aStyleList);
   ~nsStyleList();
 
-  void FinishStyle(nsPresContext* aPresContext);
+  void FinishStyle(nsPresContext*, const nsStyleList*);
   const static bool kHasFinishStyle = true;
-
-  void* operator new(size_t sz, nsStyleList* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleList, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStyleList();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStyleList, this);
-  }
 
   nsChangeHint CalcDifference(const nsStyleList& aNewData,
                               const nsStyleDisplay* aOldDisplay) const;
@@ -1609,34 +1419,23 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStylePosition
   explicit nsStylePosition(const nsPresContext* aContext);
   nsStylePosition(const nsStylePosition& aOther);
   ~nsStylePosition();
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStylePosition*) {}
   const static bool kHasFinishStyle = false;
-
-  void* operator new(size_t sz, nsStylePosition* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStylePosition, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStylePosition();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStylePosition, this);
-  }
 
   nsChangeHint CalcDifference(const nsStylePosition& aNewData,
                               const nsStyleVisibility* aOldStyleVisibility) const;
 
   /**
-   * Return the used value for 'align-self' given our parent StyleContext
+   * Return the used value for 'align-self' given our parent ComputedStyle
    * aParent (or null for the root).
    */
-  uint8_t UsedAlignSelf(nsStyleContext* aParent) const;
+  uint8_t UsedAlignSelf(mozilla::ComputedStyle* aParent) const;
 
   /**
-   * Return the used value for 'justify-self' given our parent StyleContext
+   * Return the used value for 'justify-self' given our parent ComputedStyle
    * aParent (or null for the root).
    */
-  uint8_t UsedJustifySelf(nsStyleContext* aParent) const;
+  uint8_t UsedJustifySelf(mozilla::ComputedStyle* aParent) const;
 
   mozilla::Position mObjectPosition;    // [reset]
   nsStyleSides  mOffset;                // [reset] coord, percent, calc, auto
@@ -1663,10 +1462,10 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStylePosition
   //
   // They're effectively only different in this regard: mJustifyItems is set to
   // mSpecifiedJustifyItems, except when the latter is AUTO -- in that case,
-  // mJustifyItems is set to NORMAL, or to the parent style context's
+  // mJustifyItems is set to NORMAL, or to the parent ComputedStyle's
   // mJustifyItems if it has the legacy flag.
   //
-  // This last part happens in nsStyleContext::ApplyStyleFixups.
+  // This last part happens in ComputedStyle::ApplyStyleFixups.
   uint8_t       mSpecifiedJustifyItems; // [reset] see nsStyleConsts.h
   uint8_t       mJustifyItems;          // [reset] see nsStyleConsts.h
   uint8_t       mJustifySelf;           // [reset] see nsStyleConsts.h
@@ -1687,8 +1486,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStylePosition
   nsStyleGridLine mGridColumnEnd;
   nsStyleGridLine mGridRowStart;
   nsStyleGridLine mGridRowEnd;
-  nsStyleCoord    mGridColumnGap;       // [reset] coord, percent, calc
-  nsStyleCoord    mGridRowGap;          // [reset] coord, percent, calc
+  nsStyleCoord    mColumnGap;       // [reset] normal, coord, percent, calc
+  nsStyleCoord    mRowGap;          // [reset] normal, coord, percent, calc
 
   // FIXME: Logical-coordinate equivalents to these WidthDepends... and
   // HeightDepends... methods have been introduced (see below); we probably
@@ -1834,22 +1633,11 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleTextReset
   explicit nsStyleTextReset(const nsPresContext* aContext);
   nsStyleTextReset(const nsStyleTextReset& aOther);
   ~nsStyleTextReset();
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStyleTextReset*) {}
   const static bool kHasFinishStyle = false;
 
-  void* operator new(size_t sz, nsStyleTextReset* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleTextReset, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStyleTextReset();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStyleTextReset, this);
-  }
-
   // Note the difference between this and
-  // nsStyleContext::HasTextDecorationLines.
+  // ComputedStyle::HasTextDecorationLines.
   bool HasTextDecorationLines() const {
     return mTextDecorationLine != NS_STYLE_TEXT_DECORATION_LINE_NONE &&
            mTextDecorationLine != NS_STYLE_TEXT_DECORATION_LINE_OVERRIDE_ALL;
@@ -1872,19 +1660,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleText
   explicit nsStyleText(const nsPresContext* aContext);
   nsStyleText(const nsStyleText& aOther);
   ~nsStyleText();
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStyleText*) {}
   const static bool kHasFinishStyle = false;
-
-  void* operator new(size_t sz, nsStyleText* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleText, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStyleText();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStyleText, this);
-  }
 
   nsChangeHint CalcDifference(const nsStyleText& aNewData) const;
 
@@ -2092,19 +1869,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleVisibility
   ~nsStyleVisibility() {
     MOZ_COUNT_DTOR(nsStyleVisibility);
   }
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStyleVisibility*) {}
   const static bool kHasFinishStyle = false;
-
-  void* operator new(size_t sz, nsStyleVisibility* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleVisibility, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStyleVisibility();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStyleVisibility, this);
-  }
 
   nsChangeHint CalcDifference(const nsStyleVisibility& aNewData) const;
 
@@ -2126,119 +1892,6 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleVisibility
   }
 };
 
-struct nsTimingFunction
-{
-
-  enum class Type {
-    Ease,         // ease
-    Linear,       // linear
-    EaseIn,       // ease-in
-    EaseOut,      // ease-out
-    EaseInOut,    // ease-in-out
-    StepStart,    // step-start and steps(..., start)
-    StepEnd,      // step-end, steps(..., end) and steps(...)
-    CubicBezier,  // cubic-bezier()
-    Frames,       // frames()
-  };
-
-  // Whether the timing function type is represented by a spline,
-  // and thus will have mFunc filled in.
-  static bool IsSplineType(Type aType)
-  {
-    return aType != Type::StepStart &&
-           aType != Type::StepEnd &&
-           aType != Type::Frames;
-  }
-
-  explicit nsTimingFunction(int32_t aTimingFunctionType
-                              = NS_STYLE_TRANSITION_TIMING_FUNCTION_EASE)
-  {
-    AssignFromKeyword(aTimingFunctionType);
-  }
-
-  nsTimingFunction(float x1, float y1, float x2, float y2)
-    : mType(Type::CubicBezier)
-  {
-    mFunc.mX1 = x1;
-    mFunc.mY1 = y1;
-    mFunc.mX2 = x2;
-    mFunc.mY2 = y2;
-  }
-
-  enum class Keyword { Implicit, Explicit };
-
-  nsTimingFunction(Type aType, uint32_t aStepsOrFrames)
-    : mType(aType)
-  {
-    MOZ_ASSERT(mType == Type::StepStart ||
-               mType == Type::StepEnd ||
-               mType == Type::Frames,
-               "wrong type");
-    mStepsOrFrames = aStepsOrFrames;
-  }
-
-  nsTimingFunction(const nsTimingFunction& aOther)
-  {
-    *this = aOther;
-  }
-
-  Type mType;
-  union {
-    struct {
-      float mX1;
-      float mY1;
-      float mX2;
-      float mY2;
-    } mFunc;
-    struct {
-      uint32_t mStepsOrFrames;
-    };
-  };
-
-  nsTimingFunction&
-  operator=(const nsTimingFunction& aOther)
-  {
-    if (&aOther == this) {
-      return *this;
-    }
-
-    mType = aOther.mType;
-
-    if (HasSpline()) {
-      mFunc.mX1 = aOther.mFunc.mX1;
-      mFunc.mY1 = aOther.mFunc.mY1;
-      mFunc.mX2 = aOther.mFunc.mX2;
-      mFunc.mY2 = aOther.mFunc.mY2;
-    } else {
-      mStepsOrFrames = aOther.mStepsOrFrames;
-    }
-
-    return *this;
-  }
-
-  bool operator==(const nsTimingFunction& aOther) const
-  {
-    if (mType != aOther.mType) {
-      return false;
-    }
-    if (HasSpline()) {
-      return mFunc.mX1 == aOther.mFunc.mX1 && mFunc.mY1 == aOther.mFunc.mY1 &&
-             mFunc.mX2 == aOther.mFunc.mX2 && mFunc.mY2 == aOther.mFunc.mY2;
-    }
-    return mStepsOrFrames == aOther.mStepsOrFrames;
-  }
-
-  bool operator!=(const nsTimingFunction& aOther) const
-  {
-    return !(*this == aOther);
-  }
-
-  bool HasSpline() const { return IsSplineType(mType); }
-
-private:
-  void AssignFromKeyword(int32_t aTimingFunctionType);
-};
-
 namespace mozilla {
 
 struct StyleTransition
@@ -2255,11 +1908,6 @@ struct StyleTransition
   float GetDuration() const { return mDuration; }
   nsCSSPropertyID GetProperty() const { return mProperty; }
   nsAtom* GetUnknownProperty() const { return mUnknownProperty; }
-
-  float GetCombinedDuration() const {
-    // http://dev.w3.org/csswg/css-transitions/#combined-duration
-    return std::max(mDuration, 0.0f) + mDelay;
-  }
 
   void SetTimingFunction(const nsTimingFunction& aTimingFunction)
     { mTimingFunction = aTimingFunction; }
@@ -2310,7 +1958,7 @@ struct StyleAnimation
   const nsTimingFunction& GetTimingFunction() const { return mTimingFunction; }
   float GetDelay() const { return mDelay; }
   float GetDuration() const { return mDuration; }
-  const nsString& GetName() const { return mName; }
+  nsAtom* GetName() const { return mName; }
   dom::PlaybackDirection GetDirection() const { return mDirection; }
   dom::FillMode GetFillMode() const { return mFillMode; }
   uint8_t GetPlayState() const { return mPlayState; }
@@ -2320,7 +1968,8 @@ struct StyleAnimation
     { mTimingFunction = aTimingFunction; }
   void SetDelay(float aDelay) { mDelay = aDelay; }
   void SetDuration(float aDuration) { mDuration = aDuration; }
-  void SetName(const nsAString& aName) { mName = aName; }
+  void SetName(already_AddRefed<nsAtom> aName) { mName = aName; }
+  void SetName(nsAtom* aName) { mName = aName; }
   void SetDirection(dom::PlaybackDirection aDirection) { mDirection = aDirection; }
   void SetFillMode(dom::FillMode aFillMode) { mFillMode = aFillMode; }
   void SetPlayState(uint8_t aPlayState) { mPlayState = aPlayState; }
@@ -2337,7 +1986,7 @@ private:
   nsTimingFunction mTimingFunction;
   float mDuration;
   float mDelay;
-  nsString mName; // empty string for 'none'
+  RefPtr<nsAtom> mName; // nsGkAtoms::_empty for 'none'
   dom::PlaybackDirection mDirection;
   dom::FillMode mFillMode;
   uint8_t mPlayState;
@@ -2364,13 +2013,13 @@ public:
     mFillRule = aFillRule;
   }
 
-  Position& GetPosition() {
+  mozilla::Position& GetPosition() {
     MOZ_ASSERT(mType == StyleBasicShapeType::Circle ||
                mType == StyleBasicShapeType::Ellipse,
                "expected circle or ellipse");
     return mPosition;
   }
-  const Position& GetPosition() const {
+  const mozilla::Position& GetPosition() const {
     MOZ_ASSERT(mType == StyleBasicShapeType::Circle ||
                mType == StyleBasicShapeType::Ellipse,
                "expected circle or ellipse");
@@ -2430,7 +2079,7 @@ private:
   // (top, right, bottom, left) for inset
   nsTArray<nsStyleCoord> mCoordinates;
   // position of center for ellipse or circle
-  Position mPosition;
+  mozilla::Position mPosition;
   // corner radii for inset (0 if not set)
   nsStyleCorners mRadius;
 };
@@ -2467,7 +2116,20 @@ struct StyleShapeSource final
       : nullptr;
   }
 
-  bool SetURL(css::URLValue* aValue);
+  void SetURL(css::URLValue* aValue);
+
+  const UniquePtr<nsStyleImage>& GetShapeImage() const
+  {
+    MOZ_ASSERT(mType == StyleShapeSourceType::Image, "Wrong shape source type!");
+    return mShapeImage;
+  }
+
+  // Iff we have "shape-outside:<image>" with an image URI (not a gradient),
+  // this method returns the corresponding imgIRequest*. Else, returns
+  // null.
+  imgIRequest* GetShapeImageData() const;
+
+  void SetShapeImage(UniquePtr<nsStyleImage> aShapeImage);
 
   const UniquePtr<StyleBasicShape>& GetBasicShape() const
   {
@@ -2501,24 +2163,6 @@ private:
 
 } // namespace mozilla
 
-// Consumers expect to be able to null-test mBinding to determine whether there
-// is a valid binding URI. Since we can't do URL resolution during parallel
-// style struct computation, we can't just null out the binding if the URL turns
-// out to be invalid. As such, we use this wrapper class to maintain this
-// behavior dynamically.
-class BindingHolder {
-public:
-  BindingHolder() {}
-  explicit BindingHolder(mozilla::css::URLValue* aPtr) : mPtr(aPtr) {}
-  operator mozilla::css::URLValue*() const { return Get(); }
-  mozilla::css::URLValue* operator->() const { return Get(); }
-  mozilla::css::URLValue* Get() const { return (mPtr && mPtr->GetURI()) ? mPtr.get() : nullptr; }
-  mozilla::css::URLValue* ForceGet() const { return mPtr.get(); }
-  void Set(mozilla::css::URLValue* aPtr) { mPtr = aPtr; }
-private:
-  RefPtr<mozilla::css::URLValue> mPtr;
-};
-
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
 {
   typedef mozilla::StyleGeometryBox StyleGeometryBox;
@@ -2527,25 +2171,14 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
   nsStyleDisplay(const nsStyleDisplay& aOther);
   ~nsStyleDisplay();
 
-  void FinishStyle(nsPresContext* aPresContext) {}
-  const static bool kHasFinishStyle = false;
-
-  void* operator new(size_t sz, nsStyleDisplay* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleDisplay, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStyleDisplay();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStyleDisplay, this);
-  }
+  void FinishStyle(nsPresContext*, const nsStyleDisplay*);
+  const static bool kHasFinishStyle = true;
 
   nsChangeHint CalcDifference(const nsStyleDisplay& aNewData) const;
 
   // We guarantee that if mBinding is non-null, so are mBinding->GetURI() and
   // mBinding->mOriginPrincipal.
-  BindingHolder mBinding;                  // [reset]
+  RefPtr<mozilla::css::URLValue> mBinding; // [reset]
   mozilla::StyleDisplay mDisplay;          // [reset] see nsStyleConsts.h StyleDisplay
   mozilla::StyleDisplay mOriginalDisplay;  // [reset] saved mDisplay for
                                            //         position:absolute/fixed
@@ -2567,7 +2200,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
   bool mBreakAfter;     // [reset]
   uint8_t mOverflowX;           // [reset] see nsStyleConsts.h
   uint8_t mOverflowY;           // [reset] see nsStyleConsts.h
-  uint8_t mOverflowClipBox;     // [reset] see nsStyleConsts.h
+  uint8_t mOverflowClipBoxBlock;     // [reset] see nsStyleConsts.h
+  uint8_t mOverflowClipBoxInline;    // [reset] see nsStyleConsts.h
   uint8_t mResize;              // [reset] see nsStyleConsts.h
   mozilla::StyleOrient mOrient; // [reset] see nsStyleConsts.h
   uint8_t mIsolation;           // [reset] see nsStyleConsts.h
@@ -2582,6 +2216,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
 
   uint8_t mTouchAction;         // [reset] see nsStyleConsts.h
   uint8_t mScrollBehavior;      // [reset] see nsStyleConsts.h NS_STYLE_SCROLL_BEHAVIOR_*
+  mozilla::StyleOverscrollBehavior mOverscrollBehaviorX;  // [reset] see nsStyleConsts.h
+  mozilla::StyleOverscrollBehavior mOverscrollBehaviorY;  // [reset] see nsStyleConsts.h
   uint8_t mScrollSnapTypeX;     // [reset] see nsStyleConsts.h NS_STYLE_SCROLL_SNAP_TYPE_*
   uint8_t mScrollSnapTypeY;     // [reset] see nsStyleConsts.h NS_STYLE_SCROLL_SNAP_TYPE_*
   nsStyleCoord mScrollSnapPointsX; // [reset]
@@ -2597,6 +2233,16 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
   uint8_t mTransformStyle;
   StyleGeometryBox mTransformBox; // [reset] see nsStyleConsts.h
   RefPtr<nsCSSValueSharedList> mSpecifiedTransform; // [reset]
+  RefPtr<nsCSSValueSharedList> mSpecifiedRotate; // [reset]
+  RefPtr<nsCSSValueSharedList> mSpecifiedTranslate; // [reset]
+  RefPtr<nsCSSValueSharedList> mSpecifiedScale; // [reset]
+
+  // Used to store the final combination of mSpecifiedTranslate,
+  // mSpecifiedRotate, mSpecifiedScale and mSpecifiedTransform.
+  // Use GetCombinedTransform() to get the final transform, instead of
+  // accessing mCombinedTransform directly.
+  RefPtr<nsCSSValueSharedList> mCombinedTransform;
+
   nsStyleCoord mTransformOrigin[3]; // [reset] percent, coord, calc, 3rd param is coord, calc only
   nsStyleCoord mChildPerspective; // [reset] none, coord
   nsStyleCoord mPerspectiveOrigin[2]; // [reset] percent, coord, calc
@@ -2612,6 +2258,31 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
            mTransitionDelayCount,
            mTransitionPropertyCount;
 
+  nsCSSPropertyID GetTransitionProperty(uint32_t aIndex) const
+  {
+    return mTransitions[aIndex % mTransitionPropertyCount].GetProperty();
+  }
+  float GetTransitionDelay(uint32_t aIndex) const
+  {
+    return mTransitions[aIndex % mTransitionDelayCount].GetDelay();
+  }
+  float GetTransitionDuration(uint32_t aIndex) const
+  {
+    return mTransitions[aIndex % mTransitionDurationCount].GetDuration();
+  }
+  const nsTimingFunction& GetTransitionTimingFunction(uint32_t aIndex) const
+  {
+    return mTransitions[aIndex % mTransitionTimingFunctionCount].GetTimingFunction();
+  }
+  float GetTransitionCombinedDuration(uint32_t aIndex) const
+  {
+    // https://drafts.csswg.org/css-transitions/#transition-combined-duration
+    return
+      std::max(mTransitions[aIndex % mTransitionDurationCount].GetDuration(),
+               0.0f)
+        + mTransitions[aIndex % mTransitionDelayCount].GetDelay();
+  }
+
   nsStyleAutoArray<mozilla::StyleAnimation> mAnimations; // [reset]
 
   // The number of elements in mAnimations that are not from repeating
@@ -2624,6 +2295,45 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
            mAnimationFillModeCount,
            mAnimationPlayStateCount,
            mAnimationIterationCountCount;
+
+  nsAtom* GetAnimationName(uint32_t aIndex) const
+  {
+    return mAnimations[aIndex % mAnimationNameCount].GetName();
+  }
+  float GetAnimationDelay(uint32_t aIndex) const
+  {
+    return mAnimations[aIndex % mAnimationDelayCount].GetDelay();
+  }
+  float GetAnimationDuration(uint32_t aIndex) const
+  {
+    return mAnimations[aIndex % mAnimationDurationCount].GetDuration();
+  }
+  mozilla::dom::PlaybackDirection GetAnimationDirection(uint32_t aIndex) const
+  {
+    return mAnimations[aIndex % mAnimationDirectionCount].GetDirection();
+  }
+  mozilla::dom::FillMode GetAnimationFillMode(uint32_t aIndex) const
+  {
+    return mAnimations[aIndex % mAnimationFillModeCount].GetFillMode();
+  }
+  uint8_t GetAnimationPlayState(uint32_t aIndex) const
+  {
+    return mAnimations[aIndex % mAnimationPlayStateCount].GetPlayState();
+  }
+  float GetAnimationIterationCount(uint32_t aIndex) const
+  {
+    return mAnimations[aIndex % mAnimationIterationCountCount].GetIterationCount();
+  }
+  const nsTimingFunction& GetAnimationTimingFunction(uint32_t aIndex) const
+  {
+    return mAnimations[aIndex % mAnimationTimingFunctionCount].GetTimingFunction();
+  }
+
+  // The threshold used for extracting a shape from shape-outside: <image>.
+  float mShapeImageThreshold = 0.0f; // [reset]
+
+  // The margin around a shape-outside: <image>.
+  nsStyleCoord mShapeMargin;
 
   mozilla::StyleShapeSource mShapeOutside; // [reset]
 
@@ -2733,9 +2443,14 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
   /* Returns whether the element has the -moz-transform property
    * or a related property. */
   bool HasTransformStyle() const {
-    return mSpecifiedTransform != nullptr ||
+    return mSpecifiedTransform || mSpecifiedRotate || mSpecifiedTranslate ||
+           mSpecifiedScale ||
            mTransformStyle == NS_STYLE_TRANSFORM_STYLE_PRESERVE_3D ||
            (mWillChangeBitField & NS_STYLE_WILL_CHANGE_TRANSFORM);
+  }
+
+  bool HasIndividualTransform() const {
+    return mSpecifiedRotate || mSpecifiedTranslate || mSpecifiedScale;
   }
 
   bool HasPerspectiveStyle() const {
@@ -2772,12 +2487,11 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
 
   /**
    * The same as IsAbsPosContainingBlock, except skipping the tests that
-   * are based on the frame rather than the style context (thus
+   * are based on the frame rather than the ComputedStyle (thus
    * potentially returning a false positive).
    */
-  template<class StyleContextLike>
   inline bool IsAbsPosContainingBlockForAppropriateFrame(
-                StyleContextLike* aStyleContext) const;
+    mozilla::ComputedStyle&) const;
 
   /**
    * Returns true when the element has the transform property
@@ -2785,6 +2499,13 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
    * aContextFrame is the frame for which this is the nsStyleDisplay.
    */
   inline bool HasTransform(const nsIFrame* aContextFrame) const;
+
+  /**
+   * Returns true when the element has the perspective property,
+   * and supports CSS transforms. aContextFrame is the frame for
+   * which this is the nsStyleDisplay.
+   */
+  inline bool HasPerspective(const nsIFrame* aContextFrame) const;
 
   /**
    * Returns true when the element is a containing block for its fixed-pos
@@ -2795,23 +2516,31 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
 
   /**
    * The same as IsFixedPosContainingBlock, except skipping the tests that
-   * are based on the frame rather than the style context (thus
+   * are based on the frame rather than the ComputedStyle (thus
    * potentially returning a false positive).
    */
-  template<class StyleContextLike>
   inline bool IsFixedPosContainingBlockForAppropriateFrame(
-                StyleContextLike* aStyleContext) const;
+    mozilla::ComputedStyle&) const;
+
+  /**
+   * Returns the final combined transform.
+   **/
+  already_AddRefed<nsCSSValueSharedList> GetCombinedTransform() const {
+    if (mCombinedTransform) {
+      return do_AddRef(mCombinedTransform);
+    }
+
+    // backward compatible to gecko-backed style system.
+    return mSpecifiedTransform ? do_AddRef(mSpecifiedTransform) : nullptr;
+  }
 
 private:
   // Helpers for above functions, which do some but not all of the tests
   // for them (since transform must be tested separately for each).
-  template<class StyleContextLike>
-  inline bool HasAbsPosContainingBlockStyleInternal(
-                StyleContextLike* aStyleContext) const;
-  template<class StyleContextLike>
+  inline bool HasAbsPosContainingBlockStyleInternal() const;
   inline bool HasFixedPosContainingBlockStyleInternal(
-                StyleContextLike* aStyleContext) const;
-
+    mozilla::ComputedStyle&) const;
+  void GenerateCombinedTransform();
 public:
   // Return the 'float' and 'clear' properties, with inline-{start,end} values
   // resolved to {left,right} according to the given writing mode. These are
@@ -2825,19 +2554,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleTable
   explicit nsStyleTable(const nsPresContext* aContext);
   nsStyleTable(const nsStyleTable& aOther);
   ~nsStyleTable();
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStyleTable*) {}
   const static bool kHasFinishStyle = false;
-
-  void* operator new(size_t sz, nsStyleTable* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleTable, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStyleTable();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStyleTable, this);
-  }
 
   nsChangeHint CalcDifference(const nsStyleTable& aNewData) const;
 
@@ -2850,19 +2568,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleTableBorder
   explicit nsStyleTableBorder(const nsPresContext* aContext);
   nsStyleTableBorder(const nsStyleTableBorder& aOther);
   ~nsStyleTableBorder();
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStyleTableBorder*) {}
   const static bool kHasFinishStyle = false;
-
-  void* operator new(size_t sz, nsStyleTableBorder* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleTableBorder, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStyleTableBorder();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStyleTableBorder, this);
-  }
 
   nsChangeHint CalcDifference(const nsStyleTableBorder& aNewData) const;
 
@@ -2885,6 +2592,16 @@ enum nsStyleContentType {
   eStyleContentType_NoCloseQuote  = 43,
   eStyleContentType_AltContent    = 50,
   eStyleContentType_Uninitialized
+};
+
+struct nsStyleContentAttr {
+  RefPtr<nsAtom> mName; // Non-null.
+  RefPtr<nsAtom> mNamespaceURL; // May be null.
+
+  bool operator==(const nsStyleContentAttr& aOther) const
+  {
+    return mName == aOther.mName && mNamespaceURL == aOther.mNamespaceURL;
+  }
 };
 
 class nsStyleContentData
@@ -2910,10 +2627,15 @@ public:
 
   char16_t* GetString() const
   {
-    MOZ_ASSERT(mType == eStyleContentType_String ||
-               mType == eStyleContentType_Attr);
+    MOZ_ASSERT(mType == eStyleContentType_String);
     return mContent.mString;
   }
+
+  const nsStyleContentAttr* GetAttr() const {
+    MOZ_ASSERT(mType == eStyleContentType_Attr);
+    MOZ_ASSERT(mContent.mAttr);
+    return mContent.mAttr;
+   }
 
   struct CounterFunction
   {
@@ -2941,15 +2663,16 @@ public:
     return mContent.mCounters;
   }
 
-  nsStyleImageRequest* GetImageRequest() const
+  nsStyleImageRequest* ImageRequest() const
   {
     MOZ_ASSERT(mType == eStyleContentType_Image);
+    MOZ_ASSERT(mContent.mImage);
     return mContent.mImage;
   }
 
   imgRequestProxy* GetImage() const
   {
-    return GetImageRequest()->get();
+    return ImageRequest()->get();
   }
 
   void SetKeyword(nsStyleContentType aType)
@@ -2966,8 +2689,7 @@ public:
 
   void SetString(nsStyleContentType aType, const char16_t* aString)
   {
-    MOZ_ASSERT(aType == eStyleContentType_String ||
-               aType == eStyleContentType_Attr);
+    MOZ_ASSERT(aType == eStyleContentType_String);
     MOZ_ASSERT(aString);
     MOZ_ASSERT(mType == eStyleContentType_Uninitialized,
                "should only initialize nsStyleContentData once");
@@ -2996,12 +2718,13 @@ public:
     MOZ_ASSERT(mContent.mImage);
   }
 
-  void Resolve(nsPresContext* aPresContext);
+  void Resolve(nsPresContext*, const nsStyleContentData*);
 
 private:
   nsStyleContentType mType;
   union {
     char16_t *mString;
+    nsStyleContentAttr* mAttr;
     nsStyleImageRequest* mImage;
     CounterFunction* mCounters;
   } mContent;
@@ -3026,15 +2749,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleContent
   explicit nsStyleContent(const nsPresContext* aContext);
   nsStyleContent(const nsStyleContent& aContent);
   ~nsStyleContent();
-  void FinishStyle(nsPresContext* aPresContext);
+  void FinishStyle(nsPresContext*, const nsStyleContent*);
   const static bool kHasFinishStyle = true;
-
-  void* operator new(size_t sz, nsStyleContent* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleContent, sz);
-  }
-  void Destroy(nsPresContext* aContext);
 
   nsChangeHint CalcDifference(const nsStyleContent& aNewData) const;
 
@@ -3097,19 +2813,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleUIReset
   explicit nsStyleUIReset(const nsPresContext* aContext);
   nsStyleUIReset(const nsStyleUIReset& aOther);
   ~nsStyleUIReset();
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStyleUIReset*) {}
   const static bool kHasFinishStyle = false;
-
-  void* operator new(size_t sz, nsStyleUIReset* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleUIReset, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStyleUIReset();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStyleUIReset, this);
-  }
 
   nsChangeHint CalcDifference(const nsStyleUIReset& aNewData) const;
 
@@ -3151,19 +2856,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleUserInterface
   nsStyleUserInterface(const nsStyleUserInterface& aOther);
   ~nsStyleUserInterface();
 
-  void FinishStyle(nsPresContext* aPresContext);
+  void FinishStyle(nsPresContext*, const nsStyleUserInterface*);
   const static bool kHasFinishStyle = true;
-
-  void* operator new(size_t sz, nsStyleUserInterface* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleUserInterface, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStyleUserInterface();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStyleUserInterface, this);
-  }
 
   nsChangeHint CalcDifference(const nsStyleUserInterface& aNewData) const;
 
@@ -3175,9 +2869,16 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleUserInterface
   uint8_t mCursor;                            // [inherited] See nsStyleConsts.h
   nsTArray<nsCursorImage> mCursorImages;      // [inherited] images and coords
   mozilla::StyleComplexColor mCaretColor;     // [inherited]
-  nscolor                   mFontSmoothingBackgroundColor; // [inherited]
+
+  mozilla::StyleComplexColor mScrollbarFaceColor;   // [inherited]
+  mozilla::StyleComplexColor mScrollbarTrackColor;  // [inherited]
 
   inline uint8_t GetEffectivePointerEvents(nsIFrame* aFrame) const;
+
+  bool HasCustomScrollbars() const
+  {
+    return !mScrollbarFaceColor.mIsAuto || !mScrollbarTrackColor.mIsAuto;
+  }
 };
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleXUL
@@ -3185,19 +2886,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleXUL
   explicit nsStyleXUL(const nsPresContext* aContext);
   nsStyleXUL(const nsStyleXUL& aSource);
   ~nsStyleXUL();
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStyleXUL*) {}
   const static bool kHasFinishStyle = false;
-
-  void* operator new(size_t sz, nsStyleXUL* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleXUL, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStyleXUL();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStyleXUL, this);
-  }
 
   nsChangeHint CalcDifference(const nsStyleXUL& aNewData) const;
 
@@ -3215,19 +2905,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleColumn
   explicit nsStyleColumn(const nsPresContext* aContext);
   nsStyleColumn(const nsStyleColumn& aSource);
   ~nsStyleColumn();
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStyleColumn*) {}
   const static bool kHasFinishStyle = false;
-
-  void* operator new(size_t sz, nsStyleColumn* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleColumn, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStyleColumn();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStyleColumn, this);
-  }
 
   nsChangeHint CalcDifference(const nsStyleColumn& aNewData) const;
 
@@ -3239,7 +2918,6 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleColumn
 
   uint32_t     mColumnCount; // [reset] see nsStyleConsts.h
   nsStyleCoord mColumnWidth; // [reset] coord, auto
-  nsStyleCoord mColumnGap;   // [reset] coord, normal
 
   mozilla::StyleComplexColor mColumnRuleColor; // [reset]
   uint8_t      mColumnRuleStyle;  // [reset]
@@ -3350,19 +3028,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVG
   explicit nsStyleSVG(const nsPresContext* aContext);
   nsStyleSVG(const nsStyleSVG& aSource);
   ~nsStyleSVG();
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStyleSVG*) {}
   const static bool kHasFinishStyle = false;
-
-  void* operator new(size_t sz, nsStyleSVG* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleSVG, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStyleSVG();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStyleSVG, this);
-  }
 
   nsChangeHint CalcDifference(const nsStyleSVG& aNewData) const;
 
@@ -3487,7 +3154,7 @@ struct nsStyleFilter
   nsStyleFilter();
   nsStyleFilter(const nsStyleFilter& aSource);
   ~nsStyleFilter();
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStyleFilter*) {}
   const static bool kHasFinishStyle = false;
 
   nsStyleFilter& operator=(const nsStyleFilter& aOther);
@@ -3549,15 +3216,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVGReset
   // Resolves and tracks the images in mMask.  Only called with a Servo-backed
   // style system, where those images must be resolved later than the OMT
   // nsStyleSVGReset constructor call.
-  void FinishStyle(nsPresContext* aPresContext);
+  void FinishStyle(nsPresContext*, const nsStyleSVGReset*);
   const static bool kHasFinishStyle = true;
-
-  void* operator new(size_t sz, nsStyleSVGReset* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleSVGReset, sz);
-  }
-  void Destroy(nsPresContext* aContext);
 
   nsChangeHint CalcDifference(const nsStyleSVGReset& aNewData) const;
 
@@ -3573,9 +3233,9 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVGReset
 
   nsStyleImageLayers    mMask;
   mozilla::StyleShapeSource mClipPath;// [reset]
-  nscolor          mStopColor;        // [reset]
-  nscolor          mFloodColor;       // [reset]
-  nscolor          mLightingColor;    // [reset]
+  mozilla::StyleComplexColor mStopColor;     // [reset]
+  mozilla::StyleComplexColor mFloodColor;    // [reset]
+  mozilla::StyleComplexColor mLightingColor; // [reset]
 
   float            mStopOpacity;      // [reset]
   float            mFloodOpacity;     // [reset]
@@ -3585,49 +3245,13 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVGReset
   uint8_t          mMaskType;         // [reset] see nsStyleConsts.h
 };
 
-struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleVariables
-{
-  nsStyleVariables();
-  explicit nsStyleVariables(const nsPresContext* aContext);
-  nsStyleVariables(const nsStyleVariables& aSource);
-  ~nsStyleVariables();
-  void FinishStyle(nsPresContext* aPresContext) {}
-  const static bool kHasFinishStyle = false;
-
-  void* operator new(size_t sz, nsStyleVariables* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleVariables, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStyleVariables();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStyleVariables, this);
-  }
-
-  nsChangeHint CalcDifference(const nsStyleVariables& aNewData) const;
-
-  mozilla::CSSVariableValues mVariables;
-};
-
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleEffects
 {
   explicit nsStyleEffects(const nsPresContext* aContext);
   nsStyleEffects(const nsStyleEffects& aSource);
   ~nsStyleEffects();
-  void FinishStyle(nsPresContext* aPresContext) {}
+  void FinishStyle(nsPresContext*, const nsStyleEffects*) {}
   const static bool kHasFinishStyle = false;
-
-  void* operator new(size_t sz, nsStyleEffects* aSelf) { return aSelf; }
-  void* operator new(size_t sz, nsPresContext* aContext) {
-    return aContext->PresShell()->
-      AllocateByObjectID(mozilla::eArenaObjectID_nsStyleEffects, sz);
-  }
-  void Destroy(nsPresContext* aContext) {
-    this->~nsStyleEffects();
-    aContext->PresShell()->
-      FreeByObjectID(mozilla::eArenaObjectID_nsStyleEffects, this);
-  }
 
   nsChangeHint CalcDifference(const nsStyleEffects& aNewData) const;
 
@@ -3713,7 +3337,7 @@ STATIC_ASSERT_FIELD_OFFSET_MATCHES(nsSize, nsSize_Simple, height);
  * TODO(Emilio): This is a workaround and we should be able to get rid of this
  * one.
  */
-template<typename T, typename Deleter = mozilla::DefaultDelete<T>>
+template<typename T>
 struct UniquePtr_Simple {
   T* mPtr;
 };

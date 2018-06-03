@@ -4,7 +4,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "ChannelMediaDecoder.h"
 #include "DecoderTraits.h"
 #include "MediaContainerType.h"
 #include "nsMimeTypes.h"
@@ -39,7 +38,6 @@
 #include "FlacDemuxer.h"
 
 #include "nsPluginHost.h"
-#include "MediaPrefs.h"
 
 namespace mozilla
 {
@@ -55,6 +53,15 @@ DecoderTraits::IsHttpLiveStreamingType(const MediaContainerType& aType)
     mimeType == MEDIAMIMETYPE("application/x-mpegurl") ||
     mimeType == MEDIAMIMETYPE("audio/mpegurl") ||
     mimeType == MEDIAMIMETYPE("audio/x-mpegurl");
+}
+
+/* static */ bool
+DecoderTraits::IsMatroskaType(const MediaContainerType& aType)
+{
+  const auto& mimeType = aType.Type();
+  // https://matroska.org/technical/specs/notes.html
+  return mimeType == MEDIAMIMETYPE("audio/x-matroska") ||
+         mimeType == MEDIAMIMETYPE("video/x-matroska");
 }
 
 /* static */ bool
@@ -95,7 +102,6 @@ CanHandleCodecsType(const MediaContainerType& aType,
     // ogg is supported and working: the codec must be invalid.
     return CANPLAY_NO;
   }
-#if !defined(MOZ_OMX_WEBM_DECODER)
   if (WebMDecoder::IsSupportedType(mimeType)) {
     if (WebMDecoder::IsSupportedType(aType)) {
       return CANPLAY_YES;
@@ -104,7 +110,6 @@ CanHandleCodecsType(const MediaContainerType& aType,
     // webm is supported and working: the codec must be invalid.
     return CANPLAY_NO;
   }
-#endif
 #ifdef MOZ_FMP4
   if (MP4Decoder::IsSupportedType(mimeType,
                                   /* DecoderDoctorDiagnostics* */ nullptr)) {
@@ -144,6 +149,8 @@ CanHandleMediaType(const MediaContainerType& aType,
 
   if (DecoderTraits::IsHttpLiveStreamingType(aType)) {
     Telemetry::Accumulate(Telemetry::MEDIA_HLS_CANPLAY_REQUESTED, true);
+  } else if (DecoderTraits::IsMatroskaType(aType)) {
+    Telemetry::Accumulate(Telemetry::MEDIA_MKV_CANPLAY_REQUESTED, true);
   }
 
   if (aType.ExtendedType().HaveCodecs()) {
@@ -167,11 +174,9 @@ CanHandleMediaType(const MediaContainerType& aType,
     return CANPLAY_MAYBE;
   }
 #endif
-#if !defined(MOZ_OMX_WEBM_DECODER)
   if (WebMDecoder::IsSupportedType(mimeType)) {
     return CANPLAY_MAYBE;
   }
-#endif
   if (MP3Decoder::IsSupportedType(mimeType)) {
     return CANPLAY_MAYBE;
   }
@@ -222,37 +227,6 @@ bool DecoderTraits::ShouldHandleMediaType(const char* aMIMEType,
   }
 
   return CanHandleMediaType(*containerType, aDiagnostics) != CANPLAY_NO;
-}
-
-// Instantiates but does not initialize decoder.
-static already_AddRefed<ChannelMediaDecoder>
-InstantiateDecoder(MediaDecoderInit& aInit,
-                   DecoderDoctorDiagnostics* aDiagnostics)
-{
-  MOZ_ASSERT(NS_IsMainThread());
-  RefPtr<ChannelMediaDecoder> decoder;
-
-  const MediaContainerType& type = aInit.mContainerType;
-  if (DecoderTraits::IsSupportedType(type)) {
-    decoder = new ChannelMediaDecoder(aInit);
-    return decoder.forget();
-  }
-
-  if (DecoderTraits::IsHttpLiveStreamingType(type)) {
-    // We don't have an HLS decoder.
-    Telemetry::Accumulate(Telemetry::MEDIA_HLS_DECODER_SUCCESS, false);
-  }
-
-  return nullptr;
-}
-
-/* static */
-already_AddRefed<ChannelMediaDecoder>
-DecoderTraits::CreateDecoder(MediaDecoderInit& aInit,
-                             DecoderDoctorDiagnostics* aDiagnostics)
-{
-  MOZ_ASSERT(NS_IsMainThread());
-  return InstantiateDecoder(aInit, aDiagnostics);
 }
 
 /* static */

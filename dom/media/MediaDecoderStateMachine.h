@@ -114,19 +114,40 @@ class TaskQueue;
 
 extern LazyLogModule gMediaDecoderLog;
 
-enum class MediaEventType : int8_t
+struct MediaPlaybackEvent
 {
-  PlaybackStarted,
-  PlaybackStopped,
-  PlaybackEnded,
-  SeekStarted,
-  Invalidate,
-  EnterVideoSuspend,
-  ExitVideoSuspend,
-  StartVideoSuspendTimer,
-  CancelVideoSuspendTimer,
-  VideoOnlySeekBegin,
-  VideoOnlySeekCompleted,
+  enum EventType
+  {
+    PlaybackStarted,
+    PlaybackStopped,
+    PlaybackProgressed,
+    PlaybackEnded,
+    SeekStarted,
+    Loop,
+    Invalidate,
+    EnterVideoSuspend,
+    ExitVideoSuspend,
+    StartVideoSuspendTimer,
+    CancelVideoSuspendTimer,
+    VideoOnlySeekBegin,
+    VideoOnlySeekCompleted,
+  } mType;
+
+  using DataType = Variant<Nothing, int64_t>;
+  DataType mData;
+
+  MOZ_IMPLICIT MediaPlaybackEvent(EventType aType)
+    : mType(aType)
+    , mData(Nothing{})
+  {
+  }
+
+  template<typename T>
+  MediaPlaybackEvent(EventType aType, T&& aArg)
+    : mType(aType)
+    , mData(Forward<T>(aArg))
+  {
+  }
 };
 
 enum class VideoDecodeMode : uint8_t
@@ -134,6 +155,8 @@ enum class VideoDecodeMode : uint8_t
   Normal,
   Suspend
 };
+
+DDLoggedTypeDeclName(MediaDecoderStateMachine);
 
 /*
   The state machine class. This manages the decoding and seeking in the
@@ -147,6 +170,7 @@ enum class VideoDecodeMode : uint8_t
   See MediaDecoder.h for more details.
 */
 class MediaDecoderStateMachine
+  : public DecoderDoctorLifeLogger<MediaDecoderStateMachine>
 {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(MediaDecoderStateMachine)
 
@@ -171,6 +195,9 @@ public:
     DECODER_STATE_COMPLETED,
     DECODER_STATE_SHUTDOWN
   };
+
+  // Returns the state machine task queue.
+  TaskQueue* OwnerThread() const { return mTaskQueue; }
 
   RefPtr<MediaDecoder::DebugInfoPromise> RequestDebugInfo();
 
@@ -204,7 +231,9 @@ public:
                                    ? aEndTime
                                    : media::TimeUnit::Invalid();
       });
-    OwnerThread()->Dispatch(r.forget());
+    nsresult rv = OwnerThread()->Dispatch(r.forget());
+    MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+    Unused << rv;
   }
 
   void DispatchCanPlayThrough(bool aCanPlayThrough)
@@ -244,13 +273,18 @@ public:
                       MediaDecoderEventVisibility>&
   FirstFrameLoadedEvent() { return mFirstFrameLoadedEvent; }
 
-  MediaEventSource<MediaEventType>&
-  OnPlaybackEvent() { return mOnPlaybackEvent; }
+  MediaEventSource<MediaPlaybackEvent>& OnPlaybackEvent()
+  {
+    return mOnPlaybackEvent;
+  }
   MediaEventSource<MediaResult>&
   OnPlaybackErrorEvent() { return mOnPlaybackErrorEvent; }
 
   MediaEventSource<DecoderDoctorEvent>&
   OnDecoderDoctorEvent() { return mOnDecoderDoctorEvent; }
+
+  MediaEventSource<NextFrameStatus>&
+  OnNextFrameStatus() { return mOnNextFrameStatus; }
 
   size_t SizeOfVideoQueue() const;
 
@@ -275,7 +309,6 @@ private:
   class ShutdownState;
 
   static const char* ToStateStr(State aState);
-  static const char* ToStr(NextFrameStatus aStatus);
   const char* ToStateStr();
 
   nsCString GetDebugInfo();
@@ -307,9 +340,6 @@ private:
   bool HasAudio() const { return mInfo.ref().HasAudio(); }
   bool HasVideo() const { return mInfo.ref().HasVideo(); }
   const MediaInfo& Info() const { return mInfo.ref(); }
-
-  // Returns the state machine task queue.
-  TaskQueue* OwnerThread() const { return mTaskQueue; }
 
   // Schedules the shared state machine thread to run the state machine.
   void ScheduleStateMachine();
@@ -356,6 +386,7 @@ protected:
   void VolumeChanged();
   void SetPlaybackRate(double aPlaybackRate);
   void PreservesPitchChanged();
+  void LoopingChanged();
 
   MediaQueue<AudioData>& AudioQueue() { return mAudioQueue; }
   MediaQueue<VideoData>& VideoQueue() { return mVideoQueue; }
@@ -382,8 +413,6 @@ protected:
 
   // Returns true if we have less than aThreshold of buffered data available.
   bool HasLowBufferedData(const media::TimeUnit& aThreshold);
-
-  void UpdateNextFrameStatus(NextFrameStatus aStatus);
 
   // Return the current time, either the audio clock if available (if the media
   // has audio, and the playback is possible), or a clock for the video.
@@ -656,12 +685,19 @@ private:
   MediaEventProducerExc<nsAutoPtr<MediaInfo>,
                         MediaDecoderEventVisibility> mFirstFrameLoadedEvent;
 
-  MediaEventProducer<MediaEventType> mOnPlaybackEvent;
+  MediaEventProducer<MediaPlaybackEvent> mOnPlaybackEvent;
   MediaEventProducer<MediaResult> mOnPlaybackErrorEvent;
 
   MediaEventProducer<DecoderDoctorEvent> mOnDecoderDoctorEvent;
 
+  MediaEventProducer<NextFrameStatus> mOnNextFrameStatus;
+
   const bool mIsMSE;
+
+  bool mSeamlessLoopingAllowed;
+
+  // Current playback position in the stream in bytes.
+  int64_t mPlaybackOffset = 0;
 
 private:
   // The buffered range. Mirrored from the decoder thread.
@@ -692,17 +728,10 @@ private:
   // decoding the first frame.
   Canonical<media::NullableTimeUnit> mDuration;
 
-  // The status of our next frame. Mirrored on the main thread and used to
-  // compute ready state.
-  Canonical<NextFrameStatus> mNextFrameStatus;
-
   // The time of the current frame, corresponding to the "current
   // playback position" in HTML5. This is referenced from 0, which is the initial
   // playback position.
   Canonical<media::TimeUnit> mCurrentPosition;
-
-  // Current playback position in the stream in bytes.
-  Canonical<int64_t> mPlaybackOffset;
 
   // Used to distinguish whether the audio is producing sound.
   Canonical<bool> mIsAudioDataAudible;
@@ -714,33 +743,14 @@ public:
   {
     return &mDuration;
   }
-  AbstractCanonical<NextFrameStatus>* CanonicalNextFrameStatus()
-  {
-    return &mNextFrameStatus;
-  }
   AbstractCanonical<media::TimeUnit>* CanonicalCurrentPosition()
   {
     return &mCurrentPosition;
-  }
-  AbstractCanonical<int64_t>* CanonicalPlaybackOffset()
-  {
-    return &mPlaybackOffset;
   }
   AbstractCanonical<bool>* CanonicalIsAudioDataAudible()
   {
     return &mIsAudioDataAudible;
   }
-
-#ifdef XP_WIN
-  // Whether we've called timeBeginPeriod(1) to request high resolution
-  // timers. We request high resolution timers when playback starts, and
-  // turn them off when playback is paused. Enabling high resolution
-  // timers can cause higher CPU usage and battery drain on Windows 7.
-  bool mHiResTimersRequested = false;
-  // Whether we should enable high resolution timers. This is initialized at
-  // MDSM construction, and mirrors the value of media.hi-res-timers.enabled.
-  const bool mShouldUseHiResTimers;
-#endif
 };
 
 } // namespace mozilla

@@ -10,7 +10,7 @@ import pytest
 from moztest.selftest.output import get_mozharness_status, filter_action
 
 from mozharness.base.log import INFO, WARNING, ERROR
-from mozharness.mozilla.buildbot import TBPL_SUCCESS, TBPL_WARNING, TBPL_FAILURE
+from mozharness.mozilla.automation import TBPL_SUCCESS, TBPL_WARNING, TBPL_FAILURE
 
 
 here = os.path.abspath(os.path.dirname(__file__))
@@ -21,7 +21,7 @@ def test_output_pass(runtests):
     status, lines = runtests('test_pass.html')
     assert status == 0
 
-    tbpl_status, log_level = get_mozharness_status(lines, status)
+    tbpl_status, log_level, summary = get_mozharness_status(lines, status)
     assert tbpl_status == TBPL_SUCCESS
     assert log_level in (INFO, WARNING)
 
@@ -31,28 +31,17 @@ def test_output_pass(runtests):
 
 
 def test_output_fail(runtests):
-    from runtests import build_obj
-
     status, lines = runtests('test_fail.html')
     assert status == 1
 
-    tbpl_status, log_level = get_mozharness_status(lines, status)
+    tbpl_status, log_level, summary = get_mozharness_status(lines, status)
     assert tbpl_status == TBPL_WARNING
     assert log_level == WARNING
 
     lines = filter_action('test_status', lines)
 
-    # If we are running with a build_obj, the failed status will be
-    # logged a second time at the end of the run.
-    if build_obj:
-        assert len(lines) == 2
-    else:
-        assert len(lines) == 1
+    assert len(lines) == 1
     assert lines[0]['status'] == 'FAIL'
-
-    if build_obj:
-        assert set(lines[0].keys()) == set(lines[1].keys())
-        assert set(lines[0].values()) == set(lines[1].values())
 
 
 @pytest.mark.skip_mozinfo("!crashreporter")
@@ -60,7 +49,7 @@ def test_output_crash(runtests):
     status, lines = runtests('test_crash.html', environment=["MOZ_CRASHREPORTER_SHUTDOWN=1"])
     assert status == 1
 
-    tbpl_status, log_level = get_mozharness_status(lines, status)
+    tbpl_status, log_level, summary = get_mozharness_status(lines, status)
     assert tbpl_status == TBPL_FAILURE
     assert log_level == ERROR
 
@@ -77,10 +66,9 @@ def test_output_crash(runtests):
 @pytest.mark.skip_mozinfo("!asan")
 def test_output_asan(runtests):
     status, lines = runtests('test_crash.html', environment=["MOZ_CRASHREPORTER_SHUTDOWN=1"])
-    # TODO: mochitest should return non-zero here
-    assert status == 0
+    assert status == 1
 
-    tbpl_status, log_level = get_mozharness_status(lines, status)
+    tbpl_status, log_level, summary = get_mozharness_status(lines, status)
     assert tbpl_status == TBPL_FAILURE
     assert log_level == ERROR
 
@@ -97,7 +85,7 @@ def test_output_assertion(runtests):
     # TODO: mochitest should return non-zero here
     assert status == 0
 
-    tbpl_status, log_level = get_mozharness_status(lines, status)
+    tbpl_status, log_level, summary = get_mozharness_status(lines, status)
     assert tbpl_status == TBPL_WARNING
     assert log_level == WARNING
 
@@ -128,7 +116,7 @@ def test_output_leak(monkeypatch, runtests):
     # TODO: mochitest should return non-zero here
     assert status == 0
 
-    tbpl_status, log_level = get_mozharness_status(lines, status)
+    tbpl_status, log_level, summary = get_mozharness_status(lines, status)
     assert tbpl_status == TBPL_FAILURE
     assert log_level == ERROR
 

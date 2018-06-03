@@ -52,12 +52,13 @@ public:
   }
 
   LookupResult(LookupResult&& aOther)
-    : mSurface(Move(aOther.mSurface))
+    : mSurface(std::move(aOther.mSurface))
     , mMatchType(aOther.mMatchType)
+    , mSuggestedSize(aOther.mSuggestedSize)
   { }
 
   LookupResult(DrawableSurface&& aSurface, MatchType aMatchType)
-    : mSurface(Move(aSurface))
+    : mSurface(std::move(aSurface))
     , mMatchType(aMatchType)
   {
     MOZ_ASSERT(!mSurface || !(mMatchType == MatchType::NOT_FOUND ||
@@ -70,21 +71,22 @@ public:
 
   LookupResult(DrawableSurface&& aSurface, MatchType aMatchType,
                const gfx::IntSize& aSuggestedSize)
-    : mSurface(Move(aSurface))
+    : mSurface(std::move(aSurface))
     , mMatchType(aMatchType)
     , mSuggestedSize(aSuggestedSize)
   {
-    MOZ_ASSERT(!mSuggestedSize.IsEmpty());
-    MOZ_ASSERT(!mSurface || aMatchType == MatchType::SUBSTITUTE_BECAUSE_NOT_FOUND,
-               "Only SUBSTITUTE_BECAUSE_NOT_FOUND make sense with no surface");
-    MOZ_ASSERT(mSurface || aMatchType == MatchType::NOT_FOUND,
-               "NOT_FOUND does not make sense with a surface");
+    MOZ_ASSERT(!mSurface || !(mMatchType == MatchType::NOT_FOUND ||
+                              mMatchType == MatchType::PENDING),
+               "Only NOT_FOUND or PENDING make sense with no surface");
+    MOZ_ASSERT(mSurface || mMatchType == MatchType::NOT_FOUND ||
+                           mMatchType == MatchType::PENDING,
+               "NOT_FOUND or PENDING do not make sense with a surface");
   }
 
   LookupResult& operator=(LookupResult&& aOther)
   {
     MOZ_ASSERT(&aOther != this, "Self-move-assignment is not supported");
-    mSurface = Move(aOther.mSurface);
+    mSurface = std::move(aOther.mSurface);
     mMatchType = aOther.mMatchType;
     mSuggestedSize = aOther.mSuggestedSize;
     return *this;
@@ -102,6 +104,7 @@ public:
 
 private:
   LookupResult(const LookupResult&) = delete;
+  LookupResult& operator=(const LookupResult& aOther) = delete;
 
   DrawableSurface mSurface;
   MatchType mMatchType;

@@ -30,7 +30,7 @@ public:
 
   nsresult Load(nsIChannel* aChannel);
 
-  nsresult Play() override;
+  void Play() override;
 
   void Pause() override;
 
@@ -41,22 +41,20 @@ public:
   void Resume() override;
   void Shutdown() override;
 
+  // Called as data arrives on the underlying HLS player. Main thread only.
+  void NotifyDataArrived();
+
 private:
   friend class HLSResourceCallbacksSupport;
 
-  void PinForSeek() override {}
-  void UnpinForSeek() override {}
-
   MediaDecoderStateMachine* CreateStateMachine();
 
-  bool CanPlayThroughImpl() override final
+  bool CanPlayThroughImpl() final
   {
     // TODO: We don't know how to estimate 'canplaythrough' for this decoder.
     // For now we just return true for 'autoplay' can work.
     return true;
   }
-
-  bool IsLiveStream() override final { return false; }
 
   nsCOMPtr<nsIChannel> mChannel;
   nsCOMPtr<nsIURI> mURI;

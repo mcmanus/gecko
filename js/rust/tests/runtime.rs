@@ -13,11 +13,11 @@ use std::ptr;
 #[test]
 fn runtime() {
     unsafe {
-        let runtime = Runtime::new().unwrap();
+        let runtime = Runtime::new(false).unwrap();
 
         let cx = runtime.cx();
         let h_option = JS::OnNewGlobalHookOption::FireOnNewGlobalHook;
-        let c_option = JS::CompartmentOptions::default();
+        let c_option = JS::RealmOptions::default();
 
         rooted!(in(cx) let global = JS_NewGlobalObject(cx,
                                                        &SIMPLE_GLOBAL_CLASS,
@@ -28,7 +28,7 @@ fn runtime() {
         rooted!(in(cx) let _object = JS_NewObject(cx, &CLASS as *const _));
     }
 
-    assert!(Runtime::new().is_err());
+    assert!(Runtime::new(false).is_err());
 }
 
 unsafe extern fn finalize(_fop: *mut JSFreeOp, _object: *mut JSObject) {

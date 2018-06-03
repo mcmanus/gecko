@@ -37,7 +37,7 @@ class AudioNodeModel extends EventEmitter {
    * @param String param
    */
   connect(destination, param) {
-    let edge = findWhere(this.connections, { destination: destination.id, param: param });
+    const edge = findWhere(this.connections, { destination: destination.id, param: param });
 
     if (!edge) {
       this.connections.push({ source: this.id, destination: destination.id, param: param });
@@ -118,8 +118,8 @@ class AudioNodeModel extends EventEmitter {
    * @param dagreD3.Digraph
    */
   addEdgesToGraph(graph) {
-    for (let edge of this.connections) {
-      let options = {
+    for (const edge of this.connections) {
+      const options = {
         source: this.id,
         target: edge.destination
       };
@@ -140,7 +140,6 @@ class AudioNodeModel extends EventEmitter {
     return "[object AudioNodeModel]";
   }
 }
-
 
 /**
  * Constructor for a Collection of `AudioNodeModel` models.
@@ -181,7 +180,8 @@ class AudioNodesCollection extends EventEmitter {
    * @return AudioNodeModel
    */
   add(obj) {
-    let node = new this.model(obj);
+    // eslint-disable-next-line new-cap
+    const node = new this.model(obj);
     node.collection = this;
 
     this.models.add(node);
@@ -239,14 +239,14 @@ class AudioNodesCollection extends EventEmitter {
    * @return Object
    */
   getInfo() {
-    let info = {
+    const info = {
       nodes: this.length,
       edges: 0,
       paramEdges: 0
     };
 
     this.models.forEach(node => {
-      let paramEdgeCount = node.connections.filter(edge => edge.param).length;
+      const paramEdgeCount = node.connections.filter(edge => edge.param).length;
       info.edges += node.connections.length - paramEdgeCount;
       info.paramEdges += paramEdgeCount;
     });

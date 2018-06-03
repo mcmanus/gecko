@@ -7,9 +7,11 @@ info: Check Throw Statement for automatic semicolon insertion
 es5id: 7.9_A4
 description: Try use Throw \n Expression construction
 negative:
-  phase: early
+  phase: parse
   type: SyntaxError
 ---*/
+
+throw "Test262: This statement should not be evaluated.";
 
 //CHECK#1
 try {
@@ -17,4 +19,3 @@ try {
   1;
 } catch(e) {  
 }  
-$ERROR('#1: Check throw statement for automatic semicolon insertion');

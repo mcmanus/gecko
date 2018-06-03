@@ -26,8 +26,6 @@ HTMLFrameSetElement::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto)
   return HTMLFrameSetElementBinding::Wrap(aCx, this, aGivenProto);
 }
 
-NS_IMPL_ISUPPORTS_INHERITED0(HTMLFrameSetElement, nsGenericHTMLElement)
-
 NS_IMPL_ELEMENT_CLONE(HTMLFrameSetElement)
 
 nsresult
@@ -76,8 +74,8 @@ nsresult
 HTMLFrameSetElement::GetRowSpec(int32_t *aNumValues,
                                 const nsFramesetSpec** aSpecs)
 {
-  NS_PRECONDITION(aNumValues, "Must have a pointer to an integer here!");
-  NS_PRECONDITION(aSpecs, "Must have a pointer to an array of nsFramesetSpecs");
+  MOZ_ASSERT(aNumValues, "Must have a pointer to an integer here!");
+  MOZ_ASSERT(aSpecs, "Must have a pointer to an array of nsFramesetSpecs");
   *aNumValues = 0;
   *aSpecs = nullptr;
 
@@ -106,8 +104,8 @@ nsresult
 HTMLFrameSetElement::GetColSpec(int32_t *aNumValues,
                                 const nsFramesetSpec** aSpecs)
 {
-  NS_PRECONDITION(aNumValues, "Must have a pointer to an integer here!");
-  NS_PRECONDITION(aSpecs, "Must have a pointer to an array of nsFramesetSpecs");
+  MOZ_ASSERT(aNumValues, "Must have a pointer to an integer here!");
+  MOZ_ASSERT(aSpecs, "Must have a pointer to an array of nsFramesetSpecs");
   *aNumValues = 0;
   *aSpecs = nullptr;
 
@@ -137,6 +135,7 @@ bool
 HTMLFrameSetElement::ParseAttribute(int32_t aNamespaceID,
                                     nsAtom* aAttribute,
                                     const nsAString& aValue,
+                                    nsIPrincipal* aMaybeScriptedPrincipal,
                                     nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None) {
@@ -152,7 +151,7 @@ HTMLFrameSetElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                              aResult);
+                                              aMaybeScriptedPrincipal, aResult);
 }
 
 nsChangeHint
@@ -296,7 +295,7 @@ HTMLFrameSetElement::ParseRowCol(const nsAString & aValue,
 
   aNumSpecs = count;
   // Transfer ownership to caller here
-  *aSpecs = Move(specs);
+  *aSpecs = std::move(specs);
 
   return NS_OK;
 }
@@ -319,7 +318,7 @@ HTMLFrameSetElement::IsEventAttributeNameInternal(nsAtom *aName)
   HTMLFrameSetElement::GetOn##name_()                                          \
   {                                                                            \
     if (nsPIDOMWindowInner* win = OwnerDoc()->GetInnerWindow()) {              \
-      nsGlobalWindow* globalWin = nsGlobalWindow::Cast(win);                   \
+      nsGlobalWindowInner* globalWin = nsGlobalWindowInner::Cast(win);         \
       return globalWin->GetOn##name_();                                        \
     }                                                                          \
     return nullptr;                                                            \
@@ -332,7 +331,7 @@ HTMLFrameSetElement::IsEventAttributeNameInternal(nsAtom *aName)
       return;                                                                  \
     }                                                                          \
                                                                                \
-    nsGlobalWindow* globalWin = nsGlobalWindow::Cast(win);                     \
+    nsGlobalWindowInner* globalWin = nsGlobalWindowInner::Cast(win);           \
     return globalWin->SetOn##name_(handler);                                   \
   }
 #define WINDOW_EVENT(name_, id_, type_, struct_)                               \

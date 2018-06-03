@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -6,14 +7,11 @@
 #include "ActiveElementManager.h"
 #include "mozilla/EventStateManager.h"
 #include "mozilla/EventStates.h"
-#include "mozilla/StyleSetHandle.h"
-#include "mozilla/StyleSetHandleInlines.h"
 #include "mozilla/Preferences.h"
 #include "base/message_loop.h"
 #include "base/task.h"
 #include "mozilla/dom/Element.h"
 #include "nsIDocument.h"
-#include "nsStyleSet.h"
 
 #define AEM_LOG(...)
 // #define AEM_LOG(...) printf_stderr("AEM: " __VA_ARGS__)

@@ -4,8 +4,7 @@
 
 "use strict";
 
-const { Cu } = require("chrome");
-const promise = Cu.import("resource://devtools/shared/deprecated-sync-thenables.js", {}).Promise;
+const promise = require("devtools/shared/deprecated-sync-thenables");
 
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
 const eventSource = require("devtools/shared/client/event-source");
@@ -54,13 +53,13 @@ TabClient.prototype = {
    *        Called with the response packet and a ThreadClient
    *        (which will be undefined on error).
    */
-  attachThread: function (options = {}, onResponse = noop) {
+  attachThread: function(options = {}, onResponse = noop) {
     if (this.thread) {
       DevToolsUtils.executeSoon(() => onResponse({}, this.thread));
       return promise.resolve([{}, this.thread]);
     }
 
-    let packet = {
+    const packet = {
       to: this._threadActor,
       type: "attach",
       options,
@@ -84,13 +83,13 @@ TabClient.prototype = {
   detach: DebuggerClient.requester({
     type: "detach"
   }, {
-    before: function (packet) {
+    before: function(packet) {
       if (this.thread) {
         this.thread.detach();
       }
       return packet;
     },
-    after: function (response) {
+    after: function(response) {
       this.client.unregisterClient(this);
       return response;
     },
@@ -104,13 +103,20 @@ TabClient.prototype = {
   }, {}),
 
   /**
+   * Ensure relevant pages have error reporting enabled.
+   */
+  ensureCSSErrorReportingEnabled: DebuggerClient.requester({
+    type: "ensureCSSErrorReportingEnabled",
+  }, {}),
+
+  /**
    * Reload the page in this tab.
    *
    * @param [optional] object options
    *        An object with a `force` property indicating whether or not
    *        this reload should skip the cache
    */
-  reload: function (options = { force: false }) {
+  reload: function(options = { force: false }) {
     return this._reload(options);
   },
   _reload: DebuggerClient.requester({
@@ -146,7 +152,7 @@ TabClient.prototype = {
     type: "listWorkers"
   }),
 
-  attachWorker: function (workerActor, onResponse) {
+  attachWorker: function(workerActor, onResponse) {
     return this.client.attachWorker(workerActor, onResponse);
   },
 };

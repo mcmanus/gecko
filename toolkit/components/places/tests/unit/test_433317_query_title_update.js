@@ -22,12 +22,12 @@ add_task(async function test_query_title_update() {
   // query for that query
   var options = histsvc.getNewQueryOptions();
   let query = histsvc.getNewQuery();
-  query.setFolders([PlacesUtils.toolbarFolderId], 1);
+  query.setParents([PlacesUtils.bookmarks.toolbarGuid], 1);
   var result = histsvc.executeQuery(query, options);
   var root = result.root;
   root.containerOpen = true;
   var queryNode = root.getChild(0);
-  do_check_eq(queryNode.title, "test query");
+  Assert.equal(queryNode.title, "test query");
 
   // change the title
   await PlacesUtils.bookmarks.update({
@@ -36,7 +36,7 @@ add_task(async function test_query_title_update() {
   });
 
   // confirm the node was updated
-  do_check_eq(queryNode.title, "foo");
+  Assert.equal(queryNode.title, "foo");
 
   root.containerOpen = false;
 });

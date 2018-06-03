@@ -1,6 +1,7 @@
 import argparse
-import os
 import json
+import logging
+import os
 import sys
 
 from tools import localpaths
@@ -45,7 +46,7 @@ def parse_args(argv, commands):
     parser.add_argument("--debug", action="store_true", help="Run the debugger in case of an exception")
     subparsers = parser.add_subparsers(dest="command")
     for command, props in iteritems(commands):
-        sub_parser = subparsers.add_parser(command, help=props["help"], add_help=False)
+        subparsers.add_parser(command, help=props["help"], add_help=False)
 
     args, extra = parser.parse_known_args(argv)
 
@@ -89,6 +90,8 @@ def setup_virtualenv(path, props):
 
 
 def main(prog=None, argv=None):
+    logging.basicConfig(level=logging.INFO)
+
     if prog is None:
         prog = sys.argv[0]
     if argv is None:

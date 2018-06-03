@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -24,9 +25,9 @@ class nsColorControlFrame final : public nsHTMLButtonControlFrame,
 
 public:
   friend nsIFrame* NS_NewColorControlFrame(nsIPresShell* aPresShell,
-                                           nsStyleContext* aContext);
+                                           ComputedStyle* aStyle);
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
   NS_DECL_QUERYFRAME
   NS_DECL_FRAMEARENA_HELPERS(nsColorControlFrame)
@@ -46,13 +47,11 @@ public:
                                     int32_t  aModType) override;
   virtual nsContainerFrame* GetContentInsertionFrame() override;
 
-  virtual Element* GetPseudoElement(CSSPseudoElementType aType) override;
-
   // Refresh the color swatch, using associated input's value
   nsresult UpdateColor();
 
 private:
-  explicit nsColorControlFrame(nsStyleContext* aContext);
+  explicit nsColorControlFrame(ComputedStyle* aStyle);
 
   nsCOMPtr<Element> mColorContent;
 };

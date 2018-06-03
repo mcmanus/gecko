@@ -5,6 +5,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "AbortSignal.h"
+
+#include "AbortController.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/AbortSignalBinding.h"
 
@@ -71,8 +73,7 @@ AbortSignal::Abort()
     Event::Constructor(this, NS_LITERAL_STRING("abort"), init);
   event->SetTrusted(true);
 
-  bool dummy;
-  DispatchEvent(event, &dummy);
+  DispatchEvent(*event);
 }
 
 void

@@ -1,6 +1,6 @@
 // Tests that system add-on upgrades work.
 
-Components.utils.import("resource://testing-common/httpd.js");
+ChromeUtils.import("resource://testing-common/httpd.js");
 
 BootstrapMonitor.init();
 
@@ -11,7 +11,7 @@ testserver.registerDirectory("/data/", do_get_file("data/system_addons"));
 testserver.start();
 var root = testserver.identity.primaryScheme + "://" +
            testserver.identity.primaryHost + ":" +
-           testserver.identity.primaryPort + "/data/"
+           testserver.identity.primaryPort + "/data/";
 Services.prefs.setCharPref(PREF_SYSTEM_ADDON_UPDATE_URL, root + "update.xml");
 
 let distroDir = FileUtils.getDir("ProfD", ["sysfeatures", "empty"], true);
@@ -89,6 +89,7 @@ const TEST_CONDITIONS = {
 // Test that the update check is performed as part of the regular add-on update
 // check
 add_task(async function test_addon_update() {
+  Services.prefs.setBoolPref(PREF_SYSTEM_ADDON_UPDATE_ENABLED, true);
   await setupSystemAddonConditions(TEST_CONDITIONS.blank, distroDir);
 
   await updateAllSystemAddons(await buildSystemAddonUpdates([
@@ -111,12 +112,12 @@ add_task(async function test_addon_update() {
 add_task(async function test_app_update_disabled() {
   await setupSystemAddonConditions(TEST_CONDITIONS.blank, distroDir);
 
-  Services.prefs.setBoolPref(PREF_APP_UPDATE_ENABLED, false);
+  Services.prefs.setBoolPref(PREF_SYSTEM_ADDON_UPDATE_ENABLED, false);
   await updateAllSystemAddons(await buildSystemAddonUpdates([
     { id: "system2@tests.mozilla.org", version: "2.0", path: "system2_2.xpi" },
     { id: "system3@tests.mozilla.org", version: "2.0", path: "system3_2.xpi" }
   ], root), testserver);
-  Services.prefs.clearUserPref(PREF_APP_UPDATE_ENABLED);
+  Services.prefs.clearUserPref(PREF_SYSTEM_ADDON_UPDATE_ENABLED);
 
   await verifySystemAddonState(TEST_CONDITIONS.blank.initialState, undefined, false, distroDir);
 
@@ -129,12 +130,12 @@ add_task(async function test_safe_mode() {
 
   await setupSystemAddonConditions(TEST_CONDITIONS.blank, distroDir);
 
-  Services.prefs.setBoolPref(PREF_APP_UPDATE_ENABLED, false);
+  Services.prefs.setBoolPref(PREF_SYSTEM_ADDON_UPDATE_ENABLED, false);
   await updateAllSystemAddons(await buildSystemAddonUpdates([
     { id: "system2@tests.mozilla.org", version: "2.0", path: "system2_2.xpi" },
     { id: "system3@tests.mozilla.org", version: "2.0", path: "system3_2.xpi" }
   ], root), testserver);
-  Services.prefs.clearUserPref(PREF_APP_UPDATE_ENABLED);
+  Services.prefs.clearUserPref(PREF_SYSTEM_ADDON_UPDATE_ENABLED);
 
   await verifySystemAddonState(TEST_CONDITIONS.blank.initialState, undefined, false, distroDir);
 
@@ -191,7 +192,7 @@ add_task(async function test_match_current() {
 
   // This should remain with the current set instead of creating a new copy
   let set = JSON.parse(Services.prefs.getCharPref(PREF_SYSTEM_ADDON_SET));
-  do_check_eq(set.directory, "prefilled");
+  Assert.equal(set.directory, "prefilled");
 
   await verifySystemAddonState(TEST_CONDITIONS.withBothSets.initialState, undefined, false, distroDir);
 
@@ -264,7 +265,7 @@ add_task(async function test_update_purges() {
   await installSystemAddons(await buildSystemAddonUpdates(null), testserver);
 
   let dirs = await getSystemAddonDirectories();
-  do_check_eq(dirs.length, 1);
+  Assert.equal(dirs.length, 1);
 
   await promiseShutdownManager();
 });

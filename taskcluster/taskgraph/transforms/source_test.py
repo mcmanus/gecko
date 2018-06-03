@@ -44,7 +44,7 @@ source_test_description_schema = Schema({
     # depend on a build task and the installer url will be saved to the
     # GECKO_INSTALLER_URL environment variable. Build labels are determined by the
     # `dependent-build-platforms` config in kind.yml.
-    Required('require-build', default=False): bool,
+    Required('require-build'): bool,
 
     # These fields can be keyed by "platform", and are otherwise identical to
     # job descriptions.
@@ -62,17 +62,23 @@ transforms = TransformSequence()
 
 
 @transforms.add
+def set_defaults(config, jobs):
+    for job in jobs:
+        job.setdefault('require-build', False)
+        yield job
+
+
+@transforms.add
 def validate(config, jobs):
     for job in jobs:
-        yield validate_schema(source_test_description_schema, job,
-                              "In job {!r}:".format(job['name']))
+        validate_schema(source_test_description_schema, job,
+                        "In job {!r}:".format(job['name']))
+        yield job
 
 
 @transforms.add
 def set_job_name(config, jobs):
     for job in jobs:
-        job.setdefault('attributes', {}).setdefault('job_try_name', job['name'])
-
         if 'job-from' in job and job['job-from'] != 'kind.yml':
             from_name = os.path.splitext(job['job-from'])[0]
             job['name'] = '{}-{}'.format(from_name, job['name'])
@@ -111,16 +117,9 @@ def add_build_dependency(config, job):
     if len(matches) > 1:
         raise Exception("More than one build platform found for '{}'.".format(key))
 
-    label = matches[0]['label']
-    target = matches[0]['target-name']
+    label = matches[0]
     deps = job.setdefault('dependencies', {})
     deps.update({'build': label})
-
-    build_artifact = 'public/build/{}'.format(target)
-    installer_url = ARTIFACT_URL.format('<build>', build_artifact)
-
-    env = job['worker'].setdefault('env', {})
-    env.update({'GECKO_INSTALLER_URL': {'task-reference': installer_url}})
 
 
 @transforms.add

@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -7,6 +8,7 @@
 #define GFX_WEBRENDERCOMMANDBUILDER_H
 
 #include "mozilla/webrender/WebRenderAPI.h"
+#include "mozilla/layers/ClipManager.h"
 #include "mozilla/layers/WebRenderMessages.h"
 #include "mozilla/layers/WebRenderScrollData.h"
 #include "mozilla/layers/WebRenderUserData.h"
@@ -36,23 +38,34 @@ public:
   explicit WebRenderCommandBuilder(WebRenderLayerManager* aManager)
   : mManager(aManager)
   , mLastAsr(nullptr)
+  , mDoGrouping(false)
   {}
 
   void Destroy();
+
+  void EmptyTransaction();
+
+  bool NeedsEmptyTransaction();
 
   void BuildWebRenderCommands(wr::DisplayListBuilder& aBuilder,
                               wr::IpcResourceUpdateQueue& aResourceUpdates,
                               nsDisplayList* aDisplayList,
                               nsDisplayListBuilder* aDisplayListBuilder,
                               WebRenderScrollData& aScrollData,
-                              wr::LayoutSize& aContentSize);
+                              wr::LayoutSize& aContentSize,
+                              const nsTArray<wr::WrFilterOp>& aFilters);
+
+  void PushOverrideForASR(const ActiveScrolledRoot* aASR,
+                          const Maybe<wr::WrClipId>& aClipId);
+  void PopOverrideForASR(const ActiveScrolledRoot* aASR);
 
   Maybe<wr::ImageKey> CreateImageKey(nsDisplayItem* aItem,
                                      ImageContainer* aContainer,
                                      mozilla::wr::DisplayListBuilder& aBuilder,
                                      mozilla::wr::IpcResourceUpdateQueue& aResources,
                                      const StackingContextHelper& aSc,
-                                     gfx::IntSize& aSize);
+                                     gfx::IntSize& aSize,
+                                     const Maybe<LayoutDeviceRect>& aAsyncImageBounds);
 
   WebRenderUserDataRefTable* GetWebRenderUserDataTable() { return &mWebRenderUserDatas; }
 
@@ -61,14 +74,14 @@ public:
                  mozilla::wr::DisplayListBuilder& aBuilder,
                  mozilla::wr::IpcResourceUpdateQueue& aResources,
                  const StackingContextHelper& aSc,
-                 const LayerRect& aRect);
+                 const LayoutDeviceRect& aRect);
 
   Maybe<wr::WrImageMask> BuildWrMaskImage(nsDisplayItem* aItem,
                                           wr::DisplayListBuilder& aBuilder,
                                           wr::IpcResourceUpdateQueue& aResources,
                                           const StackingContextHelper& aSc,
                                           nsDisplayListBuilder* aDisplayListBuilder,
-                                          const LayerRect& aBounds);
+                                          const LayoutDeviceRect& aBounds);
 
   bool PushItemAsImage(nsDisplayItem* aItem,
                        wr::DisplayListBuilder& aBuilder,
@@ -77,19 +90,29 @@ public:
                        nsDisplayListBuilder* aDisplayListBuilder);
 
   void CreateWebRenderCommandsFromDisplayList(nsDisplayList* aDisplayList,
+                                              nsDisplayItem* aOuterItem,
                                               nsDisplayListBuilder* aDisplayListBuilder,
                                               const StackingContextHelper& aSc,
                                               wr::DisplayListBuilder& aBuilder,
                                               wr::IpcResourceUpdateQueue& aResources);
+
+  // aWrappingItem has to be non-null.
+  void DoGroupingForDisplayList(nsDisplayList* aDisplayList,
+                                nsDisplayItem* aWrappingItem,
+                                nsDisplayListBuilder* aDisplayListBuilder,
+                                const StackingContextHelper& aSc,
+                                wr::DisplayListBuilder& aBuilder,
+                                wr::IpcResourceUpdateQueue& aResources);
 
   already_AddRefed<WebRenderFallbackData> GenerateFallbackData(nsDisplayItem* aItem,
                                                                wr::DisplayListBuilder& aBuilder,
                                                                wr::IpcResourceUpdateQueue& aResources,
                                                                const StackingContextHelper& aSc,
                                                                nsDisplayListBuilder* aDisplayListBuilder,
-                                                               LayerRect& aImageRect);
+                                                               LayoutDeviceRect& aImageRect);
 
   void RemoveUnusedAndResetWebRenderUserData();
+  void ClearCachedResources();
 
   // Those are data that we kept between transactions. We used to cache some
   // data in the layer. But in layers free mode, we don't have layer which
@@ -105,16 +128,16 @@ public:
       *aOutIsRecycled = true;
     }
 
-    nsIFrame::WebRenderUserDataTable* userDataTable =
-      frame->GetProperty(nsIFrame::WebRenderUserDataProperty());
+    WebRenderUserDataTable* userDataTable =
+      frame->GetProperty(WebRenderUserDataProperty::Key());
 
     if (!userDataTable) {
-      userDataTable = new nsIFrame::WebRenderUserDataTable();
-      frame->AddProperty(nsIFrame::WebRenderUserDataProperty(), userDataTable);
+      userDataTable = new WebRenderUserDataTable();
+      frame->AddProperty(WebRenderUserDataProperty::Key(), userDataTable);
     }
 
-    RefPtr<WebRenderUserData>& data = userDataTable->GetOrInsert(aItem->GetPerFrameKey());
-    if (!data || (data->GetType() != T::Type()) || !data->IsDataValid(mManager)) {
+    RefPtr<WebRenderUserData>& data = userDataTable->GetOrInsert(WebRenderUserDataKey(aItem->GetPerFrameKey(), T::Type()));
+    if (!data) {
       // To recreate a new user data, we should remove the data from the table first.
       if (data) {
         data->RemoveFromTable();
@@ -139,26 +162,10 @@ public:
     return res.forget();
   }
 
-public:
-  // Note: two DisplayItemClipChain* A and B might actually be "equal" (as per
-  // DisplayItemClipChain::Equal(A, B)) even though they are not the same pointer
-  // (A != B). In this hopefully-rare case, they will get separate entries
-  // in this map when in fact we could collapse them. However, to collapse
-  // them involves writing a custom hash function for the pointer type such that
-  // A and B hash to the same things whenever DisplayItemClipChain::Equal(A, B)
-  // is true, and that will incur a performance penalty for all the hashmap
-  // operations, so is probably not worth it. With the current code we might
-  // end up creating multiple clips in WR that are effectively identical but
-  // have separate clip ids. Hopefully this won't happen very often.
-  typedef std::unordered_map<const DisplayItemClipChain*, wr::WrClipId> ClipIdMap;
+  WebRenderLayerManager* mManager;
 
 private:
-  WebRenderLayerManager* mManager;
-  ClipIdMap mClipIdCache;
-
-  // These fields are used to save a copy of the display list for
-  // empty transactions in layers-free mode.
-  nsTArray<WebRenderParentCommand> mParentCommands;
+  ClipManager mClipManager;
 
   // We use this as a temporary data structure while building the mScrollData
   // inside a layers-free transaction.
@@ -174,6 +181,10 @@ private:
 
   // Store of WebRenderCanvasData objects for use in empty transactions
   CanvasDataSet mLastCanvasDatas;
+
+  // Whether consecutive inactive display items should be grouped into one
+  // blob image.
+  bool mDoGrouping;
 };
 
 } // namespace layers

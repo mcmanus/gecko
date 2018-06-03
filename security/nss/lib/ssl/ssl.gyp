@@ -13,6 +13,7 @@
         'authcert.c',
         'cmpcert.c',
         'dtlscon.c',
+        'dtls13con.c',
         'prelib.c',
         'selfencrypt.c',
         'ssl3con.c',
@@ -38,6 +39,7 @@
         'sslsecur.c',
         'sslsnce.c',
         'sslsock.c',
+        'sslspec.c',
         'ssltrace.c',
         'sslver.c',
         'tls13con.c',
@@ -58,14 +60,6 @@
           # Not Windows.
           'sources': [
             'unix_err.c'
-          ],
-        }],
-        [ 'ssl_enable_zlib==1', {
-          'dependencies': [
-            '<(DEPTH)/lib/zlib/zlib.gyp:nss_zlib'
-          ],
-          'defines': [
-            'NSS_SSL_ENABLE_ZLIB',
           ],
         }],
         [ 'fuzz_tls==1', {

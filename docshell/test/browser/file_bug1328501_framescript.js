@@ -1,5 +1,3 @@
-const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
-
 // Forward iframe loaded event.
 addEventListener("frames-loaded",
   e => sendAsyncMessage("test:frames-loaded"), true, true);
@@ -16,7 +14,7 @@ let requestObserver = {
       });
     }
   },
-  QueryInterface: XPCOMUtils.generateQI([
+  QueryInterface: ChromeUtils.generateQI([
     Ci.nsIObserver
   ])
 }

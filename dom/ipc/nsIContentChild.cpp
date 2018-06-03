@@ -7,6 +7,7 @@
 #include "nsIContentChild.h"
 
 #include "mozilla/dom/ContentChild.h"
+#include "mozilla/dom/ChildProcessMessageManager.h"
 #include "mozilla/dom/DOMTypes.h"
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/PermissionMessageUtils.h"
@@ -172,9 +173,8 @@ nsIContentChild::RecvAsyncMessage(const nsString& aMsg,
                                   const IPC::Principal& aPrincipal,
                                   const ClonedMessageData& aData)
 {
-  NS_LossyConvertUTF16toASCII messageNameCStr(aMsg);
-  AUTO_PROFILER_LABEL_DYNAMIC("nsIContentChild::RecvAsyncMessage", EVENTS,
-                              messageNameCStr.get());
+  AUTO_PROFILER_LABEL_DYNAMIC_LOSSY_NSSTRING(
+    "nsIContentChild::RecvAsyncMessage", EVENTS, aMsg);
 
   CrossProcessCpowHolder cpows(this, aCpows);
   RefPtr<nsFrameMessageManager> cpm = nsFrameMessageManager::GetChildProcessManager();
@@ -182,8 +182,8 @@ nsIContentChild::RecvAsyncMessage(const nsString& aMsg,
     ipc::StructuredCloneData data;
     ipc::UnpackClonedMessageDataForChild(aData, data);
 
-    cpm->ReceiveMessage(static_cast<nsIContentFrameMessageManager*>(cpm.get()), nullptr,
-                        aMsg, false, &data, &cpows, aPrincipal, nullptr);
+    cpm->ReceiveMessage(cpm, nullptr, aMsg, false, &data, &cpows, aPrincipal, nullptr,
+                        IgnoreErrors());
   }
   return IPC_OK();
 }

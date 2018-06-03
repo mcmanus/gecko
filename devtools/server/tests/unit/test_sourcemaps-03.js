@@ -17,9 +17,9 @@ function run_test() {
   initTestDebuggerServer();
   gDebuggee = addTestGlobal("test-source-map");
   gClient = new DebuggerClient(DebuggerServer.connectPipe());
-  gClient.connect().then(function () {
+  gClient.connect().then(function() {
     attachTestTabAndResume(gClient, "test-source-map",
-                           function (response, tabClient, threadClient) {
+                           function(response, tabClient, threadClient) {
                              gThreadClient = threadClient;
                              test_simple_source_map();
                            });
@@ -28,55 +28,55 @@ function run_test() {
 }
 
 function testBreakpointMapping(name, callback) {
-  Task.spawn(function* () {
-    let response = yield waitForPause(gThreadClient);
-    do_check_eq(response.why.type, "debuggerStatement");
+  (async function() {
+    let response = await waitForPause(gThreadClient);
+    Assert.equal(response.why.type, "debuggerStatement");
 
-    const source = yield getSource(gThreadClient, "http://example.com/www/js/" + name + ".js");
-    response = yield setBreakpoint(source, {
+    const source = await getSource(gThreadClient, "http://example.com/www/js/" + name + ".js");
+    response = await setBreakpoint(source, {
       // Setting the breakpoint on an empty line so that it is pushed down one
       // line and we can check the source mapped actualLocation later.
       line: 3
     });
 
     // Should not slide breakpoints for sourcemapped sources
-    do_check_true(!response.actualLocation);
+    Assert.ok(!response.actualLocation);
 
-    yield setBreakpoint(source, { line: 4 });
+    await setBreakpoint(source, { line: 4 });
 
     // The eval will cause us to resume, then we get an unsolicited pause
     // because of our breakpoint, we resume again to finish the eval, and
     // finally receive our last pause which has the result of the client
     // evaluation.
-    response = yield gThreadClient.eval(null, name + "()");
-    do_check_eq(response.type, "resumed");
+    response = await gThreadClient.eval(null, name + "()");
+    Assert.equal(response.type, "resumed");
 
-    response = yield waitForPause(gThreadClient);
-    do_check_eq(response.why.type, "breakpoint");
+    response = await waitForPause(gThreadClient);
+    Assert.equal(response.why.type, "breakpoint");
     // Assert that we paused because of the breakpoint at the correct
     // location in the code by testing that the value of `ret` is still
     // undefined.
-    do_check_eq(response.frame.environment.bindings.variables.ret.value.type,
-                "undefined");
+    Assert.equal(response.frame.environment.bindings.variables.ret.value.type,
+                 "undefined");
 
-    response = yield resume(gThreadClient);
+    response = await resume(gThreadClient);
 
-    response = yield waitForPause(gThreadClient);
-    do_check_eq(response.why.type, "clientEvaluated");
-    do_check_eq(response.why.frameFinished.return, name);
+    response = await waitForPause(gThreadClient);
+    Assert.equal(response.why.type, "clientEvaluated");
+    Assert.equal(response.why.frameFinished.return, name);
 
-    response = yield resume(gThreadClient);
+    response = await resume(gThreadClient);
 
     callback();
-  });
+  })();
 
-  gDebuggee.eval("(" + function () {
+  gDebuggee.eval("(" + function() {
     debugger;
   } + "());");
 }
 
 function test_simple_source_map() {
-  let expectedSources = new Set([
+  const expectedSources = new Set([
     "http://example.com/www/js/a.js",
     "http://example.com/www/js/b.js",
     "http://example.com/www/js/c.js"
@@ -93,14 +93,14 @@ function test_simple_source_map() {
       finishClient(gClient);
     }
 
-    testBreakpointMapping("a", function () {
-      testBreakpointMapping("b", function () {
+    testBreakpointMapping("a", function() {
+      testBreakpointMapping("b", function() {
         testBreakpointMapping("c", finish);
       });
     });
   });
 
-  let a = new SourceNode(null, null, null, [
+  const a = new SourceNode(null, null, null, [
     new SourceNode(1, 0, "a.js", "function a() {\n"),
     new SourceNode(2, 0, "a.js", "  var ret;\n"),
     new SourceNode(3, 0, "a.js", "  // Empty line\n"),
@@ -108,7 +108,7 @@ function test_simple_source_map() {
     new SourceNode(5, 0, "a.js", "  return ret;\n"),
     new SourceNode(6, 0, "a.js", "}\n")
   ]);
-  let b = new SourceNode(null, null, null, [
+  const b = new SourceNode(null, null, null, [
     new SourceNode(1, 0, "b.js", "function b() {\n"),
     new SourceNode(2, 0, "b.js", "  var ret;\n"),
     new SourceNode(3, 0, "b.js", "  // Empty line\n"),
@@ -116,7 +116,7 @@ function test_simple_source_map() {
     new SourceNode(5, 0, "b.js", "  return ret;\n"),
     new SourceNode(6, 0, "b.js", "}\n")
   ]);
-  let c = new SourceNode(null, null, null, [
+  const c = new SourceNode(null, null, null, [
     new SourceNode(1, 0, "c.js", "function c() {\n"),
     new SourceNode(2, 0, "c.js", "  var ret;\n"),
     new SourceNode(3, 0, "c.js", "  // Empty line\n"),
@@ -134,6 +134,6 @@ function test_simple_source_map() {
 
   code += "//# sourceMappingURL=data:text/json;base64," + btoa(map.toString());
 
-  Components.utils.evalInSandbox(code, gDebuggee, "1.8",
-                                 "http://example.com/www/js/abc.js", 1);
+  Cu.evalInSandbox(code, gDebuggee, "1.8",
+                   "http://example.com/www/js/abc.js", 1);
 }

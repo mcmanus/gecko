@@ -12,8 +12,6 @@
 #include "nsCOMArray.h"
 #include "nsCOMPtr.h"
 #include "nsIChannelEventSink.h"
-#include "nsIDOMDocument.h"
-#include "nsIDOMNode.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIMutableArray.h"
 #include "nsIObserver.h"
@@ -343,7 +341,7 @@ public:
     nsresult Schedule(nsIURI *aManifestURI,
                       nsIURI *aDocumentURI,
                       nsIPrincipal* aLoadingPrincipal,
-                      nsIDOMDocument *aDocument,
+                      nsIDocument *aDocument,
                       nsPIDOMWindowInner* aWindow,
                       nsIFile* aCustomProfileDir,
                       nsIOfflineCacheUpdate **aUpdate);
@@ -356,8 +354,7 @@ public:
      */
     static nsOfflineCacheUpdateService *EnsureService();
 
-    /** Addrefs and returns the singleton nsOfflineCacheUpdateService. */
-    static nsOfflineCacheUpdateService *GetInstance();
+    static already_AddRefed<nsOfflineCacheUpdateService> GetInstance();
 
     static nsresult OfflineAppPinnedForURI(nsIURI *aDocumentURI,
                                            nsIPrefBranch *aPrefBranch,

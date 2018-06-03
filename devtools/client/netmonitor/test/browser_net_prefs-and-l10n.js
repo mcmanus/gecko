@@ -7,14 +7,14 @@
  * Tests if the preferences and localization objects work correctly.
  */
 
-add_task(function* () {
-  let { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
+add_task(async function() {
+  const { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
 
-  let { monitor } = yield initNetMonitor(SIMPLE_URL);
+  const { monitor } = await initNetMonitor(SIMPLE_URL);
   info("Starting test... ");
 
-  let { windowRequire } = monitor.panelWin;
-  let { Prefs } = windowRequire("devtools/client/netmonitor/src/utils/prefs");
+  const { windowRequire } = monitor.panelWin;
+  const { Prefs } = windowRequire("devtools/client/netmonitor/src/utils/prefs");
 
   testL10N();
   testPrefs();
@@ -33,8 +33,8 @@ add_task(function* () {
       Services.prefs.getIntPref("devtools.netmonitor.panes-network-details-width"),
       "Getting a pref should work correctly.");
 
-    let previousValue = Prefs.networkDetailsWidth;
-    let bogusValue = ~~(Math.random() * 100);
+    const previousValue = Prefs.networkDetailsWidth;
+    const bogusValue = ~~(Math.random() * 100);
     Prefs.networkDetailsWidth = bogusValue;
     is(Prefs.networkDetailsWidth,
       Services.prefs.getIntPref("devtools.netmonitor.panes-network-details-width"),

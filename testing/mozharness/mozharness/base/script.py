@@ -150,6 +150,23 @@ class ScriptMixin(PlatformMixin):
     env = None
     script_obj = None
 
+    def query_filesize(self, file_path):
+        self.info("Determining filesize for %s" % file_path)
+        length = os.path.getsize(file_path)
+        self.info(" %s" % str(length))
+        return length
+
+    # TODO this should be parallelized with the to-be-written BaseHelper!
+    def query_sha512sum(self, file_path):
+        self.info("Determining sha512sum for %s" % file_path)
+        m = hashlib.sha512()
+        contents = self.read_from_file(file_path, verbose=False,
+                                       open_mode='rb')
+        m.update(contents)
+        sha512 = m.hexdigest()
+        self.info(" %s" % sha512)
+        return sha512
+
     def platform_name(self):
         """ Return the platform name on which the script is running on.
         Returns:
@@ -1254,7 +1271,7 @@ class ScriptMixin(PlatformMixin):
             repl_dict.update(dirs)
         if isinstance(exe, dict):
             found = False
-            # allow for searchable paths of the buildbot exe
+            # allow for searchable paths of the exe
             for name, path in exe.iteritems():
                 if isinstance(path, list) or isinstance(path, tuple):
                     path = [x % repl_dict for x in path]
@@ -1366,7 +1383,11 @@ class ScriptMixin(PlatformMixin):
                 self.info("Using partial env: %s" % pprint.pformat(partial_env))
                 env = self.query_env(partial_env=partial_env)
         else:
-            self.info("Using env: %s" % pprint.pformat(env))
+            if hasattr(self, 'previous_env') and env == self.previous_env:
+                self.info("Using env: (same as previous command)")
+            else:
+                self.info("Using env: %s" % pprint.pformat(env))
+                self.previous_env = env
 
         if output_parser is None:
             parser = OutputParser(config=self.config, log_obj=self.log_obj,
@@ -1848,7 +1869,7 @@ class BaseScript(ScriptMixin, LogMixin, object):
         # easy-to-write-hard-to-debug writable config.
         #
         # To allow for other, script-specific configurations
-        # (e.g., buildbot props json parsing), before locking,
+        # (e.g., props json parsing), before locking,
         # call self._pre_config_lock().  If needed, this method can
         # alter self.config.
         self._pre_config_lock(rw_config)
@@ -2115,7 +2136,7 @@ class BaseScript(ScriptMixin, LogMixin, object):
         return self.abs_dirs
 
     def dump_config(self, file_path=None, config=None,
-                    console_output=True, exit_on_finish=False):
+                    console_output=False, exit_on_finish=False):
         """Dump self.config to localconfig.json
         """
         config = config or self.config

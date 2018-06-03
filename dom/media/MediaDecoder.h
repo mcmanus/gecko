@@ -7,11 +7,13 @@
 #if !defined(MediaDecoder_h_)
 #define MediaDecoder_h_
 
+#include "BackgroundVideoDecodingPermissionObserver.h"
 #include "DecoderDoctorDiagnostics.h"
 #include "MediaContainerType.h"
 #include "MediaDecoderOwner.h"
 #include "MediaEventSource.h"
 #include "MediaMetadataManager.h"
+#include "MediaPromiseDefs.h"
 #include "MediaResource.h"
 #include "MediaStatistics.h"
 #include "MediaStreamGraph.h"
@@ -23,7 +25,6 @@
 #include "mozilla/ReentrantMonitor.h"
 #include "mozilla/StateMirroring.h"
 #include "mozilla/StateWatching.h"
-#include "necko-config.h"
 #include "nsAutoPtr.h"
 #include "nsCOMPtr.h"
 #include "nsIObserver.h"
@@ -39,8 +40,8 @@ class FrameStatistics;
 class VideoFrameContainer;
 class MediaFormatReader;
 class MediaDecoderStateMachine;
+struct MediaPlaybackEvent;
 
-enum class MediaEventType : int8_t;
 enum class Visibility : uint8_t;
 
 // GetCurrentTime is defined in winbase.h as zero argument macro forwarding to
@@ -80,7 +81,9 @@ struct MOZ_STACK_CLASS MediaDecoderInit
   }
 };
 
-class MediaDecoder
+DDLoggedTypeDeclName(MediaDecoder);
+
+class MediaDecoder : public DecoderDoctorLifeLogger<MediaDecoder>
 {
 public:
   typedef MozPromise<bool /* aIgnored */, bool /* aIgnored */,
@@ -119,7 +122,7 @@ public:
   void NotifyXPCOMShutdown();
 
   // Called if the media file encounters a network error.
-  void NetworkError();
+  void NetworkError(const MediaResult& aError);
 
   // Return the principal of the current URI being played or downloaded.
   virtual already_AddRefed<nsIPrincipal> GetCurrentPrincipal() = 0;
@@ -131,14 +134,14 @@ public:
   // Seek to the time position in (seconds) from the start of the video.
   // If aDoFastSeek is true, we'll seek to the sync point/keyframe preceeding
   // the seek target.
-  virtual nsresult Seek(double aTime, SeekTarget::Type aSeekType);
+  void Seek(double aTime, SeekTarget::Type aSeekType);
 
   // Initialize state machine and schedule it.
   nsresult InitializeStateMachine();
 
   // Start playback of a video. 'Load' must have previously been
   // called.
-  virtual nsresult Play();
+  virtual void Play();
 
   // Notify activity of the decoder owner is changed.
   virtual void NotifyOwnerActivityChanged(bool aIsDocumentVisible,
@@ -176,10 +179,6 @@ public:
 
   // Return true if the stream is infinite.
   bool IsInfinite() const;
-
-  // Called as data arrives on the stream and is read into the cache.  Called
-  // on the main thread only.
-  void NotifyDataArrived();
 
   // Return true if we are currently seeking in the media resource.
   // Call on the main thread only.
@@ -310,6 +309,8 @@ private:
 
   void UpdateVideoDecodeMode();
 
+  void SetIsBackgroundVideoDecodingAllowed(bool aAllowed);
+
   /******
    * The following methods must only be called on the main
    * thread.
@@ -359,7 +360,7 @@ private:
     return mAbstractMainThread;
   }
 
-  void SetCDMProxy(CDMProxy* aProxy);
+  RefPtr<SetCDMPromise> SetCDMProxy(CDMProxy* aProxy);
 
   void EnsureTelemetryReported();
 
@@ -382,9 +383,9 @@ private:
     GetOwner()->UpdateReadyState();
   }
 
-  virtual MediaDecoderOwner::NextFrameStatus NextFrameStatus()
+  MediaDecoderOwner::NextFrameStatus NextFrameStatus() const
   {
-    return !IsEnded() ? mNextFrameStatus : MediaDecoderOwner::NEXT_FRAME_UNAVAILABLE;
+    return mNextFrameStatus;
   }
 
   virtual MediaDecoderOwner::NextFrameStatus NextFrameBufferedStatus();
@@ -393,7 +394,7 @@ private:
   // data. Used for debugging purposes.
   virtual void GetMozDebugReaderData(nsACString& aString);
 
-  virtual void DumpDebugInfo();
+  RefPtr<GenericPromise> DumpDebugInfo();
 
   using DebugInfoPromise = MozPromise<nsCString, bool, true>;
   RefPtr<DebugInfoPromise> RequestDebugInfo();
@@ -428,7 +429,7 @@ protected:
     DurationChanged();
   }
 
-  virtual void OnPlaybackEvent(MediaEventType aEvent);
+  virtual void OnPlaybackEvent(MediaPlaybackEvent&& aEvent);
 
   // Called when the metadata from the media file has been loaded by the
   // state machine. Call on the main thread only.
@@ -473,15 +474,9 @@ protected:
   static constexpr auto DEFAULT_NEXT_FRAME_AVAILABLE_BUFFERED =
     media::TimeUnit::FromMicroseconds(250000);
 
+  virtual nsCString GetDebugInfo();
+
 private:
-  // Ensures our media resource has been pinned.
-  virtual void PinForSeek() = 0;
-
-  // Ensures our media resource has been unpinned.
-  virtual void UnpinForSeek() = 0;
-
-  nsCString GetDebugInfo();
-
   // Called when the owner's activity changed.
   void NotifyCompositor();
 
@@ -494,13 +489,14 @@ private:
     mMediaSeekable = false;
   }
 
+  void OnNextFrameStatus(MediaDecoderOwner::NextFrameStatus);
+
   void FinishShutdown();
 
   void ConnectMirrors(MediaDecoderStateMachine* aObject);
   void DisconnectMirrors();
 
   virtual bool CanPlayThroughImpl() = 0;
-  virtual bool IsLiveStream() = 0;
 
   // The state machine object for handling the decoding. It is safe to
   // call methods of this object from other threads. Its internal data
@@ -512,17 +508,13 @@ private:
   RefPtr<MediaDecoderStateMachine> mDecoderStateMachine;
 
 protected:
-  void NotifyDataArrivedInternal();
+  void NotifyReaderDataArrived();
   void DiscardOngoingSeekIfExists();
   virtual void CallSeek(const SeekTarget& aTarget);
 
-  // Called to notify fetching media data is in progress.
-  // Called on the main thread only.
-  virtual void DownloadProgressed();
-
   // Called by MediaResource when the principal of the resource has
   // changed. Called on main thread only.
-  void NotifyPrincipalChanged();
+  virtual void NotifyPrincipalChanged();
 
   MozPromiseRequestHolder<SeekPromise> mSeekRequest;
 
@@ -579,6 +571,9 @@ protected:
   // disabled.
   bool mHasSuspendTaint;
 
+  MediaDecoderOwner::NextFrameStatus mNextFrameStatus =
+    MediaDecoderOwner::NEXT_FRAME_UNAVAILABLE;
+
   // A listener to receive metadata updates from MDSM.
   MediaEventListener mTimedMetadataListener;
 
@@ -592,6 +587,7 @@ protected:
   MediaEventListener mOnEncrypted;
   MediaEventListener mOnWaitingForKey;
   MediaEventListener mOnDecodeWarning;
+  MediaEventListener mOnNextFrameStatus;
 
 protected:
   // PlaybackRate and pitch preservation status we should start at.
@@ -600,20 +596,11 @@ protected:
   // Buffered range, mirrored from the reader.
   Mirror<media::TimeIntervals> mBuffered;
 
-  // NextFrameStatus, mirrored from the state machine.
-  Mirror<MediaDecoderOwner::NextFrameStatus> mNextFrameStatus;
-
   // NB: Don't use mCurrentPosition directly, but rather CurrentPosition().
   Mirror<media::TimeUnit> mCurrentPosition;
 
   // Duration of the media resource according to the state machine.
   Mirror<media::NullableTimeUnit> mStateMachineDuration;
-
-  // Current playback position in the stream. This is (approximately)
-  // where we're up to playing back the stream. This is not adjusted
-  // during decoder seek operations, but it's updated at the end when we
-  // start playing back again.
-  Mirror<int64_t> mPlaybackPosition;
 
   // Used to distinguish whether the audio is producing sound.
   Mirror<bool> mIsAudioDataAudible;
@@ -652,18 +639,11 @@ protected:
   // We can allow video decoding in background when we match some special
   // conditions, eg. when the cursor is hovering over the tab. This observer is
   // used to listen the related events.
-  class BackgroundVideoDecodingPermissionObserver;
   RefPtr<BackgroundVideoDecodingPermissionObserver> mVideoDecodingOberver;
 
   // True if we want to resume video decoding even the media element is in the
   // background.
   bool mIsBackgroundVideoDecodingAllowed;
-
-  // Current decoding position in the stream. This is where the decoder
-  // is up to consuming the stream. This is not adjusted during decoder
-  // seek operations, but it's updated at the end when we start playing
-  // back again.
-  int64_t mDecoderPosition = 0;
 
 public:
   AbstractCanonical<double>* CanonicalVolume() { return &mVolume; }

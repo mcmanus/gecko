@@ -11,12 +11,12 @@ use invalidation::element::restyle_hints::RestyleHint;
 #[cfg(feature = "gecko")]
 use malloc_size_of::MallocSizeOfOps;
 use properties::ComputedValues;
-use properties::longhands::display::computed_value as display;
 use rule_tree::StrongRuleNode;
-use selector_parser::{EAGER_PSEUDO_COUNT, PseudoElement, RestyleDamage};
+use selector_parser::{PseudoElement, RestyleDamage, EAGER_PSEUDO_COUNT};
 use selectors::NthIndexCache;
 use servo_arc::Arc;
 use shared_lock::StylesheetGuards;
+use smallvec::SmallVec;
 use std::fmt;
 use std::mem;
 use std::ops::{Deref, DerefMut};
@@ -25,9 +25,9 @@ use style_resolver::{PrimaryStyle, ResolvedElementStyles, ResolvedStyle};
 bitflags! {
     /// Various flags stored on ElementData.
     #[derive(Default)]
-    pub flags ElementDataFlags: u8 {
+    pub struct ElementDataFlags: u8 {
         /// Whether the styles changed for this restyle.
-        const WAS_RESTYLED = 1 << 0,
+        const WAS_RESTYLED = 1 << 0;
         /// Whether the last traversal of this element did not do
         /// any style computation. This is not true during the initial
         /// styling pass, nor is it true when we restyle (in which case
@@ -36,16 +36,17 @@ bitflags! {
         /// This bit always corresponds to the last time the element was
         /// traversed, so each traversal simply updates it with the appropriate
         /// value.
-        const TRAVERSED_WITHOUT_STYLING = 1 << 1,
-        /// Whether we reframed/reconstructed any ancestor or self.
-        const ANCESTOR_WAS_RECONSTRUCTED = 1 << 2,
-        /// Whether the primary style of this element data was reused from another
-        /// element via a rule node comparison. This allows us to differentiate
-        /// between elements that shared styles because they met all the criteria
-        /// of the style sharing cache, compared to elements that reused style
-        /// structs via rule node identity. The former gives us stronger transitive
-        /// guarantees that allows us to apply the style sharing cache to cousins.
-        const PRIMARY_STYLE_REUSED_VIA_RULE_NODE = 1 << 3,
+        const TRAVERSED_WITHOUT_STYLING = 1 << 1;
+
+        /// Whether the primary style of this element data was reused from
+        /// another element via a rule node comparison. This allows us to
+        /// differentiate between elements that shared styles because they met
+        /// all the criteria of the style sharing cache, compared to elements
+        /// that reused style structs via rule node identity.
+        ///
+        /// The former gives us stronger transitive guarantees that allows us to
+        /// apply the style sharing cache to cousins.
+        const PRIMARY_STYLE_REUSED_VIA_RULE_NODE = 1 << 2;
     }
 }
 
@@ -94,7 +95,12 @@ impl fmt::Debug for EagerPseudoArray {
         write!(f, "EagerPseudoArray {{ ")?;
         for i in 0..EAGER_PSEUDO_COUNT {
             if let Some(ref values) = self[i] {
-                write!(f, "{:?}: {:?}, ", PseudoElement::from_eager_index(i), &values.rules)?;
+                write!(
+                    f,
+                    "{:?}: {:?}, ",
+                    PseudoElement::from_eager_index(i),
+                    &values.rules
+                )?;
             }
         }
         write!(f, "}}")
@@ -131,7 +137,9 @@ impl EagerPseudoStyles {
     /// Returns a reference to the style for a given eager pseudo, if it exists.
     pub fn get(&self, pseudo: &PseudoElement) -> Option<&Arc<ComputedValues>> {
         debug_assert!(pseudo.is_eager());
-        self.0.as_ref().and_then(|p| p[pseudo.eager_index()].as_ref())
+        self.0
+            .as_ref()
+            .and_then(|p| p[pseudo.eager_index()].as_ref())
     }
 
     /// Sets the style for the eager pseudo.
@@ -167,7 +175,7 @@ impl ElementStyles {
 
     /// Whether this element `display` value is `none`.
     pub fn is_display_none(&self) -> bool {
-        self.primary().get_box().clone_display() == display::T::none
+        self.primary().get_box().clone_display().is_none()
     }
 
     #[cfg(feature = "gecko")]
@@ -187,8 +195,12 @@ impl ElementStyles {
 // substitute the rule node instead.
 impl fmt::Debug for ElementStyles {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ElementStyles {{ primary: {:?}, pseudos: {:?} }}",
-               self.primary.as_ref().map(|x| &x.rules), self.pseudos)
+        write!(
+            f,
+            "ElementStyles {{ primary: {:?}, pseudos: {:?} }}",
+            self.primary.as_ref().map(|x| &x.rules),
+            self.pseudos
+        )
     }
 }
 
@@ -237,7 +249,7 @@ impl ElementData {
         element: E,
         shared_context: &SharedStyleContext,
         stack_limit_checker: Option<&StackLimitChecker>,
-        nth_index_cache: Option<&mut NthIndexCache>,
+        nth_index_cache: &mut NthIndexCache,
     ) -> InvalidationResult {
         // In animation-only restyle we shouldn't touch snapshot at all.
         if shared_context.traversal_flags.for_animation_only() {
@@ -245,30 +257,44 @@ impl ElementData {
         }
 
         use invalidation::element::invalidator::TreeStyleInvalidator;
+        use invalidation::element::state_and_attributes::StateAndAttrInvalidationProcessor;
 
-        debug!("invalidate_style_if_needed: {:?}, flags: {:?}, has_snapshot: {}, \
-                handled_snapshot: {}, pseudo: {:?}",
-                element,
-                shared_context.traversal_flags,
-                element.has_snapshot(),
-                element.handled_snapshot(),
-                element.implemented_pseudo_element());
+        debug!(
+            "invalidate_style_if_needed: {:?}, flags: {:?}, has_snapshot: {}, \
+             handled_snapshot: {}, pseudo: {:?}",
+            element,
+            shared_context.traversal_flags,
+            element.has_snapshot(),
+            element.handled_snapshot(),
+            element.implemented_pseudo_element()
+        );
 
         if !element.has_snapshot() || element.handled_snapshot() {
             return InvalidationResult::empty();
         }
 
-        let invalidator = TreeStyleInvalidator::new(
-            element,
-            Some(self),
+        let mut non_document_styles = SmallVec::<[_; 3]>::new();
+        let matches_doc_author_rules =
+            element.each_applicable_non_document_style_rule_data(|data, quirks_mode, host| {
+                non_document_styles.push((data, quirks_mode, host.map(|h| h.opaque())))
+            });
+
+        let mut processor = StateAndAttrInvalidationProcessor::new(
             shared_context,
-            stack_limit_checker,
+            &non_document_styles,
+            matches_doc_author_rules,
+            element,
+            self,
             nth_index_cache,
         );
 
+        let invalidator = TreeStyleInvalidator::new(element, stack_limit_checker, &mut processor);
+
         let result = invalidator.invalidate();
+
         unsafe { element.set_handled_snapshot() }
         debug_assert!(element.handled_snapshot());
+
         result
     }
 
@@ -288,8 +314,8 @@ impl ElementData {
 
     /// Returns this element's primary style as a resolved style to use for sharing.
     pub fn share_primary_style(&self) -> PrimaryStyle {
-        let reused_via_rule_node =
-            self.flags.contains(PRIMARY_STYLE_REUSED_VIA_RULE_NODE);
+        let reused_via_rule_node = self.flags
+            .contains(ElementDataFlags::PRIMARY_STYLE_REUSED_VIA_RULE_NODE);
 
         PrimaryStyle {
             style: ResolvedStyle(self.styles.primary().clone()),
@@ -300,19 +326,18 @@ impl ElementData {
     /// Sets a new set of styles, returning the old ones.
     pub fn set_styles(&mut self, new_styles: ResolvedElementStyles) -> ElementStyles {
         if new_styles.primary.reused_via_rule_node {
-            self.flags.insert(PRIMARY_STYLE_REUSED_VIA_RULE_NODE);
+            self.flags
+                .insert(ElementDataFlags::PRIMARY_STYLE_REUSED_VIA_RULE_NODE);
         } else {
-            self.flags.remove(PRIMARY_STYLE_REUSED_VIA_RULE_NODE);
+            self.flags
+                .remove(ElementDataFlags::PRIMARY_STYLE_REUSED_VIA_RULE_NODE);
         }
         mem::replace(&mut self.styles, new_styles.into())
     }
 
     /// Returns the kind of restyling that we're going to need to do on this
     /// element, based of the stored restyle hint.
-    pub fn restyle_kind(
-        &self,
-        shared_context: &SharedStyleContext
-    ) -> RestyleKind {
+    pub fn restyle_kind(&self, shared_context: &SharedStyleContext) -> RestyleKind {
         if shared_context.traversal_flags.for_animation_only() {
             return self.restyle_kind_for_animation(shared_context);
         }
@@ -326,25 +351,29 @@ impl ElementData {
         }
 
         if self.hint.has_replacements() {
-            debug_assert!(!self.hint.has_animation_hint(),
-                          "Animation only restyle hint should have already processed");
+            debug_assert!(
+                !self.hint.has_animation_hint(),
+                "Animation only restyle hint should have already processed"
+            );
             return RestyleKind::CascadeWithReplacements(self.hint & RestyleHint::replacements());
         }
 
-        debug_assert!(self.hint.has_recascade_self(),
-                      "We definitely need to do something: {:?}!", self.hint);
+        debug_assert!(
+            self.hint.has_recascade_self(),
+            "We definitely need to do something: {:?}!",
+            self.hint
+        );
         return RestyleKind::CascadeOnly;
     }
 
     /// Returns the kind of restyling for animation-only restyle.
-    fn restyle_kind_for_animation(
-        &self,
-        shared_context: &SharedStyleContext,
-    ) -> RestyleKind {
+    fn restyle_kind_for_animation(&self, shared_context: &SharedStyleContext) -> RestyleKind {
         debug_assert!(shared_context.traversal_flags.for_animation_only());
-        debug_assert!(self.has_styles(),
-                      "Unstyled element shouldn't be traversed during \
-                       animation-only traversal");
+        debug_assert!(
+            self.has_styles(),
+            "Unstyled element shouldn't be traversed during \
+             animation-only traversal"
+        );
 
         // return either CascadeWithReplacements or CascadeOnly in case of
         // animation-only restyle. I.e. animation-only restyle never does
@@ -367,11 +396,13 @@ impl ElementData {
     pub fn important_rules_are_different(
         &self,
         rules: &StrongRuleNode,
-        guards: &StylesheetGuards
+        guards: &StylesheetGuards,
     ) -> bool {
         debug_assert!(self.has_styles());
-        let (important_rules, _custom) =
-            self.styles.primary().rules().get_properties_overriding_animations(&guards);
+        let (important_rules, _custom) = self.styles
+            .primary()
+            .rules()
+            .get_properties_overriding_animations(&guards);
         let (other_important_rules, _custom) = rules.get_properties_overriding_animations(&guards);
         important_rules != other_important_rules
     }
@@ -390,13 +421,7 @@ impl ElementData {
     #[inline]
     pub fn clear_restyle_flags_and_damage(&mut self) {
         self.damage = RestyleDamage::empty();
-        self.flags.remove(WAS_RESTYLED | ANCESTOR_WAS_RECONSTRUCTED)
-    }
-
-    /// Returns whether this element or any ancestor is going to be
-    /// reconstructed.
-    pub fn reconstructed_self_or_ancestor(&self) -> bool {
-        self.reconstructed_ancestor() || self.reconstructed_self()
+        self.flags.remove(ElementDataFlags::WAS_RESTYLED);
     }
 
     /// Returns whether this element is going to be reconstructed.
@@ -404,45 +429,31 @@ impl ElementData {
         self.damage.contains(RestyleDamage::reconstruct())
     }
 
-    /// Returns whether any ancestor of this element is going to be
-    /// reconstructed.
-    fn reconstructed_ancestor(&self) -> bool {
-        self.flags.contains(ANCESTOR_WAS_RECONSTRUCTED)
-    }
-
-    /// Sets the flag that tells us whether we've reconstructed an ancestor.
-    pub fn set_reconstructed_ancestor(&mut self, reconstructed: bool) {
-        if reconstructed {
-            // If it weren't for animation-only traversals, we could assert
-            // `!self.reconstructed_ancestor()` here.
-            self.flags.insert(ANCESTOR_WAS_RECONSTRUCTED);
-        } else {
-            self.flags.remove(ANCESTOR_WAS_RECONSTRUCTED);
-        }
-    }
-
     /// Mark this element as restyled, which is useful to know whether we need
     /// to do a post-traversal.
     pub fn set_restyled(&mut self) {
-        self.flags.insert(WAS_RESTYLED);
-        self.flags.remove(TRAVERSED_WITHOUT_STYLING);
+        self.flags.insert(ElementDataFlags::WAS_RESTYLED);
+        self.flags
+            .remove(ElementDataFlags::TRAVERSED_WITHOUT_STYLING);
     }
 
     /// Returns true if this element was restyled.
     #[inline]
     pub fn is_restyle(&self) -> bool {
-        self.flags.contains(WAS_RESTYLED)
+        self.flags.contains(ElementDataFlags::WAS_RESTYLED)
     }
 
     /// Mark that we traversed this element without computing any style for it.
     pub fn set_traversed_without_styling(&mut self) {
-        self.flags.insert(TRAVERSED_WITHOUT_STYLING);
+        self.flags
+            .insert(ElementDataFlags::TRAVERSED_WITHOUT_STYLING);
     }
 
     /// Returns whether the element was traversed without computing any style for
     /// it.
     pub fn traversed_without_styling(&self) -> bool {
-        self.flags.contains(TRAVERSED_WITHOUT_STYLING)
+        self.flags
+            .contains(ElementDataFlags::TRAVERSED_WITHOUT_STYLING)
     }
 
     /// Returns whether this element has been part of a restyle.
@@ -450,20 +461,6 @@ impl ElementData {
     pub fn contains_restyle_data(&self) -> bool {
         self.is_restyle() || !self.hint.is_empty() || !self.damage.is_empty()
     }
-
-    /// If an ancestor is already getting reconstructed by Gecko's top-down
-    /// frame constructor, no need to apply damage.  Similarly if we already
-    /// have an explicitly stored ReconstructFrame hint.
-    ///
-    /// See https://bugzilla.mozilla.org/show_bug.cgi?id=1301258#c12
-    /// for followup work to make the optimization here more optimal by considering
-    /// each bit individually.
-    #[cfg(feature = "gecko")]
-    pub fn skip_applying_damage(&self) -> bool { self.reconstructed_self_or_ancestor() }
-
-    /// N/A in Servo.
-    #[cfg(feature = "servo")]
-    pub fn skip_applying_damage(&self) -> bool { false }
 
     /// Returns whether it is safe to perform cousin sharing based on the ComputedValues
     /// identity of the primary style in this ElementData. There are a few subtle things
@@ -484,7 +481,10 @@ impl ElementData {
     /// happens later in the styling pipeline. The former gives us the stronger guarantees
     /// we need for style sharing, the latter does not.
     pub fn safe_for_cousin_sharing(&self) -> bool {
-        !self.flags.intersects(TRAVERSED_WITHOUT_STYLING | PRIMARY_STYLE_REUSED_VIA_RULE_NODE)
+        !self.flags.intersects(
+            ElementDataFlags::TRAVERSED_WITHOUT_STYLING |
+                ElementDataFlags::PRIMARY_STYLE_REUSED_VIA_RULE_NODE,
+        )
     }
 
     /// Measures memory usage.

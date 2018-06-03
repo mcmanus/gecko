@@ -15,6 +15,8 @@
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/dom/DOMException.h"
 #include "mozilla/dom/DOMStringList.h"
+#include "mozilla/dom/WorkerHolder.h"
+#include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "nsAutoPtr.h"
 #include "nsPIDOMWindow.h"
@@ -23,8 +25,6 @@
 #include "nsTHashtable.h"
 #include "ProfilerHelpers.h"
 #include "ReportInternalError.h"
-#include "WorkerHolder.h"
-#include "WorkerPrivate.h"
 
 // Include this last to avoid path problems on Windows.
 #include "ActorsChild.h"
@@ -33,11 +33,9 @@ namespace mozilla {
 namespace dom {
 
 using namespace mozilla::dom::indexedDB;
-using namespace mozilla::dom::workers;
 using namespace mozilla::ipc;
 
-class IDBTransaction::WorkerHolder final
-  : public mozilla::dom::workers::WorkerHolder
+class IDBTransaction::WorkerHolder final : public mozilla::dom::WorkerHolder
 {
   WorkerPrivate* mWorkerPrivate;
 
@@ -47,7 +45,8 @@ class IDBTransaction::WorkerHolder final
 
 public:
   WorkerHolder(WorkerPrivate* aWorkerPrivate, IDBTransaction* aTransaction)
-    : mWorkerPrivate(aWorkerPrivate)
+    : mozilla::dom::WorkerHolder("IDBTransaction::WorkerHolder")
+    , mWorkerPrivate(aWorkerPrivate)
     , mTransaction(aTransaction)
   {
     MOZ_ASSERT(aWorkerPrivate);
@@ -67,7 +66,7 @@ public:
 
 private:
   virtual bool
-  Notify(Status aStatus) override;
+  Notify(WorkerStatus aStatus) override;
 };
 
 IDBTransaction::IDBTransaction(IDBDatabase* aDatabase,
@@ -193,15 +192,11 @@ IDBTransaction::CreateVersionChange(
 
   transaction->SetScriptOwner(aDatabase->GetScriptOwner());
 
-  nsCOMPtr<nsIRunnable> runnable = do_QueryObject(transaction);
-  nsContentUtils::RunInMetastableState(runnable.forget());
-
   transaction->NoteActiveTransaction();
 
   transaction->mBackgroundActor.mVersionChangeBackgroundActor = aActor;
   transaction->mNextObjectStoreId = aNextObjectStoreId;
   transaction->mNextIndexId = aNextIndexId;
-  transaction->mCreating = true;
 
   aDatabase->RegisterTransaction(transaction);
   transaction->mRegistered = true;
@@ -247,11 +242,11 @@ IDBTransaction::Create(JSContext* aCx, IDBDatabase* aDatabase,
       return nullptr;
     }
 
-    transaction->mWorkerHolder = Move(workerHolder);
+    transaction->mWorkerHolder = std::move(workerHolder);
   }
 
   nsCOMPtr<nsIRunnable> runnable = do_QueryObject(transaction);
-  nsContentUtils::RunInMetastableState(runnable.forget());
+  nsContentUtils::AddPendingIDBTransaction(runnable.forget());
 
   transaction->mCreating = true;
 
@@ -826,9 +821,9 @@ IDBTransaction::FireCompleteOrAbortEvents(nsresult aResult)
 #endif
 
   // Make sure we drop the WorkerHolder when this function completes.
-  nsAutoPtr<WorkerHolder> workerHolder = Move(mWorkerHolder);
+  nsAutoPtr<WorkerHolder> workerHolder = std::move(mWorkerHolder);
 
-  nsCOMPtr<nsIDOMEvent> event;
+  RefPtr<Event> event;
   if (NS_SUCCEEDED(aResult)) {
     event = CreateGenericEvent(this,
                                nsDependentString(kCompleteEventType),
@@ -866,8 +861,9 @@ IDBTransaction::FireCompleteOrAbortEvents(nsresult aResult)
                  mAbortCode);
   }
 
-  bool dummy;
-  if (NS_FAILED(DispatchEvent(event, &dummy))) {
+  IgnoredErrorResult rv;
+  DispatchEvent(*event, rv);
+  if (rv.Failed()) {
     NS_WARNING("DispatchEvent failed!");
   }
 
@@ -1047,14 +1043,13 @@ IDBTransaction::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
   return IDBTransactionBinding::Wrap(aCx, this, aGivenProto);
 }
 
-nsresult
+void
 IDBTransaction::GetEventTargetParent(EventChainPreVisitor& aVisitor)
 {
   AssertIsOnOwningThread();
 
   aVisitor.mCanHandle = true;
-  aVisitor.mParentTarget = mDatabase;
-  return NS_OK;
+  aVisitor.SetParentTarget(mDatabase, false);
 }
 
 NS_IMETHODIMP
@@ -1077,7 +1072,7 @@ IDBTransaction::Run()
 
 bool
 IDBTransaction::
-WorkerHolder::Notify(Status aStatus)
+WorkerHolder::Notify(WorkerStatus aStatus)
 {
   MOZ_ASSERT(mWorkerPrivate);
   mWorkerPrivate->AssertIsOnWorkerThread();
@@ -1086,7 +1081,7 @@ WorkerHolder::Notify(Status aStatus)
   if (mTransaction && aStatus > Terminating) {
     mTransaction->AssertIsOnOwningThread();
 
-    RefPtr<IDBTransaction> transaction = Move(mTransaction);
+    RefPtr<IDBTransaction> transaction = std::move(mTransaction);
 
     if (!transaction->IsCommittingOrDone()) {
       IDB_REPORT_INTERNAL_ERR();

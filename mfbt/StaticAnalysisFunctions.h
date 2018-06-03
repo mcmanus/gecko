@@ -31,6 +31,12 @@
 template <typename T>
 static MOZ_ALWAYS_INLINE T* MOZ_KnownLive(T* ptr) { return ptr; }
 
+/**
+ * Ditto, but for references.
+ */
+template <typename T>
+static MOZ_ALWAYS_INLINE T& MOZ_KnownLive(T& ref) { return ref; }
+
 extern "C" {
 #endif
 
@@ -54,6 +60,7 @@ static MOZ_ALWAYS_INLINE bool MOZ_AssertAssignmentTest(bool exprResult) {
 #else
 
 #define MOZ_CHECK_ASSERT_ASSIGNMENT(expr) (!!(expr))
+#define MOZ_KnownLive(expr) (expr)
 
 #endif /* MOZ_CLANG_PLUGIN */
 #endif /* StaticAnalysisFunctions_h */

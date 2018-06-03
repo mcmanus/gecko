@@ -34,9 +34,9 @@ public:
    : mKey(*aKey),
      mForceCompositing(false)
   { }
-  nsSMILCompositor(const nsSMILCompositor& toCopy)
-    : mKey(toCopy.mKey),
-      mAnimationFunctions(toCopy.mAnimationFunctions),
+  nsSMILCompositor(nsSMILCompositor&& toMove)
+    : mKey(std::move(toMove.mKey)),
+      mAnimationFunctions(std::move(toMove.mAnimationFunctions)),
       mForceCompositing(false)
   { }
   ~nsSMILCompositor() { }
@@ -69,16 +69,16 @@ public:
 
   // Transfers |aOther|'s mCachedBaseValue to |this|
   void StealCachedBaseValue(nsSMILCompositor* aOther) {
-    mCachedBaseValue = mozilla::Move(aOther->mCachedBaseValue);
+    mCachedBaseValue = std::move(aOther->mCachedBaseValue);
   }
 
  private:
   // Create a nsISMILAttr for my target, on the heap.
   //
-  // @param aBaseStyleContext  An optional style context which, if set, will be
+  // @param aBaseComputedStyle  An optional ComputedStyle which, if set, will be
   //                           used when fetching the base style.
   mozilla::UniquePtr<nsISMILAttr>
-  CreateSMILAttr(nsStyleContext* aBaseStyleContext);
+  CreateSMILAttr(mozilla::ComputedStyle* aBaseComputedStyle);
 
   // Returns the CSS property this compositor should animate, or
   // eCSSProperty_UNKNOWN if this compositor does not animate a CSS property.

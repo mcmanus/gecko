@@ -5,8 +5,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "DummyMediaDataDecoder.h"
-#include "mp4_demuxer/AnnexB.h"
-#include "mp4_demuxer/H264.h"
+#include "AnnexB.h"
+#include "H264.h"
 #include "MP4Decoder.h"
 
 namespace mozilla {
@@ -16,12 +16,12 @@ DummyDataCreator::~DummyDataCreator() {}
 DummyMediaDataDecoder::DummyMediaDataDecoder(UniquePtr<DummyDataCreator>&& aCreator,
                                              const nsACString& aDescription,
                                              const CreateDecoderParams& aParams)
-  : mCreator(Move(aCreator))
+  : mCreator(std::move(aCreator))
   , mIsH264(MP4Decoder::IsH264(aParams.mConfig.mMimeType))
   , mMaxRefFrames(
       mIsH264
-      ? mp4_demuxer::H264::HasSPS(aParams.VideoConfig().mExtraData)
-        ? mp4_demuxer::H264::ComputeMaxRefFrames(aParams.VideoConfig().mExtraData)
+      ? H264::HasSPS(aParams.VideoConfig().mExtraData)
+        ? H264::ComputeMaxRefFrames(aParams.VideoConfig().mExtraData)
         : 16
       : 0)
   , mType(aParams.mConfig.GetType())

@@ -14,12 +14,11 @@ Test the PausedDebuggerOverlay highlighter.
 <script>
 "use strict";
 
-window.onload = function () {
+window.onload = function() {
   SimpleTest.waitForExplicitFinish();
 
-  const {utils: Cu} = Components;
-  const {require} = Cu.import("resource://devtools/shared/Loader.jsm", {});
-  require("devtools/server/actors/inspector");
+  const {require} = ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
+  require("devtools/server/actors/inspector/inspector");
   const {HighlighterEnvironment} = require("devtools/server/actors/highlighters");
   const {PausedDebuggerOverlay} = require("devtools/server/actors/highlighters/paused-debugger");
 
@@ -32,7 +31,7 @@ window.onload = function () {
   const id = elementID => `${highlighter.ID_CLASS_PREFIX}${elementID}`;
 
   function isHidden(elementID) {
-    let attr = anonymousContent.getAttributeForElement(id(elementID), "hidden");
+    const attr = anonymousContent.getAttributeForElement(id(elementID), "hidden");
     return typeof attr === "string" && attr == "true";
   }
 
@@ -41,7 +40,7 @@ window.onload = function () {
   }
 
   function isOverlayShown() {
-    let attr = anonymousContent.getAttributeForElement(id("root"), "overlay");
+    const attr = anonymousContent.getAttributeForElement(id("root"), "overlay");
     return typeof attr === "string" && attr == "true";
   }
 

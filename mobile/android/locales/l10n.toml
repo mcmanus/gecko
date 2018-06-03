@@ -5,6 +5,7 @@
 basepath = "../../.."
 
 locales = [
+    "ach",
     "an",
     "ar",
     "as",
@@ -15,6 +16,7 @@ locales = [
     "bn-BD",
     "bn-IN",
     "br",
+    "bs",
     "ca",
     "cak",
     "cs",
@@ -23,6 +25,7 @@ locales = [
     "de",
     "dsb",
     "el",
+    "en-CA",
     "en-GB",
     "en-ZA",
     "eo",
@@ -48,6 +51,7 @@ locales = [
     "hsb",
     "hu",
     "hy-AM",
+    "ia",
     "id",
     "is",
     "it",
@@ -55,12 +59,17 @@ locales = [
     "ka",
     "kab",
     "kk",
+    "km",
     "kn",
     "ko",
+    "lij",
     "lo",
     "lt",
+    "ltg",
     "lv",
     "mai",
+    "meh",
+    "mix",
     "ml",
     "mr",
     "ms",
@@ -69,6 +78,7 @@ locales = [
     "ne-NP",
     "nl",
     "nn-NO",
+    "oc",
     "or",
     "pa-IN",
     "pl",
@@ -86,26 +96,31 @@ locales = [
     "ta",
     "te",
     "th",
+    "tl",
     "tr",
     "trs",
     "uk",
     "ur",
     "uz",
+    "vi",
     "wo",
     "xh",
     "zam",
     "zh-CN",
     "zh-TW",
-    ]
+]
 
 [build]
 exclude-multi-locale = [
-    "be",
-    "bn-BD",
-    "ne-NP",
-    "trs",
-    "wo",
-    "zam",
+    "ach",
+    "en-CA",
+    "ia",
+    "km",
+    "lij",
+    "ltg",
+    "meh",
+    "mix",
+    "tl",
 ]
 
 [env]
@@ -143,10 +158,6 @@ exclude-multi-locale = [
 [[paths]]
     reference = "dom/locales/en-US/chrome/plugins.properties"
     l10n = "{l}dom/chrome/plugins.properties"
-
-[[paths]]
-    reference = "toolkit/locales/en-US/chrome/global/about.dtd"
-    l10n = "{l}toolkit/chrome/global/about.dtd"
 
 [[paths]]
     reference = "toolkit/locales/en-US/chrome/global/aboutAbout.dtd"

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,9 +13,11 @@
 
 #include "gfxContext.h"
 #include "gfxUtils.h"
+#include "mozilla/dom/ElementInlines.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/ServoStyleSetInlines.h"
+#include "nsCSSFrameConstructor.h"
 #include "nsDisplayList.h"
-#include "nsFrameManager.h"
 #include "nsLayoutUtils.h"
 #include "nsPresContext.h"
 #include "nsIFrameInlines.h"
@@ -24,10 +27,10 @@ using namespace mozilla;
 using namespace mozilla::gfx;
 
 nsIFrame*
-NS_NewPlaceholderFrame(nsIPresShell* aPresShell, nsStyleContext* aContext,
+NS_NewPlaceholderFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle,
                        nsFrameState aTypeBits)
 {
-  return new (aPresShell) nsPlaceholderFrame(aContext, aTypeBits);
+  return new (aPresShell) nsPlaceholderFrame(aStyle, aTypeBits);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsPlaceholderFrame)
@@ -176,7 +179,7 @@ ChildListIDForOutOfFlow(nsFrameState aPlaceholderState, const nsIFrame* aChild)
 }
 
 void
-nsPlaceholderFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsPlaceholderFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   nsIFrame* oof = mOutOfFlowFrame;
   if (oof) {
@@ -189,13 +192,13 @@ nsPlaceholderFrame::DestroyFrom(nsIFrame* aDestructRoot)
     if ((GetStateBits() & PLACEHOLDER_FOR_POPUP) ||
         !nsLayoutUtils::IsProperAncestorFrame(aDestructRoot, oof)) {
       ChildListID listId = ChildListIDForOutOfFlow(GetStateBits(), oof);
-      nsFrameManager* fm = PresContext()->GetPresShell()->FrameManager();
+      nsFrameManager* fm = PresContext()->FrameConstructor();
       fm->RemoveFrame(listId, oof);
     }
     // else oof will be destroyed by its parent
   }
 
-  nsFrame::DestroyFrom(aDestructRoot);
+  nsFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 /* virtual */ bool
@@ -209,25 +212,26 @@ nsPlaceholderFrame::CanContinueTextRun() const
   return mOutOfFlowFrame->CanContinueTextRun();
 }
 
-nsStyleContext*
-nsPlaceholderFrame::GetParentStyleContextForOutOfFlow(nsIFrame** aProviderFrame) const
+ComputedStyle*
+nsPlaceholderFrame::GetParentComputedStyleForOutOfFlow(nsIFrame** aProviderFrame) const
 {
-  NS_PRECONDITION(GetParent(), "How can we not have a parent here?");
+  MOZ_ASSERT(GetParent(), "How can we not have a parent here?");
 
-  nsIContent* parentContent = mContent ? mContent->GetFlattenedTreeParent() : nullptr;
-  if (parentContent) {
-    nsStyleContext* sc =
-      PresContext()->FrameManager()->GetDisplayContentsStyleFor(parentContent);
-    if (sc) {
-      *aProviderFrame = nullptr;
-      return sc;
-    }
+  Element* parentElement =
+    mContent ? mContent->GetFlattenedTreeParentElement() : nullptr;
+  if (parentElement && Servo_Element_IsDisplayContents(parentElement)) {
+    RefPtr<ComputedStyle> style =
+      PresShell()->StyleSet()->ResolveServoStyle(parentElement);
+    *aProviderFrame = nullptr;
+    // See the comment in GetParentComputedStyle to see why returning this as a
+    // weak ref is fine.
+    return style;
   }
 
   return GetLayoutParentStyleForOutOfFlow(aProviderFrame);
 }
 
-nsStyleContext*
+ComputedStyle*
 nsPlaceholderFrame::GetLayoutParentStyleForOutOfFlow(nsIFrame** aProviderFrame) const
 {
   // Lie about our pseudo so we can step out of all anon boxes and
@@ -235,7 +239,7 @@ nsPlaceholderFrame::GetLayoutParentStyleForOutOfFlow(nsIFrame** aProviderFrame) 
   // {ib} split gunk here.
   *aProviderFrame = CorrectStyleParentFrame(GetParent(),
                                             nsGkAtoms::placeholderFrame);
-  return *aProviderFrame ? (*aProviderFrame)->StyleContext() : nullptr;
+  return *aProviderFrame ? (*aProviderFrame)->Style() : nullptr;
 }
 
 
@@ -271,10 +275,10 @@ nsPlaceholderFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 
 #ifdef DEBUG
   if (GetShowFrameBorders()) {
-    aLists.Outlines()->AppendNewToTop(
-      new (aBuilder) nsDisplayGeneric(aBuilder, this, PaintDebugPlaceholder,
-                                      "DebugPlaceholder",
-                                      DisplayItemType::TYPE_DEBUG_PLACEHOLDER));
+    aLists.Outlines()->AppendToTop(
+      MakeDisplayItem<nsDisplayGeneric>(aBuilder, this, PaintDebugPlaceholder,
+                                        "DebugPlaceholder",
+                                        DisplayItemType::TYPE_DEBUG_PLACEHOLDER));
   }
 #endif
 }

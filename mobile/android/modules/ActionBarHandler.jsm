@@ -4,13 +4,12 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+var EXPORTED_SYMBOLS = ["ActionBarHandler"];
 
-this.EXPORTED_SYMBOLS = ["ActionBarHandler"];
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
+  BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
   EventDispatcher: "resource://gre/modules/Messaging.jsm",
   GeckoViewUtils: "resource://gre/modules/GeckoViewUtils.jsm",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
@@ -51,6 +50,8 @@ var ActionBarHandler = {
    * (mozcaretstatechanged) events.
    */
   handleEvent: function(e) {
+    e.stopImmediatePropagation();
+
     // Close an open ActionBar, if carets no longer logically visible.
     if (this._selectionID && !e.caretVisible) {
       this._uninit(false);
@@ -207,8 +208,8 @@ var ActionBarHandler = {
     }
 
     // Return focused editable text element and its window.
-    if (((element instanceof Ci.nsIDOMHTMLInputElement) && element.mozIsTextField(false)) ||
-        (element instanceof Ci.nsIDOMHTMLTextAreaElement) ||
+    if (((ChromeUtils.getClassName(element) === "HTMLInputElement") && element.mozIsTextField(false)) ||
+        (ChromeUtils.getClassName(element) === "HTMLTextAreaElement") ||
         element.isContentEditable) {
       return [element, win];
     }
@@ -389,7 +390,7 @@ var ActionBarHandler = {
         if (element) {
           // If we have an active composition string, commit it, and
           // ensure proper element focus.
-          let editor = ActionBarHandler._getEditor(element, win)
+          let editor = ActionBarHandler._getEditor(element, win);
           if (editor.composing) {
             element.blur();
             element.focus();
@@ -416,7 +417,8 @@ var ActionBarHandler = {
             return false;
           }
           // Don't allow "cut" from password fields.
-          if (element instanceof Ci.nsIDOMHTMLInputElement &&
+          if (element &&
+              ChromeUtils.getClassName(element) === "HTMLInputElement" &&
               !element.mozIsTextField(true)) {
             return false;
           }
@@ -457,7 +459,8 @@ var ActionBarHandler = {
       selector: {
         matches: function(element, win) {
           // Don't allow "copy" from password fields.
-          if (element instanceof Ci.nsIDOMHTMLInputElement &&
+          if (element &&
+              ChromeUtils.getClassName(element) === "HTMLInputElement" &&
               !element.mozIsTextField(true)) {
             return false;
           }
@@ -562,7 +565,7 @@ var ActionBarHandler = {
       },
 
       action: function(element, win) {
-        let selectedText = ActionBarHandler._getSelectedText();
+        let selectedText = BrowserUtils.trimSelection(ActionBarHandler._getSelectedText());
         ActionBarHandler._uninit();
 
         // Set current tab as parent of new tab,
@@ -605,7 +608,7 @@ var ActionBarHandler = {
           if (!chrome.SearchEngines) {
             return false;
           }
-          if (!(element instanceof Ci.nsIDOMHTMLInputElement)) {
+          if (!element || ChromeUtils.getClassName(element) !== "HTMLInputElement") {
             return false;
           }
           let form = element.form;
@@ -743,11 +746,10 @@ var ActionBarHandler = {
 
     // Textarea can contain LF, etc.
     if (this._targetElement &&
-        this._targetElement instanceof Ci.nsIDOMHTMLTextAreaElement) {
+        ChromeUtils.getClassName(this._targetElement) === "HTMLTextAreaElement") {
       let flags = Ci.nsIDocumentEncoder.OutputPreformatted |
         Ci.nsIDocumentEncoder.OutputRaw;
-      return selection.QueryInterface(Ci.nsISelectionPrivate).
-        toStringWithFormat("text/plain", flags, 0);
+      return selection.toStringWithFormat("text/plain", flags, 0);
     }
 
     // Return explicitly selected text.
@@ -755,7 +757,7 @@ var ActionBarHandler = {
   },
 
   /**
-   * Provides the nsISelection for either an editor, or from the
+   * Provides the Selection for either an editor, or from the
    * default window.
    */
   _getSelection: function(element = this._targetElement, win = this._contentWindow) {

@@ -6,12 +6,13 @@
 
 const {
   EXTENSION_SIDEBAR_OBJECT_TREEVIEW_UPDATE,
+  EXTENSION_SIDEBAR_OBJECT_GRIP_VIEW_UPDATE,
   EXTENSION_SIDEBAR_REMOVE,
 } = require("../actions/index");
 
 const INITIAL_SIDEBAR = {};
 
-let reducers = {
+const reducers = {
 
   [EXTENSION_SIDEBAR_OBJECT_TREEVIEW_UPDATE](sidebar, {sidebarId, object}) {
     // Update the sidebar to a "object-treeview" which shows
@@ -24,6 +25,20 @@ let reducers = {
     });
   },
 
+  [EXTENSION_SIDEBAR_OBJECT_GRIP_VIEW_UPDATE](
+    sidebar, {sidebarId, objectValueGrip, rootTitle}
+  ) {
+    // Update the sidebar to a "object-treeview" which shows
+    // the passed object.
+    return Object.assign({}, sidebar, {
+      [sidebarId]: {
+        viewMode: "object-value-grip-view",
+        objectValueGrip,
+        rootTitle,
+      }
+    });
+  },
+
   [EXTENSION_SIDEBAR_REMOVE](sidebar, {sidebarId}) {
     // Remove the sidebar from the Redux store.
     delete sidebar[sidebarId];
@@ -32,8 +47,8 @@ let reducers = {
 
 };
 
-module.exports = function (sidebar = INITIAL_SIDEBAR, action) {
-  let reducer = reducers[action.type];
+module.exports = function(sidebar = INITIAL_SIDEBAR, action) {
+  const reducer = reducers[action.type];
   if (!reducer) {
     return sidebar;
   }

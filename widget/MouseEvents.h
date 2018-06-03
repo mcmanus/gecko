@@ -12,22 +12,6 @@
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/dom/DataTransfer.h"
 #include "nsCOMPtr.h"
-#include "nsIDOMMouseEvent.h"
-#include "nsIDOMWheelEvent.h"
-
-/******************************************************************************
- * nsDragDropEventStatus
- ******************************************************************************/
-
-enum nsDragDropEventStatus
-{  
-  // The event is a enter
-  nsDragDropEventStatus_eDragEntered,
-  // The event is exit
-  nsDragDropEventStatus_eDragExited,
-  // The event is drop
-  nsDragDropEventStatus_eDrop
-};
 
 namespace mozilla {
 
@@ -35,6 +19,17 @@ namespace dom {
   class PBrowserParent;
   class PBrowserChild;
 } // namespace dom
+
+class WidgetPointerEvent;
+class WidgetPointerEventHolder final
+{
+public:
+  nsTArray<WidgetPointerEvent> mEvents;
+  NS_INLINE_DECL_REFCOUNTING(WidgetPointerEventHolder)
+
+private:
+  virtual ~WidgetPointerEventHolder() {}
+};
 
 /******************************************************************************
  * mozilla::WidgetPointerHelper
@@ -49,6 +44,7 @@ public:
   uint32_t twist;
   float tangentialPressure;
   bool convertToPointer;
+  RefPtr<WidgetPointerEventHolder> mCoalescedWidgetEvents;
 
   WidgetPointerHelper()
     : pointerId(0)
@@ -71,7 +67,19 @@ public:
   {
   }
 
-  void AssignPointerHelperData(const WidgetPointerHelper& aEvent)
+  explicit WidgetPointerHelper(const WidgetPointerHelper& aHelper)
+    : pointerId(aHelper.pointerId)
+    , tiltX(aHelper.tiltX)
+    , tiltY(aHelper.tiltY)
+    , twist(aHelper.twist)
+    , tangentialPressure(aHelper.tangentialPressure)
+    , convertToPointer(aHelper.convertToPointer)
+    , mCoalescedWidgetEvents(aHelper.mCoalescedWidgetEvents)
+  {
+  }
+
+  void AssignPointerHelperData(const WidgetPointerHelper& aEvent,
+                               bool aCopyCoalescedEvents = false)
   {
     pointerId = aEvent.pointerId;
     tiltX = aEvent.tiltX;
@@ -79,6 +87,9 @@ public:
     twist = aEvent.twist;
     tangentialPressure = aEvent.tangentialPressure;
     convertToPointer = aEvent.convertToPointer;
+    if (aCopyCoalescedEvents) {
+      mCoalescedWidgetEvents = aEvent.mCoalescedWidgetEvents;
+    }
   }
 };
 
@@ -98,7 +109,9 @@ protected:
     , buttons(0)
     , pressure(0)
     , hitCluster(false)
-    , inputSource(nsIDOMMouseEvent::MOZ_SOURCE_MOUSE)
+    // Including MouseEventBinding.h here leads to an include loop, so
+    // we have to hardcode MouseEventBinding::MOZ_SOURCE_MOUSE.
+    , inputSource(/* MouseEventBinding::MOZ_SOURCE_MOUSE = */ 1)
   {
   }
 
@@ -109,7 +122,9 @@ protected:
     , buttons(0)
     , pressure(0)
     , hitCluster(false)
-    , inputSource(nsIDOMMouseEvent::MOZ_SOURCE_MOUSE)
+    // Including MouseEventBinding.h here leads to an include loop, so
+    // we have to hardcode MouseEventBinding::MOZ_SOURCE_MOUSE.
+    , inputSource(/* MouseEventBinding::MOZ_SOURCE_MOUSE = */ 1)
  {
  }
 
@@ -120,9 +135,6 @@ public:
   {
     MOZ_CRASH("WidgetMouseEventBase must not be most-subclass");
   }
-
-  /// The possible related target
-  nsCOMPtr<nsISupports> relatedTarget;
 
   enum buttonType
   {
@@ -157,7 +169,7 @@ public:
   // Touch near a cluster of links (true)
   bool hitCluster;
 
-  // Possible values at nsIDOMMouseEvent
+  // Possible values a in MouseEvent
   uint16_t inputSource;
 
   // ID of the canvas HitRegion
@@ -174,7 +186,6 @@ public:
   {
     AssignInputEventData(aEvent, aCopyTargets);
 
-    relatedTarget = aCopyTargets ? aEvent.relatedTarget : nullptr;
     button = aEvent.button;
     buttons = aEvent.buttons;
     pressure = aEvent.pressure;
@@ -318,7 +329,7 @@ public:
   void AssignMouseEventData(const WidgetMouseEvent& aEvent, bool aCopyTargets)
   {
     AssignMouseEventBaseData(aEvent, aCopyTargets);
-    AssignPointerHelperData(aEvent);
+    AssignPointerHelperData(aEvent, /* aCopyCoalescedEvents */ true);
 
     mIgnoreRootScrollFrame = aEvent.mIgnoreRootScrollFrame;
     mClickCount = aEvent.mClickCount;
@@ -445,7 +456,7 @@ public:
   // The delta value of mouse scroll event.
   // If the event message is eLegacyMouseLineOrPageScroll, the value indicates
   // scroll amount in lines.  However, if the value is
-  // nsIDOMUIEvent::SCROLL_PAGE_UP or nsIDOMUIEvent::SCROLL_PAGE_DOWN, the
+  // UIEvent::SCROLL_PAGE_UP or UIEvent::SCROLL_PAGE_DOWN, the
   // value inducates one page scroll.  If the event message is
   // eLegacyMousePixelScroll, the value indicates scroll amount in pixels.
   int32_t mDelta;
@@ -480,7 +491,9 @@ private:
     , mDeltaZ(0.0)
     , mOverflowDeltaX(0.0)
     , mOverflowDeltaY(0.0)
-    , mDeltaMode(nsIDOMWheelEvent::DOM_DELTA_PIXEL)
+    // Including WheelEventBinding.h here leads to an include loop, so
+    // we have to hardcode WheelEventBinding::DOM_DELTA_PIXEL.
+    , mDeltaMode(/* WheelEventBinding::DOM_DELTA_PIXEL = */ 0)
     , mLineOrPageDeltaX(0)
     , mLineOrPageDeltaY(0)
     , mScrollType(SCROLL_DEFAULT)
@@ -490,6 +503,7 @@ private:
     , mViewPortIsOverscrolled(false)
     , mCanTriggerSwipe(false)
     , mAllowToOverrideSystemScrollSpeed(false)
+    , mDeltaValuesHorizontalizedForDefaultHandler(false)
   {
   }
 
@@ -503,7 +517,9 @@ public:
     , mDeltaZ(0.0)
     , mOverflowDeltaX(0.0)
     , mOverflowDeltaY(0.0)
-    , mDeltaMode(nsIDOMWheelEvent::DOM_DELTA_PIXEL)
+    // Including WheelEventBinding.h here leads to an include loop, so
+    // we have to hardcode WheelEventBinding::DOM_DELTA_PIXEL.
+    , mDeltaMode(/* WheelEventBinding::DOM_DELTA_PIXEL = */ 0)
     , mLineOrPageDeltaX(0)
     , mLineOrPageDeltaY(0)
     , mScrollType(SCROLL_DEFAULT)
@@ -514,6 +530,7 @@ public:
     , mViewPortIsOverscrolled(false)
     , mCanTriggerSwipe(false)
     , mAllowToOverrideSystemScrollSpeed(true)
+    , mDeltaValuesHorizontalizedForDefaultHandler(false)
   {
   }
 
@@ -547,8 +564,8 @@ public:
   double mDeltaZ;
 
   // overflowed delta values for scroll, these values are set by
-  // nsEventStateManger.  If the default action of the wheel event isn't scroll,
-  // these values always zero.  Otherwise, remaning delta values which are
+  // EventStateManger.  If the default action of the wheel event isn't scroll,
+  // these values are always zero.  Otherwise, remaining delta values which are
   // not used by scroll are set.
   // NOTE: mDeltaX, mDeltaY and mDeltaZ may be modified by EventStateManager.
   //       However, mOverflowDeltaX and mOverflowDeltaY indicate unused original
@@ -558,7 +575,7 @@ public:
   double mOverflowDeltaX;
   double mOverflowDeltaY;
 
-  // Should be one of nsIDOMWheelEvent::DOM_DELTA_*
+  // Should be one of WheelEventBinding::DOM_DELTA_*
   uint32_t mDeltaMode;
 
   // If widget sets mLineOrPageDelta, EventStateManager will dispatch
@@ -631,6 +648,11 @@ public:
   // it's enabled by the pref.
   bool mAllowToOverrideSystemScrollSpeed;
 
+  // After the event's default action handler has adjusted its delta's values
+  // for horizontalizing a vertical wheel scroll, this variable will be set to
+  // true.
+  bool mDeltaValuesHorizontalizedForDefaultHandler;
+
   void AssignWheelEventData(const WidgetWheelEvent& aEvent, bool aCopyTargets)
   {
     AssignMouseEventBaseData(aEvent, aCopyTargets);
@@ -652,6 +674,8 @@ public:
     mCanTriggerSwipe = aEvent.mCanTriggerSwipe;
     mAllowToOverrideSystemScrollSpeed =
       aEvent.mAllowToOverrideSystemScrollSpeed;
+    mDeltaValuesHorizontalizedForDefaultHandler =
+      aEvent.mDeltaValuesHorizontalizedForDefaultHandler;
   }
 
   // System scroll speed settings may be too slow at using Gecko.  In such

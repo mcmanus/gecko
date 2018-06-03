@@ -2,15 +2,11 @@
  * Bug 1238183 - Test cases for forgetAboutSite with userContextId.
  */
 
-const { classes: Cc, Constructor: CC, interfaces: Ci, utils: Cu } = Components;
+const CC = Components.Constructor;
 
-Cu.import("resource://gre/modules/ForgetAboutSite.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-let {HttpServer} = Cu.import("resource://testing-common/httpd.js", {});
-let LoadContextInfo = Cc["@mozilla.org/load-context-info-factory;1"]
-                      .getService(Ci.nsILoadContextInfoFactory);
-let css = Cc["@mozilla.org/netwerk/cache-storage-service;1"]
-           .getService(Ci.nsICacheStorageService);
+let {ForgetAboutSite} = ChromeUtils.import("resource://gre/modules/ForgetAboutSite.jsm", {});
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+let {HttpServer} = ChromeUtils.import("resource://testing-common/httpd.js", {});
 
 const USER_CONTEXTS = [
   "default",
@@ -72,18 +68,16 @@ function getCookiesForOA(host, userContextId) {
 }
 
 function createURI(uri) {
-  let ioServ = Cc["@mozilla.org/network/io-service;1"]
-                  .getService(Components.interfaces.nsIIOService);
-  return ioServ.newURI(uri);
+  return Services.io.newURI(uri);
 }
 
 function getCacheStorage(where, lci, appcache) {
-  if (!lci) lci = LoadContextInfo.default;
+  if (!lci) lci = Services.loadContextInfo.default;
   switch (where) {
-    case "disk": return css.diskCacheStorage(lci, false);
-    case "memory": return css.memoryCacheStorage(lci);
-    case "appcache": return css.appCacheStorage(lci, appcache);
-    case "pin": return css.pinningCacheStorage(lci);
+    case "disk": return Services.cache2.diskCacheStorage(lci, false);
+    case "memory": return Services.cache2.memoryCacheStorage(lci);
+    case "appcache": return Services.cache2.appCacheStorage(lci, appcache);
+    case "pin": return Services.cache2.pinningCacheStorage(lci);
   }
   return null;
 }
@@ -95,12 +89,7 @@ function OpenCacheEntry(key, where, flags, lci) {
     CacheListener.prototype = {
       _appCache: null,
 
-      QueryInterface(iid) {
-        if (iid.equals(Components.interfaces.nsICacheEntryOpenCallback) ||
-            iid.equals(Components.interfaces.nsISupports))
-          return this;
-        throw Components.results.NS_ERROR_NO_INTERFACE;
-      },
+      QueryInterface: ChromeUtils.generateQI(["nsICacheEntryOpenCallback"]),
 
       onCacheEntryCheck(entry, appCache) {
         return Ci.nsICacheEntryOpenCallback.ENTRY_WANTED;
@@ -137,7 +126,7 @@ async function test_cookie_cleared() {
     tabs[userContextId] = await openTabInUserContext(TEST_URL + "file_reflect_cookie_into_title.html?" + value, userContextId);
 
     // Close this tab.
-    await BrowserTestUtils.removeTab(tabs[userContextId].tab);
+    BrowserTestUtils.removeTab(tabs[userContextId].tab);
   }
   // Check that cookies have been set properly.
   for (let userContextId of Object.keys(USER_CONTEXTS)) {
@@ -166,19 +155,19 @@ async function test_cache_cleared() {
     await OpenCacheEntry("http://" + TEST_HOST + "/",
                          "disk",
                          Ci.nsICacheStorage.OPEN_NORMALLY,
-                         LoadContextInfo.custom(false, {userContextId}));
+                         Services.loadContextInfo.custom(false, {userContextId}));
 
     await OpenCacheEntry("http://" + TEST_HOST + "/",
                          "memory",
                          Ci.nsICacheStorage.OPEN_NORMALLY,
-                         LoadContextInfo.custom(false, {userContextId}));
+                         Services.loadContextInfo.custom(false, {userContextId}));
   }
 
 
   // Check that caches have been set correctly.
   for (let userContextId of Object.keys(USER_CONTEXTS)) {
-    let mem = getCacheStorage("memory", LoadContextInfo.custom(false, {userContextId}));
-    let disk = getCacheStorage("disk", LoadContextInfo.custom(false, {userContextId}));
+    let mem = getCacheStorage("memory", Services.loadContextInfo.custom(false, {userContextId}));
+    let disk = getCacheStorage("disk", Services.loadContextInfo.custom(false, {userContextId}));
 
     Assert.ok(mem.exists(createURI("http://" + TEST_HOST + "/"), ""), "The memory cache has been set correctly");
     Assert.ok(disk.exists(createURI("http://" + TEST_HOST + "/"), ""), "The disk cache has been set correctly");
@@ -189,8 +178,8 @@ async function test_cache_cleared() {
 
   // Check that do caches be removed or not?
   for (let userContextId of Object.keys(USER_CONTEXTS)) {
-    let mem = getCacheStorage("memory", LoadContextInfo.custom(false, {userContextId}));
-    let disk = getCacheStorage("disk", LoadContextInfo.custom(false, {userContextId}));
+    let mem = getCacheStorage("memory", Services.loadContextInfo.custom(false, {userContextId}));
+    let disk = getCacheStorage("disk", Services.loadContextInfo.custom(false, {userContextId}));
 
     Assert.ok(!mem.exists(createURI("http://" + TEST_HOST + "/"), ""), "The memory cache is cleared");
     Assert.ok(!disk.exists(createURI("http://" + TEST_HOST + "/"), ""), "The disk cache is cleared");
@@ -205,7 +194,7 @@ async function test_image_cache_cleared() {
     // Open our tab in the given user context to cache image.
     tabs[userContextId] = await openTabInUserContext("http://localhost:" + gHttpServer.identity.primaryPort + "/loadImage.html",
                                                       userContextId);
-    await BrowserTestUtils.removeTab(tabs[userContextId].tab);
+    BrowserTestUtils.removeTab(tabs[userContextId].tab);
   }
 
   let expectedHits = USER_CONTEXTS.length;
@@ -217,14 +206,14 @@ async function test_image_cache_cleared() {
   gHits = 0;
 
   // Forget the site.
-  await ForgetAboutSite.removeDataFromDomain("localhost:" + gHttpServer.identity.primaryPort + "/");
+  await ForgetAboutSite.removeDataFromDomain("localhost");
 
   // Load again.
   for (let userContextId of Object.keys(USER_CONTEXTS)) {
     // Open our tab in the given user context to cache image.
     tabs[userContextId] = await openTabInUserContext("http://localhost:" + gHttpServer.identity.primaryPort + "/loadImage.html",
                                                       userContextId);
-    await BrowserTestUtils.removeTab(tabs[userContextId].tab);
+    BrowserTestUtils.removeTab(tabs[userContextId].tab);
   }
 
   // Check that image cache was cleared and the server gets another two hits.
@@ -272,7 +261,7 @@ async function test_storage_cleared() {
     });
 
     // Close this tab.
-    await BrowserTestUtils.removeTab(tabInfo.tab);
+    BrowserTestUtils.removeTab(tabInfo.tab);
   }
 
   // Forget the site.
@@ -309,7 +298,7 @@ async function test_storage_cleared() {
     });
 
     // Close the tab.
-    await BrowserTestUtils.removeTab(tabInfo.tab);
+    BrowserTestUtils.removeTab(tabInfo.tab);
   }
 }
 

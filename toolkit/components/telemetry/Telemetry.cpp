@@ -6,11 +6,9 @@
 
 #include <algorithm>
 
-#include <fstream>
-
 #include <prio.h>
 #include <prproces.h>
-#ifdef XP_LINUX
+#if defined(XP_UNIX) && !defined(XP_DARWIN)
 #include <time.h>
 #else
 #include <chrono>
@@ -44,10 +42,12 @@
 #include "js/GCAPI.h"
 #include "nsString.h"
 #include "nsITelemetry.h"
-#include "nsIFile.h"
+#include "nsIDirectoryEnumerator.h"
 #include "nsIFileStreams.h"
+#include "nsLocalFile.h"
 #include "nsIMemoryReporter.h"
 #include "nsISeekableStream.h"
+#include "nsISimpleEnumerator.h"
 #include "Telemetry.h"
 #include "TelemetryCommon.h"
 #include "TelemetryHistogram.h"
@@ -60,6 +60,7 @@
 #include "nsHashKeys.h"
 #include "nsBaseHashtable.h"
 #include "nsClassHashtable.h"
+#include "nsDataHashtable.h"
 #include "nsXULAppAPI.h"
 #include "nsReadableUtils.h"
 #include "nsThreadUtils.h"
@@ -73,15 +74,18 @@
 #include "plstr.h"
 #include "nsAppDirectoryServiceDefs.h"
 #include "mozilla/BackgroundHangMonitor.h"
+#include "mozilla/FStream.h"
 #include "mozilla/ProcessedStack.h"
 #include "mozilla/Mutex.h"
-#include "mozilla/FileUtils.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/IOInterposer.h"
 #include "mozilla/PoisonIOInterposer.h"
 #include "mozilla/StartupTimeline.h"
 #include "mozilla/HangMonitor.h"
+#if defined(XP_WIN)
+#include "mozilla/WinDllServices.h"
+#endif
 #include "nsNativeCharsetUtils.h"
 #include "nsProxyRelease.h"
 #include "HangReports.h"
@@ -91,11 +95,19 @@
 #include "KeyedStackCapturer.h"
 #endif // MOZ_GECKO_PROFILER
 
+#if defined(MOZ_TELEMETRY_GECKOVIEW)
+#include "geckoview/TelemetryGeckoViewPersistence.h"
+#endif
+
 namespace {
 
 using namespace mozilla;
 using namespace mozilla::HangMonitor;
 using Telemetry::Common::AutoHashtable;
+using Telemetry::Common::ToJSString;
+using Telemetry::Common::GetCurrentProduct;
+using Telemetry::Common::SetCurrentProduct;
+using Telemetry::Common::SupportedProduct;
 using mozilla::dom::Promise;
 using mozilla::dom::AutoJSAPI;
 using mozilla::Telemetry::HangReports;
@@ -162,6 +174,8 @@ public:
                                   const bool success);
   static bool CanRecordBase();
   static bool CanRecordExtended();
+  static bool CanRecordReleaseData();
+  static bool CanRecordPrereleaseData();
 private:
   TelemetryImpl();
   ~TelemetryImpl();
@@ -233,10 +247,15 @@ InitHistogramRecordingEnabled()
   TelemetryHistogram::InitHistogramRecordingEnabled();
 }
 
+using PathChar = filesystem::Path::value_type;
+using PathCharPtr = const PathChar*;
+
 static uint32_t
-ReadLastShutdownDuration(const char *filename) {
-  FILE *f = fopen(filename, "r");
-  if (!f) {
+ReadLastShutdownDuration(PathCharPtr filename) {
+  RefPtr<nsLocalFile> file =
+    new nsLocalFile(nsTDependentString<PathChar>(filename));
+  FILE *f;
+  if (NS_FAILED(file->OpenANSIFileDesc("r", &f)) || !f) {
     return 0;
   }
 
@@ -279,7 +298,7 @@ GetFailedProfileLockFile(nsIFile* *aFile, nsIFile* aProfileDir)
 class nsFetchTelemetryData : public Runnable
 {
 public:
-  nsFetchTelemetryData(const char* aShutdownTimeFilename,
+  nsFetchTelemetryData(PathCharPtr aShutdownTimeFilename,
                        nsIFile* aFailedProfileLockFile,
                        nsIFile* aProfileDir)
     : mozilla::Runnable("nsFetchTelemetryData")
@@ -291,7 +310,7 @@ public:
   }
 
 private:
-  const char* mShutdownTimeFilename;
+  PathCharPtr mShutdownTimeFilename;
   nsCOMPtr<nsIFile> mFailedProfileLockFile;
   RefPtr<TelemetryImpl> mTelemetry;
   nsCOMPtr<nsIFile> mProfileDir;
@@ -310,6 +329,10 @@ public:
     mTelemetry->mLastShutdownTime =
       ReadLastShutdownDuration(mShutdownTimeFilename);
     mTelemetry->ReadLateWritesStacks(mProfileDir);
+
+    TelemetryScalar::Set(Telemetry::ScalarID::BROWSER_TIMINGS_LAST_SHUTDOWN,
+                         mTelemetry->mLastShutdownTime);
+
     nsCOMPtr<nsIRunnable> e =
       NewRunnableMethod("nsFetchTelemetryData::MainThread",
                         this,
@@ -347,9 +370,9 @@ private:
 
 static TimeStamp gRecordedShutdownStartTime;
 static bool gAlreadyFreedShutdownTimeFileName = false;
-static char *gRecordedShutdownTimeFileName = nullptr;
+static PathCharPtr gRecordedShutdownTimeFileName = nullptr;
 
-static char *
+static PathCharPtr
 GetShutdownTimeFileName()
 {
   if (gAlreadyFreedShutdownTimeFileName) {
@@ -363,12 +386,8 @@ GetShutdownTimeFileName()
       return nullptr;
 
     mozFile->AppendNative(NS_LITERAL_CSTRING("Telemetry.ShutdownTime.txt"));
-    nsAutoCString nativePath;
-    nsresult rv = mozFile->GetNativePath(nativePath);
-    if (!NS_SUCCEEDED(rv))
-      return nullptr;
 
-    gRecordedShutdownTimeFileName = PL_strdup(nativePath.get());
+    gRecordedShutdownTimeFileName = NS_strdup(mozFile->NativePath().get());
   }
 
   return gRecordedShutdownTimeFileName;
@@ -439,7 +458,7 @@ TelemetryImpl::AsyncFetchTelemetryData(nsIFetchTelemetryDataCallback *aCallback)
   }
 
   // We have to get the filename from the main thread.
-  const char *shutdownTimeFilename = GetShutdownTimeFileName();
+  PathCharPtr shutdownTimeFilename = GetShutdownTimeFileName();
   if (!shutdownTimeFilename) {
     mCachedTelemetryData = true;
     aCallback->Complete();
@@ -564,32 +583,20 @@ TelemetryImpl::SetHistogramRecordingEnabled(const nsACString &id, bool aEnabled)
 }
 
 NS_IMETHODIMP
-TelemetryImpl::SnapshotHistograms(unsigned int aDataset, bool aSubsession,
+TelemetryImpl::SnapshotHistograms(unsigned int aDataset,
                                   bool aClearHistograms, JSContext* aCx,
                                   JS::MutableHandleValue aResult)
 {
-#if defined(MOZ_WIDGET_ANDROID)
-  if (aSubsession) {
-    return NS_OK;
-  }
-#endif
   return TelemetryHistogram::CreateHistogramSnapshots(aCx, aResult, aDataset,
-                                                      aSubsession,
                                                       aClearHistograms);
 }
 
 NS_IMETHODIMP
-TelemetryImpl::SnapshotKeyedHistograms(unsigned int aDataset, bool aSubsession,
+TelemetryImpl::SnapshotKeyedHistograms(unsigned int aDataset,
                                        bool aClearHistograms, JSContext* aCx,
                                        JS::MutableHandleValue aResult)
 {
-#if defined(MOZ_WIDGET_ANDROID)
-  if (aSubsession) {
-    return NS_OK;
-  }
-#endif
   return TelemetryHistogram::GetKeyedHistogramSnapshots(aCx, aResult, aDataset,
-                                                        aSubsession,
                                                         aClearHistograms);
 }
 
@@ -781,6 +788,9 @@ class GetLoadedModulesResultRunnable final : public Runnable
   nsMainThreadPtrHandle<Promise> mPromise;
   SharedLibraryInfo mRawModules;
   nsCOMPtr<nsIThread> mWorkerThread;
+#if defined(XP_WIN)
+  nsDataHashtable<nsStringHashKey, nsString> mCertSubjects;
+#endif // defined(XP_WIN)
 
 public:
   GetLoadedModulesResultRunnable(const nsMainThreadPtrHandle<Promise>& aPromise,
@@ -791,6 +801,9 @@ public:
     , mWorkerThread(do_GetCurrentThread())
   {
     MOZ_ASSERT(!NS_IsMainThread());
+#if defined(XP_WIN)
+    ObtainCertSubjects();
+#endif // defined(XP_WIN)
   }
 
   NS_IMETHOD
@@ -888,6 +901,27 @@ public:
         return NS_OK;
       }
 
+#if defined(XP_WIN)
+      // Cert Subject.
+      nsString* subject = mCertSubjects.GetValue(info.GetModulePath());
+      if (subject) {
+        JS::RootedString jsOrg(cx, ToJSString(cx, *subject));
+        if (!jsOrg) {
+          mPromise->MaybeReject(NS_ERROR_FAILURE);
+          return NS_OK;
+        }
+
+        JS::RootedValue certSubject(cx);
+        certSubject.setString(jsOrg);
+
+        if (!JS_DefineProperty(cx, moduleObj, "certSubject", certSubject,
+                               JSPROP_ENUMERATE)) {
+          mPromise->MaybeReject(NS_ERROR_FAILURE);
+          return NS_OK;
+        }
+      }
+#endif // defined(XP_WIN)
+
       if (!JS_DefineElement(cx, moduleArray, i, moduleObj, JSPROP_ENUMERATE)) {
         mPromise->MaybeReject(NS_ERROR_FAILURE);
         return NS_OK;
@@ -897,6 +931,28 @@ public:
     mPromise->MaybeResolve(moduleArray);
     return NS_OK;
   }
+
+private:
+#if defined(XP_WIN)
+  void ObtainCertSubjects()
+  {
+    MOZ_ASSERT(!NS_IsMainThread());
+
+    // NB: Currently we cannot lower this down to the profiler layer due to
+    // differing startup dependencies between the profiler and DllServices.
+    RefPtr<DllServices> dllSvc(DllServices::Get());
+
+    for (unsigned int i = 0, n = mRawModules.GetSize(); i != n; i++) {
+      const SharedLibrary& info = mRawModules.GetEntry(i);
+
+      auto orgName = dllSvc->GetBinaryOrgName(info.GetModulePath().get());
+      if (orgName) {
+        mCertSubjects.Put(info.GetModulePath(),
+                          nsDependentString(orgName.get()));
+      }
+    }
+  }
+#endif // defined(XP_WIN)
 };
 
 class GetLoadedModulesRunnable final : public Runnable
@@ -920,7 +976,7 @@ public:
 #endif // MOZ_GECKO_PROFILER
 
 NS_IMETHODIMP
-TelemetryImpl::GetLoadedModules(JSContext *cx, nsISupports** aPromise)
+TelemetryImpl::GetLoadedModules(JSContext *cx, Promise** aPromise)
 {
 #if defined(MOZ_GECKO_PROFILER)
   nsIGlobalObject* global = xpc::NativeGlobal(JS::CurrentGlobalOrNull(cx));
@@ -970,9 +1026,9 @@ IsValidBreakpadId(const std::string &breakpadId)
 // Read a stack from the given file name. In case of any error, aStack is
 // unchanged.
 static void
-ReadStack(const char *aFileName, Telemetry::ProcessedStack &aStack)
+ReadStack(PathCharPtr aFileName, Telemetry::ProcessedStack &aStack)
 {
-  std::ifstream file(aFileName);
+  IFStream file(aFileName);
 
   size_t numModules;
   file >> numModules;
@@ -1044,39 +1100,28 @@ ReadStack(const char *aFileName, Telemetry::ProcessedStack &aStack)
 void
 TelemetryImpl::ReadLateWritesStacks(nsIFile* aProfileDir)
 {
-  nsAutoCString nativePath;
-  nsresult rv = aProfileDir->GetNativePath(nativePath);
-  if (NS_FAILED(rv)) {
+  nsCOMPtr<nsIDirectoryEnumerator> files;
+  if (NS_FAILED(aProfileDir->GetDirectoryEntries(getter_AddRefs(files)))) {
     return;
   }
 
-  const char *name = nativePath.get();
-  PRDir *dir = PR_OpenDir(name);
-  if (!dir) {
-    return;
-  }
-
-  PRDirEntry *ent;
-  const char *prefix = "Telemetry.LateWriteFinal-";
-  unsigned int prefixLen = strlen(prefix);
-  while ((ent = PR_ReadDir(dir, PR_SKIP_NONE))) {
-    if (strncmp(prefix, ent->name, prefixLen) != 0) {
+  NS_NAMED_LITERAL_STRING(prefix, "Telemetry.LateWriteFinal-");
+  nsCOMPtr<nsIFile> file;
+  while (NS_SUCCEEDED(files->GetNextFile(getter_AddRefs(file))) && file) {
+    nsAutoString leafName;
+    if (NS_FAILED(file->GetLeafName(leafName)) ||
+        !StringBeginsWith(leafName, prefix)) {
       continue;
     }
 
-    nsAutoCString stackNativePath = nativePath;
-    stackNativePath += XPCOM_FILE_PATH_SEPARATOR;
-    stackNativePath += nsDependentCString(ent->name);
-
     Telemetry::ProcessedStack stack;
-    ReadStack(stackNativePath.get(), stack);
+    ReadStack(file->NativePath().get(), stack);
     if (stack.GetStackSize() != 0) {
       mLateWritesStacks.AddStack(stack);
     }
     // Delete the file so that we don't report it again on the next run.
-    PR_Delete(stackNativePath.get());
+    file->Remove(false);
   }
-  PR_CloseDir(dir);
 }
 
 NS_IMETHODIMP
@@ -1174,6 +1219,17 @@ TelemetryImpl::SetCanRecordExtended(bool canRecord) {
   return NS_OK;
 }
 
+NS_IMETHODIMP
+TelemetryImpl::GetCanRecordReleaseData(bool* ret) {
+  *ret = mCanRecordBase;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+TelemetryImpl::GetCanRecordPrereleaseData(bool* ret) {
+  *ret = mCanRecordExtended;
+  return NS_OK;
+}
 
 NS_IMETHODIMP
 TelemetryImpl::GetIsOfficialTelemetry(bool *ret) {
@@ -1198,6 +1254,9 @@ TelemetryImpl::CreateTelemetryInstance()
     useTelemetry = true;
   }
 
+  // Set current product (determines Fennec/GeckoView at runtime).
+  SetCurrentProduct();
+
   // First, initialize the TelemetryHistogram and TelemetryScalar global states.
   TelemetryHistogram::InitializeGlobalState(useTelemetry, useTelemetry);
   TelemetryScalar::InitializeGlobalState(useTelemetry, useTelemetry);
@@ -1219,6 +1278,15 @@ TelemetryImpl::CreateTelemetryInstance()
   sTelemetry->InitMemoryReporter();
   InitHistogramRecordingEnabled(); // requires sTelemetry to exist
 
+#if defined(MOZ_TELEMETRY_GECKOVIEW)
+  // We only want to add persistence for GeckoView, but both
+  // GV and Fennec are on Android. So just init persistence if this
+  // is Android but not Fennec.
+  if (GetCurrentProduct() == SupportedProduct::Geckoview) {
+    TelemetryGeckoViewPersistence::InitPersistence();
+  }
+#endif
+
   return ret.forget();
 }
 
@@ -1235,6 +1303,12 @@ TelemetryImpl::ShutdownTelemetry()
   TelemetryScalar::DeInitializeGlobalState();
   TelemetryEvent::DeInitializeGlobalState();
   TelemetryIPCAccumulator::DeInitializeGlobalState();
+
+#if defined(MOZ_TELEMETRY_GECKOVIEW)
+  if (GetCurrentProduct() == SupportedProduct::Geckoview) {
+    TelemetryGeckoViewPersistence::DeInitPersistence();
+  }
+#endif
 }
 
 void
@@ -1527,7 +1601,7 @@ TelemetryImpl::RecordChromeHang(uint32_t aDuration,
 
   sTelemetry->mHangReports.AddHang(aStack, aDuration,
                                    aSystemUptime, aFirefoxUptime,
-                                   Move(aAnnotations));
+                                   std::move(aAnnotations));
 }
 
 void
@@ -1566,6 +1640,18 @@ TelemetryImpl::CanRecordExtended()
   bool canRecordExtended;
   nsresult rv = sTelemetry->GetCanRecordExtended(&canRecordExtended);
   return NS_SUCCEEDED(rv) && canRecordExtended;
+}
+
+bool
+TelemetryImpl::CanRecordReleaseData()
+{
+  return CanRecordBase();
+}
+
+bool
+TelemetryImpl::CanRecordPrereleaseData()
+{
+  return CanRecordExtended();
 }
 
 NS_IMPL_ISUPPORTS(TelemetryImpl, nsITelemetry, nsIMemoryReporter)
@@ -1624,7 +1710,7 @@ TelemetryImpl::MsSinceProcessStart(double* aResult)
 NS_IMETHODIMP
 TelemetryImpl::MsSystemNow(double* aResult)
 {
-#ifdef XP_LINUX
+#if defined(XP_UNIX) && !defined(XP_DARWIN)
   timespec ts;
   clock_gettime(CLOCK_REALTIME, &ts);
   *aResult = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
@@ -1632,7 +1718,7 @@ TelemetryImpl::MsSystemNow(double* aResult)
   using namespace std::chrono;
   milliseconds ms = duration_cast<milliseconds>(system_clock::now().time_since_epoch());
   *aResult = static_cast<double>(ms.count());
-#endif // XP_LINUX
+#endif // XP_UNIX && !XP_DARWIN
 
   return NS_OK;
 }
@@ -1698,7 +1784,15 @@ TelemetryImpl::RegisterScalars(const nsACString& aCategoryName,
                                JS::Handle<JS::Value> aScalarData,
                                JSContext* cx)
 {
-  return TelemetryScalar::RegisterScalars(aCategoryName, aScalarData, cx);
+  return TelemetryScalar::RegisterScalars(aCategoryName, aScalarData, false, cx);
+}
+
+NS_IMETHODIMP
+TelemetryImpl::RegisterBuiltinScalars(const nsACString& aCategoryName,
+                                      JS::Handle<JS::Value> aScalarData,
+                                      JSContext* cx)
+{
+  return TelemetryScalar::RegisterScalars(aCategoryName, aScalarData, true, cx);
 }
 
 NS_IMETHODIMP
@@ -1730,7 +1824,15 @@ TelemetryImpl::RegisterEvents(const nsACString& aCategory,
                               JS::Handle<JS::Value> aEventData,
                               JSContext* cx)
 {
-  return TelemetryEvent::RegisterEvents(aCategory, aEventData, cx);
+  return TelemetryEvent::RegisterEvents(aCategory, aEventData, false, cx);
+}
+
+NS_IMETHODIMP
+TelemetryImpl::RegisterBuiltinEvents(const nsACString& aCategory,
+                              JS::Handle<JS::Value> aEventData,
+                              JSContext* cx)
+{
+  return TelemetryEvent::RegisterEvents(aCategory, aEventData, true, cx);
 }
 
 NS_IMETHODIMP
@@ -1738,6 +1840,36 @@ TelemetryImpl::ClearEvents()
 {
   TelemetryEvent::ClearEvents();
   return NS_OK;
+}
+
+NS_IMETHODIMP
+TelemetryImpl::ResetCurrentProduct()
+{
+#if defined(MOZ_WIDGET_ANDROID)
+  SetCurrentProduct();
+  return NS_OK;
+#else
+  return NS_ERROR_FAILURE;
+#endif
+}
+
+NS_IMETHODIMP
+TelemetryImpl::ClearProbes()
+{
+#if defined(MOZ_TELEMETRY_GECKOVIEW)
+  // We only support this in GeckoView.
+  if (GetCurrentProduct() != SupportedProduct::Geckoview) {
+    MOZ_ASSERT(false, "ClearProbes is only supported on GeckoView");
+    return NS_ERROR_FAILURE;
+  }
+
+  // TODO: supporting clear for histograms will come from bug 1457127.
+  TelemetryScalar::ClearScalars();
+  TelemetryGeckoViewPersistence::ClearPersistenceData();
+  return NS_OK;
+#else
+  return NS_ERROR_FAILURE;
+#endif
 }
 
 NS_IMETHODIMP
@@ -1841,8 +1973,8 @@ RecordShutdownEndTimeStamp() {
   if (!gRecordedShutdownTimeFileName || gAlreadyFreedShutdownTimeFileName)
     return;
 
-  nsCString name(gRecordedShutdownTimeFileName);
-  PL_strfree(gRecordedShutdownTimeFileName);
+  PathString name(gRecordedShutdownTimeFileName);
+  free(const_cast<PathChar*>(gRecordedShutdownTimeFileName));
   gRecordedShutdownTimeFileName = nullptr;
   gAlreadyFreedShutdownTimeFileName = true;
 
@@ -1854,10 +1986,11 @@ RecordShutdownEndTimeStamp() {
     return;
   }
 
-  nsCString tmpName = name;
-  tmpName += ".tmp";
-  FILE *f = fopen(tmpName.get(), "w");
-  if (!f)
+  nsTAutoString<PathChar> tmpName(name);
+  tmpName.AppendLiteral(".tmp");
+  RefPtr<nsLocalFile> tmpFile = new nsLocalFile(tmpName);
+  FILE *f;
+  if (NS_FAILED(tmpFile->OpenANSIFileDesc("w", &f)) || !f)
     return;
   // On a normal release build this should be called just before
   // calling _exit, but on a debug build or when the user forces a full
@@ -1873,11 +2006,13 @@ RecordShutdownEndTimeStamp() {
   MozillaUnRegisterDebugFILE(f);
   int rv = fclose(f);
   if (written < 0 || rv != 0) {
-    PR_Delete(tmpName.get());
+    tmpFile->Remove(false);
     return;
   }
-  PR_Delete(name.get());
-  PR_Rename(tmpName.get(), name.get());
+  RefPtr<nsLocalFile> file = new nsLocalFile(name);
+  nsAutoString leafName;
+  file->GetLeafName(leafName);
+  tmpFile->RenameTo(nullptr, leafName);
 }
 
 } // namespace mozilla
@@ -1906,9 +2041,21 @@ Accumulate(HistogramID aHistogram, uint32_t aSample)
 }
 
 void
+Accumulate(HistogramID aHistogram, const nsTArray<uint32_t>& aSamples)
+{
+  TelemetryHistogram::Accumulate(aHistogram, aSamples);
+}
+
+void
 Accumulate(HistogramID aID, const nsCString& aKey, uint32_t aSample)
 {
   TelemetryHistogram::Accumulate(aID, aKey, aSample);
+}
+
+void
+Accumulate(HistogramID aID, const nsCString& aKey, const nsTArray<uint32_t>& aSamples)
+{
+  TelemetryHistogram::Accumulate(aID, aKey, aSamples);
 }
 
 void
@@ -1930,12 +2077,35 @@ AccumulateCategorical(HistogramID id, const nsCString& label)
 }
 
 void
+AccumulateCategorical(HistogramID id, const nsTArray<nsCString>& labels)
+{
+  TelemetryHistogram::AccumulateCategorical(id, labels);
+}
+
+void
 AccumulateTimeDelta(HistogramID aHistogram, TimeStamp start, TimeStamp end)
 {
+  if (start > end) {
+    Accumulate(aHistogram, 0);
+    return;
+  }
   Accumulate(aHistogram,
              static_cast<uint32_t>((end - start).ToMilliseconds()));
 }
 
+void
+AccumulateTimeDelta(HistogramID aHistogram,
+                    const nsCString& key,
+                    TimeStamp start,
+                    TimeStamp end)
+{
+  if (start > end) {
+    Accumulate(aHistogram, key, 0);
+    return;
+  }
+  Accumulate(
+    aHistogram, key, static_cast<uint32_t>((end - start).ToMilliseconds()));
+}
 const char*
 GetHistogramName(HistogramID id)
 {
@@ -1952,6 +2122,18 @@ bool
 CanRecordExtended()
 {
   return TelemetryImpl::CanRecordExtended();
+}
+
+bool
+CanRecordReleaseData()
+{
+  return TelemetryImpl::CanRecordReleaseData();
+}
+
+bool
+CanRecordPrereleaseData()
+{
+  return TelemetryImpl::CanRecordPrereleaseData();
 }
 
 void
@@ -1986,7 +2168,7 @@ void RecordChromeHang(uint32_t duration,
 {
   TelemetryImpl::RecordChromeHang(duration, aStack,
                                   aSystemUptime, aFirefoxUptime,
-                                  Move(aAnnotations));
+                                  std::move(aAnnotations));
 }
 
 void CaptureStack(const nsACString& aKey)

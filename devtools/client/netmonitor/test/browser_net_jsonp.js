@@ -7,26 +7,31 @@
  * Tests if JSONP responses are handled correctly.
  */
 
-add_task(function* () {
-  let { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
+add_task(async function() {
+  const { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
 
-  let { tab, monitor } = yield initNetMonitor(JSONP_URL);
+  const { tab, monitor } = await initNetMonitor(JSONP_URL);
   info("Starting test... ");
 
-  let { document, store, windowRequire } = monitor.panelWin;
-  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
-  let {
+  const { document, store, windowRequire } = monitor.panelWin;
+  const Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+  const {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
   store.dispatch(Actions.batchEnable(false));
 
-  let wait = waitForNetworkEvents(monitor, 2);
-  yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
-    content.wrappedJSObject.performRequests();
-  });
-  yield wait;
+  // Execute requests.
+  await performRequests(monitor, tab, 2);
+
+  const requestItems = document.querySelectorAll(".request-list-item");
+  for (const requestItem of requestItems) {
+    requestItem.scrollIntoView();
+    const requestsListStatus = requestItem.querySelector(".status-code");
+    EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+    await waitUntil(() => requestsListStatus.title);
+  }
 
   verifyRequestItemTarget(
     document,
@@ -59,11 +64,10 @@ add_task(function* () {
 
   info("Testing first request");
   wait = waitForDOM(document, "#response-panel .CodeMirror-code");
-  EventUtils.sendMouseEvent({ type: "click" },
-    document.querySelector(".network-details-panel-toggle"));
+  store.dispatch(Actions.toggleNetworkDetails());
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector("#response-tab"));
-  yield wait;
+  await wait;
 
   testResponseTab("$_0123Fun", "Hello JSONP!");
 
@@ -72,14 +76,14 @@ add_task(function* () {
 
   EventUtils.sendMouseEvent({ type: "mousedown" },
     document.querySelectorAll(".request-list-item")[1]);
-  yield wait;
+  await wait;
 
   testResponseTab("$_4567Sad", "Hello weird JSONP!");
 
-  yield teardown(monitor);
+  await teardown(monitor);
 
   function testResponseTab(func, greeting) {
-    let tabpanel = document.querySelector("#response-panel");
+    const tabpanel = document.querySelector("#response-panel");
 
     is(tabpanel.querySelector(".response-error-header") === null, true,
       "The response error header doesn't have the intended visibility.");
@@ -98,9 +102,9 @@ add_task(function* () {
     is(tabpanel.querySelectorAll(".empty-notice").length, 0,
       "The empty notice should not be displayed in this tabpanel.");
 
-    let labels = tabpanel
+    const labels = tabpanel
       .querySelectorAll("tr:not(.tree-section) .treeLabelCell .treeLabel");
-    let values = tabpanel
+    const values = tabpanel
       .querySelectorAll("tr:not(.tree-section) .treeValueCell .objectBox");
 
     is(labels[0].textContent, "greeting",

@@ -7,17 +7,16 @@
 #include "builtin/WeakSetObject.h"
 
 #include "jsapi.h"
-#include "jscntxt.h"
-#include "jsiter.h"
 
 #include "builtin/MapObject.h"
 #include "vm/GlobalObject.h"
+#include "vm/Iteration.h"
+#include "vm/JSContext.h"
 #include "vm/SelfHosting.h"
-
-#include "jsobjinlines.h"
 
 #include "builtin/WeakMapObject-inl.h"
 #include "vm/Interpreter-inl.h"
+#include "vm/JSObject-inl.h"
 #include "vm/NativeObject-inl.h"
 
 using namespace js;
@@ -151,9 +150,8 @@ const JSFunctionSpec WeakSetObject::methods[] = {
 };
 
 JSObject*
-WeakSetObject::initClass(JSContext* cx, HandleObject obj)
+WeakSetObject::initClass(JSContext* cx, Handle<GlobalObject*> global)
 {
-    Handle<GlobalObject*> global = obj.as<GlobalObject>();
     RootedPlainObject proto(cx, NewBuiltinClassInstance<PlainObject>(cx));
     if (!proto)
         return nullptr;
@@ -178,7 +176,7 @@ WeakSetObject::create(JSContext* cx, HandleObject proto /* = nullptr */)
 }
 
 bool
-WeakSetObject::isBuiltinAdd(HandleValue add, JSContext* cx)
+WeakSetObject::isBuiltinAdd(HandleValue add)
 {
     return IsNativeFunction(add, WeakSet_add);
 }
@@ -239,9 +237,9 @@ WeakSetObject::construct(JSContext* cx, unsigned argc, Value* vp)
 
 
 JSObject*
-js::InitWeakSetClass(JSContext* cx, HandleObject obj)
+js::InitWeakSetClass(JSContext* cx, Handle<GlobalObject*> global)
 {
-    return WeakSetObject::initClass(cx, obj);
+    return WeakSetObject::initClass(cx, global);
 }
 
 JS_FRIEND_API(bool)

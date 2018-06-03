@@ -10,7 +10,6 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/Element.h"
 #include "nsMappedAttributeElement.h"
-#include "nsIDOMElement.h"
 #include "Link.h"
 #include "mozilla/dom/DOMRect.h"
 
@@ -27,7 +26,6 @@ class EventChainPreVisitor;
  * The base class for MathML elements.
  */
 class nsMathMLElement final : public nsMathMLElementBase,
-                              public nsIDOMElement,
                               public mozilla::dom::Link
 {
 public:
@@ -36,11 +34,6 @@ public:
 
   // Implementation of nsISupports is inherited from nsMathMLElementBase
   NS_DECL_ISUPPORTS_INHERITED
-
-  // Forward implementations of parent interfaces of nsMathMLElement to
-  // our base class
-  NS_FORWARD_NSIDOMNODE_TO_NSINODE
-  NS_FORWARD_NSIDOMELEMENT_TO_GENERIC
 
   nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                       nsIContent* aBindingParent,
@@ -51,6 +44,7 @@ public:
   virtual bool ParseAttribute(int32_t aNamespaceID,
                                 nsAtom* aAttribute,
                                 const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 nsAttrValue& aResult) override;
 
   NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* aAttribute) const override;
@@ -74,8 +68,7 @@ public:
   static void MapMathMLAttributesInto(const nsMappedAttributes* aAttributes,
                                       mozilla::GenericSpecifiedValues* aGenericData);
 
-  virtual nsresult GetEventTargetParent(
-                     mozilla::EventChainPreVisitor& aVisitor) override;
+  void GetEventTargetParent(mozilla::EventChainPreVisitor& aVisitor) override;
   virtual nsresult PostHandleEvent(
                      mozilla::EventChainPostVisitor& aVisitor) override;
   nsresult Clone(mozilla::dom::NodeInfo* aNodeInfo, nsINode** aResult,
@@ -95,8 +88,6 @@ public:
   virtual void GetLinkTarget(nsAString& aTarget) override;
   virtual already_AddRefed<nsIURI> GetHrefURI() const override;
 
-  virtual nsIDOMNode* AsDOMNode() override { return this; }
-
   virtual void NodeInfoChanged(nsIDocument* aOldDoc) override
   {
     ClearHasPendingLinkUpdate();
@@ -111,6 +102,7 @@ protected:
   virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
                                 const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
                                 bool aNotify) override;
 
 private:

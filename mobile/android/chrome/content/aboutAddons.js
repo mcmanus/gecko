@@ -6,11 +6,9 @@
 
 /* globals gChromeWin */
 
-var Ci = Components.interfaces, Cc = Components.classes, Cu = Components.utils;
-
-Cu.import("resource://gre/modules/Services.jsm")
-Cu.import("resource://gre/modules/AddonManager.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/AddonManager.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 const AMO_ICON = "chrome://browser/skin/images/amo-logo.png";
 const UPDATE_INDICATOR = "chrome://browser/skin/images/extension-update.svg";
@@ -26,8 +24,8 @@ XPCOMUtils.defineLazyGetter(window, "gChromeWin", function() {
            .getInterface(Ci.nsIDOMWindow)
            .QueryInterface(Ci.nsIDOMChromeWindow);
 });
-XPCOMUtils.defineLazyModuleGetter(window, "Preferences",
-                                  "resource://gre/modules/Preferences.jsm");
+ChromeUtils.defineModuleGetter(window, "Preferences",
+                               "resource://gre/modules/Preferences.jsm");
 
 var ContextMenus = {
   target: null,
@@ -251,8 +249,7 @@ var Addons = {
     outer.setAttribute("role", "button");
     outer.addEventListener("click", function(event) {
       try {
-        let formatter = Cc["@mozilla.org/toolkit/URLFormatterService;1"].getService(Ci.nsIURLFormatter);
-        openLink(formatter.formatURLPref("extensions.getAddons.browseAddons"));
+        openLink(Services.urlFormatter.formatURLPref("extensions.getAddons.browseAddons"));
       } catch (e) {
         Cu.reportError(e);
       }
@@ -424,12 +421,6 @@ var Addons = {
 
         this.createOptionsInTabButton(optionsBox, addon, addonItem);
         break;
-      case AddonManager.OPTIONS_TYPE_INLINE:
-        // Keep the usual layout for any options related the legacy (or system) add-ons.
-        optionsBox.classList.add("inner");
-
-        this.createInlineOptions(optionsBox, optionsURL, aListItem);
-        break;
     }
 
     showAddonOptions();
@@ -520,62 +511,6 @@ var Addons = {
     detailItem.removeAttribute("optionsURL");
   },
 
-  createInlineOptions(destination, optionsURL, aListItem) {
-    // This function removes and returns the text content of aNode without
-    // removing any child elements. Removing the text nodes ensures any XBL
-    // bindings apply properly.
-    function stripTextNodes(aNode) {
-      var text = "";
-      for (var i = 0; i < aNode.childNodes.length; i++) {
-        if (aNode.childNodes[i].nodeType != document.ELEMENT_NODE) {
-          text += aNode.childNodes[i].textContent;
-          aNode.removeChild(aNode.childNodes[i--]);
-        } else {
-          text += stripTextNodes(aNode.childNodes[i]);
-        }
-      }
-      return text;
-    }
-
-    try {
-      let xhr = new XMLHttpRequest();
-      xhr.open("GET", optionsURL, true);
-      xhr.onload = function(e) {
-        if (xhr.responseXML) {
-          // Only allow <setting> for now
-          let settings = xhr.responseXML.querySelectorAll(":root > setting");
-          if (settings.length > 0) {
-            for (let i = 0; i < settings.length; i++) {
-              var setting = settings[i];
-              var desc = stripTextNodes(setting).trim();
-              if (!setting.hasAttribute("desc")) {
-                setting.setAttribute("desc", desc);
-              }
-              destination.appendChild(setting);
-            }
-            // Send an event so add-ons can prepopulate any non-preference based
-            // settings
-            let event = document.createEvent("Events");
-            event.initEvent("AddonOptionsLoad", true, false);
-            window.dispatchEvent(event);
-          } else {
-            // Reset the options URL to hide the options header if there are no
-            // valid settings to show.
-            let detailItem = document.querySelector("#addons-details > .addon-item");
-            detailItem.setAttribute("optionsURL", "");
-          }
-
-          // Also send a notification to match the behavior of desktop Firefox
-          let id = aListItem.getAttribute("addonID");
-          Services.obs.notifyObservers(document, AddonManager.OPTIONS_NOTIFICATION_DISPLAYED, id);
-        }
-      }
-      xhr.send(null);
-    } catch (e) {
-      Cu.reportError(e);
-    }
-  },
-
   setEnabled: function setEnabled(aValue, aAddon) {
     let detailItem = document.querySelector("#addons-details > .addon-item");
     let addon = aAddon || detailItem.addon;
@@ -583,6 +518,13 @@ var Addons = {
       return;
 
     let listItem = this._getElementForAddon(addon.id);
+
+    function setDisabled(addon, value) {
+      if (value) {
+        return addon.enable();
+      }
+      return addon.disable();
+    }
 
     let opType;
     if (addon.type == "theme") {
@@ -592,18 +534,18 @@ var Addons = {
         let item = list.firstElementChild;
         while (item) {
           if (item.addon && (item.addon.type == "theme") && (item.addon.isActive)) {
-            item.addon.userDisabled = true;
+            item.addon.disable();
             item.setAttribute("isDisabled", true);
             break;
           }
           item = item.nextSibling;
         }
       }
-      addon.userDisabled = !aValue;
+      setDisabled(addon, !aValue);
     } else if (addon.type == "locale") {
-      addon.userDisabled = !aValue;
+      setDisabled(addon, !aValue);
     } else {
-      addon.userDisabled = !aValue;
+      setDisabled(addon, !aValue);
       opType = this._getOpTypeForOperations(addon.pendingOperations);
 
       if ((addon.pendingOperations & AddonManager.PENDING_ENABLE) ||
@@ -810,7 +752,7 @@ var Addons = {
 
   onDownloadCancelled: function(aInstall) {
   }
-}
+};
 
 window.addEventListener("load", init);
 window.addEventListener("unload", uninit);

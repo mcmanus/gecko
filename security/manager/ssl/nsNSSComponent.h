@@ -57,21 +57,8 @@ public:
 
   NS_IMETHOD GetPIPNSSBundleString(const char* name,
                                    nsAString& outString) = 0;
-  NS_IMETHOD PIPBundleFormatStringFromName(const char* name,
-                                           const char16_t** params,
-                                           uint32_t numParams,
-                                           nsAString& outString) = 0;
-
-  NS_IMETHOD GetNSSBundleString(const char* name,
-                                nsAString& outString) = 0;
 
   NS_IMETHOD LogoutAuthenticatedPK11() = 0;
-
-#ifndef MOZ_NO_SMART_CARDS
-  NS_IMETHOD LaunchSmartCardThread(SECMODModule* module) = 0;
-
-  NS_IMETHOD ShutdownSmartCardThread(SECMODModule* module) = 0;
-#endif
 
 #ifdef DEBUG
   NS_IMETHOD IsCertTestBuiltInRoot(CERTCertificate* cert, bool& result) = 0;
@@ -81,9 +68,15 @@ public:
 
 #ifdef XP_WIN
   NS_IMETHOD GetEnterpriseRoots(nsIX509CertList** enterpriseRoots) = 0;
+  NS_IMETHOD TrustLoaded3rdPartyRoots() = 0;
 #endif
 
   NS_IMETHOD BlockUntilLoadableRootsLoaded() = 0;
+  NS_IMETHOD CheckForSmartCardChanges() = 0;
+  // IssuerMatchesMitmCanary succeeds if aCertIssuer matches the canary and
+  // the feature is enabled. It returns an error if the strings don't match,
+  // the canary is not set, or the feature is disabled.
+  NS_IMETHOD IssuerMatchesMitmCanary(const char* aCertIssuer) = 0;
 
   // Main thread only
   NS_IMETHOD HasActiveSmartCards(bool& result) = 0;
@@ -94,8 +87,6 @@ public:
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsINSSComponent, NS_INSSCOMPONENT_IID)
-
-class nsNSSShutDownList;
 
 // Implementation of the PSM component interface.
 class nsNSSComponent final : public nsINSSComponent
@@ -119,22 +110,7 @@ public:
 
   NS_IMETHOD GetPIPNSSBundleString(const char* name,
                                    nsAString& outString) override;
-  NS_IMETHOD PIPBundleFormatStringFromName(const char* name,
-                                           const char16_t** params,
-                                           uint32_t numParams,
-                                           nsAString& outString) override;
-  NS_IMETHOD GetNSSBundleString(const char* name, nsAString& outString) override;
   NS_IMETHOD LogoutAuthenticatedPK11() override;
-
-#ifndef MOZ_NO_SMART_CARDS
-  NS_IMETHOD LaunchSmartCardThread(SECMODModule* module) override;
-  NS_IMETHOD ShutdownSmartCardThread(SECMODModule* module) override;
-  nsresult LaunchSmartCardThreads();
-  void ShutdownSmartCardThreads();
-  nsresult DispatchEventToWindow(nsIDOMWindow* domWin,
-                                 const nsAString& eventType,
-                                 const nsAString& token);
-#endif
 
 #ifdef DEBUG
   NS_IMETHOD IsCertTestBuiltInRoot(CERTCertificate* cert, bool& result) override;
@@ -144,9 +120,12 @@ public:
 
 #ifdef XP_WIN
   NS_IMETHOD GetEnterpriseRoots(nsIX509CertList** enterpriseRoots) override;
+  NS_IMETHOD TrustLoaded3rdPartyRoots() override;
 #endif
 
   NS_IMETHOD BlockUntilLoadableRootsLoaded() override;
+  NS_IMETHOD CheckForSmartCardChanges() override;
+  NS_IMETHOD IssuerMatchesMitmCanary(const char* aCertIssuer) override;
 
   // Main thread only
   NS_IMETHOD HasActiveSmartCards(bool& result) override;
@@ -171,8 +150,8 @@ private:
   nsresult InitializeNSS();
   void ShutdownNSS();
 
-  void UnloadLoadableRoots();
-  void setValidationOptions(bool isInitialSetting);
+  void setValidationOptions(bool isInitialSetting,
+                            const mozilla::MutexAutoLock& proofOfLock);
   nsresult setEnabledTLSVersions();
   nsresult InitializePIPNSSBundle();
   nsresult ConfigureInternalPKCS11Token();
@@ -188,7 +167,7 @@ private:
   nsresult LoadFamilySafetyRoot();
   void UnloadFamilySafetyRoot();
 
-  void UnloadEnterpriseRoots(const mozilla::MutexAutoLock& proofOfLock);
+  void UnloadEnterpriseRoots();
 #endif // XP_WIN
 
   // mLoadableRootsLoadedMonitor protects mLoadableRootsLoaded.
@@ -197,29 +176,24 @@ private:
   nsresult mLoadableRootsLoadedResult;
 
   // mMutex protects all members that are accessed from more than one thread.
-  // While this lock is held, the same thread must not attempt to acquire a
-  // nsNSSShutDownPreventionLock (acquiring a nsNSSShutDownPreventionLock and
-  // then acquiring this lock is fine).
   mozilla::Mutex mMutex;
 
   // The following members are accessed from more than one thread:
   nsCOMPtr<nsIStringBundle> mPIPNSSBundle;
-  nsCOMPtr<nsIStringBundle> mNSSErrorsBundle;
   bool mNSSInitialized;
 #ifdef DEBUG
   nsString mTestBuiltInRootHash;
 #endif
   nsString mContentSigningRootHash;
   RefPtr<mozilla::psm::SharedCertVerifier> mDefaultCertVerifier;
+  nsString mMitmCanaryIssuer;
+  bool mMitmDetecionEnabled;
 #ifdef XP_WIN
   mozilla::UniqueCERTCertificate mFamilySafetyRoot;
   mozilla::UniqueCERTCertList mEnterpriseRoots;
 #endif // XP_WIN
 
   // The following members are accessed only on the main thread:
-#ifndef MOZ_NO_SMART_CARDS
-  SmartCardThreadList* mThreadList;
-#endif
   static int mInstanceCount;
 };
 
@@ -233,14 +207,25 @@ BlockUntilLoadableRootsLoaded()
   return component->BlockUntilLoadableRootsLoaded();
 }
 
+inline nsresult
+CheckForSmartCardChanges()
+{
+#ifndef MOZ_NO_SMART_CARDS
+  nsCOMPtr<nsINSSComponent> component(do_GetService(PSM_COMPONENT_CONTRACTID));
+  if (!component) {
+    return NS_ERROR_FAILURE;
+  }
+  return component->CheckForSmartCardChanges();
+#else
+  return NS_OK;
+#endif
+}
+
 class nsNSSErrors
 {
 public:
   static const char* getDefaultErrorStringName(PRErrorCode err);
   static const char* getOverrideErrorStringName(PRErrorCode aErrorCode);
-  static nsresult getErrorMessageFromCode(PRErrorCode err,
-                                          nsINSSComponent* component,
-                                          nsString& returnedMessage);
 };
 
 #endif // _nsNSSComponent_h_

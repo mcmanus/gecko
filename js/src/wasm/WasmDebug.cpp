@@ -21,10 +21,12 @@
 #include "mozilla/BinarySearch.h"
 
 #include "ds/Sort.h"
+#include "gc/FreeOp.h"
 #include "jit/ExecutableAllocator.h"
 #include "jit/MacroAssembler.h"
+#include "util/StringBuffer.h"
+#include "util/Text.h"
 #include "vm/Debugger.h"
-#include "vm/StringBuffer.h"
 #include "wasm/WasmBinaryToText.h"
 #include "wasm/WasmInstance.h"
 #include "wasm/WasmValidate.h"
@@ -49,7 +51,7 @@ GeneratedSourceMap::searchLineByOffset(JSContext* cx, uint32_t offset, size_t* e
             ReportOutOfMemory(cx);
             return false;
         }
-        sortedByOffsetExprLocIndices_ = Move(indices);
+        sortedByOffsetExprLocIndices_ = std::move(indices);
 
         for (size_t i = 0; i < exprlocsLength; i++)
             (*sortedByOffsetExprLocIndices_)[i] = i;
@@ -88,7 +90,7 @@ GeneratedSourceMap::sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) cons
 DebugState::DebugState(SharedCode code,
                        const ShareableBytes* maybeBytecode,
                        bool binarySource)
-  : code_(Move(code)),
+  : code_(std::move(code)),
     maybeBytecode_(maybeBytecode),
     binarySource_(binarySource),
     enterAndLeaveFrameTrapsCounter_(0)
@@ -145,7 +147,7 @@ DebugState::createText(JSContext* cx)
             ReportOutOfMemory(cx);
             return nullptr;
         }
-        maybeSourceMap_ = Move(sourceMap);
+        maybeSourceMap_ = std::move(sourceMap);
 
         if (!BinaryToText(cx, bytes.begin(), bytes.length(), buffer, maybeSourceMap_.get()))
             return nullptr;
@@ -393,9 +395,9 @@ DebugState::toggleBreakpointTrap(JSRuntime* rt, uint32_t offset, bool enabled)
         return;
     size_t debugTrapOffset = callSite->returnAddressOffset();
 
-    const CodeSegment& codeSegment = code_->segment(Tier::Debug);
-    const CodeRange* codeRange = code_->lookupRange(codeSegment.base() + debugTrapOffset);
-    MOZ_ASSERT(codeRange && codeRange->isFunction());
+    const ModuleSegment& codeSegment = code_->segment(Tier::Debug);
+    const CodeRange* codeRange = code_->lookupFuncRange(codeSegment.base() + debugTrapOffset);
+    MOZ_ASSERT(codeRange);
 
     if (stepModeCounters_.initialized() && stepModeCounters_.lookup(codeRange->funcIndex()))
         return; // no need to toggle when step mode is enabled
@@ -512,7 +514,7 @@ DebugState::adjustEnterAndLeaveFrameTrapsState(JSContext* cx, bool enabled)
     if (wasEnabled == stillEnabled)
         return;
 
-    const CodeSegment& codeSegment = code_->segment(Tier::Debug);
+    const ModuleSegment& codeSegment = code_->segment(Tier::Debug);
     AutoWritableJitCode awjc(cx->runtime(), codeSegment.base(), codeSegment.length());
     AutoFlushICache afc("Code::adjustEnterAndLeaveFrameTrapsState");
     AutoFlushICache::setRange(uintptr_t(codeSegment.base()), codeSegment.length());
@@ -540,7 +542,7 @@ DebugState::debugGetLocalTypes(uint32_t funcIndex, ValTypeVector* locals, size_t
     size_t offsetInModule = range.funcLineOrBytecode();
     Decoder d(maybeBytecode_->begin() + offsetInModule,  maybeBytecode_->end(),
               offsetInModule, /* error = */ nullptr);
-    return DecodeLocalEntries(d, metadata().kind, locals);
+    return DecodeLocalEntries(d, metadata().kind, metadata().temporaryHasGcTypes, locals);
 }
 
 ExprType
@@ -557,7 +559,7 @@ DebugState::getGlobal(Instance& instance, uint32_t globalIndex, MutableHandleVal
 
     if (global.isConstant()) {
         Val value = global.constantValue();
-        switch (value.type()) {
+        switch (value.type().code()) {
           case ValType::I32:
             vp.set(Int32Value(value.i32()));
             break;
@@ -577,9 +579,11 @@ DebugState::getGlobal(Instance& instance, uint32_t globalIndex, MutableHandleVal
         return true;
     }
 
-    uint8_t* globalData = instance.globalSegment().globalData();
+    uint8_t* globalData = instance.globalData();
     void* dataPtr = globalData + global.offset();
-    switch (global.type()) {
+    if (global.isIndirect())
+        dataPtr = *static_cast<void**>(dataPtr);
+    switch (global.type().code()) {
       case ValType::I32: {
         vp.set(Int32Value(*static_cast<int32_t*>(dataPtr)));
         break;
@@ -680,7 +684,17 @@ DebugState::getSourceMappingURL(JSContext* cx, MutableHandleString result) const
         if (!str)
             return false;
         result.set(str);
-        break;
+        return true;
+    }
+
+    // Check presence of "SourceMap:" HTTP response header.
+    char* sourceMapURL = metadata().sourceMapURL.get();
+    if (sourceMapURL && strlen(sourceMapURL)) {
+        UTF8Chars utf8Chars(sourceMapURL, strlen(sourceMapURL));
+        JSString* str = JS_NewStringCopyUTF8N(cx, utf8Chars);
+        if (!str)
+            return false;
+        result.set(str);
     }
     return true;
 }

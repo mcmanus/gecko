@@ -16,6 +16,10 @@ body.certerror .title {
   background-image: url("cert-error.svg");
 }
 
+body.blocked .title {
+  background-image: url("chrome://global/skin/icons/blocked.svg");
+}
+
 #errorContainer {
   display: none;
 }
@@ -157,6 +161,10 @@ span#hostname {
   padding: 10px;
 }
 
+.exceptionDialogButtonContainer[hidden] {
+  display: none;
+}
+
 .illustrated #errorPageContainer {
   min-height: 300px;
   display: flex;
@@ -201,5 +209,13 @@ span#hostname {
 }
 
 .malformedURI #errorTryAgain {
+  display: none;
+}
+
+#wrongSystemTimePanel {
+  display: none;
+}
+
+#wrongSystemTimeWithoutReferencePanel {
   display: none;
 }

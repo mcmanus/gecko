@@ -16,7 +16,11 @@
 
 namespace mozilla {
 
-class ServoDeclarationBlock;
+namespace dom {
+class DocGroup;
+} // namespace dom
+
+class DeclarationBlock;
 class ServoPageRule;
 
 class ServoPageRuleDeclaration final : public nsDOMCSSDeclaration
@@ -24,15 +28,15 @@ class ServoPageRuleDeclaration final : public nsDOMCSSDeclaration
 public:
   NS_DECL_ISUPPORTS_INHERITED
 
-  NS_IMETHOD GetParentRule(nsIDOMCSSRule** aParent) final;
+  css::Rule* GetParentRule() final;
   nsINode* GetParentObject() final;
 
 protected:
   DeclarationBlock* GetCSSDeclaration(Operation aOperation) final;
   nsresult SetCSSDeclaration(DeclarationBlock* aDecl) final;
   nsIDocument* DocToUpdate() final;
-  void GetCSSParsingEnvironment(CSSParsingEnvironment& aCSSParseEnv) final;
-  nsDOMCSSDeclaration::ServoCSSParsingEnvironment GetServoCSSParsingEnvironment() const final;
+  nsDOMCSSDeclaration::ParsingEnvironment
+  GetParsingEnvironment(nsIPrincipal* aSubjectPrincipal) const final;
 
 private:
   // For accessing the constructor.
@@ -45,7 +49,7 @@ private:
   inline ServoPageRule* Rule();
   inline const ServoPageRule* Rule() const;
 
-  RefPtr<ServoDeclarationBlock> mDecls;
+  RefPtr<DeclarationBlock> mDecls;
 };
 
 class ServoPageRule final : public dom::CSSPageRule
@@ -63,13 +67,13 @@ public:
   RawServoPageRule* Raw() const { return mRawRule; }
 
   // WebIDL interface
-  void GetCssTextImpl(nsAString& aCssText) const final;
+  void GetCssText(nsAString& aCssText) const final;
   nsICSSDeclaration* Style() final;
 
   // Methods of mozilla::css::Rule
-  already_AddRefed<css::Rule> Clone() const final;
   size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)
     const final;
+
 #ifdef DEBUG
   void List(FILE* out = stdout, int32_t aIndent = 0) const final;
 #endif

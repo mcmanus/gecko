@@ -26,28 +26,28 @@ const TEST_HEIGHT = 100;
 
 const {FlameGraph} = require("devtools/client/shared/widgets/FlameGraph");
 
-add_task(function* () {
-  yield addTab("about:blank");
-  yield performTest();
+add_task(async function() {
+  await addTab("about:blank");
+  await performTest();
   gBrowser.removeCurrentTab();
 });
 
-function* performTest() {
-  let [host,, doc] = yield createHost();
+async function performTest() {
+  const [host,, doc] = await createHost();
   doc.body.setAttribute("style",
                         "position: fixed; width: 100%; height: 100%; margin: 0;");
 
-  let graph = new FlameGraph(doc.body, 1);
+  const graph = new FlameGraph(doc.body, 1);
   graph.fixedWidth = TEST_WIDTH;
   graph.fixedHeight = TEST_HEIGHT;
   graph.horizontalPanThreshold = 0;
   graph.verticalPanThreshold = 0;
 
-  yield graph.ready();
+  await graph.ready();
 
   testGraph(graph);
 
-  yield graph.destroy();
+  await graph.destroy();
   host.destroy();
 }
 

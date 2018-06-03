@@ -1,6 +1,7 @@
 FROM          ubuntu:16.04
 MAINTAINER    Joel Maher <joel.maher@gmail.com>
 
+
 RUN mkdir /builds
 RUN useradd -d /builds/worker -s /bin/bash -m worker
 WORKDIR /builds/worker
@@ -18,6 +19,9 @@ ADD topsrcdir/python/mozbuild/mozbuild/action/tooltool.py /setup/tooltool.py
 
 # %include testing/mozharness/external_tools/robustcheckout.py
 ADD topsrcdir/testing/mozharness/external_tools/robustcheckout.py /usr/local/mercurial/robustcheckout.py
+
+# %include taskcluster/docker/recipes/hgrc
+COPY topsrcdir/taskcluster/docker/recipes/hgrc /etc/mercurial/hgrc.d/mozilla.rc
 
 # %include taskcluster/docker/recipes/common.sh
 ADD topsrcdir/taskcluster/docker/recipes/common.sh /setup/common.sh
@@ -40,11 +44,13 @@ RUN           bash /setup/system-setup.sh
 # %include taskcluster/docker/recipes/xvfb.sh
 ADD topsrcdir/taskcluster/docker/recipes/xvfb.sh /builds/worker/scripts/xvfb.sh
 
-# %include taskcluster/docker/recipes/run-task
-ADD topsrcdir/taskcluster/docker/recipes/run-task /builds/worker/bin/run-task
+# %include taskcluster/scripts/run-task
+ADD topsrcdir/taskcluster/scripts/run-task /builds/worker/bin/run-task
 
 # %include taskcluster/scripts/tester/test-linux.sh
 ADD topsrcdir/taskcluster/scripts/tester/test-linux.sh /builds/worker/bin/test-linux.sh
+
+ADD topsrcdir/python/mozbuild/mozbuild/action/tooltool.py /builds/worker/scripts/tooltool.py
 
 # Set variable normally configured at login, by the shells parent process, these
 # are taken from GNU su manual
@@ -60,23 +66,12 @@ ENV           LC_ALL        en_US.UTF-8
 COPY           dot-files/config              /builds/worker/.config
 COPY           dot-files/pulse               /builds/worker/.pulse
 RUN            chmod +x bin/*
-# TODO: remove this when buildbot is gone
-COPY           buildprops.json               /builds/worker/buildprops.json
-COPY           tc-vcs-config.yml /etc/taskcluster-vcs.yml
-
-# TODO: remove
-ADD            https://raw.githubusercontent.com/taskcluster/buildbot-step/master/buildbot_step /builds/worker/bin/buildbot_step
-RUN chmod u+x /builds/worker/bin/buildbot_step
 
 # allow the worker user to access video devices
 RUN usermod -a -G video worker
 
 RUN mkdir Documents; mkdir Pictures; mkdir Music; mkdir Videos; mkdir artifacts
 
-# install tc-vcs and tc-npm-cache
-RUN npm install -g taskcluster-vcs@2.3.12 \
- && npm install -g taskcluster-npm-cache@1.1.14 \
- && rm -rf ~/.npm
 ENV PATH $PATH:/builds/worker/bin
 
 # TODO Re-enable worker when bug 1093833 lands

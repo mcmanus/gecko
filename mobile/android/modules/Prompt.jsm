@@ -2,11 +2,9 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-"use strict"
+"use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   EventDispatcher: "resource://gre/modules/Messaging.jsm",
@@ -14,18 +12,10 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   Services: "resource://gre/modules/Services.jsm",
 });
 
-this.EXPORTED_SYMBOLS = ["Prompt", "DoorHanger"];
+var EXPORTED_SYMBOLS = ["Prompt", "DoorHanger"];
 
 function log(msg) {
   Services.console.logStringMessage(msg);
-}
-
-function getRootWindow(win) {
-  // Get the root xul window.
-  return win.QueryInterface(Ci.nsIInterfaceRequestor)
-            .getInterface(Ci.nsIDocShell).QueryInterface(Ci.nsIDocShellTreeItem)
-            .rootTreeItem.QueryInterface(Ci.nsIInterfaceRequestor)
-            .getInterface(Ci.nsIDOMWindow);
 }
 
 function Prompt(aOptions) {
@@ -34,8 +24,10 @@ function Prompt(aOptions) {
   this.msg = { async: true };
 
   if (this.window) {
-    let window = getRootWindow(this.window);
-    var tab = window &&
+    let window = GeckoViewUtils.getChromeWindow(this.window);
+    let tab = window &&
+              window.document.documentElement
+                    .getAttribute("windowtype") === "navigator:browser" &&
               window.BrowserApp &&
               window.BrowserApp.getTabForWindow(this.window);
     if (tab) {
@@ -44,9 +36,9 @@ function Prompt(aOptions) {
   }
 
   if (aOptions.priority === 1)
-    this.msg.type = "Prompt:ShowTop"
+    this.msg.type = "Prompt:ShowTop";
   else
-    this.msg.type = "Prompt:Show"
+    this.msg.type = "Prompt:Show";
 
   if ("title" in aOptions && aOptions.title != null)
     this.msg.title = aOptions.title;
@@ -190,8 +182,14 @@ Prompt.prototype = {
   },
 
   _innerShow: function() {
-    let dispatcher = GeckoViewUtils.getDispatcherForWindow(this.window) ||
-                     GeckoViewUtils.getActiveDispatcher();
+    let dispatcher;
+    if (this.window) {
+      dispatcher = GeckoViewUtils.getDispatcherForWindow(this.window);
+    }
+    if (!dispatcher) {
+      [dispatcher] = GeckoViewUtils.getActiveDispatcherAndWindow();
+    }
+
     dispatcher.sendRequestForResult(this.msg).then((data) => {
       if (this.callback) {
         this.callback(data);
@@ -200,7 +198,6 @@ Prompt.prototype = {
   },
 
   _setListItems: function(aItems) {
-    let hasSelected = false;
     this.msg.listitems = [];
 
     aItems.forEach(function(item) {
@@ -248,7 +245,7 @@ Prompt.prototype = {
     return this._setListItems(aItems);
   },
 
-}
+};
 
 var DoorHanger = {
   _getTabId: function(aWindow, aBrowserApp) {
@@ -258,7 +255,7 @@ var DoorHanger = {
   },
 
   show: function(aWindow, aMessage, aValue, aButtons, aOptions, aCategory) {
-    let chromeWin = getRootWindow(aWindow);
+    let chromeWin = GeckoViewUtils.getChromeWindow(aWindow);
     if (chromeWin.NativeWindow && chromeWin.NativeWindow.doorhanger) {
       // We're dealing with browser.js.
       return chromeWin.NativeWindow.doorhanger.show(
@@ -284,14 +281,20 @@ var DoorHanger = {
       buttons: aButtons,
       options: aOptions || {},
       category: aCategory,
+      defaultCallback: (aOptions && aOptions.defaultCallback) ? -1 : undefined,
     }).then(response => {
+      if (response.callback === -1) {
+        // Default case.
+        aOptions.defaultCallback(response.checked, response.inputs);
+        return;
+      }
       // Pass the value of the optional checkbox to the callback
       callbacks[response.callback](response.checked, response.inputs);
     });
   },
 
   hide: function(aWindow, aValue) {
-    let chromeWin = getRootWindow(aWindow);
+    let chromeWin = GeckoViewUtils.getChromeWindow(aWindow);
     if (chromeWin.NativeWindow && chromeWin.NativeWindow.doorhanger) {
       // We're dealing with browser.js.
       return chromeWin.NativeWindow.doorhanger.hide(

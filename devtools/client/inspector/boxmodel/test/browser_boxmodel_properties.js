@@ -79,37 +79,37 @@ const res2 = [
   },
 ];
 
-add_task(function* () {
-  yield addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
-  let { inspector, boxmodel, testActor } = yield openLayoutView();
-  yield selectNode("div", inspector);
+add_task(async function() {
+  await addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
+  const { inspector, boxmodel, testActor } = await openLayoutView();
+  await selectNode("div", inspector);
 
-  yield testInitialValues(inspector, boxmodel);
-  yield testChangingValues(inspector, boxmodel, testActor);
+  await testInitialValues(inspector, boxmodel);
+  await testChangingValues(inspector, boxmodel, testActor);
 });
 
-function* testInitialValues(inspector, boxmodel) {
+function testInitialValues(inspector, boxmodel) {
   info("Test that the initial values of the box model are correct");
-  let doc = boxmodel.document;
+  const doc = boxmodel.document;
 
-  for (let { property, value } of res1) {
-    let elt = doc.querySelector(getPropertySelector(property));
+  for (const { property, value } of res1) {
+    const elt = doc.querySelector(getPropertySelector(property));
     is(elt.textContent, value, property + " has the right value.");
   }
 }
 
-function* testChangingValues(inspector, boxmodel, testActor) {
+async function testChangingValues(inspector, boxmodel, testActor) {
   info("Test that changing the document updates the box model");
-  let doc = boxmodel.document;
+  const doc = boxmodel.document;
 
-  let onUpdated = waitForUpdate(inspector);
-  yield testActor.setAttribute("div", "style",
+  const onUpdated = waitForUpdate(inspector);
+  await testActor.setAttribute("div", "style",
                                "box-sizing:content-box;float:right;" +
                                "line-height:10px;position:static;z-index:5;");
-  yield onUpdated;
+  await onUpdated;
 
-  for (let { property, value } of res2) {
-    let elt = doc.querySelector(getPropertySelector(property));
+  for (const { property, value } of res2) {
+    const elt = doc.querySelector(getPropertySelector(property));
     is(elt.textContent, value, property + " has the right value after style update.");
   }
 }

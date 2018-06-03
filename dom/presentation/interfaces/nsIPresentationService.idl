@@ -4,14 +4,15 @@
 
 #include "nsISupports.idl"
 
-interface nsIDOMBlob;
-interface nsIDOMEventTarget;
 interface nsIInputStream;
 interface nsIPresentationAvailabilityListener;
 interface nsIPresentationRespondingListener;
 interface nsIPresentationSessionListener;
 interface nsIPresentationTransportBuilderConstructor;
 interface nsIPrincipal;
+
+webidl Blob;
+webidl EventTarget;
 
 %{C++
 #define PRESENTATION_SERVICE_CID \
@@ -83,7 +84,7 @@ interface nsIPresentationService : nsISupports
                                in DOMString origin,
                                in DOMString deviceId,
                                in unsigned long long windowId,
-                               in nsIDOMEventTarget eventTarget,
+                               in EventTarget eventTarget,
                                in nsIPrincipal principal,
                                in nsIPresentationServiceCallback callback,
                                in nsIPresentationTransportBuilderConstructor constructor);
@@ -119,7 +120,7 @@ interface nsIPresentationService : nsISupports
    */
   void sendSessionBlob(in DOMString sessionId,
                        in uint8_t role,
-                       in nsIDOMBlob blob);
+                       in Blob blob);
 
   /*
    * Close the session.

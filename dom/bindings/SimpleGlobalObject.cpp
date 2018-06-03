@@ -46,8 +46,10 @@ SimpleGlobal_finalize(js::FreeOp *fop, JSObject *obj)
 {
   SimpleGlobalObject* globalObject =
     static_cast<SimpleGlobalObject*>(JS_GetPrivate(obj));
-  globalObject->ClearWrapper(obj);
-  NS_RELEASE(globalObject);
+  if (globalObject) {
+    globalObject->ClearWrapper(obj);
+    NS_RELEASE(globalObject);
+  }
 }
 
 static size_t
@@ -55,7 +57,9 @@ SimpleGlobal_moved(JSObject *obj, JSObject *old)
 {
   SimpleGlobalObject* globalObject =
     static_cast<SimpleGlobalObject*>(JS_GetPrivate(obj));
-  globalObject->UpdateWrapper(obj, old);
+  if (globalObject) {
+    globalObject->UpdateWrapper(obj, old);
+  }
   return 0;
 }
 
@@ -104,7 +108,7 @@ SimpleGlobalObject::Create(GlobalType globalType, JS::Handle<JS::Value> proto)
     jsapi.Init();
     JSContext* cx = jsapi.cx();
 
-    JS::CompartmentOptions options;
+    JS::RealmOptions options;
     options.creationOptions()
            .setInvisibleToDebugger(true)
            // Put our SimpleGlobalObjects in the system zone, so we won't create
@@ -114,7 +118,7 @@ SimpleGlobalObject::Create(GlobalType globalType, JS::Handle<JS::Value> proto)
            .setSystemZone();
 
     if (NS_IsMainThread()) {
-      nsCOMPtr<nsIPrincipal> principal = NullPrincipal::Create();
+      nsCOMPtr<nsIPrincipal> principal = NullPrincipal::CreateWithoutOriginAttributes();
       options.creationOptions().setTrace(xpc::TraceXPCGlobal);
       global = xpc::CreateGlobalObject(cx, js::Jsvalify(&SimpleGlobalClass),
                                        nsJSPrincipals::get(principal),
@@ -130,7 +134,7 @@ SimpleGlobalObject::Create(GlobalType globalType, JS::Handle<JS::Value> proto)
       return nullptr;
     }
 
-    JSAutoCompartment ac(cx, global);
+    JSAutoRealm ar(cx, global);
 
     // It's important to create the nsIGlobalObject for our new global before we
     // start trying to wrap things like the prototype into its compartment,

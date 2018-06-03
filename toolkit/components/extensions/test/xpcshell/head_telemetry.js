@@ -4,8 +4,8 @@
 
 /* exported IS_OOP, arraySum, clearHistograms, getSnapshots, promiseTelemetryRecorded */
 
-XPCOMUtils.defineLazyModuleGetter(this, "ContentTaskUtils",
-                                  "resource://testing-common/ContentTaskUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "ContentTaskUtils",
+                               "resource://testing-common/ContentTaskUtils.jsm");
 
 const IS_OOP = Services.prefs.getBoolPref("extensions.webextensions.remote");
 
@@ -15,24 +15,20 @@ function arraySum(arr) {
 
 function clearHistograms() {
   Services.telemetry.snapshotHistograms(Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTIN,
-                                        true /* subsession */,
                                         true /* clear */);
 }
 
 function getSnapshots(process) {
   return Services.telemetry.snapshotHistograms(Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTIN,
-                                               true /* subsession */,
                                                false /* clear */)[process];
 }
 
-// There is no good way to make sure that the parent received the histogram
-// entries from the extension and content processes.
-// Let's stick to the ugly, spinning the event loop until we have a good
-// approach (Bug 1357509).
+// TODO Bug 1357509: There is no good way to make sure that the parent received
+// the histogram entries from the extension and content processes.  Let's stick
+// to the ugly, spinning the event loop until we have a good approach.
 function promiseTelemetryRecorded(id, process, expectedCount) {
   let condition = () => {
     let snapshot = Services.telemetry.snapshotHistograms(Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTIN,
-                                                         true /* subsession */,
                                                          false /* clear */)[process][id];
     return snapshot && arraySum(snapshot.counts) >= expectedCount;
   };

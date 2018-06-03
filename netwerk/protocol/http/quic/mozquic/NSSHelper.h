@@ -14,13 +14,29 @@ namespace mozquic {
 
 class MozQuic;
 
+enum operationType {
+  kEncrypt0,
+  kDecrypt0,
+//  kEncrypt1,
+//  kDecrypt1,
+  kEncryptHandshake,
+  kDecryptHandshake,
+  kEncrypt0RTT,
+  kDecrypt0RTT,
+};
+
+// if you Read() from the helper, it pulls through the tls layer from the mozquic::stream0 buffer where
+// peer data lke the client hello is stored.. if you Write() to the helper something
+// like "", the tls layer adds the server hello on the way out into mozquic::stream0
+
 class NSSHelper final
 {
 public:
   static int Init(char *dir);
   NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *originKey);
-  NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *originKey, bool clientindicator); // todo, subclass
+  NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *originKey, bool clientindicator);
   ~NSSHelper();
+  uint32_t ReadTLSData();
   uint32_t DriveHandshake();
   bool IsHandshakeComplete() { return mHandshakeComplete; }
   uint32_t HandshakeSecret(unsigned int ciphersuite, unsigned char *sendSecret, unsigned char *recvSecret);
@@ -35,6 +51,29 @@ public:
                         uint64_t packetNumber, unsigned char *out, uint32_t outAvail,
                         uint32_t &written);
 
+
+  uint32_t EncryptHandshake(const unsigned char *aeadData, uint32_t aeadLen,
+                            const unsigned char *plaintext, uint32_t plaintextLen,
+                            uint64_t packetNumber, CID cid,
+                            unsigned char *out, uint32_t outAvail,
+                            uint32_t &written);
+
+  uint32_t DecryptHandshake(const unsigned char *aeadData, uint32_t aeadLen,
+                            const unsigned char *ciphertext, uint32_t ciphertextLen,
+                            uint64_t packetNumber, CID cid,
+                            unsigned char *out, uint32_t outAvail,
+                            uint32_t &written);
+
+  uint32_t EncryptBlock0RTT(const unsigned char *aeadData, uint32_t aeadLen,
+                            const unsigned char *plaintext, uint32_t plaintextLen,
+                            uint64_t packetNumber, unsigned char *out, uint32_t outAvail,
+                            uint32_t &written);
+
+  uint32_t DecryptBlock0RTT(const unsigned char *aeadData, uint32_t aeadLen,
+                            const unsigned char *ciphertext, uint32_t ciphertextLen,
+                            uint64_t packetNumber, unsigned char *out, uint32_t outAvail,
+                            uint32_t &written);
+
   bool SetLocalTransportExtensionInfo(const unsigned char *data, uint16_t datalen); // local data to send
   bool SetRemoteTransportExtensionInfo(const unsigned char *data, uint16_t datalen); // remote data recvd
   void GetRemoteTransportExtensionInfo(unsigned char * &_output, uint16_t &actual) {
@@ -46,7 +85,12 @@ public:
 
   bool DoHRR() {return mDoHRR;}
 
+  bool IsEarlyDataPossible();
+  bool IsEarlyDataAcceptedServer();
+  bool IsEarlyDataAcceptedClient();
+
 private:
+  void SharedInit();
   static PRStatus NSPRGetPeerName(PRFileDesc *aFD, PRNetAddr*addr);
   static PRStatus NSPRGetSocketOption(PRFileDesc *aFD, PRSocketOptionData *aOpt);
   static PRStatus nssHelperConnect(PRFileDesc *fd, const PRNetAddr *addr, PRIntervalTime to);
@@ -61,7 +105,7 @@ private:
                                                 unsigned int clientTokenLen, unsigned char *retryToken,
                                                 unsigned int *retryTokenLen, unsigned int retryTokMax,
                                                 void *arg);
-  static void HandshakeCallback(PRFileDesc *fd, void *client_data);
+  static void HandshakeCallback(PRFileDesc *fd, void *);
   static SECStatus BadCertificate(void *client_data, PRFileDesc *fd);
 
   static PRBool TransportExtensionWriter(PRFileDesc *fd, SSLHandshakeType m, PRUint8 *data,
@@ -69,18 +113,27 @@ private:
   static SECStatus TransportExtensionHandler(PRFileDesc *fd, SSLHandshakeType m, const PRUint8 *data,
                                              unsigned int len, SSLAlertDescription *alert, void *arg);
   
-  uint32_t BlockOperation(bool encrypt, const unsigned char *aeadData, uint32_t aeadLen,
+  uint32_t BlockOperation(enum operationType mode, const unsigned char *aeadData, uint32_t aeadLen,
                           const unsigned char *plaintext, uint32_t plaintextLen,
                           uint64_t packetNumber, unsigned char *out, uint32_t outAvail,
                           uint32_t &written);
-  uint32_t MakeKeyFromNSS(PRFileDesc *fd, const char *label,
+  uint32_t MakeKeyFromNSS(PRFileDesc *fd, bool earlyKey, const char *label,
                           unsigned int secretSize, unsigned int keySize, SSLHashType hashType,
                           CK_MECHANISM_TYPE importMechanism1, CK_MECHANISM_TYPE importMechanism2,
                           unsigned char *outIV, PK11SymKey **outKey);
-  uint32_t MakeKeyFromRaw(unsigned char *initialSecret,
+public:
+  static uint32_t MakeKeyFromRaw(unsigned char *initialSecret,
                           unsigned int secretSize, unsigned int keySize, SSLHashType hashType,
                           CK_MECHANISM_TYPE importMechanism1, CK_MECHANISM_TYPE importMechanism2,
                           unsigned char *outIV, PK11SymKey **outKey);
+  static uint32_t staticDecryptHandshake(const unsigned char *aadData, uint32_t aadLen,
+                                         const unsigned char *data, uint32_t dataLen,
+                                         uint64_t packetNumber, CID connectionID,
+                                         unsigned char *out, uint32_t outAvail, uint32_t &written);
+
+  static uint64_t SockAddrHasher(const struct sockaddr *);
+
+private:
   static void GetKeyParamsFromCipherSuite(uint16_t cipherSuite,
                                           unsigned int &secretSize,
                                           unsigned int &keySize,
@@ -88,7 +141,8 @@ private:
                                           CK_MECHANISM_TYPE &packetMechanism,
                                           CK_MECHANISM_TYPE &importMechanism1,
                                           CK_MECHANISM_TYPE &importMechanism2);
-
+  void MakeHandshakeKeys(CID cid);
+  
   MozQuic             *mMozQuic;
   PRFileDesc          *mFD;
   bool                 mNSSReady;
@@ -113,6 +167,16 @@ private:
   unsigned char       mPacketProtectionSenderIV0[12];
   PK11SymKey         *mPacketProtectionReceiverKey0;
   unsigned char       mPacketProtectionReceiverIV0[12];
+
+  CK_MECHANISM_TYPE   mPacketProtectionMech0RTT;
+  PK11SymKey         *mPacketProtectionKey0RTT;
+  unsigned char       mPacketProtectionIV0RTT[12];
+
+  CID                 mPacketProtectionHandshakeCID;
+  PK11SymKey         *mPacketProtectionHandshakeSenderKey;
+  unsigned char       mPacketProtectionHandshakeSenderIV[12];
+  PK11SymKey         *mPacketProtectionHandshakeReceiverKey;
+  unsigned char       mPacketProtectionHandshakeReceiverIV[12];
 };
 
 } //namespace

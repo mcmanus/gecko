@@ -43,42 +43,62 @@ they're nestable.
 #[macro_use]
 extern crate bitflags;
 #[macro_use]
+extern crate cfg_if;
+#[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate log;
+#[cfg(any(feature = "serde"))]
+#[macro_use]
+extern crate serde;
 #[macro_use]
 extern crate thread_profiler;
 
+mod batch;
 mod border;
+mod box_shadow;
+#[cfg(any(feature = "capture", feature = "replay"))]
+mod capture;
 mod clip;
 mod clip_scroll_node;
 mod clip_scroll_tree;
 mod debug_colors;
+#[cfg(feature = "debug_renderer")]
 mod debug_font_data;
+#[cfg(feature = "debug_renderer")]
 mod debug_render;
 #[cfg(feature = "debugger")]
 mod debug_server;
 mod device;
+mod display_list_flattener;
 mod ellipse;
-mod frame;
 mod frame_builder;
 mod freelist;
-mod geometry;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod gamma_lut;
 mod glyph_cache;
 mod glyph_rasterizer;
 mod gpu_cache;
+#[cfg(feature = "pathfinder")]
+mod gpu_glyph_renderer;
 mod gpu_types;
+mod hit_test;
+mod image;
 mod internal_types;
+mod picture;
 mod prim_store;
 mod print_tree;
 mod profiler;
+mod query;
 mod record;
 mod render_backend;
 mod render_task;
 mod renderer;
 mod resource_cache;
 mod scene;
-mod spring;
+mod scene_builder;
+mod segment;
+mod shade;
 mod texture_allocator;
 mod texture_cache;
 mod tiling;
@@ -132,26 +152,40 @@ extern crate euclid;
 extern crate fxhash;
 extern crate gleam;
 extern crate num_traits;
+#[cfg(feature = "pathfinder")]
+extern crate pathfinder_font_renderer;
+#[cfg(feature = "pathfinder")]
+extern crate pathfinder_gfx_utils;
+#[cfg(feature = "pathfinder")]
+extern crate pathfinder_partitioner;
+#[cfg(feature = "pathfinder")]
+extern crate pathfinder_path_utils;
 extern crate plane_split;
 extern crate rayon;
-#[cfg(feature = "debugger")]
-#[macro_use]
-extern crate serde_derive;
+#[cfg(feature = "ron")]
+extern crate ron;
 #[cfg(feature = "debugger")]
 extern crate serde_json;
+extern crate smallvec;
 extern crate time;
 #[cfg(feature = "debugger")]
 extern crate ws;
+#[cfg(feature = "debugger")]
+extern crate image as image_loader;
+#[cfg(feature = "debugger")]
+extern crate base64;
+#[cfg(all(feature = "capture", feature = "png"))]
+extern crate png;
+
 pub extern crate webrender_api;
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-extern crate gamma_lut;
-
 #[doc(hidden)]
-pub use device::build_shader_strings;
-pub use renderer::{ALPHA_PRIM_DBG, PROFILER_DBG, RENDER_TARGET_DBG, TEXTURE_CACHE_DBG};
-pub use renderer::{CpuProfile, DebugFlags, GpuProfile, OutputImageHandler, RendererKind};
-pub use renderer::{ExternalImage, ExternalImageHandler, ExternalImageSource};
-pub use renderer::{GraphicsApi, GraphicsApiInfo, ReadPixelsFormat, Renderer, RendererOptions};
+pub use device::{build_shader_strings, ReadPixelsFormat, UploadMethod, VertexUsageHint};
+pub use device::{ProgramBinary, ProgramCache, ProgramCacheObserver, ProgramSources};
+pub use renderer::{AsyncPropertySampler, CpuProfile, DebugFlags, OutputImageHandler, RendererKind};
+pub use renderer::{ExternalImage, ExternalImageHandler, ExternalImageSource, GpuProfile};
+pub use renderer::{GraphicsApi, GraphicsApiInfo, PipelineInfo, Renderer, RendererOptions};
+pub use renderer::{RendererStats, SceneBuilderHooks, ThreadListener};
 pub use renderer::MAX_VERTEX_TEXTURE_WIDTH;
 pub use webrender_api as api;
+pub use resource_cache::intersect_for_tile;

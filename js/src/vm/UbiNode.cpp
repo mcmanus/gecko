@@ -13,10 +13,7 @@
 
 #include <algorithm>
 
-#include "jscntxt.h"
-#include "jsobj.h"
-#include "jsscript.h"
-#include "jsstr.h"
+#include "builtin/String.h"
 
 #include "jit/IonCode.h"
 #include "js/Debug.h"
@@ -24,20 +21,26 @@
 #include "js/TypeDecls.h"
 #include "js/Utility.h"
 #include "js/Vector.h"
+#include "util/Text.h"
+#ifdef ENABLE_BIGINT
+#include "vm/BigIntType.h"
+#endif
 #include "vm/Debugger.h"
 #include "vm/EnvironmentObject.h"
 #include "vm/GlobalObject.h"
+#include "vm/JSContext.h"
+#include "vm/JSObject.h"
+#include "vm/JSScript.h"
 #include "vm/Scope.h"
 #include "vm/Shape.h"
-#include "vm/String.h"
-#include "vm/Symbol.h"
+#include "vm/StringType.h"
+#include "vm/SymbolType.h"
 
-#include "jsobjinlines.h"
 #include "vm/Debugger-inl.h"
+#include "vm/JSObject-inl.h"
 
 using namespace js;
 
-using mozilla::Some;
 using mozilla::RangedPtr;
 using JS::DispatchTyped;
 using JS::HandleValue;
@@ -203,7 +206,13 @@ Node::exposeToJS() const
         v.setString(as<JSString>());
     } else if (is<JS::Symbol>()) {
         v.setSymbol(as<JS::Symbol>());
-    } else {
+    }
+#ifdef ENABLE_BIGINT
+    else if (is<BigInt>()) {
+        v.setBigInt(as<BigInt>());
+    }
+#endif
+    else {
         v.setUndefined();
     }
 
@@ -257,7 +266,7 @@ class EdgeVectorTracer : public JS::CallbackTracer {
         // ownership of name; if the append succeeds, the vector element
         // then takes ownership; if the append fails, then the temporary
         // retains it, and its destructor will free it.
-        if (!vec->append(mozilla::Move(Edge(name16, Node(thing))))) {
+        if (!vec->append(std::move(Edge(name16, Node(thing))))) {
             okay = false;
             return;
         }
@@ -315,6 +324,9 @@ template JS::Zone* TracerConcrete<js::ObjectGroup>::zone() const;
 template JS::Zone* TracerConcrete<js::RegExpShared>::zone() const;
 template JS::Zone* TracerConcrete<js::Scope>::zone() const;
 template JS::Zone* TracerConcrete<JS::Symbol>::zone() const;
+#ifdef ENABLE_BIGINT
+template JS::Zone* TracerConcrete<BigInt>::zone() const;
+#endif
 template JS::Zone* TracerConcrete<JSString>::zone() const;
 
 template<typename Referent>
@@ -338,6 +350,9 @@ template UniquePtr<EdgeRange> TracerConcrete<js::ObjectGroup>::edges(JSContext* 
 template UniquePtr<EdgeRange> TracerConcrete<js::RegExpShared>::edges(JSContext* cx, bool wantNames) const;
 template UniquePtr<EdgeRange> TracerConcrete<js::Scope>::edges(JSContext* cx, bool wantNames) const;
 template UniquePtr<EdgeRange> TracerConcrete<JS::Symbol>::edges(JSContext* cx, bool wantNames) const;
+#ifdef ENABLE_BIGINT
+template UniquePtr<EdgeRange> TracerConcrete<BigInt>::edges(JSContext* cx, bool wantNames) const;
+#endif
 template UniquePtr<EdgeRange> TracerConcrete<JSString>::edges(JSContext* cx, bool wantNames) const;
 
 template<typename Referent>
@@ -393,6 +408,9 @@ Concrete<JSObject>::jsObjectConstructorName(JSContext* cx, UniqueTwoByteChars& o
 }
 
 const char16_t Concrete<JS::Symbol>::concreteTypeName[] = u"JS::Symbol";
+#ifdef ENABLE_BIGINT
+const char16_t Concrete<BigInt>::concreteTypeName[] = u"JS::BigInt";
+#endif
 const char16_t Concrete<JSScript>::concreteTypeName[] = u"JSScript";
 const char16_t Concrete<js::LazyScript>::concreteTypeName[] = u"js::LazyScript";
 const char16_t Concrete<js::jit::JitCode>::concreteTypeName[] = u"js::jit::JitCode";
@@ -456,7 +474,7 @@ RootList::init(CompartmentSet& debuggees)
         if (zone && !debuggeeZones.has(zone))
             continue;
 
-        if (!edges.append(mozilla::Move(edge)))
+        if (!edges.append(std::move(edge)))
             return false;
     }
 
@@ -507,7 +525,7 @@ RootList::addRoot(Node node, const char16_t* edgeName)
             return false;
     }
 
-    return edges.append(mozilla::Move(Edge(name.release(), node)));
+    return edges.append(std::move(Edge(name.release(), node)));
 }
 
 const char16_t Concrete<RootList>::concreteTypeName[] = u"JS::ubi::RootList";

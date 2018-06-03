@@ -5,10 +5,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "jscompartment.h"
 #include "jsfriendapi.h"
 
 #include "jsapi-tests/tests.h"
+#include "vm/JSCompartment.h"
 
 using namespace js;
 
@@ -115,7 +115,7 @@ template<JSObject* CreateWithBuffer(JSContext*, JS::HandleObject, uint32_t, int3
 bool
 TestArrayFromBuffer(JSContext* cx)
 {
-    if (Shared && !cx->compartment()->creationOptions().getSharedMemoryAndAtomicsEnabled())
+    if (Shared && !cx->realm()->creationOptions().getSharedMemoryAndAtomicsEnabled())
         return true;
 
     size_t elts = 8;

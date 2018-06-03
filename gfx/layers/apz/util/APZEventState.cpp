@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -10,6 +11,7 @@
 #include "gfxPrefs.h"
 #include "LayersLogging.h"
 #include "mozilla/BasicEvents.h"
+#include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/TabGroup.h"
 #include "mozilla/IntegerPrintfMacros.h"
@@ -19,7 +21,6 @@
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "nsCOMPtr.h"
 #include "nsDocShell.h"
-#include "nsIDOMMouseEvent.h"
 #include "nsIDOMWindowUtils.h"
 #include "nsINamed.h"
 #include "nsIScrollableFrame.h"
@@ -30,7 +31,6 @@
 #include "nsLayoutUtils.h"
 #include "nsQueryFrame.h"
 #include "TouchManager.h"
-#include "nsIDOMMouseEvent.h"
 #include "nsLayoutUtils.h"
 #include "nsIScrollableFrame.h"
 #include "nsIScrollbarMediator.h"
@@ -101,7 +101,7 @@ APZEventState::APZEventState(nsIWidget* aWidget,
                              ContentReceivedInputBlockCallback&& aCallback)
   : mWidget(nullptr)  // initialized in constructor body
   , mActiveElementManager(new ActiveElementManager())
-  , mContentReceivedInputBlockCallback(Move(aCallback))
+  , mContentReceivedInputBlockCallback(std::move(aCallback))
   , mPendingTouchPreventedResponse(false)
   , mPendingTouchPreventedBlockId(0)
   , mEndTouchIsClick(false)
@@ -207,7 +207,7 @@ APZEventState::ProcessSingleTap(const CSSPoint& aPoint,
   LayoutDevicePoint ldPoint = aPoint * aScale;
 
   APZES_LOG("Scheduling timer for click event\n");
-  nsCOMPtr<nsITimer> timer = do_CreateInstance(NS_TIMER_CONTRACTID);
+  nsCOMPtr<nsITimer> timer = NS_NewTimer();
   dom::TabChild* tabChild = widget->GetOwningTabChild();
 
   if (tabChild && XRE_IsContentProcess()) {
@@ -241,7 +241,7 @@ APZEventState::FireContextmenuEvents(const nsCOMPtr<nsIPresShell>& aPresShell,
   bool eventHandled =
       APZCCallbackHelper::DispatchMouseEvent(aPresShell, NS_LITERAL_STRING("contextmenu"),
                          aPoint, 2, 1, WidgetModifiersToDOMModifiers(aModifiers), true,
-                         nsIDOMMouseEvent::MOZ_SOURCE_TOUCH,
+                         dom::MouseEventBinding::MOZ_SOURCE_TOUCH,
                          0 /* Use the default value here. */);
 
   APZES_LOG("Contextmenu event handled: %d\n", eventHandled);
@@ -386,7 +386,7 @@ APZEventState::ProcessTouchEvent(const WidgetTouchEvent& aEvent,
     break;
   }
 
-  if (sentContentResponse &&
+  if (sentContentResponse && !isTouchPrevented &&
         aApzResponse == nsEventStatus_eConsumeDoDefault &&
         gfxPrefs::PointerEventsEnabled()) {
     WidgetTouchEvent cancelEvent(aEvent);

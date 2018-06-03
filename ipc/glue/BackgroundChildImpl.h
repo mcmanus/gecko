@@ -204,6 +204,12 @@ protected:
   virtual bool
   DeallocPGamepadTestChannelChild(PGamepadTestChannelChild* aActor) override;
 
+  virtual PClientManagerChild*
+  AllocPClientManagerChild() override;
+
+  virtual bool
+  DeallocPClientManagerChild(PClientManagerChild* aActor) override;
+
 #ifdef EARLY_BETA_OR_EARLIER
   virtual void
   OnChannelReceivedMessage(const Message& aMsg) override;
@@ -231,6 +237,13 @@ protected:
 
   bool
   GetMessageSchedulerGroups(const Message& aMsg, SchedulerGroupSet& aGroups) override;
+
+  virtual PMIDIPortChild* AllocPMIDIPortChild(const MIDIPortInfo& aPortInfo,
+                                              const bool& aSysexEnabled) override;
+  virtual bool DeallocPMIDIPortChild(PMIDIPortChild*) override;
+
+  virtual PMIDIManagerChild* AllocPMIDIManagerChild() override;
+  virtual bool DeallocPMIDIManagerChild(PMIDIManagerChild*) override;
 };
 
 class BackgroundChildImpl::ThreadLocal final

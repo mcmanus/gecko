@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -45,7 +46,7 @@ public:
     if (mDecodedBuffer) {
       // Right now this only happens if the Image was never drawn, otherwise
       // this will have been tossed away at surface destruction.
-      mRecycleBin->RecycleBuffer(Move(mDecodedBuffer), mSize.height * mStride);
+      mRecycleBin->RecycleBuffer(std::move(mDecodedBuffer), mSize.height * mStride);
     }
   }
 
@@ -79,7 +80,7 @@ public:
   BasicImageFactory() {}
 
   virtual RefPtr<PlanarYCbCrImage>
-  CreatePlanarYCbCrImage(const gfx::IntSize& aScaleHint, BufferRecycleBin* aRecycleBin)
+  CreatePlanarYCbCrImage(const gfx::IntSize& aScaleHint, BufferRecycleBin* aRecycleBin) override
   {
     return new BasicPlanarYCbCrImage(aScaleHint, gfxPlatform::GetPlatform()->GetOffscreenFormat(), aRecycleBin);
   }
@@ -164,7 +165,7 @@ BasicPlanarYCbCrImage::GetAsSourceSurface()
     surface = drawTarget->Snapshot();
   }
 
-  mRecycleBin->RecycleBuffer(Move(mDecodedBuffer), mSize.height * mStride);
+  mRecycleBin->RecycleBuffer(std::move(mDecodedBuffer), mSize.height * mStride);
 
   mSourceSurface = surface;
   return surface.forget();

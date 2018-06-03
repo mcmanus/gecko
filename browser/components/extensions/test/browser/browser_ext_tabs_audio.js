@@ -159,7 +159,7 @@ add_task(async function() {
   });
 
   extension.onMessage("change-tab", (tabId, attr, on) => {
-    let {Management: {global: {tabTracker}}} = Cu.import("resource://gre/modules/Extension.jsm", {});
+    let {Management: {global: {tabTracker}}} = ChromeUtils.import("resource://gre/modules/Extension.jsm", {});
 
     let tab = tabTracker.getTab(tabId);
 
@@ -196,6 +196,6 @@ add_task(async function() {
 
   await extension.unload();
 
-  await BrowserTestUtils.removeTab(tab1);
-  await BrowserTestUtils.removeTab(tab2);
+  BrowserTestUtils.removeTab(tab1);
+  BrowserTestUtils.removeTab(tab2);
 });

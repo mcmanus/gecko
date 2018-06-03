@@ -115,7 +115,6 @@ namespace jit {
     _(JSOP_INITHIDDENPROP)     \
     _(JSOP_INITPROP_GETTER)    \
     _(JSOP_INITPROP_SETTER)    \
-    _(JSOP_ARRAYPUSH)          \
     _(JSOP_GETELEM)            \
     _(JSOP_SETELEM)            \
     _(JSOP_STRICTSETELEM)      \
@@ -257,7 +256,8 @@ namespace jit {
     _(JSOP_OBJWITHPROTO)       \
     _(JSOP_FUNWITHPROTO)       \
     _(JSOP_CLASSCONSTRUCTOR)   \
-    _(JSOP_DERIVEDCONSTRUCTOR)
+    _(JSOP_DERIVEDCONSTRUCTOR) \
+    _(JSOP_IMPORTMETA)
 
 class BaselineCompiler : public BaselineCompilerSpecific
 {
@@ -380,6 +380,7 @@ class BaselineCompiler : public BaselineCompilerSpecific
 };
 
 extern const VMFunction NewArrayCopyOnWriteInfo;
+extern const VMFunction ImplicitThisInfo;
 
 } // namespace jit
 } // namespace js

@@ -14,7 +14,7 @@ var gThreadClient;
 var gCallback;
 
 function run_test() {
-  run_test_with_server(DebuggerServer, function () {
+  run_test_with_server(DebuggerServer, function() {
     run_test_with_server(WorkerDebuggerServer, do_test_finished);
   });
   do_test_pending();
@@ -29,9 +29,9 @@ function run_test_with_server(server, callback) {
   }.toString());
 
   gClient = new DebuggerClient(server.connectPipe());
-  gClient.connect().then(function () {
+  gClient.connect().then(function() {
     attachTestTabAndResume(gClient, "test-grips",
-                           function (response, tabClient, threadClient) {
+                           function(response, tabClient, threadClient) {
                              gThreadClient = threadClient;
                              test_object_grip();
                            });
@@ -39,36 +39,37 @@ function run_test_with_server(server, callback) {
 }
 
 function test_object_grip() {
-  gThreadClient.addOneTimeListener("paused", function (event, packet) {
-    let [f, s, ne, e] = packet.frame.arguments;
-    let [fClient, sClient, neClient, eClient] = packet.frame.arguments.map(
+  gThreadClient.addOneTimeListener("paused", function(event, packet) {
+    const [f, s, ne, e] = packet.frame.arguments;
+    const [fClient, sClient, neClient, eClient] = packet.frame.arguments.map(
       a => gThreadClient.pauseGrip(a));
 
-    do_check_false(f.extensible);
-    do_check_false(fClient.isExtensible);
+    Assert.ok(!f.extensible);
+    Assert.ok(!fClient.isExtensible);
 
-    do_check_false(s.extensible);
-    do_check_false(sClient.isExtensible);
+    Assert.ok(!s.extensible);
+    Assert.ok(!sClient.isExtensible);
 
-    do_check_false(ne.extensible);
-    do_check_false(neClient.isExtensible);
+    Assert.ok(!ne.extensible);
+    Assert.ok(!neClient.isExtensible);
 
-    do_check_true(e.extensible);
-    do_check_true(eClient.isExtensible);
+    Assert.ok(e.extensible);
+    Assert.ok(eClient.isExtensible);
 
     gThreadClient.resume(_ => {
       gClient.close().then(gCallback);
     });
   });
 
-  gDebuggee.eval("(" + function () {
-    let f = {};
+  /* eslint-disable no-undef */
+  gDebuggee.eval("(" + function() {
+    const f = {};
     Object.freeze(f);
-    let s = {};
+    const s = {};
     Object.seal(s);
-    let ne = {};
+    const ne = {};
     Object.preventExtensions(ne);
     stopMe(f, s, ne, {});
   } + "())");
+  /* eslint-enable no-undef */
 }
-

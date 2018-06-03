@@ -40,9 +40,9 @@ const TEST_ARRAY = [{
   expectedClasses: ["class", "a", "class2", "class3", "class4", "class5"]
 }];
 
-add_task(function* () {
-  yield addTab("data:text/html;charset=utf-8,");
-  let {testActor, inspector, view} = yield openRuleView();
+add_task(async function() {
+  await addTab("data:text/html;charset=utf-8,");
+  const {testActor, inspector, view} = await openRuleView();
 
   info("Open the class panel");
   view.showClassPanel();
@@ -53,30 +53,30 @@ add_task(function* () {
   textField.focus();
 
   let onMutation;
-  for (let {textEntered, expectNoMutation, expectedClasses} of TEST_ARRAY) {
+  for (const {textEntered, expectNoMutation, expectedClasses} of TEST_ARRAY) {
     if (!expectNoMutation) {
       onMutation = inspector.once("markupmutation");
     }
 
     info(`Enter the test string in the field: ${textEntered}`);
-    for (let key of textEntered.split("")) {
+    for (const key of textEntered.split("")) {
       EventUtils.synthesizeKey(key, {}, view.styleWindow);
     }
 
     info("Submit the change and wait for the textfield to become empty");
-    let onEmpty = waitForFieldToBeEmpty(textField);
+    const onEmpty = waitForFieldToBeEmpty(textField);
     EventUtils.synthesizeKey("VK_RETURN", {}, view.styleWindow);
 
     if (!expectNoMutation) {
       info("Wait for the DOM to change");
-      yield onMutation;
+      await onMutation;
     }
 
-    yield onEmpty;
+    await onEmpty;
 
     info("Check the state of the DOM node");
-    let className = yield testActor.getAttribute("body", "class");
-    let expectedClassName = expectedClasses.length ? expectedClasses.join(" ") : null;
+    const className = await testActor.getAttribute("body", "class");
+    const expectedClassName = expectedClasses.length ? expectedClasses.join(" ") : null;
     is(className, expectedClassName, "The DOM node has the right className");
 
     info("Check the content of the class panel");

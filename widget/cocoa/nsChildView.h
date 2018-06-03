@@ -335,6 +335,13 @@ public:
   virtual LayoutDeviceIntRect GetClientBounds() override;
   virtual LayoutDeviceIntRect GetScreenBounds() override;
 
+  // Refresh mBounds with up-to-date values from [mView frame].
+  // Only called if this nsChildView is the popup content view of a popup window.
+  // For popup windows, the nsIWidget interface to Gecko is provided by
+  // nsCocoaWindow, not by nsChildView. So nsCocoaWindow manages resize requests
+  // from Gecko, fires resize events, and resizes the native NSWindow and NSView.
+  void UpdateBoundsFromView();
+
   // Returns the "backing scale factor" of the view's window, which is the
   // ratio of pixels in the window's backing store to Cocoa points. Prior to
   // HiDPI support in OS X 10.7, this was always 1.0, but in HiDPI mode it
@@ -458,9 +465,6 @@ public:
                                                  mozilla::wr::DisplayListBuilder& aBuilder,
                                                  mozilla::wr::IpcResourceUpdateQueue& aResourceUpdates) override;
 
-  virtual void CleanupWebRenderWindowOverlay(mozilla::layers::WebRenderBridgeChild* aWrBridge,
-                                             mozilla::wr::IpcResourceUpdateQueue& aResources) override;
-
   virtual bool PreRender(mozilla::widget::WidgetRenderingContext* aContext) override;
   virtual void PostRender(mozilla::widget::WidgetRenderingContext* aContext) override;
   virtual void DrawWindowOverlay(mozilla::widget::WidgetRenderingContext* aManager,
@@ -541,6 +545,7 @@ public:
   virtual LayoutDeviceIntPoint GetClientOffset() override;
 
   void DispatchAPZWheelInputEvent(mozilla::InputData& aEvent, bool aCanTriggerSwipe);
+  nsEventStatus DispatchAPZInputEvent(mozilla::InputData& aEvent);
 
   void SwipeFinished();
 

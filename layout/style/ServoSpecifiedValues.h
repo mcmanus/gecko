@@ -20,8 +20,10 @@ namespace mozilla {
 class ServoSpecifiedValues final : public GenericSpecifiedValues
 {
 public:
-  ServoSpecifiedValues(nsPresContext* aContext,
-                       RawServoDeclarationBlock* aDecl);
+  ServoSpecifiedValues(nsIDocument* aDocument, RawServoDeclarationBlock* aDecl)
+    : GenericSpecifiedValues(aDocument)
+    , mDecl(aDecl)
+  {}
 
   // GenericSpecifiedValues overrides
   bool PropertyIsSet(nsCSSPropertyID aId);

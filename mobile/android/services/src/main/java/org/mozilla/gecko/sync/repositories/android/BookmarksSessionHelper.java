@@ -331,7 +331,7 @@ import java.util.concurrent.ConcurrentHashMap;
             return false;
         }
         session.trackRecord(toStore);
-        delegate.onRecordStoreSucceeded(record.guid);
+        delegate.onRecordStoreSucceeded(1);
         return true;
     }
 
@@ -373,8 +373,8 @@ import java.util.concurrent.ConcurrentHashMap;
                 Logger.warn(LOG_TAG, "Got exception updating bookkeeping of non-folder with guid " + succeeded.guid + ".", e);
             }
             session.trackRecord(succeeded);
-            delegate.onRecordStoreSucceeded(succeeded.guid);
         }
+        delegate.onRecordStoreSucceeded(toStores.size());
     }
 
     @Override
@@ -456,7 +456,7 @@ import java.util.concurrent.ConcurrentHashMap;
         // There's book-keeping which needs to happen with versions, and so we need to pass
         // along the new localVersion.
         delegate.onRecordStoreReconciled(replaced.guid, existingRecord.guid, replaced.localVersion);
-        delegate.onRecordStoreSucceeded(replaced.guid);
+        delegate.onRecordStoreSucceeded(1);
         return true;
     }
 
@@ -667,7 +667,8 @@ import java.util.concurrent.ConcurrentHashMap;
                 // If the arrays are different, or they're the same but not flushed to disk,
                 // write them out now.
                 if (!sameArrays || !clean) {
-                    dbAccessor.updatePositions(new ArrayList<>(onServer));
+                    final ArrayList<String> list = (ArrayList<String>) (ArrayList) onServer;
+                    dbAccessor.updatePositions(new ArrayList<>(list));
                 }
             } catch (Exception e) {
                 Logger.warn(LOG_TAG, "Error repositioning children for " + guid, e);
@@ -1102,7 +1103,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
             Logger.debug(LOG_TAG, "Generating child array required moving records. Updating DB.");
             final long time = RepositorySession.now();
-            if (0 < dbAccessor.updatePositions(childArray)) {
+            final ArrayList<String> cArray = (ArrayList<String>) (ArrayList) childArray;
+            if (0 < dbAccessor.updatePositions(cArray)) {
                 Logger.debug(LOG_TAG, "Bumping parent time to " + time + ".");
                 dbAccessor.bumpModified(folderID, time);
             }

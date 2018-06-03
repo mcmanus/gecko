@@ -18,6 +18,7 @@
 #include "mozilla/MozPromise.h"
 #include "mozilla/ReentrantMonitor.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/SharedThreadPool.h"
 #include "mozilla/UniquePtr.h"
 #include "nsAutoPtr.h"
 #include "nsCOMPtr.h"
@@ -125,7 +126,7 @@ CheckedInt64 FramesToUsecs(int64_t aFrames, uint32_t aRate);
 media::TimeUnit FramesToTimeUnit(int64_t aFrames, uint32_t aRate);
 // Perform aValue * aMul / aDiv, reducing the possibility of overflow due to
 // aValue * aMul overflowing.
-CheckedInt64 SaferMultDiv(int64_t aValue, uint32_t aMul, uint32_t aDiv);
+CheckedInt64 SaferMultDiv(int64_t aValue, uint64_t aMul, uint64_t aDiv);
 
 // Converts from microseconds (aUsecs) to number of audio frames, given the
 // specified audio rate (aRate). Stores the result in aOutFrames. Returns
@@ -157,6 +158,12 @@ ScaleDisplayByAspectRatio(gfx::IntSize& aDisplay, float aAspectRatio);
 void DownmixStereoToMono(mozilla::AudioDataValue* aBuffer,
                          uint32_t aFrames);
 
+// Decide the number of playback channels according to the
+// given AudioInfo and the prefs that are being set.
+uint32_t DecideAudioPlaybackChannels(const AudioInfo& info);
+
+bool IsDefaultPlaybackDeviceMono();
+
 bool IsVideoContentType(const nsCString& aContentType);
 
 // Returns true if it's safe to use aPicture as the picture to be
@@ -185,20 +192,11 @@ private:
   const T mValue;
 };
 
-class SharedThreadPool;
-
-// The MediaDataDecoder API blocks, with implementations waiting on platform
-// decoder tasks.  These platform decoder tasks are queued on a separate
-// thread pool to ensure they can run when the MediaDataDecoder clients'
-// thread pool is blocked.  Tasks on the PLATFORM_DECODER thread pool must not
-// wait on tasks in the PLAYBACK thread pool.
-//
-// No new dependencies on this mechanism should be added, as methods are being
-// made async supported by MozPromise, making this unnecessary and
-// permitting unifying the pool.
 enum class MediaThreadType {
   PLAYBACK, // MediaDecoderStateMachine and MediaFormatReader
-  PLATFORM_DECODER
+  PLATFORM_DECODER, // MediaDataDecoder
+  MSG_CONTROL,
+  WEBRTC_DECODER
 };
 // Returns the thread pool that is shared amongst all decoder state machines
 // for decoding streams.
@@ -242,6 +240,34 @@ bool
 ExtractH264CodecDetails(const nsAString& aCodecs,
                         int16_t& aProfile,
                         int16_t& aLevel);
+
+struct VideoColorSpace
+{
+  // TODO: Define the value type as strong type enum
+  // to better know the exact meaning corresponding to ISO/IEC 23001-8:2016.
+  // Default value is listed https://www.webmproject.org/vp9/mp4/#optional-fields
+  uint8_t mPrimaryId = 1; // Table 2
+  uint8_t mTransferId = 1; // Table 3
+  uint8_t mMatrixId = 1; // Table 4
+  uint8_t mRangeId = 0;
+};
+
+// Extracts the VPX codecs parameter string.
+// See https://www.webmproject.org/vp9/mp4/#codecs-parameter-string
+// for more details.
+// Returns false on failure.
+bool
+ExtractVPXCodecDetails(const nsAString& aCodec,
+                       uint8_t& aProfile,
+                       uint8_t& aLevel,
+                       uint8_t& aBitDepth);
+bool
+ExtractVPXCodecDetails(const nsAString& aCodec,
+                       uint8_t& aProfile,
+                       uint8_t& aLevel,
+                       uint8_t& aBitDepth,
+                       uint8_t& aChromaSubsampling,
+                       VideoColorSpace& aColorSpace);
 
 // Use a cryptographic quality PRNG to generate raw random bytes
 // and convert that to a base64 string.
@@ -561,6 +587,15 @@ StringListContains(const ListString& aList, const ItemString& aItem)
     }
   }
   return false;
+}
+
+inline void
+AppendStringIfNotEmpty(nsACString& aDest, nsACString&& aSrc)
+{
+  if (!aSrc.IsEmpty()) {
+    aDest.Append(NS_LITERAL_CSTRING("\n"));
+    aDest.Append(aSrc);
+  }
 }
 
 } // end namespace mozilla

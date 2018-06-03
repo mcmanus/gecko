@@ -5,12 +5,10 @@
 #include "nsISupports.idl"
 
 interface nsIDocShell;
-interface nsIDocument;
-interface nsIDOMDocument;
-interface nsIDOMNode;
 interface nsISHEntry;
 interface nsIPrintSettings;
-
+webidl Document;
+webidl Node;
 
 %{ C++
 #include "nsTArray.h"
@@ -43,17 +41,42 @@ interface nsIContentViewer : nsISupports
 
   attribute nsIDocShell container;
 
-  [noscript,notxpcom,nostdcall] void loadStart(in nsIDocument aDoc);
+  [noscript,notxpcom,nostdcall] void loadStart(in Document aDoc);
   void loadComplete(in nsresult aStatus);
   [noscript] readonly attribute boolean loadCompleted;
 
   [noscript] readonly attribute boolean isStopped;
 
   /**
-   * Checks if the document wants to prevent unloading by firing beforeunload on
-   * the document, and if it does, prompts the user. The result is returned.
+   * aPermitUnloadFlags are passed to PermitUnload to indicate what action to take
+   * if a beforeunload handler wants to prompt the user.  It is also used by
+   * permitUnloadInternal to ensure we only prompt once.
+   *
+   * ePrompt: Prompt and return the user's choice (default).
+   * eDontPromptAndDontUnload: Don't prompt and return false (unload not permitted)
+   *                           if the document (or its children) asks us to prompt.
+   * eDontPromptAndUnload: Don't prompt and return true (unload permitted) no matter what.
    */
-  boolean permitUnload();
+  const unsigned long ePrompt = 0;
+  const unsigned long eDontPromptAndDontUnload = 1;
+  const unsigned long eDontPromptAndUnload = 2;
+
+  /**
+   * Overload PermitUnload method for C++ consumers with no aPermitUnloadFlags
+   * argument.
+   */
+  %{C++
+    nsresult PermitUnload(bool* canUnload) {
+      return PermitUnload(ePrompt, canUnload);
+    }
+  %}
+
+  /**
+   * Checks if the document wants to prevent unloading by firing beforeunload on
+   * the document, and if it does, takes action directed by aPermitUnloadFlags.
+   * The result is returned.
+   */
+  boolean permitUnload([optional] in unsigned long aPermitUnloadFlags);
 
   /**
    * Exposes whether we're blocked in a call to permitUnload.
@@ -61,11 +84,11 @@ interface nsIContentViewer : nsISupports
   readonly attribute boolean inPermitUnload;
 
   /**
-   * As above, but this passes around the aShouldPrompt argument to keep
+   * As above, but this passes around the aPermitUnloadFlags argument to keep
    * track of whether the user has responded to a prompt.
    * Used internally by the scriptable version to ensure we only prompt once.
    */
-  [noscript,nostdcall] boolean permitUnloadInternal(inout boolean aShouldPrompt);
+  [noscript,nostdcall] boolean permitUnloadInternal(inout unsigned long aPermitUnloadFlags);
 
   /**
    * Exposes whether we're in the process of firing the beforeunload event.
@@ -101,12 +124,21 @@ interface nsIContentViewer : nsISupports
 
   void stop();
 
-  attribute nsIDOMDocument DOMDocument;
+  /**
+   * Returns the same thing as getDocument(), but for use from script
+   * only.  C++ consumers should use getDocument().
+   */
+  readonly attribute Document DOMDocument;
 
   /**
-   * Returns DOMDocument as nsIDocument and without addrefing.
+   * Returns DOMDocument without addrefing.
    */
-  [noscript,notxpcom] nsIDocument getDocument();
+  [noscript,notxpcom,nostdcall] Document getDocument();
+
+  /**
+   * Allows setting the document.
+   */
+  [noscript,nostdcall] void setDocument(in Document aDocument);
 
   [noscript] void getBounds(in nsIntRectRef aBounds);
   [noscript] void setBounds([const] in nsIntRectRef aBounds);
@@ -185,7 +217,7 @@ interface nsIContentViewer : nsISupports
   [noscript] readonly attribute nsIPresShellPtr presShell;
   [noscript] readonly attribute nsPresContextPtr presContext;
   // aDocument must not be null.
-  [noscript] void setDocumentInternal(in nsIDocument aDocument,
+  [noscript] void setDocumentInternal(in Document aDocument,
                                       in boolean aForceReuseInnerWindow);
   /**
    * Find the view to use as the container view for MakeWindow. Returns
@@ -201,7 +233,7 @@ interface nsIContentViewer : nsISupports
   /*
   Scrolls to a given DOM content node. 
   */
-  void scrollToNode(in nsIDOMNode node);
+  void scrollToNode(in Node node);
 
   /** The amount by which to scale all text. Default is 1.0. */
   attribute float textZoom;

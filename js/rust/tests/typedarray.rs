@@ -14,14 +14,14 @@ use std::ptr;
 
 #[test]
 fn typedarray() {
-    let rt = Runtime_::new().unwrap();
+    let rt = Runtime_::new(false).unwrap();
     let cx = rt.cx();
 
     unsafe {
         rooted!(in(cx) let global =
             JS_NewGlobalObject(cx, &SIMPLE_GLOBAL_CLASS, ptr::null_mut(),
                                JS::OnNewGlobalHookOption::FireOnNewGlobalHook,
-                               &JS::CompartmentOptions::default())
+                               &JS::RealmOptions::default())
         );
 
         let _ac = js::ac::AutoCompartment::with_obj(cx, global.get());
@@ -72,14 +72,14 @@ fn typedarray() {
 #[test]
 #[should_panic]
 fn typedarray_update_panic() {
-    let rt = Runtime_::new().unwrap();
+    let rt = Runtime_::new(false).unwrap();
     let cx = rt.cx();
 
     unsafe {
         rooted!(in(cx) let global =
             JS_NewGlobalObject(cx, &SIMPLE_GLOBAL_CLASS, ptr::null_mut(),
                                JS::OnNewGlobalHookOption::FireOnNewGlobalHook,
-                               &JS::CompartmentOptions::default())
+                               &JS::RealmOptions::default())
         );
 
         let _ac = js::ac::AutoCompartment::with_obj(cx, global.get());

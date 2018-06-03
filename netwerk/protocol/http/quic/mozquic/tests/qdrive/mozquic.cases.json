@@ -54,6 +54,31 @@
             "Name" : "overflowFlowControl",
             "ClientArgs": ["-qdrive-test10"],
             "ServerArgs": ["-qdrive-test10"]
+        },
+	{
+            "Name" : "dropsies",
+            "ClientArgs": ["-qdrive-test11"],
+            "ServerArgs": ["-qdrive-test11"]
+        },
+	{
+            "Name" : "unistreams",
+            "ClientArgs": ["-qdrive-test13"],
+            "ServerArgs": ["-qdrive-test13"]
+        },
+	{
+            "Name" : "0rtt",
+            "ClientArgs": ["-qdrive-test14"],
+            "ServerArgs": ["-qdrive-test14"]
+        },
+	{
+            "Name" : "0rtt_reject",
+            "ClientArgs": ["-qdrive-test15"],
+            "ServerArgs": ["-qdrive-test15"]
+        },
+	{
+            "Name" : "0rtt_reject_no_replay",
+            "ClientArgs": ["-qdrive-test16"],
+            "ServerArgs": ["-qdrive-test16"]
         }
     ]
 }

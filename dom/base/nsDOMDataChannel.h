@@ -9,10 +9,9 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/DOMEventTargetHelper.h"
-#include "mozilla/dom/DataChannelBinding.h"
+#include "mozilla/dom/RTCDataChannelBinding.h"
 #include "mozilla/dom/TypedArray.h"
 #include "mozilla/net/DataChannelListener.h"
-#include "nsIDOMDataChannel.h"
 #include "nsIInputStream.h"
 
 
@@ -25,7 +24,6 @@ class DataChannel;
 };
 
 class nsDOMDataChannel final : public mozilla::DOMEventTargetHelper,
-                               public nsIDOMDataChannel,
                                public mozilla::DataChannelListener
 {
 public:
@@ -35,9 +33,6 @@ public:
   nsresult Init(nsPIDOMWindowInner* aDOMWindow);
 
   NS_DECL_ISUPPORTS_INHERITED
-  NS_DECL_NSIDOMDATACHANNEL
-
-  NS_REALLY_FORWARD_NSIDOMEVENTTARGET(mozilla::DOMEventTargetHelper)
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(nsDOMDataChannel,
                                            mozilla::DOMEventTargetHelper)
@@ -57,7 +52,8 @@ public:
   }
 
   // WebIDL
-  // Uses XPIDL GetLabel.
+  void GetLabel(nsAString& aLabel);
+  void GetProtocol(nsAString& aProtocol);
   bool Reliable() const;
   mozilla::dom::RTCDataChannelState ReadyState() const;
   uint32_t BufferedAmount() const;
@@ -66,7 +62,7 @@ public:
   IMPL_EVENT_HANDLER(open)
   IMPL_EVENT_HANDLER(error)
   IMPL_EVENT_HANDLER(close)
-  // Uses XPIDL Close.
+  void Close();
   IMPL_EVENT_HANDLER(message)
   IMPL_EVENT_HANDLER(bufferedamountlow)
   mozilla::dom::RTCDataChannelType BinaryType() const
@@ -85,7 +81,6 @@ public:
   void Send(const mozilla::dom::ArrayBufferView& aData,
             mozilla::ErrorResult& aRv);
 
-  // Uses XPIDL GetProtocol.
   bool Ordered() const;
   uint16_t Id() const;
 

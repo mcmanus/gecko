@@ -27,6 +27,8 @@
 #include "mozilla/dom/ErrorEvent.h"
 #include "mozilla/dom/ErrorEventBinding.h"
 #include "mozilla/dom/quota/QuotaManager.h"
+#include "mozilla/dom/WorkerScope.h"
+#include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/BackgroundParent.h"
 #include "mozilla/ipc/PBackgroundChild.h"
@@ -43,8 +45,6 @@
 #include "IDBRequest.h"
 #include "ProfilerHelpers.h"
 #include "ScriptErrorHelper.h"
-#include "WorkerScope.h"
-#include "WorkerPrivate.h"
 #include "nsCharSeparatedTokenizer.h"
 #include "unicode/locid.h"
 
@@ -73,7 +73,6 @@ namespace dom {
 namespace indexedDB {
 
 using namespace mozilla::dom::quota;
-using namespace mozilla::dom::workers;
 using namespace mozilla::ipc;
 
 class FileManagerInfo
@@ -388,7 +387,7 @@ IndexedDatabaseManager::Init()
       obs->AddObserver(this, DISKSPACEWATCHER_OBSERVER_TOPIC, false);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    mDeleteTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
+    mDeleteTimer = NS_NewTimer();
     NS_ENSURE_STATE(mDeleteTimer);
 
     if (QuotaManager* quotaManager = QuotaManager::Get()) {
@@ -518,22 +517,19 @@ IndexedDatabaseManager::CommonPostHandleEvent(EventChainPostVisitor& aVisitor,
     return NS_OK;
   }
 
-  Event* internalEvent = aVisitor.mDOMEvent->InternalDOMEvent();
-  MOZ_ASSERT(internalEvent);
-
-  if (!internalEvent->IsTrusted()) {
+  if (!aVisitor.mDOMEvent->IsTrusted()) {
     return NS_OK;
   }
 
-  nsString type;
-  MOZ_ALWAYS_SUCCEEDS(internalEvent->GetType(type));
+  nsAutoString type;
+  aVisitor.mDOMEvent->GetType(type);
 
   MOZ_ASSERT(nsDependentString(kErrorEventType).EqualsLiteral("error"));
   if (!type.EqualsLiteral("error")) {
     return NS_OK;
   }
 
-  nsCOMPtr<EventTarget> eventTarget = internalEvent->GetTarget();
+  nsCOMPtr<EventTarget> eventTarget = aVisitor.mDOMEvent->GetTarget();
   MOZ_ASSERT(eventTarget);
 
   // Only mess with events that were originally targeted to an IDBRequest.
@@ -836,7 +832,8 @@ IndexedDatabaseManager::ClearBackgroundActor()
 void
 IndexedDatabaseManager::NoteLiveQuotaManager(QuotaManager* aQuotaManager)
 {
-  MOZ_ASSERT(IsMainProcess());
+  // This can be called during Init, so we can't use IsMainProcess() yet.
+  MOZ_ASSERT(sIsMainProcess);
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aQuotaManager);
 
@@ -1379,7 +1376,7 @@ DeleteFilesRunnable::Open()
   quotaManager->OpenDirectory(mFileManager->Type(),
                               mFileManager->Group(),
                               mFileManager->Origin(),
-                              Client::IDB,
+                              quota::Client::IDB,
                               /* aExclusive */ false,
                               this);
 

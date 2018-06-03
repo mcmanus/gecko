@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -16,10 +17,10 @@ using namespace mozilla::image;
 class nsSVGSwitchFrame final : public nsSVGGFrame
 {
   friend nsIFrame*
-  NS_NewSVGSwitchFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
+  NS_NewSVGSwitchFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle);
 protected:
-  explicit nsSVGSwitchFrame(nsStyleContext* aContext)
-    : nsSVGGFrame(aContext, kClassID)
+  explicit nsSVGSwitchFrame(ComputedStyle* aStyle)
+    : nsSVGGFrame(aStyle, kClassID)
   {}
 
 public:
@@ -59,9 +60,9 @@ private:
 // Implementation
 
 nsIFrame*
-NS_NewSVGSwitchFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewSVGSwitchFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsSVGSwitchFrame(aContext);
+  return new (aPresShell) nsSVGSwitchFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsSVGSwitchFrame)

@@ -1,6 +1,6 @@
-Cu.import("resource://testing-common/httpd.js");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/NetUtil.jsm");
+ChromeUtils.import("resource://testing-common/httpd.js");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
 
 var httpServer = null;
 // Need to randomize, because apparently no one clears our cache
@@ -57,7 +57,7 @@ function redirectHandler(metadata, response)
 // finally check we got fallback content
 function finish_test(request, buffer)
 {
-  do_check_eq(buffer, responseBody);
+  Assert.equal(buffer, responseBody);
   httpServer.stop(do_test_finished);
 }
 

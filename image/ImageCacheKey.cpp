@@ -11,7 +11,7 @@
 #include "nsLayoutUtils.h"
 #include "nsString.h"
 #include "mozilla/dom/File.h"
-#include "mozilla/dom/workers/ServiceWorkerManager.h"
+#include "mozilla/dom/ServiceWorkerManager.h"
 #include "nsIDocument.h"
 #include "nsPrintfCString.h"
 
@@ -54,7 +54,6 @@ ImageCacheKey::ImageCacheKey(nsIURI* aURI,
   , mOriginAttributes(aAttrs)
   , mControlledDocument(GetControlledDocumentToken(aDocument))
   , mIsChrome(URISchemeIs(mURI, "chrome"))
-  , mIsStyloEnabled(nsLayoutUtils::StyloEnabled())
 {
   NS_ENSURE_SUCCESS_VOID(aRv);
 
@@ -64,8 +63,7 @@ ImageCacheKey::ImageCacheKey(nsIURI* aURI,
     mBlobSerial = BlobSerial(mURI);
   }
 
-  mHash = ComputeHash(mURI, mBlobSerial, mOriginAttributes, mControlledDocument,
-                      mIsStyloEnabled);
+  mHash = ComputeHash(mURI, mBlobSerial, mOriginAttributes, mControlledDocument);
 }
 
 ImageCacheKey::ImageCacheKey(ImageURL* aURI,
@@ -75,7 +73,6 @@ ImageCacheKey::ImageCacheKey(ImageURL* aURI,
   , mOriginAttributes(aAttrs)
   , mControlledDocument(GetControlledDocumentToken(aDocument))
   , mIsChrome(URISchemeIs(mURI, "chrome"))
-  , mIsStyloEnabled(nsLayoutUtils::StyloEnabled())
 {
   MOZ_ASSERT(aURI);
 
@@ -83,8 +80,7 @@ ImageCacheKey::ImageCacheKey(ImageURL* aURI,
     mBlobSerial = BlobSerial(mURI);
   }
 
-  mHash = ComputeHash(mURI, mBlobSerial, mOriginAttributes, mControlledDocument,
-                      mIsStyloEnabled);
+  mHash = ComputeHash(mURI, mBlobSerial, mOriginAttributes, mControlledDocument);
 }
 
 ImageCacheKey::ImageCacheKey(const ImageCacheKey& aOther)
@@ -94,25 +90,20 @@ ImageCacheKey::ImageCacheKey(const ImageCacheKey& aOther)
   , mControlledDocument(aOther.mControlledDocument)
   , mHash(aOther.mHash)
   , mIsChrome(aOther.mIsChrome)
-  , mIsStyloEnabled(aOther.mIsStyloEnabled)
 { }
 
 ImageCacheKey::ImageCacheKey(ImageCacheKey&& aOther)
-  : mURI(Move(aOther.mURI))
-  , mBlobSerial(Move(aOther.mBlobSerial))
+  : mURI(std::move(aOther.mURI))
+  , mBlobSerial(std::move(aOther.mBlobSerial))
   , mOriginAttributes(aOther.mOriginAttributes)
   , mControlledDocument(aOther.mControlledDocument)
   , mHash(aOther.mHash)
   , mIsChrome(aOther.mIsChrome)
-  , mIsStyloEnabled(aOther.mIsStyloEnabled)
 { }
 
 bool
 ImageCacheKey::operator==(const ImageCacheKey& aOther) const
 {
-  if (mIsStyloEnabled != aOther.mIsStyloEnabled) {
-    return false;
-  }
   // Don't share the image cache between a controlled document and anything else.
   if (mControlledDocument != aOther.mControlledDocument) {
     return false;
@@ -142,8 +133,7 @@ ImageCacheKey::Spec() const
 ImageCacheKey::ComputeHash(ImageURL* aURI,
                            const Maybe<uint64_t>& aBlobSerial,
                            const OriginAttributes& aAttrs,
-                           void* aControlledDocument,
-                           bool aIsStyloEnabled)
+                           void* aControlledDocument)
 {
   // Since we frequently call Hash() several times in a row on the same
   // ImageCacheKey, as an optimization we compute our hash once and store it.
@@ -153,8 +143,7 @@ ImageCacheKey::ComputeHash(ImageURL* aURI,
   aAttrs.CreateSuffix(suffix);
 
   return AddToHash(0, aURI->ComputeHash(aBlobSerial),
-                   HashString(suffix), HashString(ptr),
-                   aIsStyloEnabled);
+                   HashString(suffix), HashString(ptr));
 }
 
 /* static */ void*
@@ -164,11 +153,10 @@ ImageCacheKey::GetControlledDocumentToken(nsIDocument* aDocument)
   // documents, we cast the pointer into a void* to avoid dereferencing
   // it (since we only use it for comparisons), and return it.
   void* pointer = nullptr;
-  using dom::workers::ServiceWorkerManager;
   RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
   if (aDocument && swm) {
     ErrorResult rv;
-    if (swm->IsControlled(aDocument, rv)) {
+    if (aDocument->GetController().isSome()) {
       pointer = aDocument;
     }
   }

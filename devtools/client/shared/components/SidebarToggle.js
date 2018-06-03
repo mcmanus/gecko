@@ -6,49 +6,57 @@
 
 "use strict";
 
-const { DOM, createClass, PropTypes } = require("devtools/client/shared/vendor/react");
+const { Component } = require("devtools/client/shared/vendor/react");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
 
 // Shortcuts
-const { button } = DOM;
+const { button } = dom;
 
 /**
  * Sidebar toggle button. This button is used to exapand
  * and collapse Sidebar.
  */
-var SidebarToggle = createClass({
-  displayName: "SidebarToggle",
-
-  propTypes: {
-    // Set to true if collapsed.
-    collapsed: PropTypes.bool.isRequired,
-    // Tooltip text used when the button indicates expanded state.
-    collapsePaneTitle: PropTypes.string.isRequired,
-    // Tooltip text used when the button indicates collapsed state.
-    expandPaneTitle: PropTypes.string.isRequired,
-    // Click callback
-    onClick: PropTypes.func.isRequired,
-  },
-
-  getInitialState: function () {
+class SidebarToggle extends Component {
+  static get propTypes() {
     return {
-      collapsed: this.props.collapsed,
+      // Set to true if collapsed.
+      collapsed: PropTypes.bool.isRequired,
+      // Tooltip text used when the button indicates expanded state.
+      collapsePaneTitle: PropTypes.string.isRequired,
+      // Tooltip text used when the button indicates collapsed state.
+      expandPaneTitle: PropTypes.string.isRequired,
+      // Click callback
+      onClick: PropTypes.func.isRequired,
     };
-  },
+  }
+
+  constructor(props) {
+    super(props);
+
+    this.state = {
+      collapsed: props.collapsed,
+    };
+
+    this.onClick = this.onClick.bind(this);
+  }
 
   // Events
 
-  onClick: function (event) {
+  onClick(event) {
+    event.stopPropagation();
+    this.setState({ collapsed: !this.state.collapsed });
     this.props.onClick(event);
-  },
+  }
 
   // Rendering
 
-  render: function () {
-    let title = this.state.collapsed ?
+  render() {
+    const title = this.state.collapsed ?
       this.props.expandPaneTitle :
       this.props.collapsePaneTitle;
 
-    let classNames = ["devtools-button", "sidebar-toggle"];
+    const classNames = ["devtools-button", "sidebar-toggle"];
     if (this.state.collapsed) {
       classNames.push("pane-collapsed");
     }
@@ -61,6 +69,6 @@ var SidebarToggle = createClass({
       })
     );
   }
-});
+}
 
 module.exports = SidebarToggle;

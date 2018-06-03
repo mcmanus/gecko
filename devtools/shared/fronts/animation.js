@@ -13,16 +13,15 @@ const {
   animationPlayerSpec,
   animationsSpec
 } = require("devtools/shared/specs/animation");
-const { Task } = require("devtools/shared/task");
 
 const AnimationPlayerFront = FrontClassWithSpec(animationPlayerSpec, {
-  initialize: function (conn, form, detail, ctx) {
+  initialize: function(conn, form, detail, ctx) {
     Front.prototype.initialize.call(this, conn, form, detail, ctx);
 
     this.state = {};
   },
 
-  form: function (form, detail) {
+  form: function(form, detail) {
     if (detail === "actorid") {
       this.actorID = form;
       return;
@@ -31,7 +30,7 @@ const AnimationPlayerFront = FrontClassWithSpec(animationPlayerSpec, {
     this.state = this.initialState;
   },
 
-  destroy: function () {
+  destroy: function() {
     Front.prototype.destroy.call(this);
   },
 
@@ -71,7 +70,8 @@ const AnimationPlayerFront = FrontClassWithSpec(animationPlayerSpec, {
       animationTimingFunction: this._form.animationTimingFunction,
       isRunningOnCompositor: this._form.isRunningOnCompositor,
       propertyState: this._form.propertyState,
-      documentCurrentTime: this._form.documentCurrentTime
+      documentCurrentTime: this._form.documentCurrentTime,
+      createdTime: this._form.createdTime,
     };
   },
 
@@ -79,8 +79,8 @@ const AnimationPlayerFront = FrontClassWithSpec(animationPlayerSpec, {
    * Executed when the AnimationPlayerActor emits a "changed" event. Used to
    * update the local knowledge of the state.
    */
-  onChanged: preEvent("changed", function (partialState) {
-    let {state} = this.reconstructState(partialState);
+  onChanged: preEvent("changed", function(partialState) {
+    const {state} = this.reconstructState(partialState);
     this.state = state;
   }),
 
@@ -88,21 +88,21 @@ const AnimationPlayerFront = FrontClassWithSpec(animationPlayerSpec, {
    * Refresh the current state of this animation on the client from information
    * found on the server. Doesn't return anything, just stores the new state.
    */
-  refreshState: Task.async(function* () {
-    let data = yield this.getCurrentState();
+  async refreshState() {
+    const data = await this.getCurrentState();
     if (this.currentStateHasChanged) {
       this.state = data;
     }
-  }),
+  },
 
   /**
    * getCurrentState interceptor re-constructs incomplete states since the actor
    * only sends the values that have changed.
    */
-  getCurrentState: custom(function () {
+  getCurrentState: custom(function() {
     this.currentStateHasChanged = false;
     return this._getCurrentState().then(partialData => {
-      let {state, hasChanged} = this.reconstructState(partialData);
+      const {state, hasChanged} = this.reconstructState(partialData);
       this.currentStateHasChanged = hasChanged;
       return state;
     });
@@ -110,10 +110,10 @@ const AnimationPlayerFront = FrontClassWithSpec(animationPlayerSpec, {
     impl: "_getCurrentState"
   }),
 
-  reconstructState: function (data) {
+  reconstructState: function(data) {
     let hasChanged = false;
 
-    for (let key in this.state) {
+    for (const key in this.state) {
       if (typeof data[key] === "undefined") {
         data[key] = this.state[key];
       } else if (data[key] !== this.state[key]) {
@@ -128,12 +128,12 @@ const AnimationPlayerFront = FrontClassWithSpec(animationPlayerSpec, {
 exports.AnimationPlayerFront = AnimationPlayerFront;
 
 const AnimationsFront = FrontClassWithSpec(animationsSpec, {
-  initialize: function (client, {animationsActor}) {
+  initialize: function(client, {animationsActor}) {
     Front.prototype.initialize.call(this, client, {actor: animationsActor});
     this.manage(this);
   },
 
-  destroy: function () {
+  destroy: function() {
     Front.prototype.destroy.call(this);
   }
 });

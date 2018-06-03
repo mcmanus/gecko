@@ -21,14 +21,12 @@ LOG = get_proxy_logger()
 try:
     DEFAULT_CERT_PATH = os.path.join(os.getenv('HOME'),
                                      '.mitmproxy', 'mitmproxy-ca-cert.cer')
-except:
+except Exception:
     DEFAULT_CERT_PATH = os.path.join(os.getenv('HOMEDRIVE'), os.getenv('HOMEPATH'),
                                      '.mitmproxy', 'mitmproxy-ca-cert.cer')
 
 MITMPROXY_SETTINGS = '''// Start with a comment
 // Load up mitmproxy cert
-var Cc = Components.classes;
-var Ci = Components.interfaces;
 var certdb = Cc["@mozilla.org/security/x509certdb;1"].getService(Ci.nsIX509CertDB);
 var certdb2 = certdb;
 
@@ -85,7 +83,7 @@ def is_mitmproxy_cert_installed(browser_install):
             LOG.info("Firefox autoconfig file contents:")
             LOG.info(contents)
             return False
-    except:
+    except Exception:
         LOG.info("Failed to read Firefox autoconfig file, when verifying CA certificate install")
         return False
     return True
@@ -132,13 +130,10 @@ def start_mitmproxy_playback(mitmdump_path,
         sys.path.insert(1, mitmdump_path)
         # mitmproxy needs some DLL's that are a part of Firefox itself, so add to path
         env["PATH"] = os.path.dirname(browser_path) + ";" + env["PATH"]
-    elif mozinfo.os == 'mac':
+    else:
+        # mac and linux
         param2 = param + ' ' + ' '.join(mitmproxy_recordings)
         env["PATH"] = os.path.dirname(browser_path)
-    else:
-        # TODO: support other platforms, Bug 1366355
-        LOG.error('Aborting: talos mitmproxy is currently only supported on Windows and Mac')
-        sys.exit()
 
     command = [mitmdump_path, '-k', '-s', param2]
 
@@ -160,10 +155,10 @@ def start_mitmproxy_playback(mitmdump_path,
 def stop_mitmproxy_playback(mitmproxy_proc):
     """Stop the mitproxy server playback"""
     LOG.info("Stopping mitmproxy playback, klling process %d" % mitmproxy_proc.pid)
-    if mozinfo.os == 'mac':
-        mitmproxy_proc.terminate()
-    else:
+    if mozinfo.os == 'win':
         mitmproxy_proc.kill()
+    else:
+        mitmproxy_proc.terminate()
     time.sleep(10)
     if mitmproxy_proc.pid in psutil.pids():
         # I *think* we can still continue, as process will be automatically

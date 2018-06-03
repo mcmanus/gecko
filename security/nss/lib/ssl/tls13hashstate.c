@@ -7,11 +7,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "pk11func.h"
-#include "selfencrypt.h"
 #include "ssl.h"
 #include "sslt.h"
-#include "sslencode.h"
 #include "sslimpl.h"
+#include "selfencrypt.h"
 #include "tls13con.h"
 #include "tls13err.h"
 #include "tls13hashstate.h"
@@ -89,36 +88,37 @@ tls13_RecoverHashState(sslSocket *ss,
 {
     SECStatus rv;
     unsigned char plaintext[1024];
-    SECItem ptItem = { siBuffer, plaintext, 0 };
+    unsigned int plaintextLen = 0;
     sslBuffer messageBuf = SSL_BUFFER_EMPTY;
-    PRUint32 sentinel;
-    PRUint32 cipherSuite;
-    PRUint32 group;
+    PRUint64 sentinel;
+    PRUint64 cipherSuite;
+    PRUint64 group;
     const sslNamedGroupDef *selectedGroup;
-    PRUint32 appTokenLen;
-    PRUint8 *appToken;
+    PRUint64 appTokenLen;
 
     rv = ssl_SelfEncryptUnprotect(ss, cookie, cookieLen,
-                                  ptItem.data, &ptItem.len, sizeof(plaintext));
+                                  plaintext, &plaintextLen, sizeof(plaintext));
     if (rv != SECSuccess) {
         return SECFailure;
     }
 
+    sslReader reader = SSL_READER(plaintext, plaintextLen);
+
     /* Should start with 0xff. */
-    rv = ssl3_ConsumeNumberFromItem(&ptItem, &sentinel, 1);
+    rv = sslRead_ReadNumber(&reader, 1, &sentinel);
     if ((rv != SECSuccess) || (sentinel != 0xff)) {
         FATAL_ERROR(ss, SSL_ERROR_RX_MALFORMED_CLIENT_HELLO, illegal_parameter);
         return SECFailure;
     }
     /* The cipher suite should be the same or there are some shenanigans. */
-    rv = ssl3_ConsumeNumberFromItem(&ptItem, &cipherSuite, 2);
+    rv = sslRead_ReadNumber(&reader, 2, &cipherSuite);
     if (rv != SECSuccess) {
         FATAL_ERROR(ss, SSL_ERROR_RX_MALFORMED_CLIENT_HELLO, illegal_parameter);
         return SECFailure;
     }
 
     /* The named group, if any. */
-    rv = ssl3_ConsumeNumberFromItem(&ptItem, &group, 2);
+    rv = sslRead_ReadNumber(&reader, 2, &group);
     if (rv != SECSuccess) {
         FATAL_ERROR(ss, SSL_ERROR_RX_MALFORMED_CLIENT_HELLO, illegal_parameter);
         return SECFailure;
@@ -127,7 +127,7 @@ tls13_RecoverHashState(sslSocket *ss,
 
     /* Application token. */
     PORT_Assert(ss->xtnData.applicationToken.len == 0);
-    rv = ssl3_ConsumeNumberFromItem(&ptItem, &appTokenLen, 2);
+    rv = sslRead_ReadNumber(&reader, 2, &appTokenLen);
     if (rv != SECSuccess) {
         FATAL_ERROR(ss, SSL_ERROR_RX_MALFORMED_CLIENT_HELLO, illegal_parameter);
         return SECFailure;
@@ -138,15 +138,18 @@ tls13_RecoverHashState(sslSocket *ss,
         return SECFailure;
     }
     ss->xtnData.applicationToken.len = appTokenLen;
-    rv = ssl3_ConsumeFromItem(&ptItem, &appToken, appTokenLen);
+    sslReadBuffer appTokenReader = { 0 };
+    rv = sslRead_Read(&reader, appTokenLen, &appTokenReader);
     if (rv != SECSuccess) {
         FATAL_ERROR(ss, SSL_ERROR_RX_MALFORMED_CLIENT_HELLO, illegal_parameter);
         return SECFailure;
     }
-    PORT_Memcpy(ss->xtnData.applicationToken.data, appToken, appTokenLen);
+    PORT_Assert(appTokenReader.len == appTokenLen);
+    PORT_Memcpy(ss->xtnData.applicationToken.data, appTokenReader.buf, appTokenLen);
 
     /* The remainder is the hash. */
-    if (ptItem.len != tls13_GetHashSize(ss)) {
+    unsigned int hashLen = SSL_READER_REMAINING(&reader);
+    if (hashLen != tls13_GetHashSize(ss)) {
         FATAL_ERROR(ss, SSL_ERROR_RX_MALFORMED_CLIENT_HELLO, illegal_parameter);
         return SECFailure;
     }
@@ -154,7 +157,7 @@ tls13_RecoverHashState(sslSocket *ss,
     /* Now reinject the message. */
     SSL_ASSERT_HASHES_EMPTY(ss);
     rv = ssl_HashHandshakeMessageInt(ss, ssl_hs_message_hash, 0,
-                                     ptItem.data, ptItem.len);
+                                     SSL_READER_CURRENT(&reader), hashLen);
     if (rv != SECSuccess) {
         return SECFailure;
     }
@@ -168,7 +171,7 @@ tls13_RecoverHashState(sslSocket *ss,
         return SECFailure;
     }
 
-    rv = ssl_HashHandshakeMessageInt(ss, ssl_hs_hello_retry_request, 0,
+    rv = ssl_HashHandshakeMessageInt(ss, ssl_hs_server_hello, 0,
                                      SSL_BUFFER_BASE(&messageBuf),
                                      SSL_BUFFER_LEN(&messageBuf));
     sslBuffer_Clear(&messageBuf);

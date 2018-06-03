@@ -40,9 +40,8 @@ InactiveFeaturesAndParamsCheck()
   StrVec filters;
 
   ASSERT_TRUE(!profiler_is_active());
-  ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::GPU));
+  ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::MainThreadIO));
   ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::Privacy));
-  ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::Restyle));
 
   profiler_get_start_params(&entries, &interval, &features, &filters);
 
@@ -85,9 +84,8 @@ TEST(GeckoProfiler, FeaturesAndParams)
                    features, filters, MOZ_ARRAY_LENGTH(filters));
 
     ASSERT_TRUE(profiler_is_active());
-    ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::GPU));
+    ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::MainThreadIO));
     ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::Privacy));
-    ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::Restyle));
 
     ActiveParamsCheck(PROFILER_DEFAULT_ENTRIES, PROFILER_DEFAULT_INTERVAL,
                       features, filters, MOZ_ARRAY_LENGTH(filters));
@@ -99,16 +97,16 @@ TEST(GeckoProfiler, FeaturesAndParams)
 
   // Try some different features and filters.
   {
-    uint32_t features = ProfilerFeature::GPU | ProfilerFeature::Privacy;
+    uint32_t features = ProfilerFeature::MainThreadIO |
+                        ProfilerFeature::Privacy;
     const char* filters[] = { "GeckoMain", "Foo", "Bar" };
 
     profiler_start(999999, 3,
                    features, filters, MOZ_ARRAY_LENGTH(filters));
 
     ASSERT_TRUE(profiler_is_active());
-    ASSERT_TRUE(profiler_feature_active(ProfilerFeature::GPU));
+    ASSERT_TRUE(profiler_feature_active(ProfilerFeature::MainThreadIO));
     ASSERT_TRUE(profiler_feature_active(ProfilerFeature::Privacy));
-    ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::Restyle));
 
     // Profiler::Threads is added because filters has multiple entries.
     ActiveParamsCheck(999999, 3,
@@ -129,9 +127,8 @@ TEST(GeckoProfiler, FeaturesAndParams)
                    availableFeatures, filters, MOZ_ARRAY_LENGTH(filters));
 
     ASSERT_TRUE(profiler_is_active());
-    ASSERT_TRUE(profiler_feature_active(ProfilerFeature::GPU));
+    ASSERT_TRUE(profiler_feature_active(ProfilerFeature::MainThreadIO));
     ASSERT_TRUE(profiler_feature_active(ProfilerFeature::Privacy));
-    ASSERT_TRUE(profiler_feature_active(ProfilerFeature::Restyle));
 
     ActiveParamsCheck(88888, 10,
                       availableFeatures, filters, MOZ_ARRAY_LENGTH(filters));
@@ -150,9 +147,8 @@ TEST(GeckoProfiler, FeaturesAndParams)
                    features, filters, MOZ_ARRAY_LENGTH(filters));
 
     ASSERT_TRUE(profiler_is_active());
-    ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::GPU));
+    ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::MainThreadIO));
     ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::Privacy));
-    ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::Restyle));
 
     // Entries and intervals go to defaults if 0 is specified.
     ActiveParamsCheck(PROFILER_DEFAULT_ENTRIES, PROFILER_DEFAULT_INTERVAL,
@@ -192,9 +188,8 @@ TEST(GeckoProfiler, EnsureStarted)
     // First, write some samples into the buffer.
     PR_Sleep(PR_MillisecondsToInterval(500));
 
-    uint32_t currPos1, entries1, generation1;
-    profiler_get_buffer_info(&currPos1, &entries1, &generation1);
-    ASSERT_TRUE(generation1 > 0 || currPos1 > 0);
+    Maybe<ProfilerBufferInfo> info1 = profiler_get_buffer_info();
+    ASSERT_TRUE(info1->mRangeEnd > 0);
 
     // Call profiler_ensure_started with the same settings as before.
     // This operation must not clear our buffer!
@@ -206,17 +201,14 @@ TEST(GeckoProfiler, EnsureStarted)
 
     // Check that our position in the buffer stayed the same or advanced.
     // In particular, it shouldn't have reverted to the start.
-    uint32_t currPos2, entries2, generation2;
-    profiler_get_buffer_info(&currPos2, &entries2, &generation2);
-    ASSERT_TRUE(generation2 >= generation1);
-    ASSERT_TRUE(generation2 > generation1 || currPos2 >= currPos1);
+    Maybe<ProfilerBufferInfo> info2 = profiler_get_buffer_info();
+    ASSERT_TRUE(info2->mRangeEnd >= info1->mRangeEnd);
   }
 
   {
     // Active -> Active with *different* settings
 
-    uint32_t currPos1, entries1, generation1;
-    profiler_get_buffer_info(&currPos1, &entries1, &generation1);
+    Maybe<ProfilerBufferInfo> info1 = profiler_get_buffer_info();
 
     // Call profiler_ensure_started with a different feature set than the one it's
     // currently running with. This is supposed to stop and restart the
@@ -229,10 +221,8 @@ TEST(GeckoProfiler, EnsureStarted)
     ActiveParamsCheck(PROFILER_DEFAULT_ENTRIES, PROFILER_DEFAULT_INTERVAL,
                       differentFeatures, filters, MOZ_ARRAY_LENGTH(filters));
 
-    uint32_t currPos2, entries2, generation2;
-    profiler_get_buffer_info(&currPos2, &entries2, &generation2);
-    ASSERT_TRUE(generation2 <= generation1);
-    ASSERT_TRUE(generation2 < generation1 || currPos2 < currPos1);
+    Maybe<ProfilerBufferInfo> info2 = profiler_get_buffer_info();
+    ASSERT_TRUE(info2->mRangeEnd < info1->mRangeEnd);
   }
 
   {
@@ -270,9 +260,8 @@ TEST(GeckoProfiler, DifferentThreads)
       NS_DISPATCH_SYNC);
 
     ASSERT_TRUE(profiler_is_active());
-    ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::GPU));
+    ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::MainThreadIO));
     ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::Privacy));
-    ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::Restyle));
 
     ActiveParamsCheck(PROFILER_DEFAULT_ENTRIES, PROFILER_DEFAULT_INTERVAL,
                       features, filters, MOZ_ARRAY_LENGTH(filters));
@@ -299,9 +288,8 @@ TEST(GeckoProfiler, DifferentThreads)
         "GeckoProfiler_DifferentThreads_Test::TestBody",
         [&]() {
           ASSERT_TRUE(profiler_is_active());
-          ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::GPU));
+          ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::MainThreadIO));
           ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::Privacy));
-          ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::Restyle));
 
           ActiveParamsCheck(PROFILER_DEFAULT_ENTRIES,
                             PROFILER_DEFAULT_INTERVAL,
@@ -381,24 +369,21 @@ TEST(GeckoProfiler, Pause)
 
   ASSERT_TRUE(!profiler_is_paused());
 
-  uint32_t currPos1, entries1, generation1;
-  uint32_t currPos2, entries2, generation2;
-
   // Check that we are writing samples while not paused.
-  profiler_get_buffer_info(&currPos1, &entries1, &generation1);
+  Maybe<ProfilerBufferInfo> info1 = profiler_get_buffer_info();
   PR_Sleep(PR_MillisecondsToInterval(500));
-  profiler_get_buffer_info(&currPos2, &entries2, &generation2);
-  ASSERT_TRUE(currPos1 != currPos2);
+  Maybe<ProfilerBufferInfo> info2 = profiler_get_buffer_info();
+  ASSERT_TRUE(info1->mRangeEnd != info2->mRangeEnd);
 
   profiler_pause();
 
   ASSERT_TRUE(profiler_is_paused());
 
   // Check that we are not writing samples while paused.
-  profiler_get_buffer_info(&currPos1, &entries1, &generation1);
+  info1 = profiler_get_buffer_info();
   PR_Sleep(PR_MillisecondsToInterval(500));
-  profiler_get_buffer_info(&currPos2, &entries2, &generation2);
-  ASSERT_TRUE(currPos1 == currPos2);
+  info2 = profiler_get_buffer_info();
+  ASSERT_TRUE(info1->mRangeEnd == info2->mRangeEnd);
 
   profiler_resume();
 
@@ -461,7 +446,7 @@ TEST(GeckoProfiler, Markers)
   PROFILER_TRACING("A", "C", TRACING_INTERVAL_END);
 
   UniqueProfilerBacktrace bt = profiler_get_backtrace();
-  profiler_tracing("B", "A", TRACING_EVENT, Move(bt));
+  profiler_tracing("B", "A", TRACING_EVENT, std::move(bt));
 
   {
     AUTO_PROFILER_TRACING("C", "A");
@@ -494,9 +479,9 @@ TEST(GeckoProfiler, Markers)
   okstr1[kMax - 1] = '\0';
   okstr2[kMax - 1] = '\0';
   longstr[kMax] = '\0';
-  AUTO_PROFILER_LABEL_DYNAMIC("", CSS, okstr1.get());
-  AUTO_PROFILER_LABEL_DYNAMIC("okstr2", CSS, okstr2.get());
-  AUTO_PROFILER_LABEL_DYNAMIC("", CSS, longstr.get());
+  AUTO_PROFILER_LABEL_DYNAMIC_CSTR("", CSS, okstr1.get());
+  AUTO_PROFILER_LABEL_DYNAMIC_CSTR("okstr2", CSS, okstr2.get());
+  AUTO_PROFILER_LABEL_DYNAMIC_CSTR("", CSS, longstr.get());
 
   // Sleep briefly to ensure a sample is taken and the pending markers are
   // processed.
@@ -627,7 +612,7 @@ TEST(GeckoProfiler, StreamJSONForThisProcess)
   profiler_start(PROFILER_DEFAULT_ENTRIES, PROFILER_DEFAULT_INTERVAL,
                  features, filters, MOZ_ARRAY_LENGTH(filters));
 
-  w.Start(SpliceableJSONWriter::SingleLineStyle);
+  w.Start();
   ASSERT_TRUE(profiler_stream_json_for_this_process(w));
   w.End();
 
@@ -662,7 +647,7 @@ TEST(GeckoProfiler, StreamJSONForThisProcessThreaded)
     NS_NewRunnableFunction(
       "GeckoProfiler_StreamJSONForThisProcessThreaded_Test::TestBody",
       [&]() {
-        w.Start(SpliceableJSONWriter::SingleLineStyle);
+        w.Start();
         ASSERT_TRUE(profiler_stream_json_for_this_process(w));
         w.End();
       }),
@@ -688,7 +673,7 @@ TEST(GeckoProfiler, StreamJSONForThisProcessThreaded)
   ASSERT_TRUE(!profiler_stream_json_for_this_process(w));
 }
 
-TEST(GeckoProfiler, PseudoStack)
+TEST(GeckoProfiler, ProfilingStack)
 {
   uint32_t features = ProfilerFeature::StackWalk;
   const char* filters[] = { "GeckoMain" };
@@ -697,7 +682,11 @@ TEST(GeckoProfiler, PseudoStack)
 
   UniqueFreePtr<char> dynamic(strdup("dynamic"));
   {
-    AUTO_PROFILER_LABEL_DYNAMIC("A::C", JS, dynamic.get());
+    AUTO_PROFILER_LABEL_DYNAMIC_CSTR("A::C", JS, dynamic.get());
+    AUTO_PROFILER_LABEL_DYNAMIC_NSCSTRING(
+      "A::C2", JS, nsDependentCString(dynamic.get()));
+    AUTO_PROFILER_LABEL_DYNAMIC_LOSSY_NSSTRING(
+      "A::C3", JS, NS_ConvertUTF8toUTF16(dynamic.get()));
 
     profiler_start(PROFILER_DEFAULT_ENTRIES, PROFILER_DEFAULT_INTERVAL,
                    features, filters, MOZ_ARRAY_LENGTH(filters));
@@ -706,9 +695,9 @@ TEST(GeckoProfiler, PseudoStack)
   }
 
   AutoProfilerLabel label1("A", nullptr, 888,
-                           js::ProfileEntry::Category::STORAGE);
+                           js::ProfilingStackFrame::Category::STORAGE);
   AutoProfilerLabel label2("A", dynamic.get(), 888,
-                           js::ProfileEntry::Category::NETWORK);
+                           js::ProfilingStackFrame::Category::NETWORK);
   ASSERT_TRUE(profiler_get_backtrace());
 
   profiler_stop();
@@ -751,7 +740,7 @@ public:
   virtual void CollectNativeLeafAddr(void* aAddr) { mFrames++; }
   virtual void CollectJitReturnAddr(void* aAddr) { mFrames++; }
   virtual void CollectWasmFrame(const char* aLabel) { mFrames++; }
-  virtual void CollectPseudoEntry(const js::ProfileEntry& aEntry) { mFrames++; }
+  virtual void CollectProfilingStackFrame(const js::ProfilingStackFrame& aFrame) { mFrames++; }
 
   int mSetIsMainThread;
   int mFrames;

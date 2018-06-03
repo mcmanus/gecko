@@ -91,8 +91,8 @@ nsHttpChunkedDecoder::ParseChunkRemaining(char *buf,
                                           uint32_t count,
                                           uint32_t *bytesConsumed)
 {
-    NS_PRECONDITION(mChunkRemaining == 0, "chunk remaining should be zero");
-    NS_PRECONDITION(count, "unexpected");
+    MOZ_ASSERT(mChunkRemaining == 0, "chunk remaining should be zero");
+    MOZ_ASSERT(count, "unexpected");
 
     *bytesConsumed = 0;
 
@@ -120,7 +120,17 @@ nsHttpChunkedDecoder::ParseChunkRemaining(char *buf,
                 if (!mTrailers) {
                     mTrailers = new nsHttpHeaderArray();
                 }
-                Unused << mTrailers->ParseHeaderLine(nsDependentCSubstring(buf, count));
+
+                nsHttpAtom hdr = {nullptr};
+                nsAutoCString headerNameOriginal;
+                nsAutoCString val;
+                if (NS_SUCCEEDED(mTrailers->ParseHeaderLine(nsDependentCSubstring(buf, count),
+                                                            &hdr, &headerNameOriginal, &val))) {
+                    if (hdr == nsHttp::Server_Timing) {
+                        Unused << mTrailers->SetHeaderFromNet(hdr, headerNameOriginal,
+                                                              val, true);
+                    }
+                }
             }
             else {
                 mWaitEOF = false;

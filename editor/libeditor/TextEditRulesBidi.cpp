@@ -12,7 +12,6 @@
 #include "nsError.h"
 #include "nsFrameSelection.h"
 #include "nsIContent.h"
-#include "nsIDOMNode.h"
 #include "nsIEditor.h"
 #include "nsIPresShell.h"
 #include "nsISupportsImpl.h"
@@ -25,39 +24,43 @@ using namespace dom;
 
 // Test for distance between caret and text that will be deleted
 nsresult
-TextEditRules::CheckBidiLevelForDeletion(Selection* aSelection,
-                                         nsIDOMNode* aSelNode,
-                                         int32_t aSelOffset,
-                                         nsIEditor::EDirection aAction,
-                                         bool* aCancel)
+TextEditRules::CheckBidiLevelForDeletion(
+                 const EditorRawDOMPoint& aSelectionPoint,
+                 nsIEditor::EDirection aAction,
+                 bool* aCancel)
 {
-  NS_ENSURE_ARG_POINTER(aCancel);
+  MOZ_ASSERT(IsEditorDataAvailable());
+
+  if (NS_WARN_IF(!aCancel)) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
   *aCancel = false;
 
-  nsCOMPtr<nsIPresShell> shell = mTextEditor->GetPresShell();
-  NS_ENSURE_TRUE(shell, NS_ERROR_NOT_INITIALIZED);
+  RefPtr<nsPresContext> presContext = TextEditorRef().GetPresContext();
+  if (NS_WARN_IF(!presContext)) {
+    return NS_ERROR_FAILURE;
+  }
 
-  nsPresContext *context = shell->GetPresContext();
-  NS_ENSURE_TRUE(context, NS_ERROR_NULL_POINTER);
-
-  if (!context->BidiEnabled()) {
+  if (!presContext->BidiEnabled()) {
     return NS_OK;
   }
 
-  nsCOMPtr<nsIContent> content = do_QueryInterface(aSelNode);
-  NS_ENSURE_TRUE(content, NS_ERROR_NULL_POINTER);
+  if (!aSelectionPoint.GetContainerAsContent()) {
+    return NS_ERROR_FAILURE;
+  }
 
-  nsBidiLevel levelBefore;
-  nsBidiLevel levelAfter;
-  RefPtr<nsFrameSelection> frameSelection =
-    aSelection->AsSelection()->GetFrameSelection();
-  NS_ENSURE_TRUE(frameSelection, NS_ERROR_NULL_POINTER);
+  RefPtr<nsFrameSelection> frameSelection = SelectionRef().GetFrameSelection();
+  if (NS_WARN_IF(!frameSelection)) {
+    return NS_ERROR_FAILURE;
+  }
 
   nsPrevNextBidiLevels levels = frameSelection->
-    GetPrevNextBidiLevels(content, aSelOffset, true);
+    GetPrevNextBidiLevels(aSelectionPoint.GetContainerAsContent(),
+                          aSelectionPoint.Offset(), true);
 
-  levelBefore = levels.mLevelBefore;
-  levelAfter = levels.mLevelAfter;
+  nsBidiLevel levelBefore = levels.mLevelBefore;
+  nsBidiLevel levelAfter = levels.mLevelAfter;
 
   nsBidiLevel currentCaretLevel = frameSelection->GetCaretBidiLevel();
 
@@ -81,8 +84,10 @@ TextEditRules::CheckBidiLevelForDeletion(Selection* aSelection,
 }
 
 void
-TextEditRules::UndefineCaretBidiLevel(Selection* aSelection)
+TextEditRules::UndefineCaretBidiLevel()
 {
+  MOZ_ASSERT(IsEditorDataAvailable());
+
   /**
    * After inserting text the caret Bidi level must be set to the level of the
    * inserted text.This is difficult, because we cannot know what the level is
@@ -91,7 +96,7 @@ TextEditRules::UndefineCaretBidiLevel(Selection* aSelection)
    * So we set the caret Bidi level to UNDEFINED here, and the caret code will
    * set it correctly later
    */
-  RefPtr<nsFrameSelection> frameSelection = aSelection->GetFrameSelection();
+  RefPtr<nsFrameSelection> frameSelection = SelectionRef().GetFrameSelection();
   if (frameSelection) {
     frameSelection->UndefineCaretBidiLevel();
   }

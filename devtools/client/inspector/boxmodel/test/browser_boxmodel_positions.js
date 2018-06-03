@@ -42,23 +42,23 @@ const res1 = [
   },
 ];
 
-add_task(function* () {
-  yield addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
-  let {inspector, view} = yield openBoxModelView();
-  let node = yield getNodeFront("div", inspector);
-  let children = yield inspector.markup.walker.children(node);
-  let beforeElement = children.nodes[0];
+add_task(async function() {
+  await addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
+  const {inspector, boxmodel} = await openLayoutView();
+  const node = await getNodeFront("div", inspector);
+  const children = await inspector.markup.walker.children(node);
+  const beforeElement = children.nodes[0];
 
-  yield selectNode(beforeElement, inspector);
-  yield testPositionValues(inspector, view);
+  await selectNode(beforeElement, inspector);
+  await testPositionValues(inspector, boxmodel);
 });
 
-function* testPositionValues(inspector, view) {
+function testPositionValues(inspector, boxmodel) {
   info("Test that the position values of the box model are correct");
-  let viewdoc = view.document;
+  const doc = boxmodel.document;
 
   for (let i = 0; i < res1.length; i++) {
-    let elt = viewdoc.querySelector(res1[i].selector);
+    const elt = doc.querySelector(res1[i].selector);
     is(elt.textContent, res1[i].value,
        res1[i].selector + " has the right value.");
   }

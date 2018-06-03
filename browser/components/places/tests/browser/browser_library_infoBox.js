@@ -13,7 +13,7 @@ add_task(async function() {
   gLibrary = await promiseLibrary();
   registerCleanupFunction(async () => {
     gLibrary.close();
-    await PlacesTestUtils.clearHistory();
+    await PlacesUtils.history.clear();
   });
   gLibrary.PlacesOrganizer._places.focus();
 
@@ -25,7 +25,7 @@ add_task(async function() {
   await PlacesTestUtils.addVisits("http://www.mozilla.org/");
 
   // open all bookmarks node
-  PO.selectLeftPaneQuery("AllBookmarks");
+  PO.selectLeftPaneBuiltIn("AllBookmarks");
   isnot(PO._places.selectedNode, null,
         "Correctly selected all bookmarks node.");
   checkInfoBoxSelected();
@@ -34,7 +34,7 @@ add_task(async function() {
   checkAddInfoFieldsCollapsed(PO);
 
   // open history node
-  PO.selectLeftPaneQuery("History");
+  PO.selectLeftPaneBuiltIn("History");
   isnot(PO._places.selectedNode, null, "Correctly selected history node.");
   checkInfoBoxSelected();
   ok(infoBoxExpanderWrapper.hidden,
@@ -64,7 +64,7 @@ add_task(async function() {
   historyNode.containerOpen = false;
 
   // open bookmarks menu node
-  PO.selectLeftPaneQuery("BookmarksMenu");
+  PO.selectLeftPaneBuiltIn("BookmarksMenu");
   isnot(PO._places.selectedNode, null,
         "Correctly selected bookmarks menu node.");
   checkInfoBoxSelected();
@@ -75,7 +75,7 @@ add_task(async function() {
   // open recently bookmarked node
   await PlacesUtils.bookmarks.insert({
     parentGuid: PlacesUtils.bookmarks.menuGuid,
-    url: "place:folder=BOOKMARKS_MENU&folder=UNFILED_BOOKMARKS&folder=TOOLBAR" +
+    url: "place:" + PlacesUtils.bookmarks.userContentRoots.map(guid => `parent=${guid}`).join("&") +
          "&queryType=" + Ci.nsINavHistoryQueryOptions.QUERY_TYPE_BOOKMARKS +
          "&sort=" + Ci.nsINavHistoryQueryOptions.SORT_BY_DATEADDED_DESCENDING +
          "&maxResults=10" +
@@ -98,12 +98,13 @@ add_task(async function() {
       "Correctly selected recently bookmarked node.");
   PO._places.selectNode(childNode);
   checkInfoBoxSelected();
-  ok(!infoBoxExpanderWrapper.hidden,
-      "Expander button is not hidden for recently bookmarked node.");
-  checkAddInfoFieldsNotCollapsed(PO);
+  ok(infoBoxExpanderWrapper.hidden,
+     "Expander button is hidden for recently bookmarked node.");
+  checkAddInfoFieldsCollapsed(PO);
 
   // open first bookmark
   view = ContentTree.view.view;
+  ContentTree.view.focus();
   ok(view.rowCount > 0, "Bookmark item exists.");
   view.selection.select(0);
   checkInfoBoxSelected();
@@ -157,4 +158,3 @@ function getAndCheckElmtById(id) {
   isnot(elmt, null, "Correctly got element: #" + id);
   return elmt;
 }
-

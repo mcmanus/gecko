@@ -20,7 +20,7 @@
 
 #include "mozilla/Logging.h"
 
-#if DNSQUERY_AVAILABLE
+#ifdef DNSQUERY_AVAILABLE
 // There is a bug in windns.h where the type of parameter ppQueryResultsSet for
 // DnsQuery_A is dependent on UNICODE being set. It should *always* be
 // PDNS_RECORDA, but if UNICODE is set it is PDNS_RECORDW. To get around this
@@ -40,7 +40,7 @@ static LazyLogModule gGetAddrInfoLog("GetAddrInfo");
 #define LOG_WARNING(msg, ...) \
   MOZ_LOG(gGetAddrInfoLog, LogLevel::Warning, ("[DNS]: " msg, ##__VA_ARGS__))
 
-#if DNSQUERY_AVAILABLE
+#ifdef DNSQUERY_AVAILABLE
 ////////////////////////////
 // WINDOWS IMPLEMENTATION //
 ////////////////////////////
@@ -196,7 +196,7 @@ _GetMinTTLForRequestType_Windows(DnsapiInfo * dnsapi, const char* aHost,
 }
 
 static MOZ_ALWAYS_INLINE nsresult
-_GetTTLData_Windows(const char* aHost, uint16_t* aResult, uint16_t aAddressFamily)
+_GetTTLData_Windows(const char* aHost, uint32_t* aResult, uint16_t aAddressFamily)
 {
   MOZ_ASSERT(aHost);
   MOZ_ASSERT(aResult);
@@ -250,8 +250,7 @@ _GetTTLData_Windows(const char* aHost, uint16_t* aResult, uint16_t aAddressFamil
 
 static MOZ_ALWAYS_INLINE nsresult
 _GetAddrInfo_Portable(const char* aCanonHost, uint16_t aAddressFamily,
-                      uint16_t aFlags, const char* aNetworkInterface,
-                      AddrInfo** aAddrInfo)
+                      uint16_t aFlags, AddrInfo** aAddrInfo)
 {
   MOZ_ASSERT(aCanonHost);
   MOZ_ASSERT(aAddrInfo);
@@ -302,7 +301,7 @@ nsresult
 GetAddrInfoInit() {
   LOG("Initializing GetAddrInfo.\n");
 
-#if DNSQUERY_AVAILABLE
+#ifdef DNSQUERY_AVAILABLE
   return _GetAddrInfoInit_Windows();
 #else
   return NS_OK;
@@ -313,7 +312,7 @@ nsresult
 GetAddrInfoShutdown() {
   LOG("Shutting down GetAddrInfo.\n");
 
-#if DNSQUERY_AVAILABLE
+#ifdef DNSQUERY_AVAILABLE
   return _GetAddrInfoShutdown_Windows();
 #else
   return NS_OK;
@@ -322,24 +321,30 @@ GetAddrInfoShutdown() {
 
 nsresult
 GetAddrInfo(const char* aHost, uint16_t aAddressFamily, uint16_t aFlags,
-            const char* aNetworkInterface, AddrInfo** aAddrInfo, bool aGetTtl)
+            AddrInfo** aAddrInfo, bool aGetTtl)
 {
   if (NS_WARN_IF(!aHost) || NS_WARN_IF(!aAddrInfo)) {
     return NS_ERROR_NULL_POINTER;
   }
 
-#if DNSQUERY_AVAILABLE
+#ifdef DNSQUERY_AVAILABLE
   // The GetTTLData needs the canonical name to function properly
   if (aGetTtl) {
     aFlags |= nsHostResolver::RES_CANON_NAME;
   }
 #endif
 
+  if (gNativeIsLocalhost) {
+    // pretend we use the given host but use IPv4 localhost instead!
+    aHost = "localhost";
+    aAddressFamily = PR_AF_INET;
+  }
+
   *aAddrInfo = nullptr;
   nsresult rv = _GetAddrInfo_Portable(aHost, aAddressFamily, aFlags,
-                                      aNetworkInterface, aAddrInfo);
+                                      aAddrInfo);
 
-#if DNSQUERY_AVAILABLE
+#ifdef DNSQUERY_AVAILABLE
   if (aGetTtl && NS_SUCCEEDED(rv)) {
     // Figure out the canonical name, or if that fails, just use the host name
     // we have.
@@ -351,7 +356,7 @@ GetAddrInfo(const char* aHost, uint16_t aAddressFamily, uint16_t aFlags,
     }
 
     LOG("Getting TTL for %s (cname = %s).", aHost, name);
-    uint16_t ttl = 0;
+    uint32_t ttl = 0;
     nsresult ttlRv = _GetTTLData_Windows(name, &ttl, aAddressFamily);
     if (NS_SUCCEEDED(ttlRv)) {
       (*aAddrInfo)->ttl = ttl;

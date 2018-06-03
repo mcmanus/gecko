@@ -34,10 +34,7 @@ function checkExternalFunction(entry)
         "Servo_IsWorkerThread",
         /nsIFrame::AppendOwnedAnonBoxes/,
         // Assume that atomic accesses are threadsafe.
-        /^__atomic_fetch_/,
-        /^__atomic_load_/,
-        /^__atomic_store_/,
-        /^__atomic_thread_fence/,
+        /^__atomic_/,
     ];
     if (entry.matches(whitelist))
         return;
@@ -153,7 +150,9 @@ function treatAsSafeArgument(entry, varName, csuName)
         // Various Servo binding out parameters. This is a mess and there needs
         // to be a way to indicate which params are out parameters, either using
         // an attribute or a naming convention.
+        ["Gecko_CopyAnimationNames", "aDest", null],
         ["Gecko_CopyFontFamilyFrom", "dst", null],
+        ["Gecko_SetAnimationName", "aStyleAnimation", null],
         ["Gecko_SetCounterStyleToName", "aPtr", null],
         ["Gecko_SetCounterStyleToSymbols", "aPtr", null],
         ["Gecko_SetCounterStyleToString", "aPtr", null],
@@ -212,7 +211,6 @@ function treatAsSafeArgument(entry, varName, csuName)
         ["Gecko_nsStyleSVG_CopyDashArray", "aDst", null],
         ["Gecko_nsStyleFont_SetLang", "aFont", null],
         ["Gecko_nsStyleFont_CopyLangFrom", "aFont", null],
-        ["Gecko_MatchStringArgPseudo", "aSetSlowSelectorFlag", null],
         ["Gecko_ClearWillChange", "aDisplay", null],
         ["Gecko_AppendWillChange", "aDisplay", null],
         ["Gecko_CopyWillChangeFrom", "aDest", null],
@@ -221,6 +219,7 @@ function treatAsSafeArgument(entry, varName, csuName)
         ["Gecko_DestroyShapeSource", "aShape", null],
         ["Gecko_StyleShapeSource_SetURLValue", "aShape", null],
         ["Gecko_NewBasicShape", "aShape", null],
+        ["Gecko_NewShapeImage", "aShape", null],
         ["Gecko_nsFont_InitSystem", "aDest", null],
         ["Gecko_nsFont_SetFontFeatureValuesLookup", "aFont", null],
         ["Gecko_nsFont_ResetFontFeatureValuesLookup", "aFont", null],
@@ -237,7 +236,6 @@ function treatAsSafeArgument(entry, varName, csuName)
         ["Gecko_CopyAlternateValuesFrom", "aDest", null],
         ["Gecko_CounterStyle_GetName", "aResult", null],
         ["Gecko_CounterStyle_GetSingleString", "aResult", null],
-        ["Gecko_EnsureMozBorderColors", "aBorder", null],
         ["Gecko_nsTArray_FontFamilyName_AppendNamed", "aNames", null],
         ["Gecko_nsTArray_FontFamilyName_AppendGeneric", "aNames", null],
     ];
@@ -298,6 +296,10 @@ function checkFieldWrite(entry, location, fields)
             return;
 
         if (/\bThreadLocal<\b/.test(field))
+            return;
+
+        // Debugging check for string corruption.
+        if (field == "nsStringBuffer.mCanary")
             return;
     }
 
@@ -446,8 +448,18 @@ function ignoreContents(entry)
         /imgRequestProxy::GetProgressTracker/, // Uses an AutoLock
         /Smprintf/,
         "malloc",
+        "calloc",
         "free",
         "realloc",
+        "memalign",
+        "strdup",
+        "strndup",
+        "moz_xmalloc",
+        "moz_xcalloc",
+        "moz_xrealloc",
+        "moz_xmemalign",
+        "moz_xstrdup",
+        "moz_xstrndup",
         "jemalloc_thread_local_arena",
 
         // These all create static strings in local storage, which is threadsafe
@@ -464,7 +476,7 @@ function ignoreContents(entry)
 
         // The analysis thinks we'll write to mBits in the DoGetStyleFoo<false>
         // call.  Maybe the template parameter confuses it?
-        /nsStyleContext::PeekStyle/,
+        /ComputedStyle::PeekStyle/,
 
         // The analysis can't cope with the indirection used for the objects
         // being initialized here, from nsCSSValue::Array::Create to the return
@@ -480,7 +492,6 @@ function ignoreContents(entry)
 
         // Need main thread assertions or other fixes.
         /EffectCompositor::GetServoAnimationRule/,
-        /LookAndFeel::GetColor/,
     ];
     if (entry.matches(whitelist))
         return true;
@@ -914,6 +925,7 @@ function processAssign(body, entry, location, lhs, edge)
                 return;
         } else if (lhs.Exp[0].Kind == "Fld") {
             const {
+                Name: [ fieldName ],
                 Type: {Kind, Type: fieldType},
                 FieldCSU: {Type: {Kind: containerTypeKind,
                                   Name: containerTypeName}}
@@ -923,11 +935,10 @@ function processAssign(body, entry, location, lhs, edge)
             if (containerTypeKind == 'CSU' &&
                 Kind == 'Pointer' &&
                 isEdgeSafeArgument(entry, containerExpr) &&
-                isSafeMemberPointer(containerTypeName, fieldType))
+                isSafeMemberPointer(containerTypeName, fieldName, fieldType))
             {
                 return;
             }
-
         }
         if (fields.length)
             checkFieldWrite(entry, location, fields);
@@ -1188,6 +1199,16 @@ function expressionValueEdge(exp) {
     return edge;
 }
 
+// Examples:
+//
+//   void foo(type* aSafe) {
+//     type* safeBecauseNew = new type(...);
+//     type* unsafeBecauseMultipleAssignments = new type(...);
+//     if (rand())
+//       unsafeBecauseMultipleAssignments = bar();
+//     type* safeBecauseSingleAssignmentOfSafe = aSafe;
+//   }
+//
 function isSafeVariable(entry, variable)
 {
     var index = safeArgumentIndex(variable);
@@ -1234,7 +1255,8 @@ function isSafeLocalVariable(entry, name)
             // itself is threadsafe.
             if ((isDirectCall(edge, /operator\[\]/) ||
                  isDirectCall(edge, /nsTArray.*?::InsertElementAt\b/) ||
-                 isDirectCall(edge, /nsStyleContent::ContentAt/)) &&
+                 isDirectCall(edge, /nsStyleContent::ContentAt/) ||
+                 isDirectCall(edge, /nsTArray_base.*?::GetAutoArrayBuffer\b/)) &&
                 isEdgeSafeArgument(entry, edge.PEdgeCallInstance.Exp))
             {
                 return true;
@@ -1333,23 +1355,16 @@ function isSafeLocalVariable(entry, name)
     return true;
 }
 
-function isSafeMemberPointer(containerType, memberType)
+function isSafeMemberPointer(containerType, memberName, memberType)
 {
+    // nsTArray owns its header.
+    if (containerType.includes("nsTArray_base") && memberName == "mHdr")
+        return true;
+
     if (memberType.Kind != 'Pointer')
         return false;
 
-    const {Type: {Kind: pointeeKind, Name: pointeeTypeName}} = memberType;
-
-    // nsStyleBorder has a member mBorderColors of type nsBorderColors**. It is
-    // lazily initialized to an array of 4 nsBorderColors, and should inherit
-    // the safety of its container.
-    if (containerType == 'nsStyleBorder' &&
-        pointeeKind == 'CSU' &&
-        pointeeTypeName == 'nsBorderColors')
-    {
-        return true;
-    }
-
+    // Special-cases go here :)
     return false;
 }
 

@@ -8,9 +8,8 @@
 
 #include "mozilla/ServoPageRule.h"
 
-#include "mozilla/DeclarationBlockInlines.h"
+#include "mozilla/DeclarationBlock.h"
 #include "mozilla/ServoBindings.h"
-#include "mozilla/ServoDeclarationBlock.h"
 
 using namespace mozilla::dom;
 
@@ -20,12 +19,13 @@ namespace mozilla {
 
 ServoPageRuleDeclaration::ServoPageRuleDeclaration(
   already_AddRefed<RawServoDeclarationBlock> aDecls)
-  : mDecls(new ServoDeclarationBlock(Move(aDecls)))
+  : mDecls(new DeclarationBlock(std::move(aDecls)))
 {
 }
 
 ServoPageRuleDeclaration::~ServoPageRuleDeclaration()
 {
+  mDecls->SetOwningRule(nullptr);
 }
 
 // QueryInterface implementation for ServoPageRuleDeclaration
@@ -45,17 +45,16 @@ NS_IMPL_RELEASE_USING_AGGREGATOR(ServoPageRuleDeclaration, Rule())
 
 /* nsDOMCSSDeclaration implementation */
 
-NS_IMETHODIMP
-ServoPageRuleDeclaration::GetParentRule(nsIDOMCSSRule** aParent)
+css::Rule*
+ServoPageRuleDeclaration::GetParentRule()
 {
-  *aParent = do_AddRef(Rule()).take();
-  return NS_OK;
+  return Rule();
 }
 
 nsINode*
 ServoPageRuleDeclaration::GetParentObject()
 {
-  return Rule()->GetDocument();
+  return Rule()->GetParentObject();
 }
 
 DeclarationBlock*
@@ -72,7 +71,7 @@ ServoPageRuleDeclaration::SetCSSDeclaration(DeclarationBlock* aDecl)
 
   if (aDecl != mDecls) {
     mDecls->SetOwningRule(nullptr);
-    RefPtr<ServoDeclarationBlock> decls = aDecl->AsServo();
+    RefPtr<DeclarationBlock> decls = aDecl;
     Servo_PageRule_SetStyle(rule->Raw(), decls->Raw());
     mDecls = decls.forget();
     mDecls->SetOwningRule(rule);
@@ -87,19 +86,11 @@ ServoPageRuleDeclaration::DocToUpdate()
   return nullptr;
 }
 
-void
-ServoPageRuleDeclaration::GetCSSParsingEnvironment(
-  CSSParsingEnvironment& aCSSParseEnv)
+nsDOMCSSDeclaration::ParsingEnvironment
+ServoPageRuleDeclaration::GetParsingEnvironment(
+  nsIPrincipal* aSubjectPrincipal) const
 {
-  MOZ_ASSERT_UNREACHABLE("GetCSSParsingEnvironment "
-                         "shouldn't be calling for a Servo rule");
-  GetCSSParsingEnvironmentForRule(Rule(), aCSSParseEnv);
-}
-
-nsDOMCSSDeclaration::ServoCSSParsingEnvironment
-ServoPageRuleDeclaration::GetServoCSSParsingEnvironment() const
-{
-  return GetServoCSSParsingEnvironmentForRule(Rule());
+  return GetParsingEnvironmentForRule(Rule());
 }
 
 // -- ServoPageRule --------------------------------------------------
@@ -107,7 +98,7 @@ ServoPageRuleDeclaration::GetServoCSSParsingEnvironment() const
 ServoPageRule::ServoPageRule(RefPtr<RawServoPageRule> aRawRule,
                              uint32_t aLine, uint32_t aColumn)
   : CSSPageRule(aLine, aColumn)
-  , mRawRule(Move(aRawRule))
+  , mRawRule(std::move(aRawRule))
   , mDecls(Servo_PageRule_GetStyle(mRawRule).Consume())
 {
 }
@@ -141,6 +132,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(ServoPageRule, CSSPageRule)
   // NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER which we can't use
   // directly because the wrapper is on the declaration, not on us.
   tmp->mDecls.ReleaseWrapper(static_cast<nsISupports*>(p));
+  tmp->mDecls.mDecls->SetOwningRule(nullptr);
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(ServoPageRule, CSSPageRule)
@@ -155,16 +147,6 @@ ServoPageRule::IsCCLeaf() const
   }
 
   return !mDecls.PreservingWrapper();
-}
-
-already_AddRefed<css::Rule>
-ServoPageRule::Clone() const
-{
-  // Rule::Clone is only used when CSSStyleSheetInner is cloned in
-  // preparation of being mutated. However, ServoStyleSheet never clones
-  // anything, so this method should never be called.
-  MOZ_ASSERT_UNREACHABLE("Shouldn't be cloning ServoPageRule");
-  return nullptr;
 }
 
 size_t
@@ -190,7 +172,7 @@ ServoPageRule::List(FILE* out, int32_t aIndent) const
 /* CSSRule implementation */
 
 void
-ServoPageRule::GetCssTextImpl(nsAString& aCssText) const
+ServoPageRule::GetCssText(nsAString& aCssText) const
 {
   Servo_PageRule_GetCssText(mRawRule, &aCssText);
 }

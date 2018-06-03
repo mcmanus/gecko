@@ -9,7 +9,6 @@
 #include "gtest/gtest.h"
 
 #include "FuzzingInterface.h"
-#include "LibFuzzerRegistry.h"
 
 extern "C" {
 #include <csi_platform.h>
@@ -27,11 +26,10 @@ RunStunParserFuzzing(const uint8_t* data, size_t size) {
 
   UCHAR* mes = (UCHAR*)data;
 
-  nr_stun_message_create2(&req, mes, size);
-
-  nr_stun_decode_message(req, nullptr, nullptr);
-
-  nr_stun_message_destroy(&req);
+  if (!nr_stun_message_create2(&req, mes, size)) {
+    nr_stun_decode_message(req, nullptr, nullptr);
+    nr_stun_message_destroy(&req);
+  }
 
   return 0;
 }

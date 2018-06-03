@@ -97,8 +97,8 @@ typedef void
 extern JS_PUBLIC_API(void)
 SetRealmNameCallback(JSContext* cx, RealmNameCallback callback);
 
-// Get the global object for the given realm. Returns null only if `realm` is
-// in the atoms compartment.
+// Get the global object for the given realm. This only returns nullptr during
+// GC, between collecting the global object and destroying the Realm.
 extern JS_PUBLIC_API(JSObject*)
 GetRealmGlobalOrNull(Handle<Realm*> realm);
 
@@ -116,17 +116,6 @@ GetRealmErrorPrototype(JSContext* cx);
 
 extern JS_PUBLIC_API(JSObject*)
 GetRealmIteratorPrototype(JSContext* cx);
-
-/**
- * Change the JS language version for the current Realm. This is discouraged,
- * but necessary to support the `version()` builtin function in the js and xpc
- * shells.
- *
- * It would be nice to put this in jsfriendapi, but the linkage requirements
- * of the shells make that impossible.
- */
-JS_PUBLIC_API(void)
-SetVersionForCurrentRealm(JSContext* cx, JSVersion version);
 
 } // namespace JS
 

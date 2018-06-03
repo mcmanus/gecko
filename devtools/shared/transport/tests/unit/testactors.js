@@ -5,12 +5,12 @@
 const { ActorPool, appendExtraActors, createExtraActors } =
   require("devtools/server/actors/common");
 const { RootActor } = require("devtools/server/actors/root");
-const { ThreadActor } = require("devtools/server/actors/script");
+const { ThreadActor } = require("devtools/server/actors/thread");
 const { DebuggerServer } = require("devtools/server/main");
 const promise = require("promise");
 
 var gTestGlobals = [];
-DebuggerServer.addTestGlobal = function (global) {
+DebuggerServer.addTestGlobal = function(global) {
   gTestGlobals.push(global);
 };
 
@@ -31,8 +31,8 @@ function TestTabList(connection) {
   // A pool mapping those actors' names to the actors.
   this._tabActorPool = new ActorPool(connection);
 
-  for (let global of gTestGlobals) {
-    let actor = new TestTabActor(connection, global);
+  for (const global of gTestGlobals) {
+    const actor = new TestTabActor(connection, global);
     actor.selected = false;
     this._tabActors.push(actor);
     this._tabActorPool.addActor(actor);
@@ -46,13 +46,13 @@ function TestTabList(connection) {
 
 TestTabList.prototype = {
   constructor: TestTabList,
-  getList: function () {
+  getList: function() {
     return promise.resolve([...this._tabActors]);
   }
 };
 
 function createRootActor(connection) {
-  let root = new RootActor(connection, {
+  const root = new RootActor(connection, {
     tabList: new TestTabList(connection),
     globalActorFactories: DebuggerServer.globalActorFactories
   });
@@ -81,11 +81,11 @@ TestTabActor.prototype = {
     return this._global.__name;
   },
 
-  form: function () {
-    let response = { actor: this.actorID, title: this._global.__name };
+  form: function() {
+    const response = { actor: this.actorID, title: this._global.__name };
 
     // Walk over tab actors added by extensions and add them to a new ActorPool.
-    let actorPool = new ActorPool(this.conn);
+    const actorPool = new ActorPool(this.conn);
     this._createExtraActors(DebuggerServer.tabActorFactories, actorPool);
     if (!actorPool.isEmpty()) {
       this._tabActorPool = actorPool;
@@ -97,16 +97,16 @@ TestTabActor.prototype = {
     return response;
   },
 
-  onAttach: function (request) {
+  onAttach: function(request) {
     this._attached = true;
 
-    let response = { type: "tabAttached", threadActor: this._threadActor.actorID };
+    const response = { type: "tabAttached", threadActor: this._threadActor.actorID };
     this._appendExtraActors(response);
 
     return response;
   },
 
-  onDetach: function (request) {
+  onDetach: function(request) {
     if (!this._attached) {
       return { "error": "wrongState" };
     }
@@ -123,10 +123,10 @@ TestTabActor.prototype.requestTypes = {
   "detach": TestTabActor.prototype.onDetach
 };
 
-exports.register = function (handle) {
+exports.register = function(handle) {
   handle.setRootActor(createRootActor);
 };
 
-exports.unregister = function (handle) {
+exports.unregister = function(handle) {
   handle.setRootActor(null);
 };

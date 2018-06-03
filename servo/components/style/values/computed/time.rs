@@ -4,14 +4,13 @@
 
 //! Computed time values.
 
-use std::fmt;
-use style_traits::ToCss;
+use std::fmt::{self, Write};
+use style_traits::{CssWriter, ToCss};
 use values::CSSFloat;
 
 /// A computed `<time>` value.
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
-#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
-#[cfg_attr(feature = "servo", derive(HeapSizeOf, Deserialize, Serialize))]
+#[derive(Clone, Copy, Debug, MallocSizeOf, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 pub struct Time {
     seconds: CSSFloat,
 }
@@ -19,9 +18,7 @@ pub struct Time {
 impl Time {
     /// Creates a time value from a seconds amount.
     pub fn from_seconds(seconds: CSSFloat) -> Self {
-        Time {
-            seconds: seconds,
-        }
+        Time { seconds: seconds }
     }
 
     /// Returns `0s`.
@@ -37,9 +34,9 @@ impl Time {
 }
 
 impl ToCss for Time {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result
+    fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
     where
-        W: fmt::Write,
+        W: Write,
     {
         self.seconds().to_css(dest)?;
         dest.write_str("s")

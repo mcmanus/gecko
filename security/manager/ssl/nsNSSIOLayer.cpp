@@ -34,8 +34,10 @@
 #include "nsIWebProgressListener.h"
 #include "nsNSSCertHelper.h"
 #include "nsNSSComponent.h"
+#include "nsNSSHelper.h"
 #include "nsPrintfCString.h"
 #include "nsServiceManagerUtils.h"
+#include "pkix/pkixnss.h"
 #include "pkix/pkixtypes.h"
 #include "prmem.h"
 #include "prnetdb.h"
@@ -76,7 +78,7 @@ namespace {
 //          0 means no override 1->4 are 1.0, 1.1, 1.2, 1.3, 4->7 unused
 // bits 3-5 (mask 0x38) specify the tls fallback limit
 //          0 means no override, values 1->4 match prefs
-// bit    6 (mask 0x40) specifies use of SSL_AltServerHelloType on handshake
+// bit    6 (mask 0x40) was used to specify compat mode. Temporarily reserved.
 
 enum {
   kTLSProviderFlagMaxVersion10   = 0x01,
@@ -93,11 +95,6 @@ static uint32_t getTLSProviderFlagMaxVersion(uint32_t flags)
 static uint32_t getTLSProviderFlagFallbackLimit(uint32_t flags)
 {
   return (flags & 0x38) >> 3;
-}
-
-static bool getTLSProviderFlagAltServerHello(uint32_t flags)
-{
-  return (flags & 0x40);
 }
 
 #define MAX_ALPN_LENGTH 255
@@ -126,6 +123,7 @@ nsNSSSocketInfo::nsNSSSocketInfo(SharedSSLState& aState, uint32_t providerFlags,
     mPreliminaryHandshakeDone(false),
     mNPNCompleted(false),
     mEarlyDataAccepted(false),
+    mDenyClientCert(false),
     mFalseStartCallbackCalled(false),
     mFalseStarted(false),
     mIsFullHandshake(false),
@@ -222,6 +220,13 @@ NS_IMETHODIMP
 nsNSSSocketInfo::SetClientCert(nsIX509Cert* aClientCert)
 {
   mClientCert = aClientCert;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsNSSSocketInfo::GetClientCertSent(bool* arg)
+{
+  *arg = mSentClientCert;
   return NS_OK;
 }
 
@@ -370,11 +375,6 @@ nsNSSSocketInfo::GetAlpnEarlySelection(nsACString& aAlpnSelected)
 {
   aAlpnSelected.Truncate();
 
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown() || isPK11LoggedOut()) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
-
   SSLPreliminaryChannelInfo info;
   SECStatus rv = SSL_GetPreliminaryChannelInfo(mFd, &info, sizeof(info));
   if (rv != SECSuccess || !info.canSendEarlyData) {
@@ -413,12 +413,22 @@ nsNSSSocketInfo::SetEarlyDataAccepted(bool aAccepted)
 }
 
 NS_IMETHODIMP
+nsNSSSocketInfo::GetDenyClientCert(bool* aDenyClientCert)
+{
+  *aDenyClientCert = mDenyClientCert;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsNSSSocketInfo::SetDenyClientCert(bool aDenyClientCert)
+{
+  mDenyClientCert = aDenyClientCert;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsNSSSocketInfo::DriveHandshake()
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown() || isPK11LoggedOut()) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
   if (!mFd) {
     return NS_ERROR_FAILURE;
   }
@@ -435,7 +445,7 @@ nsNSSSocketInfo::DriveHandshake()
       return mHandshakeCompleted ? NS_OK : NS_BASE_STREAM_WOULD_BLOCK;
     }
 
-    SetCanceled(errorCode, SSLErrorMessageType::Plain);
+    SetCanceled(errorCode);
     return GetXPCOMFromNSSError(errorCode);
   }
   return NS_OK;
@@ -598,9 +608,6 @@ nsNSSSocketInfo::StartTLS()
 NS_IMETHODIMP
 nsNSSSocketInfo::SetNPNList(nsTArray<nsCString>& protocolArray)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown())
-    return NS_ERROR_NOT_AVAILABLE;
   if (!mFd)
     return NS_ERROR_FAILURE;
 
@@ -628,10 +635,6 @@ nsNSSSocketInfo::SetNPNList(nsTArray<nsCString>& protocolArray)
 nsresult
 nsNSSSocketInfo::ActivateSSL()
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown())
-    return NS_ERROR_NOT_AVAILABLE;
-
   if (SECSuccess != SSL_OptionSet(mFd, SSL_SECURITY, true))
     return NS_ERROR_FAILURE;
   if (SECSuccess != SSL_ResetHandshake(mFd, false))
@@ -672,8 +675,7 @@ nsNSSSocketInfo::SetCertVerificationWaiting()
 // attempt to acquire locks that are already held by libssl when it calls
 // callbacks.
 void
-nsNSSSocketInfo::SetCertVerificationResult(PRErrorCode errorCode,
-                                           SSLErrorMessageType errorMessageType)
+nsNSSSocketInfo::SetCertVerificationResult(PRErrorCode errorCode)
 {
   MOZ_ASSERT(mCertVerificationState == waiting_for_cert_verification,
              "Invalid state transition to cert_verification_finished");
@@ -683,7 +685,6 @@ nsNSSSocketInfo::SetCertVerificationResult(PRErrorCode errorCode,
     // Only replace errorCode if there was originally no error
     if (rv != SECSuccess && errorCode == 0) {
       errorCode = PR_GetError();
-      errorMessageType = SSLErrorMessageType::Plain;
       if (errorCode == 0) {
         NS_ERROR("SSL_AuthCertificateComplete didn't set error code");
         errorCode = PR_INVALID_STATE_ERROR;
@@ -693,7 +694,7 @@ nsNSSSocketInfo::SetCertVerificationResult(PRErrorCode errorCode,
 
   if (errorCode) {
     mFailedVerification = true;
-    SetCanceled(errorCode, errorMessageType);
+    SetCanceled(errorCode);
   }
 
   if (mPlaintextBytesRead && !errorCode) {
@@ -725,7 +726,6 @@ void nsSSLIOLayerHelpers::Cleanup()
 
 static void
 nsHandleSSLError(nsNSSSocketInfo* socketInfo,
-                 ::mozilla::psm::SSLErrorMessageType errtype,
                  PRErrorCode err)
 {
   if (!NS_IsMainThread()) {
@@ -743,14 +743,8 @@ nsHandleSSLError(nsNSSSocketInfo* socketInfo,
     return;
   }
 
-  // We must cancel first, which sets the error code.
-  socketInfo->SetCanceled(err, SSLErrorMessageType::Plain);
-  nsAutoString errorString;
-  socketInfo->GetErrorLogMessage(err, errtype, errorString);
-
-  if (!errorString.IsEmpty()) {
-    nsContentUtils::LogSimpleConsoleError(errorString, "SSL");
-  }
+  // We must cancel, which sets the error code.
+  socketInfo->SetCanceled(err);
 }
 
 namespace {
@@ -762,8 +756,7 @@ int32_t checkHandshake(int32_t bytesTransfered, bool wasReading,
                        nsNSSSocketInfo* socketInfo);
 
 nsNSSSocketInfo*
-getSocketInfoIfRunning(PRFileDesc* fd, Operation op,
-                       const nsNSSShutDownPreventionLock& /*proofOfLock*/)
+getSocketInfoIfRunning(PRFileDesc* fd, Operation op)
 {
   if (!fd || !fd->lower || !fd->secret ||
       fd->identity != nsSSLIOLayerHelpers::nsSSLIOLayerIdentity) {
@@ -773,11 +766,6 @@ getSocketInfoIfRunning(PRFileDesc* fd, Operation op,
   }
 
   nsNSSSocketInfo* socketInfo = (nsNSSSocketInfo*) fd->secret;
-
-  if (socketInfo->isAlreadyShutDown() || socketInfo->isPK11LoggedOut()) {
-    PR_SetError(PR_SOCKET_SHUTDOWN_ERROR, 0);
-    return nullptr;
-  }
 
   if (socketInfo->GetErrorCode()) {
     PRErrorCode err = socketInfo->GetErrorCode();
@@ -804,8 +792,7 @@ nsSSLIOLayerConnect(PRFileDesc* fd, const PRNetAddr* addr,
 {
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("[%p] connecting SSL socket\n",
          (void*) fd));
-  nsNSSShutDownPreventionLock locker;
-  if (!getSocketInfoIfRunning(fd, not_reading_or_writing, locker))
+  if (!getSocketInfoIfRunning(fd, not_reading_or_writing))
     return PR_FAILURE;
 
   PRStatus status = fd->lower->methods->connect(fd->lower, addr, timeout);
@@ -977,7 +964,6 @@ PRIOMethods nsSSLIOLayerHelpers::nsSSLPlaintextLayerMethods;
 static PRStatus
 nsSSLIOLayerClose(PRFileDesc* fd)
 {
-  nsNSSShutDownPreventionLock locker;
   if (!fd)
     return PR_FAILURE;
 
@@ -987,12 +973,11 @@ nsSSLIOLayerClose(PRFileDesc* fd)
   nsNSSSocketInfo* socketInfo = (nsNSSSocketInfo*) fd->secret;
   MOZ_ASSERT(socketInfo, "nsNSSSocketInfo was null for an fd");
 
-  return socketInfo->CloseSocketAndDestroy(locker);
+  return socketInfo->CloseSocketAndDestroy();
 }
 
 PRStatus
-nsNSSSocketInfo::CloseSocketAndDestroy(
-    const nsNSSShutDownPreventionLock& /*proofOfLock*/)
+nsNSSSocketInfo::CloseSocketAndDestroy()
 {
   PRFileDesc* popped = PR_PopIOLayer(mFd, PR_TOP_IO_LAYER);
   MOZ_ASSERT(popped &&
@@ -1089,21 +1074,18 @@ class SSLErrorRunnable : public SyncRunnableBase
 {
  public:
   SSLErrorRunnable(nsNSSSocketInfo* infoObject,
-                   ::mozilla::psm::SSLErrorMessageType errtype,
                    PRErrorCode errorCode)
     : mInfoObject(infoObject)
-    , mErrType(errtype)
     , mErrorCode(errorCode)
   {
   }
 
-  virtual void RunOnTargetThread()
+  virtual void RunOnTargetThread() override
   {
-    nsHandleSSLError(mInfoObject, mErrType, mErrorCode);
+    nsHandleSSLError(mInfoObject, mErrorCode);
   }
 
   RefPtr<nsNSSSocketInfo> mInfoObject;
-  ::mozilla::psm::SSLErrorMessageType mErrType;
   const PRErrorCode mErrorCode;
 };
 
@@ -1317,7 +1299,7 @@ checkHandshake(int32_t bytesTransfered, bool wasReading,
     if (!wantRetry && mozilla::psm::IsNSSErrorCode(err) &&
         !socketInfo->GetErrorCode()) {
       RefPtr<SyncRunnableBase> runnable(
-        new SSLErrorRunnable(socketInfo, SSLErrorMessageType::Plain, err));
+        new SSLErrorRunnable(socketInfo, err));
       (void) runnable->DispatchToMainThreadAndWait();
     }
   } else if (wasReading && 0 == bytesTransfered) {
@@ -1355,7 +1337,7 @@ checkHandshake(int32_t bytesTransfered, bool wasReading,
     // this socket. Note that we use the original error because if we use
     // PR_CONNECT_RESET_ERROR, we'll repeated try to reconnect.
     if (originalError != PR_WOULD_BLOCK_ERROR && !socketInfo->GetErrorCode()) {
-      socketInfo->SetCanceled(originalError, SSLErrorMessageType::Plain);
+      socketInfo->SetCanceled(originalError);
     }
     PR_SetError(err, 0);
   }
@@ -1368,8 +1350,6 @@ checkHandshake(int32_t bytesTransfered, bool wasReading,
 static int16_t
 nsSSLIOLayerPoll(PRFileDesc* fd, int16_t in_flags, int16_t* out_flags)
 {
-  nsNSSShutDownPreventionLock locker;
-
   if (!out_flags) {
     NS_WARNING("nsSSLIOLayerPoll called with null out_flags");
     return 0;
@@ -1378,7 +1358,7 @@ nsSSLIOLayerPoll(PRFileDesc* fd, int16_t in_flags, int16_t* out_flags)
   *out_flags = 0;
 
   nsNSSSocketInfo* socketInfo =
-    getSocketInfoIfRunning(fd, not_reading_or_writing, locker);
+    getSocketInfoIfRunning(fd, not_reading_or_writing);
 
   if (!socketInfo) {
     // If we get here, it is probably because certificate validation failed
@@ -1422,43 +1402,26 @@ nsSSLIOLayerHelpers::nsSSLIOLayerHelpers(uint32_t aTlsFlags)
 {
 }
 
-static int
-_PSM_InvalidInt(void)
+// PSMAvailable and PSMAvailable64 are reachable, but they're unimplemented in
+// PSM, so we set an error and return -1.
+static int32_t
+PSMAvailable(PRFileDesc*)
 {
-  MOZ_ASSERT_UNREACHABLE("I/O method is invalid");
-  PR_SetError(PR_INVALID_METHOD_ERROR, 0);
+  PR_SetError(PR_NOT_IMPLEMENTED_ERROR, 0);
   return -1;
 }
 
 static int64_t
-_PSM_InvalidInt64(void)
+PSMAvailable64(PRFileDesc*)
 {
-  MOZ_ASSERT_UNREACHABLE("I/O method is invalid");
-  PR_SetError(PR_INVALID_METHOD_ERROR, 0);
+  PR_SetError(PR_NOT_IMPLEMENTED_ERROR, 0);
   return -1;
-}
-
-static PRStatus
-_PSM_InvalidStatus(void)
-{
-  MOZ_ASSERT_UNREACHABLE("I/O method is invalid");
-  PR_SetError(PR_INVALID_METHOD_ERROR, 0);
-  return PR_FAILURE;
-}
-
-static PRFileDesc*
-_PSM_InvalidDesc(void)
-{
-  MOZ_ASSERT_UNREACHABLE("I/O method is invalid");
-  PR_SetError(PR_INVALID_METHOD_ERROR, 0);
-  return nullptr;
 }
 
 static PRStatus
 PSMGetsockname(PRFileDesc* fd, PRNetAddr* addr)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (!getSocketInfoIfRunning(fd, not_reading_or_writing, locker))
+  if (!getSocketInfoIfRunning(fd, not_reading_or_writing))
     return PR_FAILURE;
 
   return fd->lower->methods->getsockname(fd->lower, addr);
@@ -1467,8 +1430,7 @@ PSMGetsockname(PRFileDesc* fd, PRNetAddr* addr)
 static PRStatus
 PSMGetpeername(PRFileDesc* fd, PRNetAddr* addr)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (!getSocketInfoIfRunning(fd, not_reading_or_writing, locker))
+  if (!getSocketInfoIfRunning(fd, not_reading_or_writing))
     return PR_FAILURE;
 
   return fd->lower->methods->getpeername(fd->lower, addr);
@@ -1477,8 +1439,7 @@ PSMGetpeername(PRFileDesc* fd, PRNetAddr* addr)
 static PRStatus
 PSMGetsocketoption(PRFileDesc* fd, PRSocketOptionData* data)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (!getSocketInfoIfRunning(fd, not_reading_or_writing, locker))
+  if (!getSocketInfoIfRunning(fd, not_reading_or_writing))
     return PR_FAILURE;
 
   return fd->lower->methods->getsocketoption(fd, data);
@@ -1487,8 +1448,7 @@ PSMGetsocketoption(PRFileDesc* fd, PRSocketOptionData* data)
 static PRStatus
 PSMSetsocketoption(PRFileDesc* fd, const PRSocketOptionData* data)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (!getSocketInfoIfRunning(fd, not_reading_or_writing, locker))
+  if (!getSocketInfoIfRunning(fd, not_reading_or_writing))
     return PR_FAILURE;
 
   return fd->lower->methods->setsocketoption(fd, data);
@@ -1498,8 +1458,7 @@ static int32_t
 PSMRecv(PRFileDesc* fd, void* buf, int32_t amount, int flags,
         PRIntervalTime timeout)
 {
-  nsNSSShutDownPreventionLock locker;
-  nsNSSSocketInfo* socketInfo = getSocketInfoIfRunning(fd, reading, locker);
+  nsNSSSocketInfo* socketInfo = getSocketInfoIfRunning(fd, reading);
   if (!socketInfo)
     return -1;
 
@@ -1525,8 +1484,7 @@ static int32_t
 PSMSend(PRFileDesc* fd, const void* buf, int32_t amount, int flags,
         PRIntervalTime timeout)
 {
-  nsNSSShutDownPreventionLock locker;
-  nsNSSSocketInfo* socketInfo = getSocketInfoIfRunning(fd, writing, locker);
+  nsNSSSocketInfo* socketInfo = getSocketInfoIfRunning(fd, writing);
   if (!socketInfo)
     return -1;
 
@@ -1611,8 +1569,7 @@ PSMSend(PRFileDesc* fd, const void* buf, int32_t amount, int flags,
 static PRStatus
 PSMBind(PRFileDesc* fd, const PRNetAddr *addr)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (!getSocketInfoIfRunning(fd, not_reading_or_writing, locker))
+  if (!getSocketInfoIfRunning(fd, not_reading_or_writing))
     return PR_FAILURE;
 
   return fd->lower->methods->bind(fd->lower, addr);
@@ -1633,28 +1590,11 @@ nsSSLIOLayerWrite(PRFileDesc* fd, const void* buf, int32_t amount)
 static PRStatus
 PSMConnectcontinue(PRFileDesc* fd, int16_t out_flags)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (!getSocketInfoIfRunning(fd, not_reading_or_writing, locker)) {
+  if (!getSocketInfoIfRunning(fd, not_reading_or_writing)) {
     return PR_FAILURE;
   }
 
   return fd->lower->methods->connectcontinue(fd, out_flags);
-}
-
-static int
-PSMAvailable(void)
-{
-  // This is called through PR_Available(), but is not implemented in PSM
-  PR_SetError(PR_NOT_IMPLEMENTED_ERROR, 0);
-  return -1;
-}
-
-static int64_t
-PSMAvailable64(void)
-{
-  // This is called through PR_Available(), but is not implemented in PSM
-  PR_SetError(PR_NOT_IMPLEMENTED_ERROR, 0);
-  return -1;
 }
 
 namespace {
@@ -1731,6 +1671,15 @@ nsSSLIOLayerHelpers::~nsSSLIOLayerHelpers()
   }
 }
 
+template <typename R, R return_value, typename... Args>
+static R
+InvalidPRIOMethod(Args...)
+{
+  MOZ_ASSERT_UNREACHABLE("I/O method is invalid");
+  PR_SetError(PR_NOT_IMPLEMENTED_ERROR, 0);
+  return return_value;
+}
+
 nsresult
 nsSSLIOLayerHelpers::Init()
 {
@@ -1738,25 +1687,46 @@ nsSSLIOLayerHelpers::Init()
     MOZ_ASSERT(NS_IsMainThread());
     nsSSLIOLayerInitialized = true;
     nsSSLIOLayerIdentity = PR_GetUniqueIdentity("NSS layer");
-    nsSSLIOLayerMethods  = *PR_GetDefaultIOMethods();
+    nsSSLIOLayerMethods = *PR_GetDefaultIOMethods();
 
-    nsSSLIOLayerMethods.available = (PRAvailableFN) PSMAvailable;
-    nsSSLIOLayerMethods.available64 = (PRAvailable64FN) PSMAvailable64;
-    nsSSLIOLayerMethods.fsync = (PRFsyncFN) _PSM_InvalidStatus;
-    nsSSLIOLayerMethods.seek = (PRSeekFN) _PSM_InvalidInt;
-    nsSSLIOLayerMethods.seek64 = (PRSeek64FN) _PSM_InvalidInt64;
-    nsSSLIOLayerMethods.fileInfo = (PRFileInfoFN) _PSM_InvalidStatus;
-    nsSSLIOLayerMethods.fileInfo64 = (PRFileInfo64FN) _PSM_InvalidStatus;
-    nsSSLIOLayerMethods.writev = (PRWritevFN) _PSM_InvalidInt;
-    nsSSLIOLayerMethods.accept = (PRAcceptFN) _PSM_InvalidDesc;
-    nsSSLIOLayerMethods.listen = (PRListenFN) _PSM_InvalidStatus;
-    nsSSLIOLayerMethods.shutdown = (PRShutdownFN) _PSM_InvalidStatus;
-    nsSSLIOLayerMethods.recvfrom = (PRRecvfromFN) _PSM_InvalidInt;
-    nsSSLIOLayerMethods.sendto = (PRSendtoFN) _PSM_InvalidInt;
-    nsSSLIOLayerMethods.acceptread = (PRAcceptreadFN) _PSM_InvalidInt;
-    nsSSLIOLayerMethods.transmitfile = (PRTransmitfileFN) _PSM_InvalidInt;
-    nsSSLIOLayerMethods.sendfile = (PRSendfileFN) _PSM_InvalidInt;
+    nsSSLIOLayerMethods.fsync =
+      InvalidPRIOMethod<PRStatus, PR_FAILURE, PRFileDesc*>;
+    nsSSLIOLayerMethods.seek =
+      InvalidPRIOMethod<int32_t, -1, PRFileDesc*, int32_t, PRSeekWhence>;
+    nsSSLIOLayerMethods.seek64 =
+      InvalidPRIOMethod<int64_t, -1, PRFileDesc*, int64_t, PRSeekWhence>;
+    nsSSLIOLayerMethods.fileInfo =
+      InvalidPRIOMethod<PRStatus, PR_FAILURE, PRFileDesc*, PRFileInfo*>;
+    nsSSLIOLayerMethods.fileInfo64 =
+      InvalidPRIOMethod<PRStatus, PR_FAILURE, PRFileDesc*, PRFileInfo64*>;
+    nsSSLIOLayerMethods.writev =
+      InvalidPRIOMethod<int32_t, -1, PRFileDesc*, const PRIOVec*, int32_t,
+                        PRIntervalTime>;
+    nsSSLIOLayerMethods.accept =
+      InvalidPRIOMethod<PRFileDesc*, nullptr, PRFileDesc*, PRNetAddr*,
+                        PRIntervalTime>;
+    nsSSLIOLayerMethods.listen =
+      InvalidPRIOMethod<PRStatus, PR_FAILURE, PRFileDesc*, int>;
+    nsSSLIOLayerMethods.shutdown =
+      InvalidPRIOMethod<PRStatus, PR_FAILURE, PRFileDesc*, int>;
+    nsSSLIOLayerMethods.recvfrom =
+      InvalidPRIOMethod<int32_t, -1, PRFileDesc*, void*, int32_t, int,
+                        PRNetAddr*, PRIntervalTime>;
+    nsSSLIOLayerMethods.sendto =
+      InvalidPRIOMethod<int32_t, -1, PRFileDesc*, const void*, int32_t, int,
+                        const PRNetAddr*, PRIntervalTime>;
+    nsSSLIOLayerMethods.acceptread =
+      InvalidPRIOMethod<int32_t, -1, PRFileDesc*, PRFileDesc**, PRNetAddr**,
+                        void*, int32_t, PRIntervalTime>;
+    nsSSLIOLayerMethods.transmitfile =
+      InvalidPRIOMethod<int32_t, -1, PRFileDesc*, PRFileDesc*, const void*,
+                        int32_t, PRTransmitFileFlags, PRIntervalTime>;
+    nsSSLIOLayerMethods.sendfile =
+      InvalidPRIOMethod<int32_t, -1, PRFileDesc*, PRSendFileData*,
+                        PRTransmitFileFlags, PRIntervalTime>;
 
+    nsSSLIOLayerMethods.available = PSMAvailable;
+    nsSSLIOLayerMethods.available64 = PSMAvailable64;
     nsSSLIOLayerMethods.getsockname = PSMGetsockname;
     nsSSLIOLayerMethods.getpeername = PSMGetpeername;
     nsSSLIOLayerMethods.getsocketoption = PSMGetsocketoption;
@@ -1773,7 +1743,7 @@ nsSSLIOLayerHelpers::Init()
     nsSSLIOLayerMethods.poll = nsSSLIOLayerPoll;
 
     nsSSLPlaintextLayerIdentity = PR_GetUniqueIdentity("Plaintxext PSM layer");
-    nsSSLPlaintextLayerMethods  = *PR_GetDefaultIOMethods();
+    nsSSLPlaintextLayerMethods = *PR_GetDefaultIOMethods();
     nsSSLPlaintextLayerMethods.recv = PlaintextRecv;
   }
 
@@ -2022,6 +1992,8 @@ nsConvertCANamesToStrings(const UniquePLArenaPool& arena, char** caNameStrings,
         }
 
         if (headerlen + contentlen != dername->len) {
+            Telemetry::ScalarAdd(Telemetry::ScalarID::SECURITY_CLIENT_CERT,
+                                 NS_LITERAL_STRING("compat"), 1);
             // This must be from an enterprise 2.x server, which sent
             // incorrectly formatted der without the outer wrapper of type and
             // length. Fix it up by adding the top level header.
@@ -2155,7 +2127,7 @@ public:
   CERTCertificate** const mPRetCert;    // in/out
   SECKEYPrivateKey** const mPRetKey;    // in/out
 protected:
-  virtual void RunOnTargetThread();
+  virtual void RunOnTargetThread() override;
 private:
   CERTDistNames* const mCANames;        // in
   nsNSSSocketInfo* const mSocketInfo;   // in
@@ -2177,12 +2149,13 @@ nsNSS_SSLGetClientAuthData(void* arg, PRFileDesc* socket,
                            CERTDistNames* caNames, CERTCertificate** pRetCert,
                            SECKEYPrivateKey** pRetKey)
 {
-  nsNSSShutDownPreventionLock locker;
-
   if (!socket || !caNames || !pRetCert || !pRetKey) {
     PR_SetError(PR_INVALID_ARGUMENT_ERROR, 0);
     return SECFailure;
   }
+
+  Telemetry::ScalarAdd(Telemetry::ScalarID::SECURITY_CLIENT_CERT,
+                       NS_LITERAL_STRING("requested"), 1);
 
   RefPtr<nsNSSSocketInfo> info(
     BitwiseCast<nsNSSSocketInfo*, PRFilePrivate*>(socket->higher->secret));
@@ -2193,6 +2166,14 @@ nsNSS_SSLGetClientAuthData(void* arg, PRFileDesc* socket,
       "Missing server cert should have been detected during server cert auth.");
     PR_SetError(SSL_ERROR_NO_CERTIFICATE, 0);
     return SECFailure;
+  }
+
+  if (info->GetDenyClientCert()) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+           ("[%p] Not returning client cert due to denyClientCert attribute\n", socket));
+    *pRetCert = nullptr;
+    *pRetKey = nullptr;
+    return SECSuccess;
   }
 
   if (info->GetJoined()) {
@@ -2221,6 +2202,8 @@ nsNSS_SSLGetClientAuthData(void* arg, PRFileDesc* socket,
   } else if (*runnable->mPRetCert || *runnable->mPRetKey) {
     // Make joinConnection prohibit joining after we've sent a client cert
     info->SetSentClientCert();
+    Telemetry::ScalarAdd(Telemetry::ScalarID::SECURITY_CLIENT_CERT,
+                         NS_LITERAL_STRING("sent"), 1);
   }
 
   return runnable->mRV;
@@ -2239,6 +2222,14 @@ ClientAuthDataRunnable::RunOnTargetThread()
   UniqueSECKEYPrivateKey privKey;
   void* wincx = mSocketInfo;
   nsresult rv;
+
+  if (NS_FAILED(CheckForSmartCardChanges())) {
+    mRV = SECFailure;
+    *mPRetCert = nullptr;
+    *mPRetKey = nullptr;
+    mErrorCodeToReport = SEC_ERROR_LIBRARY_FAILURE;
+    return;
+  }
 
   nsCOMPtr<nsIX509Cert> socketClientCert;
   mSocketInfo->GetClientCert(getter_AddRefs(socketClientCert));
@@ -2333,7 +2324,7 @@ ClientAuthDataRunnable::RunOnTargetThread()
     }
 
     if (!cert && lowPrioNonrepCert) {
-      cert = Move(lowPrioNonrepCert);
+      cert = std::move(lowPrioNonrepCert);
       privKey.reset(PK11_FindKeyByAnyCert(cert.get(), wincx));
     }
 
@@ -2427,7 +2418,7 @@ ClientAuthDataRunnable::RunOnTargetThread()
           goto loser;
         }
 
-        rv = certArray->AppendElement(tempCert, false);
+        rv = certArray->AppendElement(tempCert);
         if (NS_FAILED(rv)) {
           goto loser;
         }
@@ -2502,7 +2493,6 @@ nsSSLIOLayerImportFD(PRFileDesc* fd,
                      nsNSSSocketInfo* infoObject,
                      const char* host)
 {
-  nsNSSShutDownPreventionLock locker;
   PRFileDesc* sslSock = SSL_ImportFD(nullptr, fd);
   if (!sslSock) {
     MOZ_ASSERT_UNREACHABLE("NSS: Error importing socket");
@@ -2567,7 +2557,6 @@ nsSSLIOLayerSetOptions(PRFileDesc* fd, bool forSTARTTLS,
                        bool haveProxy, const char* host, int32_t port,
                        nsNSSSocketInfo* infoObject)
 {
-  nsNSSShutDownPreventionLock locker;
   if (forSTARTTLS || haveProxy) {
     if (SECSuccess != SSL_OptionSet(fd, SSL_SECURITY, false)) {
       return NS_ERROR_FAILURE;
@@ -2577,6 +2566,12 @@ nsSSLIOLayerSetOptions(PRFileDesc* fd, bool forSTARTTLS,
   SSLVersionRange range;
   if (SSL_VersionRangeGet(fd, &range) != SECSuccess) {
     return NS_ERROR_FAILURE;
+  }
+
+   // Set TLS 1.3 compat mode.
+  if (SECSuccess != SSL_OptionSet(fd, SSL_ENABLE_TLS13_COMPAT_MODE, PR_TRUE)) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Error,
+            ("[%p] nsSSLIOLayerSetOptions: Setting compat mode failed\n", fd));
   }
 
   if (net::QuicSocketUtil::IsQuicSocket(fd)) {
@@ -2602,17 +2597,6 @@ nsSSLIOLayerSetOptions(PRFileDesc* fd, bool forSTARTTLS,
                 ("[%p] nsSSLIOLayerSetOptions: unknown version flags %d\n",
                  fd, versionFlags));
       }
-    }
-  }
-
-  // enabling alternative server hello
-  if (getTLSProviderFlagAltServerHello(infoObject->GetProviderTlsFlags())) {
-    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
-            ("[%p] nsSSLIOLayerSetOptions: Use AltServerHello\n", fd));
-    if (SECSuccess != SSL_UseAltServerHelloType(fd, PR_TRUE)) {
-          MOZ_LOG(gPIPNSSLog, LogLevel::Error,
-                  ("[%p] nsSSLIOLayerSetOptions: Use AltServerHello failed\n", fd));
-          // continue on default path
     }
   }
 
@@ -2753,7 +2737,6 @@ nsSSLIOLayerAddToSocket(int32_t family,
                         uint32_t providerFlags,
                         uint32_t providerTlsFlags)
 {
-  nsNSSShutDownPreventionLock locker;
   PRFileDesc* layer = nullptr;
   PRFileDesc* plaintextLayer = nullptr;
   nsresult rv;

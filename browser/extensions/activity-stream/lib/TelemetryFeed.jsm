@@ -5,17 +5,18 @@
 
 "use strict";
 
-const {interfaces: Ci, utils: Cu} = Components;
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-const {actionTypes: at, actionUtils: au} = Cu.import("resource://activity-stream/common/Actions.jsm", {});
-const {Prefs} = Cu.import("resource://activity-stream/lib/ActivityStreamPrefs.jsm", {});
+const {actionTypes: at, actionUtils: au} = ChromeUtils.import("resource://activity-stream/common/Actions.jsm", {});
+const {Prefs} = ChromeUtils.import("resource://activity-stream/lib/ActivityStreamPrefs.jsm", {});
 
-XPCOMUtils.defineLazyModuleGetter(this, "perfService",
+ChromeUtils.defineModuleGetter(this, "perfService",
   "resource://activity-stream/common/PerfService.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PingCentre",
+ChromeUtils.defineModuleGetter(this, "PingCentre",
   "resource:///modules/PingCentre.jsm");
+ChromeUtils.defineModuleGetter(this, "UTEventReporting",
+  "resource://activity-stream/lib/UTEventReporting.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "gUUIDGenerator",
   "@mozilla.org/uuid-generator;1",
@@ -23,97 +24,47 @@ XPCOMUtils.defineLazyServiceGetter(this, "gUUIDGenerator",
 
 const ACTIVITY_STREAM_ID = "activity-stream";
 const ACTIVITY_STREAM_ENDPOINT_PREF = "browser.newtabpage.activity-stream.telemetry.ping.endpoint";
+const ACTIVITY_STREAM_ROUTER_ID = "activity-stream-router";
 
 // This is a mapping table between the user preferences and its encoding code
 const USER_PREFS_ENCODING = {
   "showSearch": 1 << 0,
-  "showTopSites": 1 << 1,
+  "feeds.topsites": 1 << 1,
   "feeds.section.topstories": 1 << 2,
   "feeds.section.highlights": 1 << 3,
-  "feeds.snippets": 1 << 4
+  "feeds.snippets": 1 << 4,
+  "showSponsored": 1 << 5
 };
 
-const IMPRESSION_STATS_RESET_TIME = 60 * 60 * 1000; // 60 minutes
-const PREF_IMPRESSION_STATS_CLICKED = "impressionStats.clicked";
-const PREF_IMPRESSION_STATS_BLOCKED = "impressionStats.blocked";
-const PREF_IMPRESSION_STATS_POCKETED = "impressionStats.pocketed";
+const PREF_IMPRESSION_ID = "impressionId";
 const TELEMETRY_PREF = "telemetry";
-
-/**
- * A pref persistent GUID set
- */
-class PersistentGuidSet extends Set {
-  constructor(prefs, prefName) {
-    let guids = [];
-    try {
-      guids = JSON.parse(prefs.get(prefName));
-      if (typeof guids[Symbol.iterator] !== "function") {
-        guids = [];
-        prefs.set(prefName, "[]");
-      }
-    } catch (e) {
-      Cu.reportError(e);
-      prefs.set(prefName, "[]");
-    }
-
-    super(guids);
-
-    this._prefs = prefs;
-    this._prefName = prefName;
-  }
-
-  /**
-   * Add a GUID and persist
-   *
-   * @param {Integer|String} guid a GUID to save
-   * @returns {Boolean} true if the item has been added
-   */
-  save(guid) {
-    if (!this.has(guid)) {
-      this.add(guid);
-      this._prefs.set(this._prefName, JSON.stringify(this.items()));
-      return true;
-    }
-    return false;
-  }
-
-  /**
-   * Clear GUID set and persist
-   */
-  clear() {
-    if (this.size !== 0) {
-      this._prefs.set(this._prefName, "[]");
-      super.clear();
-    }
-  }
-
-  /**
-   * Return GUID set as an array ordered by insertion time
-   */
-  items() {
-    return [...this];
-  }
-}
+const EVENTS_TELEMETRY_PREF = "telemetry.ut.events";
 
 this.TelemetryFeed = class TelemetryFeed {
   constructor(options) {
     this.sessions = new Map();
     this._prefs = new Prefs();
-    this._impressionStatsLastReset = Date.now();
-    this._impressionStats = {
-      clicked: new PersistentGuidSet(this._prefs, PREF_IMPRESSION_STATS_CLICKED),
-      blocked: new PersistentGuidSet(this._prefs, PREF_IMPRESSION_STATS_BLOCKED),
-      pocketed: new PersistentGuidSet(this._prefs, PREF_IMPRESSION_STATS_POCKETED)
-    };
-
+    this._impressionId = this.getOrCreateImpressionId();
     this.telemetryEnabled = this._prefs.get(TELEMETRY_PREF);
+    this.eventTelemetryEnabled = this._prefs.get(EVENTS_TELEMETRY_PREF);
     this._aboutHomeSeen = false;
     this._onTelemetryPrefChange = this._onTelemetryPrefChange.bind(this);
     this._prefs.observe(TELEMETRY_PREF, this._onTelemetryPrefChange);
+    this._onEventsTelemetryPrefChange = this._onEventsTelemetryPrefChange.bind(this);
+    this._prefs.observe(EVENTS_TELEMETRY_PREF, this._onEventsTelemetryPrefChange);
   }
 
   init() {
     Services.obs.addObserver(this.browserOpenNewtabStart, "browser-open-newtab-start");
+  }
+
+  getOrCreateImpressionId() {
+    let impressionId = this._prefs.get(PREF_IMPRESSION_ID);
+    if (!impressionId) {
+      impressionId = String(gUUIDGenerator.generateUUID());
+      this._prefs.set(PREF_IMPRESSION_ID, impressionId);
+    }
+    return impressionId;
   }
 
   browserOpenNewtabStart() {
@@ -159,8 +110,12 @@ this.TelemetryFeed = class TelemetryFeed {
     this.telemetryEnabled = prefVal;
   }
 
+  _onEventsTelemetryPrefChange(prefVal) {
+    this.eventTelemetryEnabled = prefVal;
+  }
+
   /**
-   * Lazily initialize PingCentre to send pings
+   * Lazily initialize PingCentre for Activity Stream to send pings
    */
   get pingCentre() {
     Object.defineProperty(this, "pingCentre",
@@ -171,6 +126,26 @@ this.TelemetryFeed = class TelemetryFeed {
         })
       });
     return this.pingCentre;
+  }
+
+  /**
+   * Lazily initialize a PingCentre client for Activity Stream Router to send pings.
+   *
+   * Unlike the PingCentre client for Activity Stream, Activity Stream Router
+   * uses a separate client with the standard PingCentre endpoint.
+   */
+  get pingCentreForASRouter() {
+    Object.defineProperty(this, "pingCentreForASRouter",
+      {value: new PingCentre({topic: ACTIVITY_STREAM_ROUTER_ID})});
+    return this.pingCentreForASRouter;
+  }
+
+  /**
+   * Lazily initialize UTEventReporting to send pings
+   */
+  get utEvents() {
+    Object.defineProperty(this, "utEvents", {value: new UTEventReporting()});
+    return this.utEvents;
   }
 
   /**
@@ -241,7 +216,11 @@ this.TelemetryFeed = class TelemetryFeed {
       session_id: String(gUUIDGenerator.generateUUID()),
       // "unknown" will be overwritten when appropriate
       page: url ? url : "unknown",
-      perf: {load_trigger_type}
+      perf: {
+        load_trigger_type,
+        is_preloaded: false,
+        is_prerendered: false
+      }
     };
 
     if (load_trigger_ts) {
@@ -269,8 +248,37 @@ this.TelemetryFeed = class TelemetryFeed {
       session.session_duration = Math.round(perfService.absNow() - session.perf.visibility_event_rcvd_ts);
     }
 
-    this.sendEvent(this.createSessionEndEvent(session));
+    let sessionEndEvent = this.createSessionEndEvent(session);
+    this.sendEvent(sessionEndEvent);
+    this.sendUTEvent(sessionEndEvent, this.utEvents.sendSessionEndEvent);
     this.sessions.delete(portID);
+  }
+
+  /**
+   * handlePagePrerendered - Set the session as prerendered
+   *
+   * @param  {string} portID the portID of the target session
+   */
+  handlePagePrerendered(portID) {
+    const session = this.sessions.get(portID);
+
+    if (!session) {
+      // It's possible the tab was never visible – in which case, there was no user session.
+      return;
+    }
+
+    session.perf.is_prerendered = true;
+  }
+
+  /**
+   * handleNewTabInit - Handle NEW_TAB_INIT, which creates a new session and sets the a flag
+   *                    for session.perf based on whether or not this new tab is preloaded
+   *
+   * @param  {obj} action the Action object
+   */
+  handleNewTabInit(action) {
+    const session = this.addSession(au.getPortIdOfSender(action), action.data.url);
+    session.perf.is_preloaded = action.data.browser.getAttribute("preloadedState") === "preloaded";
   }
 
   /**
@@ -283,7 +291,7 @@ this.TelemetryFeed = class TelemetryFeed {
     const appInfo = this.store.getState().App;
     const ping = {
       addon_version: appInfo.version,
-      locale: appInfo.locale,
+      locale: Services.locale.getAppLocaleAsLangTag(),
       user_prefs: this.userPreferences
     };
 
@@ -303,25 +311,20 @@ this.TelemetryFeed = class TelemetryFeed {
    * createImpressionStats - Create a ping for an impression stats
    *
    * @param  {ob} action The object with data to be included in the ping.
-   *                     For some user interactions, a boolean "incognito"
-   *                     field of the "data" object could be used to empty
-   *                     all the user specific IDs with "n/a" in the ping.
+   *                     For some user interactions.
    * @return {obj}    A telemetry ping
    */
   createImpressionStats(action) {
-    let ping = Object.assign(
+    return Object.assign(
       this.createPing(au.getPortIdOfSender(action)),
       action.data,
-      {action: "activity_stream_impression_stats"}
+      {
+        action: "activity_stream_impression_stats",
+        impression_id: this._impressionId,
+        client_id: "n/a",
+        session_id: "n/a"
+      }
     );
-
-    if (ping.incognito) {
-      ping.client_id = "n/a";
-      ping.session_id = "n/a";
-      delete ping.incognito;
-    }
-
-    return ping;
   }
 
   createUserEvent(action) {
@@ -362,49 +365,54 @@ this.TelemetryFeed = class TelemetryFeed {
     );
   }
 
-  async sendEvent(event_object) {
+  createASRouterEvent(action) {
+    const appInfo = this.store.getState().App;
+    const ping = {
+      client_id: "n/a",
+      addon_version: appInfo.version,
+      locale: Services.locale.getAppLocaleAsLangTag(),
+      impression_id: this._impressionId
+    };
+    return Object.assign(ping, action.data);
+  }
+
+  sendEvent(event_object) {
     if (this.telemetryEnabled) {
       this.pingCentre.sendPing(event_object,
       {filter: ACTIVITY_STREAM_ID});
     }
   }
 
-  handleImpressionStats(action) {
-    const payload = action.data;
-    let guidSet;
-    let index;
-
-    if ("click" in payload) {
-      guidSet = this._impressionStats.clicked;
-      index = payload.click;
-    } else if ("block" in payload) {
-      guidSet = this._impressionStats.blocked;
-      index = payload.block;
-    } else if ("pocket" in payload) {
-      guidSet = this._impressionStats.pocketed;
-      index = payload.pocket;
-    }
-
-    // If it is an impression ping, just send it out. For the click, block, and
-    // save to pocket pings, it only sends the first ping for the same article.
-    if (!guidSet || guidSet.save(payload.tiles[index].id)) {
-      this.sendEvent(this.createImpressionStats(action));
+  sendUTEvent(event_object, eventFunction) {
+    if (this.telemetryEnabled && this.eventTelemetryEnabled) {
+      eventFunction(event_object);
     }
   }
 
+  sendASRouterEvent(event_object) {
+    if (this.telemetryEnabled) {
+      this.pingCentreForASRouter.sendPing(event_object,
+      {filter: ACTIVITY_STREAM_ID});
+    }
+  }
+
+  handleImpressionStats(action) {
+    this.sendEvent(this.createImpressionStats(action));
+  }
+
   handleUserEvent(action) {
-    this.sendEvent(this.createUserEvent(action));
+    let userEvent = this.createUserEvent(action);
+    this.sendEvent(userEvent);
+    this.sendUTEvent(userEvent, this.utEvents.sendUserEvent);
+  }
+
+  handleASRouterUserEvent(action) {
+    let event = this.createASRouterEvent(action);
+    this.sendASRouterEvent(event);
   }
 
   handleUndesiredEvent(action) {
     this.sendEvent(this.createUndesiredEvent(action));
-  }
-
-  resetImpressionStats() {
-    for (const key of Object.keys(this._impressionStats)) {
-      this._impressionStats[key].clear();
-    }
-    this._impressionStatsLastReset = Date.now();
   }
 
   onAction(action) {
@@ -413,18 +421,16 @@ this.TelemetryFeed = class TelemetryFeed {
         this.init();
         break;
       case at.NEW_TAB_INIT:
-        this.addSession(au.getPortIdOfSender(action), action.data.url);
+        this.handleNewTabInit(action);
         break;
       case at.NEW_TAB_UNLOAD:
         this.endSession(au.getPortIdOfSender(action));
         break;
+      case at.PAGE_PRERENDERED:
+        this.handlePagePrerendered(au.getPortIdOfSender(action));
+        break;
       case at.SAVE_SESSION_PERF_DATA:
         this.saveSessionPerfData(au.getPortIdOfSender(action), action.data);
-        break;
-      case at.SYSTEM_TICK:
-        if (Date.now() - this._impressionStatsLastReset >= IMPRESSION_STATS_RESET_TIME) {
-          this.resetImpressionStats();
-        }
         break;
       case at.TELEMETRY_IMPRESSION_STATS:
         this.handleImpressionStats(action);
@@ -434,6 +440,9 @@ this.TelemetryFeed = class TelemetryFeed {
         break;
       case at.TELEMETRY_USER_EVENT:
         this.handleUserEvent(action);
+        break;
+      case at.AS_ROUTER_TELEMETRY_USER_EVENT:
+        this.handleASRouterUserEvent(action);
         break;
       case at.TELEMETRY_PERFORMANCE_EVENT:
         this.sendEvent(this.createPerformanceEvent(action));
@@ -481,16 +490,28 @@ this.TelemetryFeed = class TelemetryFeed {
   }
 
   uninit() {
-    Services.obs.removeObserver(this.browserOpenNewtabStart,
-      "browser-open-newtab-start");
+    try {
+      Services.obs.removeObserver(this.browserOpenNewtabStart,
+        "browser-open-newtab-start");
+    } catch (e) {
+      // Operation can fail when uninit is called before
+      // init has finished setting up the observer
+    }
 
     // Only uninit if the getter has initialized it
     if (Object.prototype.hasOwnProperty.call(this, "pingCentre")) {
       this.pingCentre.uninit();
     }
+    if (Object.prototype.hasOwnProperty.call(this, "utEvents")) {
+      this.utEvents.uninit();
+    }
+    if (Object.prototype.hasOwnProperty.call(this, "pingCentreForASRouter")) {
+      this.pingCentreForASRouter.uninit();
+    }
 
     try {
       this._prefs.ignore(TELEMETRY_PREF, this._onTelemetryPrefChange);
+      this._prefs.ignore(EVENTS_TELEMETRY_PREF, this._onEventsTelemetryPrefChange);
     } catch (e) {
       Cu.reportError(e);
     }
@@ -498,13 +519,10 @@ this.TelemetryFeed = class TelemetryFeed {
   }
 };
 
-this.EXPORTED_SYMBOLS = [
+const EXPORTED_SYMBOLS = [
   "TelemetryFeed",
-  "PersistentGuidSet",
   "USER_PREFS_ENCODING",
-  "IMPRESSION_STATS_RESET_TIME",
+  "PREF_IMPRESSION_ID",
   "TELEMETRY_PREF",
-  "PREF_IMPRESSION_STATS_CLICKED",
-  "PREF_IMPRESSION_STATS_BLOCKED",
-  "PREF_IMPRESSION_STATS_POCKETED"
+  "EVENTS_TELEMETRY_PREF"
 ];

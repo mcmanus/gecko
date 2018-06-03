@@ -13,6 +13,7 @@
 #include "nsCOMPtr.h"
 #include "nsComponentManagerUtils.h"
 #include "nsIAsyncInputStream.h"
+#include "nsIInputStreamLength.h"
 #include "nsIHttpHeaderVisitor.h"
 #include "nsIMIMEInputStream.h"
 #include "nsISeekableStream.h"
@@ -21,18 +22,22 @@
 #include "nsIClassInfoImpl.h"
 #include "nsIIPCSerializableInputStream.h"
 #include "mozilla/Move.h"
+#include "mozilla/Mutex.h"
 #include "mozilla/ipc/InputStreamUtils.h"
 
 using namespace mozilla::ipc;
 using mozilla::Maybe;
-using mozilla::Move;
 
 class nsMIMEInputStream : public nsIMIMEInputStream,
                           public nsISeekableStream,
                           public nsIIPCSerializableInputStream,
-                          public nsIAsyncInputStream
+                          public nsIAsyncInputStream,
+                          public nsIInputStreamCallback,
+                          public nsIInputStreamLength,
+                          public nsIAsyncInputStreamLength,
+                          public nsIInputStreamLengthCallback
 {
-    virtual ~nsMIMEInputStream();
+    virtual ~nsMIMEInputStream() = default;
 
 public:
     nsMIMEInputStream();
@@ -43,6 +48,10 @@ public:
     NS_DECL_NSISEEKABLESTREAM
     NS_DECL_NSIIPCSERIALIZABLEINPUTSTREAM
     NS_DECL_NSIASYNCINPUTSTREAM
+    NS_DECL_NSIINPUTSTREAMCALLBACK
+    NS_DECL_NSIINPUTSTREAMLENGTH
+    NS_DECL_NSIASYNCINPUTSTREAMLENGTH
+    NS_DECL_NSIINPUTSTREAMLENGTHCALLBACK
 
 private:
 
@@ -59,11 +68,21 @@ private:
 
     bool IsAsyncInputStream() const;
     bool IsIPCSerializable() const;
+    bool IsInputStreamLength() const;
+    bool IsAsyncInputStreamLength() const;
 
     nsTArray<HeaderEntry> mHeaders;
 
     nsCOMPtr<nsIInputStream> mStream;
     bool mStartedReading;
+
+    mozilla::Mutex mMutex;
+
+    // This is protected by mutex.
+    nsCOMPtr<nsIInputStreamCallback> mAsyncWaitCallback;
+
+    // This is protected by mutex.
+    nsCOMPtr<nsIInputStreamLengthCallback> mAsyncInputStreamLengthCallback;
 };
 
 NS_IMPL_ADDREF(nsMIMEInputStream)
@@ -80,7 +99,15 @@ NS_INTERFACE_MAP_BEGIN(nsMIMEInputStream)
                                      IsIPCSerializable())
   NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIAsyncInputStream,
                                      IsAsyncInputStream())
+  NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIInputStreamCallback,
+                                     IsAsyncInputStream())
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIMIMEInputStream)
+  NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIInputStreamLength,
+                                     IsInputStreamLength())
+  NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIAsyncInputStreamLength,
+                                     IsAsyncInputStreamLength())
+  NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIInputStreamLengthCallback,
+                                     IsAsyncInputStreamLength())
   NS_IMPL_QUERY_CLASSINFO(nsMIMEInputStream)
 NS_INTERFACE_MAP_END
 
@@ -90,11 +117,9 @@ NS_IMPL_CI_INTERFACE_GETTER(nsMIMEInputStream,
                             nsIInputStream,
                             nsISeekableStream)
 
-nsMIMEInputStream::nsMIMEInputStream() : mStartedReading(false)
-{
-}
-
-nsMIMEInputStream::~nsMIMEInputStream()
+nsMIMEInputStream::nsMIMEInputStream()
+  : mStartedReading(false)
+  , mMutex("nsMIMEInputStream::mMutex")
 {
 }
 
@@ -242,8 +267,44 @@ nsMIMEInputStream::AsyncWait(nsIInputStreamCallback* aCallback,
 {
     INITSTREAMS;
     nsCOMPtr<nsIAsyncInputStream> asyncStream = do_QueryInterface(mStream);
-    return asyncStream->AsyncWait(
-        aCallback, aFlags, aRequestedCount, aEventTarget);
+    if (NS_WARN_IF(!asyncStream)) {
+      return NS_ERROR_FAILURE;
+    }
+
+    nsCOMPtr<nsIInputStreamCallback> callback = aCallback ? this : nullptr;
+    {
+        MutexAutoLock lock(mMutex);
+        if (mAsyncWaitCallback && aCallback) {
+            return NS_ERROR_FAILURE;
+        }
+
+        mAsyncWaitCallback = aCallback;
+    }
+
+    return asyncStream->AsyncWait(callback, aFlags, aRequestedCount,
+                                  aEventTarget);
+}
+
+// nsIInputStreamCallback
+
+NS_IMETHODIMP
+nsMIMEInputStream::OnInputStreamReady(nsIAsyncInputStream* aStream)
+{
+    nsCOMPtr<nsIInputStreamCallback> callback;
+
+    {
+        MutexAutoLock lock(mMutex);
+
+        // We have been canceled in the meanwhile.
+        if (!mAsyncWaitCallback) {
+            return NS_OK;
+        }
+
+        callback.swap(mAsyncWaitCallback);
+  }
+
+  MOZ_ASSERT(callback);
+  return callback->OnInputStreamReady(this);
 }
 
 // nsISeekableStream
@@ -348,6 +409,54 @@ nsMIMEInputStream::ExpectedSerializedLength()
     return serializable ? serializable->ExpectedSerializedLength() : Nothing();
 }
 
+NS_IMETHODIMP
+nsMIMEInputStream::Length(int64_t* aLength)
+{
+    nsCOMPtr<nsIInputStreamLength> stream = do_QueryInterface(mStream);
+    if (NS_WARN_IF(!stream)) {
+        return NS_ERROR_FAILURE;
+    }
+
+    return stream->Length(aLength);
+}
+
+NS_IMETHODIMP
+nsMIMEInputStream::AsyncLengthWait(nsIInputStreamLengthCallback* aCallback,
+                                   nsIEventTarget* aEventTarget)
+{
+    nsCOMPtr<nsIAsyncInputStreamLength> stream = do_QueryInterface(mStream);
+    if (NS_WARN_IF(!stream)) {
+        return NS_ERROR_FAILURE;
+    }
+
+    nsCOMPtr<nsIInputStreamLengthCallback> callback = aCallback ? this : nullptr;
+    {
+        MutexAutoLock lock(mMutex);
+        mAsyncInputStreamLengthCallback = aCallback;
+    }
+
+    return stream->AsyncLengthWait(callback, aEventTarget);
+}
+
+NS_IMETHODIMP
+nsMIMEInputStream::OnInputStreamLengthReady(nsIAsyncInputStreamLength* aStream,
+                                            int64_t aLength)
+{
+    nsCOMPtr<nsIInputStreamLengthCallback> callback;
+    {
+        MutexAutoLock lock(mMutex);
+        // We have been canceled in the meanwhile.
+        if (!mAsyncInputStreamLengthCallback) {
+            return NS_OK;
+        }
+
+        callback.swap(mAsyncInputStreamLengthCallback);
+    }
+
+    MOZ_ASSERT(callback);
+    return callback->OnInputStreamLengthReady(this, aLength);
+}
+
 bool
 nsMIMEInputStream::IsAsyncInputStream() const
 {
@@ -365,4 +474,18 @@ nsMIMEInputStream::IsIPCSerializable() const
 
     nsCOMPtr<nsIIPCSerializableInputStream> serializable = do_QueryInterface(mStream);
     return !!serializable;
+}
+
+bool
+nsMIMEInputStream::IsInputStreamLength() const
+{
+    nsCOMPtr<nsIInputStreamLength> stream = do_QueryInterface(mStream);
+    return !!stream;
+}
+
+bool
+nsMIMEInputStream::IsAsyncInputStreamLength() const
+{
+    nsCOMPtr<nsIAsyncInputStreamLength> stream = do_QueryInterface(mStream);
+    return !!stream;
 }

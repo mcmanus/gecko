@@ -7,9 +7,10 @@
 #include "builtin/WeakMapObject-inl.h"
 
 #include "jsapi.h"
-#include "jscntxt.h"
 
 #include "builtin/WeakSetObject.h"
+#include "gc/FreeOp.h"
+#include "vm/JSContext.h"
 #include "vm/SelfHosting.h"
 
 #include "vm/Interpreter-inl.h"
@@ -74,8 +75,8 @@ WeakMap_get_impl(JSContext* cx, const CallArgs& args)
     return true;
 }
 
-bool
-js::WeakMap_get(JSContext* cx, unsigned argc, Value* vp)
+static bool
+WeakMap_get(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     return CallNonGenericMethod<IsWeakMap, WeakMap_get_impl>(cx, args);
@@ -130,8 +131,8 @@ WeakMap_set_impl(JSContext* cx, const CallArgs& args)
     return true;
 }
 
-bool
-js::WeakMap_set(JSContext* cx, unsigned argc, Value* vp)
+static bool
+WeakMap_set(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     return CallNonGenericMethod<IsWeakMap, WeakMap_set_impl>(cx, args);
@@ -182,21 +183,14 @@ static void
 WeakCollection_finalize(FreeOp* fop, JSObject* obj)
 {
     MOZ_ASSERT(fop->maybeOnHelperThread());
-    if (ObjectValueMap* map = obj->as<WeakCollectionObject>().getMap()) {
-#ifdef DEBUG
-        map->~ObjectValueMap();
-        memset(static_cast<void*>(map), 0xdc, sizeof(*map));
-        fop->free_(map);
-#else
+    if (ObjectValueMap* map = obj->as<WeakCollectionObject>().getMap())
         fop->delete_(map);
-#endif
-    }
 }
 
 JS_PUBLIC_API(JSObject*)
 JS::NewWeakMapObject(JSContext* cx)
 {
-    return NewBuiltinClassInstance(cx, &WeakMapObject::class_);
+    return NewBuiltinClassInstance<WeakMapObject>(cx);
 }
 
 JS_PUBLIC_API(bool)
@@ -295,13 +289,9 @@ static const JSFunctionSpec weak_map_methods[] = {
     JS_FS_END
 };
 
-static JSObject*
-InitWeakMapClass(JSContext* cx, HandleObject obj, bool defineMembers)
+JSObject*
+js::InitWeakMapClass(JSContext* cx, Handle<GlobalObject*> global)
 {
-    MOZ_ASSERT(obj->isNative());
-
-    Handle<GlobalObject*> global = obj.as<GlobalObject>();
-
     RootedPlainObject proto(cx, NewBuiltinClassInstance<PlainObject>(cx));
     if (!proto)
         return nullptr;
@@ -314,27 +304,12 @@ InitWeakMapClass(JSContext* cx, HandleObject obj, bool defineMembers)
     if (!LinkConstructorAndPrototype(cx, ctor, proto))
         return nullptr;
 
-    if (defineMembers) {
-        if (!DefinePropertiesAndFunctions(cx, proto, nullptr, weak_map_methods))
-            return nullptr;
-        if (!DefineToStringTag(cx, proto, cx->names().WeakMap))
-            return nullptr;
-    }
+    if (!DefinePropertiesAndFunctions(cx, proto, nullptr, weak_map_methods))
+        return nullptr;
+    if (!DefineToStringTag(cx, proto, cx->names().WeakMap))
+        return nullptr;
 
     if (!GlobalObject::initBuiltinConstructor(cx, global, JSProto_WeakMap, ctor, proto))
         return nullptr;
     return proto;
 }
-
-JSObject*
-js::InitWeakMapClass(JSContext* cx, HandleObject obj)
-{
-    return InitWeakMapClass(cx, obj, true);
-}
-
-JSObject*
-js::InitBareWeakMapCtor(JSContext* cx, HandleObject obj)
-{
-    return InitWeakMapClass(cx, obj, false);
-}
-

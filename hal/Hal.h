@@ -43,9 +43,6 @@ namespace hal {
 
 class WindowIdentifier;
 
-typedef Observer<int64_t> SystemClockChangeObserver;
-typedef Observer<SystemTimezoneChangeInformation> SystemTimezoneChangeObserver;
-
 } // namespace hal
 
 namespace MOZ_HAL_NAMESPACE {
@@ -169,53 +166,6 @@ void GetCurrentNetworkInformation(hal::NetworkInformation* aNetworkInfo);
  * @param aNetworkInfo The new network information.
  */
 void NotifyNetworkChange(const hal::NetworkInformation& aNetworkInfo);
-
-/**
- * Adjusting system clock.
- * @param aDeltaMilliseconds The difference compared with current system clock.
- */
-void AdjustSystemClock(int64_t aDeltaMilliseconds);
-
-/**
- * Register observer for system clock changed notification.
- * @param aObserver The observer that should be added.
- */
-void RegisterSystemClockChangeObserver(
-  hal::SystemClockChangeObserver* aObserver);
-
-/**
- * Unregister the observer for system clock changed.
- * @param aObserver The observer that should be removed.
- */
-void UnregisterSystemClockChangeObserver(
-  hal::SystemClockChangeObserver* aObserver);
-
-/**
- * Notify of a change in the system clock.
- * @param aClockDeltaMS
- */
-void NotifySystemClockChange(const int64_t& aClockDeltaMS);
-
-/**
- * Register observer for system timezone changed notification.
- * @param aObserver The observer that should be added.
- */
-void RegisterSystemTimezoneChangeObserver(
-  hal::SystemTimezoneChangeObserver* aObserver);
-
-/**
- * Unregister the observer for system timezone changed.
- * @param aObserver The observer that should be removed.
- */
-void UnregisterSystemTimezoneChangeObserver(
-  hal::SystemTimezoneChangeObserver* aObserver);
-
-/**
- * Notify of a change in the system timezone.
- * @param aSystemTimezoneChangeInfo
- */
-void NotifySystemTimezoneChange(
-  const hal::SystemTimezoneChangeInformation& aSystemTimezoneChangeInfo);
 
 /**
  * Enable wake lock notifications from the backend.
@@ -345,22 +295,6 @@ bool SetProcessPrioritySupported();
  * ignore this call entirely.
  */
 void SetProcessPriority(int aPid, hal::ProcessPriority aPriority);
-
-
-/**
- * Set the current thread's priority to appropriate platform-specific value for
- * given functionality. Instead of providing arbitrary priority numbers you
- * must specify a type of function like THREAD_PRIORITY_COMPOSITOR.
- */
-void SetCurrentThreadPriority(hal::ThreadPriority aThreadPriority);
-
-/**
- * Set a thread priority to appropriate platform-specific value for
- * given functionality. Instead of providing arbitrary priority numbers you
- * must specify a type of function like THREAD_PRIORITY_COMPOSITOR.
- */
-void SetThreadPriority(PlatformThreadId aThreadId,
-                       hal::ThreadPriority aThreadPriority);
 
 /**
  * Start monitoring disk space for low space situations.

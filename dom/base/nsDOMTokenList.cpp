@@ -62,7 +62,7 @@ nsDOMTokenList::RemoveDuplicates(const nsAttrValue* aAttr)
   }
 
   BloomFilter<8, nsAtom> filter;
-  nsAttrValue::AtomArray* array = aAttr->GetAtomArrayValue();
+  AtomArray* array = aAttr->GetAtomArrayValue();
   for (uint32_t i = 0; i < array->Length(); i++) {
     nsAtom* atom = array->ElementAt(i);
     if (filter.mightContain(atom)) {
@@ -76,8 +76,7 @@ nsDOMTokenList::RemoveDuplicates(const nsAttrValue* aAttr)
 }
 
 void
-nsDOMTokenList::RemoveDuplicatesInternal(nsAttrValue::AtomArray* aArray,
-                                         uint32_t aStart)
+nsDOMTokenList::RemoveDuplicatesInternal(AtomArray* aArray, uint32_t aStart)
 {
   nsDataHashtable<nsPtrHashKey<nsAtom>, bool> tokens;
 
@@ -315,7 +314,7 @@ nsDOMTokenList::Toggle(const nsAString& aToken,
   return isPresent;
 }
 
-void
+bool
 nsDOMTokenList::Replace(const nsAString& aToken,
                         const nsAString& aNewToken,
                         ErrorResult& aError)
@@ -325,33 +324,47 @@ nsDOMTokenList::Replace(const nsAString& aToken,
   // SyntaxError, not an InvalidCharacterError.
   if (aNewToken.IsEmpty()) {
     aError.Throw(NS_ERROR_DOM_SYNTAX_ERR);
-    return;
+    return false;
   }
 
   aError = CheckToken(aToken);
   if (aError.Failed()) {
-    return;
+    return false;
   }
 
   aError = CheckToken(aNewToken);
   if (aError.Failed()) {
-    return;
+    return false;
   }
 
   const nsAttrValue* attr = GetParsedAttr();
   if (!attr) {
-    return;
+    return false;
   }
 
-  ReplaceInternal(attr, aToken, aNewToken);
+  return ReplaceInternal(attr, aToken, aNewToken);
 }
 
-void
+bool
 nsDOMTokenList::ReplaceInternal(const nsAttrValue* aAttr,
                                 const nsAString& aToken,
                                 const nsAString& aNewToken)
 {
   RemoveDuplicates(aAttr);
+
+  // Trying to do a single pass here leads to really complicated code.  Just do
+  // the simple thing.
+  bool haveOld = false;
+  for (uint32_t i = 0; i < aAttr->GetAtomCount(); ++i) {
+    if (aAttr->AtomAt(i)->Equals(aToken)) {
+      haveOld = true;
+      break;
+    }
+  }
+  if (!haveOld) {
+    // Make sure to not touch the attribute value in this case.
+    return false;
+  }
 
   bool sawIt = false;
   nsAutoString resultStr;
@@ -375,9 +388,9 @@ nsDOMTokenList::ReplaceInternal(const nsAttrValue* aAttr,
     resultStr.Append(nsDependentAtomString(aAttr->AtomAt(i)));
   }
 
-  if (sawIt) {
-    mElement->SetAttr(kNameSpaceID_None, mAttrAtom, resultStr, true);
-  }
+  MOZ_ASSERT(sawIt, "How could we not have found our token this time?");
+  mElement->SetAttr(kNameSpaceID_None, mAttrAtom, resultStr, true);
+  return true;
 }
 
 bool
@@ -411,6 +424,12 @@ nsDOMTokenList::Stringify(nsAString& aResult)
   }
 
   mElement->GetAttr(kNameSpaceID_None, mAttrAtom, aResult);
+}
+
+DocGroup*
+nsDOMTokenList::GetDocGroup() const
+{
+  return mElement ? mElement->OwnerDoc()->GetDocGroup() : nullptr;
 }
 
 JSObject*

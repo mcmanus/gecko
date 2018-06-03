@@ -57,12 +57,22 @@ impl GeckoRestyleDamage {
                 &mut reset_only,
             )
         };
+        if reset_only && old_style.custom_properties() != new_style.custom_properties() {
+            // The Gecko_CalcStyleDifference call only checks the non-custom
+            // property structs, so we check the custom properties here. Since
+            // they generate no damage themselves, we can skip this check if we
+            // already know we had some inherited (regular) property
+            // differences.
+            any_style_changed = true;
+            reset_only = false;
+        }
         let change = if any_style_changed {
             StyleChange::Changed { reset_only }
         } else {
             StyleChange::Unchanged
         };
-        StyleDifference::new(GeckoRestyleDamage(nsChangeHint(hint)), change)
+        let damage = GeckoRestyleDamage(nsChangeHint(hint));
+        StyleDifference { damage, change }
     }
 
     /// Returns true if this restyle damage contains all the damage of |other|.

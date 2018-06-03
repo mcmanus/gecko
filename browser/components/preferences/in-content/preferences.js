@@ -5,23 +5,22 @@
 // Import globals from the files imported by the .xul files.
 /* import-globals-from subdialogs.js */
 /* import-globals-from main.js */
+/* import-globals-from home.js */
 /* import-globals-from search.js */
 /* import-globals-from containers.js */
 /* import-globals-from privacy.js */
 /* import-globals-from sync.js */
 /* import-globals-from findInPage.js */
 /* import-globals-from ../../../base/content/utilityOverlay.js */
+/* import-globals-from ../../../../toolkit/content/preferencesBindings.js */
 
 "use strict";
 
-var Cc = Components.classes;
-var Ci = Components.interfaces;
-var Cu = Components.utils;
-var Cr = Components.results;
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.defineModuleGetter(this, "formAutofillParent",
+                               "resource://formautofill/FormAutofillParent.jsm");
 
 var gLastHash = "";
 
@@ -50,14 +49,19 @@ function register_module(categoryName, categoryObject) {
 document.addEventListener("DOMContentLoaded", init_all, {once: true});
 
 function init_all() {
-  document.documentElement.instantApply = true;
+  Preferences.forceEnableInstantApply();
 
   gSubDialog.init();
   register_module("paneGeneral", gMainPane);
+  register_module("paneHome", gHomePane);
   register_module("paneSearch", gSearchPane);
   register_module("panePrivacy", gPrivacyPane);
   register_module("paneContainers", gContainersPane);
-  register_module("paneSync", gSyncPane);
+  if (Services.prefs.getBoolPref("identity.fxaccounts.enabled")) {
+    document.getElementById("category-sync").hidden = false;
+    document.getElementById("weavePrefsDeck").removeAttribute("data-hidden-from-search");
+    register_module("paneSync", gSyncPane);
+  }
   register_module("paneSearchResults", gSearchResultsPane);
   gSearchResultsPane.init();
   gMainPane.preInit();
@@ -73,6 +77,8 @@ function init_all() {
   categories.addEventListener("mousedown", function() {
     this.removeAttribute("keyboard-navigation");
   });
+
+  maybeDisplayPoliciesNotice();
 
   window.addEventListener("hashchange", onHashChange);
   gotoPref();
@@ -92,6 +98,7 @@ function telemetryBucketForCategory(category) {
   switch (category) {
     case "containers":
     case "general":
+    case "home":
     case "privacy":
     case "search":
     case "sync":
@@ -169,39 +176,35 @@ function gotoPref(aCategory) {
     categories.clearSelection();
   }
   window.history.replaceState(category, document.title);
-  search(category, "data-category", subcategory, "data-subcategory");
+  search(category, "data-category");
 
   let mainContent = document.querySelector(".main-content");
   mainContent.scrollTop = 0;
+
+  spotlight(subcategory);
 
   Services.telemetry
           .getHistogramById("FX_PREFERENCES_CATEGORY_OPENED_V2")
           .add(telemetryBucketForCategory(friendlyName));
 }
 
-function search(aQuery, aAttribute, aSubquery, aSubAttribute) {
+function search(aQuery, aAttribute) {
   let mainPrefPane = document.getElementById("mainPrefPane");
   let elements = mainPrefPane.children;
   for (let element of elements) {
     // If the "data-hidden-from-search" is "true", the
-    // element will not get considered during search. This
-    // should only be used when an element is still under
-    // development and should not be shown for any reason.
+    // element will not get considered during search.
     if (element.getAttribute("data-hidden-from-search") != "true" ||
         element.getAttribute("data-subpanel") == "true") {
       let attributeValue = element.getAttribute(aAttribute);
       if (attributeValue == aQuery) {
-        if (!element.classList.contains("header") &&
-            element.localName !== "preferences" &&
-            aSubquery && aSubAttribute) {
-          let subAttributeValue = element.getAttribute(aSubAttribute);
-          element.hidden = subAttributeValue != aSubquery;
-        } else {
-          element.hidden = false;
-        }
+        element.hidden = false;
       } else {
         element.hidden = true;
       }
+    } else if (element.getAttribute("data-hidden-from-search") == "true" &&
+               !element.hidden) {
+      element.hidden = true;
     }
     element.classList.remove("visually-hidden");
   }
@@ -216,12 +219,104 @@ function search(aQuery, aAttribute, aSubquery, aSubAttribute) {
   }
 }
 
-function helpButtonCommand() {
-  let pane = history.state;
-  let categories = document.getElementById("categories");
-  let helpTopic = categories.querySelector(".category[value=" + pane + "]")
-                            .getAttribute("helpTopic");
-  openHelpLink(helpTopic);
+async function spotlight(subcategory) {
+  let highlightedElements = document.querySelectorAll(".spotlight");
+  if (highlightedElements.length) {
+    for (let element of highlightedElements) {
+      element.classList.remove("spotlight");
+    }
+  }
+  if (subcategory) {
+    if (!gSearchResultsPane.categoriesInitialized) {
+      await waitForSystemAddonInjectionsFinished([{
+        isGoingToInject: formAutofillParent.initialized,
+        elementId: "formAutofillGroup",
+      }]);
+    }
+    scrollAndHighlight(subcategory);
+  }
+
+  /**
+   * Wait for system addons finished their dom injections.
+   * @param {Array} addons - The system addon information array.
+   * For example, the element is looked like
+   * { isGoingToInject: true, elementId: "formAutofillGroup" }.
+   * The `isGoingToInject` means the system addon will be visible or not,
+   * and the `elementId` means the id of the element will be injected into the dom
+   * if the `isGoingToInject` is true.
+   * @returns {Promise} Will resolve once all injections are finished.
+   */
+  function waitForSystemAddonInjectionsFinished(addons) {
+    return new Promise(resolve => {
+      let elementIdSet = new Set();
+      for (let addon of addons) {
+        if (addon.isGoingToInject) {
+          elementIdSet.add(addon.elementId);
+        }
+      }
+      if (elementIdSet.size) {
+        let observer = new MutationObserver(mutations => {
+          for (let mutation of mutations) {
+            for (let node of mutation.addedNodes) {
+              elementIdSet.delete(node.id);
+              if (elementIdSet.size === 0) {
+                observer.disconnect();
+                resolve();
+              }
+            }
+          }
+        });
+        let mainContent = document.querySelector(".main-content");
+        observer.observe(mainContent, {childList: true, subtree: true});
+        // Disconnect the mutation observer once there is any user input.
+        mainContent.addEventListener("scroll", disconnectMutationObserver);
+        window.addEventListener("mousedown", disconnectMutationObserver);
+        window.addEventListener("keydown", disconnectMutationObserver);
+        function disconnectMutationObserver() {
+          mainContent.removeEventListener("scroll", disconnectMutationObserver);
+          window.removeEventListener("mousedown", disconnectMutationObserver);
+          window.removeEventListener("keydown", disconnectMutationObserver);
+          observer.disconnect();
+        }
+      } else {
+        resolve();
+      }
+    });
+  }
+}
+
+function scrollAndHighlight(subcategory) {
+  let element = document.querySelector(`[data-subcategory="${subcategory}"]`);
+  if (element) {
+    let header = getClosestDisplayedHeader(element);
+    scrollContentTo(header);
+    element.classList.add("spotlight");
+  }
+}
+
+/**
+ * If there is no visible second level header it will return first level header,
+ * otherwise return second level header.
+ * @returns {Element} - The closest displayed header.
+ */
+function getClosestDisplayedHeader(element) {
+  let header = element.closest("groupbox");
+  let searchHeader = header.querySelector("caption.search-header");
+  if (searchHeader && searchHeader.hidden &&
+      header.previousSibling.classList.contains("subcategory")) {
+    header = header.previousSibling;
+  }
+  return header;
+}
+
+function scrollContentTo(element) {
+  const STICKY_CONTAINER_HEIGHT = document.querySelector(".sticky-container").clientHeight;
+  let mainContent = document.querySelector(".main-content");
+  let top = element.getBoundingClientRect().top - STICKY_CONTAINER_HEIGHT;
+  mainContent.scroll({
+    top,
+    behavior: "smooth",
+  });
 }
 
 function friendlyPrefCategoryNameToInternalName(aName) {
@@ -244,41 +339,41 @@ function internalPrefCategoryNameToFriendlyName(aName) {
 const CONFIRM_RESTART_PROMPT_RESTART_NOW = 0;
 const CONFIRM_RESTART_PROMPT_CANCEL = 1;
 const CONFIRM_RESTART_PROMPT_RESTART_LATER = 2;
-function confirmRestartPrompt(aRestartToEnable, aDefaultButtonIndex,
-                              aWantRevertAsCancelButton,
-                              aWantRestartLaterButton) {
-  let brandName = document.getElementById("bundleBrand").getString("brandShortName");
-  let bundle = document.getElementById("bundlePreferences");
-  let msg = bundle.getFormattedString(aRestartToEnable ?
-                                      "featureEnableRequiresRestart" :
-                                      "featureDisableRequiresRestart",
-                                      [brandName]);
-  let title = bundle.getFormattedString("shouldRestartTitle", [brandName]);
-  let prompts = Cc["@mozilla.org/embedcomp/prompt-service;1"].getService(Ci.nsIPromptService);
+async function confirmRestartPrompt(aRestartToEnable, aDefaultButtonIndex,
+                                    aWantRevertAsCancelButton,
+                                    aWantRestartLaterButton) {
+  let [
+    msg, title, restartButtonText, noRestartButtonText, restartLaterButtonText
+  ] = await document.l10n.formatValues([
+    {id: aRestartToEnable ?
+      "feature-enable-requires-restart" : "feature-disable-requires-restart"},
+    {id: "should-restart-title"},
+    {id: "should-restart-ok"},
+    {id: "cancel-no-restart-button"},
+    {id: "restart-later"},
+  ]);
 
   // Set up the first (index 0) button:
-  let button0Text = bundle.getFormattedString("okToRestartButton", [brandName]);
   let buttonFlags = (Services.prompt.BUTTON_POS_0 *
                      Services.prompt.BUTTON_TITLE_IS_STRING);
 
 
   // Set up the second (index 1) button:
-  let button1Text = null;
   if (aWantRevertAsCancelButton) {
-    button1Text = bundle.getString("revertNoRestartButton");
     buttonFlags += (Services.prompt.BUTTON_POS_1 *
                     Services.prompt.BUTTON_TITLE_IS_STRING);
   } else {
+    noRestartButtonText = null;
     buttonFlags += (Services.prompt.BUTTON_POS_1 *
                     Services.prompt.BUTTON_TITLE_CANCEL);
   }
 
   // Set up the third (index 2) button:
-  let button2Text = null;
   if (aWantRestartLaterButton) {
-    button2Text = bundle.getString("restartLater");
     buttonFlags += (Services.prompt.BUTTON_POS_2 *
                     Services.prompt.BUTTON_TITLE_IS_STRING);
+  } else {
+    restartLaterButtonText = null;
   }
 
   switch (aDefaultButtonIndex) {
@@ -295,9 +390,9 @@ function confirmRestartPrompt(aRestartToEnable, aDefaultButtonIndex,
       break;
   }
 
-  let buttonIndex = prompts.confirmEx(window, title, msg, buttonFlags,
-                                      button0Text, button1Text, button2Text,
-                                      null, {});
+  let buttonIndex = Services.prompt.confirmEx(window, title, msg, buttonFlags,
+                                              restartButtonText, noRestartButtonText,
+                                              restartLaterButtonText, null, {});
 
   // If we have the second confirmation dialog for restart, see if the user
   // cancels out at that point.
@@ -322,4 +417,10 @@ function appendSearchKeywords(aId, keywords) {
     keywords.push(searchKeywords);
   }
   element.setAttribute("searchkeywords", keywords.join(" "));
+}
+
+function maybeDisplayPoliciesNotice() {
+  if (Services.policies.status == Services.policies.ACTIVE) {
+    document.getElementById("policies-container").removeAttribute("hidden");
+  }
 }

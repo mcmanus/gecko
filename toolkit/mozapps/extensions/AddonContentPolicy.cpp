@@ -92,21 +92,24 @@ LogMessage(const nsAString &aMessage, nsIURI* aSourceURI, const nsAString &aSour
 // Content policy enforcement:
 
 NS_IMETHODIMP
-AddonContentPolicy::ShouldLoad(uint32_t aContentType,
-                               nsIURI* aContentLocation,
-                               nsIURI* aRequestOrigin,
-                               nsISupports* aContext,
+AddonContentPolicy::ShouldLoad(nsIURI* aContentLocation,
+                               nsILoadInfo* aLoadInfo,
                                const nsACString& aMimeTypeGuess,
-                               nsISupports* aExtra,
-                               nsIPrincipal* aRequestPrincipal,
                                int16_t* aShouldLoad)
 {
-  MOZ_ASSERT(aContentType == nsContentUtils::InternalContentPolicyTypeToExternal(aContentType),
+  uint32_t contentType = aLoadInfo->GetExternalContentPolicyType();
+  nsCOMPtr<nsIURI> requestOrigin;
+  nsCOMPtr<nsIPrincipal> loadingPrincipal = aLoadInfo->LoadingPrincipal();
+  if (loadingPrincipal) {
+    loadingPrincipal->GetURI(getter_AddRefs(requestOrigin));
+  }
+
+  MOZ_ASSERT(contentType == nsContentUtils::InternalContentPolicyTypeToExternal(contentType),
              "We should only see external content policy types here.");
 
   *aShouldLoad = nsIContentPolicy::ACCEPT;
 
-  if (!aRequestOrigin) {
+  if (!requestOrigin) {
     return NS_OK;
   }
 
@@ -114,11 +117,11 @@ AddonContentPolicy::ShouldLoad(uint32_t aContentType,
   // moz-extension URLs, or to resources being loaded from moz-extension URLs.
   bool equals;
   if (!((NS_SUCCEEDED(aContentLocation->SchemeIs("moz-extension", &equals)) && equals) ||
-        (NS_SUCCEEDED(aRequestOrigin->SchemeIs("moz-extension", &equals)) && equals))) {
+        (NS_SUCCEEDED(requestOrigin->SchemeIs("moz-extension", &equals)) && equals))) {
     return NS_OK;
   }
 
-  if (aContentType == nsIContentPolicy::TYPE_SCRIPT) {
+  if (contentType == nsIContentPolicy::TYPE_SCRIPT) {
     NS_ConvertUTF8toUTF16 typeString(aMimeTypeGuess);
     nsContentTypeParser mimeParser(typeString);
 
@@ -129,8 +132,9 @@ AddonContentPolicy::ShouldLoad(uint32_t aContentType,
         NS_SUCCEEDED(mimeParser.GetParameter("version", version))) {
       *aShouldLoad = nsIContentPolicy::REJECT_REQUEST;
 
+      nsCOMPtr<nsISupports> context = aLoadInfo->GetLoadingContext();
       LogMessage(NS_LITERAL_STRING(VERSIONED_JS_BLOCKED_MESSAGE),
-                 aRequestOrigin, typeString, aContext);
+                 requestOrigin, typeString, context);
       return NS_OK;
     }
   }
@@ -139,17 +143,16 @@ AddonContentPolicy::ShouldLoad(uint32_t aContentType,
 }
 
 NS_IMETHODIMP
-AddonContentPolicy::ShouldProcess(uint32_t aContentType,
-                                  nsIURI* aContentLocation,
-                                  nsIURI* aRequestOrigin,
-                                  nsISupports* aRequestingContext,
+AddonContentPolicy::ShouldProcess(nsIURI* aContentLocation,
+                                  nsILoadInfo* aLoadInfo,
                                   const nsACString& aMimeTypeGuess,
-                                  nsISupports* aExtra,
-                                  nsIPrincipal* aRequestPrincipal,
                                   int16_t* aShouldProcess)
 {
-  MOZ_ASSERT(aContentType == nsContentUtils::InternalContentPolicyTypeToExternal(aContentType),
+#ifdef DEBUG
+  uint32_t contentType = aLoadInfo->GetExternalContentPolicyType();
+  MOZ_ASSERT(contentType == nsContentUtils::InternalContentPolicyTypeToExternal(contentType),
              "We should only see external content policy types here.");
+#endif
 
   *aShouldProcess = nsIContentPolicy::ACCEPT;
   return NS_OK;
@@ -263,9 +266,8 @@ class CSPValidator final : public nsCSPSrcVisitor {
         return true;
 
       default:
-        NS_ConvertASCIItoUTF16 keyword(CSP_EnumToKeyword(src.getKeyword()));
-
-        FormatError("csp.error.illegal-keyword", keyword);
+        FormatError("csp.error.illegal-keyword",
+                    nsDependentString(CSP_EnumToUTF16Keyword(src.getKeyword())));
         return false;
       }
     };

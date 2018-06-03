@@ -16,11 +16,8 @@
 namespace mozilla {
 namespace dom {
 
-namespace workers {
-class WorkerHolder;
-}
-
 class IPCBlobInputStream;
+class ThreadSafeWorkerRef;
 
 class IPCBlobInputStreamChild final
   : public mozilla::ipc::PIPCBlobInputStreamChild
@@ -79,6 +76,13 @@ public:
   RecvStreamReady(const OptionalIPCStream& aStream) override;
 
   void
+  LengthNeeded(IPCBlobInputStream* aStream,
+               nsIEventTarget* aEventTarget);
+
+  mozilla::ipc::IPCResult
+  RecvLengthReady(const int64_t& aLength) override;
+
+  void
   Shutdown();
 
   void
@@ -105,12 +109,17 @@ private:
   {
     RefPtr<IPCBlobInputStream> mStream;
     nsCOMPtr<nsIEventTarget> mEventTarget;
+    enum
+    {
+      eStreamNeeded,
+      eLengthNeeded,
+    } mOp;
   };
   nsTArray<PendingOperation> mPendingOperations;
 
   nsCOMPtr<nsISerialEventTarget> mOwningEventTarget;
 
-  UniquePtr<workers::WorkerHolder> mWorkerHolder;
+  RefPtr<ThreadSafeWorkerRef> mWorkerRef;
 };
 
 } // namespace dom

@@ -2,15 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-var Ci = Components.interfaces;
-var Cc = Components.classes;
-var Cr = Components.results;
-var Cu = Components.utils;
-
 const FRECENCY_DEFAULT = 10000;
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://testing-common/httpd.js");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://testing-common/httpd.js");
 
 // Import common head.
 {
@@ -20,6 +15,14 @@ Cu.import("resource://testing-common/httpd.js");
   Services.scriptloader.loadSubScript(uri.spec, this);
 }
 
+// Add a lazy getter for common autofill test tasks used by some tests.
+{
+  /* import-globals-from ./autofill_tasks.js */
+  let file = do_get_file("autofill_tasks.js", false);
+  let uri = Services.io.newFileURI(file);
+  XPCOMUtils.defineLazyScriptGetter(this, "addAutofillTasks", uri.spec);
+}
+
 // Put any other stuff relative to this test folder below.
 
 const TITLE_SEARCH_ENGINE_SEPARATOR = " \u00B7\u2013\u00B7 ";
@@ -27,7 +30,6 @@ const TITLE_SEARCH_ENGINE_SEPARATOR = " \u00B7\u2013\u00B7 ";
 async function cleanup() {
   Services.prefs.clearUserPref("browser.urlbar.autocomplete.enabled");
   Services.prefs.clearUserPref("browser.urlbar.autoFill");
-  Services.prefs.clearUserPref("browser.urlbar.autoFill.typed");
   Services.prefs.clearUserPref("browser.urlbar.autoFill.searchEngines");
   let suggestPrefs = [
     "history",
@@ -41,9 +43,9 @@ async function cleanup() {
   }
   Services.prefs.clearUserPref("browser.search.suggest.enabled");
   await PlacesUtils.bookmarks.eraseEverything();
-  await PlacesTestUtils.clearHistory();
+  await PlacesUtils.history.clear();
 }
-do_register_cleanup(cleanup);
+registerCleanupFunction(cleanup);
 
 /**
  * @param {Array} aSearches Array of AutoCompleteSearch names.
@@ -55,7 +57,7 @@ AutoCompleteInput.prototype = {
   popup: {
     selectedIndex: -1,
     invalidate() {},
-    QueryInterface: XPCOMUtils.generateQI([Ci.nsIAutoCompletePopup])
+    QueryInterface: ChromeUtils.generateQI([Ci.nsIAutoCompletePopup])
   },
   popupOpen: false,
 
@@ -66,9 +68,6 @@ AutoCompleteInput.prototype = {
 
   minResultsForPopup: 0,
   maxRows: 0,
-
-  showCommentColumn: false,
-  showImageColumn: false,
 
   timeout: 10,
   searchParam: "",
@@ -101,8 +100,8 @@ AutoCompleteInput.prototype = {
   onTextEntered: () => false,
   onTextReverted: () => false,
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIAutoCompleteInput])
-}
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIAutoCompleteInput])
+};
 
 /**
  * A helper for check_autocomplete to check a specific match against data from
@@ -113,14 +112,16 @@ AutoCompleteInput.prototype = {
  *   uri: {nsIURI} The expected uri.
  *   title: {String} The title of the entry.
  *   tags: {String} The tags for the entry.
- *   style: {String} The style of the entry.
+ *   style: {Array} The style of the entry.
  * }
  * @param {Object} result The result to compare the result against with the same
  *                        properties as the match param.
  * @returns {boolean} Returns true if the result matches.
  */
 async function _check_autocomplete_matches(match, result) {
-  let { uri, title, tags, style } = match;
+  let { uri, tags, style } = match;
+  let title = match.comment || match.title;
+
   if (tags)
     title += " \u2013 " + tags.sort().join(", ");
   if (style)
@@ -128,16 +129,19 @@ async function _check_autocomplete_matches(match, result) {
   else
     style = ["favicon"];
 
-  do_print(`Checking against expected "${uri.spec}", "${title}"`);
-  // Got a match on both uri and title?
-  if (stripPrefix(uri.spec) != stripPrefix(result.value) || title != result.comment) {
+  let actual = { value: result.value, comment: result.comment };
+  let expected = { value: match.value || uri.spec, comment: title };
+  info(`Checking match: ` +
+       `actual=${JSON.stringify(actual)} ... ` +
+       `expected=${JSON.stringify(expected)}`);
+  if (actual.value != expected.value || actual.comment != expected.comment) {
     return false;
   }
 
   let actualStyle = result.style.split(/\s+/).sort();
   if (style)
     Assert.equal(actualStyle.toString(), style.toString(), "Match should have expected style");
-  if (uri.spec.startsWith("moz-action:")) {
+  if (uri && uri.spec.startsWith("moz-action:")) {
     Assert.ok(actualStyle.includes("action"), "moz-action results should always have 'action' in their style");
   }
 
@@ -186,14 +190,14 @@ async function check_autocomplete(test) {
 
   let numSearchesStarted = 0;
   input.onSearchBegin = () => {
-    do_print("onSearchBegin received");
+    info("onSearchBegin received");
     numSearchesStarted++;
   };
   let searchCompletePromise = new Promise(resolve => {
     input.onSearchComplete = () => {
-      do_print("onSearchComplete received");
+      info("onSearchComplete received");
       resolve();
-    }
+    };
   });
   let expectedSearches = 1;
   if (test.incompleteSearch) {
@@ -201,7 +205,7 @@ async function check_autocomplete(test) {
     expectedSearches++;
   }
 
-  do_print("Searching for: '" + test.search + "'");
+  info("Searching for: '" + test.search + "'");
   controller.startSearch(test.search);
   await searchCompletePromise;
 
@@ -220,16 +224,16 @@ async function check_autocomplete(test) {
       let firstIndexToCheck = 0;
       if (test.searchParam && test.searchParam.includes("enable-actions")) {
         firstIndexToCheck = 1;
-        do_print("Checking first match is first autocomplete entry")
+        info("Checking first match is first autocomplete entry");
         let result = {
           value: controller.getValueAt(0),
           comment: controller.getCommentAt(0),
           style: controller.getStyleAt(0),
           image: controller.getImageAt(0),
-        }
-        do_print(`First match is "${result.value}", "${result.comment}"`);
+        };
+        info(`First match is "${result.value}", "${result.comment}"`);
         Assert.ok(await _check_autocomplete_matches(matches[0], result), "first item is correct");
-        do_print("Checking rest of the matches");
+        info("Checking rest of the matches");
       }
 
       for (let i = firstIndexToCheck; i < controller.matchCount; i++) {
@@ -238,8 +242,8 @@ async function check_autocomplete(test) {
           comment: controller.getCommentAt(i),
           style: controller.getStyleAt(i),
           image: controller.getImageAt(i),
-        }
-        do_print(`Found value: "${result.value}", comment: "${result.comment}", style: "${result.style}" in results...`);
+        };
+        info(`Actual result at index ${i}: ${JSON.stringify(result)}`);
         let lowerBound = test.checkSorting ? i : firstIndexToCheck;
         let upperBound = test.checkSorting ? i + 1 : matches.length;
         let found = false;
@@ -248,7 +252,7 @@ async function check_autocomplete(test) {
           if (matches[j] == undefined)
             continue;
           if (await _check_autocomplete_matches(matches[j], result)) {
-            do_print("Got a match at index " + j + "!");
+            info("Got a match at index " + j + "!");
             // Make it undefined so we don't process it again
             matches[j] = undefined;
             found = true;
@@ -265,9 +269,9 @@ async function check_autocomplete(test) {
                  "Got as many results as expected");
 
     // If we expect results, make sure we got matches.
-    do_check_eq(controller.searchStatus, matches.length ?
-                Ci.nsIAutoCompleteController.STATUS_COMPLETE_MATCH :
-                Ci.nsIAutoCompleteController.STATUS_COMPLETE_NO_MATCH);
+    Assert.equal(controller.searchStatus, matches.length ?
+                 Ci.nsIAutoCompleteController.STATUS_COMPLETE_MATCH :
+                 Ci.nsIAutoCompleteController.STATUS_COMPLETE_NO_MATCH);
   }
 
   if (test.autofilled) {
@@ -382,7 +386,7 @@ function makeSearchMatch(input, extra = {}) {
     uri: makeActionURI("searchengine", params),
     title: params.engineName,
     style,
-  }
+  };
 }
 
 // Creates a full "match" entry for a search result, suitable for passing as
@@ -394,7 +398,7 @@ function makeVisitMatch(input, url, extra = {}) {
   let params = {
     url,
     input,
-  }
+  };
   let style = [ "action", "visiturl" ];
   if (extra.heuristic) {
     style.push("heuristic");
@@ -403,7 +407,7 @@ function makeVisitMatch(input, url, extra = {}) {
     uri: makeActionURI("visiturl", params),
     title: extra.title || url,
     style,
-  }
+  };
 }
 
 function makeSwitchToTabMatch(url, extra = {}) {
@@ -411,7 +415,7 @@ function makeSwitchToTabMatch(url, extra = {}) {
     uri: makeActionURI("switchtab", {url}),
     title: extra.title || url,
     style: [ "action", "switchtab" ],
-  }
+  };
 }
 
 function makeExtensionMatch(extra = {}) {
@@ -433,7 +437,7 @@ function makeExtensionMatch(extra = {}) {
 function makeTestServer(port = -1) {
   let httpServer = new HttpServer();
   httpServer.start(port);
-  do_register_cleanup(() => httpServer.stop(() => {}));
+  registerCleanupFunction(() => httpServer.stop(() => {}));
   return httpServer;
 }
 
@@ -443,21 +447,21 @@ function addTestEngine(basename, httpServer = undefined) {
   let dataUrl =
     "http://localhost:" + httpServer.identity.primaryPort + "/data/";
 
-  do_print("Adding engine: " + basename);
+  info("Adding engine: " + basename);
   return new Promise(resolve => {
     Services.obs.addObserver(function obs(subject, topic, data) {
       let engine = subject.QueryInterface(Ci.nsISearchEngine);
-      do_print("Observed " + data + " for " + engine.name);
+      info("Observed " + data + " for " + engine.name);
       if (data != "engine-added" || engine.name != basename) {
         return;
       }
 
       Services.obs.removeObserver(obs, "browser-search-engine-modified");
-      do_register_cleanup(() => Services.search.removeEngine(engine));
+      registerCleanupFunction(() => Services.search.removeEngine(engine));
       resolve(engine);
     }, "browser-search-engine-modified");
 
-    do_print("Adding engine from URL: " + dataUrl + basename);
+    info("Adding engine from URL: " + dataUrl + basename);
     Services.search.addEngine(dataUrl + basename, null, null, false);
   });
 }
@@ -474,7 +478,7 @@ add_task(async function ensure_search_engine() {
   // allowed.
   let geoPref = "browser.search.geoip.url";
   Services.prefs.setCharPref(geoPref, "");
-  do_register_cleanup(() => Services.prefs.clearUserPref(geoPref));
+  registerCleanupFunction(() => Services.prefs.clearUserPref(geoPref));
   await new Promise(resolve => {
     Services.search.init(resolve);
   });
@@ -488,3 +492,28 @@ add_task(async function ensure_search_engine() {
   let engine = Services.search.getEngineByName("MozSearch");
   Services.search.currentEngine = engine;
 });
+
+/**
+ * Add a adaptive result for a given (url, string) tuple.
+ * @param {string} aUrl
+ *        The url to add an adaptive result for.
+ * @param {string} aSearch
+ *        The string to add an adaptive result for.
+ * @resolves When the operation is complete.
+ */
+function addAdaptiveFeedback(aUrl, aSearch) {
+  let promise = TestUtils.topicObserved("places-autocomplete-feedback-updated");
+  let thing = {
+    QueryInterface: ChromeUtils.generateQI([Ci.nsIAutoCompleteInput,
+                                            Ci.nsIAutoCompletePopup,
+                                            Ci.nsIAutoCompleteController]),
+    get popup() { return thing; },
+    get controller() { return thing; },
+    popupOpen: true,
+    selectedIndex: 0,
+    getValueAt: () => aUrl,
+    searchString: aSearch
+  };
+  Services.obs.notifyObservers(thing, "autocomplete-will-enter-text");
+  return promise;
+}

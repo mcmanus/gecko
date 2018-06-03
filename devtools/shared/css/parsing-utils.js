@@ -19,7 +19,6 @@ loader.lazyRequireGetter(this, "CSS_ANGLEUNIT",
 
 const promise = require("promise");
 const {getCSSLexer} = require("devtools/shared/css/lexer");
-const {Task} = require("devtools/shared/task");
 
 const SELECTOR_ATTRIBUTE = exports.SELECTOR_ATTRIBUTE = 1;
 const SELECTOR_ELEMENT = exports.SELECTOR_ELEMENT = 2;
@@ -50,9 +49,9 @@ const COMMENT_PARSING_HEURISTIC_BYPASS_CHAR = "!";
  * @see CSSToken for details about the returned tokens
  */
 function* cssTokenizer(string) {
-  let lexer = getCSSLexer(string);
+  const lexer = getCSSLexer(string);
   while (true) {
-    let token = lexer.nextToken();
+    const token = lexer.nextToken();
     if (!token) {
       break;
     }
@@ -83,13 +82,13 @@ function* cssTokenizer(string) {
  *        line and column information.
  */
 function cssTokenizerWithLineColumn(string) {
-  let lexer = getCSSLexer(string);
-  let result = [];
+  const lexer = getCSSLexer(string);
+  const result = [];
   let prevToken = undefined;
   while (true) {
-    let token = lexer.nextToken();
-    let lineNumber = lexer.lineNumber;
-    let columnNumber = lexer.columnNumber;
+    const token = lexer.nextToken();
+    const lineNumber = lexer.lineNumber;
+    const columnNumber = lexer.columnNumber;
 
     if (prevToken) {
       prevToken.loc.end = {
@@ -106,7 +105,7 @@ function cssTokenizerWithLineColumn(string) {
       // We've already dealt with the previous token's location.
       prevToken = undefined;
     } else {
-      let startLoc = {
+      const startLoc = {
         line: lineNumber,
         column: columnNumber
       };
@@ -130,7 +129,7 @@ function cssTokenizerWithLineColumn(string) {
  * @return {String} the escaped result
  */
 function escapeCSSComment(inputString) {
-  let result = inputString.replace(/\/(\\*)\*/g, "/\\$1*");
+  const result = inputString.replace(/\/(\\*)\*/g, "/\\$1*");
   return result.replace(/\*(\\*)\//g, "*\\$1/");
 }
 
@@ -144,7 +143,7 @@ function escapeCSSComment(inputString) {
  * @return {String} the un-escaped result
  */
 function unescapeCSSComment(inputString) {
-  let result = inputString.replace(/\/\\(\\*)\*/g, "/$1*");
+  const result = inputString.replace(/\/\\(\\*)\*/g, "/$1*");
   return result.replace(/\*\\(\\*)\//g, "*$1/");
 }
 
@@ -179,7 +178,7 @@ function parseCommentDeclarations(isCssPropertyKnown, commentText, startOffset,
     commentText = commentText.substring(1);
   }
 
-  let rewrittenText = unescapeCSSComment(commentText);
+  const rewrittenText = unescapeCSSComment(commentText);
 
   // We might have rewritten an embedded comment.  For example
   // /\* ... *\/ would turn into /* ... */.
@@ -196,11 +195,11 @@ function parseCommentDeclarations(isCssPropertyKnown, commentText, startOffset,
   //
   // Note we allocate one extra entry because we can see an ending
   // offset that is equal to the length.
-  let rewrites = new Array(rewrittenText.length + 1).fill(0);
+  const rewrites = new Array(rewrittenText.length + 1).fill(0);
 
-  let commentRe = /\/\\*\*|\*\\*\//g;
+  const commentRe = /\/\\*\*|\*\\*\//g;
   while (true) {
-    let matchData = commentRe.exec(rewrittenText);
+    const matchData = commentRe.exec(rewrittenText);
     if (!matchData) {
       break;
     }
@@ -223,9 +222,9 @@ function parseCommentDeclarations(isCssPropertyKnown, commentText, startOffset,
   // seem worthwhile to support declarations in comments-in-comments
   // here, as there's no way to generate those using the tools, and
   // users would be crazy to write such things.
-  let newDecls = parseDeclarationsInternal(isCssPropertyKnown, rewrittenText,
+  const newDecls = parseDeclarationsInternal(isCssPropertyKnown, rewrittenText,
                                            false, true, commentOverride);
-  for (let decl of newDecls) {
+  for (const decl of newDecls) {
     decl.offsets[0] = rewrites[decl.offsets[0]];
     decl.offsets[1] = rewrites[decl.offsets[1]];
     decl.colonOffsets[0] = rewrites[decl.colonOffsets[0]];
@@ -247,6 +246,28 @@ function getEmptyDeclaration() {
           terminator: "",
           offsets: [undefined, undefined],
           colonOffsets: false};
+}
+
+/**
+ * Like trim, but only trims CSS-allowed whitespace.
+ */
+function cssTrim(str) {
+  const match = /^[ \t\r\n\f]*(.*?)[ \t\r\n\f]*$/.exec(str);
+  if (match) {
+    return match[1];
+  }
+  return str;
+}
+
+/**
+ * Like trimRight, but only trims CSS-allowed whitespace.
+ */
+function cssTrimRight(str) {
+  const match = /^(.*?)[ \t\r\n\f]*$/.exec(str);
+  if (match) {
+    return match[1];
+  }
+  return str;
 }
 
 /**
@@ -276,14 +297,23 @@ function parseDeclarationsInternal(isCssPropertyKnown, inputString,
     throw new Error("empty input string");
   }
 
-  let lexer = getCSSLexer(inputString);
+  const lexer = getCSSLexer(inputString);
 
   let declarations = [getEmptyDeclaration()];
   let lastProp = declarations[0];
 
-  let current = "", hasBang = false;
+  // This tracks the "!important" parsing state.  The states are:
+  // 0 - haven't seen anything
+  // 1 - have seen "!", looking for "important" next (possibly after
+  //     whitespace).
+  // 2 - have seen "!important"
+  let importantState = 0;
+  // This is true if we saw whitespace or comments between the "!" and
+  // the "important".
+  let importantWS = false;
+  let current = "";
   while (true) {
-    let token = lexer.nextToken();
+    const token = lexer.nextToken();
     if (!token) {
       break;
     }
@@ -301,19 +331,23 @@ function parseDeclarationsInternal(isCssPropertyKnown, inputString,
         lastProp.offsets[0] = token.startOffset;
       }
       lastProp.offsets[1] = token.endOffset;
-    } else if (lastProp.name && !current && !hasBang &&
+    } else if (lastProp.name && !current && !importantState &&
                !lastProp.priority && lastProp.colonOffsets[1]) {
       // Whitespace appearing after the ":" is attributed to it.
       lastProp.colonOffsets[1] = token.endOffset;
+    } else if (importantState === 1) {
+      importantWS = true;
     }
 
     if (token.tokenType === "symbol" && token.text === ":") {
+      // Either way, a "!important" we've seen is no longer valid now.
+      importantState = 0;
+      importantWS = false;
       if (!lastProp.name) {
         // Set the current declaration name if there's no name yet
-        lastProp.name = current.trim();
+        lastProp.name = cssTrim(current);
         lastProp.colonOffsets = [token.startOffset, token.endOffset];
         current = "";
-        hasBang = false;
 
         // When parsing a comment body, if the left-hand-side is not a
         // valid property name, then drop it and stop parsing.
@@ -336,44 +370,71 @@ function parseDeclarationsInternal(isCssPropertyKnown, inputString,
         current = "";
         break;
       }
-      lastProp.value = current.trim();
+      if (importantState === 2) {
+        lastProp.priority = "important";
+      } else if (importantState === 1) {
+        current += "!";
+        if (importantWS) {
+          current += " ";
+        }
+      }
+      lastProp.value = cssTrim(current);
       current = "";
-      hasBang = false;
+      importantState = 0;
+      importantWS = false;
       declarations.push(getEmptyDeclaration());
       lastProp = declarations[declarations.length - 1];
     } else if (token.tokenType === "ident") {
-      if (token.text === "important" && hasBang) {
-        lastProp.priority = "important";
-        hasBang = false;
+      if (token.text === "important" && importantState === 1) {
+        importantState = 2;
       } else {
-        if (hasBang) {
+        if (importantState > 0) {
           current += "!";
+          if (importantWS) {
+            current += " ";
+          }
+          if (importantState === 2) {
+            current += "important ";
+          }
+          importantState = 0;
+          importantWS = false;
         }
         // Re-escape the token to avoid dequoting problems.
         // See bug 1287620.
         current += CSS.escape(token.text);
       }
     } else if (token.tokenType === "symbol" && token.text === "!") {
-      hasBang = true;
+      importantState = 1;
     } else if (token.tokenType === "whitespace") {
       if (current !== "") {
-        current += " ";
+        current = current.trimRight() + " ";
       }
     } else if (token.tokenType === "comment") {
       if (parseComments && !lastProp.name && !lastProp.value) {
-        let commentText = inputString.substring(token.startOffset + 2,
+        const commentText = inputString.substring(token.startOffset + 2,
                                                 token.endOffset - 2);
-        let newDecls = parseCommentDeclarations(isCssPropertyKnown, commentText,
+        const newDecls = parseCommentDeclarations(isCssPropertyKnown, commentText,
                                                 token.startOffset,
                                                 token.endOffset);
 
         // Insert the new declarations just before the final element.
-        let lastDecl = declarations.pop();
+        const lastDecl = declarations.pop();
         declarations = [...declarations, ...newDecls, lastDecl];
       } else {
-        current += " ";
+        current = current.trimRight() + " ";
       }
     } else {
+      if (importantState > 0) {
+        current += "!";
+        if (importantWS) {
+          current += " ";
+        }
+        if (importantState === 2) {
+          current += "important ";
+        }
+        importantState = 0;
+        importantWS = false;
+      }
       current += inputString.substring(token.startOffset, token.endOffset);
     }
   }
@@ -384,12 +445,17 @@ function parseDeclarationsInternal(isCssPropertyKnown, inputString,
       // Ignore this case in comments.
       if (!inComment) {
         // Trailing property found, e.g. p1:v1;p2:v2;p3
-        lastProp.name = current.trim();
+        lastProp.name = cssTrim(current);
       }
     } else {
       // Trailing value found, i.e. value without an ending ;
-      lastProp.value = current.trim();
-      let terminator = lexer.performEOFFixup("", true);
+      if (importantState === 2) {
+        lastProp.priority = "important";
+      } else if (importantState === 1) {
+        current += "!";
+      }
+      lastProp.value = cssTrim(current);
+      const terminator = lexer.performEOFFixup("", true);
       lastProp.terminator = terminator + ";";
       // If the input was unterminated, attribute the remainder to
       // this property.  This avoids some bad behavior when rewriting
@@ -525,7 +591,7 @@ RuleRewriter.prototype = {
    *
    * @param {String} inputString the input to use
    */
-  startInitialization: function (inputString) {
+  startInitialization: function(inputString) {
     this.inputString = inputString;
     // Whether there are any newlines in the input text.
     this.hasNewLine = /[\r\n]/.test(this.inputString);
@@ -542,7 +608,7 @@ RuleRewriter.prototype = {
    *
    * @param {Number} index The index of the property to modify
    */
-  completeInitialization: function (index) {
+  completeInitialization: function(index) {
     if (index < 0) {
       throw new Error("Invalid index " + index + ". Expected positive integer");
     }
@@ -568,10 +634,10 @@ RuleRewriter.prototype = {
    * @param {Number} offset the offset at which to compute the indentation
    * @return {String} the indentation at the indicated position
    */
-  getIndentation: function (string, offset) {
+  getIndentation: function(string, offset) {
     let originalOffset = offset;
     for (--offset; offset >= 0; --offset) {
-      let c = string[offset];
+      const c = string[offset];
       if (c === "\r" || c === "\n" || c === "\f") {
         return string.substring(offset + 1, originalOffset);
       }
@@ -601,22 +667,22 @@ RuleRewriter.prototype = {
    *                  where |text| is the text that has been rewritten
    *                  to be "lexically safe".
    */
-  sanitizePropertyValue: function (text) {
+  sanitizePropertyValue: function(text) {
     // Start by stripping any trailing ";".  This is done here to
     // avoid the case where the user types "url(" (which is turned
     // into "url(;" by the rule view before coming here), being turned
     // into "url(;)" by this code -- due to the way "url(...)" is
     // parsed as a single token.
     text = text.replace(/;$/, "");
-    let lexer = getCSSLexer(text);
+    const lexer = getCSSLexer(text);
 
     let result = "";
     let previousOffset = 0;
-    let parenStack = [];
+    const parenStack = [];
     let anySanitized = false;
 
     // Push a closing paren on the stack.
-    let pushParen = (token, closer) => {
+    const pushParen = (token, closer) => {
       result = result + text.substring(previousOffset, token.startOffset) +
         text.substring(token.startOffset, token.endOffset);
       // We set the location of the paren in a funny way, to handle
@@ -627,9 +693,9 @@ RuleRewriter.prototype = {
     };
 
     // Pop a closing paren from the stack.
-    let popSomeParens = (closer) => {
+    const popSomeParens = (closer) => {
       while (parenStack.length > 0) {
-        let paren = parenStack.pop();
+        const paren = parenStack.pop();
 
         if (paren.closer === closer) {
           return true;
@@ -645,7 +711,7 @@ RuleRewriter.prototype = {
     };
 
     while (true) {
-      let token = lexer.nextToken();
+      const token = lexer.nextToken();
       if (!token) {
         break;
       }
@@ -696,7 +762,7 @@ RuleRewriter.prototype = {
 
     // Copy out any remaining text, then any needed terminators.
     result += text.substring(previousOffset, text.length);
-    let eofFixup = lexer.performEOFFixup("", true);
+    const eofFixup = lexer.performEOFFixup("", true);
     if (eofFixup) {
       anySanitized = true;
       result += eofFixup;
@@ -713,7 +779,7 @@ RuleRewriter.prototype = {
    * @param {Number} index the index at which to start
    * @return {Number} index of the first non-whitespace character, or -1
    */
-  skipWhitespaceBackward: function (string, index) {
+  skipWhitespaceBackward: function(string, index) {
     for (--index;
          index >= 0 && (string[index] === " " || string[index] === "\t");
          --index) {
@@ -729,21 +795,21 @@ RuleRewriter.prototype = {
    *                       terminate.  It might be invalid, so this
    *                       function must check for that.
    */
-  maybeTerminateDecl: function (index) {
+  maybeTerminateDecl: function(index) {
     if (index < 0 || index >= this.declarations.length
         // No need to rewrite declarations in comments.
         || ("commentOffsets" in this.declarations[index])) {
       return;
     }
 
-    let termDecl = this.declarations[index];
+    const termDecl = this.declarations[index];
     let endIndex = termDecl.offsets[1];
     // Due to an oddity of the lexer, we might have gotten a bit of
     // extra whitespace in a trailing bad_url token -- so be sure to
     // skip that as well.
     endIndex = this.skipWhitespaceBackward(this.result, endIndex) + 1;
 
-    let trailingText = this.result.substring(endIndex);
+    const trailingText = this.result.substring(endIndex);
     if (termDecl.terminator) {
       // Insert the terminator just at the end of the declaration,
       // before any trailing whitespace.
@@ -777,8 +843,8 @@ RuleRewriter.prototype = {
    * @param {Number} index The index of the property.
    * @return {String} The sanitized text.
    */
-  sanitizeText: function (text, index) {
-    let [anySanitized, sanitizedText] = this.sanitizePropertyValue(text);
+  sanitizeText: function(text, index) {
+    const [anySanitized, sanitizedText] = this.sanitizePropertyValue(text);
     if (anySanitized) {
       this.changedDeclarations[index] = sanitizedText;
     }
@@ -792,7 +858,7 @@ RuleRewriter.prototype = {
    * @param {String} name current name of the property
    * @param {String} newName new name of the property
    */
-  renameProperty: function (index, name, newName) {
+  renameProperty: function(index, name, newName) {
     this.completeInitialization(index);
     this.result += CSS.escape(newName);
     // We could conceivably compute the name offsets instead so we
@@ -808,13 +874,13 @@ RuleRewriter.prototype = {
    * @param {Boolean} isEnabled true if the property should be enabled;
    *                        false if it should be disabled
    */
-  setPropertyEnabled: function (index, name, isEnabled) {
+  setPropertyEnabled: function(index, name, isEnabled) {
     this.completeInitialization(index);
     const decl = this.decl;
     let copyOffset = decl.offsets[1];
     if (isEnabled) {
       // Enable it.  First see if the comment start can be deleted.
-      let commentStart = decl.commentOffsets[0];
+      const commentStart = decl.commentOffsets[0];
       if (EMPTY_COMMENT_START_RX.test(this.result.substring(commentStart))) {
         this.result = this.result.substring(0, commentStart);
       } else {
@@ -823,7 +889,7 @@ RuleRewriter.prototype = {
 
       // Insert the name and value separately, so we can report
       // sanitization changes properly.
-      let commentNamePart =
+      const commentNamePart =
           this.inputString.substring(decl.offsets[0],
                                      decl.colonOffsets[1]);
       this.result += unescapeCSSComment(commentNamePart);
@@ -833,11 +899,11 @@ RuleRewriter.prototype = {
       // a property but which would break the entire style sheet.
       let newText = this.inputString.substring(decl.colonOffsets[1],
                                                decl.offsets[1]);
-      newText = unescapeCSSComment(newText).trimRight();
+      newText = cssTrimRight(unescapeCSSComment(newText));
       this.result += this.sanitizeText(newText, index) + ";";
 
       // See if the comment end can be deleted.
-      let trailingText = this.inputString.substring(decl.offsets[1]);
+      const trailingText = this.inputString.substring(decl.offsets[1]);
       if (EMPTY_COMMENT_END_RX.test(trailingText)) {
         copyOffset = decl.commentOffsets[1];
       } else {
@@ -846,7 +912,7 @@ RuleRewriter.prototype = {
     } else {
       // Disable it.  Note that we use our special comment syntax
       // here.
-      let declText = this.inputString.substring(decl.offsets[0],
+      const declText = this.inputString.substring(decl.offsets[0],
                                                 decl.offsets[1]);
       this.result += "/*" + COMMENT_PARSING_HEURISTIC_BYPASS_CHAR +
         " " + escapeCSSComment(declText) + " */";
@@ -862,7 +928,7 @@ RuleRewriter.prototype = {
    *         that holds the default indentation that should be used
    *         for edits to the rule.
    */
-  getDefaultIndentation: function () {
+  getDefaultIndentation: function() {
     return this.rule.parentStyleSheet.guessIndentation();
   },
 
@@ -880,7 +946,7 @@ RuleRewriter.prototype = {
    * @return {Promise} a promise that is resolved when the edit has
    *                   completed
    */
-  internalCreateProperty: Task.async(function* (index, name, value, priority, enabled) {
+  async internalCreateProperty(index, name, value, priority, enabled) {
     this.completeInitialization(index);
     let newIndentation = "";
     if (this.hasNewLine) {
@@ -890,7 +956,7 @@ RuleRewriter.prototype = {
       } else if (this.defaultIndentation) {
         newIndentation = this.defaultIndentation;
       } else {
-        newIndentation = yield this.getDefaultIndentation();
+        newIndentation = await this.getDefaultIndentation();
       }
     }
 
@@ -902,7 +968,7 @@ RuleRewriter.prototype = {
     // is actually used.
     let savedWhitespace = "";
     if (this.hasNewLine) {
-      let wsOffset = this.skipWhitespaceBackward(this.result,
+      const wsOffset = this.skipWhitespaceBackward(this.result,
                                                  this.result.length);
       if (this.result[wsOffset] === "\r" || this.result[wsOffset] === "\n") {
         savedWhitespace = this.result.substring(wsOffset + 1);
@@ -932,7 +998,7 @@ RuleRewriter.prototype = {
       // index.
       this.completeCopying(this.decl.offsets[0]);
     }
-  }),
+  },
 
   /**
    * Create a new declaration.
@@ -945,7 +1011,7 @@ RuleRewriter.prototype = {
    * @param {Boolean} enabled True if the new property should be
    *                          enabled, false if disabled
    */
-  createProperty: function (index, name, value, priority, enabled) {
+  createProperty: function(index, name, value, priority, enabled) {
     this.editPromise = this.internalCreateProperty(index, name, value,
                                                    priority, enabled);
   },
@@ -963,7 +1029,7 @@ RuleRewriter.prototype = {
    * @param {String} priority the property's priority, either the empty
    *                          string or "important"
    */
-  setProperty: function (index, name, value, priority) {
+  setProperty: function(index, name, value, priority) {
     this.completeInitialization(index);
     // We might see a "set" on a previously non-existent property; in
     // that case, act like "create".
@@ -991,7 +1057,7 @@ RuleRewriter.prototype = {
    * @param {Number} index index of the property in the rule.
    * @param {String} name the name of the property to remove
    */
-  removeProperty: function (index, name) {
+  removeProperty: function(index, name) {
     this.completeInitialization(index);
 
     // If asked to remove a property that does not exist, bail out.
@@ -1016,12 +1082,12 @@ RuleRewriter.prototype = {
     // bother with this if we're looking at sources that already
     // have a newline somewhere.
     if (this.hasNewLine) {
-      let nlOffset = this.skipWhitespaceBackward(this.result,
+      const nlOffset = this.skipWhitespaceBackward(this.result,
                                                  this.decl.offsets[0]);
       if (nlOffset < 0 || this.result[nlOffset] === "\r" ||
           this.result[nlOffset] === "\n") {
-        let trailingText = this.inputString.substring(copyOffset);
-        let match = BLANK_LINE_RX.exec(trailingText);
+        const trailingText = this.inputString.substring(copyOffset);
+        const match = BLANK_LINE_RX.exec(trailingText);
         if (match) {
           this.result = this.result.substring(0, nlOffset + 1);
           copyOffset += match[0].length;
@@ -1038,7 +1104,7 @@ RuleRewriter.prototype = {
    * @param {Number} copyOffset Offset into |inputString| of the
    *        final text to copy to the output string.
    */
-  completeCopying: function (copyOffset) {
+  completeCopying: function(copyOffset) {
     // Add the trailing text.
     this.result += this.inputString.substring(copyOffset);
   },
@@ -1049,7 +1115,7 @@ RuleRewriter.prototype = {
    * @return {Promise} A promise which will be resolved when the modifications
    *         are complete.
    */
-  apply: function () {
+  apply: function() {
     return promise.resolve(this.editPromise).then(() => {
       return this.rule.setRuleText(this.result);
     });
@@ -1065,7 +1131,7 @@ RuleRewriter.prototype = {
    *                  whose value is the new text of the property.
    *                  |text| is the rewritten text of the rule.
    */
-  getResult: function () {
+  getResult: function() {
     return {changed: this.changedDeclarations, text: this.result};
   },
 };
@@ -1093,14 +1159,14 @@ function parsePseudoClassesAndAttributes(value) {
     throw new Error("empty input string");
   }
 
-  let tokens = cssTokenizer(value);
-  let result = [];
+  const tokens = cssTokenizer(value);
+  const result = [];
   let current = "";
   let functionCount = 0;
   let hasAttribute = false;
   let hasColon = false;
 
-  for (let token of tokens) {
+  for (const token of tokens) {
     if (token.tokenType === "ident") {
       current += value.substring(token.startOffset, token.endOffset);
 
@@ -1187,7 +1253,7 @@ function parsePseudoClassesAndAttributes(value) {
  * @return {Object} an object with 'value' and 'priority' properties.
  */
 function parseSingleValue(isCssPropertyKnown, value) {
-  let declaration = parseDeclarations(isCssPropertyKnown,
+  const declaration = parseDeclarations(isCssPropertyKnown,
                                       "a: " + value + ";")[0];
   return {
     value: declaration ? declaration.value : "",

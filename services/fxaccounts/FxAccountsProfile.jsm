@@ -12,19 +12,17 @@
  * the user's profile in open browser tabs, and cacheing/invalidating profile data.
  */
 
-this.EXPORTED_SYMBOLS = ["FxAccountsProfile"];
+var EXPORTED_SYMBOLS = ["FxAccountsProfile"];
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/FxAccountsCommon.js");
+ChromeUtils.import("resource://gre/modules/FxAccounts.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/FxAccountsCommon.js");
-Cu.import("resource://gre/modules/FxAccounts.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "FxAccountsProfileClient",
+ChromeUtils.defineModuleGetter(this, "FxAccountsProfileClient",
   "resource://gre/modules/FxAccountsProfileClient.jsm");
 
-this.FxAccountsProfile = function(options = {}) {
+var FxAccountsProfile = function(options = {}) {
   this._currentFetchPromise = null;
   this._cachedAt = 0; // when we saved the cached version.
   this._isNotifying = false; // are we sending a notification?
@@ -41,7 +39,7 @@ this.FxAccountsProfile = function(options = {}) {
   if (options.channel) {
     this.channel = options.channel;
   }
-}
+};
 
 this.FxAccountsProfile.prototype = {
   // If we get subsequent requests for a profile within this period, don't bother
@@ -75,7 +73,7 @@ this.FxAccountsProfile.prototype = {
     const profile = response.body;
     const userData = await this.fxa.getSignedInUser();
     if (profile.uid != userData.uid) {
-      throw new Error("The fetched profile does not correspond with the current account.")
+      throw new Error("The fetched profile does not correspond with the current account.");
     }
     let profileCache = {
       profile,
@@ -114,13 +112,18 @@ this.FxAccountsProfile.prototype = {
     return this._currentFetchPromise;
   },
 
-  // Returns cached data right away if available, then fetches the latest profile
-  // data in the background. After data is fetched a notification will be sent
-  // out if the profile has changed.
+  // Returns cached data right away if available, otherwise returns null - if
+  // it returns null, or if the profile is possibly stale, it attempts to
+  // fetch the latest profile data in the background. After data is fetched a
+  // notification will be sent out if the profile has changed.
   async getProfile() {
     const profileCache = await this.fxa.getProfileCache();
     if (!profileCache) {
-      return this._fetchAndCacheProfile();
+      // fetch and cache it in the background.
+      this._fetchAndCacheProfile().catch(err => {
+        log.error("Background refresh of initial profile failed", err);
+      });
+      return null;
     }
     if (Date.now() > this._cachedAt + this.PROFILE_FRESHNESS_THRESHOLD) {
       // Note that _fetchAndCacheProfile isn't returned, so continues
@@ -134,7 +137,7 @@ this.FxAccountsProfile.prototype = {
     return profileCache.profile;
   },
 
-  QueryInterface: XPCOMUtils.generateQI([
+  QueryInterface: ChromeUtils.generateQI([
       Ci.nsIObserver,
       Ci.nsISupportsWeakReference,
   ]),

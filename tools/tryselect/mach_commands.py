@@ -5,6 +5,7 @@
 from __future__ import absolute_import, print_function, unicode_literals
 
 import argparse
+import importlib
 import os
 import sys
 
@@ -27,15 +28,13 @@ and try again.
 '''.lstrip()
 
 
-def syntax_parser():
-    from tryselect.selectors.syntax import SyntaxParser
-    parser = SyntaxParser()
-    return parser
+class get_parser(object):
+    def __init__(self, selector):
+        self.selector = selector
 
-
-def fuzzy_parser():
-    from tryselect.selectors.fuzzy import FuzzyParser
-    return FuzzyParser()
+    def __call__(self):
+        mod = importlib.import_module('tryselect.selectors.{}'.format(self.selector))
+        return getattr(mod, '{}Parser'.format(self.selector.capitalize()))()
 
 
 def generic_parser():
@@ -78,8 +77,8 @@ class TrySelect(MachCommandBase):
         scheduling with the `syntax` selector.
         """
         from tryselect import preset
-        if kwargs['list_presets']:
-            preset.list_presets()
+        if kwargs['mod_presets']:
+            getattr(preset, kwargs['mod_presets'])()
             return
 
         # We do special handling of presets here so that `./mach try --preset foo`
@@ -95,7 +94,7 @@ class TrySelect(MachCommandBase):
     @SubCommand('try',
                 'fuzzy',
                 description='Select tasks on try using a fuzzy finder',
-                parser=fuzzy_parser)
+                parser=get_parser('fuzzy'))
     def try_fuzzy(self, **kwargs):
         """Select which tasks to use with fzf.
 
@@ -144,8 +143,9 @@ class TrySelect(MachCommandBase):
 
     @SubCommand('try',
                 'empty',
-                description='Push to try without scheduling any tasks.')
-    def try_empty(self):
+                description='Push to try without scheduling any tasks.',
+                parser=get_parser('empty'))
+    def try_empty(self, **kwargs):
         """Push to try, running no builds or tests
 
         This selector does not prompt you to run anything, it just pushes
@@ -155,12 +155,12 @@ class TrySelect(MachCommandBase):
         menu.
         """
         from tryselect.selectors.empty import run_empty_try
-        return run_empty_try()
+        return run_empty_try(**kwargs)
 
     @SubCommand('try',
                 'syntax',
                 description='Select tasks on try using try syntax',
-                parser=syntax_parser)
+                parser=get_parser('syntax'))
     def try_syntax(self, **kwargs):
         """Push the current tree to try, with the specified syntax.
 
@@ -199,7 +199,6 @@ class TrySelect(MachCommandBase):
         (available at https://github.com/glandium/git-cinnabar).
 
         """
-        from mozbuild.testing import TestResolver
         from tryselect.selectors.syntax import AutoTry
 
         try:
@@ -216,8 +215,5 @@ class TrySelect(MachCommandBase):
             print(CONFIG_ENVIRONMENT_NOT_FOUND)
             sys.exit(1)
 
-        def resolver_func():
-            return self._spawn(TestResolver)
-
-        at = AutoTry(self.topsrcdir, resolver_func, self._mach_context)
+        at = AutoTry(self.topsrcdir, self._mach_context)
         return at.run(**kwargs)

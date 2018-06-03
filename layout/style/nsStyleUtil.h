@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,7 +8,6 @@
 
 #include "nsCoord.h"
 #include "nsCSSPropertyID.h"
-#include "nsString.h"
 #include "nsTArrayForwardDeclare.h"
 #include "gfxFontFamilyList.h"
 #include "nsStringFwd.h"
@@ -21,7 +21,12 @@ class nsIPrincipal;
 class nsIURI;
 struct gfxFontFeature;
 struct gfxAlternateValue;
+struct nsCSSKTableEntry;
 struct nsCSSValueList;
+
+namespace mozilla {
+class FontSlantStyle;
+}
 
 // Style utility functions
 class nsStyleUtil {
@@ -58,6 +63,9 @@ public:
     AppendEscapedCSSFontFamilyList(aFontlist->mNames, aResult);
   }
 
+  static void
+  AppendFontSlantStyle(const mozilla::FontSlantStyle&, nsAString& aResult);
+
 private:
   static void
   AppendEscapedCSSFontFamilyList(const nsTArray<mozilla::FontFamilyName>& aNames,
@@ -65,7 +73,7 @@ private:
 
 public:
   // Append a bitmask-valued property's value(s) (space-separated) to aResult.
-  static void AppendBitmaskCSSValue(nsCSSPropertyID aProperty,
+  static void AppendBitmaskCSSValue(const nsCSSKTableEntry aTable[],
                                     int32_t aMaskedValue,
                                     int32_t aFirstMask,
                                     int32_t aLastMask,
@@ -108,9 +116,6 @@ public:
       nsTimingFunction::Type aType,
       nsAString& aResult);
 
-  static void AppendSerializedFontSrc(const nsCSSValue& aValue,
-                                      nsAString& aResult);
-
   // convert bitmask value to keyword name for a functional alternate
   static void GetFunctionalAlternatesName(int32_t aFeature,
                                           nsAString& aFeatureName);
@@ -148,14 +153,12 @@ public:
    * Does this child count as significant for selector matching?
    */
   static bool IsSignificantChild(nsIContent* aChild,
-                                   bool aTextIsSignificant,
-                                   bool aWhitespaceIsSignificant);
+                                 bool aWhitespaceIsSignificant);
 
   /*
    * Thread-safe version of IsSignificantChild()
    */
   static bool ThreadSafeIsSignificantChild(const nsIContent* aChild,
-                                           bool aTextIsSignificant,
                                            bool aWhitespaceIsSignificant);
   /**
    * Returns true if our object-fit & object-position properties might cause
@@ -188,6 +191,9 @@ public:
    *      The principal of the of the document (*not* of the style sheet).
    *      The document's principal is where any Content Security Policy that
    *      should be used to block or allow inline styles will be located.
+   *  @param aTriggeringPrincipal
+   *      The principal of the scripted caller which added the inline
+   *      stylesheet, or null if no scripted caller can be identified.
    *  @param aSourceURI
    *      URI of document containing inline style (for reporting violations)
    *  @param aLineNumber
@@ -200,8 +206,9 @@ public:
    *  @return
    *      Does CSP allow application of the specified inline style?
    */
-  static bool CSPAllowsInlineStyle(nsIContent* aContent,
+  static bool CSPAllowsInlineStyle(mozilla::dom::Element* aContent,
                                    nsIPrincipal* aPrincipal,
+                                   nsIPrincipal* aTriggeringPrincipal,
                                    nsIURI* aSourceURI,
                                    uint32_t aLineNumber,
                                    const nsAString& aStyleText,
@@ -211,7 +218,7 @@ public:
   static bool MatchesLanguagePrefix(const char16_t* aLang, size_t aLen,
                                     const char16_t (&aPrefix)[N])
   {
-    return !nsCRT::strncmp(aLang, aPrefix, N - 1) &&
+    return !NS_strncmp(aLang, aPrefix, N - 1) &&
            (aLen == N - 1 || aLang[N - 1] == '-');
   }
 

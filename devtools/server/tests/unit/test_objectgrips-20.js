@@ -153,6 +153,27 @@ async function run_test_with_server(server) {
       ["byteLength", 2],
       ["byteOffset", 0],
     ],
+  }, {
+    evaledObject: `(() => {
+      x = new Int8Array([1, 2]);
+      Object.defineProperty(x, 'length', {value: 0});
+      return x;
+    })()`,
+    expectedIndexedProperties: [["0", 1], ["1", 2]],
+    expectedNonIndexedProperties: [
+      ["length", 0],
+      ["buffer", DO_NOT_CHECK_VALUE],
+      ["byteLength", 2],
+      ["byteOffset", 0],
+    ],
+  }, {
+    evaledObject: `(() => {
+      x = new Int32Array([1, 2]);
+      Object.setPrototypeOf(x, null);
+      return x;
+    })()`,
+    expectedIndexedProperties: [["0", 1], ["1", 2]],
+    expectedNonIndexedProperties: [],
   }].forEach(async (testData) => {
     await test_object_grip(debuggee, dbgClient, threadClient, testData);
   });
@@ -168,12 +189,12 @@ async function test_object_grip(debuggee, dbgClient, threadClient, testData = {}
   } = testData;
 
   return new Promise((resolve, reject) => {
-    threadClient.addOneTimeListener("paused", async function (event, packet) {
-      let [grip] = packet.frame.arguments;
+    threadClient.addOneTimeListener("paused", async function(event, packet) {
+      const [grip] = packet.frame.arguments;
 
-      let objClient = threadClient.pauseGrip(grip);
+      const objClient = threadClient.pauseGrip(grip);
 
-      do_print(`
+      info(`
         Check enumProperties response for
         ${
           typeof evaledObject === "string"
@@ -210,13 +231,13 @@ async function check_enum_properties(response, expected = []) {
   const {iterator} = response;
   equal(iterator.count, expected.length, "iterator.count has the expected value");
 
-  do_print("Check iterator.slice response for all properties");
-  let sliceResponse = await iterator.slice(0, iterator.count);
+  info("Check iterator.slice response for all properties");
+  const sliceResponse = await iterator.slice(0, iterator.count);
   ok(sliceResponse && Object.getOwnPropertyNames(sliceResponse).includes("ownProperties"),
     "The response object has an ownProperties property");
 
-  let {ownProperties} = sliceResponse;
-  let names = Object.getOwnPropertyNames(ownProperties);
+  const {ownProperties} = sliceResponse;
+  const names = Object.getOwnPropertyNames(ownProperties);
   equal(names.length, expected.length,
     "The response has the expected number of properties");
   for (let i = 0; i < names.length; i++) {

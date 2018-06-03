@@ -90,9 +90,8 @@
 #include "mozilla/Preferences.h"
 #endif
 
-#if defined(XP_LINUX) && defined(MOZ_GMP_SANDBOX)
+#if defined(XP_LINUX) && defined(MOZ_SANDBOX)
 #include "mozilla/Sandbox.h"
-#include "mozilla/SandboxInfo.h"
 #endif
 
 #if defined(XP_LINUX)
@@ -114,6 +113,10 @@ using mozilla::_ipdltest::IPDLUnitTestProcessChild;
 
 #ifdef MOZ_JPROF
 #include "jprof.h"
+#endif
+
+#if defined(XP_WIN) && defined(MOZ_ENABLE_SKIA_PDF)
+#include "mozilla/widget/PDFiumProcessChild.h"
 #endif
 
 using namespace mozilla;
@@ -240,13 +243,13 @@ GeckoProcessType sChildProcessType = GeckoProcessType_Default;
 
 #if defined(MOZ_WIDGET_ANDROID)
 void
-XRE_SetAndroidChildFds (JNIEnv* env, int crashFd, int ipcFd)
+XRE_SetAndroidChildFds (JNIEnv* env, int prefsFd, int ipcFd, int crashFd, int crashAnnotationFd)
 {
   mozilla::jni::SetGeckoThreadEnv(env);
-#if defined(MOZ_CRASHREPORTER)
-  CrashReporter::SetNotificationPipeForChild(crashFd);
-#endif // defined(MOZ_CRASHREPORTER)
+  mozilla::dom::SetPrefsFd(prefsFd);
   IPC::Channel::SetClientChannelFd(ipcFd);
+  CrashReporter::SetNotificationPipeForChild(crashFd);
+  CrashReporter::SetCrashAnnotationPipeForChild(crashAnnotationFd);
 }
 #endif // defined(MOZ_WIDGET_ANDROID)
 
@@ -270,7 +273,6 @@ XRE_SetProcessType(const char* aProcessTypeString)
   }
 }
 
-#if defined(MOZ_CRASHREPORTER)
 // FIXME/bug 539522: this out-of-place function is stuck here because
 // IPDL wants access to this crashreporter interface, and
 // crashreporter is built in such a way to make that awkward
@@ -282,17 +284,22 @@ XRE_TakeMinidumpForChild(uint32_t aChildPid, nsIFile** aDump,
 }
 
 bool
-XRE_SetRemoteExceptionHandler(const char* aPipe/*= 0*/)
-{
-#if defined(XP_WIN) || defined(XP_MACOSX)
-  return CrashReporter::SetRemoteExceptionHandler(nsDependentCString(aPipe));
-#elif defined(OS_LINUX)
-  return CrashReporter::SetRemoteExceptionHandler();
+#if defined(XP_WIN)
+XRE_SetRemoteExceptionHandler(const char* aPipe /*= 0*/,
+                              uintptr_t aCrashTimeAnnotationFile)
 #else
-#  error "OOP crash reporter unsupported on this platform"
+XRE_SetRemoteExceptionHandler(const char* aPipe /*= 0*/)
+#endif
+{
+#if defined(XP_WIN)
+  return CrashReporter::SetRemoteExceptionHandler(nsDependentCString(aPipe),
+                                                  aCrashTimeAnnotationFile);
+#elif defined(XP_MACOSX)
+  return CrashReporter::SetRemoteExceptionHandler(nsDependentCString(aPipe));
+#else
+  return CrashReporter::SetRemoteExceptionHandler();
 #endif
 }
-#endif // if defined(MOZ_CRASHREPORTER)
 
 #if defined(XP_WIN)
 void
@@ -304,7 +311,6 @@ SetTaskbarGroupId(const nsString& aId)
 }
 #endif
 
-#if defined(MOZ_CRASHREPORTER)
 #if defined(MOZ_CONTENT_SANDBOX)
 void
 AddContentSandboxLevelAnnotation()
@@ -318,7 +324,6 @@ AddContentSandboxLevelAnnotation()
   }
 }
 #endif /* MOZ_CONTENT_SANDBOX */
-#endif /* MOZ_CRASHREPORTER */
 
 namespace {
 
@@ -355,8 +360,8 @@ XRE_InitChildProcess(int aArgc,
   MOZ_ASSERT(aChildData);
 
 #if defined(XP_LINUX) && defined(MOZ_SANDBOX)
-    // This has to happen while we're still single-threaded.
-    mozilla::SandboxEarlyInit(XRE_GetProcessType());
+  // This has to happen before glib thread pools are started.
+  mozilla::SandboxEarlyInit();
 #endif
 
 #ifdef MOZ_JPROF
@@ -397,7 +402,7 @@ XRE_InitChildProcess(int aArgc,
   // NB: This must be called before profiler_init
   ScopedLogging logger;
 
-  mozilla::LogModule::Init();
+  mozilla::LogModule::Init(aArgc, aArgv);
 
   AUTO_PROFILER_INIT;
   AUTO_PROFILER_LABEL("XRE_InitChildProcess", OTHER);
@@ -483,44 +488,55 @@ XRE_InitChildProcess(int aArgc,
 
   SetupErrorHandling(aArgv[0]);
 
-#if defined(MOZ_CRASHREPORTER)
-  if (aArgc < 1)
-    return NS_ERROR_FAILURE;
-  const char* const crashReporterArg = aArgv[--aArgc];
+  if (!CrashReporter::IsDummy()) {
+#if defined(XP_WIN)
+    if (aArgc < 1) {
+      return NS_ERROR_FAILURE;
+    }
+    const char* const crashTimeAnnotationArg = aArgv[--aArgc];
+    uintptr_t crashTimeAnnotationFile =
+      static_cast<uintptr_t>(std::stoul(std::string(crashTimeAnnotationArg)));
+#endif
 
-#  if defined(XP_WIN) || defined(XP_MACOSX)
-  // on windows and mac, |crashReporterArg| is the named pipe on which the
-  // server is listening for requests, or "-" if crash reporting is
-  // disabled.
-  if (0 != strcmp("-", crashReporterArg) &&
-      !XRE_SetRemoteExceptionHandler(crashReporterArg)) {
-    // Bug 684322 will add better visibility into this condition
-    NS_WARNING("Could not setup crash reporting\n");
+    if (aArgc < 1)
+      return NS_ERROR_FAILURE;
+    const char* const crashReporterArg = aArgv[--aArgc];
+
+#if defined(XP_MACOSX)
+    // on windows and mac, |crashReporterArg| is the named pipe on which the
+    // server is listening for requests, or "-" if crash reporting is
+    // disabled.
+    if (0 != strcmp("-", crashReporterArg) &&
+        !XRE_SetRemoteExceptionHandler(crashReporterArg)) {
+      // Bug 684322 will add better visibility into this condition
+      NS_WARNING("Could not setup crash reporting\n");
+    }
+#elif defined(XP_WIN)
+    if (0 != strcmp("-", crashReporterArg) &&
+        !XRE_SetRemoteExceptionHandler(crashReporterArg,
+                                       crashTimeAnnotationFile)) {
+      // Bug 684322 will add better visibility into this condition
+      NS_WARNING("Could not setup crash reporting\n");
+    }
+#else
+    // on POSIX, |crashReporterArg| is "true" if crash reporting is
+    // enabled, false otherwise
+    if (0 != strcmp("false", crashReporterArg) &&
+        !XRE_SetRemoteExceptionHandler(nullptr)) {
+      // Bug 684322 will add better visibility into this condition
+      NS_WARNING("Could not setup crash reporting\n");
+    }
+#endif
   }
-#  elif defined(OS_LINUX)
-  // on POSIX, |crashReporterArg| is "true" if crash reporting is
-  // enabled, false otherwise
-  if (0 != strcmp("false", crashReporterArg) &&
-      !XRE_SetRemoteExceptionHandler(nullptr)) {
-    // Bug 684322 will add better visibility into this condition
-    NS_WARNING("Could not setup crash reporting\n");
-  }
-#  else
-#    error "OOP crash reporting unsupported on this platform"
-#  endif
 
   // For Init/Shutdown thread name annotations in the crash reporter.
   CrashReporter::InitThreadAnnotationRAII annotation;
-#endif // if defined(MOZ_CRASHREPORTER)
 
   gArgv = aArgv;
   gArgc = aArgc;
 
 #ifdef MOZ_X11
   XInitThreads();
-#endif
-#if MOZ_WIDGET_GTK == 2
-  XRE_GlibInit();
 #endif
 #ifdef MOZ_WIDGET_GTK
   // Setting the name here avoids the need to pass this through to gtk_init().
@@ -535,7 +551,8 @@ XRE_InitChildProcess(int aArgc,
       printf_stderr("Could not allow ptrace from any process.\n");
     }
 #endif
-    printf_stderr("\n\nCHILDCHILDCHILDCHILD\n  debug me @ %d\n\n",
+    printf_stderr("\n\nCHILDCHILDCHILDCHILD (process type %s)\n  debug me @ %d\n\n",
+                  XRE_ChildProcessTypeToString(XRE_GetProcessType()),
                   base::GetCurrentProcId());
     sleep(GetDebugChildPauseTime());
   }
@@ -545,7 +562,8 @@ XRE_InitChildProcess(int aArgc,
                   "Invoking NS_DebugBreak() to debug child process",
                   nullptr, __FILE__, __LINE__);
   } else if (PR_GetEnv("MOZ_DEBUG_CHILD_PAUSE")) {
-    printf_stderr("\n\nCHILDCHILDCHILDCHILD\n  debug me @ %d\n\n",
+    printf_stderr("\n\nCHILDCHILDCHILDCHILD (process type %s)\n  debug me @ %d\n\n",
+                  XRE_ChildProcessTypeToString(XRE_GetProcessType()),
                   base::GetCurrentProcId());
     ::Sleep(GetDebugChildPauseTime());
   }
@@ -613,6 +631,7 @@ XRE_InitChildProcess(int aArgc,
       uiLoopType = MessageLoop::TYPE_MOZILLA_CHILD;
       break;
   case GeckoProcessType_GMPlugin:
+  case GeckoProcessType_PDFium:
       uiLoopType = MessageLoop::TYPE_DEFAULT;
       break;
   default:
@@ -660,6 +679,11 @@ XRE_InitChildProcess(int aArgc,
         process = new gmp::GMPProcessChild(parentPID);
         break;
 
+#if defined(XP_WIN) && defined(MOZ_ENABLE_SKIA_PDF)
+      case GeckoProcessType_PDFium:
+        process = new widget::PDFiumProcessChild(parentPID);
+        break;
+#endif
       case GeckoProcessType_GPU:
         process = new gfx::GPUProcessImpl(parentPID);
         break;
@@ -671,12 +695,6 @@ XRE_InitChildProcess(int aArgc,
       if (!process->Init(aArgc, aArgv)) {
         return NS_ERROR_FAILURE;
       }
-
-#ifdef MOZ_CRASHREPORTER
-#if defined(XP_WIN) || defined(XP_MACOSX)
-      CrashReporter::InitChildProcessTmpDir(crashReportTmpDir);
-#endif
-#endif
 
 #if defined(XP_WIN)
       // Set child processes up such that they will get killed after the
@@ -693,10 +711,8 @@ XRE_InitChildProcess(int aArgc,
 
       OverrideDefaultLocaleIfNeeded();
 
-#if defined(MOZ_CRASHREPORTER)
 #if defined(MOZ_CONTENT_SANDBOX)
       AddContentSandboxLevelAnnotation();
-#endif
 #endif
 
       // Run the UI event loop on the main thread.
@@ -768,7 +784,7 @@ XRE_InitParentProcess(int aArgc,
   // Set main thread before we initialize the profiler
   NS_SetMainThread();
 
-  mozilla::LogModule::Init();
+  mozilla::LogModule::Init(aArgc, aArgv);
 
   AUTO_PROFILER_INIT;
 
@@ -977,7 +993,7 @@ XRE_ShutdownTestShell()
 void
 XRE_InstallX11ErrorHandler()
 {
-#if (MOZ_WIDGET_GTK == 3)
+#ifdef MOZ_WIDGET_GTK
   InstallGdkErrorHandler();
 #else
   InstallX11ErrorHandler();

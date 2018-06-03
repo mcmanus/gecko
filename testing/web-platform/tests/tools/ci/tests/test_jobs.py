@@ -1,11 +1,15 @@
 from tools.ci import jobs
 
+default_jobs = set(["lint", "manifest_upload"])
+
+
 def test_testharness():
-    assert jobs.get_jobs(["resources/testharness.js"]) == set(["lint", "resources_unittest"])
+    assert jobs.get_jobs(["resources/testharness.js"]) == default_jobs | set(["resources_unittest"])
     assert jobs.get_jobs(["resources/testharness.js"],
                          includes=["resources_unittest"]) == set(["resources_unittest"])
     assert jobs.get_jobs(["foo/resources/testharness.js"],
                          includes=["resources_unittest"]) == set()
+
 
 def test_stability():
     assert jobs.get_jobs(["dom/historical.html"],
@@ -32,8 +36,10 @@ def test_stability():
                           "css/CSS21/test-001.html"],
                          includes=["stability"]) == set(["stability"])
 
-def test_lint():
-    assert jobs.get_jobs(["README.md"]) == set(["lint"])
+
+def test_default():
+    assert jobs.get_jobs(["README.md"]) == default_jobs
+
 
 def test_tools_unittest():
     assert jobs.get_jobs(["tools/ci/test/test_jobs.py"],
@@ -43,11 +49,13 @@ def test_tools_unittest():
     assert jobs.get_jobs(["dom/historical.html"],
                          includes=["tools_unittest"]) == set()
 
+
 def test_wptrunner_unittest():
     assert jobs.get_jobs(["tools/wptrunner/wptrunner/wptrunner.py"],
                          includes=["wptrunner_unittest"]) == set(["wptrunner_unittest"])
     assert jobs.get_jobs(["tools/example.py"],
                          includes=["wptrunner_unittest"]) == set()
+
 
 def test_build_css():
     assert jobs.get_jobs(["css/css-build-testsuites.sh"],
@@ -61,8 +69,6 @@ def test_build_css():
 def test_update_built():
     assert jobs.get_jobs(["2dcontext/foo.html"],
                          includes=["update_built"]) == set(["update_built"])
-    assert jobs.get_jobs(["assumptions/foo.html"],
-                         includes=["update_built"]) == set(["update_built"])
     assert jobs.get_jobs(["html/foo.html"],
                          includes=["update_built"]) == set(["update_built"])
     assert jobs.get_jobs(["offscreen-canvas/foo.html"],
@@ -74,3 +80,9 @@ def test_wpt_integration():
                          includes=["wpt_integration"]) == set(["wpt_integration"])
     assert jobs.get_jobs(["tools/wptrunner/wptrunner/wptrunner.py"],
                          includes=["wpt_integration"]) == set(["wpt_integration"])
+
+def test_wpt_infrastructure():
+    assert jobs.get_jobs(["tools/hammer.html"],
+                         includes=["wptrunner_infrastructure"]) == set(["wptrunner_infrastructure"])
+    assert jobs.get_jobs(["infrastructure/assumptions/ahem.html"],
+                         includes=["wptrunner_infrastructure"]) == set(["wptrunner_infrastructure"])

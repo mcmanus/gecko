@@ -20,6 +20,7 @@
 #include "nsIWritablePropertyBag2.h"
 #include "nsIChannel.h"
 #include "nsIScriptError.h"
+#include "nsIEnterprisePolicies.h"
 
 namespace mozilla {
 namespace net {
@@ -92,7 +93,7 @@ nsAboutProtocolHandler::GetFlagsForURI(nsIURI* aURI, uint32_t* aFlags)
     // Secure (https) pages can load safe about pages without becoming
     // mixed content.
     if (aboutModuleFlags & nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT) {
-        *aFlags |= URI_SAFE_TO_LOAD_IN_SECURE_CONTEXT;
+        *aFlags |= URI_IS_POTENTIALLY_TRUSTWORTHY;
         // about: pages can only be loaded by unprivileged principals
         // if they are marked as LINKABLE
         if (aboutModuleFlags & nsIAboutModule::MAKE_LINKABLE) {
@@ -113,11 +114,13 @@ nsAboutProtocolHandler::NewURI(const nsACString &aSpec,
     *result = nullptr;
     nsresult rv;
 
-    // Use a simple URI to parse out some stuff first
-    nsCOMPtr<nsIURI> url = do_CreateInstance(kSimpleURICID, &rv);
-    if (NS_FAILED(rv)) return rv;
 
-    rv = url->SetSpec(aSpec);
+    // Use a simple URI to parse out some stuff first
+    nsCOMPtr<nsIURI> url;
+    rv = NS_MutateURI(new nsSimpleURI::Mutator())
+           .SetSpec(aSpec)
+           .Finalize(url);
+
     if (NS_FAILED(rv)) {
         return rv;
     }
@@ -148,19 +151,15 @@ nsAboutProtocolHandler::NewURI(const nsACString &aSpec,
         rv = NS_NewURI(getter_AddRefs(inner), spec);
         NS_ENSURE_SUCCESS(rv, rv);
 
-        nsSimpleNestedURI* outer = new nsNestedAboutURI(inner, aBaseURI);
-        NS_ENSURE_TRUE(outer, NS_ERROR_OUT_OF_MEMORY);
-
-        // Take a ref to it in the COMPtr we plan to return
-        url = outer;
-
-        rv = outer->SetSpec(aSpec);
+        nsCOMPtr<nsIURI> base(aBaseURI);
+        rv = NS_MutateURI(new nsNestedAboutURI::Mutator())
+               .Apply(NS_MutatorMethod(&nsINestedAboutURIMutator::InitWithBase,
+                                       inner, base))
+               .SetSpec(aSpec)
+               .Finalize(url);
         NS_ENSURE_SUCCESS(rv, rv);
     }
 
-    // We don't want to allow mutation, since it would allow safe and
-    // unsafe URIs to change into each other...
-    NS_TryToSetImmutable(url);
     url.swap(*result);
     return NS_OK;
 }
@@ -176,14 +175,29 @@ nsAboutProtocolHandler::NewChannel2(nsIURI* uri,
     nsCOMPtr<nsIAboutModule> aboutMod;
     nsresult rv = NS_GetAboutModule(uri, getter_AddRefs(aboutMod));
 
+    bool aboutPageAllowed = true;
     nsAutoCString path;
     nsresult rv2 = NS_GetAboutModuleName(uri, path);
-    if (NS_SUCCEEDED(rv2) && path.EqualsLiteral("srcdoc")) {
-        // about:srcdoc is meant to be unresolvable, yet is included in the
-        // about lookup tables so that it can pass security checks when used in
-        // a srcdoc iframe.  To ensure that it stays unresolvable, we pretend
-        // that it doesn't exist.
-      rv = NS_ERROR_FACTORY_NOT_REGISTERED;
+    if (NS_SUCCEEDED(rv2)) {
+        if (path.EqualsLiteral("srcdoc")) {
+            // about:srcdoc is meant to be unresolvable, yet is included in the
+            // about lookup tables so that it can pass security checks when used in
+            // a srcdoc iframe.  To ensure that it stays unresolvable, we pretend
+            // that it doesn't exist.
+            rv = NS_ERROR_FACTORY_NOT_REGISTERED;
+        } else {
+            nsCOMPtr<nsIEnterprisePolicies> policyManager =
+                do_GetService("@mozilla.org/browser/enterprisepolicies;1", &rv2);
+            if (NS_SUCCEEDED(rv2)) {
+                nsAutoCString normalizedURL;
+                normalizedURL.AssignLiteral("about:");
+                normalizedURL.Append(path);
+                rv2 = policyManager->IsAllowed(normalizedURL, &aboutPageAllowed);
+                if (NS_FAILED(rv2)) {
+                    aboutPageAllowed = false;
+                }
+            }
+        }
     }
 
     if (NS_SUCCEEDED(rv)) {
@@ -234,6 +248,9 @@ nsAboutProtocolHandler::NewChannel2(nsIURI* uri,
                         SetPropertyAsInterface(NS_LITERAL_STRING("baseURI"),
                                                aboutURI->GetBaseURI());
                 }
+            }
+            if (!aboutPageAllowed) {
+                (*result)->Cancel(NS_ERROR_BLOCKED_BY_POLICY);
             }
         }
         return rv;
@@ -288,7 +305,7 @@ nsSafeAboutProtocolHandler::GetDefaultPort(int32_t *result)
 NS_IMETHODIMP
 nsSafeAboutProtocolHandler::GetProtocolFlags(uint32_t *result)
 {
-    *result = URI_NORELATIVE | URI_NOAUTH | URI_LOADABLE_BY_ANYONE | URI_SAFE_TO_LOAD_IN_SECURE_CONTEXT;
+    *result = URI_NORELATIVE | URI_NOAUTH | URI_LOADABLE_BY_ANYONE | URI_IS_POTENTIALLY_TRUSTWORTHY;
     return NS_OK;
 }
 
@@ -298,21 +315,14 @@ nsSafeAboutProtocolHandler::NewURI(const nsACString &aSpec,
                                    nsIURI *aBaseURI,
                                    nsIURI **result)
 {
-    nsresult rv;
-
-    nsCOMPtr<nsIURI> url = do_CreateInstance(kSimpleURICID, &rv);
-    if (NS_FAILED(rv)) return rv;
-
-    rv = url->SetSpec(aSpec);
+    nsresult rv = NS_MutateURI(new nsSimpleURI::Mutator())
+                    .SetSpec(aSpec)
+                    .Finalize(result);
     if (NS_FAILED(rv)) {
         return rv;
     }
 
-    NS_TryToSetImmutable(url);
-
-    *result = nullptr;
-    url.swap(*result);
-    return rv;
+    return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -348,10 +358,18 @@ NS_INTERFACE_MAP_BEGIN(nsNestedAboutURI)
 NS_INTERFACE_MAP_END_INHERITING(nsSimpleNestedURI)
 
 // nsISerializable
+
 NS_IMETHODIMP
-nsNestedAboutURI::Read(nsIObjectInputStream* aStream)
+nsNestedAboutURI::Read(nsIObjectInputStream *aStream)
 {
-    nsresult rv = nsSimpleNestedURI::Read(aStream);
+    NS_NOTREACHED("Use nsIURIMutator.read() instead");
+    return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+nsresult
+nsNestedAboutURI::ReadPrivate(nsIObjectInputStream *aStream)
+{
+    nsresult rv = nsSimpleNestedURI::ReadPrivate(aStream);
     if (NS_FAILED(rv)) return rv;
 
     bool haveBase;
@@ -422,9 +440,27 @@ nsNestedAboutURI::StartClone(nsSimpleURI::RefHandlingEnum aRefHandlingMode,
 
     nsNestedAboutURI* url = new nsNestedAboutURI(innerClone, mBaseURI);
     SetRefOnClone(url, aRefHandlingMode, aNewRef);
-    url->SetMutable(false);
 
     return url;
+}
+
+// Queries this list of interfaces. If none match, it queries mURI.
+NS_IMPL_NSIURIMUTATOR_ISUPPORTS(nsNestedAboutURI::Mutator,
+                                nsIURISetters,
+                                nsIURIMutator,
+                                nsISerializable,
+                                nsINestedAboutURIMutator)
+
+NS_IMETHODIMP
+nsNestedAboutURI::Mutate(nsIURIMutator** aMutator)
+{
+    RefPtr<nsNestedAboutURI::Mutator> mutator = new nsNestedAboutURI::Mutator();
+    nsresult rv = mutator->InitFromURI(this);
+    if (NS_FAILED(rv)) {
+        return rv;
+    }
+    mutator.forget(aMutator);
+    return NS_OK;
 }
 
 // nsIClassInfo

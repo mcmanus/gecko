@@ -16,7 +16,7 @@
 #include "WrapperFactory.h"
 
 #include "nsIDocShellTreeItem.h"
-#include "nsIDOMDocument.h"
+#include "nsIDocument.h"
 
 using namespace js;
 using namespace JS;
@@ -1076,9 +1076,6 @@ WrapperOwner::ok(JSContext* cx, const ReturnStatus& status)
     if (status.type() == ReturnStatus::TReturnSuccess)
         return true;
 
-    if (status.type() == ReturnStatus::TReturnStopIteration)
-        return JS_ThrowStopIteration(cx);
-
     if (status.type() == ReturnStatus::TReturnDeadCPOW) {
         JS_ReportErrorASCII(cx, "operation not possible on dead CPOW");
         return false;
@@ -1113,7 +1110,7 @@ GetRemoteObjectTag(JS::Handle<JSObject*> obj)
         if (treeItem)
             return NS_LITERAL_CSTRING("ContentDocShellTreeItem");
 
-        nsCOMPtr<nsIDOMDocument> doc(do_QueryInterface(supports));
+        nsCOMPtr<nsIDocument> doc(do_QueryInterface(supports));
         if (doc)
             return NS_LITERAL_CSTRING("ContentDocument");
     }
@@ -1190,7 +1187,7 @@ WrapperOwner::fromRemoteObjectVariant(JSContext* cx, const RemoteObject& objVar)
 
         // All CPOWs live in the privileged junk scope.
         RootedObject junkScope(cx, xpc::PrivilegedJunkScope());
-        JSAutoCompartment ac(cx, junkScope);
+        JSAutoRealm ar(cx, junkScope);
         RootedValue v(cx, UndefinedValue());
         // We need to setLazyProto for the getPrototype/getPrototypeIfOrdinary
         // hooks.

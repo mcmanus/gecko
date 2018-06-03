@@ -8,19 +8,19 @@
  */
 
 interface CSSStyleDeclaration {
-  [CEReactions, SetterThrows]
+  [CEReactions, SetterNeedsSubjectPrincipal=NonSystem, SetterThrows]
   attribute DOMString cssText;
 
   readonly attribute unsigned long length;
   getter DOMString item(unsigned long index);
 
+  [Throws, ChromeOnly]
+  sequence<DOMString> getCSSImageURLs(DOMString property);
+
   [Throws]
   DOMString getPropertyValue(DOMString property);
-  // Mozilla extension, sort of
-  [Throws]
-  CSSValue? getPropertyCSSValue(DOMString property);
   DOMString getPropertyPriority(DOMString property);
-  [CEReactions, Throws]
+  [CEReactions, NeedsSubjectPrincipal=NonSystem, Throws]
   void setProperty(DOMString property, [TreatNullAs=EmptyString] DOMString value, [TreatNullAs=EmptyString] optional DOMString priority = "");
   [CEReactions, Throws]
   DOMString removeProperty(DOMString property);

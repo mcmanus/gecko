@@ -8,16 +8,8 @@
       <label id="customization-header">
         &customizeMode.menuAndToolbars.header3;
       </label>
-      <hbox id="customization-empty" hidden="true">
-        <label>&customizeMode.menuAndToolbars.empty;</label>
-        <label onclick="BrowserOpenAddonsMgr('addons://discover/');"
-               onkeypress="BrowserOpenAddonsMgr('addons://discover/');"
-               id="customization-more-tools"
-               class="text-link">
-          &customizeMode.menuAndToolbars.emptyLink;
-        </label>
-      </hbox>
       <vbox id="customization-palette" class="customization-palette" hidden="true"/>
+      <vbox id="customization-pong-arena" hidden="true"/>
       <spacer id="customization-spacer"/>
     </box>
     <vbox id="customization-panel-container">
@@ -36,7 +28,6 @@
     </vbox>
   </box>
   <hbox id="customization-footer">
-#ifdef CAN_DRAW_IN_TITLEBAR
     <checkbox id="customization-titlebar-visibility-checkbox" class="customizationmode-checkbox"
               label="&customizeMode.titlebar;"
 #NB: because oncommand fires after click, by the time we've fired, the checkbox binding
@@ -45,7 +36,6 @@
     <checkbox id="customization-extra-drag-space-checkbox" class="customizationmode-checkbox"
               label="&customizeMode.extraDragSpace;"
               oncommand="gCustomizeMode.toggleDragSpace(this.checked)"/>
-#endif
     <button id="customization-toolbar-visibility-button" label="&customizeMode.toolbars2;" class="customizationmode-button" type="menu">
       <menupopup id="customization-toolbar-menu" onpopupshowing="onViewToolbarsPopupShowing(event)"/>
     </button>
@@ -126,6 +116,12 @@
 #endif
       </panel>
     </button>
+
+    <button id="whimsy-button"
+            type="checkbox"
+            class="customizationmode-button"
+            oncommand="gCustomizeMode.togglePong(this.checked);"
+            hidden="true"/>
 
     <spacer id="customization-footer-spacer"/>
     <button id="customization-undo-reset-button"

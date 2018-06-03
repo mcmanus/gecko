@@ -2,6 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 from marionette_harness import MarionetteTestCase
 
 
@@ -32,7 +34,7 @@ class TestWindowMaximize(MarionetteTestCase):
         if self.marionette.session_capabilities["platformName"] == "windows_nt":
             delta = 16
         else:
-            delta = 8
+            delta = 22
 
         self.assertGreaterEqual(
             actual["width"], self.max["width"] - delta,

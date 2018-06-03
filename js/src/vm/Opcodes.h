@@ -63,6 +63,7 @@
  *     Super
  *     Arguments
  *     Var Scope
+ *     Modules
  *   [Operators]
  *     Comparison Operators
  *     Arithmetic Operators
@@ -698,15 +699,14 @@
     macro(JSOP_THROWMSG,   74, "throwmsg",    NULL,         3,  0,  0, JOF_UINT16) \
     \
     /*
-     * Sets up a for-in or for-each-in loop using the JSITER_* flag bits in
-     * this op's uint8_t immediate operand. It pops the top of stack value as
-     * 'val' and pushes 'iter' which is an iterator for 'val'.
+     * Sets up a for-in loop. It pops the top of stack value as 'val' and pushes
+     * 'iter' which is an iterator for 'val'.
      *   Category: Statements
      *   Type: For-In Statement
-     *   Operands: uint8_t flags
+     *   Operands:
      *   Stack: val => iter
      */ \
-    macro(JSOP_ITER,      75, "iter",       NULL,         2,  1,  1,  JOF_UINT8) \
+    macro(JSOP_ITER,      75, "iter",       NULL,         1,  1,  1,  JOF_BYTE) \
     /*
      * Pushes the next iterated value onto the stack. If no value is available,
      * MagicValue(JS_NO_ITER_VALUE) is pushed.
@@ -2106,17 +2106,8 @@
      *   Stack: gen, val => rval
      */ \
     macro(JSOP_RESUME,        205,"resume",      NULL,    3,  2,  1,  JOF_UINT8|JOF_INVOKE) \
-    /*
-     * Pops the top two values on the stack as 'obj' and 'v', pushes 'v' to
-     * 'obj'.
-     *
-     * This opcode is used for Array Comprehension.
-     *   Category: Literals
-     *   Type: Array
-     *   Operands:
-     *   Stack: v, obj =>
-     */ \
-    macro(JSOP_ARRAYPUSH,     206,"arraypush",   NULL,    1,  2,  0,  JOF_BYTE) \
+    \
+    macro(JSOP_UNUSED206,     206,"unused206",   NULL,    1,  0,  0,  JOF_BYTE) \
     \
     /*
      * No-op bytecode only emitted in some self-hosted functions. Not handled by
@@ -2148,14 +2139,15 @@
      */ \
     macro(JSOP_AWAIT,         209, "await",        NULL,  4,  2,  1,  JOF_UINT24) \
     /*
-     * Pops the iterator from the top of the stack, and create async iterator
-     * from it and push the async iterator back onto the stack.
+     * Pops the iterator and its next method from the top of the stack, and
+     * create async iterator from it and push the async iterator back onto the
+     * stack.
      *   Category: Statements
      *   Type: Generator
      *   Operands:
-     *   Stack: iter => asynciter
+     *   Stack: iter, next => asynciter
      */ \
-    macro(JSOP_TOASYNCITER,   210, "toasynciter",  NULL,  1,  1,  1,  JOF_BYTE) \
+    macro(JSOP_TOASYNCITER,   210, "toasynciter",  NULL,  1,  2,  1,  JOF_BYTE) \
     /*
      * Pops the top two values 'id' and 'obj' from the stack, then pushes
      * obj.hasOwnProperty(id)
@@ -2353,14 +2345,22 @@
      *   Stack: callee, this, args[0], ..., args[argc-1] => rval
      *   nuses: (argc+2)
      */ \
-    macro(JSOP_CALL_IGNORES_RV, 231, "call-ignores-rv", NULL, 3, -1, 1, JOF_UINT16|JOF_INVOKE|JOF_TYPESET)
+    macro(JSOP_CALL_IGNORES_RV, 231, "call-ignores-rv", NULL, 3, -1, 1, JOF_UINT16|JOF_INVOKE|JOF_TYPESET) \
+    /*
+     * Push "import.meta"
+     *
+     *   Category: Variables and Scopes
+     *   Type: Modules
+     *   Operands:
+     *   Stack: => import.meta
+     */ \
+    macro(JSOP_IMPORTMETA,    232, "importmeta", NULL,      1,  0,  1,  JOF_BYTE)
 
 /*
  * In certain circumstances it may be useful to "pad out" the opcode space to
  * a power of two.  Use this macro to do so.
  */
 #define FOR_EACH_TRAILING_UNUSED_OPCODE(macro) \
-    macro(232) \
     macro(233) \
     macro(234) \
     macro(235) \

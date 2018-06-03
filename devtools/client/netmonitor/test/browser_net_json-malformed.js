@@ -7,25 +7,27 @@
  * Tests if malformed JSON responses are handled correctly.
  */
 
-add_task(function* () {
-  let { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
-  let { tab, monitor } = yield initNetMonitor(JSON_MALFORMED_URL);
+add_task(async function() {
+  const { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
+  const { tab, monitor } = await initNetMonitor(JSON_MALFORMED_URL);
   info("Starting test... ");
 
-  let { document, store, windowRequire } = monitor.panelWin;
-  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
-  let {
+  const { document, store, windowRequire } = monitor.panelWin;
+  const Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+  const {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
   store.dispatch(Actions.batchEnable(false));
 
-  let wait = waitForNetworkEvents(monitor, 1);
-  yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
-    content.wrappedJSObject.performRequests();
-  });
-  yield wait;
+  // Execute requests.
+  await performRequests(monitor, tab, 1);
+
+  const requestItem = document.querySelector(".request-list-item");
+  const requestsListStatus = requestItem.querySelector(".status-code");
+  EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+  await waitUntil(() => requestsListStatus.title);
 
   verifyRequestItemTarget(
     document,
@@ -41,13 +43,12 @@ add_task(function* () {
     });
 
   wait = waitForDOM(document, "#response-panel .CodeMirror-code");
-  EventUtils.sendMouseEvent({ type: "click" },
-    document.querySelector(".network-details-panel-toggle"));
+  store.dispatch(Actions.toggleNetworkDetails());
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector("#response-tab"));
-  yield wait;
+  await wait;
 
-  let tabpanel = document.querySelector("#response-panel");
+  const tabpanel = document.querySelector("#response-panel");
   is(tabpanel.querySelector(".response-error-header") === null, false,
     "The response error header doesn't have the intended visibility.");
   is(tabpanel.querySelector(".response-error-header").textContent,
@@ -58,7 +59,7 @@ add_task(function* () {
     "SyntaxError: JSON.parse: unexpected non-whitespace character after JSON data" +
       " at line 1 column 40 of the JSON data",
     "The response error header doesn't have the intended tooltiptext attribute.");
-  let jsonView = tabpanel.querySelector(".tree-section .treeLabel") || {};
+  const jsonView = tabpanel.querySelector(".tree-section .treeLabel") || {};
   is(jsonView.textContent === L10N.getStr("jsonScopeName"), false,
     "The response json view doesn't have the intended visibility.");
   is(tabpanel.querySelector(".CodeMirror-code") === null, false,
@@ -70,5 +71,5 @@ add_task(function* () {
     "{ \"greeting\": \"Hello malformed JSON!\" },",
     "The text shown in the source editor is incorrect.");
 
-  yield teardown(monitor);
+  await teardown(monitor);
 });

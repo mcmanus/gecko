@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -18,6 +19,7 @@
 #include "imgIContainer.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/StaticPtr.h"
 #include "nsIReflowCallback.h"
 #include "nsTObserverArray.h"
 
@@ -64,7 +66,7 @@ public:
   using Nothing = mozilla::Nothing;
   using Visibility = mozilla::Visibility;
 
-  typedef mozilla::image::DrawResult DrawResult;
+  typedef mozilla::image::ImgDrawResult ImgDrawResult;
   typedef mozilla::layers::ImageContainer ImageContainer;
   typedef mozilla::layers::ImageLayer ImageLayer;
   typedef mozilla::layers::LayerManager LayerManager;
@@ -72,8 +74,8 @@ public:
   NS_DECL_FRAMEARENA_HELPERS(nsImageFrame)
   NS_DECL_QUERYFRAME
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
-  virtual void DidSetStyleContext(nsStyleContext* aOldStyleContext) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
+  virtual void DidSetComputedStyle(ComputedStyle* aOldComputedStyle) override;
 
   virtual void Init(nsIContent*       aContent,
                     nsContainerFrame* aParent,
@@ -103,6 +105,8 @@ public:
   void OnVisibilityChange(Visibility aNewVisibility,
                           const Maybe<OnNonvisible>& aNonvisibleAction = Nothing()) override;
 
+  void ResponsiveContentDensityChanged();
+
 #ifdef ACCESSIBILITY
   virtual mozilla::a11y::AccType AccessibleType() override;
 #endif
@@ -131,22 +135,23 @@ public:
   static void ReleaseGlobals() {
     if (gIconLoad) {
       gIconLoad->Shutdown();
-      NS_RELEASE(gIconLoad);
+      gIconLoad = nullptr;
     }
     NS_IF_RELEASE(sIOService);
   }
 
+  already_AddRefed<imgIRequest> GetCurrentRequest() const;
   nsresult Notify(imgIRequest *aRequest, int32_t aType, const nsIntRect* aData);
 
   /**
-   * Function to test whether aContent, which has aStyleContext as its style,
+   * Function to test whether aContent, which has aComputedStyle as its style,
    * should get an image frame.  Note that this method is only used by the
    * frame constructor; it's only here because it uses gIconLoad for now.
    */
   static bool ShouldCreateImageFrameFor(mozilla::dom::Element* aElement,
-                                          nsStyleContext* aStyleContext);
+                                        ComputedStyle* aComputedStyle);
 
-  DrawResult DisplayAltFeedback(gfxContext& aRenderingContext,
+  ImgDrawResult DisplayAltFeedback(gfxContext& aRenderingContext,
                                 const nsRect& aDirtyRect,
                                 nsPoint aPt,
                                 uint32_t aFlags);
@@ -176,12 +181,12 @@ public:
   virtual void ReflowCallbackCanceled() override;
 
 private:
-  friend nsIFrame* NS_NewImageFrame(nsIPresShell*, nsStyleContext*);
-  explicit nsImageFrame(nsStyleContext* aContext)
-    : nsImageFrame(aContext, kClassID) {}
+  friend nsIFrame* NS_NewImageFrame(nsIPresShell*, ComputedStyle*);
+  explicit nsImageFrame(ComputedStyle* aStyle)
+    : nsImageFrame(aStyle, kClassID) {}
 
 protected:
-  nsImageFrame(nsStyleContext* aContext, ClassID aID);
+  nsImageFrame(ComputedStyle* aStyle, ClassID aID);
   virtual ~nsImageFrame();
 
   void EnsureIntrinsicSizeAndRatio();
@@ -224,7 +229,7 @@ protected:
                       const nsString&      aAltText,
                       const nsRect&        aRect);
 
-  DrawResult PaintImage(gfxContext& aRenderingContext, nsPoint aPt,
+  ImgDrawResult PaintImage(gfxContext& aRenderingContext, nsPoint aPt,
                         const nsRect& aDirtyRect, imgIContainer* aImage,
                         uint32_t aFlags);
 
@@ -326,7 +331,7 @@ private:
 
   RefPtr<nsImageMap> mImageMap;
 
-  nsCOMPtr<imgINotificationObserver> mListener;
+  RefPtr<nsImageListener> mListener;
 
   nsCOMPtr<imgIContainer> mImage;
   nsCOMPtr<imgIContainer> mPrevImage;
@@ -394,7 +399,8 @@ private:
   };
 
 public:
-  static IconLoad* gIconLoad; // singleton pattern: one LoadIcons instance is used
+  // singleton pattern: one LoadIcons instance is used
+  static mozilla::StaticRefPtr<IconLoad> gIconLoad;
 
   friend class nsDisplayImage;
 };
@@ -435,6 +441,11 @@ public:
    *         Not necessarily contained in this item's bounds.
    */
   virtual nsRect GetDestRect() const override;
+
+  virtual void UpdateDrawResult(mozilla::image::ImgDrawResult aResult) override
+  {
+    nsDisplayItemGenericImageGeometry::UpdateDrawResult(this, aResult);
+  }
 
   virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
                                    LayerManager* aManager,

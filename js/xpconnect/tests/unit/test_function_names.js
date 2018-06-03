@@ -1,10 +1,6 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-var Cu = Components.utils;
-var Cc = Components.classes;
-var Ci = Components.interfaces;
-
 function callback() {}
 
 let sandbox = Cu.Sandbox(this);
@@ -30,7 +26,7 @@ function run_test() {
   function observer(subject, topic, data)
   {
     let named = subject.QueryInterface(Ci.nsINamed);
-    do_check_eq(named.name, data);
+    Assert.equal(named.name, data);
     dump(`name: ${named.name}\n`);
   }
   obs.addObserver(observer, "test-obs-fun", false);

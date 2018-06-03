@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -19,16 +20,16 @@
 using namespace mozilla;
 
 nsContainerFrame*
-NS_NewHTMLButtonControlFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewHTMLButtonControlFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsHTMLButtonControlFrame(aContext);
+  return new (aPresShell) nsHTMLButtonControlFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsHTMLButtonControlFrame)
 
-nsHTMLButtonControlFrame::nsHTMLButtonControlFrame(nsStyleContext* aContext,
+nsHTMLButtonControlFrame::nsHTMLButtonControlFrame(ComputedStyle* aStyle,
                                                    nsIFrame::ClassID aID)
-  : nsContainerFrame(aContext, aID)
+  : nsContainerFrame(aStyle, aID)
 {
 }
 
@@ -37,10 +38,10 @@ nsHTMLButtonControlFrame::~nsHTMLButtonControlFrame()
 }
 
 void
-nsHTMLButtonControlFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsHTMLButtonControlFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   nsCheckboxRadioFrame::RegUnRegAccessKey(static_cast<nsIFrame*>(this), false);
-  nsContainerFrame::DestroyFrom(aDestructRoot);
+  nsContainerFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 void
@@ -110,10 +111,10 @@ nsHTMLButtonControlFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     mRenderer.DisplayButton(aBuilder, aLists.BorderBackground(), &onTop);
   }
 
-  nsDisplayListCollection set;
+  nsDisplayListCollection set(aBuilder);
 
   // Do not allow the child subtree to receive events.
-  if (!isForEventDelivery) {
+  if (!isForEventDelivery || aBuilder->HitTestIsForVisibility()) {
     DisplayListClipState::AutoSaveRestore clipState(aBuilder);
 
     if (ShouldClipPaintingToBorderBox()) {
@@ -189,7 +190,7 @@ nsHTMLButtonControlFrame::Reflow(nsPresContext* aPresContext,
   MOZ_ASSERT(firstKid, "Button should have a child frame for its contents");
   MOZ_ASSERT(!firstKid->GetNextSibling(),
              "Button should have exactly one child frame");
-  MOZ_ASSERT(firstKid->StyleContext()->GetPseudo() ==
+  MOZ_ASSERT(firstKid->Style()->GetPseudo() ==
              nsCSSAnonBoxes::buttonContent,
              "Button's child frame has unexpected pseudo type!");
 
@@ -375,23 +376,23 @@ nsHTMLButtonControlFrame::GetNaturalBaselineBOffset(mozilla::WritingMode aWM,
 nsresult nsHTMLButtonControlFrame::SetFormProperty(nsAtom* aName, const nsAString& aValue)
 {
   if (nsGkAtoms::value == aName) {
-    return mContent->SetAttr(kNameSpaceID_None, nsGkAtoms::value,
-                             aValue, true);
+    return mContent->AsElement()->SetAttr(kNameSpaceID_None, nsGkAtoms::value,
+                                          aValue, true);
   }
   return NS_OK;
 }
 
-nsStyleContext*
-nsHTMLButtonControlFrame::GetAdditionalStyleContext(int32_t aIndex) const
+ComputedStyle*
+nsHTMLButtonControlFrame::GetAdditionalComputedStyle(int32_t aIndex) const
 {
-  return mRenderer.GetStyleContext(aIndex);
+  return mRenderer.GetComputedStyle(aIndex);
 }
 
 void
-nsHTMLButtonControlFrame::SetAdditionalStyleContext(int32_t aIndex,
-                                                    nsStyleContext* aStyleContext)
+nsHTMLButtonControlFrame::SetAdditionalComputedStyle(int32_t aIndex,
+                                                    ComputedStyle* aComputedStyle)
 {
-  mRenderer.SetStyleContext(aIndex, aStyleContext);
+  mRenderer.SetComputedStyle(aIndex, aComputedStyle);
 }
 
 void

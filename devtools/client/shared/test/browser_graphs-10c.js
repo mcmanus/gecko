@@ -27,37 +27,37 @@ const TEST_DATA = [
 ];
 const LineGraphWidget = require("devtools/client/shared/widgets/LineGraphWidget");
 
-add_task(function* () {
-  yield addTab("about:blank");
-  yield performTest();
+add_task(async function() {
+  await addTab("about:blank");
+  await performTest();
   gBrowser.removeCurrentTab();
 });
 
-function* performTest() {
-  let [host,, doc] = yield createHost("window");
+async function performTest() {
+  const [host,, doc] = await createHost("window");
   doc.body.setAttribute("style",
                         "position: fixed; width: 100%; height: 100%; margin: 0;");
 
-  let graph = new LineGraphWidget(doc.body, "fps");
-  yield graph.once("ready");
+  const graph = new LineGraphWidget(doc.body, "fps");
+  await graph.once("ready");
 
   let refreshCount = 0;
   graph.on("refresh", () => refreshCount++);
 
-  yield testGraph(host, graph);
+  await testGraph(host, graph);
 
   is(refreshCount, 2, "The graph should've been refreshed 2 times.");
 
-  yield graph.destroy();
+  await graph.destroy();
   host.destroy();
 }
 
-function* testGraph(host, graph) {
+async function testGraph(host, graph) {
   graph.setData(TEST_DATA);
 
   host._window.resizeTo(500, 500);
-  yield graph.once("refresh");
-  let oldBounds = host.frame.getBoundingClientRect();
+  await graph.once("refresh");
+  const oldBounds = host.frame.getBoundingClientRect();
 
   is(graph._width, oldBounds.width * window.devicePixelRatio,
     "The window was properly resized (1).");
@@ -75,15 +75,15 @@ function* testGraph(host, graph) {
   info("Making sure the selection updates when the window is resized");
 
   host._window.resizeTo(250, 250);
-  yield graph.once("refresh");
-  let newBounds = host.frame.getBoundingClientRect();
+  await graph.once("refresh");
+  const newBounds = host.frame.getBoundingClientRect();
 
   is(graph._width, newBounds.width * window.devicePixelRatio,
     "The window was properly resized (2).");
   is(graph._height, newBounds.height * window.devicePixelRatio,
     "The window was properly resized (2).");
 
-  let ratio = oldBounds.width / newBounds.width;
+  const ratio = oldBounds.width / newBounds.width;
   info("The window resize ratio is: " + ratio);
 
   is(graph.getSelection().start, Math.round(100 / ratio),

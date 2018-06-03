@@ -20,14 +20,14 @@ const TEST_URI = `
 
 const SHOW_INFINITE_LINES_PREF = "devtools.gridinspector.showInfiniteLines";
 
-add_task(function* () {
-  yield addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
-  let { inspector, gridInspector } = yield openLayoutView();
-  let { document: doc } = gridInspector;
-  let { store } = inspector;
+add_task(async function() {
+  await addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
+  const { inspector, gridInspector } = await openLayoutView();
+  const { document: doc } = gridInspector;
+  const { store } = inspector;
 
-  yield selectNode("#grid", inspector);
-  let checkbox = doc.getElementById("grid-setting-extend-grid-lines");
+  await selectNode("#grid", inspector);
+  const checkbox = doc.getElementById("grid-setting-extend-grid-lines");
 
   ok(!Services.prefs.getBoolPref(SHOW_INFINITE_LINES_PREF),
     "'Extend grid lines infinitely' is pref off by default.");
@@ -36,13 +36,13 @@ add_task(function* () {
   let onCheckboxChange = waitUntilState(store, state =>
     state.highlighterSettings.showInfiniteLines);
   checkbox.click();
-  yield onCheckboxChange;
+  await onCheckboxChange;
 
   info("Toggling OFF the 'Extend grid lines infinitely' setting.");
   onCheckboxChange = waitUntilState(store, state =>
     !state.highlighterSettings.showInfiniteLines);
   checkbox.click();
-  yield onCheckboxChange;
+  await onCheckboxChange;
 
   ok(!Services.prefs.getBoolPref(SHOW_INFINITE_LINES_PREF),
     "'Extend grid lines infinitely' is pref off.");

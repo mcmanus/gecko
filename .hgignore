@@ -77,6 +77,7 @@ _OPT\.OBJ/
 ^third_party/python/psutil/.*\.so
 ^third_party/python/psutil/.*\.pyd
 ^third_party/python/psutil/build/
+^third_party/python/psutil/tmp/
 
 # Git repositories
 .git/
@@ -107,8 +108,12 @@ GPATH
 ^mobile/android/gradle/.gradle
 
 # XCode project cruft
+^[^/]*\.xcodeproj/
 ^embedding/ios/GeckoEmbed/GeckoEmbed.xcodeproj/project.xcworkspace/xcuserdata
 ^embedding/ios/GeckoEmbed/GeckoEmbed.xcodeproj/xcuserdata
+
+# Rust/Cargo output from running `cargo` directly
+^target/
 
 # Ignore mozharness execution files
 ^testing/mozharness/.tox/
@@ -144,6 +149,14 @@ GPATH
 ^testing/talos/talos/mitmproxy/mitmproxy
 ^testing/talos/talos/mitmproxy/mitmweb
 
+# Ignore talos webkit benchmark files; source is copied from in-tree /third_party
+# into testing/talos/talos/tests/webkit/PerformanceTests/ when run locally
+# i.e. speedometer, motionmark, stylebench
+^testing/talos/talos/tests/webkit/PerformanceTests
+
+# Ignore toolchains.json created by tooltool.
+^toolchains\.json
+
 # Ignore files created when running a reftest.
 ^lextab.py$
 
@@ -161,3 +174,12 @@ subinclude:servo/.hgignore
 
 # Ignore Infer output
 ^infer-out/
+
+# https://bz.mercurial-scm.org/show_bug.cgi?id=5322
+^comm/
+
+# Ignore various raptor performance framework files
+^testing/raptor/.raptor-venv
+^testing/raptor/raptor-venv
+^testing/raptor/raptor/tests/.*.json
+^testing/raptor/webext/raptor/auto_gen_test_config.js

@@ -171,7 +171,7 @@ nsFilePicker::nsFilePicker()
   : mSelectedType(0)
   , mRunning(false)
   , mAllowURLs(false)
-#if (MOZ_WIDGET_GTK == 3)
+#ifdef MOZ_WIDGET_GTK
   , mFileChooserDelegate(nullptr)
 #endif
 {
@@ -402,9 +402,14 @@ nsFilePicker::Open(nsIFilePickerShownCallback *aCallback)
                                           GTK_RESPONSE_ACCEPT,
                                           GTK_RESPONSE_CANCEL,
                                           -1);
+
+  // If we have --enable-proxy-bypass-protection, then don't allow
+  // remote URLs to be used.
+#ifndef MOZ_PROXY_BYPASS_PROTECTION
   if (mAllowURLs) {
     gtk_file_chooser_set_local_only(GTK_FILE_CHOOSER(file_chooser), FALSE);
   }
+#endif
 
   if (action == GTK_FILE_CHOOSER_ACTION_OPEN || action == GTK_FILE_CHOOSER_ACTION_SAVE) {
     GtkWidget *img_preview = gtk_image_new();
@@ -448,7 +453,7 @@ nsFilePicker::Open(nsIFilePickerShownCallback *aCallback)
       nsAutoCString directory;
       defaultPath->GetNativePath(directory);
 
-#if (MOZ_WIDGET_GTK == 3)
+#ifdef MOZ_WIDGET_GTK
       // Workaround for problematic refcounting in GTK3 before 3.16.
       // We need to keep a reference to the dialog's internal delegate.
       // Otherwise, if our dialog gets destroyed, we'll lose the dialog's
@@ -585,7 +590,7 @@ nsFilePicker::Done(GtkWidget* file_chooser, gint response)
   // been released.
   gtk_widget_destroy(file_chooser);
 
-#if (MOZ_WIDGET_GTK == 3)
+#ifdef MOZ_WIDGET_GTK
       if (mFileChooserDelegate) {
         // Properly deref our acquired reference. We call this after
         // gtk_widget_destroy() to try and ensure that pending file info

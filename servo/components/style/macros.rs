@@ -4,6 +4,33 @@
 
 //! Various macro helpers.
 
+macro_rules! exclusive_value {
+    (($value:ident, $set:expr) => $ident:path) => {
+        if $value.intersects($set) {
+            return Err(());
+        } else {
+            $ident
+        }
+    };
+}
+
+#[cfg(feature = "gecko")]
+macro_rules! impl_gecko_keyword_conversions {
+    ($name:ident, $utype:ty) => {
+        impl From<$utype> for $name {
+            fn from(bits: $utype) -> $name {
+                $name::from_gecko_keyword(bits)
+            }
+        }
+
+        impl From<$name> for $utype {
+            fn from(v: $name) -> $utype {
+                v.to_gecko_keyword()
+            }
+        }
+    };
+}
+
 macro_rules! trivial_to_computed_value {
     ($name:ty) => {
         impl $crate::values::computed::ToComputedValue for $name {
@@ -17,93 +44,33 @@ macro_rules! trivial_to_computed_value {
                 other.clone()
             }
         }
-    }
+    };
 }
 
-/// A macro to parse an identifier, or return an `UnexpectedIndent` error
+/// A macro to parse an identifier, or return an `UnexpectedIdent` error
 /// otherwise.
 ///
 /// FIXME(emilio): The fact that `UnexpectedIdent` is a `SelectorParseError`
 /// doesn't make a lot of sense to me.
 macro_rules! try_match_ident_ignore_ascii_case {
-    ($ident:expr, $( $match_body:tt )*) => {
-        let __ident = $ident;
-        (match_ignore_ascii_case! { &*__ident,
+    ($input:expr, $( $match_body:tt )*) => {{
+        let location = $input.current_source_location();
+        let ident = $input.expect_ident_cloned()?;
+        match_ignore_ascii_case! { &ident,
             $( $match_body )*
-            _ => Err(()),
-        })
-        .map_err(|()| {
-            ::selectors::parser::SelectorParseError::UnexpectedIdent(__ident.clone()).into()
-        })
-    }
-}
-
-macro_rules! define_numbered_css_keyword_enum {
-    ($name: ident: $( $css: expr => $variant: ident = $value: expr ),+,) => {
-        define_numbered_css_keyword_enum!($name: $( $css => $variant = $value ),+);
-    };
-    ($name: ident: $( $css: expr => $variant: ident = $value: expr ),+) => {
-        #[allow(non_camel_case_types, missing_docs)]
-        #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-        #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf, Deserialize, Serialize))]
-        pub enum $name {
-            $( $variant = $value ),+
+            _ => return Err(location.new_custom_error(
+                ::selectors::parser::SelectorParseErrorKind::UnexpectedIdent(ident.clone())
+            ))
         }
-
-        impl $crate::parser::Parse for $name {
-            fn parse<'i, 't>(
-                _context: &$crate::parser::ParserContext,
-                input: &mut ::cssparser::Parser<'i, 't>,
-            ) -> Result<$name, ::style_traits::ParseError<'i>> {
-                try_match_ident_ignore_ascii_case! { input.expect_ident()?,
-                    $( $css => Ok($name::$variant), )+
-                }
-            }
-        }
-
-        impl ::style_traits::values::ToCss for $name {
-            fn to_css<W>(&self, dest: &mut W) -> ::std::fmt::Result
-            where
-                W: ::std::fmt::Write,
-            {
-                match *self {
-                    $( $name::$variant => dest.write_str($css) ),+
-                }
-            }
-        }
-    }
-}
-
-/// A macro for implementing `ToComputedValue`, and `Parse` traits for
-/// the enums defined using `define_css_keyword_enum` macro.
-///
-/// NOTE: We should either move `Parse` trait to `style_traits`
-/// or `define_css_keyword_enum` macro to this crate, but that
-/// may involve significant cleanup in both the crates.
-macro_rules! add_impls_for_keyword_enum {
-    ($name:ident) => {
-        impl $crate::parser::Parse for $name {
-            #[inline]
-            fn parse<'i, 't>(
-                _context: &$crate::parser::ParserContext,
-                input: &mut ::cssparser::Parser<'i, 't>,
-            ) -> Result<Self, ::style_traits::ParseError<'i>> {
-                $name::parse(input)
-            }
-        }
-
-        trivial_to_computed_value!($name);
-    };
+    }}
 }
 
 macro_rules! define_keyword_type {
-    ($name: ident, $css: expr) => {
+    ($name:ident, $css:expr) => {
         #[allow(missing_docs)]
-        #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        #[derive(Animate, Clone, ComputeSquaredDistance, Copy, PartialEq)]
-        #[derive(ToAnimatedZero, ToComputedValue, ToCss)]
+        #[derive(Animate, Clone, ComputeSquaredDistance, Copy, MallocSizeOf,
+                 PartialEq, SpecifiedValueInfo, ToAnimatedValue, ToAnimatedZero,
+                 ToComputedValue, ToCss)]
         pub struct $name;
 
         impl fmt::Debug for $name {
@@ -115,12 +82,30 @@ macro_rules! define_keyword_type {
         impl $crate::parser::Parse for $name {
             fn parse<'i, 't>(
                 _context: &$crate::parser::ParserContext,
-                input: &mut ::cssparser::Parser<'i, 't>
+                input: &mut ::cssparser::Parser<'i, 't>,
             ) -> Result<$name, ::style_traits::ParseError<'i>> {
-                input.expect_ident_matching($css).map(|_| $name).map_err(|e| e.into())
+                input
+                    .expect_ident_matching($css)
+                    .map(|_| $name)
+                    .map_err(|e| e.into())
+            }
+        }
+    };
+}
+
+#[cfg(feature = "gecko")]
+macro_rules! impl_bitflags_conversions {
+    ($name:ident) => {
+        impl From<u8> for $name {
+            fn from(bits: u8) -> $name {
+                $name::from_bits(bits).expect("bits contain valid flag")
             }
         }
 
-        impl $crate::values::animated::AnimatedValueAsComputed for $name {}
+        impl From<$name> for u8 {
+            fn from(v: $name) -> u8 {
+                v.bits()
+            }
+        }
     };
 }

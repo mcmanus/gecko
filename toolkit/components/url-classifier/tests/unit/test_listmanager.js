@@ -1,8 +1,7 @@
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
-                                  "resource://gre/modules/NetUtil.jsm");
+ChromeUtils.defineModuleGetter(this, "NetUtil",
+                               "resource://gre/modules/NetUtil.jsm");
 
 // These tables share the same updateURL.
 const TEST_TABLE_DATA_LIST = [
@@ -66,15 +65,15 @@ let gHttpServV4 = null;
 // These two variables are used to synchronize the last two racing updates
 // (in terms of "update URL") in test_update_all_tables().
 let gUpdatedCntForTableData = 0; // For TEST_TABLE_DATA_LIST.
-let gIsV4Updated = false;   // For TEST_TABLE_DATA_V4.
+let gIsV4Updated = false; // For TEST_TABLE_DATA_V4.
 
 const NEW_CLIENT_STATE = "sta\0te";
 const CHECKSUM = "\x30\x67\xc7\x2c\x5e\x50\x1c\x31\xe3\xfe\xca\x73\xf0\x47\xdc\x34\x1a\x95\x63\x99\xec\x70\x5e\x0a\xee\x9e\xfb\x17\xa1\x55\x35\x78";
 
-prefBranch.setBoolPref("browser.safebrowsing.debug", true);
+Services.prefs.setBoolPref("browser.safebrowsing.debug", true);
 
 // The "\xFF\xFF" is to generate a base64 string with "/".
-prefBranch.setCharPref("browser.safebrowsing.id", "Firefox\xFF\xFF");
+Services.prefs.setCharPref("browser.safebrowsing.id", "Firefox\xFF\xFF");
 
 // Register tables.
 TEST_TABLE_DATA_LIST.forEach(function(t) {
@@ -193,6 +192,8 @@ add_test(function test_getGethashUrl() {
 });
 
 function run_test() {
+  throwOnUpdateErrors();
+
   // Setup primary testing server.
   gHttpServ = new HttpServer();
   gHttpServ.registerDirectory("/", do_get_cwd());
@@ -220,11 +221,11 @@ function run_test() {
     }
 
     if (gIsV4Updated) {
-      run_next_test();  // All tests are done. Just finish.
+      run_next_test(); // All tests are done. Just finish.
       return;
     }
 
-    do_print("Waiting for TEST_TABLE_DATA_V4 to be tested ...");
+    info("Waiting for TEST_TABLE_DATA_V4 to be tested ...");
   });
 
   gHttpServ.start(4444);
@@ -290,7 +291,7 @@ function run_test() {
         return;
       }
 
-      do_print("Wait for all sever-involved tests to be done ...");
+      info("Wait for all sever-involved tests to be done ...");
     });
 
   });
@@ -303,8 +304,8 @@ function run_test() {
 // A trick to force updating tables. However, before calling this, we have to
 // call disableAllUpdates() first to clean up the updateCheckers in listmanager.
 function forceTableUpdate() {
-  prefBranch.setCharPref(PREF_NEXTUPDATETIME, "1");
-  prefBranch.setCharPref(PREF_NEXTUPDATETIME_V4, "1");
+  Services.prefs.setCharPref(PREF_NEXTUPDATETIME, "1");
+  Services.prefs.setCharPref(PREF_NEXTUPDATETIME_V4, "1");
   gListManager.maybeToggleUpdateChecking();
 }
 
@@ -316,8 +317,8 @@ function disableAllUpdates() {
 // Since there's no public interface on listmanager to know the update success,
 // we could only rely on the refresh of "nextupdatetime".
 function waitForUpdateSuccess(callback) {
-  let nextupdatetime = parseInt(prefBranch.getCharPref(PREF_NEXTUPDATETIME));
-  do_print("nextupdatetime: " + nextupdatetime);
+  let nextupdatetime = parseInt(Services.prefs.getCharPref(PREF_NEXTUPDATETIME));
+  info("nextupdatetime: " + nextupdatetime);
   if (nextupdatetime !== 1) {
     callback();
     return;

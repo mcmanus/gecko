@@ -18,6 +18,7 @@ const ROLE_COMBOBOX = nsIAccessibleRole.ROLE_COMBOBOX;
 const ROLE_COMBOBOX_LIST = nsIAccessibleRole.ROLE_COMBOBOX_LIST;
 const ROLE_COMBOBOX_OPTION = nsIAccessibleRole.ROLE_COMBOBOX_OPTION;
 const ROLE_COLUMNHEADER = nsIAccessibleRole.ROLE_COLUMNHEADER;
+const ROLE_DATE_EDITOR = nsIAccessibleRole.ROLE_DATE_EDITOR;
 const ROLE_DEFINITION = nsIAccessibleRole.ROLE_DEFINITION;
 const ROLE_DEFINITION_LIST = nsIAccessibleRole.ROLE_DEFINITION_LIST;
 const ROLE_DETAILS = nsIAccessibleRole.ROLE_DETAILS;
@@ -84,6 +85,7 @@ const ROLE_MENUBAR = nsIAccessibleRole.ROLE_MENUBAR;
 const ROLE_MENUITEM = nsIAccessibleRole.ROLE_MENUITEM;
 const ROLE_MENUPOPUP = nsIAccessibleRole.ROLE_MENUPOPUP;
 const ROLE_NAVIGATION = nsIAccessibleRole.ROLE_NAVIGATION;
+const ROLE_NON_NATIVE_DOCUMENT = nsIAccessibleRole.ROLE_NON_NATIVE_DOCUMENT;
 const ROLE_NOTHING = nsIAccessibleRole.ROLE_NOTHING;
 const ROLE_NOTE = nsIAccessibleRole.ROLE_NOTE;
 const ROLE_OPTION = nsIAccessibleRole.ROLE_OPTION;
@@ -166,7 +168,7 @@ function getRole(aAccOrElmOrID) {
  */
 function isRole(aIdentifier, aRole, aMsg) {
   var role = getRole(aIdentifier);
-  if (role == - 1)
+  if (role == -1)
     return;
 
   if (role == aRole) {

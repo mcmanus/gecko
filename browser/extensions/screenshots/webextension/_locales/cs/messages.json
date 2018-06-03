@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "Stáhnout"
   },
+  "downloadOnlyNotice": {
+    "message": "Nyní jste v režimu pouze ke stažení."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots se automaticky přepne do režimu pouze ke stažení, pokud:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "Jste v okně anonymního prohlížení."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Máte zakázané cookies třetích stran."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "Máte zcela zakázané ukládání historie."
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "Používáte Firefox ESR."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "Nahrávání bylo zakázáno."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Odkaz zkopírován"
   },
@@ -36,6 +57,28 @@
     "message": "Odkaz na váš snímek byl zkopírován do schránky. Pro vložení stiskněte $META_KEY$-V.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Kopírovat"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Snímek zkopírován"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Váš snímek byl zkopírován do schránky. Pro vložení stiskněte $META_KEY$-V.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Tento obrázek byl oříznutý na $PIXELS$px.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -89,7 +132,7 @@
     "message": "Kdykoliv chcete pořídit snímek, otevřete nabídku akcí stránky v adresním řádku."
   },
   "tourHeaderClickAndDrag": {
-    "message": "Zachyťte, cokoliv chcete"
+    "message": "Zachyťte cokoliv chcete"
   },
   "tourBodyClickAndDrag": {
     "message": "Stiskem tlačítka myši a tahem můžete vybrat oblast stránky. Výběr můžete provést také najetím myši na prvek stránky."

@@ -4,23 +4,19 @@
 
 /* eslint-env mozilla/frame-script */
 
-var Ci = Components.interfaces;
-var Cu = Components.utils;
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Logger",
+ChromeUtils.defineModuleGetter(this, "Logger",
   "resource://gre/modules/accessibility/Utils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Presentation",
+ChromeUtils.defineModuleGetter(this, "Presentation",
   "resource://gre/modules/accessibility/Presentation.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Utils",
+ChromeUtils.defineModuleGetter(this, "Utils",
   "resource://gre/modules/accessibility/Utils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "EventManager",
+ChromeUtils.defineModuleGetter(this, "EventManager",
   "resource://gre/modules/accessibility/EventManager.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ContentControl",
+ChromeUtils.defineModuleGetter(this, "ContentControl",
   "resource://gre/modules/accessibility/ContentControl.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Roles",
+ChromeUtils.defineModuleGetter(this, "Roles",
   "resource://gre/modules/accessibility/Constants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "States",
+ChromeUtils.defineModuleGetter(this, "States",
   "resource://gre/modules/accessibility/Constants.jsm");
 
 Logger.info("content-script.js", content.document.location);
@@ -66,19 +62,6 @@ function forwardToChild(aMessage, aListener, aVCPosition) {
   return true;
 }
 
-function activateContextMenu(aMessage) {
-  let position = Utils.getVirtualCursor(content.document).position;
-  if (!forwardToChild(aMessage, activateContextMenu, position)) {
-    let center = Utils.getBounds(position, true).center();
-
-    let evt = content.document.createEvent("HTMLEvents");
-    evt.initEvent("contextmenu", true, true);
-    evt.clientX = center.x;
-    evt.clientY = center.y;
-    position.DOMNode.dispatchEvent(evt);
-  }
-}
-
 function presentCaretChange(aText, aOldOffset, aNewOffset) {
   if (aOldOffset !== aNewOffset) {
     let msg = Presentation.textSelectionChanged(aText, aNewOffset, aNewOffset,
@@ -91,7 +74,7 @@ function scroll(aMessage) {
   let position = Utils.getVirtualCursor(content.document).position;
   if (!forwardToChild(aMessage, scroll, position)) {
     sendAsyncMessage("AccessFu:DoScroll",
-                     { bounds: Utils.getBounds(position, true),
+                     { bounds: Utils.getBounds(position),
                        page: aMessage.json.page,
                        horizontal: aMessage.json.horizontal });
   }
@@ -108,7 +91,6 @@ addMessageListener(
     if (m.json.buildApp)
       Utils.MozBuildApp = m.json.buildApp;
 
-    addMessageListener("AccessFu:ContextMenu", activateContextMenu);
     addMessageListener("AccessFu:Scroll", scroll);
 
     if (!contentControl) {
@@ -143,7 +125,6 @@ addMessageListener(
   function(m) {
     Logger.debug("AccessFu:Stop");
 
-    removeMessageListener("AccessFu:ContextMenu", activateContextMenu);
     removeMessageListener("AccessFu:Scroll", scroll);
 
     eventManager.stop();

@@ -66,11 +66,10 @@ interface nsITelemetry : nsISupports
    *   sum - sum of the bucket contents
    *
    * @param aDataset DATASET_RELEASE_CHANNEL_OPTOUT or DATASET_RELEASE_CHANNEL_OPTIN.
-   * @param aSubsession Whether to return the internally-duplicated subsession histograms
-   * @param aClear Whether to clear out the subsession histograms after snapshotting (only works if aSubsession is true)
+   * @param aClear Whether to clear out the histograms after snapshotting
    */
   [implicit_jscontext]
-  jsval snapshotHistograms(in uint32_t aDataset, in boolean aSubsession, in boolean aClear);
+  jsval snapshotHistograms(in uint32_t aDataset, in boolean aClear);
 
   /**
    * The amount of time, in milliseconds, that the last session took
@@ -189,6 +188,7 @@ interface nsITelemetry : nsISupports
    *     "version": <string>, // Version of the module
    *     "debugName": <string>, // ID of the debug information file
    *     "debugID": <string>, // Name of the debug information file
+   *     "certSubject": <string>, // Name of the organization that signed the binary (Optional, only defined when present)
    *   },
    *   ...
    * ]
@@ -198,7 +198,7 @@ interface nsITelemetry : nsISupports
    * @throws NS_ERROR_NOT_IMPLEMENTED if the Gecko profiler is not enabled.
    */
   [implicit_jscontext]
-  nsISupports getLoadedModules();
+  Promise getLoadedModules();
 
   /*
    * An object with two fields: memoryMap and stacks.
@@ -232,11 +232,10 @@ interface nsITelemetry : nsISupports
    *   { process1: {name1: {histogramData1}, name2:{histogramData2}...}}
    *
    * @param aDataset DATASET_RELEASE_CHANNEL_OPTOUT or DATASET_RELEASE_CHANNEL_OPTIN.
-   * @param aSubsession Whether to return the internally-duplicated subsession keyed histograms
-   * @param aClear Whether to clear out the subsession keyed histograms after snapshotting (only works if aSubsession is true)
+   * @param aClear Whether to clear out the keyed histograms after snapshotting
    */
   [implicit_jscontext]
-  jsval snapshotKeyedHistograms(in uint32_t aDataset, in boolean aSubsession, in boolean aClear);
+  jsval snapshotKeyedHistograms(in uint32_t aDataset, in boolean aClear);
 
   /**
    * Create and return a histogram registered in TelemetryHistograms.h.
@@ -273,6 +272,34 @@ interface nsITelemetry : nsISupports
    * Set this to false in tests to disable gathering of extended telemetry statistics.
    */
   attribute boolean canRecordExtended;
+
+  /**
+   * A flag indicating whether Telemetry is recording release data, which is a
+   * smallish subset of our usage data that we're prepared to handle from our
+   * largish release population.
+   *
+   * This is true most of the time.
+   *
+   * This does not indicate whether Telemetry will send any data. That is
+   * governed by user preference and other mechanisms.
+   *
+   * You may use this to determine if it's okay to record your data.
+   */
+  readonly attribute boolean canRecordReleaseData;
+
+  /**
+   * A flag indicating whether Telemetry is recording prerelease data, which is
+   * a largish amount of usage data that we're prepared to handle from our
+   * smallish pre-release population.
+   *
+   * This is true on pre-release branches of Firefox.
+   *
+   * This does not indicate whether Telemetry will send any data. That is
+   * governed by user preference and other mechanisms.
+   *
+   * You may use this to determine if it's okay to record your data.
+   */
+  readonly attribute boolean canRecordPrereleaseData;
 
   /**
    * A flag indicating whether Telemetry can submit official results (for base or extended
@@ -487,6 +514,17 @@ interface nsITelemetry : nsISupports
   void registerEvents(in ACString aCategory, in jsval aEventData);
 
   /**
+   * Parent process only. Register dynamic builtin events. The parameters
+   * have the same meaning as the usual |registerEvents| function.
+   *
+   * This function is only meant to be used to support the "artifact build"/
+   * "build faster" developers by allowing to add new events without rebuilding
+   * the C++ components including the headers files.
+  */
+  [implicit_jscontext]
+  void registerBuiltinEvents(in ACString aCategory, in jsval aEventData);
+
+  /**
    * Parent process only. Register new scalars to record them from addons. This
    * allows registering multiple scalars for a category. They will be valid only for
    * the current Firefox session.
@@ -514,7 +552,36 @@ interface nsITelemetry : nsISupports
   void registerScalars(in ACString aCategoryName, in jsval aScalarData);
 
   /**
+   * Parent process only. Register dynamic builtin scalars. The parameters
+   * have the same meaning as the usual |registerScalars| function.
+   *
+   * This function is only meant to be used to support the "artifact build"/
+   * "build faster" developers by allowing to add new scalars without rebuilding
+   * the C++ components including the headers files.
+   */
+  [implicit_jscontext]
+  void registerBuiltinScalars(in ACString aCategoryName, in jsval aScalarData);
+
+  /**
    * Resets all the stored events. This is intended to be only used in tests.
    */
   void clearEvents();
+
+  /**
+   * Reset the current product. This is intended to be only used in Android tests.
+   * It will fail on Desktop.
+   */
+  void resetCurrentProduct();
+
+  /**
+   * Reset the storage for all the collection primitives so that GeckoView
+   * can issue a single Clear signal for histograms, scalars, events, ...
+   *
+   * This is needed for supporting the current implementation of GeckoView
+   * measurement persistence: all the measurements are stored in a single file and
+   * they can't be cleared independently.
+   *
+   * Please note that this is only intended to be used by GeckoViewTelemetryController.
+   */
+  void clearProbes();
 };

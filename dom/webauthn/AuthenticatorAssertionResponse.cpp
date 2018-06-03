@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,6 +15,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(AuthenticatorAssertionResponse,
                                                 AuthenticatorResponse)
   tmp->mAuthenticatorDataCachedObj = nullptr;
   tmp->mSignatureCachedObj = nullptr;
+  tmp->mUserHandleCachedObj = nullptr;
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(AuthenticatorAssertionResponse,
@@ -22,6 +23,7 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(AuthenticatorAssertionResponse,
   NS_IMPL_CYCLE_COLLECTION_TRACE_PRESERVED_WRAPPER
   NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mAuthenticatorDataCachedObj)
   NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mSignatureCachedObj)
+  NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mUserHandleCachedObj)
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(AuthenticatorAssertionResponse,
@@ -38,6 +40,7 @@ AuthenticatorAssertionResponse::AuthenticatorAssertionResponse(nsPIDOMWindowInne
   : AuthenticatorResponse(aParent)
   , mAuthenticatorDataCachedObj(nullptr)
   , mSignatureCachedObj(nullptr)
+  , mUserHandleCachedObj(nullptr)
 {
   mozilla::HoldJSObjects(this);
 }
@@ -87,6 +90,31 @@ nsresult
 AuthenticatorAssertionResponse::SetSignature(CryptoBuffer& aBuffer)
 {
   if (NS_WARN_IF(!mSignature.Assign(aBuffer))) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+  return NS_OK;
+}
+
+void
+AuthenticatorAssertionResponse::GetUserHandle(JSContext* aCx,
+                                              JS::MutableHandle<JSObject*> aRetVal)
+{
+  // Per https://w3c.github.io/webauthn/#ref-for-dom-authenticatorassertionresponse-userhandle%E2%91%A0
+  // this should return null if the handle is unset.
+  if (mUserHandle.IsEmpty()) {
+    aRetVal.set(nullptr);
+  } else {
+    if (!mUserHandleCachedObj) {
+      mUserHandleCachedObj = mUserHandle.ToArrayBuffer(aCx);
+    }
+    aRetVal.set(mUserHandleCachedObj);
+  }
+}
+
+nsresult
+AuthenticatorAssertionResponse::SetUserHandle(CryptoBuffer& aBuffer)
+{
+  if (NS_WARN_IF(!mUserHandle.Assign(aBuffer))) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
   return NS_OK;

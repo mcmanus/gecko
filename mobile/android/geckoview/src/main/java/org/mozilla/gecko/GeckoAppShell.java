@@ -20,6 +20,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.StringTokenizer;
 import java.util.TreeMap;
@@ -27,15 +28,16 @@ import java.util.TreeMap;
 import org.mozilla.gecko.annotation.JNITarget;
 import org.mozilla.gecko.annotation.RobocopTarget;
 import org.mozilla.gecko.annotation.WrapForJNI;
-import org.mozilla.gecko.gfx.BitmapUtils;
 import org.mozilla.gecko.permissions.Permissions;
 import org.mozilla.gecko.process.GeckoProcessManager;
 import org.mozilla.gecko.SysInfo;
+import org.mozilla.gecko.util.BitmapUtils;
 import org.mozilla.gecko.util.HardwareCodecCapabilityUtils;
 import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.IOUtils;
 import org.mozilla.gecko.util.ProxySelector;
 import org.mozilla.gecko.util.ThreadUtils;
+import org.mozilla.geckoview.BuildConfig;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
@@ -84,6 +86,7 @@ import android.os.SystemClock;
 import android.os.Vibrator;
 import android.provider.Settings;
 import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
 import android.support.v4.util.SimpleArrayMap;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
@@ -108,10 +111,14 @@ public class GeckoAppShell
     // We have static members only.
     private GeckoAppShell() { }
 
-    private static final CrashHandler CRASH_HANDLER = new CrashHandler() {
+    private static class GeckoCrashHandler extends CrashHandler {
         @Override
         protected String getAppPackageName() {
-            return AppConstants.ANDROID_PACKAGE_NAME;
+            final Context appContext = getAppContext();
+            if (appContext == null) {
+                return "<unknown>";
+            }
+            return appContext.getPackageName();
         }
 
         @Override
@@ -123,12 +130,12 @@ public class GeckoAppShell
         protected Bundle getCrashExtras(final Thread thread, final Throwable exc) {
             final Bundle extras = super.getCrashExtras(thread, exc);
 
-            extras.putString("ProductName", AppConstants.MOZ_APP_BASENAME);
-            extras.putString("ProductID", AppConstants.MOZ_APP_ID);
-            extras.putString("Version", AppConstants.MOZ_APP_VERSION);
-            extras.putString("BuildID", AppConstants.MOZ_APP_BUILDID);
-            extras.putString("Vendor", AppConstants.MOZ_APP_VENDOR);
-            extras.putString("ReleaseChannel", AppConstants.MOZ_UPDATE_CHANNEL);
+            extras.putString("ProductName", BuildConfig.MOZ_APP_BASENAME);
+            extras.putString("ProductID", BuildConfig.MOZ_APP_ID);
+            extras.putString("Version", BuildConfig.MOZ_APP_VERSION);
+            extras.putString("BuildID", BuildConfig.MOZ_APP_BUILDID);
+            extras.putString("Vendor", BuildConfig.MOZ_APP_VENDOR);
+            extras.putString("ReleaseChannel", BuildConfig.MOZ_UPDATE_CHANNEL);
 
             final String appNotes = getAppNotes();
             if (appNotes != null) {
@@ -158,7 +165,7 @@ public class GeckoAppShell
 
             // reportJavaCrash should have caused us to hard crash. If we're still here,
             // it probably means Gecko is not loaded, and we should do something else.
-            if (AppConstants.MOZ_CRASHREPORTER && AppConstants.MOZILLA_OFFICIAL) {
+            if (BuildConfig.MOZ_CRASHREPORTER && BuildConfig.MOZILLA_OFFICIAL) {
                 // Only use Java crash reporter if enabled on official build.
                 return super.reportException(thread, exc);
             }
@@ -167,10 +174,18 @@ public class GeckoAppShell
     };
 
     private static String sAppNotes;
+    private static CrashHandler sCrashHandler;
 
-    public static CrashHandler ensureCrashHandling() {
-        // Crash handling is automatically enabled when GeckoAppShell is loaded.
-        return CRASH_HANDLER;
+    public static synchronized CrashHandler ensureCrashHandling() {
+        if (sCrashHandler == null) {
+            sCrashHandler = new GeckoCrashHandler();
+        }
+
+        return sCrashHandler;
+    }
+
+    public static synchronized boolean isCrashHandlingEnabled() {
+        return sCrashHandler != null;
     }
 
     @WrapForJNI(exceptionMode = "ignore")
@@ -273,8 +288,10 @@ public class GeckoAppShell
     }
 
     @WrapForJNI(exceptionMode = "ignore")
-    private static void handleUncaughtException(Throwable e) {
-        CRASH_HANDLER.uncaughtException(null, e);
+    private static synchronized void handleUncaughtException(Throwable e) {
+        if (sCrashHandler != null) {
+            sCrashHandler.uncaughtException(null, e);
+        }
     }
 
     private static float getLocationAccuracy(Location location) {
@@ -628,7 +645,7 @@ public class GeckoAppShell
         return sScreenOrientationDelegate;
     }
 
-    public static void setScreenOrientationDelegate(ScreenOrientationDelegate screenOrientationDelegate) {
+    public static void setScreenOrientationDelegate(@Nullable ScreenOrientationDelegate screenOrientationDelegate) {
         sScreenOrientationDelegate = (screenOrientationDelegate != null) ? screenOrientationDelegate : DEFAULT_LISTENERS;
     }
 
@@ -648,6 +665,7 @@ public class GeckoAppShell
         sHapticFeedbackDelegate = (delegate != null) ? delegate : DEFAULT_LISTENERS;
     }
 
+    @SuppressWarnings("fallthrough")
     @WrapForJNI(calledFrom = "gecko")
     private static void enableSensor(int aSensortype) {
         final SensorManager sm = (SensorManager)
@@ -759,6 +777,7 @@ public class GeckoAppShell
         }
     }
 
+    @SuppressWarnings("fallthrough")
     @WrapForJNI(calledFrom = "gecko")
     private static void disableSensor(int aSensortype) {
         final SensorManager sm = (SensorManager)
@@ -1830,37 +1849,61 @@ public class GeckoAppShell
         return sScreenSize;
     }
 
-    @WrapForJNI(calledFrom = "gecko")
+    @WrapForJNI(calledFrom = "any")
     public static int getAudioOutputFramesPerBuffer() {
+        final int DEFAULT = 512;
+
         if (SysInfo.getVersion() < 17) {
-            return 0;
+            return DEFAULT;
         }
         final AudioManager am = (AudioManager)getApplicationContext()
                                 .getSystemService(Context.AUDIO_SERVICE);
         if (am == null) {
-            return 0;
+            return DEFAULT;
         }
         final String prop = am.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER);
         if (prop == null) {
-            return 0;
+            return DEFAULT;
         }
         return Integer.parseInt(prop);
     }
 
-    @WrapForJNI(calledFrom = "gecko")
+    @WrapForJNI(calledFrom = "any")
     public static int getAudioOutputSampleRate() {
+        final int DEFAULT = 44100;
+
         if (SysInfo.getVersion() < 17) {
-            return 0;
+            return DEFAULT;
         }
         final AudioManager am = (AudioManager)getApplicationContext()
                                 .getSystemService(Context.AUDIO_SERVICE);
         if (am == null) {
-            return 0;
+            return DEFAULT;
         }
         final String prop = am.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE);
         if (prop == null) {
-            return 0;
+            return DEFAULT;
         }
         return Integer.parseInt(prop);
+    }
+
+    @WrapForJNI
+    public static String getDefaultLocale() {
+        final Locale locale = Locale.getDefault();
+        if (Build.VERSION.SDK_INT >= 21) {
+            return locale.toLanguageTag();
+        }
+
+        final StringBuilder out = new StringBuilder(locale.getLanguage());
+        final String country = locale.getCountry();
+        final String variant = locale.getVariant();
+        if (!TextUtils.isEmpty(country)) {
+            out.append('-').append(country);
+        }
+        if (!TextUtils.isEmpty(variant)) {
+            out.append('-').append(variant);
+        }
+        // e.g. "en", "en-US", or "en-US-POSIX".
+        return out.toString();
     }
 }

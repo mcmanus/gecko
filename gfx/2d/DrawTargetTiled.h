@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -41,13 +42,17 @@ public:
 
   virtual bool IsTiledDrawTarget() const override { return true; }
 
+  virtual bool IsCaptureDT() const override { return mTiles[0].mDrawTarget->IsCaptureDT(); }
   virtual DrawTargetType GetType() const override { return mTiles[0].mDrawTarget->GetType(); }
   virtual BackendType GetBackendType() const override { return mTiles[0].mDrawTarget->GetBackendType(); }
   virtual already_AddRefed<SourceSurface> Snapshot() override;
   virtual void DetachAllSnapshots() override;
-  virtual IntSize GetSize() override {
+  virtual IntSize GetSize() const override {
     MOZ_ASSERT(mRect.Width() > 0 && mRect.Height() > 0);
     return IntSize(mRect.XMost(), mRect.YMost());
+  }
+  virtual IntRect GetRect() const override {
+    return mRect;
   }
 
   virtual void Flush() override;
@@ -99,8 +104,7 @@ public:
   virtual void FillGlyphs(ScaledFont *aFont,
                           const GlyphBuffer &aBuffer,
                           const Pattern &aPattern,
-                          const DrawOptions &aOptions = DrawOptions(),
-                          const GlyphRenderingOptions *aRenderingOptions = nullptr) override;
+                          const DrawOptions &aOptions = DrawOptions()) override;
   virtual void Mask(const Pattern &aSource,
                     const Pattern &aMask,
                     const DrawOptions &aOptions = DrawOptions()) override;
@@ -192,16 +196,23 @@ public:
     }
   }
 
-  virtual SurfaceType GetType() const { return SurfaceType::TILED; }
-  virtual IntSize GetSize() const {
+  virtual SurfaceType GetType() const override { return SurfaceType::TILED; }
+  virtual IntSize GetSize() const override {
     MOZ_ASSERT(mRect.Width() > 0 && mRect.Height() > 0);
     return IntSize(mRect.XMost(), mRect.YMost());
   }
-  virtual SurfaceFormat GetFormat() const { return mSnapshots[0]->GetFormat(); }
+  virtual IntRect GetRect() const override {
+    return mRect;
+  }
+  virtual SurfaceFormat GetFormat() const override { return mSnapshots[0]->GetFormat(); }
 
-  virtual already_AddRefed<DataSourceSurface> GetDataSurface()
+  virtual already_AddRefed<DataSourceSurface> GetDataSurface() override
   {
-    RefPtr<DataSourceSurface> surf = Factory::CreateDataSourceSurface(GetSize(), GetFormat());
+    RefPtr<DataSourceSurface> surf = Factory::CreateDataSourceSurface(mRect.Size(), GetFormat());
+    if (!surf) {
+      gfxCriticalError() << "DrawTargetTiled::GetDataSurface failed to allocate surface";
+      return nullptr;
+    }
 
     DataSourceSurface::MappedSurface mappedSurf;
     if (!surf->Map(DataSourceSurface::MapType::WRITE, &mappedSurf)) {
@@ -212,7 +223,7 @@ public:
     {
       RefPtr<DrawTarget> dt =
         Factory::CreateDrawTargetForData(BackendType::CAIRO, mappedSurf.mData,
-        GetSize(), mappedSurf.mStride, GetFormat());
+        mRect.Size(), mappedSurf.mStride, GetFormat());
 
       if (!dt) {
         gfxWarning() << "DrawTargetTiled::GetDataSurface failed in CreateDrawTargetForData";
@@ -221,7 +232,7 @@ public:
       }
       for (size_t i = 0; i < mSnapshots.size(); i++) {
         RefPtr<DataSourceSurface> dataSurf = mSnapshots[i]->GetDataSurface();
-        dt->CopySurface(dataSurf, IntRect(IntPoint(0, 0), mSnapshots[i]->GetSize()), mOrigins[i]);
+        dt->CopySurface(dataSurf, IntRect(IntPoint(0, 0), mSnapshots[i]->GetSize()), mOrigins[i] - mRect.TopLeft());
       }
     }
     surf->Unmap();

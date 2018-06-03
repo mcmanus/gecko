@@ -20,7 +20,6 @@
 #include "mozIStorageAsyncStatement.h"
 #include "mozIStorageStatementCallback.h"
 #include "mozIStoragePendingStatement.h"
-#include "nsPIPlacesDatabase.h"
 #include "nsIObserver.h"
 #include "prinrval.h"
 #include "prtime.h"
@@ -218,11 +217,10 @@ already_AddRefed<mozIStorageConnection>
 do_get_db()
 {
   nsCOMPtr<nsINavHistoryService> history = do_get_NavHistory();
-  nsCOMPtr<nsPIPlacesDatabase> database = do_QueryInterface(history);
-  do_check_true(database);
+  do_check_true(history);
 
   nsCOMPtr<mozIStorageConnection> dbConn;
-  nsresult rv = database->GetDBConnection(getter_AddRefs(dbConn));
+  nsresult rv = history->GetDBConnection(getter_AddRefs(dbConn));
   do_check_success(rv);
   return dbConn.forget();
 }
@@ -347,7 +345,7 @@ addURI(nsIURI* aURI)
   do_wait_async_updates();
 }
 
-static const char TOPIC_PROFILE_CHANGE[] = "profile-before-change";
+static const char TOPIC_PROFILE_CHANGE_QM[] = "profile-before-change-qm";
 static const char TOPIC_PLACES_CONNECTION_CLOSED[] = "places-connection-closed";
 
 class WaitForConnectionClosed final : public nsIObserver
@@ -365,7 +363,10 @@ public:
       do_GetService(NS_OBSERVERSERVICE_CONTRACTID);
     MOZ_ASSERT(os);
     if (os) {
-      MOZ_ALWAYS_SUCCEEDS(os->AddObserver(this, TOPIC_PROFILE_CHANGE, false));
+      // The places-connection-closed notification happens because of things
+      // that occur during profile-before-change, so we use the stage after that
+      // to wait for it.
+      MOZ_ALWAYS_SUCCEEDS(os->AddObserver(this, TOPIC_PROFILE_CHANGE_QM, false));
     }
     mSpinner = new WaitForTopicSpinner(TOPIC_PLACES_CONNECTION_CLOSED);
   }

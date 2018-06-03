@@ -5,6 +5,7 @@
 extern crate gleam;
 extern crate glutin;
 extern crate webrender;
+extern crate winit;
 
 #[path = "common/boilerplate.rs"]
 mod boilerplate;
@@ -23,8 +24,8 @@ impl Example for App {
         &mut self,
         api: &RenderApi,
         builder: &mut DisplayListBuilder,
-        _resources: &mut ResourceUpdates,
-        _layout_size: LayoutSize,
+        _txn: &mut Transaction,
+        _framebuffer_size: DeviceUintSize,
         pipeline_id: PipelineId,
         document_id: DocumentId,
     ) {
@@ -38,51 +39,44 @@ impl Example for App {
         let info = LayoutPrimitiveInfo::new(sub_bounds);
         sub_builder.push_stacking_context(
             &info,
-            ScrollPolicy::Scrollable,
+            None,
             None,
             TransformStyle::Flat,
             None,
             MixBlendMode::Normal,
             Vec::new(),
+            GlyphRasterSpace::Screen,
         );
 
         // green rect visible == success
         sub_builder.push_rect(&info, ColorF::new(0.0, 1.0, 0.0, 1.0));
         sub_builder.pop_stacking_context();
 
-        api.set_display_list(
-            document_id,
+        let mut txn = Transaction::new();
+        txn.set_display_list(
             Epoch(0),
             None,
             sub_bounds.size,
             sub_builder.finalize(),
             true,
-            ResourceUpdates::new(),
         );
+        api.send_transaction(document_id, txn);
 
         // And this is for the root pipeline
         builder.push_stacking_context(
             &info,
-            ScrollPolicy::Scrollable,
-            Some(PropertyBinding::Binding(PropertyBindingKey::new(42))),
+            None,
+            Some(PropertyBinding::Binding(PropertyBindingKey::new(42), LayoutTransform::identity())),
             TransformStyle::Flat,
             None,
             MixBlendMode::Normal,
             Vec::new(),
+            GlyphRasterSpace::Screen,
         );
         // red rect under the iframe: if this is visible, things have gone wrong
         builder.push_rect(&info, ColorF::new(1.0, 0.0, 0.0, 1.0));
-        builder.push_iframe(&info, sub_pipeline_id);
+        builder.push_iframe(&info, sub_pipeline_id, false);
         builder.pop_stacking_context();
-    }
-
-    fn on_event(
-        &mut self,
-        _event: glutin::Event,
-        _api: &RenderApi,
-        _document_id: DocumentId,
-    ) -> bool {
-        false
     }
 }
 

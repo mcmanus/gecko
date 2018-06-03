@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -922,7 +924,7 @@ FileHandleThreadPool::WaitForDirectoriesToComplete(
   MOZ_ASSERT(aCallback);
 
   nsAutoPtr<StoragesCompleteCallback> callback(
-    new StoragesCompleteCallback(Move(aDirectoryIds), aCallback));
+    new StoragesCompleteCallback(std::move(aDirectoryIds), aCallback));
 
   if (!MaybeFireCallback(callback)) {
     mCompleteCallbacks.AppendElement(callback.forget());
@@ -1272,7 +1274,7 @@ FileHandleThreadPool::
 StoragesCompleteCallback::StoragesCompleteCallback(
                                              nsTArray<nsCString>&& aDirectoryIds,
                                              nsIRunnable* aCallback)
-  : mDirectoryIds(Move(aDirectoryIds))
+  : mDirectoryIds(std::move(aDirectoryIds))
   , mCallback(aCallback)
 {
   AssertIsOnBackgroundThread();

@@ -9,30 +9,27 @@
 #include "nsIEventTarget.h"
 #include "nsIGlobalObject.h"
 #include "nsITimer.h"
-#include "nsITransport.h"
-#include "nsIStreamTransportService.h"
 
 #include "mozilla/Base64.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/dom/DOMException.h"
+#include "mozilla/dom/DOMExceptionBinding.h"
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/FileReaderBinding.h"
 #include "mozilla/dom/ProgressEvent.h"
+#include "mozilla/dom/WorkerCommon.h"
+#include "mozilla/dom/WorkerRef.h"
+#include "mozilla/dom/WorkerScope.h"
 #include "mozilla/Encoding.h"
+#include "nsAlgorithm.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsDOMJSUtils.h"
 #include "nsError.h"
-#include "nsNetCID.h"
 #include "nsNetUtil.h"
 #include "xpcpublic.h"
 
-#include "WorkerPrivate.h"
-#include "WorkerScope.h"
-
 namespace mozilla {
 namespace dom {
-
-using namespace workers;
 
 #define ABORT_STR "abort"
 #define LOAD_STR "load"
@@ -42,8 +39,6 @@ using namespace workers;
 #define PROGRESS_STR "progress"
 
 const uint64_t kUnknownSize = uint64_t(-1);
-
-static NS_DEFINE_CID(kStreamTransportServiceCID, NS_STREAMTRANSPORTSERVICE_CID);
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(FileReader)
 
@@ -100,7 +95,7 @@ FileReader::RootResultArrayBuffer()
 //FileReader constructors/initializers
 
 FileReader::FileReader(nsIGlobalObject* aGlobal,
-                       WorkerPrivate* aWorkerPrivate)
+                       WeakWorkerRef* aWorkerRef)
   : DOMEventTargetHelper(aGlobal)
   , mFileData(nullptr)
   , mDataLen(0)
@@ -112,10 +107,10 @@ FileReader::FileReader(nsIGlobalObject* aGlobal,
   , mTotal(0)
   , mTransferred(0)
   , mBusyCount(0)
-  , mWorkerPrivate(aWorkerPrivate)
+  , mWeakWorkerRef(aWorkerRef)
 {
   MOZ_ASSERT(aGlobal);
-  MOZ_ASSERT(NS_IsMainThread() == !mWorkerPrivate);
+  MOZ_ASSERT_IF(NS_IsMainThread(), !mWeakWorkerRef);
 
   if (NS_IsMainThread()) {
     mTarget = aGlobal->EventTargetFor(TaskCategory::Other);
@@ -136,15 +131,16 @@ FileReader::~FileReader()
 FileReader::Constructor(const GlobalObject& aGlobal, ErrorResult& aRv)
 {
   nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(aGlobal.GetAsSupports());
-  WorkerPrivate* workerPrivate = nullptr;
+  RefPtr<WeakWorkerRef> workerRef;
 
   if (!NS_IsMainThread()) {
     JSContext* cx = aGlobal.Context();
-    workerPrivate = GetWorkerPrivateFromContext(cx);
-    MOZ_ASSERT(workerPrivate);
+    WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(cx);
+
+    workerRef = WeakWorkerRef::Create(workerPrivate);
   }
 
-  RefPtr<FileReader> fileReader = new FileReader(global, workerPrivate);
+  RefPtr<FileReader> fileReader = new FileReader(global, workerRef);
 
   return fileReader.forget();
 }
@@ -185,27 +181,6 @@ FileReader::GetResult(JSContext* aCx,
     aRv.Throw(NS_ERROR_FAILURE);
     return;
   }
-}
-
-static nsresult
-ReadFuncBinaryString(nsIInputStream* in,
-                     void* closure,
-                     const char* fromRawSegment,
-                     uint32_t toOffset,
-                     uint32_t count,
-                     uint32_t *writeCount)
-{
-  char16_t* dest = static_cast<char16_t*>(closure) + toOffset;
-  char16_t* end = dest + count;
-  const unsigned char* source = (const unsigned char*)fromRawSegment;
-  while (dest != end) {
-    *dest = *source;
-    ++dest;
-    ++source;
-  }
-  *writeCount = count;
-
-  return NS_OK;
 }
 
 void
@@ -259,7 +234,7 @@ FileReader::OnLoadEndArrayBuffer()
   // XXX Code selected arbitrarily
   mError =
     new DOMException(NS_ERROR_DOM_INVALID_STATE_ERR, errorMsg,
-                     errorNameC, DOMException::INVALID_STATE_ERR);
+                     errorNameC, DOMExceptionBinding::INVALID_STATE_ERR);
 
   FreeDataAndDispatchError();
 }
@@ -284,6 +259,37 @@ FileReader::DoAsyncWait()
   return NS_OK;
 }
 
+namespace {
+
+void
+PopulateBufferForBinaryString(char16_t* aDest, const char* aSource,
+                              uint32_t aCount)
+{
+  const unsigned char* source = (const unsigned char*)aSource;
+  char16_t* end = aDest + aCount;
+  while (aDest != end) {
+    *aDest = *source;
+    ++aDest;
+    ++source;
+  }
+}
+
+nsresult
+ReadFuncBinaryString(nsIInputStream* aInputStream,
+                     void* aClosure,
+                     const char* aFromRawSegment,
+                     uint32_t aToOffset,
+                     uint32_t aCount,
+                     uint32_t* aWriteCount)
+{
+  char16_t* dest = static_cast<char16_t*>(aClosure) + aToOffset;
+  PopulateBufferForBinaryString(dest, aFromRawSegment, aCount);
+  *aWriteCount = aCount;
+  return NS_OK;
+}
+
+} // anonymous
+
 nsresult
 FileReader::DoReadData(uint64_t aCount)
 {
@@ -293,32 +299,57 @@ FileReader::DoReadData(uint64_t aCount)
 
   if (mDataFormat == FILE_AS_BINARY) {
     //Continuously update our binary string as data comes in
-    uint32_t oldLen = mResult.Length();
-    MOZ_ASSERT(mResult.Length() == mDataLen, "unexpected mResult length");
-    if (uint64_t(oldLen) + aCount > UINT32_MAX)
+    CheckedInt<uint64_t> size = mResult.Length();
+    size += aCount;
+
+    if (!size.isValid() ||
+        size.value() > UINT32_MAX ||
+        size.value() > mTotal) {
       return NS_ERROR_OUT_OF_MEMORY;
-    char16_t *buf = nullptr;
-    mResult.GetMutableData(&buf, oldLen + aCount, fallible);
-    NS_ENSURE_TRUE(buf, NS_ERROR_OUT_OF_MEMORY);
+    }
 
-    nsresult rv;
+    uint32_t oldLen = mResult.Length();
+    MOZ_ASSERT(oldLen == mDataLen, "unexpected mResult length");
 
-    // nsFileStreams do not implement ReadSegment. In case here we are dealing
-    // with a nsIAsyncInputStream, in content process, we need to wrap a
-    // nsIBufferedInputStream around it.
-    if (!mBufferedStream) {
-      rv = NS_NewBufferedInputStream(getter_AddRefs(mBufferedStream),
-                                     mAsyncStream, 8192);
+    char16_t* dest = nullptr;
+    mResult.GetMutableData(&dest, size.value(), fallible);
+    NS_ENSURE_TRUE(dest, NS_ERROR_OUT_OF_MEMORY);
+
+    dest += oldLen;
+
+    if (NS_InputStreamIsBuffered(mAsyncStream)) {
+      nsresult rv = mAsyncStream->ReadSegments(ReadFuncBinaryString, dest,
+                                               aCount, &bytesRead);
       NS_ENSURE_SUCCESS(rv, rv);
+    } else {
+      while (aCount > 0) {
+        char tmpBuffer[4096];
+        uint32_t minCount =
+          XPCOM_MIN(aCount, static_cast<uint64_t>(sizeof(tmpBuffer)));
+        uint32_t read;
+
+        nsresult rv = mAsyncStream->Read(tmpBuffer, minCount, &read);
+        if (rv == NS_BASE_STREAM_CLOSED) {
+          rv = NS_OK;
+        }
+
+        NS_ENSURE_SUCCESS(rv, rv);
+
+        if (read == 0) {
+          // The stream finished too early.
+          return NS_ERROR_OUT_OF_MEMORY;
+        }
+
+        PopulateBufferForBinaryString(dest, tmpBuffer, read);
+
+        dest += read;
+        aCount -= read;
+        bytesRead += read;
+      }
     }
 
-    rv = mBufferedStream->ReadSegments(ReadFuncBinaryString, buf + oldLen,
-                                       aCount, &bytesRead);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
-
-    mResult.Truncate(oldLen + bytesRead);
+    MOZ_ASSERT(size.value() == oldLen + bytesRead);
+    mResult.Truncate(size.value());
   }
   else {
     CheckedInt<uint64_t> size = mDataLen;
@@ -355,6 +386,11 @@ FileReader::ReadFileContent(Blob& aBlob,
                             eDataFormat aDataFormat,
                             ErrorResult& aRv)
 {
+  if (IsCurrentThreadRunningWorker() && !mWeakWorkerRef) {
+    // The worker is already shutting down.
+    return;
+  }
+
   if (mReadyState == LOADING) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
@@ -366,7 +402,6 @@ FileReader::ReadFileContent(Blob& aBlob,
   mResultArrayBuffer = nullptr;
 
   mAsyncStream = nullptr;
-  mBufferedStream = nullptr;
 
   mTransferred = 0;
   mTotal = 0;
@@ -377,48 +412,18 @@ FileReader::ReadFileContent(Blob& aBlob,
   mDataFormat = aDataFormat;
   CopyUTF16toUTF8(aCharset, mCharset);
 
-  nsCOMPtr<nsIInputStream> stream;
-  mBlob->CreateInputStream(getter_AddRefs(stream), aRv);
-  if (NS_WARN_IF(aRv.Failed())) {
-    return;
-  }
-
-  bool nonBlocking = false;
-  aRv = stream->IsNonBlocking(&nonBlocking);
-  if (NS_WARN_IF(aRv.Failed())) {
-    return;
-  }
-
-  mAsyncStream = do_QueryInterface(stream);
-
-  // We want to have a non-blocking nsIAsyncInputStream.
-  if (!mAsyncStream || !nonBlocking) {
-    nsresult rv;
-    nsCOMPtr<nsIStreamTransportService> sts =
-      do_GetService(kStreamTransportServiceCID, &rv);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      aRv.Throw(rv);
-      return;
-    }
-
-    nsCOMPtr<nsITransport> transport;
-    aRv = sts->CreateInputTransport(stream,
-                                    /* aCloseWhenDone */ true,
-                                    getter_AddRefs(transport));
+  {
+    nsCOMPtr<nsIInputStream> stream;
+    mBlob->CreateInputStream(getter_AddRefs(stream), aRv);
     if (NS_WARN_IF(aRv.Failed())) {
       return;
     }
 
-    nsCOMPtr<nsIInputStream> wrapper;
-    aRv = transport->OpenInputStream(/* aFlags */ 0,
-                                     /* aSegmentSize */ 0,
-                                     /* aSegmentCount */ 0,
-                                     getter_AddRefs(wrapper));
+    aRv = NS_MakeAsyncNonBlockingInputStream(stream.forget(),
+                                             getter_AddRefs(mAsyncStream));
     if (NS_WARN_IF(aRv.Failed())) {
       return;
     }
-
-    mAsyncStream = do_QueryInterface(wrapper);
   }
 
   MOZ_ASSERT(mAsyncStream);
@@ -529,7 +534,7 @@ void
 FileReader::StartProgressEventTimer()
 {
   if (!mProgressNotifier) {
-    mProgressNotifier = do_CreateInstance(NS_TIMER_CONTRACTID);
+    mProgressNotifier = NS_NewTimer();
   }
 
   if (mProgressNotifier) {
@@ -558,7 +563,6 @@ FileReader::FreeDataAndDispatchSuccess()
   FreeFileData();
   mResult.SetIsVoid(false);
   mAsyncStream = nullptr;
-  mBufferedStream = nullptr;
   mBlob = nullptr;
 
   // Dispatch event to signify end of a successful operation
@@ -574,7 +578,6 @@ FileReader::FreeDataAndDispatchError()
   FreeFileData();
   mResult.SetIsVoid(true);
   mAsyncStream = nullptr;
-  mBufferedStream = nullptr;
   mBlob = nullptr;
 
   // Dispatch error event to signify load failure
@@ -620,8 +623,9 @@ FileReader::DispatchProgressEvent(const nsAString& aType)
     ProgressEvent::Constructor(this, aType, init);
   event->SetTrusted(true);
 
-  bool dummy;
-  return DispatchEvent(event, &dummy);
+  ErrorResult rv;
+  DispatchEvent(*event, rv);
+  return rv.StealNSResult();
 }
 
 // nsITimerCallback
@@ -651,7 +655,7 @@ FileReader::OnInputStreamReady(nsIAsyncInputStream* aStream)
 
   // We use this class to decrease the busy counter at the end of this method.
   // In theory we can do it immediatelly but, for debugging reasons, we want to
-  // be 100% sure we have a workerHolder when OnLoadEnd() is called.
+  // be 100% sure we have a workerRef when OnLoadEnd() is called.
   FileReaderDecreaseBusyCounter RAII(this);
 
   uint64_t count;
@@ -769,7 +773,6 @@ FileReader::Abort()
   mResultArrayBuffer = nullptr;
 
   mAsyncStream = nullptr;
-  mBufferedStream = nullptr;
   mBlob = nullptr;
 
   //Clean up memory buffer
@@ -783,9 +786,21 @@ FileReader::Abort()
 nsresult
 FileReader::IncreaseBusyCounter()
 {
-  if (mWorkerPrivate && mBusyCount++ == 0 &&
-      !HoldWorker(mWorkerPrivate, Closing)) {
-    return NS_ERROR_FAILURE;
+  if (mWeakWorkerRef && mBusyCount++ == 0) {
+    if (NS_WARN_IF(!mWeakWorkerRef->GetPrivate())) {
+      return NS_ERROR_FAILURE;
+    }
+
+    RefPtr<FileReader> self = this;
+
+    RefPtr<StrongWorkerRef> ref =
+      StrongWorkerRef::Create(mWeakWorkerRef->GetPrivate(), "FileReader",
+                              [self]() { self->Shutdown(); });
+    if (NS_WARN_IF(!ref)) {
+      return NS_ERROR_FAILURE;
+    }
+
+    mStrongWorkerRef = ref;
   }
 
   return NS_OK;
@@ -794,23 +809,10 @@ FileReader::IncreaseBusyCounter()
 void
 FileReader::DecreaseBusyCounter()
 {
-  MOZ_ASSERT_IF(mWorkerPrivate, mBusyCount);
-  if (mWorkerPrivate && --mBusyCount == 0) {
-    ReleaseWorker();
+  MOZ_ASSERT_IF(mStrongWorkerRef, mBusyCount);
+  if (mStrongWorkerRef && --mBusyCount == 0) {
+    mStrongWorkerRef = nullptr;
   }
-}
-
-bool
-FileReader::Notify(Status aStatus)
-{
-  MOZ_ASSERT(mWorkerPrivate);
-  mWorkerPrivate->AssertIsOnWorkerThread();
-
-  if (aStatus > Running) {
-    Shutdown();
-  }
-
-  return true;
 }
 
 void
@@ -823,17 +825,12 @@ FileReader::Shutdown()
     mAsyncStream = nullptr;
   }
 
-  if (mBufferedStream) {
-    mBufferedStream->Close();
-    mBufferedStream = nullptr;
-  }
-
   FreeFileData();
   mResultArrayBuffer = nullptr;
 
-  if (mWorkerPrivate && mBusyCount != 0) {
-    ReleaseWorker();
-    mWorkerPrivate = nullptr;
+  if (mWeakWorkerRef && mBusyCount != 0) {
+    mStrongWorkerRef = nullptr;
+    mWeakWorkerRef = nullptr;
     mBusyCount = 0;
   }
 }

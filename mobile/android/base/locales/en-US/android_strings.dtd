@@ -69,6 +69,14 @@
 <!ENTITY  crash_restart_label "Restart &brandShortName;">
 
 <!ENTITY url_bar_default_text2 "Search or enter address">
+<!-- Localization note (url_bar_qrcode_text2) : This text will be
+     heard by non-visual users when the focus is on the QR Code
+     icon in the url bar. -->
+<!ENTITY url_bar_qrcode_text2 "Use your QR Reader to search or enter address">
+<!-- Localization note (url_bar_mic_text2) : This text will be
+     heard by non-visual users when the focus is on the Microphone
+     icon in the url bar. -->
+<!ENTITY url_bar_mic_text2 "Use your microphone to search or enter address">
 
 <!ENTITY bookmark "Bookmark">
 <!ENTITY bookmark_remove "Remove bookmark">
@@ -206,7 +214,7 @@
      “storing data”. -->
 <!ENTITY pref_category_advanced_summary3 "Restore tabs, data saver, developer tools">
 <!ENTITY pref_category_notifications "Notifications">
-<!ENTITY pref_category_notifications_summary "New features, website updates">
+<!ENTITY pref_category_notifications_summary2 "New features, product tips">
 <!ENTITY pref_developer_remotedebugging_usb "Remote debugging via USB">
 <!ENTITY pref_developer_remotedebugging_wifi "Remote debugging via Wi-Fi">
 <!ENTITY pref_developer_remotedebugging_wifi_disabled_summary "Wi-Fi debugging requires your device to have a QR code reader app installed.">
@@ -282,9 +290,22 @@
 <!ENTITY pref_whats_new_notification "What\'s new in &brandShortName;">
 <!ENTITY pref_whats_new_notification_summary "Learn about new features after an update">
 
+<!-- Localization note (pref_feature_tips_notification): Title of a new toggleable setting in Settings-Notifications screen.
+     Similar to the already existing "pref_whats_new_notification"-->
+<!ENTITY pref_feature_tips_notification "Product and feature tips">
+<!-- Localization note (pref_feature_tips_notification_summary): Description of a new toggleable setting in Settings-Notifications screen.
+     Similar to the already existing "pref_whats_new_notification_summary"-->
+<!ENTITY pref_feature_tips_notification_summary "Learn more about using &brandShortName; and other &vendorShortName; products">
+
 <!-- Localization note (pref_category_experimental): Title of a sub category in the 'advanced' category
      for experimental features. -->
 <!ENTITY pref_category_experimental "Experimental features">
+
+<!-- Custom Tabs is an Android API for allowing third-party apps to open URLs in a customized UI.
+     Instead of switching to the browser it appears as if the user stays in the third-party app.
+     For more see: https://developer.chrome.com/multidevice/android/customtabs -->
+<!ENTITY pref_custom_tabs2 "Custom Tabs">
+<!ENTITY pref_custom_tabs_summary4 "Allow apps to open web content in a quickly loading custom tab">
 
 <!-- Localization note (custom_tabs_menu_item_open_in): The variable is replaced by the name of
      default browser from user's preference, such as "Open in Firefox" -->
@@ -357,6 +378,7 @@
 <!ENTITY pref_qrcode_enabled_summary2 "Allow QR scanner in the URL bar">
 
 <!ENTITY pref_use_master_password "Use master password">
+<!ENTITY pref_sync_default_title "Firefox Account">
 <!ENTITY pref_sync2 "Sign in">
 <!ENTITY pref_sync_summary2 "Sync your tabs, bookmarks, logins, history">
 <!ENTITY pref_search_suggestions "Show search suggestions">
@@ -415,7 +437,6 @@
      crashReporterDesc.label). -->
 <!ENTITY datareporting_fhr_title "&brandShortName; Health Report">
 <!ENTITY datareporting_fhr_summary2 "Shares data with &vendorShortName; about your browser health and helps you understand your browser performance">
-<!ENTITY datareporting_abouthr_title "View my Health Report">
 <!ENTITY datareporting_telemetry_title "Telemetry">
 <!ENTITY datareporting_telemetry_summary "Shares performance, usage, hardware and customization data about your browser with &vendorShortName; to help us make &brandShortName; better">
 <!ENTITY datareporting_crashreporter_summary "&brandShortName; submits crash reports to help &vendorShortName; make your browser more stable and secure">
@@ -447,6 +468,7 @@
 <!ENTITY share_image_failed "Unable to share this image">
 <!ENTITY save_as_pdf "Save as PDF">
 <!ENTITY print "Print">
+<!ENTITY view_page_source "View Page Source">
 <!ENTITY find_in_page "Find in page">
 <!ENTITY desktop_mode "Request desktop site">
 <!ENTITY page "Page">
@@ -478,7 +500,7 @@
 <!ENTITY contextmenu_open_new_tab "Open in New Tab">
 <!ENTITY contextmenu_open_private_tab "Open in Private Tab">
 <!ENTITY contextmenu_remove "Remove">
-<!ENTITY contextmenu_add_to_launcher "Add to Home Screen">
+<!ENTITY contextmenu_add_page_shortcut "Add Page Shortcut">
 <!ENTITY contextmenu_set_as_homepage "Set as Homepage">
 <!ENTITY contextmenu_share "Share">
 <!ENTITY contextmenu_pasteandgo "Paste &amp; Go">
@@ -529,9 +551,10 @@
 <!ENTITY pref_compact_tabs_summary2 "Arrange tabs in two columns in portrait mode">
 
 <!-- Localization note (page_removed): This string appears in a toast message when
-     any page is removed frome about:home. This includes pages that are in history,
+     any page is removed from about:home. This includes pages that are in history,
      bookmarks, or reading list. -->
 <!ENTITY page_removed "Page removed">
+<!ENTITY folder_removed "Folder removed">
 
 <!ENTITY bookmark_edit_title "Edit Bookmark">
 <!ENTITY bookmark_edit_folder_title "Edit Folder">
@@ -746,7 +769,7 @@ just addresses the organization to follow, e.g. "This site is run by " -->
      "Last synced" is one of the user's other Sync clients, typically Firefox on
      their desktop or laptop.-->
 <!ENTITY remote_tabs_last_synced "Last synced: &formatS;">
-<!-- Localization note: Used when the sync has not happend yet, showed in place of a date -->
+<!-- Localization note: Used when the sync has not happened yet, showed in place of a date -->
 <!ENTITY remote_tabs_never_synced "Last synced: never">
 
 <!-- LOCALIZATION NOTE (intent_uri_private_browsing_prompt): This string will
@@ -804,6 +827,9 @@ just addresses the organization to follow, e.g. "This site is run by " -->
      replaced by the Android OS version (e.g., 14)-->
 <!ENTITY unsupported_sdk_version "Sorry! This &brandShortName; won\'t work on this device (&formatS1;, &formatS2;). Please download the correct version.">
 
+<!-- LOCALIZATION NOTE(corrupt_apk): This notification is shown if corruption has been detected on startup and the user has to reinstall Firefox -->
+<!ENTITY corrupt_apk "Unable to open &brandShortName;. Please reinstall and try again.">
+
 <!ENTITY eol_notification_title2 "&brandShortName; will no longer update">
 <!ENTITY eol_notification_summary "Tap to learn more">
 
@@ -812,7 +838,7 @@ just addresses the organization to follow, e.g. "This site is run by " -->
 <!ENTITY whatsnew_notification_title "&brandShortName; is up to date">
 <!ENTITY whatsnew_notification_summary "Find out what\'s new in this version">
 
-<!ENTITY promotion_add_to_homescreen "Add to home screen">
+<!ENTITY promotion_add_page_shortcut "Add page shortcut">
 
 <!ENTITY helper_first_offline_bookmark_title "Read offline">
 <!ENTITY helper_first_offline_bookmark_message "Find your Reader View items in Bookmarks, even offline.">
@@ -853,3 +879,13 @@ is simply hidden from the Activity Stream panel. -->
 <!ENTITY private_tab_learn_more "Want to learn more?">
 
 <!ENTITY fullscreen_warning "Entered full screen">
+
+<!-- LOCALIZATION NOTE (pwa_add_to_launcher_confirm): The plus sign here is part of UI design -->
+<!ENTITY pwa_add_to_launcher_confirm "+ Add to Home Screen">
+
+<!-- LOCALIZATION NOTE (pwa_add_to_launcher_badge2): Used as label in the page actions dropdown list,
+displayed when there are more than 3 actions available for a page.
+See also https://bug1409261.bmoattachments.org/attachment.cgi?id=8919897 -->
+<!ENTITY pwa_add_to_launcher_badge2 "Add to Home Screen">
+<!ENTITY pwa_continue_to_website "Continue to Website">
+<!ENTITY pwa_onboarding_sumo "You can easily add this website to your Home screen to have instant access and browse faster with an app-like experience.">

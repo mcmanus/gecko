@@ -13,14 +13,15 @@ import org.mozilla.gecko.background.common.log.Logger;
 import org.mozilla.gecko.db.BrowserContract;
 import org.mozilla.gecko.db.BrowserContract.DeletedFormHistory;
 import org.mozilla.gecko.db.BrowserContract.FormHistory;
+import org.mozilla.gecko.sync.SessionCreateException;
 import org.mozilla.gecko.sync.repositories.InactiveSessionException;
 import org.mozilla.gecko.sync.repositories.NoContentProviderException;
 import org.mozilla.gecko.sync.repositories.NoStoreDelegateException;
 import org.mozilla.gecko.sync.repositories.NullCursorException;
 import org.mozilla.gecko.sync.repositories.RecordFilter;
 import org.mozilla.gecko.sync.repositories.Repository;
+import org.mozilla.gecko.sync.repositories.RepositorySession;
 import org.mozilla.gecko.sync.repositories.StoreTrackingRepositorySession;
-import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionCreationDelegate;
 import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionFetchRecordsDelegate;
 import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionFinishDelegate;
 import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionWipeDelegate;
@@ -49,13 +50,11 @@ public class FormHistoryRepositorySession extends
   public static class FormHistoryRepository extends Repository {
 
     @Override
-    public void createSession(RepositorySessionCreationDelegate delegate,
-                              Context context) {
+    public RepositorySession createSession(Context context) throws SessionCreateException {
       try {
-        final FormHistoryRepositorySession session = new FormHistoryRepositorySession(this, context);
-        delegate.onSessionCreated(session);
+        return new FormHistoryRepositorySession(this, context);
       } catch (Exception e) {
-        delegate.onSessionCreateFailed(e);
+        throw new SessionCreateException(e);
       }
     }
   }
@@ -218,7 +217,7 @@ public class FormHistoryRepositorySession extends
       }
     };
 
-    delegateQueue.execute(command);
+    fetchWorkQueue.execute(command);
   }
 
   protected static String regularBetween(long start, long end) {
@@ -555,7 +554,7 @@ public class FormHistoryRepositorySession extends
               Logger.trace(LOG_TAG, "Remote modified, local not. Deleting.");
               deleteExistingRecord(existingRecord);
               trackRecord(record);
-              storeDelegate.onRecordStoreSucceeded(record.guid);
+              storeDelegate.onRecordStoreSucceeded(1);
               return;
             }
 
@@ -568,7 +567,7 @@ public class FormHistoryRepositorySession extends
               // Currently, locallyModified above is _always_ true if a record exists locally,
               // and so we'll consider any deletions of already present records as reconciliations.
               storeDelegate.onRecordStoreReconciled(record.guid, null, null);
-              storeDelegate.onRecordStoreSucceeded(record.guid);
+              storeDelegate.onRecordStoreSucceeded(1);
               return;
             }
 
@@ -588,7 +587,7 @@ public class FormHistoryRepositorySession extends
             Logger.trace(LOG_TAG, "No match. Inserting.");
             insertNewRegularRecord(record);
             trackRecord(record);
-            storeDelegate.onRecordStoreSucceeded(record.guid);
+            storeDelegate.onRecordStoreSucceeded(1);
             return;
           }
 
@@ -600,7 +599,7 @@ public class FormHistoryRepositorySession extends
             Logger.trace(LOG_TAG, "Remote guid different from local guid. Storing to keep remote guid.");
             replaceExistingRecordWithRegularRecord(record, existingRecord);
             trackRecord(record);
-            storeDelegate.onRecordStoreSucceeded(record.guid);
+            storeDelegate.onRecordStoreSucceeded(1);
             return;
           }
 
@@ -610,7 +609,7 @@ public class FormHistoryRepositorySession extends
             Logger.trace(LOG_TAG, "Remote modified, local not. Storing.");
             replaceExistingRecordWithRegularRecord(record, existingRecord);
             trackRecord(record);
-            storeDelegate.onRecordStoreSucceeded(record.guid);
+            storeDelegate.onRecordStoreSucceeded(1);
             return;
           }
 
@@ -620,7 +619,7 @@ public class FormHistoryRepositorySession extends
             replaceExistingRecordWithRegularRecord(record, existingRecord);
             trackRecord(record);
             storeDelegate.onRecordStoreReconciled(record.guid, existingRecord.guid, null);
-            storeDelegate.onRecordStoreSucceeded(record.guid);
+            storeDelegate.onRecordStoreSucceeded(1);
             return;
           }
 

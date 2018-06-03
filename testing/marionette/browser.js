@@ -5,22 +5,59 @@
 "use strict";
 /* global frame */
 
-const {utils: Cu} = Components;
-
-const {WebElementEventTarget} = Cu.import("chrome://marionette/content/dom.js", {});
-Cu.import("chrome://marionette/content/element.js");
+const {WebElementEventTarget} = ChromeUtils.import("chrome://marionette/content/dom.js", {});
+ChromeUtils.import("chrome://marionette/content/element.js");
 const {
   NoSuchWindowError,
   UnsupportedOperationError,
-} = Cu.import("chrome://marionette/content/error.js", {});
-Cu.import("chrome://marionette/content/frame.js");
+} = ChromeUtils.import("chrome://marionette/content/error.js", {});
+const {
+  MessageManagerDestroyedPromise,
+} = ChromeUtils.import("chrome://marionette/content/sync.js", {});
 
-this.EXPORTED_SYMBOLS = ["browser", "WindowState"];
+this.EXPORTED_SYMBOLS = ["browser", "Context", "WindowState"];
 
 /** @namespace */
 this.browser = {};
 
 const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+
+/**
+ * Variations of Marionette contexts.
+ *
+ * Choosing a context through the <tt>Marionette:SetContext</tt>
+ * command directs all subsequent browsing context scoped commands
+ * to that context.
+ */
+class Context {
+  /**
+   * Gets the correct context from a string.
+   *
+   * @param {string} s
+   *     Context string serialisation.
+   *
+   * @return {Context}
+   *     Context.
+   *
+   * @throws {TypeError}
+   *     If <var>s</var> is not a context.
+   */
+  static fromString(s) {
+    switch (s) {
+      case "chrome":
+        return Context.Chrome;
+
+      case "content":
+        return Context.Content;
+
+      default:
+        throw new TypeError(`Unknown context: ${s}`);
+    }
+  }
+}
+Context.Chrome = "chrome";
+Context.Content = "content";
+this.Context = Context;
 
 /**
  * Get the <code>&lt;xul:browser&gt;</code> for the specified tab.
@@ -112,13 +149,8 @@ browser.Context = class {
     this.pendingCommands = [];
     this._needsFlushPendingCommands = false;
 
-    // We should have one frame.Manager per browser.Context so that we
-    // can handle modals in each <xul:browser>.
-    this.frameManager = new frame.Manager(driver);
     this.frameRegsPending = 0;
 
-    // register all message listeners
-    this.frameManager.addMessageManagerListeners(driver.mm);
     this.getIdForBrowser = driver.getIdForBrowser.bind(driver);
     this.updateIdForBrowser = driver.updateIdForBrowser.bind(driver);
   }
@@ -139,7 +171,25 @@ browser.Context = class {
   }
 
   get messageManager() {
-    return this.contentBrowser.messageManager;
+    if (this.contentBrowser) {
+      return this.contentBrowser.messageManager;
+    }
+
+    return null;
+  }
+
+  /**
+   * Checks if the browsing context has been discarded.
+   *
+   * The browsing context will have been discarded if the content
+   * browser, represented by the <code>&lt;xul:browser&gt;</code>,
+   * has been detached.
+   *
+   * @return {boolean}
+   *     True if browsing context has been discarded, false otherwise.
+   */
+  get closed() {
+    return this.contentBrowser === null;
   }
 
   /**
@@ -234,7 +284,14 @@ browser.Context = class {
    */
   closeWindow() {
     return new Promise(resolve => {
-      this.window.addEventListener("unload", resolve, {once: true});
+      // Wait for the window message manager to be destroyed
+      let destroyed = new MessageManagerDestroyedPromise(
+          this.window.messageManager);
+
+      this.window.addEventListener("unload", async () => {
+        await destroyed;
+        resolve();
+      }, {once: true});
       this.window.close();
     });
   }
@@ -259,14 +316,22 @@ browser.Context = class {
     }
 
     return new Promise((resolve, reject) => {
+      // Wait for the browser message manager to be destroyed
+      let browserDetached = async () => {
+        await new MessageManagerDestroyedPromise(this.messageManager);
+        resolve();
+      };
+
       if (this.tabBrowser.closeTab) {
         // Fennec
-        this.tabBrowser.deck.addEventListener("TabClose", resolve, {once: true});
+        this.tabBrowser.deck.addEventListener(
+            "TabClose", browserDetached, {once: true});
         this.tabBrowser.closeTab(this.tab);
 
       } else if (this.tabBrowser.removeTab) {
         // Firefox
-        this.tab.addEventListener("TabClose", resolve, {once: true});
+        this.tab.addEventListener(
+            "TabClose", browserDetached, {once: true});
         this.tabBrowser.removeTab(this.tab);
 
       } else {
@@ -452,14 +517,12 @@ browser.Windows = class extends Map {
 
 };
 
-// TODO(ato): Move this to testing/marionette/wm.js
-// after https://bugzil.la/1311041
 /**
  * Marionette representation of the {@link ChromeWindow} window state.
  *
  * @enum {string}
  */
-this.WindowState = {
+const WindowState = {
   Maximized: "maximized",
   Minimized: "minimized",
   Normal: "normal",
@@ -496,3 +559,4 @@ this.WindowState = {
     }
   },
 };
+this.WindowState = WindowState;

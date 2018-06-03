@@ -39,7 +39,7 @@ class MediaRawDataQueue
 
   void Push(already_AddRefed<MediaRawData>&& aItem)
   {
-    mQueue.push_back(Move(aItem));
+    mQueue.push_back(std::move(aItem));
   }
 
   void PushFront(MediaRawData* aItem) {
@@ -48,7 +48,7 @@ class MediaRawDataQueue
 
   void PushFront(already_AddRefed<MediaRawData>&& aItem)
   {
-    mQueue.push_front(Move(aItem));
+    mQueue.push_front(std::move(aItem));
   }
 
   void PushFront(MediaRawDataQueue&& aOther)
@@ -122,7 +122,12 @@ private:
 
 class WebMTrackDemuxer;
 
-class WebMDemuxer : public MediaDataDemuxer
+DDLoggedTypeDeclNameAndBase(WebMDemuxer, MediaDataDemuxer);
+DDLoggedTypeNameAndBase(WebMTrackDemuxer, MediaTrackDemuxer);
+
+class WebMDemuxer
+  : public MediaDataDemuxer
+  , public DecoderDoctorLifeLogger<WebMDemuxer>
 {
 public:
   explicit WebMDemuxer(MediaResource* aResource);
@@ -290,7 +295,9 @@ private:
   EncryptionInfo mCrypto;
 };
 
-class WebMTrackDemuxer : public MediaTrackDemuxer
+class WebMTrackDemuxer
+  : public MediaTrackDemuxer
+  , public DecoderDoctorLifeLogger<WebMTrackDemuxer>
 {
 public:
   WebMTrackDemuxer(WebMDemuxer* aParent,

@@ -21,15 +21,16 @@ job_path_map = {
                   "!.*/README",
                   "!css/[^/]*$"],
     "lint": [".*"],
+    "manifest_upload": [".*"],
     "resources_unittest": ["resources/"],
     "tools_unittest": ["tools/"],
     "wptrunner_unittest": ["tools/wptrunner/*"],
     "build_css": ["css/"],
     "update_built": ["2dcontext/",
-                     "assumptions/",
                      "html/",
                      "offscreen-canvas/"],
     "wpt_integration": ["tools/"],
+    "wptrunner_infrastructure": ["infrastructure/", "tools/"],
 }
 
 
@@ -99,6 +100,12 @@ def get_jobs(paths, **kwargs):
         if not rules:
             break
 
+    # Default jobs shuld run even if there were no changes
+    if not paths:
+        for job, path_re in iteritems(job_path_map):
+            if ".*" in path_re:
+                jobs.add(job)
+
     return jobs
 
 
@@ -116,4 +123,4 @@ def run(**kwargs):
         for item in sorted(jobs):
             print(item)
     else:
-        return 0 if set(kwargs["includes"]) == jobs else 1
+        return 0 if set(kwargs["includes"]).issubset(jobs) else 1

@@ -15,26 +15,23 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/MemoryReporting.h"
 
-#include "jsalloc.h"
-#include "jsatom.h"
-
 #include "builtin/SelfHostingDefines.h"
 #include "gc/Barrier.h"
 #include "gc/Heap.h"
 #include "gc/Marking.h"
+#include "js/AllocPolicy.h"
 #include "js/UbiNode.h"
 #include "js/Vector.h"
 #include "vm/ArrayObject.h"
-
-struct JSContext;
+#include "vm/JSAtom.h"
 
 namespace js {
 
 class ArrayObject;
-class MatchPairs;
-class RegExpCompartment;
+class RegExpRealm;
 class RegExpShared;
 class RegExpStatics;
+class VectorMatchPairs;
 
 using RootedRegExpShared = JS::Rooted<RegExpShared*>;
 using HandleRegExpShared = JS::Handle<RegExpShared*>;
@@ -162,11 +159,11 @@ class RegExpShared : public gc::TenuredCell
     // matches if specified and otherwise only determining if there is a match.
     static RegExpRunStatus execute(JSContext* cx, MutableHandleRegExpShared res,
                                    HandleLinearString input, size_t searchIndex,
-                                   MatchPairs* matches, size_t* endIndex);
+                                   VectorMatchPairs* matches, size_t* endIndex);
 
     // Register a table with this RegExpShared, and take ownership.
     bool addTable(JitCodeTable table) {
-        return tables.append(Move(table));
+        return tables.append(std::move(table));
     }
 
     /* Accessors */
@@ -274,15 +271,24 @@ class RegExpZone
 
     bool empty() const { return set_.empty(); }
 
+    RegExpShared* maybeGet(JSAtom* source, RegExpFlag flags) const {
+        Set::Ptr p = set_.lookup(Key(source, flags));
+        return p ? *p : nullptr;
+    }
+
     RegExpShared* get(JSContext* cx, HandleAtom source, RegExpFlag flags);
 
     /* Like 'get', but compile 'maybeOpt' (if non-null). */
     RegExpShared* get(JSContext* cx, HandleAtom source, JSString* maybeOpt);
 
+#ifdef DEBUG
+    void clear() { set_.clear(); }
+#endif
+
     size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf);
 };
 
-class RegExpCompartment
+class RegExpRealm
 {
     /*
      * This is the template object where the result of re.exec() is based on,
@@ -315,9 +321,9 @@ class RegExpCompartment
     ArrayObject* createMatchResultTemplateObject(JSContext* cx);
 
   public:
-    explicit RegExpCompartment(Zone* zone);
+    explicit RegExpRealm();
 
-    void sweep(JSRuntime* rt);
+    void sweep();
 
     /* Get or create template object used to base the result of .exec() on. */
     ArrayObject* getOrCreateMatchResultTemplateObject(JSContext* cx) {
@@ -340,10 +346,10 @@ class RegExpCompartment
     }
 
     static size_t offsetOfOptimizableRegExpPrototypeShape() {
-        return offsetof(RegExpCompartment, optimizableRegExpPrototypeShape_);
+        return offsetof(RegExpRealm, optimizableRegExpPrototypeShape_);
     }
     static size_t offsetOfOptimizableRegExpInstanceShape() {
-        return offsetof(RegExpCompartment, optimizableRegExpInstanceShape_);
+        return offsetof(RegExpRealm, optimizableRegExpInstanceShape_);
     }
 };
 

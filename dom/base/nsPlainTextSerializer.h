@@ -14,12 +14,12 @@
 #define nsPlainTextSerializer_h__
 
 #include "mozilla/Attributes.h"
+#include "mozilla/intl/LineBreaker.h"
 #include "nsCOMPtr.h"
 #include "nsAtom.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsIContentSerializer.h"
 #include "nsIDocumentEncoder.h"
-#include "nsILineBreaker.h"
 #include "nsString.h"
 #include "nsTArray.h"
 
@@ -29,6 +29,7 @@ class nsIContent;
 
 namespace mozilla {
 namespace dom {
+class DocumentType;
 class Element;
 } // namespace dom
 } // namespace mozilla
@@ -54,13 +55,20 @@ public:
   NS_IMETHOD AppendCDATASection(nsIContent* aCDATASection,
                                 int32_t aStartOffset, int32_t aEndOffset,
                                 nsAString& aStr) override;
-  NS_IMETHOD AppendProcessingInstruction(nsIContent* aPI,
+  NS_IMETHOD AppendProcessingInstruction(mozilla::dom::ProcessingInstruction* aPI,
                                          int32_t aStartOffset,
                                          int32_t aEndOffset,
-                                         nsAString& aStr) override  { return NS_OK; }
-  NS_IMETHOD AppendComment(nsIContent* aComment, int32_t aStartOffset,
-                           int32_t aEndOffset, nsAString& aStr) override  { return NS_OK; }
-  NS_IMETHOD AppendDoctype(nsIContent *aDoctype,
+                                         nsAString& aStr) override
+  {
+    return NS_OK;
+  }
+  NS_IMETHOD AppendComment(mozilla::dom::Comment* aComment,
+                           int32_t aStartOffset,
+                           int32_t aEndOffset, nsAString& aStr) override
+  {
+    return NS_OK;
+  }
+  NS_IMETHOD AppendDoctype(mozilla::dom::DocumentType* aDoctype,
                            nsAString& aStr) override  { return NS_OK; }
   NS_IMETHOD AppendElementStart(mozilla::dom::Element* aElement,
                                 mozilla::dom::Element* aOriginalElement,
@@ -231,7 +239,7 @@ private:
   uint32_t         mULCount;
 
   nsString                     mLineBreak;
-  nsCOMPtr<nsILineBreaker>     mLineBreaker;
+  RefPtr<mozilla::intl::LineBreaker> mLineBreaker;
 
   // Conveniance constant. It would be nice to have it as a const static
   // variable, but that causes issues with OpenBSD and module unloading.

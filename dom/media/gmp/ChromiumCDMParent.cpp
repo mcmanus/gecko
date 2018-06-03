@@ -12,14 +12,14 @@
 #include "GMPContentChild.h"
 #include "GMPContentParent.h"
 #include "GMPLog.h"
+#include "GMPService.h"
 #include "GMPUtils.h"
-#include "MediaPrefs.h"
 #include "mozilla/dom/MediaKeyMessageEventBinding.h"
 #include "mozilla/gmp/GMPTypes.h"
-#include "mozilla/Telemetry.h"
+#include "mozilla/StaticPrefs.h"
 #include "mozilla/Unused.h"
-#include "mp4_demuxer/AnnexB.h"
-#include "mp4_demuxer/H264.h"
+#include "AnnexB.h"
+#include "H264.h"
 
 #define NS_DispatchToMainThread(...) CompileError_UseAbstractMainThreadInstead
 
@@ -32,7 +32,7 @@ ChromiumCDMParent::ChromiumCDMParent(GMPContentParent* aContentParent,
                                      uint32_t aPluginId)
   : mPluginId(aPluginId)
   , mContentParent(aContentParent)
-  , mVideoShmemLimit(MediaPrefs::EMEChromiumAPIVideoShmemCount())
+  , mVideoShmemLimit(StaticPrefs::MediaEmeChromiumApiVideoShmems())
 {
   GMP_LOG(
     "ChromiumCDMParent::ChromiumCDMParent(this=%p, contentParent=%p, id=%u)",
@@ -45,15 +45,42 @@ bool
 ChromiumCDMParent::Init(ChromiumCDMCallback* aCDMCallback,
                         bool aAllowDistinctiveIdentifier,
                         bool aAllowPersistentState,
-                        nsIEventTarget* aMainThread)
+                        nsIEventTarget* aMainThread,
+                        nsCString& aOutFailureReason)
 {
-  GMP_LOG("ChromiumCDMParent::Init(this=%p)", this);
+  GMP_LOG("ChromiumCDMParent::Init(this=%p) shutdown=%d abormalShutdown=%d "
+          "actorDestroyed=%d",
+          this,
+          mIsShutdown,
+          mAbnormalShutdown,
+          mActorDestroyed);
   if (!aCDMCallback || !aMainThread) {
+    aOutFailureReason = nsPrintfCString("ChromiumCDMParent::Init() failed "
+                                        "nullCallback=%d nullMainThread=%d",
+                                        !aCDMCallback,
+                                        !aMainThread);
+    GMP_LOG("ChromiumCDMParent::Init(this=%p) failure since aCDMCallback(%p) or"
+            " aMainThread(%p) is nullptr", this, aCDMCallback, aMainThread);
     return false;
   }
   mCDMCallback = aCDMCallback;
   mMainThread = aMainThread;
-  return SendInit(aAllowDistinctiveIdentifier, aAllowPersistentState);
+
+  if (SendInit(aAllowDistinctiveIdentifier, aAllowPersistentState)) {
+    return true;
+  }
+
+  RefPtr<gmp::GeckoMediaPluginService> service =
+    gmp::GeckoMediaPluginService::GetGeckoMediaPluginService();
+  bool xpcomWillShutdown = service && service->XPCOMWillShutdownReceived();
+  aOutFailureReason = nsPrintfCString(
+    "ChromiumCDMParent::Init() failed "
+    "shutdown=%d cdmCrash=%d actorDestroyed=%d browserShutdown=%d",
+    mIsShutdown,
+    mAbnormalShutdown,
+    mActorDestroyed,
+    xpcomWillShutdown);
+  return false;
 }
 
 void
@@ -184,6 +211,25 @@ ChromiumCDMParent::RemoveSession(const nsCString& aSessionId,
   }
 }
 
+void
+ChromiumCDMParent::GetStatusForPolicy(uint32_t aPromiseId,
+                                      const nsCString& aMinHdcpVersion)
+{
+  GMP_LOG("ChromiumCDMParent::GetStatusForPolicy(this=%p)", this);
+  if (mIsShutdown) {
+    RejectPromise(aPromiseId,
+                  NS_ERROR_DOM_INVALID_STATE_ERR,
+                  NS_LITERAL_CSTRING("CDM is shutdown."));
+    return;
+  }
+  if (!SendGetStatusForPolicy(aPromiseId, aMinHdcpVersion)) {
+    RejectPromise(
+      aPromiseId,
+      NS_ERROR_DOM_INVALID_STATE_ERR,
+      NS_LITERAL_CSTRING("Failed to send getStatusForPolicy to CDM process"));
+  }
+}
+
 bool
 ChromiumCDMParent::InitCDMInputBuffer(gmp::CDMInputBuffer& aBuffer,
                                       MediaRawData* aSample)
@@ -273,6 +319,24 @@ ChromiumCDMParent::Recv__delete__()
 }
 
 ipc::IPCResult
+ChromiumCDMParent::RecvOnResolvePromiseWithKeyStatus(const uint32_t& aPromiseId,
+                                                     const uint32_t& aKeyStatus)
+{
+  GMP_LOG("ChromiumCDMParent::RecvOnResolvePromiseWithKeyStatus(this=%p, pid=%u, "
+          "keystatus=%u)",
+          this,
+          aPromiseId,
+          aKeyStatus);
+  if (!mCDMCallback || mIsShutdown) {
+    return IPC_OK();
+  }
+
+  mCDMCallback->ResolvePromiseWithKeyStatus(aPromiseId, aKeyStatus);
+
+  return IPC_OK();
+}
+
+ipc::IPCResult
 ChromiumCDMParent::RecvOnResolveNewSessionPromise(const uint32_t& aPromiseId,
                                                   const nsCString& aSessionId)
 {
@@ -357,29 +421,19 @@ ChromiumCDMParent::RejectPromise(uint32_t aPromiseId,
 }
 
 static nsresult
-ToNsresult(uint32_t aError)
+ToNsresult(uint32_t aException)
 {
-  switch (static_cast<cdm::Error>(aError)) {
-    case cdm::kNotSupportedError:
+  switch (static_cast<cdm::Exception>(aException)) {
+    case cdm::Exception::kExceptionNotSupportedError:
       return NS_ERROR_DOM_NOT_SUPPORTED_ERR;
-    case cdm::kInvalidStateError:
+    case cdm::Exception::kExceptionInvalidStateError:
       return NS_ERROR_DOM_INVALID_STATE_ERR;
-    case cdm::kInvalidAccessError:
-      // Note: Chrome converts kInvalidAccessError to TypeError, since the
-      // Chromium CDM API doesn't have a type error enum value. The EME spec
-      // requires TypeError in some places, so we do the same conversion.
-      // See bug 1313202.
+    case cdm::Exception::kExceptionTypeError:
       return NS_ERROR_DOM_TYPE_ERR;
-    case cdm::kQuotaExceededError:
+    case cdm::Exception::kExceptionQuotaExceededError:
       return NS_ERROR_DOM_QUOTA_EXCEEDED_ERR;
-    case cdm::kUnknownError:
-      return NS_ERROR_DOM_UNKNOWN_ERR; // Note: Unique placeholder.
-    case cdm::kClientError:
-      return NS_ERROR_DOM_ABORT_ERR; // Note: Unique placeholder.
-    case cdm::kOutputError:
-      return NS_ERROR_DOM_SECURITY_ERR; // Note: Unique placeholder.
   };
-  MOZ_ASSERT_UNREACHABLE("Invalid cdm::Error enum value.");
+  MOZ_ASSERT_UNREACHABLE("Invalid cdm::Exception enum value.");
   return NS_ERROR_DOM_TIMEOUT_ERR; // Note: Unique placeholder.
 }
 
@@ -405,7 +459,7 @@ ChromiumCDMParent::RecvOnSessionMessage(const nsCString& aSessionId,
     return IPC_OK();
   }
 
-  mCDMCallback->SessionMessage(aSessionId, aMessageType, Move(aMessage));
+  mCDMCallback->SessionMessage(aSessionId, aMessageType, std::move(aMessage));
   return IPC_OK();
 }
 
@@ -419,7 +473,7 @@ ChromiumCDMParent::RecvOnSessionKeysChange(
     return IPC_OK();
   }
 
-  mCDMCallback->SessionKeysChange(aSessionId, Move(aKeysInfo));
+  mCDMCallback->SessionKeysChange(aSessionId, std::move(aKeysInfo));
   return IPC_OK();
 }
 
@@ -647,9 +701,6 @@ ChromiumCDMParent::EnsureSufficientShmems(size_t aVideoFrameSize)
     mVideoShmemsActive++;
   }
 
-  mMaxVideoShmemsActive =
-    std::max(mMaxVideoShmemsActive, mVideoShmemsActive);
-
   return true;
 }
 
@@ -682,7 +733,7 @@ ChromiumCDMParent::RecvDecodedData(const CDMVideoFrame& aFrame,
     return IPC_OK();
   }
 
-  ReorderAndReturnOutput(Move(v));
+  ReorderAndReturnOutput(std::move(v));
 
   return IPC_OK();
 }
@@ -730,7 +781,7 @@ ChromiumCDMParent::RecvDecodedShmem(const CDMVideoFrame& aFrame,
   // for it again.
   autoDeallocateShmem.release();
 
-  ReorderAndReturnOutput(Move(v));
+  ReorderAndReturnOutput(std::move(v));
 
   return IPC_OK();
 }
@@ -739,15 +790,15 @@ void
 ChromiumCDMParent::ReorderAndReturnOutput(RefPtr<VideoData>&& aFrame)
 {
   if (mMaxRefFrames == 0) {
-    mDecodePromise.ResolveIfExists({ Move(aFrame) }, __func__);
+    mDecodePromise.ResolveIfExists({ std::move(aFrame) }, __func__);
     return;
   }
-  mReorderQueue.Push(Move(aFrame));
+  mReorderQueue.Push(std::move(aFrame));
   MediaDataDecoder::DecodedData results;
   while (mReorderQueue.Length() > mMaxRefFrames) {
     results.AppendElement(mReorderQueue.Pop());
   }
-  mDecodePromise.Resolve(Move(results), __func__);
+  mDecodePromise.Resolve(std::move(results), __func__);
 }
 
 already_AddRefed<VideoData>
@@ -840,11 +891,11 @@ ChromiumCDMParent::ActorDestroy(ActorDestroyReason aWhy)
     mContentParent->ChromiumCDMDestroyed(this);
     mContentParent = nullptr;
   }
-  bool abnormalShutdown = (aWhy == AbnormalShutdown);
-  if (abnormalShutdown && callback) {
+  mAbnormalShutdown = (aWhy == AbnormalShutdown);
+  if (mAbnormalShutdown && callback) {
     callback->Terminated();
   }
-  MaybeDisconnect(abnormalShutdown);
+  MaybeDisconnect(mAbnormalShutdown);
 }
 
 RefPtr<MediaDataDecoder::InitPromise>
@@ -892,8 +943,8 @@ ChromiumCDMParent::InitializeVideoDecoder(
 
   mMaxRefFrames =
     (aConfig.mCodec() == cdm::VideoDecoderConfig::kCodecH264)
-      ? mp4_demuxer::H264::HasSPS(aInfo.mExtraData)
-          ? mp4_demuxer::H264::ComputeMaxRefFrames(aInfo.mExtraData)
+      ? H264::HasSPS(aInfo.mExtraData)
+          ? H264::ComputeMaxRefFrames(aInfo.mExtraData)
           : 16
       : 0;
 
@@ -1027,10 +1078,10 @@ ChromiumCDMParent::RecvDrainComplete()
 
   MediaDataDecoder::DecodedData samples;
   while (!mReorderQueue.IsEmpty()) {
-    samples.AppendElement(Move(mReorderQueue.Pop()));
+    samples.AppendElement(std::move(mReorderQueue.Pop()));
   }
 
-  mDecodePromise.ResolveIfExists(Move(samples), __func__);
+  mDecodePromise.ResolveIfExists(std::move(samples), __func__);
   return IPC_OK();
 }
 RefPtr<ShutdownPromise>
@@ -1048,12 +1099,7 @@ ChromiumCDMParent::ShutdownVideoDecoder()
   }
   mVideoDecoderInitialized = false;
 
-  GMP_LOG("ChromiumCDMParent::~ShutdownVideoDecoder(this=%p) "
-          "VIDEO_CHROMIUM_CDM_MAX_SHMEMS=%u",
-          this,
-          mMaxVideoShmemsActive);
-  Telemetry::Accumulate(Telemetry::HistogramID::VIDEO_CHROMIUM_CDM_MAX_SHMEMS,
-                        mMaxVideoShmemsActive);
+  GMP_LOG("ChromiumCDMParent::~ShutdownVideoDecoder(this=%p) ", this);
 
   // The ChromiumCDMChild will purge its shmems, so if the decoder is
   // reinitialized the shmems need to be re-allocated, and they may need

@@ -70,6 +70,11 @@ public:
     return mPoints[aIndex];
   }
 
+  void Clear()
+  {
+    mPoints.Clear();
+  }
+
 protected:
   ~TouchList() {}
 
@@ -96,7 +101,13 @@ public:
   CopyTouches(const Sequence<OwningNonNull<Touch>>& aTouches);
 
   TouchList* Touches();
+  // TargetTouches() populates mTargetTouches from widget event's touch list.
   TouchList* TargetTouches();
+  // GetExistingTargetTouches just returns the existing target touches list.
+  TouchList* GetExistingTargetTouches()
+  {
+    return mTargetTouches;
+  }
   TouchList* ChangedTouches();
 
   bool AltKey();
@@ -107,7 +118,7 @@ public:
   void InitTouchEvent(const nsAString& aType,
                       bool aCanBubble,
                       bool aCancelable,
-                      nsGlobalWindow* aView,
+                      nsGlobalWindowInner* aView,
                       int32_t aDetail,
                       bool aCtrlKey,
                       bool aAltKey,
@@ -120,13 +131,15 @@ public:
   static bool PrefEnabled(JSContext* aCx, JSObject* aGlobal);
   static bool PrefEnabled(nsIDocShell* aDocShell);
 
-  static already_AddRefed<Event> Constructor(const GlobalObject& aGlobal,
-                                             const nsAString& aType,
-                                             const TouchEventInit& aParam,
-                                             ErrorResult& aRv);
+  static already_AddRefed<TouchEvent> Constructor(const GlobalObject& aGlobal,
+                                                  const nsAString& aType,
+                                                  const TouchEventInit& aParam,
+                                                  ErrorResult& aRv);
 
 protected:
   ~TouchEvent() {}
+
+  void AssignTouchesToWidgetEvent(TouchList* aList, bool aCheckDuplicates);
 
   RefPtr<TouchList> mTouches;
   RefPtr<TouchList> mTargetTouches;

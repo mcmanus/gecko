@@ -3,15 +3,15 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-var {classes: Cc, interfaces: Ci, manager: Cm, utils: Cu} = Components;
-Cu.import("resource://gre/modules/Services.jsm");
+var Cm = Components.manager;
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-const VKB_ENTER_KEY = 13;   // User press of VKB enter key
-const INITIAL_PAGE_DELAY = 500;   // Initial pause on program start for scroll alignment
-const PREFS_BUFFER_MAX = 30;   // Max prefs buffer size for getPrefsBuffer()
-const PAGE_SCROLL_TRIGGER = 200;     // Triggers additional getPrefsBuffer() on user scroll-to-bottom
-const FILTER_CHANGE_TRIGGER = 200;     // Delay between responses to filterInput changes
-const INNERHTML_VALUE_DELAY = 100;    // Delay before providing prefs innerHTML value
+const VKB_ENTER_KEY = 13; // User press of VKB enter key
+const INITIAL_PAGE_DELAY = 500; // Initial pause on program start for scroll alignment
+const PREFS_BUFFER_MAX = 30; // Max prefs buffer size for getPrefsBuffer()
+const PAGE_SCROLL_TRIGGER = 200; // Triggers additional getPrefsBuffer() on user scroll-to-bottom
+const FILTER_CHANGE_TRIGGER = 200; // Delay between responses to filterInput changes
+const INNERHTML_VALUE_DELAY = 100; // Delay before providing prefs innerHTML value
 
 var gStringBundle = Services.strings.createBundle("chrome://browser/locale/config.properties");
 var gClipboardHelper = Cc["@mozilla.org/widget/clipboardhelper;1"].getService(Ci.nsIClipboardHelper);
@@ -87,7 +87,7 @@ var NewPrefDialog = {
     }
 
     // If item already in list, it's being changed, else added
-    let item = AboutConfig._list.filter(i => { return i.name == aPrefName });
+    let item = AboutConfig._list.filter(i => { return i.name == aPrefName; });
     if (item.length) {
       this._positiveButton.textContent = gStringBundle.GetStringFromName("newPref.changeButton");
     } else {
@@ -178,7 +178,7 @@ var NewPrefDialog = {
   toggleBoolValue: function AC_toggleBoolValue() {
     this._booleanValue.value = (this._booleanValue.value == "true" ? "false" : "true");
   }
-}
+};
 
 
 /* ============================== AboutConfig ==============================
@@ -492,7 +492,7 @@ var AboutConfig = {
     }
 
     // If pref not already in list, refresh display as it's being added
-    let anyWhere = this._list.filter(i => { return i.name == pref.name });
+    let anyWhere = this._list.filter(i => { return i.name == pref.name; });
     if (!anyWhere.length) {
       document.location.reload();
     }
@@ -507,7 +507,7 @@ var AboutConfig = {
       gClipboardHelper.copyString(pref.value);
     }
   }
-}
+};
 
 
 /* ============================== Pref ==============================
@@ -596,33 +596,60 @@ Pref.prototype = {
 
       this.li.setAttribute("contextmenu", "prefs-context-menu");
 
-      // Create list item outline, bind to object actions
-      // eslint-disable-next-line no-unsanitized/property
-      this.li.innerHTML =
-        "<div class='pref-name' " +
-            "onclick='AboutConfig.selectOrToggleBoolPref(event);'>" +
-            this.name +
-        "</div>" +
-        "<div class='pref-item-line'>" +
-          "<input class='pref-value' value='' " +
-            "onblur='AboutConfig.setIntOrStringPref(event);' " +
-            "onclick='AboutConfig.selectOrToggleBoolPref(event);'>" +
-          "</input>" +
-          "<div class='pref-button reset' " +
-            "onclick='AboutConfig.resetDefaultPref(event);'>" +
-            gStringBundle.GetStringFromName("pref.resetButton") +
-          "</div>" +
-          "<div class='pref-button toggle' " +
-            "onclick='AboutConfig.toggleBoolPref(event);'>" +
-            gStringBundle.GetStringFromName("pref.toggleButton") +
-          "</div>" +
-          "<div class='pref-button up' " +
-            "onclick='AboutConfig.incrOrDecrIntPref(event, 1);'>" +
-          "</div>" +
-          "<div class='pref-button down' " +
-            "onclick='AboutConfig.incrOrDecrIntPref(event, -1);'>" +
-          "</div>" +
-        "</div>";
+      let prefName = document.createElement("div");
+      prefName.className = "pref-name";
+      prefName.addEventListener("click", function(event) {
+        AboutConfig.selectOrToggleBoolPref(event);
+      });
+      prefName.textContent = this.name;
+
+      this.li.appendChild(prefName);
+
+      let prefItemLine = document.createElement("div");
+      prefItemLine.className = "pref-item-line";
+
+      let prefValue = document.createElement("input");
+      prefValue.className = "pref-value";
+      prefValue.addEventListener("blur", function(event) {
+        AboutConfig.setIntOrStringPref(event);
+      });
+      prefValue.addEventListener("click", function(event) {
+        AboutConfig.selectOrToggleBoolPref(event);
+      });
+      prefValue.value = "";
+      prefItemLine.appendChild(prefValue);
+
+      let resetButton = document.createElement("div");
+      resetButton.className = "pref-button reset";
+      resetButton.addEventListener("click", function(event) {
+        AboutConfig.resetDefaultPref(event);
+      });
+      resetButton.textContent = gStringBundle.GetStringFromName("pref.resetButton");
+      prefItemLine.appendChild(resetButton);
+
+      let toggleButton = document.createElement("div");
+      toggleButton.className = "pref-button toggle";
+      toggleButton.addEventListener("click", function(event) {
+        AboutConfig.toggleBoolPref(event);
+      });
+      toggleButton.textContent = gStringBundle.GetStringFromName("pref.toggleButton");
+      prefItemLine.appendChild(toggleButton);
+
+      let upButton = document.createElement("div");
+      upButton.className = "pref-button up";
+      upButton.addEventListener("click", function(event) {
+        AboutConfig.incrOrDecrIntPref(event, 1);
+      });
+      prefItemLine.appendChild(upButton);
+
+      let downButton = document.createElement("div");
+      downButton.className = "pref-button down";
+      downButton.addEventListener("click", function(event) {
+        AboutConfig.incrOrDecrIntPref(event, -1);
+      });
+      prefItemLine.appendChild(downButton);
+
+      this.li.appendChild(prefItemLine);
 
       // Delay providing the list item values, until the LI is returned and added to the document
       setTimeout(this._valueSetup.bind(this), INNERHTML_VALUE_DELAY);
@@ -668,5 +695,5 @@ Pref.prototype = {
       this.li.querySelector(".pref-name").setAttribute("locked", true);
     }
   }
-}
+};
 

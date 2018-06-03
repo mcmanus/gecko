@@ -24,6 +24,11 @@ let loadChromiumResources = Promise.resolve().then(() => {
     '/resources/chromium/chooser_service.mojom.js',
     '/resources/chromium/webusb-test.js',
   ].forEach(path => {
+    // Use importScripts for workers.
+    if (typeof document === 'undefined') {
+      chain = chain.then(() => importScripts(path));
+      return;
+    }
     let script = document.createElement('script');
     script.src = path;
     script.async = false;
@@ -125,5 +130,6 @@ function callWithTrustedClick(callback) {
       document.body.removeChild(button);
     };
     document.body.appendChild(button);
+    test_driver.click(button);
   });
 }

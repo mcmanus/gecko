@@ -7,8 +7,6 @@
 #include "mozilla/dom/HTMLFrameElement.h"
 #include "mozilla/dom/HTMLFrameElementBinding.h"
 
-class nsIDOMDocument;
-
 NS_IMPL_NS_NEW_HTML_ELEMENT_CHECK_PARSER(Frame)
 
 namespace mozilla {
@@ -25,14 +23,13 @@ HTMLFrameElement::~HTMLFrameElement()
 }
 
 
-NS_IMPL_ISUPPORTS_INHERITED0(HTMLFrameElement, nsGenericHTMLFrameElement)
-
 NS_IMPL_ELEMENT_CLONE(HTMLFrameElement)
 
 bool
 HTMLFrameElement::ParseAttribute(int32_t aNamespaceID,
                                  nsAtom* aAttribute,
                                  const nsAString& aValue,
+                                 nsIPrincipal* aMaybeScriptedPrincipal,
                                  nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None) {
@@ -54,7 +51,7 @@ HTMLFrameElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return nsGenericHTMLFrameElement::ParseAttribute(aNamespaceID, aAttribute,
-                                                   aValue, aResult);
+                                                   aValue, aMaybeScriptedPrincipal, aResult);
 }
 
 JSObject*

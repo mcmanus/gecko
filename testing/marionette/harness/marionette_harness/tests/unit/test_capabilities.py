@@ -2,14 +2,10 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import, print_function
+
 from marionette_driver.errors import SessionNotCreatedException
-
 from marionette_harness import MarionetteTestCase
-
-# Unlike python 3, python 2 doesn't have a proper implementation of realpath or
-# samefile for Windows. However this function, which does exactly what we want,
-# was added to python 2 to fix an issue with tcl installations and symlinks.
-from FixTk import convert_path
 
 
 class TestCapabilities(MarionetteTestCase):
@@ -29,6 +25,25 @@ class TestCapabilities(MarionetteTestCase):
                 "return Services.sysinfo.getProperty('name')").lower()
             self.os_version = self.marionette.execute_script(
                 "return Services.sysinfo.getProperty('version')")
+
+    def get_fennec_profile(self):
+        profile = self.marionette.instance.runner.device.app_ctx.remote_profile
+        if self.caps["moz:profile"].lower() != profile.lower():
+            # mozdevice may be using a symlink and readlink is not
+            # universally available (missing from sdk 18).
+            # Attempt to resolve the most common symlink cases by using
+            # ls -l to determine if the root of the path (like /sdcard)
+            # is a symlink.
+            import posixpath
+            import re
+            device = self.marionette.instance.runner.device.app_ctx.device
+            root = posixpath.sep.join(profile.split(posixpath.sep)[0:2])
+            ls_out = device.shell_output("ls -l %s" % root)
+            match = re.match(r'.*->\s(.*)', ls_out)
+            if match:
+                new_root = match.group(1)
+                profile = profile.replace(root, new_root)
+        return profile
 
     def test_mandated_capabilities(self):
         self.assertIn("browserName", self.caps)
@@ -59,22 +74,32 @@ class TestCapabilities(MarionetteTestCase):
         self.assertIn("moz:profile", self.caps)
         if self.marionette.instance is not None:
             if self.caps["browserName"] == "fennec":
-                current_profile = self.marionette.instance.runner.device.app_ctx.remote_profile
+                current_profile = self.get_fennec_profile()
             else:
-                current_profile = convert_path(self.marionette.instance.runner.profile.profile)
-            self.assertEqual(convert_path(str(self.caps["moz:profile"])), current_profile)
-            self.assertEqual(convert_path(str(self.marionette.profile)), current_profile)
+                current_profile = self.marionette.profile_path
+            # Bug 1438461 - mozprofile uses lower-case letters even on case-sensitive filesystems
+            self.assertEqual(self.caps["moz:profile"].lower(), current_profile.lower())
 
         self.assertIn("moz:accessibilityChecks", self.caps)
         self.assertFalse(self.caps["moz:accessibilityChecks"])
-        self.assertIn("moz:webdriverClick", self.caps)
-        self.assertEqual(self.caps["moz:webdriverClick"], False)
 
-    def test_set_webdriver_click(self):
+        self.assertIn("moz:useNonSpecCompliantPointerOrigin", self.caps)
+        self.assertFalse(self.caps["moz:useNonSpecCompliantPointerOrigin"])
+
+        self.assertIn("moz:webdriverClick", self.caps)
+        self.assertTrue(self.caps["moz:webdriverClick"])
+
+    def test_disable_webdriver_click(self):
         self.marionette.delete_session()
-        self.marionette.start_session({"moz:webdriverClick": True})
+        self.marionette.start_session({"moz:webdriverClick": False})
         caps = self.marionette.session_capabilities
-        self.assertEqual(True, caps["moz:webdriverClick"])
+        self.assertFalse(caps["moz:webdriverClick"])
+
+    def test_use_non_spec_compliant_pointer_origin(self):
+        self.marionette.delete_session()
+        self.marionette.start_session({"moz:useNonSpecCompliantPointerOrigin": True})
+        caps = self.marionette.session_capabilities
+        self.assertTrue(caps["moz:useNonSpecCompliantPointerOrigin"])
 
     def test_we_get_valid_uuid4_when_creating_a_session(self):
         self.assertNotIn("{", self.marionette.session_id,

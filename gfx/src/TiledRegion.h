@@ -57,7 +57,7 @@ public:
 
   TiledRegion(TiledRegion&& aOther)
     : mBounds(aOther.mBounds)
-    , mImpl(Move(aOther.mImpl))
+    , mImpl(std::move(aOther.mImpl))
     , mCoversBounds(false)
   {}
 
@@ -186,7 +186,7 @@ private:
   {
     MOZ_ASSERT(!aRect.IsEmpty());
     MOZ_ASSERT(!aRect.Overflows());
-    return { aRect.x, aRect.y, aRect.XMost(), aRect.YMost() };
+    return { aRect.X(), aRect.Y(), aRect.XMost(), aRect.YMost() };
   }
 
   RectT mBounds;

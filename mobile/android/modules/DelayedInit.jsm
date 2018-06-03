@@ -1,15 +1,13 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-"use strict"
+"use strict";
 
 /* globals MessageLoop */
 
-const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
+var EXPORTED_SYMBOLS = ["DelayedInit"];
 
-this.EXPORTED_SYMBOLS = ["DelayedInit"];
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "MessageLoop",
                                    "@mozilla.org/message-loop;1",

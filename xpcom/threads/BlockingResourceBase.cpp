@@ -271,7 +271,7 @@ void
 BlockingResourceBase::CheckAcquire()
 {
   if (mType == eCondVar) {
-    NS_NOTYETIMPLEMENTED(
+    MOZ_ASSERT_UNREACHABLE(
       "FIXME bug 456272: annots. to allow CheckAcquire()ing condvars");
     return;
   }
@@ -315,7 +315,7 @@ void
 BlockingResourceBase::Acquire()
 {
   if (mType == eCondVar) {
-    NS_NOTYETIMPLEMENTED(
+    MOZ_ASSERT_UNREACHABLE(
       "FIXME bug 456272: annots. to allow Acquire()ing condvars");
     return;
   }
@@ -340,7 +340,7 @@ void
 BlockingResourceBase::Release()
 {
   if (mType == eCondVar) {
-    NS_NOTYETIMPLEMENTED(
+    MOZ_ASSERT_UNREACHABLE(
       "FIXME bug 456272: annots. to allow Release()ing condvars");
     return;
   }
@@ -586,8 +586,16 @@ RecursiveMutex::AssertCurrentThreadIn()
 
 //
 // Debug implementation of CondVar
-nsresult
-CondVar::Wait(PRIntervalTime aInterval)
+void
+CondVar::Wait()
+{
+  // Forward to the timed version of CondVar::Wait to avoid code duplication.
+  CVStatus status = Wait(TimeDuration::Forever());
+  MOZ_ASSERT(status == CVStatus::NoTimeout);
+}
+
+CVStatus
+CondVar::Wait(TimeDuration aDuration)
 {
   AssertCurrentThreadOwnsMutex();
 
@@ -600,18 +608,14 @@ CondVar::Wait(PRIntervalTime aInterval)
   mLock->mOwningThread = nullptr;
 
   // give up mutex until we're back from Wait()
-  if (aInterval == PR_INTERVAL_NO_TIMEOUT) {
-    mImpl.wait(*mLock);
-  } else {
-    mImpl.wait_for(*mLock, TimeDuration::FromMilliseconds(double(aInterval)));
-  }
+  CVStatus status = mImpl.wait_for(*mLock, aDuration);
 
   // restore saved state
   mLock->SetAcquisitionState(savedAcquisitionState);
   mLock->mChainPrev = savedChainPrev;
   mLock->mOwningThread = savedOwningThread;
 
-  return NS_OK;
+  return status;
 }
 
 #endif // ifdef DEBUG

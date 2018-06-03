@@ -177,37 +177,6 @@ inline bool isInIgnoredNamespaceForImplicitConversion(const Decl *Declaration) {
          Name == "testing";           // gtest
 }
 
-inline bool isIgnoredPathForImplicitCtor(const Decl *Declaration) {
-  SourceLocation Loc = Declaration->getLocation();
-  const SourceManager &SM = Declaration->getASTContext().getSourceManager();
-  SmallString<1024> FileName = SM.getFilename(Loc);
-  llvm::sys::fs::make_absolute(FileName);
-  llvm::sys::path::reverse_iterator Begin = llvm::sys::path::rbegin(FileName),
-                                    End = llvm::sys::path::rend(FileName);
-  for (; Begin != End; ++Begin) {
-    if (Begin->compare_lower(StringRef("skia")) == 0 ||
-        Begin->compare_lower(StringRef("sfntly")) == 0 ||
-        Begin->compare_lower(StringRef("angle")) == 0 ||
-        Begin->compare_lower(StringRef("harfbuzz")) == 0 ||
-        Begin->compare_lower(StringRef("hunspell")) == 0 ||
-        Begin->compare_lower(StringRef("scoped_ptr.h")) == 0 ||
-        Begin->compare_lower(StringRef("graphite2")) == 0 ||
-        Begin->compare_lower(StringRef("icu")) == 0 ||
-        Begin->compare_lower(StringRef("libcubeb")) == 0 ||
-        Begin->compare_lower(StringRef("libstagefright")) == 0 ||
-        Begin->compare_lower(StringRef("cairo")) == 0 ||
-        Begin->compare_lower(StringRef("pdfium")) == 0) {
-      return true;
-    }
-    if (Begin->compare_lower(StringRef("chromium")) == 0) {
-      // Ignore security/sandbox/chromium but not ipc/chromium.
-      ++Begin;
-      return Begin != End && Begin->compare_lower(StringRef("sandbox")) == 0;
-    }
-  }
-  return false;
-}
-
 inline bool isIgnoredPathForImplicitConversion(const Decl *Declaration) {
   Declaration = Declaration->getCanonicalDecl();
   SourceLocation Loc = Declaration->getLocation();
@@ -243,6 +212,7 @@ inline bool isIgnoredPathForSprintfLiteral(const CallExpr *Call,
         Begin->compare_lower(StringRef("google-breakpad")) == 0 ||
         Begin->compare_lower(StringRef("gflags")) == 0 ||
         Begin->compare_lower(StringRef("harfbuzz")) == 0 ||
+        Begin->compare_lower(StringRef("icu")) == 0 ||
         Begin->compare_lower(StringRef("jsoncpp")) == 0 ||
         Begin->compare_lower(StringRef("libstagefright")) == 0 ||
         Begin->compare_lower(StringRef("mtransport")) == 0 ||
@@ -428,7 +398,7 @@ inline bool inThirdPartyPath(const Decl *D, ASTContext *context) {
   return inThirdPartyPath(Loc, SM);
 }
 
-inline CXXRecordDecl* getNonTemplateSpecializedCXXRecordDecl(QualType Q) {
+inline CXXRecordDecl *getNonTemplateSpecializedCXXRecordDecl(QualType Q) {
   auto *D = Q->getAsCXXRecordDecl();
 
   if (!D) {
@@ -458,27 +428,30 @@ inline bool inThirdPartyPath(const Decl *D) {
 inline bool inThirdPartyPath(const Stmt *S, ASTContext *context) {
   SourceLocation Loc = S->getLocStart();
   const SourceManager &SM = context->getSourceManager();
-
-  return inThirdPartyPath(Loc, SM);
+  auto ExpansionLoc = SM.getExpansionLoc(Loc);
+  if (ExpansionLoc.isInvalid()) {
+    return inThirdPartyPath(Loc, SM);
+  }
+  return inThirdPartyPath(ExpansionLoc, SM);
 }
 
 /// Polyfill for CXXOperatorCallExpr::isInfixBinaryOp()
-inline bool isInfixBinaryOp(const CXXOperatorCallExpr* OpCall) {
+inline bool isInfixBinaryOp(const CXXOperatorCallExpr *OpCall) {
 #if CLANG_VERSION_FULL >= 400
   return OpCall->isInfixBinaryOp();
 #else
   // Taken from clang source.
   if (OpCall->getNumArgs() != 2)
-     return false;
+    return false;
 
   switch (OpCall->getOperator()) {
-   case OO_Call: case OO_Subscript:
-     return false;
-   default:
-     return true;
+  case OO_Call:
+  case OO_Subscript:
+    return false;
+  default:
+    return true;
   }
 #endif
 }
-
 
 #endif

@@ -154,10 +154,8 @@ nsPrintSettingsWin::nsPrintSettingsWin() :
  *  See documentation in nsPrintSettingsWin.h
  *	@update 
  */
-nsPrintSettingsWin::nsPrintSettingsWin(const nsPrintSettingsWin& aPS) :
-  mDeviceName(nullptr),
-  mDriverName(nullptr),
-  mDevMode(nullptr)
+nsPrintSettingsWin::nsPrintSettingsWin(const nsPrintSettingsWin& aPS)
+  : mDevMode(nullptr)
 {
   *this = aPS;
 }
@@ -168,38 +166,28 @@ nsPrintSettingsWin::nsPrintSettingsWin(const nsPrintSettingsWin& aPS) :
  */
 nsPrintSettingsWin::~nsPrintSettingsWin()
 {
-  if (mDeviceName) free(mDeviceName);
-  if (mDriverName) free(mDriverName);
   if (mDevMode) ::HeapFree(::GetProcessHeap(), 0, mDevMode);
 }
 
-NS_IMETHODIMP nsPrintSettingsWin::SetDeviceName(const char16_t * aDeviceName)
+NS_IMETHODIMP nsPrintSettingsWin::SetDeviceName(const nsAString& aDeviceName)
 {
-  if (mDeviceName) {
-    free(mDeviceName);
-  }
-  mDeviceName = aDeviceName?wcsdup(char16ptr_t(aDeviceName)):nullptr;
+  mDeviceName = aDeviceName;
   return NS_OK;
 }
-NS_IMETHODIMP nsPrintSettingsWin::GetDeviceName(char16_t **aDeviceName)
+NS_IMETHODIMP nsPrintSettingsWin::GetDeviceName(nsAString& aDeviceName)
 {
-  NS_ENSURE_ARG_POINTER(aDeviceName);
-  *aDeviceName = mDeviceName?reinterpret_cast<char16_t*>(wcsdup(mDeviceName)):nullptr;
+  aDeviceName = mDeviceName;
   return NS_OK;
 }
 
-NS_IMETHODIMP nsPrintSettingsWin::SetDriverName(const char16_t * aDriverName)
+NS_IMETHODIMP nsPrintSettingsWin::SetDriverName(const nsAString& aDriverName)
 {
-  if (mDriverName) {
-    free(mDriverName);
-  }
-  mDriverName = aDriverName?wcsdup(char16ptr_t(aDriverName)):nullptr;
+  mDriverName = aDriverName;
   return NS_OK;
 }
-NS_IMETHODIMP nsPrintSettingsWin::GetDriverName(char16_t **aDriverName)
+NS_IMETHODIMP nsPrintSettingsWin::GetDriverName(nsAString& aDriverName)
 {
-  NS_ENSURE_ARG_POINTER(aDriverName);
-  *aDriverName = mDriverName?reinterpret_cast<char16_t*>(wcsdup(mDriverName)):nullptr;
+  aDriverName = mDriverName;
   return NS_OK;
 }
 
@@ -288,6 +276,41 @@ nsPrintSettingsWin::GetEffectivePageSize(double *aWidth, double *aHeight)
 }
 
 void
+nsPrintSettingsWin::InitUnwriteableMargin(HDC aHdc)
+{
+  int32_t pixelsPerInchY = GetDeviceCaps(aHdc, LOGPIXELSY);
+  int32_t pixelsPerInchX = GetDeviceCaps(aHdc, LOGPIXELSX);
+
+  int32_t marginLeft = GetDeviceCaps(aHdc, PHYSICALOFFSETX);
+  int32_t marginTop  = GetDeviceCaps(aHdc, PHYSICALOFFSETY);
+
+  double marginLeftInch = double(marginLeft) / pixelsPerInchX;
+  double marginTopInch  = double(marginTop) / pixelsPerInchY;
+
+  int32_t printableAreaWidth = GetDeviceCaps(aHdc, HORZRES);
+  int32_t printableAreaHeight  = GetDeviceCaps(aHdc, VERTRES);
+
+  double printableAreaWidthInch = double(printableAreaWidth) / pixelsPerInchX;
+  double printableAreaHeightInch = double(printableAreaHeight) / pixelsPerInchY;
+
+  int32_t physicalWidth = GetDeviceCaps(aHdc, PHYSICALWIDTH);
+  int32_t physicalHeight = GetDeviceCaps(aHdc, PHYSICALHEIGHT);
+
+  double physicalWidthInch = double(physicalWidth) / pixelsPerInchX;
+  double physicalHeightInch = double(physicalHeight) / pixelsPerInchY;
+
+  double marginBottomInch = physicalHeightInch - printableAreaHeightInch - marginTopInch;
+  double marginRightInch = physicalWidthInch - printableAreaWidthInch - marginLeftInch;
+
+  mUnwriteableMargin.SizeTo(
+     NS_INCHES_TO_INT_TWIPS(marginTopInch),
+     NS_INCHES_TO_INT_TWIPS(marginRightInch),
+     NS_INCHES_TO_INT_TWIPS(marginBottomInch),
+     NS_INCHES_TO_INT_TWIPS(marginLeftInch)
+  );
+}
+
+void
 nsPrintSettingsWin::CopyFromNative(HDC aHdc, DEVMODEW* aDevMode)
 {
   MOZ_ASSERT(aHdc);
@@ -323,6 +346,8 @@ nsPrintSettingsWin::CopyFromNative(HDC aHdc, DEVMODEW* aDevMode)
     mPaperData = -1;
   }
 
+  InitUnwriteableMargin(aHdc);
+
   // The length and width in DEVMODE are always in tenths of a millimeter.
   double sizeUnitToTenthsOfAmm =
     10L * (mPaperSizeUnit == kPaperSizeInches ? MM_PER_INCH_FLOAT : 1L);
@@ -338,14 +363,10 @@ nsPrintSettingsWin::CopyFromNative(HDC aHdc, DEVMODEW* aDevMode)
     mPaperWidth = -1l;
   }
 
-  // On Windows we currently create a surface using the printable area of the
-  // page and don't set the unwriteable [sic] margins. Using the unwriteable
-  // margins doesn't appear to work on Windows, but I am not sure if this is a
-  // bug elsewhere in our code or a Windows quirk.
   // Note: we only scale the printing using the LOGPIXELSY, so we use that
   // when calculating the surface width as well as the height.
-  int32_t printableWidthInDots = GetDeviceCaps(aHdc, HORZRES);
-  int32_t printableHeightInDots = GetDeviceCaps(aHdc, VERTRES);
+  int32_t printableWidthInDots = GetDeviceCaps(aHdc, PHYSICALWIDTH);
+  int32_t printableHeightInDots = GetDeviceCaps(aHdc, PHYSICALHEIGHT);
   int32_t heightDPI = GetDeviceCaps(aHdc, LOGPIXELSY);
 
   // Keep these values in portrait format, so we can reflect our own changes
@@ -425,21 +446,13 @@ nsPrintSettingsWin& nsPrintSettingsWin::operator=(const nsPrintSettingsWin& rhs)
 
   ((nsPrintSettings&) *this) = rhs;
 
-  if (mDeviceName) {
-    free(mDeviceName);
-  }
-
-  if (mDriverName) {
-    free(mDriverName);
-  }
-
   // Use free because we used the native malloc to create the memory
   if (mDevMode) {
     ::HeapFree(::GetProcessHeap(), 0, mDevMode);
   }
 
-  mDeviceName = rhs.mDeviceName?wcsdup(rhs.mDeviceName):nullptr;
-  mDriverName = rhs.mDriverName?wcsdup(rhs.mDriverName):nullptr;
+  mDeviceName = rhs.mDeviceName;
+  mDriverName = rhs.mDriverName;
 
   if (rhs.mDevMode) {
     CopyDevMode(rhs.mDevMode, mDevMode);
@@ -464,7 +477,7 @@ nsPrintSettingsWin::_Assign(nsIPrintSettings *aPS)
 // This define turns on the testing module below
 // so at start up it writes and reads the prefs.
 #ifdef DEBUG_rodsX
-#include "nsIPrintOptions.h"
+#include "nsIPrintSettingsService.h"
 #include "nsIServiceManager.h"
 class Tester {
 public:
@@ -474,7 +487,8 @@ Tester::Tester()
 {
   nsCOMPtr<nsIPrintSettings> ps;
   nsresult rv;
-  nsCOMPtr<nsIPrintOptions> printService = do_GetService("@mozilla.org/gfx/printsettings-service;1", &rv);
+  nsCOMPtr<nsIPrintSettingsService> printService =
+    do_GetService("@mozilla.org/gfx/printsettings-service;1", &rv);
   if (NS_SUCCEEDED(rv)) {
     rv = printService->CreatePrintSettings(getter_AddRefs(ps));
   }

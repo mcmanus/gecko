@@ -10,7 +10,10 @@ transforms:
    - taskgraph.transforms.task:transforms
 
 kind-dependencies:
-  - checksums-signing
+   - checksums-signing
 
 only-for-attributes:
-  - nightly
+   - nightly
+
+job-template:
+   shipping-phase: promote

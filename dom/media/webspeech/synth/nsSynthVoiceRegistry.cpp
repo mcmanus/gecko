@@ -8,7 +8,6 @@
 #include "nsServiceManagerUtils.h"
 #include "nsCategoryManagerUtils.h"
 
-#include "MediaPrefs.h"
 #include "SpeechSynthesisUtterance.h"
 #include "SpeechSynthesisVoice.h"
 #include "nsSynthVoiceRegistry.h"
@@ -16,10 +15,12 @@
 #include "AudioChannelService.h"
 
 #include "nsString.h"
-#include "mozilla/StaticPtr.h"
+#include "mozilla/ClearOnShutdown.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/intl/LocaleService.h"
+#include "mozilla/StaticPrefs.h"
+#include "mozilla/StaticPtr.h"
 #include "mozilla/Unused.h"
 
 #include "SpeechSynthesisChild.h"
@@ -171,6 +172,7 @@ nsSynthVoiceRegistry::GetInstance()
 
   if (!gSynthVoiceRegistry) {
     gSynthVoiceRegistry = new nsSynthVoiceRegistry();
+    ClearOnShutdown(&gSynthVoiceRegistry);
     if (XRE_IsParentProcess()) {
       // Start up all speech synth services.
       NS_CreateServicesFromCategory(NS_SPEECH_SYNTH_STARTED, nullptr,
@@ -187,14 +189,6 @@ nsSynthVoiceRegistry::GetInstanceForService()
   RefPtr<nsSynthVoiceRegistry> registry = GetInstance();
 
   return registry.forget();
-}
-
-void
-nsSynthVoiceRegistry::Shutdown()
-{
-  LOG(LogLevel::Debug, ("[%s] nsSynthVoiceRegistry::Shutdown()",
-                        (XRE_IsContentProcess()) ? "Content" : "Default"));
-  gSynthVoiceRegistry = nullptr;
 }
 
 bool
@@ -352,7 +346,8 @@ nsSynthVoiceRegistry::RemoveVoice(nsISpeechService* aService,
   mDefaultVoices.RemoveElement(retval);
   mUriVoiceMap.Remove(aUri);
 
-  if (retval->mIsQueued && !MediaPrefs::WebSpeechForceGlobal()) {
+  if (retval->mIsQueued &&
+      !StaticPrefs::MediaWebspeechSynthForceGlobalQueue()) {
     // Check if this is the last queued voice, and disable the global queue if
     // it is.
     bool queued = false;
@@ -723,7 +718,8 @@ nsSynthVoiceRegistry::Speak(const nsAString& aText,
 
   aTask->SetChosenVoiceURI(voice->mUri);
 
-  if (mUseGlobalQueue || MediaPrefs::WebSpeechForceGlobal()) {
+  if (mUseGlobalQueue ||
+      StaticPrefs::MediaWebspeechSynthForceGlobalQueue()) {
     LOG(LogLevel::Debug,
         ("nsSynthVoiceRegistry::Speak queueing text='%s' lang='%s' uri='%s' rate=%f pitch=%f",
          NS_ConvertUTF16toUTF8(aText).get(), NS_ConvertUTF16toUTF8(aLang).get(),
@@ -802,7 +798,8 @@ nsSynthVoiceRegistry::SetIsSpeaking(bool aIsSpeaking)
 
   // Only set to 'true' if global queue is enabled.
   mIsSpeaking =
-    aIsSpeaking && (mUseGlobalQueue || MediaPrefs::WebSpeechForceGlobal());
+    aIsSpeaking && (mUseGlobalQueue ||
+                    StaticPrefs::MediaWebspeechSynthForceGlobalQueue());
 
   nsTArray<SpeechSynthesisParent*> ssplist;
   GetAllSpeechSynthActors(ssplist);
@@ -824,23 +821,11 @@ nsSynthVoiceRegistry::SpeakImpl(VoiceData* aVoice,
        NS_ConvertUTF16toUTF8(aText).get(), NS_ConvertUTF16toUTF8(aVoice->mUri).get(),
        aRate, aPitch));
 
-  SpeechServiceType serviceType;
-
-  DebugOnly<nsresult> rv = aVoice->mService->GetServiceType(&serviceType);
-  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "Failed to get speech service type");
-
-  if (serviceType == nsISpeechService::SERVICETYPE_INDIRECT_AUDIO) {
-    aTask->InitIndirectAudio();
-  } else {
-    aTask->InitDirectAudio();
-  }
+  aTask->Init();
 
   if (NS_FAILED(aVoice->mService->Speak(aText, aVoice->mUri, aVolume, aRate,
                                         aPitch, aTask))) {
-    if (serviceType == nsISpeechService::SERVICETYPE_INDIRECT_AUDIO) {
-      aTask->DispatchError(0, 0);
-    }
-    // XXX When using direct audio, no way to dispatch error
+    aTask->DispatchError(0, 0);
   }
 }
 

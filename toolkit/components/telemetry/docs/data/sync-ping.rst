@@ -2,9 +2,9 @@
 "sync" ping
 ===========
 
-This is an aggregated format that contains information about each sync that occurred during a timeframe. It is submitted every 12 hours, and on browser shutdown, but only if the syncs property would not be empty. The ping does not contain the enviroment block, nor the clientId.
+This is an aggregated format that contains information about each sync that occurred during a timeframe. It is submitted every 12 hours, and on browser shutdown, but only if the ``syncs`` property would not be empty. The ping does not contain the environment block, nor the clientId.
 
-Each item in the syncs property is generated after a sync is completed, for both successful and failed syncs, and contains measurements pertaining to sync performance and error information.
+Each item in the ``syncs`` property is generated after a sync is completed, for both successful and failed syncs, and contains measurements pertaining to sync performance and error information.
 
 A JSON-schema document describing the exact format of the ping's payload property can be found at `services/sync/tests/unit/sync\_ping\_schema.json <https://dxr.mozilla.org/mozilla-central/source/services/sync/tests/unit/sync_ping_schema.json>`_.
 
@@ -122,7 +122,7 @@ These values should be monotonic. If we can't get a monotonic timestamp, -1 will
 uid
 ~~~~~~~~~
 
-This property containing a hash of the FxA account identifier, which is a 32 character hexidecimal string. In the case that we are unable to authenticate with FxA and have never authenticated in the past, it will be a placeholder string consisting of 32 repeated ``0`` characters.
+This property containing a hash of the FxA account identifier, which is a 32 character hexadecimal string. In the case that we are unable to authenticate with FxA and have never authenticated in the past, it will be a placeholder string consisting of 32 repeated ``0`` characters.
 
 syncs.why
 ~~~~~~~~~
@@ -229,7 +229,6 @@ client. This is logically the "other end" of ``sendcommand``.
 - value: Not used (ie, ``null``)
 - extra: An object with the following attributes:
 
-  - deviceID: A GUID which identifies the device the command is being sent to.
   - flowID: A GUID which uniquely identifies this command invocation. The value
             for this GUID will be the same as the flowID sent to the client via
             ``sendcommand``.

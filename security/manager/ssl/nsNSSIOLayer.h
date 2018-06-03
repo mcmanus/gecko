@@ -55,8 +55,7 @@ public:
   void SetTLSVersionRange(SSLVersionRange range) { mTLSVersionRange = range; }
   SSLVersionRange GetTLSVersionRange() const { return mTLSVersionRange; };
 
-  PRStatus CloseSocketAndDestroy(
-                const nsNSSShutDownPreventionLock& proofOfLock);
+  PRStatus CloseSocketAndDestroy();
 
   void SetNegotiatedNPN(const char* value, uint32_t length);
   void SetEarlyDataAccepted(bool aAccepted);
@@ -74,6 +73,7 @@ public:
   bool IsFullHandshake() const { return mIsFullHandshake; }
 
   bool GetJoined() { return mJoined; }
+  bool GetDenyClientCert() { return mDenyClientCert; }
   void SetSentClientCert() { mSentClientCert = true; }
 
   uint32_t GetProviderFlags() const { return mProviderFlags; }
@@ -88,10 +88,8 @@ public:
     after_cert_verification
   };
   void SetCertVerificationWaiting();
-  // Use errorCode == 0 to indicate success; in that case, errorMessageType is
-  // ignored.
-  void SetCertVerificationResult(PRErrorCode errorCode,
-              ::mozilla::psm::SSLErrorMessageType errorMessageType);
+  // Use errorCode == 0 to indicate success;
+  void SetCertVerificationResult(PRErrorCode errorCode);
 
   // for logging only
   PRBool IsWaitingForCertVerification() const
@@ -186,6 +184,7 @@ private:
   nsCString mNegotiatedNPN;
   bool      mNPNCompleted;
   bool      mEarlyDataAccepted;
+  bool      mDenyClientCert;
   bool      mFalseStartCallbackCalled;
   bool      mFalseStarted;
   bool      mIsFullHandshake;

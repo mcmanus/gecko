@@ -9,8 +9,7 @@
 
 #include "mozilla/Move.h"
 
-#include "jsalloc.h"
-
+#include "js/AllocPolicy.h"
 #include "js/HashTable.h"
 
 namespace js {
@@ -23,7 +22,7 @@ template <typename InlineEntry,
           typename HashPolicy,
           typename AllocPolicy,
           size_t InlineEntries>
-class InlineTable
+class InlineTable : private AllocPolicy
 {
   private:
     using TablePtr    = typename Table::Ptr;
@@ -103,7 +102,8 @@ class InlineTable
     static const size_t SizeOfInlineEntries = sizeof(InlineEntry) * InlineEntries;
 
     explicit InlineTable(AllocPolicy a = AllocPolicy())
-      : inlNext_(0),
+      : AllocPolicy(a),
+        inlNext_(0),
         inlCount_(0),
         table_(a)
     { }
@@ -304,6 +304,10 @@ class InlineTable
 
             MOZ_ASSERT(!p.found());
             MOZ_ASSERT(uintptr_t(inlineEnd()) == uintptr_t(p.inlAddPtr_));
+
+            if (!this->checkSimulatedOOM())
+                return false;
+
             addPtr->update(mozilla::Forward<KeyInput>(key),
                            mozilla::Forward<Args>(args)...);
             ++inlCount_;
@@ -441,7 +445,7 @@ class InlineMap
         }
 
         MOZ_MUST_USE bool moveTo(Map& map) {
-            return map.putNew(mozilla::Move(key), mozilla::Move(value));
+            return map.putNew(std::move(key), std::move(value));
         }
     };
 
@@ -579,7 +583,7 @@ class InlineSet
         }
 
         MOZ_MUST_USE bool moveTo(Set& set) {
-            return set.putNew(mozilla::Move(key));
+            return set.putNew(std::move(key));
         }
     };
 

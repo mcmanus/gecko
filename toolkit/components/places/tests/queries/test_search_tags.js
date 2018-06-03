@@ -27,14 +27,14 @@ add_task(async function test_search_for_tagged_bookmarks() {
   query.searchTerms = "elephant";
   var options = PlacesUtils.history.getNewQueryOptions();
   options.queryType = Ci.nsINavHistoryQueryOptions.QUERY_TYPE_BOOKMARKS;
-  query.setFolders([folder], 1);
+  query.setParents([folder.guid], 1);
 
   var result = PlacesUtils.history.executeQuery(query, options);
   var rootNode = result.root;
   rootNode.containerOpen = true;
 
-  do_check_eq(rootNode.childCount, 1);
-  do_check_eq(rootNode.getChild(0).bookmarkGuid, bookmark.guid);
+  Assert.equal(rootNode.childCount, 1);
+  Assert.equal(rootNode.getChild(0).bookmarkGuid, bookmark.guid);
   rootNode.containerOpen = false;
 
   // partial matches are okay
@@ -42,7 +42,7 @@ add_task(async function test_search_for_tagged_bookmarks() {
   result = PlacesUtils.history.executeQuery(query, options);
   rootNode = result.root;
   rootNode.containerOpen = true;
-  do_check_eq(rootNode.childCount, 1);
+  Assert.equal(rootNode.childCount, 1);
   rootNode.containerOpen = false;
 
   // case insensitive search term
@@ -50,8 +50,8 @@ add_task(async function test_search_for_tagged_bookmarks() {
   result = PlacesUtils.history.executeQuery(query, options);
   rootNode = result.root;
   rootNode.containerOpen = true;
-  do_check_eq(rootNode.childCount, 1);
-  do_check_eq(rootNode.getChild(0).bookmarkGuid, bookmark.guid);
+  Assert.equal(rootNode.childCount, 1);
+  Assert.equal(rootNode.getChild(0).bookmarkGuid, bookmark.guid);
   rootNode.containerOpen = false;
 
   // case insensitive tag
@@ -59,7 +59,7 @@ add_task(async function test_search_for_tagged_bookmarks() {
   result = PlacesUtils.history.executeQuery(query, options);
   rootNode = result.root;
   rootNode.containerOpen = true;
-  do_check_eq(rootNode.childCount, 1);
-  do_check_eq(rootNode.getChild(0).bookmarkGuid, bookmark.guid);
+  Assert.equal(rootNode.childCount, 1);
+  Assert.equal(rootNode.getChild(0).bookmarkGuid, bookmark.guid);
   rootNode.containerOpen = false;
 });

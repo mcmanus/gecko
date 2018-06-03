@@ -5,7 +5,8 @@
 // Tests the dialog used for loading PKCS #11 modules.
 
 const { MockRegistrar } =
-  Cu.import("resource://testing-common/MockRegistrar.jsm", {});
+  ChromeUtils.import("resource://testing-common/MockRegistrar.jsm", {});
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm", {});
 
 const gMockPKCS11ModuleDB = {
   addModuleCallCount: 0,
@@ -65,7 +66,7 @@ const gMockPKCS11ModuleDB = {
     throw new Error("not expecting get isFIPSEnabled() to be called");
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIPKCS11ModuleDB])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIPKCS11ModuleDB])
 };
 
 const gMockPromptService = {
@@ -82,7 +83,7 @@ const gMockPromptService = {
                  "alert: Actual and expected text should match");
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIPromptService])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIPromptService])
 };
 
 var gMockPKCS11CID =
@@ -95,9 +96,7 @@ var gMockPromptServiceCID =
 var gMockFilePicker = SpecialPowers.MockFilePicker;
 gMockFilePicker.init(window);
 
-var gTempFile = Cc["@mozilla.org/file/directory_service;1"]
-                  .getService(Ci.nsIProperties)
-                  .get("TmpD", Ci.nsIFile);
+var gTempFile = Services.dirsvc.get("TmpD", Ci.nsIFile);
 gTempFile.append("browser_loadPKCS11Module_ui-fakeModule");
 
 registerCleanupFunction(() => {
@@ -122,7 +121,7 @@ function openLoadModuleDialog() {
   let win = window.openDialog("chrome://pippki/content/load_device.xul", "", "");
   return new Promise(resolve => {
     win.addEventListener("load", function() {
-      resolve(win);
+      executeSoon(() => resolve(win));
     }, {once: true});
   });
 }
@@ -230,4 +229,34 @@ add_task(async function testCancel() {
                "alert() should never have been called");
 
   await BrowserTestUtils.windowClosed(win);
+});
+
+async function testModuleNameHelper(moduleName, acceptButtonShouldBeDisabled) {
+  let win = await openLoadModuleDialog();
+  resetCallCounts();
+
+  info(`Setting Module Name to '${moduleName}'`);
+  let moduleNameBox = win.document.getElementById("device_name");
+  moduleNameBox.value = moduleName;
+  // this makes this not a great test, but it's the easiest way to simulate this
+  moduleNameBox.onchange();
+
+  let dialogNode = win.document.querySelector("dialog");
+  Assert.equal(dialogNode.getAttribute("buttondisabledaccept"),
+               acceptButtonShouldBeDisabled ? "true" : "", // it's a string
+               `dialog accept button should ${acceptButtonShouldBeDisabled ? "" : "not "}be disabled`);
+
+  return BrowserTestUtils.closeWindow(win);
+}
+
+add_task(async function testEmptyModuleName() {
+  await testModuleNameHelper("", true);
+});
+
+add_task(async function testReservedModuleName() {
+  await testModuleNameHelper("Root Certs", true);
+});
+
+add_task(async function testAcceptableModuleName() {
+  await testModuleNameHelper("Some Module Name", false);
 });

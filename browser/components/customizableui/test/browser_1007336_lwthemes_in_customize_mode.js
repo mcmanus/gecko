@@ -4,10 +4,10 @@
 
 "use strict";
 
-const DEFAULT_THEME_ID = "{972ce4c6-7e08-4474-a285-3208198ce6fd}";
+const DEFAULT_THEME_ID = "default-theme@mozilla.org";
 const LIGHT_THEME_ID = "firefox-compact-light@mozilla.org";
 const DARK_THEME_ID = "firefox-compact-dark@mozilla.org";
-const {LightweightThemeManager} = Components.utils.import("resource://gre/modules/LightweightThemeManager.jsm", {});
+const {LightweightThemeManager} = ChromeUtils.import("resource://gre/modules/LightweightThemeManager.jsm", {});
 
 add_task(async function() {
   Services.prefs.clearUserPref("lightweightThemes.usedThemes");
@@ -95,7 +95,8 @@ add_task(async function() {
 
   let defaultTheme = header.nextSibling;
   defaultTheme.doCommand();
-  is(Services.prefs.getCharPref("lightweightThemes.selectedThemeID"), "", "No lwtheme should be selected");
+  is(Services.prefs.getCharPref("lightweightThemes.selectedThemeID"),
+     DEFAULT_THEME_ID, "Default theme should be selected");
 
   // ensure current theme isn't set to "Default"
   popupShownPromise = popupShown(popup);
@@ -111,7 +112,7 @@ add_task(async function() {
 
   // check that "Restore Defaults" button resets theme
   await gCustomizeMode.reset();
-  is(LightweightThemeManager.currentTheme, null, "Current theme reset to default");
+  is(LightweightThemeManager.currentTheme.id, DEFAULT_THEME_ID, "Current theme reset to default");
 
   await endCustomizing();
   Services.prefs.setCharPref("lightweightThemes.usedThemes", "[]");

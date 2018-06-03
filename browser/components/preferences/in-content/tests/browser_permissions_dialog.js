@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-Components.utils.import("resource:///modules/SitePermissions.jsm");
-Components.utils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource:///modules/SitePermissions.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 const PERMISSIONS_URL = "chrome://browser/content/preferences/sitePermissions.xul";
 const URL = "http://www.example.com";
@@ -19,7 +19,9 @@ function checkPermissionItem(origin, state) {
   Assert.equal(label.value, origin);
 
   let menulist = doc.getElementsByTagName("menulist")[0];
-  Assert.equal(menulist.label, state);
+  let selectedIndex = menulist.selectedIndex;
+  let selectedItem = menulist.querySelectorAll("menuitem")[selectedIndex];
+  Assert.equal(selectedItem.value, state);
 }
 
 async function openPermissionsDialog() {
@@ -32,6 +34,7 @@ async function openPermissionsDialog() {
   });
 
   sitePermissionsDialog = await dialogOpened;
+  await sitePermissionsDialog.document.mozSubdialogReady;
 }
 
 add_task(async function openSitePermissionsDialog() {
@@ -52,7 +55,7 @@ add_task(async function addPermission() {
 
   // Observe the added permission changes in the dialog UI.
   Assert.equal(richlistbox.itemCount, 1);
-  checkPermissionItem(URL, "Allow");
+  checkPermissionItem(URL, Services.perms.ALLOW_ACTION);
 
   SitePermissions.remove(URL, "desktop-notification");
 });
@@ -63,7 +66,7 @@ add_task(async function observePermissionChange() {
   // Change the permission.
   SitePermissions.set(URI, "desktop-notification", SitePermissions.BLOCK);
 
-  checkPermissionItem(URL, "Block");
+  checkPermissionItem(URL, Services.perms.DENY_ACTION);
 
   SitePermissions.remove(URL, "desktop-notification");
 });
@@ -95,7 +98,7 @@ add_task(async function onPermissionChange() {
 
   doc.getElementById("btnApplyChanges").click();
 
-  await waitForCondition(() =>
+  await TestUtils.waitForCondition(() =>
     SitePermissions.get(URI, "desktop-notification").state == SitePermissions.BLOCK);
 
   SitePermissions.remove(URI, "desktop-notification");
@@ -112,7 +115,7 @@ add_task(async function onPermissionDelete() {
   richlistbox.selectItem(richlistbox.getItemAtIndex(0));
   doc.getElementById("removePermission").click();
 
-  await waitForCondition(() => richlistbox.itemCount == 0);
+  await TestUtils.waitForCondition(() => richlistbox.itemCount == 0);
 
   Assert.equal(SitePermissions.get(URI, "desktop-notification").state,
                SitePermissions.ALLOW,
@@ -120,7 +123,7 @@ add_task(async function onPermissionDelete() {
 
   doc.getElementById("btnApplyChanges").click();
 
-  await waitForCondition(() =>
+  await TestUtils.waitForCondition(() =>
     SitePermissions.get(URI, "desktop-notification").state == SitePermissions.UNKNOWN);
 });
 
@@ -135,7 +138,7 @@ add_task(async function onAllPermissionsDelete() {
   SitePermissions.set(u, "desktop-notification", SitePermissions.ALLOW);
 
   doc.getElementById("removeAllPermissions").click();
-  await waitForCondition(() => richlistbox.itemCount == 0);
+  await TestUtils.waitForCondition(() => richlistbox.itemCount == 0);
 
   Assert.equal(SitePermissions.get(URI, "desktop-notification").state,
      SitePermissions.ALLOW);
@@ -144,7 +147,7 @@ add_task(async function onAllPermissionsDelete() {
 
   doc.getElementById("btnApplyChanges").click();
 
-  await waitForCondition(() =>
+  await TestUtils.waitForCondition(() =>
     (SitePermissions.get(URI, "desktop-notification").state == SitePermissions.UNKNOWN) &&
       (SitePermissions.get(u, "desktop-notification").state == SitePermissions.UNKNOWN));
 });
@@ -164,11 +167,11 @@ add_task(async function onPermissionChangeAndDelete() {
   richlistbox.selectItem(richlistbox.getItemAtIndex(0));
   doc.getElementById("removePermission").click();
 
-  await waitForCondition(() => richlistbox.itemCount == 0);
+  await TestUtils.waitForCondition(() => richlistbox.itemCount == 0);
 
   doc.getElementById("btnApplyChanges").click();
 
-  await waitForCondition(() =>
+  await TestUtils.waitForCondition(() =>
     SitePermissions.get(URI, "desktop-notification").state == SitePermissions.UNKNOWN);
 });
 
@@ -201,7 +204,7 @@ add_task(async function onPermissionDeleteCancel() {
   richlistbox.selectItem(richlistbox.getItemAtIndex(0));
   doc.getElementById("removePermission").click();
 
-  await waitForCondition(() => richlistbox.itemCount == 0);
+  await TestUtils.waitForCondition(() => richlistbox.itemCount == 0);
 
   doc.getElementById("cancel").click();
 
@@ -269,6 +272,75 @@ add_task(async function onPermissionsSort() {
   SitePermissions.remove(u, "desktop-notification");
 
   doc.getElementById("cancel").click();
+});
+
+add_task(async function onPermissionDisable() {
+  // Enable desktop-notification permission prompts.
+  Services.prefs.setIntPref("permissions.default.desktop-notification", SitePermissions.UNKNOWN);
+
+  await openPermissionsDialog();
+  let doc = sitePermissionsDialog.document;
+
+  // Check if the enabled state is reflected in the checkbox.
+  let checkbox = doc.getElementById("permissionsDisableCheckbox");
+  Assert.equal(checkbox.checked, false);
+
+  // Disable permission and click on "Cancel".
+  checkbox.checked = true;
+  doc.getElementById("cancel").click();
+
+  // Check that the permission is not disabled yet.
+  let perm = Services.prefs.getIntPref("permissions.default.desktop-notification");
+  Assert.equal(perm, SitePermissions.UNKNOWN);
+
+  // Open the dialog once again.
+  await openPermissionsDialog();
+  doc = sitePermissionsDialog.document;
+
+  // Disable permission and save changes.
+  checkbox = doc.getElementById("permissionsDisableCheckbox");
+  checkbox.checked = true;
+  doc.getElementById("btnApplyChanges").click();
+
+  // Check if the permission is now disabled.
+  perm = Services.prefs.getIntPref("permissions.default.desktop-notification");
+  Assert.equal(perm, SitePermissions.BLOCK);
+
+  // Open the dialog once again and check if the disabled state is still reflected in the checkbox.
+  await openPermissionsDialog();
+  doc = sitePermissionsDialog.document;
+  checkbox = doc.getElementById("permissionsDisableCheckbox");
+  Assert.equal(checkbox.checked, true);
+
+  // Close the dialog and clean up.
+  doc.getElementById("cancel").click();
+  Services.prefs.setIntPref("permissions.default.desktop-notification", SitePermissions.UNKNOWN);
+});
+
+add_task(async function checkDefaultPermissionState() {
+  // Set default permission state to ALLOW.
+  Services.prefs.setIntPref("permissions.default.desktop-notification", SitePermissions.ALLOW);
+
+  await openPermissionsDialog();
+  let doc = sitePermissionsDialog.document;
+
+  // Check if the enabled state is reflected in the checkbox.
+  let checkbox = doc.getElementById("permissionsDisableCheckbox");
+  Assert.equal(checkbox.checked, false);
+
+  // Check the checkbox and then uncheck it.
+  checkbox.checked = true;
+  checkbox.checked = false;
+
+  // Save changes.
+  doc.getElementById("btnApplyChanges").click();
+
+  // Check if the default permission state is retained (and not automatically set to SitePermissions.UNKNOWN).
+  let state = Services.prefs.getIntPref("permissions.default.desktop-notification");
+  Assert.equal(state, SitePermissions.ALLOW);
+
+  // Clean up.
+  Services.prefs.setIntPref("permissions.default.desktop-notification", SitePermissions.UNKNOWN);
 });
 
 add_task(async function removeTab() {

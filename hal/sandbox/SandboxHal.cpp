@@ -137,36 +137,6 @@ UnlockScreenOrientation()
 }
 
 void
-AdjustSystemClock(int64_t aDeltaMilliseconds)
-{
-  Hal()->SendAdjustSystemClock(aDeltaMilliseconds);
-}
-
-void
-EnableSystemClockChangeNotifications()
-{
-  Hal()->SendEnableSystemClockChangeNotifications();
-}
-
-void
-DisableSystemClockChangeNotifications()
-{
-  Hal()->SendDisableSystemClockChangeNotifications();
-}
-
-void
-EnableSystemTimezoneChangeNotifications()
-{
-  Hal()->SendEnableSystemTimezoneChangeNotifications();
-}
-
-void
-DisableSystemTimezoneChangeNotifications()
-{
-  Hal()->SendDisableSystemTimezoneChangeNotifications();
-}
-
-void
 EnableSensorNotifications(SensorType aSensor) {
   Hal()->SendEnableSensorNotifications(aSensor);
 }
@@ -219,47 +189,31 @@ DisableSwitchNotifications(SwitchDevice aDevice)
 bool
 EnableAlarm()
 {
-  NS_RUNTIMEABORT("Alarms can't be programmed from sandboxed contexts.  Yet.");
-  return false;
+  MOZ_CRASH("Alarms can't be programmed from sandboxed contexts.  Yet.");
 }
 
 void
 DisableAlarm()
 {
-  NS_RUNTIMEABORT("Alarms can't be programmed from sandboxed contexts.  Yet.");
+  MOZ_CRASH("Alarms can't be programmed from sandboxed contexts.  Yet.");
 }
 
 bool
 SetAlarm(int32_t aSeconds, int32_t aNanoseconds)
 {
-  NS_RUNTIMEABORT("Alarms can't be programmed from sandboxed contexts.  Yet.");
-  return false;
+  MOZ_CRASH("Alarms can't be programmed from sandboxed contexts.  Yet.");
 }
 
 void
 SetProcessPriority(int aPid, ProcessPriority aPriority)
 {
-  NS_RUNTIMEABORT("Only the main process may set processes' priorities.");
+  MOZ_CRASH("Only the main process may set processes' priorities.");
 }
 
 bool
 SetProcessPrioritySupported()
 {
-  NS_RUNTIMEABORT("Only the main process may call SetProcessPrioritySupported().");
-  return false;
-}
-
-void
-SetCurrentThreadPriority(ThreadPriority aThreadPriority)
-{
-  NS_RUNTIMEABORT("Setting current thread priority cannot be called from sandboxed contexts.");
-}
-
-void
-SetThreadPriority(PlatformThreadId aThreadId,
-                  ThreadPriority aThreadPriority)
-{
-  NS_RUNTIMEABORT("Setting thread priority cannot be called from sandboxed contexts.");
+  MOZ_CRASH("Only the main process may call SetProcessPrioritySupported().");
 }
 
 void
@@ -281,8 +235,6 @@ class HalParent : public PHalParent
                 , public WakeLockObserver
                 , public ScreenConfigurationObserver
                 , public SwitchObserver
-                , public SystemClockChangeObserver
-                , public SystemTimezoneChangeObserver
 {
 public:
   virtual void
@@ -298,8 +250,6 @@ public:
       hal::UnregisterSensorObserver(SensorType(sensor), this);
     }
     hal::UnregisterWakeLockObserver(this);
-    hal::UnregisterSystemClockChangeObserver(this);
-    hal::UnregisterSystemTimezoneChangeObserver(this);
     for (int32_t switchDevice = SWITCH_DEVICE_UNKNOWN + 1;
          switchDevice < NUM_SWITCH_DEVICE; ++switchDevice) {
       hal::UnregisterSwitchObserver(SwitchDevice(switchDevice), this);
@@ -420,41 +370,6 @@ public:
   }
 
   virtual mozilla::ipc::IPCResult
-  RecvAdjustSystemClock(const int64_t &aDeltaMilliseconds) override
-  {
-    hal::AdjustSystemClock(aDeltaMilliseconds);
-    return IPC_OK();
-  }
-
-  virtual mozilla::ipc::IPCResult
-  RecvEnableSystemClockChangeNotifications() override
-  {
-    hal::RegisterSystemClockChangeObserver(this);
-    return IPC_OK();
-  }
-
-  virtual mozilla::ipc::IPCResult
-  RecvDisableSystemClockChangeNotifications() override
-  {
-    hal::UnregisterSystemClockChangeObserver(this);
-    return IPC_OK();
-  }
-
-  virtual mozilla::ipc::IPCResult
-  RecvEnableSystemTimezoneChangeNotifications() override
-  {
-    hal::RegisterSystemTimezoneChangeObserver(this);
-    return IPC_OK();
-  }
-
-  virtual mozilla::ipc::IPCResult
-  RecvDisableSystemTimezoneChangeNotifications() override
-  {
-    hal::UnregisterSystemTimezoneChangeObserver(this);
-    return IPC_OK();
-  }
-
-  virtual mozilla::ipc::IPCResult
   RecvEnableSensorNotifications(const SensorType &aSensor) override {
     // We currently allow any content to register device-sensor
     // listeners.
@@ -531,16 +446,6 @@ public:
   {
     Unused << SendNotifySwitchChange(aSwitchEvent);
   }
-
-  void Notify(const int64_t& aClockDeltaMS) override
-  {
-    Unused << SendNotifySystemClockChange(aClockDeltaMS);
-  }
-
-  void Notify(const SystemTimezoneChangeInformation& aSystemTimezoneChangeInfo) override
-  {
-    Unused << SendNotifySystemTimezoneChange(aSystemTimezoneChangeInfo);
-  }
 };
 
 class HalChild : public PHalChild {
@@ -581,19 +486,6 @@ public:
   virtual mozilla::ipc::IPCResult
   RecvNotifySwitchChange(const mozilla::hal::SwitchEvent& aEvent) override {
     hal::NotifySwitchChange(aEvent);
-    return IPC_OK();
-  }
-
-  virtual mozilla::ipc::IPCResult
-  RecvNotifySystemClockChange(const int64_t& aClockDeltaMS) override {
-    hal::NotifySystemClockChange(aClockDeltaMS);
-    return IPC_OK();
-  }
-
-  virtual mozilla::ipc::IPCResult
-  RecvNotifySystemTimezoneChange(
-    const SystemTimezoneChangeInformation& aSystemTimezoneChangeInfo) override {
-    hal::NotifySystemTimezoneChange(aSystemTimezoneChangeInfo);
     return IPC_OK();
   }
 };

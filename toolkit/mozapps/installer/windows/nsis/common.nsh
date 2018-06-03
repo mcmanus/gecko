@@ -3629,6 +3629,16 @@
             ${EndIf}
           ${EndIf}
         ${Loop}
+        ; There might also be a shortcut with a different name created by a
+        ; previous version of the installer.
+        ${If} ${FileExists} "$SMPROGRAMS\${BrandFullName}.lnk"
+          ShellLink::GetShortCutTarget "$SMPROGRAMS\${BrandFullName}.lnk"
+          Pop $R5
+          ${${_MOZFUNC_UN}GetLongPath} "$R5" $R5
+          ${If} "$INSTDIR\${FileMainEXE}" == "$R5"
+            Delete "$SMPROGRAMS\${BrandFullName}.lnk"
+          ${EndIf}
+        ${EndIf}
 
         ; Delete Quick Launch shortcuts for this application
         StrCpy $R4 -1
@@ -3649,6 +3659,16 @@
             ${EndIf}
           ${EndIf}
         ${Loop}
+        ; There might also be a shortcut with a different name created by a
+        ; previous version of the installer.
+        ${If} ${FileExists} "$QUICKLAUNCH\${BrandFullName}.lnk"
+          ShellLink::GetShortCutTarget "$QUICKLAUNCH\${BrandFullName}.lnk"
+          Pop $R5
+          ${${_MOZFUNC_UN}GetLongPath} "$R5" $R5
+          ${If} "$INSTDIR\${FileMainEXE}" == "$R5"
+            Delete "$QUICKLAUNCH\${BrandFullName}.lnk"
+          ${EndIf}
+        ${EndIf}
 
         ; Delete Desktop shortcuts for this application
         StrCpy $R4 -1
@@ -3669,6 +3689,16 @@
             ${EndIf}
           ${EndIf}
         ${Loop}
+        ; There might also be a shortcut with a different name created by a
+        ; previous version of the installer.
+        ${If} ${FileExists} "$DESKTOP\${BrandFullName}.lnk"
+          ShellLink::GetShortCutTarget "$DESKTOP\${BrandFullName}.lnk"
+          Pop $R5
+          ${${_MOZFUNC_UN}GetLongPath} "$R5" $R5
+          ${If} "$INSTDIR\${FileMainEXE}" == "$R5"
+            Delete "$DESKTOP\${BrandFullName}.lnk"
+          ${EndIf}
+        ${EndIf}
 
         ${${_MOZFUNC_UN}GetLongPath} "$SMPROGRAMS" $R6
 
@@ -4900,12 +4930,46 @@
 !macroend
 
 /**
+ * Reads a flag option from the command line and sets a variable with its state,
+ * if the option is present on the command line.
+ *
+ * @param   FULL_COMMAND_LINE
+ *          The entire installer command line, such as from ${GetParameters}
+ * @param   OPTION
+ *          Name of the option to look for
+ * @param   OUTPUT
+ *          Variable/register to write the output to. Will be set to "0" if the
+ *          option was present with the value "false", will be set to "1" if the
+ *          option was present with another value, and will be untouched if the
+ *          option was not on the command line at all.
+ */
+!macro InstallGetOption FULL_COMMAND_LINE OPTION OUTPUT
+  Push $0
+  ClearErrors
+  ${GetOptions} ${FULL_COMMAND_LINE} "/${OPTION}" $0
+  ${IfNot} ${Errors}
+    ; Any valid command-line option triggers a silent installation.
+    SetSilent silent
+
+    ${If} $0 == "=false"
+      StrCpy ${OUTPUT} "0"
+    ${Else}
+      StrCpy ${OUTPUT} "1"
+    ${EndIf}
+  ${EndIf}
+  Pop $0
+!macroend
+!define InstallGetOption "!insertmacro InstallGetOption"
+
+/**
  * Called from the installer's .onInit function not to be confused with the
  * uninstaller's .onInit or the uninstaller's un.onInit functions.
  *
  * @param   _WARN_UNSUPPORTED_MSG
  *          Message displayed when the Windows version is not supported.
  *
+ * $R4 = keeps track of whether a custom install path was specified on either
+ *       the command line or in an INI file
  * $R5 = return value from the GetSize macro
  * $R6 = general string values, return value from GetTempFileName, return
  *       value from the GetSize macro
@@ -4932,6 +4996,7 @@
       Push $R7
       Push $R6
       Push $R5
+      Push $R4
 
       ; Don't install on systems that don't support SSE2. The parameter value of
       ; 10 is for PF_XMMI64_INSTRUCTIONS_AVAILABLE which will check whether the
@@ -4954,21 +5019,23 @@
         SetRegView 64
       !endif
 
-      ${GetParameters} $R8
+      StrCpy $R4 0 ; will be set to 1 if a custom install path is set
 
+      ${GetParameters} $R8
       ${If} $R8 != ""
         ; Default install type
         StrCpy $InstallType ${INSTALLTYPE_BASIC}
 
         ${Unless} ${Silent}
-          ; Manually check for /S in the command line due to Bug 506867
+          ; NSIS should check for /S for us, but we've had issues with it such
+          ; as bug 506867 in the past, so we'll check for it ourselves also.
           ClearErrors
           ${GetOptions} "$R8" "/S" $R7
           ${Unless} ${Errors}
             SetSilent silent
           ${Else}
-            ; Support for the deprecated -ms command line argument. The new command
-            ; line arguments are not supported when -ms is used.
+            ; NSIS dropped support for the deprecated -ms argument, but we don't
+            ; want to break backcompat, so we'll check for it here too.
             ClearErrors
             ${GetOptions} "$R8" "-ms" $R7
             ${Unless} ${Errors}
@@ -4983,9 +5050,12 @@
         ${Unless} ${Errors}
           ; The configuration file must also exist
           ${If} ${FileExists} "$R7"
+            ; Any valid command-line option triggers a silent installation.
             SetSilent silent
+
             ReadINIStr $R8 $R7 "Install" "InstallDirectoryName"
             ${If} $R8 != ""
+              StrCpy $R4 1
               !ifdef HAVE_64BIT_BUILD
                 StrCpy $INSTDIR "$PROGRAMFILES64\$R8"
               !else
@@ -4994,42 +5064,8 @@
             ${Else}
               ReadINIStr $R8 $R7 "Install" "InstallDirectoryPath"
               ${If} $R8 != ""
+                StrCpy $R4 1
                 StrCpy $INSTDIR "$R8"
-              ${EndIf}
-            ${EndIf}
-
-            ; Quit if we are unable to create the installation directory or we are
-            ; unable to write to a file in the installation directory.
-            ClearErrors
-            ${If} ${FileExists} "$INSTDIR"
-              GetTempFileName $R6 "$INSTDIR"
-              FileOpen $R5 "$R6" w
-              FileWrite $R5 "Write Access Test"
-              FileClose $R5
-              Delete $R6
-              ${If} ${Errors}
-                ; Attempt to elevate and then try again.
-                ${ElevateUAC}
-                GetTempFileName $R6 "$INSTDIR"
-                FileOpen $R5 "$R6" w
-                FileWrite $R5 "Write Access Test"
-                FileClose $R5
-                Delete $R6
-                ${If} ${Errors}
-                  ; Nothing initialized so no need to call OnEndCommon
-                  Quit
-                ${EndIf}
-              ${EndIf}
-            ${Else}
-              CreateDirectory "$INSTDIR"
-              ${If} ${Errors}
-                ; Attempt to elevate and then try again.
-                ${ElevateUAC}
-                CreateDirectory "$INSTDIR"
-                ${If} ${Errors}
-                  ; Nothing initialized so no need to call OnEndCommon
-                  Quit
-                ${EndIf}
               ${EndIf}
             ${EndIf}
 
@@ -5054,6 +5090,15 @@
               StrCpy $AddStartMenuSC "1"
             ${EndIf}
 
+            ; We still accept the plural version for backwards compatibility,
+            ; but the singular version takes priority.
+            ReadINIStr $R8 $R7 "Install" "StartMenuShortcut"
+            ${If} $R8 == "false"
+              StrCpy $AddStartMenuSC "0"
+            ${Else}
+              StrCpy $AddStartMenuSC "1"
+            ${EndIf}
+
             ReadINIStr $R8 $R7 "Install" "TaskbarShortcut"
             ${If} $R8 == "false"
               StrCpy $AddTaskbarSC "0"
@@ -5065,9 +5110,17 @@
             ${If} $R8 == "false"
               StrCpy $InstallMaintenanceService "0"
             ${Else}
-              ; Installing the service always requires elevation.
-              ${ElevateUAC}
+              StrCpy $InstallMaintenanceService "1"
             ${EndIf}
+
+            !ifdef MOZ_OPTIONAL_EXTENSIONS
+              ReadINIStr $R8 $R7 "Install" "OptionalExtensions"
+              ${If} $R8 == "false"
+                StrCpy $InstallOptionalExtensions "0"
+              ${Else}
+                StrCpy $InstallOptionalExtensions "1"
+              ${EndIf}
+            !endif
 
             !ifndef NO_STARTMENU_DIR
               ReadINIStr $R8 $R7 "Install" "StartMenuDirectoryName"
@@ -5076,20 +5129,92 @@
               ${EndIf}
             !endif
           ${EndIf}
-        ${Else}
-          ; If this isn't an INI install, we need to try to elevate now.
-          ; We'll check the user's permission level later on to determine the
-          ; default install path (which will be the real install path for /S).
-          ; If an INI file is used, we try to elevate down that path when needed.
-          ${ElevateUAC}
         ${EndUnless}
-      ${EndIf}
-      ClearErrors
 
-      ${IfNot} ${Silent}
+        ; Check for individual command line parameters after evaluating the INI
+        ; file, because these should override the INI entires.
+        ${GetParameters} $R8
+        ${GetOptions} $R8 "/InstallDirectoryName=" $R7
+        ${If} $R7 != ""
+          StrCpy $R4 1
+          !ifdef HAVE_64BIT_BUILD
+            StrCpy $INSTDIR "$PROGRAMFILES64\$R7"
+          !else
+            StrCpy $INSTDIR "$PROGRAMFILES32\$R7"
+          !endif
+        ${Else}
+          ${GetOptions} $R8 "/InstallDirectoryPath=" $R7
+          ${If} $R7 != ""
+            StrCpy $R4 1
+            StrCpy $INSTDIR "$R7"
+          ${EndIf}
+        ${EndIf}
+
+        ${InstallGetOption} $R8 "QuickLaunchShortcut" $AddQuickLaunchSC
+        ${InstallGetOption} $R8 "DesktopShortcut" $AddDesktopSC
+        ${InstallGetOption} $R8 "StartMenuShortcuts" $AddStartMenuSC
+        ; We still accept the plural version for backwards compatibility,
+        ; but the singular version takes priority.
+        ${InstallGetOption} $R8 "StartMenuShortcut" $AddStartMenuSC
+        ${InstallGetOption} $R8 "TaskbarShortcut" $AddTaskbarSC
+        ${InstallGetOption} $R8 "MaintenanceService" $InstallMaintenanceService
+        !ifdef MOZ_OPTIONAL_EXTENSIONS
+          ${InstallGetOption} $R8 "OptionalExtensions" $InstallOptionalExtensions
+        !endif
+
+        ; Installing the service always requires elevated privileges.
+        ${If} $InstallMaintenanceService == "1"
+          ${ElevateUAC}
+        ${EndIf}
+      ${EndIf}
+
+      ${If} $R4 == 1
+        ; Any valid command-line option triggers a silent installation.
+        SetSilent silent
+
+        ; Quit if we are unable to create the installation directory or we are
+        ; unable to write to a file in the installation directory.
+        ClearErrors
+        ${If} ${FileExists} "$INSTDIR"
+          GetTempFileName $R6 "$INSTDIR"
+          FileOpen $R5 "$R6" w
+          FileWrite $R5 "Write Access Test"
+          FileClose $R5
+          Delete $R6
+          ${If} ${Errors}
+            ; Attempt to elevate and then try again.
+            ${ElevateUAC}
+            GetTempFileName $R6 "$INSTDIR"
+            FileOpen $R5 "$R6" w
+            FileWrite $R5 "Write Access Test"
+            FileClose $R5
+            Delete $R6
+            ${If} ${Errors}
+              ; Nothing initialized so no need to call OnEndCommon
+              Quit
+            ${EndIf}
+          ${EndIf}
+        ${Else}
+          CreateDirectory "$INSTDIR"
+          ${If} ${Errors}
+            ; Attempt to elevate and then try again.
+            ${ElevateUAC}
+            CreateDirectory "$INSTDIR"
+            ${If} ${Errors}
+              ; Nothing initialized so no need to call OnEndCommon
+              Quit
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+      ${Else}
+        ; If we weren't given a custom path parameter, then try to elevate now.
+        ; We'll check the user's permission level later on to determine the
+        ; default install path (which will be the real install path for /S).
+        ; If an INI file is used, we try to elevate down that path when needed.
         ${ElevateUAC}
       ${EndIf}
 
+      Pop $R4
       Pop $R5
       Pop $R6
       Pop $R7
@@ -7403,18 +7528,39 @@
 !endif
 
 /**
- * Modified version of the __NSD_SetStretchedImage macro from nsDialogs.nsh that
- * supports transparency. See nsDialogs documentation for additional info.
+ * Draws an image file (BMP, GIF, or JPG) onto a bitmap control, with scaling.
+ * Adapted from https://stackoverflow.com/a/13405711/1508094
+ *
+ * @param CONTROL bitmap control created by NSD_CreateBitmap
+ * @param IMAGE path to image file to draw to the bitmap
+ * @param HANDLE output bitmap handle which must be freed via NSD_FreeImage
+ *               after nsDialogs::Show has been called
  */
-!macro __SetStretchedTransparentImage CONTROL IMAGE HANDLE
-  Push $0
-  Push $1
-  Push $2
-  Push $R0
+!macro __SetStretchedImageOLE CONTROL IMAGE HANDLE
+  !ifndef IID_IPicture
+    !define IID_IPicture {7BF80980-BF32-101A-8BBB-00AA00300CAB}
+  !endif
+  !ifndef SRCCOPY
+    !define SRCCOPY 0xCC0020
+  !endif
+  !ifndef HALFTONE
+    !define HALFTONE 4
+  !endif
+
+  Push $0 ; HANDLE
+  Push $1 ; memory DC
+  Push $2 ; IPicture created from IMAGE
+  Push $3 ; HBITMAP obtained from $2
+  Push $4 ; BITMAPINFO obtained from $3
+  Push $5 ; width of IMAGE
+  Push $6 ; height of IMAGE
+  Push $7 ; width of CONTROL
+  Push $8 ; height of CONTROL
+  Push $R0 ; CONTROL
 
   StrCpy $R0 ${CONTROL} ; in case ${CONTROL} is $0
-  StrCpy $1 ""
-  StrCpy $2 ""
+  StrCpy $7 ""
+  StrCpy $8 ""
 
   System::Call '*(i, i, i, i) i.s'
   Pop $0
@@ -7423,25 +7569,140 @@
     System::Call 'user32::GetClientRect(i R0, i r0)'
     System::Call '*$0(i, i, i .s, i .s)'
     System::Free $0
-    Pop $1
-    Pop $2
+    Pop $7
+    Pop $8
   ${EndIf}
 
-  System::Call 'user32::LoadImageW(i 0, t s, i ${IMAGE_BITMAP}, i r1, i r2, \
-                                   i ${MOZ_LOADTRANSPARENT}) i .s' "${IMAGE}"
-  Pop $0
-  SendMessage $R0 ${STM_SETIMAGE} ${IMAGE_BITMAP} $0
-
-  SetCtlColors $R0 "" transparent
-  ${NSD_AddExStyle} $R0 ${WS_EX_TRANSPARENT}|${WS_EX_TOPMOST}
+  ${If} $7 > 0
+  ${AndIf} $8 > 0
+    System::Call 'oleaut32::OleLoadPicturePath(w"${IMAGE}",i0,i0,i0,g"${IID_IPicture}",*i.r2)i.r1'
+    ${If} $1 = 0
+      System::Call 'user32::GetDC(i0)i.s'
+      System::Call 'gdi32::CreateCompatibleDC(iss)i.r1'
+      System::Call 'gdi32::CreateCompatibleBitmap(iss,ir7,ir8)i.r0'
+      System::Call 'user32::ReleaseDC(i0,is)'
+      System::Call '$2->3(*i.r3)i.r4' ; IPicture->get_Handle
+      ${If} $4 = 0
+        System::Call 'gdi32::SetStretchBltMode(ir1,i${HALFTONE})'
+        System::Call '*(&i40,&i1024)i.r4' ; BITMAP / BITMAPINFO
+        System::Call 'gdi32::GetObject(ir3,i24,ir4)'
+        System::Call 'gdi32::SelectObject(ir1,ir0)i.s'
+        System::Call '*$4(i40,i.r5,i.r6,i0,i,i.s)' ; Grab size and bits-ptr AND init as BITMAPINFOHEADER
+        System::Call 'gdi32::GetDIBits(ir1,ir3,i0,i0,i0,ir4,i0)' ; init BITMAPINFOHEADER
+        System::Call 'gdi32::GetDIBits(ir1,ir3,i0,i0,i0,ir4,i0)' ; init BITMAPINFO
+        System::Call 'gdi32::StretchDIBits(ir1,i0,i0,ir7,ir8,i0,i0,ir5,ir6,is,ir4,i0,i${SRCCOPY})'
+        System::Call 'gdi32::SelectObject(ir1,is)'
+        System::Free $4
+        SendMessage $R0 ${STM_SETIMAGE} ${IMAGE_BITMAP} $0
+      ${EndIf}
+      System::Call 'gdi32::DeleteDC(ir1)'
+      System::Call '$2->2()' ; IPicture->release()
+    ${EndIf}
+  ${EndIf}
 
   Pop $R0
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
   Pop $2
   Pop $1
   Exch $0
   Pop ${HANDLE}
 !macroend
-!define SetStretchedTransparentImage "!insertmacro __SetStretchedTransparentImage"
+!define SetStretchedImageOLE "!insertmacro __SetStretchedImageOLE"
+
+/**
+ * Display a task dialog box with custom strings and button labels.
+ *
+ * The task dialog is highly customizable. The specific style being used here
+ * is similar to a MessageBox except that the button text is customizable.
+ * MessageBox-style buttons are used instead of command link buttons; this can
+ * be made configurable if command buttons are needed.
+ *
+ * See https://msdn.microsoft.com/en-us/library/windows/desktop/bb760544.aspx
+ * for the TaskDialogIndirect function's documentation, and links to definitions
+ * of the TASKDIALOGCONFIG and TASKDIALOG_BUTTON structures it uses.
+ *
+ * @param INSTRUCTION  Dialog header string; use empty string if unneeded
+ * @param CONTENT      Secondary message string; use empty string if unneeded
+ * @param BUTTON1      Text for the first button, the one selected by default
+ * @param BUTTON2      Text for the second button
+ *
+ * @return One of the following values will be left on the stack:
+ *         1001 if the first button was clicked
+ *         1002 if the second button was clicked
+ *         2 (IDCANCEL) if the dialog was closed
+ *         0 on error
+ */
+!macro _ShowTaskDialog INSTRUCTION CONTENT BUTTON1 BUTTON2
+  !ifndef SIZEOF_TASKDIALOGCONFIG_32BIT
+    !define SIZEOF_TASKDIALOGCONFIG_32BIT 96
+  !endif
+  !ifndef TDF_ALLOW_DIALOG_CANCELLATION
+    !define TDF_ALLOW_DIALOG_CANCELLATION 0x0008
+  !endif
+  !ifndef TDF_RTL_LAYOUT
+    !define TDF_RTL_LAYOUT 0x02000
+  !endif
+  !ifndef TD_WARNING_ICON
+    !define TD_WARNING_ICON 0x0FFFF
+  !endif
+
+  Push $0 ; return value
+  Push $1 ; TASKDIALOGCONFIG struct
+  Push $2 ; TASKDIALOG_BUTTON array
+  Push $3 ; dwFlags member of the TASKDIALOGCONFIG
+
+  StrCpy $3 ${TDF_ALLOW_DIALOG_CANCELLATION}
+  !ifdef ${AB_CD}_rtl
+    IntOp $3 $3 | ${TDF_RTL_LAYOUT}
+  !endif
+
+  ; Build an array of two TASKDIALOG_BUTTON structs
+  System::Call "*(i 1001, \
+                  w '${BUTTON1}', \
+                  i 1002, \
+                  w '${BUTTON2}' \
+                  ) p.r2"
+  ; Build a TASKDIALOGCONFIG struct
+  System::Call "*(i ${SIZEOF_TASKDIALOGCONFIG_32BIT}, \
+                  p $HWNDPARENT, \
+                  p 0, \
+                  i $3, \
+                  i 0, \
+                  w '$(INSTALLER_WIN_CAPTION)', \
+                  p ${TD_WARNING_ICON}, \
+                  w '${INSTRUCTION}', \
+                  w '${CONTENT}', \
+                  i 2, \
+                  p r2, \
+                  i 1001, \
+                  i 0, \
+                  p 0, \
+                  i 0, \
+                  p 0, \
+                  p 0, \
+                  p 0, \
+                  p 0, \
+                  p 0, \
+                  p 0, \
+                  p 0, \
+                  p 0, \
+                  i 0 \
+                  ) p.r1"
+  System::Call "comctl32::TaskDialogIndirect(p r1, *i 0 r0, p 0, p 0)"
+  System::Free $1
+  System::Free $2
+
+  Pop $3
+  Pop $2
+  Pop $1
+  Exch $0
+!macroend
+!define ShowTaskDialog "!insertmacro _ShowTaskDialog"
 
 /**
  * Removes a single style from a control.
@@ -7852,4 +8113,50 @@
 
   Pop $1
   Exch $0 ; return elapsed seconds
+!macroend
+
+/**
+ * Create a process to execute a command line. If it is successfully created,
+ * wait on it with WaitForInputIdle, to avoid exiting the current process too
+ * early (exiting early can cause the created process's windows to be opened in
+ * the background).
+ *
+ * CMDLINE Is the command line to execute, like the argument to Exec
+ */
+!define ExecAndWaitForInputIdle "!insertmacro ExecAndWaitForInputIdle_"
+!define CREATE_DEFAULT_ERROR_MODE 0x04000000
+!macro ExecAndWaitForInputIdle_ CMDLINE
+  ; derived from https://stackoverflow.com/a/13960786/3444805 by Anders Kjersem
+  Push $0
+  Push $1
+  Push $2
+
+  ; Command line
+  StrCpy $0 ${CMDLINE}
+
+  ; STARTUPINFO
+  System::Alloc 68
+  Pop $1
+  ; fill in STARTUPINFO.cb (first field) with sizeof(STARTUPINFO)
+  System::Call "*$1(i 68)"
+
+  ; PROCESS_INFORMATION
+  System::Call "*(i, i, i, i) i . r2"
+
+  ; CREATE_DEFAULT_ERROR_MODE follows NSIS myCreateProcess used in Exec
+  System::Call "kernel32::CreateProcessW(i 0, t r0, i 0, i 0, i 0, i ${CREATE_DEFAULT_ERROR_MODE}, i 0, i 0, i r1, i r2) i . r0"
+
+  System::Free $1
+  ${If} $0 <> 0
+    System::Call "*$2(i . r0, i . r1)"
+    ; $0: hProcess, $1: hThread
+    System::Call "user32::WaitForInputIdle(i $0, i 10000)"
+    System::Call "kernel32::CloseHandle(i $0)"
+    System::Call "kernel32::CloseHandle(i $1)"
+  ${EndIf}
+  System::Free $2
+
+  Pop $2
+  Pop $1
+  Pop $0
 !macroend

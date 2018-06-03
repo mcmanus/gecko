@@ -4,48 +4,57 @@
 
 "use strict";
 
-const { DOM: dom, createClass, PropTypes } = require("devtools/client/shared/vendor/react");
+const { Component } = require("devtools/client/shared/vendor/react");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
 
-module.exports = createClass({
-  displayName: "AutocompletePopup",
+class AutocompletePopup extends Component {
+  static get propTypes() {
+    return {
+      /**
+       * autocompleteProvider takes search-box's entire input text as `filter` argument
+       * ie. "is:cached pr"
+       * returned value is array of objects like below
+       * [{value: "is:cached protocol", displayValue: "protocol"}[, ...]]
+       * `value` is used to update the search-box input box for given item
+       * `displayValue` is used to render the autocomplete list
+       */
+      autocompleteProvider: PropTypes.func.isRequired,
+      filter: PropTypes.string.isRequired,
+      onItemSelected: PropTypes.func.isRequired,
+    };
+  }
 
-  propTypes: {
-    /**
-     * autocompleteProvider takes search-box's entire input text as `filter` argument
-     * ie. "is:cached pr"
-     * returned value is array of objects like below
-     * [{value: "is:cached protocol", displayValue: "protocol"}[, ...]]
-     * `value` is used to update the search-box input box for given item
-     * `displayValue` is used to render the autocomplete list
-     */
-    autocompleteProvider: PropTypes.func.isRequired,
-    filter: PropTypes.string.isRequired,
-    onItemSelected: PropTypes.func.isRequired,
-  },
-
-  getInitialState() {
-    return this.computeState(this.props);
-  },
+  constructor(props, context) {
+    super(props, context);
+    this.state = this.computeState(props);
+    this.computeState = this.computeState.bind(this);
+    this.jumpToTop = this.jumpToTop.bind(this);
+    this.jumpToBottom = this.jumpToBottom.bind(this);
+    this.jumpBy = this.jumpBy.bind(this);
+    this.select = this.select.bind(this);
+    this.onMouseDown = this.onMouseDown.bind(this);
+  }
 
   componentWillReceiveProps(nextProps) {
     if (this.props.filter === nextProps.filter) {
       return;
     }
     this.setState(this.computeState(nextProps));
-  },
+  }
 
   componentDidUpdate() {
     if (this.refs.selected) {
       this.refs.selected.scrollIntoView(false);
     }
-  },
+  }
 
   computeState({ autocompleteProvider, filter }) {
-    let list = autocompleteProvider(filter);
-    let selectedIndex = list.length == 1 ? 0 : -1;
+    const list = autocompleteProvider(filter);
+    const selectedIndex = list.length > 0 ? 0 : -1;
 
     return { list, selectedIndex };
-  },
+  }
 
   /**
    * Use this method to select the top-most item
@@ -53,7 +62,7 @@ module.exports = createClass({
    */
   jumpToTop() {
     this.setState({ selectedIndex: 0 });
-  },
+  }
 
   /**
    * Use this method to select the bottom-most item
@@ -61,7 +70,7 @@ module.exports = createClass({
    */
   jumpToBottom() {
     this.setState({ selectedIndex: this.state.list.length - 1 });
-  },
+  }
 
   /**
    * Increment the selected index with the provided increment value. Will cycle to the
@@ -71,7 +80,7 @@ module.exports = createClass({
    * @param {number} increment - No. of hops in the direction
    */
   jumpBy(increment = 1) {
-    let { list, selectedIndex } = this.state;
+    const { list, selectedIndex } = this.state;
     let nextIndex = selectedIndex + increment;
     if (increment > 0) {
       // Positive cycling
@@ -81,7 +90,7 @@ module.exports = createClass({
       nextIndex = nextIndex < 0 ? list.length - 1 : nextIndex;
     }
     this.setState({selectedIndex: nextIndex});
-  },
+  }
 
   /**
    * Submit the currently selected item to the onItemSelected callback
@@ -91,23 +100,23 @@ module.exports = createClass({
     if (this.refs.selected) {
       this.props.onItemSelected(this.refs.selected.dataset.value);
     }
-  },
+  }
 
   onMouseDown(e) {
     e.preventDefault();
     this.setState({ selectedIndex: Number(e.target.dataset.index) }, this.select);
-  },
+  }
 
   render() {
-    let { list } = this.state;
+    const { list } = this.state;
 
     return list.length > 0 && dom.div(
       { className: "devtools-autocomplete-popup devtools-monospace" },
       dom.ul(
         { className: "devtools-autocomplete-listbox" },
         list.map((item, i) => {
-          let isSelected = this.state.selectedIndex == i;
-          let itemClassList = ["autocomplete-item"];
+          const isSelected = this.state.selectedIndex == i;
+          const itemClassList = ["autocomplete-item"];
 
           if (isSelected) {
             itemClassList.push("autocomplete-selected");
@@ -124,4 +133,6 @@ module.exports = createClass({
       )
     );
   }
-});
+}
+
+module.exports = AutocompletePopup;

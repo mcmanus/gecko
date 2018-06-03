@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use cssparser::SourceLocation;
-use euclid::ScaleFactor;
+use euclid::TypedScale;
 use euclid::TypedSize2D;
 use selectors::parser::{AncestorHashes, Selector};
 use servo_arc::Arc;
@@ -18,7 +18,7 @@ use style::shared_lock::SharedRwLock;
 use style::stylesheets::StyleRule;
 use style::stylist::{Stylist, Rule};
 use style::stylist::needs_revalidation_for_testing;
-use style::thread_state;
+use style::thread_state::{self, ThreadState};
 
 /// Helper method to get some Rules from selector strings.
 /// Each sublist of the result contains the Rules for one StyleRule.
@@ -31,7 +31,7 @@ fn get_mock_rules(css_selectors: &[&str]) -> (Vec<Vec<Rule>>, SharedRwLock) {
             selectors: selectors,
             block: Arc::new(shared_lock.wrap(PropertyDeclarationBlock::with_one(
                 PropertyDeclaration::Display(
-                    longhands::display::SpecifiedValue::block),
+                    longhands::display::SpecifiedValue::Block),
                 Importance::Normal
             ))),
             source_location: SourceLocation {
@@ -179,13 +179,13 @@ fn test_insert() {
 }
 
 fn mock_stylist() -> Stylist {
-    let device = Device::new(MediaType::screen(), TypedSize2D::new(0f32, 0f32), ScaleFactor::new(1.0));
+    let device = Device::new(MediaType::screen(), TypedSize2D::new(0f32, 0f32), TypedScale::new(1.0));
     Stylist::new(device, QuirksMode::NoQuirks)
 }
 
 #[test]
 fn test_stylist_device_accessors() {
-    thread_state::initialize(thread_state::LAYOUT);
+    thread_state::initialize(ThreadState::LAYOUT);
     let stylist = mock_stylist();
     assert_eq!(stylist.device().media_type(), MediaType::screen());
     let mut stylist_mut = mock_stylist();
@@ -194,7 +194,7 @@ fn test_stylist_device_accessors() {
 
 #[test]
 fn test_stylist_rule_tree_accessors() {
-    thread_state::initialize(thread_state::LAYOUT);
+    thread_state::initialize(ThreadState::LAYOUT);
     let stylist = mock_stylist();
     stylist.rule_tree();
     stylist.rule_tree().root();

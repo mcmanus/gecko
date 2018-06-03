@@ -1,7 +1,8 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-* This Source Code Form is subject to the terms of the Mozilla Public
-* License, v. 2.0. If a copy of the MPL was not distributed with this
-* file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "FrameBuilder.h"
 #include "ContainerLayerMLGPU.h"
@@ -12,6 +13,7 @@
 #include "MLGDevice.h"                  // for MLGSwapChain
 #include "RenderPassMLGPU.h"
 #include "RenderViewMLGPU.h"
+#include "mozilla/gfx/Logging.h"
 #include "mozilla/gfx/Polygon.h"
 #include "mozilla/layers/BSPTree.h"
 #include "mozilla/layers/LayersHelpers.h"
@@ -69,7 +71,7 @@ FrameBuilder::Build()
     Maybe<gfx::Polygon> geometry;
     RenderTargetIntRect clip(0, 0, target->GetSize().width, target->GetSize().height);
 
-    AssignLayer(mRoot->GetLayer(), mWidgetRenderView, clip, Move(geometry));
+    AssignLayer(mRoot->GetLayer(), mWidgetRenderView, clip, std::move(geometry));
   }
 
   // Build the default mask buffer.
@@ -137,7 +139,7 @@ FrameBuilder::AssignLayer(Layer* aLayer,
 
   // Finally, assign the layer to a rendering batch in the current render
   // target.
-  layer->AssignToView(this, aView, Move(aGeometry));
+  layer->AssignToView(this, aView, std::move(aGeometry));
 }
 
 bool
@@ -150,7 +152,7 @@ FrameBuilder::ProcessContainerLayer(ContainerLayer* aContainer,
 
   // Diagnostic information for bug 1387467.
   if (!layer) {
-    gfxDevCrash(LogReason::InvalidLayerType) <<
+    gfxDevCrash(gfx::LogReason::InvalidLayerType) <<
       "Layer type is invalid: " << aContainer->Name();
     return false;
   }
@@ -179,7 +181,7 @@ FrameBuilder::ProcessContainerLayer(ContainerLayer* aContainer,
   // to be a full-fledged ContainerLayerMLGPU.
   ContainerLayerMLGPU* viewContainer = layer->AsContainerLayerMLGPU();
   if (!viewContainer) {
-    gfxDevCrash(LogReason::InvalidLayerType) <<
+    gfxDevCrash(gfx::LogReason::InvalidLayerType) <<
       "Container layer type is invalid: " << aContainer->Name();
     return false;
   }
@@ -222,10 +224,10 @@ FrameBuilder::ProcessChildList(ContainerLayer* aContainer,
     } else if (aParentGeometry) {
       geometry = aParentGeometry;
     } else if (entry.geometry) {
-      geometry = Move(entry.geometry);
+      geometry = std::move(entry.geometry);
     }
 
-    AssignLayer(child, aView, clip, Move(geometry));
+    AssignLayer(child, aView, clip, std::move(geometry));
   }
 }
 

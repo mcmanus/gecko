@@ -17,9 +17,10 @@ from mozunit import main
 
 class FakeTryOptionSyntax(object):
 
-    def __init__(self, message, task_graph):
+    def __init__(self, message, task_graph, graph_config):
         self.trigger_tests = 0
         self.talos_trigger_tests = 0
+        self.raptor_trigger_tests = 0
         self.notifications = None
         self.env = []
         self.profile = False
@@ -40,7 +41,7 @@ class TestTargetTasks(unittest.TestCase):
                       task={}),
         }, graph=Graph(nodes={'a'}, edges=set()))
         parameters = {'project': project}
-        return 'a' in method(graph, parameters)
+        return 'a' in method(graph, parameters, {})
 
     def test_default_all(self):
         """run_on_projects=[all] includes release, integration, and other projects"""
@@ -84,16 +85,17 @@ class TestTargetTasks(unittest.TestCase):
         finally:
             try_option_syntax.TryOptionSyntax = orig_TryOptionSyntax
 
-    def test_just_try_it(self):
-        "try_mode = None runs try optoin syntax with no options"
+    def test_empty_try(self):
+        "try_mode = None runs nothing"
         tg = self.make_task_graph()
         method = target_tasks.get_method('try_tasks')
-        with self.fake_TryOptionSyntax():
-            params = {
-                'try_mode': None,
-                'message': '',
-            }
-            self.assertEqual(method(tg, params), ['b'])
+        params = {
+            'try_mode': None,
+            'project': 'try',
+            'message': '',
+        }
+        # only runs the task with run_on_projects: try
+        self.assertEqual(method(tg, params, {}), [])
 
     def test_try_option_syntax(self):
         "try_mode = try_option_syntax uses TryOptionSyntax"
@@ -104,7 +106,7 @@ class TestTargetTasks(unittest.TestCase):
                 'try_mode': 'try_option_syntax',
                 'message': 'try: -p all',
             }
-            self.assertEqual(method(tg, params), ['b'])
+            self.assertEqual(method(tg, params, {}), ['b'])
 
     def test_try_task_config(self):
         "try_mode = try_task_config uses the try config"
@@ -114,7 +116,7 @@ class TestTargetTasks(unittest.TestCase):
             'try_mode': 'try_task_config',
             'try_task_config': {'tasks': ['a']},
         }
-        self.assertEqual(method(tg, params), ['a'])
+        self.assertEqual(method(tg, params, {}), ['a'])
 
 
 if __name__ == '__main__':

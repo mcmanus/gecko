@@ -1,9 +1,8 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-let { classes: Cc, utils: Cu, interfaces: Ci, results: Cr } = Components;
-
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+const { TelemetryUtils } = ChromeUtils.import("resource://gre/modules/TelemetryUtils.jsm", {});
 
 function ensureProfilerInitialized() {
   // Starting and stopping the profiler with the "stackwalk" flag will cause the
@@ -63,16 +62,17 @@ add_task(async function test_BHRObserver() {
   // transient hang, and the other a permanent hang. We'll wait for the hangs to
   // be recorded.
 
-  do_execute_soon(() => {
+  executeSoon(() => {
     let startTime = Date.now();
     while ((Date.now() - startTime) < 10000);
   });
 
-  do_execute_soon(() => {
+  executeSoon(() => {
     let startTime = Date.now();
     while ((Date.now() - startTime) < 1000);
   });
 
+  Services.prefs.setBoolPref(TelemetryUtils.Preferences.OverridePreRelease, true);
   let childDone = run_test_in_child("child_cause_hang.js");
 
   // Now we wait for the hangs to have their bhr-thread-hang message fired for

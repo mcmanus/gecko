@@ -93,9 +93,9 @@ StreamFilter::Connect()
       GetCurrentThreadSerialEventTarget(),
       __func__,
       [=] (mozilla::ipc::Endpoint<PStreamFilterChild>&& aEndpoint) {
-        self->FinishConnect(Move(aEndpoint));
+        self->FinishConnect(std::move(aEndpoint));
       },
-      [=] (mozilla::ipc::PromiseRejectReason aReason) {
+      [=] (mozilla::ipc::ResponseRejectReason aReason) {
         self->mActor->RecvInitialized(false);
       });
   } else {
@@ -108,7 +108,7 @@ StreamFilter::Connect()
       NewRunnableMethod<mozilla::ipc::Endpoint<PStreamFilterChild>&&>(
         "StreamFilter::FinishConnect",
         this, &StreamFilter::FinishConnect,
-        Move(endpoint)));
+        std::move(endpoint)));
   }
 }
 
@@ -177,7 +177,7 @@ StreamFilter::Write(const ArrayBufferOrUint8Array& aData, ErrorResult& aRv)
   }
 
   if (ok) {
-    mActor->Write(Move(data), aRv);
+    mActor->Write(std::move(data), aRv);
   }
 }
 
@@ -244,8 +244,7 @@ StreamFilter::FireEvent(const nsAString& aType)
   RefPtr<Event> event = Event::Constructor(this, aType, init);
   event->SetTrusted(true);
 
-  bool defaultPrevented;
-  DispatchEvent(event, &defaultPrevented);
+  DispatchEvent(*event);
 }
 
 void
@@ -271,8 +270,7 @@ StreamFilter::FireDataEvent(const nsTArray<uint8_t>& aData)
     StreamFilterDataEvent::Constructor(this, NS_LITERAL_STRING("data"), init);
   event->SetTrusted(true);
 
-  bool defaultPrevented;
-  DispatchEvent(event, &defaultPrevented);
+  DispatchEvent(*event);
 }
 
 void

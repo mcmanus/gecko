@@ -202,6 +202,35 @@ bool
 nsTextFragment::SetTo(const char16_t* aBuffer, int32_t aLength,
                       bool aUpdateBidi, bool aForce2b)
 {
+  if (aForce2b && mState.mIs2b && !m2b->IsReadonly()) {
+    uint32_t storageSize = m2b->StorageSize();
+    uint32_t neededSize = aLength * sizeof(char16_t);
+    if (!neededSize) {
+      if (storageSize < AutoStringDefaultStorageSize) {
+        // If we're storing small enough nsStringBuffer, let's preserve it.
+
+        static_cast<char16_t*>(m2b->Data())[0] = char16_t(0);
+        mState.mLength = 0;
+        mState.mIsBidi = false;
+        return true;
+      }
+    } else if ((neededSize < storageSize) &&
+               ((storageSize / 2) <
+                (neededSize + AutoStringDefaultStorageSize))) {
+      // Don't try to reuse the existing nsStringBuffer, if it would have
+      // lots of unused space.
+
+      memcpy(m2b->Data(), aBuffer, neededSize);
+      static_cast<char16_t*>(m2b->Data())[aLength] = char16_t(0);
+      mState.mLength = aLength;
+      mState.mIsBidi = false;
+      if (aUpdateBidi) {
+        UpdateBidiFlag(aBuffer, aLength);
+      }
+      return true;
+    }
+  }
+
   ReleaseText();
 
   if (aLength == 0) {
@@ -333,6 +362,10 @@ bool
 nsTextFragment::Append(const char16_t* aBuffer, uint32_t aLength,
                        bool aUpdateBidi, bool aForce2b)
 {
+  if (!aLength) {
+    return true;
+  }
+
   // This is a common case because some callsites create a textnode
   // with a value by creating the node and then calling AppendData.
   if (mState.mLength == 0) {
@@ -479,7 +512,7 @@ void
 nsTextFragment::UpdateBidiFlag(const char16_t* aBuffer, uint32_t aLength)
 {
   if (mState.mIs2b && !mState.mIsBidi) {
-    if (HasRTLChars(aBuffer, aLength)) {
+    if (HasRTLChars(MakeSpan(aBuffer, aLength))) {
       mState.mIsBidi = true;
     }
   }

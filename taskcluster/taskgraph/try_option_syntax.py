@@ -98,7 +98,6 @@ UNITTEST_ALIASES = {
     'reftest-no-accel': alias_matches(r'^(plain-)?reftest-no-accel.*$'),
     'reftests': alias_matches(r'^(plain-)?reftest.*$'),
     'reftests-e10s': alias_matches(r'^(plain-)?reftest-e10s.*$'),
-    'reftest-stylo': alias_matches(r'^(plain-)?reftest-stylo.*$'),
     'reftest-gpu': alias_matches(r'^(plain-)?reftest-gpu.*$'),
     'robocop': alias_prefix('robocop'),
     'web-platform-test': alias_prefix('web-platform-tests'),
@@ -126,13 +125,11 @@ UNITTEST_PLATFORM_PRETTY_NAMES = {
         'linux32',
         'linux64',
         'linux64-asan',
-        'linux64-stylo-disabled',
         'linux64-stylo-sequential'
     ],
     'x64': [
         'linux64',
         'linux64-asan',
-        'linux64-stylo-disabled',
         'linux64-stylo-sequential'
     ],
     'Android 4.3': ['android-4.3-arm7-api-16'],
@@ -150,35 +147,6 @@ UNITTEST_PLATFORM_PRETTY_NAMES = {
     # 'Windows XP': [..TODO..],
     # 'win32': [..TODO..],
     # 'win64': [..TODO..],
-}
-
-# We have a few platforms for which we want to do some "extra" builds, or at
-# least build-ish things.  Sort of.  Anyway, these other things are implemented
-# as different "platforms".  These do *not* automatically ride along with "-p
-# all"
-RIDEALONG_BUILDS = {
-    'android-api-16': [
-        'android-api-16-l10n',
-    ],
-    'linux': [
-        'linux-l10n',
-    ],
-    'linux64': [
-        'linux64-l10n',
-        'sm-plain',
-        'sm-nonunified',
-        'sm-arm-sim',
-        'sm-arm64-sim',
-        'sm-compacting',
-        'sm-rootanalysis',
-        'sm-package',
-        'sm-tsan',
-        'sm-asan',
-        'sm-mozjs-sys',
-        'sm-msan',
-        'sm-fuzzing',
-        'sm-rust-bindings',
-    ],
 }
 
 TEST_CHUNK_SUFFIX = re.compile('(.*)-([0-9]+)$')
@@ -233,6 +201,7 @@ def parse_message(message):
     parser.add_argument('-u', '--unittests', nargs='?',
                         dest='unittests', const='all', default='all')
     parser.add_argument('-t', '--talos', nargs='?', dest='talos', const='all', default='none')
+    parser.add_argument('-r', '--raptor', nargs='?', dest='raptor', const='all', default='none')
     parser.add_argument('-i', '--interactive',
                         dest='interactive', action='store_true', default=False)
     parser.add_argument('-e', '--all-emails',
@@ -241,6 +210,8 @@ def parse_message(message):
                         dest='notifications', action='store_const', const='failure')
     parser.add_argument('-j', '--job', dest='jobs', action='append')
     parser.add_argument('--rebuild-talos', dest='talos_trigger_tests', action='store',
+                        type=int, default=1)
+    parser.add_argument('--rebuild-raptor', dest='raptor_trigger_tests', action='store',
                         type=int, default=1)
     parser.add_argument('--setenv', dest='env', action='append')
     parser.add_argument('--geckoProfile', dest='profile', action='store_true')
@@ -262,7 +233,7 @@ def parse_message(message):
 
 class TryOptionSyntax(object):
 
-    def __init__(self, parameters, full_task_graph):
+    def __init__(self, parameters, full_task_graph, graph_config):
         """
         Apply the try options in parameters.
 
@@ -289,15 +260,18 @@ class TryOptionSyntax(object):
             'only_chunks': set([..chunk numbers..]), # to limit only to certain chunks
         }
         """
+        self.graph_config = graph_config
         self.jobs = []
         self.build_types = []
         self.platforms = []
         self.unittests = []
         self.talos = []
+        self.raptor = []
         self.trigger_tests = 0
         self.interactive = False
         self.notifications = None
         self.talos_trigger_tests = 0
+        self.raptor_trigger_tests = 0
         self.env = []
         self.profile = False
         self.tag = None
@@ -312,10 +286,12 @@ class TryOptionSyntax(object):
         self.unittests = self.parse_test_option(
             "unittest_try_name", options['unittests'], full_task_graph)
         self.talos = self.parse_test_option("talos_try_name", options['talos'], full_task_graph)
+        self.raptor = self.parse_test_option("raptor_try_name", options['raptor'], full_task_graph)
         self.trigger_tests = options['trigger_tests']
         self.interactive = options['interactive']
         self.notifications = options['notifications']
         self.talos_trigger_tests = options['talos_trigger_tests']
+        self.raptor_trigger_tests = options['raptor_trigger_tests']
         self.env = options['env']
         self.profile = options['profile']
         self.tag = options['tag']
@@ -323,7 +299,9 @@ class TryOptionSyntax(object):
         self.include_nightly = options['include_nightly']
 
     def parse_jobs(self, jobs_arg):
-        if not jobs_arg or jobs_arg == ['all']:
+        if not jobs_arg or jobs_arg == ['none']:
+            return []  # default is `-j none`
+        if jobs_arg == ['all']:
             return None
         expanded = []
         for job in jobs_arg:
@@ -350,6 +328,7 @@ class TryOptionSyntax(object):
         if platform_arg == 'all':
             return None
 
+        RIDEALONG_BUILDS = self.graph_config['try']['ridealong-builds']
         results = []
         for build in platform_arg.split(','):
             results.append(build)
@@ -597,27 +576,22 @@ class TryOptionSyntax(object):
             else:
                 return False
 
-        job_try_name = attr('job_try_name')
-        if job_try_name:
+        if attr('job_try_name'):
             # Beware the subtle distinction between [] and None for self.jobs and self.platforms.
             # They will be [] if there was no try syntax, and None if try syntax was detected but
             # they remained unspecified.
-            if self.jobs:
-                return job_try_name in self.jobs
-            elif not self.jobs and 'build' in task.dependencies:
-                # We exclude tasks with build dependencies from the default set of jobs because
-                # they will schedule their builds even if they end up optimized away. This means
-                # to run these tasks on try, they'll need to be explicitly specified by -j until
-                # we find a better solution (see bug 1372510).
-                return False
-            elif not self.jobs and attr('build_platform'):
-                if self.platforms is None or attr('build_platform') in self.platforms:
-                    return True
-                return False
+            if self.jobs is not None:
+                return attr('job_try_name') in self.jobs
+
+            # User specified `-j all`
+            if self.platforms is not None and attr('build_platform') not in self.platforms:
+                return False  # honor -p for jobs governed by a platform
+            # "all" means "everything with `try` in run_on_projects"
             return check_run_on_projects()
         elif attr('kind') == 'test':
             return match_test(self.unittests, 'unittest_try_name') \
-                 or match_test(self.talos, 'talos_try_name')
+                 or match_test(self.talos, 'talos_try_name') \
+                 or match_test(self.raptor, 'raptor_try_name')
         elif attr('kind') in BUILD_KINDS:
             if attr('build_type') not in self.build_types:
                 return False
@@ -642,11 +616,13 @@ class TryOptionSyntax(object):
             "platforms: " + none_for_all(self.platforms),
             "unittests: " + none_for_all(self.unittests),
             "talos: " + none_for_all(self.talos),
+            "raptor" + none_for_all(self.raptor),
             "jobs: " + none_for_all(self.jobs),
             "trigger_tests: " + str(self.trigger_tests),
             "interactive: " + str(self.interactive),
             "notifications: " + str(self.notifications),
             "talos_trigger_tests: " + str(self.talos_trigger_tests),
+            "raptor_trigger_tests: " + str(self.raptor_trigger_tests),
             "env: " + str(self.env),
             "profile: " + str(self.profile),
             "tag: " + str(self.tag),

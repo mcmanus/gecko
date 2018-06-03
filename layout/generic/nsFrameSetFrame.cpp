@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,6 +10,7 @@
 
 #include "gfxContext.h"
 #include "gfxUtils.h"
+#include "mozilla/ComputedStyle.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/Helpers.h"
@@ -20,16 +22,14 @@
 #include "nsContainerFrame.h"
 #include "nsLayoutUtils.h"
 #include "nsPresContext.h"
+#include "nsIContentInlines.h"
 #include "nsIPresShell.h"
 #include "nsGkAtoms.h"
 #include "nsStyleConsts.h"
-#include "nsStyleContext.h"
 #include "nsHTMLParts.h"
-#include "nsIDOMMutationEvent.h"
 #include "nsNameSpaceManager.h"
 #include "nsCSSAnonBoxes.h"
-#include "mozilla/StyleSetHandle.h"
-#include "mozilla/StyleSetHandleInlines.h"
+#include "mozilla/ServoStyleSet.h"
 #include "mozilla/dom/Element.h"
 #include "nsDisplayList.h"
 #include "nsNodeUtils.h"
@@ -113,7 +113,7 @@ public:
   void PaintBorder(DrawTarget* aDrawTarget, nsPoint aPt);
 
 protected:
-  nsHTMLFramesetBorderFrame(nsStyleContext* aContext, int32_t aWidth, bool aVertical, bool aVisible);
+  nsHTMLFramesetBorderFrame(ComputedStyle* aStyle, int32_t aWidth, bool aVertical, bool aVisible);
   virtual ~nsHTMLFramesetBorderFrame();
   virtual nscoord GetIntrinsicISize() override;
   virtual nscoord GetIntrinsicBSize() override;
@@ -154,8 +154,8 @@ public:
                           nsReflowStatus&          aStatus) override;
 
 protected:
-  explicit nsHTMLFramesetBlankFrame(nsStyleContext* aContext)
-    : nsLeafFrame(aContext, kClassID)
+  explicit nsHTMLFramesetBlankFrame(ComputedStyle* aStyle)
+    : nsLeafFrame(aStyle, kClassID)
   {}
 
   virtual ~nsHTMLFramesetBlankFrame();
@@ -172,8 +172,8 @@ protected:
 bool    nsHTMLFramesetFrame::gDragInProgress = false;
 #define DEFAULT_BORDER_WIDTH_PX 6
 
-nsHTMLFramesetFrame::nsHTMLFramesetFrame(nsStyleContext* aContext)
-  : nsContainerFrame(aContext, kClassID)
+nsHTMLFramesetFrame::nsHTMLFramesetFrame(ComputedStyle* aStyle)
+  : nsContainerFrame(aStyle, kClassID)
 {
   mNumRows             = 0;
   mNumCols             = 0;
@@ -226,7 +226,7 @@ nsHTMLFramesetFrame::Init(nsIContent*       aContent,
   nscolor borderColor = GetBorderColor();
 
   // Get the rows= cols= data
-  HTMLFrameSetElement* ourContent = HTMLFrameSetElement::FromContent(mContent);
+  HTMLFrameSetElement* ourContent = HTMLFrameSetElement::FromNode(mContent);
   NS_ASSERTION(ourContent, "Someone gave us a broken frameset element!");
   const nsFramesetSpec* rowSpecs = nullptr;
   const nsFramesetSpec* colSpecs = nullptr;
@@ -270,75 +270,71 @@ nsHTMLFramesetFrame::Init(nsIContent*       aContent,
 
   // create the children frames; skip content which isn't <frameset> or <frame>
   mChildCount = 0; // number of <frame> or <frameset> children
-  nsIFrame* frame;
 
-  // number of any type of children
-  uint32_t numChildren = mContent->GetChildCount();
-
-  for (uint32_t childX = 0; childX < numChildren; childX++) {
+  for (nsIContent* child = mContent->GetFirstChild();
+       child;
+       child = child->GetNextSibling()) {
     if (mChildCount == numCells) { // we have more <frame> or <frameset> than cells
       // Clear the lazy bits in the remaining children.  Also clear
       // the restyle flags, like nsCSSFrameConstructor::ProcessChildren does.
-      for (uint32_t i = childX; i < numChildren; i++) {
-        nsIContent *child = mContent->GetChildAt(i);
+      for (; child; child = child->GetNextSibling()) {
         child->UnsetFlags(NODE_DESCENDANTS_NEED_FRAMES | NODE_NEEDS_FRAME);
-        child->UnsetRestyleFlagsIfGecko();
       }
       break;
     }
-    nsIContent *child = mContent->GetChildAt(childX);
     child->UnsetFlags(NODE_DESCENDANTS_NEED_FRAMES | NODE_NEEDS_FRAME);
-    // Also clear the restyle flags in the child like
-    // nsCSSFrameConstructor::ProcessChildren does.
-    child->UnsetRestyleFlagsIfGecko();
 
     // IMPORTANT: This must match the conditions in
     // nsCSSFrameConstructor::ContentAppended/Inserted/Removed
-    if (!child->IsHTMLElement())
+    if (!child->IsHTMLElement()) {
       continue;
-
-    if (child->IsAnyOfHTMLElements(nsGkAtoms::frameset, nsGkAtoms::frame)) {
-      RefPtr<nsStyleContext> kidSC;
-
-      kidSC = shell->StyleSet()->ResolveStyleFor(child->AsElement(),
-                                                 mStyleContext,
-                                                 LazyComputeBehavior::Allow);
-      if (child->IsHTMLElement(nsGkAtoms::frameset)) {
-        frame = NS_NewHTMLFramesetFrame(shell, kidSC);
-
-        nsHTMLFramesetFrame* childFrame = (nsHTMLFramesetFrame*)frame;
-        childFrame->SetParentFrameborder(frameborder);
-        childFrame->SetParentBorderWidth(borderWidth);
-        childFrame->SetParentBorderColor(borderColor);
-        frame->Init(child, this, nullptr);
-
-        mChildBorderColors[mChildCount].Set(childFrame->GetBorderColor());
-      } else { // frame
-        frame = NS_NewSubDocumentFrame(shell, kidSC);
-
-        frame->Init(child, this, nullptr);
-
-        mChildFrameborder[mChildCount] = GetFrameBorder(child);
-        mChildBorderColors[mChildCount].Set(GetBorderColor(child));
-      }
-      child->SetPrimaryFrame(frame);
-
-      mFrames.AppendFrame(nullptr, frame);
-
-      mChildCount++;
     }
+
+    if (!child->IsAnyOfHTMLElements(nsGkAtoms::frameset, nsGkAtoms::frame)) {
+      continue;
+    }
+
+    RefPtr<ComputedStyle> kidSC =
+      shell->StyleSet()->ResolveStyleFor(child->AsElement(),
+                                         mComputedStyle,
+                                         LazyComputeBehavior::Allow);
+
+    nsIFrame* frame;
+    if (child->IsHTMLElement(nsGkAtoms::frameset)) {
+      frame = NS_NewHTMLFramesetFrame(shell, kidSC);
+
+      nsHTMLFramesetFrame* childFrame = (nsHTMLFramesetFrame*)frame;
+      childFrame->SetParentFrameborder(frameborder);
+      childFrame->SetParentBorderWidth(borderWidth);
+      childFrame->SetParentBorderColor(borderColor);
+      frame->Init(child, this, nullptr);
+
+      mChildBorderColors[mChildCount].Set(childFrame->GetBorderColor());
+    } else { // frame
+      frame = NS_NewSubDocumentFrame(shell, kidSC);
+
+      frame->Init(child, this, nullptr);
+
+      mChildFrameborder[mChildCount] = GetFrameBorder(child);
+      mChildBorderColors[mChildCount].Set(GetBorderColor(child));
+    }
+    child->SetPrimaryFrame(frame);
+
+    mFrames.AppendFrame(nullptr, frame);
+
+    mChildCount++;
   }
 
   mNonBlankChildCount = mChildCount;
   // add blank frames for frameset cells that had no content provided
   for (int blankX = mChildCount; blankX < numCells; blankX++) {
-    RefPtr<nsStyleContext> pseudoStyleContext;
-    pseudoStyleContext = shell->StyleSet()->
+    RefPtr<ComputedStyle> pseudoComputedStyle;
+    pseudoComputedStyle = shell->StyleSet()->
       ResolveNonInheritingAnonymousBoxStyle(nsCSSAnonBoxes::framesetBlank);
 
     // XXX the blank frame is using the content of its parent - at some point it
     // should just have null content, if we support that
-    nsHTMLFramesetBlankFrame* blankFrame = new (shell) nsHTMLFramesetBlankFrame(pseudoStyleContext);
+    nsHTMLFramesetBlankFrame* blankFrame = new (shell) nsHTMLFramesetBlankFrame(pseudoComputedStyle);
 
     blankFrame->Init(mContent, this, nullptr);
 
@@ -541,7 +537,7 @@ int32_t nsHTMLFramesetFrame::GetBorderWidth(nsPresContext* aPresContext,
   if (frameborder == eFrameborder_No) {
     return 0;
   }
-  nsGenericHTMLElement *content = nsGenericHTMLElement::FromContent(mContent);
+  nsGenericHTMLElement *content = nsGenericHTMLElement::FromNode(mContent);
 
   if (content) {
     const nsAttrValue* attr = content->GetParsedAttr(nsGkAtoms::border);
@@ -678,8 +674,8 @@ nsHTMLFramesetFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   BuildDisplayListForInline(aBuilder, aLists);
 
   if (mDragger && aBuilder->IsForEventDelivery()) {
-    aLists.Content()->AppendNewToTop(
-      new (aBuilder) nsDisplayEventReceiver(aBuilder, this));
+    aLists.Content()->AppendToTop(
+      MakeDisplayItem<nsDisplayEventReceiver>(aBuilder, this));
   }
 }
 
@@ -735,7 +731,7 @@ nsFrameborder GetFrameBorderHelper(nsGenericHTMLElement* aContent)
 nsFrameborder nsHTMLFramesetFrame::GetFrameBorder()
 {
   nsFrameborder result = eFrameborder_Notset;
-  nsGenericHTMLElement *content = nsGenericHTMLElement::FromContent(mContent);
+  nsGenericHTMLElement *content = nsGenericHTMLElement::FromNode(mContent);
 
   if (content) {
     result = GetFrameBorderHelper(content);
@@ -750,7 +746,7 @@ nsFrameborder nsHTMLFramesetFrame::GetFrameBorder(nsIContent* aContent)
 {
   nsFrameborder result = eFrameborder_Notset;
 
-  nsGenericHTMLElement *content = nsGenericHTMLElement::FromContent(aContent);
+  nsGenericHTMLElement *content = nsGenericHTMLElement::FromNode(aContent);
 
   if (content) {
     result = GetFrameBorderHelper(content);
@@ -763,7 +759,7 @@ nsFrameborder nsHTMLFramesetFrame::GetFrameBorder(nsIContent* aContent)
 
 nscolor nsHTMLFramesetFrame::GetBorderColor()
 {
-  nsGenericHTMLElement *content = nsGenericHTMLElement::FromContent(mContent);
+  nsGenericHTMLElement *content = nsGenericHTMLElement::FromNode(mContent);
 
   if (content) {
     const nsAttrValue* attr = content->GetParsedAttr(nsGkAtoms::bordercolor);
@@ -780,7 +776,7 @@ nscolor nsHTMLFramesetFrame::GetBorderColor()
 
 nscolor nsHTMLFramesetFrame::GetBorderColor(nsIContent* aContent)
 {
-  nsGenericHTMLElement *content = nsGenericHTMLElement::FromContent(aContent);
+  nsGenericHTMLElement *content = nsGenericHTMLElement::FromNode(aContent);
 
   if (content) {
     const nsAttrValue* attr = content->GetParsedAttr(nsGkAtoms::bordercolor);
@@ -806,7 +802,7 @@ nsHTMLFramesetFrame::Reflow(nsPresContext*           aPresContext,
   MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
 
   nsIPresShell *shell = aPresContext->PresShell();
-  StyleSetHandle styleSet = shell->StyleSet();
+  ServoStyleSet* styleSet = shell->StyleSet();
 
   GetParent()->AddStateBits(NS_FRAME_CONTAINS_RELATIVE_BSIZE);
 
@@ -838,7 +834,7 @@ nsHTMLFramesetFrame::Reflow(nsPresContext*           aPresContext,
   height -= (mNumRows - 1) * borderWidth;
   if (height < 0) height = 0;
 
-  HTMLFrameSetElement* ourContent = HTMLFrameSetElement::FromContent(mContent);
+  HTMLFrameSetElement* ourContent = HTMLFrameSetElement::FromNode(mContent);
   NS_ASSERTION(ourContent, "Someone gave us a broken frameset element!");
   const nsFramesetSpec* rowSpecs = nullptr;
   const nsFramesetSpec* colSpecs = nullptr;
@@ -908,11 +904,11 @@ nsHTMLFramesetFrame::Reflow(nsPresContext*           aPresContext,
       offset.y += lastSize.height;
       if (firstTime) { // create horizontal border
 
-        RefPtr<nsStyleContext> pseudoStyleContext;
-        pseudoStyleContext = styleSet->
+        RefPtr<ComputedStyle> pseudoComputedStyle;
+        pseudoComputedStyle = styleSet->
           ResolveNonInheritingAnonymousBoxStyle(nsCSSAnonBoxes::horizontalFramesetBorder);
 
-        borderFrame = new (shell) nsHTMLFramesetBorderFrame(pseudoStyleContext,
+        borderFrame = new (shell) nsHTMLFramesetBorderFrame(pseudoComputedStyle,
                                                             borderWidth,
                                                             false,
                                                             false);
@@ -937,11 +933,11 @@ nsHTMLFramesetFrame::Reflow(nsPresContext*           aPresContext,
         if (0 == cellIndex.y) { // in 1st row
           if (firstTime) { // create vertical border
 
-            RefPtr<nsStyleContext> pseudoStyleContext;
-            pseudoStyleContext = styleSet->
+            RefPtr<ComputedStyle> pseudoComputedStyle;
+            pseudoComputedStyle = styleSet->
               ResolveNonInheritingAnonymousBoxStyle(nsCSSAnonBoxes::verticalFramesetBorder);
 
-            borderFrame = new (shell) nsHTMLFramesetBorderFrame(pseudoStyleContext,
+            borderFrame = new (shell) nsHTMLFramesetBorderFrame(pseudoComputedStyle,
                                                                 borderWidth,
                                                                 true,
                                                                 false);
@@ -1127,7 +1123,9 @@ nsHTMLFramesetFrame::GetNoResize(nsIFrame* aChildFrame)
 {
   nsIContent* content = aChildFrame->GetContent();
 
-  return content && content->HasAttr(kNameSpaceID_None, nsGkAtoms::noresize);
+  return content &&
+    content->IsElement() &&
+    content->AsElement()->HasAttr(kNameSpaceID_None, nsGkAtoms::noresize);
 }
 
 bool
@@ -1254,7 +1252,7 @@ nsHTMLFramesetFrame::MouseDrag(nsPresContext* aPresContext,
     if (change != 0) {
       // Recompute the specs from the new sizes.
       nscoord width = mRect.width - (mNumCols - 1) * GetBorderWidth(aPresContext, true);
-      HTMLFrameSetElement* ourContent = HTMLFrameSetElement::FromContent(mContent);
+      HTMLFrameSetElement* ourContent = HTMLFrameSetElement::FromNode(mContent);
       NS_ASSERTION(ourContent, "Someone gave us a broken frameset element!");
       const nsFramesetSpec* colSpecs = nullptr;
       ourContent->GetColSpec(&mNumCols, &colSpecs);
@@ -1262,7 +1260,8 @@ nsHTMLFramesetFrame::MouseDrag(nsPresContext* aPresContext,
       GenerateRowCol(aPresContext, width, mNumCols, colSpecs, mColSizes.get(),
                      newColAttr);
       // Setting the attr will trigger a reflow
-      mContent->SetAttr(kNameSpaceID_None, nsGkAtoms::cols, newColAttr, true);
+      mContent->AsElement()->SetAttr(kNameSpaceID_None, nsGkAtoms::cols,
+                                     newColAttr, true);
     }
   } else {
     change = aPresContext->DevPixelsToAppUnits(
@@ -1278,7 +1277,7 @@ nsHTMLFramesetFrame::MouseDrag(nsPresContext* aPresContext,
     if (change != 0) {
       // Recompute the specs from the new sizes.
       nscoord height = mRect.height - (mNumRows - 1) * GetBorderWidth(aPresContext, true);
-      HTMLFrameSetElement* ourContent = HTMLFrameSetElement::FromContent(mContent);
+      HTMLFrameSetElement* ourContent = HTMLFrameSetElement::FromNode(mContent);
       NS_ASSERTION(ourContent, "Someone gave us a broken frameset element!");
       const nsFramesetSpec* rowSpecs = nullptr;
       ourContent->GetRowSpec(&mNumRows, &rowSpecs);
@@ -1286,7 +1285,8 @@ nsHTMLFramesetFrame::MouseDrag(nsPresContext* aPresContext,
       GenerateRowCol(aPresContext, height, mNumRows, rowSpecs, mRowSizes.get(),
                      newRowAttr);
       // Setting the attr will trigger a reflow
-      mContent->SetAttr(kNameSpaceID_None, nsGkAtoms::rows, newRowAttr, true);
+      mContent->AsElement()->SetAttr(kNameSpaceID_None, nsGkAtoms::rows,
+                                     newRowAttr, true);
     }
   }
 
@@ -1305,15 +1305,15 @@ nsHTMLFramesetFrame::EndMouseDrag(nsPresContext* aPresContext)
 }
 
 nsIFrame*
-NS_NewHTMLFramesetFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewHTMLFramesetFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
 #ifdef DEBUG
-  const nsStyleDisplay* disp = aContext->StyleDisplay();
+  const nsStyleDisplay* disp = aStyle->StyleDisplay();
   NS_ASSERTION(!disp->IsAbsolutelyPositionedStyle() && !disp->IsFloatingStyle(),
                "Framesets should not be positioned and should not float");
 #endif
 
-  return new (aPresShell) nsHTMLFramesetFrame(aContext);
+  return new (aPresShell) nsHTMLFramesetFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsHTMLFramesetFrame)
@@ -1321,11 +1321,11 @@ NS_IMPL_FRAMEARENA_HELPERS(nsHTMLFramesetFrame)
 /*******************************************************************************
  * nsHTMLFramesetBorderFrame
  ******************************************************************************/
-nsHTMLFramesetBorderFrame::nsHTMLFramesetBorderFrame(nsStyleContext* aContext,
+nsHTMLFramesetBorderFrame::nsHTMLFramesetBorderFrame(ComputedStyle* aStyle,
                                                      int32_t aWidth,
                                                      bool aVertical,
                                                      bool aVisibility)
-  : nsLeafFrame(aContext, kClassID)
+  : nsLeafFrame(aStyle, kClassID)
   , mWidth(aWidth)
   , mVertical(aVertical)
   , mVisibility(aVisibility)
@@ -1419,8 +1419,8 @@ void
 nsHTMLFramesetBorderFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                             const nsDisplayListSet& aLists)
 {
-  aLists.Content()->AppendNewToTop(
-    new (aBuilder) nsDisplayFramesetBorder(aBuilder, this));
+  aLists.Content()->AppendToTop(
+    MakeDisplayItem<nsDisplayFramesetBorder>(aBuilder, this));
 }
 
 void nsHTMLFramesetBorderFrame::PaintBorder(DrawTarget* aDrawTarget,
@@ -1621,7 +1621,7 @@ void nsDisplayFramesetBlank::Paint(nsDisplayListBuilder* aBuilder,
   DrawTarget* drawTarget = aCtx->GetDrawTarget();
   int32_t appUnitsPerDevPixel = mFrame->PresContext()->AppUnitsPerDevPixel();
   Rect rect =
-    NSRectToSnappedRect(mVisibleRect, appUnitsPerDevPixel, *drawTarget);
+    NSRectToSnappedRect(GetPaintRect(), appUnitsPerDevPixel, *drawTarget);
   ColorPattern white(ToDeviceColor(Color(1.f, 1.f, 1.f, 1.f)));
   drawTarget->FillRect(rect, white);
 }
@@ -1630,6 +1630,6 @@ void
 nsHTMLFramesetBlankFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                            const nsDisplayListSet& aLists)
 {
-  aLists.Content()->AppendNewToTop(
-    new (aBuilder) nsDisplayFramesetBlank(aBuilder, this));
+  aLists.Content()->AppendToTop(
+    MakeDisplayItem<nsDisplayFramesetBlank>(aBuilder, this));
 }

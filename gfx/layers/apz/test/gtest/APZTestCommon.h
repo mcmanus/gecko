@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=8 et tw=80 : */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -19,11 +19,11 @@
 #include "mozilla/layers/AsyncCompositionManager.h" // for ViewTransform
 #include "mozilla/layers/GeckoContentController.h"
 #include "mozilla/layers/CompositorBridgeParent.h"
-#include "mozilla/layers/APZCTreeManager.h"
 #include "mozilla/layers/LayerMetricsWrapper.h"
 #include "mozilla/layers/APZThreadUtils.h"
 #include "mozilla/TypedEnumBits.h"
 #include "mozilla/UniquePtr.h"
+#include "apz/src/APZCTreeManager.h"
 #include "apz/src/AsyncPanZoomController.h"
 #include "apz/src/HitTestingTreeNode.h"
 #include "base/task.h"
@@ -88,12 +88,12 @@ public:
     return NS_IsMainThread();
   }
   void DispatchToRepaintThread(already_AddRefed<Runnable> aTask) {
-    NS_DispatchToMainThread(Move(aTask));
+    NS_DispatchToMainThread(std::move(aTask));
   }
   MOCK_METHOD3(NotifyAPZStateChange, void(const ScrollableLayerGuid& aGuid, APZStateChange aChange, int aArg));
   MOCK_METHOD0(NotifyFlushComplete, void());
   MOCK_METHOD1(NotifyAsyncScrollbarDragRejected, void(const FrameMetrics::ViewID&));
-  MOCK_METHOD1(NotifyAutoscrollHandledByAPZ, void(const FrameMetrics::ViewID&));
+  MOCK_METHOD1(NotifyAsyncAutoscrollRejected, void(const FrameMetrics::ViewID&));
   MOCK_METHOD1(CancelAutoscroll, void(const ScrollableLayerGuid&));
 };
 
@@ -172,7 +172,10 @@ private:
 
 class TestAPZCTreeManager : public APZCTreeManager {
 public:
-  explicit TestAPZCTreeManager(MockContentControllerDelayed* aMcc) : mcc(aMcc) {}
+  explicit TestAPZCTreeManager(MockContentControllerDelayed* aMcc)
+    : APZCTreeManager(LayersId{0})
+    , mcc(aMcc)
+  {}
 
   RefPtr<InputQueue> GetInputQueue() const {
     return mInputQueue;
@@ -183,7 +186,7 @@ public:
   }
 
 protected:
-  AsyncPanZoomController* NewAPZCInstance(uint64_t aLayersId,
+  AsyncPanZoomController* NewAPZCInstance(LayersId aLayersId,
                                           GeckoContentController* aController) override;
 
   TimeStamp GetFrameTime() override {
@@ -196,7 +199,7 @@ private:
 
 class TestAsyncPanZoomController : public AsyncPanZoomController {
 public:
-  TestAsyncPanZoomController(uint64_t aLayersId, MockContentControllerDelayed* aMcc,
+  TestAsyncPanZoomController(LayersId aLayersId, MockContentControllerDelayed* aMcc,
                              TestAPZCTreeManager* aTreeManager,
                              GestureBehavior aBehavior = DEFAULT_GESTURES)
     : AsyncPanZoomController(aLayersId, aTreeManager, aTreeManager->GetInputQueue(),
@@ -214,7 +217,7 @@ public:
   }
 
   nsEventStatus ReceiveInputEvent(const InputData& aEvent, uint64_t* aOutInputBlockId) {
-    return GetInputQueue()->ReceiveInputEvent(this, !mWaitForMainThread, aEvent, aOutInputBlockId);
+    return GetInputQueue()->ReceiveInputEvent(this, TargetConfirmationFlags{!mWaitForMainThread}, aEvent, aOutInputBlockId);
   }
 
   void ContentReceivedInputBlock(uint64_t aInputBlockId, bool aPreventDefault) {
@@ -262,16 +265,23 @@ public:
     EXPECT_EQ(FLING, mState);
   }
 
+  void AssertStateIsSmoothScroll() const {
+    RecursiveMutexAutoLock lock(mRecursiveMutex);
+    EXPECT_EQ(SMOOTH_SCROLL, mState);
+  }
+
+  void AssertNotAxisLocked() const {
+    RecursiveMutexAutoLock lock(mRecursiveMutex);
+    EXPECT_EQ(PANNING, mState);
+  }
+
   void AssertAxisLocked(ScrollDirection aDirection) const {
     RecursiveMutexAutoLock lock(mRecursiveMutex);
     switch (aDirection) {
-    case ScrollDirection::NONE:
-      EXPECT_EQ(PANNING, mState);
-      break;
-    case ScrollDirection::HORIZONTAL:
+    case ScrollDirection::eHorizontal:
       EXPECT_EQ(PANNING_LOCKED_X, mState);
       break;
-    case ScrollDirection::VERTICAL:
+    case ScrollDirection::eVertical:
       EXPECT_EQ(PANNING_LOCKED_Y, mState);
       break;
     }
@@ -625,7 +635,7 @@ APZCTesterBase::DoubleTapAndCheckStatus(const RefPtr<InputReceiver>& aTarget,
 }
 
 AsyncPanZoomController*
-TestAPZCTreeManager::NewAPZCInstance(uint64_t aLayersId,
+TestAPZCTreeManager::NewAPZCInstance(LayersId aLayersId,
                                      GeckoContentController* aController)
 {
   MockContentControllerDelayed* mcc = static_cast<MockContentControllerDelayed*>(aController);

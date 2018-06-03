@@ -13,6 +13,7 @@ const SHEET_TYPE = {
   "author": "AUTHOR_SHEET"
 };
 
+// eslint-disable-next-line no-unused-vars
 loader.lazyRequireGetter(this, "setIgnoreLayoutChanges", "devtools/server/actors/reflow", true);
 exports.setIgnoreLayoutChanges = (...args) =>
   this.setIgnoreLayoutChanges(...args);
@@ -39,7 +40,7 @@ function utilsFor(win) {
  * @return {DOMWindow}
  */
 function getTopWindow(win) {
-  let docShell = win.QueryInterface(Ci.nsIInterfaceRequestor)
+  const docShell = win.QueryInterface(Ci.nsIInterfaceRequestor)
                     .getInterface(Ci.nsIWebNavigation)
                     .QueryInterface(Ci.nsIDocShell);
 
@@ -47,7 +48,7 @@ function getTopWindow(win) {
     return win.top;
   }
 
-  let topDocShell =
+  const topDocShell =
     docShell.getSameTypeRootTreeItemIgnoreBrowserBoundaries();
 
   return topDocShell
@@ -79,7 +80,7 @@ function isWindowIncluded(boundaryWindow, win) {
     return true;
   }
 
-  let parent = getParentWindow(win);
+  const parent = getParentWindow(win);
 
   if (!parent || parent === win) {
     return false;
@@ -100,7 +101,7 @@ function getParentWindow(win) {
     return null;
   }
 
-  let docShell = win.QueryInterface(Ci.nsIInterfaceRequestor)
+  const docShell = win.QueryInterface(Ci.nsIInterfaceRequestor)
                  .getInterface(Ci.nsIWebNavigation)
                  .QueryInterface(Ci.nsIDocShell);
 
@@ -108,7 +109,7 @@ function getParentWindow(win) {
     return win.parent;
   }
 
-  let parentDocShell =
+  const parentDocShell =
     docShell.getSameTypeParentIgnoreBrowserBoundaries();
 
   return parentDocShell
@@ -147,7 +148,7 @@ function getFrameOffsets(boundaryWindow, node) {
   let yOffset = 0;
 
   let frameWin = getWindowFor(node);
-  let scale = getCurrentZoom(node);
+  const scale = getCurrentZoom(node);
 
   if (boundaryWindow === null) {
     boundaryWindow = getTopWindow(frameWin);
@@ -156,7 +157,7 @@ function getFrameOffsets(boundaryWindow, node) {
   }
 
   while (frameWin !== boundaryWindow) {
-    let frameElement = getFrameElement(frameWin);
+    const frameElement = getFrameElement(frameWin);
     if (!frameElement) {
       break;
     }
@@ -164,9 +165,9 @@ function getFrameOffsets(boundaryWindow, node) {
     // We are in an iframe.
     // We take into account the parent iframe position and its
     // offset (borders and padding).
-    let frameRect = frameElement.getBoundingClientRect();
+    const frameRect = frameElement.getBoundingClientRect();
 
-    let [offsetTop, offsetLeft] = getFrameContentOffset(frameElement);
+    const [offsetTop, offsetLeft] = getFrameContentOffset(frameElement);
 
     xOffset += frameRect.left + offsetLeft;
     yOffset += frameRect.top + offsetTop;
@@ -199,23 +200,23 @@ function getAdjustedQuads(boundaryWindow, node, region) {
     return [];
   }
 
-  let quads = node.getBoxQuads({
-    box: region
+  const quads = node.getBoxQuads({
+    box: region,
+    relativeTo: boundaryWindow.document
   });
 
   if (!quads.length) {
     return [];
   }
 
-  let [xOffset, yOffset] = getFrameOffsets(boundaryWindow, node);
-  let scale = getCurrentZoom(node);
-  let { scrollX, scrollY } = boundaryWindow;
+  const scale = getCurrentZoom(node);
+  const { scrollX, scrollY } = boundaryWindow;
 
-  xOffset += scrollX * scale;
-  yOffset += scrollY * scale;
+  const xOffset = scrollX * scale;
+  const yOffset = scrollY * scale;
 
-  let adjustedQuads = [];
-  for (let quad of quads) {
+  const adjustedQuads = [];
+  for (const quad of quads) {
     adjustedQuads.push({
       p1: {
         w: quad.p1.w * scale,
@@ -274,7 +275,7 @@ exports.getAdjustedQuads = getAdjustedQuads;
  */
 function getRect(boundaryWindow, node, contentWindow) {
   let frameWin = node.ownerDocument.defaultView;
-  let clientRect = node.getBoundingClientRect();
+  const clientRect = node.getBoundingClientRect();
 
   if (boundaryWindow === null) {
     boundaryWindow = getTopWindow(frameWin);
@@ -284,7 +285,7 @@ function getRect(boundaryWindow, node, contentWindow) {
 
   // Go up in the tree of frames to determine the correct rectangle.
   // clientRect is read-only, we need to be able to change properties.
-  let rect = {
+  const rect = {
     top: clientRect.top + contentWindow.pageYOffset,
     left: clientRect.left + contentWindow.pageXOffset,
     width: clientRect.width,
@@ -293,7 +294,7 @@ function getRect(boundaryWindow, node, contentWindow) {
 
   // We iterate through all the parent windows.
   while (frameWin !== boundaryWindow) {
-    let frameElement = getFrameElement(frameWin);
+    const frameElement = getFrameElement(frameWin);
     if (!frameElement) {
       break;
     }
@@ -301,9 +302,9 @@ function getRect(boundaryWindow, node, contentWindow) {
     // We are in an iframe.
     // We take into account the parent iframe position and its
     // offset (borders and padding).
-    let frameRect = frameElement.getBoundingClientRect();
+    const frameRect = frameElement.getBoundingClientRect();
 
-    let [offsetTop, offsetLeft] = getFrameContentOffset(frameElement);
+    const [offsetTop, offsetLeft] = getFrameContentOffset(frameElement);
 
     rect.top += frameRect.top + offsetTop;
     rect.left += frameRect.left + offsetLeft;
@@ -330,8 +331,8 @@ function getNodeBounds(boundaryWindow, node) {
   if (!node) {
     return null;
   }
-  let { scrollX, scrollY } = boundaryWindow;
-  let scale = getCurrentZoom(node);
+  const { scrollX, scrollY } = boundaryWindow;
+  const scale = getCurrentZoom(node);
 
   // Find out the offset of the node in its current frame
   let offsetLeft = 0;
@@ -361,8 +362,8 @@ function getNodeBounds(boundaryWindow, node) {
   yOffset += (offsetTop + scrollY) * scale;
 
   // Get the width and height
-  let width = node.offsetWidth * scale;
-  let height = node.offsetHeight * scale;
+  const width = node.offsetWidth * scale;
+  const height = node.offsetHeight * scale;
 
   return {
     p1: {x: xOffset, y: yOffset},
@@ -392,14 +393,14 @@ function safelyGetContentWindow(frame) {
     return frame.contentWindow;
   }
 
-  let walker = Cc["@mozilla.org/inspector/deep-tree-walker;1"]
+  const walker = Cc["@mozilla.org/inspector/deep-tree-walker;1"]
                .createInstance(Ci.inIDeepTreeWalker);
   walker.showSubDocuments = true;
   walker.showDocumentsAsNodes = true;
   walker.init(frame, nodeFilterConstants.SHOW_ALL);
   walker.currentNode = frame;
 
-  let document = walker.nextNode();
+  const document = walker.nextNode();
   if (!document || !document.defaultView) {
     throw new Error("Couldn't get the content window inside frame " + frame);
   }
@@ -422,62 +423,21 @@ function safelyGetContentWindow(frame) {
  *         of the content document.
  */
 function getFrameContentOffset(frame) {
-  let style = safelyGetContentWindow(frame).getComputedStyle(frame);
+  const style = safelyGetContentWindow(frame).getComputedStyle(frame);
 
   // In some cases, the computed style is null
   if (!style) {
     return [0, 0];
   }
 
-  let paddingTop = parseInt(style.getPropertyValue("padding-top"), 10);
-  let paddingLeft = parseInt(style.getPropertyValue("padding-left"), 10);
+  const paddingTop = parseInt(style.getPropertyValue("padding-top"), 10);
+  const paddingLeft = parseInt(style.getPropertyValue("padding-left"), 10);
 
-  let borderTop = parseInt(style.getPropertyValue("border-top-width"), 10);
-  let borderLeft = parseInt(style.getPropertyValue("border-left-width"), 10);
+  const borderTop = parseInt(style.getPropertyValue("border-top-width"), 10);
+  const borderLeft = parseInt(style.getPropertyValue("border-left-width"), 10);
 
   return [borderTop + paddingTop, borderLeft + paddingLeft];
 }
-
-/**
- * Find an element from the given coordinates. This method descends through
- * frames to find the element the user clicked inside frames.
- *
- * @param {DOMDocument} document
- *        The document to look into.
- * @param {Number} x
- * @param {Number} y
- * @return {DOMNode}
- *         the element node found at the given coordinates, or null if no node
- *         was found
- */
-function getElementFromPoint(document, x, y) {
-  let node = document.elementFromPoint(x, y);
-  if (node && node.contentDocument) {
-    if (ChromeUtils.getClassName(node) === "HTMLIFrameElement") {
-      let rect = node.getBoundingClientRect();
-
-      // Gap between the frame and its content window.
-      let [offsetTop, offsetLeft] = getFrameContentOffset(node);
-
-      x -= rect.left + offsetLeft;
-      y -= rect.top + offsetTop;
-
-      if (x < 0 || y < 0) {
-        // Didn't reach the content document, still over the frame.
-        return node;
-      }
-    }
-    if (ChromeUtils.getClassName(node) === "HTMLIFrameElement" ||
-        ChromeUtils.getClassName(node) === "HTMLFrameElement") {
-      let subnode = getElementFromPoint(node.contentDocument, x, y);
-      if (subnode) {
-        node = subnode;
-      }
-    }
-  }
-  return node;
-}
-exports.getElementFromPoint = getElementFromPoint;
 
 /**
  * Check if a node and its document are still alive
@@ -514,7 +474,7 @@ exports.isNodeConnected = isNodeConnected;
  */
 function getRootBindingParent(node) {
   let parent;
-  let doc = node.ownerDocument;
+  const doc = node.ownerDocument;
   if (!doc) {
     return node;
   }
@@ -526,13 +486,13 @@ function getRootBindingParent(node) {
 exports.getRootBindingParent = getRootBindingParent;
 
 function getBindingParent(node) {
-  let doc = node.ownerDocument;
+  const doc = node.ownerDocument;
   if (!doc) {
     return null;
   }
 
   // If there is no binding parent then it is not anonymous.
-  let parent = doc.getBindingParent(node);
+  const parent = doc.getBindingParent(node);
   if (!parent) {
     return null;
   }
@@ -586,7 +546,7 @@ exports.isNativeAnonymous = isNativeAnonymous;
  *
  */
 function isXBLAnonymous(node) {
-  let parent = getBindingParent(node);
+  const parent = getBindingParent(node);
   if (!parent) {
     return false;
   }
@@ -596,7 +556,7 @@ function isXBLAnonymous(node) {
     return false;
   }
 
-  let anonNodes = [...node.ownerDocument.getAnonymousNodes(parent) || []];
+  const anonNodes = [...node.ownerDocument.getAnonymousNodes(parent) || []];
   return anonNodes.indexOf(node) > -1;
 }
 exports.isXBLAnonymous = isXBLAnonymous;
@@ -609,7 +569,7 @@ exports.isXBLAnonymous = isXBLAnonymous;
  * @return {Boolean}
  */
 function isShadowAnonymous(node) {
-  let parent = getBindingParent(node);
+  const parent = getBindingParent(node);
   if (!parent) {
     return false;
   }
@@ -631,7 +591,7 @@ exports.isShadowAnonymous = isShadowAnonymous;
  * @return {Number}
  */
 function getCurrentZoom(node) {
-  let win = getWindowFor(node);
+  const win = getWindowFor(node);
 
   if (!win) {
     throw new Error("Unable to get the zoom from the given argument.");
@@ -653,7 +613,7 @@ exports.getCurrentZoom = getCurrentZoom;
  * @return {Number}
  */
 function getDisplayPixelRatio(node) {
-  let win = getWindowFor(node);
+  const win = getWindowFor(node);
   return win.devicePixelRatio / utilsFor(win).fullZoom;
 }
 exports.getDisplayPixelRatio = getDisplayPixelRatio;
@@ -666,7 +626,7 @@ exports.getDisplayPixelRatio = getDisplayPixelRatio;
  */
 function getWindowDimensions(window) {
   // First we'll try without flushing layout, because it's way faster.
-  let windowUtils = utilsFor(window);
+  const windowUtils = utilsFor(window);
   let { width, height } = windowUtils.getRootBounds();
 
   if (!width || !height) {
@@ -674,8 +634,8 @@ function getWindowDimensions(window) {
     width = window.innerWidth + window.scrollMaxX - window.scrollMinX;
     height = window.innerHeight + window.scrollMaxY - window.scrollMinY;
 
-    let scrollbarHeight = {};
-    let scrollbarWidth = {};
+    const scrollbarHeight = {};
+    const scrollbarWidth = {};
     windowUtils.getScrollbarSize(false, scrollbarWidth, scrollbarHeight);
     width -= scrollbarWidth.value;
     height -= scrollbarHeight.value;
@@ -692,14 +652,14 @@ exports.getWindowDimensions = getWindowDimensions;
  * number of pixels for the viewport's size.
  */
 function getViewportDimensions(window) {
-  let windowUtils = utilsFor(window);
+  const windowUtils = utilsFor(window);
 
-  let scrollbarHeight = {};
-  let scrollbarWidth = {};
+  const scrollbarHeight = {};
+  const scrollbarWidth = {};
   windowUtils.getScrollbarSize(false, scrollbarWidth, scrollbarHeight);
 
-  let width = window.innerWidth - scrollbarWidth.value;
-  let height = window.innerHeight - scrollbarHeight.value;
+  const width = window.innerWidth - scrollbarWidth.value;
+  const height = window.innerHeight - scrollbarHeight.value;
 
   return { width, height };
 }
@@ -714,7 +674,7 @@ exports.getViewportDimensions = getViewportDimensions;
  * @return {DOMWindow}
  */
 function getWindowFor(node) {
-  if (node instanceof Ci.nsIDOMNode) {
+  if (Node.isInstance(node)) {
     if (node.nodeType === node.DOCUMENT_NODE) {
       return node.defaultView;
     }
@@ -740,7 +700,7 @@ function loadSheet(window, url, type = "agent") {
     type = "agent";
   }
 
-  let windowUtils = utilsFor(window);
+  const windowUtils = utilsFor(window);
   try {
     windowUtils.loadSheetUsingURIString(url, windowUtils[SHEET_TYPE[type]]);
   } catch (e) {
@@ -762,7 +722,7 @@ function removeSheet(window, url, type = "agent") {
     type = "agent";
   }
 
-  let windowUtils = utilsFor(window);
+  const windowUtils = utilsFor(window);
   try {
     windowUtils.removeSheetUsingURIString(url, windowUtils[SHEET_TYPE[type]]);
   } catch (e) {

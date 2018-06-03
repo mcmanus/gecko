@@ -478,8 +478,12 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
 
         final String sql;
         if (keepAfter > 0) {
+            // See Bug 1428165: 'modified' value might be missing; assume 0 if that's the case.
             sql = "DELETE FROM " + TABLE_HISTORY + " " +
-                  "WHERE MAX(" + History.DATE_LAST_VISITED + ", " + History.DATE_MODIFIED + ") < " + keepAfter + " " +
+                  "WHERE MAX("
+                    + History.DATE_LAST_VISITED + ", " +
+                    "COALESCE(" + History.DATE_MODIFIED + ", 0))" +
+                  " < " + keepAfter + " " +
                   " AND " + History._ID + " IN ( SELECT " +
                     History._ID + " FROM " + TABLE_HISTORY + " " +
                     "ORDER BY " + History.DATE_LAST_VISITED + " ASC LIMIT " + toRemove +
@@ -576,8 +580,8 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
             case BOOKMARKS_ID:
                 trace("Delete on BOOKMARKS_ID: " + uri);
 
-                selection = DBUtils.concatenateWhere(selection, TABLE_BOOKMARKS + "._id = ?");
-                selectionArgs = DBUtils.appendSelectionArgs(selectionArgs,
+                selection = DatabaseUtils.concatenateWhere(selection, TABLE_BOOKMARKS + "._id = ?");
+                selectionArgs = DatabaseUtils.appendSelectionArgs(selectionArgs,
                         new String[] { Long.toString(ContentUris.parseId(uri)) });
                 // fall through
             case BOOKMARKS: {
@@ -591,8 +595,8 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
             case HISTORY_ID:
                 trace("Delete on HISTORY_ID: " + uri);
 
-                selection = DBUtils.concatenateWhere(selection, TABLE_HISTORY + "._id = ?");
-                selectionArgs = DBUtils.appendSelectionArgs(selectionArgs,
+                selection = DatabaseUtils.concatenateWhere(selection, TABLE_HISTORY + "._id = ?");
+                selectionArgs = DatabaseUtils.appendSelectionArgs(selectionArgs,
                         new String[] { Long.toString(ContentUris.parseId(uri)) });
                 // fall through
             case HISTORY: {
@@ -641,8 +645,8 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
             case FAVICON_ID:
                 debug("Delete on FAVICON_ID: " + uri);
 
-                selection = DBUtils.concatenateWhere(selection, TABLE_FAVICONS + "._id = ?");
-                selectionArgs = DBUtils.appendSelectionArgs(selectionArgs,
+                selection = DatabaseUtils.concatenateWhere(selection, TABLE_FAVICONS + "._id = ?");
+                selectionArgs = DatabaseUtils.appendSelectionArgs(selectionArgs,
                         new String[] { Long.toString(ContentUris.parseId(uri)) });
                 // fall through
             case FAVICONS: {
@@ -655,8 +659,8 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
             case THUMBNAIL_ID:
                 debug("Delete on THUMBNAIL_ID: " + uri);
 
-                selection = DBUtils.concatenateWhere(selection, TABLE_THUMBNAILS + "._id = ?");
-                selectionArgs = DBUtils.appendSelectionArgs(selectionArgs,
+                selection = DatabaseUtils.concatenateWhere(selection, TABLE_THUMBNAILS + "._id = ?");
+                selectionArgs = DatabaseUtils.appendSelectionArgs(selectionArgs,
                         new String[] { Long.toString(ContentUris.parseId(uri)) });
                 // fall through
             case THUMBNAILS: {
@@ -679,8 +683,8 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
             case REMOTE_DEVICES_ID:
                 debug("Delete on REMOTE_DEVICES_ID: " + uri);
 
-                selection = DBUtils.concatenateWhere(selection, TABLE_REMOTE_DEVICES + "._ID = ?");
-                selectionArgs = DBUtils.appendSelectionArgs(selectionArgs,
+                selection = DatabaseUtils.concatenateWhere(selection, TABLE_REMOTE_DEVICES + "._ID = ?");
+                selectionArgs = DatabaseUtils.appendSelectionArgs(selectionArgs,
                         new String[] { Long.toString(ContentUris.parseId(uri)) });
                 // fall through
             case REMOTE_DEVICES: {
@@ -839,8 +843,8 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
             case BOOKMARKS_ID:
                 debug("Update on BOOKMARKS_ID: " + uri);
 
-                selection = DBUtils.concatenateWhere(selection, TABLE_BOOKMARKS + "._id = ?");
-                selectionArgs = DBUtils.appendSelectionArgs(selectionArgs,
+                selection = DatabaseUtils.concatenateWhere(selection, TABLE_BOOKMARKS + "._id = ?");
+                selectionArgs = DatabaseUtils.appendSelectionArgs(selectionArgs,
                         new String[] { Long.toString(ContentUris.parseId(uri)) });
                 // fall through
             case BOOKMARKS: {
@@ -856,8 +860,8 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
             case HISTORY_ID:
                 debug("Update on HISTORY_ID: " + uri);
 
-                selection = DBUtils.concatenateWhere(selection, TABLE_HISTORY + "._id = ?");
-                selectionArgs = DBUtils.appendSelectionArgs(selectionArgs,
+                selection = DatabaseUtils.concatenateWhere(selection, TABLE_HISTORY + "._id = ?");
+                selectionArgs = DatabaseUtils.appendSelectionArgs(selectionArgs,
                         new String[] { Long.toString(ContentUris.parseId(uri)) });
                 // fall through
             case HISTORY: {
@@ -1061,12 +1065,12 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
                                          " ? AS " + Bookmarks.URL + "," +
                                          " ? AS " + Bookmarks.TITLE);
 
-            suggestedSiteArgs = DBUtils.appendSelectionArgs(suggestedSiteArgs,
-                                                            new String[] {
-                                                                    suggestedSitesCursor.getString(idColumnIndex),
-                                                                    suggestedSitesCursor.getString(urlColumnIndex),
-                                                                    suggestedSitesCursor.getString(titleColumnIndex)
-                                                            });
+            suggestedSiteArgs = DatabaseUtils.appendSelectionArgs(suggestedSiteArgs,
+                                                                  new String[] {
+                                                                          suggestedSitesCursor.getString(idColumnIndex),
+                                                                          suggestedSitesCursor.getString(urlColumnIndex),
+                                                                          suggestedSitesCursor.getString(titleColumnIndex)
+                                                                  });
         }
         suggestedSitesCursor.close();
 
@@ -1242,7 +1246,8 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
                 "LEFT JOIN " + PageMetadata.TABLE_NAME + " ON " +
                     DBUtils.qualifyColumn(History.TABLE_NAME, History.GUID) + " = " +
                     DBUtils.qualifyColumn(PageMetadata.TABLE_NAME, PageMetadata.HISTORY_GUID) + " " +
-                "WHERE " + DBUtils.qualifyColumn(History.TABLE_NAME, History.URL) + " NOT IN (SELECT " + ActivityStreamBlocklist.URL + " FROM " + ActivityStreamBlocklist.TABLE_NAME + " )" +
+                "WHERE " + DBUtils.qualifyColumn(History.TABLE_NAME, History.URL) + " NOT IN (SELECT " + ActivityStreamBlocklist.URL + " FROM " + ActivityStreamBlocklist.TABLE_NAME + " ) " +
+                "AND " + DBUtils.qualifyColumn(History.TABLE_NAME, History.IS_DELETED) + " IS NOT 1 " +
                 "ORDER BY " + Highlights.DATE + " DESC " +
                 "LIMIT " + limit;
 
@@ -1257,6 +1262,7 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
     }
 
     @Override
+    @SuppressWarnings("fallthrough")
     public Cursor query(Uri uri, String[] projection, String selection,
             String[] selectionArgs, String sortOrder) {
         final int match = URI_MATCHER.match(uri);
@@ -1282,17 +1288,17 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
                 debug("Query is on bookmarks: " + uri);
 
                 if (match == BOOKMARKS_ID) {
-                    selection = DBUtils.concatenateWhere(selection, Bookmarks._ID + " = ?");
-                    selectionArgs = DBUtils.appendSelectionArgs(selectionArgs,
+                    selection = DatabaseUtils.concatenateWhere(selection, Bookmarks._ID + " = ?");
+                    selectionArgs = DatabaseUtils.appendSelectionArgs(selectionArgs,
                             new String[] { Long.toString(ContentUris.parseId(uri)) });
                 } else if (match == BOOKMARKS_FOLDER_ID) {
-                    selection = DBUtils.concatenateWhere(selection, Bookmarks.PARENT + " = ?");
-                    selectionArgs = DBUtils.appendSelectionArgs(selectionArgs,
+                    selection = DatabaseUtils.concatenateWhere(selection, Bookmarks.PARENT + " = ?");
+                    selectionArgs = DatabaseUtils.appendSelectionArgs(selectionArgs,
                             new String[] { Long.toString(ContentUris.parseId(uri)) });
                 }
 
                 if (!shouldShowDeleted(uri))
-                    selection = DBUtils.concatenateWhere(Bookmarks.IS_DELETED + " = 0", selection);
+                    selection = DatabaseUtils.concatenateWhere(Bookmarks.IS_DELETED + " = 0", selection);
 
                 if (TextUtils.isEmpty(sortOrder)) {
                     sortOrder = DEFAULT_BOOKMARKS_SORT_ORDER;
@@ -1316,15 +1322,15 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
             }
 
             case HISTORY_ID:
-                selection = DBUtils.concatenateWhere(selection, History._ID + " = ?");
-                selectionArgs = DBUtils.appendSelectionArgs(selectionArgs,
+                selection = DatabaseUtils.concatenateWhere(selection, History._ID + " = ?");
+                selectionArgs = DatabaseUtils.appendSelectionArgs(selectionArgs,
                         new String[] { Long.toString(ContentUris.parseId(uri)) });
                 // fall through
             case HISTORY: {
                 debug("Query is on history: " + uri);
 
                 if (!shouldShowDeleted(uri))
-                    selection = DBUtils.concatenateWhere(History.IS_DELETED + " = 0", selection);
+                    selection = DatabaseUtils.concatenateWhere(History.IS_DELETED + " = 0", selection);
 
                 if (TextUtils.isEmpty(sortOrder))
                     sortOrder = DEFAULT_HISTORY_SORT_ORDER;
@@ -1350,8 +1356,8 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
                 break;
 
             case FAVICON_ID:
-                selection = DBUtils.concatenateWhere(selection, Favicons._ID + " = ?");
-                selectionArgs = DBUtils.appendSelectionArgs(selectionArgs,
+                selection = DatabaseUtils.concatenateWhere(selection, Favicons._ID + " = ?");
+                selectionArgs = DatabaseUtils.appendSelectionArgs(selectionArgs,
                         new String[] { Long.toString(ContentUris.parseId(uri)) });
                 // fall through
             case FAVICONS: {
@@ -1364,8 +1370,8 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
             }
 
             case THUMBNAIL_ID:
-                selection = DBUtils.concatenateWhere(selection, Thumbnails._ID + " = ?");
-                selectionArgs = DBUtils.appendSelectionArgs(selectionArgs,
+                selection = DatabaseUtils.concatenateWhere(selection, Thumbnails._ID + " = ?");
+                selectionArgs = DatabaseUtils.appendSelectionArgs(selectionArgs,
                         new String[] { Long.toString(ContentUris.parseId(uri)) });
                 // fall through
             case THUMBNAILS: {
@@ -1425,8 +1431,8 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
             }
 
             case REMOTE_DEVICES_ID:
-                selection = DBUtils.concatenateWhere(selection, RemoteDevices._ID + " = ?");
-                selectionArgs = DBUtils.appendSelectionArgs(selectionArgs,
+                selection = DatabaseUtils.concatenateWhere(selection, RemoteDevices._ID + " = ?");
+                selectionArgs = DatabaseUtils.appendSelectionArgs(selectionArgs,
                         new String[] { Long.toString(ContentUris.parseId(uri)) });
                 // fall through
             case REMOTE_DEVICES: {
@@ -2829,6 +2835,10 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
 
     private int bulkInsertHistory(final SQLiteDatabase db, ContentValues[] values) {
         int inserted = 0;
+        // Set 'modified' and 'created' timestamps to current wall time.
+        // 'modified' specifically is used by Sync for change tracking, and so we must ensure it's
+        // set to our own clock (as opposed to record's modified timestamp as record by the server).
+        final long now = System.currentTimeMillis();
         final String fullInsertSqlStatement = "INSERT INTO " + History.TABLE_NAME + " (" +
                 History.GUID + "," +
                 History.TITLE + "," +
@@ -2836,11 +2846,15 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
                 History.DATE_LAST_VISITED + "," +
                 History.REMOTE_DATE_LAST_VISITED + "," +
                 History.VISITS + "," +
-                History.REMOTE_VISITS + ") VALUES (?, ?, ?, ?, ?, ?, ?)";
+                History.REMOTE_VISITS + "," +
+                History.DATE_MODIFIED + "," +
+                History.DATE_CREATED + ") VALUES (?, ?, ?, ?, ?, ?, ?, " + now + "," + now + ")";
         final String shortInsertSqlStatement = "INSERT INTO " + History.TABLE_NAME + " (" +
                 History.GUID + "," +
                 History.TITLE + "," +
-                History.URL + ") VALUES (?, ?, ?)";
+                History.URL + "," +
+                History.DATE_MODIFIED + "," +
+                History.DATE_CREATED + ") VALUES (?, ?, ?, " + now + "," + now + ")";
         final SQLiteStatement compiledFullStatement = db.compileStatement(fullInsertSqlStatement);
         final SQLiteStatement compiledShortStatement = db.compileStatement(shortInsertSqlStatement);
         SQLiteStatement statementToExec;
@@ -2857,7 +2871,7 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
 
                 // If dateLastVisited is null, so will be remoteDateLastVisited and visits.
                 // We will use the short compiled statement in this case.
-                // See implementation in AndroidBrowserHistoryDataAccessor@getContentValues.
+                // See implementation in HistoryDataAccessor#getContentValues.
                 if (dateLastVisited == null) {
                     statementToExec = compiledShortStatement;
                 } else {
@@ -2951,7 +2965,7 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
                     // or, less likely, due to record reconciliation bugs at the RepositorySession
                     // level.
                     } catch (SQLiteConstraintException e) {
-                        Log.w(LOGTAG, "Unexpected constraint exception while inserting a visit", e);
+                        // Don't log this, it'll just cause memory churn.
                     }
                 }
                 if (inserted != valueSet.length) {

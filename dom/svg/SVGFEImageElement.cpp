@@ -43,9 +43,7 @@ nsSVGElement::StringInfo SVGFEImageElement::sStringInfo[3] =
 // nsISupports methods
 
 NS_IMPL_ISUPPORTS_INHERITED(SVGFEImageElement, SVGFEImageElementBase,
-                            nsIDOMNode, nsIDOMElement, nsIDOMSVGElement,
-                            imgINotificationObserver, nsIImageLoadingContent,
-                            imgIOnloadBlocker)
+                            imgINotificationObserver, nsIImageLoadingContent)
 
 //----------------------------------------------------------------------
 // Implementation
@@ -124,7 +122,9 @@ SVGFEImageElement::IsAttributeMapped(const nsAtom* name) const
 nsresult
 SVGFEImageElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
-                                const nsAttrValue* aOldValue, bool aNotify)
+                                const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
+                                bool aNotify)
 {
   if (aName == nsGkAtoms::href &&
       (aNamespaceID == kNameSpaceID_XLink ||
@@ -138,7 +138,9 @@ SVGFEImageElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
   }
 
   return SVGFEImageElementBase::AfterSetAttr(aNamespaceID, aName,
-                                             aValue, aOldValue, aNotify);
+                                             aValue, aOldValue,
+                                             aSubjectPrincipal,
+                                             aNotify);
 }
 
 void
@@ -195,7 +197,7 @@ SVGFEImageElement::IntrinsicState() const
 }
 
 //----------------------------------------------------------------------
-// nsIDOMNode methods
+// nsINode methods
 
 NS_IMPL_ELEMENT_CLONE_WITH_INIT(SVGFEImageElement)
 

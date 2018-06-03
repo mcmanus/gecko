@@ -4,15 +4,13 @@
 
 "use strict";
 
-const {interfaces: Ci, utils: Cu} = Components;
+ChromeUtils.import("resource://gre/modules/Log.jsm");
+ChromeUtils.import("resource://gre/modules/Preferences.jsm");
 
-Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://gre/modules/Preferences.jsm");
-
-Cu.import("chrome://marionette/content/assert.js");
-Cu.import("chrome://marionette/content/capture.js");
+ChromeUtils.import("chrome://marionette/content/assert.js");
+ChromeUtils.import("chrome://marionette/content/capture.js");
 const {InvalidArgumentError} =
-    Cu.import("chrome://marionette/content/error.js", {});
+    ChromeUtils.import("chrome://marionette/content/error.js", {});
 
 this.EXPORTED_SYMBOLS = ["reftest"];
 
@@ -69,7 +67,7 @@ reftest.Runner = class {
    *     String enum representing when screenshots should be taken
    */
   async setup(urlCount, screenshotMode) {
-    this.parentWindow =  assert.window(this.driver.getCurrentWindow());
+    this.parentWindow =  assert.open(this.driver.getCurrentWindow());
 
     this.screenshotMode = SCREENSHOT_MODE[screenshotMode] ||
         SCREENSHOT_MODE.unexpected;
@@ -97,13 +95,13 @@ reftest.Runner = class {
   }
 
   async openWindow() {
-    let reftestWin;
+    let reftestWin = this.parentWindow.open(
+        "chrome://marionette/content/reftest.xul",
+        "reftest",
+        "chrome,dialog,height=600,width=600");
+
     await new Promise(resolve => {
-      reftestWin = this.parentWindow.openDialog(
-          "chrome://marionette/content/reftest.xul",
-          "reftest",
-          "chrome,dialog,height=600,width=600,all",
-          resolve);
+      reftestWin.addEventListener("load", resolve, {once: true});
     });
 
     let browser = reftestWin.document.createElementNS(XUL_NS, "xul:browser");
@@ -135,7 +133,7 @@ min-width: 600px; min-height: 600px; max-width: 600px; max-height: 600px`;
 
   abort() {
     if (this.reftestWin) {
-      this.driver.close();
+      this.driver.closeChromeWindow();
     }
     this.reftestWin = null;
   }
@@ -197,7 +195,12 @@ min-width: 600px; min-height: 600px; max-width: 600px; max-height: 600px`;
       try {
         result = await this.runTest(testUrl, references, expected, timeout);
       } catch (e) {
-        result = {status: STATUS.ERROR, message: e.stack, extra: {}};
+        result = {
+          status: STATUS.ERROR,
+          message: String(e),
+          stack: e.stack,
+          extra: {},
+        };
       }
       return result;
     })();
@@ -381,8 +384,8 @@ min-width: 600px; min-height: 600px; max-width: 600px; max-height: 600px`;
 
       canvas = capture.canvas(
           win,
-          0,  // left
-          0,  // top
+          0, // left
+          0, // top
           win.innerWidth,
           win.innerHeight,
           {canvas, flags});

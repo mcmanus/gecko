@@ -7,13 +7,10 @@
 const {Cc, Ci, components} = require("chrome");
 const {isWindowIncluded} = require("devtools/shared/layout/utils");
 const Services = require("Services");
-const {XPCOMUtils} = require("resource://gre/modules/XPCOMUtils.jsm");
+const ChromeUtils = require("ChromeUtils");
 const {CONSOLE_WORKER_IDS, WebConsoleUtils} = require("devtools/server/actors/webconsole/utils");
 
-XPCOMUtils.defineLazyServiceGetter(this,
-                                   "swm",
-                                   "@mozilla.org/serviceworkers/manager;1",
-                                   "nsIServiceWorkerManager");
+loader.lazyRequireGetter(this, "EventEmitter", "devtools/shared/event-emitter");
 
 // Process script used to forward console calls from content processes to parent process
 const CONTENT_PROCESS_SCRIPT = "resource://devtools/server/actors/webconsole/content-process-forward.js";
@@ -41,7 +38,7 @@ exports.ConsoleServiceListener = ConsoleServiceListener;
 
 ConsoleServiceListener.prototype =
 {
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIConsoleListener]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIConsoleListener]),
 
   /**
    * The content window for which we listen to page errors.
@@ -58,7 +55,7 @@ ConsoleServiceListener.prototype =
   /**
    * Initialize the nsIConsoleService listener.
    */
-  init: function () {
+  init: function() {
     Services.console.registerListener(this);
   },
 
@@ -70,7 +67,7 @@ ConsoleServiceListener.prototype =
    * @param nsIConsoleMessage message
    *        The message object coming from the nsIConsoleService.
    */
-  observe: function (message) {
+  observe: function(message) {
     if (!this.listener) {
       return;
     }
@@ -82,7 +79,7 @@ ConsoleServiceListener.prototype =
         return;
       }
 
-      let errorWindow = Services.wm.getOuterWindowWithId(message.outerWindowID);
+      const errorWindow = Services.wm.getOuterWindowWithId(message.outerWindowID);
       if (!errorWindow || !isWindowIncluded(this.window, errorWindow)) {
         return;
       }
@@ -100,7 +97,7 @@ ConsoleServiceListener.prototype =
    * @return boolean
    *         True if the category is allowed to be logged, false otherwise.
    */
-  isCategoryAllowed: function (category) {
+  isCategoryAllowed: function(category) {
     if (!category) {
       return false;
     }
@@ -130,8 +127,8 @@ ConsoleServiceListener.prototype =
    *         The array of cached messages. Each element is an nsIScriptError or
    *         an nsIConsoleMessage
    */
-  getCachedMessages: function (includePrivate = false) {
-    let errors = Services.console.getMessageArray() || [];
+  getCachedMessages: function(includePrivate = false) {
+    const errors = Services.console.getMessageArray() || [];
 
     // if !this.window, we're in a browser console. Still need to filter
     // private messages.
@@ -147,7 +144,7 @@ ConsoleServiceListener.prototype =
       });
     }
 
-    let ids = WebConsoleUtils.getInnerWindowIDsForFrames(this.window);
+    const ids = WebConsoleUtils.getInnerWindowIDsForFrames(this.window);
 
     return errors.filter((error) => {
       if (error instanceof Ci.nsIScriptError) {
@@ -155,7 +152,7 @@ ConsoleServiceListener.prototype =
           return false;
         }
         if (ids &&
-            (ids.indexOf(error.innerWindowID) == -1 ||
+            (!ids.includes(error.innerWindowID) ||
              !this.isCategoryAllowed(error.category))) {
           return false;
         }
@@ -172,7 +169,7 @@ ConsoleServiceListener.prototype =
   /**
    * Remove the nsIConsoleService listener.
    */
-  destroy: function () {
+  destroy: function() {
     Services.console.unregisterListener(this);
     this.listener = this.window = null;
   },
@@ -206,7 +203,7 @@ exports.ConsoleAPIListener = ConsoleAPIListener;
 
 ConsoleAPIListener.prototype =
 {
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIObserver]),
 
   /**
    * The content window for which we listen to window.console API calls.
@@ -233,7 +230,7 @@ ConsoleAPIListener.prototype =
   /**
    * Initialize the window.console API observer.
    */
-  init: function () {
+  init: function() {
     // Note that the observer is process-wide. We will filter the messages as
     // needed, see CAL_observe().
     Services.obs.addObserver(this, "console-api-log-event");
@@ -248,7 +245,7 @@ ConsoleAPIListener.prototype =
    * @param string topic
    *        The message topic received from the observer service.
    */
-  observe: function (message, topic) {
+  observe: function(message, topic) {
     if (!this.owner) {
       return;
     }
@@ -256,7 +253,7 @@ ConsoleAPIListener.prototype =
     // Here, wrappedJSObject is not a security wrapper but a property defined
     // by the XPCOM component which allows us to unwrap the XPCOM interface and
     // access the underlying JSObject.
-    let apiMessage = message.wrappedJSObject;
+    const apiMessage = message.wrappedJSObject;
 
     if (!this.isMessageRelevant(apiMessage)) {
       return;
@@ -274,22 +271,22 @@ ConsoleAPIListener.prototype =
    * @return bool
    *         Do we care about this message?
    */
-  isMessageRelevant: function (message) {
-    let workerType = WebConsoleUtils.getWorkerType(message);
+  isMessageRelevant: function(message) {
+    const workerType = WebConsoleUtils.getWorkerType(message);
 
     if (this.window && workerType === "ServiceWorker") {
       // For messages from Service Workers, message.ID is the
       // scope, which can be used to determine whether it's controlling
       // a window.
-      let scope = message.ID;
+      const scope = message.ID;
 
-      if (!swm.shouldReportToWindow(this.window, scope)) {
+      if (!this.window.shouldReportForServiceWorkerScope(scope)) {
         return false;
       }
     }
 
     if (this.window && !workerType) {
-      let msgWindow = Services.wm.getCurrentInnerWindowWithId(message.innerID);
+      const msgWindow = Services.wm.getCurrentInnerWindowWithId(message.innerID);
       if (!msgWindow || !isWindowIncluded(this.window, msgWindow)) {
         // Not the same window!
         return false;
@@ -329,9 +326,9 @@ ConsoleAPIListener.prototype =
    * @return array
    *         The array of cached messages.
    */
-  getCachedMessages: function (includePrivate = false) {
+  getCachedMessages: function(includePrivate = false) {
     let messages = [];
-    let ConsoleAPIStorage = Cc["@mozilla.org/consoleAPI-storage;1"]
+    const ConsoleAPIStorage = Cc["@mozilla.org/consoleAPI-storage;1"]
                               .getService(Ci.nsIConsoleAPIStorage);
 
     // if !this.window, we're in a browser console. Retrieve all events
@@ -339,7 +336,7 @@ ConsoleAPIListener.prototype =
     if (!this.window) {
       messages = ConsoleAPIStorage.getEvents();
     } else {
-      let ids = WebConsoleUtils.getInnerWindowIDsForFrames(this.window);
+      const ids = WebConsoleUtils.getInnerWindowIDsForFrames(this.window);
       ids.forEach((id) => {
         messages = messages.concat(ConsoleAPIStorage.getEvents(id));
       });
@@ -363,7 +360,7 @@ ConsoleAPIListener.prototype =
   /**
    * Destroy the console API listener.
    */
-  destroy: function () {
+  destroy: function() {
     Services.obs.removeObserver(this, "console-api-log-event");
     this.window = this.owner = null;
   },
@@ -393,8 +390,8 @@ exports.ConsoleReflowListener = ConsoleReflowListener;
 
 ConsoleReflowListener.prototype =
 {
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIReflowObserver,
-                                         Ci.nsISupportsWeakReference]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIReflowObserver,
+                                          Ci.nsISupportsWeakReference]),
   docshell: null,
   listener: null,
 
@@ -405,8 +402,8 @@ ConsoleReflowListener.prototype =
    * @param DOMHighResTimeStamp end
    * @param boolean interruptible
    */
-  sendReflow: function (start, end, interruptible) {
-    let frame = components.stack.caller.caller;
+  sendReflow: function(start, end, interruptible) {
+    const frame = components.stack.caller.caller;
 
     let filename = frame ? frame.filename : null;
 
@@ -432,7 +429,7 @@ ConsoleReflowListener.prototype =
    * @param DOMHighResTimeStamp start
    * @param DOMHighResTimeStamp end
    */
-  reflow: function (start, end) {
+  reflow: function(start, end) {
     this.sendReflow(start, end, false);
   },
 
@@ -442,14 +439,14 @@ ConsoleReflowListener.prototype =
    * @param DOMHighResTimeStamp start
    * @param DOMHighResTimeStamp end
    */
-  reflowInterruptible: function (start, end) {
+  reflowInterruptible: function(start, end) {
     this.sendReflow(start, end, true);
   },
 
   /**
    * Unregister listener.
    */
-  destroy: function () {
+  destroy: function() {
     this.docshell.removeWeakReflowObserver(this);
     this.listener = this.docshell = null;
   },
@@ -475,7 +472,7 @@ exports.ContentProcessListener = ContentProcessListener;
 
 ContentProcessListener.prototype = {
   receiveMessage(message) {
-    let logMsg = message.data;
+    const logMsg = message.data;
     logMsg.wrappedJSObject = logMsg;
     this.listener.onConsoleAPICall(logMsg);
   },
@@ -490,3 +487,83 @@ ContentProcessListener.prototype = {
     this.listener = null;
   }
 };
+
+/**
+ * Forward `DOMContentLoaded` and `load` events with precise timing
+ * of when events happened according to window.performance numbers.
+ *
+ * @constructor
+ * @param object console
+ *        The web console actor.
+ */
+function DocumentEventsListener(console) {
+  this.console = console;
+
+  this.onWindowReady = this.onWindowReady.bind(this);
+  this.onContentLoaded = this.onContentLoaded.bind(this);
+  this.onLoad = this.onLoad.bind(this);
+  this.listen();
+}
+
+exports.DocumentEventsListener = DocumentEventsListener;
+
+DocumentEventsListener.prototype = {
+  listen() {
+    EventEmitter.on(this.console.parentActor, "window-ready", this.onWindowReady);
+    this.onWindowReady({ window: this.console.window, isTopLevel: true });
+  },
+
+  onWindowReady({ window, isTopLevel }) {
+    // Ignore iframes
+    if (!isTopLevel) {
+      return;
+    }
+
+    const { readyState } = window.document;
+    if (readyState != "interactive" && readyState != "complete") {
+      window.addEventListener("DOMContentLoaded", this.onContentLoaded, { once: true });
+    } else {
+      this.onContentLoaded({ target: window.document });
+    }
+    if (readyState != "complete") {
+      window.addEventListener("load", this.onLoad, { once: true });
+    } else {
+      this.onLoad({ target: window.document });
+    }
+  },
+
+  onContentLoaded(event) {
+    const window = event.target.defaultView;
+    const packet = {
+      from: this.console.actorID,
+      type: "documentEvent",
+      name: "dom-interactive",
+      // milliseconds since the UNIX epoch, when the parser finished its work
+      // on the main document, that is when its Document.readyState changes to
+      // 'interactive' and the corresponding readystatechange event is thrown
+      time: window.performance.timing.domInteractive
+    };
+    this.console.conn.send(packet);
+  },
+
+  onLoad(event) {
+    const window = event.target.defaultView;
+    const packet = {
+      from: this.console.actorID,
+      type: "documentEvent",
+      name: "dom-complete",
+      // milliseconds since the UNIX epoch, when the parser finished its work
+      // on the main document, that is when its Document.readyState changes to
+      // 'complete' and the corresponding readystatechange event is thrown
+      time: window.performance.timing.domComplete
+    };
+    this.console.conn.send(packet);
+  },
+
+  destroy() {
+    EventEmitter.off(this.console.parentActor, "window-ready", this.onWindowReady);
+
+    this.listener = null;
+  }
+};
+

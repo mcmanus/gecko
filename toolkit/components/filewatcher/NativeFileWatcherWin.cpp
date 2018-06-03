@@ -269,7 +269,7 @@ public:
   {
   }
 
-  NS_IMETHOD Run();
+  NS_IMETHOD Run() override;
   nsresult AddPathRunnableMethod(PathRunnablesParametersWrapper* aWrappedParameters);
   nsresult RemovePathRunnableMethod(PathRunnablesParametersWrapper* aWrappedParameters);
   nsresult DeactivateRunnableMethod();
@@ -1339,7 +1339,7 @@ NativeFileWatcherService::AddPath(const nsAString& aPathToWatch,
   }
 
   // Since the dispatch succeeded, we let the runnable own the pointer.
-  wrappedCallbacks.release();
+  Unused << wrappedCallbacks.release();
 
   WakeUpWorkerThread();
 
@@ -1413,7 +1413,7 @@ NativeFileWatcherService::RemovePath(const nsAString& aPathToRemove,
   }
 
   // Since the dispatch succeeded, we let the runnable own the pointer.
-  wrappedCallbacks.release();
+  Unused << wrappedCallbacks.release();
 
   WakeUpWorkerThread();
 

@@ -9,6 +9,7 @@
 /* This must occur *after* base/basictypes.h to avoid typedefs conflicts. */
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Base64.h"
+#include "mozilla/ResultExtensions.h"
 
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/TabChild.h"
@@ -55,6 +56,7 @@
 #include "nsIIOService.h"
 #include "nsNetCID.h"
 
+#include "nsDSURIContentListener.h"
 #include "nsMimeTypes.h"
 // used for header disposition information.
 #include "nsIHttpChannel.h"
@@ -1008,9 +1010,16 @@ nsExternalHelperAppService::LoadURI(nsIURI *aURI,
   // if we are not supposed to ask, and the preferred action is to use
   // a helper app or the system default, we just launch the URI.
   if (!alwaysAsk && (preferredAction == nsIHandlerInfo::useHelperApp ||
-                     preferredAction == nsIHandlerInfo::useSystemDefault))
-    return handler->LaunchWithURI(uri, aWindowContext);
-  
+                     preferredAction == nsIHandlerInfo::useSystemDefault)) {
+    rv = handler->LaunchWithURI(uri, aWindowContext);
+    // We are not supposed to ask, but when file not found the user most likely
+    // uninstalled the application which handles the uri so we will continue
+    // by application chooser dialog.
+    if (rv != NS_ERROR_FILE_NOT_FOUND) {
+      return rv;
+    }
+  }
+
   nsCOMPtr<nsIContentDispatchChooser> chooser =
     do_CreateInstance("@mozilla.org/content-dispatch-chooser;1", &rv);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -1185,10 +1194,9 @@ NS_INTERFACE_MAP_BEGIN(nsExternalAppHandler)
    NS_INTERFACE_MAP_ENTRY(nsIRequestObserver)
    NS_INTERFACE_MAP_ENTRY(nsIHelperAppLauncher)
    NS_INTERFACE_MAP_ENTRY(nsICancelable)
-   NS_INTERFACE_MAP_ENTRY(nsITimerCallback)
    NS_INTERFACE_MAP_ENTRY(nsIBackgroundFileSaverObserver)
    NS_INTERFACE_MAP_ENTRY(nsINamed)
-NS_INTERFACE_MAP_END_THREADSAFE
+NS_INTERFACE_MAP_END
 
 nsExternalAppHandler::nsExternalAppHandler(nsIMIMEInfo * aMIMEInfo,
                                            const nsACString& aTempFileExtension,
@@ -1200,11 +1208,9 @@ nsExternalAppHandler::nsExternalAppHandler(nsIMIMEInfo * aMIMEInfo,
 : mMimeInfo(aMIMEInfo)
 , mContentContext(aContentContext)
 , mWindowContext(aWindowContext)
-, mWindowToClose(nullptr)
 , mSuggestedFileName(aSuggestedFilename)
 , mForceSave(aForceSave)
 , mCanceled(false)
-, mShouldCloseWindow(false)
 , mStopRequestIssued(false)
 , mReason(aReason)
 , mContentLength(-1)
@@ -1553,7 +1559,7 @@ nsExternalAppHandler::MaybeApplyDecodingForExtension(nsIRequest *aRequest)
 
 NS_IMETHODIMP nsExternalAppHandler::OnStartRequest(nsIRequest *request, nsISupports * aCtxt)
 {
-  NS_PRECONDITION(request, "OnStartRequest without request?");
+  MOZ_ASSERT(request, "OnStartRequest without request?");
 
   // Set mTimeDownloadStarted here as the download has already started and
   // we want to record the start time before showing the filepicker.
@@ -1580,13 +1586,15 @@ NS_IMETHODIMP nsExternalAppHandler::OnStartRequest(nsIRequest *request, nsISuppo
     aChannel->GetContentLength(&mContentLength);
   }
 
+  mMaybeCloseWindowHelper = new MaybeCloseWindowHelper(mContentContext);
+
   nsCOMPtr<nsIPropertyBag2> props(do_QueryInterface(request, &rv));
   // Determine whether a new window was opened specifically for this request
   if (props) {
     bool tmp = false;
     props->GetPropertyAsBool(NS_LITERAL_STRING("docshell.newWindowTarget"),
                              &tmp);
-    mShouldCloseWindow = tmp;
+    mMaybeCloseWindowHelper->SetShouldCloseWindow(tmp);
   }
 
   // Now get the URI
@@ -1605,14 +1613,14 @@ NS_IMETHODIMP nsExternalAppHandler::OnStartRequest(nsIRequest *request, nsISuppo
       Unused << httpChannel->GetResponseHeader(NS_LITERAL_CSTRING("refresh"),
                                                refreshHeader);
       if (!refreshHeader.IsEmpty()) {
-        mShouldCloseWindow = false;
+        mMaybeCloseWindowHelper->SetShouldCloseWindow(false);
       }
     }
   }
 
   // Close the underlying DOMWindow if there is no refresh header
   // and it was opened specifically for the download
-  MaybeCloseWindow();
+  mContentContext = mMaybeCloseWindowHelper->MaybeCloseWindow();
 
   // In an IPC setting, we're allowing the child process, here, to make
   // decisions about decoding the channel (e.g. decompression).  It will
@@ -1777,7 +1785,7 @@ NS_IMETHODIMP nsExternalAppHandler::OnStartRequest(nsIRequest *request, nsISuppo
 // notification to the dialog progress listener or nsITransfer implementation.
 void nsExternalAppHandler::SendStatusChange(ErrorType type, nsresult rv, nsIRequest *aRequest, const nsString& path)
 {
-    const char* msgId;
+    const char* msgId = nullptr;
     switch (rv) {
     case NS_ERROR_OUT_OF_MEMORY:
         // No memory
@@ -2027,7 +2035,7 @@ nsExternalAppHandler::OnSaveComplete(nsIBackgroundFileSaver *aSaver,
         LOG(("nsExternalAppHandler: Got %zu redirects\n",
              loadInfo->RedirectChain().Length()));
         for (nsIRedirectHistoryEntry* entry : loadInfo->RedirectChain()) {
-          redirectChain->AppendElement(entry, false);
+          redirectChain->AppendElement(entry);
         }
         mRedirects = redirectChain;
       }
@@ -2304,7 +2312,7 @@ nsresult nsExternalAppHandler::ContinueSave(nsIFile * aNewFileLocation)
   if (mCanceled)
     return NS_OK;
 
-  NS_PRECONDITION(aNewFileLocation, "Must be called with a non-null file");
+  MOZ_ASSERT(aNewFileLocation, "Must be called with a non-null file");
 
   nsresult rv = NS_OK;
   nsCOMPtr<nsIFile> fileToUse = do_QueryInterface(aNewFileLocation);
@@ -2515,47 +2523,6 @@ bool nsExternalAppHandler::GetNeverAskFlagFromPref(const char * prefName, const 
                                         start, end);
 }
 
-nsresult nsExternalAppHandler::MaybeCloseWindow()
-{
-  nsCOMPtr<nsPIDOMWindowOuter> window = do_GetInterface(mContentContext);
-  NS_ENSURE_STATE(window);
-
-  if (mShouldCloseWindow) {
-    // Reset the window context to the opener window so that the dependent
-    // dialogs have a parent
-    nsCOMPtr<nsPIDOMWindowOuter> opener = window->GetOpener();
-
-    if (opener && !opener->Closed()) {
-      mContentContext = do_GetInterface(opener);
-
-      // Now close the old window.  Do it on a timer so that we don't run
-      // into issues trying to close the window before it has fully opened.
-      NS_ASSERTION(!mTimer, "mTimer was already initialized once!");
-      mTimer = do_CreateInstance("@mozilla.org/timer;1");
-      if (!mTimer) {
-        return NS_ERROR_FAILURE;
-      }
-
-      mTimer->InitWithCallback(this, 0, nsITimer::TYPE_ONE_SHOT);
-      mWindowToClose = window;
-    }
-  }
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsExternalAppHandler::Notify(nsITimer* timer)
-{
-  NS_ASSERTION(mWindowToClose, "No window to close after timer fired");
-
-  mWindowToClose->Close();
-  mWindowToClose = nullptr;
-  mTimer = nullptr;
-
-  return NS_OK;
-}
-
 NS_IMETHODIMP
 nsExternalAppHandler::GetName(nsACString& aName)
 {
@@ -2571,9 +2538,8 @@ nsExternalAppHandler::GetName(nsACString& aName)
 // nsIMIMEService methods
 NS_IMETHODIMP nsExternalHelperAppService::GetFromTypeAndExtension(const nsACString& aMIMEType, const nsACString& aFileExt, nsIMIMEInfo **_retval) 
 {
-  NS_PRECONDITION(!aMIMEType.IsEmpty() ||
-                  !aFileExt.IsEmpty(), 
-                  "Give me something to work with");
+  MOZ_ASSERT(!aMIMEType.IsEmpty() || !aFileExt.IsEmpty(),
+             "Give me something to work with");
   LOG(("Getting mimeinfo from type '%s' ext '%s'\n",
         PromiseFlatCString(aMIMEType).get(), PromiseFlatCString(aFileExt).get()));
 

@@ -66,6 +66,10 @@ public:
                             nsIInterfaceRequestor *callbacks, nsProxyInfo *proxyInfo,
                             uint32_t caps, const OriginAttributes &originAttributes);
 
+  // AcceptableProxy() decides whether a particular proxy configuration (pi) is suitable
+  // for use with Alt-Svc. No proxy (including a null pi) is suitable.
+  static bool AcceptableProxy(nsProxyInfo *pi);
+
   const nsCString &AlternateHost() const { return mAlternateHost; }
   const nsCString &OriginHost() const { return mOriginHost; }
   uint32_t OriginPort() const { return mOriginPort; }
@@ -98,7 +102,7 @@ public:
                           const OriginAttributes &originAttributes);
 
 private:
-  virtual ~AltSvcMapping() {};
+  virtual ~AltSvcMapping() = default;
   void     SyncString(const nsCString& val);
   RefPtr<DataStorage> mStorage;
   int32_t             mStorageEpoch;
@@ -139,11 +143,11 @@ public:
     : mCallbacks(aRequestor) {}
 
 private:
-  virtual ~AltSvcOverride() {}
+  virtual ~AltSvcOverride() = default;
   nsCOMPtr<nsIInterfaceRequestor> mCallbacks;
 };
 
-class TransactionObserver : public nsIStreamListener
+class TransactionObserver final : public nsIStreamListener
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -154,7 +158,7 @@ public:
   void Complete(nsHttpTransaction *, nsresult);
 private:
   friend class WellKnownChecker;
-  virtual ~TransactionObserver() {}
+  virtual ~TransactionObserver() = default;
 
   nsCOMPtr<nsISupports> mChannelRef;
   nsHttpChannel        *mChannel;
@@ -171,7 +175,7 @@ class AltSvcCache
 {
 public:
   AltSvcCache() : mStorageEpoch(0) {}
-  virtual ~AltSvcCache () {};
+  virtual ~AltSvcCache () = default;
   void UpdateAltServiceMapping(AltSvcMapping *map, nsProxyInfo *pi,
                                nsIInterfaceRequestor *, uint32_t caps,
                                const OriginAttributes &originAttributes); // main thread

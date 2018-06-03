@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,15 +14,15 @@
 #include "nsCheckboxRadioFrame.h"
 
 nsIFrame*
-NS_NewLegendFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewLegendFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
 #ifdef DEBUG
-  const nsStyleDisplay* disp = aContext->StyleDisplay();
+  const nsStyleDisplay* disp = aStyle->StyleDisplay();
   NS_ASSERTION(!disp->IsAbsolutelyPositionedStyle() && !disp->IsFloatingStyle(),
                "Legends should not be positioned and should not float");
 #endif
 
-  nsIFrame* f = new (aPresShell) nsLegendFrame(aContext);
+  nsIFrame* f = new (aPresShell) nsLegendFrame(aStyle);
   f->AddStateBits(NS_BLOCK_FORMATTING_CONTEXT_STATE_BITS);
   return f;
 }
@@ -29,10 +30,10 @@ NS_NewLegendFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 NS_IMPL_FRAMEARENA_HELPERS(nsLegendFrame)
 
 void
-nsLegendFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsLegendFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   nsCheckboxRadioFrame::RegUnRegAccessKey(static_cast<nsIFrame*>(this), false);
-  nsBlockFrame::DestroyFrom(aDestructRoot);
+  nsBlockFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 NS_QUERYFRAME_HEAD(nsLegendFrame)
@@ -58,7 +59,7 @@ int32_t
 nsLegendFrame::GetLogicalAlign(WritingMode aCBWM)
 {
   int32_t intValue = NS_STYLE_TEXT_ALIGN_START;
-  nsGenericHTMLElement* content = nsGenericHTMLElement::FromContent(mContent);
+  nsGenericHTMLElement* content = nsGenericHTMLElement::FromNode(mContent);
   if (content) {
     const nsAttrValue* attr = content->GetParsedAttr(nsGkAtoms::align);
     if (attr && attr->Type() == nsAttrValue::eEnum) {

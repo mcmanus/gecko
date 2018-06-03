@@ -1,8 +1,8 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- *
-* This Source Code Form is subject to the terms of the Mozilla Public
-* License, v. 2.0. If a copy of the MPL was not distributed with this
-* file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef MOZILLA_GFX_RENDERPASSMLGPU_H
 #define MOZILLA_GFX_RENDERPASSMLGPU_H
@@ -314,12 +314,13 @@ protected:
   // surfaces, on the other hand, are relative to the target offset of the
   // layer. In all cases the visible region may be partially occluded, so
   // knowing the true origin is important.
+  template <typename RegionType>
   bool AddItems(Txn& aTxn,
                 const Info& aInfo,
-                const nsIntRegion& aDrawRegion)
+                const RegionType& aDrawRegion)
   {
     for (auto iter = aDrawRegion.RectIter(); !iter.Done(); iter.Next()) {
-      gfx::Rect drawRect = gfx::Rect(iter.Get());
+      gfx::Rect drawRect = gfx::Rect(iter.Get().ToUnknownRect());
       if (!AddItem(aTxn, aInfo, drawRect)) {
         return false;
       }
@@ -423,7 +424,8 @@ private:
   }
 
 private:
-  PaintedLayerMLGPU* mAssignedLayer;
+  float mOpacity;
+  SamplerMode mSamplerMode;
   RefPtr<TextureSource> mTextureOnBlack;
   RefPtr<TextureSource> mTextureOnWhite;
 };
@@ -464,8 +466,10 @@ private:
   bool AddToPass(LayerMLGPU* aItem, ItemInfo& aInfo) override;
   void SetupPipeline() override;
   bool OnPrepareBuffers() override;
+  void ExecuteRendering() override;
   float GetOpacity() const override;
   bool PrepareBlendState();
+  void RenderWithBackdropCopy();
 
 private:
   ConstantBufferSection mBlendConstants;

@@ -48,7 +48,8 @@ IPDL_SOURCES += [
 ]
 
 LOCAL_INCLUDES += [
-    '../workers',
+    # For nsDOMSerializer
+    '/dom/base',
     # For HttpBaseChannel.h dependencies
     '/netwerk/base',
     # For nsDataHandler.h

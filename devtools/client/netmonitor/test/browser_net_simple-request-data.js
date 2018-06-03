@@ -7,30 +7,21 @@
  * Tests if requests render correct information in the menu UI.
  */
 
-// The following intermittent rejections should not be left uncaught. This test
-// has been whitelisted until the issue is fixed.
-//
-// NOTE: Whitelisting a class of rejections should be limited. Normally you
-//       should use "expectUncaughtRejection" to flag individual failures.
-Cu.import("resource://testing-common/PromiseTestUtils.jsm", this);
-PromiseTestUtils.whitelistRejectionsGlobally(/cookies is undefined/);
-PromiseTestUtils.whitelistRejectionsGlobally(/requestItem is undefined/);
-
 function test() {
   // Disable tcp fast open, because it is setting a response header indicator
   // (bug 1352274). TCP Fast Open is not present on all platforms therefore the
   // number of response headers will vary depending on the platform.
   Services.prefs.setBoolPref("network.tcp.tcp_fastopen_enable", false);
 
-  let { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
+  const { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
 
   initNetMonitor(SIMPLE_SJS).then(async ({ tab, monitor }) => {
     info("Starting test... ");
 
-    let { document, store, windowRequire } = monitor.panelWin;
-    let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
-    let { EVENTS } = windowRequire("devtools/client/netmonitor/src/constants");
-    let {
+    const { document, store, windowRequire, connector } = monitor.panelWin;
+    const Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+    const { EVENTS } = windowRequire("devtools/client/netmonitor/src/constants");
+    const {
       getDisplayedRequests,
       getSelectedRequest,
       getSortedRequests,
@@ -38,12 +29,12 @@ function test() {
 
     store.dispatch(Actions.batchEnable(false));
 
-    let promiseList = [];
+    const promiseList = [];
     promiseList.push(waitForNetworkEvents(monitor, 1));
 
     function expectEvent(evt, cb) {
       promiseList.push(new Promise((resolve, reject) => {
-        monitor.panelWin.once(evt, _ => {
+        monitor.panelWin.api.once(evt, _ => {
           cb().then(resolve, reject);
         });
       }));
@@ -57,7 +48,7 @@ function test() {
       is(!!document.querySelector(".network-details-panel"), false,
         "The network details panel should still be hidden after first request.");
 
-      let requestItem = getSortedRequests(store.getState()).get(0);
+      const requestItem = getSortedRequests(store.getState()).get(0);
 
       is(typeof requestItem.id, "string",
         "The attached request id is incorrect.");
@@ -113,12 +104,9 @@ function test() {
     });
 
     expectEvent(EVENTS.RECEIVED_REQUEST_HEADERS, async () => {
-      await waitUntil(() => {
-        let requestItem = getSortedRequests(store.getState()).get(0);
-        return requestItem && requestItem.requestHeaders;
-      });
+      await waitForRequestData(store, ["requestHeaders"]);
 
-      let requestItem = getSortedRequests(store.getState()).get(0);
+      const requestItem = getSortedRequests(store.getState()).get(0);
 
       ok(requestItem.requestHeaders,
         "There should be a requestHeaders data available.");
@@ -139,12 +127,9 @@ function test() {
     });
 
     expectEvent(EVENTS.RECEIVED_REQUEST_COOKIES, async () => {
-      await waitUntil(() => {
-        let requestItem = getSortedRequests(store.getState()).get(0);
-        return requestItem && requestItem.requestCookies;
-      });
+      await waitForRequestData(store, ["requestCookies"]);
 
-      let requestItem = getSortedRequests(store.getState()).get(0);
+      const requestItem = getSortedRequests(store.getState()).get(0);
 
       ok(requestItem.requestCookies,
         "There should be a requestCookies data available.");
@@ -160,23 +145,20 @@ function test() {
       );
     });
 
-    monitor.panelWin.once(EVENTS.RECEIVED_REQUEST_POST_DATA, () => {
+    monitor.panelWin.api.once(EVENTS.RECEIVED_REQUEST_POST_DATA, () => {
       ok(false, "Trap listener: this request doesn't have any post data.");
     });
 
     expectEvent(EVENTS.RECEIVED_RESPONSE_HEADERS, async () => {
-      await waitUntil(() => {
-        let requestItem = getSortedRequests(store.getState()).get(0);
-        return requestItem && requestItem.responseHeaders;
-      });
+      await waitForRequestData(store, ["responseHeaders"]);
 
-      let requestItem = getSortedRequests(store.getState()).get(0);
+      const requestItem = getSortedRequests(store.getState()).get(0);
 
       ok(requestItem.responseHeaders,
         "There should be a responseHeaders data available.");
-      is(requestItem.responseHeaders.headers.length, 10,
+      is(requestItem.responseHeaders.headers.length, 13,
         "The responseHeaders data has an incorrect |headers| property.");
-      is(requestItem.responseHeaders.headersSize, 330,
+      is(requestItem.responseHeaders.headersSize, 335,
         "The responseHeaders data has an incorrect |headersSize| property.");
 
       verifyRequestItemTarget(
@@ -189,12 +171,9 @@ function test() {
     });
 
     expectEvent(EVENTS.RECEIVED_RESPONSE_COOKIES, async () => {
-      await waitUntil(() => {
-        let requestItem = getSortedRequests(store.getState()).get(0);
-        return requestItem && requestItem.responseCookies;
-      });
+      await waitForRequestData(store, ["responseCookies"]);
 
-      let requestItem = getSortedRequests(store.getState()).get(0);
+      const requestItem = getSortedRequests(store.getState()).get(0);
 
       ok(requestItem.responseCookies,
         "There should be a responseCookies data available.");
@@ -211,16 +190,14 @@ function test() {
     });
 
     expectEvent(EVENTS.STARTED_RECEIVING_RESPONSE, async () => {
-      await waitUntil(() => {
-        let requestItem = getSortedRequests(store.getState()).get(0);
-        return requestItem &&
-               requestItem.httpVersion &&
-               requestItem.status &&
-               requestItem.statusText &&
-               requestItem.headersSize;
-      });
+      await waitForRequestData(store, [
+        "httpVersion",
+        "status",
+        "statusText",
+        "headersSize"
+      ]);
 
-      let requestItem = getSortedRequests(store.getState()).get(0);
+      const requestItem = getSortedRequests(store.getState()).get(0);
 
       is(requestItem.httpVersion, "HTTP/1.1",
         "The httpVersion data has an incorrect value.");
@@ -228,8 +205,14 @@ function test() {
         "The status data has an incorrect value.");
       is(requestItem.statusText, "Och Aye",
         "The statusText data has an incorrect value.");
-      is(requestItem.headersSize, 330,
+      is(requestItem.headersSize, 335,
         "The headersSize data has an incorrect value.");
+
+      const requestListItem = document.querySelector(".request-list-item");
+      requestListItem.scrollIntoView();
+      const requestsListStatus = requestListItem.querySelector(".status-code");
+      EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+      await waitUntil(() => requestsListStatus.title);
 
       verifyRequestItemTarget(
         document,
@@ -244,39 +227,21 @@ function test() {
       );
     });
 
-    expectEvent(EVENTS.RECEIVED_RESPONSE_CONTENT, async () => {
-      await waitUntil(() => {
-        let requestItem = getSortedRequests(store.getState()).get(0);
-        return requestItem &&
-               requestItem.transferredSize &&
-               requestItem.contentSize &&
-               requestItem.mimeType &&
-               requestItem.responseContent;
-      });
+    expectEvent(EVENTS.PAYLOAD_READY, async () => {
+      await waitForRequestData(store, [
+        "transferredSize",
+        "contentSize",
+        "mimeType"
+      ]);
 
-      let requestItem = getSortedRequests(store.getState()).get(0);
+      const requestItem = getSortedRequests(store.getState()).get(0);
 
-      is(requestItem.transferredSize, "342",
+      is(requestItem.transferredSize, "347",
         "The transferredSize data has an incorrect value.");
       is(requestItem.contentSize, "12",
         "The contentSize data has an incorrect value.");
       is(requestItem.mimeType, "text/plain; charset=utf-8",
         "The mimeType data has an incorrect value.");
-
-      ok(requestItem.responseContent,
-        "There should be a responseContent data available.");
-      // eslint-disable-next-line mozilla/no-cpows-in-tests
-      is(requestItem.responseContent.content.mimeType,
-        "text/plain; charset=utf-8",
-        "The responseContent data has an incorrect |content.mimeType| property.");
-      // eslint-disable-next-line mozilla/no-cpows-in-tests
-      is(requestItem.responseContent.content.text,
-        "Hello world!",
-        "The responseContent data has an incorrect |content.text| property.");
-      // eslint-disable-next-line mozilla/no-cpows-in-tests
-      is(requestItem.responseContent.content.size,
-        12,
-        "The responseContent data has an incorrect |content.size| property.");
 
       verifyRequestItemTarget(
         document,
@@ -287,19 +252,16 @@ function test() {
         {
           type: "plain",
           fullMimeType: "text/plain; charset=utf-8",
-          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 342),
+          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 347),
           size: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 12),
         }
       );
     });
 
     expectEvent(EVENTS.UPDATING_EVENT_TIMINGS, async () => {
-      await waitUntil(() => {
-        let requestItem = getSortedRequests(store.getState()).get(0);
-        return requestItem && requestItem.eventTimings;
-      });
+      await waitForRequestData(store, ["eventTimings"]);
 
-      let requestItem = getSortedRequests(store.getState()).get(0);
+      const requestItem = getSortedRequests(store.getState()).get(0);
 
       is(typeof requestItem.totalTime, "number",
         "The attached totalTime is incorrect.");
@@ -319,7 +281,9 @@ function test() {
     });
 
     expectEvent(EVENTS.RECEIVED_EVENT_TIMINGS, async () => {
-      let requestItem = getSortedRequests(store.getState()).get(0);
+      await waitForRequestData(store, ["eventTimings"]);
+
+      const requestItem = getSortedRequests(store.getState()).get(0);
 
       ok(requestItem.eventTimings,
         "There should be a eventTimings data available.");
@@ -352,7 +316,18 @@ function test() {
       );
     });
 
+    const wait = waitForNetworkEvents(monitor, 1);
     tab.linkedBrowser.reload();
+    await wait;
+
+    const requestItem = getSortedRequests(store.getState()).get(0);
+
+    if (!requestItem.requestHeaders) {
+      connector.requestData(requestItem.id, "requestHeaders");
+    }
+    if (!requestItem.responseHeaders) {
+      connector.requestData(requestItem.id, "responseHeaders");
+    }
 
     await Promise.all(promiseList);
     await teardown(monitor);

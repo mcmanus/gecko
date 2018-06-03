@@ -10,19 +10,18 @@
 "use strict";
 
 const jsLexer = require("devtools/shared/css/lexer");
-const domutils = Components.classes["@mozilla.org/inspector/dom-utils;1"]
-                           .getService(Components.interfaces.inIDOMUtils);
+const InspectorUtils = require("InspectorUtils");
 
 // An object that acts like a CSSLexer but verifies that the DOM lexer
 // and the JS lexer do the same thing.
 function DoubleLexer(input) {
-  do_print("DoubleLexer input: " + input);
-  this.domLexer = domutils.getCSSLexer(input);
+  info("DoubleLexer input: " + input);
+  this.domLexer = InspectorUtils.getCSSLexer(input);
   this.jsLexer = jsLexer.getCSSLexer(input);
 }
 
 DoubleLexer.prototype = {
-  checkState: function () {
+  checkState: function() {
     equal(this.domLexer.lineNumber, this.jsLexer.lineNumber,
           "check line number");
     equal(this.domLexer.columnNumber, this.jsLexer.columnNumber,
@@ -37,15 +36,15 @@ DoubleLexer.prototype = {
     return this.domLexer.columnNumber;
   },
 
-  performEOFFixup: function (inputString, preserveBackslash) {
-    let d = this.domLexer.performEOFFixup(inputString, preserveBackslash);
-    let j = this.jsLexer.performEOFFixup(inputString, preserveBackslash);
+  performEOFFixup: function(inputString, preserveBackslash) {
+    const d = this.domLexer.performEOFFixup(inputString, preserveBackslash);
+    const j = this.jsLexer.performEOFFixup(inputString, preserveBackslash);
 
     equal(d, j);
     return d;
   },
 
-  mungeNumber: function (token) {
+  mungeNumber: function(token) {
     if (token && (token.tokenType === "number" ||
                   token.tokenType === "percentage") &&
         !token.isInteger) {
@@ -57,12 +56,12 @@ DoubleLexer.prototype = {
     }
   },
 
-  nextToken: function () {
+  nextToken: function() {
     // Check state both before and after.
     this.checkState();
 
-    let d = this.domLexer.nextToken();
-    let j = this.jsLexer.nextToken();
+    const d = this.domLexer.nextToken();
+    const j = this.jsLexer.nextToken();
 
     this.mungeNumber(d);
     this.mungeNumber(j);
@@ -76,12 +75,12 @@ DoubleLexer.prototype = {
 };
 
 function test_lexer(cssText, tokenTypes) {
-  let lexer = new DoubleLexer(cssText);
+  const lexer = new DoubleLexer(cssText);
   let reconstructed = "";
   let lastTokenEnd = 0;
   let i = 0;
   while (true) {
-    let token = lexer.nextToken();
+    const token = lexer.nextToken();
     if (!token) {
       break;
     }
@@ -150,12 +149,12 @@ var LEX_TESTS = [
 ];
 
 function test_lexer_linecol(cssText, locations) {
-  let lexer = new DoubleLexer(cssText);
+  const lexer = new DoubleLexer(cssText);
   let i = 0;
   while (true) {
-    let token = lexer.nextToken();
-    let startLine = lexer.lineNumber;
-    let startColumn = lexer.columnNumber;
+    const token = lexer.nextToken();
+    const startLine = lexer.lineNumber;
+    const startColumn = lexer.columnNumber;
 
     // We do this in a bit of a funny way so that we can also test the
     // location of the EOF.
@@ -177,12 +176,12 @@ function test_lexer_linecol(cssText, locations) {
 
 function test_lexer_eofchar(cssText, argText, expectedAppend,
                             expectedNoAppend) {
-  let lexer = new DoubleLexer(cssText);
+  const lexer = new DoubleLexer(cssText);
   while (lexer.nextToken()) {
     // Nothing.
   }
 
-  do_print("EOF char test, input = " + cssText);
+  info("EOF char test, input = " + cssText);
 
   let result = lexer.performEOFFixup(argText, true);
   equal(result, expectedAppend);

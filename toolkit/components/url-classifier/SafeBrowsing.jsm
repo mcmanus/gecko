@@ -2,13 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-this.EXPORTED_SYMBOLS = ["SafeBrowsing"];
+var EXPORTED_SYMBOLS = ["SafeBrowsing"];
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cu = Components.utils;
-
-Cu.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 const PREF_DEBUG_ENABLED = "browser.safebrowsing.debug";
 let loggingEnabled = false;
@@ -54,7 +50,7 @@ const tablePreferences = [
   "urlclassifier.flashInfobarTable"
 ];
 
-this.SafeBrowsing = {
+var SafeBrowsing = {
 
   init() {
     if (this.initialized) {
@@ -66,6 +62,7 @@ this.SafeBrowsing = {
     Services.prefs.addObserver("privacy.trackingprotection", this);
     Services.prefs.addObserver("urlclassifier", this);
     Services.prefs.addObserver("plugins.flashBlock.enabled", this);
+    Services.prefs.addObserver("plugins.show_infobar", this);
 
     this.readPrefs();
     this.addMozEntries();
@@ -151,7 +148,7 @@ this.SafeBrowsing = {
   blockedEnabled:       false,
   trackingAnnotations:  false,
   flashBlockEnabled:    false,
-  flashInfobarListEnabled: true,
+  flashInfobarListEnabled: false,
 
   phishingLists:                [],
   malwareLists:                 [],
@@ -183,7 +180,7 @@ this.SafeBrowsing = {
 
       default:
         let err = "SafeBrowsing getReportURL() called with unknown kind: " + kind;
-        Components.utils.reportError(err);
+        Cu.reportError(err);
         throw err;
     }
 
@@ -207,7 +204,7 @@ this.SafeBrowsing = {
 
   observe(aSubject, aTopic, aData) {
     // skip nextupdatetime and lastupdatetime
-    if (aData.indexOf("lastupdatetime") >= 0 || aData.indexOf("nextupdatetime") >= 0) {
+    if (aData.includes("lastupdatetime") || aData.includes("nextupdatetime")) {
       return;
     }
 
@@ -231,6 +228,7 @@ this.SafeBrowsing = {
     this.blockedEnabled = Services.prefs.getBoolPref("browser.safebrowsing.blockedURIs.enabled");
     this.trackingAnnotations = Services.prefs.getBoolPref("privacy.trackingprotection.annotate_channels");
     this.flashBlockEnabled = Services.prefs.getBoolPref("plugins.flashBlock.enabled");
+    this.flashInfobarListEnabled = Services.prefs.getBoolPref("plugins.show_infobar", false);
 
     let flashAllowTable, flashAllowExceptTable, flashTable,
         flashExceptTable, flashSubDocTable,
@@ -271,7 +269,7 @@ this.SafeBrowsing = {
                                              flashTable,
                                              flashExceptTable,
                                              flashSubDocTable,
-                                             flashSubDocExceptTable)
+                                             flashSubDocExceptTable);
 
     if (obsoleteLists) {
       let newLists = [this.phishingLists,
@@ -287,7 +285,7 @@ this.SafeBrowsing = {
 
       for (let i = 0; i < obsoleteLists.length; ++i) {
         obsoleteLists[i] = obsoleteLists[i]
-          .filter(list => newLists[i].indexOf(list) == -1);
+          .filter(list => !newLists[i].includes(list));
       }
     }
 
@@ -341,6 +339,9 @@ this.SafeBrowsing = {
     }
 
     Object.keys(this.providers).forEach(function(provider) {
+      if (provider == "test") {
+        return; // skip
+      }
       let updateURL = Services.urlFormatter.formatURLPref(
         "browser.safebrowsing.provider." + provider + ".updateURL");
       let gethashURL = Services.urlFormatter.formatURLPref(
@@ -405,14 +406,14 @@ this.SafeBrowsing = {
       }
     }
     for (let i = 0; i < this.downloadBlockLists.length; ++i) {
-      if (this.downloadsEnabled) {
+      if (this.malwareEnabled && this.downloadsEnabled) {
         listManager.enableUpdate(this.downloadBlockLists[i]);
       } else {
         listManager.disableUpdate(this.downloadBlockLists[i]);
       }
     }
     for (let i = 0; i < this.downloadAllowLists.length; ++i) {
-      if (this.downloadsEnabled) {
+      if (this.malwareEnabled && this.downloadsEnabled) {
         listManager.enableUpdate(this.downloadAllowLists[i]);
       } else {
         listManager.disableUpdate(this.downloadAllowLists[i]);

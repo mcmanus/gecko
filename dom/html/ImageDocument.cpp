@@ -5,18 +5,19 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "ImageDocument.h"
+#include "mozilla/ComputedStyle.h"
+#include "mozilla/dom/DOMPrefs.h"
+#include "mozilla/dom/Element.h"
+#include "mozilla/dom/Event.h"
 #include "mozilla/dom/ImageDocumentBinding.h"
 #include "mozilla/dom/HTMLImageElement.h"
+#include "mozilla/dom/MouseEvent.h"
 #include "nsRect.h"
 #include "nsIImageLoadingContent.h"
 #include "nsGenericHTMLElement.h"
 #include "nsDocShell.h"
 #include "nsIDocumentInlines.h"
 #include "nsDOMTokenList.h"
-#include "nsIDOMHTMLImageElement.h"
-#include "nsIDOMEvent.h"
-#include "nsIDOMKeyEvent.h"
-#include "nsIDOMMouseEvent.h"
 #include "nsIDOMEventListener.h"
 #include "nsIFrame.h"
 #include "nsGkAtoms.h"
@@ -26,13 +27,10 @@
 #include "imgINotificationObserver.h"
 #include "nsIPresShell.h"
 #include "nsPresContext.h"
-#include "nsStyleContext.h"
 #include "nsIChannel.h"
 #include "nsIContentPolicy.h"
 #include "nsContentPolicyUtils.h"
 #include "nsPIDOMWindow.h"
-#include "nsIDOMElement.h"
-#include "nsIDOMHTMLElement.h"
 #include "nsError.h"
 #include "nsURILoader.h"
 #include "nsIDocShell.h"
@@ -40,7 +38,6 @@
 #include "nsThreadUtils.h"
 #include "nsIScrollableFrame.h"
 #include "nsContentUtils.h"
-#include "mozilla/dom/Element.h"
 #include "mozilla/Preferences.h"
 #include <algorithm>
 
@@ -50,7 +47,7 @@
 //XXX A hack needed for Firefox's site specific zoom.
 static bool IsSiteSpecific()
 {
-  return !mozilla::Preferences::GetBool("privacy.resistFingerprinting", false) &&
+  return !mozilla::dom::DOMPrefs::ResistFingerprintingEnabled() &&
          mozilla::Preferences::GetBool("browser.zoom.siteSpecific", false);
 }
 
@@ -96,19 +93,30 @@ ImageListener::OnStartRequest(nsIRequest* request, nsISupports *ctxt)
   nsAutoCString mimeType;
   channel->GetContentType(mimeType);
 
-  nsIScriptSecurityManager* secMan = nsContentUtils::GetSecurityManager();
-  nsCOMPtr<nsIPrincipal> channelPrincipal;
-  if (secMan) {
-    secMan->GetChannelResultPrincipal(channel, getter_AddRefs(channelPrincipal));
+  nsCOMPtr<nsILoadInfo> loadInfo = channel->GetLoadInfo();
+  // query the corresponding arguments for the channel loadinfo and pass
+  // it on to the temporary loadinfo used for content policy checks.
+  nsCOMPtr<nsINode> requestingNode = domWindow->GetFrameElementInternal();
+  nsCOMPtr<nsIPrincipal> loadingPrincipal;
+  if (requestingNode) {
+    loadingPrincipal = requestingNode->NodePrincipal();
+  }
+  else {
+    nsContentUtils::GetSecurityManager()->
+      GetChannelResultPrincipal(channel, getter_AddRefs(loadingPrincipal));
   }
 
+  nsCOMPtr<nsILoadInfo> secCheckLoadInfo =
+    new net::LoadInfo(loadingPrincipal,
+                      loadInfo ? loadInfo->TriggeringPrincipal() : nullptr,
+                      requestingNode,
+                      nsILoadInfo::SEC_ONLY_FOR_EXPLICIT_CONTENTSEC_CHECK,
+                      nsIContentPolicy::TYPE_INTERNAL_IMAGE);
+
   int16_t decision = nsIContentPolicy::ACCEPT;
-  nsresult rv = NS_CheckContentProcessPolicy(nsIContentPolicy::TYPE_INTERNAL_IMAGE,
-                                             channelURI,
-                                             channelPrincipal,
-                                             domWindow->GetFrameElementInternal(),
+  nsresult rv = NS_CheckContentProcessPolicy(channelURI,
+                                             secCheckLoadInfo,
                                              mimeType,
-                                             nullptr,
                                              &decision,
                                              nsContentUtils::GetContentPolicy());
 
@@ -154,6 +162,9 @@ ImageDocument::ImageDocument()
   , mFirstResize(false)
   , mObservingImageLoader(false)
   , mOriginalZoomLevel(1.0)
+#if defined(MOZ_WIDGET_ANDROID)
+  , mOriginalResolution(1.0)
+#endif
 {
 }
 
@@ -209,6 +220,9 @@ ImageDocument::StartDocumentLoad(const char*         aCommand,
   }
 
   mOriginalZoomLevel = IsSiteSpecific() ? 1.0 : GetZoomLevel();
+#if defined(MOZ_WIDGET_ANDROID)
+  mOriginalResolution = GetResolution();
+#endif
 
   NS_ASSERTION(aDocListener, "null aDocListener");
   *aDocListener = new ImageListener(this);
@@ -259,7 +273,8 @@ ImageDocument::SetScriptGlobalObject(nsIScriptGlobalObject* aScriptGlobalObject)
   MediaDocument::SetScriptGlobalObject(aScriptGlobalObject);
 
   if (aScriptGlobalObject) {
-    if (!GetRootElement()) {
+    if (!InitialSetupHasBeenDone()) {
+      MOZ_ASSERT(!GetRootElement(), "Where did the root element come from?");
       // Create synthetic document
 #ifdef DEBUG
       nsresult rv =
@@ -276,14 +291,14 @@ ImageDocument::SetScriptGlobalObject(nsIScriptGlobalObject* aScriptGlobalObject)
     target->AddEventListener(NS_LITERAL_STRING("resize"), this, false);
     target->AddEventListener(NS_LITERAL_STRING("keypress"), this, false);
 
-    if (GetReadyStateEnum() != nsIDocument::READYSTATE_COMPLETE) {
+    if (!InitialSetupHasBeenDone()) {
       LinkStylesheet(NS_LITERAL_STRING("resource://content-accessible/ImageDocument.css"));
       if (!nsContentUtils::IsChildOfSameType(this)) {
         LinkStylesheet(NS_LITERAL_STRING("resource://content-accessible/TopLevelImageDocument.css"));
         LinkStylesheet(NS_LITERAL_STRING("chrome://global/skin/media/TopLevelImageDocument.css"));
       }
+      InitialSetupDone();
     }
-    BecomeInteractive();
   }
 }
 
@@ -293,6 +308,9 @@ ImageDocument::OnPageShow(bool aPersisted,
 {
   if (aPersisted) {
     mOriginalZoomLevel = IsSiteSpecific() ? 1.0 : GetZoomLevel();
+#if defined(MOZ_WIDGET_ANDROID)
+    mOriginalResolution = GetResolution();
+#endif
   }
   RefPtr<ImageDocument> kungFuDeathGrip(this);
   UpdateSizeFromLayout();
@@ -351,7 +369,7 @@ ImageDocument::ShrinkToFit()
     // displayed image height by getting .height on the HTMLImageElement.
     //
     // Hold strong ref, because Height() can run script.
-    RefPtr<HTMLImageElement> img = HTMLImageElement::FromContent(mImageContent);
+    RefPtr<HTMLImageElement> img = HTMLImageElement::FromNode(mImageContent);
     uint32_t imageHeight = img->Height();
     nsDOMTokenList* classList = img->ClassList();
     ErrorResult ignored;
@@ -363,19 +381,21 @@ ImageDocument::ShrinkToFit()
     ignored.SuppressException();
     return;
   }
+#if defined(MOZ_WIDGET_ANDROID)
+  if (GetResolution() != mOriginalResolution && mImageIsResized) {
+    // Don't resize if resolution has changed, e.g., through pinch-zooming on
+    // Android.
+    return;
+  }
+#endif
 
   // Keep image content alive while changing the attributes.
-  RefPtr<HTMLImageElement> image = HTMLImageElement::FromContent(mImageContent);
-  {
-    IgnoredErrorResult ignored;
-    image->SetWidth(std::max(1, NSToCoordFloor(GetRatio() * mImageWidth)),
-                    ignored);
-  }
-  {
-    IgnoredErrorResult ignored;
-    image->SetHeight(std::max(1, NSToCoordFloor(GetRatio() * mImageHeight)),
-                     ignored);
-  }
+  RefPtr<HTMLImageElement> image = HTMLImageElement::FromNode(mImageContent);
+
+  uint32_t newWidth = std::max(1, NSToCoordFloor(GetRatio() * mImageWidth));
+  uint32_t newHeight = std::max(1, NSToCoordFloor(GetRatio() * mImageHeight));
+  image->SetWidth(newWidth, IgnoreErrors());
+  image->SetHeight(newHeight, IgnoreErrors());
 
   // The view might have been scrolled when zooming in, scroll back to the
   // origin now that we're showing a shrunk-to-window version.
@@ -410,8 +430,6 @@ ImageDocument::DOMRestoreImageTo(int32_t aX, int32_t aY)
 void
 ImageDocument::ScrollImageTo(int32_t aX, int32_t aY, bool restoreImage)
 {
-  float ratio = GetRatio();
-
   if (restoreImage) {
     RestoreImage();
     FlushPendingNotifications(FlushType::Layout);
@@ -427,6 +445,12 @@ ImageDocument::ScrollImageTo(int32_t aX, int32_t aY, bool restoreImage)
     return;
   }
 
+  float ratio = GetRatio();
+  // Don't try to scroll image if the document is not visible (mVisibleWidth or
+  // mVisibleHeight is zero).
+  if (ratio <= 0.0) {
+    return;
+  }
   nsRect portRect = sf->GetScrollPortRect();
   sf->ScrollTo(nsPoint(nsPresContext::CSSPixelsToAppUnits(aX/ratio) - portRect.width/2,
                        nsPresContext::CSSPixelsToAppUnits(aY/ratio) - portRect.height/2),
@@ -608,7 +632,7 @@ ImageDocument::OnLoadComplete(imgIRequest* aRequest, nsresult aStatus)
 }
 
 NS_IMETHODIMP
-ImageDocument::HandleEvent(nsIDOMEvent* aEvent)
+ImageDocument::HandleEvent(Event* aEvent)
 {
   nsAutoString eventType;
   aEvent->GetType(eventType);
@@ -620,14 +644,12 @@ ImageDocument::HandleEvent(nsIDOMEvent* aEvent)
     mShouldResize = true;
     if (mImageIsResized) {
       int32_t x = 0, y = 0;
-      nsCOMPtr<nsIDOMMouseEvent> event(do_QueryInterface(aEvent));
+      MouseEvent* event = aEvent->AsMouseEvent();
       if (event) {
-        event->GetClientX(&x);
-        event->GetClientY(&y);
         RefPtr<HTMLImageElement> img =
-          HTMLImageElement::FromContent(mImageContent);
-        x -= img->OffsetLeft();
-        y -= img->OffsetTop();
+          HTMLImageElement::FromNode(mImageContent);
+        x = event->ClientX() - img->OffsetLeft();
+        y = event->ClientY() - img->OffsetTop();
       }
       mShouldResize = false;
       RestoreImageTo(x, y);
@@ -691,7 +713,7 @@ ImageDocument::CreateSyntheticDocument()
   RefPtr<mozilla::dom::NodeInfo> nodeInfo;
   nodeInfo = mNodeInfoManager->GetNodeInfo(nsGkAtoms::img, nullptr,
                                            kNameSpaceID_XHTML,
-                                           nsIDOMNode::ELEMENT_NODE);
+                                           nsINode::ELEMENT_NODE);
 
   mImageContent = NS_NewHTMLImageElement(nodeInfo.forget());
   if (!mImageContent) {
@@ -718,17 +740,16 @@ ImageDocument::CreateSyntheticDocument()
 nsresult
 ImageDocument::CheckOverflowing(bool changeState)
 {
-  /* Create a scope so that the style context gets destroyed before we might
+  /* Create a scope so that the ComputedStyle gets destroyed before we might
    * call RebuildStyleData.  Also, holding onto pointers to the
    * presentation through style resolution is potentially dangerous.
    */
   {
-    nsIPresShell *shell = GetShell();
-    if (!shell) {
+    nsPresContext* context = GetPresContext();
+    if (!context) {
       return NS_OK;
     }
 
-    nsPresContext *context = shell->GetPresContext();
     nsRect visibleArea = context->GetVisibleArea();
 
     mVisibleWidth = nsPresContext::AppUnitsToFloatCSSPixels(visibleArea.width);
@@ -855,6 +876,19 @@ ImageDocument::GetZoomLevel()
   }
   return zoomLevel;
 }
+
+#if defined(MOZ_WIDGET_ANDROID)
+float
+ImageDocument::GetResolution()
+{
+  float resolution = mOriginalResolution;
+  nsCOMPtr<nsIPresShell> shell = GetShell();
+  if (shell) {
+    resolution = shell->GetResolution();
+  }
+  return resolution;
+}
+#endif
 
 } // namespace dom
 } // namespace mozilla

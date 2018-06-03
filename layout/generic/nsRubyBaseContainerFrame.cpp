@@ -1,8 +1,8 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
-/* This Source Code is subject to the terms of the Mozilla Public License
- * version 2.0 (the "License"). You can obtain a copy of the License at
- * http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* rendering object for CSS "display: ruby-base-container" */
 
@@ -10,13 +10,13 @@
 #include "nsRubyTextContainerFrame.h"
 #include "nsRubyBaseFrame.h"
 #include "nsRubyTextFrame.h"
+#include "mozilla/ComputedStyle.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/WritingModes.h"
 #include "nsLayoutUtils.h"
 #include "nsLineLayout.h"
 #include "nsPresContext.h"
-#include "nsStyleContext.h"
 #include "nsStyleStructInlines.h"
 #include "nsTextFrame.h"
 #include "RubyUtils.h"
@@ -37,9 +37,9 @@ NS_IMPL_FRAMEARENA_HELPERS(nsRubyBaseContainerFrame)
 
 nsContainerFrame*
 NS_NewRubyBaseContainerFrame(nsIPresShell* aPresShell,
-                             nsStyleContext* aContext)
+                             ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsRubyBaseContainerFrame(aContext);
+  return new (aPresShell) nsRubyBaseContainerFrame(aStyle);
 }
 
 
@@ -106,7 +106,7 @@ GetIsLineBreakAllowed(nsIFrame* aFrame, bool aIsLineBreakable,
                       bool* aAllowInitialLineBreak, bool* aAllowLineBreak)
 {
   nsIFrame* parent = aFrame->GetParent();
-  bool lineBreakSuppressed = parent->StyleContext()->ShouldSuppressLineBreak();
+  bool lineBreakSuppressed = parent->Style()->ShouldSuppressLineBreak();
   // Allow line break between ruby bases when white-space allows,
   // we are not inside a nested ruby, and there is no span.
   bool allowLineBreak = !lineBreakSuppressed &&

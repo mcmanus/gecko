@@ -6,20 +6,24 @@
 
 #include "mozilla/dom/cache/CacheStreamControlParent.h"
 
+#include "mozilla/UniquePtr.h"
 #include "mozilla/Unused.h"
 #include "mozilla/dom/cache/CacheTypes.h"
 #include "mozilla/dom/cache/ReadStream.h"
 #include "mozilla/dom/cache/StreamList.h"
 #include "mozilla/ipc/FileDescriptorSetParent.h"
+#include "mozilla/ipc/IPCStreamUtils.h"
 #include "mozilla/ipc/PBackgroundParent.h"
 #include "mozilla/ipc/PFileDescriptorSetParent.h"
 #include "nsISupportsImpl.h"
+#include "nsTArray.h"
 
 namespace mozilla {
 namespace dom {
 namespace cache {
 
 using mozilla::dom::OptionalFileDescriptorSet;
+using mozilla::ipc::AutoIPCStream;
 using mozilla::ipc::FileDescriptor;
 using mozilla::ipc::FileDescriptorSetParent;
 using mozilla::ipc::PFileDescriptorSetParent;
@@ -64,7 +68,7 @@ CacheStreamControlParent::SerializeStream(CacheReadStream* aReadStreamOut,
   DebugOnly<bool> ok = autoStream->Serialize(aStream, Manager());
   MOZ_ASSERT(ok);
 
-  aStreamCleanupList.AppendElement(Move(autoStream));
+  aStreamCleanupList.AppendElement(std::move(autoStream));
 }
 
 void
@@ -83,7 +87,7 @@ CacheStreamControlParent::OpenStream(const nsID& aId,
   // a separate resolver function to signal the completion of the
   // operation.  The Manager uses the existence of the Listener to ensure
   // that its safe to complete the operation.
-  mStreamList->GetManager()->ExecuteOpenStream(this, Move(aResolver), aId);
+  mStreamList->GetManager()->ExecuteOpenStream(this, std::move(aResolver), aId);
 }
 
 void
@@ -123,20 +127,8 @@ CacheStreamControlParent::RecvOpenStream(const nsID& aStreamId,
 {
   NS_ASSERT_OWNINGTHREAD(CacheStreamControlParent);
 
-  // This is safe because:
-  //  1. We add ourself to the Manager as an operation Listener in OpenStream().
-  //  2. We remove ourself as a Listener from the Manager in ActorDestroy().
-  //  3. The Manager will not "complete" the operation if the Listener has
-  //     been removed.  This means the lambda will not be invoked.
-  //  4. The ActorDestroy() will also cause the child-side MozPromise for
-  //     this async returning method to be rejected.  So we don't have to
-  //     call the resolver in this case.
-  CacheStreamControlParent* self = this;
-
-  OpenStream(aStreamId, [self, aResolver](nsCOMPtr<nsIInputStream>&& aStream) {
-      AutoIPCStream stream;
-      Unused << stream.Serialize(aStream, self->Manager());
-      aResolver(stream.TakeOptionalValue());
+  OpenStream(aStreamId, [aResolver](nsCOMPtr<nsIInputStream>&& aStream) {
+      aResolver(aStream);
     });
 
   return IPC_OK();

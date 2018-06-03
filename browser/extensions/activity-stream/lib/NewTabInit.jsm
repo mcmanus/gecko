@@ -3,9 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const {utils: Cu} = Components;
-
-const {actionCreators: ac, actionTypes: at} = Cu.import("resource://activity-stream/common/Actions.jsm", {});
+const {actionCreators: ac, actionTypes: at} = ChromeUtils.import("resource://activity-stream/common/Actions.jsm", {});
 
 /**
  * NewTabInit - A placeholder for now. This will send a copy of the state to all
@@ -13,40 +11,42 @@ const {actionCreators: ac, actionTypes: at} = Cu.import("resource://activity-str
  */
 this.NewTabInit = class NewTabInit {
   constructor() {
-    this._queue = new Set();
+    this._repliedEarlyTabs = new Map();
   }
+
   reply(target) {
+    // Skip this reply if we already replied to an early tab
+    if (this._repliedEarlyTabs.get(target)) {
+      return;
+    }
+
     const action = {type: at.NEW_TAB_INITIAL_STATE, data: this.store.getState()};
-    this.store.dispatch(ac.SendToContent(action, target));
+    this.store.dispatch(ac.AlsoToOneContent(action, target));
+
+    // Remember that this early tab has already gotten a rehydration response in
+    // case it thought we lost its initial REQUEST and asked again
+    if (this._repliedEarlyTabs.has(target)) {
+      this._repliedEarlyTabs.set(target, true);
+    }
   }
+
   onAction(action) {
     switch (action.type) {
       case at.NEW_TAB_STATE_REQUEST:
-        // If localization hasn't been loaded yet, we should wait for it.
-        if (!this.store.getState().App.strings) {
-          this._queue.add(action.meta.fromTarget);
-          return;
-        }
         this.reply(action.meta.fromTarget);
         break;
-      case at.LOCALE_UPDATED:
-        // If the queue is full because we were waiting for strings,
-        // dispatch them now.
-        if (this._queue.size > 0 && this.store.getState().App.strings) {
-          this._queue.forEach(target => this.reply(target));
-          this._queue.clear();
+      case at.NEW_TAB_INIT:
+        // Initialize data for early tabs that might REQUEST twice
+        if (action.data.simulated) {
+          this._repliedEarlyTabs.set(action.data.portID, false);
         }
         break;
-      case at.NEW_TAB_INIT:
-        if (action.data.url === "about:home") {
-          const prefs = this.store.getState().Prefs.values;
-          if (prefs["aboutHome.autoFocus"] && prefs.showSearch) {
-            action.data.browser.focus();
-          }
-        }
+      case at.NEW_TAB_UNLOAD:
+        // Clean up for any tab (no-op if not an early tab)
+        this._repliedEarlyTabs.delete(action.meta.fromTarget);
         break;
     }
   }
 };
 
-this.EXPORTED_SYMBOLS = ["NewTabInit"];
+const EXPORTED_SYMBOLS = ["NewTabInit"];

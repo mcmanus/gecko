@@ -53,26 +53,25 @@ exports.synthesizeProfile = () => {
  * Generates a simple implementation for a tree class.
  */
 exports.synthesizeCustomTreeClass = () => {
-  const { Cu } = require("chrome");
-  const { AbstractTreeItem } = Cu.import("resource://devtools/client/shared/widgets/AbstractTreeItem.jsm", {});
-  const { Heritage } = require("devtools/client/shared/widgets/view-helpers");
+  const { AbstractTreeItem } = require("resource://devtools/client/shared/widgets/AbstractTreeItem.jsm");
+  const { extend } = require("devtools/shared/extend");
 
   function MyCustomTreeItem(dataSrc, properties) {
     AbstractTreeItem.call(this, properties);
     this.itemDataSrc = dataSrc;
   }
 
-  MyCustomTreeItem.prototype = Heritage.extend(AbstractTreeItem.prototype, {
-    _displaySelf: function (document, arrowNode) {
-      let node = document.createElement("hbox");
+  MyCustomTreeItem.prototype = extend(AbstractTreeItem.prototype, {
+    _displaySelf: function(document, arrowNode) {
+      const node = document.createElement("hbox");
       node.style.marginInlineStart = (this.level * 10) + "px";
       node.appendChild(arrowNode);
       node.appendChild(document.createTextNode(this.itemDataSrc.label));
       return node;
     },
 
-    _populateSelf: function (children) {
-      for (let childDataSrc of this.itemDataSrc.children) {
+    _populateSelf: function(children) {
+      for (const childDataSrc of this.itemDataSrc.children) {
         children.push(new MyCustomTreeItem(childDataSrc, {
           parent: this,
           level: this.level + 1

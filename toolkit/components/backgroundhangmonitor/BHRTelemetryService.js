@@ -4,13 +4,11 @@
 
 "use strict";
 
-const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+ChromeUtils.import("resource://gre/modules/Services.jsm", this);
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
-Cu.import("resource://gre/modules/Services.jsm", this);
-
-XPCOMUtils.defineLazyModuleGetter(this, "TelemetryController",
-                                  "resource://gre/modules/TelemetryController.jsm");
+ChromeUtils.defineModuleGetter(this, "TelemetryController",
+                               "resource://gre/modules/TelemetryController.jsm");
 
 function BHRTelemetryService() {
   // Allow tests to get access to this object to verify it works correctly.
@@ -25,7 +23,7 @@ function BHRTelemetryService() {
 
 BHRTelemetryService.prototype = Object.freeze({
   classID: Components.ID("{117c8cdf-69e6-4f31-a439-b8a654c67127}"),
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIObserver]),
 
   TRANSMIT_HANG_COUNT: 50,
 

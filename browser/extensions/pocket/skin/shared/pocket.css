@@ -3,6 +3,12 @@
   padding-bottom: 0;
 }
 
+#pageActionActivatedActionPanel[actionID="pocket"] > .panel-arrowcontainer > .panel-arrowbox > .panel-arrow {
+  fill: #fbfbfb;
+}
+
+#appMenu-library-pocket-button,
+#pageAction-panel-pocket,
 #pocket-button {
   list-style-image: url("chrome://pocket-shared/skin/pocket.svg");
 }
@@ -12,7 +18,8 @@
   fill: transparent;
 }
 
-#pocket-button-box[open="true"] > #pocket-button {
+#pocket-button-box[open="true"] > #pocket-button,
+#pocket-button-box[pocketed="true"] > #pocket-button {
   fill: #ef4056;
   fill-opacity: 1;
 }
@@ -43,14 +50,8 @@
   /* Since .toolbarbutton-icon uses a different width than the animatable box,
      we need to set a padding relative to the difference in widths. */
   margin-inline-start: calc((16px + 2 * var(--toolbarbutton-inner-padding) - 20px) / 2);
-  /* Set the min- and max- width and height of the box equal to that
-     of each frame of the SVG sprite. Setting the width and height via
-     the `width` and `height` CSS properties causes an assertion for
-     `inline-size less than zero: 'aContainingBlockISize >= 0'` (bug 1379332). */
-  min-width: 20px;
-  max-width: 20px;
-  min-height: 16px;
-  max-height: 16px;
+  width: 20px; /* Width of each frame within the SVG sprite */
+  height: 16px; /* Height of each frame within the SVG sprite */
 }
 
 #pocket-button-box[animate="true"] > #pocket-animatable-box {
@@ -175,53 +176,3 @@
   animation-timing-function: ease-out;
 }
 
-#pocket-button[cui-areatype="toolbar"][open] {
-  fill: #ef4056;
-}
-
-@media not all and (min-resolution: 1.1dppx) {
-  #pocket-button[cui-areatype="menu-panel"],
-  toolbarpaletteitem[place="palette"] > #pocket-button {
-    list-style-image: url(chrome://pocket/skin/menuPanel.png);
-    -moz-image-region: rect(0, 32px, 32px, 0);
-  }
-
-  #pocket-button[cui-areatype="menu-panel"][panel-multiview-anchor=true] {
-    -moz-image-region: rect(32px, 32px, 64px, 0);
-  }
-}
-
-@media (min-resolution: 1.1dppx) {
-  #pocket-button[cui-areatype="menu-panel"],
-  toolbarpaletteitem[place="palette"] > #pocket-button {
-    list-style-image: url(chrome://pocket/skin/menuPanel@2x.png);
-    -moz-image-region: rect(0px, 64px, 64px, 0);
-  }
-
-  #pocket-button[cui-areatype="menu-panel"][panel-multiview-anchor=true] {
-    -moz-image-region: rect(64px, 64px, 128px, 0);
-  }
-}
-
-#appMenu-library-pocket-button {
-  list-style-image: url("chrome://pocket-shared/skin/pocket.svg");
-}
-
-#panelMenu_pocket {
-  list-style-image: url("chrome://pocket/content/panels/img/pocketmenuitem16.png");
-}
-
-@media (min-resolution: 2dppx) {
-  #panelMenu_pocket {
-    list-style-image: url("chrome://pocket/content/panels/img/pocketmenuitem16@2x.png");
-  }
-
-  #panelMenu_pocket > .toolbarbutton-icon {
-    width: 16px;
-  }
-}
-
-#pageAction-panel-pocket,
-#pocket-button {
-  list-style-image: url("chrome://pocket-shared/skin/pocket.svg");
-}

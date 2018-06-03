@@ -8,13 +8,12 @@
 
 #include "mozilla/ScopeExit.h"
 
-#include "jscntxt.h"
-
 #include "jit/BaselineJIT.h"
 #include "jit/Ion.h"
-#include "jit/JitCompartment.h"
+#include "jit/JitRealm.h"
 #include "jit/JitSpewer.h"
 #include "jit/Snapshots.h"
+#include "vm/JSContext.h"
 #include "vm/TraceLogging.h"
 
 #include "jit/JSJitFrameIter-inl.h"
@@ -229,7 +228,7 @@ jit::ExceptionHandlerBailout(JSContext* cx, const InlineFrameIterator& frame,
             bailoutInfo->bailoutKind = Bailout_IonExceptionDebugMode;
 
         rfe->kind = ResumeFromException::RESUME_BAILOUT;
-        rfe->target = cx->runtime()->jitRuntime()->getBailoutTail()->raw();
+        rfe->target = cx->runtime()->jitRuntime()->getBailoutTail().value;
         rfe->bailoutInfo = bailoutInfo;
     } else {
         // Bailout failed. If the overrecursion check failed, clear the

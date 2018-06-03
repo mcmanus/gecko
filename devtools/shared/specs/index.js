@@ -74,11 +74,6 @@ const Types = exports.__TypesForTests = [
     spec: "devtools/shared/specs/environment",
     front: null,
   },
-  {
-    types: ["eventLoopLag"],
-    spec: "devtools/shared/specs/eventlooplag",
-    front: "devtools/shared/fronts/eventlooplag",
-  },
   /* frame has old fashion client and no front */
   {
     types: ["frame"],
@@ -112,7 +107,7 @@ const Types = exports.__TypesForTests = [
     front: "devtools/shared/fronts/inspector",
   },
   {
-    types: ["grid", "layout"],
+    types: ["flexbox", "grid", "layout"],
     spec: "devtools/shared/specs/layout",
     front: "devtools/shared/fronts/layout",
   },
@@ -120,6 +115,11 @@ const Types = exports.__TypesForTests = [
     types: ["memory"],
     spec: "devtools/shared/specs/memory",
     front: "devtools/shared/fronts/memory",
+  },
+  {
+    types: ["netEvent"],
+    spec: "devtools/shared/specs/network-event",
+    front: null,
   },
   /* imageData isn't an actor but just a DictType */
   {
@@ -131,6 +131,11 @@ const Types = exports.__TypesForTests = [
     types: ["domnode", "domnodelist"],
     spec: "devtools/shared/specs/node",
     front: "devtools/shared/fronts/node",
+  },
+  {
+    types: ["perf"],
+    spec: "devtools/shared/specs/perf",
+    front: "devtools/shared/fronts/perf",
   },
   {
     types: ["performance"],
@@ -151,6 +156,11 @@ const Types = exports.__TypesForTests = [
     types: ["promises"],
     spec: "devtools/shared/specs/promises",
     front: "devtools/shared/fronts/promises",
+  },
+  {
+    types: ["propertyIterator"],
+    spec: "devtools/shared/specs/property-iterator",
+    front: null,
   },
   {
     types: ["reflow"],
@@ -190,9 +200,24 @@ const Types = exports.__TypesForTests = [
     front: "devtools/shared/fronts/styles",
   },
   {
-    types: ["originalsource", "mediarule", "stylesheet", "stylesheets"],
+    types: ["mediarule", "stylesheet", "stylesheets"],
     spec: "devtools/shared/specs/stylesheets",
     front: "devtools/shared/fronts/stylesheets",
+  },
+  {
+    types: ["symbol"],
+    spec: "devtools/shared/specs/symbol",
+    front: null,
+  },
+  {
+    types: ["symbolIterator"],
+    spec: "devtools/shared/specs/symbol-iterator",
+    front: null,
+  },
+  {
+    types: ["tab"],
+    spec: "devtools/shared/specs/tab",
+    front: null,
   },
   {
     types: ["timeline"],
@@ -203,6 +228,11 @@ const Types = exports.__TypesForTests = [
     types: ["audionode", "webaudio"],
     spec: "devtools/shared/specs/webaudio",
     front: "devtools/shared/fronts/webaudio",
+  },
+  {
+    types: ["console"],
+    spec: "devtools/shared/specs/webconsole",
+    front: null,
   },
   {
     types: ["webExtensionInspectedWindow"],
@@ -246,7 +276,7 @@ Types.forEach(item => {
  * @returns true, if it matched a lazy loaded type and tried to load it.
  */
 function lazyLoadSpec(type) {
-  let modulePath = lazySpecs.get(type);
+  const modulePath = lazySpecs.get(type);
   if (modulePath) {
     try {
       require(modulePath);
@@ -270,7 +300,7 @@ exports.lazyLoadSpec = lazyLoadSpec;
  * @returns true, if it matched a lazy loaded type and tried to load it.
  */
 function lazyLoadFront(type) {
-  let modulePath = lazyFronts.get(type);
+  const modulePath = lazyFronts.get(type);
   if (modulePath) {
     try {
       require(modulePath);

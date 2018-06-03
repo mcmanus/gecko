@@ -14,9 +14,9 @@
 #include <processthreadsapi.h>
 #endif // defined(XP_WIN)
 
-#include "jscompartment.h"
-#include "jswin.h"
-
+#include "gc/PublicIterators.h"
+#include "util/Windows.h"
+#include "vm/JSCompartment.h"
 #include "vm/Runtime.h"
 
 namespace js {
@@ -135,13 +135,9 @@ PerformanceMonitoring::start()
 bool
 PerformanceMonitoring::commit()
 {
+#if defined(MOZ_HAVE_RDTSC)
     // Maximal initialization size, in elements for the vector of groups.
     static const size_t MAX_GROUPS_INIT_CAPACITY = 1024;
-
-#if !defined(MOZ_HAVE_RDTSC)
-    // The AutoStopwatch is only executed if `MOZ_HAVE_RDTSC`.
-    return false;
-#endif // !defined(MOZ_HAVE_RDTSC)
 
     if (!isMonitoringJank_) {
         // Either we have not started monitoring or monitoring has
@@ -157,7 +153,7 @@ PerformanceMonitoring::commit()
     // The move operation is generally constant time, unless
     // `recentGroups_.length()` is very small, in which case
     // it's fast just because it's small.
-    PerformanceGroupVector recentGroups(Move(recentGroups_));
+    PerformanceGroupVector recentGroups(std::move(recentGroups_));
     recentGroups_ = PerformanceGroupVector(); // Reconstruct after `Move`.
 
     bool success = true;
@@ -175,6 +171,10 @@ PerformanceMonitoring::commit()
     // twice in succession).
     reset();
     return success;
+#else
+    // The AutoStopwatch is only executed if `MOZ_HAVE_RDTSC`.
+    return false;
+#endif // defined(MOZ_HAVE_RDTSC)
 }
 
 uint64_t
@@ -194,9 +194,8 @@ void
 PerformanceMonitoring::dispose(JSRuntime* rt)
 {
     reset();
-    for (CompartmentsIter c(rt, SkipAtoms); !c.done(); c.next()) {
-        c->performanceMonitoring.unlink();
-    }
+    for (RealmsIter r(rt); !r.done(); r.next())
+        r->performanceMonitoring.unlink();
 }
 
 PerformanceGroupHolder::~PerformanceGroupHolder()
@@ -244,7 +243,7 @@ AutoStopwatch::AutoStopwatch(JSContext* cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM_IN_IM
     JSRuntime* runtime = cx_->runtime();
     iteration_ = runtime->performanceMonitoring().iteration();
 
-    const PerformanceGroupVector* groups = compartment->performanceMonitoring.getGroups(cx);
+    const PerformanceGroupVector* groups = cx_->realm()->performanceMonitoring.getGroups(cx);
     if (!groups) {
       // Either the embedding has not provided any performance
       // monitoring logistics or there was an error that prevents

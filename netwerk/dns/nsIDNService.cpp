@@ -102,14 +102,14 @@ void nsIDNService::prefsChanged(nsIPrefBranch *prefBranch, const char16_t *pref)
   mLock.AssertCurrentThreadOwns();
 
   if (!pref || NS_LITERAL_STRING(NS_NET_PREF_IDNBLACKLIST).Equals(pref)) {
-    nsCOMPtr<nsISupportsString> blacklist;
-    nsresult rv = prefBranch->GetComplexValue(NS_NET_PREF_IDNBLACKLIST,
-                                              NS_GET_IID(nsISupportsString),
-                                              getter_AddRefs(blacklist));
-    if (NS_SUCCEEDED(rv))
-      blacklist->ToString(getter_Copies(mIDNBlacklist));
-    else
+    nsAutoCString blacklist;
+    nsresult rv = prefBranch->GetStringPref(NS_NET_PREF_IDNBLACKLIST,
+                                            EmptyCString(), 0, blacklist);
+    if (NS_SUCCEEDED(rv)) {
+      CopyUTF8toUTF16(blacklist, mIDNBlacklist);
+    } else {
       mIDNBlacklist.Truncate();
+    }
   }
   if (!pref || NS_LITERAL_STRING(NS_NET_PREF_SHOWPUNYCODE).Equals(pref)) {
     bool val;
@@ -123,9 +123,9 @@ void nsIDNService::prefsChanged(nsIPrefBranch *prefBranch, const char16_t *pref)
       mIDNUseWhitelist = val;
   }
   if (!pref || NS_LITERAL_STRING(NS_NET_PREF_IDNRESTRICTION).Equals(pref)) {
-    nsCString profile;
+    nsAutoCString profile;
     if (NS_FAILED(prefBranch->GetCharPref(NS_NET_PREF_IDNRESTRICTION,
-                                          getter_Copies(profile)))) {
+                                          profile))) {
       profile.Truncate();
     }
     if (profile.EqualsLiteral("moderate")) {
@@ -750,6 +750,7 @@ bool nsIDNService::isLabelSafe(const nsAString &label)
 
   Script lastScript = Script::INVALID;
   uint32_t previousChar = 0;
+  uint32_t baseChar = 0; // last non-diacritic seen (base char for marks)
   uint32_t savedNumberingSystem = 0;
 // Simplified/Traditional Chinese check temporarily disabled -- bug 857481
 #if 0
@@ -780,7 +781,6 @@ bool nsIDNService::isLabelSafe(const nsAString &label)
       if (illegalScriptCombo(script, savedScript)) {
         return false;
       }
-      lastScript = script;
     }
 
     // Check for mixed numbering systems
@@ -831,6 +831,18 @@ bool nsIDNService::isLabelSafe(const nsAString &label)
           }
         }
       }
+      // Check for diacritics on dotless-i, which would be indistinguishable
+      // from normal accented letter i.
+      if (baseChar == 0x0131 &&
+          ((ch >= 0x0300 && ch <= 0x0314) || ch == 0x031a)) {
+        return false;
+      }
+    } else {
+      baseChar = ch;
+    }
+
+    if (script != Script::COMMON && script != Script::INHERITED) {
+      lastScript = script;
     }
 
     // Simplified/Traditional Chinese check temporarily disabled -- bug 857481

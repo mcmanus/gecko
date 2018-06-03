@@ -6,18 +6,20 @@
 include('/media/webrtc/webrtc.mozbuild')
 
 LOCAL_INCLUDES += [
+    '!/ipc/ipdl/_ipdlheaders',
     '/dom/media',
+    '/ipc/chromium/src',
     '/media/libyuv/libyuv/include',
     '/media/mtransport',
     '/media/webrtc',
+    '/media/webrtc/signaling/src/common/browser_logging',
     '/media/webrtc/signaling/src/media-conduit',
     '/media/webrtc/trunk',
     '/netwerk/srtp/src/crypto/include',
     '/netwerk/srtp/src/include',
 ]
 
-# Duplicate definition of getLogModule
-SOURCES += [
+UNIFIED_SOURCES += [
     'MediaPipeline.cpp',
     'MediaPipelineFilter.cpp',
     'RtpLogger.cpp',

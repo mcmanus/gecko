@@ -21,19 +21,19 @@ template<typename T>
 size_t
 nsIDocument::FindDocStyleSheetInsertionPoint(
     const nsTArray<T>& aDocSheets,
-    mozilla::StyleSheet* aSheet)
+    const mozilla::StyleSheet& aSheet)
 {
   nsStyleSheetService* sheetService = nsStyleSheetService::GetInstance();
 
   // lowest index first
-  int32_t newDocIndex = GetIndexOfStyleSheet(aSheet);
+  int32_t newDocIndex = IndexOfSheet(aSheet);
 
-  int32_t count = aDocSheets.Length();
-  int32_t index;
-  for (index = 0; index < count; index++) {
-    mozilla::StyleSheet* sheet = static_cast<mozilla::StyleSheet*>(
-      aDocSheets[index]);
-    int32_t sheetDocIndex = GetIndexOfStyleSheet(sheet);
+  size_t count = aDocSheets.Length();
+  size_t index = 0;
+  for (; index < count; index++) {
+    auto* sheet = static_cast<mozilla::StyleSheet*>(aDocSheets[index]);
+    MOZ_ASSERT(sheet);
+    int32_t sheetDocIndex = IndexOfSheet(*sheet);
     if (sheetDocIndex > newDocIndex)
       break;
 
@@ -43,8 +43,7 @@ nsIDocument::FindDocStyleSheetInsertionPoint(
     // doc sheet should end up before it.
     if (sheetDocIndex < 0) {
       if (sheetService) {
-        auto& authorSheets =
-          *sheetService->AuthorStyleSheets(GetStyleBackendType());
+        auto& authorSheets = *sheetService->AuthorStyleSheets();
         if (authorSheets.IndexOf(sheet) != authorSheets.NoIndex) {
           break;
         }
@@ -62,35 +61,27 @@ inline void
 nsIDocument::SetServoRestyleRoot(nsINode* aRoot, uint32_t aDirtyBits)
 {
   MOZ_ASSERT(aRoot);
-  MOZ_ASSERT(aDirtyBits);
-  MOZ_ASSERT((aDirtyBits & ~Element::kAllServoDescendantBits) == 0);
-  MOZ_ASSERT((aDirtyBits & mServoRestyleRootDirtyBits) == mServoRestyleRootDirtyBits);
 
-  // NOTE(emilio): The !aRoot->IsElement() check allows us to handle cases where
-  // we change the restyle root during unbinding of a subtree where the root is
-  // not unbound yet (and thus hasn't cleared the restyle root yet).
-  //
-  // In that case the tree can be in a somewhat inconsistent state (with the
-  // document no longer being the subtree root of the current root, but the root
-  // not having being unbound first).
-  //
-  // In that case, given there's no common ancestor, aRoot should be the
-  // document, and we allow that, provided that the previous root will
-  // eventually be unbound and the dirty bits will be cleared.
-  //
-  // If we want to enforce calling into this method with the tree in a
-  // consistent state, we'd need to move all the state changes that happen on
-  // content unbinding for parents, like fieldset validity stuff and ancestor
-  // direction changes off script runners or, alternatively, nulling out the
-  // document and parent node _after_ nulling out the children's, and then
-  // remove that line.
   MOZ_ASSERT(!mServoRestyleRoot ||
              mServoRestyleRoot == aRoot ||
-             !aRoot->IsElement() ||
              nsContentUtils::ContentIsFlattenedTreeDescendantOfForStyle(mServoRestyleRoot, aRoot));
   MOZ_ASSERT(aRoot == aRoot->OwnerDocAsNode() || aRoot->IsElement());
   mServoRestyleRoot = aRoot;
+  SetServoRestyleRootDirtyBits(aDirtyBits);
+}
+
+// Note: we break this out of SetServoRestyleRoot so that callers can add
+// bits without doing a no-op assignment to the restyle root, which would
+// involve cycle-collected refcount traffic.
+inline void
+nsIDocument::SetServoRestyleRootDirtyBits(uint32_t aDirtyBits)
+{
+  MOZ_ASSERT(aDirtyBits);
+  MOZ_ASSERT((aDirtyBits & ~Element::kAllServoDescendantBits) == 0);
+  MOZ_ASSERT((aDirtyBits & mServoRestyleRootDirtyBits) == mServoRestyleRootDirtyBits);
+  MOZ_ASSERT(mServoRestyleRoot);
   mServoRestyleRootDirtyBits = aDirtyBits;
 }
+
 
 #endif // nsIDocumentInlines_h

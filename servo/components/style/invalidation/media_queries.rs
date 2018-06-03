@@ -23,9 +23,7 @@ use stylesheets::{NestedRuleIterationCondition, Stylesheet, SupportsRule};
 ///
 /// If this changes, though, we may need to remove the item from the cache if
 /// present before it goes away.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
-#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[derive(Clone, Copy, Debug, Eq, Hash, MallocSizeOf, PartialEq)]
 pub struct MediaListKey(usize);
 
 impl MediaListKey {
@@ -37,7 +35,7 @@ impl MediaListKey {
 
 /// A trait to get a given `MediaListKey` for a given item that can hold a
 /// `MediaList`.
-pub trait ToMediaListKey : Sized {
+pub trait ToMediaListKey: Sized {
     /// Get a `MediaListKey` for this item. This key needs to uniquely identify
     /// the item.
     #[allow(unsafe_code)]
@@ -53,9 +51,7 @@ impl ToMediaListKey for MediaRule {}
 
 /// A struct that holds the result of a media query evaluation pass for the
 /// media queries that evaluated successfully.
-#[derive(Debug, PartialEq)]
-#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
-#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[derive(Debug, MallocSizeOf, PartialEq)]
 pub struct EffectiveMediaQueryResults {
     /// The set of media lists that matched last time.
     set: FnvHashSet<MediaListKey>,
@@ -77,14 +73,16 @@ impl EffectiveMediaQueryResults {
     /// Returns whether a given item was known to be effective when the results
     /// were cached.
     pub fn was_effective<T>(&self, item: &T) -> bool
-        where T: ToMediaListKey,
+    where
+        T: ToMediaListKey,
     {
         self.set.contains(&item.to_media_list_key())
     }
 
     /// Notices that an effective item has been seen, and caches it as matching.
     pub fn saw_effective<T>(&mut self, item: &T)
-        where T: ToMediaListKey,
+    where
+        T: ToMediaListKey,
     {
         // NOTE(emilio): We can't assert that we don't cache the same item twice
         // because of stylesheet reusing... shrug.
@@ -101,19 +99,12 @@ impl NestedRuleIterationCondition for PotentiallyEffectiveMediaRules {
         _: &SharedRwLockReadGuard,
         _: &Device,
         _: QuirksMode,
-        _: &ImportRule)
-        -> bool
-    {
+        _: &ImportRule,
+    ) -> bool {
         true
     }
 
-    fn process_media(
-        _: &SharedRwLockReadGuard,
-        _: &Device,
-        _: QuirksMode,
-        _: &MediaRule)
-        -> bool
-    {
+    fn process_media(_: &SharedRwLockReadGuard, _: &Device, _: QuirksMode, _: &MediaRule) -> bool {
         true
     }
 
@@ -122,9 +113,8 @@ impl NestedRuleIterationCondition for PotentiallyEffectiveMediaRules {
         guard: &SharedRwLockReadGuard,
         device: &Device,
         quirks_mode: QuirksMode,
-        rule: &DocumentRule)
-        -> bool
-    {
+        rule: &DocumentRule,
+    ) -> bool {
         use stylesheets::EffectiveRules;
         EffectiveRules::process_document(guard, device, quirks_mode, rule)
     }
@@ -134,9 +124,8 @@ impl NestedRuleIterationCondition for PotentiallyEffectiveMediaRules {
         guard: &SharedRwLockReadGuard,
         device: &Device,
         quirks_mode: QuirksMode,
-        rule: &SupportsRule)
-        -> bool
-    {
+        rule: &SupportsRule,
+    ) -> bool {
         use stylesheets::EffectiveRules;
         EffectiveRules::process_supports(guard, device, quirks_mode, rule)
     }

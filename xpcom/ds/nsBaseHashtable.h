@@ -60,6 +60,8 @@ public:
 
   using nsTHashtable<EntryType>::Contains;
   using nsTHashtable<EntryType>::GetGeneration;
+  using nsTHashtable<EntryType>::SizeOfExcludingThis;
+  using nsTHashtable<EntryType>::SizeOfIncludingThis;
 
   nsBaseHashtable() {}
   explicit nsBaseHashtable(uint32_t aInitLength)
@@ -159,7 +161,7 @@ public:
    */
   void Put(KeyType aKey, UserDataType&& aData)
   {
-    if (!Put(aKey, mozilla::Move(aData), mozilla::fallible)) {
+    if (!Put(aKey, std::move(aData), mozilla::fallible)) {
       NS_ABORT_OOM(this->mTable.EntrySize() * this->mTable.EntryCount());
     }
   }
@@ -171,7 +173,7 @@ public:
       return false;
     }
 
-    ent->mData = mozilla::Move(aData);
+    ent->mData = std::move(aData);
 
     return true;
   }
@@ -189,13 +191,13 @@ public:
   {
     if (auto* ent = this->GetEntry(aKey)) {
       if (aData) {
-        *aData = mozilla::Move(ent->mData);
+        *aData = std::move(ent->mData);
       }
       this->RemoveEntry(ent);
       return true;
     }
     if (aData) {
-      *aData = mozilla::Move(DataType());
+      *aData = std::move(DataType());
     }
     return false;
   }
@@ -265,29 +267,29 @@ public:
 
   struct EntryPtr {
   private:
-    EntryType& mEntry;
+    EntryType* mEntry;
     bool mExistingEntry;
+    nsBaseHashtable& mTable;
     // For debugging purposes
 #ifdef DEBUG
-    nsBaseHashtable& mTable;
     uint32_t mTableGeneration;
     bool mDidInitNewEntry;
 #endif
 
   public:
     EntryPtr(nsBaseHashtable& aTable, EntryType* aEntry, bool aExistingEntry)
-      : mEntry(*aEntry)
+      : mEntry(aEntry)
       , mExistingEntry(aExistingEntry)
-#ifdef DEBUG
       , mTable(aTable)
+#ifdef DEBUG
       , mTableGeneration(aTable.GetGeneration())
       , mDidInitNewEntry(false)
 #endif
     {}
     ~EntryPtr()
     {
-      MOZ_ASSERT(mExistingEntry || mDidInitNewEntry,
-                 "Forgot to call OrInsert() on a new entry");
+      MOZ_ASSERT(mExistingEntry || mDidInitNewEntry || !mEntry,
+                 "Forgot to call OrInsert() or OrRemove() on a new entry");
     }
 
     // Is there something stored in the table already?
@@ -301,19 +303,29 @@ public:
     UserDataType OrInsert(F func)
     {
       MOZ_ASSERT(mTableGeneration == mTable.GetGeneration());
+      MOZ_ASSERT(mEntry);
       if (!mExistingEntry) {
-        mEntry.mData = func();
+        mEntry->mData = func();
 #ifdef DEBUG
         mDidInitNewEntry = true;
 #endif
       }
-      return mEntry.mData;
+      return mEntry->mData;
+    }
+
+    void OrRemove()
+    {
+      MOZ_ASSERT(mTableGeneration == mTable.GetGeneration());
+      MOZ_ASSERT(mEntry);
+      mTable.RemoveEntry(mEntry);
+      mEntry = nullptr;
     }
 
     MOZ_MUST_USE DataType& Data()
     {
       MOZ_ASSERT(mTableGeneration == mTable.GetGeneration());
-      return mEntry.mData;
+      MOZ_ASSERT(mEntry);
+      return mEntry->mData;
     }
   };
 
@@ -443,8 +455,8 @@ nsBaseHashtableET<KeyClass, DataType>::nsBaseHashtableET(KeyTypePointer aKey)
 template<class KeyClass, class DataType>
 nsBaseHashtableET<KeyClass, DataType>::nsBaseHashtableET(
       nsBaseHashtableET<KeyClass, DataType>&& aToMove)
-  : KeyClass(mozilla::Move(aToMove))
-  , mData(mozilla::Move(aToMove.mData))
+  : KeyClass(std::move(aToMove))
+  , mData(std::move(aToMove.mData))
 {
 }
 

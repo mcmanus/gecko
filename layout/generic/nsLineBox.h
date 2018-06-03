@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim:cindent:ts=2:et:sw=2:
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -556,8 +556,10 @@ public:
     mBounds.BSize(mWritingMode) = 0;
   }
 
+  using PostDestroyData = nsIFrame::PostDestroyData;
   static void DeleteLineList(nsPresContext* aPresContext, nsLineList& aLines,
-                             nsIFrame* aDestructRoot, nsFrameList* aFrames);
+                             nsIFrame* aDestructRoot, nsFrameList* aFrames,
+                             PostDestroyData& aPostDestroyData);
 
   // search from end to beginning of [aBegin, aEnd)
   // Returns true if it found the line and false if not.
@@ -572,7 +574,7 @@ public:
                                     int32_t* aFrameIndexInLine);
 
 #ifdef DEBUG_FRAME_DUMP
-  const char* BreakTypeToString(StyleClear aBreakType) const;
+  static const char* BreakTypeToString(StyleClear aBreakType);
   char* StateToString(char* aBuf, int32_t aBufSize) const;
 
   void List(FILE* out, int32_t aIndent, uint32_t aFlags = 0) const;

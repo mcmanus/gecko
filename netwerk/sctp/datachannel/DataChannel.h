@@ -30,7 +30,6 @@
 #include "mtransport/transportflow.h"
 #include "mtransport/transportlayer.h"
 #include "mtransport/transportlayerdtls.h"
-#include "mtransport/transportlayerprsock.h"
 #endif
 
 #ifndef DATACHANNEL_LOG
@@ -60,7 +59,7 @@ class OutgoingMsg
 public:
   OutgoingMsg(struct sctp_sendv_spa &info, const uint8_t *data,
               size_t length);
-  ~OutgoingMsg() {};
+  ~OutgoingMsg() = default;;
   void Advance(size_t offset);
   struct sctp_sendv_spa &GetInfo() { return *mInfo; };
   size_t GetLength() { return mLength; };
@@ -68,7 +67,7 @@ public:
   const uint8_t *GetData() { return (const uint8_t *)(mData + mPos); };
 
 protected:
-  OutgoingMsg() {}; // Use this for inheritance only
+  OutgoingMsg() = default;; // Use this for inheritance only
   size_t mLength;
   const uint8_t *mData;
   struct sctp_sendv_spa *mInfo;
@@ -134,7 +133,7 @@ public:
   {
   public:
     MOZ_DECLARE_WEAKREFERENCE_TYPENAME(DataChannelConnection::DataConnectionListener)
-    virtual ~DataConnectionListener() {}
+    virtual ~DataConnectionListener() = default;
 
     // Called when a new DataChannel has been opened by the other side.
     virtual void NotifyDataChannel(already_AddRefed<DataChannel> channel) = 0;
@@ -150,6 +149,7 @@ public:
   // Finish Destroy on STS to avoid SCTP race condition with ABORT from far end
   void DestroyOnSTS(struct socket *aMasterSocket,
                     struct socket *aSocket);
+  void DestroyOnSTSFinal();
 
   void SetMaxMessageSize(bool aMaxMessageSizeSet, uint64_t aMaxMessageSize);
   uint64_t GetMaxMessageSize();
@@ -624,7 +624,7 @@ public:
   }
 
 private:
-  ~DataChannelOnMessageAvailable() {}
+  ~DataChannelOnMessageAvailable() = default;
 
   int32_t                         mType;
   // XXX should use union

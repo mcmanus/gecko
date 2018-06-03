@@ -3,9 +3,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-this.EXPORTED_SYMBOLS = ["LinksCache"];
+const EXPORTED_SYMBOLS = ["LinksCache"];
 
-const EXPIRATION_TIME = 5 * 60 * 1000; // 5 minutes
+// This should be slightly less than SYSTEM_TICK_INTERVAL as timer
+// comparisons are too exact while the async/await functionality will make the
+// last recorded time a little bit later. This causes the comparasion to skip
+// updates.
+// It should be 10% less than SYSTEM_TICK to update at least once every 5 mins.
+// https://github.com/mozilla/activity-stream/pull/3695#discussion_r144678214
+const EXPIRATION_TIME = 4.5 * 60 * 1000; // 4.5 minutes
 
 /**
  * Cache link results from a provided object property and refresh after some
@@ -13,7 +19,6 @@ const EXPIRATION_TIME = 5 * 60 * 1000; // 5 minutes
  * links to the new links with the same url.
  */
 this.LinksCache = class LinksCache {
-
   /**
    * Create a links cache for a given object property.
    *
@@ -93,19 +98,19 @@ this.LinksCache = class LinksCache {
           if (oldLink) {
             for (const property of this.migrateProperties) {
               const oldValue = oldLink[property];
-              if (oldValue) {
+              if (oldValue !== undefined) {
                 newLink[property] = oldValue;
               }
             }
           } else {
             // Share data among link copies and new links from future requests
-            newLink.__sharedCache = {
-              // Provide a helper to update the cached link
-              updateLink(property, value) {
-                newLink[property] = value;
-              }
-            };
+            newLink.__sharedCache = {};
           }
+          // Provide a helper to update the cached link
+          newLink.__sharedCache.updateLink = (property, value) => {
+            newLink[property] = value;
+          };
+
           return newLink;
         }));
       });

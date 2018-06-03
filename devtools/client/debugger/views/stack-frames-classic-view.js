@@ -20,7 +20,7 @@ function StackFramesClassicListView(DebuggerController, DebuggerView) {
   this._onSelect = this._onSelect.bind(this);
 }
 
-StackFramesClassicListView.prototype = Heritage.extend(WidgetMethods, {
+StackFramesClassicListView.prototype = extend(WidgetMethods, {
   /**
    * Initialization function, called when the debugger is started.
    */
@@ -82,7 +82,7 @@ StackFramesClassicListView.prototype = Heritage.extend(WidgetMethods, {
    *        The frame line number.
    * @param number aDepth
    *        The frame depth in the stack.
-   * @return nsIDOMNode
+   * @return Node
    *         The stack frame view.
    */
   _createFrameView: function (aTitle, aUrl, aLine, aDepth) {

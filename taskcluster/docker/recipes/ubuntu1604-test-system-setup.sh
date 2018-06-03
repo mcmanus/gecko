@@ -2,7 +2,7 @@
 
 set -ve
 
-test `whoami` == 'root'
+test "$(whoami)" == 'root'
 
 mkdir -p /setup
 cd /setup
@@ -56,6 +56,7 @@ apt_packages+=('net-tools')
 apt_packages+=('pulseaudio')
 apt_packages+=('pulseaudio-module-bluetooth')
 apt_packages+=('pulseaudio-module-gconf')
+apt_packages+=('qemu-kvm')
 apt_packages+=('rlwrap')
 apt_packages+=('screen')
 apt_packages+=('software-properties-common')
@@ -87,16 +88,15 @@ apt_packages+=('python-pip')
 apt-get update
 # This allows ubuntu-desktop to be installed without human interaction
 export DEBIAN_FRONTEND=noninteractive
-apt-get install -y -f ${apt_packages[@]}
+apt-get install -y -f "${apt_packages[@]}"
 
 dpkg-reconfigure locales
 
 . /setup/common.sh
 . /setup/install-mercurial.sh
 
-pip install --upgrade pip
-
-pip install virtualenv
+pip install pip==9.0.3
+pip install virtualenv==15.2.0
 
 . /setup/install-node.sh
 
@@ -167,6 +167,10 @@ apt-get -q -y -f install \
     libdbus-glib-1-2:i386 \
     openjdk-8-jdk:i386
 
+# use fc-cache:i386 to pre-build the font cache for i386 binaries
+apt-get -q -y -f install \
+    fontconfig:i386 \
+
 # revert the list of repos
 cp sources.list.orig /etc/apt/sources.list
 apt-get update
@@ -176,4 +180,4 @@ cd /
 rm -rf /setup ~/.ccache ~/.cache ~/.npm
 apt-get clean
 apt-get autoclean
-rm -f $0
+rm -f "$0"

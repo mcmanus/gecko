@@ -30,6 +30,7 @@ import android.preference.PreferenceActivity;
 import android.preference.PreferenceGroup;
 import android.preference.SwitchPreference;
 import android.preference.TwoStatePreference;
+import android.support.annotation.NonNull;
 import android.support.design.widget.Snackbar;
 import android.support.design.widget.TextInputLayout;
 import android.support.v4.content.LocalBroadcastManager;
@@ -129,7 +130,6 @@ public class GeckoPreferences
     private static final String PREFS_UPDATER_URL = "app.update.url.android";
     private static final String PREFS_GEO_REPORTING = NON_PREF_PREFIX + "app.geo.reportdata";
     private static final String PREFS_GEO_LEARN_MORE = NON_PREF_PREFIX + "geo.learn_more";
-    private static final String PREFS_HEALTHREPORT_LINK = NON_PREF_PREFIX + "healthreport.link";
     public static final String PREFS_DEVTOOLS_REMOTE_USB_ENABLED = "devtools.remote.usb.enabled";
     public static final String PREFS_DEVTOOLS_REMOTE_WIFI_ENABLED = "devtools.remote.wifi.enabled";
     private static final String PREFS_DEVTOOLS_REMOTE_LINK = NON_PREF_PREFIX + "remote_debugging.link";
@@ -146,10 +146,11 @@ public class GeckoPreferences
     private static final String PREFS_FAQ_LINK = NON_PREF_PREFIX + "faq.link";
     private static final String PREFS_FEEDBACK_LINK = NON_PREF_PREFIX + "feedback.link";
     public static final String PREFS_NOTIFICATIONS_WHATS_NEW = NON_PREF_PREFIX + "notifications.whats_new";
+    public static final String PREFS_NOTIFICATIONS_FEATURES_TIPS = NON_PREF_PREFIX + "notifications.features.tips";
     public static final String PREFS_APP_UPDATE_LAST_BUILD_ID = "app.update.last_build_id";
     public static final String PREFS_READ_PARTNER_CUSTOMIZATIONS_PROVIDER = NON_PREF_PREFIX + "distribution.read_partner_customizations_provider";
     public static final String PREFS_READ_PARTNER_BOOKMARKS_PROVIDER = NON_PREF_PREFIX + "distribution.read_partner_bookmarks_provider";
-    public static final String PREFS_PWA = NON_PREF_PREFIX + "pwa";
+    public static final String PREFS_CUSTOM_TABS = NON_PREF_PREFIX + "customtabs_58";
     public static final String PREFS_CATEGORY_EXPERIMENTAL_FEATURES = NON_PREF_PREFIX + "category_experimental";
     public static final String PREFS_COMPACT_TABS = NON_PREF_PREFIX + "compact_tabs";
     public static final String PREFS_SHOW_QUIT_MENU = NON_PREF_PREFIX + "distribution.show_quit_menu";
@@ -177,6 +178,7 @@ public class GeckoPreferences
     private static final String PREFS_DYNAMIC_TOOLBAR = "browser.chrome.dynamictoolbar";
 
     public static final String PREFS_SHUTDOWN_INTENT = "app.shutdownintent.enabled";
+    public static final String PREFS_MMA_DEVICE_ID = "mma.device_id";
 
     // These values are chosen to be distinct from other Activity constants.
     private static final int REQUEST_CODE_PREF_SCREEN = 5;
@@ -462,9 +464,17 @@ public class GeckoPreferences
     }
 
     @TargetApi(11)
-    public void switchToHeader(int id) {
+    public void trySwitchToHeader(int id) {
+        /**
+         * Can't switch to an unknown header.
+         * See {@link GeckoPreferenceFragment#getHeader()}
+         */
+        if (id == GeckoPreferenceFragment.HEADER_ID_UNDEFINED) {
+            return;
+        }
+
+        // Can't switch to a header if there are no headers!
         if (mHeaders == null) {
-            // Can't switch to a header if there are no headers!
             return;
         }
 
@@ -644,8 +654,8 @@ public class GeckoPreferences
                     preferences.removePreference(pref);
                     i--;
                     continue;
-                } else if (PREFS_CATEGORY_EXPERIMENTAL_FEATURES.equals(key)
-                        && !AppConstants.MOZ_ANDROID_PWA) {
+
+                } else if (PREFS_CATEGORY_EXPERIMENTAL_FEATURES.equals(key) && ((PreferenceGroup) pref).getPreferenceCount() == 0) {
                     preferences.removePreference(pref);
                     i--;
                     continue;
@@ -674,8 +684,7 @@ public class GeckoPreferences
                         i--;
                         continue;
                     }
-                } else if (PREFS_HEALTHREPORT_UPLOAD_ENABLED.equals(key) ||
-                           PREFS_HEALTHREPORT_LINK.equals(key)) {
+                } else if (PREFS_HEALTHREPORT_UPLOAD_ENABLED.equals(key)) {
                     if (!AppConstants.MOZ_SERVICES_HEALTHREPORT || !Restrictions.isAllowed(this, Restrictable.DATA_CHOICES)) {
                         preferences.removePreference(pref);
                         i--;
@@ -808,15 +817,26 @@ public class GeckoPreferences
                         i--;
                         continue;
                     }
-                } else if (PREFS_PWA.equals(key) && !AppConstants.MOZ_ANDROID_PWA) {
-                    preferences.removePreference(pref);
-                    i--;
-                    continue;
                 } else if (PREFS_COMPACT_TABS.equals(key)) {
                     if (HardwareUtils.isTablet()) {
                         preferences.removePreference(pref);
                         i--;
                         continue;
+                    }
+                } else if (PREFS_NOTIFICATIONS_FEATURES_TIPS.equals(key)) {
+                    final boolean isLeanplumAvailable = MmaDelegate.isMmaExperimentEnabled(this);
+
+                    if (!isLeanplumAvailable) {
+                        preferences.removePreference(pref);
+                        i--;
+                        continue;
+                    }
+
+                    // Mma can only work if Health Report is enabled
+                    boolean isHealthReportEnabled = isHealthReportEnabled(this);
+                    if (!isHealthReportEnabled) {
+                        ((SwitchPreference) pref).setChecked(isHealthReportEnabled);
+                        pref.setEnabled(isHealthReportEnabled);
                     }
                 }
 
@@ -886,8 +906,8 @@ public class GeckoPreferences
         return super.onOptionsItemSelected(item);
     }
 
-    final private int DIALOG_CREATE_MASTER_PASSWORD = 0;
-    final private int DIALOG_REMOVE_MASTER_PASSWORD = 1;
+    private static final int DIALOG_CREATE_MASTER_PASSWORD = 0;
+    private static final int DIALOG_REMOVE_MASTER_PASSWORD = 1;
 
     public static void setCharEncodingState(boolean enabled) {
         sIsCharEncodingEnabled = enabled;
@@ -1110,9 +1130,10 @@ public class GeckoPreferences
         } else if (PREFS_HEALTHREPORT_UPLOAD_ENABLED.equals(prefName)) {
             final Boolean newBooleanValue = (Boolean) newValue;
             AdjustConstants.getAdjustHelper().setEnabled(newBooleanValue);
-            if (!newBooleanValue) {
-                MmaDelegate.stop();
-            }
+            // If Health Report has been disabled Mma should also be stopped.
+            // If it was just enabled, we should also try to start Mma immediately
+            // provided that all the other requirements to start Mma are met.
+            informMmaStatusChanged(newBooleanValue);
         } else if (PREFS_GEO_REPORTING.equals(prefName)) {
             if ((Boolean) newValue) {
                 enableStumbler((CheckBoxPreference) preference);
@@ -1127,6 +1148,10 @@ public class GeckoPreferences
                 startActivityForResult(promptIntent, REQUEST_CODE_TAB_QUEUE);
                 return false;
             }
+        } else if (PREFS_NOTIFICATIONS_FEATURES_TIPS.equals(prefName)) {
+            // isChecked() returns the old value that hasn't yet been updated
+            final boolean isMmaEnabled = !((SwitchPreference) preference).isChecked();
+            informMmaStatusChanged(isMmaEnabled);
         } else if (HANDLERS.containsKey(prefName)) {
             PrefHandler handler = HANDLERS.get(prefName);
             handler.onChange(this, preference, newValue);
@@ -1174,6 +1199,12 @@ public class GeckoPreferences
                 });
     }
 
+    private void informMmaStatusChanged(boolean newStatus) {
+        final GeckoBundle newStatusBundle = new GeckoBundle(1);
+        newStatusBundle.putBoolean("isMmaEnabled", newStatus);
+        EventDispatcher.getInstance().dispatch("NotificationSettings:FeatureTipsStatusUpdated", newStatusBundle);
+    }
+
     private TextInputLayout getTextBox(int aHintText) {
         final EditText input = new EditText(this);
         int inputtype = InputType.TYPE_CLASS_TEXT;
@@ -1188,7 +1219,7 @@ public class GeckoPreferences
         return layout;
     }
 
-    private class PasswordTextWatcher implements TextWatcher {
+    private static final class PasswordTextWatcher implements TextWatcher {
         EditText input1;
         EditText input2;
         AlertDialog dialog;
@@ -1216,7 +1247,7 @@ public class GeckoPreferences
         public void onTextChanged(CharSequence s, int start, int before, int count) { }
     }
 
-    private class EmptyTextWatcher implements TextWatcher {
+    private static final class EmptyTextWatcher implements TextWatcher {
         EditText input;
         AlertDialog dialog;
 
@@ -1424,5 +1455,22 @@ public class GeckoPreferences
         Bundle fragmentArgs = new Bundle();
         fragmentArgs.putString("resource", resource);
         intent.putExtra(PreferenceActivity.EXTRA_SHOW_FRAGMENT_ARGUMENTS, fragmentArgs);
+    }
+
+    /**
+     * Get if Mma is available for the device and enabled by the user.
+     */
+    public static boolean isMmaAvailableAndEnabled(@NonNull Context context) {
+        final boolean isInMmaExperiment = MmaDelegate.isMmaExperimentEnabled(context);
+        final boolean isHealthReportEnabled = isHealthReportEnabled(context);
+        final boolean areMmaMessagesAllowed = GeckoPreferences.getBooleanPref(context,
+                GeckoPreferences.PREFS_NOTIFICATIONS_FEATURES_TIPS, true);
+
+        return isHealthReportEnabled && isInMmaExperiment && areMmaMessagesAllowed;
+    }
+
+    public static boolean isHealthReportEnabled(Context context) {
+        // Health Report is enabled by default so we'll return true if the preference is not found
+        return GeckoPreferences.getBooleanPref(context, PREFS_HEALTHREPORT_UPLOAD_ENABLED, true);
     }
 }

@@ -1,14 +1,15 @@
+import json
 import os
 import platform
 import signal
 import subprocess
 import sys
+import tempfile
 
 import mozinfo
 import mozleak
 from mozprocess import ProcessHandler
 from mozprofile import FirefoxProfile, Preferences
-from mozprofile.permissions import ServerLocations
 from mozrunner import FirefoxRunner
 from mozrunner.utils import get_stack_fixer_function
 from mozcrash import mozcrash
@@ -23,7 +24,6 @@ from ..executors import executor_kwargs as base_executor_kwargs
 from ..executors.executormarionette import (MarionetteTestharnessExecutor,
                                             MarionetteRefTestExecutor,
                                             MarionetteWdspecExecutor)
-from ..environment import hostnames
 
 
 here = os.path.join(os.path.split(__file__)[0])
@@ -51,14 +51,15 @@ def get_timeout_multiplier(test_type, run_info_data, **kwargs):
         else:
             return 2
     elif run_info_data["debug"] or run_info_data.get("asan"):
-        return 3
+        if run_info_data.get("ccov"):
+            return 4
+        else:
+            return 3
     return 1
 
 
 def check_args(**kwargs):
     require_arg(kwargs, "binary")
-    if kwargs["ssl_type"] != "none":
-        require_arg(kwargs, "certutil_binary")
 
 
 def browser_kwargs(test_type, run_info_data, **kwargs):
@@ -78,31 +79,40 @@ def browser_kwargs(test_type, run_info_data, **kwargs):
                                                          run_info_data,
                                                          **kwargs),
             "leak_check": kwargs["leak_check"],
-            "stylo_threads": kwargs["stylo_threads"]}
+            "stylo_threads": kwargs["stylo_threads"],
+            "chaos_mode_flags": kwargs["chaos_mode_flags"],
+            "config": kwargs["config"]}
 
 
 def executor_kwargs(test_type, server_config, cache_manager, run_info_data,
                     **kwargs):
     executor_kwargs = base_executor_kwargs(test_type, server_config,
-                                           cache_manager, **kwargs)
+                                           cache_manager, run_info_data,
+                                           **kwargs)
     executor_kwargs["close_after_done"] = test_type != "reftest"
     executor_kwargs["timeout_multiplier"] = get_timeout_multiplier(test_type,
                                                                    run_info_data,
                                                                    **kwargs)
+    executor_kwargs["e10s"] = run_info_data["e10s"]
+    capabilities = {}
     if test_type == "reftest":
         executor_kwargs["reftest_internal"] = kwargs["reftest_internal"]
         executor_kwargs["reftest_screenshot"] = kwargs["reftest_screenshot"]
     if test_type == "wdspec":
-        fxOptions = {}
+        options = {}
         if kwargs["binary"]:
-            fxOptions["binary"] = kwargs["binary"]
+            options["binary"] = kwargs["binary"]
         if kwargs["binary_args"]:
-            fxOptions["args"] = kwargs["binary_args"]
-        fxOptions["prefs"] = {
-            "network.dns.localDomains": ",".join(hostnames)
+            options["args"] = kwargs["binary_args"]
+        options["prefs"] = {
+            "network.dns.localDomains": ",".join(server_config.domains_set)
         }
-        capabilities = {"moz:firefoxOptions": fxOptions}
+        capabilities["moz:firefoxOptions"] = options
+    if kwargs["certutil_binary"] is None:
+        capabilities["acceptInsecureCerts"] = True
+    if capabilities:
         executor_kwargs["capabilities"] = capabilities
+    executor_kwargs["debug"] = run_info_data["debug"]
     return executor_kwargs
 
 
@@ -111,10 +121,13 @@ def env_extras(**kwargs):
 
 
 def env_options():
-    return {"host": "127.0.0.1",
-            "external_host": "web-platform.test",
-            "bind_hostname": "false",
-            "certificate_domain": "web-platform.test",
+    # The server host is set to 127.0.0.1 as Firefox is configured (through the
+    # network.dns.localDomains preference set below) to resolve the test
+    # domains to localhost without relying on the network stack.
+    #
+    # https://github.com/w3c/web-platform-tests/pull/9480
+    return {"server_host": "127.0.0.1",
+            "bind_address": False,
             "supports_debugger": True}
 
 
@@ -124,8 +137,8 @@ def run_info_extras(**kwargs):
 
 
 def update_properties():
-    return (["debug", "stylo", "e10s", "os", "version", "processor", "bits"],
-            {"debug", "e10s", "stylo"})
+    return (["debug", "webrender", "e10s", "os", "version", "processor", "bits"],
+            {"debug", "e10s", "webrender"})
 
 
 class FirefoxBrowser(Browser):
@@ -136,7 +149,8 @@ class FirefoxBrowser(Browser):
     def __init__(self, logger, binary, prefs_root, test_type, extra_prefs=None, debug_info=None,
                  symbols_path=None, stackwalk_binary=None, certutil_binary=None,
                  ca_certificate_path=None, e10s=False, stackfix_dir=None,
-                 binary_args=None, timeout_multiplier=None, leak_check=False, stylo_threads=1):
+                 binary_args=None, timeout_multiplier=None, leak_check=False, stylo_threads=1,
+                 chaos_mode_flags=None, config=None):
         Browser.__init__(self, logger)
         self.binary = binary
         self.prefs_root = prefs_root
@@ -152,6 +166,7 @@ class FirefoxBrowser(Browser):
         self.certutil_binary = certutil_binary
         self.e10s = e10s
         self.binary_args = binary_args
+        self.config = config
         if stackfix_dir:
             self.stack_fixer = get_stack_fixer_function(stackfix_dir,
                                                         self.symbols_path)
@@ -164,6 +179,7 @@ class FirefoxBrowser(Browser):
         self.leak_report_file = None
         self.leak_check = leak_check
         self.stylo_threads = stylo_threads
+        self.chaos_mode_flags = chaos_mode_flags
 
     def settings(self, test):
         return {"check_leaks": self.leak_check and not test.leaks}
@@ -178,19 +194,19 @@ class FirefoxBrowser(Browser):
         env["MOZ_CRASHREPORTER_SHUTDOWN"] = "1"
         env["MOZ_DISABLE_NONLOCAL_CONNECTIONS"] = "1"
         env["STYLO_THREADS"] = str(self.stylo_threads)
-
-        locations = ServerLocations(filename=os.path.join(here, "server-locations.txt"))
+        if self.chaos_mode_flags is not None:
+            env["MOZ_CHAOSMODE"] = str(self.chaos_mode_flags)
 
         preferences = self.load_prefs()
 
-        self.profile = FirefoxProfile(locations=locations,
-                                      preferences=preferences)
+        self.profile = FirefoxProfile(preferences=preferences)
         self.profile.set_preferences({"marionette.port": self.marionette_port,
                                       "dom.disable_open_during_load": False,
-                                      "network.dns.localDomains": ",".join(hostnames),
+                                      "network.dns.localDomains": ",".join(self.config.domains_set),
                                       "network.proxy.type": 0,
                                       "places.history.enabled": False,
-                                      "dom.send_after_paint_to_content": True})
+                                      "dom.send_after_paint_to_content": True,
+                                      "network.preload": True})
         if self.e10s:
             self.profile.set_preferences({"browser.tabs.remote.autostart": True})
 
@@ -233,11 +249,23 @@ class FirefoxBrowser(Browser):
     def load_prefs(self):
         prefs = Preferences()
 
-        prefs_path = os.path.join(self.prefs_root, "prefs_general.js")
-        if os.path.exists(prefs_path):
-            prefs.add(Preferences.read_prefs(prefs_path))
-        else:
-            self.logger.warning("Failed to find base prefs file in %s" % prefs_path)
+        pref_paths = []
+        prefs_general = os.path.join(self.prefs_root, 'prefs_general.js')
+        if os.path.isfile(prefs_general):
+            # Old preference file used in Firefox 60 and earlier (remove when no longer supported)
+            pref_paths.append(prefs_general)
+
+        profiles = os.path.join(self.prefs_root, 'profiles.json')
+        if os.path.isfile(profiles):
+            with open(profiles, 'r') as fh:
+                for name in json.load(fh)['web-platform-tests']:
+                    pref_paths.append(os.path.join(self.prefs_root, name, 'user.js'))
+
+        for path in pref_paths:
+            if os.path.exists(path):
+                prefs.add(Preferences.read_prefs(path))
+            else:
+                self.logger.warning("Failed to find base prefs file in %s" % path)
 
         # Add any custom preferences
         prefs.add(self.extra_prefs, cast=True)
@@ -290,12 +318,15 @@ class FirefoxBrowser(Browser):
 
     def on_output(self, line):
         """Write a line of output from the firefox process to the log"""
-        data = line.decode("utf8", "replace")
-        if self.stack_fixer:
-            data = self.stack_fixer(data)
-        self.logger.process_output(self.pid(),
-                                   data,
-                                   command=" ".join(self.runner.command))
+        if "GLib-GObject-CRITICAL" in line:
+            return
+        if line:
+            data = line.decode("utf8", "replace")
+            if self.stack_fixer:
+                data = self.stack_fixer(data)
+            self.logger.process_output(self.pid(),
+                                      data,
+                                      command=" ".join(self.runner.command))
 
     def is_alive(self):
         if self.runner:
@@ -332,6 +363,9 @@ class FirefoxBrowser(Browser):
         """Create a certificate database to use in the test profile. This is configured
         to trust the CA Certificate that has signed the web-platform.test server
         certificate."""
+        if self.certutil_binary is None:
+            self.logger.info("--certutil-binary not supplied; Firefox will not check certificates")
+            return
 
         self.logger.info("Setting up ssl")
 
@@ -350,7 +384,7 @@ class FirefoxBrowser(Browser):
 
         env[env_var] = (os.path.pathsep.join([certutil_dir, env[env_var]])
                         if env_var in env else certutil_dir).encode(
-                                sys.getfilesystemencoding() or 'utf-8', 'replace')
+                            sys.getfilesystemencoding() or 'utf-8', 'replace')
 
         def certutil(*args):
             cmd = [self.certutil_binary] + list(args)

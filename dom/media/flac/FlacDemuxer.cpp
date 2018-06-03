@@ -7,18 +7,17 @@
 #include "FlacDemuxer.h"
 
 #include "mozilla/Maybe.h"
-#include "mp4_demuxer/BitReader.h"
-#include "nsAutoPtr.h"
+#include "BitReader.h"
 #include "prenv.h"
 #include "FlacFrameParser.h"
 #include "VideoUtils.h"
 #include "TimeUnits.h"
 
 extern mozilla::LazyLogModule gMediaDemuxerLog;
-#define LOG(msg, ...) \
-  MOZ_LOG(gMediaDemuxerLog, LogLevel::Debug, ("FlacDemuxer " msg, ##__VA_ARGS__))
-#define LOGV(msg, ...) \
-  MOZ_LOG(gMediaDemuxerLog, LogLevel::Verbose, ("FlacDemuxer " msg, ##__VA_ARGS__))
+#define LOG(msg, ...)                                                          \
+  DDMOZ_LOG(gMediaDemuxerLog, LogLevel::Debug, msg, ##__VA_ARGS__)
+#define LOGV(msg, ...)                                                         \
+  DDMOZ_LOG(gMediaDemuxerLog, LogLevel::Verbose, msg, ##__VA_ARGS__)
 
 using namespace mozilla::media;
 
@@ -44,11 +43,9 @@ public:
   // From https://xiph.org/flac/format.html#frame_header
   // A valid header is one that can be decoded without error and that has a
   // valid CRC.
-  // aPacket must points to a buffer that is at least FLAC_MAX_FRAME_HEADER_SIZE
-  // bytes.
-  bool Parse(const uint8_t* aPacket)
+  bool Parse(const uint8_t* aPacket, size_t aBytes)
   {
-    mp4_demuxer::BitReader br(aPacket, FLAC_MAX_FRAME_HEADER_SIZE * 8);
+    BitReader br(aPacket, aBytes * 8);
 
     // Frame sync code.
     if ((br.ReadBits(15) & 0x7fff) != 0x7ffc) {
@@ -230,27 +227,32 @@ public:
   // mandatorily set to 0, so we need to find either of 0xfffc or 0xfffd 2-bytes
   // signature. We first use a bitmask to see if 0xfc or 0xfd is present. And if
   // so we check for the whole signature.
-  // aData must be pointing to a buffer at least
-  // aLength + FLAC_MAX_FRAME_HEADER_SIZE bytes.
   int64_t FindNext(const uint8_t* aData, const uint32_t aLength)
   {
+    // The non-variable size of a FLAC header is 32 bits followed by variable
+    // size data and a 8 bits CRC.
+    // There's no need to read the last 4 bytes, it can never make a complete
+    // header.
+    if (aLength < 4) {
+      return -1;
+    }
     uint32_t modOffset = aLength % 4;
     uint32_t i, j;
 
     for (i = 0; i < modOffset; i++) {
       if ((BigEndian::readUint16(aData + i) & 0xfffe) == 0xfff8) {
-        if (mHeader.Parse(aData + i)) {
+        if (mHeader.Parse(aData + i, aLength - i)) {
           return i;
         }
       }
     }
 
-    for (; i < aLength; i += 4) {
+    for (; i < aLength - 4; i += 4) {
       uint32_t x = BigEndian::readUint32(aData + i);
       if (((x & ~(x + 0x01010101)) & 0x80808080)) {
         for (j = 0; j < 4; j++) {
           if ((BigEndian::readUint16(aData + i + j) & 0xfffe) == 0xfff8) {
-            if (mHeader.Parse(aData + i + j)) {
+            if (mHeader.Parse(aData + i + j, aLength - i - j)) {
               return i + j;
             }
           }
@@ -282,15 +284,7 @@ public:
         return false;
       }
 
-      if (read < FLAC_MAX_FRAME_HEADER_SIZE) {
-        // Assume that we can't have a valid frame in such small content, we
-        // must have reached EOS.
-        // So we're done.
-        mEOS = true;
-        return false;
-      }
-
-      const size_t bufSize = read + innerOffset - FLAC_MAX_FRAME_HEADER_SIZE;
+      const size_t bufSize = read + innerOffset;
       int64_t foundOffset =
         FindNext(reinterpret_cast<uint8_t*>(buffer.Elements()), bufSize);
 
@@ -299,9 +293,19 @@ public:
         return true;
       }
 
+      if (read < BUFFER_SIZE) {
+        // Nothing more to try on as we had reached EOS during the previous
+        // read.
+        mEOS = true;
+        return false;
+      }
+
       // Scan the next block;
-      offset += bufSize;
-      buffer.RemoveElementsAt(0, bufSize);
+      // We rewind a bit to re-try what could have been an incomplete packet.
+      // The maximum size of a FLAC header being FLAC_MAX_FRAME_HEADER_SIZE so
+      // we need to retry just after that amount.
+      offset += bufSize - (FLAC_MAX_FRAME_HEADER_SIZE + 1);
+      buffer.RemoveElementsAt(0, bufSize - (FLAC_MAX_FRAME_HEADER_SIZE + 1));
       innerOffset = buffer.Length();
     } while (offset - originalOffset < FLAC_MAX_FRAME_SIZE);
 
@@ -422,7 +426,8 @@ public:
   // Convenience methods to external FlacFrameParser ones.
   bool IsHeaderBlock(const uint8_t* aPacket, size_t aLength) const
   {
-    return mParser.IsHeaderBlock(aPacket, aLength);
+    auto res = mParser.IsHeaderBlock(aPacket, aLength);
+    return res.isOk() ? res.unwrap() : false;
   }
 
   uint32_t HeaderBlockLength(const uint8_t* aPacket) const
@@ -432,7 +437,7 @@ public:
 
   bool DecodeHeaderBlock(const uint8_t* aPacket, size_t aLength)
   {
-    return mParser.DecodeHeaderBlock(aPacket, aLength);
+    return mParser.DecodeHeaderBlock(aPacket, aLength).isOk();
   }
 
   bool HasFullMetadata() const { return mParser.HasFullMetadata(); }
@@ -553,13 +558,18 @@ private:
 
 // FlacDemuxer
 
-FlacDemuxer::FlacDemuxer(MediaResource* aSource) : mSource(aSource) { }
+FlacDemuxer::FlacDemuxer(MediaResource* aSource)
+  : mSource(aSource)
+{
+  DDLINKCHILD("source", aSource);
+}
 
 bool
 FlacDemuxer::InitInternal()
 {
   if (!mTrackDemuxer) {
     mTrackDemuxer = new FlacTrackDemuxer(mSource);
+    DDLINKCHILD("track demuxer", mTrackDemuxer.get());
   }
   return mTrackDemuxer->Init();
 }
@@ -606,6 +616,7 @@ FlacTrackDemuxer::FlacTrackDemuxer(MediaResource* aSource)
   , mParser(new flac::FrameParser())
   , mTotalFrameLen(0)
 {
+  DDLINKCHILD("source", aSource);
   Reset();
 }
 
@@ -951,7 +962,7 @@ FlacTrackDemuxer::GetNextFrame(const flac::Frame& aFrame)
   RefPtr<MediaRawData> frame = new MediaRawData();
   frame->mOffset = offset;
 
-  nsAutoPtr<MediaRawDataWriter> frameWriter(frame->CreateWriter());
+  UniquePtr<MediaRawDataWriter> frameWriter(frame->CreateWriter());
   if (!frameWriter->SetSize(size)) {
     LOG("GetNext() Exit failed to allocated media buffer");
     return nullptr;
@@ -1045,12 +1056,12 @@ FlacTrackDemuxer::TimeAtEnd()
 /* static */ bool
 FlacDemuxer::FlacSniffer(const uint8_t* aData, const uint32_t aLength)
 {
-  if (aLength < FLAC_MAX_FRAME_HEADER_SIZE) {
+  if (aLength < FLAC_MIN_FRAME_SIZE) {
     return false;
   }
 
   flac::Frame frame;
-  return frame.FindNext(aData, aLength - FLAC_MAX_FRAME_HEADER_SIZE) >= 0;
+  return frame.FindNext(aData, aLength) >= 0;
 }
 
 } // namespace mozilla

@@ -6,37 +6,39 @@
 /**
  * Tests for exporting POST data into HAR format.
  */
-add_task(function* () {
-  let { tab, monitor } = yield initNetMonitor(
+add_task(async function() {
+  const { tab, monitor } = await initNetMonitor(
     HAR_EXAMPLE_URL + "html_har_post-data-test-page.html");
 
   info("Starting test... ");
 
-  let { store, windowRequire } = monitor.panelWin;
-  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
-  let RequestListContextMenu = windowRequire(
-    "devtools/client/netmonitor/src/request-list-context-menu");
+  const { connector, store, windowRequire } = monitor.panelWin;
+  const Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+  const { HarMenuUtils } = windowRequire(
+    "devtools/client/netmonitor/src/har/har-menu-utils");
+  const { getSortedRequests } = windowRequire(
+    "devtools/client/netmonitor/src/selectors/index");
 
   store.dispatch(Actions.batchEnable(false));
 
   // Execute one POST request on the page and wait till its done.
-  let wait = waitForNetworkEvents(monitor, 0, 1);
-  yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
+  const wait = waitForNetworkEvents(monitor, 1);
+  await ContentTask.spawn(tab.linkedBrowser, {}, async function() {
     content.wrappedJSObject.executeTest();
   });
-  yield wait;
+  await wait;
 
   // Copy HAR into the clipboard (asynchronous).
-  let contextMenu = new RequestListContextMenu({});
-  let jsonString = yield contextMenu.copyAllAsHar();
-  let har = JSON.parse(jsonString);
+  const jsonString = await HarMenuUtils.copyAllAsHar(
+    getSortedRequests(store.getState()), connector);
+  const har = JSON.parse(jsonString);
 
   // Check out the HAR log.
   isnot(har.log, null, "The HAR log must exist");
   is(har.log.pages.length, 1, "There must be one page");
   is(har.log.entries.length, 1, "There must be one request");
 
-  let entry = har.log.entries[0];
+  const entry = har.log.entries[0];
   is(entry.request.postData.mimeType, "application/json",
     "Check post data content type");
   is(entry.request.postData.text, "{'first': 'John', 'last': 'Doe'}",

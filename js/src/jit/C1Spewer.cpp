@@ -27,8 +27,8 @@ C1Spewer::beginFunction(MIRGraph* graph, JSScript* script)
 
     out_.printf("begin_compilation\n");
     if (script) {
-        out_.printf("  name \"%s:%zu\"\n", script->filename(), script->lineno());
-        out_.printf("  method \"%s:%zu\"\n", script->filename(), script->lineno());
+        out_.printf("  name \"%s:%u\"\n", script->filename(), script->lineno());
+        out_.printf("  method \"%s:%u\"\n", script->filename(), script->lineno());
     } else {
         out_.printf("  name \"wasm compilation\"\n");
         out_.printf("  method \"wasm compilation\"\n");
@@ -90,7 +90,10 @@ void
 C1Spewer::spewRanges(GenericPrinter& out, BacktrackingAllocator* regalloc, LNode* ins)
 {
     for (size_t k = 0; k < ins->numDefs(); k++) {
-        uint32_t id = ins->getDef(k)->virtualRegister();
+        const LDefinition* def = ins->isPhi()
+            ? ins->toPhi()->getDef(k)
+            : ins->toInstruction()->getDef(k);
+        uint32_t id = def->virtualRegister();
         VirtualRegister* vreg = &regalloc->vregs[id];
 
         for (LiveRange::RegisterLinkIterator iter = vreg->rangesBegin(); iter; iter++) {

@@ -9,6 +9,9 @@ consistency.
 
 from __future__ import absolute_import, print_function, unicode_literals
 
+import json
+from taskgraph.util.taskcluster import get_artifact_url, get_artifact_prefix
+
 SECRET_SCOPE = 'secrets:get:project/releng/gecko/{}/level-{}/{}'
 
 
@@ -24,7 +27,7 @@ def docker_worker_add_workspace_cache(config, job, taskdesc, extra=None):
             taskdesc['attributes']['build_platform'],
             taskdesc['attributes']['build_type'],
         ),
-        'mount-point': "/builds/worker/workspace",
+        'mount-point': "{workdir}/workspace".format(**job['run']),
         # Don't enable the workspace cache when we can't guarantee its
         # behavior, like on Try.
         'skip-untrusted': True,
@@ -35,42 +38,25 @@ def docker_worker_add_workspace_cache(config, job, taskdesc, extra=None):
         )
 
 
-def docker_worker_add_tc_vcs_cache(config, job, taskdesc):
-    taskdesc['worker'].setdefault('caches', []).append({
-        'type': 'persistent',
-        'name': 'level-{}-{}-tc-vcs'.format(
-            config.params['level'], config.params['project']),
-        'mount-point': "/builds/worker/.tc-vcs",
-    })
-
-
-def add_public_artifacts(config, job, taskdesc, path):
+def add_artifacts(config, job, taskdesc, path):
     taskdesc['worker'].setdefault('artifacts', []).append({
-        'name': 'public/build',
+        'name': get_artifact_prefix(taskdesc),
         'path': path,
         'type': 'directory',
     })
 
 
-def docker_worker_add_public_artifacts(config, job, taskdesc):
-    """ Adds a public artifact directory to the task """
-    add_public_artifacts(config, job, taskdesc, path='/builds/worker/artifacts/')
+def docker_worker_add_artifacts(config, job, taskdesc):
+    """ Adds an artifact directory to the task """
+    add_artifacts(config, job, taskdesc, path='{workdir}/artifacts/'.format(**job['run']))
 
 
-def generic_worker_add_public_artifacts(config, job, taskdesc):
-    """ Adds a public artifact directory to the task """
-    add_public_artifacts(config, job, taskdesc, path=r'public/build')
-
-
-def docker_worker_add_gecko_vcs_env_vars(config, job, taskdesc):
-    """Add the GECKO_BASE_* and GECKO_HEAD_* env vars to the worker."""
-    env = taskdesc['worker'].setdefault('env', {})
-    env.update({
-        'GECKO_BASE_REPOSITORY': config.params['base_repository'],
-        'GECKO_HEAD_REF': config.params['head_rev'],
-        'GECKO_HEAD_REPOSITORY': config.params['head_repository'],
-        'GECKO_HEAD_REV': config.params['head_rev'],
-    })
+def generic_worker_add_artifacts(config, job, taskdesc):
+    """ Adds an artifact directory to the task """
+    # The path is the location on disk; it doesn't necessarily
+    # mean the artifacts will be public or private; that is set via the name
+    # attribute in add_artifacts.
+    add_artifacts(config, job, taskdesc, path=get_artifact_prefix(taskdesc))
 
 
 def support_vcs_checkout(config, job, taskdesc, sparse=False):
@@ -86,6 +72,11 @@ def support_vcs_checkout(config, job, taskdesc, sparse=False):
     if job['worker']['implementation'] in ('docker-worker', 'docker-engine'):
         name = 'level-%s-checkouts' % level
 
+        # comm-central checkouts need their own cache, because clobber won't
+        # remove the comm-central checkout
+        if job['run'].get('comm-checkout', False):
+            name += '-comm'
+
         # Sparse checkouts need their own cache because they can interfere
         # with clients that aren't sparse aware.
         if sparse:
@@ -94,15 +85,25 @@ def support_vcs_checkout(config, job, taskdesc, sparse=False):
         taskdesc['worker'].setdefault('caches', []).append({
             'type': 'persistent',
             'name': name,
-            'mount-point': '/builds/worker/checkouts',
+            'mount-point': '{workdir}/checkouts'.format(**job['run']),
         })
 
     taskdesc['worker'].setdefault('env', {}).update({
         'GECKO_BASE_REPOSITORY': config.params['base_repository'],
         'GECKO_HEAD_REPOSITORY': config.params['head_repository'],
         'GECKO_HEAD_REV': config.params['head_rev'],
-        'HG_STORE_PATH': '/builds/worker/checkouts/hg-store',
+        'GECKO_PATH': '{workdir}/checkouts/gecko'.format(**job['run']),
+        'HG_STORE_PATH': '{workdir}/checkouts/hg-store'.format(**job['run']),
     })
+
+    if 'comm_base_repository' in config.params:
+        taskdesc['worker']['env'].update({
+            'COMM_BASE_REPOSITORY': config.params['comm_base_repository'],
+            'COMM_HEAD_REPOSITORY': config.params['comm_head_repository'],
+            'COMM_HEAD_REV': config.params['comm_head_rev'],
+        })
+    elif job['run'].get('comm-checkout', False):
+        raise Exception("Can't checkout from comm-* repository if not given a repository.")
 
     # Give task access to hgfingerprint secret so it can pin the certificate
     # for hg.mozilla.org.
@@ -111,6 +112,34 @@ def support_vcs_checkout(config, job, taskdesc, sparse=False):
     # only some worker platforms have taskcluster-proxy enabled
     if job['worker']['implementation'] in ('docker-worker', 'docker-engine'):
         taskdesc['worker']['taskcluster-proxy'] = True
+
+
+def generic_worker_hg_commands(base_repo, head_repo, head_rev, path):
+    """Obtain commands needed to obtain a Mercurial checkout on generic-worker.
+
+    Returns two command strings. One performs the checkout. Another logs.
+    """
+    args = [
+        r'"c:\Program Files\Mercurial\hg.exe"',
+        'robustcheckout',
+        '--sharebase', r'y:\hg-shared',
+        '--purge',
+        '--upstream', base_repo,
+        '--revision', head_rev,
+        head_repo,
+        path,
+    ]
+
+    logging_args = [
+        b":: TinderboxPrint:<a href={source_repo}/rev/{revision} "
+        b"title='Built from {repo_name} revision {revision}'>{revision}</a>"
+        b"\n".format(
+            revision=head_rev,
+            source_repo=head_repo,
+            repo_name=head_repo.split('/')[-1]),
+    ]
+
+    return [' '.join(args), ' '.join(logging_args)]
 
 
 def docker_worker_setup_secrets(config, job, taskdesc):
@@ -148,11 +177,11 @@ def docker_worker_add_tooltool(config, job, taskdesc, internal=False):
     taskdesc['worker'].setdefault('caches', []).append({
         'type': 'persistent',
         'name': 'level-%s-tooltool-cache' % level,
-        'mount-point': '/builds/worker/tooltool-cache',
+        'mount-point': '{workdir}/tooltool-cache'.format(**job['run']),
     })
 
     taskdesc['worker'].setdefault('env', {}).update({
-        'TOOLTOOL_CACHE': '/builds/worker/tooltool-cache',
+        'TOOLTOOL_CACHE': '{workdir}/tooltool-cache'.format(**job['run']),
     })
 
     taskdesc['worker']['relengapi-proxy'] = True
@@ -164,3 +193,26 @@ def docker_worker_add_tooltool(config, job, taskdesc, internal=False):
         taskdesc['scopes'].extend([
             'docker-worker:relengapi-proxy:tooltool.download.internal',
         ])
+
+
+def support_use_artifacts(config, job, taskdesc, use_artifacts):
+    """Set a JSON object of artifact URLs in an environment variable.
+
+    This will tell the run-task script to download the artifacts.
+    """
+    urls = {}
+    prefix = get_artifact_prefix(taskdesc)
+    for kind, artifacts in use_artifacts.items():
+        if kind not in taskdesc['dependencies']:
+            raise Exception("{label} can't use '{kind}' artifacts because it has no '{kind}' "
+                            "dependency!".format(label=job['label'], kind=kind))
+        task_id = '<{}>'.format(kind)
+        urls[kind] = []
+
+        for artifact in artifacts:
+            path = '/'.join([prefix, artifact])
+            urls[kind].append(get_artifact_url(task_id, path))
+
+    env = taskdesc['worker'].setdefault('env', {})
+    env['USE_ARTIFACT_URLS'] = {'task-reference': json.dumps(urls)}
+    env['USE_ARTIFACT_PATH'] = '{workdir}/use-artifacts'.format(**job['run'])

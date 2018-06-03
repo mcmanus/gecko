@@ -15,14 +15,14 @@ Bug 1067491 - Test recording allocations.
 <script>
 "use strict";
 
-window.onload = function () {
+window.onload = function() {
   SimpleTest.waitForExplicitFinish();
 
-  Task.spawn(function* () {
-    let { memory, client } = yield startServerAndGetSelectedTabMemory();
-    yield memory.attach();
+  (async function() {
+    const { memory, client } = await startServerAndGetSelectedTabMemory();
+    await memory.attach();
 
-    yield memory.startRecordingAllocations();
+    await memory.startRecordingAllocations();
     ok(true, "Can start recording allocations");
 
     // Allocate some objects.
@@ -36,22 +36,22 @@ window.onload = function () {
           alloc1 = {}; alloc1.line = Error().lineNumber;
           alloc2 = []; alloc2.line = Error().lineNumber;
           // eslint-disable-next-line new-parens
-          alloc3 = new function () {}; alloc3.line = Error().lineNumber;
+          alloc3 = new function() {}; alloc3.line = Error().lineNumber;
         }());
       }());
     }());
     /* eslint-enable max-nested-callbacks */
 
-    let response = yield memory.getAllocations();
+    const response = await memory.getAllocations();
 
-    yield memory.stopRecordingAllocations();
+    await memory.stopRecordingAllocations();
     ok(true, "Can stop recording allocations");
 
     // Filter out allocations by library and test code, and get only the
     // allocations that occurred in our test case above.
 
     function isTestAllocation(alloc) {
-      let frame = response.frames[alloc];
+      const frame = response.frames[alloc];
       return frame
         && frame.functionDisplayName === "inner"
         && (frame.line === alloc1.line
@@ -59,7 +59,7 @@ window.onload = function () {
             || frame.line === alloc3.line);
     }
 
-    let testAllocations = response.allocations.filter(isTestAllocation);
+    const testAllocations = response.allocations.filter(isTestAllocation);
     ok(testAllocations.length >= 3,
        "Should find our 3 test allocations (plus some allocations for the error "
        + "objects used to get line numbers)");
@@ -69,19 +69,19 @@ window.onload = function () {
     // line we expected (rather than a bunch on the first line and none on the
     // others, etc).
 
-    let expectedLines = new Set([alloc1.line, alloc2.line, alloc3.line]);
+    const expectedLines = new Set([alloc1.line, alloc2.line, alloc3.line]);
 
-    for (let alloc of testAllocations) {
-      let innerFrame = response.frames[alloc];
+    for (const alloc of testAllocations) {
+      const innerFrame = response.frames[alloc];
       ok(innerFrame, "Should get the inner frame");
       is(innerFrame.functionDisplayName, "inner");
       expectedLines.delete(innerFrame.line);
 
-      let middleFrame = response.frames[innerFrame.parent];
+      const middleFrame = response.frames[innerFrame.parent];
       ok(middleFrame, "Should get the middle frame");
       is(middleFrame.functionDisplayName, "middle");
 
-      let outerFrame = response.frames[middleFrame.parent];
+      const outerFrame = response.frames[middleFrame.parent];
       ok(outerFrame, "Should get the outer frame");
       is(outerFrame.functionDisplayName, "outer");
 
@@ -94,9 +94,9 @@ window.onload = function () {
     is(expectedLines.size, 0,
        "Should have found all the expected lines");
 
-    yield memory.detach();
+    await memory.detach();
     destroyServerAndFinish(client);
-  });
+  })();
 };
 </script>
 </pre>

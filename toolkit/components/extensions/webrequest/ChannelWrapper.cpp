@@ -19,6 +19,7 @@
 #include "mozilla/ErrorNames.h"
 #include "mozilla/ResultExtensions.h"
 #include "mozilla/Unused.h"
+#include "mozilla/dom/Element.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/TabParent.h"
 #include "nsIContentPolicy.h"
@@ -78,6 +79,24 @@ ChannelWrapper::Get(const GlobalObject& global, nsIChannel* channel)
   return wrapper.forget();
 }
 
+already_AddRefed<ChannelWrapper>
+ChannelWrapper::GetRegisteredChannel(const GlobalObject& global, uint64_t aChannelId, const WebExtensionPolicy& aAddon, nsITabParent* aTabParent)
+{
+  nsIContentParent* contentParent = nullptr;
+  if (TabParent* parent = static_cast<TabParent*>(aTabParent)) {
+    contentParent = static_cast<nsIContentParent*>(parent->Manager());
+  }
+
+  auto& webreq = WebRequestService::GetSingleton();
+
+  nsCOMPtr<nsITraceableChannel> channel = webreq.GetTraceableChannel(aChannelId, aAddon.Id(), contentParent);
+  if (!channel) {
+    return nullptr;
+  }
+  nsCOMPtr<nsIChannel> chan(do_QueryInterface(channel));
+  return ChannelWrapper::Get(global, chan);
+}
+
 void
 ChannelWrapper::SetChannel(nsIChannel* aChannel)
 {
@@ -123,6 +142,18 @@ ChannelWrapper::RedirectTo(nsIURI* aURI, ErrorResult& aRv)
   nsresult rv = NS_ERROR_UNEXPECTED;
   if (nsCOMPtr<nsIHttpChannel> chan = MaybeHttpChannel()) {
     rv = chan->RedirectTo(aURI);
+  }
+  if (NS_FAILED(rv)) {
+    aRv.Throw(rv);
+  }
+}
+
+void
+ChannelWrapper::UpgradeToSecure(ErrorResult& aRv)
+{
+  nsresult rv = NS_ERROR_UNEXPECTED;
+  if (nsCOMPtr<nsIHttpChannel> chan = MaybeHttpChannel()) {
+    rv = chan->UpgradeToSecure();
   }
   if (NS_FAILED(rv)) {
     aRv.Throw(rv);
@@ -277,11 +308,11 @@ ChannelWrapper::GetResponseHeaders(nsTArray<dom::MozHTTPHeader>& aRetVal, ErrorR
 }
 
 void
-ChannelWrapper::SetRequestHeader(const nsCString& aHeader, const nsCString& aValue, ErrorResult& aRv)
+ChannelWrapper::SetRequestHeader(const nsCString& aHeader, const nsCString& aValue, bool aMerge, ErrorResult& aRv)
 {
   nsresult rv = NS_ERROR_UNEXPECTED;
   if (nsCOMPtr<nsIHttpChannel> chan = MaybeHttpChannel()) {
-    rv = chan->SetRequestHeader(aHeader, aValue, false);
+    rv = chan->SetRequestHeader(aHeader, aValue, aMerge);
   }
   if (NS_FAILED(rv)) {
     aRv.Throw(rv);
@@ -289,7 +320,7 @@ ChannelWrapper::SetRequestHeader(const nsCString& aHeader, const nsCString& aVal
 }
 
 void
-ChannelWrapper::SetResponseHeader(const nsCString& aHeader, const nsCString& aValue, ErrorResult& aRv)
+ChannelWrapper::SetResponseHeader(const nsCString& aHeader, const nsCString& aValue, bool aMerge, ErrorResult& aRv)
 {
   nsresult rv = NS_ERROR_UNEXPECTED;
   if (nsCOMPtr<nsIHttpChannel> chan = MaybeHttpChannel()) {
@@ -299,7 +330,7 @@ ChannelWrapper::SetResponseHeader(const nsCString& aHeader, const nsCString& aVa
         mContentTypeHdr = aValue;
       }
     } else {
-      rv = chan->SetResponseHeader(aHeader, aValue, false);
+      rv = chan->SetResponseHeader(aHeader, aValue, aMerge);
     }
   }
   if (NS_FAILED(rv)) {
@@ -322,11 +353,11 @@ ChannelWrapper::GetLoadContext() const
   return nullptr;
 }
 
-already_AddRefed<nsIDOMElement>
+already_AddRefed<Element>
 ChannelWrapper::GetBrowserElement() const
 {
   if (nsCOMPtr<nsILoadContext> ctxt = GetLoadContext()) {
-    nsCOMPtr<nsIDOMElement> elem;
+    RefPtr<Element> elem;
     if (NS_SUCCEEDED(ctxt->GetTopFrameElement(getter_AddRefs(elem)))) {
       return elem.forget();
     }
@@ -363,14 +394,9 @@ ChannelWrapper::IsSystemLoad() const
 }
 
 bool
-ChannelWrapper::GetCanModify(ErrorResult& aRv) const
+ChannelWrapper::CanModify() const
 {
-  nsCOMPtr<nsIURI> uri = FinalURI();
-  nsAutoCString spec;
-  if (uri) {
-    uri->GetSpec(spec);
-  }
-  if (!uri || AddonManagerWebAPI::IsValidSite(uri)) {
+  if (WebExtensionPolicy::IsRestrictedURI(FinalURLInfo())) {
     return false;
   }
 
@@ -380,10 +406,9 @@ ChannelWrapper::GetCanModify(ErrorResult& aRv) const
         return false;
       }
 
-      if (prin->GetIsCodebasePrincipal() &&
-          (NS_FAILED(prin->GetURI(getter_AddRefs(uri))) ||
-           AddonManagerWebAPI::IsValidSite(uri))) {
-          return false;
+      auto* docURI = DocumentURLInfo();
+      if (docURI && WebExtensionPolicy::IsRestrictedURI(*docURI)) {
+        return false;
       }
     }
   }
@@ -500,19 +525,22 @@ ChannelWrapper::Matches(const dom::MozRequestFilter& aFilter,
       return false;
     }
 
+    // If this isn't the proxy phase of the request, check that the extension
+    // has origin permissions for origin that originated the request.
     bool isProxy = aOptions.mIsProxy && aExtension->HasPermission(nsGkAtoms::proxy);
-    if (!isProxy && IsSystemLoad()) {
-      return false;
-    }
-
-    if (auto origin = DocumentURLInfo()) {
-      nsAutoCString baseURL;
-      aExtension->GetBaseURL(baseURL);
-
-      if (!isProxy &&
-          !StringBeginsWith(origin->CSpec(), baseURL) &&
-          !aExtension->CanAccessURI(*origin)) {
+    if (!isProxy) {
+      if (IsSystemLoad()) {
         return false;
+      }
+
+      if (auto origin = DocumentURLInfo()) {
+        nsAutoCString baseURL;
+        aExtension->GetBaseURL(baseURL);
+
+        if (!StringBeginsWith(origin->CSpec(), baseURL) &&
+            !aExtension->CanAccessURI(*origin)) {
+          return false;
+        }
       }
     }
   }
@@ -569,6 +597,60 @@ ChannelWrapper::ParentWindowId() const
   return -1;
 }
 
+void
+ChannelWrapper::GetFrameAncestors(dom::Nullable<nsTArray<dom::MozFrameAncestorInfo>>& aFrameAncestors, ErrorResult& aRv) const
+{
+  nsCOMPtr<nsILoadInfo> loadInfo = GetLoadInfo();
+  if (!loadInfo || WindowId(loadInfo) == 0) {
+    aFrameAncestors.SetNull();
+    return;
+  }
+
+  nsresult rv = GetFrameAncestors(loadInfo, aFrameAncestors.SetValue());
+  if (NS_FAILED(rv)) {
+    aRv.Throw(rv);
+  }
+}
+
+nsresult
+ChannelWrapper::GetFrameAncestors(nsILoadInfo* aLoadInfo, nsTArray<dom::MozFrameAncestorInfo>& aFrameAncestors) const
+{
+  const nsTArray<nsCOMPtr<nsIPrincipal>>& ancestorPrincipals = aLoadInfo->AncestorPrincipals();
+  const nsTArray<uint64_t>& ancestorOuterWindowIDs = aLoadInfo->AncestorOuterWindowIDs();
+  uint32_t size = ancestorPrincipals.Length();
+  MOZ_DIAGNOSTIC_ASSERT(size == ancestorOuterWindowIDs.Length());
+  if (size != ancestorOuterWindowIDs.Length()) {
+    return NS_ERROR_UNEXPECTED;
+  }
+
+  bool subFrame = aLoadInfo->GetExternalContentPolicyType() == nsIContentPolicy::TYPE_SUBDOCUMENT;
+  if (!aFrameAncestors.SetCapacity(subFrame ? size : size + 1, fallible)) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
+  // The immediate parent is always the first element in the ancestor arrays, however
+  // SUBDOCUMENTs do not have their immediate parent included, so we inject it here.
+  // This will force wrapper.parentWindowId == wrapper.frameAncestors[0].frameId to
+  // always be true.  All ather requests already match this way.
+  if (subFrame) {
+    auto ancestor = aFrameAncestors.AppendElement();
+    GetDocumentURL(ancestor->mUrl);
+    ancestor->mFrameId = ParentWindowId();
+  }
+
+  for (uint32_t i = 0; i < size; ++i) {
+    auto ancestor = aFrameAncestors.AppendElement();
+    nsCOMPtr<nsIURI> uri;
+    MOZ_TRY(ancestorPrincipals[i]->GetURI(getter_AddRefs(uri)));
+    if (!uri) {
+      return NS_ERROR_UNEXPECTED;
+    }
+    MOZ_TRY(uri->GetSpec(ancestor->mUrl));
+    ancestor->mFrameId = NormalizeWindowID(aLoadInfo, ancestorOuterWindowIDs[i]);
+  }
+  return NS_OK;
+}
+
 /*****************************************************************************
  * Response filtering
  *****************************************************************************/
@@ -576,6 +658,12 @@ ChannelWrapper::ParentWindowId() const
 void
 ChannelWrapper::RegisterTraceableChannel(const WebExtensionPolicy& aAddon, nsITabParent* aTabParent)
 {
+  // We can't attach new listeners after the response has started, so don't
+  // bother registering anything.
+  if (mResponseStarted || !CanModify()) {
+    return;
+  }
+
   mAddonEntries.Put(aAddon.Id(), aTabParent);
   if (!mChannelEntry) {
     mChannelEntry = WebRequestService::GetSingleton().RegisterChannel(this);
@@ -653,6 +741,8 @@ GetContentPolicyType(uint32_t aType)
     return MozContentPolicyType::Imageset;
   case nsIContentPolicy::TYPE_WEB_MANIFEST:
     return MozContentPolicyType::Web_manifest;
+  case nsIContentPolicy::TYPE_SPECULATIVE:
+    return MozContentPolicyType::Speculative;
   default:
     return MozContentPolicyType::Other;
   }
@@ -721,7 +811,7 @@ ChannelWrapper::FinalURI() const
   if (nsCOMPtr<nsIChannel> chan = MaybeChannel()) {
     NS_GetFinalChannelURI(chan, getter_AddRefs(uri));
   }
-  return uri.forget();;
+  return uri.forget();
 }
 
 void
@@ -766,7 +856,7 @@ ChannelWrapper::GetProxyInfo(dom::Nullable<MozProxyInfo>& aRetVal, ErrorResult& 
     if (NS_FAILED(rv)) {
       aRv.Throw(rv);
     } else {
-      aRetVal.SetValue(Move(result));
+      aRetVal.SetValue(std::move(result));
     }
   }
 }
@@ -860,6 +950,7 @@ ChannelWrapper::RequestListener::OnStartRequest(nsIRequest *request, nsISupports
   MOZ_ASSERT(mOrigStreamListener, "Should have mOrigStreamListener");
 
   mChannelWrapper->mChannelEntry = nullptr;
+  mChannelWrapper->mResponseStarted = true;
   mChannelWrapper->ErrorCheck();
   mChannelWrapper->FireEvent(NS_LITERAL_STRING("start"));
 
@@ -915,8 +1006,7 @@ ChannelWrapper::FireEvent(const nsAString& aType)
   RefPtr<Event> event = Event::Constructor(this, aType, init);
   event->SetTrusted(true);
 
-  bool defaultPrevented;
-  DispatchEvent(event, &defaultPrevented);
+  DispatchEvent(*event);
 }
 
 void

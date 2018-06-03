@@ -33,7 +33,7 @@ public:
 
   virtual int32_t TabIndexDefault() override;
 
-  NS_IMPL_FROMCONTENT_HTML_WITH_TAG(HTMLButtonElement, button)
+  NS_IMPL_FROMNODE_HTML_WITH_TAG(HTMLButtonElement, button)
 
   // Element
   virtual bool IsInteractiveHTMLContent(bool aIgnoreTabindex) const override
@@ -45,14 +45,13 @@ public:
   NS_IMETHOD Reset() override;
   NS_IMETHOD SubmitNamesValues(HTMLFormSubmission* aFormSubmission) override;
   NS_IMETHOD SaveState() override;
-  bool RestoreState(nsPresState* aState) override;
+  bool RestoreState(PresState* aState) override;
   virtual bool IsDisabledForEvents(EventMessage aMessage) override;
 
   virtual void FieldSetDisabledChanged(bool aNotify) override;
 
-  // nsIDOMEventTarget
-  virtual nsresult GetEventTargetParent(
-                     EventChainPreVisitor& aVisitor) override;
+  // EventTarget
+  void GetEventTargetParent(EventChainPreVisitor& aVisitor) override;
   virtual nsresult PostHandleEvent(
                      EventChainPostVisitor& aVisitor) override;
 
@@ -84,10 +83,12 @@ public:
   virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
                                 const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
                                 bool aNotify) override;
   virtual bool ParseAttribute(int32_t aNamespaceID,
                               nsAtom* aAttribute,
                               const nsAString& aValue,
+                              nsIPrincipal* aMaybeScriptedPrincipal,
                               nsAttrValue& aResult) override;
 
   // nsGenericHTMLElement

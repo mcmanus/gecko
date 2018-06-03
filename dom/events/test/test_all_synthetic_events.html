@@ -122,10 +122,6 @@ const kEventConstructors = {
                                                          return new ErrorEvent(aName, aProps);
                                                        },
   },
-  FlyWebFetchEvent:                          { create: null, // Cannot create untrusted event from JS.
-                                             },
-  FlyWebWebSocketEvent:                      { create: null, // Cannot create untrusted event from JS.
-                                             },
   FocusEvent:                                { create: function (aName, aProps) {
                                                          return new FocusEvent(aName, aProps);
                                                        },
@@ -293,7 +289,12 @@ const kEventConstructors = {
                                                        },
                                              },
   RTCDataChannelEvent:                       { create: function (aName, aProps) {
-                                                         return new RTCDataChannelEvent(aName, aProps);
+                                                         let pc = new RTCPeerConnection();
+                                                         aProps.channel = pc.createDataChannel("foo");
+                                                         let e = new RTCDataChannelEvent(aName, aProps);
+                                                         aProps.channel.close();
+                                                         pc.close();
+                                                         return e;
                                                        },
                                              },
   RTCDTMFToneChangeEvent:                       { create: function (aName, aProps) {
@@ -413,6 +414,10 @@ const kEventConstructors = {
                                              },
   WebGLContextEvent:                         { create: function (aName, aProps) {
                                                          return new WebGLContextEvent(aName, aProps);
+                                                       },
+                                             },
+  SecurityPolicyViolationEvent:              { create: function (aName, aProps) {
+                                                         return new SecurityPolicyViolationEvent(aName, aProps);
                                                        },
                                              },
 };

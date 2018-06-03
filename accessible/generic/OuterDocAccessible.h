@@ -26,13 +26,13 @@ class OuterDocAccessible final : public AccessibleWrap
 public:
   OuterDocAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
-  NS_DECL_ISUPPORTS_INHERITED
+  NS_INLINE_DECL_REFCOUNTING_INHERITED(OuterDocAccessible, AccessibleWrap)
 
   DocAccessibleParent* RemoteChildDoc() const;
 
   // Accessible
   virtual void Shutdown() override;
-  virtual mozilla::a11y::role NativeRole() override;
+  virtual mozilla::a11y::role NativeRole() const override;
   virtual Accessible* ChildAtPoint(int32_t aX, int32_t aY,
                                    EWhichChildAtPoint aWhichChild) override;
 

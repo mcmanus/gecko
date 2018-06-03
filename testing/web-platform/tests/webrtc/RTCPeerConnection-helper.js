@@ -93,12 +93,12 @@ function isSimilarSessionDescription(sessionDesc1, sessionDesc2) {
   }
 }
 
-function assert_session_desc_equals(sessionDesc1, sessionDesc2) {
+function assert_session_desc_similar(sessionDesc1, sessionDesc2) {
   assert_true(isSimilarSessionDescription(sessionDesc1, sessionDesc2),
     'Expect both session descriptions to have the same count of media lines');
 }
 
-function assert_session_desc_not_equals(sessionDesc1, sessionDesc2) {
+function assert_session_desc_not_similar(sessionDesc1, sessionDesc2) {
   assert_false(isSimilarSessionDescription(sessionDesc1, sessionDesc2),
     'Expect both session descriptions to have different count of media lines');
 }
@@ -393,4 +393,55 @@ function getTrackFromUserMedia(kind) {
     const [ track ] = tracks;
     return [track, mediaStream];
   });
+}
+
+// Obtain |count| MediaStreamTracks of type |kind| and MediaStreams. The tracks
+// do not belong to any stream and the streams are empty. Returns a Promise
+// resolved with a pair of arrays [tracks, streams].
+// Assumes there is at least one available device to generate the tracks and
+// streams and that the getUserMedia() calls resolve.
+function getUserMediaTracksAndStreams(count, type = 'audio') {
+  let otherTracksPromise;
+  if (count > 1)
+    otherTracksPromise = getUserMediaTracksAndStreams(count - 1, type);
+  else
+    otherTracksPromise = Promise.resolve([[], []]);
+  return otherTracksPromise.then(([tracks, streams]) => {
+    return getTrackFromUserMedia(type)
+    .then(([track, stream]) => {
+      // Remove the default stream-track relationship.
+      stream.removeTrack(track);
+      tracks.push(track);
+      streams.push(stream);
+      return [tracks, streams];
+    });
+  });
+}
+
+// Creates an offer for the caller, set it as the caller's local description and
+// then sets the callee's remote description to the offer. Returns the Promise
+// of the setRemoteDescription call.
+function performOffer(caller, callee) {
+  let sessionDescription;
+  return caller.createOffer()
+  .then(offer => {
+    sessionDescription = offer;
+    return caller.setLocalDescription(offer);
+  }).then(() => callee.setRemoteDescription(sessionDescription));
+}
+
+
+// The resolver has a |promise| that can be resolved or rejected using |resolve|
+// or |reject|.
+class Resolver {
+  constructor() {
+    let promiseResolve;
+    let promiseReject;
+    this.promise = new Promise(function(resolve, reject) {
+      promiseResolve = resolve;
+      promiseReject = reject;
+    });
+    this.resolve = promiseResolve;
+    this.reject = promiseReject;
+  }
 }

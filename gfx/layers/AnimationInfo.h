@@ -1,12 +1,17 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef GFX_ANIMATIONINFO_H
 #define GFX_ANIMATIONINFO_H
 
-#include "mozilla/StyleAnimationValue.h"
+#include "nsAutoPtr.h"
+#include "nsDisplayItemTypes.h"
+
+struct RawServoAnimationValue;
+class nsIFrame;
 
 namespace mozilla {
 namespace layers {
@@ -50,12 +55,20 @@ public:
   void TransferMutatedFlagToLayer(Layer* aLayer);
 
   uint64_t GetCompositorAnimationsId() { return mCompositorAnimationsId; }
-  StyleAnimationValue GetBaseAnimationStyle() const { return mBaseAnimationStyle; }
+  RawServoAnimationValue* GetBaseAnimationStyle() const
+  {
+    return mBaseAnimationStyle;
+  }
   InfallibleTArray<AnimData>& GetAnimationData() { return mAnimationData; }
   AnimationArray& GetAnimations() { return mAnimations; }
   bool ApplyPendingUpdatesForThisTransaction();
   bool HasOpacityAnimation() const;
   bool HasTransformAnimation() const;
+
+  // In case of continuation, |aFrame| must be the first or the last
+  // continuation frame, otherwise this function might return Nothing().
+  static Maybe<uint64_t> GetGenerationFromFrame(nsIFrame* aFrame,
+                                                DisplayItemType aDisplayItemKey);
 
 protected:
   LayerManager* mManager;
@@ -66,7 +79,7 @@ protected:
   // If this layer is used for OMTA, then this counter is used to ensure we
   // stay in sync with the animation manager
   uint64_t mAnimationGeneration;
-  StyleAnimationValue mBaseAnimationStyle;
+  RefPtr<RawServoAnimationValue> mBaseAnimationStyle;
   bool mMutated;
 };
 

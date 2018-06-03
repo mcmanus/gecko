@@ -8,6 +8,7 @@ package org.mozilla.gecko.home;
 import java.lang.ref.WeakReference;
 import java.util.EnumSet;
 
+import org.mozilla.gecko.Clipboard;
 import org.mozilla.gecko.GeckoApplication;
 import org.mozilla.gecko.GeckoProfile;
 import org.mozilla.gecko.GeckoSharedPrefs;
@@ -30,7 +31,6 @@ import org.mozilla.gecko.reader.SavedReaderViewHelper;
 import org.mozilla.gecko.reader.ReadingListHelper;
 import org.mozilla.gecko.restrictions.Restrictable;
 import org.mozilla.gecko.restrictions.Restrictions;
-import org.mozilla.gecko.util.Clipboard;
 import org.mozilla.gecko.util.MenuUtils;
 import org.mozilla.gecko.util.StringUtils;
 import org.mozilla.gecko.util.ThreadUtils;
@@ -280,7 +280,7 @@ public abstract class HomeFragment extends Fragment {
                 return false;
             }
 
-            Clipboard.setText(info.url);
+            Clipboard.setText(context, info.url);
             return true;
         }
 
@@ -309,8 +309,7 @@ public abstract class HomeFragment extends Fragment {
             ThreadUtils.postToBackgroundThread(new Runnable() {
                 @Override
                 public void run() {
-                    GeckoApplication.createShortcut(displayTitle, info.url);
-
+                    GeckoApplication.createBrowserShortcut(displayTitle, info.url);
                 }
             });
 
@@ -554,9 +553,14 @@ public abstract class HomeFragment extends Fragment {
             if (activity == null || activity.isFinishing()) {
                 return;
             }
-
+            final int message;
+            if (info.isFolder) {
+                message = R.string.folder_removed;
+            } else {
+                message = R.string.page_removed;
+            }
             SnackbarBuilder.builder(activity)
-                    .message(R.string.page_removed)
+                    .message(message)
                     .duration(Snackbar.LENGTH_LONG)
                     .buildAndShow();
         }

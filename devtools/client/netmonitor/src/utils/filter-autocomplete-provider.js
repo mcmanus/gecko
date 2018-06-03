@@ -6,7 +6,7 @@
 
 const { FILTER_FLAGS } = require("../constants");
 
-/*
+/**
  * Generates a value for the given filter
  * ie. if flag = status-code, will generate "200" from the given request item.
  * For flags related to cookies, it might generate an array based on the request
@@ -56,8 +56,8 @@ function getAutocompleteValuesForFlag(flag, request) {
       break;
     case "has-response-header":
       // Some requests not having responseHeaders..?
-      values = request.responseHeaders &&
-        request.responseHeaders.headers.map(h => h.name);
+      values = request.responseHeaders ?
+        request.responseHeaders.headers.map(h => h.name) : [];
       break;
     case "protocol":
       values.push(request.httpVersion);
@@ -70,7 +70,7 @@ function getAutocompleteValuesForFlag(flag, request) {
   return values;
 }
 
-/*
+/**
  * For a given lastToken passed ie. "is:", returns an array of populated flag
  * values for consumption in autocompleteProvider
  * ie. ["is:cached", "is:running", "is:from-cache"]
@@ -102,16 +102,17 @@ function getLastTokenFlagValues(lastToken, requests) {
   }
 
   let values = [];
-  for (let request of requests) {
+  for (const request of requests) {
     values.push(...getAutocompleteValuesForFlag(flag, request));
   }
   values = [...new Set(values)];
 
   return values
+    .filter(value => value)
     .filter(value => {
-      if (typedFlagValue) {
-        let lowerTyped = typedFlagValue.toLowerCase(),
-          lowerValue = value.toLowerCase();
+      if (typedFlagValue && value) {
+        const lowerTyped = typedFlagValue.toLowerCase();
+        const lowerValue = value.toLowerCase();
         return lowerValue.includes(lowerTyped) && lowerValue !== lowerTyped;
       }
       return typeof value !== "undefined" && value !== "" && value !== "undefined";
@@ -138,14 +139,14 @@ function autocompleteProvider(filter, requests) {
     return [];
   }
 
-  let negativeAutocompleteList = FILTER_FLAGS.map((item) => `-${item}`);
-  let baseList = [...FILTER_FLAGS, ...negativeAutocompleteList]
+  const negativeAutocompleteList = FILTER_FLAGS.map((item) => `-${item}`);
+  const baseList = [...FILTER_FLAGS, ...negativeAutocompleteList]
     .map((item) => `${item}:`);
 
   // The last token is used to filter the base autocomplete list
-  let tokens = filter.split(/\s+/g);
-  let lastToken = tokens[tokens.length - 1];
-  let previousTokens = tokens.slice(0, tokens.length - 1);
+  const tokens = filter.split(/\s+/g);
+  const lastToken = tokens[tokens.length - 1];
+  const previousTokens = tokens.slice(0, tokens.length - 1);
 
   // Autocomplete list is not generated for empty lastToken
   if (!lastToken) {
@@ -153,7 +154,7 @@ function autocompleteProvider(filter, requests) {
   }
 
   let autocompleteList;
-  let availableValues = getLastTokenFlagValues(lastToken, requests);
+  const availableValues = getLastTokenFlagValues(lastToken, requests);
   if (availableValues.length > 0) {
     autocompleteList = availableValues;
   } else {

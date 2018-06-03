@@ -15,7 +15,6 @@ const {
   walkerSpec
 } = require("devtools/shared/specs/inspector");
 const defer = require("devtools/shared/defer");
-const { Task } = require("devtools/shared/task");
 loader.lazyRequireGetter(this, "nodeConstants",
   "devtools/shared/dom-node-constants");
 loader.lazyRequireGetter(this, "CommandUtils",
@@ -32,25 +31,25 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
    * This is kept for backward-compatibility reasons with older remote target.
    * Targets previous to bug 916443
    */
-  pick: custom(function () {
+  pick: custom(function() {
     return this._pick().then(response => {
       return response.node;
     });
   }, {impl: "_pick"}),
 
-  initialize: function (client, form) {
+  initialize: function(client, form) {
     this._createRootNodePromise();
     Front.prototype.initialize.call(this, client, form);
     this._orphaned = new Set();
     this._retainedOrphans = new Set();
   },
 
-  destroy: function () {
+  destroy: function() {
     Front.prototype.destroy.call(this);
   },
 
   // Update the object given a form representation off the wire.
-  form: function (json) {
+  form: function(json) {
     this.actorID = json.actor;
     this.rootNode = types.getType("domnode").read(json.root, this);
     this._rootNodeDeferred.resolve(this.rootNode);
@@ -64,7 +63,7 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
    * method returns a promise that will resolve to the root node when it is
    * set.
    */
-  getRootNode: function () {
+  getRootNode: function() {
     return this._rootNodeDeferred.promise;
   },
 
@@ -72,7 +71,7 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
    * Create the root node promise, triggering the "new-root" notification
    * on resolution.
    */
-  _createRootNodePromise: function () {
+  _createRootNodePromise: function() {
     this._rootNodeDeferred = defer();
     this._rootNodeDeferred.promise.then(() => {
       this.emit("new-root");
@@ -87,8 +86,8 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
    * a bare-bones stand-in node.  The stand-in node will be updated
    * with a real form by the end of the deserialization.
    */
-  ensureParentFront: function (id) {
-    let front = this.get(id);
+  ensureParentFront: function(id) {
+    const front = this.get(id);
     if (front) {
       return front;
     }
@@ -116,7 +115,7 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
    * semantics by setting our local retained flag on the node only AFTER
    * a SUCCESSFUL retainNode call.
    */
-  retainNode: custom(function (node) {
+  retainNode: custom(function(node) {
     return this._retainNode(node).then(() => {
       node.retained = true;
     });
@@ -124,7 +123,7 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
     impl: "_retainNode",
   }),
 
-  unretainNode: custom(function (node) {
+  unretainNode: custom(function(node) {
     return this._unretainNode(node).then(() => {
       node.retained = false;
       if (this._retainedOrphans.has(node)) {
@@ -136,17 +135,17 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
     impl: "_unretainNode"
   }),
 
-  releaseNode: custom(function (node, options = {}) {
+  releaseNode: custom(function(node, options = {}) {
     // NodeFront.destroy will destroy children in the ownership tree too,
     // mimicking what the server will do here.
-    let actorID = node.actorID;
+    const actorID = node.actorID;
     this._releaseFront(node, !!options.force);
     return this._releaseNode({ actorID: actorID });
   }, {
     impl: "_releaseNode"
   }),
 
-  findInspectingNode: custom(function () {
+  findInspectingNode: custom(function() {
     return this._findInspectingNode().then(response => {
       return response.node;
     });
@@ -154,7 +153,7 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
     impl: "_findInspectingNode"
   }),
 
-  querySelector: custom(function (queryNode, selector) {
+  querySelector: custom(function(queryNode, selector) {
     return this._querySelector(queryNode, selector).then(response => {
       return response.node;
     });
@@ -162,7 +161,7 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
     impl: "_querySelector"
   }),
 
-  getNodeActorFromObjectActor: custom(function (objectActorID) {
+  getNodeActorFromObjectActor: custom(function(objectActorID) {
     return this._getNodeActorFromObjectActor(objectActorID).then(response => {
       return response ? response.node : null;
     });
@@ -170,7 +169,7 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
     impl: "_getNodeActorFromObjectActor"
   }),
 
-  getNodeActorFromWindowID: custom(function (windowID) {
+  getNodeActorFromWindowID: custom(function(windowID) {
     return this._getNodeActorFromWindowID(windowID).then(response => {
       return response ? response.node : null;
     });
@@ -178,7 +177,7 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
     impl: "_getNodeActorFromWindowID"
   }),
 
-  getStyleSheetOwnerNode: custom(function (styleSheetActorID) {
+  getStyleSheetOwnerNode: custom(function(styleSheetActorID) {
     return this._getStyleSheetOwnerNode(styleSheetActorID).then(response => {
       return response ? response.node : null;
     });
@@ -186,7 +185,7 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
     impl: "_getStyleSheetOwnerNode"
   }),
 
-  getNodeFromActor: custom(function (actorID, path) {
+  getNodeFromActor: custom(function(actorID, path) {
     return this._getNodeFromActor(actorID, path).then(response => {
       return response ? response.node : null;
     });
@@ -207,25 +206,18 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
    *    - "selectorOnly": treat input as a selector string (don't search text
    *                      tags, attributes, etc)
    */
-  search: custom(Task.async(function* (query, options = { }) {
+  search: custom(async function(query, options = { }) {
     let nodeList;
     let searchType;
-    let searchData = this.searchData = this.searchData || { };
-    let selectorOnly = !!options.selectorOnly;
+    const searchData = this.searchData = this.searchData || { };
+    const selectorOnly = !!options.selectorOnly;
 
-    // Backwards compat.  Use selector only search if the new
-    // search functionality isn't implemented, or if the caller (tests)
-    // want it.
-    if (selectorOnly || !this.traits.textSearch) {
+    if (selectorOnly) {
       searchType = "selector";
-      if (this.traits.multiFrameQuerySelectorAll) {
-        nodeList = yield this.multiFrameQuerySelectorAll(query);
-      } else {
-        nodeList = yield this.querySelectorAll(this.rootNode, query);
-      }
+      nodeList = await this.multiFrameQuerySelectorAll(query);
     } else {
       searchType = "search";
-      let result = yield this._search(query, options);
+      const result = await this._search(query, options);
       nodeList = result.list;
     }
 
@@ -252,18 +244,18 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
     }
 
     // Send back the single node, along with any relevant search data
-    let node = yield nodeList.item(searchData.index);
+    const node = await nodeList.item(searchData.index);
     return {
       type: searchType,
       node: node,
       resultsLength: nodeList.length,
       resultsIndex: searchData.index,
     };
-  }), {
+  }, {
     impl: "_search"
   }),
 
-  _releaseFront: function (node, force) {
+  _releaseFront: function(node, force) {
     if (node.retained && !force) {
       node.reparent(null);
       this._retainedOrphans.add(node);
@@ -276,7 +268,7 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
     }
 
     // Release any children
-    for (let child of node.treeChildren()) {
+    for (const child of node.treeChildren()) {
       this._releaseFront(child, force);
     }
 
@@ -288,10 +280,10 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
   /**
    * Get any unprocessed mutation records and process them.
    */
-  getMutations: custom(function (options = {}) {
+  getMutations: custom(function(options = {}) {
     return this._getMutations(options).then(mutations => {
-      let emitMutations = [];
-      for (let change of mutations) {
+      const emitMutations = [];
+      for (const change of mutations) {
         // The target is only an actorID, get the associated front.
         let targetID;
         let targetFront;
@@ -318,15 +310,15 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
           continue;
         }
 
-        let emittedMutation = Object.assign(change, { target: targetFront });
+        const emittedMutation = Object.assign(change, { target: targetFront });
 
         if (change.type === "childList" ||
             change.type === "nativeAnonymousChildList") {
           // Update the ownership tree according to the mutation record.
-          let addedFronts = [];
-          let removedFronts = [];
-          for (let removed of change.removed) {
-            let removedFront = this.get(removed);
+          const addedFronts = [];
+          const removedFronts = [];
+          for (const removed of change.removed) {
+            const removedFront = this.get(removed);
             if (!removedFront) {
               console.error("Got a removal of an actor we didn't know about: " +
                 removed);
@@ -340,8 +332,8 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
             this._orphaned.add(removedFront);
             removedFronts.push(removedFront);
           }
-          for (let added of change.added) {
-            let addedFront = this.get(added);
+          for (const added of change.added) {
+            const addedFront = this.get(added);
             if (!addedFront) {
               console.error("Got an addition of an actor we didn't know " +
                 "about: " + added);
@@ -370,7 +362,7 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
           // Nothing we need to do here, except verify that we don't have any
           // document children, because we should have gotten a documentUnload
           // first.
-          for (let child of targetFront.treeChildren()) {
+          for (const child of targetFront.treeChildren()) {
             if (child.nodeType === nodeConstants.DOCUMENT_NODE) {
               console.warn("Got an unexpected frameLoad in the inspector, " +
                 "please file a bug on bugzilla.mozilla.org!");
@@ -392,8 +384,8 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
         } else if (change.type === "unretained") {
           // Retained orphans were force-released without the intervention of
           // client (probably a navigated frame).
-          for (let released of change.nodes) {
-            let releasedFront = this.get(released);
+          for (const released of change.nodes) {
+            const releasedFront = this.get(released);
             this._retainedOrphans.delete(released);
             this._releaseFront(releasedFront, true);
           }
@@ -418,7 +410,7 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
       }
 
       if (options.cleanup) {
-        for (let node of this._orphaned) {
+        for (const node of this._orphaned) {
           // This will move retained nodes to this._retainedOrphans.
           this._releaseFront(node);
         }
@@ -435,56 +427,23 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
    * Handle the `new-mutations` notification by fetching the
    * available mutation records.
    */
-  onMutations: preEvent("new-mutations", function () {
+  onMutations: preEvent("new-mutations", function() {
     // Fetch and process the mutations.
     this.getMutations({cleanup: this.autoCleanup}).catch(() => {});
   }),
 
-  isLocal: function () {
+  isLocal: function() {
     return !!this.conn._transport._serverConnection;
   },
 
-  // XXX hack during transition to remote inspector: get a proper NodeFront
-  // for a given local node.  Only works locally.
-  frontForRawNode: function (rawNode) {
-    if (!this.isLocal()) {
-      console.warn("Tried to use frontForRawNode on a remote connection.");
-      return null;
-    }
-    const { DebuggerServer } = require("devtools/server/main");
-    let walkerActor = DebuggerServer.searchAllConnectionsForActor(this.actorID);
-    if (!walkerActor) {
-      throw Error("Could not find client side for actor " + this.actorID);
-    }
-    let nodeActor = walkerActor._ref(rawNode);
-
-    // Pass the node through a read/write pair to create the client side actor.
-    let nodeType = types.getType("domnode");
-    let returnNode = nodeType.read(
-      nodeType.write(nodeActor, walkerActor), this);
-    let top = returnNode;
-    let extras = walkerActor.parents(nodeActor, {sameTypeRootTreeItem: true});
-    for (let extraActor of extras) {
-      top = nodeType.read(nodeType.write(extraActor, walkerActor), this);
-    }
-
-    if (top !== this.rootNode) {
-      // Imported an already-orphaned node.
-      this._orphaned.add(top);
-      walkerActor._orphaned
-        .add(DebuggerServer.searchAllConnectionsForActor(top.actorID));
-    }
-    return returnNode;
-  },
-
-  removeNode: custom(Task.async(function* (node) {
-    let previousSibling = yield this.previousSibling(node);
-    let nextSibling = yield this._removeNode(node);
+  removeNode: custom(async function(node) {
+    const previousSibling = await this.previousSibling(node);
+    const nextSibling = await this._removeNode(node);
     return {
       previousSibling: previousSibling,
       nextSibling: nextSibling,
     };
-  }), {
+  }, {
     impl: "_removeNode"
   }),
 });
@@ -496,7 +455,7 @@ exports.WalkerFront = WalkerFront;
  * inspector-related actors, including the walker.
  */
 var InspectorFront = FrontClassWithSpec(inspectorSpec, {
-  initialize: function (client, tabForm) {
+  initialize: function(client, tabForm) {
     Front.prototype.initialize.call(this, client);
     this.actorID = tabForm.inspectorActor;
 
@@ -505,12 +464,12 @@ var InspectorFront = FrontClassWithSpec(inspectorSpec, {
     this.manage(this);
   },
 
-  destroy: function () {
+  destroy: function() {
     delete this.walker;
     Front.prototype.destroy.call(this);
   },
 
-  getWalker: custom(function (options = {}) {
+  getWalker: custom(function(options = {}) {
     return this._getWalker(options).then(walker => {
       this.walker = walker;
       return walker;
@@ -519,7 +478,7 @@ var InspectorFront = FrontClassWithSpec(inspectorSpec, {
     impl: "_getWalker"
   }),
 
-  getPageStyle: custom(function () {
+  getPageStyle: custom(function() {
     return this._getPageStyle().then(pageStyle => {
       // We need a walker to understand node references from the
       // node style.
@@ -534,15 +493,15 @@ var InspectorFront = FrontClassWithSpec(inspectorSpec, {
     impl: "_getPageStyle"
   }),
 
-  pickColorFromPage: custom(Task.async(function* (toolbox, options) {
+  pickColorFromPage: custom(async function(toolbox, options) {
     if (toolbox) {
       // If the eyedropper was already started using the gcli command, hide it so we don't
       // end up with 2 instances of the eyedropper on the page.
       CommandUtils.executeOnTarget(toolbox.target, "eyedropper --hide");
     }
 
-    yield this._pickColorFromPage(options);
-  }), {
+    await this._pickColorFromPage(options);
+  }, {
     impl: "_pickColorFromPage"
   })
 });

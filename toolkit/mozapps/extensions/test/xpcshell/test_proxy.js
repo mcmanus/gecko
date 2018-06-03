@@ -5,55 +5,64 @@
 const ID = "proxy1@tests.mozilla.org";
 
 createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "42");
-startupManager();
 
 BootstrapMonitor.init();
 
+const BOOTSTRAP_JS = `ChromeUtils.import("resource://xpcshell-data/BootstrapMonitor.jsm").monitor(this);`;
+
 // Ensure that a proxy file to an add-on with a valid manifest works.
 add_task(async function() {
+  Services.prefs.setBoolPref(PREF_XPI_SIGNATURES_REQUIRED, false);
+
+  await promiseStartupManager();
+
   let tempdir = gTmpD.clone();
-  writeInstallRDFToDir({
+  let unpackedAddon = await promiseWriteInstallRDFToDir({
     id: ID,
     version: "1.0",
     bootstrap: true,
     unpack: true,
     targetApplications: [{
-          id: "xpcshell@tests.mozilla.org",
+      id: "xpcshell@tests.mozilla.org",
       minVersion: "1",
       maxVersion: "1"
-        }],
+    }],
     name: "Test Bootstrap 1 (proxy)",
-  }, tempdir, ID, "bootstrap.js");
-
-  let unpackedAddon = tempdir.clone();
-  unpackedAddon.append(ID);
-  do_get_file("data/test_proxy/bootstrap.js")
-    .copyTo(unpackedAddon, "bootstrap.js");
+  }, tempdir, ID, {
+    "bootstrap.js": BOOTSTRAP_JS,
+  });
 
   // create proxy file in profile/extensions dir
   let extensionsDir = gProfD.clone();
   extensionsDir.append("extensions");
-  let proxyFile = writeProxyFileToDir(extensionsDir, unpackedAddon, ID);
+  let proxyFile = await promiseWriteProxyFileToDir(extensionsDir, unpackedAddon, ID);
 
   await promiseRestartManager();
 
-  BootstrapMonitor.checkAddonInstalled(ID, "1.0");
-  BootstrapMonitor.checkAddonStarted(ID, "1.0");
-
   let addon = await promiseAddonByID(ID);
 
-  do_check_neq(addon, null);
-  do_check_eq(addon.version, "1.0");
-  do_check_eq(addon.name, "Test Bootstrap 1 (proxy)");
-  do_check_true(addon.isCompatible);
-  do_check_false(addon.appDisabled);
-  do_check_true(addon.isActive);
-  do_check_eq(addon.type, "extension");
-  do_check_eq(addon.signedState, mozinfo.addon_signing ? AddonManager.SIGNEDSTATE_PRIVILEGED : AddonManager.SIGNEDSTATE_NOT_REQUIRED);
+  if (AppConstants.MOZ_REQUIRE_SIGNING) {
+    BootstrapMonitor.checkAddonNotInstalled(ID, "1.0");
+    BootstrapMonitor.checkAddonNotStarted(ID, "1.0");
 
-  do_check_true(proxyFile.exists());
+    Assert.equal(addon, null);
+  } else {
+    BootstrapMonitor.checkAddonInstalled(ID, "1.0");
+    BootstrapMonitor.checkAddonStarted(ID, "1.0");
 
-  addon.uninstall();
+    Assert.notEqual(addon, null);
+    Assert.equal(addon.version, "1.0");
+    Assert.equal(addon.name, "Test Bootstrap 1 (proxy)");
+    Assert.ok(addon.isCompatible);
+    Assert.ok(!addon.appDisabled);
+    Assert.ok(addon.isActive);
+    Assert.equal(addon.type, "extension");
+    Assert.equal(addon.signedState, mozinfo.addon_signing ? AddonManager.SIGNEDSTATE_UNKNOWN : AddonManager.SIGNEDSTATE_NOT_REQUIRED);
+
+    Assert.ok(proxyFile.exists());
+
+    await addon.uninstall();
+  }
   unpackedAddon.remove(true);
 
   await promiseRestartManager();
@@ -66,28 +75,25 @@ add_task(async function() {
   let tempdir = gTmpD.clone();
 
   // use a mismatched ID to make this install.rdf invalid
-  writeInstallRDFToDir({
+  let unpackedAddon = await promiseWriteInstallRDFToDir({
     id: "bad-proxy1@tests.mozilla.org",
     version: "1.0",
     bootstrap: true,
     unpack: true,
     targetApplications: [{
-          id: "xpcshell@tests.mozilla.org",
+      id: "xpcshell@tests.mozilla.org",
       minVersion: "1",
       maxVersion: "1"
-        }],
+    }],
     name: "Test Bootstrap 1 (proxy)",
-  }, tempdir, ID, "bootstrap.js");
-
-  let unpackedAddon = tempdir.clone();
-  unpackedAddon.append(ID);
-  do_get_file("data/test_proxy/bootstrap.js")
-    .copyTo(unpackedAddon, "bootstrap.js");
+  }, tempdir, ID, {
+    "bootstrap.js": BOOTSTRAP_JS,
+  });
 
   // create proxy file in profile/extensions dir
   let extensionsDir = gProfD.clone();
   extensionsDir.append("extensions");
-  let proxyFile = writeProxyFileToDir(extensionsDir, unpackedAddon, ID);
+  let proxyFile = await promiseWriteProxyFileToDir(extensionsDir, unpackedAddon, ID);
 
   await promiseRestartManager();
 
@@ -95,9 +101,9 @@ add_task(async function() {
   BootstrapMonitor.checkAddonNotStarted(ID, "1.0");
 
   let addon = await promiseAddonByID(ID);
-  do_check_eq(addon, null);
+  Assert.equal(addon, null);
 
-  do_check_true(proxyFile.exists());
+  Assert.ok(proxyFile.exists());
 
   unpackedAddon.remove(true);
   proxyFile.remove(true);

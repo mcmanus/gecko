@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -178,8 +179,8 @@ SVGTurbulenceRenderer<Type,Stitch,f32x4_t,i32x4_t,u8x16_t>::CreateStitchInfo(con
   StitchInfo stitch;
   stitch.width = int32_t(floorf(aTileRect.Width() * mBaseFrequency.width + 0.5f));
   stitch.height = int32_t(floorf(aTileRect.Height() * mBaseFrequency.height + 0.5f));
-  stitch.wrapX = int32_t(aTileRect.x * mBaseFrequency.width) + stitch.width;
-  stitch.wrapY = int32_t(aTileRect.y * mBaseFrequency.height) + stitch.height;
+  stitch.wrapX = int32_t(aTileRect.X() * mBaseFrequency.width) + stitch.width;
+  stitch.wrapY = int32_t(aTileRect.Y() * mBaseFrequency.height) + stitch.height;
   return stitch;
 }
 
@@ -328,8 +329,9 @@ SVGTurbulenceRenderer<Type,Stitch,f32x4_t,i32x4_t,u8x16_t>::Render(const IntSize
     return nullptr;
   }
 
-  uint8_t* targetData = target->GetData();
-  uint32_t stride = target->Stride();
+  DataSourceSurface::ScopedMap map(target, DataSourceSurface::READ_WRITE);
+  uint8_t* targetData = map.GetData();
+  uint32_t stride = map.GetStride();
 
   Point startOffset = EquivalentNonNegativeOffset(aOffset);
 

@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=8 et tw=80 : */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -21,7 +21,6 @@ GenericScrollAnimation::GenericScrollAnimation(AsyncPanZoomController& aApzc,
                                                const ScrollAnimationBezierPhysicsSettings& aSettings)
   : mApzc(aApzc)
   , mFinalDestination(aInitialPosition)
-  , mForceVerticalOverscroll(false)
 {
   if (gfxPrefs::SmoothScrollMSDPhysicsEnabled()) {
     mAnimationPhysics = MakeUnique<ScrollAnimationMSDPhysics>(aInitialPosition);
@@ -31,7 +30,9 @@ GenericScrollAnimation::GenericScrollAnimation(AsyncPanZoomController& aApzc,
 }
 
 void
-GenericScrollAnimation::UpdateDelta(TimeStamp aTime, nsPoint aDelta, const nsSize& aCurrentVelocity)
+GenericScrollAnimation::UpdateDelta(TimeStamp aTime,
+                                    const nsPoint& aDelta,
+                                    const nsSize& aCurrentVelocity)
 {
   mFinalDestination += aDelta;
 
@@ -39,7 +40,9 @@ GenericScrollAnimation::UpdateDelta(TimeStamp aTime, nsPoint aDelta, const nsSiz
 }
 
 void
-GenericScrollAnimation::UpdateDestination(TimeStamp aTime, nsPoint aDestination, const nsSize& aCurrentVelocity)
+GenericScrollAnimation::UpdateDestination(TimeStamp aTime,
+                                          const nsPoint& aDestination,
+                                          const nsSize& aCurrentVelocity)
 {
   mFinalDestination = aDestination;
 
@@ -86,9 +89,12 @@ GenericScrollAnimation::DoSample(FrameMetrics& aFrameMetrics, const TimeDuration
 
   // Note: we ignore overscroll for generic animations.
   ParentLayerPoint adjustedOffset, overscroll;
-  mApzc.mX.AdjustDisplacement(displacement.x, adjustedOffset.x, overscroll.x);
+  mApzc.mX.AdjustDisplacement(displacement.x, adjustedOffset.x, overscroll.x,
+                              mDirectionForcedToOverscroll
+                                == Some(ScrollDirection::eHorizontal));
   mApzc.mY.AdjustDisplacement(displacement.y, adjustedOffset.y, overscroll.y,
-                              mForceVerticalOverscroll);
+                              mDirectionForcedToOverscroll
+                                == Some(ScrollDirection::eVertical));
 
   // If we expected to scroll, but there's no more scroll range on either axis,
   // then end the animation early. Note that the initial displacement could be 0

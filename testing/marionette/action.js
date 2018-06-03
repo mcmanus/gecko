@@ -6,18 +6,15 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
-
-Cu.import("chrome://marionette/content/assert.js");
-Cu.import("chrome://marionette/content/element.js");
+ChromeUtils.import("chrome://marionette/content/assert.js");
+const {element} = ChromeUtils.import("chrome://marionette/content/element.js", {});
 const {
-  pprint,
   InvalidArgumentError,
   MoveTargetOutOfBoundsError,
   UnsupportedOperationError,
-} = Cu.import("chrome://marionette/content/error.js", {});
-Cu.import("chrome://marionette/content/event.js");
-Cu.import("chrome://marionette/content/interaction.js");
+} = ChromeUtils.import("chrome://marionette/content/error.js", {});
+ChromeUtils.import("chrome://marionette/content/event.js");
+const {pprint} = ChromeUtils.import("chrome://marionette/content/format.js", {});
 
 this.EXPORTED_SYMBOLS = ["action"];
 
@@ -341,18 +338,21 @@ action.PointerOrigin = {
   Pointer: "pointer",
 };
 
+/** Flag for WebDriver spec conforming pointer origin calculation. */
+action.specCompatPointerOrigin = true;
+
 /**
  * Look up a PointerOrigin.
  *
- * @param {(undefined|string|WebElement)} obj
- *     Origin for a pointerMove action.
+ * @param {(string|Element)=} obj
+ *     Origin for a <code>pointerMove</code> action.  Must be one of
+ *     "viewport" (default), "pointer", or a DOM element.
  *
  * @return {action.PointerOrigin}
- *     A pointer origin that is either "viewport" (default), "pointer", or a
- *     web-element reference.
+ *     Pointer origin.
  *
  * @throws {InvalidArgumentError}
- *     If <code>obj</code> is not a valid origin.
+ *     If <var>obj</var> is not a valid origin.
  */
 action.PointerOrigin.get = function(obj) {
   let origin = obj;
@@ -362,9 +362,10 @@ action.PointerOrigin.get = function(obj) {
     let name = capitalize(obj);
     assert.in(name, this, pprint`Unknown pointer-move origin: ${obj}`);
     origin = this[name];
-  } else if (!element.isWebElementReference(obj)) {
-    throw new InvalidArgumentError("Expected 'origin' to be a string or a " +
-      pprint`web element reference, got ${obj}`);
+  } else if (!element.isDOMElement(obj)) {
+    throw new InvalidArgumentError("Expected 'origin' to be undefined, " +
+        '"viewport", "pointer", ' +
+        pprint`or an element, got: ${obj}`);
   }
   return origin;
 };
@@ -373,8 +374,8 @@ action.PointerOrigin.get = function(obj) {
 action.PointerType = {
   Mouse: "mouse",
   // TODO For now, only mouse is supported
-  //Pen: "pen",
-  //Touch: "touch",
+  // Pen: "pen",
+  // Touch: "touch",
 };
 
 /**
@@ -969,21 +970,25 @@ action.Mouse = class {
  * @param {action.Chain} chain
  *     Actions grouped by tick; each element in |chain| is a sequence of
  *     actions for one tick.
- * @param {element.Store} seenEls
- *     Element store.
  * @param {WindowProxy} window
  *     Current window global.
+ * @param {boolean=} [specCompatPointerOrigin=true] specCompatPointerOrigin
+ *     Flag to turn off the WebDriver spec conforming pointer origin
+ *     calculation. It has to be kept until all Selenium bindings can
+ *     successfully handle the WebDriver spec conforming Pointer Origin
+ *     calculation. See https://bugzilla.mozilla.org/show_bug.cgi?id=1429338.
  *
  * @return {Promise}
  *     Promise for dispatching all actions in |chain|.
  */
-action.dispatch = function(chain, seenEls, window) {
+action.dispatch = function(chain, window, specCompatPointerOrigin = true) {
+  action.specCompatPointerOrigin = specCompatPointerOrigin;
+
   let chainEvents = (async () => {
     for (let tickActions of chain) {
       await action.dispatchTickActions(
           tickActions,
           action.computeTickDuration(tickActions),
-          seenEls,
           window);
     }
   })();
@@ -1005,20 +1010,15 @@ action.dispatch = function(chain, seenEls, window) {
  *     List of actions for one tick.
  * @param {number} tickDuration
  *     Duration in milliseconds of this tick.
- * @param {element.Store} seenEls
- *     Element store.
  * @param {WindowProxy} window
  *     Current window global.
  *
  * @return {Promise}
  *     Promise for dispatching all tick-actions and pending DOM events.
  */
-action.dispatchTickActions = function(
-    tickActions, tickDuration, seenEls, window) {
-  let pendingEvents = tickActions.map(
-      toEvents(tickDuration, seenEls, window));
-  return Promise.all(pendingEvents).then(
-      () => interaction.flushEventLoop(window));
+action.dispatchTickActions = function(tickActions, tickDuration, window) {
+  let pendingEvents = tickActions.map(toEvents(tickDuration, window));
+  return Promise.all(pendingEvents);
 };
 
 /**
@@ -1082,8 +1082,6 @@ action.computePointerDestination = function(
  *
  * @param {number} tickDuration
  *     Duration in milliseconds of this tick.
- * @param {element.Store} seenEls
- *     Element store.
  * @param {WindowProxy} window
  *     Current window global.
  *
@@ -1091,7 +1089,7 @@ action.computePointerDestination = function(
  *     Function that takes an action and returns a Promise for dispatching
  *     the event that corresponds to that action.
  */
-function toEvents(tickDuration, seenEls, window) {
+function toEvents(tickDuration, window) {
   return a => {
     let inputState = action.inputStateMap.get(a.id);
 
@@ -1110,7 +1108,7 @@ function toEvents(tickDuration, seenEls, window) {
 
       case action.PointerMove:
         return dispatchPointerMove(
-            a, inputState, tickDuration, seenEls, window);
+            a, inputState, tickDuration, window);
 
       case action.PointerCancel:
         throw new UnsupportedOperationError();
@@ -1218,6 +1216,10 @@ function dispatchPointerDown(a, inputState, window) {
       case action.PointerType.Mouse:
         let mouseEvent = new action.Mouse("mousedown", a.button);
         mouseEvent.update(inputState);
+        if (event.DoubleClickTracker.isClicked()) {
+          mouseEvent = Object.assign({},
+              mouseEvent, {clickCount: 2});
+        }
         event.synthesizeMouseAtPoint(
             inputState.x,
             inputState.y,
@@ -1273,6 +1275,10 @@ function dispatchPointerUp(a, inputState, window) {
       case action.PointerType.Mouse:
         let mouseEvent = new action.Mouse("mouseup", a.button);
         mouseEvent.update(inputState);
+        if (event.DoubleClickTracker.isClicked()) {
+          mouseEvent = Object.assign({},
+              mouseEvent, {clickCount: 2});
+        }
         event.synthesizeMouseAtPoint(
             inputState.x, inputState.y, mouseEvent, window);
         break;
@@ -1290,8 +1296,8 @@ function dispatchPointerUp(a, inputState, window) {
 }
 
 /**
- * Dispatch a pointerMove action equivalent to moving pointer device in
- * a line.
+ * Dispatch a pointerMove action equivalent to moving pointer device
+ * in a line.
  *
  * If the action duration is 0, the pointer jumps immediately to the
  * target coordinates.  Otherwise, events are synthesized to mimic a
@@ -1302,8 +1308,6 @@ function dispatchPointerUp(a, inputState, window) {
  *     Action to dispatch.
  * @param {action.InputState} inputState
  *     Input state for this action's input source.
- * @param {element.Store} seenEls
- *     Element store.
  * @param {WindowProxy} window
  *     Current window global.
  *
@@ -1311,7 +1315,7 @@ function dispatchPointerUp(a, inputState, window) {
  *     Promise to dispatch at least one pointermove event, as well as
  *     mousemove events as appropriate.
  */
-function dispatchPointerMove(a, inputState, tickDuration, seenEls, window) {
+function dispatchPointerMove(a, inputState, tickDuration, window) {
   const timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
   // interval between pointermove increments in ms, based on common vsync
   const fps60 = 17;
@@ -1320,8 +1324,8 @@ function dispatchPointerMove(a, inputState, tickDuration, seenEls, window) {
     const start = Date.now();
     const [startX, startY] = [inputState.x, inputState.y];
 
-    let target = action.computePointerDestination(a, inputState,
-        getElementCenter(a.origin, seenEls));
+    let coords = getElementCenter(a.origin, window);
+    let target = action.computePointerDestination(a, inputState, coords);
     const [targetX, targetY] = [target.x, target.y];
 
     if (!inViewPort(targetX, targetY, window)) {
@@ -1430,11 +1434,11 @@ function inViewPort(x, y, win) {
   return !(x < 0 || y < 0 || x > win.innerWidth || y > win.innerHeight);
 }
 
-function getElementCenter(elementReference, seenEls) {
-  if (element.isWebElementReference(elementReference)) {
-    let uuid = elementReference[element.Key] ||
-        elementReference[element.LegacyKey];
-    let el = seenEls.get(uuid);
+function getElementCenter(el, window) {
+  if (element.isDOMElement(el)) {
+    if (action.specCompatPointerOrigin) {
+      return element.getInViewCentrePoint(el.getClientRects()[0], window);
+    }
     return element.coordinates(el);
   }
   return {};

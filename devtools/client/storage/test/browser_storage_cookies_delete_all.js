@@ -2,30 +2,30 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* import-globals-from ../../framework/test/shared-head.js */
+/* import-globals-from ../../shared/test/shared-head.js */
 
 "use strict";
 
 // Test deleting all cookies
 
-function* performDelete(store, rowName, action) {
-  let contextMenu = gPanelWindow.document.getElementById(
+async function performDelete(store, rowName, action) {
+  const contextMenu = gPanelWindow.document.getElementById(
     "storage-table-popup");
-  let menuDeleteAllItem = contextMenu.querySelector(
+  const menuDeleteAllItem = contextMenu.querySelector(
     "#storage-table-popup-delete-all");
-  let menuDeleteAllSessionCookiesItem = contextMenu.querySelector(
+  const menuDeleteAllSessionCookiesItem = contextMenu.querySelector(
     "#storage-table-popup-delete-all-session-cookies");
-  let menuDeleteAllFromItem = contextMenu.querySelector(
+  const menuDeleteAllFromItem = contextMenu.querySelector(
     "#storage-table-popup-delete-all-from");
 
-  let storeName = store.join(" > ");
+  const storeName = store.join(" > ");
 
-  yield selectTreeItem(store);
+  await selectTreeItem(store);
 
-  let eventWait = gUI.once("store-objects-updated");
-  let cells = getRowCells(rowName, true);
+  const eventWait = gUI.once("store-objects-edit");
+  const cells = getRowCells(rowName, true);
 
-  yield waitForContextMenu(contextMenu, cells.name, () => {
+  await waitForContextMenu(contextMenu, cells.name, () => {
     info(`Opened context menu in ${storeName}, row '${rowName}'`);
     switch (action) {
       case "deleteAll":
@@ -36,21 +36,21 @@ function* performDelete(store, rowName, action) {
         break;
       case "deleteAllFrom":
         menuDeleteAllFromItem.click();
-        let hostName = cells.host.value;
+        const hostName = cells.host.value;
         ok(menuDeleteAllFromItem.getAttribute("label").includes(hostName),
         `Context menu item label contains '${hostName}'`);
         break;
     }
   });
 
-  yield eventWait;
+  await eventWait;
 }
 
-add_task(function* () {
-  yield openTabAndSetupStorage(MAIN_DOMAIN + "storage-listings.html");
+add_task(async function() {
+  await openTabAndSetupStorage(MAIN_DOMAIN + "storage-listings.html");
 
   info("test state before delete");
-  yield checkState([
+  await checkState([
     [
       ["cookies", "http://test1.example.org"], [
         getCookieId("c1", "test1.example.org", "/browser"),
@@ -78,10 +78,10 @@ add_task(function* () {
   info("delete all from domain");
   // delete only cookies that match the host exactly
   let id = getCookieId("c1", "test1.example.org", "/browser");
-  yield performDelete(["cookies", "http://test1.example.org"], id, "deleteAllFrom");
+  await performDelete(["cookies", "http://test1.example.org"], id, "deleteAllFrom");
 
   info("test state after delete all from domain");
-  yield checkState([
+  await checkState([
     // Domain cookies (.example.org) must not be deleted.
     [
       ["cookies", "http://test1.example.org"],
@@ -110,11 +110,11 @@ add_task(function* () {
   info("delete all session cookies");
   // delete only session cookies
   id = getCookieId("cs2", ".example.org", "/");
-  yield performDelete(["cookies", "http://sectest1.example.org"], id,
+  await performDelete(["cookies", "http://sectest1.example.org"], id,
     "deleteAllSessionCookies");
 
   info("test state after delete all session cookies");
-  yield checkState([
+  await checkState([
     // Cookies with expiry date must not be deleted.
     [
       ["cookies", "http://test1.example.org"],
@@ -137,15 +137,15 @@ add_task(function* () {
   info("delete all");
   // delete all cookies for host, including domain cookies
   id = getCookieId("uc2", ".example.org", "/");
-  yield performDelete(["cookies", "http://sectest1.example.org"], id, "deleteAll");
+  await performDelete(["cookies", "http://sectest1.example.org"], id, "deleteAll");
 
   info("test state after delete all");
-  yield checkState([
+  await checkState([
     // Domain cookies (.example.org) are deleted too, so deleting in sectest1
     // also removes stuff from test1.
     [["cookies", "http://test1.example.org"], []],
     [["cookies", "https://sectest1.example.org"], []],
   ]);
 
-  yield finishTests();
+  await finishTests();
 });

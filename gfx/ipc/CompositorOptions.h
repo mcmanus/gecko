@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=99: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -33,6 +33,7 @@ public:
     : mUseAPZ(false)
     , mUseWebRender(false)
     , mUseAdvancedLayers(false)
+    , mInitiallyPaused(false)
   {
   }
 
@@ -41,15 +42,21 @@ public:
     : mUseAPZ(aUseAPZ)
     , mUseWebRender(aUseWebRender)
     , mUseAdvancedLayers(false)
+    , mInitiallyPaused(false)
   {
   }
 
   bool UseAPZ() const { return mUseAPZ; }
   bool UseWebRender() const { return mUseWebRender; }
   bool UseAdvancedLayers() const { return mUseAdvancedLayers; }
+  bool InitiallyPaused() const { return mInitiallyPaused; }
 
   void SetUseAdvancedLayers(bool aUseAdvancedLayers) {
     mUseAdvancedLayers = aUseAdvancedLayers;
+  }
+
+  void SetInitiallyPaused(bool aPauseAtStartup) {
+    mInitiallyPaused = aPauseAtStartup;
   }
 
   bool operator==(const CompositorOptions& aOther) const {
@@ -64,8 +71,10 @@ private:
   bool mUseAPZ;
   bool mUseWebRender;
   bool mUseAdvancedLayers;
+  bool mInitiallyPaused;
 
   // Make sure to add new fields to the ParamTraits implementation
+  // in LayersMessageUtils.h
 };
 
 } // namespace layers

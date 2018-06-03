@@ -25,14 +25,16 @@
 #include "unicode/uclean.h"
 #include "unicode/utypes.h"
 #endif // ENABLE_INTL_API
+#ifdef ENABLE_BIGINT
+#include "vm/BigIntType.h"
+#endif
 #include "vm/DateTime.h"
 #include "vm/HelperThreads.h"
 #include "vm/Runtime.h"
 #include "vm/Time.h"
 #include "vm/TraceLogging.h"
 #include "vtune/VTuneWrapper.h"
-#include "wasm/WasmBuiltins.h"
-#include "wasm/WasmInstance.h"
+#include "wasm/WasmProcess.h"
 
 using JS::detail::InitState;
 using JS::detail::libraryInitState;
@@ -78,9 +80,11 @@ JS::detail::InitWithFailureDiagnostic(bool isDebugBuild)
 
     MOZ_ASSERT(libraryInitState == InitState::Uninitialized,
                "must call JS_Init once before any JSAPI operation except "
-               "JS_SetICUMemoryFunctions");
+               "JS_SetICUMemoryFunctions or JS::SetGMPMemoryFunctions");
     MOZ_ASSERT(!JSRuntime::hasLiveRuntimes(),
                "how do we have live runtimes before JS_Init?");
+
+    libraryInitState = InitState::Initializing;
 
     PRMJ_NowInit();
 
@@ -98,18 +102,17 @@ JS::detail::InitWithFailureDiagnostic(bool isDebugBuild)
 
 #if defined(DEBUG) || defined(JS_OOM_BREAKPOINT)
     RETURN_IF_FAIL(js::oom::InitThreadType());
-    js::oom::SetThreadType(js::THREAD_TYPE_COOPERATING);
 #endif
 
-    RETURN_IF_FAIL(js::Mutex::Init());
+    js::InitMallocAllocator();
 
-    RETURN_IF_FAIL(js::wasm::InitInstanceStaticData());
+    RETURN_IF_FAIL(js::Mutex::Init());
 
     js::gc::InitMemorySubsystem(); // Ensure gc::SystemPageSize() works.
 
     RETURN_IF_FAIL(js::jit::InitProcessExecutableMemory());
 
-    MOZ_ALWAYS_TRUE(js::MemoryProtectionExceptionHandler::install());
+    RETURN_IF_FAIL(js::MemoryProtectionExceptionHandler::install());
 
     RETURN_IF_FAIL(js::jit::InitializeIon());
 
@@ -132,6 +135,10 @@ JS::detail::InitWithFailureDiagnostic(bool isDebugBuild)
 
 #ifdef JS_SIMULATOR
     RETURN_IF_FAIL(js::jit::SimulatorProcess::initialize());
+#endif
+
+#ifdef ENABLE_BIGINT
+    JS::BigInt::init();
 #endif
 
     libraryInitState = InitState::Running;
@@ -170,7 +177,7 @@ JS_ShutDown(void)
 
     js::MemoryProtectionExceptionHandler::uninstall();
 
-    js::wasm::ShutDownInstanceStaticData();
+    js::wasm::ShutDown();
 
     js::Mutex::ShutDown();
 
@@ -196,9 +203,11 @@ JS_ShutDown(void)
     js::FinishDateTimeState();
 
     if (!JSRuntime::hasLiveRuntimes()) {
-        js::wasm::ReleaseBuiltinThunks();
         js::jit::ReleaseProcessExecutableMemory();
+        MOZ_ASSERT(!js::LiveMappedBufferCount());
     }
+
+    js::ShutDownMallocAllocator();
 
     libraryInitState = InitState::ShutDown;
 }

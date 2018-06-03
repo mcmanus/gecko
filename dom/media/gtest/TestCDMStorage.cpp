@@ -11,6 +11,7 @@
 #include "ChromiumCDMCallback.h"
 #include "GMPTestMonitor.h"
 #include "GMPServiceParent.h"
+#include "MediaResult.h"
 #include "nsIFile.h"
 #include "nsISimpleEnumerator.h"
 #include "nsNSSComponent.h" //For EnsureNSSInitializedChromeOrContent
@@ -43,25 +44,14 @@ template<typename T>
 static nsresult
 EnumerateDir(nsIFile* aPath, T&& aDirIter)
 {
-  nsCOMPtr<nsISimpleEnumerator> iter;
+  nsCOMPtr<nsIDirectoryEnumerator> iter;
   nsresult rv = aPath->GetDirectoryEntries(getter_AddRefs(iter));
   if (NS_FAILED(rv)) {
     return rv;
   }
 
-  bool hasMore = false;
-  while (NS_SUCCEEDED(iter->HasMoreElements(&hasMore)) && hasMore) {
-    nsCOMPtr<nsISupports> supports;
-    rv = iter->GetNext(getter_AddRefs(supports));
-    if (NS_FAILED(rv)) {
-      continue;
-    }
-
-    nsCOMPtr<nsIFile> entry(do_QueryInterface(supports, &rv));
-    if (NS_FAILED(rv)) {
-      continue;
-    }
-
+  nsCOMPtr<nsIFile> entry;
+  while (NS_SUCCEEDED(iter->GetNextFile(getter_AddRefs(entry))) && entry) {
     aDirIter(entry);
   }
   return NS_OK;
@@ -226,7 +216,7 @@ ClearCDMStorage(already_AddRefed<nsIRunnable> aContinuation,
                 nsIThread* aTarget, PRTime aSince = -1)
 {
   RefPtr<ClearCDMStorageTask> task(
-    new ClearCDMStorageTask(Move(aContinuation), aTarget, aSince));
+    new ClearCDMStorageTask(std::move(aContinuation), aTarget, aSince));
   SystemGroup::Dispatch(TaskCategory::Other, task.forget());
 }
 
@@ -311,7 +301,7 @@ GetNodeId(const nsAString& aOrigin,
   nsresult rv = service->GetNodeId(origin,
                                    topLevelOrigin,
                                    NS_LITERAL_STRING("gmp-fake"),
-                                   Move(callback));
+                                   std::move(callback));
   EXPECT_TRUE(NS_SUCCEEDED(rv) && NS_SUCCEEDED(result));
   return nodeId;
 }
@@ -435,14 +425,14 @@ class CDMStorageTest
   {
     nsTArray<nsCString> updates;
     updates.AppendElement(aUpdate);
-    CreateDecryptor(aOrigin, aTopLevelOrigin, aInPBMode, Move(updates));
+    CreateDecryptor(aOrigin, aTopLevelOrigin, aInPBMode, std::move(updates));
   }
 
   void CreateDecryptor(const nsAString& aOrigin,
                        const nsAString& aTopLevelOrigin,
                        bool aInPBMode,
                        nsTArray<nsCString>&& aUpdates) {
-    CreateDecryptor(GetNodeId(aOrigin, aTopLevelOrigin, NS_LITERAL_STRING("gmp-fake"), aInPBMode), Move(aUpdates));
+    CreateDecryptor(GetNodeId(aOrigin, aTopLevelOrigin, NS_LITERAL_STRING("gmp-fake"), aInPBMode), std::move(aUpdates));
   }
 
   void CreateDecryptor(const NodeId& aNodeId,
@@ -456,7 +446,7 @@ class CDMStorageTest
 
     RefPtr<CDMStorageTest> self = this;
     RefPtr<gmp::GetCDMParentPromise> promise =
-          service->GetCDM(aNodeId, Move(tags), nullptr);
+          service->GetCDM(aNodeId, std::move(tags), nullptr);
     auto thread = GetAbstractGMPThread();
     promise->Then(thread,
                   __func__,
@@ -464,13 +454,18 @@ class CDMStorageTest
                     self->mCDM = cdm;
                     EXPECT_TRUE(!!self->mCDM);
                     self->mCallback.reset(new CallbackProxy(self));
-                    self->mCDM->Init(self->mCallback.get(), false, true, GetMainThreadEventTarget());
+                    nsCString failureReason;
+                    self->mCDM->Init(self->mCallback.get(),
+                                     false,
+                                     true,
+                                     GetMainThreadEventTarget(),
+                                     failureReason);
 
                     for (auto& update : aUpdates) {
                       self->Update(update);
                     }
                   },
-                  [](nsresult rv) { EXPECT_TRUE(false); });
+                  [](MediaResult rv) { EXPECT_TRUE(false); });
   }
 
   void TestBasicStorage() {
@@ -574,7 +569,7 @@ class CDMStorageTest
                             "CDMStorageTest::TestForgetThisSite_Forget",
                             this,
                             &CDMStorageTest::TestForgetThisSite_Forget,
-                            Move(siteInfo)));
+                            std::move(siteInfo)));
   }
 
   void TestForgetThisSite_Forget(UniquePtr<NodeInfo>&& aSiteInfo) {
@@ -590,7 +585,7 @@ class CDMStorageTest
       "CDMStorageTest::TestForgetThisSite_Verify",
       this,
       &CDMStorageTest::TestForgetThisSite_Verify,
-      Move(aSiteInfo));
+      std::move(aSiteInfo));
     thread->Dispatch(r, NS_DISPATCH_NORMAL);
 
     nsCOMPtr<nsIRunnable> f = NewRunnableMethod(
@@ -969,7 +964,7 @@ class CDMStorageTest
   }
 
   void Expect(const nsCString& aMessage, already_AddRefed<nsIRunnable> aContinuation) {
-    mExpected.AppendElement(ExpectedMessage(aMessage, Move(aContinuation)));
+    mExpected.AppendElement(ExpectedMessage(aMessage, std::move(aContinuation)));
   }
 
   void AwaitFinished() {
@@ -986,7 +981,7 @@ class CDMStorageTest
     RefPtr<GMPShutdownObserver> task(new GMPShutdownObserver(
       NewRunnableMethod(
         "CDMStorageTest::Shutdown", this, &CDMStorageTest::Shutdown),
-      Move(aContinuation),
+      std::move(aContinuation),
       mNodeId));
     SystemGroup::Dispatch(TaskCategory::Other, task.forget());
   }
@@ -1071,6 +1066,9 @@ private:
     void ResolveLoadSessionPromise(uint32_t aPromiseId,
                                    bool aSuccessful) override { }
 
+    void ResolvePromiseWithKeyStatus(uint32_t aPromiseId,
+                                     uint32_t aKeyStatus) override { }
+
     void ResolvePromise(uint32_t aPromiseId) override { }
 
     void RejectPromise(uint32_t aPromiseId,
@@ -1081,7 +1079,7 @@ private:
                         uint32_t aMessageType,
                         nsTArray<uint8_t>&& aMessage) override
     {
-      mRunner->SessionMessage(aSessionId, aMessageType, Move(aMessage));
+      mRunner->SessionMessage(aSessionId, aMessageType, std::move(aMessage));
     }
 
     void SessionKeysChange(const nsCString& aSessionId,

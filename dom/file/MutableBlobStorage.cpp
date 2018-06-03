@@ -8,6 +8,7 @@
 #include "MemoryBlobImpl.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/dom/ipc/TemporaryIPCBlobChild.h"
+#include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/PBackgroundChild.h"
 #include "mozilla/Preferences.h"
@@ -16,7 +17,6 @@
 #include "nsAnonymousTemporaryFile.h"
 #include "nsNetCID.h"
 #include "nsProxyRelease.h"
-#include "WorkerPrivate.h"
 
 #define BLOB_MEMORY_TEMPORARY_FILE 1048576
 
@@ -100,17 +100,15 @@ private:
 };
 
 // This runnable moves a buffer to the IO thread and there, it writes it into
-// the temporary file.
+// the temporary file, if its File Descriptor has not been already closed.
 class WriteRunnable final : public Runnable
 {
 public:
   static WriteRunnable*
-  CopyBuffer(MutableBlobStorage* aBlobStorage, PRFileDesc* aFD,
+  CopyBuffer(MutableBlobStorage* aBlobStorage,
              const void* aData, uint32_t aLength)
   {
-    MOZ_ASSERT(NS_IsMainThread());
     MOZ_ASSERT(aBlobStorage);
-    MOZ_ASSERT(aFD);
     MOZ_ASSERT(aData);
 
     // We have to take a copy of this buffer.
@@ -120,19 +118,17 @@ public:
     }
 
     memcpy((char*)data, aData, aLength);
-    return new WriteRunnable(aBlobStorage, aFD, data, aLength);
+    return new WriteRunnable(aBlobStorage, data, aLength);
   }
 
   static WriteRunnable*
-  AdoptBuffer(MutableBlobStorage* aBlobStorage, PRFileDesc* aFD,
-              void* aData, uint32_t aLength)
+  AdoptBuffer(MutableBlobStorage* aBlobStorage, void* aData, uint32_t aLength)
   {
     MOZ_ASSERT(NS_IsMainThread());
     MOZ_ASSERT(aBlobStorage);
-    MOZ_ASSERT(aFD);
     MOZ_ASSERT(aData);
 
-    return new WriteRunnable(aBlobStorage, aFD, aData, aLength);
+    return new WriteRunnable(aBlobStorage, aData, aLength);
   }
 
   NS_IMETHOD
@@ -141,8 +137,15 @@ public:
     MOZ_ASSERT(!NS_IsMainThread());
     MOZ_ASSERT(mBlobStorage);
 
-    int32_t written = PR_Write(mFD, mData, mLength);
+    PRFileDesc* fd = mBlobStorage->GetFD();
+    if (!fd) {
+      // The file descriptor has been closed in the meantime.
+      return NS_OK;
+    }
+
+    int32_t written = PR_Write(fd, mData, mLength);
     if (NS_WARN_IF(written < 0 || uint32_t(written) != mLength)) {
+      mBlobStorage->CloseFD();
       return mBlobStorage->EventTarget()->Dispatch(
         new ErrorPropagationRunnable(mBlobStorage, NS_ERROR_FAILURE),
         NS_DISPATCH_NORMAL);
@@ -152,19 +155,13 @@ public:
   }
 
 private:
-  WriteRunnable(MutableBlobStorage* aBlobStorage,
-                PRFileDesc* aFD,
-                void* aData,
-                uint32_t aLength)
+  WriteRunnable(MutableBlobStorage* aBlobStorage, void* aData, uint32_t aLength)
     : Runnable("dom::WriteRunnable")
     , mBlobStorage(aBlobStorage)
-    , mFD(aFD)
     , mData(aData)
     , mLength(aLength)
   {
-    MOZ_ASSERT(NS_IsMainThread());
     MOZ_ASSERT(mBlobStorage);
-    MOZ_ASSERT(aFD);
     MOZ_ASSERT(aData);
   }
 
@@ -174,7 +171,6 @@ private:
   }
 
   RefPtr<MutableBlobStorage> mBlobStorage;
-  PRFileDesc* mFD;
   void* mData;
   uint32_t mLength;
 };
@@ -215,6 +211,8 @@ class CreateBlobRunnable final : public Runnable
                                , public TemporaryIPCBlobChildCallback
 {
 public:
+  // We need to always declare refcounting because
+  // TemporaryIPCBlobChildCallback has pure-virtual refcounting.
   NS_DECL_ISUPPORTS_INHERITED
 
   CreateBlobRunnable(MutableBlobStorage* aBlobStorage,
@@ -243,8 +241,8 @@ public:
   void
   OperationSucceeded(BlobImpl* aBlobImpl) override
   {
-    nsCOMPtr<nsISupports> parent(Move(mParent));
-    RefPtr<MutableBlobStorageCallback> callback(Move(mCallback));
+    nsCOMPtr<nsISupports> parent(std::move(mParent));
+    RefPtr<MutableBlobStorageCallback> callback(std::move(mCallback));
 
     RefPtr<Blob> blob = Blob::Create(parent, aBlobImpl);
     callback->BlobStoreCompleted(mBlobStorage, blob, NS_OK);
@@ -253,7 +251,7 @@ public:
   void
   OperationFailed(nsresult aRv) override
   {
-    RefPtr<MutableBlobStorageCallback> callback(Move(mCallback));
+    RefPtr<MutableBlobStorageCallback> callback(std::move(mCallback));
     callback->BlobStoreCompleted(mBlobStorage, nullptr, aRv);
   }
 
@@ -285,13 +283,11 @@ class LastRunnable final : public Runnable
 {
 public:
   LastRunnable(MutableBlobStorage* aBlobStorage,
-               PRFileDesc* aFD,
                nsISupports* aParent,
                const nsACString& aContentType,
                MutableBlobStorageCallback* aCallback)
     : Runnable("dom::LastRunnable")
     , mBlobStorage(aBlobStorage)
-    , mFD(aFD)
     , mParent(aParent)
     , mContentType(aContentType)
     , mCallback(aCallback)
@@ -299,16 +295,12 @@ public:
     MOZ_ASSERT(NS_IsMainThread());
     MOZ_ASSERT(mBlobStorage);
     MOZ_ASSERT(aCallback);
-    MOZ_ASSERT(aFD);
   }
 
   NS_IMETHOD
   Run() override
   {
     MOZ_ASSERT(!NS_IsMainThread());
-
-    PR_Close(mFD);
-    mFD = nullptr;
 
     RefPtr<Runnable> runnable =
       new CreateBlobRunnable(mBlobStorage, mParent.forget(),
@@ -331,7 +323,6 @@ private:
   }
 
   RefPtr<MutableBlobStorage> mBlobStorage;
-  PRFileDesc* mFD;
   nsCOMPtr<nsISupports> mParent;
   nsCString mContentType;
   RefPtr<MutableBlobStorageCallback> mCallback;
@@ -342,7 +333,8 @@ private:
 MutableBlobStorage::MutableBlobStorage(MutableBlobStorageType aType,
                                        nsIEventTarget* aEventTarget,
                                        uint32_t aMaxMemory)
-  : mData(nullptr)
+  : mMutex("MutableBlobStorage::mMutex")
+  , mData(nullptr)
   , mDataLen(0)
   , mDataBufferLen(0)
   , mStorageState(aType == eOnlyInMemory ? eKeepInMemory : eInMemory)
@@ -371,7 +363,7 @@ MutableBlobStorage::~MutableBlobStorage()
 
   if (mFD) {
     RefPtr<Runnable> runnable = new CloseFileRunnable(mFD);
-    DispatchToIOThread(runnable.forget());
+    Unused << DispatchToIOThread(runnable.forget());
   }
 
   if (mTaskQueue) {
@@ -392,14 +384,14 @@ MutableBlobStorage::GetBlobWhenReady(nsISupports* aParent,
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aCallback);
 
+  MutexAutoLock lock(mMutex);
+
   // GetBlob can be called just once.
   MOZ_ASSERT(mStorageState != eClosed);
   StorageState previousState = mStorageState;
   mStorageState = eClosed;
 
   if (previousState == eInTemporaryFile) {
-    MOZ_ASSERT(mFD);
-
     if (NS_FAILED(mErrorResult)) {
       MOZ_ASSERT(!mActor);
 
@@ -416,9 +408,11 @@ MutableBlobStorage::GetBlobWhenReady(nsISupports* aParent,
     // executed in order and this LastRunnable will be... the last one.
     // This Runnable will also close the FD on the I/O thread.
     RefPtr<Runnable> runnable =
-      new LastRunnable(this, mFD, aParent, aContentType, aCallback);
-    DispatchToIOThread(runnable.forget());
-    mFD = nullptr;
+      new LastRunnable(this, aParent, aContentType, aCallback);
+
+    // If the dispatching fails, we are shutting down and it's fine to do not
+    // run the callback.
+    Unused << DispatchToIOThread(runnable.forget());
     return;
   }
 
@@ -456,7 +450,9 @@ MutableBlobStorage::GetBlobWhenReady(nsISupports* aParent,
 nsresult
 MutableBlobStorage::Append(const void* aData, uint32_t aLength)
 {
-  MOZ_ASSERT(NS_IsMainThread());
+  // This method can be called on any thread.
+
+  MutexAutoLock lock(mMutex);
   MOZ_ASSERT(mStorageState != eClosed);
   NS_ENSURE_ARG_POINTER(aData);
 
@@ -466,22 +462,29 @@ MutableBlobStorage::Append(const void* aData, uint32_t aLength)
 
   // If eInMemory is the current Storage state, we could maybe migrate to
   // a temporary file.
-  if (mStorageState == eInMemory && ShouldBeTemporaryStorage(aLength)) {
-    MaybeCreateTemporaryFile();
+  if (mStorageState == eInMemory && ShouldBeTemporaryStorage(lock, aLength) &&
+      !MaybeCreateTemporaryFile(lock)) {
+    return NS_ERROR_FAILURE;
   }
 
   // If we are already in the temporaryFile mode, we have to dispatch a
   // runnable.
   if (mStorageState == eInTemporaryFile) {
-    MOZ_ASSERT(mFD);
+    // If a previous operation failed, let's return that error now.
+    if (NS_FAILED(mErrorResult)) {
+      return mErrorResult;
+    }
 
     RefPtr<WriteRunnable> runnable =
-      WriteRunnable::CopyBuffer(this, mFD, aData, aLength);
+      WriteRunnable::CopyBuffer(this, aData, aLength);
     if (NS_WARN_IF(!runnable)) {
       return NS_ERROR_OUT_OF_MEMORY;
     }
 
-    DispatchToIOThread(runnable.forget());
+    nsresult rv = DispatchToIOThread(runnable.forget());
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
 
     mDataLen += aLength;
     return NS_OK;
@@ -491,7 +494,7 @@ MutableBlobStorage::Append(const void* aData, uint32_t aLength)
 
   uint64_t offset = mDataLen;
 
-  if (!ExpandBufferSize(aLength)) {
+  if (!ExpandBufferSize(lock, aLength)) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
@@ -500,9 +503,9 @@ MutableBlobStorage::Append(const void* aData, uint32_t aLength)
 }
 
 bool
-MutableBlobStorage::ExpandBufferSize(uint64_t aSize)
+MutableBlobStorage::ExpandBufferSize(const MutexAutoLock& aProofOfLock,
+                                     uint64_t aSize)
 {
-  MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(mStorageState < eInTemporaryFile);
 
   if (mDataBufferLen >= mDataLen + aSize) {
@@ -533,7 +536,8 @@ MutableBlobStorage::ExpandBufferSize(uint64_t aSize)
 }
 
 bool
-MutableBlobStorage::ShouldBeTemporaryStorage(uint64_t aSize) const
+MutableBlobStorage::ShouldBeTemporaryStorage(const MutexAutoLock& aProofOfLock,
+                                             uint64_t aSize) const
 {
   MOZ_ASSERT(mStorageState == eInMemory);
 
@@ -547,42 +551,38 @@ MutableBlobStorage::ShouldBeTemporaryStorage(uint64_t aSize) const
   return bufferSize.value() >= mMaxMemory;
 }
 
-void
-MutableBlobStorage::MaybeCreateTemporaryFile()
+bool
+MutableBlobStorage::MaybeCreateTemporaryFile(const MutexAutoLock& aProofOfLock)
 {
   mStorageState = eWaitingForTemporaryFile;
 
-  mozilla::ipc::PBackgroundChild* actor =
-    mozilla::ipc::BackgroundChild::GetForCurrentThread();
-  if (actor) {
-    ActorCreated(actor);
-  } else {
-    mozilla::ipc::BackgroundChild::GetOrCreateForCurrentThread(this);
+  if (!NS_IsMainThread()) {
+    RefPtr<MutableBlobStorage> self = this;
+    nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction(
+      "MutableBlobStorage::MaybeCreateTemporaryFile",
+      [self]() { self->MaybeCreateTemporaryFileOnMainThread(); });
+    EventTarget()->Dispatch(r.forget(), NS_DISPATCH_SYNC);
+    return !!mActor;
   }
+
+  MaybeCreateTemporaryFileOnMainThread();
+  return !!mActor;
 }
 
 void
-MutableBlobStorage::ActorFailed()
-{
-  MOZ_CRASH("Failed to create a PBackgroundChild actor!");
-}
-
-void
-MutableBlobStorage::ActorCreated(PBackgroundChild* aActor)
+MutableBlobStorage::MaybeCreateTemporaryFileOnMainThread()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(mStorageState == eWaitingForTemporaryFile ||
-             mStorageState == eClosed);
-  MOZ_ASSERT_IF(mPendingCallback, mStorageState == eClosed);
+  MOZ_ASSERT(!mActor);
 
-  // If the object has been already closed and we don't need to execute a
-  // callback, we have nothing else to do.
-  if (mStorageState == eClosed && !mPendingCallback) {
+  mozilla::ipc::PBackgroundChild* actorChild =
+    mozilla::ipc::BackgroundChild::GetOrCreateForCurrentThread();
+  if (NS_WARN_IF(!actorChild)) {
     return;
   }
 
   mActor = new TemporaryIPCBlobChild(this);
-  aActor->SendPTemporaryIPCBlobConstructor(mActor);
+  actorChild->SendPTemporaryIPCBlobConstructor(mActor);
 
   // We need manually to increase the reference for this actor because the
   // IPC allocator method is not triggered. The Release() is called by IPDL
@@ -596,6 +596,8 @@ void
 MutableBlobStorage::TemporaryFileCreated(PRFileDesc* aFD)
 {
   MOZ_ASSERT(NS_IsMainThread());
+
+  MutexAutoLock lock(mMutex);
   MOZ_ASSERT(mStorageState == eWaitingForTemporaryFile ||
              mStorageState == eClosed);
   MOZ_ASSERT_IF(mPendingCallback, mStorageState == eClosed);
@@ -606,10 +608,13 @@ MutableBlobStorage::TemporaryFileCreated(PRFileDesc* aFD)
   // callback, we need just to close the file descriptor in the correct thread.
   if (mStorageState == eClosed && !mPendingCallback) {
     RefPtr<Runnable> runnable = new CloseFileRunnable(aFD);
-    DispatchToIOThread(runnable.forget());
+
+    // If this dispatching fails, CloseFileRunnable will close the FD in the
+    // DTOR on the current thread.
+    Unused << DispatchToIOThread(runnable.forget());
 
     // Let's inform the parent that we have nothing else to do.
-    mActor->SendOperationDone(false, EmptyCString());
+    mActor->SendOperationFailed();
     mActor = nullptr;
     return;
   }
@@ -620,16 +625,21 @@ MutableBlobStorage::TemporaryFileCreated(PRFileDesc* aFD)
   }
 
   mFD = aFD;
+  MOZ_ASSERT(NS_SUCCEEDED(mErrorResult));
 
   // This runnable takes the ownership of mData and it will write this buffer
   // into the temporary file.
   RefPtr<WriteRunnable> runnable =
-    WriteRunnable::AdoptBuffer(this, mFD, mData, mDataLen);
+    WriteRunnable::AdoptBuffer(this, mData, mDataLen);
   MOZ_ASSERT(runnable);
 
   mData = nullptr;
 
-  DispatchToIOThread(runnable.forget());
+  nsresult rv = DispatchToIOThread(runnable.forget());
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    // Shutting down, we cannot continue.
+    return;
+  }
 
   // If we are closed, it means that GetBlobWhenReady() has been called when we
   // were already waiting for a temporary file-descriptor. Finally we are here,
@@ -640,10 +650,9 @@ MutableBlobStorage::TemporaryFileCreated(PRFileDesc* aFD)
     MOZ_ASSERT(mPendingCallback);
 
     RefPtr<Runnable> runnable =
-      new LastRunnable(this, mFD, mPendingParent, mPendingContentType,
+      new LastRunnable(this, mPendingParent, mPendingContentType,
                        mPendingCallback);
-    DispatchToIOThread(runnable.forget());
-    mFD = nullptr;
+    Unused << DispatchToIOThread(runnable.forget());
 
     mPendingParent = nullptr;
     mPendingCallback = nullptr;
@@ -655,12 +664,24 @@ MutableBlobStorage::AskForBlob(TemporaryIPCBlobChildCallback* aCallback,
                                const nsACString& aContentType)
 {
   MOZ_ASSERT(NS_IsMainThread());
+
+  MutexAutoLock lock(mMutex);
   MOZ_ASSERT(mStorageState == eClosed);
-  MOZ_ASSERT(!mFD);
+  MOZ_ASSERT(mFD);
   MOZ_ASSERT(mActor);
   MOZ_ASSERT(aCallback);
 
-  mActor->AskForBlob(aCallback, aContentType);
+  // Let's pass the FileDescriptor to the parent actor in order to keep the file
+  // locked on windows.
+  mActor->AskForBlob(aCallback, aContentType, mFD);
+
+  // The previous operation has duplicated the file descriptor. Now we can close
+  // mFD. The parent will take care of closing the duplicated file descriptor on
+  // its side.
+  RefPtr<Runnable> runnable = new CloseFileRunnable(mFD);
+  Unused << DispatchToIOThread(runnable.forget());
+
+  mFD = nullptr;
   mActor = nullptr;
 }
 
@@ -668,13 +689,17 @@ void
 MutableBlobStorage::ErrorPropagated(nsresult aRv)
 {
   MOZ_ASSERT(NS_IsMainThread());
+
+  MutexAutoLock lock(mMutex);
   mErrorResult = aRv;
 
-  mActor->SendOperationDone(false, EmptyCString());
-  mActor = nullptr;
+  if (mActor) {
+    mActor->SendOperationFailed();
+    mActor = nullptr;
+  }
 }
 
-void
+nsresult
 MutableBlobStorage::DispatchToIOThread(already_AddRefed<nsIRunnable> aRunnable)
 {
   if (!mTaskQueue) {
@@ -686,17 +711,40 @@ MutableBlobStorage::DispatchToIOThread(already_AddRefed<nsIRunnable> aRunnable)
   }
 
   nsCOMPtr<nsIRunnable> runnable(aRunnable);
-  mTaskQueue->Dispatch(runnable.forget());
+  nsresult rv = mTaskQueue->Dispatch(runnable.forget());
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  return NS_OK;
 }
 
 size_t
-MutableBlobStorage::SizeOfCurrentMemoryBuffer() const
+MutableBlobStorage::SizeOfCurrentMemoryBuffer()
 {
   MOZ_ASSERT(NS_IsMainThread());
+  MutexAutoLock lock(mMutex);
   return mStorageState < eInTemporaryFile ? mDataLen : 0;
 }
 
-NS_IMPL_ISUPPORTS(MutableBlobStorage, nsIIPCBackgroundChildCreateCallback)
+PRFileDesc*
+MutableBlobStorage::GetFD()
+{
+  MOZ_ASSERT(!NS_IsMainThread());
+  MutexAutoLock lock(mMutex);
+  return mFD;
+}
+
+void
+MutableBlobStorage::CloseFD()
+{
+  MOZ_ASSERT(!NS_IsMainThread());
+  MutexAutoLock lock(mMutex);
+  MOZ_ASSERT(mFD);
+
+  PR_Close(mFD);
+  mFD = nullptr;
+}
 
 } // dom namespace
 } // mozilla namespace

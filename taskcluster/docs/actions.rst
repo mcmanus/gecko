@@ -34,6 +34,11 @@ a custom action task can be more efficient.
 
 Creating a Callback Action
 --------------------------
+
+.. note:
+
+    You can generate ``actions.json`` on the command line with ``./mach taskgraph actions``.
+
 A *callback action* is an action that calls back into in-tree logic. That is,
 you register the action with name, title, description, context, input schema and a
 python callback. When the action is triggered in a user interface,
@@ -52,7 +57,7 @@ To create a new callback action you must create a file
       description="Simple **proof-of-concept** callback action",
       order=10000,  # Order in which it should appear relative to other actions
   )
-  def hello_world_action(parameters, input, task_group_id, task_id, task):
+  def hello_world_action(parameters, graph_config, input, task_group_id, task_id, task):
       # parameters is an instance of taskgraph.parameters.Parameters
       # it carries decision task parameters from the original decision task.
       # input, task_id, and task should all be None
@@ -112,7 +117,7 @@ The example action below will be shown in the context-menu for tasks with
       order=1,
       context=[{'platform': 'linux'}]
   )
-  def retrigger_action(parameters, input, task_group_id, task_id, task):
+  def retrigger_action(parameters, graph_config, input, task_group_id, task_id, task):
       # input will be None
       print "Retriggering: {}".format(task_id)
       print "task definition: {}".format(task)
@@ -175,7 +180,7 @@ both ``input`` and ``context``::
           'additionalProperties': False,
       },
   )
-  def retrigger_action(parameters, input, task_group_id, task_id, task):
+  def retrigger_action(parameters, graph_config, input, task_group_id, task_id, task):
       print "Create all pruned tasks with priority: {}".format(input['priority'])
       if input['runTalos']:
           print "Also running talos jobs..."
@@ -186,6 +191,11 @@ It is encouraged to set ``additionalProperties: false``, as well as specifying
 all properties as ``required`` in the JSON schema. Furthermore, it's good
 practice to provide ``default`` values for properties, as user interface generators
 will often take advantage of such properties.
+
+It is possible to specify the ``schema`` parameter as a callable that returns
+the JSON schema. It will be called with a keyword parameter ``graph_config``
+with the `graph configuration <taskgraph-graph-config>` of the current
+taskgraph.
 
 Once you have specified input and context as applicable for your action you can
 do pretty much anything you want from within your callback. Whether you want
@@ -211,7 +221,7 @@ The feature is illustrated below::
       # Define an action that is only included if this is a push to try
       available=lambda parameters: parameters.get('project', None) == 'try',
   )
-  def try_only_action(parameters, input, task_group_id, task_id, task):
+  def try_only_action(parameters, graph_config, input, task_group_id, task_id, task):
       print "My try-only action"
 
 Properties of ``parameters``  are documented in the
@@ -245,7 +255,7 @@ The example below illustrates how to create such an action in Python::
           'default': 'low',
       },
   )
-  def task_template_builder(parameters):
+  def task_template_builder(parameters, graph_config):
       # The task template builder may return None to signal that the action
       # isn't available.
       if parameters.get('project', None) != 'try':

@@ -4,30 +4,23 @@
 
 "use strict";
 
-var Cc = Components.classes;
-var Ci = Components.interfaces;
-var Cu = Components.utils;
-var Cr = Components.results;
+var EXPORTED_SYMBOLS = [ "TabCrashHandler",
+                         "PluginCrashReporter",
+                         "UnsubmittedCrashHandler" ];
 
-this.EXPORTED_SYMBOLS = [ "TabCrashHandler",
-                          "PluginCrashReporter",
-                          "UnsubmittedCrashHandler" ];
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "CrashSubmit",
-  "resource://gre/modules/CrashSubmit.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
-  "resource://gre/modules/AppConstants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "RemotePages",
-  "resource://gre/modules/RemotePageManager.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "SessionStore",
-  "resource:///modules/sessionstore/SessionStore.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
-  "resource:///modules/RecentWindow.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
-  "resource://gre/modules/PluralForm.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  AppConstants: "resource://gre/modules/AppConstants.jsm",
+  BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
+  clearTimeout: "resource://gre/modules/Timer.jsm",
+  CrashSubmit: "resource://gre/modules/CrashSubmit.jsm",
+  PluralForm: "resource://gre/modules/PluralForm.jsm",
+  RemotePages: "resource://gre/modules/RemotePageManager.jsm",
+  SessionStore: "resource:///modules/sessionstore/SessionStore.jsm",
+  setTimeout: "resource://gre/modules/Timer.jsm"
+});
 
 XPCOMUtils.defineLazyGetter(this, "gNavigatorBundle", function() {
   const url = "chrome://browser/locale/browser.properties";
@@ -40,6 +33,9 @@ const PENDING_CRASH_REPORT_DAYS = 28;
 const DAY = 24 * 60 * 60 * 1000; // milliseconds
 const DAYS_TO_SUPPRESS = 30;
 const MAX_UNSEEN_CRASHED_CHILD_IDS = 20;
+
+// Time after which we will begin scanning for unsubmitted crash reports
+const CHECK_FOR_UNSUBMITTED_CRASH_REPORTS_DELAY_MS = 60 * 10000; // 10 minutes
 
 /**
  * BrowserWeakMap is exactly like a WeakMap, but expects <xul:browser>
@@ -72,12 +68,13 @@ class BrowserWeakMap extends WeakMap {
   }
 }
 
-this.TabCrashHandler = {
+var TabCrashHandler = {
   _crashedTabCount: 0,
   childMap: new Map(),
   browserMap: new BrowserWeakMap(),
   unseenCrashedChildIDs: [],
   crashedBrowserQueues: new Map(),
+  testBuildIDMismatch: false,
 
   get prefs() {
     delete this.prefs;
@@ -158,8 +155,6 @@ this.TabCrashHandler = {
         break;
       }
       case "oop-frameloader-crashed": {
-        aSubject.QueryInterface(Ci.nsIFrameLoader);
-
         let browser = aSubject.ownerElement;
         if (!browser) {
           return;
@@ -229,9 +224,13 @@ this.TabCrashHandler = {
 
     let sentBrowser = false;
     for (let weakBrowser of browserQueue) {
-      let browser = weakBrowser.get();
+      let browser = weakBrowser.browser.get();
       if (browser) {
-        this.sendToTabCrashedPage(browser);
+        if (weakBrowser.restartRequired || this.testBuildIDMismatch) {
+          this.sendToRestartRequiredPage(browser);
+        } else {
+          this.sendToTabCrashedPage(browser);
+        }
         sentBrowser = true;
       }
     }
@@ -246,10 +245,12 @@ this.TabCrashHandler = {
    *
    * @param browser (<xul:browser>)
    *        The selected browser that just crashed.
+   * @param restartRequired (bool)
+   *        Whether or not a browser restart is required to recover.
    */
-  onSelectedBrowserCrash(browser) {
+  onSelectedBrowserCrash(browser, restartRequired) {
     if (!browser.isRemoteBrowser) {
-      Cu.reportError("Selected crashed browser is not remote.")
+      Cu.reportError("Selected crashed browser is not remote.");
       return;
     }
     if (!browser.frameLoader) {
@@ -269,7 +270,8 @@ this.TabCrashHandler = {
     // this queue will be flushed. The weak reference is to avoid
     // leaking browsers in case anything goes wrong during this
     // teardown process.
-    browserQueue.push(Cu.getWeakReference(browser));
+    browserQueue.push({browser: Cu.getWeakReference(browser),
+                       restartRequired});
   },
 
   /**
@@ -297,7 +299,7 @@ this.TabCrashHandler = {
     //    crash reports. If they are, we'll send the crash report
     //    immediately.
     if (childID &&
-        this.unseenCrashedChildIDs.indexOf(childID) != -1) {
+        this.unseenCrashedChildIDs.includes(childID)) {
       if (UnsubmittedCrashHandler.autoSubmit) {
         let dumpID = this.childMap.get(childID);
         if (dumpID) {
@@ -310,6 +312,23 @@ this.TabCrashHandler = {
     }
 
     return false;
+  },
+
+  sendToRestartRequiredPage(browser) {
+    let uri = browser.currentURI;
+    let gBrowser = browser.ownerGlobal.gBrowser;
+    let tab = gBrowser.getTabForBrowser(browser);
+    // The restart required page is non-remote by default.
+    gBrowser.updateBrowserRemoteness(browser, false);
+
+    browser.docShell.displayLoadError(Cr.NS_ERROR_BUILDID_MISMATCH, uri, null);
+    tab.setAttribute("crashed", true);
+
+    // Make sure to only count once even if there are multiple windows
+    // that will all show about:restartrequired.
+    if (this._crashedTabCount == 1) {
+      Services.telemetry.scalarAdd("dom.contentprocess.buildID_mismatch", 1);
+    }
   },
 
   /**
@@ -361,8 +380,14 @@ this.TabCrashHandler = {
    *        even if they are empty.
    */
   maybeSendCrashReport(message) {
-    if (!AppConstants.MOZ_CRASHREPORTER)
+    if (!AppConstants.MOZ_CRASHREPORTER) {
       return;
+    }
+
+    if (!message.data.hasReport) {
+      // There was no report, so nothing to do.
+      return;
+    }
 
     let browser = message.target.browser;
 
@@ -374,8 +399,9 @@ this.TabCrashHandler = {
 
     let childID = this.browserMap.get(browser);
     let dumpID = this.childMap.get(childID);
-    if (!dumpID)
-      return
+    if (!dumpID) {
+      return;
+    }
 
     if (!message.data.sendReport) {
       Services.telemetry.getHistogramById("FX_CONTENT_CRASH_NOT_SUBMITTED").add(1);
@@ -554,7 +580,7 @@ this.TabCrashHandler = {
 
     return this.childMap.get(this.browserMap.get(browser));
   },
-}
+};
 
 /**
  * This component is responsible for scanning the pending
@@ -563,7 +589,7 @@ this.TabCrashHandler = {
  * submit those reports automatically without prompting if
  * the user has opted in.
  */
-this.UnsubmittedCrashHandler = {
+var UnsubmittedCrashHandler = {
   get prefs() {
     delete this.prefs;
     return this.prefs =
@@ -584,6 +610,8 @@ this.UnsubmittedCrashHandler = {
   // some number of days. See the documentation for
   // shouldShowPendingSubmissionsNotification().
   suppressed: false,
+
+  _checkTimeout: null,
 
   init() {
     if (this.initialized) {
@@ -621,6 +649,11 @@ this.UnsubmittedCrashHandler = {
 
     this.initialized = false;
 
+    if (this._checkTimeout) {
+      clearTimeout(this._checkTimeout);
+      this._checkTimeout = null;
+    }
+
     if (!this.enabled) {
       return;
     }
@@ -646,6 +679,14 @@ this.UnsubmittedCrashHandler = {
         break;
       }
     }
+  },
+
+  scheduleCheckForUnsubmittedCrashReports() {
+    this._checkTimeout = setTimeout(() => {
+      Services.tm.idleDispatchToMainThread(() => {
+        this.checkForUnsubmittedCrashReports();
+      });
+    }, CHECK_FOR_UNSUBMITTED_CRASH_REPORTS_DELAY_MS);
   },
 
   /**
@@ -816,7 +857,7 @@ this.UnsubmittedCrashHandler = {
    * @returns The <xul:notification> if one is shown. null otherwise.
    */
   show({ notificationID, message, reportIDs, onAction }) {
-    let chromeWin = RecentWindow.getMostRecentBrowserWindow();
+    let chromeWin = BrowserWindowTracker.getTopWindow();
     if (!chromeWin) {
       // Can't show a notification in this case. We'll hopefully
       // get another opportunity to have the user submit their
@@ -852,7 +893,7 @@ this.UnsubmittedCrashHandler = {
     {
       label: gNavigatorBundle.GetStringFromName("pendingCrashReports.viewAll"),
       callback() {
-        chromeWin.openUILinkIn("about:crashes", "tab");
+        chromeWin.openTrustedLinkIn("about:crashes", "tab");
         return true;
       },
     }];
@@ -880,11 +921,11 @@ this.UnsubmittedCrashHandler = {
 
   get autoSubmit() {
     return Services.prefs
-                   .getBoolPref("browser.crashReports.unsubmittedCheck.autoSubmit");
+                   .getBoolPref("browser.crashReports.unsubmittedCheck.autoSubmit2");
   },
 
   set autoSubmit(val) {
-    Services.prefs.setBoolPref("browser.crashReports.unsubmittedCheck.autoSubmit",
+    Services.prefs.setBoolPref("browser.crashReports.unsubmittedCheck.autoSubmit2",
                                val);
   },
 
@@ -907,7 +948,7 @@ this.UnsubmittedCrashHandler = {
   },
 };
 
-this.PluginCrashReporter = {
+var PluginCrashReporter = {
   /**
    * Makes the PluginCrashReporter ready to hear about and
    * submit crash reports.
@@ -971,12 +1012,10 @@ this.PluginCrashReporter = {
         // Only the parent process gets the gmp-plugin-crash observer
         // notification, so we need to inform any content processes that
         // the GMP has crashed.
-        if (Cc["@mozilla.org/parentprocessmessagemanager;1"]) {
+        if (Services.ppmm) {
           let pluginName = propertyBag.getPropertyAsAString("pluginName");
-          let mm = Cc["@mozilla.org/parentprocessmessagemanager;1"]
-            .getService(Ci.nsIMessageListenerManager);
-          mm.broadcastAsyncMessage("gmp-plugin-crash",
-                                   { pluginName, pluginID });
+          Services.ppmm.broadcastAsyncMessage("gmp-plugin-crash",
+                                              { pluginName, pluginID });
         }
         break;
       }

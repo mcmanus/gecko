@@ -15,6 +15,7 @@
 #include "jsapi.h"
 #include "jsfriendapi.h"
 #include "nsIScriptContext.h"
+#include "nsIScriptElement.h"
 #include "nsIScriptGlobalObject.h"
 #include "nsIXPConnect.h"
 #include "nsCOMPtr.h"
@@ -25,12 +26,14 @@
 #include "xpcpublic.h"
 #include "nsContentUtils.h"
 #include "nsGlobalWindow.h"
+#include "nsXBLPrototypeBinding.h"
 #include "mozilla/CycleCollectedJSContext.h"
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/Date.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/ScriptSettings.h"
 
+using namespace mozilla;
 using namespace mozilla::dom;
 
 bool
@@ -83,7 +86,7 @@ nsJSUtils::GetCurrentlyRunningCodeInnerWindowID(JSContext *aContext)
   if (!aContext)
     return 0;
 
-  nsGlobalWindow* win = xpc::CurrentWindowOrNull(aContext);
+  nsGlobalWindowInner* win = xpc::CurrentWindowOrNull(aContext);
   return win ? win->WindowID() : 0;
 }
 
@@ -98,10 +101,9 @@ nsJSUtils::CompileFunction(AutoJSAPI& jsapi,
                            JSObject** aFunctionObject)
 {
   JSContext* cx = jsapi.cx();
-  MOZ_ASSERT(js::GetEnterCompartmentDepth(cx) > 0);
+  MOZ_ASSERT(js::GetEnterRealmDepth(cx) > 0);
   MOZ_ASSERT_IF(aScopeChain.length() != 0,
                 js::IsObjectInContextCompartment(aScopeChain[0], cx));
-  MOZ_ASSERT_IF(aOptions.versionSet, aOptions.version != JSVERSION_UNKNOWN);
 
   // Do the junk Gecko is supposed to do before calling into JSAPI.
   for (size_t i = 0; i < aScopeChain.length(); ++i) {
@@ -137,10 +139,10 @@ nsJSUtils::ExecutionContext::ExecutionContext(JSContext* aCx,
   :
 #ifdef MOZ_GECKO_PROFILER
     mAutoProfilerLabel("nsJSUtils::ExecutionContext", /* dynamicStr */ nullptr,
-                       __LINE__, js::ProfileEntry::Category::JS),
+                       __LINE__, js::ProfilingStackFrame::Category::JS),
 #endif
     mCx(aCx)
-  , mCompartment(aCx, aGlobal)
+  , mRealm(aCx, aGlobal)
   , mRetValue(aCx)
   , mScopeChain(aCx)
   , mRv(NS_OK)
@@ -195,7 +197,7 @@ nsJSUtils::ExecutionContext::SetScopeChain(
 }
 
 nsresult
-nsJSUtils::ExecutionContext::JoinAndExec(void **aOffThreadToken,
+nsJSUtils::ExecutionContext::JoinAndExec(JS::OffThreadToken** aOffThreadToken,
                                          JS::MutableHandle<JSScript*> aScript)
 {
   if (mSkip) {
@@ -236,8 +238,6 @@ nsJSUtils::ExecutionContext::CompileAndExec(JS::CompileOptions& aCompileOptions,
     return mRv;
   }
 
-  MOZ_ASSERT_IF(aCompileOptions.versionSet,
-                aCompileOptions.version != JSVERSION_UNKNOWN);
   MOZ_ASSERT(aSrcBuf.get());
   MOZ_ASSERT(mRetValue.isUndefined());
 #ifdef DEBUG
@@ -324,7 +324,7 @@ nsJSUtils::ExecutionContext::DecodeAndExec(JS::CompileOptions& aCompileOptions,
 }
 
 nsresult
-nsJSUtils::ExecutionContext::DecodeJoinAndExec(void **aOffThreadToken)
+nsJSUtils::ExecutionContext::DecodeJoinAndExec(JS::OffThreadToken** aOffThreadToken)
 {
   if (mSkip) {
     return mRv;
@@ -342,6 +342,91 @@ nsJSUtils::ExecutionContext::DecodeJoinAndExec(void **aOffThreadToken)
   }
 
   return NS_OK;
+}
+
+nsresult
+nsJSUtils::ExecutionContext::DecodeBinASTJoinAndExec(JS::OffThreadToken** aOffThreadToken,
+                                                     JS::MutableHandle<JSScript*> aScript)
+{
+#ifdef JS_BUILD_BINAST
+  if (mSkip) {
+    return mRv;
+  }
+
+  MOZ_ASSERT(!mWantsReturnValue);
+  MOZ_ASSERT(!mExpectScopeChain);
+
+  aScript.set(JS::FinishOffThreadBinASTDecode(mCx, *aOffThreadToken));
+  *aOffThreadToken = nullptr; // Mark the token as having been finished.
+
+  if (!aScript) {
+    mSkip = true;
+    mRv = EvaluationExceptionToNSResult(mCx);
+    return mRv;
+  }
+
+  if (mEncodeBytecode && !StartIncrementalEncoding(mCx, aScript)) {
+    mSkip = true;
+    mRv = EvaluationExceptionToNSResult(mCx);
+    return mRv;
+  }
+
+  if (!JS_ExecuteScript(mCx, mScopeChain, aScript)) {
+    mSkip = true;
+    mRv = EvaluationExceptionToNSResult(mCx);
+    return mRv;
+  }
+
+  return NS_OK;
+#else
+  return NS_ERROR_NOT_IMPLEMENTED;
+#endif
+}
+
+nsresult
+nsJSUtils::ExecutionContext::DecodeBinASTAndExec(JS::CompileOptions& aCompileOptions,
+                                                 const uint8_t* aBuf, size_t aLength,
+                                                 JS::MutableHandle<JSScript*> aScript)
+{
+#ifdef JS_BUILD_BINAST
+  MOZ_ASSERT(mScopeChain.length() == 0,
+             "BinAST decoding is not supported in non-syntactic scopes");
+
+  if (mSkip) {
+    return mRv;
+  }
+
+  MOZ_ASSERT(aBuf);
+  MOZ_ASSERT(mRetValue.isUndefined());
+#ifdef DEBUG
+  mWantsReturnValue = !aCompileOptions.noScriptRval;
+#endif
+
+  aScript.set(JS::DecodeBinAST(mCx, aCompileOptions, aBuf, aLength));
+
+  if (!aScript) {
+    mSkip = true;
+    mRv = EvaluationExceptionToNSResult(mCx);
+    return mRv;
+  }
+
+  if (mEncodeBytecode && !StartIncrementalEncoding(mCx, aScript)) {
+    mSkip = true;
+    mRv = EvaluationExceptionToNSResult(mCx);
+    return mRv;
+  }
+
+  MOZ_ASSERT(!mCoerceToString || mWantsReturnValue);
+  if (!JS_ExecuteScript(mCx, mScopeChain, aScript, &mRetValue)) {
+    mSkip = true;
+    mRv = EvaluationExceptionToNSResult(mCx);
+    return mRv;
+  }
+
+  return NS_OK;
+#else
+  return NS_ERROR_NOT_IMPLEMENTED;
+#endif
 }
 
 nsresult
@@ -385,8 +470,6 @@ nsJSUtils::CompileModule(JSContext* aCx,
 {
   AUTO_PROFILER_LABEL("nsJSUtils::CompileModule", JS);
 
-  MOZ_ASSERT_IF(aCompileOptions.versionSet,
-                aCompileOptions.version != JSVERSION_UNKNOWN);
   MOZ_ASSERT(aCx == nsContentUtils::GetCurrentJSContext());
   MOZ_ASSERT(aSrcBuf.get());
   MOZ_ASSERT(js::GetGlobalForObjectCrossCompartment(aEvaluationGlobal) ==
@@ -399,6 +482,29 @@ nsJSUtils::CompileModule(JSContext* aCx,
   NS_ENSURE_TRUE(xpc::Scriptability::Get(aEvaluationGlobal).Allowed(), NS_OK);
 
   if (!JS::CompileModule(aCx, aCompileOptions, aSrcBuf, aModule)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  return NS_OK;
+}
+
+nsresult
+nsJSUtils::InitModuleSourceElement(JSContext* aCx,
+                                   JS::Handle<JSObject*> aModule,
+                                   nsIScriptElement* aElement)
+{
+  JS::Rooted<JS::Value> value(aCx);
+  nsresult rv = nsContentUtils::WrapNative(aCx, aElement, &value,
+                                           /* aAllowWrapping = */ true);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  MOZ_ASSERT(value.isObject());
+  JS::Rooted<JSObject*> object(aCx, &value.toObject());
+
+  JS::Rooted<JSScript*> script(aCx, JS::GetModuleScript(aModule));
+  if (!JS::InitScriptSourceElement(aCx, script, object, nullptr)) {
     return NS_ERROR_FAILURE;
   }
 
@@ -443,23 +549,60 @@ nsJSUtils::ModuleEvaluate(JSContext* aCx, JS::Handle<JSObject*> aModule)
   return NS_OK;
 }
 
+static bool
+AddScopeChainItem(JSContext* aCx,
+                  nsINode* aNode,
+                  JS::AutoObjectVector& aScopeChain)
+{
+  JS::RootedValue val(aCx);
+  if (!GetOrCreateDOMReflector(aCx, aNode, &val)) {
+    return false;
+  }
+
+  if (!aScopeChain.append(&val.toObject())) {
+    return false;
+  }
+
+  return true;
+}
+
 /* static */
 bool
 nsJSUtils::GetScopeChainForElement(JSContext* aCx,
-                                   mozilla::dom::Element* aElement,
+                                   Element* aElement,
                                    JS::AutoObjectVector& aScopeChain)
 {
   for (nsINode* cur = aElement; cur; cur = cur->GetScopeChainParent()) {
-    JS::RootedValue val(aCx);
-    if (!GetOrCreateDOMReflector(aCx, cur, &val)) {
-      return false;
-    }
-
-    if (!aScopeChain.append(&val.toObject())) {
+    if (!AddScopeChainItem(aCx, cur, aScopeChain)) {
       return false;
     }
   }
 
+  return true;
+}
+
+/* static */
+bool
+nsJSUtils::GetScopeChainForXBL(JSContext* aCx,
+                               Element* aElement,
+                               const nsXBLPrototypeBinding& aProtoBinding,
+                               JS::AutoObjectVector& aScopeChain)
+{
+  if (!aElement) {
+    return true;
+  }
+
+  if (!aProtoBinding.SimpleScopeChain()) {
+    return GetScopeChainForElement(aCx, aElement, aScopeChain);
+  }
+
+  if (!AddScopeChainItem(aCx, aElement, aScopeChain)) {
+    return false;
+  }
+
+  if (!AddScopeChainItem(aCx, aElement->OwnerDoc(), aScopeChain)) {
+    return false;
+  }
   return true;
 }
 

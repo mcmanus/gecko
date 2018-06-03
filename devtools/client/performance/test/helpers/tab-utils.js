@@ -4,8 +4,7 @@
 
 /* globals dump */
 
-const { Cu } = require("chrome");
-const { BrowserTestUtils } = Cu.import("resource://testing-common/BrowserTestUtils.jsm", {});
+const { BrowserTestUtils } = require("resource://testing-common/BrowserTestUtils.jsm");
 const Services = require("Services");
 const { waitForDelayedStartupFinished } = require("devtools/client/performance/test/helpers/wait-utils");
 const { gDevTools } = require("devtools/client/framework/devtools");
@@ -22,13 +21,13 @@ function getRandomInt(min, max) {
  * Adds a browser tab with the given url in the specified window and waits
  * for it to load.
  */
-exports.addTab = function ({ url, win }, options = {}) {
-  let id = getRandomInt(0, Number.MAX_SAFE_INTEGER - 1);
+exports.addTab = function({ url, win }, options = {}) {
+  const id = getRandomInt(0, Number.MAX_SAFE_INTEGER - 1);
   url += `#${id}`;
 
   dump(`Adding tab with url: ${url}.\n`);
 
-  let { gBrowser } = win || window;
+  const { gBrowser } = win || window;
   return BrowserTestUtils.openNewForegroundTab(gBrowser, url,
                                                !options.dontWaitForTabReady);
 };
@@ -36,24 +35,19 @@ exports.addTab = function ({ url, win }, options = {}) {
 /**
  * Removes a browser tab from the specified window and waits for it to close.
  */
-exports.removeTab = function (tab, options = {}) {
+exports.removeTab = function(tab) {
   dump(`Removing tab: ${tab.linkedBrowser.currentURI.spec}.\n`);
 
-  return new Promise(resolve => {
-    BrowserTestUtils.removeTab(tab).then(() => resolve(tab));
-
-    if (options.dontWaitForTabClose) {
-      resolve(tab);
-    }
-  });
+  BrowserTestUtils.removeTab(tab);
 };
 
 /**
  * Adds a browser window with the provided options.
  */
-exports.addWindow = function* (options) {
-  let { OpenBrowserWindow } = Services.wm.getMostRecentWindow(gDevTools.chromeWindowType);
-  let win = OpenBrowserWindow(options);
-  yield waitForDelayedStartupFinished(win);
+exports.addWindow = async function(options) {
+  const { OpenBrowserWindow } =
+    Services.wm.getMostRecentWindow(gDevTools.chromeWindowType);
+  const win = OpenBrowserWindow(options);
+  await waitForDelayedStartupFinished(win);
   return win;
 };

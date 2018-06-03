@@ -5,29 +5,38 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "jsweakmap.h"
-
 #include "gc/Heap.h"
+#include "gc/WeakMap.h"
 #include "gc/Zone.h"
-
 #include "jsapi-tests/tests.h"
 
 using namespace js;
 using namespace js::gc;
 
+namespace js {
+
+struct GCManagedObjectWeakMap : public ObjectWeakMap
+{
+    using ObjectWeakMap::ObjectWeakMap;
+};
+
+} // namespace js
+
 namespace JS {
 
 template <>
-struct DeletePolicy<js::ObjectWeakMap> : public js::GCManagedDeletePolicy<js::ObjectWeakMap>
+struct DeletePolicy<js::GCManagedObjectWeakMap>
+  : public js::GCManagedDeletePolicy<js::GCManagedObjectWeakMap>
 {};
 
 template <>
-struct MapTypeToRootKind<js::ObjectWeakMap*> {
+struct MapTypeToRootKind<js::GCManagedObjectWeakMap*> {
     static const JS::RootKind kind = JS::RootKind::Traceable;
 };
 
 template <>
-struct GCPolicy<js::ObjectWeakMap*> : public NonGCPointerPolicy<js::ObjectWeakMap*>
+struct GCPolicy<js::GCManagedObjectWeakMap*>
+  : public NonGCPointerPolicy<js::GCManagedObjectWeakMap*>
 {};
 
 } // namespace JS
@@ -47,7 +56,7 @@ BEGIN_TEST(testGCGrayMarking)
 #endif /* JS_GC_ZEAL */
 
     CHECK(InitGlobals());
-    JSAutoCompartment ac(cx, global1);
+    JSAutoRealm ar(cx, global1);
 
     InitGrayRootTracer();
 
@@ -55,7 +64,6 @@ BEGIN_TEST(testGCGrayMarking)
         TestMarking() &&
         TestWeakMaps() &&
         TestUnassociatedWeakMaps() &&
-        TestWatchpoints() &&
         TestCCWs() &&
         TestGrayUnmarking();
 
@@ -334,12 +342,12 @@ bool
 TestUnassociatedWeakMaps()
 {
     // Make a weakmap that's not associated with a JSObject.
-    auto weakMap = cx->make_unique<ObjectWeakMap>(cx);
+    auto weakMap = cx->make_unique<GCManagedObjectWeakMap>(cx);
     CHECK(weakMap);
     CHECK(weakMap->init());
 
     // Make sure this gets traced during GC.
-    Rooted<ObjectWeakMap*> rootMap(cx, weakMap.get());
+    Rooted<GCManagedObjectWeakMap*> rootMap(cx, weakMap.get());
 
     JSObject* key = AllocWeakmapKeyObject();
     CHECK(key);
@@ -423,63 +431,6 @@ TestUnassociatedWeakMaps()
     JS_GC(cx);
     CHECK(IsMarkedGray(key));
     CHECK(IsMarkedGray(value));
-
-    blackRoot = nullptr;
-    grayRoots.grayRoot1 = nullptr;
-    grayRoots.grayRoot2 = nullptr;
-
-    return true;
-}
-
-bool
-TestWatchpoints()
-{
-    JSObject* watched = AllocPlainObject();
-    CHECK(watched);
-
-    JSObject* closure = AllocPlainObject();
-    CHECK(closure);
-
-    {
-        RootedObject obj(cx, watched);
-        RootedObject callable(cx, closure);
-        RootedId id(cx, INT_TO_JSID(0));
-        CHECK(JS_DefinePropertyById(cx, obj, id, JS::TrueHandleValue, 0));
-        CHECK(js::WatchGuts(cx, obj, id, callable));
-    }
-
-    // Test that a watchpoint marks the callable black if the watched object is
-    // black.
-
-    RootedObject blackRoot(cx, watched);
-    grayRoots.grayRoot1 = nullptr;
-    JS_GC(cx);
-    CHECK(IsMarkedBlack(watched));
-    CHECK(IsMarkedBlack(closure));
-
-    // Test that a watchpoint marks the callable gray if the watched object is
-    // gray.
-
-    blackRoot = nullptr;
-    grayRoots.grayRoot1 = watched;
-    JS_GC(cx);
-    CHECK(IsMarkedGray(watched));
-    CHECK(IsMarkedGray(closure));
-
-    // Test that ExposeToActiveJS *doesn't* unmark through watchpoints.  We
-    // could make this work, but it's currently handled by the CC fixup.
-
-    CHECK(IsMarkedGray(watched));
-    CHECK(IsMarkedGray(closure));
-    JS::ExposeObjectToActiveJS(watched);
-    CHECK(IsMarkedBlack(watched));
-    CHECK(IsMarkedGray(closure));
-
-    {
-        RootedObject obj(cx, watched);
-        RootedId id(cx, INT_TO_JSID(0));
-        CHECK(js::UnwatchGuts(cx, obj, id));
-    }
 
     blackRoot = nullptr;
     grayRoots.grayRoot1 = nullptr;
@@ -717,7 +668,7 @@ GetCrossCompartmentWrapper(JSObject* target)
 {
     MOZ_ASSERT(target->compartment() == global1->compartment());
     JS::RootedObject obj(cx, target);
-    JSAutoCompartment ac(cx, global2);
+    JSAutoRealm ar(cx, global2);
     if (!JS_WrapObject(cx, &obj))
         return nullptr;
 

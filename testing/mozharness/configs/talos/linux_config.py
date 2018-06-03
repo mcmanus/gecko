@@ -9,25 +9,13 @@ else:
     TOOLTOOL_MANIFEST_PATH = "config/tooltool-manifests/linux32/releng.manifest"
     MINIDUMP_STACKWALK_PATH = "linux32-minidump_stackwalk"
 
-exes = {
-    'tooltool.py': "/tools/tooltool.py",
-}
-
 config = {
     "log_name": "talos",
-    "buildbot_json_path": "buildprops.json",
     "installer_path": "installer.exe",
     "virtualenv_path": VENV_PATH,
-    "find_links": [
-        "http://pypi.pvt.build.mozilla.org/pub",
-        "http://pypi.pub.build.mozilla.org/pub",
-    ],
-    "pip_index": False,
-    "exes": exes,
     "title": os.uname()[1].lower().split('.')[0],
     "default_actions": [
         "clobber",
-        "read-buildbot-config",
         "download-and-extract",
         "populate-webroot",
         "create-virtualenv",

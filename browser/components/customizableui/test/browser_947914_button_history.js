@@ -9,7 +9,7 @@ const TEST_PATH = getRootDirectory(gTestPath).replace("chrome://mochitests/conte
 add_task(async function() {
   info("Check history button existence and functionality");
   let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, TEST_PATH + "dummy_history_item.html");
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 
   tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, TEST_PATH); // will 404, but we don't care.
 
@@ -28,7 +28,7 @@ add_task(async function() {
   let promise = BrowserTestUtils.waitForEvent(historyPanel, "ViewShown");
   historyButton.click();
   await promise;
-  ok(historyPanel.getAttribute("current"), "History Panel is in view");
+  ok(historyPanel.getAttribute("visible"), "History Panel is in view");
 
   let browserLoaded = BrowserTestUtils.browserLoaded(tab.linkedBrowser);
   let panelHiddenPromise = promiseOverflowHidden(window);
@@ -36,11 +36,11 @@ add_task(async function() {
   let historyItems = document.getElementById("appMenu_historyMenu");
   let historyItemForURL = historyItems.querySelector("toolbarbutton.bookmark-item[label='Happy History Hero']");
   ok(historyItemForURL, "Should have a history item for the history we just made.");
-  historyItemForURL.click();
+  EventUtils.synthesizeMouseAtCenter(historyItemForURL, {});
   await browserLoaded;
   is(gBrowser.currentURI.spec, TEST_PATH + "dummy_history_item.html", "Should have expected page load");
 
-  await panelHiddenPromise
-  await BrowserTestUtils.removeTab(tab);
+  await panelHiddenPromise;
+  BrowserTestUtils.removeTab(tab);
   info("Menu panel was closed");
 });

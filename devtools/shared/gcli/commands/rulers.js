@@ -10,7 +10,7 @@ loader.lazyRequireGetter(this, "CommandState",
   "devtools/shared/gcli/command-state", true);
 
 const l10n = require("gcli/l10n");
-require("devtools/server/actors/inspector");
+require("devtools/server/actors/inspector/inspector");
 const { HighlighterEnvironment } =
   require("devtools/server/actors/highlighters");
 const { RulersHighlighter } =
@@ -36,11 +36,11 @@ exports.items = [
       offChange: (target, handler) => CommandState.off("changed", handler)
     },
     exec: function* (args, context) {
-      let { target } = context.environment;
+      const { target } = context.environment;
 
       // Pipe the call to the server command.
-      let response = yield context.updateExec("rulers_server");
-      let isEnabled = response.data;
+      const response = yield context.updateExec("rulers_server");
+      const isEnabled = response.data;
 
       if (isEnabled) {
         CommandState.enableForTarget(target, "rulers");
@@ -60,22 +60,22 @@ exports.items = [
     runAt: "server",
     hidden: true,
     returnType: "highlighterVisibility",
-    exec: function (args, context) {
-      let env = context.environment;
-      let { document } = env;
+    exec: function(args, context) {
+      const env = context.environment;
+      const { document } = env;
 
       // Calling the command again after the rulers have been shown once hides
       // them.
       if (highlighters.has(document)) {
-        let { highlighter } = highlighters.get(document);
+        const { highlighter } = highlighters.get(document);
         highlighter.destroy();
         return false;
       }
 
       // Otherwise, display the rulers.
-      let environment = new HighlighterEnvironment();
+      const environment = new HighlighterEnvironment();
       environment.initFromWindow(env.window);
-      let highlighter = new RulersHighlighter(environment);
+      const highlighter = new RulersHighlighter(environment);
 
       // Store the instance of the rulers highlighter for this document so we
       // can hide it later.
@@ -85,7 +85,7 @@ exports.items = [
       // window is refreshed or closed with the rulers shown.
       EventEmitter.once(highlighter, "destroy", () => {
         if (highlighters.has(document)) {
-          let { environment: toDestroy } = highlighters.get(document);
+          const { environment: toDestroy } = highlighters.get(document);
           toDestroy.destroy();
           highlighters.delete(document);
         }

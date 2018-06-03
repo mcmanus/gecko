@@ -13,6 +13,7 @@ const {
   evalCalcExpression,
   shapeModeToCssPropertyName,
   getCirclePath,
+  getDecimalPrecision,
   getUnit
 } = require("devtools/server/actors/highlighters/shapes");
 
@@ -22,6 +23,7 @@ function run_test() {
   test_eval_calc_expression();
   test_shape_mode_to_css_property_name();
   test_get_circle_path();
+  test_get_decimal_precision();
   test_get_unit();
   run_next_test();
 }
@@ -37,7 +39,7 @@ function test_split_coords() {
     expected: ["calc(50px\u00a0+\u00a020%)", "30%"]
   }];
 
-  for (let { desc, expr, expected } of tests) {
+  for (const { desc, expr, expected } of tests) {
     deepEqual(splitCoords(expr), expected, desc);
   }
 }
@@ -58,7 +60,7 @@ function test_coord_to_percent() {
     expected: 0
   }];
 
-  for (let { desc, expr, expected } of tests) {
+  for (const { desc, expr, expected } of tests) {
     equal(coordToPercent(expr, size), expected, desc);
   }
 }
@@ -83,7 +85,7 @@ function test_eval_calc_expression() {
     expected: 30
   }];
 
-  for (let { desc, expr, expected } of tests) {
+  for (const { desc, expr, expected } of tests) {
     equal(evalCalcExpression(expr, size), expected, desc);
   }
 }
@@ -99,7 +101,7 @@ function test_shape_mode_to_css_property_name() {
     expected: "shapeOutside"
   }];
 
-  for (let { desc, expr, expected } of tests) {
+  for (const { desc, expr, expected } of tests) {
     equal(shapeModeToCssPropertyName(expr), expected, desc);
   }
 }
@@ -123,8 +125,31 @@ function test_get_circle_path() {
     expected: "M-2.5,0a2.5,1.25 0 1,0 5,0a2.5,1.25 0 1,0 -5,0"
   }];
 
-  for (let { desc, size, cx, cy, width, height, zoom, expected } of tests) {
+  for (const { desc, size, cx, cy, width, height, zoom, expected } of tests) {
     equal(getCirclePath(size, cx, cy, width, height, zoom), expected, desc);
+  }
+}
+
+function test_get_decimal_precision() {
+  const tests = [{
+    desc: "getDecimalPrecision with px",
+    expr: "px", expected: 0
+  }, {
+    desc: "getDecimalPrecision with %",
+    expr: "%", expected: 2
+  }, {
+    desc: "getDecimalPrecision with em",
+    expr: "em", expected: 2
+  }, {
+    desc: "getDecimalPrecision with undefined",
+    expr: undefined, expected: 0
+  }, {
+    desc: "getDecimalPrecision with empty string",
+    expr: "", expected: 0
+  }];
+
+  for (const { desc, expr, expected } of tests) {
+    equal(getDecimalPrecision(expr), expected, desc);
   }
 }
 
@@ -143,10 +168,16 @@ function test_get_unit() {
     expr: "0", expected: "px"
   }, {
     desc: "getUnit with 0%",
-    expr: "0%", expected: "px"
+    expr: "0%", expected: "%"
   }, {
-    desc: "getUnit with no unit",
-    expr: "30", expected: "px"
+    desc: "getUnit with 0.00%",
+    expr: "0.00%", expected: "%"
+  }, {
+    desc: "getUnit with 0px",
+    expr: "0px", expected: "px"
+  }, {
+    desc: "getUnit with 0em",
+    expr: "0em", expected: "em"
   }, {
     desc: "getUnit with calc",
     expr: "calc(30px + 5%)", expected: "px"
@@ -161,7 +192,7 @@ function test_get_unit() {
     expr: "farthest-side", expected: "px"
   }];
 
-  for (let { desc, expr, expected } of tests) {
+  for (const { desc, expr, expected } of tests) {
     equal(getUnit(expr), expected, desc);
   }
 }

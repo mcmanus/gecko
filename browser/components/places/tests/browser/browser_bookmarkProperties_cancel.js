@@ -9,11 +9,10 @@ registerCleanupFunction(async function() {
   sandbox.restore();
   delete window.sinon;
   await PlacesUtils.bookmarks.eraseEverything();
-  await PlacesTestUtils.clearHistory();
+  await PlacesUtils.history.clear();
 });
 
 let bookmarks; // Bookmarks added via insertTree.
-let bookmarkIds; // Map of Guids to Ids.
 
 add_task(async function setup() {
   bookmarks = await PlacesUtils.bookmarks.insertTree({
@@ -27,10 +26,6 @@ add_task(async function setup() {
     }]
   });
 
-  bookmarkIds = await PlacesUtils.promiseManyItemIds([
-    bookmarks[0].guid, bookmarks[1].guid
-  ]);
-
   // Undo is called asynchronously - and not waited for. Since we're not
   // expecting undo to be called, we can only tell this by stubbing it.
   sandbox.stub(PlacesTransactions, "undo").returns(Promise.resolve());
@@ -39,13 +34,8 @@ add_task(async function setup() {
 // Tests for bug 1391393 - Ensures that if the user cancels the bookmark properties
 // dialog without having done any changes, then no undo is called.
 add_task(async function test_cancel_with_no_changes() {
-  if (!PlacesUIUtils.useAsyncTransactions) {
-    Assert.ok(true, "Skipping test as async transactions are turned off");
-    return;
-  }
-
   await withSidebarTree("bookmarks", async (tree) => {
-    tree.selectItems([bookmarkIds.get(bookmarks[0].guid)]);
+    tree.selectItems([bookmarks[0].guid]);
 
     // Delete the bookmark to put something in the undo history.
     // Rather than calling cmd_delete, we call the remove directly, so that we
@@ -53,7 +43,7 @@ add_task(async function test_cancel_with_no_changes() {
     // in the history.
     await tree.controller.remove("Remove Selection");
 
-    tree.selectItems([bookmarkIds.get(bookmarks[1].guid)]);
+    tree.selectItems([bookmarks[1].guid]);
 
     // Now open the bookmarks dialog and cancel it.
     await withBookmarksDialog(
@@ -80,13 +70,8 @@ add_task(async function test_cancel_with_no_changes() {
 });
 
 add_task(async function test_cancel_with_changes() {
-  if (!PlacesUIUtils.useAsyncTransactions) {
-    Assert.ok(true, "Skipping test as async transactions are turned off");
-    return;
-  }
-
   await withSidebarTree("bookmarks", async (tree) => {
-    tree.selectItems([bookmarkIds.get(bookmarks[1].guid)]);
+    tree.selectItems([bookmarks[1].guid]);
 
     // Now open the bookmarks dialog and cancel it.
     await withBookmarksDialog(
@@ -99,7 +84,7 @@ add_task(async function test_cancel_with_changes() {
         await BrowserTestUtils.waitForCondition(() => !acceptButton.disabled,
           "The accept button should be enabled");
 
-        let promiseTitleChangeNotification = promiseBookmarksNotification(
+        let promiseTitleChangeNotification = PlacesTestUtils.waitForNotification(
           "onItemChanged", (itemId, prop, isAnno, val) => prop == "title" && val == "n");
 
         fillBookmarkTextField("editBMPanel_namePicker", "n", dialogWin);

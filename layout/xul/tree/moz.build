@@ -5,7 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 with Files('**'):
-    BUG_COMPONENT = ('Core', 'XP Toolkit/Widgets: XUL')
+    BUG_COMPONENT = ('Core', 'XUL')
 
 XPIDL_SOURCES += [
     'nsITreeBoxObject.idl',
@@ -51,5 +51,5 @@ LOCAL_INCLUDES += [
     '/dom/xul',
 ]
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

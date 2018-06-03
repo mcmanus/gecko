@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "Sćahnyć"
   },
+  "downloadOnlyNotice": {
+    "message": "Tuchwilu sće w modusu „Jenož sćahnyć“."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots w slědowacych situacijach awtomatisce do modusa „Jenož sćahnyć“ přepina:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "W priwatnym woknje."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Placki třećich poskićowarjow su znjemóžnjene."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "„Sej historiju ženje njespomjatkować“ je zmóžnjene."
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "Wužiwaće Firefox ESR."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "Nahraća su znjemóžnjene."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Wotkaz kopěrowany"
   },
@@ -36,6 +57,28 @@
     "message": "Wotkaz k wašemu fotu wobrazowki je so do mjezyskłada kopěrował. Tłóčće $META_KEY$-V, zo byšće jón zasadźił.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Kopěrować"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Foto kopěrowane"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Waše foto je so do mjezyskłada kopěrowało. Tłóčće $META_KEY$-V, zo byšće jo zasadźił.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Tutón wobraz je so na $PIXELS$px přitřihał.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }

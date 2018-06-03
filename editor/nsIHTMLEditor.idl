@@ -8,18 +8,11 @@
 
 interface nsIContent;
 interface nsIArray;
-interface nsISelection;
-interface nsIContentFilter;
 
-%{C++
-namespace mozilla {
-namespace dom {
-class Element;
-}
-}
-%}
-
-[ptr] native Element (mozilla::dom::Element);
+webidl Document;
+webidl Element;
+webidl Node;
+webidl Selection;
 
 [scriptable, builtinclass, uuid(87ee993e-985f-4a43-a974-0d9512da2fb0)]
 interface nsIHTMLEditor : nsISupports
@@ -135,7 +128,7 @@ interface nsIHTMLEditor : nsISupports
    *
    * @param aNode      the node to test
    */
-  boolean nodeIsBlock(in nsIDOMNode node);
+  boolean nodeIsBlock(in Node node);
 
   /**
    * Insert some HTML source at the current location
@@ -177,8 +170,8 @@ interface nsIHTMLEditor : nsISupports
                              in AString aContextStr,
                              in AString aInfoStr,
                              in AString aFlavor,
-                             in nsIDOMDocument aSourceDoc,
-                             in nsIDOMNode aDestinationNode,
+                             in Document aSourceDoc,
+                             in Node aDestinationNode,
                              in long aDestinationOffset,
                              in boolean aDeleteSelection);
 
@@ -195,7 +188,7 @@ interface nsIHTMLEditor : nsISupports
     *     after the end of the selection for all element except
     *     Named Anchors, which insert before the selection
     */
-  void insertElementAtSelection(in nsIDOMElement aElement,
+  void insertElementAtSelection(in Element aElement,
                                 in boolean aDeleteSelection);
 
   /**
@@ -209,14 +202,14 @@ interface nsIHTMLEditor : nsISupports
 
 
   /* ------------ Selection manipulation -------------- */
-  /* Should these be moved to nsISelection? */
+  /* Should these be moved to Selection? */
 
   /**
     * Set the selection at the suppled element
     *
     * @param aElement   An element in the document
     */
-  void selectElement(in nsIDOMElement aElement);
+  void selectElement(in Element aElement);
 
   /**
     * Create a collapsed selection just after aElement
@@ -230,7 +223,7 @@ interface nsIHTMLEditor : nsISupports
     *
     * @param aElement  An element in the document
     */
-  void setCaretAfterElement(in nsIDOMElement aElement);
+  void setCaretAfterElement(in Element aElement);
 
   /**
    * SetParagraphFormat       Insert a block paragraph tag around selection
@@ -358,12 +351,15 @@ interface nsIHTMLEditor : nsISupports
    * @return         NS_EDITOR_ELEMENT_NOT_FOUND if an element is not found
    *                 (passes NS_SUCCEEDED macro)
    */
-  nsIDOMElement getElementOrParentByTagName(in AString aTagName,
-                                            in nsIDOMNode aNode);
+  Element getElementOrParentByTagName(in AString aTagName,
+                                      in Node aNode);
 
   /**
-   * Return an element only if it is the only node selected,
-   *    such as an image, horizontal rule, etc.
+   * Return an Element only if it is the only node selected,
+   *    such as an image, horizontal rule, etc.  The return type is
+   *    nsISupports for implementation convenience; the returned object,
+   *    if not null, is always a DOM Element.
+   *
    * The exception is a link, which is more like a text attribute:
    *    The Anchor tag is returned if the selection is within the textnode(s)
    *    that are children of the "A" node.
@@ -377,15 +373,9 @@ interface nsIHTMLEditor : nsISupports
    *      (an "A" tag with the "href" attribute set)
    *    Use "anchor" or "namedanchor" to get a named anchor node
    *      (an "A" tag with the "name" attribute set)
-   * @return          NS_EDITOR_ELEMENT_NOT_FOUND if an element is not found
-   *                  (passes NS_SUCCEEDED macro)
+   * @return the element as described above
    */
-  nsIDOMElement getSelectedElement(in AString aTagName);
-
-  /**
-   * Output the contents of the <HEAD> section as text/HTML format
-   */
-  AString getHeadContentsAsHTML();
+  nsISupports getSelectedElement(in AString aTagName);
 
   /**
    * Replace all children of <HEAD> with string of HTML source
@@ -409,14 +399,14 @@ interface nsIHTMLEditor : nsISupports
    *      (an "A" tag with the "name" attribute set)
    * @return          The new element created.
    */
-  nsIDOMElement createElementWithDefaults(in AString aTagName);
+  Element createElementWithDefaults(in AString aTagName);
 
   /**
    * Insert an link element as the parent of the current selection
    *
    * @param aElement   An "A" element with a non-empty "href" attribute
    */
-  void insertLinkAroundSelection(in nsIDOMElement aAnchorElement);
+  void insertLinkAroundSelection(in Element aAnchorElement);
 
   /**
    * Set the value of the "bgcolor" attribute on the document's <body> element
@@ -455,31 +445,19 @@ interface nsIHTMLEditor : nsISupports
   attribute boolean isCSSEnabled;
 
   /**
-   * Add listener for insertion override
-   * @param inFilter  function which callers want called during insertion
-   */
-  void addInsertionListener(in nsIContentFilter inFilter);
-
-  /**
-   * Remove listener for insertion override
-   * @param inFilter  function which callers do not want called during insertion
-   */
-  void removeInsertionListener(in nsIContentFilter inFilter);
-
-  /**
    * returns the deepest container of the selection
    * @return a DOM Element
    */
-  nsIDOMElement getSelectionContainer();
+  Element getSelectionContainer();
 
   /**
    * Checks if the anonymous nodes created by the HTML editor have to be
    * refreshed or hidden depending on a possible new state of the selection
    * @param aSelection [IN] a selection
    */
-  void checkSelectionStateForAnonymousButtons(in nsISelection aSelection);
+  void checkSelectionStateForAnonymousButtons(in Selection aSelection);
 
-  boolean isAnonymousElement(in nsIDOMElement aElement);
+  boolean isAnonymousElement(in Element aElement);
 
   /**
    * A boolean indicating if a return key pressed in a paragraph creates

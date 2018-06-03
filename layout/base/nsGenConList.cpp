@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim:cindent:ts=2:et:sw=2:
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -58,7 +58,7 @@ nsGenConList::DestroyNodesFor(nsIFrame* aFrame)
  */
 inline int32_t PseudoCompareType(nsIFrame* aFrame, nsIContent** aContent)
 {
-  nsAtom *pseudo = aFrame->StyleContext()->GetPseudo();
+  nsAtom *pseudo = aFrame->Style()->GetPseudo();
   if (pseudo == nsCSSPseudoElements::before) {
     *aContent = aFrame->GetContent()->GetParent();
     return -1;
@@ -74,14 +74,14 @@ inline int32_t PseudoCompareType(nsIFrame* aFrame, nsIContent** aContent)
 /* static */ bool
 nsGenConList::NodeAfter(const nsGenConNode* aNode1, const nsGenConNode* aNode2)
 {
-  nsIFrame *frame1 = aNode1->mPseudoFrame;
-  nsIFrame *frame2 = aNode2->mPseudoFrame;
+  nsIFrame* frame1 = aNode1->mPseudoFrame;
+  nsIFrame* frame2 = aNode2->mPseudoFrame;
   if (frame1 == frame2) {
     NS_ASSERTION(aNode2->mContentIndex != aNode1->mContentIndex, "identical");
     return aNode1->mContentIndex > aNode2->mContentIndex;
   }
-  nsIContent *content1;
-  nsIContent *content2;
+  nsIContent* content1;
+  nsIContent* content2;
   int32_t pseudoType1 = PseudoCompareType(frame1, &content1);
   int32_t pseudoType2 = PseudoCompareType(frame2, &content2);
   if (pseudoType1 == 0 || pseudoType2 == 0) {
@@ -99,7 +99,7 @@ nsGenConList::NodeAfter(const nsGenConNode* aNode1, const nsGenConNode* aNode2)
       return pseudoType1 == 1;
     }
   }
-  // XXX Switch to the frame version of DoCompareTreePosition?
+
   int32_t cmp = nsLayoutUtils::DoCompareTreePosition(content1, content2,
                                                      pseudoType1, -pseudoType2);
   MOZ_ASSERT(cmp != 0, "same content, different frames");

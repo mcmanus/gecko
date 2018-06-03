@@ -11,7 +11,7 @@
 #include "nsString.h"
 #include "nsPrintfCString.h"
 #include "jsfriendapi.h"
-#include "jswrapper.h"
+#include "js/Wrapper.h"
 
 namespace mozilla {
 namespace jsipc {
@@ -106,7 +106,7 @@ class Logging
             JS::RootedObject obj(cx);
             obj = shared->objects_.find(id);
             if (obj) {
-                JSAutoCompartment ac(cx, obj);
+                JSAutoRealm ar(cx, obj);
                 objDesc = js::ObjectClassName(cx, obj);
             } else {
                 objDesc = "<dead object>";

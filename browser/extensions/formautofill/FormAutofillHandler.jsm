@@ -6,237 +6,167 @@
  * Defines a handler object to represent forms that autofill can handle.
  */
 
+/* exported FormAutofillHandler */
+
 "use strict";
 
-this.EXPORTED_SYMBOLS = ["FormAutofillHandler"];
+var EXPORTED_SYMBOLS = ["FormAutofillHandler"];
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://formautofill/FormAutofillUtils.jsm");
 
-Cu.import("resource://formautofill/FormAutofillUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "FormAutofillHeuristics",
-                                  "resource://formautofill/FormAutofillHeuristics.jsm");
+ChromeUtils.defineModuleGetter(this, "FormAutofillHeuristics",
+                               "resource://formautofill/FormAutofillHeuristics.jsm");
+ChromeUtils.defineModuleGetter(this, "FormLikeFactory",
+                               "resource://gre/modules/FormLikeFactory.jsm");
 
 this.log = null;
-FormAutofillUtils.defineLazyLogGetter(this, this.EXPORTED_SYMBOLS[0]);
+FormAutofillUtils.defineLazyLogGetter(this, EXPORTED_SYMBOLS[0]);
 
-/**
- * Handles profile autofill for a DOM Form element.
- * @param {FormLike} form Form that need to be auto filled
- */
-function FormAutofillHandler(form) {
-  this.form = form;
-  this.fieldDetails = [];
-  this.winUtils = this.form.rootElement.ownerGlobal.QueryInterface(Ci.nsIInterfaceRequestor)
-    .getInterface(Ci.nsIDOMWindowUtils);
+const {FIELD_STATES} = FormAutofillUtils;
 
-  this.address = {
+class FormAutofillSection {
+  constructor(fieldDetails, winUtils) {
+    this.fieldDetails = fieldDetails;
+    this.filledRecordGUID = null;
+    this.winUtils = winUtils;
+
     /**
-     * Similar to the `fieldDetails` above but contains address fields only.
+     * Enum for form autofill MANUALLY_MANAGED_STATES values
      */
-    fieldDetails: [],
-    /**
-     * String of the filled address' guid.
-     */
-    filledRecordGUID: null,
-  };
+    this._FIELD_STATE_ENUM = {
+      // not themed
+      [FIELD_STATES.NORMAL]: null,
+      // highlighted
+      [FIELD_STATES.AUTO_FILLED]: "-moz-autofill",
+      // highlighted && grey color text
+      [FIELD_STATES.PREVIEW]: "-moz-autofill-preview",
+    };
 
-  this.creditCard = {
-    /**
-     * Similar to the `fieldDetails` above but contains credit card fields only.
-     */
-    fieldDetails: [],
-    /**
-     * String of the filled creditCard's guid.
-     */
-    filledRecordGUID: null,
-  };
-
-  this._cacheValue = {
-    allFieldNames: null,
-    oneLineStreetAddress: null,
-    matchingSelectOption: null,
-  };
-}
-
-FormAutofillHandler.prototype = {
-  /**
-   * DOM Form element to which this object is attached.
-   */
-  form: null,
-
-  _formFieldCount: 0,
-
-  /**
-   * Array of collected data about relevant form fields.  Each item is an object
-   * storing the identifying details of the field and a reference to the
-   * originally associated element from the form.
-   *
-   * The "section", "addressType", "contactType", and "fieldName" values are
-   * used to identify the exact field when the serializable data is received
-   * from the backend.  There cannot be multiple fields which have
-   * the same exact combination of these values.
-   *
-   * A direct reference to the associated element cannot be sent to the user
-   * interface because processing may be done in the parent process.
-   */
-  fieldDetails: null,
-
-  /**
-   * Subcategory of handler that contains address related data.
-   */
-  address: null,
-
-  /**
-   * Subcategory of handler that contains credit card related data.
-   */
-  creditCard: null,
-
-  /**
-   * A WindowUtils reference of which Window the form belongs
-   */
-  winUtils: null,
-
-  /**
-   * Enum for form autofill MANUALLY_MANAGED_STATES values
-   */
-  fieldStateEnum: {
-    // not themed
-    NORMAL: null,
-    // highlighted
-    AUTO_FILLED: "-moz-autofill",
-    // highlighted && grey color text
-    PREVIEW: "-moz-autofill-preview",
-  },
-
-  get isFormChangedSinceLastCollection() {
-    // When the number of form controls is the same with last collection, it
-    // can be recognized as there is no element changed. However, we should
-    // improve the function to detect the element changes. e.g. a tel field
-    // is changed from type="hidden" to type="tel".
-    return this._formFieldCount != this.form.elements.length;
-  },
-
-  /**
-   * Time in milliseconds since epoch when a user started filling in the form.
-   */
-  timeStartedFillingMS: null,
-
-  /**
-   * Set fieldDetails from the form about fields that can be autofilled.
-   *
-   * @param {boolean} allowDuplicates
-   *        true to remain any duplicated field details otherwise to remove the
-   *        duplicated ones.
-   * @returns {Array} The valid address and credit card details.
-   */
-  collectFormFields(allowDuplicates = false) {
-    this._cacheValue.allFieldNames = null;
-    this._formFieldCount = this.form.elements.length;
-    let fieldDetails = FormAutofillHeuristics.getFormInfo(this.form, allowDuplicates);
-    this.fieldDetails = fieldDetails ? fieldDetails : [];
-    log.debug("Collected details on", this.fieldDetails.length, "fields");
-
-    this.address.fieldDetails = this.fieldDetails.filter(
-      detail => FormAutofillUtils.isAddressField(detail.fieldName)
-    );
-    this.creditCard.fieldDetails = this.fieldDetails.filter(
-      detail => FormAutofillUtils.isCreditCardField(detail.fieldName)
-    );
-
-    if (this.address.fieldDetails.length < FormAutofillUtils.AUTOFILL_FIELDS_THRESHOLD) {
-      log.debug("Ignoring address related fields since it has only",
-                this.address.fieldDetails.length,
-                "field(s)");
-      this.address.fieldDetails = [];
+    if (!this.isValidSection()) {
+      this.fieldDetails = [];
+      log.debug(`Ignoring ${this.constructor.name} related fields since it is an invalid section`);
     }
 
-    if (!this.creditCard.fieldDetails.some(i => i.fieldName == "cc-number")) {
-      log.debug("Ignoring credit card related fields since it's without credit card number field");
-      this.creditCard.fieldDetails = [];
-    }
-    let validDetails = Array.of(...(this.address.fieldDetails),
-                                ...(this.creditCard.fieldDetails));
-    for (let detail of validDetails) {
-      let input = detail.elementWeakRef.get();
-      if (!input) {
-        continue;
-      }
-      input.addEventListener("input", this);
-    }
+    this._cacheValue = {
+      allFieldNames: null,
+      matchingSelectOption: null,
+    };
+  }
 
-    return validDetails;
-  },
+  /*
+   * Examine the section is a valid section or not based on its fieldDetails or
+   * other information. This method must be overrided.
+   *
+   * @returns {boolean} True for a valid section, otherwise false
+   *
+   */
+  isValidSection() {
+    throw new TypeError("isValidSection method must be overrided");
+  }
 
-  getFieldDetailByName(fieldName) {
-    return this.fieldDetails.find(detail => detail.fieldName == fieldName);
-  },
+  /*
+   * Examine the section is an enabled section type or not based on its
+   * preferences. This method must be overrided.
+   *
+   * @returns {boolean} True for an enabled section type, otherwise false
+   *
+   */
+  isEnabled() {
+    throw new TypeError("isEnabled method must be overrided");
+  }
+
+  /*
+   * Examine the section is createable for storing the profile. This method
+   * must be overrided.
+   *
+   * @param {Object} record The record for examining createable
+   * @returns {boolean} True for the record is createable, otherwise false
+   *
+   */
+  isRecordCreatable(record) {
+    throw new TypeError("isRecordCreatable method must be overrided");
+  }
+
+  /**
+   * Override this method if the profile is needed to apply some transformers.
+   *
+   * @param {Object} profile
+   *        A profile should be converted based on the specific requirement.
+   */
+  applyTransformers(profile) {}
+
+  /**
+   * Override this method if the profile is needed to be customized for
+   * previewing values.
+   *
+   * @param {Object} profile
+   *        A profile for pre-processing before previewing values.
+   */
+  preparePreviewProfile(profile) {}
+
+  /**
+   * Override this method if the profile is needed to be customized for filling
+   * values.
+   *
+   * @param {Object} profile
+   *        A profile for pre-processing before filling values.
+   * @returns {boolean} Whether the profile should be filled.
+   */
+  async prepareFillingProfile(profile) {
+    return true;
+  }
+
+  /*
+   * Override this methid if any data for `createRecord` is needed to be
+   * normailized before submitting the record.
+   *
+   * @param {Object} profile
+   *        A record for normalization.
+   */
+  normalizeCreatingRecord(data) {}
+
+  /*
+   * Override this method if there is any field value needs to compute for a
+   * specific case. Return the original value in the default case.
+   * @param {String} value
+   *        The original field value.
+   * @param {Object} fieldDetail
+   *        A fieldDetail of the related element.
+   * @param {HTMLElement} element
+   *        A element for checking converting value.
+   *
+   * @returns {String}
+   *          A string of the converted value.
+   */
+  computeFillingValue(value, fieldName, element) {
+    return value;
+  }
+
+  set focusedInput(element) {
+    this._focusedDetail = this.getFieldDetailByElement(element);
+  }
 
   getFieldDetailByElement(element) {
     return this.fieldDetails.find(
       detail => detail.elementWeakRef.get() == element
     );
-  },
-
-  getFieldDetailsByElement(element) {
-    let fieldDetail = this.getFieldDetailByElement(element);
-    if (!fieldDetail) {
-      return [];
-    }
-    if (FormAutofillUtils.isAddressField(fieldDetail.fieldName)) {
-      return this.address.fieldDetails;
-    }
-    if (FormAutofillUtils.isCreditCardField(fieldDetail.fieldName)) {
-      return this.creditCard.fieldDetails;
-    }
-    return [];
-  },
+  }
 
   get allFieldNames() {
     if (!this._cacheValue.allFieldNames) {
       this._cacheValue.allFieldNames = this.fieldDetails.map(record => record.fieldName);
     }
     return this._cacheValue.allFieldNames;
-  },
+  }
 
-  _getOneLineStreetAddress(address) {
-    if (!this._cacheValue.oneLineStreetAddress) {
-      this._cacheValue.oneLineStreetAddress = {};
-    }
-    if (!this._cacheValue.oneLineStreetAddress[address]) {
-      this._cacheValue.oneLineStreetAddress[address] = FormAutofillUtils.toOneLineAddress(address);
-    }
-    return this._cacheValue.oneLineStreetAddress[address];
-  },
+  getFieldDetailByName(fieldName) {
+    return this.fieldDetails.find(detail => detail.fieldName == fieldName);
+  }
 
-  _addressTransformer(profile) {
-    if (profile["street-address"]) {
-      // "-moz-street-address-one-line" is used by the labels in
-      // ProfileAutoCompleteResult.
-      profile["-moz-street-address-one-line"] = this._getOneLineStreetAddress(profile["street-address"]);
-      let streetAddressDetail = this.getFieldDetailByName("street-address");
-      if (streetAddressDetail &&
-          (streetAddressDetail.elementWeakRef.get() instanceof Ci.nsIDOMHTMLInputElement)) {
-        profile["street-address"] = profile["-moz-street-address-one-line"];
-      }
-
-      let waitForConcat = [];
-      for (let f of ["address-line3", "address-line2", "address-line1"]) {
-        waitForConcat.unshift(profile[f]);
-        if (this.getFieldDetailByName(f)) {
-          if (waitForConcat.length > 1) {
-            profile[f] = FormAutofillUtils.toOneLineAddress(waitForConcat);
-          }
-          waitForConcat = [];
-        }
-      }
-    }
-  },
-
-  _matchSelectOptions(profile) {
+  matchSelectOptions(profile) {
     if (!this._cacheValue.matchingSelectOption) {
       this._cacheValue.matchingSelectOption = new WeakMap();
     }
@@ -248,7 +178,7 @@ FormAutofillHandler.prototype = {
       }
 
       let element = fieldDetail.elementWeakRef.get();
-      if (!(element instanceof Ci.nsIDOMHTMLSelectElement)) {
+      if (ChromeUtils.getClassName(element) !== "HTMLSelectElement") {
         continue;
       }
 
@@ -272,15 +202,39 @@ FormAutofillHandler.prototype = {
         delete profile[fieldName];
       }
     }
-  },
+  }
+
+  adaptFieldMaxLength(profile) {
+    for (let key in profile) {
+      let detail = this.getFieldDetailByName(key);
+      if (!detail) {
+        continue;
+      }
+
+      let element = detail.elementWeakRef.get();
+      if (!element) {
+        continue;
+      }
+
+      let maxLength = element.maxLength;
+      if (maxLength === undefined || maxLength < 0 || profile[key].length <= maxLength) {
+        continue;
+      }
+
+      if (maxLength) {
+        profile[key] = profile[key].substr(0, maxLength);
+      } else {
+        delete profile[key];
+      }
+    }
+  }
 
   getAdaptedProfiles(originalProfiles) {
     for (let profile of originalProfiles) {
-      this._addressTransformer(profile);
-      this._matchSelectOptions(profile);
+      this.applyTransformers(profile);
     }
     return originalProfiles;
-  },
+  }
 
   /**
    * Processes form fields that can be autofilled, and populates them with the
@@ -288,41 +242,21 @@ FormAutofillHandler.prototype = {
    *
    * @param {Object} profile
    *        A profile to be filled in.
-   * @param {Object} focusedInput
-   *        A focused input element needed to determine the address or credit
-   *        card field.
    */
-  async autofillFormFields(profile, focusedInput) {
-    let focusedDetail = this.fieldDetails.find(
-      detail => detail.elementWeakRef.get() == focusedInput
-    );
-    let targetSet;
-    if (FormAutofillUtils.isCreditCardField(focusedDetail.fieldName)) {
-      // When Master Password is enabled by users, the decryption process
-      // should prompt Master Password dialog to get the decrypted credit
-      // card number. Otherwise, the number can be decrypted with the default
-      // password.
-      if (profile["cc-number-encrypted"]) {
-        let decrypted = await this._decrypt(profile["cc-number-encrypted"], true);
-
-        if (!decrypted) {
-          // Early return if the decrypted is empty or undefined
-          return;
-        }
-
-        profile["cc-number"] = decrypted;
-      }
-      targetSet = this.creditCard;
-    } else if (FormAutofillUtils.isAddressField(focusedDetail.fieldName)) {
-      targetSet = this.address;
-    } else {
-      throw new Error("Unknown form fields");
+  async autofillFields(profile) {
+    let focusedDetail = this._focusedDetail;
+    if (!focusedDetail) {
+      throw new Error("No fieldDetail for the focused input.");
     }
 
-    log.debug("profile in autofillFormFields:", profile);
+    if (!await this.prepareFillingProfile(profile)) {
+      log.debug("profile cannot be filled", profile);
+      return;
+    }
+    log.debug("profile in autofillFields:", profile);
 
-    targetSet.filledRecordGUID = profile.guid;
-    for (let fieldDetail of targetSet.fieldDetails) {
+    this.filledRecordGUID = profile.guid;
+    for (let fieldDetail of this.fieldDetails) {
       // Avoid filling field value in the following cases:
       // 1. a non-empty input field for an unfocused input
       // 2. the invalid value set
@@ -336,20 +270,18 @@ FormAutofillHandler.prototype = {
       element.previewValue = "";
       let value = profile[fieldDetail.fieldName];
 
-      if (element instanceof Ci.nsIDOMHTMLInputElement && value) {
+      if (ChromeUtils.getClassName(element) === "HTMLInputElement" && value) {
         // For the focused input element, it will be filled with a valid value
         // anyway.
         // For the others, the fields should be only filled when their values
         // are empty.
+        let focusedInput = focusedDetail.elementWeakRef.get();
         if (element == focusedInput ||
             (element != focusedInput && !element.value)) {
           element.setUserInput(value);
-          this.changeFieldState(fieldDetail, "AUTO_FILLED");
-          continue;
+          this._changeFieldState(fieldDetail, FIELD_STATES.AUTO_FILLED);
         }
-      }
-
-      if (element instanceof Ci.nsIDOMHTMLSelectElement) {
+      } else if (ChromeUtils.getClassName(element) === "HTMLSelectElement") {
         let cache = this._cacheValue.matchingSelectOption.get(element) || {};
         let option = cache[value] && cache[value].get();
         if (!option) {
@@ -363,64 +295,23 @@ FormAutofillHandler.prototype = {
           element.dispatchEvent(new element.ownerGlobal.Event("change", {bubbles: true}));
         }
         // Autofill highlight appears regardless if value is changed or not
-        this.changeFieldState(fieldDetail, "AUTO_FILLED");
+        this._changeFieldState(fieldDetail, FIELD_STATES.AUTO_FILLED);
       }
     }
-
-    // Handle the highlight style resetting caused by user's correction afterward.
-    log.debug("register change handler for filled form:", this.form);
-    const onChangeHandler = e => {
-      let hasFilledFields;
-
-      if (!e.isTrusted) {
-        return;
-      }
-
-      for (let fieldDetail of targetSet.fieldDetails) {
-        let element = fieldDetail.elementWeakRef.get();
-
-        if (!element) {
-          return;
-        }
-
-        if (e.target == element || (e.target == element.form && e.type == "reset")) {
-          this.changeFieldState(fieldDetail, "NORMAL");
-        }
-
-        hasFilledFields |= (fieldDetail.state == "AUTO_FILLED");
-      }
-
-      // Unregister listeners and clear guid once no field is in AUTO_FILLED state.
-      if (!hasFilledFields) {
-        this.form.rootElement.removeEventListener("input", onChangeHandler);
-        this.form.rootElement.removeEventListener("reset", onChangeHandler);
-        targetSet.filledRecordGUID = null;
-      }
-    };
-
-    this.form.rootElement.addEventListener("input", onChangeHandler);
-    this.form.rootElement.addEventListener("reset", onChangeHandler);
-  },
+  }
 
   /**
    * Populates result to the preview layers with given profile.
    *
    * @param {Object} profile
    *        A profile to be previewed with
-   * @param {Object} focusedInput
-   *        A focused input element for determining credit card or address fields.
    */
-  previewFormFields(profile, focusedInput) {
-    log.debug("preview profile in autofillFormFields:", profile);
+  previewFormFields(profile) {
+    log.debug("preview profile: ", profile);
 
-    // Always show the decrypted credit card number when Master Password is
-    // disabled.
-    if (profile["cc-number-decrypted"]) {
-      profile["cc-number"] = profile["cc-number-decrypted"];
-    }
+    this.preparePreviewProfile(profile);
 
-    let fieldDetails = this.getFieldDetailsByElement(focusedInput);
-    for (let fieldDetail of fieldDetails) {
+    for (let fieldDetail of this.fieldDetails) {
       let element = fieldDetail.elementWeakRef.get();
       let value = profile[fieldDetail.fieldName] || "";
 
@@ -429,7 +320,7 @@ FormAutofillHandler.prototype = {
         continue;
       }
 
-      if (element instanceof Ci.nsIDOMHTMLSelectElement) {
+      if (ChromeUtils.getClassName(element) === "HTMLSelectElement") {
         // Unlike text input, select element is always previewed even if
         // the option is already selected.
         if (value) {
@@ -446,21 +337,17 @@ FormAutofillHandler.prototype = {
         continue;
       }
       element.previewValue = value;
-      this.changeFieldState(fieldDetail, value ? "PREVIEW" : "NORMAL");
+      this._changeFieldState(fieldDetail, value ? FIELD_STATES.PREVIEW : FIELD_STATES.NORMAL);
     }
-  },
+  }
 
   /**
    * Clear preview text and background highlight of all fields.
-   *
-   * @param {Object} focusedInput
-   *        A focused input element for determining credit card or address fields.
    */
-  clearPreviewedFormFields(focusedInput) {
+  clearPreviewedFormFields() {
     log.debug("clear previewed fields in:", this.form);
 
-    let fieldDetails = this.getFieldDetailsByElement(focusedInput);
-    for (let fieldDetail of fieldDetails) {
+    for (let fieldDetail of this.fieldDetails) {
       let element = fieldDetail.elementWeakRef.get();
       if (!element) {
         log.warn(fieldDetail.fieldName, "is unreachable");
@@ -471,13 +358,32 @@ FormAutofillHandler.prototype = {
 
       // We keep the state if this field has
       // already been auto-filled.
-      if (fieldDetail.state === "AUTO_FILLED") {
+      if (fieldDetail.state == FIELD_STATES.AUTO_FILLED) {
         continue;
       }
 
-      this.changeFieldState(fieldDetail, "NORMAL");
+      this._changeFieldState(fieldDetail, FIELD_STATES.NORMAL);
     }
-  },
+  }
+
+  /**
+   * Clear value and highlight style of all filled fields.
+   */
+  clearPopulatedForm() {
+    for (let fieldDetail of this.fieldDetails) {
+      let element = fieldDetail.elementWeakRef.get();
+      if (!element) {
+        log.warn(fieldDetail.fieldName, "is unreachable");
+        continue;
+      }
+
+      // Only reset value for input element.
+      if (fieldDetail.state == FIELD_STATES.AUTO_FILLED &&
+          ChromeUtils.getClassName(element) === "HTMLInputElement") {
+        element.setUserInput("");
+      }
+    }
+  }
 
   /**
    * Change the state of a field to correspond with different presentations.
@@ -487,19 +393,22 @@ FormAutofillHandler.prototype = {
    * @param {string} nextState
    *        Used to determine the next state
    */
-  changeFieldState(fieldDetail, nextState) {
+  _changeFieldState(fieldDetail, nextState) {
     let element = fieldDetail.elementWeakRef.get();
 
     if (!element) {
       log.warn(fieldDetail.fieldName, "is unreachable while changing state");
       return;
     }
-    if (!(nextState in this.fieldStateEnum)) {
+    if (!(nextState in this._FIELD_STATE_ENUM)) {
       log.warn(fieldDetail.fieldName, "is trying to change to an invalid state");
       return;
     }
+    if (fieldDetail.state == nextState) {
+      return;
+    }
 
-    for (let [state, mmStateValue] of Object.entries(this.fieldStateEnum)) {
+    for (let [state, mmStateValue] of Object.entries(this._FIELD_STATE_ENUM)) {
       // The NORMAL state is simply the absence of other manually
       // managed states so we never need to add or remove it.
       if (!mmStateValue) {
@@ -513,10 +422,140 @@ FormAutofillHandler.prototype = {
       }
     }
 
-    fieldDetail.state = nextState;
-  },
+    switch (nextState) {
+      case FIELD_STATES.NORMAL: {
+        if (fieldDetail.state == FIELD_STATES.AUTO_FILLED) {
+          element.removeEventListener("input", this, {mozSystemGroup: true});
+        }
+        break;
+      }
+      case FIELD_STATES.AUTO_FILLED: {
+        element.addEventListener("input", this, {mozSystemGroup: true});
+        break;
+      }
+    }
 
-  _isAddressRecordCreatable(record) {
+    fieldDetail.state = nextState;
+  }
+
+  resetFieldStates() {
+    for (let fieldDetail of this.fieldDetails) {
+      const element = fieldDetail.elementWeakRef.get();
+      element.removeEventListener("input", this, {mozSystemGroup: true});
+      this._changeFieldState(fieldDetail, FIELD_STATES.NORMAL);
+    }
+    this.filledRecordGUID = null;
+  }
+
+  isFilled() {
+    return !!this.filledRecordGUID;
+  }
+
+  /**
+   * Return the record that is converted from `fieldDetails` and only valid
+   * form record is included.
+   *
+   * @returns {Object|null}
+   *          A record object consists of three properties:
+   *            - guid: The id of the previously-filled profile or null if omitted.
+   *            - record: A valid record converted from details with trimmed result.
+   *            - untouchedFields: Fields that aren't touched after autofilling.
+   *          Return `null` for any uncreatable or invalid record.
+   */
+  createRecord() {
+    let details = this.fieldDetails;
+    if (!this.isEnabled() || !details || details.length == 0) {
+      return null;
+    }
+
+    let data = {
+      guid: this.filledRecordGUID,
+      record: {},
+      untouchedFields: [],
+    };
+
+    details.forEach(detail => {
+      let element = detail.elementWeakRef.get();
+      // Remove the unnecessary spaces
+      let value = element && element.value.trim();
+      value = this.computeFillingValue(value, detail, element);
+
+      if (!value || value.length > FormAutofillUtils.MAX_FIELD_VALUE_LENGTH) {
+        // Keep the property and preserve more information for updating
+        data.record[detail.fieldName] = "";
+        return;
+      }
+
+      data.record[detail.fieldName] = value;
+
+      if (detail.state == FIELD_STATES.AUTO_FILLED) {
+        data.untouchedFields.push(detail.fieldName);
+      }
+    });
+
+    this.normalizeCreatingRecord(data);
+
+    if (!this.isRecordCreatable(data.record)) {
+      return null;
+    }
+
+    return data;
+  }
+
+  handleEvent(event) {
+    switch (event.type) {
+      case "input": {
+        if (!event.isTrusted) {
+          return;
+        }
+        const target = event.target;
+        const targetFieldDetail = this.getFieldDetailByElement(target);
+
+        this._changeFieldState(targetFieldDetail, FIELD_STATES.NORMAL);
+
+        let isAutofilled = false;
+        let dimFieldDetails = [];
+        for (const fieldDetail of this.fieldDetails) {
+          const element = fieldDetail.elementWeakRef.get();
+
+          if (ChromeUtils.getClassName(element) === "HTMLSelectElement") {
+            // Dim fields are those we don't attempt to revert their value
+            // when clear the target set, such as <select>.
+            dimFieldDetails.push(fieldDetail);
+          } else {
+            isAutofilled |= fieldDetail.state == FIELD_STATES.AUTO_FILLED;
+          }
+        }
+        if (!isAutofilled) {
+          // Restore the dim fields to initial state as well once we knew
+          // that user had intention to clear the filled form manually.
+          for (const fieldDetail of dimFieldDetails) {
+            this._changeFieldState(fieldDetail, FIELD_STATES.NORMAL);
+          }
+          this.filledRecordGUID = null;
+        }
+        break;
+      }
+    }
+  }
+}
+
+class FormAutofillAddressSection extends FormAutofillSection {
+  constructor(fieldDetails, winUtils) {
+    super(fieldDetails, winUtils);
+
+    this._cacheValue.oneLineStreetAddress = null;
+  }
+
+  isValidSection() {
+    return this.fieldDetails.length >= FormAutofillUtils.AUTOFILL_FIELDS_THRESHOLD;
+  }
+
+  isEnabled() {
+    return FormAutofillUtils.isAutofillAddressesEnabled;
+  }
+
+  isRecordCreatable(record) {
     let hasName = 0;
     let length = 0;
     for (let key of Object.keys(record)) {
@@ -530,107 +569,129 @@ FormAutofillHandler.prototype = {
       length++;
     }
     return (length + hasName) >= FormAutofillUtils.AUTOFILL_FIELDS_THRESHOLD;
-  },
+  }
 
-  _isCreditCardRecordCreatable(record) {
-    return record["cc-number"] && FormAutofillUtils.isCCNumber(record["cc-number"]);
-  },
-
-  /**
-   * Return the records that is converted from address/creditCard fieldDetails and
-   * only valid form records are included.
-   *
-   * @returns {Object}
-   *          Consists of two record objects: address, creditCard. Each one can
-   *          be omitted if there's no valid fields. A record object consists of
-   *          three properties:
-   *            - guid: The id of the previously-filled profile or null if omitted.
-   *            - record: A valid record converted from details with trimmed result.
-   *            - untouchedFields: Fields that aren't touched after autofilling.
-   */
-  createRecords() {
-    let data = {};
-    let target = [];
-
-    if (FormAutofillUtils.isAutofillAddressesEnabled) {
-      target.push("address");
+  _getOneLineStreetAddress(address) {
+    if (!this._cacheValue.oneLineStreetAddress) {
+      this._cacheValue.oneLineStreetAddress = {};
     }
-    if (FormAutofillUtils.isAutofillCreditCardsEnabled) {
-      target.push("creditCard");
+    if (!this._cacheValue.oneLineStreetAddress[address]) {
+      this._cacheValue.oneLineStreetAddress[address] = FormAutofillUtils.toOneLineAddress(address);
     }
+    return this._cacheValue.oneLineStreetAddress[address];
+  }
 
-    target.forEach(type => {
-      let details = this[type].fieldDetails;
-      if (!details || details.length == 0) {
-        return;
+  addressTransformer(profile) {
+    if (profile["street-address"]) {
+      // "-moz-street-address-one-line" is used by the labels in
+      // ProfileAutoCompleteResult.
+      profile["-moz-street-address-one-line"] = this._getOneLineStreetAddress(profile["street-address"]);
+      let streetAddressDetail = this.getFieldDetailByName("street-address");
+      if (streetAddressDetail &&
+          (ChromeUtils.getClassName(streetAddressDetail.elementWeakRef.get()) === "HTMLInputElement")) {
+        profile["street-address"] = profile["-moz-street-address-one-line"];
       }
 
-      data[type] = {
-        guid: this[type].filledRecordGUID,
-        record: {},
-        untouchedFields: [],
-      };
-
-      details.forEach(detail => {
-        let element = detail.elementWeakRef.get();
-        // Remove the unnecessary spaces
-        let value = element && element.value.trim();
-
-        // Try to abbreviate the value of select element.
-        if (type == "address" &&
-            detail.fieldName == "address-level1" &&
-            element instanceof Ci.nsIDOMHTMLSelectElement) {
-          // Don't save the record when the option value is empty *OR* there
-          // are multiple options being selected. The empty option is usually
-          // assumed to be default along with a meaningless text to users.
-          if (!value || element.selectedOptions.length != 1) {
-            // Keep the property and preserve more information for address updating
-            data[type].record[detail.fieldName] = "";
-            return;
+      let waitForConcat = [];
+      for (let f of ["address-line3", "address-line2", "address-line1"]) {
+        waitForConcat.unshift(profile[f]);
+        if (this.getFieldDetailByName(f)) {
+          if (waitForConcat.length > 1) {
+            profile[f] = FormAutofillUtils.toOneLineAddress(waitForConcat);
           }
-
-          let text = element.selectedOptions[0].text.trim();
-          value = FormAutofillUtils.getAbbreviatedStateName([value, text]) || text;
+          waitForConcat = [];
         }
+      }
+    }
+  }
 
-        if (!value) {
-          // Keep the property and preserve more information for updating
-          data[type].record[detail.fieldName] = "";
-          return;
-        }
-
-        data[type].record[detail.fieldName] = value;
-
-        if (detail.state == "AUTO_FILLED") {
-          data[type].untouchedFields.push(detail.fieldName);
-        }
-      });
-    });
-
-    this._normalizeAddress(data.address);
-
-    if (data.address && !this._isAddressRecordCreatable(data.address.record)) {
-      log.debug("No address record saving since there are only",
-                     Object.keys(data.address.record).length,
-                     "usable fields");
-      delete data.address;
+  /**
+   * Replace tel with tel-national if tel violates the input element's
+   * restriction.
+   * @param {Object} profile
+   *        A profile to be converted.
+   */
+  telTransformer(profile) {
+    if (!profile.tel || !profile["tel-national"]) {
+      return;
     }
 
-    if (data.creditCard && !this._isCreditCardRecordCreatable(data.creditCard.record)) {
-      log.debug("No credit card record saving since card number is invalid");
-      delete data.creditCard;
+    let detail = this.getFieldDetailByName("tel");
+    if (!detail) {
+      return;
     }
 
-    // If both address and credit card exists, skip this metrics because it not a
-    // general case and each specific histogram might contains insufficient data set.
-    if (data.address && data.creditCard) {
-      this.timeStartedFillingMS = null;
+    let element = detail.elementWeakRef.get();
+    let _pattern;
+    let testPattern = str => {
+      if (!_pattern) {
+        // The pattern has to match the entire value.
+        _pattern = new RegExp("^(?:" + element.pattern + ")$", "u");
+      }
+      return _pattern.test(str);
+    };
+    if (element.pattern) {
+      if (testPattern(profile.tel)) {
+        return;
+      }
+    } else if (element.maxLength) {
+      if (detail._reason == "autocomplete" && profile.tel.length <= element.maxLength) {
+        return;
+      }
     }
 
-    return data;
-  },
+    if (detail._reason != "autocomplete") {
+      // Since we only target people living in US and using en-US websites in
+      // MVP, it makes more sense to fill `tel-national` instead of `tel`
+      // if the field is identified by heuristics and no other clues to
+      // determine which one is better.
+      // TODO: [Bug 1407545] This should be improved once more countries are
+      // supported.
+      profile.tel = profile["tel-national"];
+    } else if (element.pattern) {
+      if (testPattern(profile["tel-national"])) {
+        profile.tel = profile["tel-national"];
+      }
+    } else if (element.maxLength) {
+      if (profile["tel-national"].length <= element.maxLength) {
+        profile.tel = profile["tel-national"];
+      }
+    }
+  }
 
-  _normalizeAddress(address) {
+  /*
+   * Apply all address related transformers.
+   *
+   * @param {Object} profile
+   *        A profile for adjusting address related value.
+   * @override
+   */
+  applyTransformers(profile) {
+    this.addressTransformer(profile);
+    this.telTransformer(profile);
+    this.matchSelectOptions(profile);
+    this.adaptFieldMaxLength(profile);
+  }
+
+  computeFillingValue(value, fieldDetail, element) {
+    // Try to abbreviate the value of select element.
+    if (fieldDetail.fieldName == "address-level1" &&
+      ChromeUtils.getClassName(element) === "HTMLSelectElement") {
+      // Don't save the record when the option value is empty *OR* there
+      // are multiple options being selected. The empty option is usually
+      // assumed to be default along with a meaningless text to users.
+      if (!value || element.selectedOptions.length != 1) {
+        // Keep the property and preserve more information for address updating
+        value = "";
+      } else {
+        let text = element.selectedOptions[0].text.trim();
+        value = FormAutofillUtils.getAbbreviatedSubregionName([value, text]) || text;
+      }
+    }
+    return value;
+  }
+
+  normalizeCreatingRecord(address) {
     if (!address) {
       return;
     }
@@ -671,7 +732,86 @@ FormAutofillHandler.prototype = {
         }
       }
     }
-  },
+  }
+}
+
+class FormAutofillCreditCardSection extends FormAutofillSection {
+  constructor(fieldDetails, winUtils) {
+    super(fieldDetails, winUtils);
+  }
+
+  isValidSection() {
+    let ccNumberReason = "";
+    let hasCCNumber = false;
+    let hasExpiryDate = false;
+    let hasCCName = false;
+
+    for (let detail of this.fieldDetails) {
+      switch (detail.fieldName) {
+        case "cc-number":
+          hasCCNumber = true;
+          ccNumberReason = detail._reason;
+          break;
+        case "cc-name":
+        case "cc-given-name":
+        case "cc-additional-name":
+        case "cc-family-name":
+          hasCCName = true;
+          break;
+        case "cc-exp":
+        case "cc-exp-month":
+        case "cc-exp-year":
+          hasExpiryDate = true;
+          break;
+      }
+    }
+
+    return hasCCNumber && (ccNumberReason == "autocomplete" || hasExpiryDate || hasCCName);
+  }
+
+  isEnabled() {
+    return FormAutofillUtils.isAutofillCreditCardsEnabled;
+  }
+
+  isRecordCreatable(record) {
+    return record["cc-number"] && FormAutofillUtils.isCCNumber(record["cc-number"]);
+  }
+
+  creditCardExpDateTransformer(profile) {
+    if (!profile["cc-exp"]) {
+      return;
+    }
+
+    let detail = this.getFieldDetailByName("cc-exp");
+    if (!detail) {
+      return;
+    }
+
+    let element = detail.elementWeakRef.get();
+    if (element.tagName != "INPUT" || !element.placeholder) {
+      return;
+    }
+
+    let result,
+      ccExpMonth = profile["cc-exp-month"],
+      ccExpYear = profile["cc-exp-year"],
+      placeholder = element.placeholder;
+
+    result = /(?:[^m]|\b)(m{1,2})\s*([-/\\]*)\s*(y{2,4})(?!y)/i.exec(placeholder);
+    if (result) {
+      profile["cc-exp"] = String(ccExpMonth).padStart(result[1].length, "0") +
+                          result[2] +
+                          String(ccExpYear).substr(-1 * result[3].length);
+      return;
+    }
+
+    result = /(?:[^y]|\b)(y{2,4})\s*([-/\\]*)\s*(m{1,2})(?!m)/i.exec(placeholder);
+    if (result) {
+      profile["cc-exp"] = String(ccExpYear).substr(-1 * result[1].length) +
+                          result[2] +
+                          String(ccExpMonth).padStart(result[3].length, "0");
+    }
+  }
 
   async _decrypt(cipherText, reauth) {
     return new Promise((resolve) => {
@@ -682,7 +822,254 @@ FormAutofillHandler.prototype = {
 
       Services.cpmm.sendAsyncMessage("FormAutofill:GetDecryptedString", {cipherText, reauth});
     });
-  },
+  }
+
+  /*
+   * Apply all credit card related transformers.
+   *
+   * @param {Object} profile
+   *        A profile for adjusting credit card related value.
+   * @override
+   */
+  applyTransformers(profile) {
+    this.matchSelectOptions(profile);
+    this.creditCardExpDateTransformer(profile);
+    this.adaptFieldMaxLength(profile);
+  }
+
+  /**
+   * Customize for previewing prorifle.
+   *
+   * @param {Object} profile
+   *        A profile for pre-processing before previewing values.
+   * @override
+   */
+  preparePreviewProfile(profile) {
+    // Always show the decrypted credit card number when Master Password is
+    // disabled.
+    if (profile["cc-number-decrypted"]) {
+      profile["cc-number"] = profile["cc-number-decrypted"];
+    }
+  }
+
+  /**
+   * Customize for filling prorifle.
+   *
+   * @param {Object} profile
+   *        A profile for pre-processing before filling values.
+   * @returns {boolean} Whether the profile should be filled.
+   * @override
+   */
+  async prepareFillingProfile(profile) {
+    // When Master Password is enabled by users, the decryption process
+    // should prompt Master Password dialog to get the decrypted credit
+    // card number. Otherwise, the number can be decrypted with the default
+    // password.
+    if (profile["cc-number-encrypted"]) {
+      let decrypted = await this._decrypt(profile["cc-number-encrypted"], true);
+
+      if (!decrypted) {
+        // Early return if the decrypted is empty or undefined
+        return false;
+      }
+
+      profile["cc-number"] = decrypted;
+    }
+    return true;
+  }
+}
+
+/**
+ * Handles profile autofill for a DOM Form element.
+ */
+class FormAutofillHandler {
+  /**
+   * Initialize the form from `FormLike` object to handle the section or form
+   * operations.
+   * @param {FormLike} form Form that need to be auto filled
+   */
+  constructor(form) {
+    this._updateForm(form);
+
+    /**
+     * A WindowUtils reference of which Window the form belongs
+     */
+    this.winUtils = this.form.rootElement.ownerGlobal.QueryInterface(Ci.nsIInterfaceRequestor)
+      .getInterface(Ci.nsIDOMWindowUtils);
+
+    /**
+     * Time in milliseconds since epoch when a user started filling in the form.
+     */
+    this.timeStartedFillingMS = null;
+  }
+
+  set focusedInput(element) {
+    let section = this._sectionCache.get(element);
+    if (!section) {
+      section = this.sections.find(
+        s => s.getFieldDetailByElement(element)
+      );
+      this._sectionCache.set(element, section);
+    }
+
+    this._focusedSection = section;
+
+    if (section) {
+      section.focusedInput = element;
+    }
+  }
+
+  get activeSection() {
+    return this._focusedSection;
+  }
+
+  /**
+   * Check the form is necessary to be updated. This function should be able to
+   * detect any changes including all control elements in the form.
+   * @param {HTMLElement} element The element supposed to be in the form.
+   * @returns {boolean} FormAutofillHandler.form is updated or not.
+   */
+  updateFormIfNeeded(element) {
+    // When the following condition happens, FormAutofillHandler.form should be
+    // updated:
+    // * The count of form controls is changed.
+    // * When the element can not be found in the current form.
+    //
+    // However, we should improve the function to detect the element changes.
+    // e.g. a tel field is changed from type="hidden" to type="tel".
+
+    let _formLike;
+    let getFormLike = () => {
+      if (!_formLike) {
+        _formLike = FormLikeFactory.createFromField(element);
+      }
+      return _formLike;
+    };
+
+    let currentForm = element.form;
+    if (!currentForm) {
+      currentForm = getFormLike();
+    }
+
+    if (currentForm.elements.length != this.form.elements.length) {
+      log.debug("The count of form elements is changed.");
+      this._updateForm(getFormLike());
+      return true;
+    }
+
+    if (!this.form.elements.includes(element)) {
+      log.debug("The element can not be found in the current form.");
+      this._updateForm(getFormLike());
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Update the form with a new FormLike, and the related fields should be
+   * updated or clear to ensure the data consistency.
+   * @param {FormLike} form a new FormLike to replace the original one.
+   */
+  _updateForm(form) {
+    /**
+     * DOM Form element to which this object is attached.
+     */
+    this.form = form;
+
+    /**
+     * Array of collected data about relevant form fields.  Each item is an object
+     * storing the identifying details of the field and a reference to the
+     * originally associated element from the form.
+     *
+     * The "section", "addressType", "contactType", and "fieldName" values are
+     * used to identify the exact field when the serializable data is received
+     * from the backend.  There cannot be multiple fields which have
+     * the same exact combination of these values.
+     *
+     * A direct reference to the associated element cannot be sent to the user
+     * interface because processing may be done in the parent process.
+     */
+    this.fieldDetails = null;
+
+    this.sections = [];
+    this._sectionCache = new WeakMap();
+  }
+
+  /**
+   * Set fieldDetails from the form about fields that can be autofilled.
+   *
+   * @param {boolean} allowDuplicates
+   *        true to remain any duplicated field details otherwise to remove the
+   *        duplicated ones.
+   * @returns {Array} The valid address and credit card details.
+   */
+  collectFormFields(allowDuplicates = false) {
+    let sections = FormAutofillHeuristics.getFormInfo(this.form, allowDuplicates);
+    let allValidDetails = [];
+    for (let {fieldDetails, type} of sections) {
+      let section;
+      if (type == FormAutofillUtils.SECTION_TYPES.ADDRESS) {
+        section = new FormAutofillAddressSection(fieldDetails, this.winUtils);
+      } else if (type == FormAutofillUtils.SECTION_TYPES.CREDIT_CARD) {
+        section = new FormAutofillCreditCardSection(fieldDetails, this.winUtils);
+      } else {
+        throw new Error("Unknown field type.");
+      }
+      this.sections.push(section);
+      allValidDetails.push(...section.fieldDetails);
+    }
+
+    for (let detail of allValidDetails) {
+      let input = detail.elementWeakRef.get();
+      if (!input) {
+        continue;
+      }
+      input.addEventListener("input", this, {mozSystemGroup: true});
+    }
+
+    this.fieldDetails = allValidDetails;
+    return allValidDetails;
+  }
+
+  _hasFilledSection() {
+    return this.sections.some(section => section.isFilled());
+  }
+
+  /**
+   * Processes form fields that can be autofilled, and populates them with the
+   * profile provided by backend.
+   *
+   * @param {Object} profile
+   *        A profile to be filled in.
+   */
+  async autofillFormFields(profile) {
+    let noFilledSectionsPreviously = !this._hasFilledSection();
+    await this.activeSection.autofillFields(profile);
+
+    const onChangeHandler = e => {
+      if (!e.isTrusted) {
+        return;
+      }
+      if (e.type == "reset") {
+        for (let section of this.sections) {
+          section.resetFieldStates();
+        }
+      }
+      // Unregister listeners once no field is in AUTO_FILLED state.
+      if (!this._hasFilledSection()) {
+        this.form.rootElement.removeEventListener("input", onChangeHandler, {mozSystemGroup: true});
+        this.form.rootElement.removeEventListener("reset", onChangeHandler, {mozSystemGroup: true});
+      }
+    };
+
+    if (noFilledSectionsPreviously) {
+      // Handle the highlight style resetting caused by user's correction afterward.
+      log.debug("register change handler for filled form:", this.form);
+      this.form.rootElement.addEventListener("input", onChangeHandler, {mozSystemGroup: true});
+      this.form.rootElement.addEventListener("reset", onChangeHandler, {mozSystemGroup: true});
+    }
+  }
 
   handleEvent(event) {
     switch (event.type) {
@@ -696,10 +1083,41 @@ FormAutofillHandler.prototype = {
           if (!input) {
             continue;
           }
-          input.removeEventListener("input", this);
+          input.removeEventListener("input", this, {mozSystemGroup: true});
         }
         this.timeStartedFillingMS = Date.now();
         break;
     }
-  },
-};
+  }
+
+  /**
+   * Collect the filled sections within submitted form and convert all the valid
+   * field data into multiple records.
+   *
+   * @returns {Object} records
+   *          {Array.<Object>} records.address
+   *          {Array.<Object>} records.creditCard
+   */
+  createRecords() {
+    const records = {
+      address: [],
+      creditCard: [],
+    };
+
+    for (const section of this.sections) {
+      const secRecord = section.createRecord();
+      if (!secRecord) {
+        continue;
+      }
+      if (section instanceof FormAutofillAddressSection) {
+        records.address.push(secRecord);
+      } else if (section instanceof FormAutofillCreditCardSection) {
+        records.creditCard.push(secRecord);
+      } else {
+        throw new Error("Unknown section type");
+      }
+    }
+    log.debug("Create records:", records);
+    return records;
+  }
+}

@@ -12,7 +12,6 @@
 #include "nsTArray.h"
 
 class nsAtom;
-class nsIDOMDocument;
 
 class txXPathTreeWalker
 {
@@ -95,20 +94,10 @@ class txXPathNativeNode
 public:
     static txXPathNode* createXPathNode(nsINode* aNode,
                                         bool aKeepRootAlive = false);
-    static txXPathNode* createXPathNode(nsIDOMNode* aNode,
-                                        bool aKeepRootAlive = false)
-    {
-        nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-        return createXPathNode(node, aKeepRootAlive);
-    }
     static txXPathNode* createXPathNode(nsIContent* aContent,
                                         bool aKeepRootAlive = false);
-    static txXPathNode* createXPathNode(nsIDOMDocument* aDocument);
+    static txXPathNode* createXPathNode(nsIDocument* aDocument);
     static nsINode* getNode(const txXPathNode& aNode);
-    static nsresult getNode(const txXPathNode& aNode, nsIDOMNode** aResult)
-    {
-        return CallQueryInterface(getNode(aNode), aResult);
-    }
     static nsIContent* getContent(const txXPathNode& aNode);
     static nsIDocument* getDocument(const txXPathNode& aNode);
     static void addRef(const txXPathNode& aNode)
@@ -183,8 +172,7 @@ txXPathTreeWalker::isOnNode(const txXPathNode& aNode) const
 inline int32_t
 txXPathNodeUtils::getUniqueIdentifier(const txXPathNode& aNode)
 {
-    NS_PRECONDITION(!aNode.isAttribute(),
-                    "Not implemented for attributes.");
+    MOZ_ASSERT(!aNode.isAttribute(), "Not implemented for attributes.");
     return NS_PTR_TO_INT32(aNode.mNode);
 }
 
@@ -237,16 +225,14 @@ txXPathNodeUtils::isAttribute(const txXPathNode& aNode)
 inline bool
 txXPathNodeUtils::isProcessingInstruction(const txXPathNode& aNode)
 {
-    return aNode.isContent() &&
-           aNode.Content()->IsNodeOfType(nsINode::ePROCESSING_INSTRUCTION);
+    return aNode.isContent() && aNode.Content()->IsProcessingInstruction();
 }
 
 /* static */
 inline bool
 txXPathNodeUtils::isComment(const txXPathNode& aNode)
 {
-    return aNode.isContent() &&
-           aNode.Content()->IsNodeOfType(nsINode::eCOMMENT);
+    return aNode.isContent() && aNode.Content()->IsComment();
 }
 
 /* static */
@@ -254,7 +240,7 @@ inline bool
 txXPathNodeUtils::isText(const txXPathNode& aNode)
 {
     return aNode.isContent() &&
-           aNode.Content()->IsNodeOfType(nsINode::eTEXT);
+           aNode.Content()->IsText();
 }
 
 #endif /* txXPathTreeWalker_h__ */

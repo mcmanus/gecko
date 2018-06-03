@@ -5,11 +5,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "jscompartment.h"
-
 #include "gc/Zone.h"
-
 #include "jsapi-tests/tests.h"
+#include "vm/JSCompartment.h"
 
 JSObject* keyDelegate = nullptr;
 
@@ -88,7 +86,7 @@ BEGIN_TEST(testWeakMap_keyDelegates)
 
     JS::RootedObject delegateRoot(cx);
     {
-        JSAutoCompartment ac(cx, delegate);
+        JSAutoRealm ar(cx, delegate);
         delegateRoot = JS_NewPlainObject(cx);
         CHECK(delegateRoot);
         JS::RootedValue delegateValue(cx, JS::ObjectValue(*delegate));
@@ -187,13 +185,13 @@ JSObject* newCCW(JS::HandleObject sourceZone, JS::HandleObject destZone)
      */
     JS::RootedObject object(cx);
     {
-        JSAutoCompartment ac(cx, destZone);
+        JSAutoRealm ar(cx, destZone);
         object = JS_NewPlainObject(cx);
         if (!object)
             return nullptr;
     }
     {
-        JSAutoCompartment ac(cx, sourceZone);
+        JSAutoRealm ar(cx, sourceZone);
         if (!JS_WrapObject(cx, &object))
             return nullptr;
     }
@@ -236,9 +234,7 @@ JSObject* newDelegate()
     };
 
     /* Create the global object. */
-    JS::CompartmentOptions options;
-    options.behaviors().setVersion(JSVERSION_DEFAULT);
-
+    JS::RealmOptions options;
     JS::RootedObject global(cx, JS_NewGlobalObject(cx, Jsvalify(&delegateClass), nullptr,
                                                    JS::FireOnNewGlobalHook, options));
     if (!global)

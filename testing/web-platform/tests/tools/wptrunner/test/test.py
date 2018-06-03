@@ -73,7 +73,7 @@ def read_config():
     # This only allows one product per whatever for now
     for product in parser.sections():
         if product != "general":
-            dest = rv["products"][product] = {}
+            rv["products"][product] = {}
             for key, value in parser.items(product):
                 rv["products"][product][key] = value
 
@@ -156,7 +156,8 @@ def main():
         run(config, args)
     except Exception:
         if args.pdb:
-            import pdb, traceback
+            import pdb
+            import traceback
             print traceback.format_exc()
             pdb.post_mortem()
         else:

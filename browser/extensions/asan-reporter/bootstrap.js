@@ -3,20 +3,18 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const {classes: Cc, interfaces: Ci, utils: Cu, manager: Cm} = Components;
+const Cm = Components.manager;
 
-Cu.import("resource://gre/modules/AppConstants.jsm");
-Cu.import("resource://gre/modules/FileUtils.jsm");
-Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://gre/modules/Preferences.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/FileUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Log.jsm");
+ChromeUtils.import("resource://gre/modules/Preferences.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-const XMLHttpRequest = Components.Constructor("@mozilla.org/xmlextras/xmlhttprequest;1");
+ChromeUtils.defineModuleGetter(this, "OS", "resource://gre/modules/osfile.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "OS", "resource://gre/modules/osfile.jsm");
-
-Cu.importGlobalProperties(["TextDecoder"]);
+Cu.importGlobalProperties(["TextDecoder", "XMLHttpRequest"]);
 
 // Define our prefs
 const PREF_CLIENT_ID = "asanreporter.clientid";
@@ -31,12 +29,37 @@ logger.addAppender(new Log.ConsoleAppender(new Log.BasicFormatter()));
 logger.addAppender(new Log.DumpAppender(new Log.BasicFormatter()));
 logger.level = Preferences.get(PREF_LOG_LEVEL, Log.Level.Info);
 
+this.TabCrashObserver = {
+  init() {
+    if (this.initialized)
+      return;
+    this.initialized = true;
+
+    Services.obs.addObserver(this, "ipc:content-shutdown");
+  },
+
+  observe(aSubject, aTopic, aData) {
+    if (aTopic == "ipc:content-shutdown") {
+        aSubject.QueryInterface(Ci.nsIPropertyBag2);
+        if (!aSubject.get("abnormal")) {
+          return;
+        }
+        processDirectory("/tmp");
+    }
+  },
+};
+
 function install(aData, aReason) {}
 
 function uninstall(aData, aReason) {}
 
 function startup(aData, aReason) {
   logger.info("Starting up...");
+
+  // Install a handler to observe tab crashes, so we can report those right
+  // after they happen instead of relying on the user to restart the browser.
+  TabCrashObserver.init();
+
   // We could use OS.Constants.Path.tmpDir here, but unfortunately there is
   // no way in C++ to get the same value *prior* to xpcom initialization.
   // Since ASan needs its options, including the "log_path" option already
@@ -62,19 +85,19 @@ function processDirectory(pathString) {
   iterator.forEach(
     (entry) => {
       if (entry.name.indexOf("ff_asan_log.") == 0
-        && entry.name.indexOf("submitted") < 0) {
+        && !entry.name.includes("submitted")) {
         results.push(entry);
       }
     }
   ).then(
     () => {
       iterator.close();
-      logger.info("Processing " + results.length + " reports...")
+      logger.info("Processing " + results.length + " reports...");
 
       // Sequentially submit all reports that we found. Note that doing this
       // with Promise.all would not result in a sequential ordering and would
       // cause multiple requests to be sent to the server at once.
-      let requests = Promise.resolve()
+      let requests = Promise.resolve();
       results.forEach(
         (result) => {
           requests = requests.then(
@@ -82,14 +105,14 @@ function processDirectory(pathString) {
             // so our chain is not interrupted if one of the reports couldn't
             // be submitted for some reason.
             () => submitReport(result.path).then(
-              () => { logger.info("Successfully submitted " + result.path) },
-              (e) => { logger.error("Failed to submit " + result.path + ". Reason: " + e) },
+              () => { logger.info("Successfully submitted " + result.path); },
+              (e) => { logger.error("Failed to submit " + result.path + ". Reason: " + e); },
             )
-          )
+          );
         }
-      )
+      );
 
-      requests.then(() => logger.info("Done processing reports."))
+      requests.then(() => logger.info("Done processing reports."));
     },
     (e) => {
       iterator.close();
@@ -103,7 +126,7 @@ function submitReport(reportFile) {
   return OS.File.read(reportFile).then(submitToServer).then(
     () => {
       // Mark as submitted only if we successfully submitted it to the server.
-      return OS.File.move(reportFile, reportFile + ".submitted")
+      return OS.File.move(reportFile, reportFile + ".submitted");
     }
   );
 }
@@ -125,7 +148,7 @@ function submitToServer(data) {
         Services.appinfo.version,
         Services.appinfo.appBuildID,
         (AppConstants.SOURCE_REVISION_URL || "unknown")
-      ]
+      ];
 
       // Concatenate all relevant information as our server only
       // has one field available for version information.
@@ -143,7 +166,7 @@ function submitToServer(data) {
         os,
         client,
         tool: "asan-nightly-program"
-      }
+      };
 
       var xhr = new XMLHttpRequest();
       xhr.open("POST", api_url, true);

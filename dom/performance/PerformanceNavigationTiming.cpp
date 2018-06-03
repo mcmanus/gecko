@@ -21,58 +21,89 @@ PerformanceNavigationTiming::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aG
   return PerformanceNavigationTimingBinding::Wrap(aCx, this, aGivenProto);
 }
 
+#define REDUCE_TIME_PRECISION                               \
+  if (mPerformance->IsSystemPrincipal()) {                  \
+    return rawValue;                                        \
+  }                                                         \
+  return nsRFPService::ReduceTimePrecisionAsMSecs(rawValue, \
+    mPerformance->GetRandomTimelineSeed())
+
 DOMHighResTimeStamp
 PerformanceNavigationTiming::UnloadEventStart() const
 {
-  return mTiming->GetDOMTiming()->GetUnloadEventStartHighRes();
+  DOMHighResTimeStamp rawValue =
+    mPerformance->GetDOMTiming()->GetUnloadEventStartHighRes();
+
+  REDUCE_TIME_PRECISION;
 }
 
 DOMHighResTimeStamp
 PerformanceNavigationTiming::UnloadEventEnd() const
 {
-  return mTiming->GetDOMTiming()->GetUnloadEventEndHighRes();
+  DOMHighResTimeStamp rawValue =
+    mPerformance->GetDOMTiming()->GetUnloadEventEndHighRes();
+
+  REDUCE_TIME_PRECISION;
 }
 
 DOMHighResTimeStamp
 PerformanceNavigationTiming::DomInteractive() const
 {
-  return mTiming->GetDOMTiming()->GetDomInteractiveHighRes();
+  DOMHighResTimeStamp rawValue =
+    mPerformance->GetDOMTiming()->GetDomInteractiveHighRes();
+
+  REDUCE_TIME_PRECISION;
 }
 
 DOMHighResTimeStamp
 PerformanceNavigationTiming::DomContentLoadedEventStart() const
 {
-  return mTiming->GetDOMTiming()->GetDomContentLoadedEventStartHighRes();
+  DOMHighResTimeStamp rawValue =
+    mPerformance->GetDOMTiming()->GetDomContentLoadedEventStartHighRes();
+
+  REDUCE_TIME_PRECISION;
 }
 
 DOMHighResTimeStamp
 PerformanceNavigationTiming::DomContentLoadedEventEnd() const
 {
-  return mTiming->GetDOMTiming()->GetDomContentLoadedEventEndHighRes();
+  DOMHighResTimeStamp rawValue =
+    mPerformance->GetDOMTiming()->GetDomContentLoadedEventEndHighRes();
+
+  REDUCE_TIME_PRECISION;
 }
 
 DOMHighResTimeStamp
 PerformanceNavigationTiming::DomComplete() const
 {
-  return mTiming->GetDOMTiming()->GetDomCompleteHighRes();
+  DOMHighResTimeStamp rawValue =
+    mPerformance->GetDOMTiming()->GetDomCompleteHighRes();
+
+  REDUCE_TIME_PRECISION;
 }
 
 DOMHighResTimeStamp
 PerformanceNavigationTiming::LoadEventStart() const
 {
-  return mTiming->GetDOMTiming()->GetLoadEventStartHighRes();
+  DOMHighResTimeStamp rawValue =
+    mPerformance->GetDOMTiming()->GetLoadEventStartHighRes();
+
+  REDUCE_TIME_PRECISION;
 }
 
 DOMHighResTimeStamp
 PerformanceNavigationTiming::LoadEventEnd() const
 {
-  return mTiming->GetDOMTiming()->GetLoadEventEndHighRes();
+  DOMHighResTimeStamp rawValue =
+    mPerformance->GetDOMTiming()->GetLoadEventEndHighRes();
+
+  REDUCE_TIME_PRECISION;
 }
 
 NavigationType
 PerformanceNavigationTiming::Type() const
 {
-  switch(mTiming->GetDOMTiming()->GetType()) {
+  switch(mPerformance->GetDOMTiming()->GetType()) {
     case nsDOMNavigationTiming::TYPE_NAVIGATE:
       return NavigationType::Navigate;
       break;
@@ -92,5 +123,5 @@ PerformanceNavigationTiming::Type() const
 uint16_t
 PerformanceNavigationTiming::RedirectCount() const
 {
-  return mTiming->GetRedirectCount();
+  return mTimingData->GetRedirectCount();
 }

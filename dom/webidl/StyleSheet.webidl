@@ -10,7 +10,7 @@
 interface StyleSheet {
   [Constant]
   readonly attribute DOMString type;
-  [Constant]
+  [Constant, Throws]
   readonly attribute DOMString? href;
   // Spec says "Node", but it can go null when the node gets a new
   // sheet.  That's also why it's not [Constant]
@@ -20,7 +20,7 @@ interface StyleSheet {
   readonly attribute StyleSheet? parentStyleSheet;
   [Pure]
   readonly attribute DOMString? title;
-  [Constant]
+  [Constant, PutForwards=mediaText]
   readonly attribute MediaList media;
   [Pure]
   attribute boolean disabled;

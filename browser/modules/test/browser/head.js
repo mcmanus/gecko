@@ -1,6 +1,6 @@
 
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesTestUtils",
-                                  "resource://testing-common/PlacesTestUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "PlacesTestUtils",
+                               "resource://testing-common/PlacesTestUtils.jsm");
 
 const SINGLE_TRY_TIMEOUT = 100;
 const NUMBER_OF_TRIES = 30;
@@ -53,7 +53,7 @@ function checkKeyedScalar(scalars, scalarName, key, expectedValue) {
             scalarName + " must be recorded.");
   Assert.ok(key in scalars[scalarName],
             scalarName + " must contain the '" + key + "' key.");
-  Assert.ok(scalars[scalarName][key], expectedValue,
+  Assert.equal(scalars[scalarName][key], expectedValue,
             scalarName + "['" + key + "'] must contain the expected value");
 }
 
@@ -168,8 +168,14 @@ function checkEvents(events, expectedEvents) {
  * @returns A nsIContentPermissionRequest-ish object.
  */
 function makeMockPermissionRequest(browser) {
+  let type = {
+    options: [],
+    QueryInterface: ChromeUtils.generateQI([Ci.nsIContentPermissionType]),
+  };
+  let types = Cc["@mozilla.org/array;1"].createInstance(Ci.nsIMutableArray);
+  types.appendElement(type);
   let result = {
-    types: null,
+    types,
     principal: browser.contentPrincipal,
     requester: null,
     _cancelled: false,
@@ -180,7 +186,7 @@ function makeMockPermissionRequest(browser) {
     allow() {
       this._allowed = true;
     },
-    QueryInterface: XPCOMUtils.generateQI([Ci.nsIContentPermissionRequest]),
+    QueryInterface: ChromeUtils.generateQI([Ci.nsIContentPermissionRequest]),
   };
 
   // In the e10s-case, nsIContentPermissionRequest will have

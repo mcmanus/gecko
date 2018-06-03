@@ -91,13 +91,13 @@ MediaDrmCDMProxy::CreateSession(uint32_t aCreateSessionToken,
   data->mCreateSessionToken = aCreateSessionToken;
   data->mPromiseId = aPromiseId;
   data->mInitDataType = NS_ConvertUTF16toUTF8(aInitDataType);
-  data->mInitData = Move(aInitData);
+  data->mInitData = std::move(aInitData);
 
   nsCOMPtr<nsIRunnable> task(
     NewRunnableMethod<UniquePtr<CreateSessionData>&&>("MediaDrmCDMProxy::md_CreateSession",
                                                       this,
                                                       &MediaDrmCDMProxy::md_CreateSession,
-                                                      Move(data)));
+                                                      std::move(data)));
   mOwnerThread->Dispatch(task, NS_DISPATCH_NORMAL);
 }
 
@@ -108,7 +108,7 @@ MediaDrmCDMProxy::LoadSession(PromiseId aPromiseId,
 {
   // TODO: Implement LoadSession.
   RejectPromise(aPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
-                NS_LITERAL_CSTRING("Currently Fennec did not support LoadSession"));
+                NS_LITERAL_CSTRING("Currently Fennec does not support LoadSession"));
 }
 
 void
@@ -117,7 +117,7 @@ MediaDrmCDMProxy::SetServerCertificate(PromiseId aPromiseId,
 {
   // TODO: Implement SetServerCertificate.
   RejectPromise(aPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
-                NS_LITERAL_CSTRING("Currently Fennec did not support SetServerCertificate"));
+                NS_LITERAL_CSTRING("Currently Fennec does not support SetServerCertificate"));
 }
 
 void
@@ -132,13 +132,13 @@ MediaDrmCDMProxy::UpdateSession(const nsAString& aSessionId,
   UniquePtr<UpdateSessionData> data(new UpdateSessionData());
   data->mPromiseId = aPromiseId;
   data->mSessionId = NS_ConvertUTF16toUTF8(aSessionId);
-  data->mResponse = Move(aResponse);
+  data->mResponse = std::move(aResponse);
 
   nsCOMPtr<nsIRunnable> task(
     NewRunnableMethod<UniquePtr<UpdateSessionData>&&>("MediaDrmCDMProxy::md_UpdateSession",
                                                       this,
                                                       &MediaDrmCDMProxy::md_UpdateSession,
-                                                      Move(data)));
+                                                      std::move(data)));
   mOwnerThread->Dispatch(task, NS_DISPATCH_NORMAL);
 }
 
@@ -158,7 +158,7 @@ MediaDrmCDMProxy::CloseSession(const nsAString& aSessionId,
     NewRunnableMethod<UniquePtr<SessionOpData>&&>("MediaDrmCDMProxy::md_CloseSession",
                                                   this,
                                                   &MediaDrmCDMProxy::md_CloseSession,
-                                                  Move(data)));
+                                                  std::move(data)));
   mOwnerThread->Dispatch(task, NS_DISPATCH_NORMAL);
 }
 
@@ -168,7 +168,7 @@ MediaDrmCDMProxy::RemoveSession(const nsAString& aSessionId,
 {
   // TODO: Implement RemoveSession.
   RejectPromise(aPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
-                NS_LITERAL_CSTRING("Currently Fennec did not support RemoveSession"));
+                NS_LITERAL_CSTRING("Currently Fennec does not support RemoveSession"));
 }
 
 void
@@ -345,7 +345,7 @@ MediaDrmCDMProxy::KeySystem() const
   return mKeySystem;
 }
 
-CDMCaps&
+DataMutex<CDMCaps>&
 MediaDrmCDMProxy::Capabilites()
 {
   return mCapabilites;
@@ -365,11 +365,12 @@ MediaDrmCDMProxy::OnKeyStatusesChange(const nsAString& aSessionId)
 }
 
 void
-MediaDrmCDMProxy::GetSessionIdsForKeyId(const nsTArray<uint8_t>& aKeyId,
-                                      nsTArray<nsCString>& aSessionIds)
+MediaDrmCDMProxy::GetStatusForPolicy(PromiseId aPromiseId,
+                                     const nsAString& aMinHdcpVersion)
 {
-  CDMCaps::AutoLock caps(Capabilites());
-  caps.GetSessionIdsForKeyId(aKeyId, aSessionIds);
+  // TODO: Implement GetStatusForPolicy.
+  RejectPromise(aPromiseId, NS_ERROR_DOM_NOT_SUPPORTED_ERR,
+                NS_LITERAL_CSTRING("Currently Fennec does not support GetStatusForPolicy"));
 }
 
 #ifdef DEBUG

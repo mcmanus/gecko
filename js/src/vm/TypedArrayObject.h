@@ -8,12 +8,12 @@
 #define vm_TypedArrayObject_h
 
 #include "mozilla/Attributes.h"
-
-#include "jsobj.h"
+#include "mozilla/TextUtils.h"
 
 #include "gc/Barrier.h"
 #include "js/Class.h"
 #include "vm/ArrayBufferObject.h"
+#include "vm/JSObject.h"
 #include "vm/SharedArrayObject.h"
 
 #define JS_FOR_EACH_TYPED_ARRAY(macro) \
@@ -27,11 +27,7 @@
     macro(double, Float64) \
     macro(uint8_clamped, Uint8Clamped)
 
-typedef struct JSProperty JSProperty;
-
 namespace js {
-
-enum class TypedArrayLength { Fixed, Dynamic };
 
 /*
  * TypedArrayObject
@@ -115,16 +111,7 @@ class TypedArrayObject : public NativeObject
     static const uint32_t INLINE_BUFFER_LIMIT =
         (NativeObject::MAX_FIXED_SLOTS - FIXED_DATA_START) * sizeof(Value);
 
-    static gc::AllocKind
-    AllocKindForLazyBuffer(size_t nbytes)
-    {
-        MOZ_ASSERT(nbytes <= INLINE_BUFFER_LIMIT);
-        if (nbytes == 0)
-            nbytes += sizeof(uint8_t);
-        size_t dataSlots = AlignBytes(nbytes, sizeof(Value)) / sizeof(Value);
-        MOZ_ASSERT(nbytes <= dataSlots * sizeof(Value));
-        return gc::GetGCObjectKind(FIXED_DATA_START + dataSlots);
-    }
+    static inline gc::AllocKind AllocKindForLazyBuffer(size_t nbytes);
 
     inline Scalar::Type type() const;
     inline size_t bytesPerElement() const;
@@ -166,7 +153,7 @@ class TypedArrayObject : public NativeObject
     bool hasInlineElements() const;
     void setInlineElements();
     uint8_t* elementsRaw() const {
-        return *(uint8_t **)((((char *)this) + this->dataOffset()));
+        return *(uint8_t **)((((char *)this) + js::TypedArrayObject::dataOffset()));
     }
     uint8_t* elements() const {
         assertZeroLengthArrayData();
@@ -195,8 +182,9 @@ class TypedArrayObject : public NativeObject
                                MutableHandleObject res);
 
     /*
-     * Byte length above which created typed arrays and data views will have
-     * singleton types regardless of the context in which they are created.
+     * Byte length above which created typed arrays will have singleton types
+     * regardless of the context in which they are created. This only applies to
+     * typed arrays created with an existing ArrayBuffer.
      */
     static const uint32_t SINGLETON_BYTE_LENGTH = 1024 * 1024 * 10;
 
@@ -323,14 +311,25 @@ IsTypedArrayClass(const Class* clasp)
            clasp < &TypedArrayObject::classes[Scalar::MaxTypedArrayViewType];
 }
 
+inline Scalar::Type
+GetTypedArrayClassType(const Class* clasp)
+{
+    MOZ_ASSERT(IsTypedArrayClass(clasp));
+    return static_cast<Scalar::Type>(clasp - &TypedArrayObject::classes[0]);
+}
+
 bool
 IsTypedArrayConstructor(HandleValue v, uint32_t type);
+
+// In WebIDL terminology, a BufferSource is either an ArrayBuffer or a typed
+// array view. In either case, extract the dataPointer/byteLength.
+bool
+IsBufferSource(JSObject* object, SharedMem<uint8_t*>* dataPointer, size_t* byteLength);
 
 inline Scalar::Type
 TypedArrayObject::type() const
 {
-    MOZ_ASSERT(IsTypedArrayClass(getClass()));
-    return static_cast<Scalar::Type>(getClass() - &classes[0]);
+    return GetTypedArrayClassType(getClass());
 }
 
 inline size_t
@@ -365,13 +364,13 @@ IsTypedArrayIndex(jsid id, uint64_t* indexp)
 
     if (atom->hasLatin1Chars()) {
         const Latin1Char* s = atom->latin1Chars(nogc);
-        if (!JS7_ISDEC(*s) && *s != '-')
+        if (!mozilla::IsAsciiDigit(*s) && *s != '-')
             return false;
         return StringIsTypedArrayIndex(s, length, indexp);
     }
 
     const char16_t* s = atom->twoByteChars(nogc);
-    if (!JS7_ISDEC(*s) && *s != '-')
+    if (!mozilla::IsAsciiDigit(*s) && *s != '-')
         return false;
     return StringIsTypedArrayIndex(s, length, indexp);
 }

@@ -44,19 +44,17 @@ public:
     return Run();
   }
 
+#ifdef MOZ_COLLECTING_RUNNABLE_TELEMETRY
   NS_IMETHOD GetName(nsACString& aName) override
   {
-#ifdef RELEASE_OR_BETA
-    aName.Truncate();
-#else
     if (mName) {
       aName.Append(nsPrintfCString("ProxyReleaseEvent for %s", mName));
     } else {
       aName.AssignLiteral("ProxyReleaseEvent");
     }
-#endif
     return NS_OK;
   }
+#endif
 
 private:
   T* MOZ_OWNING_REF mDoomed;
@@ -102,7 +100,7 @@ struct ProxyReleaseChooser
                            already_AddRefed<T> aDoomed,
                            bool aAlwaysProxy)
   {
-    ::detail::ProxyRelease(aName, aTarget, mozilla::Move(aDoomed), aAlwaysProxy);
+    ::detail::ProxyRelease(aName, aTarget, std::move(aDoomed), aAlwaysProxy);
   }
 };
 
@@ -149,7 +147,7 @@ NS_ProxyRelease(const char* aName, nsIEventTarget* aTarget,
                 already_AddRefed<T> aDoomed, bool aAlwaysProxy = false)
 {
   ::detail::ProxyReleaseChooser<mozilla::IsBaseOf<nsISupports, T>::value>
-    ::ProxyRelease(aName, aTarget, mozilla::Move(aDoomed), aAlwaysProxy);
+    ::ProxyRelease(aName, aTarget, std::move(aDoomed), aAlwaysProxy);
 }
 
 /**
@@ -185,7 +183,7 @@ NS_ReleaseOnMainThreadSystemGroup(const char* aName,
     }
   }
 
-  NS_ProxyRelease(aName, systemGroupEventTarget, mozilla::Move(aDoomed),
+  NS_ProxyRelease(aName, systemGroupEventTarget, std::move(aDoomed),
                   aAlwaysProxy);
 }
 
@@ -195,7 +193,7 @@ NS_ReleaseOnMainThreadSystemGroup(already_AddRefed<T> aDoomed,
                                   bool aAlwaysProxy = false)
 {
   NS_ReleaseOnMainThreadSystemGroup("NS_ReleaseOnMainThreadSystemGroup",
-                                    mozilla::Move(aDoomed), aAlwaysProxy);
+                                    std::move(aDoomed), aAlwaysProxy);
 }
 
 /**
@@ -370,14 +368,7 @@ public:
   // These all call through to nsMainThreadPtrHolder, and thus implicitly
   // assert that we're on the main thread. Off-main-thread consumers must treat
   // these handles as opaque.
-  T* get()
-  {
-    if (mPtr) {
-      return mPtr.get()->get();
-    }
-    return nullptr;
-  }
-  const T* get() const
+  T* get() const
   {
     if (mPtr) {
       return mPtr.get()->get();
@@ -385,8 +376,8 @@ public:
     return nullptr;
   }
 
-  operator T*() { return get(); }
-  T* operator->() MOZ_NO_ADDREF_RELEASE_ON_RETURN { return get(); }
+  operator T*() const { return get(); }
+  T* operator->() const MOZ_NO_ADDREF_RELEASE_ON_RETURN { return get(); }
 
   // These are safe to call on other threads with appropriate external locking.
   bool operator==(const nsMainThreadPtrHandle<T>& aOther) const

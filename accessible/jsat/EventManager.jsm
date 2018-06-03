@@ -4,30 +4,29 @@
 
 "use strict";
 
-const Ci = Components.interfaces;
-const Cu = Components.utils;
-
-const TEXT_NODE = 3;
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "Services",
   "resource://gre/modules/Services.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Utils",
+ChromeUtils.defineModuleGetter(this, "Utils",
   "resource://gre/modules/accessibility/Utils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Logger",
+ChromeUtils.defineModuleGetter(this, "Logger",
   "resource://gre/modules/accessibility/Utils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Presentation",
+ChromeUtils.defineModuleGetter(this, "Presentation",
   "resource://gre/modules/accessibility/Presentation.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Roles",
+ChromeUtils.defineModuleGetter(this, "Roles",
   "resource://gre/modules/accessibility/Constants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Events",
+ChromeUtils.defineModuleGetter(this, "Events",
   "resource://gre/modules/accessibility/Constants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "States",
+ChromeUtils.defineModuleGetter(this, "States",
   "resource://gre/modules/accessibility/Constants.jsm");
+ChromeUtils.defineModuleGetter(this, "clearTimeout",
+  "resource://gre/modules/Timer.jsm");
+ChromeUtils.defineModuleGetter(this, "setTimeout",
+  "resource://gre/modules/Timer.jsm");
 
-this.EXPORTED_SYMBOLS = ["EventManager"];
+var EXPORTED_SYMBOLS = ["EventManager"];
 
-this.EventManager = function EventManager(aContentScope, aContentControl) {
+function EventManager(aContentScope, aContentControl) {
   this.contentScope = aContentScope;
   this.contentControl = aContentControl;
   this.addEventListener = this.contentScope.addEventListener.bind(
@@ -39,11 +38,9 @@ this.EventManager = function EventManager(aContentScope, aContentControl) {
   this.webProgress = this.contentScope.docShell.
     QueryInterface(Ci.nsIInterfaceRequestor).
     getInterface(Ci.nsIWebProgress);
-};
+}
 
 this.EventManager.prototype = {
-  editState: { editing: false },
-
   start: function start() {
     try {
       if (!this._started) {
@@ -109,13 +106,7 @@ this.EventManager.prototype = {
       case "resize":
       {
         // the target could be an element, document or window
-        let window = null;
-        if (aEvent.target instanceof Ci.nsIDOMWindow)
-          window = aEvent.target;
-        else if (aEvent.target instanceof Ci.nsIDOMDocument)
-          window = aEvent.target.defaultView;
-        else if (aEvent.target instanceof Ci.nsIDOMElement)
-          window = aEvent.target.ownerGlobal;
+        let window = aEvent.target.ownerGlobal;
         this.present(Presentation.viewportChanged(window));
         break;
       }
@@ -155,8 +146,7 @@ this.EventManager.prototype = {
         let reason = event.reason;
         let oldAccessible = event.oldAccessible;
 
-        if (this.editState.editing &&
-            !Utils.getState(position).contains(States.FOCUSED)) {
+        if (!Utils.getState(position).contains(States.FOCUSED)) {
           aEvent.accessibleDocument.takeFocus();
         }
         this.present(
@@ -219,12 +209,9 @@ this.EventManager.prototype = {
         // it doesn't mean we are not on any editable accessible. just not
         // on this one..
         let state = Utils.getState(acc);
-        if (state.contains(States.FOCUSED)) {
-          this._setEditingMode(aEvent, caretOffset);
-          if (state.contains(States.EDITABLE)) {
-            this.present(Presentation.textSelectionChanged(acc.getText(0, -1),
-              caretOffset, caretOffset, 0, 0, aEvent.isFromUserInput));
-          }
+        if (state.contains(States.FOCUSED) && state.contains(States.EDITABLE)) {
+          this.present(Presentation.textSelectionChanged(acc.getText(0, -1),
+            caretOffset, caretOffset, 0, 0, aEvent.isFromUserInput));
         }
         break;
       }
@@ -239,7 +226,7 @@ this.EventManager.prototype = {
         let hidden = Utils.isHidden(aEvent.accessible);
         this[hidden ? "_handleHide" : "_handleShow"](evt);
         if (this.inTest) {
-          this.sendMsgFunc("AccessFu:AriaHidden", { hidden: hidden });
+          this.sendMsgFunc("AccessFu:AriaHidden", { hidden });
         }
         break;
       }
@@ -270,12 +257,13 @@ this.EventManager.prototype = {
       {
         // Put vc where the focus is at
         let acc = aEvent.accessible;
-        this._setEditingMode(aEvent);
-        if ([Roles.CHROME_WINDOW,
+        if (![Roles.CHROME_WINDOW,
              Roles.DOCUMENT,
-             Roles.APPLICATION].indexOf(acc.role) < 0) {
+             Roles.APPLICATION].includes(acc.role)) {
           this.contentControl.autoMove(acc);
-       }
+        }
+
+        this.present(Presentation.focused(acc));
 
        if (this.inTest) {
         this.sendMsgFunc("AccessFu:Focused");
@@ -299,8 +287,10 @@ this.EventManager.prototype = {
         this.contentControl.autoMove(aEvent.accessible, { delay: 500 });
         break;
       }
-      case Events.VALUE_CHANGE:
       case Events.TEXT_VALUE_CHANGE:
+        // We handle this events in TEXT_INSERTED/TEXT_REMOVED.
+        break;
+      case Events.VALUE_CHANGE:
       {
         let position = this.contentControl.vc.position;
         let target = aEvent.accessible;
@@ -316,54 +306,6 @@ this.EventManager.prototype = {
         }
       }
     }
-  },
-
-  _setEditingMode: function _setEditingMode(aEvent, aCaretOffset) {
-    let acc = aEvent.accessible;
-    let accText, characterCount;
-    let caretOffset = aCaretOffset;
-
-    try {
-      accText = acc.QueryInterface(Ci.nsIAccessibleText);
-    } catch (e) {
-      // No text interface on this accessible.
-    }
-
-    if (accText) {
-      characterCount = accText.characterCount;
-      if (caretOffset === undefined) {
-        caretOffset = accText.caretOffset;
-      }
-    }
-
-    // Update editing state, both for presenter and other things
-    let state = Utils.getState(acc);
-
-    let editState = {
-      editing: state.contains(States.EDITABLE) &&
-        state.contains(States.FOCUSED),
-      multiline: state.contains(States.MULTI_LINE),
-      atStart: caretOffset === 0,
-      atEnd: caretOffset === characterCount
-    };
-
-    // Not interesting
-    if (!editState.editing && editState.editing === this.editState.editing) {
-      return;
-    }
-
-    if (editState.editing !== this.editState.editing) {
-      this.present(Presentation.editingModeChanged(editState.editing));
-    }
-
-    if (editState.editing !== this.editState.editing ||
-        editState.multiline !== this.editState.multiline ||
-        editState.atEnd !== this.editState.atEnd ||
-        editState.atStart !== this.editState.atStart) {
-      this.sendMsgFunc("AccessFu:Input", editState);
-    }
-
-    this.editState = editState;
   },
 
   _handleShow: function _handleShow(aEvent) {
@@ -480,7 +422,7 @@ this.EventManager.prototype = {
         if (liveAttrs) {
           return liveAttrs;
         }
-        parent = parent.parent
+        parent = parent.parent;
       }
       return {};
     };
@@ -509,10 +451,10 @@ this.EventManager.prototype = {
       let queue = this._liveEventQueue.get(domNode);
       let nextEvent = queue[0];
       if (nextEvent.eventType === aEventType) {
-        Utils.win.clearTimeout(nextEvent.timeoutID);
+        clearTimeout(nextEvent.timeoutID);
         queue.shift();
         if (queue.length === 0) {
-          this._liveEventQueue.delete(domNode)
+          this._liveEventQueue.delete(domNode);
         }
       }
     }
@@ -524,7 +466,7 @@ this.EventManager.prototype = {
     }
     let eventHandler = {
       eventType: aEventType,
-      timeoutID: Utils.win.setTimeout(this.present.bind(this),
+      timeoutID: setTimeout(this.present.bind(this),
         20, // Wait for a possible EVENT_SHOW or EVENT_TEXT_INSERTED event.
         Presentation.liveRegion(aLiveRegion, aIsPolite, true, aModifiedText))
     };
@@ -567,10 +509,7 @@ this.EventManager.prototype = {
     this.present(Presentation.tabStateChanged(docAcc, "newdoc"));
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener,
-                                         Ci.nsISupportsWeakReference,
-                                         Ci.nsISupports,
-                                         Ci.nsIObserver])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIWebProgressListener, Ci.nsISupportsWeakReference, Ci.nsIObserver])
 };
 
 const AccessibilityEventObserver = {
@@ -694,8 +633,7 @@ const AccessibilityEventObserver = {
     // Match the content window to its EventManager.
     let eventManager = this.getListener(content);
     if (!eventManager || !eventManager._started) {
-      if (Utils.MozBuildApp === "browser" &&
-          !(content instanceof Ci.nsIDOMChromeWindow)) {
+      if (Utils.MozBuildApp === "browser" && !content.isChromeWindow) {
         Logger.warning(
           "AccessibilityEventObserver.observe: ignored event:",
           Logger.eventToString(event), "accessible:",

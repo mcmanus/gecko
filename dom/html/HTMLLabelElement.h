@@ -26,10 +26,10 @@ public:
   {
   }
 
-  NS_IMPL_FROMCONTENT_HTML_WITH_TAG(HTMLLabelElement, label)
+  NS_IMPL_FROMNODE_HTML_WITH_TAG(HTMLLabelElement, label)
 
   // nsISupports
-  NS_DECL_ISUPPORTS_INHERITED
+  NS_INLINE_DECL_REFCOUNTING_INHERITED(HTMLLabelElement, nsGenericHTMLElement)
 
   // Element
   virtual bool IsInteractiveHTMLContent(bool aIgnoreTabindex) const override

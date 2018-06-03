@@ -1,12 +1,13 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 "use strict";
 
 /* exported ExtensionChild */
 
-this.EXPORTED_SYMBOLS = ["ExtensionChild"];
+var EXPORTED_SYMBOLS = ["ExtensionChild"];
 
 /*
  * This file handles addon logic that is independent of the chrome process.
@@ -16,26 +17,28 @@ this.EXPORTED_SYMBOLS = ["ExtensionChild"];
  * Don't put contentscript logic here, use ExtensionContent.jsm instead.
  */
 
-const Ci = Components.interfaces;
-const Cc = Components.classes;
-const Cu = Components.utils;
-const Cr = Components.results;
-
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "finalizationService",
-  "@mozilla.org/toolkit/finalizationwitness;1", "nsIFinalizationWitnessService");
+                                   "@mozilla.org/toolkit/finalizationwitness;1",
+                                   "nsIFinalizationWitnessService");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   ExtensionContent: "resource://gre/modules/ExtensionContent.jsm",
+  ExtensionPageChild: "resource://gre/modules/ExtensionPageChild.jsm",
   MessageChannel: "resource://gre/modules/MessageChannel.jsm",
   NativeApp: "resource://gre/modules/NativeMessaging.jsm",
   PromiseUtils: "resource://gre/modules/PromiseUtils.jsm",
 });
 
-Cu.import("resource://gre/modules/ExtensionCommon.jsm");
-Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+XPCOMUtils.defineLazyGetter(
+  this, "processScript",
+  () => Cc["@mozilla.org/webextensions/extension-process-script;1"]
+          .getService().wrappedJSObject);
+
+ChromeUtils.import("resource://gre/modules/ExtensionCommon.jsm");
+ChromeUtils.import("resource://gre/modules/ExtensionUtils.jsm");
 
 const {
   DefaultMap,
@@ -87,25 +90,33 @@ function injectAPI(source, dest) {
  * wrapped promise from being garbage collected.
  */
 const StrongPromise = {
+  locations: new Map(),
+
   wrap(promise, channelId, location) {
     return new Promise((resolve, reject) => {
-      const tag = `${channelId}|${location}`;
-      const witness = finalizationService.make("extensions-sendMessage-witness", tag);
+      this.locations.set(channelId, location);
+
+      const witness = finalizationService.make("extensions-sendMessage-witness", channelId);
       promise.then(value => {
+        this.locations.delete(channelId);
         witness.forget();
         resolve(value);
       }, error => {
+        this.locations.delete(channelId);
         witness.forget();
         reject(error);
       });
     });
   },
-  observe(subject, topic, tag) {
-    const pos = tag.indexOf("|");
-    const channel = Number(tag.substr(0, pos));
-    const location = tag.substr(pos + 1);
-    const message = `Promised response from onMessage listener at ${location} went out of scope`;
-    MessageChannel.abortChannel(channel, {message});
+  observe(subject, topic, channelId) {
+    channelId = Number(channelId);
+    let location = this.locations.get(channelId);
+    this.locations.delete(channelId);
+
+    const message = `Promised response from onMessage listener went out of scope`;
+    const error = ChromeUtils.createError(message, location);
+    error.mozWebExtLocation = location;
+    MessageChannel.abortChannel(channelId, error);
   },
 };
 Services.obs.addObserver(StrongPromise, "extensions-sendMessage-witness");
@@ -118,7 +129,7 @@ Services.obs.addObserver(StrongPromise, "extensions-sendMessage-witness");
  * @param {Array<nsIMessageListenerManager>} receiverMMs Message managers to
  *     listen on.
  * @param {string} name Arbitrary port name as defined by the addon.
- * @param {string} id An ID that uniquely identifies this port's channel.
+ * @param {number} id An ID that uniquely identifies this port's channel.
  * @param {object} sender The `port.sender` property.
  * @param {object} recipient The recipient of messages sent from this port.
  */
@@ -168,19 +179,27 @@ class Port {
         this.postMessage(json);
       },
 
-      onDisconnect: new EventManager(this.context, "Port.onDisconnect", fire => {
-        return this.registerOnDisconnect(holder => {
-          let error = holder.deserialize(this.context.cloneScope);
-          portError = error && this.context.normalizeError(error);
-          fire.asyncWithoutClone(portObj);
-        });
+      onDisconnect: new EventManager({
+        context: this.context,
+        name: "Port.onDisconnect",
+        register: fire => {
+          return this.registerOnDisconnect(holder => {
+            let error = holder && holder.deserialize(this.context.cloneScope);
+            portError = error && this.context.normalizeError(error);
+            fire.asyncWithoutClone(portObj);
+          });
+        },
       }).api(),
 
-      onMessage: new EventManager(this.context, "Port.onMessage", fire => {
-        return this.registerOnMessage(holder => {
-          let msg = holder.deserialize(this.context.cloneScope);
-          fire.asyncWithoutClone(msg, portObj);
-        });
+      onMessage: new EventManager({
+        context: this.context,
+        name: "Port.onMessage",
+        register: fire => {
+          return this.registerOnMessage(holder => {
+            let msg = holder.deserialize(this.context.cloneScope);
+            fire.asyncWithoutClone(msg, portObj);
+          });
+        },
       }).api(),
 
       get error() {
@@ -378,7 +397,7 @@ class Messenger {
         if (error.result == MessageChannel.RESULT_NO_HANDLER) {
           return Promise.reject({message: "Could not establish connection. Receiving end does not exist."});
         } else if (error.result != MessageChannel.RESULT_NO_RESPONSE) {
-          return Promise.reject({message: error.message});
+          return Promise.reject(error);
         }
       });
     holder = null;
@@ -392,63 +411,67 @@ class Messenger {
   }
 
   _onMessage(name, filter) {
-    return new EventManager(this.context, name, fire => {
-      const [location] = new this.context.cloneScope.Error().stack.split("\n", 1);
+    return new EventManager({
+      context: this.context,
+      name,
+      register: fire => {
+        const caller = this.context.getCaller();
 
-      let listener = {
-        messageFilterPermissive: this.optionalFilter,
-        messageFilterStrict: this.filter,
+        let listener = {
+          messageFilterPermissive: this.optionalFilter,
+          messageFilterStrict: this.filter,
 
-        filterMessage: (sender, recipient) => {
-          // Exclude messages coming from content scripts for the devtools extension contexts
-          // (See Bug 1383310).
-          if (this.excludeContentScriptSender && sender.envType === "content_child") {
-            return false;
-          }
+          filterMessage: (sender, recipient) => {
+            // Exclude messages coming from content scripts for the devtools extension contexts
+            // (See Bug 1383310).
+            if (this.excludeContentScriptSender && sender.envType === "content_child") {
+              return false;
+            }
 
-          // Ignore the message if it was sent by this Messenger.
-          return (sender.contextId !== this.context.contextId &&
-                  filter(sender, recipient));
-        },
+            // Ignore the message if it was sent by this Messenger.
+            return (sender.contextId !== this.context.contextId &&
+                    filter(sender, recipient));
+          },
 
-        receiveMessage: ({target, data: holder, sender, recipient, channelId}) => {
-          if (!this.context.active) {
-            return;
-          }
+          receiveMessage: ({target, data: holder, sender, recipient, channelId}) => {
+            if (!this.context.active) {
+              return;
+            }
 
-          let sendResponse;
-          let response = undefined;
-          let promise = new Promise(resolve => {
-            sendResponse = value => {
-              resolve(value);
-              response = promise;
-            };
-          });
+            let sendResponse;
+            let response = undefined;
+            let promise = new Promise(resolve => {
+              sendResponse = value => {
+                resolve(value);
+                response = promise;
+              };
+            });
 
-          let message = holder.deserialize(this.context.cloneScope);
-          holder = null;
+            let message = holder.deserialize(this.context.cloneScope);
+            holder = null;
 
-          sender = Cu.cloneInto(sender, this.context.cloneScope);
-          sendResponse = Cu.exportFunction(sendResponse, this.context.cloneScope);
+            sender = Cu.cloneInto(sender, this.context.cloneScope);
+            sendResponse = Cu.exportFunction(sendResponse, this.context.cloneScope);
 
-          // Note: We intentionally do not use runSafe here so that any
-          // errors are propagated to the message sender.
-          let result = fire.raw(message, sender, sendResponse);
-          message = null;
+            // Note: We intentionally do not use runSafe here so that any
+            // errors are propagated to the message sender.
+            let result = fire.raw(message, sender, sendResponse);
+            message = null;
 
-          if (result instanceof this.context.cloneScope.Promise) {
-            return StrongPromise.wrap(result, channelId, location);
-          } else if (result === true) {
-            return StrongPromise.wrap(promise, channelId, location);
-          }
-          return response;
-        },
-      };
+            if (result instanceof this.context.cloneScope.Promise) {
+              return StrongPromise.wrap(result, channelId, caller);
+            } else if (result === true) {
+              return StrongPromise.wrap(promise, channelId, caller);
+            }
+            return response;
+          },
+        };
 
-      MessageChannel.addListener(this.messageManagers, "Extension:Message", listener);
-      return () => {
-        MessageChannel.removeListener(this.messageManagers, "Extension:Message", listener);
-      };
+        MessageChannel.addListener(this.messageManagers, "Extension:Message", listener);
+        return () => {
+          MessageChannel.removeListener(this.messageManagers, "Extension:Message", listener);
+        };
+      },
     }).api();
   }
 
@@ -495,41 +518,45 @@ class Messenger {
   }
 
   _onConnect(name, filter) {
-    return new EventManager(this.context, name, fire => {
-      let listener = {
-        messageFilterPermissive: this.optionalFilter,
-        messageFilterStrict: this.filter,
+    return new EventManager({
+      context: this.context,
+      name,
+      register: fire => {
+        let listener = {
+          messageFilterPermissive: this.optionalFilter,
+          messageFilterStrict: this.filter,
 
-        filterMessage: (sender, recipient) => {
-          // Exclude messages coming from content scripts for the devtools extension contexts
-          // (See Bug 1383310).
-          if (this.excludeContentScriptSender && sender.envType === "content_child") {
-            return false;
-          }
+          filterMessage: (sender, recipient) => {
+            // Exclude messages coming from content scripts for the devtools extension contexts
+            // (See Bug 1383310).
+            if (this.excludeContentScriptSender && sender.envType === "content_child") {
+              return false;
+            }
 
-          // Ignore the port if it was created by this Messenger.
-          return (sender.contextId !== this.context.contextId &&
-                  filter(sender, recipient));
-        },
+            // Ignore the port if it was created by this Messenger.
+            return (sender.contextId !== this.context.contextId &&
+                    filter(sender, recipient));
+          },
 
-        receiveMessage: ({target, data: message, sender}) => {
-          let {name, portId} = message;
-          let mm = getMessageManager(target);
-          let recipient = Object.assign({}, sender);
-          if (recipient.tab) {
-            recipient.tabId = recipient.tab.id;
-            delete recipient.tab;
-          }
-          let port = new Port(this.context, mm, this.messageManagers, name, portId, sender, recipient);
-          fire.asyncWithoutClone(port.api());
-          return true;
-        },
-      };
+          receiveMessage: ({target, data: message, sender}) => {
+            let {name, portId} = message;
+            let mm = getMessageManager(target);
+            let recipient = Object.assign({}, sender);
+            if (recipient.tab) {
+              recipient.tabId = recipient.tab.id;
+              delete recipient.tab;
+            }
+            let port = new Port(this.context, mm, this.messageManagers, name, portId, sender, recipient);
+            fire.asyncWithoutClone(port.api());
+            return true;
+          },
+        };
 
-      MessageChannel.addListener(this.messageManagers, "Extension:Connect", listener);
-      return () => {
-        MessageChannel.removeListener(this.messageManagers, "Extension:Connect", listener);
-      };
+        MessageChannel.addListener(this.messageManagers, "Extension:Connect", listener);
+        return () => {
+          MessageChannel.removeListener(this.messageManagers, "Extension:Connect", listener);
+        };
+      },
     }).api();
   }
 
@@ -557,6 +584,10 @@ class BrowserExtensionContent extends EventEmitter {
     this.uuid = data.uuid;
     this.instanceId = data.instanceId;
 
+    this.childModules = data.childModules;
+    this.dependencies = data.dependencies;
+    this.schemaURLs = data.schemaURLs;
+
     this.MESSAGE_EMIT_EVENT = `Extension:EmitEvent:${this.instanceId}`;
     Services.cpmm.addMessageListener(this.MESSAGE_EMIT_EVENT, this);
 
@@ -565,10 +596,15 @@ class BrowserExtensionContent extends EventEmitter {
     });
 
     this.webAccessibleResources = data.webAccessibleResources.map(res => new MatchGlob(res));
-    this.whiteListedHosts = new MatchPatternSet(data.whiteListedHosts, {ignorePath: true});
     this.permissions = data.permissions;
     this.optionalPermissions = data.optionalPermissions;
     this.principal = data.principal;
+
+    let restrictSchemes = !this.hasPermission("mozillaAddons");
+
+    this.whiteListedHosts = new MatchPatternSet(data.whiteListedHosts, {restrictSchemes, ignorePath: true});
+
+    this.apiManager = this.getAPIManager();
 
     this.localeData = new LocaleData(data.localeData);
 
@@ -594,7 +630,7 @@ class BrowserExtensionContent extends EventEmitter {
         let patterns = this.whiteListedHosts.patterns.map(host => host.pattern);
 
         this.whiteListedHosts = new MatchPatternSet([...patterns, ...permissions.origins],
-                                                    {ignorePath: true});
+                                                    {restrictSchemes, ignorePath: true});
       }
 
       if (this.policy) {
@@ -629,6 +665,30 @@ class BrowserExtensionContent extends EventEmitter {
     ExtensionManager.extensions.set(this.id, this);
   }
 
+  getAPIManager() {
+    let apiManagers = [ExtensionPageChild.apiManager];
+
+    for (let id of this.dependencies) {
+      let extension = processScript.getExtensionChild(id);
+      if (extension) {
+        apiManagers.push(extension.experimentAPIManager);
+      }
+    }
+
+    if (this.childModules) {
+      this.experimentAPIManager =
+        new ExtensionCommon.LazyAPIManager("addon", this.childModules, this.schemaURLs);
+
+      apiManagers.push(this.experimentAPIManager);
+    }
+
+    if (apiManagers.length == 1) {
+      return apiManagers[0];
+    }
+
+    return new ExtensionCommon.MultiAPIManager("addon", apiManagers.reverse());
+  }
+
   shutdown() {
     ExtensionManager.extensions.delete(this.id);
     ExtensionContent.shutdownExtension(this);
@@ -636,6 +696,7 @@ class BrowserExtensionContent extends EventEmitter {
     if (isContentProcess) {
       MessageChannel.abortResponses({extensionId: this.id});
     }
+    this.emit("shutdown");
   }
 
   getContext(window) {
@@ -773,6 +834,7 @@ class ChildAPIManager {
     // delegated to the ParentAPIManager.
     this.localApis = localAPICan.root;
     this.apiCan = localAPICan;
+    this.schema = this.apiCan.apiManager.schema;
 
     this.id = `${context.extension.id}.${context.contextId}`;
 
@@ -814,6 +876,10 @@ class ChildAPIManager {
       this.context.extension.on("add-permissions", this.updatePermissions);
       this.context.extension.on("remove-permissions", this.updatePermissions);
     }
+  }
+
+  inject(obj) {
+    this.schema.inject(obj, this);
   }
 
   receiveMessage({name, messageName, data}) {

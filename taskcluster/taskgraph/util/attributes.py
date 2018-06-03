@@ -12,16 +12,33 @@ INTEGRATION_PROJECTS = {
     'autoland',
 }
 
-TRUNK_PROJECTS = INTEGRATION_PROJECTS | {'mozilla-central', }
+TRUNK_PROJECTS = INTEGRATION_PROJECTS | {'mozilla-central', 'comm-central'}
 
 RELEASE_PROJECTS = {
     'mozilla-central',
-    'mozilla-aurora',
     'mozilla-beta',
     'mozilla-release',
+    'mozilla-esr60',
+    'comm-central',
+    'comm-beta',
 }
 
-_OPTIONAL_ATTRIBUTES = ('nightly', 'signed', 'l10n_chunk')
+RELEASE_PROMOTION_PROJECTS = {
+    'jamun',
+    'maple',
+    'try',
+    'try-comm-central',
+} | RELEASE_PROJECTS
+
+_OPTIONAL_ATTRIBUTES = (
+    'artifact_prefix',
+    'l10n_chunk',
+    'nightly',
+    'signed',
+    'shipping_phase',
+    'shipping_product',
+    'stub-installer',
+)
 
 
 def attrmatch(attributes, **kwargs):

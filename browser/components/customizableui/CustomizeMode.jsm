@@ -4,18 +4,14 @@
 
 "use strict";
 
-this.EXPORTED_SYMBOLS = ["CustomizeMode"];
-
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+var EXPORTED_SYMBOLS = ["CustomizeMode"];
 
 const kPrefCustomizationDebug = "browser.uiCustomization.debug";
 const kPaletteId = "customization-palette";
 const kDragDataTypePrefix = "text/toolbarwrapper-id/";
 const kSkipSourceNodePref = "browser.uiCustomization.skipSourceNodeCheck";
-const kToolbarVisibilityBtn = "customization-toolbar-visibility-button";
 const kDrawInTitlebarPref = "browser.tabs.drawInTitlebar";
 const kExtraDragSpacePref = "browser.tabs.extraDragSpace";
-const kMaxTransitionDurationMs = 2000;
 const kKeepBroadcastAttributes = "keepbroadcastattributeswhencustomizing";
 
 const kPanelItemContextMenu = "customizationPanelItemContextMenu";
@@ -25,24 +21,24 @@ const kDownloadAutohideCheckboxId = "downloads-button-autohide-checkbox";
 const kDownloadAutohidePanelId = "downloads-button-autohide-panel";
 const kDownloadAutoHidePref = "browser.download.autohideButton";
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource:///modules/CustomizableUI.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/AddonManager.jsm");
-Cu.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource:///modules/CustomizableUI.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/AddonManager.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
 
 Cu.importGlobalProperties(["CSS"]);
 
-XPCOMUtils.defineLazyModuleGetter(this, "DragPositionManager",
-                                  "resource:///modules/DragPositionManager.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "BrowserUITelemetry",
-                                  "resource:///modules/BrowserUITelemetry.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
-                                  "resource://gre/modules/BrowserUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "LightweightThemeManager",
-                                  "resource://gre/modules/LightweightThemeManager.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "SessionStore",
-                                  "resource:///modules/sessionstore/SessionStore.jsm");
+ChromeUtils.defineModuleGetter(this, "DragPositionManager",
+                               "resource:///modules/DragPositionManager.jsm");
+ChromeUtils.defineModuleGetter(this, "BrowserUITelemetry",
+                               "resource:///modules/BrowserUITelemetry.jsm");
+ChromeUtils.defineModuleGetter(this, "BrowserUtils",
+                               "resource://gre/modules/BrowserUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "LightweightThemeManager",
+                               "resource://gre/modules/LightweightThemeManager.jsm");
+ChromeUtils.defineModuleGetter(this, "SessionStore",
+                               "resource:///modules/sessionstore/SessionStore.jsm");
 XPCOMUtils.defineLazyGetter(this, "gWidgetsBundle", function() {
   const kUrl = "chrome://browser/locale/customizableui/customizableWidgets.properties";
   return Services.strings.createBundle(kUrl);
@@ -53,7 +49,7 @@ XPCOMUtils.defineLazyPreferenceGetter(this, "gCosmeticAnimationsEnabled",
 let gDebug;
 XPCOMUtils.defineLazyGetter(this, "log", () => {
   let scope = {};
-  Cu.import("resource://gre/modules/Console.jsm", scope);
+  ChromeUtils.import("resource://gre/modules/Console.jsm", scope);
   gDebug = Services.prefs.getBoolPref(kPrefCustomizationDebug, false);
   let consoleOptions = {
     maxLogLevel: gDebug ? "all" : "log",
@@ -83,7 +79,7 @@ var gTabsProgressListener = {
 
     unregisterGlobalTab();
   },
-}
+};
 
 function unregisterGlobalTab() {
   gTab.removeEventListener("TabClose", unregisterGlobalTab);
@@ -106,18 +102,19 @@ function CustomizeMode(aWindow) {
   // toolbar items in browser.xul. This is invisible, and never seen by the
   // user. Then there's the visible palette, which gets populated and displayed
   // to the user when in customizing mode.
-  this.visiblePalette = this.document.getElementById(kPaletteId);
-  this.paletteEmptyNotice = this.document.getElementById("customization-empty");
-  if (Services.prefs.getCharPref("general.skins.selectedSkin") != "classic/1.0") {
-    let lwthemeButton = this.document.getElementById("customization-lwtheme-button");
-    lwthemeButton.setAttribute("hidden", "true");
-  }
-  if (AppConstants.CAN_DRAW_IN_TITLEBAR) {
+  this.visiblePalette = this.$(kPaletteId);
+  this.pongArena = this.$("customization-pong-arena");
+
+  if (this._canDrawInTitlebar()) {
     this._updateTitlebarCheckbox();
     this._updateDragSpaceCheckbox();
     Services.prefs.addObserver(kDrawInTitlebarPref, this);
     Services.prefs.addObserver(kExtraDragSpacePref, this);
+  } else {
+    this.$("customization-titlebar-visibility-checkbox").hidden = true;
+    this.$("customization-extra-drag-space-checkbox").hidden = true;
   }
+
   this.window.addEventListener("unload", this);
 }
 
@@ -146,10 +143,14 @@ CustomizeMode.prototype = {
   },
 
   uninit() {
-    if (AppConstants.CAN_DRAW_IN_TITLEBAR) {
+    if (this._canDrawInTitlebar()) {
       Services.prefs.removeObserver(kDrawInTitlebarPref, this);
       Services.prefs.removeObserver(kExtraDragSpacePref, this);
     }
+  },
+
+  $(id) {
+    return this.document.getElementById(id);
   },
 
   toggle() {
@@ -165,7 +166,7 @@ CustomizeMode.prototype = {
   },
 
   _updateLWThemeButtonIcon() {
-    let lwthemeButton = this.document.getElementById("customization-lwtheme-button");
+    let lwthemeButton = this.$("customization-lwtheme-button");
     let lwthemeIcon = this.document.getAnonymousElementByAttribute(lwthemeButton,
                         "class", "button-icon");
     lwthemeIcon.style.backgroundImage = LightweightThemeManager.currentTheme ?
@@ -218,7 +219,7 @@ CustomizeMode.prototype = {
         w.gCustomizeMode.enter();
       };
       Services.obs.addObserver(obs, "browser-delayed-startup-finished");
-      this.window.openUILinkIn("about:newtab", "window");
+      this.window.openTrustedLinkIn("about:newtab", "window");
       return;
     }
     this._wantToBeInCustomizeMode = true;
@@ -261,7 +262,7 @@ CustomizeMode.prototype = {
 
     // Always disable the reset button at the start of customize mode, it'll be re-enabled
     // if necessary when we finish entering:
-    let resetButton = this.document.getElementById("customization-reset-button");
+    let resetButton = this.$("customization-reset-button");
     resetButton.setAttribute("disabled", "true");
 
     (async () => {
@@ -278,16 +279,6 @@ CustomizeMode.prototype = {
           Services.obs.addObserver(delayedStartupObserver, "browser-delayed-startup-finished");
         });
       }
-
-      let toolbarVisibilityBtn = document.getElementById(kToolbarVisibilityBtn);
-      let togglableToolbars = window.getTogglableToolbars();
-      if (togglableToolbars.length == 0) {
-        toolbarVisibilityBtn.setAttribute("hidden", "true");
-      } else {
-        toolbarVisibilityBtn.removeAttribute("hidden");
-      }
-
-      this.updateLWTStyling();
 
       CustomizableUI.dispatchToolboxEvent("beforecustomization", {}, window);
       CustomizableUI.notifyStartCustomizing(this.window);
@@ -323,8 +314,6 @@ CustomizeMode.prototype = {
         toolbar.setAttribute("customizing", true);
 
       await this._doTransition(true);
-
-      Services.obs.addObserver(this, "lightweight-theme-window-updated");
 
       // Let everybody in this window know that we're about to customize.
       CustomizableUI.dispatchToolboxEvent("customizationstarting", {}, window);
@@ -397,8 +386,6 @@ CustomizeMode.prototype = {
 
     this._handler.isExitingCustomizeMode = true;
 
-    this._removeExtraToolbarsIfEmpty();
-
     this._teardownDownloadAutoHideToggle();
 
     CustomizableUI.removeListener(this);
@@ -408,14 +395,11 @@ CustomizeMode.prototype = {
     let window = this.window;
     let document = this.document;
 
-    // Hide the palette before starting the transition for increased perf.
-    this.visiblePalette.hidden = true;
-    this.visiblePalette.removeAttribute("showing");
-    this.paletteEmptyNotice.hidden = true;
+    this.togglePong(false);
 
     // Disable the reset and undo reset buttons while transitioning:
-    let resetButton = this.document.getElementById("customization-reset-button");
-    let undoResetButton = this.document.getElementById("customization-undo-reset-button");
+    let resetButton = this.$("customization-reset-button");
+    let undoResetButton = this.$("customization-undo-reset-button");
     undoResetButton.hidden = resetButton.disabled = true;
 
     this._transitioning = true;
@@ -424,9 +408,6 @@ CustomizeMode.prototype = {
       await this.depopulatePalette();
 
       await this._doTransition(false);
-      this.updateLWTStyling({});
-
-      Services.obs.removeObserver(this, "lightweight-theme-window-updated");
 
       if (this.browser.selectedTab == gTab) {
         if (gTab.linkedBrowser.currentURI.spec == "about:blank") {
@@ -529,26 +510,6 @@ CustomizeMode.prototype = {
     return Promise.resolve();
   },
 
-  updateLWTStyling(aData) {
-    let docElement = this.document.documentElement;
-    if (!aData) {
-      let lwt = docElement._lightweightTheme;
-      aData = lwt.getData();
-    }
-    let headerURL = aData && aData.headerURL;
-    if (!headerURL) {
-      docElement.removeAttribute("customization-lwtheme");
-      return;
-    }
-    docElement.setAttribute("customization-lwtheme", "true");
-
-    let deck = this.document.getElementById("tab-view-deck");
-    let toolboxRect = this.window.gNavToolbox.getBoundingClientRect();
-    let height = toolboxRect.bottom;
-    deck.style.setProperty("--toolbox-rect-height", `${height}`);
-    deck.style.setProperty("--toolbox-rect-height-with-unit", `${height}px`);
-  },
-
   _getCustomizableChildForNode(aNode) {
     // NB: adjusted from _getCustomizableParent to keep that method fast
     // (it's used during drags), and avoid multiple DOM loops
@@ -572,7 +533,7 @@ CustomizeMode.prototype = {
 
     while (aNode && aNode.parentNode) {
       let parent = aNode.parentNode;
-      if (areas.indexOf(parent.id) != -1) {
+      if (areas.includes(parent.id)) {
         return aNode;
       }
       aNode = parent;
@@ -587,19 +548,38 @@ CustomizeMode.prototype = {
         (aNode.id == "downloads-button" && aNode.hidden)) {
       return null;
     }
+
     let animationNode;
-    if (aNode.parentNode.id.startsWith("wrapper-")) {
+    if (aNode.parentNode && aNode.parentNode.id.startsWith("wrapper-")) {
       animationNode = aNode.parentNode;
     } else {
       animationNode = aNode;
     }
     return new Promise(resolve => {
-      animationNode.classList.add("animate-out");
-      animationNode.addEventListener("animationend", function cleanupWidgetAnimationEnd(e) {
+      function cleanupCustomizationExit() {
+        resolveAnimationPromise();
+      }
+
+      function cleanupWidgetAnimationEnd(e) {
         if (e.animationName == "widget-animate-out" && e.target.id == animationNode.id) {
-          animationNode.removeEventListener("animationend", cleanupWidgetAnimationEnd);
-          resolve();
+          resolveAnimationPromise();
         }
+      }
+
+      function resolveAnimationPromise() {
+        animationNode.removeEventListener("animationend", cleanupWidgetAnimationEnd);
+        animationNode.removeEventListener("customizationending", cleanupCustomizationExit);
+        resolve();
+      }
+
+      // Wait until the next frame before setting the class to ensure
+      // we do start the animation.
+      this.window.requestAnimationFrame(() => {
+        this.window.requestAnimationFrame(() => {
+          animationNode.classList.add("animate-out");
+          animationNode.ownerGlobal.gNavToolbox.addEventListener("customizationending", cleanupCustomizationExit);
+          animationNode.addEventListener("animationend", cleanupWidgetAnimationEnd);
+        });
       });
     });
   },
@@ -633,10 +613,10 @@ CustomizeMode.prototype = {
     }
 
     if (widgetAnimationPromise) {
-      if (aNode.parentNode.id.startsWith("wrapper-")) {
+      if (aNode.parentNode && aNode.parentNode.id.startsWith("wrapper-")) {
         aNode.parentNode.classList.remove("animate-out");
       } else {
-        aNode.classList.remove("animate-out")
+        aNode.classList.remove("animate-out");
       }
     }
   },
@@ -666,14 +646,14 @@ CustomizeMode.prototype = {
     }
 
     if (widgetAnimationPromise) {
-      if (aNode.parentNode.id.startsWith("wrapper-")) {
+      if (aNode.parentNode && aNode.parentNode.id.startsWith("wrapper-")) {
         aNode.parentNode.classList.remove("animate-out");
       } else {
-        aNode.classList.remove("animate-out")
+        aNode.classList.remove("animate-out");
       }
     }
     if (gCosmeticAnimationsEnabled) {
-      let overflowButton = this.document.getElementById("nav-bar-overflow-button");
+      let overflowButton = this.$("nav-bar-overflow-button");
       BrowserUtils.setToolbarButtonHeightProperty(overflowButton).then(() => {
         overflowButton.setAttribute("animate", "true");
         overflowButton.addEventListener("animationend", function onAnimationEnd(event) {
@@ -712,10 +692,10 @@ CustomizeMode.prototype = {
       }
     }
     if (widgetAnimationPromise) {
-      if (aNode.parentNode.id.startsWith("wrapper-")) {
+      if (aNode.parentNode && aNode.parentNode.id.startsWith("wrapper-")) {
         aNode.parentNode.classList.remove("animate-out");
       } else {
-        aNode.classList.remove("animate-out")
+        aNode.classList.remove("animate-out");
       }
     }
   },
@@ -839,9 +819,7 @@ CustomizeMode.prototype = {
       aPlace = wrapper.getAttribute("place");
     } else {
       wrapper = this.document.createElement("toolbarpaletteitem");
-      // "place" is used by toolkit to add the toolbarpaletteitem-palette
-      // binding to a toolbarpaletteitem, which gives it a label node for when
-      // it's sitting in the palette.
+      // "place" is used to show the label when it's sitting in the palette.
       wrapper.setAttribute("place", aPlace);
     }
 
@@ -883,16 +861,12 @@ CustomizeMode.prototype = {
       wrapper.setAttribute("flex", aNode.getAttribute("flex"));
     }
 
-    if (aPlace == "panel") {
-      if (aNode.classList.contains(CustomizableUI.WIDE_PANEL_CLASS)) {
-        wrapper.setAttribute("haswideitem", "true");
-      } else if (wrapper.hasAttribute("haswideitem")) {
-        wrapper.removeAttribute("haswideitem");
-      }
-    }
-
     let removable = aPlace == "palette" || CustomizableUI.isWidgetRemovable(aNode);
     wrapper.setAttribute("removable", removable);
+
+    // Allow touch events to initiate dragging in customize mode.
+    // This is only supported on Windows for now.
+    wrapper.setAttribute("touchdownstartsdrag", "true");
 
     let contextMenuAttrName = "";
     if (aNode.getAttribute("context")) {
@@ -901,7 +875,7 @@ CustomizeMode.prototype = {
       contextMenuAttrName = "contextmenu";
     }
     let currentContextMenu = aNode.getAttribute(contextMenuAttrName);
-    let contextMenuForPlace = aPlace == "panel" ?
+    let contextMenuForPlace = aPlace == "menu-panel" ?
                                 kPanelItemContextMenu :
                                 kPaletteItemContextMenu;
     if (aPlace != "toolbar") {
@@ -911,7 +885,7 @@ CustomizeMode.prototype = {
     if (currentContextMenu &&
         currentContextMenu != contextMenuForPlace) {
       aNode.setAttribute("wrapped-context", currentContextMenu);
-      aNode.setAttribute("wrapped-contextAttrName", contextMenuAttrName)
+      aNode.setAttribute("wrapped-contextAttrName", contextMenuAttrName);
       aNode.removeAttribute(contextMenuAttrName);
     } else if (currentContextMenu == contextMenuForPlace) {
       aNode.removeAttribute(contextMenuAttrName);
@@ -973,7 +947,7 @@ CustomizeMode.prototype = {
       toolbarItem.setAttribute("command", commandID);
 
       // XXX Bug 309953 - toolbarbuttons aren't in sync with their commands after customizing
-      let command = this.document.getElementById(commandID);
+      let command = this.$(commandID);
       if (command && command.hasAttribute("disabled")) {
         toolbarItem.setAttribute("disabled", command.getAttribute("disabled"));
       }
@@ -985,7 +959,7 @@ CustomizeMode.prototype = {
       toolbarItem.setAttribute(contextAttrName, wrappedContext);
       toolbarItem.removeAttribute("wrapped-contextAttrName");
       toolbarItem.removeAttribute("wrapped-context");
-    } else if (place == "panel") {
+    } else if (place == "menu-panel") {
       toolbarItem.setAttribute("context", kPanelItemContextMenu);
     }
 
@@ -1041,7 +1015,7 @@ CustomizeMode.prototype = {
   _addDragHandlers(aTarget) {
     // Allow dropping on the padding of the arrow panel.
     if (aTarget.id == CustomizableUI.AREA_FIXED_OVERFLOW_PANEL) {
-      aTarget = this.document.getElementById("customization-panelHolder");
+      aTarget = this.$("customization-panelHolder");
     }
     aTarget.addEventListener("dragstart", this, true);
     aTarget.addEventListener("dragover", this, true);
@@ -1062,7 +1036,7 @@ CustomizeMode.prototype = {
     // Remove handler from different target if it was added to
     // allow dropping on the padding of the arrow panel.
     if (aTarget.id == CustomizableUI.AREA_FIXED_OVERFLOW_PANEL) {
-      aTarget = this.document.getElementById("customization-panelHolder");
+      aTarget = this.$("customization-panelHolder");
     }
     aTarget.removeEventListener("dragstart", this, true);
     aTarget.removeEventListener("dragover", this, true);
@@ -1093,18 +1067,6 @@ CustomizeMode.prototype = {
     })().catch(log.error);
   },
 
-  _removeExtraToolbarsIfEmpty() {
-    let toolbox = this.window.gNavToolbox;
-    for (let child of toolbox.children) {
-      if (child.hasAttribute("customindex")) {
-        let placements = CustomizableUI.getWidgetIdsInArea(child.id);
-        if (!placements.length) {
-          CustomizableUI.removeExtraToolbar(child.id);
-        }
-      }
-    }
-  },
-
   persistCurrentSets(aSetBeforePersisting) {
     let document = this.document;
     let toolbars = document.querySelectorAll("toolbar[customizable='true'][currentset]");
@@ -1121,7 +1083,7 @@ CustomizeMode.prototype = {
   reset() {
     this.resetting = true;
     // Disable the reset button temporarily while resetting:
-    let btn = this.document.getElementById("customization-reset-button");
+    let btn = this.$("customization-reset-button");
     BrowserUITelemetry.countCustomizationEvent("reset");
     btn.disabled = true;
     return (async () => {
@@ -1180,7 +1142,6 @@ CustomizeMode.prototype = {
       toolbar.removeAttribute("customizing");
     }
     this._onUIChange();
-    this.updateLWTStyling();
   },
 
   onWidgetMoved(aWidgetId, aArea, aOldPosition, aNewPosition) {
@@ -1237,7 +1198,7 @@ CustomizeMode.prototype = {
   },
 
   onWidgetDestroyed(aWidgetId) {
-    let wrapper = this.document.getElementById("wrapper-" + aWidgetId);
+    let wrapper = this.$("wrapper-" + aWidgetId);
     if (wrapper) {
       wrapper.remove();
     }
@@ -1247,7 +1208,7 @@ CustomizeMode.prototype = {
     // If the node was added to an area, we would have gotten an onWidgetAdded notification,
     // plus associated DOM change notifications, so only do stuff for the palette:
     if (!aArea) {
-      let widgetNode = this.document.getElementById(aWidgetId);
+      let widgetNode = this.$(aWidgetId);
       if (widgetNode) {
         this.wrapToolbarItem(widgetNode, "palette");
       } else {
@@ -1281,7 +1242,7 @@ CustomizeMode.prototype = {
   getMoreThemes(aEvent) {
     aEvent.target.parentNode.parentNode.hidePopup();
     let getMoreURL = Services.urlFormatter.formatURLPref("lightweightThemes.getMoreURL");
-    this.window.openUILinkIn(getMoreURL, "tab");
+    this.window.openTrustedLinkIn(getMoreURL, "tab");
   },
 
   updateUIDensity(mode) {
@@ -1377,7 +1338,7 @@ CustomizeMode.prototype = {
   },
 
   onLWThemesMenuShowing(aEvent) {
-    const DEFAULT_THEME_ID = "{972ce4c6-7e08-4474-a285-3208198ce6fd}";
+    const DEFAULT_THEME_ID = "default-theme@mozilla.org";
     const LIGHT_THEME_ID = "firefox-compact-light@mozilla.org";
     const DARK_THEME_ID = "firefox-compact-dark@mozilla.org";
     const MAX_THEME_COUNT = 6;
@@ -1400,107 +1361,98 @@ CustomizeMode.prototype = {
       panel.hidePopup();
     };
 
-    AddonManager.getAddonByID(DEFAULT_THEME_ID, aDefaultTheme => {
-      let doc = this.window.document;
+    let doc = this.window.document;
 
-      function buildToolbarButton(aTheme) {
-        let tbb = doc.createElement("toolbarbutton");
-        tbb.theme = aTheme;
-        tbb.setAttribute("label", aTheme.name);
-        if (aDefaultTheme == aTheme) {
-          // The actual icon is set up so it looks nice in about:addons, but
-          // we'd like the version that's correct for the OS we're on, so we set
-          // an attribute that our styling will then use to display the icon.
-          tbb.setAttribute("defaulttheme", "true");
-        } else {
-          tbb.setAttribute("image", aTheme.iconURL);
-        }
-        if (aTheme.description)
-          tbb.setAttribute("tooltiptext", aTheme.description);
-        tbb.setAttribute("tabindex", "0");
-        tbb.classList.add("customization-lwtheme-menu-theme");
-        let isActive = activeThemeID == aTheme.id;
-        tbb.setAttribute("aria-checked", isActive);
-        tbb.setAttribute("role", "menuitemradio");
-        if (isActive) {
-          tbb.setAttribute("active", "true");
-        }
-        tbb.addEventListener("focus", previewTheme);
-        tbb.addEventListener("mouseover", previewTheme);
-        tbb.addEventListener("blur", resetPreview);
-        tbb.addEventListener("mouseout", resetPreview);
-
-        return tbb;
+    function buildToolbarButton(aTheme) {
+      let tbb = doc.createElement("toolbarbutton");
+      tbb.theme = aTheme;
+      tbb.setAttribute("label", aTheme.name);
+      tbb.setAttribute("image", aTheme.iconURL);
+      if (aTheme.description)
+        tbb.setAttribute("tooltiptext", aTheme.description);
+      tbb.setAttribute("tabindex", "0");
+      tbb.classList.add("customization-lwtheme-menu-theme");
+      let isActive = activeThemeID == aTheme.id;
+      tbb.setAttribute("aria-checked", isActive);
+      tbb.setAttribute("role", "menuitemradio");
+      if (isActive) {
+        tbb.setAttribute("active", "true");
       }
+      tbb.addEventListener("focus", previewTheme);
+      tbb.addEventListener("mouseover", previewTheme);
+      tbb.addEventListener("blur", resetPreview);
+      tbb.addEventListener("mouseout", resetPreview);
 
-      let themes = [aDefaultTheme];
-      let lwts = LightweightThemeManager.usedThemes;
-      let currentLwt = LightweightThemeManager.currentTheme;
+      return tbb;
+    }
 
-      let activeThemeID = currentLwt ? currentLwt.id : DEFAULT_THEME_ID;
+    let themes = [];
+    let lwts = LightweightThemeManager.usedThemes;
+    let currentLwt = LightweightThemeManager.currentTheme;
 
-      // Move the current theme (if any) and the light/dark themes to the start:
-      let importantThemes = [LIGHT_THEME_ID, DARK_THEME_ID];
-      if (currentLwt && !importantThemes.includes(currentLwt.id)) {
-        importantThemes.push(currentLwt.id);
+    let activeThemeID = currentLwt ? currentLwt.id : DEFAULT_THEME_ID;
+
+    // Move the current theme (if any) and the light/dark themes to the start:
+    let importantThemes = [DEFAULT_THEME_ID, LIGHT_THEME_ID, DARK_THEME_ID];
+    if (currentLwt && !importantThemes.includes(currentLwt.id)) {
+      importantThemes.push(currentLwt.id);
+    }
+    for (let importantTheme of importantThemes) {
+      let themeIndex = lwts.findIndex(theme => theme.id == importantTheme);
+      if (themeIndex > -1) {
+        themes.push(...lwts.splice(themeIndex, 1));
       }
-      for (let importantTheme of importantThemes) {
-        let themeIndex = lwts.findIndex(theme => theme.id == importantTheme);
-        if (themeIndex > -1) {
-          themes.push(...lwts.splice(themeIndex, 1));
-        }
-      }
-      themes = themes.concat(lwts);
-      if (themes.length > MAX_THEME_COUNT)
-        themes.length = MAX_THEME_COUNT;
+    }
+    themes = themes.concat(lwts);
+    if (themes.length > MAX_THEME_COUNT)
+      themes.length = MAX_THEME_COUNT;
 
-      let footer = doc.getElementById("customization-lwtheme-menu-footer");
-      let panel = footer.parentNode;
-      let recommendedLabel = doc.getElementById("customization-lwtheme-menu-recommended");
-      for (let theme of themes) {
-        let button = buildToolbarButton(theme);
-        button.addEventListener("command", () => {
-          if ("userDisabled" in button.theme)
-            button.theme.userDisabled = false;
-          else
-            LightweightThemeManager.currentTheme = button.theme;
-          onThemeSelected(panel);
-        });
-        panel.insertBefore(button, recommendedLabel);
-      }
+    let footer = doc.getElementById("customization-lwtheme-menu-footer");
+    let panel = footer.parentNode;
+    let recommendedLabel = doc.getElementById("customization-lwtheme-menu-recommended");
+    for (let theme of themes) {
+      let button = buildToolbarButton(theme);
+      button.addEventListener("command", () => {
+        if ("userDisabled" in button.theme)
+          button.theme.userDisabled = false;
+        else
+          LightweightThemeManager.currentTheme = button.theme;
+        onThemeSelected(panel);
+      });
+      panel.insertBefore(button, recommendedLabel);
+    }
 
-      let lwthemePrefs = Services.prefs.getBranch("lightweightThemes.");
-      let recommendedThemes = lwthemePrefs.getStringPref("recommendedThemes");
-      recommendedThemes = JSON.parse(recommendedThemes);
-      let sb = Services.strings.createBundle("chrome://browser/locale/lightweightThemes.properties");
-      for (let theme of recommendedThemes) {
-        try {
-          theme.name = sb.GetStringFromName("lightweightThemes." + theme.id + ".name");
-          theme.description = sb.GetStringFromName("lightweightThemes." + theme.id + ".description");
-        } catch (ex) {
-          // If finding strings for this failed, just don't build it. This can
-          // happen for users with 'older' recommended themes lists, some of which
-          // have since been removed from Firefox.
-          continue;
-        }
-        let button = buildToolbarButton(theme);
-        button.addEventListener("command", () => {
-          LightweightThemeManager.setLocalTheme(button.theme);
-          recommendedThemes = recommendedThemes.filter((aTheme) => { return aTheme.id != button.theme.id; });
-          lwthemePrefs.setStringPref("recommendedThemes",
-                                     JSON.stringify(recommendedThemes));
-          onThemeSelected(panel);
-        });
-        panel.insertBefore(button, footer);
+    let lwthemePrefs = Services.prefs.getBranch("lightweightThemes.");
+    let recommendedThemes = lwthemePrefs.getStringPref("recommendedThemes");
+    recommendedThemes = JSON.parse(recommendedThemes);
+    let sb = Services.strings.createBundle("chrome://browser/locale/lightweightThemes.properties");
+    for (let theme of recommendedThemes) {
+      try {
+        theme.name = sb.GetStringFromName("lightweightThemes." + theme.id + ".name");
+        theme.description = sb.GetStringFromName("lightweightThemes." + theme.id + ".description");
+      } catch (ex) {
+        // If finding strings for this failed, just don't build it. This can
+        // happen for users with 'older' recommended themes lists, some of which
+        // have since been removed from Firefox.
+        continue;
       }
-      let hideRecommendedLabel = (footer.previousSibling == recommendedLabel);
-      recommendedLabel.hidden = hideRecommendedLabel;
-    });
+      let button = buildToolbarButton(theme);
+      button.addEventListener("command", () => {
+        LightweightThemeManager.setLocalTheme(button.theme);
+        recommendedThemes = recommendedThemes.filter((aTheme) => { return aTheme.id != button.theme.id; });
+        lwthemePrefs.setStringPref("recommendedThemes",
+                                   JSON.stringify(recommendedThemes));
+        onThemeSelected(panel);
+      });
+      panel.insertBefore(button, footer);
+    }
+    let hideRecommendedLabel = (footer.previousSibling == recommendedLabel);
+    recommendedLabel.hidden = hideRecommendedLabel;
   },
 
   _clearLWThemesMenu(panel) {
-    let footer = this.document.getElementById("customization-lwtheme-menu-footer");
-    let recommendedLabel = this.document.getElementById("customization-lwtheme-menu-recommended");
+    let footer = this.$("customization-lwtheme-menu-footer");
+    let recommendedLabel = this.$("customization-lwtheme-menu-recommended");
     for (let element of [footer, recommendedLabel]) {
       while (element.previousSibling &&
              element.previousSibling.localName == "toolbarbutton") {
@@ -1524,16 +1476,24 @@ CustomizeMode.prototype = {
 
   _updateEmptyPaletteNotice() {
     let paletteItems = this.visiblePalette.getElementsByTagName("toolbarpaletteitem");
-    this.paletteEmptyNotice.hidden = !!paletteItems.length;
+    let whimsyButton = this.$("whimsy-button");
+
+    if (paletteItems.length == 1 &&
+        paletteItems[0].id.includes("wrapper-customizableui-special-spring")) {
+      whimsyButton.hidden = false;
+    } else {
+      this.togglePong(false);
+      whimsyButton.hidden = true;
+    }
   },
 
   _updateResetButton() {
-    let btn = this.document.getElementById("customization-reset-button");
+    let btn = this.$("customization-reset-button");
     btn.disabled = CustomizableUI.inDefaultState;
   },
 
   _updateUndoResetButton() {
-    let undoResetButton =  this.document.getElementById("customization-undo-reset-button");
+    let undoResetButton =  this.$("customization-undo-reset-button");
     undoResetButton.hidden = !CustomizableUI.canUndoReset;
   },
 
@@ -1585,7 +1545,7 @@ CustomizeMode.prototype = {
       let originalTarget = aEvent.originalTarget;
       if (this._isUnwantedDragDrop(aEvent) ||
           this.visiblePalette.contains(originalTarget) ||
-          this.document.getElementById("customization-panelHolder").contains(originalTarget)) {
+          this.$("customization-panelHolder").contains(originalTarget)) {
         return;
       }
       // We have a dragover/drop on the palette.
@@ -1595,7 +1555,7 @@ CustomizeMode.prototype = {
         this._onDragDrop(aEvent, this.visiblePalette);
       }
     };
-    let contentContainer = this.document.getElementById("customization-content-container");
+    let contentContainer = this.$("customization-content-container");
     contentContainer.addEventListener("dragover", this.paletteDragHandler, true);
     contentContainer.addEventListener("drop", this.paletteDragHandler, true);
   },
@@ -1604,7 +1564,7 @@ CustomizeMode.prototype = {
     DragPositionManager.stop();
     this._removeDragHandlers(this.visiblePalette);
 
-    let contentContainer = this.document.getElementById("customization-content-container");
+    let contentContainer = this.$("customization-content-container");
     contentContainer.removeEventListener("dragover", this.paletteDragHandler, true);
     contentContainer.removeEventListener("drop", this.paletteDragHandler, true);
     delete this.paletteDragHandler;
@@ -1615,26 +1575,21 @@ CustomizeMode.prototype = {
       case "nsPref:changed":
         this._updateResetButton();
         this._updateUndoResetButton();
-        if (AppConstants.CAN_DRAW_IN_TITLEBAR) {
+        if (this._canDrawInTitlebar()) {
           this._updateTitlebarCheckbox();
           this._updateDragSpaceCheckbox();
-        }
-        break;
-      case "lightweight-theme-window-updated":
-        if (aSubject == this.window) {
-          aData = JSON.parse(aData);
-          this.updateLWTStyling(aData);
         }
         break;
     }
   },
 
+  _canDrawInTitlebar() {
+    return this.window.TabsInTitlebar.systemSupported;
+  },
+
   _updateTitlebarCheckbox() {
-    if (!AppConstants.CAN_DRAW_IN_TITLEBAR) {
-      return;
-    }
     let drawInTitlebar = Services.prefs.getBoolPref(kDrawInTitlebarPref, true);
-    let checkbox = this.document.getElementById("customization-titlebar-visibility-checkbox");
+    let checkbox = this.$("customization-titlebar-visibility-checkbox");
     // Drawing in the titlebar means 'hiding' the titlebar.
     // We use the attribute rather than a property because if we're not in
     // customize mode the button is hidden and properties don't work.
@@ -1646,18 +1601,14 @@ CustomizeMode.prototype = {
   },
 
   _updateDragSpaceCheckbox() {
-    if (!AppConstants.CAN_DRAW_IN_TITLEBAR) {
-      return;
-    }
-
     let extraDragSpace = Services.prefs.getBoolPref(kExtraDragSpacePref);
     let drawInTitlebar = Services.prefs.getBoolPref(kDrawInTitlebarPref, true);
-    let menuBar = this.document.getElementById("toolbar-menubar");
+    let menuBar = this.$("toolbar-menubar");
     let menuBarEnabled = menuBar
       && AppConstants.platform != "macosx"
       && menuBar.getAttribute("autohide") != "true";
 
-    let checkbox = this.document.getElementById("customization-extra-drag-space-checkbox");
+    let checkbox = this.$("customization-extra-drag-space-checkbox");
     if (extraDragSpace) {
       checkbox.setAttribute("checked", "true");
     } else {
@@ -1672,19 +1623,12 @@ CustomizeMode.prototype = {
   },
 
   toggleTitlebar(aShouldShowTitlebar) {
-    if (!AppConstants.CAN_DRAW_IN_TITLEBAR) {
-      return;
-    }
     // Drawing in the titlebar means not showing the titlebar, hence the negation:
     Services.prefs.setBoolPref(kDrawInTitlebarPref, !aShouldShowTitlebar);
     this._updateDragSpaceCheckbox();
   },
 
   toggleDragSpace(aShouldShowDragSpace) {
-    if (!AppConstants.CAN_DRAW_IN_TITLEBAR) {
-      return;
-    }
-
     Services.prefs.setBoolPref(kExtraDragSpacePref, aShouldShowDragSpace);
   },
 
@@ -1745,7 +1689,7 @@ CustomizeMode.prototype = {
       if (this._customizing && !this._transitioning) {
         item.hidden = true;
         DragPositionManager.start(this.window);
-        let canUsePrevSibling = placeForItem == "toolbar" || placeForItem == "panel";
+        let canUsePrevSibling = placeForItem == "toolbar" || placeForItem == "menu-panel";
         if (item.nextSibling) {
           this._setDragActive(item.nextSibling, "before", draggedItem.id, placeForItem);
           this._dragOverItem = item.nextSibling;
@@ -1801,7 +1745,7 @@ CustomizeMode.prototype = {
       return;
     }
 
-    let targetAreaType = CustomizableUI.getAreaType(targetArea.id);
+    let targetAreaType = CustomizableUI.getPlaceForItem(targetArea);
     let targetNode = this._getDragOverNode(aEvent, targetArea, targetAreaType, draggedItemId);
 
     // We need to determine the place that the widget is being dropped in
@@ -2146,11 +2090,6 @@ CustomizeMode.prototype = {
       return;
     }
 
-    // getPlaceForItem and getAreaType return different things. Hack-around
-    // rather than having to update every. single. consumer. (and break add-ons)
-    if (aAreaType == "panel") {
-      aAreaType = "menu-panel";
-    }
     if (aItem.getAttribute("dragover") != aValue) {
       aItem.setAttribute("dragover", aValue);
 
@@ -2163,7 +2102,7 @@ CustomizeMode.prototype = {
         let makeSpaceImmediately = false;
         if (!gDraggingInToolbars.has(targetArea.id)) {
           gDraggingInToolbars.add(targetArea.id);
-          let draggedWrapper = this.document.getElementById("wrapper-" + aDraggedItemId);
+          let draggedWrapper = this.$("wrapper-" + aDraggedItemId);
           let originArea = this._getCustomizableParent(draggedWrapper);
           makeSpaceImmediately = originArea == targetArea;
         }
@@ -2234,12 +2173,11 @@ CustomizeMode.prototype = {
 
   _setGridDragActive(aDragOverNode, aDraggedItem, aValue) {
     let targetArea = this._getCustomizableParent(aDragOverNode);
-    let draggedWrapper = this.document.getElementById("wrapper-" + aDraggedItem.id);
+    let draggedWrapper = this.$("wrapper-" + aDraggedItem.id);
     let originArea = this._getCustomizableParent(draggedWrapper);
     let positionManager = DragPositionManager.getManagerForArea(targetArea);
     let draggedSize = this._getDragItemSize(aDragOverNode, aDraggedItem);
-    let isWide = aDraggedItem.classList.contains(CustomizableUI.WIDE_PANEL_CLASS);
-    positionManager.insertPlaceholder(targetArea, aDragOverNode, isWide, draggedSize,
+    positionManager.insertPlaceholder(targetArea, aDragOverNode, draggedSize,
                                       originArea == targetArea);
   },
 
@@ -2322,10 +2260,6 @@ CustomizeMode.prototype = {
     if (!expectedParent.contains(aEvent.target)) {
       return expectedParent;
     }
-    // Our tests are stupid. Cope:
-    if (!aEvent.clientX && !aEvent.clientY) {
-      return aEvent.target;
-    }
     // Offset the drag event's position with the offset to the center of
     // the thing we're dragging
     let dragX = aEvent.clientX - this._dragOffset.x;
@@ -2349,7 +2283,7 @@ CustomizeMode.prototype = {
       dragX -= bounds.left;
       dragY -= bounds.top;
       // Find the closest node:
-      targetNode = positionManager.find(aAreaElement, dragX, dragY, aDraggedItemId);
+      targetNode = positionManager.find(aAreaElement, dragX, dragY);
     }
     return targetNode || aEvent.target;
   },
@@ -2417,13 +2351,13 @@ CustomizeMode.prototype = {
   },
 
   _setupDownloadAutoHideToggle() {
-    this.document.getElementById(kDownloadAutohidePanelId).removeAttribute("hidden");
+    this.$(kDownloadAutohidePanelId).removeAttribute("hidden");
     this.window.addEventListener("click", this._checkForDownloadsClick, true);
   },
 
   _teardownDownloadAutoHideToggle() {
     this.window.removeEventListener("click", this._checkForDownloadsClick, true);
-    this.document.getElementById(kDownloadAutohidePanelId).hidePopup();
+    this.$(kDownloadAutohidePanelId).hidePopup();
   },
 
   _maybeMoveDownloadsButtonToNavBar() {
@@ -2466,7 +2400,8 @@ CustomizeMode.prototype = {
         panelOnTheLeft = true;
       }
     } else {
-      await BrowserUtils.promiseLayoutFlushed(doc, "display", () => {});
+      await this.window.promiseDocumentFlushed(() => {});
+
       if (!this._customizing || !this._wantToBeInCustomizeMode) {
         return;
       }
@@ -2506,6 +2441,245 @@ CustomizeMode.prototype = {
     Services.prefs.setBoolPref(kDownloadAutoHidePref, checkbox.checked);
     // Ensure we move the button (back) after the user leaves customize mode.
     event.view.gCustomizeMode._moveDownloadsButtonToNavBar = checkbox.checked;
+  },
+
+  togglePong(enabled) {
+    // It's possible we're toggling for a reason other than hitting
+    // the button (we might be exiting, for example), so make sure that
+    // the state and checkbox are in sync.
+    let whimsyButton = this.$("whimsy-button");
+    whimsyButton.checked = enabled;
+
+    if (enabled) {
+      this.visiblePalette.setAttribute("whimsypong", "true");
+      this.pongArena.hidden = false;
+      if (!this.uninitWhimsy) {
+        this.uninitWhimsy = this.whimsypong();
+      }
+    } else {
+      this.visiblePalette.removeAttribute("whimsypong");
+      if (this.uninitWhimsy) {
+        this.uninitWhimsy();
+        this.uninitWhimsy = null;
+      }
+      this.pongArena.hidden = true;
+    }
+  },
+
+  whimsypong() {
+    function update() {
+      updateBall();
+      updatePlayers();
+    }
+
+    function updateBall() {
+      if (ball[1] <= 0 || ball[1] >= gameSide) {
+        if ((ball[1] <= 0 && (ball[0] < p1 || ball[0] > p1 + paddleWidth)) ||
+            (ball[1] >= gameSide && (ball[0] < p2 || ball[0] > p2 + paddleWidth))) {
+          updateScore(ball[1] <= 0 ? 0 : 1);
+        } else {
+          if ((ball[1] <= 0 && (ball[0] - p1 < paddleEdge || p1 + paddleWidth - ball[0] < paddleEdge)) ||
+              (ball[1] >= gameSide && (ball[0] - p2 < paddleEdge || p2 + paddleWidth - ball[0] < paddleEdge))) {
+            ballDxDy[0] *= Math.random() + 1.3;
+            ballDxDy[0] = Math.max(Math.min(ballDxDy[0], 6), -6);
+            if (Math.abs(ballDxDy[0]) == 6) {
+              ballDxDy[0] += Math.sign(ballDxDy[0]) * Math.random();
+            }
+          } else {
+            ballDxDy[0] /= 1.1;
+          }
+          ballDxDy[1] *= -1;
+          ball[1] = ball[1] <= 0 ? 0 : gameSide;
+        }
+      }
+      ball = [Math.max(Math.min(ball[0] + ballDxDy[0], gameSide), 0),
+              Math.max(Math.min(ball[1] + ballDxDy[1], gameSide), 0)];
+      if (ball[0] <= 0 || ball[0] >= gameSide) {
+        ballDxDy[0] *= -1;
+      }
+    }
+
+    function updatePlayers() {
+      if (keydown) {
+        let p1Adj = 1;
+        if ((keydown == 37 && !isRTL) ||
+            (keydown == 39 && isRTL)) {
+          p1Adj = -1;
+        }
+        p1 += p1Adj * 10 * keydownAdj;
+      }
+
+      let sign = Math.sign(ballDxDy[0]);
+      if ((sign > 0 && ball[0] > p2 + paddleWidth / 2) ||
+          (sign < 0 && ball[0] < p2 + paddleWidth / 2)) {
+        p2 += sign * 3;
+      } else if ((sign > 0 && ball[0] > p2 + paddleWidth / 1.1) ||
+                 (sign < 0 && ball[0] < p2 + paddleWidth / 1.1)) {
+        p2 += sign * 9;
+      }
+
+      if (score >= winScore) {
+        p1 = ball[0];
+        p2 = ball[0];
+      }
+      p1 = Math.max(Math.min(p1, gameSide - paddleWidth), 0);
+      p2 = Math.max(Math.min(p2, gameSide - paddleWidth), 0);
+    }
+
+    function updateScore(adj) {
+      if (adj) {
+        score += adj;
+      } else if (--lives == 0) {
+        quit = true;
+      }
+      ball = ballDef.slice();
+      ballDxDy = ballDxDyDef.slice();
+      ballDxDy[1] *= score / winScore + 1;
+    }
+
+    function draw() {
+      let xAdj = isRTL ? -1 : 1;
+      elements["wp-player1"].style.transform = "translate(" + (xAdj * p1) + "px, -37px)";
+      elements["wp-player2"].style.transform = "translate(" + (xAdj * p2) + "px, " + gameSide + "px)";
+      elements["wp-ball"].style.transform = "translate(" + (xAdj * ball[0]) + "px, " + ball[1] + "px)";
+      elements["wp-score"].textContent = score;
+      elements["wp-lives"].setAttribute("lives", lives);
+      if (score >= winScore) {
+        let arena = elements.arena;
+        let image = "url(chrome://browser/skin/customizableui/whimsy.png)";
+        let position = `${(isRTL ? gameSide : 0) + (xAdj * ball[0]) - 10}px ${ball[1] - 10}px`;
+        let repeat = "no-repeat";
+        let size = "20px";
+        if (arena.style.backgroundImage) {
+          if (arena.style.backgroundImage.split(",").length >= 160) {
+            quit = true;
+          }
+
+          image += ", " + arena.style.backgroundImage;
+          position += ", " + arena.style.backgroundPosition;
+          repeat += ", " + arena.style.backgroundRepeat;
+          size += ", " + arena.style.backgroundSize;
+        }
+        arena.style.backgroundImage = image;
+        arena.style.backgroundPosition = position;
+        arena.style.backgroundRepeat = repeat;
+        arena.style.backgroundSize = size;
+      }
+    }
+
+    function onkeydown(event) {
+      keys.push(event.which);
+      if (keys.length > 10) {
+        keys.shift();
+        let codeEntered = true;
+        for (let i = 0; i < keys.length; i++) {
+          if (keys[i] != keysCode[i]) {
+            codeEntered = false;
+            break;
+          }
+        }
+        if (codeEntered) {
+          elements.arena.setAttribute("kcode", "true");
+          let spacer = document.querySelector("#customization-palette > toolbarpaletteitem");
+          spacer.setAttribute("kcode", "true");
+        }
+      }
+      if (event.which == 37 /* left */ ||
+          event.which == 39 /* right */) {
+        keydown = event.which;
+        keydownAdj *= 1.05;
+      }
+    }
+
+    function onkeyup(event) {
+      if (event.which == 37 || event.which == 39) {
+        keydownAdj = 1;
+        keydown = 0;
+      }
+    }
+
+    function uninit() {
+      document.removeEventListener("keydown", onkeydown);
+      document.removeEventListener("keyup", onkeyup);
+      if (rAFHandle) {
+        window.cancelAnimationFrame(rAFHandle);
+      }
+      let arena = elements.arena;
+      while (arena.firstChild) {
+        arena.firstChild.remove();
+      }
+      arena.removeAttribute("score");
+      arena.removeAttribute("lives");
+      arena.removeAttribute("kcode");
+      arena.style.removeProperty("background-image");
+      arena.style.removeProperty("background-position");
+      arena.style.removeProperty("background-repeat");
+      arena.style.removeProperty("background-size");
+      let spacer = document.querySelector("#customization-palette > toolbarpaletteitem");
+      spacer.removeAttribute("kcode");
+      elements = null;
+      document = null;
+      quit = true;
+    }
+
+    if (this.uninitWhimsy) {
+      return this.uninitWhimsy;
+    }
+
+    let ballDef = [10, 10];
+    let ball = [10, 10];
+    let ballDxDyDef = [2, 2];
+    let ballDxDy = [2, 2];
+    let score = 0;
+    let p1 = 0;
+    let p2 = 10;
+    let gameSide = 300;
+    let paddleEdge = 30;
+    let paddleWidth = 84;
+    let keydownAdj = 1;
+    let keydown = 0;
+    let keys = [];
+    let keysCode = [38, 38, 40, 40, 37, 39, 37, 39, 66, 65];
+    let lives = 5;
+    let winScore = 11;
+    let quit = false;
+    let document = this.document;
+    let rAFHandle = 0;
+    let elements = {
+      arena: document.getElementById("customization-pong-arena")
+    };
+    let isRTL = document.documentElement.matches(":-moz-locale-dir(rtl)");
+
+    document.addEventListener("keydown", onkeydown);
+    document.addEventListener("keyup", onkeyup);
+
+    for (let id of ["player1", "player2", "ball", "score", "lives"]) {
+      let el = document.createElement("box");
+      el.id = "wp-" + id;
+      elements[el.id] = elements.arena.appendChild(el);
+    }
+
+    let spacer = this.visiblePalette.querySelector("toolbarpaletteitem");
+    for (let player of ["#wp-player1", "#wp-player2"]) {
+      let val = "-moz-element(#" + spacer.id + ") no-repeat";
+      elements.arena.querySelector(player).style.background = val;
+    }
+
+    let window = this.window;
+    rAFHandle = window.requestAnimationFrame(function animate() {
+      update();
+      draw();
+      if (quit) {
+        elements["wp-score"].textContent = score;
+        elements["wp-lives"] && elements["wp-lives"].setAttribute("lives", lives);
+        elements.arena.setAttribute("score", score);
+        elements.arena.setAttribute("lives", lives);
+      } else {
+        rAFHandle = window.requestAnimationFrame(animate);
+      }
+    });
+
+    return uninit;
   },
 };
 

@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -23,7 +24,8 @@ namespace layers {
 
 // Image class that refers to a decoded video frame within
 // the GPU process.
-class GPUVideoImage final : public Image {
+class GPUVideoImage final : public Image
+{
   friend class gl::GLBlitHelper;
 public:
   GPUVideoImage(dom::VideoDecoderManagerChild* aManager,
@@ -45,12 +47,13 @@ public:
                                     ImageBridgeChild::GetSingleton().get());
   }
 
-  ~GPUVideoImage() override {}
+  virtual ~GPUVideoImage() {}
 
-  gfx::IntSize GetSize() override { return mSize; }
+  gfx::IntSize GetSize() const override { return mSize; }
 
 private:
-  GPUVideoTextureData* GetData() const {
+  GPUVideoTextureData* GetData() const
+  {
     if (!mTextureClient) {
       return nullptr;
     }
@@ -58,7 +61,7 @@ private:
   }
 
 public:
-  virtual already_AddRefed<gfx::SourceSurface> GetAsSourceSurface() override
+  already_AddRefed<gfx::SourceSurface> GetAsSourceSurface() override
   {
     GPUVideoTextureData* data = GetData();
     if (!data) {
@@ -67,7 +70,7 @@ public:
     return data->GetAsSourceSurface();
   }
 
-  virtual TextureClient* GetTextureClient(KnowsCompositor* aForwarder) override
+  TextureClient* GetTextureClient(KnowsCompositor* aForwarder) override
   {
     MOZ_ASSERT(aForwarder == ImageBridgeChild::GetSingleton(), "Must only use GPUVideo on ImageBridge");
     return mTextureClient;

@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "Завантажити"
   },
+  "downloadOnlyNotice": {
+    "message": "Ви зараз в режимі лише завантаження."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots автоматично переходить в режим лише завантаження в таких випадках:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "У вікні приватного перегляду."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Сторонні куки вимкнено."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "Активовано налаштування “Ніколи не пам'ятати історії”."
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "Ви використовуєте Firefox ESR."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "Вивантаження було вимкнено."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Посилання скопійовано"
   },
@@ -36,6 +57,28 @@
     "message": "Посилання на ваш знімок було скопійоване до буфера обміну. Натисніть $META_KEY$-V для вставлення.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Копіювати"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Знімок скопійовано"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Ваш знімок був скопійований в буфер обміну. Натисніть $META_KEY$-V, щоб вставити.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Зображення було обрізано до $PIXELS$ пікселів.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -81,6 +124,12 @@
   },
   "tourBodyIntro": {
     "message": "Робіть знімки екрану, зберігайте та діліться ними прямо в Firefox."
+  },
+  "tourHeaderPageAction": {
+    "message": "Новий спосіб збереження"
+  },
+  "tourBodyPageAction": {
+    "message": "Розгорніть меню дій для сторінки в панелі адреси, коли ви хочете зробити знімок екрану."
   },
   "tourHeaderClickAndDrag": {
     "message": "Робіть знімки чого завгодно"

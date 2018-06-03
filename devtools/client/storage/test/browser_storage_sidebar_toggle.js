@@ -26,18 +26,18 @@ const testCases = [
   }
 ];
 
-add_task(function* () {
-  yield openTabAndSetupStorage(MAIN_DOMAIN + "storage-listings.html");
+add_task(async function() {
+  await openTabAndSetupStorage(MAIN_DOMAIN + "storage-listings.html");
 
-  for (let test of testCases) {
-    let { location, sidebarHidden, clickToggle, toggleButtonVisible } = test;
+  for (const test of testCases) {
+    const { location, sidebarHidden, clickToggle, toggleButtonVisible } = test;
 
     info("running " + JSON.stringify(test));
 
     if (Array.isArray(location)) {
-      yield selectTreeItem(location);
+      await selectTreeItem(location);
     } else if (location) {
-      yield selectTableItem(location);
+      await selectTableItem(location);
     }
 
     if (clickToggle) {
@@ -53,5 +53,5 @@ add_task(function* () {
     info("-".repeat(80));
   }
 
-  yield finishTests();
+  await finishTests();
 });

@@ -1,9 +1,9 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-Cu.import("resource://services-sync/engines/tabs.js");
-Cu.import("resource://services-sync/service.js");
-Cu.import("resource://services-sync/util.js");
+ChromeUtils.import("resource://services-sync/engines/tabs.js");
+ChromeUtils.import("resource://services-sync/service.js");
+ChromeUtils.import("resource://services-sync/util.js");
 
 async function getMockStore() {
   let engine = new TabEngine(Service);
@@ -109,11 +109,15 @@ add_task(async function test_createRecord() {
   ok(record instanceof TabSetRecord);
   equal(record.tabs.length, 2501);
 
-  store.getMaxRecordPayloadSize = () => 512 * 1024;
-  numtabs = 5200
-  _("Modify the max record payload size and create a big record");
-  store.getWindowEnumerator = mockGetWindowEnumerator.bind(this, "http://foo.com", 1, numtabs);
-  record = await store.createRecord("fake-guid");
-  ok(record instanceof TabSetRecord);
-  equal(record.tabs.length, 5021);
+  let maxSizeStub = sinon.stub(Service, "getMemcacheMaxRecordPayloadSize", () => 512 * 1024);
+  try {
+    numtabs = 5200;
+    _("Modify the max record payload size and create a big record");
+    store.getWindowEnumerator = mockGetWindowEnumerator.bind(this, "http://foo.com", 1, numtabs);
+    record = await store.createRecord("fake-guid");
+    ok(record instanceof TabSetRecord);
+    equal(record.tabs.length, 5021);
+  } finally {
+    maxSizeStub.restore();
+  }
 });

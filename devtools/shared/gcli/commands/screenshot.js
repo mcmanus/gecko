@@ -5,6 +5,7 @@
 "use strict";
 
 const { Cc, Ci, Cr, Cu } = require("chrome");
+const ChromeUtils = require("ChromeUtils");
 const l10n = require("gcli/l10n");
 const Services = require("Services");
 const { NetUtil } = require("resource://gre/modules/NetUtil.jsm");
@@ -36,11 +37,7 @@ const CONTAINER_FLASHING_DURATION = 500;
  */
 const filenameParam = {
   name: "filename",
-  type: {
-    name: "file",
-    filetype: "file",
-    existing: "maybe",
-  },
+  type: "string",
   defaultValue: FILENAME_DEFAULT_VALUE,
   description: l10n.lookup("screenshotFilenameDesc"),
   manual: l10n.lookup("screenshotFilenameManual")
@@ -50,7 +47,7 @@ const filenameParam = {
  * Both commands have almost the same set of standard optional parameters, except for the
  * type of the --selector option, which can be a node only on the server.
  */
-const getScreenshotCommandParams = function (isClient) {
+const getScreenshotCommandParams = function(isClient) {
   return {
     group: l10n.lookup("screenshotGroupOptions"),
     params: [
@@ -130,7 +127,7 @@ exports.items = [
     item: "converter",
     from: "imageSummary",
     to: "dom",
-    exec: function (imageSummary, context) {
+    exec: function(imageSummary, context) {
       const document = context.document;
       const root = document.createElement("div");
 
@@ -163,8 +160,10 @@ exports.items = [
         root.style.cursor = "pointer";
         root.addEventListener("click", () => {
           if (imageSummary.href) {
-            let mainWindow = context.environment.chromeWindow;
-            mainWindow.openUILinkIn(imageSummary.href, "tab");
+            const mainWindow = context.environment.chromeWindow;
+            mainWindow.openWebLinkIn(imageSummary.href, "tab", {
+              triggeringPrincipal: document.nodePrincipal,
+            });
           } else if (imageSummary.filename) {
             const file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
             file.initWithPath(imageSummary.filename);
@@ -190,10 +189,10 @@ exports.items = [
       filenameParam,
       clientScreenshotParams,
     ],
-    exec: function (args, context) {
+    exec: function(args, context) {
       // Re-execute the command on the server
       const command = context.typed.replace(/^screenshot/, "screenshot_server");
-      let capture = context.updateExec(command).then(output => {
+      const capture = context.updateExec(command).then(output => {
         return output.error ? Promise.reject(output.data) : output.data;
       });
 
@@ -211,7 +210,7 @@ exports.items = [
       filenameParam,
       serverScreenshotParams,
     ],
-    exec: function (args, context) {
+    exec: function(args, context) {
       return captureScreenshot(args, context.environment.document);
     },
   }
@@ -221,7 +220,7 @@ exports.items = [
  * This function is called to simulate camera effects
  */
 function simulateCameraEffect(document, effect) {
-  let window = document.defaultView;
+  const window = document.defaultView;
   if (effect === "shutter") {
     if (Services.prefs.getBoolPref("devtools.screenshot.audio.enabled")) {
       const audioCamera = new window.Audio("resource://devtools/client/themes/audio/shutter.wav");
@@ -349,7 +348,7 @@ function getFilename(defaultName) {
   const date = new Date();
   let dateString = date.getFullYear() + "-" + (date.getMonth() + 1) +
                   "-" + date.getDate();
-  dateString = dateString.split("-").map(function (part) {
+  dateString = dateString.split("-").map(function(part) {
     if (part.length == 1) {
       part = "0" + part;
     }
@@ -367,45 +366,62 @@ function getFilename(defaultName) {
  * for now.
  */
 function saveToClipboard(context, reply) {
-  try {
-    const channel = NetUtil.newChannel({
-      uri: reply.data,
-      loadUsingSystemPrincipal: true,
-      contentPolicyType: Ci.nsIContentPolicy.TYPE_INTERNAL_IMAGE
-    });
-    const input = channel.open2();
+  return new Promise(resolve => {
+    try {
+      const channel = NetUtil.newChannel({
+        uri: reply.data,
+        loadUsingSystemPrincipal: true,
+        contentPolicyType: Ci.nsIContentPolicy.TYPE_INTERNAL_IMAGE
+      });
+      const input = channel.open2();
 
-    const loadContext = context.environment.chromeWindow
-                               .QueryInterface(Ci.nsIInterfaceRequestor)
-                               .getInterface(Ci.nsIWebNavigation)
-                               .QueryInterface(Ci.nsILoadContext);
+      const loadContext = context.environment.chromeWindow
+                                 .QueryInterface(Ci.nsIInterfaceRequestor)
+                                 .getInterface(Ci.nsIWebNavigation)
+                                 .QueryInterface(Ci.nsILoadContext);
 
-    const imgTools = Cc["@mozilla.org/image/tools;1"]
-                        .getService(Ci.imgITools);
+      const callback = {
+        onImageReady(container, status) {
+          if (!container) {
+            console.error("imgTools.decodeImageAsync failed");
+            reply.destinations.push(l10n.lookup("screenshotErrorCopying"));
+            resolve();
+            return;
+          }
 
-    const container = imgTools.decodeImage(input, channel.contentType);
+          try {
+            const wrapped = Cc["@mozilla.org/supports-interface-pointer;1"]
+                              .createInstance(Ci.nsISupportsInterfacePointer);
+            wrapped.data = container;
 
-    const wrapped = Cc["@mozilla.org/supports-interface-pointer;1"]
-                      .createInstance(Ci.nsISupportsInterfacePointer);
-    wrapped.data = container;
+            const trans = Cc["@mozilla.org/widget/transferable;1"]
+                            .createInstance(Ci.nsITransferable);
+            trans.init(loadContext);
+            trans.addDataFlavor(channel.contentType);
+            trans.setTransferData(channel.contentType, wrapped, -1);
 
-    const trans = Cc["@mozilla.org/widget/transferable;1"]
-                    .createInstance(Ci.nsITransferable);
-    trans.init(loadContext);
-    trans.addDataFlavor(channel.contentType);
-    trans.setTransferData(channel.contentType, wrapped, -1);
+            Services.clipboard.setData(trans, null, Ci.nsIClipboard.kGlobalClipboard);
 
-    const clip = Cc["@mozilla.org/widget/clipboard;1"]
-                    .getService(Ci.nsIClipboard);
-    clip.setData(trans, null, Ci.nsIClipboard.kGlobalClipboard);
+            reply.destinations.push(l10n.lookup("screenshotCopied"));
+          } catch (ex) {
+            console.error(ex);
+            reply.destinations.push(l10n.lookup("screenshotErrorCopying"));
+          }
+          resolve();
+        }
+      };
 
-    reply.destinations.push(l10n.lookup("screenshotCopied"));
-  } catch (ex) {
-    console.error(ex);
-    reply.destinations.push(l10n.lookup("screenshotErrorCopying"));
-  }
-
-  return Promise.resolve();
+      const threadManager = Cc["@mozilla.org/thread-manager;1"].getService();
+      const imgTools = Cc["@mozilla.org/image/tools;1"]
+                          .getService(Ci.imgITools);
+      imgTools.decodeImageAsync(input, channel.contentType, callback,
+                                threadManager.currentThread);
+    } catch (ex) {
+      console.error(ex);
+      reply.destinations.push(l10n.lookup("screenshotErrorCopying"));
+      resolve();
+    }
+  });
 }
 
 /**
@@ -413,10 +429,8 @@ function saveToClipboard(context, reply) {
  */
 function uploadToImgur(reply) {
   return new Promise((resolve, reject) => {
-    const xhr = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"]
-                  .createInstance(Ci.nsIXMLHttpRequest);
-    const fd = Cc["@mozilla.org/files/formdata;1"]
-                  .createInstance(Ci.nsIDOMFormData);
+    const xhr = new XMLHttpRequest();
+    const fd = new FormData();
     fd.append("image", reply.data.split(",")[1]);
     fd.append("type", "base64");
     fd.append("title", reply.filename);
@@ -430,7 +444,7 @@ function uploadToImgur(reply) {
     xhr.send(fd);
     xhr.responseType = "json";
 
-    xhr.onreadystatechange = function () {
+    xhr.onreadystatechange = function() {
       if (xhr.readyState == 4) {
         if (xhr.status == 200) {
           reply.href = xhr.response.data.link;
@@ -465,7 +479,7 @@ function DownloadListener(win, transfer) {
   this.transfer = transfer;
 
   // For most method calls, forward to the transfer object.
-  for (let name in transfer) {
+  for (const name in transfer) {
     if (name != "QueryInterface" &&
         name != "onStateChange") {
       this[name] = (...args) => transfer[name].apply(transfer, args);
@@ -478,20 +492,14 @@ function DownloadListener(win, transfer) {
 }
 
 DownloadListener.prototype = {
-  QueryInterface: function (iid) {
-    if (iid.equals(Ci.nsIInterfaceRequestor) ||
-        iid.equals(Ci.nsIWebProgressListener) ||
-        iid.equals(Ci.nsIWebProgressListener2) ||
-        iid.equals(Ci.nsISupports)) {
-      return this;
-    }
-    throw Cr.NS_ERROR_NO_INTERFACE;
-  },
+  QueryInterface: ChromeUtils.generateQI(["nsIInterfaceRequestor",
+                                          "nsIWebProgressListener",
+                                          "nsIWebProgressListener2"]),
 
-  getInterface: function (iid) {
+  getInterface: function(iid) {
     if (iid.equals(Ci.nsIAuthPrompt) ||
         iid.equals(Ci.nsIAuthPrompt2)) {
-      let ww = Cc["@mozilla.org/embedcomp/window-watcher;1"]
+      const ww = Cc["@mozilla.org/embedcomp/window-watcher;1"]
                  .getService(Ci.nsIPromptFactory);
       return ww.getPrompt(this.window, iid);
     }
@@ -499,7 +507,7 @@ DownloadListener.prototype = {
     throw Cr.NS_ERROR_NO_INTERFACE;
   },
 
-  onStateChange: function (webProgress, request, state, status) {
+  onStateChange: function(webProgress, request, state, status) {
     // Check if the download has completed
     if ((state & Ci.nsIWebProgressListener.STATE_STOP) &&
         (state & Ci.nsIWebProgressListener.STATE_IS_NETWORK)) {
@@ -519,25 +527,25 @@ DownloadListener.prototype = {
  * completion.
  */
 var saveToFile = Task.async(function* (context, reply) {
-  let document = context.environment.chromeDocument;
-  let window = context.environment.chromeWindow;
+  const document = context.environment.chromeDocument;
+  const window = context.environment.chromeWindow;
 
   // Check there is a .png extension to filename
   if (!reply.filename.match(/.png$/i)) {
     reply.filename += ".png";
   }
 
-  let downloadsDir = yield Downloads.getPreferredDownloadsDirectory();
-  let downloadsDirExists = yield OS.File.exists(downloadsDir);
+  const downloadsDir = yield Downloads.getPreferredDownloadsDirectory();
+  const downloadsDirExists = yield OS.File.exists(downloadsDir);
   if (downloadsDirExists) {
     // If filename is absolute, it will override the downloads directory and
     // still be applied as expected.
     reply.filename = OS.Path.join(downloadsDir, reply.filename);
   }
 
-  let sourceURI = Services.io.newURI(reply.data);
-  let targetFile = new FileUtils.File(reply.filename);
-  let targetFileURI = Services.io.newFileURI(targetFile);
+  const sourceURI = Services.io.newURI(reply.data);
+  const targetFile = new FileUtils.File(reply.filename);
+  const targetFileURI = Services.io.newFileURI(targetFile);
 
   // Create download and track its progress.
   // This is adapted from saveURL in contentAreaUtils.js, but simplified greatly
@@ -550,12 +558,12 @@ var saveToFile = Task.async(function* (context, reply) {
                 nsIWBP.PERSIST_FLAGS_FORCE_ALLOW_COOKIES |
                 nsIWBP.PERSIST_FLAGS_BYPASS_CACHE |
                 nsIWBP.PERSIST_FLAGS_AUTODETECT_APPLY_CONVERSION;
-  let isPrivate =
+  const isPrivate =
     PrivateBrowsingUtils.isContentWindowPrivate(document.defaultView);
-  let persist = Cc["@mozilla.org/embedding/browser/nsWebBrowserPersist;1"]
+  const persist = Cc["@mozilla.org/embedding/browser/nsWebBrowserPersist;1"]
                   .createInstance(Ci.nsIWebBrowserPersist);
   persist.persistFlags = flags;
-  let tr = Cc["@mozilla.org/transfer;1"].createInstance(Ci.nsITransfer);
+  const tr = Cc["@mozilla.org/transfer;1"].createInstance(Ci.nsITransfer);
   tr.init(sourceURI,
           targetFileURI,
           "",
@@ -564,10 +572,10 @@ var saveToFile = Task.async(function* (context, reply) {
           null,
           persist,
           isPrivate);
-  let listener = new DownloadListener(window, tr);
+  const listener = new DownloadListener(window, tr);
   persist.progressListener = listener;
   persist.savePrivacyAwareURI(sourceURI,
-                              null,
+                              0,
                               document.documentURIObject,
                               Ci.nsIHttpChannel.REFERRER_POLICY_UNSET,
                               null,

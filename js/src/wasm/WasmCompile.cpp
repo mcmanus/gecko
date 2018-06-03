@@ -21,12 +21,12 @@
 #include "mozilla/Maybe.h"
 #include "mozilla/Unused.h"
 
-#include "jsprf.h"
-
 #include "jit/ProcessExecutableMemory.h"
+#include "util/Text.h"
 #include "wasm/WasmBaselineCompile.h"
-#include "wasm/WasmBinaryIterator.h"
 #include "wasm/WasmGenerator.h"
+#include "wasm/WasmIonCompile.h"
+#include "wasm/WasmOpIter.h"
 #include "wasm/WasmSignalHandlers.h"
 #include "wasm/WasmValidate.h"
 
@@ -34,12 +34,16 @@ using namespace js;
 using namespace js::jit;
 using namespace js::wasm;
 
+template <class DecoderT>
 static bool
-DecodeFunctionBody(Decoder& d, ModuleGenerator& mg, uint32_t funcIndex)
+DecodeFunctionBody(DecoderT& d, ModuleGenerator& mg, uint32_t funcIndex)
 {
     uint32_t bodySize;
     if (!d.readVarU32(&bodySize))
         return d.fail("expected number of function body bytes");
+
+    if (bodySize > MaxFunctionBytes)
+        return d.fail("function body too big");
 
     const size_t offsetInModule = d.currentOffset();
 
@@ -51,15 +55,13 @@ DecodeFunctionBody(Decoder& d, ModuleGenerator& mg, uint32_t funcIndex)
     return mg.compileFuncDef(funcIndex, offsetInModule, bodyBegin, bodyBegin + bodySize);
 }
 
+template <class DecoderT>
 static bool
-DecodeCodeSection(Decoder& d, ModuleGenerator& mg, ModuleEnvironment* env)
+DecodeCodeSection(const ModuleEnvironment& env, DecoderT& d, ModuleGenerator& mg)
 {
-    if (!mg.startFuncDefs())
-        return false;
-
-    if (!env->codeSection) {
-        if (env->numFuncDefs() != 0)
-            return d.fail("expected function bodies");
+    if (!env.codeSection) {
+        if (env.numFuncDefs() != 0)
+            return d.fail("expected code section");
 
         return mg.finishFuncDefs();
     }
@@ -68,15 +70,15 @@ DecodeCodeSection(Decoder& d, ModuleGenerator& mg, ModuleEnvironment* env)
     if (!d.readVarU32(&numFuncDefs))
         return d.fail("expected function body count");
 
-    if (numFuncDefs != env->numFuncDefs())
+    if (numFuncDefs != env.numFuncDefs())
         return d.fail("function body count does not match function signature count");
 
     for (uint32_t funcDefIndex = 0; funcDefIndex < numFuncDefs; funcDefIndex++) {
-        if (!DecodeFunctionBody(d, mg, env->numFuncImports() + funcDefIndex))
+        if (!DecodeFunctionBody(d, mg, env.numFuncImports() + funcDefIndex))
             return false;
     }
 
-    if (!d.finishSection(*env->codeSection, "code"))
+    if (!d.finishSection(*env.codeSection, "code"))
         return false;
 
     return mg.finishFuncDefs();
@@ -85,18 +87,25 @@ DecodeCodeSection(Decoder& d, ModuleGenerator& mg, ModuleEnvironment* env)
 bool
 CompileArgs::initFromContext(JSContext* cx, ScriptedCaller&& scriptedCaller)
 {
-    baselineEnabled = cx->options().wasmBaseline();
+#ifdef ENABLE_WASM_GC
+    bool gcEnabled = cx->options().wasmGc();
+#else
+    bool gcEnabled = false;
+#endif
 
-    // For sanity's sake, just use Ion if both compilers are disabled.
-    ionEnabled = cx->options().wasmIon() || !cx->options().wasmBaseline();
+    baselineEnabled = cx->options().wasmBaseline() || gcEnabled;
+    ionEnabled = cx->options().wasmIon() && !gcEnabled;
+    sharedMemoryEnabled = cx->realm()->creationOptions().getSharedMemoryAndAtomicsEnabled();
+    gcTypesEnabled = gcEnabled ? HasGcTypes::True : HasGcTypes::False;
+    testTiering = (cx->options().testWasmAwaitTier2() || JitOptions.wasmDelayTier2) && !gcEnabled;
 
     // Debug information such as source view or debug traps will require
     // additional memory and permanently stay in baseline code, so we try to
     // only enable it when a developer actually cares: when the debugger tab
     // is open.
-    debugEnabled = cx->compartment()->debuggerObservesAsmJS();
+    debugEnabled = cx->realm()->debuggerObservesAsmJS();
 
-    this->scriptedCaller = Move(scriptedCaller);
+    this->scriptedCaller = std::move(scriptedCaller);
     return assumptions.initBuildIdFromContext(cx);
 }
 
@@ -312,11 +321,8 @@ static const double spaceCutoffPct = 0.9;
 
 // Figure out whether we should use tiered compilation or not.
 static bool
-GetTieringEnabled(uint32_t codeSize)
+TieringBeneficial(uint32_t codeSize)
 {
-    if (!CanUseExtraThreads())
-        return false;
-
     uint32_t cpuCount = HelperThreadState().cpuCount;
     MOZ_ASSERT(cpuCount > 0);
 
@@ -382,42 +388,60 @@ GetTieringEnabled(uint32_t codeSize)
     return true;
 }
 
+static void
+InitialCompileFlags(const CompileArgs& args, Decoder& d, CompileMode* mode, Tier* tier,
+                    DebugEnabled* debug)
+{
+    uint32_t codeSectionSize = 0;
+
+    SectionRange range;
+    if (StartsCodeSection(d.begin(), d.end(), &range))
+        codeSectionSize = range.size;
+
+    // Attempt to default to ion if baseline is disabled.
+    bool baselineEnabled = BaselineCanCompile() && (args.baselineEnabled || args.testTiering);
+    bool debugEnabled = BaselineCanCompile() && args.debugEnabled;
+    bool ionEnabled = IonCanCompile() && (args.ionEnabled || !baselineEnabled || args.testTiering);
+
+    // HasCompilerSupport() should prevent failure here
+    MOZ_RELEASE_ASSERT(baselineEnabled || ionEnabled);
+
+    if (baselineEnabled && ionEnabled && !debugEnabled && CanUseExtraThreads() &&
+        (TieringBeneficial(codeSectionSize) || args.testTiering))
+    {
+        *mode = CompileMode::Tier1;
+        *tier = Tier::Baseline;
+    } else {
+        *mode = CompileMode::Once;
+        *tier = debugEnabled || !ionEnabled ? Tier::Baseline : Tier::Ion;
+    }
+
+    *debug = debugEnabled ? DebugEnabled::True : DebugEnabled::False;
+}
+
 SharedModule
-wasm::CompileInitialTier(const ShareableBytes& bytecode, const CompileArgs& args, UniqueChars* error)
+wasm::CompileBuffer(const CompileArgs& args, const ShareableBytes& bytecode, UniqueChars* error,
+                    UniqueCharsVector* warnings)
 {
     MOZ_RELEASE_ASSERT(wasm::HaveSignalHandlers());
 
-    bool baselineEnabled = BaselineCanCompile() && args.baselineEnabled;
-    bool debugEnabled = BaselineCanCompile() && args.debugEnabled;
-    bool ionEnabled = args.ionEnabled || !baselineEnabled;
-
-    DebugEnabled debug = debugEnabled ? DebugEnabled::True : DebugEnabled::False;
-
-    ModuleEnvironment env(ModuleEnvironment::UnknownMode, ModuleEnvironment::UnknownTier, debug);
-
-    Decoder d(bytecode.bytes, error);
-    if (!DecodeModuleEnvironment(d, &env))
-        return nullptr;
-
-    uint32_t codeSize = env.codeSection ? env.codeSection->size : 0;
+    Decoder d(bytecode.bytes, 0, error, warnings);
 
     CompileMode mode;
     Tier tier;
-    if (baselineEnabled && ionEnabled && !debugEnabled && GetTieringEnabled(codeSize)) {
-        mode = CompileMode::Tier1;
-        tier = Tier::Baseline;
-    } else {
-        mode = CompileMode::Once;
-        tier = debugEnabled || !ionEnabled ? Tier::Baseline : Tier::Ion;
-    }
+    DebugEnabled debug;
+    InitialCompileFlags(args, d, &mode, &tier, &debug);
 
-    env.setModeAndTier(mode, tier);
-
-    ModuleGenerator mg(args, &env, nullptr, error);
-    if (!mg.init(bytecode.length()))
+    ModuleEnvironment env(mode, tier, debug, args.gcTypesEnabled,
+                          args.sharedMemoryEnabled ? Shareable::True : Shareable::False);
+    if (!DecodeModuleEnvironment(d, &env))
         return nullptr;
 
-    if (!DecodeCodeSection(d, mg, &env))
+    ModuleGenerator mg(args, &env, nullptr, error);
+    if (!mg.init())
+        return nullptr;
+
+    if (!DecodeCodeSection(env, d, mg))
         return nullptr;
 
     if (!DecodeModuleTail(d, &env))
@@ -427,26 +451,183 @@ wasm::CompileInitialTier(const ShareableBytes& bytecode, const CompileArgs& args
 }
 
 bool
-wasm::CompileTier2(Module& module, const CompileArgs& args, Atomic<bool>* cancelled)
+wasm::CompileTier2(const CompileArgs& args, Module& module, Atomic<bool>* cancelled)
 {
     MOZ_RELEASE_ASSERT(wasm::HaveSignalHandlers());
 
     UniqueChars error;
-    Decoder d(module.bytecode().bytes, &error);
+    Decoder d(module.bytecode().bytes, 0, &error);
 
-    ModuleEnvironment env(CompileMode::Tier2, Tier::Ion, DebugEnabled::False);
+    MOZ_ASSERT(args.gcTypesEnabled == HasGcTypes::False, "can't ion-compile with gc types yet");
+
+    ModuleEnvironment env(CompileMode::Tier2, Tier::Ion, DebugEnabled::False, HasGcTypes::False,
+                          args.sharedMemoryEnabled ? Shareable::True : Shareable::False);
     if (!DecodeModuleEnvironment(d, &env))
         return false;
 
     ModuleGenerator mg(args, &env, cancelled, &error);
-    if (!mg.init(module.bytecode().length()))
+    if (!mg.init())
         return false;
 
-    if (!DecodeCodeSection(d, mg, &env))
+    if (!DecodeCodeSection(env, d, mg))
         return false;
 
     if (!DecodeModuleTail(d, &env))
         return false;
 
     return mg.finishTier2(module);
+}
+
+class StreamingDecoder
+{
+    Decoder d_;
+    const ExclusiveStreamEnd& streamEnd_;
+    const Atomic<bool>& cancelled_;
+
+  public:
+    StreamingDecoder(const ModuleEnvironment& env, const Bytes& begin,
+                     const ExclusiveStreamEnd& streamEnd, const Atomic<bool>& cancelled,
+                     UniqueChars* error, UniqueCharsVector* warnings)
+      : d_(begin, env.codeSection->start, error, warnings),
+        streamEnd_(streamEnd),
+        cancelled_(cancelled)
+    {}
+
+    bool fail(const char* msg) {
+        return d_.fail(msg);
+    }
+
+    bool done() const {
+        return d_.done();
+    }
+
+    size_t currentOffset() const {
+        return d_.currentOffset();
+    }
+
+    bool waitForBytes(size_t numBytes) {
+        numBytes = Min(numBytes, d_.bytesRemain());
+        const uint8_t* requiredEnd = d_.currentPosition() + numBytes;
+        auto streamEnd = streamEnd_.lock();
+        while (streamEnd < requiredEnd) {
+            if (cancelled_)
+                return false;
+            streamEnd.wait();
+        }
+        return true;
+    }
+
+    bool readVarU32(uint32_t* u32) {
+        return waitForBytes(MaxVarU32DecodedBytes) &&
+               d_.readVarU32(u32);
+    }
+
+    bool readBytes(size_t size, const uint8_t** begin) {
+        return waitForBytes(size) &&
+               d_.readBytes(size, begin);
+    }
+
+    bool finishSection(const SectionRange& range, const char* name) {
+        return d_.finishSection(range, name);
+    }
+};
+
+static SharedBytes
+CreateBytecode(const Bytes& env, const Bytes& code, const Bytes& tail, UniqueChars* error)
+{
+    size_t size = env.length() + code.length() + tail.length();
+    if (size > MaxModuleBytes) {
+        *error = DuplicateString("module too big");
+        return nullptr;
+    }
+
+    MutableBytes bytecode = js_new<ShareableBytes>();
+    if (!bytecode || !bytecode->bytes.resize(size))
+        return nullptr;
+
+    uint8_t* p = bytecode->bytes.begin();
+
+    memcpy(p, env.begin(), env.length());
+    p += env.length();
+
+    memcpy(p, code.begin(), code.length());
+    p += code.length();
+
+    memcpy(p, tail.begin(), tail.length());
+    p += tail.length();
+
+    MOZ_ASSERT(p == bytecode->end());
+
+    return bytecode;
+}
+
+SharedModule
+wasm::CompileStreaming(const CompileArgs& args,
+                       const Bytes& envBytes,
+                       const Bytes& codeBytes,
+                       const ExclusiveStreamEnd& codeStreamEnd,
+                       const ExclusiveTailBytesPtr& tailBytesPtr,
+                       const Atomic<bool>& cancelled,
+                       UniqueChars* error,
+                       UniqueCharsVector* warnings)
+{
+    MOZ_ASSERT(wasm::HaveSignalHandlers());
+
+    Maybe<ModuleEnvironment> env;
+
+    {
+        Decoder d(envBytes, 0, error, warnings);
+
+        CompileMode mode;
+        Tier tier;
+        DebugEnabled debug;
+        InitialCompileFlags(args, d, &mode, &tier, &debug);
+
+        env.emplace(mode, tier, debug, args.gcTypesEnabled,
+                    args.sharedMemoryEnabled ? Shareable::True : Shareable::False);
+        if (!DecodeModuleEnvironment(d, env.ptr()))
+            return nullptr;
+
+        MOZ_ASSERT(d.done());
+    }
+
+    ModuleGenerator mg(args, env.ptr(), &cancelled, error);
+    if (!mg.init())
+        return nullptr;
+
+    {
+        MOZ_ASSERT(env->codeSection->size == codeBytes.length());
+        StreamingDecoder d(*env, codeBytes, codeStreamEnd, cancelled, error, warnings);
+
+        if (!DecodeCodeSection(*env, d, mg))
+            return nullptr;
+
+        MOZ_ASSERT(d.done());
+    }
+
+    {
+        auto tailBytesPtrGuard = tailBytesPtr.lock();
+        while (!tailBytesPtrGuard) {
+            if (cancelled)
+                return nullptr;
+            tailBytesPtrGuard.wait();
+        }
+    }
+
+    const Bytes& tailBytes = *tailBytesPtr.lock();
+
+    {
+        Decoder d(tailBytes, env->codeSection->end(), error, warnings);
+
+        if (!DecodeModuleTail(d, env.ptr()))
+            return nullptr;
+
+        MOZ_ASSERT(d.done());
+    }
+
+    SharedBytes bytecode = CreateBytecode(envBytes, codeBytes, tailBytes, error);
+    if (!bytecode)
+        return nullptr;
+
+    return mg.finishModule(*bytecode);
 }

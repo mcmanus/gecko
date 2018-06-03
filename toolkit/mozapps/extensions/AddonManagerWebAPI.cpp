@@ -11,6 +11,7 @@
 
 #include "mozilla/Preferences.h"
 #include "nsGlobalWindow.h"
+#include "xpcpublic.h"
 
 #include "nsIDocShell.h"
 #include "nsIScriptObjectPrincipal.h"
@@ -76,7 +77,9 @@ AddonManagerWebAPI::IsValidSite(nsIURI* uri)
   bool isSecure;
   nsresult rv = uri->SchemeIs("https", &isSecure);
   if (NS_FAILED(rv) || !isSecure) {
-    return false;
+    if (!(xpc::IsInAutomation() && Preferences::GetBool("extensions.webapi.testing.http", false))) {
+      return false;
+    }
   }
 
   nsAutoCString host;
@@ -91,7 +94,7 @@ AddonManagerWebAPI::IsValidSite(nsIURI* uri)
 bool
 AddonManagerWebAPI::IsAPIEnabled(JSContext* cx, JSObject* obj)
 {
-  nsGlobalWindow* global = xpc::WindowGlobalOrNull(obj);
+  nsGlobalWindowInner* global = xpc::WindowGlobalOrNull(obj);
   if (!global) {
     return false;
   }

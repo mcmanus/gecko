@@ -11,14 +11,12 @@
 #include <errno.h>
 #include <sys/utsname.h>
 #include "nsCRTGlue.h"
+#include "nsExceptionHandler.h"
+#include "nsICrashReporter.h"
 #include "prenv.h"
 
 #include "GfxInfoX11.h"
 
-#ifdef MOZ_CRASHREPORTER
-#include "nsExceptionHandler.h"
-#include "nsICrashReporter.h"
-#endif
 
 namespace mozilla {
 namespace widget {
@@ -176,9 +174,8 @@ GfxInfo::GetData()
             mAdapterDescription.Append(nsDependentCString(buf));
             mAdapterDescription.Append('\n');
         }
-#ifdef MOZ_CRASHREPORTER
+
         CrashReporter::AppendAppNotesToCrashReport(mAdapterDescription);
-#endif
         return;
     }
 
@@ -194,9 +191,8 @@ GfxInfo::GetData()
     if (mHasTextureFromPixmap)
         note.AppendLiteral(" -- texture_from_pixmap");
     note.Append('\n');
-#ifdef MOZ_CRASHREPORTER
+
     CrashReporter::AppendAppNotesToCrashReport(note);
-#endif
 
     // determine the major OpenGL version. That's the first integer in the version string.
     mGLMajorVersion = strtol(mVersion.get(), 0, 10);
@@ -264,10 +260,10 @@ const nsTArray<GfxDriverInfo>&
 GfxInfo::GetGfxDriverInfo()
 {
   // Nothing here yet.
-  //if (!mDriverInfo->Length()) {
+  //if (!sDriverInfo->Length()) {
   //
   //}
-  return *mDriverInfo;
+  return *sDriverInfo;
 }
 
 nsresult
@@ -279,14 +275,18 @@ GfxInfo::GetFeatureStatusImpl(int32_t aFeature,
                               OperatingSystem* aOS /* = nullptr */)
 
 {
-  GetData();
-
   NS_ENSURE_ARG_POINTER(aStatus);
   *aStatus = nsIGfxInfo::FEATURE_STATUS_UNKNOWN;
   aSuggestedDriverVersion.SetIsVoid(true);
   OperatingSystem os = OperatingSystem::Linux;
   if (aOS)
     *aOS = os;
+
+  if (sShutdownOccurred) {
+    return NS_OK;
+  }
+
+  GetData();
 
   if (mGLMajorVersion == 1) {
     // We're on OpenGL 1. In most cases that indicates really old hardware.
@@ -307,6 +307,12 @@ GfxInfo::GetFeatureStatusImpl(int32_t aFeature,
     {
       *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
       aFailureId = "FEATURE_FAILURE_SOFTWARE_GL";
+      return NS_OK;
+    }
+
+    if (aFeature == nsIGfxInfo::FEATURE_WEBRENDER) {
+      *aStatus = nsIGfxInfo::FEATURE_BLOCKED_OS_VERSION;
+      aFailureId = "FEATURE_UNQUALIFIED_WEBRENDER_LINUX";
       return NS_OK;
     }
 

@@ -73,9 +73,9 @@ public:
         return mSurfaceOverride;
     }
 
-    virtual bool MakeCurrentImpl(bool aForce) override;
+    virtual bool MakeCurrentImpl() const override;
 
-    virtual bool IsCurrent() override;
+    virtual bool IsCurrentImpl() const override;
 
     virtual bool RenewSurface(widget::CompositorWidget* aWidget) override;
 
@@ -117,6 +117,7 @@ public:
     const EGLConfig mConfig;
 protected:
     EGLSurface mSurface;
+    const EGLSurface mFallbackSurface;
 public:
     const EGLContext mContext;
 protected:
@@ -133,11 +134,17 @@ protected:
     static EGLSurface CreatePBufferSurfaceTryingPowerOfTwo(EGLConfig config,
                                                            EGLenum bindToTextureFormat,
                                                            gfx::IntSize& pbsize);
+#if defined(MOZ_WAYLAND)
+    static EGLSurface CreateWaylandBufferSurface(EGLConfig config,
+                                                 gfx::IntSize& pbsize);
+#endif
 #if defined(MOZ_WIDGET_ANDROID)
 public:
     EGLSurface CreateCompatibleSurface(void* aWindow);
 #endif // defined(MOZ_WIDGET_ANDROID)
 };
+
+bool CreateConfig(EGLConfig* config, int32_t depth, bool enableDepthBuffer);
 
 } // namespace gl
 } // namespace mozilla

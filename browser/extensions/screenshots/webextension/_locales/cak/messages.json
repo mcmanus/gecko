@@ -29,6 +29,27 @@
   "downloadScreenshot": {
     "message": "Tiqasäx"
   },
+  "downloadOnlyNotice": {
+    "message": "Wakami k'o pa rub'eyal Xa Xe Qasanïk."
+  },
+  "downloadOnlyDetails": {
+    "message": "Ri Firefox Chapoj Wachaj pa ruyonil nuk'ëx pa rub'anikil Xa Xe Qasanïk pa ri taq k'ulwachitajinem re':"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "Pa jun rutzuwäch Ichin Okem pa K'amaya'l."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "E chupül ri taq kikaxlanwey aj rox winäq."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "“Majub'ey tinatäx natab'äl” tzijon."
+  },
+  "downloadOnlyDetailsESR": {
+    "message": "Tajin nawokisaj ri Firefox ESR."
+  },
+  "downloadOnlyDetailsNoUploadPref": {
+    "message": "E chupül ri kisamajib'exik taq yakb'äl."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Ximonel Wachib'en"
   },
@@ -36,6 +57,28 @@
     "message": "Xwachib'ëx pa molwuj ri ruximonel awachib'al. Tapitz'a' $META_KEY$-V richin natz'äm.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Tiwachib'ëx"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Xwachib'ëx chapoj"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Xwachib'ëx pa molwuj ri ruchapoj awachib'al. Tapitz'a' $META_KEY$-V richin natz'äm.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Re wachib'äl re' xqupïx pa $PIXELS$px.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }

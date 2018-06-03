@@ -46,20 +46,16 @@ public:
     MOZ_ASSERT_IF(aRequireTailDispatch, NS_IsMainThread() && aTarget->IsOnCurrentThread());
   }
 
-  virtual void Dispatch(already_AddRefed<nsIRunnable> aRunnable,
-                        DispatchFailureHandling aFailureHandling = AssertDispatchSuccess,
-                        DispatchReason aReason = NormalDispatch) override
+  virtual nsresult Dispatch(already_AddRefed<nsIRunnable> aRunnable,
+                            DispatchReason aReason = NormalDispatch) override
   {
     AbstractThread* currentThread;
     if (aReason != TailDispatch && (currentThread = GetCurrent()) && RequiresTailDispatch(currentThread)) {
-      currentThread->TailDispatcher().AddTask(this, Move(aRunnable), aFailureHandling);
-      return;
+      return currentThread->TailDispatcher().AddTask(this, std::move(aRunnable));
     }
 
-    RefPtr<nsIRunnable> runner(new Runner(this, Move(aRunnable), false /* already drained by TaskGroupRunnable  */));
-    nsresult rv = mTarget->Dispatch(runner.forget(), NS_DISPATCH_NORMAL);
-    MOZ_DIAGNOSTIC_ASSERT(aFailureHandling == DontAssertDispatchSuccess || NS_SUCCEEDED(rv));
-    Unused << rv;
+    RefPtr<nsIRunnable> runner(new Runner(this, std::move(aRunnable), false /* already drained by TaskGroupRunnable  */));
+    return mTarget->Dispatch(runner.forget(), NS_DISPATCH_NORMAL);
   }
 
   // Prevent a GCC warning about the other overload of Dispatch being hidden.
@@ -111,7 +107,7 @@ private:
   CreateDirectTaskDrainer(already_AddRefed<nsIRunnable> aRunnable) override
   {
     RefPtr<Runner> runner =
-      new Runner(this, Move(aRunnable), /* aDrainDirectTasks */ true);
+      new Runner(this, std::move(aRunnable), /* aDrainDirectTasks */ true);
     return runner.forget();
   }
 
@@ -177,6 +173,7 @@ private:
       return rv;
     }
 
+#ifdef MOZ_COLLECTING_RUNNABLE_TELEMETRY
     NS_IMETHOD GetName(nsACString& aName) override
     {
       aName.AssignLiteral("AbstractThread::Runner");
@@ -190,6 +187,7 @@ private:
       }
       return NS_OK;
     }
+#endif
 
   private:
     RefPtr<EventTargetWrapper> mThread;
@@ -223,8 +221,7 @@ AbstractThread::DispatchFromScript(nsIRunnable* aEvent, uint32_t aFlags)
 NS_IMETHODIMP
 AbstractThread::Dispatch(already_AddRefed<nsIRunnable> aEvent, uint32_t aFlags)
 {
-  Dispatch(Move(aEvent), DontAssertDispatchSuccess, NormalDispatch);
-  return NS_OK;
+  return Dispatch(std::move(aEvent), NormalDispatch);
 }
 
 NS_IMETHODIMP
@@ -234,12 +231,14 @@ AbstractThread::DelayedDispatch(already_AddRefed<nsIRunnable> aEvent,
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
-void
+nsresult
 AbstractThread::TailDispatchTasksFor(AbstractThread* aThread)
 {
   if (MightHaveTailTasks()) {
-    TailDispatcher().DispatchTasksFor(aThread);
+    return TailDispatcher().DispatchTasksFor(aThread);
   }
+
+  return NS_OK;
 }
 
 bool
@@ -301,13 +300,13 @@ AbstractThread::InitMainThread()
 void
 AbstractThread::DispatchStateChange(already_AddRefed<nsIRunnable> aRunnable)
 {
-  GetCurrent()->TailDispatcher().AddStateChangeTask(this, Move(aRunnable));
+  GetCurrent()->TailDispatcher().AddStateChangeTask(this, std::move(aRunnable));
 }
 
 /* static */ void
 AbstractThread::DispatchDirectTask(already_AddRefed<nsIRunnable> aRunnable)
 {
-  GetCurrent()->TailDispatcher().AddDirectTask(Move(aRunnable));
+  GetCurrent()->TailDispatcher().AddDirectTask(std::move(aRunnable));
 }
 
 /* static */

@@ -1,6 +1,7 @@
 //! Intermediate representation of variables.
 
-use super::context::{BindgenContext, ItemId};
+use callbacks::MacroParsingBehavior;
+use super::context::{BindgenContext, TypeId};
 use super::dot::DotAttributes;
 use super::function::cursor_mangling;
 use super::int::IntKind;
@@ -35,7 +36,7 @@ pub struct Var {
     /// The mangled name of the variable.
     mangled_name: Option<String>,
     /// The type of the variable.
-    ty: ItemId,
+    ty: TypeId,
     /// The value of the variable, that needs to be suitable for `ty`.
     val: Option<VarType>,
     /// Whether this variable is const.
@@ -46,18 +47,18 @@ impl Var {
     /// Construct a new `Var`.
     pub fn new(
         name: String,
-        mangled: Option<String>,
-        ty: ItemId,
+        mangled_name: Option<String>,
+        ty: TypeId,
         val: Option<VarType>,
         is_const: bool,
     ) -> Var {
         assert!(!name.is_empty());
         Var {
-            name: name,
-            mangled_name: mangled,
-            ty: ty,
-            val: val,
-            is_const: is_const,
+            name,
+            mangled_name,
+            ty,
+            val,
+            is_const,
         }
     }
 
@@ -72,7 +73,7 @@ impl Var {
     }
 
     /// Get this variable's type.
-    pub fn ty(&self) -> ItemId {
+    pub fn ty(&self) -> TypeId {
         self.ty
     }
 
@@ -97,18 +98,33 @@ impl DotAttributes for Var {
         W: io::Write,
     {
         if self.is_const {
-            try!(writeln!(out, "<tr><td>const</td><td>true</td></tr>"));
+            writeln!(out, "<tr><td>const</td><td>true</td></tr>")?;
         }
 
         if let Some(ref mangled) = self.mangled_name {
-            try!(writeln!(
+            writeln!(
                 out,
                 "<tr><td>mangled name</td><td>{}</td></tr>",
                 mangled
-            ));
+            )?;
         }
 
         Ok(())
+    }
+}
+
+// TODO(emilio): we could make this more (or less) granular, I guess.
+fn default_macro_constant_type(value: i64) -> IntKind {
+    if value < 0 {
+        if value < i32::min_value() as i64 {
+            IntKind::I64
+        } else {
+            IntKind::I32
+        }
+    } else if value > u32::max_value() as i64 {
+        IntKind::U64
+    } else {
+        IntKind::U32
     }
 }
 
@@ -122,12 +138,16 @@ impl ClangSubItemParser for Var {
         use cexpr::literal::CChar;
         match cursor.kind() {
             CXCursor_MacroDefinition => {
-
-                if let Some(visitor) = ctx.parse_callbacks() {
-                    visitor.parsed_macro(&cursor.spelling());
+                if let Some(callbacks) = ctx.parse_callbacks() {
+                    match callbacks.will_parse_macro(&cursor.spelling()) {
+                        MacroParsingBehavior::Ignore => {
+                            return Err(ParseError::Continue);
+                        }
+                        MacroParsingBehavior::Default => {}
+                    }
                 }
 
-                let value = parse_macro(ctx, &cursor, ctx.translation_unit());
+                let value = parse_macro(ctx, &cursor);
 
                 let (id, value) = match value {
                     Some(v) => v,
@@ -184,17 +204,7 @@ impl ClangSubItemParser for Var {
                     EvalResult::Int(Wrapping(value)) => {
                         let kind = ctx.parse_callbacks()
                             .and_then(|c| c.int_macro(&name, value))
-                            .unwrap_or_else(|| if value < 0 {
-                                if value < i32::min_value() as i64 {
-                                    IntKind::LongLong
-                                } else {
-                                    IntKind::Int
-                                }
-                            } else if value > u32::max_value() as i64 {
-                                IntKind::ULongLong
-                            } else {
-                                IntKind::UInt
-                            });
+                            .unwrap_or_else(|| default_macro_constant_type(value));
 
                         (TypeKind::Int(kind), VarType::Int(value))
                     }
@@ -294,14 +304,10 @@ impl ClangSubItemParser for Var {
 fn parse_macro(
     ctx: &BindgenContext,
     cursor: &clang::Cursor,
-    unit: &clang::TranslationUnit,
 ) -> Option<(Vec<u8>, cexpr::expr::EvalResult)> {
     use cexpr::{expr, nom};
 
-    let mut cexpr_tokens = match unit.cexpr_tokens(cursor) {
-        None => return None,
-        Some(tokens) => tokens,
-    };
+    let mut cexpr_tokens = cursor.cexpr_tokens()?;
 
     let parser = expr::IdentifierParser::new(ctx.parsed_macros());
 
@@ -318,9 +324,7 @@ fn parse_macro(
     // See:
     //   https://bugs.llvm.org//show_bug.cgi?id=9069
     //   https://reviews.llvm.org/D26446
-    if cexpr_tokens.pop().is_none() {
-        return None;
-    }
+    cexpr_tokens.pop()?;
 
     match parser.macro_definition(&cexpr_tokens) {
         nom::IResult::Done(_, (id, val)) => Some((id.into(), val)),
@@ -328,17 +332,11 @@ fn parse_macro(
     }
 }
 
-fn parse_int_literal_tokens(
-    cursor: &clang::Cursor,
-    unit: &clang::TranslationUnit,
-) -> Option<i64> {
+fn parse_int_literal_tokens(cursor: &clang::Cursor) -> Option<i64> {
     use cexpr::{expr, nom};
     use cexpr::expr::EvalResult;
 
-    let cexpr_tokens = match unit.cexpr_tokens(cursor) {
-        None => return None,
-        Some(tokens) => tokens,
-    };
+    let cexpr_tokens = cursor.cexpr_tokens()?;
 
     // TODO(emilio): We can try to parse other kinds of literals.
     match expr::expr(&cexpr_tokens) {
@@ -357,7 +355,7 @@ fn get_integer_literal_from_cursor(
         match c.kind() {
             CXCursor_IntegerLiteral |
             CXCursor_UnaryOperator => {
-                value = parse_int_literal_tokens(&c, unit);
+                value = parse_int_literal_tokens(&c);
             }
             CXCursor_UnexposedExpr => {
                 value = get_integer_literal_from_cursor(&c, unit);

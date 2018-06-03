@@ -4,7 +4,6 @@
 
 #include "GLLibraryEGL.h"
 
-#include "angle/Platform.h"
 #include "gfxConfig.h"
 #include "gfxCrashReporterUtils.h"
 #include "gfxUtils.h"
@@ -20,7 +19,10 @@
 #include "nsIGfxInfo.h"
 #include "nsPrintfCString.h"
 #ifdef XP_WIN
+#include "mozilla/gfx/DeviceManagerDx.h"
 #include "nsWindowsHelpers.h"
+
+#include <d3d11.h>
 #endif
 #include "OGLShaderProgram.h"
 #include "prenv.h"
@@ -29,6 +31,13 @@
 #include "GLContextProvider.h"
 #include "gfxPrefs.h"
 #include "ScopedGLHelpers.h"
+#ifdef MOZ_WIDGET_GTK
+#include <gdk/gdk.h>
+#ifdef MOZ_WAYLAND
+#include <gdk/gdkwayland.h>
+#include <dlfcn.h>
+#endif // MOZ_WIDGET_GTK
+#endif // MOZ_WAYLAND
 
 namespace mozilla {
 namespace gl {
@@ -56,9 +65,10 @@ static const char* sEGLExtensionNames[] = {
     "EGL_KHR_stream_consumer_gltexture",
     "EGL_EXT_device_query",
     "EGL_NV_stream_consumer_gltexture_yuv",
-    "EGL_ANGLE_stream_producer_d3d_texture_nv12",
+    "EGL_ANGLE_stream_producer_d3d_texture",
     "EGL_ANGLE_device_creation",
     "EGL_ANGLE_device_creation_d3d11",
+    "EGL_KHR_surfaceless_context"
 };
 
 #if defined(ANDROID)
@@ -106,13 +116,13 @@ static PRLibrary* LoadApitraceLibrary()
 static PRLibrary*
 LoadLibraryForEGLOnWindows(const nsAString& filename)
 {
-    nsAutoCString path(gfx::gfxVars::GREDirectory());
+    nsAutoString path(gfx::gfxVars::GREDirectory());
     path.Append(PR_GetDirectorySeparator());
-    path.Append(ToNewUTF8String(filename));
+    path.Append(filename);
 
     PRLibSpec lspec;
-    lspec.type = PR_LibSpec_Pathname;
-    lspec.value.pathname = path.get();
+    lspec.type = PR_LibSpec_PathnameU;
+    lspec.value.pathname_u = path.get();
     return PR_LoadLibraryWithFlags(lspec, PR_LD_LAZY | PR_LD_LOCAL);
 }
 
@@ -144,6 +154,52 @@ GetAndInitWARPDisplay(GLLibraryEGL& egl, void* displayType)
         return EGL_NO_DISPLAY;
 
     return display;
+}
+
+static EGLDisplay
+GetAndInitDisplayForWebRender(GLLibraryEGL& egl, void* displayType)
+{
+#ifdef XP_WIN
+    const EGLint attrib_list[] = {  LOCAL_EGL_EXPERIMENTAL_PRESENT_PATH_ANGLE,
+                                    LOCAL_EGL_EXPERIMENTAL_PRESENT_PATH_FAST_ANGLE,
+                                    LOCAL_EGL_NONE };
+    RefPtr<ID3D11Device> d3d11Device = gfx::DeviceManagerDx::Get()->GetCompositorDevice();
+    if (!d3d11Device) {
+        gfxCriticalNote << "Failed to get compositor device for EGLDisplay";
+        return EGL_NO_DISPLAY;
+    }
+    EGLDeviceEXT eglDevice = egl.fCreateDeviceANGLE(LOCAL_EGL_D3D11_DEVICE_ANGLE, reinterpret_cast<void *>(d3d11Device.get()), nullptr);
+    if (!eglDevice) {
+        gfxCriticalNote << "Failed to get EGLDeviceEXT of D3D11Device";
+        return EGL_NO_DISPLAY;
+    }
+    // Create an EGLDisplay using the EGLDevice
+    EGLDisplay display = egl.fGetPlatformDisplayEXT(LOCAL_EGL_PLATFORM_DEVICE_EXT, eglDevice, attrib_list);
+    if (!display) {
+        gfxCriticalNote << "Failed to get EGLDisplay of D3D11Device";
+        return EGL_NO_DISPLAY;
+    }
+
+    if (display == EGL_NO_DISPLAY) {
+        const EGLint err = egl.fGetError();
+        if (err != LOCAL_EGL_SUCCESS) {
+            gfxCriticalError() << "Unexpected GL error: " << gfx::hexa(err);
+            MOZ_CRASH("GFX: Unexpected GL error.");
+        }
+        return EGL_NO_DISPLAY;
+    }
+
+    if (!egl.fInitialize(display, nullptr, nullptr)) {
+        const EGLint err = egl.fGetError();
+        if (err != LOCAL_EGL_SUCCESS) {
+            gfxCriticalError() << "Failed to initialize EGLDisplay for WebRender error: " << gfx::hexa(err);
+        }
+        return EGL_NO_DISPLAY;
+    }
+    return display;
+#else
+    return EGL_NO_DISPLAY;
+#endif
 }
 
 static bool
@@ -188,7 +244,7 @@ GetAndInitDisplay(GLLibraryEGL& egl, void* displayType)
     return display;
 }
 
-class AngleErrorReporting: public angle::Platform {
+class AngleErrorReporting {
 public:
     AngleErrorReporting()
     {
@@ -200,7 +256,7 @@ public:
       mFailureId = aFailureId;
     }
 
-    void logError(const char *errorMessage) override
+    void logError(const char *errorMessage)
     {
         if (!mFailureId) {
             return;
@@ -241,7 +297,7 @@ GetAndInitDisplayForAccelANGLE(GLLibraryEGL& egl, nsACString* const out_failureI
     EGLDisplay ret = 0;
 
     if (wr::RenderThread::IsInRenderThread()) {
-        return GetAndInitDisplay(egl, LOCAL_EGL_D3D11_ONLY_DISPLAY_ANGLE);
+        return GetAndInitDisplayForWebRender(egl, EGL_DEFAULT_DISPLAY);
     }
 
     FeatureState& d3d11ANGLE = gfxConfig::GetFeature(Feature::D3D11_HW_ANGLE);
@@ -254,7 +310,6 @@ GetAndInitDisplayForAccelANGLE(GLLibraryEGL& egl, nsACString* const out_failureI
         d3d11ANGLE.UserForceEnable("User force-enabled D3D11 ANGLE on disabled hardware");
 
     gAngleErrorReporter.SetFailureId(out_failureId);
-    egl.fANGLEPlatformInitialize(&gAngleErrorReporter);
 
     auto guardShutdown = mozilla::MakeScopeExit([&] {
         gAngleErrorReporter.SetFailureId(nullptr);
@@ -414,6 +469,7 @@ GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString* const out_failureId
         SYMBOL(QueryContext),
         SYMBOL(BindTexImage),
         SYMBOL(ReleaseTexImage),
+        SYMBOL(SwapInterval),
         SYMBOL(QuerySurface),
         END_OF_SYMBOLS
     };
@@ -449,15 +505,11 @@ GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString* const out_failureId
     nsCOMPtr<nsIGfxInfo> gfxInfo = do_GetService("@mozilla.org/gfx/info;1");
     mIsANGLE = IsExtensionSupported(ANGLE_platform_angle);
 
-    EGLDisplay chosenDisplay = nullptr;
-
     // Client exts are ready. (But not display exts!)
 
     if (mIsANGLE) {
         MOZ_ASSERT(IsExtensionSupported(ANGLE_platform_angle_d3d));
         const GLLibraryLoader::SymLoadStruct angleSymbols[] = {
-            { (PRFuncPtr*)&mSymbols.fANGLEPlatformInitialize, { "ANGLEPlatformInitialize", nullptr } },
-            { (PRFuncPtr*)&mSymbols.fANGLEPlatformShutdown, { "ANGLEPlatformShutdown", nullptr } },
             SYMBOL(GetPlatformDisplayEXT),
             END_OF_SYMBOLS
         };
@@ -465,66 +517,22 @@ GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString* const out_failureId
             gfxCriticalError() << "Failed to load ANGLE symbols!";
             return false;
         }
+        MOZ_ASSERT(IsExtensionSupported(ANGLE_platform_angle_d3d));
+        const GLLibraryLoader::SymLoadStruct createDeviceSymbols[] = {
+            SYMBOL(CreateDeviceANGLE),
+            SYMBOL(ReleaseDeviceANGLE),
+            END_OF_SYMBOLS
+        };
+        if (!fnLoadSymbols(createDeviceSymbols)) {
+            NS_ERROR("EGL supports ANGLE_device_creation without exposing its functions!");
+            MarkExtensionUnsupported(ANGLE_device_creation);
+        }
     }
 
-    if (IsExtensionSupported(ANGLE_platform_angle_d3d)) {
-        nsCString accelAngleFailureId;
-        bool accelAngleSupport = IsAccelAngleSupported(gfxInfo, &accelAngleFailureId);
-        bool shouldTryAccel = forceAccel || accelAngleSupport;
-        bool shouldTryWARP = !forceAccel; // Only if ANGLE not supported or fails
-
-        // If WARP preferred, will override ANGLE support
-        if (gfxPrefs::WebGLANGLEForceWARP()) {
-            shouldTryWARP = true;
-            shouldTryAccel = false;
-            if (accelAngleFailureId.IsEmpty()) {
-                accelAngleFailureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_FORCE_WARP");
-            }
-        }
-
-        // Hardware accelerated ANGLE path (supported or force accel)
-        if (shouldTryAccel) {
-            chosenDisplay = GetAndInitDisplayForAccelANGLE(*this, out_failureId);
-        }
-
-        // Report the acceleration status to telemetry
-        if (!chosenDisplay) {
-            if (accelAngleFailureId.IsEmpty()) {
-                Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_ACCL_FAILURE_ID,
-                                      NS_LITERAL_CSTRING("FEATURE_FAILURE_ACCL_ANGLE_UNKNOWN"));
-            } else {
-                Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_ACCL_FAILURE_ID,
-                                      accelAngleFailureId);
-            }
-        } else {
-            Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_ACCL_FAILURE_ID,
-                                  NS_LITERAL_CSTRING("SUCCESS"));
-        }
-
-        // Fallback to a WARP display if ANGLE fails, or if WARP is forced
-        if (!chosenDisplay && shouldTryWARP) {
-            chosenDisplay = GetAndInitWARPDisplay(*this, EGL_DEFAULT_DISPLAY);
-            if (!chosenDisplay) {
-                if (out_failureId->IsEmpty()) {
-                    *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WARP_FALLBACK");
-                }
-                NS_ERROR("Fallback WARP context failed to initialize.");
-                return false;
-            }
-            mIsWARP = true;
-        }
-    } else {
-        chosenDisplay = GetAndInitDisplay(*this, EGL_DEFAULT_DISPLAY);
-    }
-
-    if (!chosenDisplay) {
-        if (out_failureId->IsEmpty()) {
-            *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_NO_DISPLAY");
-        }
-        NS_WARNING("Failed to initialize a display.");
+    mEGLDisplay = CreateDisplay(forceAccel, gfxInfo, out_failureId);
+    if (!mEGLDisplay) {
         return false;
     }
-    mEGLDisplay = chosenDisplay;
 
     InitDisplayExtensions();
 
@@ -644,27 +652,15 @@ GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString* const out_failureId
         }
     }
 
-    if (IsExtensionSupported(ANGLE_stream_producer_d3d_texture_nv12)) {
+    if (IsExtensionSupported(ANGLE_stream_producer_d3d_texture)) {
         const GLLibraryLoader::SymLoadStruct nvStreamSymbols[] = {
-            SYMBOL(CreateStreamProducerD3DTextureNV12ANGLE),
-            SYMBOL(StreamPostD3DTextureNV12ANGLE),
+            SYMBOL(CreateStreamProducerD3DTextureANGLE),
+            SYMBOL(StreamPostD3DTextureANGLE),
             END_OF_SYMBOLS
         };
         if (!fnLoadSymbols(nvStreamSymbols)) {
-            NS_ERROR("EGL supports ANGLE_stream_producer_d3d_texture_nv12 without exposing its functions!");
-            MarkExtensionUnsupported(ANGLE_stream_producer_d3d_texture_nv12);
-        }
-    }
-
-    if (IsExtensionSupported(ANGLE_device_creation)) {
-        const GLLibraryLoader::SymLoadStruct createDeviceSymbols[] = {
-            SYMBOL(CreateDeviceANGLE),
-            SYMBOL(ReleaseDeviceANGLE),
-            END_OF_SYMBOLS
-        };
-        if (!fnLoadSymbols(createDeviceSymbols)) {
-            NS_ERROR("EGL supports ANGLE_device_creation without exposing its functions!");
-            MarkExtensionUnsupported(ANGLE_device_creation);
+            NS_ERROR("EGL supports ANGLE_stream_producer_d3d_texture without exposing its functions!");
+            MarkExtensionUnsupported(ANGLE_stream_producer_d3d_texture);
         }
     }
 
@@ -675,6 +671,88 @@ GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString* const out_failureId
 
 #undef SYMBOL
 #undef END_OF_SYMBOLS
+
+EGLDisplay
+GLLibraryEGL::CreateDisplay(bool forceAccel, const nsCOMPtr<nsIGfxInfo>& gfxInfo, nsACString* const out_failureId)
+{
+    MOZ_ASSERT(!mInitialized);
+
+    EGLDisplay chosenDisplay = nullptr;
+
+    if (IsExtensionSupported(ANGLE_platform_angle_d3d)) {
+        nsCString accelAngleFailureId;
+        bool accelAngleSupport = IsAccelAngleSupported(gfxInfo, &accelAngleFailureId);
+        bool shouldTryAccel = forceAccel || accelAngleSupport;
+        bool shouldTryWARP = !forceAccel; // Only if ANGLE not supported or fails
+
+        // If WARP preferred, will override ANGLE support
+        if (gfxPrefs::WebGLANGLEForceWARP()) {
+            shouldTryWARP = true;
+            shouldTryAccel = false;
+            if (accelAngleFailureId.IsEmpty()) {
+                accelAngleFailureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_FORCE_WARP");
+            }
+        }
+
+        // Hardware accelerated ANGLE path (supported or force accel)
+        if (shouldTryAccel) {
+            chosenDisplay = GetAndInitDisplayForAccelANGLE(*this, out_failureId);
+        }
+
+        // Report the acceleration status to telemetry
+        if (!chosenDisplay) {
+            if (accelAngleFailureId.IsEmpty()) {
+                Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_ACCL_FAILURE_ID,
+                                      NS_LITERAL_CSTRING("FEATURE_FAILURE_ACCL_ANGLE_UNKNOWN"));
+            } else {
+                Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_ACCL_FAILURE_ID,
+                                      accelAngleFailureId);
+            }
+        } else {
+            Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_ACCL_FAILURE_ID,
+                                  NS_LITERAL_CSTRING("SUCCESS"));
+        }
+
+        // Fallback to a WARP display if ANGLE fails, or if WARP is forced
+        if (!chosenDisplay && shouldTryWARP) {
+            chosenDisplay = GetAndInitWARPDisplay(*this, EGL_DEFAULT_DISPLAY);
+            if (!chosenDisplay) {
+                if (out_failureId->IsEmpty()) {
+                    *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WARP_FALLBACK");
+                }
+                NS_ERROR("Fallback WARP context failed to initialize.");
+                return nullptr;
+            }
+            mIsWARP = true;
+        }
+    } else {
+        void *nativeDisplay = EGL_DEFAULT_DISPLAY;
+#ifdef MOZ_WAYLAND
+        // Some drivers doesn't support EGL_DEFAULT_DISPLAY
+        GdkDisplay *gdkDisplay = gdk_display_get_default();
+        if (GDK_IS_WAYLAND_DISPLAY(gdkDisplay)) {
+            static auto sGdkWaylandDisplayGetWlDisplay =
+                (wl_display *(*)(GdkDisplay *))
+                dlsym(RTLD_DEFAULT, "gdk_wayland_display_get_wl_display");
+            nativeDisplay = sGdkWaylandDisplayGetWlDisplay(gdkDisplay);
+            if (!nativeDisplay) {
+                NS_WARNING("Failed to get wl_display.");
+                return nullptr;
+            }
+        }
+#endif
+        chosenDisplay = GetAndInitDisplay(*this, nativeDisplay);
+    }
+
+    if (!chosenDisplay) {
+        if (out_failureId->IsEmpty()) {
+            *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_NO_DISPLAY");
+        }
+        NS_WARNING("Failed to initialize a display.");
+        return nullptr;
+    }
+    return chosenDisplay;
+}
 
 template<size_t N>
 static void
@@ -832,4 +910,3 @@ AfterEGLCall(const char* glFunction)
 
 } /* namespace gl */
 } /* namespace mozilla */
-

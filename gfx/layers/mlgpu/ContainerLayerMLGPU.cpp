@@ -1,7 +1,8 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-* This Source Code Form is subject to the terms of the Mozilla Public
-* License, v. 2.0. If a copy of the MPL was not distributed with this
-* file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "ContainerLayerMLGPU.h"
 #include "gfxPrefs.h"
@@ -21,7 +22,8 @@ using namespace gfx;
 ContainerLayerMLGPU::ContainerLayerMLGPU(LayerManagerMLGPU* aManager)
  : ContainerLayer(aManager, nullptr),
    LayerMLGPU(aManager),
-   mInvalidateEntireSurface(false)
+   mInvalidateEntireSurface(false),
+   mSurfaceCopyNeeded(false)
 {
 }
 
@@ -35,6 +37,8 @@ ContainerLayerMLGPU::~ContainerLayerMLGPU()
 bool
 ContainerLayerMLGPU::OnPrepareToRender(FrameBuilder* aBuilder)
 {
+  mView = nullptr;
+
   if (!UseIntermediateSurface()) {
     // Set this so we invalidate the entire cached render target (if any)
     // if our container uses an intermediate surface again later.
@@ -50,12 +54,12 @@ ContainerLayerMLGPU::OnPrepareToRender(FrameBuilder* aBuilder)
 
     Maybe<IntRect> bounds = ComputeIntermediateSurfaceBounds();
     if (bounds) {
-      LayerIntRegion region = Move(GetShadowVisibleRegion());
+      LayerIntRegion region = std::move(GetShadowVisibleRegion());
       region.AndWith(LayerIntRect::FromUnknownRect(bounds.value()));
       AL_LOG("  computed bounds: %s\n", Stringify(bounds.value()).c_str());
       AL_LOG("  new visible: %s\n", Stringify(region).c_str());
 
-      SetShadowVisibleRegion(Move(region));
+      SetShadowVisibleRegion(std::move(region));
     }
   }
   mChildrenChanged = false;
@@ -66,6 +70,19 @@ ContainerLayerMLGPU::OnPrepareToRender(FrameBuilder* aBuilder)
   if (mRenderTarget && mRenderTarget->GetSize() != mTargetSize) {
     mRenderTarget = nullptr;
   }
+
+  // Note that if a surface copy is needed, we always redraw the
+  // whole surface (on-demand). This is a rare case - the old
+  // Compositor already does this - and it saves us having to
+  // do much more complicated invalidation.
+  bool surfaceCopyNeeded = false;
+  DefaultComputeSupportsComponentAlphaChildren(&surfaceCopyNeeded);
+  if (surfaceCopyNeeded != mSurfaceCopyNeeded ||
+      surfaceCopyNeeded)
+  {
+    mInvalidateEntireSurface = true;
+  }
+  mSurfaceCopyNeeded = surfaceCopyNeeded;
 
   gfx::IntRect viewport(gfx::IntPoint(0, 0), mTargetSize);
   if (!mRenderTarget ||
@@ -225,6 +242,26 @@ ContainerLayerMLGPU::IsContentOpaque()
     return false;
   }
   return LayerMLGPU::IsContentOpaque();
+}
+
+const LayerIntRegion&
+ContainerLayerMLGPU::GetShadowVisibleRegion()
+{
+  if (!UseIntermediateSurface()) {
+    RecomputeShadowVisibleRegionFromChildren();
+  }
+
+  return mShadowVisibleRegion;
+}
+
+const LayerIntRegion&
+RefLayerMLGPU::GetShadowVisibleRegion()
+{
+  if (!UseIntermediateSurface()) {
+    RecomputeShadowVisibleRegionFromChildren();
+  }
+
+  return mShadowVisibleRegion;
 }
 
 } // namespace layers

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,11 +14,11 @@
 #include "nsIAnonymousContentCreator.h"
 #include "nsCOMPtr.h"
 
-class nsIDOMDataTransfer;
-class nsIDOMFileList;
 namespace mozilla {
 namespace dom {
+class FileList;
 class BlobImpl;
+class DataTransfer;
 } // namespace dom
 } // namespace mozilla
 
@@ -26,7 +27,7 @@ class nsFileControlFrame : public nsBlockFrame,
                            public nsIAnonymousContentCreator
 {
 public:
-  explicit nsFileControlFrame(nsStyleContext* aContext);
+  explicit nsFileControlFrame(ComputedStyle* aStyle);
 
   virtual void Init(nsIContent*       aContent,
                     nsContainerFrame* aParent,
@@ -44,7 +45,7 @@ public:
 
   virtual nscoord GetMinISize(gfxContext *aRenderingContext) override;
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override;
@@ -118,11 +119,12 @@ protected:
 
     NS_DECL_NSIDOMEVENTLISTENER
 
-    nsresult GetBlobImplForWebkitDirectory(nsIDOMFileList* aFileList,
+    nsresult GetBlobImplForWebkitDirectory(mozilla::dom::FileList* aFileList,
                                            mozilla::dom::BlobImpl** aBlobImpl);
 
-    bool IsValidDropData(nsIDOMDataTransfer* aDOMDataTransfer);
-    bool CanDropTheseFiles(nsIDOMDataTransfer* aDOMDataTransfer, bool aSupportsMultiple);
+    bool IsValidDropData(mozilla::dom::DataTransfer* aDataTransfer);
+    bool CanDropTheseFiles(mozilla::dom::DataTransfer* aDataTransfer,
+                           bool aSupportsMultiple);
   };
 
   virtual bool IsFrameOfType(uint32_t aFlags) const override
@@ -135,12 +137,12 @@ protected:
    * The text box input.
    * @see nsFileControlFrame::CreateAnonymousContent
    */
-  nsCOMPtr<nsIContent> mTextContent;
+  RefPtr<Element> mTextContent;
   /**
    * The button to open a file or directory picker.
    * @see nsFileControlFrame::CreateAnonymousContent
    */
-  nsCOMPtr<nsIContent> mBrowseFilesOrDirs;
+  RefPtr<Element> mBrowseFilesOrDirs;
 
   /**
    * Drag and drop mouse listener.

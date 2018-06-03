@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -26,27 +27,6 @@ public:
 
 protected:
   WebRenderLayerManager* mManager;
-};
-
-class WebRenderCanvasRendererSync : public WebRenderCanvasRenderer
-{
-public:
-  explicit WebRenderCanvasRendererSync(WebRenderLayerManager* aManager)
-    : WebRenderCanvasRenderer(aManager)
-  { }
-  virtual ~WebRenderCanvasRendererSync();
-
-  WebRenderCanvasRendererSync* AsWebRenderCanvasRendererSync() override { return this; }
-
-  void Initialize(const CanvasInitializeData& aData) override;
-  bool CreateCompositable() override;
-
-  void ClearCachedResources() override;
-  void Destroy() override;
-
-  wr::MaybeExternalImageId GetExternalImageId() { return mExternalImageId; }
-protected:
-  wr::MaybeExternalImageId mExternalImageId;
 };
 
 class WebRenderCanvasRendererAsync : public WebRenderCanvasRenderer

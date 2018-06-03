@@ -21,10 +21,10 @@ const INITIAL_DEVICES = {
   types: [],
   isModalOpen: false,
   modalOpenedFromViewport: null,
-  listState: Types.deviceListState.INITIALIZED,
+  listState: Types.loadableState.INITIALIZED,
 };
 
-let reducers = {
+const reducers = {
 
   [ADD_DEVICE](devices, { device, deviceType }) {
     return Object.assign({}, devices, {
@@ -40,7 +40,7 @@ let reducers = {
   },
 
   [UPDATE_DEVICE_DISPLAYED](devices, { device, deviceType, displayed }) {
-    let newDevices = devices[deviceType].map(d => {
+    const newDevices = devices[deviceType].map(d => {
       if (d == device) {
         d.displayed = displayed;
       }
@@ -55,29 +55,29 @@ let reducers = {
 
   [LOAD_DEVICE_LIST_START](devices, action) {
     return Object.assign({}, devices, {
-      listState: Types.deviceListState.LOADING,
+      listState: Types.loadableState.LOADING,
     });
   },
 
   [LOAD_DEVICE_LIST_ERROR](devices, action) {
     return Object.assign({}, devices, {
-      listState: Types.deviceListState.ERROR,
+      listState: Types.loadableState.ERROR,
     });
   },
 
   [LOAD_DEVICE_LIST_END](devices, action) {
     return Object.assign({}, devices, {
-      listState: Types.deviceListState.LOADED,
+      listState: Types.loadableState.LOADED,
     });
   },
 
   [REMOVE_DEVICE](devices, { device, deviceType }) {
-    let index = devices[deviceType].indexOf(device);
+    const index = devices[deviceType].indexOf(device);
     if (index < 0) {
       return devices;
     }
 
-    let list = [...devices[deviceType]];
+    const list = [...devices[deviceType]];
     list.splice(index, 1);
     return Object.assign({}, devices, {
       [deviceType]: list
@@ -93,8 +93,8 @@ let reducers = {
 
 };
 
-module.exports = function (devices = INITIAL_DEVICES, action) {
-  let reducer = reducers[action.type];
+module.exports = function(devices = INITIAL_DEVICES, action) {
+  const reducer = reducers[action.type];
   if (!reducer) {
     return devices;
   }

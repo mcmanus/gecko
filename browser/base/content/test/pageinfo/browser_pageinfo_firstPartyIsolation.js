@@ -1,4 +1,4 @@
-const {classes: Cc, interfaces: Ci, manager: Cm} = Components;
+const Cm = Components.manager;
 
 function waitForEvent(elem, event) {
   return new Promise(resolve => {
@@ -29,7 +29,7 @@ function testFirstPartyDomain(pageInfo) {
 
         // For <img>, we will query imgIRequest.imagePrincipal later, so we wait
         // for loadend event. For <audio> and <video>, so far we only can get
-        // the loadingprincipal attribute on the node, so we simply wait for
+        // the triggeringprincipal attribute on the node, so we simply wait for
         // loadstart.
         if (i == 0) {
           await waitForEvent(preview, "loadend");
@@ -48,10 +48,10 @@ function testFirstPartyDomain(pageInfo) {
                        "imagePrincipal should have firstPartyDomain set to " + EXPECTED_DOMAIN);
         }
 
-        // Check the node has the attribute 'loadingprincipal'.
-        let serial = Components.classes["@mozilla.org/network/serialization-helper;1"]
-                               .getService(Components.interfaces.nsISerializationHelper);
-        let loadingPrincipalStr = preview.getAttribute("loadingprincipal");
+        // Check the node has the attribute 'triggeringprincipal'.
+        let serial = Cc["@mozilla.org/network/serialization-helper;1"]
+                       .getService(Ci.nsISerializationHelper);
+        let loadingPrincipalStr = preview.getAttribute("triggeringprincipal");
         let loadingPrincipal = serial.deserializeObject(loadingPrincipalStr);
         Assert.equal(loadingPrincipal.originAttributes.firstPartyDomain, EXPECTED_DOMAIN,
                      "loadingPrincipal should have firstPartyDomain set to " + EXPECTED_DOMAIN);
@@ -71,12 +71,16 @@ async function test() {
     Services.prefs.clearUserPref("privacy.firstparty.isolate");
   });
 
+  let url = "https://example.com/browser/browser/base/content/test/pageinfo/image.html";
   gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
-  content.location = "https://example.com/browser/browser/base/content/test/pageinfo/image.html";
-  await waitForEvent(gBrowser.selectedBrowser, "load");
+  let loadPromise = BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser, false, url);
+  gBrowser.selectedBrowser.loadURI(url);
+  await loadPromise;
 
-  let spec = gBrowser.selectedBrowser.currentURI.spec;
-  let pageInfo = BrowserPageInfo(spec, "mediaTab");
+  // Pass a dummy imageElement, if there isn't an imageElement, pageInfo.js
+  // will do a preview, however this sometimes will cause intermittent failures,
+  // see bug 1403365.
+  let pageInfo = BrowserPageInfo(url, "mediaTab", {});
   info("waitForEvent pageInfo");
   await waitForEvent(pageInfo, "load");
 

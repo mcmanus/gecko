@@ -138,7 +138,7 @@ public:
     return FromMilliseconds(aMicroseconds / 1000.0);
   }
 
-  static BaseTimeDuration Forever()
+  static constexpr BaseTimeDuration Forever()
   {
     return FromTicks(INT64_MAX);
   }
@@ -403,6 +403,9 @@ typedef BaseTimeDuration<TimeDurationValueCalculator> TimeDuration;
  * is initialized to the clock's epoch and provides a
  * time_since_epoch() method that functions similiarly. i.e.
  * t.IsNull() is equivalent to t.time_since_epoch() == decltype(t)::duration::zero();
+ *
+ * Note that, since TimeStamp objects are small, prefer to pass them by value
+ * unless there is a specific reason not to do so.
  */
 class TimeStamp
 {
@@ -422,9 +425,11 @@ public:
    * False on Windows 7
    * Android's event time uses CLOCK_MONOTONIC via SystemClock.uptimeMilles.
    * So it is same value of TimeStamp posix implementation.
+   * Wayland/GTK event time also uses CLOCK_MONOTONIC on Weston/Mutter
+   * compositors.
    * UNTESTED ON OTHER PLATFORMS
    */
-#if defined(XP_DARWIN) || defined(MOZ_WIDGET_ANDROID)
+#if defined(XP_DARWIN) || defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GTK)
   static TimeStamp FromSystemTime(int64_t aSystemTime)
   {
     static_assert(sizeof(aSystemTime) == sizeof(TimeStampValue),
@@ -589,7 +594,6 @@ public:
 
 private:
   friend struct IPC::ParamTraits<mozilla::TimeStamp>;
-  friend void StartupTimelineRecordExternal(int, uint64_t);
 
   MOZ_IMPLICIT TimeStamp(TimeStampValue aValue) : mValue(aValue) {}
 

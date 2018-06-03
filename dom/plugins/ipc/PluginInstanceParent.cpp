@@ -10,6 +10,7 @@
 #include "mozilla/BasicEvents.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Telemetry.h"
+#include "mozilla/dom/Element.h"
 #include "PluginInstanceParent.h"
 #include "BrowserStreamParent.h"
 #include "PluginBackgroundDestroyer.h"
@@ -25,7 +26,6 @@
 #include "nsNPAPIPluginInstance.h"
 #include "nsPluginInstanceOwner.h"
 #include "nsFocusManager.h"
-#include "nsIDOMElement.h"
 #ifdef MOZ_X11
 #include "gfxXlibSurface.h"
 #endif
@@ -613,17 +613,6 @@ PluginInstanceParent::RecvNPN_InvalidateRect(const NPRect& rect)
 {
     mNPNIface->invalidaterect(mNPP, const_cast<NPRect*>(&rect));
     return IPC_OK();
-}
-
-static inline NPRect
-IntRectToNPRect(const gfx::IntRect& rect)
-{
-    NPRect r;
-    r.left = rect.x;
-    r.top = rect.y;
-    r.right = rect.x + rect.width;
-    r.bottom = rect.y + rect.height;
-    return r;
 }
 
 mozilla::ipc::IPCResult
@@ -2232,7 +2221,7 @@ PluginInstanceParent::AnswerPluginFocusChange(const bool& gotFocus)
       nsPluginInstanceOwner* owner = GetOwner();
       if (owner) {
         nsIFocusManager* fm = nsFocusManager::GetFocusManager();
-        nsCOMPtr<nsIDOMElement> element;
+        RefPtr<dom::Element> element;
         owner->GetDOMElement(getter_AddRefs(element));
         if (fm && element) {
           fm->SetFocus(element, 0);
@@ -2304,6 +2293,20 @@ PluginInstanceParent::RecvRequestCommitOrCancel(const bool& aCommitted)
     if (owner) {
         owner->RequestCommitOrCancel(aCommitted);
     }
+#endif
+    return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+PluginInstanceParent::RecvEnableIME(const bool& aEnable)
+{
+#if defined(OS_WIN)
+    nsPluginInstanceOwner* owner = GetOwner();
+    if (owner) {
+        owner->EnableIME(aEnable);
+    }
+#else
+    MOZ_CRASH("Not reachable");
 #endif
     return IPC_OK();
 }

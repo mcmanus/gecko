@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-//  * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -370,21 +371,25 @@ BufferTextureData::BorrowMappedYCbCrData(MappedYCbCrTextureData& aMap)
 
   aMap.stereoMode = desc.stereoMode();
   aMap.metadata = nullptr;
+  uint32_t bytesPerPixel = desc.bitDepth() > 8 ? 2 : 1;
 
   aMap.y.data = data + desc.yOffset();
   aMap.y.size = ySize;
   aMap.y.stride = desc.yStride();
   aMap.y.skip = 0;
+  aMap.y.bytesPerPixel = bytesPerPixel;
 
   aMap.cb.data = data + desc.cbOffset();
   aMap.cb.size = cbCrSize;
   aMap.cb.stride = desc.cbCrStride();
   aMap.cb.skip = 0;
+  aMap.cb.bytesPerPixel = bytesPerPixel;
 
   aMap.cr.data = data + desc.crOffset();
   aMap.cr.size = cbCrSize;
   aMap.cr.stride = desc.cbCrStride();
   aMap.cr.skip = 0;
+  aMap.cr.bytesPerPixel = bytesPerPixel;
 
   return true;
 }

@@ -2,26 +2,21 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* exported EditAddress, EditCreditCard */
+/* exported EditAddressDialog, EditCreditCardDialog */
+/* eslint-disable mozilla/balanced-listeners */ // Not relevant since the document gets unloaded.
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
-const AUTOFILL_BUNDLE_URI = "chrome://formautofill/locale/formautofill.properties";
-const REGIONS_BUNDLE_URI = "chrome://global/locale/regionNames.properties";
+ChromeUtils.import("resource://formautofill/FormAutofillUtils.jsm");
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://formautofill/FormAutofillUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "formAutofillStorage",
+                               "resource://formautofill/FormAutofillStorage.jsm");
+ChromeUtils.defineModuleGetter(this, "MasterPassword",
+                               "resource://formautofill/MasterPassword.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "profileStorage",
-                                  "resource://formautofill/ProfileStorage.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "MasterPassword",
-                                  "resource://formautofill/MasterPassword.jsm");
-
-class EditDialog {
+class AutofillEditDialog {
   constructor(subStorageName, elements, record) {
-    this._storageInitPromise = profileStorage.initialize();
+    this._storageInitPromise = formAutofillStorage.initialize();
     this._subStorageName = subStorageName;
     this._elements = elements;
     this._record = record;
@@ -30,44 +25,11 @@ class EditDialog {
   }
 
   async init() {
-    if (this._record) {
-      await this.loadInitialValues(this._record);
-    }
     this.attachEventListeners();
-    // For testing only: loadInitialValues for credit card is an async method, and tests
-    // need to wait until the values have been filled before editing the fields.
+    // For testing only: signal to tests that the dialog is ready for testing.
+    // This is likely no longer needed since retrieving from storage is fully
+    // handled in manageDialog.js now.
     window.dispatchEvent(new CustomEvent("FormReady"));
-  }
-
-  uninit() {
-    this.detachEventListeners();
-    this._elements = null;
-  }
-
-  /**
-   * Fill the form with a record object.
-   * @param  {object} record
-   */
-  loadInitialValues(record) {
-    for (let field in record) {
-      let input = document.getElementById(field);
-      if (input) {
-        input.value = record[field];
-      }
-    }
-  }
-
-  /**
-   * Get inputs from the form.
-   * @returns {object}
-   */
-  buildFormObject() {
-    return Array.from(document.forms[0].elements).reduce((obj, input) => {
-      if (input.value) {
-        obj[input.id] = input.value;
-      }
-      return obj;
-    }, {});
   }
 
   /**
@@ -76,7 +38,7 @@ class EditDialog {
    */
   async getStorage() {
     await this._storageInitPromise;
-    return profileStorage[this._subStorageName];
+    return formAutofillStorage[this._subStorageName];
   }
 
   /**
@@ -104,10 +66,6 @@ class EditDialog {
         this.init();
         break;
       }
-      case "unload": {
-        this.uninit();
-        break;
-      }
       case "click": {
         this.handleClick(event);
         break;
@@ -118,6 +76,13 @@ class EditDialog {
       }
       case "keypress": {
         this.handleKeyPress(event);
+        break;
+      }
+      case "contextmenu": {
+        if (!(event.target instanceof HTMLInputElement) &&
+            !(event.target instanceof HTMLTextAreaElement)) {
+          event.preventDefault();
+        }
         break;
       }
     }
@@ -145,7 +110,7 @@ class EditDialog {
   handleInput(event) {
     // Toggle disabled attribute on the save button based on
     // whether the form is filled or empty.
-    if (Object.keys(this.buildFormObject()).length == 0) {
+    if (Object.keys(this._elements.fieldContainer.buildFormObject()).length == 0) {
       this._elements.save.setAttribute("disabled", true);
     } else {
       this._elements.save.removeAttribute("disabled");
@@ -168,113 +133,54 @@ class EditDialog {
    */
   attachEventListeners() {
     window.addEventListener("keypress", this);
+    window.addEventListener("contextmenu", this);
     this._elements.controlsContainer.addEventListener("click", this);
     document.addEventListener("input", this);
   }
 
-  /**
-   * Remove event listener
-   */
-  detachEventListeners() {
-    window.removeEventListener("keypress", this);
-    this._elements.controlsContainer.removeEventListener("click", this);
-    document.removeEventListener("input", this);
-  }
+  // An interface to be inherited.
+  localizeDocument() {}
 }
 
-class EditAddress extends EditDialog {
+class EditAddressDialog extends AutofillEditDialog {
   constructor(elements, record) {
     super("addresses", elements, record);
-    this.formatForm(record && record.country);
-  }
-
-  /**
-   * Format the form based on country. The address-level1 and postal-code labels
-   * should be specific to the given country.
-   * @param  {string} country
-   */
-  formatForm(country) {
-    // TODO: Use fmt to show/hide and order fields (Bug 1383687)
-    const {addressLevel1Label, postalCodeLabel} = FormAutofillUtils.getFormFormat(country);
-    this._elements.addressLevel1Label.dataset.localization = addressLevel1Label;
-    this._elements.postalCodeLabel.dataset.localization = postalCodeLabel;
-    FormAutofillUtils.localizeMarkup(AUTOFILL_BUNDLE_URI, document);
   }
 
   localizeDocument() {
     if (this._record) {
       this._elements.title.dataset.localization = "editAddressTitle";
     }
-    FormAutofillUtils.localizeMarkup(REGIONS_BUNDLE_URI, this._elements.country);
   }
 
   async handleSubmit() {
-    await this.saveRecord(this.buildFormObject(), this._record ? this._record.guid : null);
+    await this.saveRecord(this._elements.fieldContainer.buildFormObject(), this._record ? this._record.guid : null);
     window.close();
   }
 }
 
-class EditCreditCard extends EditDialog {
+class EditCreditCardDialog extends AutofillEditDialog {
   constructor(elements, record) {
     super("creditCards", elements, record);
-    this.generateYears();
-  }
-
-  generateYears() {
-    const count = 11;
-    const currentYear = new Date().getFullYear();
-    const ccExpYear = this._record && this._record["cc-exp-year"];
-
-    if (ccExpYear && ccExpYear < currentYear) {
-      this._elements.year.appendChild(new Option(ccExpYear));
-    }
-
-    for (let i = 0; i < count; i++) {
-      let year = currentYear + i;
-      let option = new Option(year);
-      this._elements.year.appendChild(option);
-    }
-
-    if (ccExpYear && ccExpYear > currentYear + count) {
-      this._elements.year.appendChild(new Option(ccExpYear));
-    }
   }
 
   localizeDocument() {
     if (this._record) {
       this._elements.title.dataset.localization = "editCreditCardTitle";
     }
-    FormAutofillUtils.localizeMarkup(AUTOFILL_BUNDLE_URI, document);
-  }
-
-  /**
-   * Decrypt cc-number first and fill the form.
-   * @param  {object} creditCard
-   */
-  async loadInitialValues(creditCard) {
-    let decryptedCC = await MasterPassword.decrypt(creditCard["cc-number-encrypted"]);
-    super.loadInitialValues(Object.assign({}, creditCard, {"cc-number": decryptedCC}));
   }
 
   async handleSubmit() {
-    let creditCard = this.buildFormObject();
-    // Show error on the cc-number field if it's empty or invalid
-    if (!FormAutofillUtils.isCCNumber(creditCard["cc-number"])) {
-      this._elements.ccNumber.setCustomValidity(true);
+    let creditCard = this._elements.fieldContainer.buildFormObject();
+    if (!this._elements.fieldContainer._elements.form.checkValidity()) {
       return;
     }
-    let storage = await this.getStorage();
-    await storage.normalizeCCNumberFields(creditCard);
-    await this.saveRecord(creditCard, this._record ? this._record.guid : null);
-    window.close();
-  }
 
-  handleInput(event) {
-    // Clear the error message if cc-number is valid
-    if (event.target == this._elements.ccNumber &&
-        FormAutofillUtils.isCCNumber(this._elements.ccNumber.value)) {
-      this._elements.ccNumber.setCustomValidity("");
+    // TODO: "MasterPassword.ensureLoggedIn" can be removed after the storage
+    // APIs are refactored to be async functions (bug 1399367).
+    if (await MasterPassword.ensureLoggedIn()) {
+      await this.saveRecord(creditCard, this._record ? this._record.guid : null);
     }
-    super.handleInput(event);
+    window.close();
   }
 }

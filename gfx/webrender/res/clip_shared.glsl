@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include rect,clip_scroll,render_task,resource_cache,snap,transform
+
 #ifdef WR_VERTEX_SHADER
 
 #define SEGMENT_ALL         0
@@ -11,13 +13,13 @@
 #define SEGMENT_CORNER_BR   4
 
 in int aClipRenderTaskAddress;
-in int aClipLayerAddress;
+in int aScrollNodeId;
 in int aClipSegment;
 in ivec4 aClipDataResourceAddress;
 
 struct ClipMaskInstance {
     int render_task_address;
-    int layer_address;
+    int scroll_node_id;
     int segment;
     ivec2 clip_data_address;
     ivec2 resource_address;
@@ -27,7 +29,7 @@ ClipMaskInstance fetch_clip_item() {
     ClipMaskInstance cmi;
 
     cmi.render_task_address = aClipRenderTaskAddress;
-    cmi.layer_address = aClipLayerAddress;
+    cmi.scroll_node_id = aScrollNodeId;
     cmi.segment = aClipSegment;
     cmi.clip_data_address = aClipDataResourceAddress.xy;
     cmi.resource_address = aClipDataResourceAddress.zw;
@@ -49,54 +51,60 @@ RectWithSize intersect_rect(RectWithSize a, RectWithSize b) {
 // The transformed vertex function that always covers the whole clip area,
 // which is the intersection of all clip instances of a given primitive
 ClipVertexInfo write_clip_tile_vertex(RectWithSize local_clip_rect,
-                                      Layer layer,
-                                      ClipArea area,
-                                      int segment) {
+                                      ClipScrollNode scroll_node,
+                                      ClipArea area) {
+    vec2 device_pos = area.screen_origin + aPosition.xy * area.common_data.task_rect.size;
+    vec2 actual_pos = device_pos;
 
-    RectWithSize clipped_local_rect = intersect_rect(local_clip_rect,
-                                                     layer.local_clip_rect);
+    if (scroll_node.is_axis_aligned) {
+        vec4 snap_positions = compute_snap_positions(
+            scroll_node.transform,
+            local_clip_rect
+        );
 
-    vec2 outer_p0 = area.screen_origin_target_index.xy;
-    vec2 outer_p1 = outer_p0 + area.task_bounds.zw - area.task_bounds.xy;
-    vec2 inner_p0 = area.inner_rect.xy;
-    vec2 inner_p1 = area.inner_rect.zw;
+        vec2 snap_offsets = compute_snap_offset_impl(
+            device_pos,
+            scroll_node.transform,
+            local_clip_rect,
+            RectWithSize(snap_positions.xy, snap_positions.zw - snap_positions.xy),
+            snap_positions,
+            vec2(0.5)
+        );
 
-    vec2 p0, p1;
-    switch (segment) {
-        case SEGMENT_ALL:
-            p0 = outer_p0;
-            p1 = outer_p1;
-            break;
-        case SEGMENT_CORNER_TL:
-            p0 = outer_p0;
-            p1 = inner_p0;
-            break;
-        case SEGMENT_CORNER_BL:
-            p0 = vec2(outer_p0.x, outer_p1.y);
-            p1 = vec2(inner_p0.x, inner_p1.y);
-            break;
-        case SEGMENT_CORNER_TR:
-            p0 = vec2(outer_p1.x, outer_p1.y);
-            p1 = vec2(inner_p1.x, inner_p1.y);
-            break;
-        case SEGMENT_CORNER_BR:
-            p0 = vec2(outer_p1.x, outer_p0.y);
-            p1 = vec2(inner_p1.x, inner_p0.y);
-            break;
+        actual_pos -= snap_offsets;
     }
 
-    vec2 actual_pos = mix(p0, p1, aPosition.xy);
+    vec4 node_pos;
 
-    vec4 layer_pos = get_layer_pos(actual_pos / uDevicePixelRatio, layer);
+    // Select the local position, based on whether we are rasterizing this
+    // clip mask in local- or sccreen-space.
+    if (area.local_space) {
+        node_pos = vec4(actual_pos / uDevicePixelRatio, 0.0, 1.0);
+    } else {
+        node_pos = get_node_pos(actual_pos / uDevicePixelRatio, scroll_node);
+    }
 
-    // compute the point position in side the layer, in CSS space
-    vec2 vertex_pos = actual_pos + area.task_bounds.xy - area.screen_origin_target_index.xy;
+    // compute the point position inside the scroll node, in CSS space
+    vec2 vertex_pos = device_pos +
+                      area.common_data.task_rect.p0 -
+                      area.screen_origin;
 
     gl_Position = uTransform * vec4(vertex_pos, 0.0, 1);
 
-    vLocalBounds = vec4(clipped_local_rect.p0, clipped_local_rect.p0 + clipped_local_rect.size);
+    init_transform_vs(vec4(local_clip_rect.p0, local_clip_rect.p0 + local_clip_rect.size));
 
-    return ClipVertexInfo(layer_pos.xyw, actual_pos, clipped_local_rect);
+    ClipVertexInfo vi = ClipVertexInfo(node_pos.xyw, actual_pos, local_clip_rect);
+    return vi;
 }
 
 #endif //WR_VERTEX_SHADER
+
+#ifdef WR_FRAGMENT_SHADER
+
+//Note: identical to prim_shared
+float distance_to_line(vec2 p0, vec2 perp_dir, vec2 p) {
+    vec2 dir_to_p0 = p0 - p;
+    return dot(normalize(perp_dir), dir_to_p0);
+}
+
+#endif //WR_FRAGMENT_SHADER

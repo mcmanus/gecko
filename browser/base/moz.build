@@ -8,6 +8,10 @@ with Files("**"):
     BUG_COMPONENT = ("Firefox", "General")
 
 SPHINX_TREES['sslerrorreport'] = 'content/docs/sslerrorreport'
+SPHINX_TREES['tabbrowser'] = 'content/docs/tabbrowser'
+
+with Files('content/docs/sslerrorreport/**'):
+    SCHEDULES.exclusive = ['docs']
 
 MOCHITEST_MANIFESTS += [
     'content/test/general/mochitest.ini',
@@ -15,6 +19,10 @@ MOCHITEST_MANIFESTS += [
 
 MOCHITEST_CHROME_MANIFESTS += [
     'content/test/chrome/chrome.ini',
+]
+
+TESTING_JS_MODULES += [
+    'content/test/sanitize/SiteDataTestUtils.jsm',
 ]
 
 BROWSER_CHROME_MANIFESTS += [
@@ -25,8 +33,8 @@ BROWSER_CHROME_MANIFESTS += [
     'content/test/favicons/browser.ini',
     'content/test/forms/browser.ini',
     'content/test/general/browser.ini',
+    'content/test/historySwipeAnimation/browser.ini',
     'content/test/metaTags/browser.ini',
-    'content/test/newtab/browser.ini',
     'content/test/pageinfo/browser.ini',
     'content/test/performance/browser.ini',
     'content/test/performance/hidpi/browser.ini',
@@ -36,14 +44,17 @@ BROWSER_CHROME_MANIFESTS += [
     'content/test/popupNotifications/browser.ini',
     'content/test/popups/browser.ini',
     'content/test/referrer/browser.ini',
+    'content/test/sanitize/browser.ini',
     'content/test/sidebar/browser.ini',
     'content/test/siteIdentity/browser.ini',
     'content/test/static/browser.ini',
+    'content/test/statuspanel/browser.ini',
     'content/test/sync/browser.ini',
     'content/test/tabcrashed/browser.ini',
     'content/test/tabPrompts/browser.ini',
     'content/test/tabs/browser.ini',
     'content/test/touch/browser.ini',
+    'content/test/trackingUI/browser.ini',
     'content/test/urlbar/browser.ini',
     'content/test/webextensions/browser.ini',
     'content/test/webrtc/browser.ini',
@@ -54,13 +65,10 @@ DEFINES['MOZ_APP_VERSION_DISPLAY'] = CONFIG['MOZ_APP_VERSION_DISPLAY']
 
 DEFINES['APP_LICENSE_BLOCK'] = '%s/content/overrides/app-license.html' % SRCDIR
 
-if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('windows', 'gtk2', 'gtk3', 'cocoa'):
+if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('windows', 'gtk3', 'cocoa'):
     DEFINES['CONTEXT_COPY_IMAGE_CONTENTS'] = 1
 
-if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('windows', 'cocoa'):
-    DEFINES['CAN_DRAW_IN_TITLEBAR'] = 1
-
-if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('windows', 'gtk2', 'gtk3'):
+if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('windows', 'gtk3'):
     DEFINES['MENUBAR_CAN_AUTOHIDE'] = 1
 
 JAR_MANIFESTS += ['jar.mn']

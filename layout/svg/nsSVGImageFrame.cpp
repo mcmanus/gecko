@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,16 +12,15 @@
 #include "mozilla/gfx/2D.h"
 #include "imgIContainer.h"
 #include "nsContainerFrame.h"
-#include "nsIDOMMutationEvent.h"
 #include "nsIImageLoadingContent.h"
 #include "nsLayoutUtils.h"
 #include "imgINotificationObserver.h"
 #include "SVGObserverUtils.h"
-#include "mozilla/dom/SVGSVGElement.h"
 #include "nsSVGUtils.h"
 #include "SVGContentUtils.h"
 #include "SVGGeometryFrame.h"
 #include "SVGImageContext.h"
+#include "mozilla/dom/MutationEventBinding.h"
 #include "mozilla/dom/SVGImageElement.h"
 #include "nsContentUtils.h"
 #include "nsIReflowCallback.h"
@@ -38,9 +38,9 @@ NS_QUERYFRAME_HEAD(nsSVGImageFrame)
 NS_QUERYFRAME_TAIL_INHERITING(SVGGeometryFrame)
 
 nsIFrame*
-NS_NewSVGImageFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewSVGImageFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsSVGImageFrame(aContext);
+  return new (aPresShell) nsSVGImageFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsSVGImageFrame)
@@ -94,14 +94,14 @@ nsSVGImageFrame::Init(nsIContent*       aContent,
 }
 
 /* virtual */ void
-nsSVGImageFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsSVGImageFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   if (GetStateBits() & NS_FRAME_IS_NONDISPLAY) {
     DecApproximateVisibleCount();
   }
 
   if (mReflowCallbackPosted) {
-    PresContext()->PresShell()->CancelReflowCallback(this);
+    PresShell()->CancelReflowCallback(this);
     mReflowCallbackPosted = false;
   }
 
@@ -112,7 +112,7 @@ nsSVGImageFrame::DestroyFrom(nsIFrame* aDestructRoot)
     imageLoader->FrameDestroyed(this);
   }
 
-  nsFrame::DestroyFrom(aDestructRoot);
+  nsFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 //----------------------------------------------------------------------
@@ -147,7 +147,7 @@ nsSVGImageFrame::AttributeChanged(int32_t         aNameSpaceID,
   // Currently our SMIL implementation does not modify the DOM attributes. Once
   // we implement the SVG 2 SMIL behaviour this can be removed
   // SVGImageElement::AfterSetAttr's implementation will be sufficient.
-  if (aModType == nsIDOMMutationEvent::SMIL &&
+  if (aModType == MutationEventBinding::SMIL &&
       aAttribute == nsGkAtoms::href &&
       (aNameSpaceID == kNameSpaceID_XLink ||
        aNameSpaceID == kNameSpaceID_None)) {
@@ -356,6 +356,7 @@ nsSVGImageFrame::PaintSVG(gfxContext& aContext,
         nsLayoutUtils::GetSamplingFilterForFrame(this),
         nsPoint(0, 0),
         aDirtyRect ? &dirtyRect : nullptr,
+        Nothing(),
         flags);
     }
 
@@ -451,7 +452,7 @@ nsSVGImageFrame::ReflowSVG()
     SVGObserverUtils::UpdateEffects(this);
 
     if (!mReflowCallbackPosted) {
-      nsIPresShell* shell = PresContext()->PresShell();
+      nsIPresShell* shell = PresShell();
       mReflowCallbackPosted = true;
       shell->PostReflowCallback(this);
     }

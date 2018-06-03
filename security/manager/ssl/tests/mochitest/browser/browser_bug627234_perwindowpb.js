@@ -17,13 +17,7 @@ FakeSSLStatus.prototype = {
   getInterface(aIID) {
     return this.QueryInterface(aIID);
   },
-  QueryInterface(aIID) {
-    if (aIID.equals(Ci.nsISSLStatus) ||
-        aIID.equals(Ci.nsISupports)) {
-      return this;
-    }
-    throw new Error(Cr.NS_ERROR_NO_INTERFACE);
-  },
+  QueryInterface: ChromeUtils.generateQI(["nsISSLStatus"]),
 };
 
 function whenNewWindowLoaded(aOptions, aCallback) {
@@ -49,7 +43,7 @@ function test() {
   }
 
   function doTest(aIsPrivateMode, aWindow, aCallback) {
-    aWindow.gBrowser.selectedBrowser.addEventListener("load", function() {
+    BrowserTestUtils.browserLoaded(aWindow.gBrowser.selectedBrowser).then(() => {
       let sslStatus = new FakeSSLStatus();
       uri = aWindow.Services.io.newURI("https://localhost/img.png");
       gSSService.processHeader(Ci.nsISiteSecurityService.HEADER_HSTS, uri,
@@ -60,7 +54,7 @@ function test() {
                                 "checking sts host");
 
       aCallback();
-    }, {capture: true, once: true});
+    });
 
     aWindow.gBrowser.selectedBrowser.loadURI(testURI);
   }

@@ -6,7 +6,6 @@
 
 #include "nsISupports.idl"
 
-interface nsIDOMDocument;
 interface nsIInputStream;
 interface nsIOutputStream;
 interface nsITabParent;
@@ -187,7 +186,10 @@ interface nsIWebBrowserPersistWriteCompletion : nsISupports
  * Asynchronous callback for creating a persistable document from some
  * other object.
  *
- * @see nsIWebBrowserPersistable.
+ * XXXbz This should really be changed to just return a promise that
+ * then gets resolved or rejected...
+ *
+ * @see WebBrowserPersistable in FrameLoader.webidl.
  */
 [scriptable, uuid(321e3174-594f-4036-b7be-791b821bd376)]
 interface nsIWebBrowserPersistDocumentReceiver : nsISupports

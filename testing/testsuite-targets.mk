@@ -91,9 +91,6 @@ REMOTE_CPPUNITTESTS = \
 cppunittests-remote:
 	$(call REMOTE_CPPUNITTESTS);
 
-pgo-profile-run:
-	$(PYTHON) $(topsrcdir)/build/pgo/profileserver.py $(EXTRA_TEST_ARGS)
-
 # Package up the tests and test harnesses
 include $(topsrcdir)/toolkit/mozapps/installer/package-name.mk
 
@@ -121,6 +118,7 @@ TEST_PKGS_ZIP := \
   mochitest \
   reftest \
   talos \
+  raptor \
   awsy \
   xpcshell \
   $(NULL)
@@ -146,15 +144,20 @@ test-packages-manifest:
       $(foreach pkg,$(TEST_PKGS_ZIP),$(call PKG_ARG,$(pkg),zip)) \
       $(foreach pkg,$(TEST_PKGS_TARGZ),$(call PKG_ARG,$(pkg),tar.gz))
 
+ifdef UPLOAD_PATH
+test_archive_dir = $(UPLOAD_PATH)
+else
+test_archive_dir = $(DIST)/$(PKG_PATH)
+endif
+
 package-tests-prepare-dest:
-	@rm -f '$(DIST)/$(PKG_PATH)$(TEST_PACKAGE)'
-	$(NSINSTALL) -D $(DIST)/$(PKG_PATH)
+	$(NSINSTALL) -D $(test_archive_dir)
 
 define package_archive
 package-tests-$(1): stage-all package-tests-prepare-dest
 	$$(call py_action,test_archive, \
 		$(1) \
-		'$$(abspath $$(DIST))/$$(PKG_PATH)/$$(PKG_BASENAME).$(1).tests.$(2)')
+		'$$(abspath $$(test_archive_dir))/$$(PKG_BASENAME).$(1).tests.$(2)')
 package-tests: package-tests-$(1)
 endef
 
@@ -163,7 +166,6 @@ $(foreach name,$(TEST_PKGS_TARGZ),$(eval $(call package_archive,$(name),tar.gz))
 
 ifeq ($(MOZ_BUILD_APP),mobile/android)
 stage-all: stage-android
-stage-all: stage-instrumentation-tests
 endif
 
 # Prepare _tests before any of the other staging/packaging steps.
@@ -187,10 +189,7 @@ stage-mach: make-stage-dir
 	cp $(topsrcdir)/testing/tools/mach_test_package_bootstrap.py $(PKG_STAGE)/tools/mach_bootstrap.py
 	cp $(topsrcdir)/mach $(PKG_STAGE)
 
-stage-mochitest: make-stage-dir
-ifeq ($(MOZ_BUILD_APP),mobile/android)
-	$(MAKE) -C $(DEPTH)/testing/mochitest stage-package
-endif
+stage-mochitest: make-stage-dir ;
 
 stage-jstests: make-stage-dir
 	$(MAKE) -C $(DEPTH)/js/src/tests stage-package
@@ -245,10 +244,7 @@ stage-steeplechase: make-stage-dir
 	$(NSINSTALL) -D $(PKG_STAGE)/steeplechase/
 	cp -RL $(DEPTH)/_tests/steeplechase $(PKG_STAGE)/steeplechase/tests
 	cp -RL $(DIST)/xpi-stage/specialpowers $(PKG_STAGE)/steeplechase
-	cp -RL $(topsrcdir)/testing/profiles/prefs_general.js $(PKG_STAGE)/steeplechase
-
-stage-instrumentation-tests: make-stage-dir
-	$(MAKE) -C $(DEPTH)/testing/instrumentation stage-package
+	cp -RL $(topsrcdir)/testing/profiles/common/user.js $(PKG_STAGE)/steeplechase/prefs_general.js
 
 TEST_EXTENSIONS := \
     specialpowers@mozilla.org.xpi \
@@ -281,7 +277,6 @@ check::
   stage-jstests \
   stage-android \
   stage-steeplechase \
-  stage-instrumentation-tests \
   test-packages-manifest \
   check \
   $(NULL)

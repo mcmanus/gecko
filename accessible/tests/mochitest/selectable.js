@@ -18,8 +18,8 @@ function testSelectableSelection(aIdentifier, aSelectedChildren, aMsg) {
      msg + "getSelectedChildren: wrong selected children count for " +
      prettyName(aIdentifier));
 
-  for (var idx = 0; idx < len; idx++) {
-    var expectedAcc = getAccessible(aSelectedChildren[idx]);
+  for (let idx = 0; idx < len; idx++) {
+    let expectedAcc = getAccessible(aSelectedChildren[idx]);
     var actualAcc = selectedChildren.queryElementAt(idx, nsIAccessible);
     is(actualAcc, expectedAcc,
        msg + "getSelectedChildren: wrong selected child at index " + idx +
@@ -32,8 +32,8 @@ function testSelectableSelection(aIdentifier, aSelectedChildren, aMsg) {
      "selectedItemCount: wrong selected children count for " + prettyName(aIdentifier));
 
   // getSelectedItemAt
-  for (var idx = 0; idx < len; idx++) {
-    var expectedAcc = getAccessible(aSelectedChildren[idx]);
+  for (let idx = 0; idx < len; idx++) {
+    let expectedAcc = getAccessible(aSelectedChildren[idx]);
     is(acc.getSelectedItemAt(idx), expectedAcc,
        msg + "getSelectedItemAt: wrong selected child at index " + idx + " for " +
        prettyName(aIdentifier));
@@ -50,7 +50,7 @@ function testIsItemSelected(aSelectAcc, aTraversedAcc, aIndexObj, aSelectedChild
   var childCount = aTraversedAcc.childCount;
   for (var idx = 0; idx < childCount; idx++) {
     var child = aTraversedAcc.getChildAt(idx);
-    var [state, /*extraState*/] = getStates(child);
+    var [state, /* extraState */] = getStates(child);
     if (state & STATE_SELECTABLE) {
       var isSelected = false;
       var len = aSelectedChildren.length;
@@ -68,7 +68,7 @@ function testIsItemSelected(aSelectAcc, aTraversedAcc, aIndexObj, aSelectedChild
 
       // selected state
       testStates(child, isSelected ? STATE_SELECTED : 0, 0,
-                 !isSelected ? STATE_SELECTED : 0 , 0);
+                 !isSelected ? STATE_SELECTED : 0, 0);
 
       continue;
     }

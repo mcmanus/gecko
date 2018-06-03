@@ -61,14 +61,14 @@ class Fifo
     { }
 
     Fifo(Fifo&& rhs)
-        : front_(mozilla::Move(rhs.front_))
-        , rear_(mozilla::Move(rhs.rear_))
+        : front_(std::move(rhs.front_))
+        , rear_(std::move(rhs.rear_))
     { }
 
     Fifo& operator=(Fifo&& rhs) {
         MOZ_ASSERT(&rhs != this, "self-move disallowed");
         this->~Fifo();
-        new (this) Fifo(mozilla::Move(rhs));
+        new (this) Fifo(std::move(rhs));
         return *this;
     }
 
@@ -83,6 +83,41 @@ class Fifo
     bool empty() const {
         MOZ_ASSERT_IF(rear_.length() > 0, front_.length() > 0); // Invariant 4.
         return front_.empty();
+    }
+
+    // Iterator from oldest to yongest element.
+    struct ConstIterator
+    {
+        const Fifo& self_;
+        size_t idx_;
+
+        ConstIterator(const Fifo& self, size_t idx)
+            : self_(self), idx_(idx)
+        { }
+
+        ConstIterator& operator++() {
+            ++idx_;
+            return *this;
+        }
+
+        const T& operator*() const {
+            // Iterate front in reverse, then rear.
+            size_t split = self_.front_.length();
+            return (idx_ < split) ? self_.front_[(split - 1) - idx_]
+                                  : self_.rear_[idx_ - split];
+        }
+
+        bool operator!=(const ConstIterator& other) const {
+            return (&self_ != &other.self_) || (idx_ != other.idx_);
+        }
+    };
+
+    ConstIterator begin() const {
+        return ConstIterator(*this, 0);
+    }
+
+    ConstIterator end() const {
+        return ConstIterator(*this, length());
     }
 
     // Push an element to the back of the queue. This method can take either a
@@ -141,6 +176,14 @@ class Fifo
         size_t erased = EraseIf(front_, pred);
         erased += EraseIf(rear_, pred);
         return erased;
+    }
+
+    size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const {
+        return front_.sizeOfExcludingThis(mallocSizeOf) +
+               rear_.sizeOfExcludingThis(mallocSizeOf);
+    }
+    size_t sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const {
+        return mallocSizeOf(this) + sizeOfExcludingThis(mallocSizeOf);
     }
 };
 

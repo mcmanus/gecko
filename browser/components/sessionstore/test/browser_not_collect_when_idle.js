@@ -1,6 +1,6 @@
 /** Test for Bug 1305950 **/
 
-Cu.import("resource://testing-common/MockRegistrar.jsm", this);
+ChromeUtils.import("resource://testing-common/MockRegistrar.jsm", this);
 
 // The mock idle service.
 var idleService = {
@@ -25,7 +25,7 @@ var idleService = {
     }
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIIdleService]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIIdleService]),
   idleTime: 19999,
 
   addIdleObserver(observer, time) {
@@ -88,11 +88,11 @@ add_task(async function testIntervalChanges() {
   SessionSaver.runDelayed(0);
 
   // We expect `p1` hits the timeout.
-  await Assert.rejects(p1, null, "[Test 1A] No state write during idle.");
+  await Assert.rejects(p1, /Save state timeout/, "[Test 1A] No state write during idle.");
 
   // Test again for better reliability. Same, we expect following promise hits
   // the timeout.
-  await Assert.rejects(promiseSaveState(), null, "[Test 1B] Again: No state write during idle.");
+  await Assert.rejects(promiseSaveState(), /Save state timeout/, "[Test 1B] Again: No state write during idle.");
 
   // Back to the active mode.
   info("Start to test active mode...");
@@ -101,4 +101,3 @@ add_task(async function testIntervalChanges() {
   info("[Test 2] Waiting for sessionstore-state-write-complete during active");
   await TestUtils.topicObserved("sessionstore-state-write-complete");
 });
-

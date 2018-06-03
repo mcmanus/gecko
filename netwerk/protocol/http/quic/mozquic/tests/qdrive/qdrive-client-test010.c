@@ -26,7 +26,7 @@ void *testGetClosure10()
 void testConfig10(struct mozquic_config_t *_c)
 {
   memset(&state, 0, sizeof(state));
-  test_assert(mozquic_unstable_api1(_c, "connWindowKB", 0x400000, 0) == MOZQUIC_OK);
+  test_assert(mozquic_unstable_api1(_c, "connWindow", 0xffffffff, 0) == MOZQUIC_OK);
 }
 
 int testEvent10(void *closure, uint32_t event, void *param)
@@ -44,7 +44,7 @@ int testEvent10(void *closure, uint32_t event, void *param)
   if (state.state == 1) {
     char buf[3] = { 0x10, 0x11, 0x12 };
 
-    mozquic_start_new_stream(&state.stream, param, buf, 3, 1);
+    mozquic_start_new_stream(&state.stream, param, 0, 0, buf, 3, 1);
     state.state++;
     return MOZQUIC_OK;
   }
@@ -52,7 +52,7 @@ int testEvent10(void *closure, uint32_t event, void *param)
   if (event == MOZQUIC_EVENT_NEW_STREAM_DATA) {
     test_assert(state.state == 2);
     mozquic_stream_t *stream = param;
-    test_assert(mozquic_get_streamid(stream) == 1);
+    test_assert(mozquic_get_streamid(stream) == 4);
     
     uint32_t amt = 0;
     unsigned char buf[500];

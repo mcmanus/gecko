@@ -74,8 +74,25 @@ struct ParamTraits<mozilla::ErrorResult>
                !readValue.DeserializeDOMExceptionInfo(aMsg, aIter)) {
       return false;
     }
-    *aResult = Move(readValue);
+    *aResult = std::move(readValue);
     return true;
+  }
+};
+
+template<>
+struct ParamTraits<mozilla::CopyableErrorResult>
+{
+  typedef mozilla::CopyableErrorResult paramType;
+
+  static void Write(Message* aMsg, const paramType& aParam)
+  {
+    ParamTraits<mozilla::ErrorResult>::Write(aMsg, aParam);
+  }
+
+  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
+  {
+    mozilla::ErrorResult& ref = static_cast<mozilla::ErrorResult&>(*aResult);
+    return ParamTraits<mozilla::ErrorResult>::Read(aMsg, aIter, &ref);
   }
 };
 

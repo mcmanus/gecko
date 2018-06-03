@@ -9,7 +9,6 @@
 #include "HTMLFormSubmissionConstants.h"
 #include "mozilla/dom/HTMLButtonElementBinding.h"
 #include "mozilla/dom/HTMLFormSubmission.h"
-#include "nsIDOMHTMLFormElement.h"
 #include "nsAttrValueInlines.h"
 #include "nsGkAtoms.h"
 #include "nsIPresShell.h"
@@ -19,7 +18,6 @@
 #include "nsIURL.h"
 #include "nsIFrame.h"
 #include "nsIFormControlFrame.h"
-#include "nsIDOMEvent.h"
 #include "nsIDocument.h"
 #include "mozilla/ContentEvents.h"
 #include "mozilla/EventDispatcher.h"
@@ -29,7 +27,7 @@
 #include "mozilla/TextEvents.h"
 #include "nsUnicharUtils.h"
 #include "nsLayoutUtils.h"
-#include "nsPresState.h"
+#include "mozilla/PresState.h"
 #include "nsError.h"
 #include "nsFocusManager.h"
 #include "mozilla/dom/HTMLFormElement.h"
@@ -155,6 +153,7 @@ bool
 HTMLButtonElement::ParseAttribute(int32_t aNamespaceID,
                                   nsAtom* aAttribute,
                                   const nsAString& aValue,
+                                  nsIPrincipal* aMaybeScriptedPrincipal,
                                   nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None) {
@@ -172,7 +171,7 @@ HTMLButtonElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                              aResult);
+                                              aMaybeScriptedPrincipal, aResult);
 }
 
 bool
@@ -183,12 +182,12 @@ HTMLButtonElement::IsDisabledForEvents(EventMessage aMessage)
   return IsElementDisabledForEvents(aMessage, formFrame);
 }
 
-nsresult
+void
 HTMLButtonElement::GetEventTargetParent(EventChainPreVisitor& aVisitor)
 {
   aVisitor.mCanHandle = false;
   if (IsDisabledForEvents(aVisitor.mEvent->mMessage)) {
-    return NS_OK;
+    return;
   }
 
   // Track whether we're in the outermost Dispatch invocation that will
@@ -212,7 +211,7 @@ HTMLButtonElement::GetEventTargetParent(EventChainPreVisitor& aVisitor)
     }
   }
 
-  return nsGenericHTMLElement::GetEventTargetParent(aVisitor);
+  nsGenericHTMLElement::GetEventTargetParent(aVisitor);
 }
 
 nsresult
@@ -412,7 +411,9 @@ HTMLButtonElement::BeforeSetAttr(int32_t aNameSpaceID, nsAtom* aName,
 nsresult
 HTMLButtonElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
-                                const nsAttrValue* aOldValue, bool aNotify)
+                                const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
+                                bool aNotify)
 {
   if (aNameSpaceID == kNameSpaceID_None) {
     if (aName == nsGkAtoms::type) {
@@ -436,7 +437,7 @@ HTMLButtonElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
 
   return nsGenericHTMLFormElementWithState::AfterSetAttr(aNameSpaceID, aName,
                                                          aValue, aOldValue,
-                                                         aNotify);
+                                                         aSubjectPrincipal, aNotify);
 }
 
 NS_IMETHODIMP
@@ -446,22 +447,22 @@ HTMLButtonElement::SaveState()
     return NS_OK;
   }
 
-  nsPresState* state = GetPrimaryPresState();
+  PresState* state = GetPrimaryPresState();
   if (state) {
     // We do not want to save the real disabled state but the disabled
     // attribute.
-    state->SetDisabled(HasAttr(kNameSpaceID_None, nsGkAtoms::disabled));
+    state->disabled() = HasAttr(kNameSpaceID_None, nsGkAtoms::disabled);
+    state->disabledSet() = true;
   }
 
   return NS_OK;
 }
 
 bool
-HTMLButtonElement::RestoreState(nsPresState* aState)
+HTMLButtonElement::RestoreState(PresState* aState)
 {
-  if (aState && aState->IsDisabledSet() && !aState->GetDisabled()) {
-    IgnoredErrorResult rv;
-    SetDisabled(false, rv);
+  if (aState && aState->disabledSet() && !aState->disabled()) {
+    SetDisabled(false, IgnoreErrors());
   }
 
   return false;

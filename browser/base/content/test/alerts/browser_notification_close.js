@@ -1,15 +1,14 @@
 "use strict";
 
 const {PlacesTestUtils} =
-  Cu.import("resource://testing-common/PlacesTestUtils.jsm", {});
+  ChromeUtils.import("resource://testing-common/PlacesTestUtils.jsm", {});
 
 let notificationURL = "http://example.org/browser/browser/base/content/test/alerts/file_dom_notifications.html";
 let oldShowFavicons;
 
 add_task(async function test_notificationClose() {
-  let pm = Services.perms;
   let notificationURI = makeURI(notificationURL);
-  pm.add(notificationURI, "desktop-notification", pm.ALLOW_ACTION);
+  await addNotificationPermission(notificationURL);
 
   oldShowFavicons = Services.prefs.getBoolPref("alerts.showFavicons");
   Services.prefs.setBoolPref("alerts.showFavicons", true);

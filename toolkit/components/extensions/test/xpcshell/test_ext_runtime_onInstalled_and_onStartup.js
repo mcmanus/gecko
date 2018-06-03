@@ -2,13 +2,8 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-XPCOMUtils.defineLazyGetter(this, "Management", () => {
-  const {Management} = Cu.import("resource://gre/modules/Extension.jsm", {});
-  return Management;
-});
-
-Cu.import("resource://gre/modules/AddonManager.jsm");
-Cu.import("resource://gre/modules/Preferences.jsm");
+ChromeUtils.import("resource://gre/modules/AddonManager.jsm");
+ChromeUtils.import("resource://gre/modules/Preferences.jsm");
 
 const {
   createAppInfo,
@@ -311,9 +306,8 @@ add_task(async function test_should_not_fire_on_restart() {
   });
 
   let addon = await AddonManager.getAddonByID(EXTENSION_ID);
-  addon.userDisabled = true;
-
-  addon.userDisabled = false;
+  await addon.disable();
+  await addon.enable();
   await extension.awaitStartup();
 
   await expectEvents(extension, {

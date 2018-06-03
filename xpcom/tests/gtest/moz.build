@@ -25,8 +25,12 @@ UNIFIED_SOURCES += [
     'TestFile.cpp',
     'TestGCPostBarriers.cpp',
     'TestID.cpp',
+    'TestInputStreamLengthHelper.cpp',
+    'TestLogCommandLineHandler.cpp',
+    'TestMoveString.cpp',
     'TestMozPromise.cpp',
     'TestMultiplexInputStream.cpp',
+    'TestNonBlockingAsyncInputStream.cpp',
     'TestNsDeque.cpp',
     'TestNSPRLogModulesParser.cpp',
     'TestObserverArray.cpp',
@@ -49,6 +53,7 @@ UNIFIED_SOURCES += [
     'TestTaskQueue.cpp',
     'TestTextFormatter.cpp',
     'TestThreadManager.cpp',
+    'TestThreadMetrics.cpp',
     'TestThreadPool.cpp',
     'TestThreadPoolListener.cpp',
     'TestThreads.cpp',
@@ -67,7 +72,7 @@ if CONFIG['MOZ_DEBUG'] and CONFIG['OS_ARCH'] not in ('WINNT') and CONFIG['OS_TAR
         'TestDeadlockDetectorScalability.cpp',
     ]
 
-if CONFIG['WRAP_STL_INCLUDES'] and not CONFIG['CLANG_CL']:
+if CONFIG['WRAP_STL_INCLUDES'] and CONFIG['CC_TYPE'] != 'clang-cl':
     UNIFIED_SOURCES += [
         'TestSTLWrappers.cpp',
     ]
@@ -92,6 +97,18 @@ GENERATED_FILES = [
 dafsa_data = GENERATED_FILES['dafsa_test_1.inc']
 dafsa_data.script = '../../ds/make_dafsa.py'
 dafsa_data.inputs = ['dafsa_test_1.dat']
+
+TEST_HARNESS_FILES.gtest += [
+    'wikipedia/ar.txt',
+    'wikipedia/de-edit.txt',
+    'wikipedia/de.txt',
+    'wikipedia/ja.txt',
+    'wikipedia/ko.txt',
+    'wikipedia/ru.txt',
+    'wikipedia/th.txt',
+    'wikipedia/tr.txt',
+    'wikipedia/vi.txt',
+]
 
 FINAL_LIBRARY = 'xul-gtest'
 

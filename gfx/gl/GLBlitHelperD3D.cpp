@@ -20,12 +20,11 @@ namespace mozilla {
 namespace gl {
 
 static EGLStreamKHR
-StreamFromD3DTexture(ID3D11Texture2D* const texD3D,
-                     const EGLAttrib* const postAttribs)
+StreamFromD3DTexture(ID3D11Texture2D* const texD3D, const EGLAttrib* const postAttribs)
 {
     auto& egl = sEGLLibrary;
     if (!egl.IsExtensionSupported(GLLibraryEGL::NV_stream_consumer_gltexture_yuv) ||
-        !egl.IsExtensionSupported(GLLibraryEGL::ANGLE_stream_producer_d3d_texture_nv12))
+        !egl.IsExtensionSupported(GLLibraryEGL::ANGLE_stream_producer_d3d_texture))
     {
         return 0;
     }
@@ -39,12 +38,10 @@ StreamFromD3DTexture(ID3D11Texture2D* const texD3D,
     MOZ_ALWAYS_TRUE( ok &= bool(egl.fStreamConsumerGLTextureExternalAttribsNV(display,
                                                                               stream,
                                                                               nullptr)) );
-    MOZ_ALWAYS_TRUE( ok &= bool(egl.fCreateStreamProducerD3DTextureNV12ANGLE(display,
-                                                                             stream,
-                                                                             nullptr)) );
-    MOZ_ALWAYS_TRUE( ok &= bool(egl.fStreamPostD3DTextureNV12ANGLE(display, stream,
-                                                                   texD3D,
-                                                                   postAttribs)) );
+    MOZ_ALWAYS_TRUE( ok &= bool(egl.fCreateStreamProducerD3DTextureANGLE(display, stream,
+                                                                         nullptr)) );
+    MOZ_ALWAYS_TRUE( ok &= bool(egl.fStreamPostD3DTextureANGLE(display, stream, texD3D,
+                                                               postAttribs)) );
     if (ok)
         return stream;
 
@@ -199,9 +196,9 @@ GLBlitHelper::BlitImage(layers::GPUVideoImage* const srcImage,
             const auto& clipSize = subdesc.size();
             const auto& ySize = subdesc.sizeY();
             const auto& uvSize = subdesc.sizeCbCr();
+            const auto& colorSpace = subdesc.yUVColorSpace();
 
             const gfx::IntRect clipRect(0, 0, clipSize.width, clipSize.height);
-            const auto colorSpace = YUVColorSpace::BT601;
 
             const WindowsHandle handles[3] = {
                 subdesc.handleY(),
@@ -244,7 +241,8 @@ GLBlitHelper::BlitImage(layers::D3D11YCbCrImage* const srcImage,
 
 bool
 GLBlitHelper::BlitDescriptor(const layers::SurfaceDescriptorD3D10& desc,
-                             const gfx::IntSize& destSize, OriginPos destOrigin) const
+                             const gfx::IntSize& destSize,
+                             const OriginPos destOrigin) const
 {
     const auto& d3d = GetD3D11();
     if (!d3d)
@@ -283,6 +281,10 @@ GLBlitHelper::BlitDescriptor(const layers::SurfaceDescriptorD3D10& desc,
     //return BlitAngleNv12(tex, YUVColorSpace::BT601, destSize, destOrigin);
 
     const BindAnglePlanes bindPlanes(this, 2, texList, postAttribsList);
+    if (!bindPlanes.Success()) {
+        MOZ_ASSERT(false, "BindAnglePlanes failed.");
+        return false;
+    }
 
     D3D11_TEXTURE2D_DESC texDesc = {0};
     tex->GetDesc(&texDesc);
@@ -295,8 +297,14 @@ GLBlitHelper::BlitDescriptor(const layers::SurfaceDescriptorD3D10& desc,
                               ySize.height / divisors.height);
 
     const bool yFlip = destOrigin != srcOrigin;
-    const DrawBlitProg::BaseArgs baseArgs = { destSize, yFlip, clipRect, ySize };
-    const DrawBlitProg::YUVArgs yuvArgs = { uvSize, divisors, colorSpace };
+    const DrawBlitProg::BaseArgs baseArgs = {
+        SubRectMat3(clipRect, ySize),
+        yFlip, destSize, Nothing()
+    };
+    const DrawBlitProg::YUVArgs yuvArgs = {
+        SubRectMat3(clipRect, uvSize, divisors),
+        colorSpace
+    };
 
     const auto& prog = GetDrawBlitProg({kFragHeader_TexExt, kFragBody_NV12});
     MOZ_RELEASE_ASSERT(prog);
@@ -310,8 +318,8 @@ bool
 GLBlitHelper::BlitAngleYCbCr(const WindowsHandle (&handleList)[3],
                              const gfx::IntRect& clipRect,
                              const gfx::IntSize& ySize, const gfx::IntSize& uvSize,
-                             const YUVColorSpace colorSpace,
-                             const gfx::IntSize& destSize, OriginPos destOrigin) const
+                             const YUVColorSpace colorSpace, const gfx::IntSize& destSize,
+                             const OriginPos destOrigin) const
 {
     const auto& d3d = GetD3D11();
     if (!d3d)
@@ -331,8 +339,14 @@ GLBlitHelper::BlitAngleYCbCr(const WindowsHandle (&handleList)[3],
     const BindAnglePlanes bindPlanes(this, 3, texList);
 
     const bool yFlip = destOrigin != srcOrigin;
-    const DrawBlitProg::BaseArgs baseArgs = { destSize, yFlip, clipRect, ySize };
-    const DrawBlitProg::YUVArgs yuvArgs = { uvSize, divisors, colorSpace };
+    const DrawBlitProg::BaseArgs baseArgs = {
+        SubRectMat3(clipRect, ySize),
+        yFlip, destSize, Nothing()
+    };
+    const DrawBlitProg::YUVArgs yuvArgs = {
+        SubRectMat3(clipRect, uvSize, divisors),
+        colorSpace
+    };
 
     const auto& prog = GetDrawBlitProg({kFragHeader_TexExt, kFragBody_PlanarYUV});
     MOZ_RELEASE_ASSERT(prog);

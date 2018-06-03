@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim:cindent:ts=2:et:sw=2:
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -567,10 +567,10 @@ BlockReflowInput::AddFloat(nsLineLayout*       aLineLayout,
                              nsIFrame*           aFloat,
                              nscoord             aAvailableISize)
 {
-  NS_PRECONDITION(aLineLayout, "must have line layout");
-  NS_PRECONDITION(mBlock->LinesEnd() != mCurrentLine, "null ptr");
-  NS_PRECONDITION(aFloat->GetStateBits() & NS_FRAME_OUT_OF_FLOW,
-                  "aFloat must be an out-of-flow frame");
+  MOZ_ASSERT(aLineLayout, "must have line layout");
+  MOZ_ASSERT(mBlock->LinesEnd() != mCurrentLine, "null ptr");
+  MOZ_ASSERT(aFloat->GetStateBits() & NS_FRAME_OUT_OF_FLOW,
+             "aFloat must be an out-of-flow frame");
 
   MOZ_ASSERT(aFloat->GetParent(), "float must have parent");
   MOZ_ASSERT(aFloat->GetParent()->IsFrameOfType(nsIFrame::eBlockFrame),
@@ -716,6 +716,8 @@ FloatMarginISize(const ReflowInput& aCBReflowInput,
 bool
 BlockReflowInput::FlowAndPlaceFloat(nsIFrame* aFloat)
 {
+  MOZ_ASSERT(aFloat->GetParent() == mBlock);
+
   WritingMode wm = mReflowInput.GetWritingMode();
   // Save away the Y coordinate before placing the float. We will
   // restore mBCoord at the end after placing the float. This is
@@ -834,23 +836,28 @@ BlockReflowInput::FlowAndPlaceFloat(nsIFrame* aFloat)
         fc = fc->Next();
       }
 
-      if(prevFrame) {
+      if (prevFrame) {
         //get the frame type
         if (prevFrame->IsTableWrapperFrame()) {
           //see if it has "align="
-          // IE makes a difference between align and he float property
+          // IE makes a difference between align and the float property.
+          //
+          // We're interested only if previous frame is align=left IE messes
+          // things up when "right" (overlapping frames).
+          //
+          // FIXME(emilio, bug 1426747): This looks fishy.
           nsIContent* content = prevFrame->GetContent();
-          if (content) {
-            // we're interested only if previous frame is align=left
-            // IE messes things up when "right" (overlapping frames)
-            if (content->AttrValueIs(kNameSpaceID_None, nsGkAtoms::align,
-                                     NS_LITERAL_STRING("left"), eIgnoreCase)) {
-              keepFloatOnSameLine = true;
-              // don't advance to next line (IE quirkie behaviour)
-              // it breaks rule CSS2/9.5.1/1, but what the hell
-              // since we cannot evangelize the world
-              break;
-            }
+          if (content &&
+              content->IsElement() &&
+              content->AsElement()->AttrValueIs(kNameSpaceID_None,
+                                                nsGkAtoms::align,
+                                                NS_LITERAL_STRING("left"),
+                                                eIgnoreCase)) {
+            keepFloatOnSameLine = true;
+            // don't advance to next line (IE quirkie behaviour)
+            // it breaks rule CSS2/9.5.1/1, but what the hell
+            // since we cannot evangelize the world
+            break;
           }
         }
       }
@@ -1136,4 +1143,3 @@ BlockReflowInput::ClearFloats(nscoord aBCoord, StyleClear aBreakType,
 
   return newBCoord;
 }
-

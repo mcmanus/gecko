@@ -261,7 +261,7 @@ tests".
 In order for a test to be interpreted as a single page test, then
 it must simply not call `test()` or `async_test()` anywhere on the page, and
 must call the `done()` function to indicate that the test is complete. All
-the `assert_*` functions are avaliable as normal, but are called without
+the `assert_*` functions are available as normal, but are called without
 the normal step function wrapper. For example:
 
 ```html
@@ -281,7 +281,7 @@ The test title for single page tests is always taken from `document.title`.
 ## Making assertions ##
 
 Functions for making assertions start `assert_`. The full list of
-asserts avaliable is documented in the [asserts](#list-of-assertions) section
+asserts available is documented in the [asserts](#list-of-assertions) section
 below. The general signature is:
 
 ```js
@@ -605,7 +605,7 @@ workers](https://slightlyoff.github.io/ServiceWorker/spec/service_worker/).
 Testing from a worker script is different from testing from an HTML document in
 several ways:
 
-* Workers have no reporting capability since they are runing in the background.
+* Workers have no reporting capability since they are running in the background.
   Hence they rely on `testharness.js` running in a companion client HTML document
   for reporting.
 
@@ -667,6 +667,17 @@ a [`SharedWorker`](https://html.spec.whatwg.org/multipage/workers.html#shared-wo
 or a [`ServiceWorker`](https://slightlyoff.github.io/ServiceWorker/spec/service_worker/#service-worker-obj).
 Once called, the containing document fetches all the tests from the worker and
 behaves as if those tests were running in the containing document itself.
+
+`fetch_tests_from_worker` returns a promise that resolves once all the remote
+tests have completed. This is useful if you're importing tests from multiple
+workers and want to ensure they run in series:
+
+```js
+(async function() {
+  await fetch_tests_from_worker(new Worker("worker-1.js"));
+  await fetch_tests_from_worker(new Worker("worker-2.js"));
+})();
+```
 
 ## List of Assertions ##
 

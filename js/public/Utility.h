@@ -15,6 +15,7 @@
 #include "mozilla/Scoped.h"
 #include "mozilla/TemplateLib.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/WrappingOperations.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +26,8 @@
 #endif
 
 #include "jstypes.h"
+
+#include "mozmemory.h"
 
 /* The public JS engine namespace. */
 namespace JS {}
@@ -54,10 +57,13 @@ namespace js {
  * Thread types are used to tag threads for certain kinds of testing (see
  * below), and also used to characterize threads in the thread scheduler (see
  * js/src/vm/HelperThreads.cpp).
+ *
+ * Please update oom::FirstThreadTypeToTest and oom::LastThreadTypeToTest when
+ * adding new thread types.
  */
 enum ThreadType {
     THREAD_TYPE_NONE = 0,       // 0
-    THREAD_TYPE_COOPERATING,    // 1
+    THREAD_TYPE_MAIN,           // 1
     THREAD_TYPE_WASM,           // 2
     THREAD_TYPE_ION,            // 3
     THREAD_TYPE_PARSE,          // 4
@@ -67,6 +73,7 @@ enum ThreadType {
     THREAD_TYPE_PROMISE_TASK,   // 8
     THREAD_TYPE_ION_FREE,       // 9
     THREAD_TYPE_WASM_TIER2,     // 10
+    THREAD_TYPE_WORKER,         // 11
     THREAD_TYPE_MAX             // Used to check shell function arguments
 };
 
@@ -82,13 +89,22 @@ namespace oom {
  * is in jsutil.cpp.
  */
 # if defined(DEBUG) || defined(JS_OOM_BREAKPOINT)
+
+// Define the range of threads tested by simulated OOM testing and the
+// like. Testing worker threads is not supported.
+const ThreadType FirstThreadTypeToTest = THREAD_TYPE_MAIN;
+const ThreadType LastThreadTypeToTest = THREAD_TYPE_WASM_TIER2;
+
 extern bool InitThreadType(void);
 extern void SetThreadType(ThreadType);
 extern JS_FRIEND_API(uint32_t) GetThreadType(void);
+
 # else
+
 inline bool InitThreadType(void) { return true; }
 inline void SetThreadType(ThreadType t) {};
 inline uint32_t GetThreadType(void) { return 0; }
+
 # endif
 
 } /* namespace oom */
@@ -97,7 +113,11 @@ inline uint32_t GetThreadType(void) { return 0; }
 # if defined(DEBUG) || defined(JS_OOM_BREAKPOINT)
 
 #ifdef JS_OOM_BREAKPOINT
+#  if defined(_MSC_VER)
+static MOZ_NEVER_INLINE void js_failedAllocBreakpoint() { __asm { }; }
+#  else
 static MOZ_NEVER_INLINE void js_failedAllocBreakpoint() { asm(""); }
+#  endif
 #define JS_OOM_CALL_BP_FUNC() js_failedAllocBreakpoint()
 #else
 #define JS_OOM_CALL_BP_FUNC() do {} while(0)
@@ -282,7 +302,7 @@ HadSimulatedInterrupt()
 #  define JS_INTERRUPT_POSSIBLY_FAIL()                                        \
     do {                                                                      \
         if (MOZ_UNLIKELY(js::oom::ShouldFailWithInterrupt())) {               \
-            cx->interrupt_ = true;                                            \
+            cx->requestInterrupt(js::InterruptReason::CallbackUrgent);        \
             return cx->handleInterrupt();                                     \
         }                                                                     \
     } while (0)
@@ -351,22 +371,33 @@ struct MOZ_RAII JS_PUBLIC_DATA(AutoEnterOOMUnsafeRegion)
 
 } /* namespace js */
 
+// Malloc allocation.
+
+namespace js {
+
+extern JS_PUBLIC_DATA(arena_id_t) MallocArena;
+
+extern void InitMallocAllocator();
+extern void ShutDownMallocAllocator();
+
+} /* namespace js */
+
 static inline void* js_malloc(size_t bytes)
 {
     JS_OOM_POSSIBLY_FAIL();
-    return malloc(bytes);
+    return moz_arena_malloc(js::MallocArena, bytes);
 }
 
 static inline void* js_calloc(size_t bytes)
 {
     JS_OOM_POSSIBLY_FAIL();
-    return calloc(bytes, 1);
+    return moz_arena_calloc(js::MallocArena, bytes, 1);
 }
 
 static inline void* js_calloc(size_t nmemb, size_t size)
 {
     JS_OOM_POSSIBLY_FAIL();
-    return calloc(nmemb, size);
+    return moz_arena_calloc(js::MallocArena, nmemb, size);
 }
 
 static inline void* js_realloc(void* p, size_t bytes)
@@ -377,19 +408,18 @@ static inline void* js_realloc(void* p, size_t bytes)
     MOZ_ASSERT(bytes != 0);
 
     JS_OOM_POSSIBLY_FAIL();
-    return realloc(p, bytes);
+    return moz_arena_realloc(js::MallocArena, p, bytes);
 }
 
 static inline void js_free(void* p)
 {
+    // TODO: This should call |moz_arena_free(js::MallocArena, p)| but we
+    // currently can't enforce that all memory freed here was allocated by
+    // js_malloc().
     free(p);
 }
 
-static inline char* js_strdup(const char* s)
-{
-    JS_OOM_POSSIBLY_FAIL();
-    return strdup(s);
-}
+JS_PUBLIC_API(char*) js_strdup(const char* s);
 #endif/* JS_USE_CUSTOM_ALLOCATOR */
 
 #include <new>
@@ -519,7 +549,7 @@ js_delete_poison(const T* p)
 {
     if (p) {
         p->~T();
-        memset(const_cast<T*>(p), 0x3B, sizeof(T));
+        memset(static_cast<void*>(const_cast<T*>(p)), 0x3B, sizeof(T));
         js_free(const_cast<T*>(p));
     }
 }
@@ -668,7 +698,7 @@ ScrambleHashCode(HashNumber h)
      * are stored in a hash table; see Knuth for details.
      */
     static const HashNumber goldenRatio = 0x9E3779B9U;
-    return h * goldenRatio;
+    return mozilla::WrappingMultiply(h, goldenRatio);
 }
 
 } /* namespace detail */

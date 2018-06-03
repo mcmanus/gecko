@@ -4,9 +4,6 @@
 
 package org.mozilla.gecko.sync.repositories;
 
-import android.support.annotation.Nullable;
-import android.util.Log;
-
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
@@ -14,7 +11,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import org.mozilla.gecko.background.common.log.Logger;
-import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionBeginDelegate;
+import org.mozilla.gecko.sync.SyncException;
 import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionFetchRecordsDelegate;
 import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionFinishDelegate;
 import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionStoreDelegate;
@@ -26,9 +23,9 @@ import org.mozilla.gecko.sync.repositories.domain.Record;
  *
  *<ul>
  * <li>Construct, with a reference to its parent {@link Repository}, by calling
- *   {@link Repository#createSession(org.mozilla.gecko.sync.repositories.delegates.RepositorySessionCreationDelegate, android.content.Context)}.</li>
+ *   {@link Repository#createSession(android.content.Context)}.</li>
  * <li>Populate with saved information by calling {@link #unbundle(RepositorySessionBundle)}.</li>
- * <li>Begin a sync by calling {@link #begin(RepositorySessionBeginDelegate)}. <code>begin()</code>
+ * <li>Begin a sync by calling {@link #begin()}. <code>begin()</code>
  *   is an appropriate place to initialize expensive resources.</li>
  * <li>Perform operations such as {@link #fetchModified(RepositorySessionFetchRecordsDelegate)} and
  *   {@link #store(Record)}.</li>
@@ -57,9 +54,11 @@ public abstract class RepositorySession {
   protected RepositorySessionStoreDelegate storeDelegate;
 
   /**
-   * A queue of Runnables which call out into delegates.
+   * A queue of Runnables which perform fetching (see fetch* methods).
+   * At the same time, this is also a queue of Runnables which call out into session's delegates.
+   * See {@link #abort(RepositorySessionFinishDelegate)} and {@link #finish(RepositorySessionFinishDelegate)}.
    */
-  protected ExecutorService delegateQueue  = Executors.newSingleThreadExecutor();
+  protected ExecutorService fetchWorkQueue = Executors.newSingleThreadExecutor();
 
   /**
    * A queue of Runnables which effect storing.
@@ -185,13 +184,6 @@ public abstract class RepositorySession {
   }
 
   /**
-   * Indicates that a number of records have been stored, more are still to come but after some time,
-   * and now would be a good time to flush records and perform any other similar operations.
-   */
-  public void storeFlush() {
-  }
-
-  /**
    * Indicates that a flow of records have been completed.
    */
   public void performCleanup() {
@@ -206,7 +198,7 @@ public abstract class RepositorySession {
    */
   protected void sharedBegin() throws InvalidSessionTransitionException {
     Logger.debug(LOG_TAG, "Shared begin.");
-    if (delegateQueue.isShutdown()) {
+    if (fetchWorkQueue.isShutdown()) {
       throw new InvalidSessionTransitionException(null);
     }
     if (storeWorkQueue.isShutdown()) {
@@ -216,15 +208,13 @@ public abstract class RepositorySession {
   }
 
   /**
-   * Start the session. This is an appropriate place to initialize
-   * data access components such as database handles.
+   * Start the session. Override this in your subclasses to initialize data access components such
+   * as database handles, and otherwise specify what "begin" means for your session.
    *
-   * @param delegate
-   * @throws InvalidSessionTransitionException
+   * @throws InvalidSessionTransitionException if session wasn't {@link SessionStatus#UNSTARTED}.
    */
-  public void begin(RepositorySessionBeginDelegate delegate) throws InvalidSessionTransitionException {
+  public void begin() throws SyncException {
     sharedBegin();
-    delegate.deferredBeginDelegate(delegateQueue).onBeginSucceeded(this);
   }
 
   public void unbundle(RepositorySessionBundle bundle) {
@@ -255,7 +245,7 @@ public abstract class RepositorySession {
    */
   public void abort(RepositorySessionFinishDelegate delegate) {
     this.abort();
-    delegate.deferredFinishDelegate(delegateQueue).onFinishSucceeded(this, this.getBundle());
+    delegate.deferredFinishDelegate(fetchWorkQueue).onFinishSucceeded(this, this.getBundle());
   }
 
   /**
@@ -271,7 +261,7 @@ public abstract class RepositorySession {
       Logger.error(LOG_TAG, "Caught exception shutting down store work queue.", e);
     }
     try {
-      delegateQueue.shutdown();
+      fetchWorkQueue.shutdown();
     } catch (Exception e) {
       Logger.error(LOG_TAG, "Caught exception shutting down delegate queue.", e);
     }
@@ -287,7 +277,7 @@ public abstract class RepositorySession {
   public void finish(final RepositorySessionFinishDelegate delegate) throws InactiveSessionException {
     try {
       this.transitionFrom(SessionStatus.ACTIVE, SessionStatus.DONE);
-      delegate.deferredFinishDelegate(delegateQueue).onFinishSucceeded(this, this.getBundle());
+      delegate.deferredFinishDelegate(fetchWorkQueue).onFinishSucceeded(this, this.getBundle());
     } catch (InvalidSessionTransitionException e) {
       Logger.error(LOG_TAG, "Tried to finish() an unstarted or already finished session");
       throw new InactiveSessionException(e);
@@ -295,19 +285,7 @@ public abstract class RepositorySession {
 
     Logger.trace(LOG_TAG, "Shutting down work queues.");
     storeWorkQueue.shutdown();
-    delegateQueue.shutdown();
-  }
-
-  /**
-   * Run the provided command if we're active and our delegate queue
-   * is not shut down.
-   */
-  protected synchronized void executeDelegateCommand(Runnable command)
-      throws InactiveSessionException {
-    if (!isActive() || delegateQueue.isShutdown()) {
-      throw new InactiveSessionException();
-    }
-    delegateQueue.execute(command);
+    fetchWorkQueue.shutdown();
   }
 
   public synchronized void ensureActive() throws InactiveSessionException {

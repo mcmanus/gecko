@@ -102,17 +102,23 @@ class URLManifestItem(ManifestItem):
 class TestharnessTest(URLManifestItem):
     item_type = "testharness"
 
-    def __init__(self, source_file, url, url_base="/", timeout=None, manifest=None):
+    def __init__(self, source_file, url, url_base="/", timeout=None, testdriver=False, jsshell=False, manifest=None):
         URLManifestItem.__init__(self, source_file, url, url_base=url_base, manifest=manifest)
         self.timeout = timeout
+        self.testdriver = testdriver
+        self.jsshell = jsshell
 
     def meta_key(self):
-        return (self.timeout,)
+        return (self.timeout, self.testdriver)
 
     def to_json(self):
         rv = URLManifestItem.to_json(self)
         if self.timeout is not None:
             rv[-1]["timeout"] = self.timeout
+        if self.testdriver:
+            rv[-1]["testdriver"] = self.testdriver
+        if self.jsshell:
+            rv[-1]["jsshell"] = True
         return rv
 
     @classmethod
@@ -124,6 +130,8 @@ class TestharnessTest(URLManifestItem):
                    url,
                    url_base=manifest.url_base,
                    timeout=extras.get("timeout"),
+                   testdriver=bool(extras.get("testdriver")),
+                   jsshell=bool(extras.get("jsshell")),
                    manifest=manifest)
 
 

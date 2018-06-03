@@ -53,7 +53,6 @@ XPIDL_SOURCES += [
     'nsIInputStreamChannel.idl',
     'nsIInputStreamPump.idl',
     'nsIIOService.idl',
-    'nsIIOService2.idl',
     'nsILoadContextInfo.idl',
     'nsILoadGroup.idl',
     'nsILoadGroupChild.idl',
@@ -63,6 +62,7 @@ XPIDL_SOURCES += [
     'nsINestedURI.idl',
     'nsINetAddr.idl',
     'nsINetUtil.idl',
+    'nsINetworkActivityData.idl',
     'nsINetworkInfoService.idl',
     'nsINetworkInterceptController.idl',
     'nsINetworkLinkService.idl',
@@ -121,12 +121,11 @@ XPIDL_SOURCES += [
     'nsITraceableChannel.idl',
     'nsITransport.idl',
     'nsIUDPSocket.idl',
-    'nsIUnicharStreamLoader.idl',
     'nsIUploadChannel.idl',
     'nsIUploadChannel2.idl',
     'nsIURI.idl',
     'nsIURIClassifier.idl',
-    'nsIURIWithBlobImpl.idl',
+    'nsIURIMutator.idl',
     'nsIURIWithPrincipal.idl',
     'nsIURL.idl',
     'nsIURLParser.idl',
@@ -174,7 +173,6 @@ EXPORTS.mozilla.net += [
     'Dashboard.h',
     'DashboardTypes.h',
     'MemoryDownloader.h',
-    'MozURL.h',
     'PartiallySeekableInputStream.h',
     'Predictor.h',
     'ReferrerPolicy.h',
@@ -193,7 +191,6 @@ UNIFIED_SOURCES += [
     'LoadContextInfo.cpp',
     'LoadInfo.cpp',
     'MemoryDownloader.cpp',
-    'MozURL.cpp',
     'NetworkActivityMonitor.cpp',
     'nsAsyncRedirectVerifyHelper.cpp',
     'nsAsyncStreamCopier.cpp',
@@ -212,6 +209,7 @@ UNIFIED_SOURCES += [
     'nsInputStreamChannel.cpp',
     'nsInputStreamPump.cpp',
     'nsIOService.cpp',
+    'nsIURIMutatorUtils.cpp',
     'nsLoadGroup.cpp',
     'nsMediaFragmentURIParser.cpp',
     'nsMIMEInputStream.cpp',
@@ -239,7 +237,6 @@ UNIFIED_SOURCES += [
     'nsSyncStreamListener.cpp',
     'nsTransportUtils.cpp',
     'nsUDPSocket.cpp',
-    'nsUnicharStreamLoader.cpp',
     'nsURLHelper.cpp',
     'nsURLParsers.cpp',
     'PartiallySeekableInputStream.cpp',
@@ -256,10 +253,6 @@ UNIFIED_SOURCES += [
     'Tickler.cpp',
     'TLSServerSocket.cpp',
 ]
-
-if CONFIG['MOZ_RUST_URLPARSE']:
-    EXPORTS.mozilla.net += [ 'RustURL.h' ]
-    UNIFIED_SOURCES += [ 'RustURL.cpp' ]
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
     SOURCES += [
@@ -296,6 +289,8 @@ EXTRA_JS_MODULES += [
     'NetUtil.jsm',
 ]
 
+DIRS += [ 'mozurl' ]
+
 include('/ipc/chromium/chromium-config.mozbuild')
 
 FINAL_LIBRARY = 'xul'
@@ -309,5 +304,5 @@ LOCAL_INCLUDES += [
     '/security/pkix/include'
 ]
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

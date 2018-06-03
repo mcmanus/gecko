@@ -1,6 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: sw=2 ts=8 et :
- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,10 +13,9 @@
 #include "mozilla/ViewportFrame.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/ContentParent.h"
+#include "mozilla/dom/Element.h"
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/TabParent.h"
-#include "mozilla/layers/APZCTreeManager.h"
-#include "mozilla/layers/APZThreadUtils.h"
 #include "mozilla/layers/CompositorBridgeParent.h"
 #include "mozilla/layers/LayerTransactionParent.h"
 #include "nsContentUtils.h"
@@ -77,7 +75,7 @@ IsTempLayerManager(LayerManager* aManager)
           !static_cast<BasicLayerManager*>(aManager)->IsRetained());
 }
 
-already_AddRefed<LayerManager>
+static already_AddRefed<LayerManager>
 GetLayerManager(nsFrameLoader* aFrameLoader)
 {
   if (nsIContent* content = aFrameLoader->GetOwnerContent()) {
@@ -95,7 +93,7 @@ GetLayerManager(nsFrameLoader* aFrameLoader)
 }
 
 RenderFrameParent::RenderFrameParent(nsFrameLoader* aFrameLoader)
-  : mLayersId(0)
+  : mLayersId{0}
   , mLayersConnected(false)
   , mFrameLoader(aFrameLoader)
   , mFrameLoaderDestroyed(false)
@@ -186,7 +184,7 @@ RenderFrameParent::BuildLayer(nsDisplayListBuilder* aBuilder,
     return nullptr;
   }
 
-  if (!mLayersId) {
+  if (!mLayersId.IsValid()) {
     return nullptr;
   }
 
@@ -245,7 +243,7 @@ RenderFrameParent::OwnerContentChanged(nsIContent* aContent)
 void
 RenderFrameParent::ActorDestroy(ActorDestroyReason why)
 {
-  if (mLayersId != 0) {
+  if (mLayersId.IsValid()) {
     if (XRE_IsParentProcess()) {
       GPUProcessManager::Get()->UnmapLayerTreeId(mLayersId, OtherPid());
     } else if (XRE_IsContentProcess()) {
@@ -295,7 +293,7 @@ RenderFrameParent::BuildDisplayList(nsDisplayListBuilder* aBuilder,
   clipState.ClipContentDescendants(bounds);
 
   aLists.Content()->AppendToTop(
-    new (aBuilder) nsDisplayRemote(aBuilder, aFrame, this));
+    MakeDisplayItem<nsDisplayRemote>(aBuilder, aFrame, this));
 }
 
 void
@@ -317,11 +315,7 @@ RenderFrameParent::TakeFocusForClickFromTap()
   if (!fm) {
     return;
   }
-  nsCOMPtr<nsIContent> owner = mFrameLoader->GetOwnerContent();
-  if (!owner) {
-    return;
-  }
-  nsCOMPtr<nsIDOMElement> element = do_QueryInterface(owner);
+  RefPtr<Element> element = mFrameLoader->GetOwnerContent();
   if (!element) {
     return;
   }
@@ -363,7 +357,7 @@ nsDisplayRemote::nsDisplayRemote(nsDisplayListBuilder* aBuilder,
     if (aBuilder->IsInsidePointerEventsNoneDoc() || frameIsPointerEventsNone) {
       mEventRegionsOverride |= EventRegionsOverride::ForceEmptyHitRegion;
     }
-    if (nsLayoutUtils::HasDocumentLevelListenersForApzAwareEvents(aFrame->PresContext()->PresShell())) {
+    if (nsLayoutUtils::HasDocumentLevelListenersForApzAwareEvents(aFrame->PresShell())) {
       mEventRegionsOverride |= EventRegionsOverride::ForceDispatchToContent;
     }
   }
@@ -375,8 +369,8 @@ nsDisplayRemote::BuildLayer(nsDisplayListBuilder* aBuilder,
                             const ContainerLayerParameters& aContainerParameters)
 {
   RefPtr<Layer> layer = mRemoteFrame->BuildLayer(aBuilder, mFrame, aManager, this, aContainerParameters);
-  if (layer && layer->AsContainerLayer()) {
-    layer->AsContainerLayer()->SetEventRegionsOverride(mEventRegionsOverride);
+  if (layer && layer->AsRefLayer()) {
+    layer->AsRefLayer()->SetEventRegionsOverride(mEventRegionsOverride);
   }
   return layer.forget();
 }
@@ -390,13 +384,14 @@ nsDisplayRemote::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuild
 {
   mOffset = mozilla::layout::GetContentRectLayerOffset(mFrame, aDisplayListBuilder);
 
-  mozilla::LayoutDeviceRect visible = mozilla::LayoutDeviceRect::FromAppUnits(
-      GetVisibleRect(), mFrame->PresContext()->AppUnitsPerDevPixel());
-  visible += mOffset;
+  mozilla::LayoutDeviceRect rect = mozilla::LayoutDeviceRect::FromAppUnits(
+    mFrame->GetContentRectRelativeToSelf(), mFrame->PresContext()->AppUnitsPerDevPixel());
+  rect += mOffset;
 
-  aBuilder.PushIFrame(aSc.ToRelativeLayoutRect(visible),
+  aBuilder.PushIFrame(mozilla::wr::ToRoundedLayoutRect(rect),
       !BackfaceIsHidden(),
-      mozilla::wr::AsPipelineId(GetRemoteLayersId()));
+      mozilla::wr::AsPipelineId(GetRemoteLayersId()),
+      /*ignoreMissingPipelines*/ true);
 
   return true;
 }
@@ -413,7 +408,7 @@ nsDisplayRemote::UpdateScrollData(mozilla::layers::WebRenderScrollData* aData,
   return true;
 }
 
-uint64_t
+LayersId
 nsDisplayRemote::GetRemoteLayersId() const
 {
   return mRemoteFrame->GetLayersId();

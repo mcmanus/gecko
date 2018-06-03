@@ -48,6 +48,14 @@ public:
 
   void StartLayout() { MediaDocument::StartLayout(); }
 
+  virtual void Destroy() override
+  {
+    if (mStreamListener) {
+      mStreamListener->DropDocumentRef();
+    }
+    MediaDocument::Destroy();
+  }
+
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(PluginDocument, MediaDocument)
 protected:
   ~PluginDocument() override;
@@ -122,15 +130,15 @@ PluginDocument::SetScriptGlobalObject(nsIScriptGlobalObject* aScriptGlobalObject
   MediaDocument::SetScriptGlobalObject(aScriptGlobalObject);
 
   if (aScriptGlobalObject) {
-    if (!mPluginContent) {
+    if (!InitialSetupHasBeenDone()) {
       // Create synthetic document
 #ifdef DEBUG
       nsresult rv =
 #endif
         CreateSyntheticPluginDocument();
       NS_ASSERTION(NS_SUCCEEDED(rv), "failed to create synthetic document");
+      InitialSetupDone();
     }
-    BecomeInteractive();
   } else {
     mStreamListener = nullptr;
   }
@@ -138,7 +146,7 @@ PluginDocument::SetScriptGlobalObject(nsIScriptGlobalObject* aScriptGlobalObject
 
 
 bool
-PluginDocument::CanSavePresentation(nsIRequest *aNewRequest)
+PluginDocument::CanSavePresentation(nsIRequest* aNewRequest)
 {
   // Full-page plugins cannot be cached, currently, because we don't have
   // the stream listener data to feed to the plugin instance.
@@ -214,7 +222,7 @@ PluginDocument::CreateSyntheticPluginDocument()
   RefPtr<mozilla::dom::NodeInfo> nodeInfo;
   nodeInfo = mNodeInfoManager->GetNodeInfo(nsGkAtoms::embed, nullptr,
                                            kNameSpaceID_XHTML,
-                                           nsIDOMNode::ELEMENT_NODE);
+                                           nsINode::ELEMENT_NODE);
   rv = NS_NewHTMLElement(getter_AddRefs(mPluginContent), nodeInfo.forget(),
                          NOT_FROM_PARSER);
   NS_ENSURE_SUCCESS(rv, rv);

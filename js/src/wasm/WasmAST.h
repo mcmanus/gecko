@@ -138,12 +138,12 @@ class AstSig : public AstBase
         ret_(ExprType::Void)
     {}
     AstSig(AstValTypeVector&& args, ExprType ret)
-      : args_(Move(args)),
+      : args_(std::move(args)),
         ret_(ret)
     {}
     AstSig(AstName name, AstSig&& rhs)
       : name_(name),
-        args_(Move(rhs.args_)),
+        args_(std::move(rhs.args_)),
         ret_(rhs.ret_)
     {}
     const AstValTypeVector& args() const {
@@ -161,7 +161,10 @@ class AstSig : public AstBase
 
     typedef const AstSig& Lookup;
     static HashNumber hash(Lookup sig) {
-        return AddContainerToHash(sig.args(), HashNumber(sig.ret()));
+        HashNumber hn = HashNumber(sig.ret());
+        for (ValType vt : sig.args())
+            hn = mozilla::AddToHash(hn, vt.code());
+        return hn;
     }
     static bool match(const AstSig* lhs, Lookup rhs) {
         return *lhs == rhs;
@@ -183,6 +186,10 @@ class AstNode : public AstBase
 
 enum class AstExprKind
 {
+    AtomicCmpXchg,
+    AtomicLoad,
+    AtomicRMW,
+    AtomicStore,
     BinaryOperator,
     Block,
     Branch,
@@ -194,14 +201,22 @@ enum class AstExprKind
     ConversionOperator,
     CurrentMemory,
     Drop,
+#ifdef ENABLE_WASM_SATURATING_TRUNC_OPS
+    ExtraConversionOperator,
+#endif
     First,
     GetGlobal,
     GetLocal,
     GrowMemory,
     If,
     Load,
+#ifdef ENABLE_WASM_BULKMEM_OPS
+    MemCopy,
+    MemFill,
+#endif
     Nop,
     Pop,
+    RefNull,
     Return,
     SetGlobal,
     SetLocal,
@@ -209,7 +224,9 @@ enum class AstExprKind
     Store,
     TernaryOperator,
     UnaryOperator,
-    Unreachable
+    Unreachable,
+    Wait,
+    Wake
 };
 
 class AstExpr : public AstNode
@@ -384,7 +401,7 @@ class AstBlock : public AstExpr
       : AstExpr(Kind, type),
         op_(op),
         name_(name),
-        exprs_(Move(exprs))
+        exprs_(std::move(exprs))
     {}
 
     Op op() const { return op_; }
@@ -425,7 +442,7 @@ class AstCall : public AstExpr
   public:
     static const AstExprKind Kind = AstExprKind::Call;
     AstCall(Op op, ExprType type, AstRef func, AstExprVector&& args)
-      : AstExpr(Kind, type), op_(op), func_(func), args_(Move(args))
+      : AstExpr(Kind, type), op_(op), func_(func), args_(std::move(args))
     {}
 
     Op op() const { return op_; }
@@ -442,7 +459,7 @@ class AstCallIndirect : public AstExpr
   public:
     static const AstExprKind Kind = AstExprKind::CallIndirect;
     AstCallIndirect(AstRef sig, ExprType type, AstExprVector&& args, AstExpr* index)
-      : AstExpr(Kind, type), sig_(sig), args_(Move(args)), index_(index)
+      : AstExpr(Kind, type), sig_(sig), args_(std::move(args)), index_(index)
     {}
     AstRef& sig() { return sig_; }
     const AstExprVector& args() const { return args_; }
@@ -476,8 +493,8 @@ class AstIf : public AstExpr
       : AstExpr(Kind, type),
         cond_(cond),
         name_(name),
-        thenExprs_(Move(thenExprs)),
-        elseExprs_(Move(elseExprs))
+        thenExprs_(std::move(thenExprs)),
+        elseExprs_(std::move(elseExprs))
     {}
 
     AstExpr& cond() const { return *cond_; }
@@ -542,6 +559,170 @@ class AstStore : public AstExpr
     AstExpr& value() const { return *value_; }
 };
 
+class AstAtomicCmpXchg : public AstExpr
+{
+    ThreadOp op_;
+    AstLoadStoreAddress address_;
+    AstExpr* expected_;
+    AstExpr* replacement_;
+
+  public:
+    static const AstExprKind Kind = AstExprKind::AtomicCmpXchg;
+    explicit AstAtomicCmpXchg(ThreadOp op, const AstLoadStoreAddress &address, AstExpr* expected,
+                              AstExpr* replacement)
+      : AstExpr(Kind, ExprType::Limit),
+        op_(op),
+        address_(address),
+        expected_(expected),
+        replacement_(replacement)
+    {}
+
+    ThreadOp op() const { return op_; }
+    const AstLoadStoreAddress& address() const { return address_; }
+    AstExpr& expected() const { return *expected_; }
+    AstExpr& replacement() const { return *replacement_; }
+};
+
+class AstAtomicLoad : public AstExpr
+{
+    ThreadOp op_;
+    AstLoadStoreAddress address_;
+
+  public:
+    static const AstExprKind Kind = AstExprKind::AtomicLoad;
+    explicit AstAtomicLoad(ThreadOp op, const AstLoadStoreAddress &address)
+      : AstExpr(Kind, ExprType::Limit),
+        op_(op),
+        address_(address)
+    {}
+
+    ThreadOp op() const { return op_; }
+    const AstLoadStoreAddress& address() const { return address_; }
+};
+
+class AstAtomicRMW : public AstExpr
+{
+    ThreadOp op_;
+    AstLoadStoreAddress address_;
+    AstExpr* value_;
+
+  public:
+    static const AstExprKind Kind = AstExprKind::AtomicRMW;
+    explicit AstAtomicRMW(ThreadOp op, const AstLoadStoreAddress &address, AstExpr* value)
+      : AstExpr(Kind, ExprType::Limit),
+        op_(op),
+        address_(address),
+        value_(value)
+    {}
+
+    ThreadOp op() const { return op_; }
+    const AstLoadStoreAddress& address() const { return address_; }
+    AstExpr& value() const { return *value_; }
+};
+
+class AstAtomicStore : public AstExpr
+{
+    ThreadOp op_;
+    AstLoadStoreAddress address_;
+    AstExpr* value_;
+
+  public:
+    static const AstExprKind Kind = AstExprKind::AtomicStore;
+    explicit AstAtomicStore(ThreadOp op, const AstLoadStoreAddress &address, AstExpr* value)
+      : AstExpr(Kind, ExprType::Void),
+        op_(op),
+        address_(address),
+        value_(value)
+    {}
+
+    ThreadOp op() const { return op_; }
+    const AstLoadStoreAddress& address() const { return address_; }
+    AstExpr& value() const { return *value_; }
+};
+
+class AstWait : public AstExpr
+{
+    ThreadOp op_;
+    AstLoadStoreAddress address_;
+    AstExpr* expected_;
+    AstExpr* timeout_;
+
+  public:
+    static const AstExprKind Kind = AstExprKind::Wait;
+    explicit AstWait(ThreadOp op, const AstLoadStoreAddress &address, AstExpr* expected,
+                     AstExpr* timeout)
+      : AstExpr(Kind, ExprType::I32),
+        op_(op),
+        address_(address),
+        expected_(expected),
+        timeout_(timeout)
+    {}
+
+    ThreadOp op() const { return op_; }
+    const AstLoadStoreAddress& address() const { return address_; }
+    AstExpr& expected() const { return *expected_; }
+    AstExpr& timeout() const { return *timeout_; }
+};
+
+class AstWake : public AstExpr
+{
+    AstLoadStoreAddress address_;
+    AstExpr* count_;
+
+  public:
+    static const AstExprKind Kind = AstExprKind::Wake;
+    explicit AstWake(const AstLoadStoreAddress &address, AstExpr* count)
+      : AstExpr(Kind, ExprType::I32),
+        address_(address),
+        count_(count)
+    {}
+
+    const AstLoadStoreAddress& address() const { return address_; }
+    AstExpr& count() const { return *count_; }
+};
+
+#ifdef ENABLE_WASM_BULKMEM_OPS
+class AstMemCopy : public AstExpr
+{
+    AstExpr* dest_;
+    AstExpr* src_;
+    AstExpr* len_;
+
+  public:
+    static const AstExprKind Kind = AstExprKind::MemCopy;
+    explicit AstMemCopy(AstExpr* dest, AstExpr* src, AstExpr* len)
+      : AstExpr(Kind, ExprType::I32),
+        dest_(dest),
+        src_(src),
+        len_(len)
+    {}
+
+    AstExpr& dest() const { return *dest_; }
+    AstExpr& src()  const { return *src_; }
+    AstExpr& len()  const { return *len_; }
+};
+
+class AstMemFill : public AstExpr
+{
+    AstExpr* start_;
+    AstExpr* val_;
+    AstExpr* len_;
+
+  public:
+    static const AstExprKind Kind = AstExprKind::MemFill;
+    explicit AstMemFill(AstExpr* start, AstExpr* val, AstExpr* len)
+      : AstExpr(Kind, ExprType::I32),
+        start_(start),
+        val_(val),
+        len_(len)
+    {}
+
+    AstExpr& start() const { return *start_; }
+    AstExpr& val()   const { return *val_; }
+    AstExpr& len()   const { return *len_; }
+};
+#endif
+
 class AstCurrentMemory final : public AstExpr
 {
   public:
@@ -578,7 +759,7 @@ class AstBranchTable : public AstExpr
       : AstExpr(Kind, ExprType::Void),
         index_(index),
         default_(def),
-        table_(Move(table)),
+        table_(std::move(table)),
         value_(maybeValue)
     {}
     AstExpr& index() const { return index_; }
@@ -601,9 +782,9 @@ class AstFunc : public AstNode
                 AstNameVector&& locals, AstExprVector&& body)
       : name_(name),
         sig_(sig),
-        vars_(Move(vars)),
-        localNames_(Move(locals)),
-        body_(Move(body)),
+        vars_(std::move(vars)),
+        localNames_(std::move(locals)),
+        body_(std::move(body)),
         endOffset_(AstNodeUnknownOffset)
     {}
     AstRef& sig() { return sig_; }
@@ -623,7 +804,7 @@ class AstGlobal : public AstNode
     Maybe<AstExpr*> init_;
 
   public:
-    AstGlobal() : isMutable_(false), type_(ValType(TypeCode::Limit))
+    AstGlobal() : isMutable_(false), type_(ValType())
     {}
 
     explicit AstGlobal(AstName name, ValType type, bool isMutable,
@@ -708,7 +889,7 @@ class AstDataSegment : public AstNode
 
   public:
     AstDataSegment(AstExpr* offset, AstNameVector&& fragments)
-      : offset_(offset), fragments_(Move(fragments))
+      : offset_(offset), fragments_(std::move(fragments))
     {}
 
     AstExpr* offset() const { return offset_; }
@@ -724,7 +905,7 @@ class AstElemSegment : public AstNode
 
   public:
     AstElemSegment(AstExpr* offset, AstRefVector&& elems)
-      : offset_(offset), elems_(Move(elems))
+      : offset_(offset), elems_(std::move(elems))
     {}
 
     AstExpr* offset() const { return offset_; }
@@ -788,6 +969,8 @@ class AstModule : public AstNode
     AstElemSegmentVector elemSegments_;
     AstGlobalVector      globals_;
 
+    size_t numGlobalImports_;
+
   public:
     explicit AstModule(LifoAlloc& lifo)
       : lifo_(lifo),
@@ -801,7 +984,8 @@ class AstModule : public AstNode
         funcs_(lifo),
         dataSegments_(lifo),
         elemSegments_(lifo),
-        globals_(lifo)
+        globals_(lifo),
+        numGlobalImports_(0)
     {}
     bool init() {
         return sigMap_.init();
@@ -855,7 +1039,7 @@ class AstModule : public AstNode
             return true;
         }
         *sigIndex = sigs_.length();
-        auto* lifoSig = new (lifo_) AstSig(AstName(), Move(sig));
+        auto* lifoSig = new (lifo_) AstSig(AstName(), std::move(sig));
         return lifoSig &&
                sigs_.append(lifoSig) &&
                sigMap_.add(p, sigs_.back(), *sigIndex);
@@ -891,9 +1075,9 @@ class AstModule : public AstNode
                 return false;
             break;
           case DefinitionKind::Global:
+            numGlobalImports_++;
             break;
         }
-
         return imports_.append(imp);
     }
     const ImportVector& imports() const {
@@ -916,6 +1100,9 @@ class AstModule : public AstNode
     }
     const AstGlobalVector& globals() const {
         return globals_;
+    }
+    size_t numGlobalImports() const {
+        return numGlobalImports_;
     }
 };
 
@@ -1007,6 +1194,38 @@ class AstConversionOperator final : public AstExpr
     AstExpr* operand() const { return operand_; }
 };
 
+#ifdef ENABLE_WASM_SATURATING_TRUNC_OPS
+// Like AstConversionOperator, but for opcodes encoded with the Misc prefix.
+class AstExtraConversionOperator final : public AstExpr
+{
+    MiscOp op_;
+    AstExpr* operand_;
+
+  public:
+    static const AstExprKind Kind = AstExprKind::ExtraConversionOperator;
+    explicit AstExtraConversionOperator(MiscOp op, AstExpr* operand)
+      : AstExpr(Kind, ExprType::Limit),
+        op_(op), operand_(operand)
+    {}
+
+    MiscOp op() const { return op_; }
+    AstExpr* operand() const { return operand_; }
+};
+#endif
+
+class AstRefNull final : public AstExpr
+{
+    ValType refType_;
+  public:
+    static const AstExprKind Kind = AstExprKind::RefNull;
+    explicit AstRefNull(ValType refType)
+      : AstExpr(Kind, ExprType::Limit), refType_(refType)
+    {}
+    ValType refType() const {
+        return refType_;
+    }
+};
+
 // This is an artificial AST node which can fill operand slots in an AST
 // constructed from parsing or decoding stack-machine code that doesn't have
 // an inherent AST structure.
@@ -1030,7 +1249,7 @@ class AstFirst : public AstExpr
     static const AstExprKind Kind = AstExprKind::First;
     explicit AstFirst(AstExprVector&& exprs)
       : AstExpr(Kind, ExprType::Limit),
-        exprs_(Move(exprs))
+        exprs_(std::move(exprs))
     {}
 
     AstExprVector& exprs() { return exprs_; }

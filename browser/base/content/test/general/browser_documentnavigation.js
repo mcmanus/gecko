@@ -49,11 +49,9 @@ async function expectFocusOnF6(backward, expectedDocument, expectedElement, onCo
       }
 
       contentExpectedElement.addEventListener("focus", function() {
-        const contentFM = Components.classes["@mozilla.org/focus-manager;1"].
-                            getService(Components.interfaces.nsIFocusManager);
-        let details = contentFM.focusedWindow.document.documentElement.id;
-        if (contentFM.focusedElement) {
-          details += "," + contentFM.focusedElement.id;
+        let details = Services.focus.focusedWindow.document.documentElement.id;
+        if (Services.focus.focusedElement) {
+          details += "," + Services.focus.focusedElement.id;
         }
 
         sendSyncMessage("BrowserTest:FocusChanged", { details });
@@ -127,7 +125,7 @@ add_task(async function() {
   await expectFocusOnF6(false, "html2", "html2",
                                 true, "basic focus content page with second tab");
 
-  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
+  BrowserTestUtils.removeTab(gBrowser.selectedTab);
 });
 
 // Shift+F6 should navigate backwards. There's only one document here so the effect
@@ -219,7 +217,7 @@ add_task(async function() {
   await expectFocusOnF6(false, "main-window", gURLBar.inputField,
                                 false, "back focus with contenteditable body urlbar");
 
-  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
+  BrowserTestUtils.removeTab(gBrowser.selectedTab);
 });
 
 // Navigation with a frameset loaded
@@ -250,7 +248,7 @@ add_task(async function() {
   await expectFocusOnF6(true, "main-window", gURLBar.inputField,
                                false, "back focus on frameset frame urlbar");
 
-  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
+  BrowserTestUtils.removeTab(gBrowser.selectedTab);
 });
 
 // XXXndeakin add tests for browsers inside of panels

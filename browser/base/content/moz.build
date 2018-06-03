@@ -7,20 +7,11 @@
 with Files("**"):
     BUG_COMPONENT = ("Firefox", "General")
 
-with Files("aboutaccounts/**"):
-    BUG_COMPONENT = ("Firefox", "Sync")
-
-with Files("abouthealthreport/**"):
-    BUG_COMPONENT = ("Firefox Health Report", "Client: Desktop")
-
 with Files("defaultthemes/**"):
     BUG_COMPONENT = ("Firefox", "Theme")
 
 with Files("docs/**"):
     BUG_COMPONENT = ("Core", "Security")
-
-with Files("newtab/**"):
-    BUG_COMPONENT = ("Firefox", "New Tab Page")
 
 with Files("pageinfo/**"):
     BUG_COMPONENT = ("Firefox", "Page Info Window")
@@ -43,8 +34,8 @@ with Files("test/contextMenu/**"):
 with Files("test/forms/**"):
     BUG_COMPONENT = ("Core", "Layout: Form Controls")
 
-with Files("test/newtab/**"):
-    BUG_COMPONENT = ("Firefox", "New Tab Page")
+with Files("test/historySwipeAnimation/**"):
+    BUG_COMPONENT = ("Core", "Widget: Cocoa")
 
 with Files("test/pageinfo/**"):
     BUG_COMPONENT = ("Firefox", "Page Info Window")
@@ -52,7 +43,7 @@ with Files("test/pageinfo/**"):
 with Files("test/performance/**"):
     BUG_COMPONENT = ("Firefox", "General")
 
-with Files("test/performance/browser_appmenu_reflows.js"):
+with Files("test/performance/browser_appmenu.js"):
     BUG_COMPONENT = ("Firefox", "Menus")
 
 with Files("test/permissions/**"):
@@ -70,6 +61,10 @@ with Files("test/popups/**"):
 with Files("test/referrer/**"):
     BUG_COMPONENT = ("Core", "Document Navigation")
 
+# TODO: Update this after bug 1435528 is resolved.
+with Files("test/sanitize/**"):
+    BUG_COMPONENT = ("Firefox", "General")
+
 with Files("test/siteIdentity/**"):
     BUG_COMPONENT = ("Firefox", "Site Identity and Permission Panels")
 
@@ -78,6 +73,9 @@ with Files("test/sidebar/**"):
 
 with Files("test/static/**"):
     BUG_COMPONENT = ("Firefox", "General")
+
+with Files("test/statuspanel/**"):
+    BUG_COMPONENT = ("Firefox", "Tabbed Browser")
 
 with Files("test/sync/**"):
     BUG_COMPONENT = ("Firefox", "Sync")
@@ -93,6 +91,9 @@ with Files("test/tabs/**"):
 
 with Files("test/touch/**"):
     BUG_COMPONENT = ("Firefox", "General")
+
+with Files("test/trackingUI/**"):
+    BUG_COMPONENT = ("Firefox", "Tracking Protection")
 
 with Files("test/urlbar/**"):
     BUG_COMPONENT = ("Firefox", "Address Bar")
@@ -145,23 +146,14 @@ with Files("browser-safebrowsing.js"):
 with Files("browser-sync.js"):
     BUG_COMPONENT = ("Firefox", "Sync")
 
-with Files("browser-tabPreviews.xml"):
-    BUG_COMPONENT = ("Firefox", "Tabbed Browser")
-
 with Files("contentSearch*"):
     BUG_COMPONENT = ("Firefox", "Search")
-
-with Files("*.svg"):
-    BUG_COMPONENT = ("Firefox", "Theme")
 
 with Files("hiddenWindow.xul"):
     BUG_COMPONENT = ("Firefox", "Device Permissions")
 
-with Files("macBrowserOverlay.xul"):
+with Files("macWindow.inc.xul"):
     BUG_COMPONENT = ("Firefox", "Shell Integration")
-
-with Files("report-phishing-overlay.xul"):
-    BUG_COMPONENT = ("Toolkit", "Safe Browsing")
 
 with Files("tabbrowser*"):
     BUG_COMPONENT = ("Firefox", "Tabbed Browser")

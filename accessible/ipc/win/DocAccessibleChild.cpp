@@ -19,8 +19,8 @@ static StaticAutoPtr<PlatformChild> sPlatformChild;
 
 DocAccessibleChild::DocAccessibleChild(DocAccessible* aDoc, IProtocol* aManager)
   : DocAccessibleChildBase(aDoc)
-  , mEmulatedWindowHandle(nullptr)
   , mIsRemoteConstructed(false)
+  , mEmulatedWindowHandle(nullptr)
 {
   MOZ_COUNT_CTOR_INHERITED(DocAccessibleChild, DocAccessibleChildBase);
   if (!sPlatformChild) {
@@ -108,7 +108,7 @@ DocAccessibleChild::PushDeferredEvent(UniquePtr<DeferredEvent> aEvent)
   }
 
   if (topLevelIPCDoc) {
-    topLevelIPCDoc->mDeferredEvents.AppendElement(Move(aEvent));
+    topLevelIPCDoc->mDeferredEvents.AppendElement(std::move(aEvent));
   }
 }
 
@@ -263,7 +263,7 @@ DocAccessibleChild::SendSelectionEvent(const uint64_t& aID,
 }
 
 bool
-DocAccessibleChild::SendRoleChangedEvent(const uint32_t& aRole)
+DocAccessibleChild::SendRoleChangedEvent(const a11y::role& aRole)
 {
   if (IsConstructedInParentProcess()) {
     return PDocAccessibleChild::SendRoleChangedEvent(aRole);
@@ -318,4 +318,3 @@ DocAccessibleChild::RecvRestoreFocus()
 
 } // namespace a11y
 } // namespace mozilla
-

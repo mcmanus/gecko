@@ -150,18 +150,31 @@ add_task(async function sendMessageResponseGC() {
   function page() {
     browser.test.onMessage.addListener(msg => {
       browser.runtime.sendMessage(msg)
-        .then(response => {
-          if (response) {
-            browser.test.log(`Got response: ${response}`);
-            browser.test.sendMessage(response);
-          }
-        }, ({message}) => {
-          browser.test.assertTrue(
-            /at background@moz-extension:\/\/[\w-]+\/%7B[\w-]+%7D\.js:4:\d went out/.test(message),
-            `Promise rejected with the correct error message: ${message}`);
-          browser.test.sendMessage("rejected");
-        }
-      );
+        .then(
+          response => {
+            if (response) {
+              browser.test.log(`Got response: ${response}`);
+              browser.test.sendMessage(response);
+            }
+          }, error => {
+            browser.test.assertEq(
+              "Promised response from onMessage listener went out of scope",
+              error.message,
+              `Promise rejected with the correct error message`);
+
+            browser.test.assertTrue(
+              /^moz-extension:\/\/[\w-]+\/%7B[\w-]+%7D\.js/.test(error.fileName),
+              `Promise rejected with the correct error filename: ${error.fileName}`);
+
+            browser.test.assertEq(
+              4, error.lineNumber,
+              `Promise rejected with the correct error line number`);
+
+            browser.test.assertTrue(
+              /moz-extension:\/\/[\w-]+\/%7B[\w-]+%7D\.js:4/.test(error.stack),
+              `Promise rejected with the correct error stack: ${error.stack}`);
+            browser.test.sendMessage("rejected");
+          });
     });
     browser.test.sendMessage("ready");
   }

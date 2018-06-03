@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -16,7 +17,6 @@
 // PR LOGGING
 #include "mozilla/Logging.h"
 
-#define DUMP_LAYOUT_LEVEL 9 // this turns on the dumping of each doucment's layout info
 static mozilla::LazyLogModule gPrintingLog("printing");
 
 #define PR_PL(_p1)  MOZ_LOG(gPrintingLog, mozilla::LogLevel::Debug, _p1);
@@ -38,7 +38,6 @@ nsPrintData::nsPrintData(ePrintDataType aType)
   , mNumPrintablePages(0)
   , mNumPagesPrinted(0)
   , mShrinkRatio(1.0)
-  , mOrigDCScale(1.0)
   , mPPEventListeners(nullptr)
 {
   nsCOMPtr<nsIStringBundle> brandBundle;

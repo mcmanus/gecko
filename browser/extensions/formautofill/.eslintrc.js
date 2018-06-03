@@ -5,7 +5,6 @@ module.exports = {
     // Rules from the mozilla plugin
     "mozilla/balanced-listeners": "error",
     "mozilla/no-aArgs": "error",
-    "mozilla/no-cpows-in-tests": "error",
     "mozilla/var-only-at-top-level": "error",
 
     "valid-jsdoc": ["error", {
@@ -36,7 +35,7 @@ module.exports = {
     "curly": ["error", "all"],
 
     // Two space indent
-    "indent": ["error", 2, {"SwitchCase": 1}],
+    "indent-legacy": ["error", 2, {"SwitchCase": 1}],
 
     // Always require parenthesis for new calls
     "new-parens": "error",
@@ -45,13 +44,12 @@ module.exports = {
     "no-unused-expressions": "error",
 
     // No declaring variables that are never used
-    "no-unused-vars": ["error", {"args": "none", "varsIgnorePattern": "^(Cc|Ci|Cr|Cu|EXPORTED_SYMBOLS)$"}],
+    "no-unused-vars": ["error", {
+      "args": "none", "vars": "all"
+    }],
 
     // No using variables before defined
     "no-use-before-define": "error",
-
-    // Always require semicolon at end of statement
-    "semi": ["error", "always"],
 
     // Disallow using variables outside the blocks they are defined (especially
     // since only let and const are used, see "no-var").
@@ -62,7 +60,7 @@ module.exports = {
     "comma-dangle": ["error", "always-multiline"],
 
     // Warn about cyclomatic complexity in functions.
-    "complexity": ["error", {"max": 20}],
+    "complexity": ["error", {"max": 26}],
 
     // Enforce dots on the next line with property name.
     "dot-location": ["error", "property"],

@@ -26,18 +26,13 @@ NS_IMPL_ISUPPORTS(nsPKCS11Slot, nsIPKCS11Slot)
 nsPKCS11Slot::nsPKCS11Slot(PK11SlotInfo* slot)
 {
   MOZ_ASSERT(slot);
-
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown())
-    return;
-
   mSlot.reset(PK11_ReferenceSlot(slot));
   mSeries = PK11_GetSlotSeries(slot);
-  Unused << refreshSlotInfo(locker);
+  Unused << refreshSlotInfo();
 }
 
 nsresult
-nsPKCS11Slot::refreshSlotInfo(const nsNSSShutDownPreventionLock& /*proofOfLock*/)
+nsPKCS11Slot::refreshSlotInfo()
 {
   CK_SLOT_INFO slotInfo;
   nsresult rv = MapSECStatus(PK11_GetSlotInfo(mSlot.get(), &slotInfo));
@@ -74,39 +69,12 @@ nsPKCS11Slot::refreshSlotInfo(const nsNSSShutDownPreventionLock& /*proofOfLock*/
   return NS_OK;
 }
 
-nsPKCS11Slot::~nsPKCS11Slot()
-{
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown()) {
-    return;
-  }
-  destructorSafeDestroyNSSReference();
-  shutdown(ShutdownCalledFrom::Object);
-}
-
-void
-nsPKCS11Slot::virtualDestroyNSSReference()
-{
-  destructorSafeDestroyNSSReference();
-}
-
-void
-nsPKCS11Slot::destructorSafeDestroyNSSReference()
-{
-  mSlot = nullptr;
-}
-
 nsresult
 nsPKCS11Slot::GetAttributeHelper(const nsACString& attribute,
                          /*out*/ nsACString& xpcomOutParam)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown()) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
-
   if (PK11_GetSlotSeries(mSlot.get()) != mSeries) {
-    nsresult rv = refreshSlotInfo(locker);
+    nsresult rv = refreshSlotInfo();
     if (NS_FAILED(rv)) {
       return rv;
     }
@@ -119,10 +87,6 @@ nsPKCS11Slot::GetAttributeHelper(const nsACString& attribute,
 NS_IMETHODIMP
 nsPKCS11Slot::GetName(/*out*/ nsACString& name)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown())
-    return NS_ERROR_NOT_AVAILABLE;
-
   // |csn| is non-owning.
   char* csn = PK11_GetSlotName(mSlot.get());
   if (csn && *csn) {
@@ -168,11 +132,6 @@ NS_IMETHODIMP
 nsPKCS11Slot::GetToken(nsIPK11Token** _retval)
 {
   NS_ENSURE_ARG_POINTER(_retval);
-
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown())
-    return NS_ERROR_NOT_AVAILABLE;
-
   nsCOMPtr<nsIPK11Token> token = new nsPK11Token(mSlot.get());
   token.forget(_retval);
   return NS_OK;
@@ -181,17 +140,13 @@ nsPKCS11Slot::GetToken(nsIPK11Token** _retval)
 NS_IMETHODIMP
 nsPKCS11Slot::GetTokenName(/*out*/ nsACString& tokenName)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown())
-    return NS_ERROR_NOT_AVAILABLE;
-
   if (!PK11_IsPresent(mSlot.get())) {
     tokenName.SetIsVoid(true);
     return NS_OK;
   }
 
   if (PK11_GetSlotSeries(mSlot.get()) != mSeries) {
-    nsresult rv = refreshSlotInfo(locker);
+    nsresult rv = refreshSlotInfo();
     if (NS_FAILED(rv)) {
       return rv;
     }
@@ -205,11 +160,6 @@ NS_IMETHODIMP
 nsPKCS11Slot::GetStatus(uint32_t* _retval)
 {
   NS_ENSURE_ARG_POINTER(_retval);
-
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown())
-    return NS_ERROR_NOT_AVAILABLE;
-
   if (PK11_IsDisabled(mSlot.get())) {
     *_retval = SLOT_DISABLED;
   } else if (!PK11_IsPresent(mSlot.get())) {
@@ -232,54 +182,42 @@ NS_IMPL_ISUPPORTS(nsPKCS11Module, nsIPKCS11Module)
 nsPKCS11Module::nsPKCS11Module(SECMODModule* module)
 {
   MOZ_ASSERT(module);
-
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown())
-    return;
-
   mModule.reset(SECMOD_ReferenceModule(module));
 }
 
-nsPKCS11Module::~nsPKCS11Module()
+// Convert the UTF8 internal name of the module to how it should appear to the
+// user. In most cases this involves simply passing back the module's name.
+// However, the builtin roots module has a non-localized name internally that we
+// must map to the localized version when we display it to the user.
+static nsresult
+NormalizeModuleNameOut(const char* moduleNameIn, nsACString& moduleNameOut)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown()) {
-    return;
+  // Easy case: this isn't the builtin roots module.
+  if (strnlen(moduleNameIn, kRootModuleNameLen + 1) != kRootModuleNameLen ||
+      strncmp(kRootModuleName, moduleNameIn, kRootModuleNameLen) != 0) {
+    moduleNameOut.Assign(moduleNameIn);
+    return NS_OK;
   }
-  destructorSafeDestroyNSSReference();
-  shutdown(ShutdownCalledFrom::Object);
-}
 
-void
-nsPKCS11Module::virtualDestroyNSSReference()
-{
-  destructorSafeDestroyNSSReference();
-}
-
-void
-nsPKCS11Module::destructorSafeDestroyNSSReference()
-{
-  mModule = nullptr;
+  nsAutoString localizedRootModuleName;
+  nsresult rv = GetPIPNSSBundleString("RootCertModuleName",
+                                      localizedRootModuleName);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  moduleNameOut.Assign(NS_ConvertUTF16toUTF8(localizedRootModuleName));
+  return NS_OK;
 }
 
 NS_IMETHODIMP
 nsPKCS11Module::GetName(/*out*/ nsACString& name)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown())
-    return NS_ERROR_NOT_AVAILABLE;
-
-  name = mModule->commonName;
-  return NS_OK;
+  return NormalizeModuleNameOut(mModule->commonName, name);
 }
 
 NS_IMETHODIMP
 nsPKCS11Module::GetLibName(/*out*/ nsACString& libName)
 {
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown())
-    return NS_ERROR_NOT_AVAILABLE;
-
   if (mModule->dllName) {
     libName = mModule->dllName;
   } else {
@@ -293,10 +231,6 @@ nsPKCS11Module::FindSlotByName(const nsACString& name,
                        /*out*/ nsIPKCS11Slot** _retval)
 {
   NS_ENSURE_ARG_POINTER(_retval);
-
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown())
-    return NS_ERROR_NOT_AVAILABLE;
 
   const nsCString& flatName = PromiseFlatCString(name);
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("Getting \"%s\"", flatName.get()));
@@ -333,9 +267,9 @@ nsPKCS11Module::ListSlots(nsISimpleEnumerator** _retval)
 {
   NS_ENSURE_ARG_POINTER(_retval);
 
-  nsNSSShutDownPreventionLock locker;
-  if (isAlreadyShutDown()) {
-    return NS_ERROR_NOT_AVAILABLE;
+  nsresult rv = CheckForSmartCardChanges();
+  if (NS_FAILED(rv)) {
+    return rv;
   }
 
   nsCOMPtr<nsIMutableArray> array = do_CreateInstance(NS_ARRAY_CONTRACTID);
@@ -351,7 +285,7 @@ nsPKCS11Module::ListSlots(nsISimpleEnumerator** _retval)
   for (int i = 0; i < mModule->slotCount; i++) {
     if (mModule->slots[i]) {
       nsCOMPtr<nsIPKCS11Slot> slot = new nsPKCS11Slot(mModule->slots[i]);
-      nsresult rv = array->AppendElement(slot, false);
+      rv = array->AppendElement(slot);
       if (NS_FAILED(rv)) {
         return rv;
       }

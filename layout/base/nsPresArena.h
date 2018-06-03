@@ -1,6 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=2 sw=2 et tw=78:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
@@ -13,6 +13,7 @@
 #include "mozilla/ArenaAllocator.h"
 #include "mozilla/ArenaObjectID.h"
 #include "mozilla/ArenaRefPtr.h"
+#include "mozilla/Assertions.h"
 #include "mozilla/MemoryChecking.h" // Note: Do not remove this, needed for MOZ_HAVE_MEM_CHECKS below
 #include "mozilla/MemoryReporting.h"
 #include <stdint.h>
@@ -55,6 +56,15 @@ public:
     Free(aID, aPtr);
   }
 
+  void* AllocateByCustomID(uint32_t aID, size_t aSize)
+  {
+    return Allocate(aID, aSize);
+  }
+  void FreeByCustomID(uint32_t aID, void* ptr)
+  {
+    Free(aID, ptr);
+  }
+
   /**
    * Register an ArenaRefPtr to be cleared when this arena is about to
    * be destroyed.
@@ -88,9 +98,9 @@ public:
 
   /**
    * Clears all currently registered ArenaRefPtrs for the given ArenaObjectID.
-   * This is called when we reconstruct the rule tree so that style contexts
+   * This is called when we reconstruct the rule tree so that ComputedStyles
    * pointing into the old rule tree aren't released afterwards, triggering an
-   * assertion in ~nsStyleContext.
+   * assertion in ~ComputedStyle.
    */
   void ClearArenaRefPtrs(mozilla::ArenaObjectID aObjectID);
 
@@ -99,6 +109,10 @@ public:
    * arena.
    */
   void AddSizeOfExcludingThis(nsWindowSizes& aWindowSizes) const;
+
+  void Check() {
+    mPool.Check();
+  }
 
 private:
   void* Allocate(uint32_t aCode, size_t aSize);

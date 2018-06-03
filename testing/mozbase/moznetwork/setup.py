@@ -2,6 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
 
 from setuptools import setup
 
@@ -14,7 +15,7 @@ deps = ['mozinfo',
 setup(name='moznetwork',
       version=PACKAGE_VERSION,
       description="Library of network utilities for use in Mozilla testing",
-      long_description="see http://mozbase.readthedocs.org/",
+      long_description="see https://firefox-source-docs.mozilla.org/mozbase/index.html",
       classifiers=['Programming Language :: Python :: 2.7',
                    'Programming Language :: Python :: 2 :: Only'],
       # Get strings from http://pypi.python.org/pypi?%3Aaction=list_classifiers

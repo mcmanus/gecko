@@ -25,16 +25,16 @@
  * - {String} name
  * @return {String} The value, if found, null otherwise
  */
-addMessageListener("Test:GetRulePropertyValue", function (msg) {
-  let {name, styleSheetIndex, ruleIndex} = msg.data;
+addMessageListener("Test:GetRulePropertyValue", function(msg) {
+  const {name, styleSheetIndex, ruleIndex} = msg.data;
   let value = null;
 
   dumpn("Getting the value for property name " + name + " in sheet " +
     styleSheetIndex + " and rule " + ruleIndex);
 
-  let sheet = content.document.styleSheets[styleSheetIndex];
+  const sheet = content.document.styleSheets[styleSheetIndex];
   if (sheet) {
-    let rule = sheet.cssRules[ruleIndex];
+    const rule = sheet.cssRules[ruleIndex];
     if (rule) {
       value = rule.style.getPropertyValue(name);
     }
@@ -51,12 +51,12 @@ addMessageListener("Test:GetRulePropertyValue", function (msg) {
  * - {String} name: name of the property
  * @return {String} The value, if found, null otherwise
  */
-addMessageListener("Test:GetComputedStylePropertyValue", function (msg) {
-  let {selector, pseudo, name} = msg.data;
-  let doc = content.document;
+addMessageListener("Test:GetComputedStylePropertyValue", function(msg) {
+  const {selector, pseudo, name} = msg.data;
+  const doc = content.document;
 
-  let element = doc.querySelector(selector);
-  let value = content.getComputedStyle(element, pseudo).getPropertyValue(name);
+  const element = doc.querySelector(selector);
+  const value = content.getComputedStyle(element, pseudo).getPropertyValue(name);
   sendAsyncMessage("Test:GetComputedStylePropertyValue", value);
 });
 
@@ -69,11 +69,11 @@ addMessageListener("Test:GetComputedStylePropertyValue", function (msg) {
  * - {String} name: name of the property
  * - {String} expected: the expected value for property
  */
-addMessageListener("Test:WaitForComputedStylePropertyValue", function (msg) {
-  let {selector, pseudo, name, expected} = msg.data;
-  let element = content.document.querySelector(selector);
+addMessageListener("Test:WaitForComputedStylePropertyValue", function(msg) {
+  const {selector, pseudo, name, expected} = msg.data;
+  const element = content.document.querySelector(selector);
   waitForSuccess(() => {
-    let value = content.document.defaultView.getComputedStyle(element, pseudo)
+    const value = content.document.defaultView.getComputedStyle(element, pseudo)
                                             .getPropertyValue(name);
 
     return value === expected;

@@ -28,6 +28,7 @@ class AudioSinkInterface;
 class PacketRouter;
 class RtcEventLog;
 class RtcpRttStats;
+class RtpPacketObserver;
 class RtpPacketSender;
 class Transport;
 class TransportFeedbackObserver;
@@ -54,7 +55,8 @@ class ChannelProxy {
   virtual void SetRTCP_CNAME(const std::string& c_name);
   virtual void SetNACKStatus(bool enable, int max_packets);
   virtual void SetSendAudioLevelIndicationStatus(bool enable, int id);
-  virtual void SetReceiveAudioLevelIndicationStatus(bool enable, int id);
+  virtual void SetReceiveAudioLevelIndicationStatus(bool enable, int id,
+                                                    bool isLevelSsrc = true);
   virtual void EnableSendTransportSequenceNumber(int id);
   virtual void EnableReceiveTransportSequenceNumber(int id);
   virtual void RegisterSenderCongestionControlObjects(
@@ -110,6 +112,9 @@ class ChannelProxy {
   virtual void DisassociateSendChannel();
 
   virtual void SetRtcpRttStats(RtcpRttStats* rtcp_rtt_stats);
+
+  virtual void SetRtpPacketObserver(
+      RtpPacketObserver* observer);
 
  private:
   Channel* channel() const;

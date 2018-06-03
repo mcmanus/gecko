@@ -18,12 +18,14 @@
 #include "nsXBLBinding.h"
 #include "nsTArray.h"
 #include "nsThreadUtils.h"
+#include "mozilla/MediaFeatureChange.h"
+#include "mozilla/MemoryReporting.h"
 #include "mozilla/StyleSheet.h"
+#include "mozilla/EventStates.h"
 
 struct ElementDependentRuleProcessorData;
 class nsIXPConnectWrappedJS;
 class nsAtom;
-class nsIDOMNodeList;
 class nsIDocument;
 class nsIURI;
 class nsXBLDocumentInfo;
@@ -87,7 +89,6 @@ public:
    * <children> tags directly as kids of <content>.  This will only end up
    * returning a non-null list for nodes which have a binding attached.
    */
-  nsresult GetAnonymousNodesFor(nsIContent* aContent, nsIDOMNodeList** aResult);
   nsINodeList* GetAnonymousNodesFor(nsIContent* aContent);
 
   nsresult ClearBinding(mozilla::dom::Element* aElement);
@@ -123,28 +124,10 @@ public:
 
   nsresult GetBindingImplementation(nsIContent* aContent, REFNSIID aIID, void** aResult);
 
-  // Style rule methods
-  nsresult WalkRules(nsIStyleRuleProcessor::EnumFunc aFunc,
-                     ElementDependentRuleProcessorData* aData,
-                     bool* aCutOffInheritance);
-
-  void WalkAllRules(nsIStyleRuleProcessor::EnumFunc aFunc,
-                    ElementDependentRuleProcessorData* aData);
-
-  // Do any processing that needs to happen as a result of a change in the
-  // characteristics of the medium, and return whether this rule processor's
-  // rules or the servo style set have changed (e.g., because of media
-  // queries).
-  bool MediumFeaturesChanged(nsPresContext* aPresContext);
-
-  // Update the content bindings in mBoundContentSet due to medium features
-  // changed.
-  void UpdateBoundContentBindingsForServo(nsPresContext* aPresContext);
 
   void AppendAllSheets(nsTArray<mozilla::StyleSheet*>& aArray);
 
-  void Traverse(nsIContent *aContent,
-                            nsCycleCollectionTraversalCallback &cb);
+  void Traverse(nsIContent *aContent, nsCycleCollectionTraversalCallback &cb);
 
   NS_DECL_CYCLE_COLLECTION_CLASS(nsBindingManager)
 
@@ -170,10 +153,17 @@ public:
   // Called when the document is going away
   void DropDocumentReference();
 
-  nsIContent* FindNestedInsertionPoint(nsIContent* aContainer,
-                                       nsIContent* aChild);
-
   nsIContent* FindNestedSingleInsertionPoint(nsIContent* aContainer, bool* aMulti);
+
+  size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
+
+  // Enumerate each bound content's bindings (including its base bindings)
+  // in mBoundContentSet. Return false from the callback to stop enumeration.
+  using BoundContentProtoBindingCallback =
+    std::function<bool (nsXBLPrototypeBinding*)>;
+
+  bool EnumerateBoundContentProtoBindings(
+      const BoundContentProtoBindingCallback&) const;
 
 protected:
   nsIXPConnectWrappedJS* GetWrappedJS(nsIContent* aContent);
@@ -195,14 +185,7 @@ protected:
   // Call PostProcessAttachedQueueEvent() on a timer.
   static void PostPAQEventCallback(nsITimer* aTimer, void* aClosure);
 
-  // Enumerate each bound content's bindings (including its base bindings)
-  // in mBoundContentSet.
-  using BoundContentBindingCallback = std::function<void (nsXBLBinding*)>;
-  void EnumerateBoundContentBindings(
-    const BoundContentBindingCallback& aCallback) const;
-
 // MEMBER VARIABLES
-protected:
   // A set of nsIContent that currently have a binding installed.
   nsAutoPtr<nsTHashtable<nsRefPtrHashKey<nsIContent> > > mBoundContentSet;
 

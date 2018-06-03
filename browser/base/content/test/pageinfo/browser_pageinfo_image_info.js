@@ -8,13 +8,24 @@ function getImageInfo(imageElement) {
   };
 }
 
+const URI =
+  "data:text/html," +
+  "<style type='text/css'>%23test-image,%23not-test-image {background-image: url('about:logo?c');}</style>" +
+  "<img src='about:logo?b' height=300 width=350 alt=2 id='not-test-image'>" +
+  "<img src='about:logo?b' height=300 width=350 alt=2>" +
+  "<img src='about:logo?a' height=200 width=250>" +
+  "<img src='about:logo?b' height=200 width=250 alt=1>" +
+  "<img src='about:logo?b' height=100 width=150 alt=2 id='test-image'>";
+
 function test() {
   waitForExplicitFinish();
 
   gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
 
-  gBrowser.selectedBrowser.addEventListener("load", function() {
-    var doc = gBrowser.contentDocument;
+  let uriToWaitFor = URI.replace(/ /g, "%20");
+  BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser, false,
+                                 uriToWaitFor).then(function() {
+    var doc = gBrowser.contentDocumentAsCPOW;
     var testImg = doc.getElementById("test-image");
     var pageInfo = BrowserPageInfo(gBrowser.selectedBrowser.currentURI.spec,
                                    "mediaTab", getImageInfo(testImg));
@@ -34,14 +45,7 @@ function test() {
         });
       });
     }, {capture: true, once: true});
-  }, {capture: true, once: true});
+  });
 
-  content.location =
-    "data:text/html," +
-    "<style type='text/css'>%23test-image,%23not-test-image {background-image: url('about:logo?c');}</style>" +
-    "<img src='about:logo?b' height=300 width=350 alt=2 id='not-test-image'>" +
-    "<img src='about:logo?b' height=300 width=350 alt=2>" +
-    "<img src='about:logo?a' height=200 width=250>" +
-    "<img src='about:logo?b' height=200 width=250 alt=1>" +
-    "<img src='about:logo?b' height=100 width=150 alt=2 id='test-image'>";
+  gBrowser.loadURI(URI);
 }

@@ -11,20 +11,19 @@
 
 "use strict";
 
-this.EXPORTED_SYMBOLS = ["FormAutofillDoorhanger"];
+var EXPORTED_SYMBOLS = ["FormAutofillDoorhanger"];
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
-
-Cu.import("resource://gre/modules/AppConstants.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://formautofill/FormAutofillUtils.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://formautofill/FormAutofillUtils.jsm");
 
 this.log = null;
-FormAutofillUtils.defineLazyLogGetter(this, this.EXPORTED_SYMBOLS[0]);
+FormAutofillUtils.defineLazyLogGetter(this, EXPORTED_SYMBOLS[0]);
 
-const BUNDLE_URI = "chrome://formautofill/locale/formautofill.properties";
-const GetStringFromName = Services.strings.createBundle(BUNDLE_URI).GetStringFromName;
+const GetStringFromName = FormAutofillUtils.stringBundle.GetStringFromName;
+const formatStringFromName = FormAutofillUtils.stringBundle.formatStringFromName;
+const brandShortName = FormAutofillUtils.brandBundle.GetStringFromName("brandShortName");
 let changeAutofillOptsKey = "changeAutofillOptions";
 let autofillOptsKey = "autofillOptionsLink";
 let autofillSecurityOptionsKey = "autofillSecurityOptionsLink";
@@ -37,7 +36,7 @@ if (AppConstants.platform == "macosx") {
 const CONTENT = {
   firstTimeUse: {
     notificationId: "autofill-address",
-    message: GetStringFromName("saveAddressesMessage"),
+    message: formatStringFromName("saveAddressesMessage", [brandShortName], 1),
     anchor: {
       id: "autofill-address-notification-icon",
       URL: "chrome://formautofill/content/formfill-anchor.svg",
@@ -45,7 +44,7 @@ const CONTENT = {
     },
     mainAction: {
       label: GetStringFromName(changeAutofillOptsKey),
-      accessKey: "C",
+      accessKey: GetStringFromName("changeAutofillOptionsAccessKey"),
       callbackState: "open-pref",
       disableHighlight: true,
     },
@@ -70,10 +69,13 @@ const CONTENT = {
       hideClose: true,
     },
   },
-  update: {
+  updateAddress: {
     notificationId: "autofill-address",
     message: GetStringFromName("updateAddressMessage"),
+    descriptionLabel: GetStringFromName("updateAddressDescriptionLabel"),
+    descriptionIcon: false,
     linkMessage: GetStringFromName(autofillOptsKey),
+    spotlightURL: "about:preferences#privacy-address-autofill",
     anchor: {
       id: "autofill-address-notification-icon",
       URL: "chrome://formautofill/content/formfill-anchor.svg",
@@ -81,12 +83,12 @@ const CONTENT = {
     },
     mainAction: {
       label: GetStringFromName("updateAddressLabel"),
-      accessKey: "U",
+      accessKey: GetStringFromName("updateAddressAccessKey"),
       callbackState: "update",
     },
     secondaryActions: [{
       label: GetStringFromName("createAddressLabel"),
-      accessKey: "C",
+      accessKey: GetStringFromName("createAddressAccessKey"),
       callbackState: "create",
     }],
     options: {
@@ -95,10 +97,13 @@ const CONTENT = {
       hideClose: true,
     },
   },
-  creditCard: {
+  addCreditCard: {
     notificationId: "autofill-credit-card",
-    message: GetStringFromName("saveCreditCardMessage"),
+    message: formatStringFromName("saveCreditCardMessage", [brandShortName], 1),
+    descriptionLabel: GetStringFromName("saveCreditCardDescriptionLabel"),
+    descriptionIcon: true,
     linkMessage: GetStringFromName(autofillSecurityOptionsKey),
+    spotlightURL: "about:preferences#privacy-credit-card-autofill",
     anchor: {
       id: "autofill-credit-card-notification-icon",
       URL: "chrome://formautofill/content/formfill-anchor.svg",
@@ -106,17 +111,69 @@ const CONTENT = {
     },
     mainAction: {
       label: GetStringFromName("saveCreditCardLabel"),
-      accessKey: "S",
+      accessKey: GetStringFromName("saveCreditCardAccessKey"),
       callbackState: "save",
     },
     secondaryActions: [{
       label: GetStringFromName("cancelCreditCardLabel"),
-      accessKey: "D",
+      accessKey: GetStringFromName("cancelCreditCardAccessKey"),
       callbackState: "cancel",
     }, {
       label: GetStringFromName("neverSaveCreditCardLabel"),
-      accessKey: "N",
+      accessKey: GetStringFromName("neverSaveCreditCardAccessKey"),
       callbackState: "disable",
+    }],
+    options: {
+      persistWhileVisible: true,
+      popupIconURL: "chrome://formautofill/content/icon-credit-card.svg",
+      hideClose: true,
+      checkbox: {
+        get checked() {
+          return Services.prefs.getBoolPref("services.sync.engine.creditcards");
+        },
+        get label() {
+          // Only set the label when the fallowing conditions existed:
+          // - sync account is set
+          // - credit card sync is disabled
+          // - credit card sync is available
+          // otherwise return null label to hide checkbox.
+          return Services.prefs.prefHasUserValue("services.sync.username") &&
+            !Services.prefs.getBoolPref("services.sync.engine.creditcards") &&
+            Services.prefs.getBoolPref("services.sync.engine.creditcards.available") ?
+            GetStringFromName("creditCardsSyncCheckbox") : null;
+        },
+        callback(event) {
+          let {secondaryButton, menubutton} = event.target.parentNode.parentNode.parentNode;
+          let checked = event.target.checked;
+          Services.prefs.setBoolPref("services.sync.engine.creditcards", checked);
+          secondaryButton.disabled = checked;
+          menubutton.disabled = checked;
+          log.debug("Set creditCard sync to", checked);
+        },
+      },
+    },
+  },
+  updateCreditCard: {
+    notificationId: "autofill-credit-card",
+    message: GetStringFromName("updateCreditCardMessage"),
+    descriptionLabel: GetStringFromName("updateCreditCardDescriptionLabel"),
+    descriptionIcon: true,
+    linkMessage: GetStringFromName(autofillOptsKey),
+    spotlightURL: "about:preferences#privacy-credit-card-autofill",
+    anchor: {
+      id: "autofill-credit-card-notification-icon",
+      URL: "chrome://formautofill/content/formfill-anchor.svg",
+      tooltiptext: GetStringFromName("openAutofillMessagePanel"),
+    },
+    mainAction: {
+      label: GetStringFromName("updateCreditCardLabel"),
+      accessKey: GetStringFromName("updateCreditCardAccessKey"),
+      callbackState: "update",
+    },
+    secondaryActions: [{
+      label: GetStringFromName("createCreditCardLabel"),
+      accessKey: GetStringFromName("createCreditCardAccessKey"),
+      callbackState: "create",
     }],
     options: {
       persistWhileVisible: true,
@@ -165,31 +222,66 @@ let FormAutofillDoorhanger = {
 
     return [mainAction, secondaryActions];
   },
-  /**
-   * Append the link label element to the popupnotificationcontent.
-   * @param  {XULElement} browser
-   *         Target browser element for showing doorhanger.
-   * @param  {string} id
-   *         The ID of the doorhanger.
-   * @param  {string} message
-   *         The localized string for link title.
-   */
-  _appendPrivacyPanelLink(browser, id, message) {
+  _getNotificationElm(browser, id) {
     let notificationId = id + "-notification";
     let chromeDoc = browser.ownerDocument;
-    let notification = chromeDoc.getElementById(notificationId);
-
-    if (!notification.querySelector("popupnotificationcontent")) {
-      let notificationcontent = chromeDoc.createElement("popupnotificationcontent");
-      let privacyLinkElement = chromeDoc.createElement("label");
-      privacyLinkElement.className = "text-link";
-      privacyLinkElement.setAttribute("useoriginprincipal", true);
-      privacyLinkElement.setAttribute("href", "about:preferences#privacy");
-      privacyLinkElement.setAttribute("value", message);
-      notificationcontent.appendChild(privacyLinkElement);
-      notification.append(notificationcontent);
-    }
+    return chromeDoc.getElementById(notificationId);
   },
+  /**
+   * Append the link label element to the popupnotificationcontent.
+   * @param  {XULElement} content
+   *         popupnotificationcontent
+   * @param  {string} message
+   *         The localized string for link title.
+   * @param  {string} link
+   *         Makes it possible to open and highlight a section in preferences
+   */
+  _appendPrivacyPanelLink(content, message, link) {
+    let chromeDoc = content.ownerDocument;
+    let privacyLinkElement = chromeDoc.createElement("label");
+    privacyLinkElement.className = "text-link";
+    privacyLinkElement.setAttribute("useoriginprincipal", true);
+    privacyLinkElement.setAttribute("href", link || "about:preferences#privacy");
+    privacyLinkElement.setAttribute("value", message);
+    content.appendChild(privacyLinkElement);
+  },
+
+  /**
+   * Append the description section to the popupnotificationcontent.
+   * @param  {XULElement} content
+   *         popupnotificationcontent
+   * @param  {string} descriptionLabel
+   *         The label showing above description.
+   * @param  {string} descriptionIcon
+   *         The src of description icon.
+   */
+  _appendDescription(content, descriptionLabel, descriptionIcon) {
+    let chromeDoc = content.ownerDocument;
+    let docFragment = chromeDoc.createDocumentFragment();
+
+    let descriptionLabelElement = chromeDoc.createElement("label");
+    descriptionLabelElement.setAttribute("value", descriptionLabel);
+    docFragment.appendChild(descriptionLabelElement);
+
+    let descriptionWrapper = chromeDoc.createElement("hbox");
+    descriptionWrapper.className = "desc-message-box";
+
+    if (descriptionIcon) {
+      let descriptionIconElement = chromeDoc.createElement("image");
+      descriptionWrapper.appendChild(descriptionIconElement);
+    }
+
+    let descriptionElement = chromeDoc.createElement("description");
+    descriptionWrapper.appendChild(descriptionElement);
+    docFragment.appendChild(descriptionWrapper);
+
+    content.appendChild(docFragment);
+  },
+
+  _updateDescription(content, description) {
+    content.querySelector("description").textContent = description;
+  },
+
   /**
    * Create an image element for notification anchor if it doesn't already exist.
    * @param  {XULElement} browser
@@ -224,26 +316,20 @@ let FormAutofillDoorhanger = {
     if (!options.checkbox) {
       return;
     }
-    let id = notificationId + "-notification";
-    let chromeDoc = browser.ownerDocument;
-    let notification = chromeDoc.getElementById(id);
-    let cb = notification.checkbox;
+    let {checkbox} = this._getNotificationElm(browser, notificationId);
 
-    if (cb) {
-      cb.addEventListener("command", options.checkbox.callback);
+    if (checkbox && !checkbox.hidden) {
+      checkbox.addEventListener("command", options.checkbox.callback);
     }
   },
   _removeCheckboxListener(browser, {notificationId, options}) {
     if (!options.checkbox) {
       return;
     }
-    let id = notificationId + "-notification";
-    let chromeDoc = browser.ownerDocument;
-    let notification = chromeDoc.getElementById(id);
-    let cb = notification.checkbox;
+    let {checkbox} = this._getNotificationElm(browser, notificationId);
 
-    if (cb) {
-      cb.removeEventListener("command", options.checkbox.callback);
+    if (checkbox && !checkbox.hidden) {
+      checkbox.removeEventListener("command", options.checkbox.callback);
     }
   },
   /**
@@ -252,23 +338,31 @@ let FormAutofillDoorhanger = {
    *         Target browser element for showing doorhanger.
    * @param  {string} type
    *         The type of the doorhanger. There will have first time use/update/credit card.
+   * @param  {string} description
+   *         The message that provides more information on doorhanger.
    * @returns {Promise}
               Resolved with action type when action callback is triggered.
    */
-  async show(browser, type) {
+  async show(browser, type, description) {
     log.debug("show doorhanger with type:", type);
     return new Promise((resolve) => {
       let {
         notificationId,
         message,
+        descriptionLabel,
+        descriptionIcon,
         linkMessage,
+        spotlightURL,
         anchor,
         mainAction,
         secondaryActions,
         options,
       } = CONTENT[type];
 
-      let chromeWin = browser.ownerGlobal;
+      const {
+        ownerGlobal: chromeWin,
+        ownerDocument: chromeDoc,
+      } = browser;
       options.eventCallback = (topic) => {
         log.debug("eventCallback:", topic);
 
@@ -288,7 +382,17 @@ let FormAutofillDoorhanger = {
           return;
         }
 
-        this._appendPrivacyPanelLink(browser, notificationId, linkMessage);
+        const notificationElementId = notificationId + "-notification";
+        const notification = chromeDoc.getElementById(notificationElementId);
+        const notificationContent = notification.querySelector("popupnotificationcontent") ||
+                                    chromeDoc.createElement("popupnotificationcontent");
+        if (!notification.contains(notificationContent)) {
+          notificationContent.setAttribute("orient", "vertical");
+          this._appendDescription(notificationContent, descriptionLabel, descriptionIcon);
+          this._appendPrivacyPanelLink(notificationContent, linkMessage, spotlightURL);
+          notification.append(notificationContent);
+        }
+        this._updateDescription(notificationContent, description);
       };
       this._setAnchor(browser, anchor);
       chromeWin.PopupNotifications.show(

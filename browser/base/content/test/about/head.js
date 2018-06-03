@@ -23,12 +23,6 @@ function waitForCondition(condition, nextTest, errorMsg, retryTimes) {
   var moveOn = function() { clearInterval(interval); nextTest(); };
 }
 
-function promiseWaitForCondition(aConditionFn) {
-  return new Promise(resolve => {
-    waitForCondition(aConditionFn, resolve, "Condition didn't pass.");
-  });
-}
-
 function whenTabLoaded(aTab, aCallback) {
   promiseTabLoadEvent(aTab).then(aCallback);
 }
@@ -90,8 +84,7 @@ function promiseTabLoadEvent(tab, url) {
  */
 function waitForDocLoadAndStopIt(aExpectedURL, aBrowser = gBrowser.selectedBrowser, aStopFromProgressListener = true) {
   function content_script(contentStopFromProgressListener) {
-    let { interfaces: Ci, utils: Cu } = Components;
-    Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+    ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
     let wp = docShell.QueryInterface(Ci.nsIWebProgress);
 
     function stopContent(now, uri) {
@@ -120,7 +113,7 @@ function waitForDocLoadAndStopIt(aExpectedURL, aBrowser = gBrowser.selectedBrows
           stopContent(contentStopFromProgressListener, chan.originalURI.spec);
         }
       },
-      QueryInterface: XPCOMUtils.generateQI(["nsISupportsWeakReference"])
+      QueryInterface: ChromeUtils.generateQI(["nsISupportsWeakReference"])
     };
     wp.addProgressListener(progressListener, wp.NOTIFY_STATE_WINDOW);
 

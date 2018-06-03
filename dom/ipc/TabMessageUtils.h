@@ -8,31 +8,26 @@
 #define TABMESSAGE_UTILS_H
 
 #include "ipc/IPCMessageUtils.h"
-#include "nsIDOMEvent.h"
+#include "mozilla/RefPtr.h"
+#include "mozilla/dom/Event.h"
+#include "nsExceptionHandler.h"
 #include "nsPIDOMWindow.h"
 #include "nsCOMPtr.h"
 
-#ifdef MOZ_CRASHREPORTER
-#include "nsExceptionHandler.h"
-#endif
-
 namespace mozilla {
 namespace dom {
+class Event;
+
 struct RemoteDOMEvent
 {
   // Make sure to set the owner after deserializing.
-  nsCOMPtr<nsIDOMEvent> mEvent;
+  RefPtr<Event> mEvent;
 };
 
 bool ReadRemoteEvent(const IPC::Message* aMsg, PickleIterator* aIter,
                      mozilla::dom::RemoteDOMEvent* aResult);
 
-#ifdef MOZ_CRASHREPORTER
 typedef CrashReporter::ThreadId NativeThreadId;
-#else
-// unused in this case
-typedef int32_t NativeThreadId;
-#endif
 
 } // namespace dom
 } // namespace mozilla

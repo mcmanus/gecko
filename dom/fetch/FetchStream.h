@@ -21,11 +21,8 @@ class nsIInputStream;
 namespace mozilla {
 namespace dom {
 
-namespace workers {
-class WorkerHolder;
-}
-
 class FetchStreamHolder;
+class WeakWorkerRef;
 
 class FetchStream final : public nsIInputStreamCallback
                         , public nsIObserver
@@ -52,6 +49,14 @@ private:
   FetchStream(nsIGlobalObject* aGlobal, FetchStreamHolder* aStreamHolder,
               nsIInputStream* aInputStream);
   ~FetchStream();
+
+#ifdef DEBUG
+  void
+  AssertIsOnOwningThread();
+#else
+  void
+  AssertIsOnOwningThread() {}
+#endif
 
   static void
   RequestDataCallback(JSContext* aCx, JS::HandleObject aStream,
@@ -82,10 +87,19 @@ private:
   FinalizeCallback(void* aUnderlyingSource, uint8_t aFlags);
 
   void
-  ErrorPropagation(JSContext* aCx, JS::HandleObject aStream, nsresult aRv);
+  ErrorPropagation(JSContext* aCx,
+                   const MutexAutoLock& aProofOfLock,
+                   JS::HandleObject aStream, nsresult aRv);
 
   void
-  CloseAndReleaseObjects(JSContext* aCx, JS::HandleObject aSteam);
+  CloseAndReleaseObjects(JSContext* aCx,
+                         const MutexAutoLock& aProofOfLock,
+                         JS::HandleObject aSteam);
+
+  class WorkerShutdown;
+
+  void
+  ReleaseObjects(const MutexAutoLock& aProofOfLock);
 
   void
   ReleaseObjects();
@@ -93,6 +107,9 @@ private:
   // Common methods
 
   enum State {
+    // This is the beginning state before any reading operation.
+    eInitializing,
+
     // RequestDataCallback has not been called yet. We haven't started to read
     // data from the stream yet.
     eWaiting,
@@ -112,7 +129,12 @@ private:
     eClosed,
   };
 
-  // Touched only on the target thread.
+  // We need a mutex because JS engine can release FetchStream on a non-owning
+  // thread. We must be sure that the releasing of resources doesn't trigger
+  // race conditions.
+  Mutex mMutex;
+
+  // Protected by mutex.
   State mState;
 
   nsCOMPtr<nsIGlobalObject> mGlobal;
@@ -125,7 +147,7 @@ private:
   nsCOMPtr<nsIInputStream> mOriginalInputStream;
   nsCOMPtr<nsIAsyncInputStream> mInputStream;
 
-  UniquePtr<workers::WorkerHolder> mWorkerHolder;
+  RefPtr<WeakWorkerRef> mWorkerRef;
 };
 
 } // dom namespace

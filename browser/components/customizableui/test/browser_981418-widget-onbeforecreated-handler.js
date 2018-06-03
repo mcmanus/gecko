@@ -30,27 +30,25 @@ add_task(async function testAddOnBeforeCreatedWidget() {
   let viewNode = document.getElementById(kWidgetId + "idontexistyet");
   ok(widgetNode, "Widget should exist");
   ok(viewNode, "Panelview should exist");
+
+  let viewShownPromise = BrowserTestUtils.waitForEvent(viewNode, "ViewShown");
   widgetNode.click();
+  await viewShownPromise;
 
-  let tempPanel = document.getElementById("customizationui-widget-panel");
-  let panelShownPromise = promisePanelElementShown(window, tempPanel);
+  let widgetPanel = document.getElementById("customizationui-widget-panel");
+  ok(widgetPanel, "Widget panel should exist");
 
-  await Promise.all([
-    BrowserTestUtils.waitForEvent(viewNode, "ViewShown"),
-    panelShownPromise
-  ]);
-
-  let panelHiddenPromise = promisePanelElementHidden(window, tempPanel);
-  tempPanel.hidePopup();
+  let panelHiddenPromise = promisePanelElementHidden(window, widgetPanel);
+  widgetPanel.hidePopup();
   await panelHiddenPromise;
 
   CustomizableUI.addWidgetToArea(kWidgetId, CustomizableUI.AREA_FIXED_OVERFLOW_PANEL);
   await waitForOverflowButtonShown();
   await document.getElementById("nav-bar").overflowable.show();
 
+  viewShownPromise = BrowserTestUtils.waitForEvent(viewNode, "ViewShown");
   widgetNode.click();
-
-  await BrowserTestUtils.waitForEvent(viewNode, "ViewShown");
+  await viewShownPromise;
 
   let panelHidden = promiseOverflowHidden(window);
   PanelUI.overflowPanel.hidePopup();

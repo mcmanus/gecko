@@ -6,7 +6,7 @@
 const TEST_URL = "data:text/html,test custom host";
 
 function test() {
-  let {Toolbox} = require("devtools/client/framework/toolbox");
+  const {Toolbox} = require("devtools/client/framework/toolbox");
 
   let toolbox, iframe, target;
 
@@ -15,20 +15,20 @@ function test() {
   iframe = document.createElement("iframe");
   document.documentElement.appendChild(iframe);
 
-  addTab(TEST_URL).then(function (tab) {
+  addTab(TEST_URL).then(function(tab) {
     target = TargetFactory.forTab(tab);
-    let options = {customIframe: iframe};
+    const options = {customIframe: iframe};
     gDevTools.showToolbox(target, null, Toolbox.HostType.CUSTOM, options)
              .then(testCustomHost, console.error)
              .catch(console.error);
   });
 
   function onMessage(event) {
-    if (typeof(event.data) !== "string") {
+    if (typeof (event.data) !== "string") {
       return;
     }
     info("onMessage: " + event.data);
-    let json = JSON.parse(event.data);
+    const json = JSON.parse(event.data);
     if (json.name == "toolbox-close") {
       ok("Got the `toolbox-close` message");
       window.removeEventListener("message", onMessage);

@@ -18,12 +18,10 @@
 <script class="testbody" type="text/javascript">
 /* import-globals-from classifierHelper.js */
 
-const Ci = Components.interfaces;
-const Cu = Components.utils;
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://testing-common/BrowserTestUtils.jsm");
-Cu.import("resource://testing-common/ContentTask.jsm");
-Cu.import("resource://testing-common/TestUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://testing-common/BrowserTestUtils.jsm");
+ChromeUtils.import("resource://testing-common/ContentTask.jsm");
+ChromeUtils.import("resource://testing-common/TestUtils.jsm");
 
 var mainWindow = window.QueryInterface(Ci.nsIInterfaceRequestor)
                     .getInterface(Ci.nsIWebNavigation)
@@ -129,7 +127,7 @@ var createBlockedIframe = function(aWindow, aBrowser, aTopUrl, aUrl) {
 var createBlockedPage = function(aWindow, aBrowser, aTopUrl, aUrl) {
   (async function() {
     await BrowserTestUtils.loadURI(aBrowser, aTopUrl);
-    await BrowserTestUtils.waitForContentEvent(aBrowser, "DOMContentLoaded")
+    await BrowserTestUtils.waitForContentEvent(aBrowser, "DOMContentLoaded");
 
     let doc = aWindow.gBrowser.contentDocument;
     let ignoreWarningLink = doc.getElementById("ignore_warning_link");

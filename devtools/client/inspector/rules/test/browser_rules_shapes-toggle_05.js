@@ -18,26 +18,27 @@ const TEST_URI = `
   <div id="shape"></div>
 `;
 
-add_task(function* () {
-  yield addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
-  let {inspector, view, testActor} = yield openRuleView();
-  let highlighters = view.highlighters;
+add_task(async function() {
+  await addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
+  const {inspector, view, testActor} = await openRuleView();
+  const highlighters = view.highlighters;
 
-  yield selectNode("#shape", inspector);
-  let container = getRuleViewProperty(view, "#shape", "clip-path").valueSpan;
-  let shapeToggle = container.querySelector(".ruleview-shape");
+  info("Select a node with a shape value");
+  await selectNode("#shape", inspector);
+  const container = getRuleViewProperty(view, "#shape", "clip-path").valueSpan;
+  const shapeToggle = container.querySelector(".ruleview-shapeswatch");
 
   info("Toggling ON the CSS shapes highlighter from the rule-view.");
-  let onHighlighterShown = highlighters.once("shapes-highlighter-shown");
+  const onHighlighterShown = highlighters.once("shapes-highlighter-shown");
   shapeToggle.click();
-  yield onHighlighterShown;
+  await onHighlighterShown;
   ok(highlighters.shapesHighlighterShown, "CSS shapes highlighter is shown.");
 
-  let onHighlighterHidden = highlighters.once("shapes-highlighter-hidden");
+  const onHighlighterHidden = highlighters.once("shapes-highlighter-hidden");
   info("Remove the #shapes container in the content page");
   testActor.eval(`
     document.querySelector("#shape").remove();
   `);
-  yield onHighlighterHidden;
+  await onHighlighterHidden;
   ok(!highlighters.shapesHighlighterShown, "CSS shapes highlighter is hidden.");
 });

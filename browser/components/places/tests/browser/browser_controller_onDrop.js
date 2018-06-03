@@ -17,10 +17,10 @@ add_task(async function setup() {
     sandbox.restore();
     delete window.sinon;
     await PlacesUtils.bookmarks.eraseEverything();
-    await PlacesTestUtils.clearHistory();
+    await PlacesUtils.history.clear();
   });
 
-  sandbox.stub(PlacesUIUtils, "getTransactionForData");
+  sandbox.stub(PlacesTransactions, "Move");
   sandbox.stub(PlacesTransactions, "batch");
 
   bookmarks = await PlacesUtils.bookmarks.insertTree({
@@ -59,40 +59,41 @@ add_task(async function setup() {
 
 async function run_drag_test(startBookmarkIndex, insertionIndex, newParentGuid,
                              expectedInsertionIndex, expectTransactionCreated = true) {
-  if (!PlacesUIUtils.useAsyncTransactions) {
-    Assert.ok(true, "Skipping test as async transactions are turned off");
-    return;
-  }
-
   if (!newParentGuid) {
     newParentGuid = PlacesUtils.bookmarks.unfiledGuid;
   }
 
   // Reset the stubs so that previous test runs don't count against us.
-  PlacesUIUtils.getTransactionForData.reset();
+  PlacesTransactions.Move.reset();
   PlacesTransactions.batch.reset();
 
   let dragBookmark = bookmarks[startBookmarkIndex];
 
   await withSidebarTree("bookmarks", async (tree) => {
-    tree.selectItems([PlacesUtils.unfiledBookmarksFolderId]);
+    tree.selectItems([PlacesUtils.bookmarks.unfiledGuid]);
     PlacesUtils.asContainer(tree.selectedNode).containerOpen = true;
 
     // Simulating a drag-drop with a tree view turns out to be really difficult
     // as you can't get a node for the source/target. Hence, we fake the
     // insertion point and drag data and call the function direct.
-    let ip = new InsertionPoint({
+    let ip = new PlacesInsertionPoint({
       parentId: await PlacesUtils.promiseItemId(PlacesUtils.bookmarks.unfiledGuid),
       parentGuid: newParentGuid,
       index: insertionIndex,
       orientation: Ci.nsITreeView.DROP_ON
     });
 
-    let bookmarkWithId = JSON.stringify(Object.assign({
+    let dragData = Object.assign({
       id: bookmarkIds.get(dragBookmark.guid),
       itemGuid: dragBookmark.guid,
       parent: PlacesUtils.unfiledBookmarksFolderId,
-    }, dragBookmark));
+      instanceId: PlacesUtils.instanceId,
+    }, dragBookmark);
+
+    // Force the type.
+    dragData.type = PlacesUtils.TYPE_X_MOZ_PLACE;
+    let bookmarkWithId = JSON.stringify(dragData);
+
 
     let dt = {
       dropEffect: "move",
@@ -110,26 +111,22 @@ async function run_drag_test(startBookmarkIndex, insertionIndex, newParentGuid,
     await PlacesControllerDragHelper.onDrop(ip, dt);
 
     if (!expectTransactionCreated) {
-      Assert.ok(PlacesUIUtils.getTransactionForData.notCalled,
+      Assert.ok(PlacesTransactions.Move.notCalled,
         "Should not have created transaction data");
       return;
     }
 
-    Assert.ok(PlacesUIUtils.getTransactionForData.calledOnce,
+    Assert.ok(PlacesTransactions.Move.calledOnce,
       "Should have called getTransactionForData at least once.");
 
-    let args = PlacesUIUtils.getTransactionForData.args[0];
+    let moveData = PlacesTransactions.Move.args[0][0];
 
-    Assert.deepEqual(args[0], JSON.parse(bookmarkWithId),
+    Assert.deepEqual(moveData.guid, dragBookmark.guid,
       "Should have called getTransactionForData with the correct unwrapped bookmark");
-    Assert.equal(args[1], PlacesUtils.TYPE_X_MOZ_PLACE,
-      "Should have called getTransactionForData with the correct flavor");
-    Assert.equal(args[2], newParentGuid,
+    Assert.equal(moveData.newParentGuid, newParentGuid,
       "Should have called getTransactionForData with the correct parent guid");
-    Assert.equal(args[3], expectedInsertionIndex,
+    Assert.equal(moveData.newIndex, expectedInsertionIndex,
       "Should have called getTransactionForData with the correct index");
-    Assert.equal(args[4], false,
-      "Should have called getTransactionForData with a move");
   });
 }
 
@@ -153,8 +150,16 @@ add_task(async function test_simple_move_to_same_index() {
   await run_drag_test(1, 1, null, 1, false);
 });
 
-add_task(async function test_simple_move_different_folder() {
-  // When we move items to a different folder, the index should never change.
-  await run_drag_test(0, 2, bookmarks[3].guid, 2);
-  await run_drag_test(2, 0, bookmarks[3].guid, 0);
+add_task(async function test_simple_move_different_folder_append() {
+  // When we move items to a different folder, the insertion index will be -1
+  // and shouldn't change.
+  await run_drag_test(0, -1, bookmarks[3].guid, -1);
+  await run_drag_test(2, -1, bookmarks[3].guid, -1);
+});
+
+add_task(async function test_move_different_folder_insert_at() {
+  // When we move items to a different folder, the insertion index will be -1
+  // and shouldn't change.
+  await run_drag_test(0, 0, bookmarks[3].guid, 0);
+  await run_drag_test(2, 2, bookmarks[3].guid, 2);
 });

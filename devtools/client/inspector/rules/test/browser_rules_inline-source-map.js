@@ -11,15 +11,15 @@
 const TESTCASE_URI = URL_ROOT + "doc_inline_sourcemap.html";
 const PREF = "devtools.source-map.client-service.enabled";
 
-add_task(function* () {
+add_task(async function() {
   Services.prefs.setBoolPref(PREF, true);
 
-  yield addTab(TESTCASE_URI);
-  let {inspector, view} = yield openRuleView();
+  await addTab(TESTCASE_URI);
+  const {inspector, view} = await openRuleView();
 
-  yield selectNode("div", inspector);
+  await selectNode("div", inspector);
 
-  let ruleEl = getRuleViewRule(view, "div");
+  const ruleEl = getRuleViewRule(view, "div");
   ok(ruleEl, "The 'div' rule exists in the rule-view");
 
   Services.prefs.clearUserPref(PREF);

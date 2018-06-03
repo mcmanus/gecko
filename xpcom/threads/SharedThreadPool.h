@@ -68,7 +68,7 @@ public:
   }
 
   NS_IMETHOD Dispatch(already_AddRefed<nsIRunnable> event, uint32_t flags = NS_DISPATCH_NORMAL) override
-    { return !mEventTarget ? NS_ERROR_NULL_POINTER : mEventTarget->Dispatch(Move(event), flags); }
+    { return !mEventTarget ? NS_ERROR_NULL_POINTER : mEventTarget->Dispatch(std::move(event), flags); }
 
   NS_IMETHOD DelayedDispatch(already_AddRefed<nsIRunnable>, uint32_t) override
     { return NS_ERROR_NOT_IMPLEMENTED; }
@@ -85,17 +85,6 @@ public:
   // Spins the event loop until all thread pools are shutdown.
   // *Must* be called on the main thread.
   static void SpinUntilEmpty();
-
-#if defined(MOZ_ASAN)
-  // Use the system default in ASAN builds, because the default is assumed to be
-  // larger than the size we want to use and is hopefully sufficient for ASAN.
-  static const uint32_t kStackSize = nsIThreadManager::DEFAULT_STACK_SIZE;
-#elif defined(XP_WIN) || defined(XP_MACOSX) || defined(LINUX)
-  static const uint32_t kStackSize = (256 * 1024);
-#else
-  // All other platforms use their system defaults.
-  static const uint32_t kStackSize = nsIThreadManager::DEFAULT_STACK_SIZE;
-#endif
 
 private:
 

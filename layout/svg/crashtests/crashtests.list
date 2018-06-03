@@ -15,7 +15,6 @@ load 325427-1.svg
 load 326495-1.svg
 load 326974-1.svg
 load 327706-1.svg
-load 327709-1.svg
 load 327711-1.svg
 load 328137-1.svg
 load 329848-1.svg
@@ -200,6 +199,16 @@ load 1209525-1.svg
 load 1223281-1.svg
 load 1322537-1.html
 load 1322537-2.html
+load 1322852.html
 load 1348564.svg
+load 1402109.html
+load 1402124.html
+load 1402486.html
+load 1421807-1.html
+pref(dom.webcomponents.shadowdom.enabled,true) load 1421807-2.html
+load 1422226.html
+load 1443092.html
 load conditional-outer-svg-nondirty-reflow-assert.xhtml
 load extref-test-1.xhtml
+load blob-merging-and-retained-display-list.html
+load grouping-empty-bounds.html

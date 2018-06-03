@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -31,6 +32,8 @@ MacIOSurfaceTextureHostOGL::~MacIOSurfaceTextureHostOGL()
 GLTextureSource*
 MacIOSurfaceTextureHostOGL::CreateTextureSourceForPlane(size_t aPlane)
 {
+  MOZ_ASSERT(mSurface);
+
   GLuint textureHandle;
   gl::GLContext* gl = mProvider->GetGLContext();
   gl->fGenTextures(1, &textureHandle);
@@ -93,11 +96,17 @@ MacIOSurfaceTextureHostOGL::SetTextureSourceProvider(TextureSourceProvider* aPro
 
 gfx::SurfaceFormat
 MacIOSurfaceTextureHostOGL::GetFormat() const {
+  if (!mSurface) {
+    return gfx::SurfaceFormat::UNKNOWN;
+  }
   return mSurface->GetFormat();
 }
 
 gfx::SurfaceFormat
 MacIOSurfaceTextureHostOGL::GetReadFormat() const {
+  if (!mSurface) {
+    return gfx::SurfaceFormat::UNKNOWN;
+  }
   return mSurface->GetReadFormat();
 }
 
@@ -147,25 +156,27 @@ MacIOSurfaceTextureHostOGL::NumSubTextures() const
 }
 
 void
-MacIOSurfaceTextureHostOGL::PushResourceUpdates(wr::ResourceUpdateQueue& aResources,
+MacIOSurfaceTextureHostOGL::PushResourceUpdates(wr::TransactionBuilder& aResources,
                                                 ResourceUpdateOp aOp,
                                                 const Range<wr::ImageKey>& aImageKeys,
                                                 const wr::ExternalImageId& aExtID)
 {
   MOZ_ASSERT(mSurface);
 
-  auto method = aOp == TextureHost::ADD_IMAGE ? &wr::ResourceUpdateQueue::AddExternalImage
-                                              : &wr::ResourceUpdateQueue::UpdateExternalImage;
+  auto method = aOp == TextureHost::ADD_IMAGE ? &wr::TransactionBuilder::AddExternalImage
+                                              : &wr::TransactionBuilder::UpdateExternalImage;
   auto bufferType = wr::WrExternalImageBufferType::TextureRectHandle;
 
   switch (GetFormat()) {
     case gfx::SurfaceFormat::R8G8B8X8:
-    case gfx::SurfaceFormat::R8G8B8A8:
-    case gfx::SurfaceFormat::B8G8R8A8:
-    case gfx::SurfaceFormat::B8G8R8X8: {
+    case gfx::SurfaceFormat::R8G8B8A8: {
       MOZ_ASSERT(aImageKeys.length() == 1);
       MOZ_ASSERT(mSurface->GetPlaneCount() == 0);
-      wr::ImageDescriptor descriptor(GetSize(), GetFormat());
+      // The internal pixel format of MacIOSurface is always BGRX or BGRA
+      // format.
+      auto format = GetFormat() == gfx::SurfaceFormat::R8G8B8A8 ? gfx::SurfaceFormat::B8G8R8A8
+                                                                : gfx::SurfaceFormat::B8G8R8X8;
+      wr::ImageDescriptor descriptor(GetSize(), format);
       (aResources.*method)(aImageKeys[0], descriptor, aExtID, bufferType, 0);
       break;
     }
@@ -176,7 +187,7 @@ MacIOSurfaceTextureHostOGL::PushResourceUpdates(wr::ResourceUpdateQueue& aResour
       // and YCbCr at OpenGL 3.1)
       MOZ_ASSERT(aImageKeys.length() == 1);
       MOZ_ASSERT(mSurface->GetPlaneCount() == 0);
-      wr::ImageDescriptor descriptor(GetSize(), gfx::SurfaceFormat::R8G8B8X8);
+      wr::ImageDescriptor descriptor(GetSize(), gfx::SurfaceFormat::B8G8R8X8);
       (aResources.*method)(aImageKeys[0], descriptor, aExtID, bufferType, 0);
       break;
     }
@@ -211,7 +222,7 @@ MacIOSurfaceTextureHostOGL::PushDisplayItems(wr::DisplayListBuilder& aBuilder,
     case gfx::SurfaceFormat::B8G8R8X8: {
       MOZ_ASSERT(aImageKeys.length() == 1);
       MOZ_ASSERT(mSurface->GetPlaneCount() == 0);
-      aBuilder.PushImage(aBounds, aClip, true, aFilter, aImageKeys[0]);
+      aBuilder.PushImage(aBounds, aClip, true, aFilter, aImageKeys[0], !(mFlags & TextureFlags::NON_PREMULTIPLIED));
       break;
     }
     case gfx::SurfaceFormat::YUV422: {
@@ -221,7 +232,7 @@ MacIOSurfaceTextureHostOGL::PushDisplayItems(wr::DisplayListBuilder& aBuilder,
                                          aClip,
                                          true,
                                          aImageKeys[0],
-                                         wr::WrYuvColorSpace::Rec601,
+                                         wr::ToWrYuvColorSpace(YUVColorSpace::BT601),
                                          aFilter);
       break;
     }
@@ -233,7 +244,7 @@ MacIOSurfaceTextureHostOGL::PushDisplayItems(wr::DisplayListBuilder& aBuilder,
                              true,
                              aImageKeys[0],
                              aImageKeys[1],
-                             wr::WrYuvColorSpace::Rec601,
+                             wr::ToWrYuvColorSpace(YUVColorSpace::BT601),
                              aFilter);
       break;
     }

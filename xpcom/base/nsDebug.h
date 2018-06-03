@@ -79,9 +79,9 @@ inline MOZ_MUST_USE bool NS_warn_if_impl(bool aCondition, const char* aExpr,
     if (!(_expr)) {                                           \
       NS_DebugBreak(NS_DEBUG_WARNING, _msg, #_expr, __FILE__, __LINE__); \
     }                                                         \
-  } while(0)
+  } while(false)
 #else
-#define NS_WARNING_ASSERTION(_expr, _msg)  do { /* nothing */ } while(0)
+#define NS_WARNING_ASSERTION(_expr, _msg)  do { /* nothing */ } while(false)
 #endif
 
 /**
@@ -103,26 +103,6 @@ inline void MOZ_PretendNoReturn()
   } while(0)
 #else
 #define NS_ASSERTION(expr, str)        do { /* nothing */ } while(0)
-#endif
-
-/**
- * NS_PRECONDITION/POSTCONDITION are synonyms for NS_ASSERTION.
- */
-#define NS_PRECONDITION(expr, str) NS_ASSERTION(expr, str)
-#define NS_POSTCONDITION(expr, str) NS_ASSERTION(expr, str)
-
-/**
- * This macros triggers a program failure if executed. It indicates that
- * an attempt was made to execute some unimplemented functionality.
- */
-#ifdef DEBUG
-#define NS_NOTYETIMPLEMENTED(str)                             \
-  do {                                                        \
-    NS_DebugBreak(NS_DEBUG_ASSERTION, str, "NotYetImplemented", __FILE__, __LINE__); \
-    MOZ_PretendNoReturn();                                    \
-  } while(0)
-#else
-#define NS_NOTYETIMPLEMENTED(str)      do { /* nothing */ } while(0)
 #endif
 
 /**
@@ -160,21 +140,6 @@ inline void MOZ_PretendNoReturn()
   NS_DebugBreak(NS_DEBUG_WARNING, str, nullptr, __FILE__, __LINE__)
 #else
 #define NS_WARNING(str)                do { /* nothing */ } while(0)
-#endif
-
-/**
- * Trigger an debug-only abort.
- *
- * @see NS_RUNTIMEABORT for release-mode asserts.
- */
-#ifdef DEBUG
-#define NS_ABORT()                                            \
-  do {                                                        \
-    NS_DebugBreak(NS_DEBUG_ABORT, nullptr, nullptr, __FILE__, __LINE__); \
-    MOZ_PretendNoReturn();                                    \
-  } while(0)
-#else
-#define NS_ABORT()                     do { /* nothing */ } while(0)
 #endif
 
 /**
@@ -216,13 +181,13 @@ inline void MOZ_PretendNoReturn()
   do {                                               \
     __attribute__((assume_static(#COND), unused))    \
     int STATIC_PASTE1(assume_static_, __COUNTER__);  \
-  } while(0)
+  } while(false)
 
 #define STATIC_ASSERT_RUNTIME(COND)                         \
   do {                                                      \
     __attribute__((assert_static_runtime(#COND), unused))   \
     int STATIC_PASTE1(assert_static_runtime_, __COUNTER__); \
-  } while(0)
+  } while(false)
 
 #else /* XGILL_PLUGIN */
 
@@ -233,8 +198,8 @@ inline void MOZ_PretendNoReturn()
 #define STATIC_INVARIANT(COND)             /* nothing */
 #define STATIC_INVARIANT_ASSUME(COND)      /* nothing */
 
-#define STATIC_ASSUME(COND)          do { /* nothing */ } while(0)
-#define STATIC_ASSERT_RUNTIME(COND)  do { /* nothing */ } while(0)
+#define STATIC_ASSUME(COND)          do { /* nothing */ } while(false)
+#define STATIC_ASSERT_RUNTIME(COND)  do { /* nothing */ } while(false)
 
 #endif /* XGILL_PLUGIN */
 
@@ -246,15 +211,6 @@ inline void MOZ_PretendNoReturn()
 ** Macros for terminating execution when an unrecoverable condition is
 ** reached.  These need to be compiled regardless of the DEBUG flag.
 ******************************************************************************/
-
-/**
- * Terminate execution <i>immediately</i>, and if possible on the current
- * platform, in such a way that execution can't be continued by other
- * code (e.g., by intercepting a signal).
- */
-#define NS_RUNTIMEABORT(msg)                                    \
-  NS_DebugBreak(NS_DEBUG_ABORT, msg, nullptr, __FILE__, __LINE__)
-
 
 /* Macros for checking the trueness of an expression passed in within an
  * interface implementation.  These need to be compiled regardless of the
@@ -268,7 +224,7 @@ inline void MOZ_PretendNoReturn()
        NS_WARNING("NS_ENSURE_TRUE(" #x ") failed");           \
        return ret;                                            \
     }                                                         \
-  } while(0)
+  } while(false)
 
 #define NS_ENSURE_FALSE(x, ret)                               \
   NS_ENSURE_TRUE(!(x), ret)
@@ -279,7 +235,7 @@ inline void MOZ_PretendNoReturn()
        NS_WARNING("NS_ENSURE_TRUE(" #x ") failed");           \
        return;                                                \
     }                                                         \
-  } while(0)
+  } while(false)
 
 #define NS_ENSURE_FALSE_VOID(x)                               \
   NS_ENSURE_TRUE_VOID(!(x))
@@ -319,7 +275,7 @@ inline void MOZ_PretendNoReturn()
       NS_ENSURE_SUCCESS_BODY(res, ret)                                    \
       return ret;                                                         \
     }                                                                     \
-  } while(0)
+  } while(false)
 
 #define NS_ENSURE_SUCCESS_VOID(res)                                       \
   do {                                                                    \
@@ -328,7 +284,7 @@ inline void MOZ_PretendNoReturn()
       NS_ENSURE_SUCCESS_BODY_VOID(res)                                    \
       return;                                                             \
     }                                                                     \
-  } while(0)
+  } while(false)
 
 /******************************************************************************
 ** Macros for checking state and arguments upon entering interface boundaries

@@ -1,6 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=2 sw=2 et tw=78:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
@@ -12,11 +12,10 @@
 #include "mozilla/Poison.h"
 #include "nsDebug.h"
 #include "nsPrintfCString.h"
-#include "GeckoStyleContext.h"
 #include "FrameLayerBuilder.h"
 #include "mozilla/ArrayUtils.h"
-#include "nsStyleContext.h"
-#include "nsStyleContextInlines.h"
+#include "mozilla/ComputedStyle.h"
+#include "mozilla/ComputedStyleInlines.h"
 #include "nsWindowSizes.h"
 
 #include <inttypes.h>
@@ -48,11 +47,11 @@ nsPresArena::ClearArenaRefPtrWithoutDeregistering(void* aPtr,
                                                   ArenaObjectID aObjectID)
 {
   switch (aObjectID) {
-    // We use ArenaRefPtr<nsStyleContext>, which can be ServoStyleContext
-    // or GeckoStyleContext. GeckoStyleContext is actually arena managed,
-    // but ServoStyleContext isn't.
-    case eArenaObjectID_GeckoStyleContext:
-      static_cast<ArenaRefPtr<nsStyleContext>*>(aPtr)->ClearWithoutDeregistering();
+    // We use ArenaRefPtr<ComputedStyle>, which can be ComputedStyle
+    // or GeckoComputedStyle. GeckoComputedStyle is actually arena managed,
+    // but ComputedStyle isn't.
+    case eArenaObjectID_GeckoComputedStyle:
+      static_cast<ArenaRefPtr<ComputedStyle>*>(aPtr)->ClearWithoutDeregistering();
       return;
     default:
       MOZ_ASSERT(false, "unexpected ArenaObjectID value");
@@ -204,21 +203,6 @@ nsPresArena::AddSizeOfExcludingThis(nsWindowSizes& aSizes) const
       case eArenaObjectID_nsLineBox:
         aSizes.mArenaSizes.mLineBoxes += totalSize;
         break;
-      case eArenaObjectID_nsRuleNode:
-        aSizes.mArenaSizes.mRuleNodes += totalSize;
-        break;
-      case eArenaObjectID_GeckoStyleContext:
-        aSizes.mArenaSizes.mStyleContexts += totalSize;
-        break;
-#define STYLE_STRUCT(name_, cb_) \
-      case eArenaObjectID_nsStyle##name_: \
-        aSizes.mArenaSizes.mGeckoStyleSizes.NS_STYLE_SIZES_FIELD(name_) += \
-          totalSize; \
-        break;
-#define STYLE_STRUCT_LIST_IGNORE_VARIABLES
-#include "nsStyleStructList.h"
-#undef STYLE_STRUCT
-#undef STYLE_STRUCT_LIST_IGNORE_VARIABLES
       default:
         continue;
     }

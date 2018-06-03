@@ -16,10 +16,11 @@ CXX = clang++
 
 LDFLAGS += -L$(NSS_LIBDIR) -lnss3 -lnssutil3 -lsmime3 -lssl3 -lplds4 -lplc4 -lnspr4 -lstdc++
 CXXFLAGS += -std=c++0x -I$(NSS_INCLUDE) -I$(NSPR_INCLUDE)
-CFLAGS += -I$(CURDIR) -Wall
-CFLAGS += -Wno-unused-command-line-argument
-CXXFLAGS += -Wno-unused-command-line-argument -Wall
+CFLAGS += -I$(CURDIR) -Wall -Wextra -Werror -Wno-unused-parameter
+CFLAGS += -Wno-unused-command-line-argument -Wno-format
+CXXFLAGS += -Wno-unused-command-line-argument -Wall -Wextra -Werror -Wno-unused-parameter
 CXXFLAGS += -g
+CXXFLAGS += -fno-exceptions -fno-rtti -Wno-format
 CFLAGS += -g
 
 # For .h dependency management
@@ -31,14 +32,16 @@ endif
 
 OBJS += Ack.o
 OBJS += API.o
-OBJS += ClearText.o
+OBJS += Handshake.o
 OBJS += Logging.o
 OBJS += MozQuic.o
 OBJS += NSSHelper.o
 OBJS += Packetization.o
 OBJS += Ping.o
+OBJS += Sender.o
 OBJS += StatelessReset.o
 OBJS += Streams.o
+OBJS += Timer.o
 OBJS += TransportExtension.o
 
 all: client server qdrive-client qdrive-server
@@ -57,6 +60,12 @@ QDRIVESERVEROBJS += tests/qdrive/qdrive-server-test007.o
 QDRIVESERVEROBJS += tests/qdrive/qdrive-server-test008.o
 QDRIVESERVEROBJS += tests/qdrive/qdrive-server-test009.o
 QDRIVESERVEROBJS += tests/qdrive/qdrive-server-test010.o
+QDRIVESERVEROBJS += tests/qdrive/qdrive-server-test011.o
+# 12 was a pong test
+QDRIVESERVEROBJS += tests/qdrive/qdrive-server-test013.o
+QDRIVESERVEROBJS += tests/qdrive/qdrive-server-test014.o
+QDRIVESERVEROBJS += tests/qdrive/qdrive-server-test015.o
+QDRIVESERVEROBJS += tests/qdrive/qdrive-server-test016.o
 
 QDRIVECLIENTOBJS += tests/qdrive/qdrive-common.o
 QDRIVECLIENTOBJS += tests/qdrive/qdrive-client-test000.o
@@ -70,6 +79,12 @@ QDRIVECLIENTOBJS += tests/qdrive/qdrive-client-test007.o
 QDRIVECLIENTOBJS += tests/qdrive/qdrive-client-test008.o
 QDRIVECLIENTOBJS += tests/qdrive/qdrive-client-test009.o
 QDRIVECLIENTOBJS += tests/qdrive/qdrive-client-test010.o
+QDRIVECLIENTOBJS += tests/qdrive/qdrive-client-test011.o
+# 12 was a pong test
+QDRIVECLIENTOBJS += tests/qdrive/qdrive-client-test013.o
+QDRIVECLIENTOBJS += tests/qdrive/qdrive-client-test014.o
+QDRIVECLIENTOBJS += tests/qdrive/qdrive-client-test015.o
+QDRIVECLIENTOBJS += tests/qdrive/qdrive-client-test016.o
 
 sample/server-files.o: sample/server.jpg sample/index.html sample/main.js
 ifeq ($(UNAME_S),Darwin)

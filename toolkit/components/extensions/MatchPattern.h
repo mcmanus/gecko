@@ -61,7 +61,7 @@ public:
 
   bool Contains(const nsAtom* aAtom) const
   {
-    return mElems.BinaryIndexOf(aAtom) != mElems.NoIndex;
+    return mElems.ContainsSorted(aAtom);
   }
 
   bool Intersects(const AtomSet& aOther) const;
@@ -155,6 +155,7 @@ public:
 
   nsAtom* Scheme() const;
   const nsCString& Host() const;
+  const nsAtom* HostAtom() const;
   const nsString& Path() const;
   const nsString& FilePath() const;
   const nsString& Spec() const;
@@ -170,6 +171,7 @@ private:
 
   mutable RefPtr<nsAtom> mScheme;
   mutable nsCString mHost;
+  mutable RefPtr<nsAtom> mHostAtom;
 
   mutable nsString mPath;
   mutable nsString mFilePath;
@@ -255,7 +257,8 @@ protected:
 private:
   explicit MatchPattern(nsISupports* aParent) : mParent(aParent) {}
 
-  void Init(JSContext* aCx, const nsAString& aPattern, bool aIgnorePath, ErrorResult& aRv);
+  void Init(JSContext* aCx, const nsAString& aPattern, bool aIgnorePath,
+            bool aRestrictSchemes, ErrorResult& aRv);
 
   bool SubsumesDomain(const MatchPattern& aPattern) const;
 
@@ -283,6 +286,11 @@ private:
   // The glob against which the URL path must match. If null, the path is
   // ignored entirely. If non-null, the path must match this glob.
   RefPtr<MatchGlob> mPath;
+
+ public:
+  // A quick way to check if a particular URL matches <all_urls> without
+  // actually instantiating a MatchPattern
+  static bool MatchesAllURLs(const URLInfo& aURL);
 };
 
 

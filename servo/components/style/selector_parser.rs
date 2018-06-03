@@ -7,11 +7,10 @@
 #![deny(missing_docs)]
 
 use cssparser::{Parser as CssParser, ParserInput};
-use selectors::Element;
 use selectors::parser::SelectorList;
-use std::fmt::{self, Debug};
-use style_traits::ParseError;
-use stylesheets::{Origin, Namespaces, UrlExtraData};
+use std::fmt::{self, Debug, Write};
+use style_traits::{CssWriter, ParseError, ToCss};
+use stylesheets::{Namespaces, Origin, UrlExtraData};
 
 /// A convenient alias for the type that represents an attribute value used for
 /// selector parser implementation.
@@ -36,7 +35,7 @@ pub use servo::restyle_damage::ServoRestyleDamage as RestyleDamage;
 pub use gecko::restyle_damage::GeckoRestyleDamage as RestyleDamage;
 
 /// Servo's selector parser.
-#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[cfg_attr(feature = "servo", derive(MallocSizeOf))]
 pub struct SelectorParser<'a> {
     /// The origin of the stylesheet we're parsing.
     pub stylesheet_origin: Origin,
@@ -52,8 +51,9 @@ impl<'a> SelectorParser<'a> {
     /// account namespaces.
     ///
     /// This is used for some DOM APIs like `querySelector`.
-    pub fn parse_author_origin_no_namespace(input: &str)
-                                            -> Result<SelectorList<SelectorImpl>, ParseError> {
+    pub fn parse_author_origin_no_namespace(
+        input: &str,
+    ) -> Result<SelectorList<SelectorImpl>, ParseError> {
         let namespaces = Namespaces::default();
         let parser = SelectorParser {
             stylesheet_origin: Origin::Author,
@@ -71,8 +71,8 @@ impl<'a> SelectorParser<'a> {
 
     /// Whether we're parsing selectors in a stylesheet that has chrome
     /// privilege.
-    pub fn in_chrome_stylesheet(&self) -> bool {
-        self.url_data.map_or(false, |d| d.is_chrome())
+    pub fn chrome_rules_enabled(&self) -> bool {
+        self.url_data.map_or(false, |d| d.is_chrome()) || self.stylesheet_origin == Origin::User
     }
 }
 
@@ -103,25 +103,16 @@ pub enum PseudoElementCascadeType {
     Precomputed,
 }
 
-/// An extension to rust-selector's `Element` trait.
-pub trait ElementExt: Element<Impl=SelectorImpl> + Debug {
-    /// Whether this element should match user and author rules.
-    ///
-    /// We use this for Native Anonymous Content in Gecko.
-    fn matches_user_and_author_rules(&self) -> bool;
-}
-
-/// A per-functional-pseudo map, from a given pseudo to a `T`.
-#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
-#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+/// A per-pseudo map, from a given pseudo to a `T`.
+#[derive(MallocSizeOf)]
 pub struct PerPseudoElementMap<T> {
-    entries: [Option<T>; SIMPLE_PSEUDO_COUNT],
+    entries: [Option<T>; PSEUDO_COUNT],
 }
 
 impl<T> Default for PerPseudoElementMap<T> {
     fn default() -> Self {
         Self {
-            entries: PseudoElement::simple_pseudo_none_array(),
+            entries: PseudoElement::pseudo_none_array(),
         }
     }
 }
@@ -147,11 +138,7 @@ where
 impl<T> PerPseudoElementMap<T> {
     /// Get an entry in the map.
     pub fn get(&self, pseudo: &PseudoElement) -> Option<&T> {
-        let index = match pseudo.simple_index() {
-            Some(i) => i,
-            None => return None,
-        };
-        self.entries[index].as_ref()
+        self.entries[pseudo.index()].as_ref()
     }
 
     /// Clear this enumerated array.
@@ -159,48 +146,67 @@ impl<T> PerPseudoElementMap<T> {
         *self = Self::default();
     }
 
-    /// Invokes a callback on each non-None entry.
-    pub fn for_each<F: FnMut(&mut T)>(&mut self, mut f: F) {
-        for entry in self.entries.iter_mut() {
-            if entry.is_some() {
-                f(entry.as_mut().unwrap());
-            }
-        }
-    }
-
     /// Set an entry value.
     ///
     /// Returns an error if the element is not a simple pseudo.
-    pub fn set(&mut self, pseudo: &PseudoElement, value: T) -> Result<(), ()> {
-        let index = match pseudo.simple_index() {
-            Some(i) => i,
-            None => return Err(()),
-        };
-        self.entries[index] = Some(value);
-        Ok(())
+    pub fn set(&mut self, pseudo: &PseudoElement, value: T) {
+        self.entries[pseudo.index()] = Some(value);
     }
 
     /// Get an entry for `pseudo`, or create it with calling `f`.
-    pub fn get_or_insert_with<F>(
-        &mut self,
-        pseudo: &PseudoElement,
-        f: F,
-    ) -> Result<&mut T, ()>
+    pub fn get_or_insert_with<F>(&mut self, pseudo: &PseudoElement, f: F) -> &mut T
     where
         F: FnOnce() -> T,
     {
-        let index = match pseudo.simple_index() {
-            Some(i) => i,
-            None => return Err(()),
-        };
+        let index = pseudo.index();
         if self.entries[index].is_none() {
             self.entries[index] = Some(f());
         }
-        Ok(self.entries[index].as_mut().unwrap())
+        self.entries[index].as_mut().unwrap()
     }
 
     /// Get an iterator for the entries.
     pub fn iter(&self) -> ::std::slice::Iter<Option<T>> {
         self.entries.iter()
+    }
+}
+
+/// Values for the :dir() pseudo class
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Direction {
+    /// left-to-right semantic directionality
+    Ltr,
+    /// right-to-left semantic directionality
+    Rtl,
+    /// Some other provided directionality value
+    ///
+    /// TODO(emilio): If we atomize we can then unbox in NonTSPseudoClass.
+    Other(Box<str>),
+}
+
+impl Direction {
+    /// Parse a direction value.
+    pub fn parse<'i, 't>(parser: &mut CssParser<'i, 't>) -> Result<Self, ParseError<'i>> {
+        let ident = parser.expect_ident()?;
+        Ok(match_ignore_ascii_case! { &ident,
+            "rtl" => Direction::Rtl,
+            "ltr" => Direction::Ltr,
+            _ => Direction::Other(Box::from(ident.as_ref())),
+        })
+    }
+}
+
+impl ToCss for Direction {
+    fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
+    where
+        W: Write,
+    {
+        let dir_str = match *self {
+            Direction::Rtl => "rtl",
+            Direction::Ltr => "ltr",
+            // FIXME: This should be escaped as an identifier; see #19231
+            Direction::Other(ref other) => other,
+        };
+        dest.write_str(dir_str)
     }
 }

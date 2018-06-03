@@ -11,10 +11,10 @@ function run_test() {
   gDebuggee = testGlobal("test-1");
   DebuggerServer.addTestGlobal(gDebuggee);
 
-  let transport = DebuggerServer.connectPipe();
+  const transport = DebuggerServer.connectPipe();
   gClient = new DebuggerClient(transport);
-  gClient.connect().then(function (type, traits) {
-    attachTestTab(gClient, "test-1", function (reply, tabClient) {
+  gClient.connect().then(function(type, traits) {
+    attachTestTab(gClient, "test-1", function(reply, tabClient) {
       test_close(transport);
     });
   });
@@ -26,10 +26,10 @@ function test_close(transport) {
   // (like if a device is unplugged)
   // the client is automatically closed,
   // and we can still call client.close.
-  let onClosed = function () {
+  const onClosed = function() {
     gClient.removeListener("closed", onClosed);
     ok(true, "Client emitted 'closed' event");
-    gClient.close().then(function () {
+    gClient.close().then(function() {
       ok(true, "client.close() successfully called its callback");
       do_test_finished();
     });

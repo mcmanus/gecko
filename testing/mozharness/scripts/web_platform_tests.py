@@ -5,10 +5,10 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 # ***** END LICENSE BLOCK *****
 import copy
-import glob
-import json
 import os
 import sys
+
+from datetime import datetime, timedelta
 
 # load modules from parent dir
 sys.path.insert(1, os.path.dirname(sys.path[0]))
@@ -16,8 +16,7 @@ sys.path.insert(1, os.path.dirname(sys.path[0]))
 from mozharness.base.errors import BaseErrorList
 from mozharness.base.script import PreScriptAction
 from mozharness.base.vcs.vcsbase import MercurialScript
-from mozharness.mozilla.blob_upload import BlobUploadMixin, blobupload_config_options
-from mozharness.mozilla.testing.testbase import TestingMixin, testing_config_options, TOOLTOOL_PLATFORM_DIR
+from mozharness.mozilla.testing.testbase import TestingMixin, testing_config_options
 from mozharness.mozilla.testing.codecoverage import (
     CodeCoverageMixin,
     code_coverage_config_options
@@ -27,7 +26,8 @@ from mozharness.mozilla.testing.errors import HarnessErrorList
 from mozharness.mozilla.structuredlog import StructuredOutputParser
 from mozharness.base.log import INFO
 
-class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCoverageMixin):
+
+class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin):
     config_options = [
         [['--test-type'], {
             "action": "extend",
@@ -54,7 +54,8 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
             "action": "store_true",
             "dest": "allow_software_gl_layers",
             "default": False,
-            "help": "Permits a software GL implementation (such as LLVMPipe) to use the GL compositor."}
+            "help": "Permits a software GL implementation (such as LLVMPipe) "
+                    "to use the GL compositor."}
          ],
         [["--enable-webrender"], {
             "action": "store_true",
@@ -86,20 +87,7 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
             "default": False,
             "help": "Forcibly enable single thread traversal in Stylo with STYLO_THREADS=1"}
          ],
-        [["--enable-stylo"], {
-            "action": "store_true",
-            "dest": "enable_stylo",
-            "default": False,
-            "help": "Run tests with Stylo enabled"}
-         ],
-        [["--disable-stylo"], {
-            "action": "store_true",
-            "dest": "disable_stylo",
-            "default": False,
-            "help": "Run tests with Stylo disabled"}
-         ],
     ] + copy.deepcopy(testing_config_options) + \
-        copy.deepcopy(blobupload_config_options) + \
         copy.deepcopy(code_coverage_config_options)
 
     def __init__(self, require_config_file=True):
@@ -107,7 +95,6 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
             config_options=self.config_options,
             all_actions=[
                 'clobber',
-                'read-buildbot-config',
                 'download-and-extract',
                 'create-virtualenv',
                 'pull',
@@ -165,10 +152,21 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
         self.register_virtualenv_module(requirements=[requirements],
                                         two_pass=True)
 
-    def _query_cmd(self):
+    def _query_geckodriver(self):
+        path = None
+        c = self.config
+        dirs = self.query_abs_dirs()
+        repl_dict = {}
+        repl_dict.update(dirs)
+        path = c.get("geckodriver", "geckodriver")
+        if path:
+            path = path % repl_dict
+        return path
+
+    def _query_cmd(self, test_types):
         if not self.binary_path:
             self.fatal("Binary path could not be determined")
-            #And exit
+            # And exit
 
         c = self.config
         dirs = self.query_abs_dirs()
@@ -194,12 +192,13 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
                 "--symbols-path=%s" % self.query_symbols_url(),
                 "--stackwalk-binary=%s" % self.query_minidump_stackwalk(),
                 "--stackfix-dir=%s" % os.path.join(dirs["abs_test_install_dir"], "bin"),
-                "--run-by-dir=3"]
+                "--run-by-dir=3",
+                "--no-pause-after-test"]
 
         if not sys.platform.startswith("linux"):
             cmd += ["--exclude=css"]
 
-        for test_type in c.get("test_type", []):
+        for test_type in test_types:
             cmd.append("--test-type=%s" % test_type)
 
         if not c["e10s"]:
@@ -210,17 +209,26 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
         else:
             cmd.append("--stylo-threads=4")
 
-        for opt in ["total_chunks", "this_chunk"]:
-            val = c.get(opt)
-            if val:
-                cmd.append("--%s=%s" % (opt.replace("_", "-"), val))
+        if not (self.verify_enabled or self.per_test_coverage):
+            if os.environ.get('MOZHARNESS_TEST_PATHS'):
+                prefix = 'testing/web-platform'
+                paths = os.environ['MOZHARNESS_TEST_PATHS'].split(':')
+                paths = [os.path.join(dirs["abs_wpttest_dir"], os.path.relpath(p, prefix))
+                         for p in paths if p.startswith(prefix)]
+                cmd.extend(paths)
+            else:
+                for opt in ["total_chunks", "this_chunk"]:
+                    val = c.get(opt)
+                    if val:
+                        cmd.append("--%s=%s" % (opt.replace("_", "-"), val))
 
-        if "wdspec" in c.get("test_type", []):
-            geckodriver_path = os.path.join(dirs["abs_test_bin_dir"], "geckodriver")
-            if not os.path.isfile(geckodriver_path):
+        if "wdspec" in test_types:
+            geckodriver_path = self._query_geckodriver()
+            if not geckodriver_path or not os.path.isfile(geckodriver_path):
                 self.fatal("Unable to find geckodriver binary "
-                           "in common test package: %s" % geckodriver_path)
+                           "in common test package: %s" % str(geckodriver_path))
             cmd.append("--webdriver-binary=%s" % geckodriver_path)
+            cmd.append("--webdriver-arg=-vv")  # enable trace logs
 
         options = list(c.get("options", []))
 
@@ -230,14 +238,14 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
             'test_install_path': dirs["abs_test_install_dir"],
             'abs_app_dir': abs_app_dir,
             'abs_work_dir': dirs["abs_work_dir"]
-            }
+        }
 
         test_type_suite = {
             "testharness": "web-platform-tests",
             "reftest": "web-platform-tests-reftests",
             "wdspec": "web-platform-tests-wdspec",
         }
-        for test_type in c.get("test_type", []):
+        for test_type in test_types:
             try_options, try_tests = self.try_args(test_type_suite[test_type])
 
             cmd.extend(self.query_options(options,
@@ -256,7 +264,9 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
                           "mozbase/*",
                           "marionette/*",
                           "tools/*",
-                          "web-platform/*"],
+                          "web-platform/*",
+                          "mozpack/*",
+                          "mozbuild/*"],
             suite_categories=["web-platform"])
 
     def _install_fonts(self):
@@ -266,7 +276,8 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
         if not sys.platform.startswith("darwin"):
             font_path = os.path.join(os.path.dirname(self.binary_path), "fonts")
         else:
-            font_path = os.path.join(os.path.dirname(self.binary_path), os.pardir, "Resources", "res", "fonts")
+            font_path = os.path.join(os.path.dirname(self.binary_path), os.pardir,
+                                     "Resources", "res", "fonts")
         if not os.path.exists(font_path):
             os.makedirs(font_path)
         ahem_src = os.path.join(dirs["abs_wpttest_dir"], "tests", "fonts", "Ahem.ttf")
@@ -276,7 +287,6 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
 
     def run_tests(self):
         dirs = self.query_abs_dirs()
-        cmd = self._query_cmd()
 
         self._install_fonts()
 
@@ -298,33 +308,87 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
             env['MOZ_HEADLESS_WIDTH'] = self.config['headless_width']
             env['MOZ_HEADLESS_HEIGHT'] = self.config['headless_height']
 
-        if self.config['disable_stylo']:
-            if self.config['single_stylo_traversal']:
-                self.fatal("--disable-stylo conflicts with --single-stylo-traversal")
-            if self.config['enable_stylo']:
-                self.fatal("--disable-stylo conflicts with --enable-stylo")
-
         if self.config['single_stylo_traversal']:
             env['STYLO_THREADS'] = '1'
         else:
             env['STYLO_THREADS'] = '4'
 
-        if self.config['enable_stylo']:
-            env['STYLO_FORCE_ENABLED'] = '1'
-        if self.config['disable_stylo']:
-            env['STYLO_FORCE_DISABLED'] = '1'
-
         env = self.query_env(partial_env=env, log_level=INFO)
 
-        return_code = self.run_command(cmd,
-                                       cwd=dirs['abs_work_dir'],
-                                       output_timeout=1000,
-                                       output_parser=parser,
-                                       env=env)
+        start_time = datetime.now()
+        max_per_test_time = timedelta(minutes=60)
+        max_per_test_tests = 10
+        executed_tests = 0
+        executed_too_many_tests = False
 
-        tbpl_status, log_level = parser.evaluate_parser(return_code)
+        if self.per_test_coverage or self.verify_enabled:
+            suites = self.query_per_test_category_suites(None, None)
+            if "wdspec" in suites:
+                # geckodriver is required for wdspec, but not always available
+                geckodriver_path = self._query_geckodriver()
+                if not geckodriver_path or not os.path.isfile(geckodriver_path):
+                    suites.remove("wdspec")
+                    self.info("Skipping 'wdspec' tests - no geckodriver")
+        else:
+            test_types = self.config.get("test_type", [])
+            suites = [None]
+        for suite in suites:
+            if executed_too_many_tests and not self.per_test_coverage:
+                continue
 
-        self.buildbot_status(tbpl_status, level=log_level)
+            if suite:
+                test_types = [suite]
+
+            summary = {}
+            for per_test_args in self.query_args(suite):
+                # Make sure baseline code coverage tests are never
+                # skipped and that having them run has no influence
+                # on the max number of actual tests that are to be run.
+                is_baseline_test = 'baselinecoverage' in per_test_args[-1] \
+                                   if self.per_test_coverage else False
+                if executed_too_many_tests and not is_baseline_test:
+                    continue
+
+                if not is_baseline_test:
+                    if (datetime.now() - start_time) > max_per_test_time:
+                        # Running tests has run out of time. That is okay! Stop running
+                        # them so that a task timeout is not triggered, and so that
+                        # (partial) results are made available in a timely manner.
+                        self.info("TinderboxPrint: Running tests took too long: Not all tests "
+                                  "were executed.<br/>")
+                        return
+                    if executed_tests >= max_per_test_tests:
+                        # When changesets are merged between trees or many tests are
+                        # otherwise updated at once, there probably is not enough time
+                        # to run all tests, and attempting to do so may cause other
+                        # problems, such as generating too much log output.
+                        self.info("TinderboxPrint: Too many modified tests: Not all tests "
+                                  "were executed.<br/>")
+                        executed_too_many_tests = True
+
+                    executed_tests = executed_tests + 1
+
+                cmd = self._query_cmd(test_types)
+                cmd.extend(per_test_args)
+
+                if self.per_test_coverage:
+                    gcov_dir, jsvm_dir = self.set_coverage_env(env)
+
+                return_code = self.run_command(cmd,
+                                               cwd=dirs['abs_work_dir'],
+                                               output_timeout=1000,
+                                               output_parser=parser,
+                                               env=env)
+
+                if self.per_test_coverage:
+                    self.add_per_test_coverage_report(gcov_dir, jsvm_dir, suite, per_test_args[-1])
+
+                tbpl_status, log_level, summary = parser.evaluate_parser(return_code,
+                                                                         previous_summary=summary)
+                self.record_status(tbpl_status, level=log_level)
+
+                if len(per_test_args) > 0:
+                    self.log_per_test_status(per_test_args[-1], tbpl_status, log_level)
 
 
 # main {{{1

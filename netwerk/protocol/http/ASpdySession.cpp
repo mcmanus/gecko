@@ -28,12 +28,6 @@ namespace net {
 const char *ASpdySession::kH2Alpn = "h2";
 const char *ASpdySession::kHQAlpn = MOZQUIC_ALPN;
 
-ASpdySession::ASpdySession()
-{
-}
-
-ASpdySession::~ASpdySession() = default;
-
 ASpdySession *
 ASpdySession::NewSpdySession(uint32_t version,
                              nsISocketTransport *aTransport,
@@ -110,10 +104,6 @@ SpdyInformation::GetALPNIndex(const nsACString &alpnString,
 //////////////////////////////////////////
 // SpdyPushCache
 //////////////////////////////////////////
-
-SpdyPushCache::SpdyPushCache()
-{
-}
 
 SpdyPushCache::~SpdyPushCache()
 {

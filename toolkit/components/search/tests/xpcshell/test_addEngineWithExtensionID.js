@@ -11,7 +11,7 @@ const kExtensionID2 = "extension2@mozilla.com";
 const kExtension2LoadPath = "[http]localhost/test-search-engine.xml:extension2@mozilla.com";
 
 add_task(async function test_addEngineWithDetailsWithExtensionID() {
-  do_check_false(Services.search.isInitialized);
+  Assert.ok(!Services.search.isInitialized);
 
   await asyncInit();
 
@@ -19,26 +19,26 @@ add_task(async function test_addEngineWithDetailsWithExtensionID() {
                                        kSearchEngineURL, kExtensionID1);
 
   let engine = Services.search.getEngineByName(kSearchEngineID);
-  do_check_neq(engine, null);
+  Assert.notEqual(engine, null);
 
   let engines = Services.search.getEnginesByExtensionID(kExtensionID1);
-  do_check_eq(engines.length, 1);
-  do_check_eq(engines[0], engine);
+  Assert.equal(engines.length, 1);
+  Assert.equal(engines[0], engine);
 });
 
 add_test(function test_addEngineWithExtensionID() {
   let searchCallback = {
     onSuccess(engine) {
       let engines = Services.search.getEnginesByExtensionID(kExtensionID2);
-      do_check_eq(engines.length, 1);
-      do_check_eq(engines[0], engine);
-      do_check_eq(engine.wrappedJSObject._loadPath, kExtension2LoadPath);
+      Assert.equal(engines.length, 1);
+      Assert.equal(engines[0], engine);
+      Assert.equal(engine.wrappedJSObject._loadPath, kExtension2LoadPath);
       run_next_test();
     },
     onError(errorCode) {
       do_throw("search callback returned error: " + errorCode);
     }
-  }
+  };
   Services.search.addEngine(gDataUrl + "engine.xml", null,
                             null, false, searchCallback, kExtensionID2);
 });

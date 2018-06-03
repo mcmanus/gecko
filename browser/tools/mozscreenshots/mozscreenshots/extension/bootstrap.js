@@ -6,40 +6,35 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/AddonManager.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/Timer.jsm");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/AddonManager.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Timer.jsm");
+ChromeUtils.defineModuleGetter(this, "TestRunner",
+                               "chrome://mozscreenshots/content/TestRunner.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "TestRunner",
-                                  "chrome://mozscreenshots/content/TestRunner.jsm");
-
-function install(data, reason) {
+async function install(data, reason) {
   if (!isAppSupported()) {
     uninstallExtension(data);
     return;
   }
 
-  AddonManager.getAddonByID(data.id, function(addon) {
-    // Enable on install in case the user disabled a prior version
-    if (addon) {
-      addon.userDisabled = false;
-    }
-  });
+  let addon = await AddonManager.getAddonByID(data.id);
+  if (addon) {
+    await addon.enable();
+  }
 }
 
-function startup(data, reason) {
+async function startup(data, reason) {
   if (!isAppSupported()) {
     uninstallExtension(data);
     return;
   }
 
-  AddonManager.getAddonByID(data.id, function(addon) {
-    let extensionPath = addon.getResourceURI();
-    TestRunner.init(extensionPath);
-  });
+  let addon = await AddonManager.getAddonByID(data.id);
+  let extensionPath = addon.getResourceURI();
+  TestRunner.init(extensionPath);
 }
 
 function shutdown(data, reason) { }
@@ -53,8 +48,7 @@ function isAppSupported() {
   return true;
 }
 
-function uninstallExtension(data) {
-  AddonManager.getAddonByID(data.id, function(addon) {
-    addon.uninstall();
-  });
+async function uninstallExtension(data) {
+  let addon = await AddonManager.getAddonByID(data.id);
+  addon.uninstall();
 }

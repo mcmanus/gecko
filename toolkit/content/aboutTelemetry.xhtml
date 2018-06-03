@@ -63,9 +63,6 @@
       <div class="category" value="simple-measurements-section">
         <span class="category-name">&aboutTelemetry.simpleMeasurementsSection;</span>
       </div>
-      <div class="category" value="telemetry-log-section">
-        <span class="category-name">&aboutTelemetry.telemetryLogSection;</span>
-      </div>
       <div class="category" value="slow-sql-section">
         <span class="category-name">&aboutTelemetry.slowSqlSection;</span>
       </div>
@@ -96,11 +93,11 @@
           <h4 class="title">&aboutTelemetry.pingDataSource;</h4>
           <div>
             <input type="radio" id="ping-source-current" name="choose-ping-source" value="current" checked="checked" />
-            &aboutTelemetry.showCurrentPingData;
+            <label for="ping-source-current">&aboutTelemetry.showCurrentPingData;</label>
           </div>
           <div id="ping-source-archive-container">
             <input type="radio" id="ping-source-archive" name="choose-ping-source" value="archive" />
-            &aboutTelemetry.showArchivedPingData;
+            <label for="ping-source-archive">&aboutTelemetry.showArchivedPingData;</label>
           </div>
         </div>
         <div id="current-ping-picker">
@@ -124,10 +121,6 @@
             </select>
           </div>
         </div>
-        <div>
-          <h4 class="title">&aboutTelemetry.payloadChoiceHeader;</h4>
-          <select id="choose-payload"></select>
-        </div>
       </div>
 
       <div class="header">
@@ -145,7 +138,7 @@
 
       <section id="home-section" class="active">
         <p id="page-subtitle"></p>
-        <p id="home-explanation"></p>
+        <p id="settings-explanation"></p>
         <p id="ping-explanation"></p>
         <p>&aboutTelemetry.moreInformations;</p>
         <ul>
@@ -194,10 +187,6 @@
 
       <section id="simple-measurements-section">
         <div id="simple-measurements" class="data"></div>
-      </section>
-
-      <section id="telemetry-log-section">
-        <div id="telemetry-log" class="data"></div>
       </section>
 
       <section id="slow-sql-section">

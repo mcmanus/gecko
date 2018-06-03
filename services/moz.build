@@ -5,17 +5,17 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 with Files('moz.build'):
-    BUG_COMPONENT = ('Core', 'Build Config')
+    BUG_COMPONENT = ('Firefox Build System', 'General')
 
 DIRS += [
     'common',
     'crypto',
+    'settings',
 ]
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] != 'android':
     DIRS += [
         'fxaccounts',
-        'blocklists',
     ]
 
 if CONFIG['MOZ_SERVICES_SYNC']:

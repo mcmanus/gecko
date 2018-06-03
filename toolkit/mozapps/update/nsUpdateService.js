@@ -6,15 +6,13 @@
 
 "use strict";
 
-const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
-Cu.import("resource://gre/modules/FileUtils.jsm", this);
-Cu.import("resource://gre/modules/Services.jsm", this);
-Cu.import("resource://gre/modules/ctypes.jsm", this);
-Cu.import("resource://gre/modules/UpdateTelemetry.jsm", this);
-Cu.import("resource://gre/modules/AppConstants.jsm", this);
-Cu.importGlobalProperties(["XMLHttpRequest"]);
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+ChromeUtils.import("resource://gre/modules/FileUtils.jsm", this);
+ChromeUtils.import("resource://gre/modules/Services.jsm", this);
+ChromeUtils.import("resource://gre/modules/ctypes.jsm", this);
+ChromeUtils.import("resource://gre/modules/UpdateTelemetry.jsm", this);
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm", this);
+Cu.importGlobalProperties(["DOMParser", "XMLHttpRequest"]);
 
 const UPDATESERVICE_CID = Components.ID("{B3C290A6-3943-4B89-8BBE-C01EB7B3B311}");
 const UPDATESERVICE_CONTRACTID = "@mozilla.org/updates/update-service;1";
@@ -158,7 +156,7 @@ const NETWORK_ERROR_OFFLINE             = 111;
 const HTTP_ERROR_OFFSET                 = 1000;
 
 const DOWNLOAD_CHUNK_SIZE           = 300000; // bytes
-const DOWNLOAD_BACKGROUND_INTERVAL  = 600;    // seconds
+const DOWNLOAD_BACKGROUND_INTERVAL  = 600; // seconds
 const DOWNLOAD_FOREGROUND_INTERVAL  = 0;
 
 const UPDATE_WINDOW_NAME      = "Update:Wizard";
@@ -187,38 +185,31 @@ const APPID_TO_TOPIC = {
   "{92650c4d-4b8e-4d2a-b7eb-24ecf4f6b63a}": "sessionstore-windows-restored",
   // Thunderbird
   "{3550f703-e582-4d05-9a08-453d09bdfdc6}": "mail-startup-done",
-  // Instantbird
-  "{33cb9019-c295-46dd-be21-8c4936574bee}": "xul-window-visible",
 };
 
 // A var is used for the delay so tests can set a smaller value.
 var gSaveUpdateXMLDelay = 2000;
 var gUpdateMutexHandle = null;
 
-XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
-                                  "resource://gre/modules/UpdateUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "WindowsRegistry",
-                                  "resource://gre/modules/WindowsRegistry.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AsyncShutdown",
-                                  "resource://gre/modules/AsyncShutdown.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "OS",
-                                  "resource://gre/modules/osfile.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "DeferredTask",
-                                  "resource://gre/modules/DeferredTask.jsm");
+ChromeUtils.defineModuleGetter(this, "UpdateUtils",
+                               "resource://gre/modules/UpdateUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "WindowsRegistry",
+                               "resource://gre/modules/WindowsRegistry.jsm");
+ChromeUtils.defineModuleGetter(this, "AsyncShutdown",
+                               "resource://gre/modules/AsyncShutdown.jsm");
+ChromeUtils.defineModuleGetter(this, "OS",
+                               "resource://gre/modules/osfile.jsm");
+ChromeUtils.defineModuleGetter(this, "CertUtils",
+                               "resource://gre/modules/CertUtils.jsm");
+ChromeUtils.defineModuleGetter(this, "DeferredTask",
+                               "resource://gre/modules/DeferredTask.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "gLogEnabled", function aus_gLogEnabled() {
-  return getPref("getBoolPref", PREF_APP_UPDATE_LOG, false);
+  return Services.prefs.getBoolPref(PREF_APP_UPDATE_LOG, false);
 });
 
 XPCOMUtils.defineLazyGetter(this, "gUpdateBundle", function aus_gUpdateBundle() {
   return Services.strings.createBundle(URI_UPDATES_PROPERTIES);
-});
-
-// shared code for suppressing bad cert dialogs
-XPCOMUtils.defineLazyGetter(this, "gCertUtils", function aus_gCertUtils() {
-  let temp = { };
-  Cu.import("resource://gre/modules/CertUtils.jsm", temp);
-  return temp;
 });
 
 /**
@@ -347,7 +338,7 @@ function hasUpdateMutex() {
 function areDirectoryEntriesWriteable(aDir) {
   let items = aDir.directoryEntries;
   while (items.hasMoreElements()) {
-    let item = items.getNext().QueryInterface(Ci.nsIFile);
+    let item = items.nextFile;
     if (!item.isWritable()) {
       LOG("areDirectoryEntriesWriteable - unable to write to " + item.path);
       return false;
@@ -505,7 +496,7 @@ XPCOMUtils.defineLazyGetter(this, "gCanStageUpdatesSession", function aus_gCSUS(
  */
 function getCanStageUpdates() {
   // If staging updates are disabled, then just bail out!
-  if (!getPref("getBoolPref", PREF_APP_UPDATE_STAGING_ENABLED, false)) {
+  if (!Services.prefs.getBoolPref(PREF_APP_UPDATE_STAGING_ENABLED, false)) {
     LOG("getCanStageUpdates - staging updates is disabled by preference " +
         PREF_APP_UPDATE_STAGING_ENABLED);
     return false;
@@ -532,10 +523,16 @@ XPCOMUtils.defineLazyGetter(this, "gCanCheckForUpdates", function aus_gCanCheckF
   // If the administrator has disabled app update and locked the preference so
   // users can't check for updates. This preference check is ok in this lazy
   // getter since locked prefs don't change until the application is restarted.
-  var enabled = getPref("getBoolPref", PREF_APP_UPDATE_ENABLED, true);
+  var enabled = Services.prefs.getBoolPref(PREF_APP_UPDATE_ENABLED, true);
   if (!enabled && Services.prefs.prefIsLocked(PREF_APP_UPDATE_ENABLED)) {
     LOG("gCanCheckForUpdates - unable to automatically check for updates, " +
         "the preference is disabled and admistratively locked.");
+    return false;
+  }
+
+  if (Services.policies && !Services.policies.isAllowed("appUpdate")) {
+    LOG("gCanCheckForUpdates - unable to automatically check for updates. " +
+        "Functionality disabled by enterprise policy.");
     return false;
   }
 
@@ -566,26 +563,6 @@ function LOG(string) {
     dump("*** AUS:SVC " + string + "\n");
     Services.console.logStringMessage("AUS:SVC " + string);
   }
-}
-
-/**
- * Gets a preference value, handling the case where there is no default.
- * @param   func
- *          The name of the preference function to call, on nsIPrefBranch
- * @param   preference
- *          The name of the preference
- * @param   defaultValue
- *          The default value to return in the event the preference has
- *          no setting
- * @return  The value of the preference, or undefined if there was no
- *          user or default value.
- */
-function getPref(func, preference, defaultValue) {
-  try {
-    return Services.prefs[func](preference);
-  } catch (e) {
-  }
-  return defaultValue;
 }
 
 /**
@@ -755,7 +732,7 @@ function shouldUseService() {
   // 2) The maintenance service is installed
   // 3) The pref for using the service is enabled
   if (!AppConstants.MOZ_MAINTENANCE_SERVICE || !isServiceInstalled() ||
-      !getPref("getBoolPref", PREF_APP_UPDATE_SERVICE_ENABLED, false)) {
+      !Services.prefs.getBoolPref(PREF_APP_UPDATE_SERVICE_ENABLED, false)) {
     LOG("shouldUseService - returning false");
     return false;
   }
@@ -786,7 +763,7 @@ function isServiceInstalled() {
     wrk.close();
   } catch (e) {
   }
-  installed = installed == 1;  // convert to bool
+  installed = installed == 1; // convert to bool
   LOG("isServiceInstalled - returning " + installed);
   return installed;
 }
@@ -838,7 +815,7 @@ function cleanUpUpdatesDir(aRemovePatchFiles = true) {
   if (aRemovePatchFiles) {
     let dirEntries = updateDir.directoryEntries;
     while (dirEntries.hasMoreElements()) {
-      let file = dirEntries.getNext().QueryInterface(Ci.nsIFile);
+      let file = dirEntries.nextFile;
       // Now, recursively remove this file.  The recursive removal is needed for
       // Mac OSX because this directory will contain a copy of updater.app,
       // which is itself a directory and the MozUpdater directory on platforms
@@ -945,11 +922,11 @@ function handleUpdateFailure(update, errorCode) {
   }
 
   if (update.errorCode == ELEVATION_CANCELED) {
-    if (getPref("getBoolPref", PREF_APP_UPDATE_DOORHANGER, false)) {
-      let elevationAttempts = getPref("getIntPref", PREF_APP_UPDATE_ELEVATE_ATTEMPTS, 0);
+    if (Services.prefs.getBoolPref(PREF_APP_UPDATE_DOORHANGER, false)) {
+      let elevationAttempts = Services.prefs.getIntPref(PREF_APP_UPDATE_ELEVATE_ATTEMPTS, 0);
       elevationAttempts++;
       Services.prefs.setIntPref(PREF_APP_UPDATE_ELEVATE_ATTEMPTS, elevationAttempts);
-      let maxAttempts = Math.min(getPref("getIntPref", PREF_APP_UPDATE_ELEVATE_MAXATTEMPTS, 2), 10);
+      let maxAttempts = Math.min(Services.prefs.getIntPref(PREF_APP_UPDATE_ELEVATE_MAXATTEMPTS, 2), 10);
 
       if (elevationAttempts > maxAttempts) {
         LOG("handleUpdateFailure - notifying observers of error. " +
@@ -962,18 +939,18 @@ function handleUpdateFailure(update, errorCode) {
       }
     }
 
-    let cancelations = getPref("getIntPref", PREF_APP_UPDATE_CANCELATIONS, 0);
+    let cancelations = Services.prefs.getIntPref(PREF_APP_UPDATE_CANCELATIONS, 0);
     cancelations++;
     Services.prefs.setIntPref(PREF_APP_UPDATE_CANCELATIONS, cancelations);
     if (AppConstants.platform == "macosx") {
-      let osxCancelations = getPref("getIntPref",
-                                    PREF_APP_UPDATE_CANCELATIONS_OSX, 0);
+      let osxCancelations =
+        Services.prefs.getIntPref(PREF_APP_UPDATE_CANCELATIONS_OSX, 0);
       osxCancelations++;
       Services.prefs.setIntPref(PREF_APP_UPDATE_CANCELATIONS_OSX,
                                 osxCancelations);
-      let maxCancels = getPref("getIntPref",
-                               PREF_APP_UPDATE_CANCELATIONS_OSX_MAX,
-                               DEFAULT_CANCELATIONS_OSX_MAX);
+      let maxCancels =
+        Services.prefs.getIntPref(PREF_APP_UPDATE_CANCELATIONS_OSX_MAX,
+                                  DEFAULT_CANCELATIONS_OSX_MAX);
       // Prevent the preference from setting a value greater than 5.
       maxCancels = Math.min(maxCancels, 5);
       if (osxCancelations >= maxCancels) {
@@ -1002,11 +979,9 @@ function handleUpdateFailure(update, errorCode) {
   }
 
   if (SERVICE_ERRORS.includes(update.errorCode)) {
-    var failCount = getPref("getIntPref",
-                            PREF_APP_UPDATE_SERVICE_ERRORS, 0);
-    var maxFail = getPref("getIntPref",
-                          PREF_APP_UPDATE_SERVICE_MAXERRORS,
-                          DEFAULT_SERVICE_MAX_ERRORS);
+    var failCount = Services.prefs.getIntPref(PREF_APP_UPDATE_SERVICE_ERRORS, 0);
+    var maxFail = Services.prefs.getIntPref(PREF_APP_UPDATE_SERVICE_MAXERRORS,
+                                            DEFAULT_SERVICE_MAX_ERRORS);
     // Prevent the preference from setting a value greater than 10.
     maxFail = Math.min(maxFail, 10);
     // As a safety, when the service reaches maximum failures, it will
@@ -1140,7 +1115,6 @@ function UpdatePatch(patch) {
   this._properties = {};
   for (var i = 0; i < patch.attributes.length; ++i) {
     var attr = patch.attributes.item(i);
-    attr.QueryInterface(Ci.nsIDOMAttr);
     switch (attr.name) {
       case "selected":
         this.selected = attr.value == "true";
@@ -1254,9 +1228,9 @@ UpdatePatch.prototype = {
     this._properties.state = val;
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIUpdatePatch,
-                                         Ci.nsIPropertyBag,
-                                         Ci.nsIWritablePropertyBag])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIUpdatePatch,
+                                          Ci.nsIPropertyBag,
+                                          Ci.nsIWritablePropertyBag])
 };
 
 /**
@@ -1273,9 +1247,9 @@ function Update(update) {
   this.isCompleteUpdate = false;
   this.unsupported = false;
   this.channel = "default";
-  this.promptWaitTime = getPref("getIntPref", PREF_APP_UPDATE_PROMPTWAITTIME, 43200);
-  this.backgroundInterval = getPref("getIntPref", PREF_APP_UPDATE_BACKGROUNDINTERVAL,
-                                    DOWNLOAD_BACKGROUND_INTERVAL);
+  this.promptWaitTime = Services.prefs.getIntPref(PREF_APP_UPDATE_PROMPTWAITTIME, 43200);
+  this.backgroundInterval = Services.prefs.getIntPref(PREF_APP_UPDATE_BACKGROUNDINTERVAL,
+                                                      DOWNLOAD_BACKGROUND_INTERVAL);
 
   // Null <update>, assume this is a message container and do no
   // further initialization
@@ -1283,16 +1257,14 @@ function Update(update) {
     return;
   }
 
-  const ELEMENT_NODE = Ci.nsIDOMNode.ELEMENT_NODE;
   let patch;
   for (let i = 0; i < update.childNodes.length; ++i) {
     let patchElement = update.childNodes.item(i);
-    if (patchElement.nodeType != ELEMENT_NODE ||
+    if (patchElement.nodeType != patchElement.ELEMENT_NODE ||
         patchElement.localName != "patch") {
       continue;
     }
 
-    patchElement.QueryInterface(Ci.nsIDOMElement);
     try {
       patch = new UpdatePatch(patchElement);
     } catch (e) {
@@ -1312,7 +1284,6 @@ function Update(update) {
 
   for (let i = 0; i < update.attributes.length; ++i) {
     var attr = update.attributes.item(i);
-    attr.QueryInterface(Ci.nsIDOMAttr);
     if (attr.value == "undefined") {
       continue;
     } else if (attr.name == "detailsURL") {
@@ -1558,9 +1529,9 @@ Update.prototype = {
     return null;
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIUpdate,
-                                         Ci.nsIPropertyBag,
-                                         Ci.nsIWritablePropertyBag])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIUpdate,
+                                          Ci.nsIPropertyBag,
+                                          Ci.nsIWritablePropertyBag])
 };
 
 const UpdateServiceFactory = {
@@ -1644,7 +1615,6 @@ UpdateService.prototype = {
         // intentional fallthrough
       case "sessionstore-windows-restored":
       case "mail-startup-done":
-      case "xul-window-visible":
         if (Services.appinfo.ID in APPID_TO_TOPIC) {
           Services.obs.removeObserver(this,
                                       APPID_TO_TOPIC[Services.appinfo.ID]);
@@ -1659,7 +1629,7 @@ UpdateService.prototype = {
         break;
       case "nsPref:changed":
         if (data == PREF_APP_UPDATE_LOG) {
-          gLogEnabled = getPref("getBoolPref", PREF_APP_UPDATE_LOG, false);
+          gLogEnabled = Services.prefs.getBoolPref(PREF_APP_UPDATE_LOG, false);
         }
         break;
       case "quit-application":
@@ -1946,11 +1916,11 @@ UpdateService.prototype = {
     // Send the error code to telemetry
     AUSTLMY.pingCheckExError(this._pingSuffix, update.errorCode);
     update.errorCode = BACKGROUNDCHECK_MULTIPLE_FAILURES;
-    let errCount = getPref("getIntPref", PREF_APP_UPDATE_BACKGROUNDERRORS, 0);
+    let errCount = Services.prefs.getIntPref(PREF_APP_UPDATE_BACKGROUNDERRORS, 0);
     errCount++;
     Services.prefs.setIntPref(PREF_APP_UPDATE_BACKGROUNDERRORS, errCount);
     // Don't allow the preference to set a value greater than 20 for max errors.
-    let maxErrors = Math.min(getPref("getIntPref", PREF_APP_UPDATE_BACKGROUNDMAXERRORS, 10), 20);
+    let maxErrors = Math.min(Services.prefs.getIntPref(PREF_APP_UPDATE_BACKGROUNDMAXERRORS, 10), 20);
 
     if (errCount >= maxErrors) {
       let prompter = Cc["@mozilla.org/updates/update-prompt;1"].
@@ -2128,7 +2098,7 @@ UpdateService.prototype = {
       } else if (!validUpdateURL) {
         AUSTLMY.pingCheckCode(this._pingSuffix,
                               AUSTLMY.CHK_INVALID_DEFAULT_URL);
-      } else if (!getPref("getBoolPref", PREF_APP_UPDATE_ENABLED, true)) {
+      } else if (!Services.prefs.getBoolPref(PREF_APP_UPDATE_ENABLED, true)) {
         AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_PREF_DISABLED);
       } else if (!hasUpdateMutex()) {
         AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_NO_MUTEX);
@@ -2204,9 +2174,8 @@ UpdateService.prototype = {
     let update = minorUpdate || majorUpdate;
     if (AppConstants.platform == "macosx" && update) {
       if (getElevationRequired()) {
-        let installAttemptVersion = getPref("getCharPref",
-                                            PREF_APP_UPDATE_ELEVATE_VERSION,
-                                            null);
+        let installAttemptVersion =
+          Services.prefs.getCharPref(PREF_APP_UPDATE_ELEVATE_VERSION, null);
         if (vc.compare(installAttemptVersion, update.appVersion) != 0) {
           Services.prefs.setCharPref(PREF_APP_UPDATE_ELEVATE_VERSION,
                                      update.appVersion);
@@ -2218,13 +2187,13 @@ UpdateService.prototype = {
             Services.prefs.clearUserPref(PREF_APP_UPDATE_ELEVATE_NEVER);
           }
         } else {
-          let numCancels = getPref("getIntPref",
-                                   PREF_APP_UPDATE_CANCELATIONS_OSX, 0);
-          let rejectedVersion = getPref("getCharPref",
-                                        PREF_APP_UPDATE_ELEVATE_NEVER, "");
-          let maxCancels = getPref("getIntPref",
-                                   PREF_APP_UPDATE_CANCELATIONS_OSX_MAX,
-                                   DEFAULT_CANCELATIONS_OSX_MAX);
+          let numCancels =
+            Services.prefs.getIntPref(PREF_APP_UPDATE_CANCELATIONS_OSX, 0);
+          let rejectedVersion =
+            Services.prefs.getCharPref(PREF_APP_UPDATE_ELEVATE_NEVER, "");
+          let maxCancels =
+            Services.prefs.getIntPref(PREF_APP_UPDATE_CANCELATIONS_OSX_MAX,
+                                      DEFAULT_CANCELATIONS_OSX_MAX);
           if (numCancels >= maxCancels) {
             LOG("UpdateService:selectUpdate - the user requires elevation to " +
                 "install this update, but the user has exceeded the max " +
@@ -2282,7 +2251,7 @@ UpdateService.prototype = {
       return;
     }
 
-    var updateEnabled = getPref("getBoolPref", PREF_APP_UPDATE_ENABLED, true);
+    var updateEnabled = Services.prefs.getBoolPref(PREF_APP_UPDATE_ENABLED, true);
     if (!updateEnabled) {
       AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_PREF_DISABLED);
       LOG("UpdateService:_selectAndInstallUpdate - not prompting because " +
@@ -2299,7 +2268,7 @@ UpdateService.prototype = {
       LOG("UpdateService:_selectAndInstallUpdate - update not supported for " +
           "this system. Notifying observers. topic: update-available, " +
           "status: unsupported");
-      if (!getPref("getBoolPref", PREF_APP_UPDATE_NOTIFIEDUNSUPPORTED, false)) {
+      if (!Services.prefs.getBoolPref(PREF_APP_UPDATE_NOTIFIEDUNSUPPORTED, false)) {
         LOG("UpdateService:_selectAndInstallUpdate - notifying that the " +
             "update is not supported for this system");
         this._showPrompt(update);
@@ -2336,7 +2305,7 @@ UpdateService.prototype = {
      * Major         Notify
      * Minor         Auto Install
      */
-    if (!getPref("getBoolPref", PREF_APP_UPDATE_AUTO, true)) {
+    if (!Services.prefs.getBoolPref(PREF_APP_UPDATE_AUTO, true)) {
       LOG("UpdateService:_selectAndInstallUpdate - prompting because silent " +
           "install is disabled. Notifying observers. topic: update-available, " +
           "status: show-prompt");
@@ -2510,10 +2479,10 @@ UpdateService.prototype = {
                                     flags: Ci.nsIClassInfo.SINGLETON}),
 
   _xpcom_factory: UpdateServiceFactory,
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIApplicationUpdateService,
-                                         Ci.nsIUpdateCheckListener,
-                                         Ci.nsITimerCallback,
-                                         Ci.nsIObserver])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIApplicationUpdateService,
+                                          Ci.nsIUpdateCheckListener,
+                                          Ci.nsITimerCallback,
+                                          Ci.nsIObserver])
 };
 
 /**
@@ -2615,20 +2584,17 @@ UpdateManager.prototype = {
                      createInstance(Ci.nsIFileInputStream);
     fileStream.init(file, FileUtils.MODE_RDONLY, FileUtils.PERMS_FILE, 0);
     try {
-      var parser = Cc["@mozilla.org/xmlextras/domparser;1"].
-                   createInstance(Ci.nsIDOMParser);
+      var parser = new DOMParser();
       var doc = parser.parseFromStream(fileStream, "UTF-8",
                                        fileStream.available(), "text/xml");
 
-      const ELEMENT_NODE = Ci.nsIDOMNode.ELEMENT_NODE;
       var updateCount = doc.documentElement.childNodes.length;
       for (var i = 0; i < updateCount; ++i) {
         var updateElement = doc.documentElement.childNodes.item(i);
-        if (updateElement.nodeType != ELEMENT_NODE ||
+        if (updateElement.nodeType != updateElement.ELEMENT_NODE ||
             updateElement.localName != "update")
           continue;
 
-        updateElement.QueryInterface(Ci.nsIDOMElement);
         let update;
         try {
           update = new Update(updateElement);
@@ -2726,8 +2692,7 @@ UpdateManager.prototype = {
     const EMPTY_UPDATES_DOCUMENT_OPEN = "<?xml version=\"1.0\"?><updates xmlns=\"http://www.mozilla.org/2005/app-update\">";
     const EMPTY_UPDATES_DOCUMENT_CLOSE = "</updates>";
     try {
-      var parser = Cc["@mozilla.org/xmlextras/domparser;1"].
-                   createInstance(Ci.nsIDOMParser);
+      var parser = new DOMParser();
       var doc = parser.parseFromString(EMPTY_UPDATES_DOCUMENT_OPEN + EMPTY_UPDATES_DOCUMENT_CLOSE, "text/xml");
 
       for (var i = 0; i < updates.length; ++i) {
@@ -2834,7 +2799,7 @@ UpdateManager.prototype = {
     Services.obs.notifyObservers(update, "update-staged", update.state);
 
     // Only prompt when the UI isn't already open.
-    let windowType = getPref("getCharPref", PREF_APP_UPDATE_ALTWINDOWTYPE, null);
+    let windowType = Services.prefs.getCharPref(PREF_APP_UPDATE_ALTWINDOWTYPE, null);
     if (Services.wm.getMostRecentWindow(UPDATE_WINDOW_NAME) ||
         windowType && Services.wm.getMostRecentWindow(windowType)) {
       return;
@@ -2887,7 +2852,7 @@ UpdateManager.prototype = {
   },
 
   classID: Components.ID("{093C2356-4843-4C65-8709-D7DBCBBE7DFB}"),
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIUpdateManager, Ci.nsIObserver])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIUpdateManager, Ci.nsIObserver])
 };
 
 /**
@@ -2979,11 +2944,11 @@ Checker.prototype = {
     url = await UpdateUtils.formatUpdateURL(url);
 
     if (force) {
-      url += (url.indexOf("?") != -1 ? "&" : "?") + "force=1";
+      url += (url.includes("?") ? "&" : "?") + "force=1";
     }
 
     if (this._getCanMigrate()) {
-      url += (url.indexOf("?") != -1 ? "&" : "?") + "mig64=1";
+      url += (url.includes("?") ? "&" : "?") + "mig64=1";
     }
 
     LOG("Checker:getUpdateURL - update URL: " + url);
@@ -3010,7 +2975,7 @@ Checker.prototype = {
 
       this._request = new XMLHttpRequest();
       this._request.open("GET", url, true);
-      this._request.channel.notificationCallbacks = new gCertUtils.BadCertHandler(false);
+      this._request.channel.notificationCallbacks = new CertUtils.BadCertHandler(false);
       // Prevent the request from reading from the cache.
       this._request.channel.loadFlags |= Ci.nsIRequest.LOAD_BYPASS_CACHE;
       // Prevent the request from writing to the cache.
@@ -3055,15 +3020,13 @@ Checker.prototype = {
                       updatesElement.nodeName);
     }
 
-    const ELEMENT_NODE = Ci.nsIDOMNode.ELEMENT_NODE;
     var updates = [];
     for (var i = 0; i < updatesElement.childNodes.length; ++i) {
       var updateElement = updatesElement.childNodes.item(i);
-      if (updateElement.nodeType != ELEMENT_NODE ||
+      if (updateElement.nodeType != updateElement.ELEMENT_NODE ||
           updateElement.localName != "update")
         continue;
 
-      updateElement.QueryInterface(Ci.nsIDOMElement);
       let update;
       try {
         update = new Update(updateElement);
@@ -3101,10 +3064,11 @@ Checker.prototype = {
   /**
    * The XMLHttpRequest succeeded and the document was loaded.
    * @param   event
-   *          The nsIDOMEvent for the load
+   *          The Event for the load
    */
   onLoad: function UC_onLoad(event) {
     LOG("Checker:onLoad - request completed downloading document");
+    Services.prefs.clearUserPref("security.pki.mitm_canary_issuer");
 
     try {
       // Analyze the resulting DOM and determine the set of updates.
@@ -3141,12 +3105,25 @@ Checker.prototype = {
   /**
    * There was an error of some kind during the XMLHttpRequest
    * @param   event
-   *          The nsIDOMEvent for the error
+   *          The Event for the error
    */
   onError: function UC_onError(event) {
     var request = event.target;
     var status = this._getChannelStatus(request);
     LOG("Checker:onError - request.status: " + status);
+
+    // Set MitM pref.
+    try {
+      var sslStatus = request.channel.QueryInterface(Ci.nsIRequest)
+                        .securityInfo.QueryInterface(Ci.nsISSLStatusProvider)
+                        .SSLStatus.QueryInterface(Ci.nsISSLStatus);
+      if (sslStatus && sslStatus.serverCert && sslStatus.serverCert.issuerName) {
+        Services.prefs.setStringPref("security.pki.mitm_canary_issuer",
+                                     sslStatus.serverCert.issuerName);
+      }
+    } catch (e) {
+      LOG("Checker:onError - Getting sslStatus failed.");
+    }
 
     // If we can't find an error string specific to this status code,
     // just use the 200 message from above, which means everything
@@ -3171,7 +3148,7 @@ Checker.prototype = {
    */
   _enabled: true,
   get enabled() {
-    return getPref("getBoolPref", PREF_APP_UPDATE_ENABLED, true) &&
+    return Services.prefs.getBoolPref(PREF_APP_UPDATE_ENABLED, true) &&
            gCanCheckForUpdates && hasUpdateMutex() && this._enabled;
   },
 
@@ -3197,7 +3174,7 @@ Checker.prototype = {
   },
 
   classID: Components.ID("{898CDC9B-E43F-422F-9CC4-2F6291B415A3}"),
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIUpdateChecker])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIUpdateChecker])
 };
 
 /**
@@ -3511,7 +3488,7 @@ Downloader.prototype = {
    * @param   maxProgress
    *          The total number of bytes that must be transferred
    */
-  onProgress: function Downloader_onProgress(request, context, progress,
+    onProgress: function Downloader_onProgress(request, context, progress,
                                              maxProgress) {
     LOG("Downloader:onProgress - progress: " + progress + "/" + maxProgress);
 
@@ -3542,6 +3519,7 @@ Downloader.prototype = {
     }
     this.updateService._consecutiveSocketErrors = 0;
   },
+
 
   /**
    * When we have new status text
@@ -3588,12 +3566,12 @@ Downloader.prototype = {
     var shouldRegisterOnlineObserver = false;
     var shouldRetrySoon = false;
     var deleteActiveUpdate = false;
-    var retryTimeout = getPref("getIntPref", PREF_APP_UPDATE_SOCKET_RETRYTIMEOUT,
-                               DEFAULT_SOCKET_RETRYTIMEOUT);
+    var retryTimeout = Services.prefs.getIntPref(PREF_APP_UPDATE_SOCKET_RETRYTIMEOUT,
+                                                 DEFAULT_SOCKET_RETRYTIMEOUT);
     // Prevent the preference from setting a value greater than 10000.
     retryTimeout = Math.min(retryTimeout, 10000);
-    var maxFail = getPref("getIntPref", PREF_APP_UPDATE_SOCKET_MAXERRORS,
-                          DEFAULT_SOCKET_MAX_ERRORS);
+    var maxFail = Services.prefs.getIntPref(PREF_APP_UPDATE_SOCKET_MAXERRORS,
+                                            DEFAULT_SOCKET_MAX_ERRORS);
     // Prevent the preference from setting a value greater than 20.
     maxFail = Math.min(maxFail, 20);
     LOG("Downloader:onStopRequest - status: " + status + ", " +
@@ -3734,11 +3712,11 @@ Downloader.prototype = {
       }
 
       if (allFailed) {
-        if (getPref("getBoolPref", PREF_APP_UPDATE_DOORHANGER, false)) {
-          let downloadAttempts = getPref("getIntPref", PREF_APP_UPDATE_DOWNLOAD_ATTEMPTS, 0);
+        if (Services.prefs.getBoolPref(PREF_APP_UPDATE_DOORHANGER, false)) {
+          let downloadAttempts = Services.prefs.getIntPref(PREF_APP_UPDATE_DOWNLOAD_ATTEMPTS, 0);
           downloadAttempts++;
           Services.prefs.setIntPref(PREF_APP_UPDATE_DOWNLOAD_ATTEMPTS, downloadAttempts);
-          let maxAttempts = Math.min(getPref("getIntPref", PREF_APP_UPDATE_DOWNLOAD_MAXATTEMPTS, 2), 10);
+          let maxAttempts = Math.min(Services.prefs.getIntPref(PREF_APP_UPDATE_DOWNLOAD_MAXATTEMPTS, 2), 10);
 
           if (downloadAttempts > maxAttempts) {
             LOG("Downloader:onStopRequest - notifying observers of error. " +
@@ -3839,9 +3817,9 @@ Downloader.prototype = {
     throw Cr.NS_NOINTERFACE;
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIRequestObserver,
-                                         Ci.nsIProgressEventSink,
-                                         Ci.nsIInterfaceRequestor])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIRequestObserver,
+                                          Ci.nsIProgressEventSink,
+                                          Ci.nsIInterfaceRequestor])
 };
 
 /**
@@ -3869,8 +3847,8 @@ UpdatePrompt.prototype = {
    * See nsIUpdateService.idl
    */
   showUpdateAvailable: function UP_showUpdateAvailable(update) {
-    if (getPref("getBoolPref", PREF_APP_UPDATE_SILENT, false) ||
-        getPref("getBoolPref", PREF_APP_UPDATE_DOORHANGER, false) ||
+    if (Services.prefs.getBoolPref(PREF_APP_UPDATE_SILENT, false) ||
+        Services.prefs.getBoolPref(PREF_APP_UPDATE_DOORHANGER, false) ||
         this._getUpdateWindow() || this._getAltUpdateWindow()) {
       return;
     }
@@ -3883,7 +3861,7 @@ UpdatePrompt.prototype = {
    * See nsIUpdateService.idl
    */
   showUpdateDownloaded: function UP_showUpdateDownloaded(update, background) {
-    if (background && getPref("getBoolPref", PREF_APP_UPDATE_SILENT, false)) {
+    if (background && Services.prefs.getBoolPref(PREF_APP_UPDATE_SILENT, false)) {
       return;
     }
 
@@ -3892,7 +3870,7 @@ UpdatePrompt.prototype = {
         "an update was downloaded. topic: update-downloaded, status: " + update.state);
     Services.obs.notifyObservers(update, "update-downloaded", update.state);
 
-    if (getPref("getBoolPref", PREF_APP_UPDATE_DOORHANGER, false)) {
+    if (Services.prefs.getBoolPref(PREF_APP_UPDATE_DOORHANGER, false)) {
       return;
     }
 
@@ -3912,8 +3890,8 @@ UpdatePrompt.prototype = {
    * See nsIUpdateService.idl
    */
   showUpdateError: function UP_showUpdateError(update) {
-    if (getPref("getBoolPref", PREF_APP_UPDATE_SILENT, false) ||
-        getPref("getBoolPref", PREF_APP_UPDATE_DOORHANGER, false) ||
+    if (Services.prefs.getBoolPref(PREF_APP_UPDATE_SILENT, false) ||
+        Services.prefs.getBoolPref(PREF_APP_UPDATE_DOORHANGER, false) ||
         this._getAltUpdateWindow())
       return;
 
@@ -3950,7 +3928,7 @@ UpdatePrompt.prototype = {
    * See nsIUpdateService.idl
    */
   showUpdateElevationRequired: function UP_showUpdateElevationRequired() {
-    if (getPref("getBoolPref", PREF_APP_UPDATE_SILENT, false) ||
+    if (Services.prefs.getBoolPref(PREF_APP_UPDATE_SILENT, false) ||
         this._getAltUpdateWindow()) {
       return;
     }
@@ -3974,7 +3952,7 @@ UpdatePrompt.prototype = {
    * application update user interface window.
    */
   _getAltUpdateWindow: function UP__getAltUpdateWindow() {
-    let windowType = getPref("getCharPref", PREF_APP_UPDATE_ALTWINDOWTYPE, null);
+    let windowType = Services.prefs.getCharPref(PREF_APP_UPDATE_ALTWINDOWTYPE, null);
     if (!windowType)
       return null;
     return Services.wm.getMostRecentWindow(windowType);
@@ -4026,7 +4004,7 @@ UpdatePrompt.prototype = {
       var idleService = Cc["@mozilla.org/widget/idleservice;1"].
                         getService(Ci.nsIIdleService);
       // Don't allow the preference to set a value greater than 600 seconds for the idle time.
-      const IDLE_TIME = Math.min(getPref("getIntPref", PREF_APP_UPDATE_IDLETIME, 60), 600);
+      const IDLE_TIME = Math.min(Services.prefs.getIntPref(PREF_APP_UPDATE_IDLETIME, 60), 600);
       if (idleService.idleTime / 1000 >= IDLE_TIME) {
         this._showUI(parent, uri, features, name, page, update);
         return;
@@ -4071,7 +4049,7 @@ UpdatePrompt.prototype = {
                       getService(Ci.nsIIdleService);
 
     // Don't allow the preference to set a value greater than 600 seconds for the idle time.
-    const IDLE_TIME = Math.min(getPref("getIntPref", PREF_APP_UPDATE_IDLETIME, 60), 600);
+    const IDLE_TIME = Math.min(Services.prefs.getIntPref(PREF_APP_UPDATE_IDLETIME, 60), 600);
     if (idleService.idleTime / 1000 >= IDLE_TIME) {
       this._showUI(parent, uri, features, name, page, update);
     } else {
@@ -4135,7 +4113,7 @@ UpdatePrompt.prototype = {
   classDescription: "Update Prompt",
   contractID: "@mozilla.org/updates/update-prompt;1",
   classID: Components.ID("{27ABA825-35B5-4018-9FDD-F99250A0E722}"),
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIUpdatePrompt])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIUpdatePrompt])
 };
 
 var components = [UpdateService, Checker, UpdatePrompt, UpdateManager];

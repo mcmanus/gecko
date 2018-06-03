@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,7 +17,6 @@
 #include "nsISelectionController.h"
 #include "nsISelectionListener.h"
 #include "nsITableCellLayout.h"
-#include "nsIDOMElement.h"
 #include "WordMovementType.h"
 #include "CaretAssociationHint.h"
 #include "nsBidiPresUtils.h"
@@ -181,6 +182,20 @@ namespace dom {
 class Selection;
 class SelectionChangeListener;
 } // namespace dom
+
+/**
+ * Constants for places that want to handle table selections.  These
+ * indicate what part of a table is being selected.
+ */
+enum class TableSelection : uint32_t {
+  None, /* Nothing being selected; not valid in all cases. */
+  Cell, /* A cell is being selected. */
+  Row,  /* A row is being selected. */
+  Column, /* A column is being selected. */
+  Table, /* A table (including cells and captions) is being selected. */
+  AllCells, /* All the cells in a table are being selected. */
+};
+
 } // namespace mozilla
 class nsIScrollableFrame;
 
@@ -235,24 +250,24 @@ public:
    *  @param aPoint is relative to aFrame
    */
   /*unsafe*/
-  void HandleDrag(nsIFrame *aFrame, nsPoint aPoint);
+  void HandleDrag(nsIFrame* aFrame, const nsPoint& aPoint);
 
   /** HandleTableSelection will set selection to a table, cell, etc
    *   depending on information contained in aFlags
    *  @param aParentContent is the paretent of either a table or cell that user clicked or dragged the mouse in
    *  @param aContentOffset is the offset of the table or cell
-   *  @param aTarget indicates what to select (defined in nsISelectionPrivate.idl/nsISelectionPrivate.h):
-   *    TABLESELECTION_CELL      We should select a cell (content points to the cell)
-   *    TABLESELECTION_ROW       We should select a row (content points to any cell in row)
-   *    TABLESELECTION_COLUMN    We should select a row (content points to any cell in column)
-   *    TABLESELECTION_TABLE     We should select a table (content points to the table)
-   *    TABLESELECTION_ALLCELLS  We should select all cells (content points to any cell in table)
+   *  @param aTarget indicates what to select
+   *    TableSelection::Cell     We should select a cell (content points to the cell)
+   *    TableSelection::Row      We should select a row (content points to any cell in row)
+   *    TableSelection::Column   We should select a row (content points to any cell in column)
+   *    TableSelection::Table    We should select a table (content points to the table)
+   *    TableSelection::AllCells We should select all cells (content points to any cell in table)
    *  @param aMouseEvent         passed in so we can get where event occurred and what keys are pressed
    */
   /*unsafe*/
   nsresult HandleTableSelection(nsINode* aParentContent,
                                 int32_t aContentOffset,
-                                int32_t aTarget,
+                                mozilla::TableSelection aTarget,
                                 mozilla::WidgetMouseEvent* aMouseEvent);
 
   /**
@@ -318,8 +333,8 @@ public:
    *  @param aDelay is the timer's interval.
    */
   /*unsafe*/
-  nsresult StartAutoScrollTimer(nsIFrame *aFrame,
-                                nsPoint aPoint,
+  nsresult StartAutoScrollTimer(nsIFrame* aFrame,
+                                const nsPoint& aPoint,
                                 uint32_t aDelay);
 
   /** StopAutoScrollTimer stops any active auto scroll timer.
@@ -354,8 +369,14 @@ public:
   /**
     if we are in table cell selection mode. aka ctrl click in table cell
    */
-  bool GetTableCellSelection() const { return mSelectingTableCellMode != 0; }
-  void ClearTableCellSelection() { mSelectingTableCellMode = 0; }
+  bool GetTableCellSelection() const
+  {
+    return mSelectingTableCellMode != mozilla::TableSelection::None;
+  }
+  void ClearTableCellSelection()
+  {
+    mSelectingTableCellMode = mozilla::TableSelection::None;
+  }
 
   /** GetSelection
    * no query interface for selection. must use this method now.
@@ -606,9 +627,9 @@ public:
    */
   nsresult MaintainSelection(nsSelectionAmount aAmount = eSelectNoAmount);
 
-  nsresult ConstrainFrameAndPointToAnchorSubtree(nsIFrame *aFrame,
-                                                 nsPoint& aPoint,
-                                                 nsIFrame **aRetFrame,
+  nsresult ConstrainFrameAndPointToAnchorSubtree(nsIFrame* aFrame,
+                                                 const nsPoint& aPoint,
+                                                 nsIFrame** aRetFrame,
                                                  nsPoint& aRetPoint);
 
   nsFrameSelection();
@@ -702,15 +723,12 @@ private:
   nsresult     UpdateSelectionCacheOnRepaintSelection(mozilla::dom::
                                                       Selection* aSel);
 
-  RefPtr<mozilla::dom::Selection>
-    mDomSelections[
-      sizeof(mozilla::kPresentSelectionTypes) / sizeof(mozilla::SelectionType)];
-
   // Table selection support.
   nsITableCellLayout* GetCellLayout(nsIContent *aCellContent) const;
 
   nsresult SelectBlockOfCells(nsIContent *aStartNode, nsIContent *aEndNode);
-  nsresult SelectRowOrColumn(nsIContent *aCellContent, uint32_t aTarget);
+  nsresult SelectRowOrColumn(nsIContent *aCellContent,
+                             mozilla::TableSelection aTarget);
   nsresult UnselectCells(nsIContent *aTable,
                          int32_t aStartRowIndex, int32_t aStartColumnIndex,
                          int32_t aEndRowIndex, int32_t aEndColumnIndex,
@@ -733,49 +751,60 @@ private:
   nsIContent* GetParentTable(nsIContent *aCellNode) const;
   nsresult CreateAndAddRange(nsINode* aContainer, int32_t aOffset);
 
+  ////////////BEGIN nsFrameSelection members
+
+  RefPtr<mozilla::dom::Selection>
+    mDomSelections[
+      sizeof(mozilla::kPresentSelectionTypes) / sizeof(mozilla::SelectionType)];
+
   nsCOMPtr<nsINode> mCellParent; //used to snap to table selection
   nsCOMPtr<nsIContent> mStartSelectedCell;
   nsCOMPtr<nsIContent> mEndSelectedCell;
   nsCOMPtr<nsIContent> mAppendStartSelectedCell;
   nsCOMPtr<nsIContent> mUnselectCellOnMouseUp;
-  int32_t  mSelectingTableCellMode;
-  int32_t  mSelectedCellIndex;
+  mozilla::TableSelection mSelectingTableCellMode = mozilla::TableSelection::None;
+  int32_t  mSelectedCellIndex = 0;
 
   // maintain selection
   RefPtr<nsRange> mMaintainRange;
-  nsSelectionAmount mMaintainedAmount;
+  nsSelectionAmount mMaintainedAmount = eSelectNoAmount;
 
   //batching
-  int32_t mBatching;
+  int32_t mBatching = 0;
 
   // Limit selection navigation to a child of this node.
   nsCOMPtr<nsIContent> mLimiter;
   // Limit selection navigation to a descendant of this node.
   nsCOMPtr<nsIContent> mAncestorLimiter;
 
-  nsIPresShell *mShell;
+  nsIPresShell* mShell = nullptr;
+  // Reason for notifications of selection changing.
+  int16_t mSelectionChangeReason = nsISelectionListener::NO_REASON;
+  // For visual display purposes.
+  int16_t mDisplaySelection = nsISelectionController::SELECTION_OFF;
 
-  int16_t mSelectionChangeReason; // reason for notifications of selection changing
-  int16_t mDisplaySelection; //for visual display purposes.
-
-  CaretAssociateHint mHint;   //hint to tell if the selection is at the end of this line or beginning of next
-  nsBidiLevel mCaretBidiLevel;
-  nsBidiLevel mKbdBidiLevel;
+  // Hint to tell if the selection is at the end of this line or beginning of next.
+  CaretAssociateHint mHint = mozilla::CARET_ASSOCIATE_BEFORE;
+  nsBidiLevel mCaretBidiLevel = BIDI_LEVEL_UNDEFINED;
+  nsBidiLevel mKbdBidiLevel = NSBIDI_LTR;
 
   nsPoint mDesiredPos;
-  uint32_t mDelayedMouseEventClickCount;
-  bool mDelayedMouseEventIsShift;
-  bool mDelayedMouseEventValid;
+  bool mDelayedMouseEventValid = false;
+  // These values are not used since they are only valid when
+  // mDelayedMouseEventValid is true, and setting mDelayedMouseEventValid
+  // always overrides these values.
+  uint32_t mDelayedMouseEventClickCount = 0;
+  bool mDelayedMouseEventIsShift = false;
 
-  bool mChangesDuringBatching;
-  bool mNotifyFrames;
-  bool mDragSelectingCells;
-  bool mDragState;   //for drag purposes
-  bool mMouseDoubleDownState; //has the doubleclick down happened
-  bool mDesiredPosSet;
-  bool mAccessibleCaretEnabled;
+  bool mChangesDuringBatching = false;
+  bool mNotifyFrames = true;
+  bool mDragSelectingCells = false;
+  bool mDragState = false;   //for drag purposes
+  bool mMouseDoubleDownState = false; //has the doubleclick down happened
+  bool mDesiredPosSet = false;
+  bool mAccessibleCaretEnabled = false;
 
-  int8_t mCaretMovementStyle;
+  int8_t mCaretMovementStyle = 0;
 
   static bool sSelectionEventsEnabled;
   static bool sSelectionEventsOnTextControlsEnabled;

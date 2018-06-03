@@ -31,9 +31,16 @@ JSJitFrameIter::JSJitFrameIter(const JitActivation* activation)
     }
 }
 
-JSJitFrameIter::JSJitFrameIter(JSContext* cx)
-  : JSJitFrameIter(cx->activation()->asJit())
+JSJitFrameIter::JSJitFrameIter(const JitActivation* activation, uint8_t* fp)
+  : current_(fp),
+    type_(JitFrame_JSJitToWasm),
+    returnAddressToFp_(nullptr),
+    frameSize_(0),
+    cachedSafepointIndex_(nullptr),
+    activation_(activation)
 {
+    MOZ_ASSERT(!activation_->bailoutData());
+    MOZ_ASSERT(!TlsContext.get()->inUnsafeCallWithABI);
 }
 
 bool
@@ -209,8 +216,7 @@ JSJitFrameIter::machineState() const
         for (uint32_t a = 0; a < (*iter).numAlignedAliased(); a++) {
             // Only say that registers that actually start here start here.
             // e.g. d0 should not start at s1, only at s0.
-            FloatRegister ftmp;
-            (*iter).alignedAliased(a, &ftmp);
+            FloatRegister ftmp = (*iter).alignedAliased(a);
             machine.setRegisterLocation(ftmp, (double*)floatSpill);
         }
     }
@@ -308,7 +314,7 @@ JSJitFrameIter::dumpBaseline() const
         fprintf(stderr, "  global frame, no callee\n");
     }
 
-    fprintf(stderr, "  file %s line %zu\n",
+    fprintf(stderr, "  file %s line %u\n",
             script()->filename(), script()->lineno());
 
     JSContext* cx = TlsContext.get();
@@ -376,6 +382,9 @@ JSJitFrameIter::dump() const
       case JitFrame_Exit:
         fprintf(stderr, " Exit frame\n");
         break;
+      case JitFrame_JSJitToWasm:
+        fprintf(stderr, " Wasm exit frame\n");
+        break;
     };
     fputc('\n', stderr);
 }
@@ -422,7 +431,7 @@ JSJitFrameIter::verifyReturnAddressUsingNativeToBytecodeMap()
 
     JitSpew(JitSpew_Profiling, "Found bytecode location of depth %d:", depth);
     for (size_t i = 0; i < location.length(); i++) {
-        JitSpew(JitSpew_Profiling, "   %s:%zu - %zu",
+        JitSpew(JitSpew_Profiling, "   %s:%u - %zu",
                 location[i].script->filename(), location[i].script->lineno(),
                 size_t(location[i].pc - location[i].script->code()));
     }
@@ -435,7 +444,7 @@ JSJitFrameIter::verifyReturnAddressUsingNativeToBytecodeMap()
             MOZ_ASSERT_IF(idx < location.length() - 1, inlineFrames.more());
 
             JitSpew(JitSpew_Profiling,
-                    "Match %d: ION %s:%zu(%zu) vs N2B %s:%zu(%zu)",
+                    "Match %d: ION %s:%u(%zu) vs N2B %s:%u(%zu)",
                     (int)idx,
                     inlineFrames.script()->filename(),
                     inlineFrames.script()->lineno(),
@@ -455,8 +464,7 @@ JSJitFrameIter::verifyReturnAddressUsingNativeToBytecodeMap()
 }
 #endif // DEBUG
 
-JSJitProfilingFrameIterator::JSJitProfilingFrameIterator(
-        JSContext* cx, const JS::ProfilingFrameIterator::RegisterState& state)
+JSJitProfilingFrameIterator::JSJitProfilingFrameIterator(JSContext* cx, void* pc)
 {
     // If no profilingActivation is live, initialize directly to
     // end-of-iteration state.
@@ -483,28 +491,27 @@ JSJitProfilingFrameIterator::JSJitProfilingFrameIterator(
 
     // Get the fp from the current profilingActivation
     fp_ = (uint8_t*) act->lastProfilingFrame();
-    void* lastCallSite = act->lastProfilingCallSite();
-
-    JitcodeGlobalTable* table = cx->runtime()->jitRuntime()->getJitcodeGlobalTable();
 
     // Profiler sampling must NOT be suppressed if we are here.
     MOZ_ASSERT(cx->isProfilerSamplingEnabled());
 
     // Try initializing with sampler pc
-    if (tryInitWithPC(state.pc))
+    if (tryInitWithPC(pc))
         return;
 
     // Try initializing with sampler pc using native=>bytecode table.
-    if (tryInitWithTable(table, state.pc, cx->runtime(), /* forLastCallSite = */ false))
+    JitcodeGlobalTable* table = cx->runtime()->jitRuntime()->getJitcodeGlobalTable();
+    if (tryInitWithTable(table, pc, /* forLastCallSite = */ false))
         return;
 
     // Try initializing with lastProfilingCallSite pc
+    void* lastCallSite = act->lastProfilingCallSite();
     if (lastCallSite) {
         if (tryInitWithPC(lastCallSite))
             return;
 
         // Try initializing with lastProfilingCallSite pc using native=>bytecode table.
-        if (tryInitWithTable(table, lastCallSite, cx->runtime(), /* forLastCallSite = */ true))
+        if (tryInitWithTable(table, lastCallSite, /* forLastCallSite = */ true))
             return;
     }
 
@@ -524,11 +531,9 @@ GetPreviousRawFrame(CommonFrameLayout* frame)
     return ReturnType((uint8_t*)frame + prevSize);
 }
 
-JSJitProfilingFrameIterator::JSJitProfilingFrameIterator(void* exitFrame)
+JSJitProfilingFrameIterator::JSJitProfilingFrameIterator(CommonFrameLayout* fp)
 {
-    // Skip the exit frame.
-    ExitFrameLayout* frame = (ExitFrameLayout*) exitFrame;
-    moveToNextFrame(frame);
+    moveToNextFrame(fp);
 }
 
 bool
@@ -554,7 +559,7 @@ JSJitProfilingFrameIterator::tryInitWithPC(void* pc)
 }
 
 bool
-JSJitProfilingFrameIterator::tryInitWithTable(JitcodeGlobalTable* table, void* pc, JSRuntime* rt,
+JSJitProfilingFrameIterator::tryInitWithTable(JitcodeGlobalTable* table, void* pc,
                                             bool forLastCallSite)
 {
     if (!pc)
@@ -644,6 +649,27 @@ JSJitProfilingFrameIterator::operator++()
 }
 
 void
+JSJitProfilingFrameIterator::moveToWasmFrame(CommonFrameLayout* frame)
+{
+    // No previous js jit frame, this is a transition frame, used to
+    // pass a wasm iterator the correct value of FP.
+    returnAddressToFp_ = nullptr;
+    fp_ = GetPreviousRawFrame<uint8_t*>(frame);
+    type_ = JitFrame_WasmToJSJit;
+    MOZ_ASSERT(!done());
+}
+
+void
+JSJitProfilingFrameIterator::moveToCppEntryFrame()
+{
+    // No previous frame, set to nullptr to indicate that
+    // JSJitProfilingFrameIterator is done().
+    returnAddressToFp_ = nullptr;
+    fp_ = nullptr;
+    type_ = JitFrame_CppToJSJit;
+}
+
+void
 JSJitProfilingFrameIterator::moveToNextFrame(CommonFrameLayout* frame)
 {
     /*
@@ -666,6 +692,10 @@ JSJitProfilingFrameIterator::moveToNextFrame(CommonFrameLayout* frame)
      * |    ^--- Ion
      * |    |
      * |    ^--- Baseline Stub <---- Baseline
+     * |    |
+     * |    ^--- WasmToJSJit <--- (other wasm frames)
+     * |    |
+     * |    ^--- CppToJSJit
      * |
      * ^--- Entry Frame (From C++)
      *      Exit Frame (From previous JitActivation)
@@ -726,6 +756,16 @@ JSJitProfilingFrameIterator::moveToNextFrame(CommonFrameLayout* frame)
             return;
         }
 
+        if (rectPrevType == JitFrame_WasmToJSJit) {
+            moveToWasmFrame(rectFrame);
+            return;
+        }
+
+        if (rectPrevType == JitFrame_CppToJSJit) {
+            moveToCppEntryFrame();
+            return;
+        }
+
         MOZ_CRASH("Bad frame type prior to rectifier frame.");
     }
 
@@ -742,20 +782,12 @@ JSJitProfilingFrameIterator::moveToNextFrame(CommonFrameLayout* frame)
     }
 
     if (prevType == JitFrame_WasmToJSJit) {
-        // No previous js jit frame, this is a transition frame, used to pass
-        // a wasm iterator the correct value of FP.
-        returnAddressToFp_ = nullptr;
-        fp_ = GetPreviousRawFrame<uint8_t*>(frame);
-        type_ = JitFrame_WasmToJSJit;
+        moveToWasmFrame(frame);
         return;
     }
 
     if (prevType == JitFrame_CppToJSJit) {
-        // No previous frame, set to null to indicate that
-        // JSJitProfilingFrameIterator is done().
-        returnAddressToFp_ = nullptr;
-        fp_ = nullptr;
-        type_ = JitFrame_CppToJSJit;
+        moveToCppEntryFrame();
         return;
     }
 

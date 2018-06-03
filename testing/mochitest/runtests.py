@@ -15,6 +15,7 @@ sys.path.insert(0, SCRIPT_DIR)
 from argparse import Namespace
 from collections import defaultdict
 from contextlib import closing
+from distutils import spawn
 import copy
 import ctypes
 import glob
@@ -172,9 +173,6 @@ class MessageLogger(object):
         # Message buffering
         self.buffered_messages = []
 
-        # Failures reporting, after the end of the tests execution
-        self.errors = []
-
     def validate(self, obj):
         """Tests whether the given object is a valid structured message
         (only does a superficial validation)"""
@@ -245,8 +243,6 @@ class MessageLogger(object):
         # manually dump 'TEST-UNEXPECTED-FAIL'.
         if ('expected' in message or (message['action'] == 'log' and message[
                 'message'].startswith('TEST-UNEXPECTED'))):
-            # Saving errors/failures to be shown at the end of the test run
-            self.errors.append(message)
             self.restore_buffering = self.restore_buffering or self.buffering
             self.buffering = False
             if self.buffered_messages:
@@ -328,10 +324,29 @@ def call(*args, **kwargs):
 
 def killPid(pid, log):
     # see also https://bugzilla.mozilla.org/show_bug.cgi?id=911249#c58
-    try:
-        os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
-    except Exception as e:
-        log.info("Failed to kill process %d: %s" % (pid, str(e)))
+
+    if HAVE_PSUTIL:
+        # Kill a process tree (including grandchildren) with signal.SIGTERM
+        if pid == os.getpid():
+            raise RuntimeError("Error: trying to kill ourselves, not another process")
+        try:
+            parent = psutil.Process(pid)
+            children = parent.children(recursive=True)
+            children.append(parent)
+            for p in children:
+                p.send_signal(signal.SIGTERM)
+            gone, alive = psutil.wait_procs(children, timeout=30)
+            for p in gone:
+                log.info('psutil found pid %s dead' % p.pid)
+            for p in alive:
+                log.info('failed to kill pid %d after 30s' % p.pid)
+        except Exception as e:
+            log.info("Error: Failed to kill process %d: %s" % (pid, str(e)))
+    else:
+        try:
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+        except Exception as e:
+            log.info("Failed to kill process %d: %s" % (pid, str(e)))
 
 
 if mozinfo.isWin:
@@ -439,8 +454,6 @@ class MochitestServer(object):
         args = [
             "-g",
             self._xrePath,
-            "-v",
-            "170",
             "-f",
             os.path.join(
                 self._httpdPath,
@@ -506,7 +519,7 @@ class MochitestServer(object):
                 # https://bugzilla.mozilla.org/show_bug.cgi?id=912285
                 # self._process.terminate()
                 self._process.proc.terminate()
-        except:
+        except Exception:
             self._log.info("Failed to stop web server on %s" % self.shutdownURL)
             traceback.print_exc()
             self._process.kill()
@@ -608,7 +621,7 @@ class SSLTunnel:
             config.write(
                 "websocketserver:%s:%s\n" %
                 (self.webServer, self.webSocketPort))
-            config.write("listen:*:%s:pgo server certificate\n" % self.sslPort)
+            config.write("listen:*:%s:pgoserver\n" % self.sslPort)
 
             for loc in locations:
                 if loc.scheme == "https" and "nocert" not in loc.options:
@@ -732,27 +745,40 @@ def findTestMediaDevices(log):
         return None
 
     # Feed it a frame of output so it has something to display
-    subprocess.check_call(['/usr/bin/gst-launch-0.10', 'videotestsrc',
+    gst01 = spawn.find_executable("gst-launch-0.1")
+    gst10 = spawn.find_executable("gst-launch-1.0")
+    if gst01:
+        gst = gst01
+    else:
+        gst = gst10
+    subprocess.check_call([gst, 'videotestsrc',
                            'pattern=green', 'num-buffers=1', '!',
                            'v4l2sink', 'device=%s' % device])
     info['video'] = name
 
-    # Use pactl to see if the PulseAudio module-sine-source module is loaded.
-    def sine_source_loaded():
-        o = subprocess.check_output(
-            ['/usr/bin/pactl', 'list', 'short', 'modules'])
-        return filter(lambda x: 'module-sine-source' in x, o.splitlines())
+    pactl = spawn.find_executable("pactl")
+    pacmd = spawn.find_executable("pacmd")
 
-    if not sine_source_loaded():
-        # Load module-sine-source
-        subprocess.check_call(['/usr/bin/pactl', 'load-module',
-                               'module-sine-source'])
-    if not sine_source_loaded():
-        log.error('Couldn\'t load module-sine-source')
+    # Use pactl to see if the PulseAudio module-null-sink module is loaded.
+    def null_sink_loaded():
+        o = subprocess.check_output(
+            [pactl, 'list', 'short', 'modules'])
+        return filter(lambda x: 'module-null-sink' in x, o.splitlines())
+
+    if not null_sink_loaded():
+        # Load module-null-sink
+        subprocess.check_call([pactl, 'load-module',
+                               'module-null-sink'])
+
+    if not null_sink_loaded():
+        log.error('Couldn\'t load module-null-sink')
         return None
 
+    # Whether it was loaded or not make it the default output
+    subprocess.check_call([pacmd, 'set-default-sink', 'null'])
+
     # Hardcode the name since it's always the same.
-    info['audio'] = 'Sine source at 440 Hz'
+    info['audio'] = 'Monitor of Null Output'
     return info
 
 
@@ -812,7 +838,6 @@ class MochitestDesktop(object):
     Mochitest class for desktop firefox.
     """
     oldcwd = os.getcwd()
-    mochijar = os.path.join(SCRIPT_DIR, 'mochijar')
 
     # Path to the test script on the server
     TEST_PATH = "tests"
@@ -830,13 +855,15 @@ class MochitestDesktop(object):
     # TODO: replace this with 'runtests.py' or 'mochitest' or the like
     test_name = 'automation.py'
 
-    def __init__(self, flavor, logger_options, quiet=False):
+    def __init__(self, flavor, logger_options, staged_addons=None, quiet=False):
         update_mozinfo()
         self.flavor = flavor
+        self.staged_addons = staged_addons
         self.server = None
         self.wsserver = None
         self.websocketProcessBridge = None
         self.sslTunnel = None
+        self.manifest = None
         self.tests_by_manifest = defaultdict(list)
         self.prefs_by_manifest = defaultdict(set)
         self._active_tests = None
@@ -848,10 +875,13 @@ class MochitestDesktop(object):
         self.start_script_kwargs = {}
         self.urlOpts = []
 
-        commandline.log_formatters["tbpl"] = (
-            MochitestFormatter,
-            "Mochitest specific tbpl formatter")
-        self.log = commandline.setup_logging("mochitest", logger_options, {"tbpl": sys.stdout})
+        if logger_options.get('log'):
+            self.log = logger_options['log']
+        else:
+            commandline.log_formatters["tbpl"] = (
+                MochitestFormatter,
+                "Mochitest specific tbpl formatter")
+            self.log = commandline.setup_logging("mochitest", logger_options, {"tbpl": sys.stdout})
 
         self.message_logger = MessageLogger(
                 logger=self.log, buffering=quiet, structured=True)
@@ -879,14 +909,19 @@ class MochitestDesktop(object):
         kwargs['log'] = self.log
         return test_environment(**kwargs)
 
-    def extraPrefs(self, extraPrefs):
-        """interpolate extra preferences from option strings"""
+    def extraPrefs(self, prefs):
+        """Interpolate extra preferences from option strings"""
 
         try:
-            return dict(parseKeyValue(extraPrefs, context='--setpref='))
+            prefs = dict(parseKeyValue(prefs, context='--setpref='))
         except KeyValueParseError as e:
             print(str(e))
             sys.exit(1)
+
+        for pref, value in prefs.items():
+            value = Preferences.cast(value)
+            prefs[pref] = value
+        return prefs
 
     def getFullPath(self, path):
         " Get an absolute path relative to self.oldcwd."
@@ -1144,7 +1179,7 @@ class MochitestDesktop(object):
                 sock = socket.create_connection(("127.0.0.1", 8191))
                 sock.close()
                 break
-            except:
+            except Exception:
                 time.sleep(0.1)
         else:
             self.log.error("runtests.py | Timed out while waiting for "
@@ -1213,6 +1248,7 @@ class MochitestDesktop(object):
         if self.websocketProcessBridge is not None:
             try:
                 self.websocketProcessBridge.kill()
+                self.websocketProcessBridge.wait()
                 self.log.info('Stopping websocket/process bridge')
             except Exception:
                 self.log.critical('Exception stopping websocket/process bridge')
@@ -1285,11 +1321,6 @@ toolbar#nav-bar {
 
         manifest = self.writeChromeManifest(options)
 
-        if not os.path.isdir(self.mochijar):
-            self.log.error(
-                "TEST-UNEXPECTED-FAIL | invalid setup: missing mochikit extension")
-            return None
-
         return manifest
 
     def getExtensionsToInstall(self, options):
@@ -1325,7 +1356,7 @@ toolbar#nav-bar {
     def logPreamble(self, tests):
         """Logs a suite_start message and test_start/test_end at the beginning of a run.
         """
-        self.log.suite_start(self.tests_by_manifest)
+        self.log.suite_start(self.tests_by_manifest, name='mochitest-{}'.format(self.flavor))
         for test in tests:
             if 'disabled' in test:
                 self.log.test_start(test['path'])
@@ -1394,10 +1425,6 @@ toolbar#nav-bar {
         if manifest:
             if options.extra_mozinfo_json:
                 mozinfo.update(options.extra_mozinfo_json)
-            if 'STYLO_FORCE_ENABLED' in os.environ:
-                mozinfo.update({'stylo': True})
-            if 'STYLO_FORCE_DISABLED' in os.environ:
-                mozinfo.update({'stylo': False})
 
             info = mozinfo.info
 
@@ -1483,7 +1510,7 @@ toolbar#nav-bar {
             self.tests_by_manifest[manifest_relpath].append(tp)
             self.prefs_by_manifest[manifest_relpath].add(test.get('prefs'))
 
-            if 'prefs' in test and not options.runByManifest:
+            if 'prefs' in test and not options.runByManifest and 'disabled' not in test:
                 self.log.error("parsing {}: runByManifest mode must be enabled to "
                                "set the `prefs` key".format(manifest_relpath))
                 sys.exit(1)
@@ -1493,6 +1520,8 @@ toolbar#nav-bar {
                 testob['disabled'] = test['disabled']
             if 'expected' in test:
                 testob['expected'] = test['expected']
+            if 'uses-unsafe-cpows' in test:
+                testob['uses-unsafe-cpows'] = test['uses-unsafe-cpows'] == 'true'
             if 'scheme' in test:
                 testob['scheme'] = test['scheme']
             if options.failure_pattern_file:
@@ -1604,7 +1633,6 @@ toolbar#nav-bar {
             xrePath=options.xrePath,
             env=env,
             debugger=debugger,
-            dmdPath=options.dmdPath,
             lsanPath=lsanPath,
             ubsanPath=ubsanPath)
 
@@ -1612,6 +1640,19 @@ toolbar#nav-bar {
             browserEnv["MOZ_DEVELOPER_REPO_DIR"] = options.topsrcdir
         if hasattr(options, "topobjdir"):
             browserEnv["MOZ_DEVELOPER_OBJ_DIR"] = options.topobjdir
+
+        if options.headless:
+            browserEnv["MOZ_HEADLESS"] = '1'
+
+        if options.dmd:
+            browserEnv["DMD"] = os.environ.get('DMD', '1')
+
+        # bug 1443327: do not set MOZ_CRASHREPORTER_SHUTDOWN during browser-chrome
+        # tests, since some browser-chrome tests test content process crashes;
+        # also exclude non-e10s since at least one non-e10s mochitest is problematic
+        if (options.flavor == 'browser' or not options.e10s) and \
+           'MOZ_CRASHREPORTER_SHUTDOWN' in browserEnv:
+            del browserEnv["MOZ_CRASHREPORTER_SHUTDOWN"]
 
         # These variables are necessary for correct application startup; change
         # via the commandline at your own risk.
@@ -1668,7 +1709,8 @@ toolbar#nav-bar {
                             killPid(proc.pid, self.log)
                         else:
                             self.log.info("NOT killing %s (not an orphan?)" % procd)
-                except:
+                except Exception as e:
+                    self.log.info("Warning: Unable to kill process %s: %s" % (pname, str(e)))
                     # may not be able to access process info for all processes
                     continue
         else:
@@ -1775,95 +1817,64 @@ toolbar#nav-bar {
         os.unlink(pwfilePath)
         return 0
 
-    def buildProfile(self, options):
-        """ create the profile and add optional chrome bits and files if requested """
-        if options.flavor == 'browser' and options.timeout:
-            options.extraPrefs.append(
-                "testing.browserTestHarness.timeout=%d" %
-                options.timeout)
-        # browser-chrome tests use a fairly short default timeout of 45 seconds;
-        # this is sometimes too short on asan and debug, where we expect reduced
-        # performance.
-        if (mozinfo.info["asan"] or mozinfo.info["debug"]) and \
-                options.flavor == 'browser' and options.timeout is None:
-            self.log.info("Increasing default timeout to 90 seconds")
-            options.extraPrefs.append("testing.browserTestHarness.timeout=90")
-
-        options.extraPrefs.append(
-            "browser.tabs.remote.autostart=%s" %
-            ('true' if options.e10s else 'false'))
-
-        options.extraPrefs.append(
-            "dom.ipc.tabs.nested.enabled=%s" %
-            ('true' if options.nested_oop else 'false'))
-
-        options.extraPrefs.append(
-            "idle.lastDailyNotification=%d" %
-            (int(time.time()) * 1000))
-
-        # get extensions to install
-        extensions = self.getExtensionsToInstall(options)
-
-        # preferences
-        preferences = [
-            os.path.join(
-                SCRIPT_DIR,
-                'profile_data',
-                'prefs_general.js')]
-
-        prefs = {}
-        for path in preferences:
-            prefs.update(Preferences.read_prefs(path))
-
-        prefs.update(self.extraPrefs(options.extraPrefs))
-
-        # Bug 1262954: For windows XP + e10s disable acceleration
-        if platform.system() in ("Windows", "Microsoft") and \
-           '5.1' in platform.version() and options.e10s:
-            prefs['layers.acceleration.disabled'] = True
-
-        sandbox_whitelist_paths = [SCRIPT_DIR] + options.sandboxReadWhitelist
-        if (platform.system() == "Linux" or
-            platform.system() in ("Windows", "Microsoft")):
-            # Trailing slashes are needed to indicate directories on Linux and Windows
-            sandbox_whitelist_paths = map(lambda p: os.path.join(p, ""),
-                                          sandbox_whitelist_paths)
-
-        # interpolate preferences
-        interpolation = {
-            "server": "%s:%s" %
-            (options.webServer, options.httpPort)}
-
-        prefs = json.loads(json.dumps(prefs) % interpolation)
-        for pref in prefs:
-            prefs[pref] = Preferences.cast(prefs[pref])
-        # TODO: make this less hacky
-        # https://bugzilla.mozilla.org/show_bug.cgi?id=913152
-
+    def proxy(self, options):
         # proxy
         # use SSL port for legacy compatibility; see
         # - https://bugzilla.mozilla.org/show_bug.cgi?id=688667#c66
         # - https://bugzilla.mozilla.org/show_bug.cgi?id=899221
         # - https://github.com/mozilla/mozbase/commit/43f9510e3d58bfed32790c82a57edac5f928474d
         #             'ws': str(self.webSocketPort)
-        proxy = {'remote': options.webServer,
-                 'http': options.httpPort,
-                 'https': options.sslPort,
-                 'ws': options.sslPort
-                 }
+        return {
+            'remote': options.webServer,
+            'http': options.httpPort,
+            'https': options.sslPort,
+            'ws': options.sslPort,
+        }
 
-        # See if we should use fake media devices.
-        if options.useTestMediaDevices:
-            prefs['media.audio_loopback_dev'] = self.mediaDevices['audio']
-            prefs['media.video_loopback_dev'] = self.mediaDevices['video']
+    def merge_base_profiles(self, options):
+        """Merge extra profile data from testing/profiles."""
+        profile_data_dir = os.path.join(SCRIPT_DIR, 'profile_data')
 
-        # create a profile
+        # If possible, read profile data from topsrcdir. This prevents us from
+        # requiring a re-build to pick up newly added extensions in the
+        # <profile>/extensions directory.
+        if build_obj:
+            path = os.path.join(build_obj.topsrcdir, 'testing', 'profiles')
+            if os.path.isdir(path):
+                profile_data_dir = path
+
+        with open(os.path.join(profile_data_dir, 'profiles.json'), 'r') as fh:
+            base_profiles = json.load(fh)['mochitest']
+
+        # values to use when interpolating preferences
+        interpolation = {
+            "server": "%s:%s" % (options.webServer, options.httpPort),
+        }
+
+        for profile in base_profiles:
+            path = os.path.join(profile_data_dir, profile)
+            self.profile.merge(path, interpolation=interpolation)
+
+    def buildProfile(self, options):
+        """ create the profile and add optional chrome bits and files if requested """
+        # get extensions to install
+        extensions = self.getExtensionsToInstall(options)
+
+        # Whitelist the _tests directory (../..) so that TESTING_JS_MODULES work
+        tests_dir = os.path.dirname(os.path.dirname(SCRIPT_DIR))
+        sandbox_whitelist_paths = [tests_dir] + options.sandboxReadWhitelist
+        if (platform.system() == "Linux" or
+            platform.system() in ("Windows", "Microsoft")):
+            # Trailing slashes are needed to indicate directories on Linux and Windows
+            sandbox_whitelist_paths = map(lambda p: os.path.join(p, ""),
+                                          sandbox_whitelist_paths)
+
+        # Create the profile
         self.profile = Profile(profile=options.profilePath,
                                addons=extensions,
                                locations=self.locations,
-                               preferences=prefs,
-                               proxy=proxy,
-                               whitelistpaths=sandbox_whitelist_paths
+                               proxy=self.proxy(options),
+                               whitelistpaths=sandbox_whitelist_paths,
                                )
 
         # Fix options.profilePath for legacy consumers.
@@ -1880,6 +1891,47 @@ toolbar#nav-bar {
                 "TEST-UNEXPECTED-FAIL | runtests.py | Certificate integration failed")
             return None
 
+        # Set preferences in the following order (latter overrides former):
+        # 1) Preferences from base profile (e.g from testing/profiles)
+        # 2) Prefs hardcoded in this function
+        # 3) Prefs from --setpref
+
+        # Prefs from base profiles
+        self.merge_base_profiles(options)
+
+        # Hardcoded prefs (TODO move these into a base profile)
+        prefs = {
+            "browser.tabs.remote.autostart": options.e10s,
+            "dom.ipc.tabs.nested.enabled": options.nested_oop,
+            "idle.lastDailyNotification": int(time.time()),
+            # Enable tracing output for detailed failures in case of
+            # failing connection attempts, and hangs (bug 1397201)
+            "marionette.log.level": "TRACE",
+        }
+
+        if options.flavor == 'browser' and options.timeout:
+            prefs["testing.browserTestHarness.timeout"] = options.timeout
+
+        # browser-chrome tests use a fairly short default timeout of 45 seconds;
+        # this is sometimes too short on asan and debug, where we expect reduced
+        # performance.
+        if (mozinfo.info["asan"] or mozinfo.info["debug"]) and \
+                options.flavor == 'browser' and options.timeout is None:
+            self.log.info("Increasing default timeout to 90 seconds")
+            prefs["testing.browserTestHarness.timeout"] = 90
+
+        if getattr(self, 'testRootAbs', None):
+            prefs['mochitest.testRoot'] = self.testRootAbs
+
+        # See if we should use fake media devices.
+        if options.useTestMediaDevices:
+            prefs['media.audio_loopback_dev'] = self.mediaDevices['audio']
+            prefs['media.video_loopback_dev'] = self.mediaDevices['video']
+
+        self.profile.set_preferences(prefs)
+
+        # Extra prefs from --setpref
+        self.profile.set_preferences(self.extraPrefs(options.extraPrefs))
         return manifest
 
     def getGMPPluginPath(self, options):
@@ -1911,18 +1963,19 @@ toolbar#nav-bar {
 
         return os.pathsep.join(gmp_paths)
 
-    def cleanup(self, options):
+    def cleanup(self, options, final=False):
         """ remove temporary files and profile """
         if hasattr(self, 'manifest') and self.manifest is not None:
-            os.remove(self.manifest)
+            if os.path.exists(self.manifest):
+                os.remove(self.manifest)
         if hasattr(self, 'profile'):
             del self.profile
-        if options.pidFile != "":
+        if options.pidFile != "" and os.path.exists(options.pidFile):
             try:
                 os.remove(options.pidFile)
                 if os.path.exists(options.pidFile + ".xpcshell.pid"):
                     os.remove(options.pidFile + ".xpcshell.pid")
-            except:
+            except Exception:
                 self.log.warning(
                     "cleaning up pidfile '%s' was unsuccessful from the test harness" %
                     options.pidFile)
@@ -1971,18 +2024,23 @@ toolbar#nav-bar {
         If parent_pid is provided, and psutil is available, returns children of
         parent_pid according to psutil.
         """
-        if parent_pid and HAVE_PSUTIL:
-            self.log.info("Determining child pids from psutil")
-            return [p.pid for p in psutil.Process(parent_pid).children()]
-
         rv = []
+        if parent_pid and HAVE_PSUTIL:
+            self.log.info("Determining child pids from psutil...")
+            try:
+                rv = [p.pid for p in psutil.Process(parent_pid).children()]
+                self.log.info(str(rv))
+            except psutil.NoSuchProcess:
+                self.log.warning("Failed to lookup children of pid %d" % parent_pid)
+
+        rv = set(rv)
         pid_re = re.compile(r'==> process \d+ launched child process (\d+)')
         with open(process_log) as fd:
             for line in fd:
                 self.log.info(line.rstrip())
                 m = pid_re.search(line)
                 if m:
-                    rv.append(int(m.group(1)))
+                    rv.add(int(m.group(1)))
         return rv
 
     def checkForZombies(self, processLog, utilityPath, debuggerInfo):
@@ -2016,6 +2074,24 @@ toolbar#nav-bar {
                     dump_screen=not debuggerInfo)
 
         return foundZombie
+
+    def checkForRunningBrowsers(self):
+        firefoxes = ""
+        if HAVE_PSUTIL:
+            attrs = ['pid', 'ppid', 'name', 'cmdline', 'username']
+            for proc in psutil.process_iter():
+                try:
+                    if 'firefox' in proc.name():
+                        firefoxes = "%s%s\n" % (firefoxes, proc.as_dict(attrs=attrs))
+                except Exception:
+                    # may not be able to access process info for all processes
+                    continue
+        if len(firefoxes) > 0:
+            # In automation, this warning is unexpected and should be investigated.
+            # In local testing, this is probably okay, as long as the browser is not
+            # running a marionette server.
+            self.log.warning("Found 'firefox' running before starting test browser!")
+            self.log.warning(firefoxes)
 
     def runApp(self,
                testUrl,
@@ -2139,6 +2215,8 @@ toolbar#nav-bar {
                          'onTimeout': [timeoutHandler]}
             kp_kwargs['processOutputLine'] = [outputHandler]
 
+            self.checkForRunningBrowsers()
+
             # create mozrunner instance and start the system under test process
             self.lastTestSeen = self.test_name
             startTime = datetime.now()
@@ -2175,10 +2253,14 @@ toolbar#nav-bar {
                 # install specialpowers and mochikit addons
                 addons = Addons(self.marionette)
 
-                addons.install(create_zip(
-                    os.path.join(here, 'extensions', 'specialpowers')
-                ))
-                addons.install(create_zip(self.mochijar))
+                if self.staged_addons:
+                    for addon_path in self.staged_addons:
+                        if not os.path.isdir(addon_path):
+                            self.log.error(
+                                "TEST-UNEXPECTED-FAIL | invalid setup: missing extension at %s" %
+                                addon_path)
+                            return 1, self.lastTestSeen
+                        addons.install(create_zip(addon_path))
 
                 self.execute_start_script()
 
@@ -2200,7 +2282,12 @@ toolbar#nav-bar {
             # https://github.com/mozilla/mozbase/blob/master/mozrunner/mozrunner/runner.py#L61
             # until bug 913970 is fixed regarding mozrunner `wait` not returning status
             # see https://bugzilla.mozilla.org/show_bug.cgi?id=913970
+            self.log.info("runtests.py | Waiting for browser...")
             status = proc.wait()
+            if status is None:
+                self.log.warning("runtests.py | Failed to get app exit code - running/crashed?")
+                # must report an integer to process_exit()
+                status = 0
             self.log.process_exit("Main app process", status)
             runner.process_handler = None
 
@@ -2365,6 +2452,7 @@ toolbar#nav-bar {
             stepOptions.keep_open = False
             stepOptions.runUntilFailure = True
             stepOptions.profilePath = None
+            self.urlOpts = []
             result = self.runTests(stepOptions)
             result = result or (-2 if self.countfail > 0 else 0)
             self.message_logger.finish()
@@ -2376,6 +2464,7 @@ toolbar#nav-bar {
             stepOptions.keep_open = False
             for i in xrange(VERIFY_REPEAT_SINGLE_BROWSER):
                 stepOptions.profilePath = None
+                self.urlOpts = []
                 result = self.runTests(stepOptions)
                 result = result or (-2 if self.countfail > 0 else 0)
                 self.message_logger.finish()
@@ -2389,6 +2478,7 @@ toolbar#nav-bar {
             stepOptions.keep_open = False
             stepOptions.environment.append("MOZ_CHAOSMODE=3")
             stepOptions.profilePath = None
+            self.urlOpts = []
             result = self.runTests(stepOptions)
             result = result or (-2 if self.countfail > 0 else 0)
             self.message_logger.finish()
@@ -2401,6 +2491,7 @@ toolbar#nav-bar {
             stepOptions.environment.append("MOZ_CHAOSMODE=3")
             for i in xrange(VERIFY_REPEAT_SINGLE_BROWSER):
                 stepOptions.profilePath = None
+                self.urlOpts = []
                 result = self.runTests(stepOptions)
                 result = result or (-2 if self.countfail > 0 else 0)
                 self.message_logger.finish()
@@ -2469,6 +2560,7 @@ toolbar#nav-bar {
         if options.flavor in ('a11y', 'chrome'):
             options.e10s = False
         mozinfo.update({"e10s": options.e10s})  # for test manifest parsing.
+        mozinfo.update({"headless": options.headless})  # for test manifest parsing.
 
         if options.jscov_dir_prefix is not None:
             mozinfo.update({'coverage': True})
@@ -2496,7 +2588,7 @@ toolbar#nav-bar {
 
         # code for --run-by-manifest
         manifests = set(t['manifest'] for t in tests)
-        result = 1  # default value, if no tests are run.
+        result = 0
         origPrefs = options.extraPrefs[:]
         for m in sorted(manifests):
             self.log.info("Running manifest: {}".format(m))
@@ -2513,13 +2605,17 @@ toolbar#nav-bar {
             # by the user, since we need to create a new directory for each run. We would face
             # problems if we use the directory provided by the user.
             tests_in_manifest = [t['path'] for t in tests if t['manifest'] == m]
-            result = self.runMochitests(options, tests_in_manifest)
+            res = self.runMochitests(options, tests_in_manifest)
+            result = result or res
 
             # Dump the logging buffer
             self.message_logger.dump_buffered()
 
-            if result == -1:
+            if res == -1:
                 break
+
+        if self.manifest is not None:
+            self.cleanup(options, True)
 
         e10s_mode = "e10s" if options.e10s else "non-e10s"
 
@@ -2539,6 +2635,10 @@ toolbar#nav-bar {
             print("3 INFO Todo:    %s" % self.counttodo)
             print("4 INFO Mode:    %s" % e10s_mode)
             print("5 INFO SimpleTest FINISHED")
+
+        if not result and not self.countpass:
+            # either tests failed or no tests run
+            result = 1
 
         return result
 
@@ -2637,7 +2737,13 @@ toolbar#nav-bar {
             elif options.debugger or not options.autorun:
                 timeout = None
             else:
-                timeout = 330.0  # default JS harness timeout is 300 seconds
+                # We generally want the JS harness or marionette to handle
+                # timeouts if they can.
+                # The default JS harness timeout is currently 300 seconds.
+                # The default Marionette socket timeout is currently 360 seconds.
+                # Wait a little (10 seconds) more before timing out here.
+                # See bug 479518 and bug 1414063.
+                timeout = 370.0
 
             # Detect shutdown leaks for m-bc runs if
             # code coverage is not enabled.
@@ -2696,7 +2802,7 @@ toolbar#nav-bar {
         except KeyboardInterrupt:
             self.log.info("runtests.py | Received keyboard interrupt.\n")
             status = -1
-        except:
+        except Exception:
             traceback.print_exc()
             self.log.error(
                 "Automation Error: Received unexpected exception while running application\n")
@@ -2726,7 +2832,7 @@ toolbar#nav-bar {
         self.log.info("runtests.py | Running tests: end.")
 
         if self.manifest is not None:
-            self.cleanup(options)
+            self.cleanup(options, False)
 
         return status
 
@@ -2747,11 +2853,28 @@ toolbar#nav-bar {
         self.log.info('Found child pids: %s' % child_pids)
 
         if HAVE_PSUTIL:
-            child_procs = [psutil.Process(pid) for pid in child_pids]
+            try:
+                browser_proc = [psutil.Process(browser_pid)]
+            except Exception:
+                self.log.info('Failed to get proc for pid %d' % browser_pid)
+                browser_proc = []
+            try:
+                child_procs = [psutil.Process(pid) for pid in child_pids]
+            except Exception:
+                self.log.info('Failed to get child procs')
+                child_procs = []
             for pid in child_pids:
                 self.killAndGetStack(pid, utilityPath, debuggerInfo,
                                      dump_screen=not debuggerInfo)
             gone, alive = psutil.wait_procs(child_procs, timeout=30)
+            for p in gone:
+                self.log.info('psutil found pid %s dead' % p.pid)
+            for p in alive:
+                self.log.warning('failed to kill pid %d after 30s' %
+                                 p.pid)
+            self.killAndGetStack(browser_pid, utilityPath, debuggerInfo,
+                                 dump_screen=not debuggerInfo)
+            gone, alive = psutil.wait_procs(browser_proc, timeout=30)
             for p in gone:
                 self.log.info('psutil found pid %s dead' % p.pid)
             for p in alive:
@@ -2767,8 +2890,8 @@ toolbar#nav-bar {
             if child_pids:
                 time.sleep(30)
 
-        self.killAndGetStack(browser_pid, utilityPath, debuggerInfo,
-                             dump_screen=not debuggerInfo)
+            self.killAndGetStack(browser_pid, utilityPath, debuggerInfo,
+                                 dump_screen=not debuggerInfo)
 
     class OutputHandler(object):
 
@@ -2844,10 +2967,10 @@ toolbar#nav-bar {
 
         def finish(self):
             if self.shutdownLeaks:
-                self.shutdownLeaks.process()
+                self.harness.countfail += self.shutdownLeaks.process()
 
             if self.lsanLeaks:
-                self.lsanLeaks.process()
+                self.harness.countfail += self.lsanLeaks.process()
 
         # output message handlers:
         # these take a message and return a message
@@ -2942,7 +3065,11 @@ def run_test_harness(parser, options):
         key: value for key, value in vars(options).iteritems()
         if key.startswith('log') or key == 'valgrind'}
 
-    runner = MochitestDesktop(options.flavor, logger_options, quiet=options.quiet)
+    runner = MochitestDesktop(options.flavor, logger_options, options.stagedAddons,
+                              quiet=options.quiet)
+
+    if hasattr(options, 'log'):
+        delattr(options, 'log')
 
     options.runByManifest = False
     if options.flavor in ('plain', 'browser', 'chrome'):
@@ -2960,17 +3087,7 @@ def run_test_harness(parser, options):
                 logzip.write(logfile)
                 os.remove(logfile)
             logzip.close()
-
-    # don't dump failures if running from automation as treeherder already displays them
-    if build_obj:
-        if runner.message_logger.errors:
-            result = 1
-            runner.message_logger.logger.warning("The following tests failed:")
-            for error in runner.message_logger.errors:
-                runner.message_logger.logger.log_raw(error)
-
     runner.message_logger.finish()
-
     return result
 
 

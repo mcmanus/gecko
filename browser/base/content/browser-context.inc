@@ -12,28 +12,33 @@
                   tooltiptext="&backButton.tooltip;"
                   aria-label="&backCmd.label;"
                   command="Browser:BackOrBackDuplicate"
+                  accesskey="&backCmd.accesskey;"
                   onclick="checkForMiddleClick(this, event);"/>
         <menuitem id="context-forward"
                   class="menuitem-iconic"
                   tooltiptext="&forwardButton.tooltip;"
                   aria-label="&forwardCmd.label;"
                   command="Browser:ForwardOrForwardDuplicate"
+                  accesskey="&forwardCmd.accesskey;"
                   onclick="checkForMiddleClick(this, event);"/>
         <menuitem id="context-reload"
                   class="menuitem-iconic"
                   tooltip="dynamic-shortcut-tooltip"
                   aria-label="&reloadCmd.label;"
                   oncommand="gContextMenu.reload(event);"
+                  accesskey="&reloadCmd.accesskey;"
                   onclick="checkForMiddleClick(this, event);"/>
         <menuitem id="context-stop"
                   class="menuitem-iconic"
                   tooltip="dynamic-shortcut-tooltip"
                   aria-label="&stopCmd.label;"
+                  accesskey="&stopCmd.accesskey;"
                   command="Browser:Stop"/>
         <menuitem id="context-bookmarkpage"
                   class="menuitem-iconic"
                   observes="bookmarkThisPageBroadcaster"
                   aria-label="&bookmarkPageCmd2.label;"
+                  accesskey="&bookmarkPageCmd2.accesskey;"
                   oncommand="gContextMenu.bookmarkThisPage();"/>
       </menugroup>
       <menuseparator id="context-sep-navigation"/>
@@ -258,11 +263,13 @@
                 label="&savePageCmd.label;"
                 accesskey="&savePageCmd.accesskey2;"
                 oncommand="gContextMenu.savePageAs();"/>
-      <menuseparator id="context-sep-sendpagetodevice" hidden="true"/>
+      <menuseparator id="context-sep-sendpagetodevice" class="sync-ui-item"
+                     hidden="true"/>
       <menu id="context-sendpagetodevice"
-                label="&sendPageToDevice.label;"
-                accesskey="&sendPageToDevice.accesskey;"
-                hidden="true">
+            class="sync-ui-item"
+            label="&sendPageToDevice.label;"
+            accesskey="&sendPageToDevice.accesskey;"
+            hidden="true">
         <menupopup id="context-sendpagetodevice-popup"
                    onpopupshowing="(() => { let browser = gBrowser || getPanelBrowser(); gSync.populateSendTabToDevicesMenu(event.target, browser.currentURI.spec, browser.contentTitle); })()"/>
       </menu>
@@ -305,11 +312,13 @@
                 oncommand="AddKeywordForSearchField();"/>
       <menuitem id="context-searchselect"
                 oncommand="BrowserSearch.loadSearchFromContext(this.searchTerms);"/>
-      <menuseparator id="context-sep-sendlinktodevice" hidden="true"/>
+      <menuseparator id="context-sep-sendlinktodevice" class="sync-ui-item"
+                     hidden="true"/>
       <menu id="context-sendlinktodevice"
-                label="&sendLinkToDevice.label;"
-                accesskey="&sendLinkToDevice.accesskey;"
-                hidden="true">
+            class="sync-ui-item"
+            label="&sendLinkToDevice.label;"
+            accesskey="&sendLinkToDevice.accesskey;"
+            hidden="true">
         <menupopup id="context-sendlinktodevice-popup"
                    onpopupshowing="gSync.populateSendTabToDevicesMenu(event.target, gContextMenu.linkURL, gContextMenu.linkTextStr);"/>
       </menu>
@@ -332,7 +341,7 @@
           <menuitem id="context-reloadframe"
                     label="&reloadFrameCmd.label;"
                     accesskey="&reloadFrameCmd.accesskey;"
-                    oncommand="gContextMenu.reloadFrame();"/>
+                    oncommand="gContextMenu.reloadFrame(event);"/>
           <menuseparator/>
           <menuitem id="context-bookmarkframe"
                     label="&bookmarkThisFrameCmd.label;"
@@ -437,6 +446,10 @@
                 label="&inspectContextMenu.label;"
                 accesskey="&inspectContextMenu.accesskey;"
                 oncommand="gContextMenu.inspectNode();"/>
+      <menuitem id="context-inspect-a11y"
+                hidden="true"
+                label="&inspectA11YContextMenu.label;"
+                oncommand="gContextMenu.inspectA11Y();"/>
       <menuseparator id="context-media-eme-separator" hidden="true"/>
       <menuitem id="context-media-eme-learnmore"
                 class="menuitem-iconic"

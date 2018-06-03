@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -75,12 +76,11 @@ public:
   }
 
   // PImageBridge
-  virtual mozilla::ipc::IPCResult RecvImageBridgeThreadId(const PlatformThreadId& aThreadId) override;
-  virtual mozilla::ipc::IPCResult RecvInitReadLocks(ReadLockArray&& aReadLocks) override;
   virtual mozilla::ipc::IPCResult RecvUpdate(EditArray&& aEdits, OpDestroyArray&& aToDestroy,
                                           const uint64_t& aFwdTransactionId) override;
 
   virtual PTextureParent* AllocPTextureParent(const SurfaceDescriptor& aSharedData,
+                                              const ReadLockDescriptor& aReadLock,
                                               const LayersBackend& aLayersBackend,
                                               const TextureFlags& aFlags,
                                               const uint64_t& aSerial,
@@ -114,7 +114,7 @@ public:
 
   virtual bool IsSameProcess() const override;
 
-  static RefPtr<ImageBridgeParent> GetInstance(ProcessId aId);
+  static already_AddRefed<ImageBridgeParent> GetInstance(ProcessId aId);
 
   static bool NotifyImageComposites(nsTArray<ImageCompositeNotificationInfo>& aNotifications);
 
@@ -134,13 +134,13 @@ private:
   // deferred destruction of ourselves.
   RefPtr<ImageBridgeParent> mSelfRef;
 
-  bool mSetChildThreadPriority;
   bool mClosed;
 
   /**
    * Map of all living ImageBridgeParent instances
    */
-  static std::map<base::ProcessId, ImageBridgeParent*> sImageBridges;
+  typedef std::map<base::ProcessId, ImageBridgeParent*> ImageBridgeMap;
+  static ImageBridgeMap sImageBridges;
 
   RefPtr<CompositorThreadHolder> mCompositorThreadHolder;
 };

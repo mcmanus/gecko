@@ -1,4 +1,3 @@
 config = {
-    'perfherder_extra_options': ['artifact'],
-    'src_mozconfig': 'browser/config/mozconfigs/macosx64/artifact',
+    'mozconfig_variant': 'artifact',
 }

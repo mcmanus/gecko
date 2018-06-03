@@ -59,6 +59,7 @@ bool
 HTMLSharedListElement::ParseAttribute(int32_t aNamespaceID,
                                       nsAtom* aAttribute,
                                       const nsAString& aValue,
+                                      nsIPrincipal* aMaybeScriptedPrincipal,
                                       nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None) {
@@ -75,20 +76,18 @@ HTMLSharedListElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                              aResult);
+                                              aMaybeScriptedPrincipal, aResult);
 }
 
 void
 HTMLSharedListElement::MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
                                              GenericSpecifiedValues* aData)
 {
-  if (aData->ShouldComputeStyleStruct(NS_STYLE_INHERIT_BIT(List))) {
-    if (!aData->PropertyIsSet(eCSSProperty_list_style_type)) {
-      // type: enum
-      const nsAttrValue* value = aAttributes->GetAttr(nsGkAtoms::type);
-      if (value && value->Type() == nsAttrValue::eEnum) {
-        aData->SetKeywordValue(eCSSProperty_list_style_type, value->GetEnumValue());
-      }
+  if (!aData->PropertyIsSet(eCSSProperty_list_style_type)) {
+    // type: enum
+    const nsAttrValue* value = aAttributes->GetAttr(nsGkAtoms::type);
+    if (value && value->Type() == nsAttrValue::eEnum) {
+      aData->SetKeywordValue(eCSSProperty_list_style_type, value->GetEnumValue());
     }
   }
 

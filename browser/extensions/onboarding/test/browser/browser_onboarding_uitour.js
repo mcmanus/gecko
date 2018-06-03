@@ -46,20 +46,6 @@ add_task(async function test_clean_up_uitour_after_closing_overlay() {
   await highlightClosePromise;
   is(highlight.state, "closed", "Should close UITour highlight after closing the overlay by clicking the overlay");
 
-  // Trigger UITour showHighlight
-  highlightOpenPromise = promisePopupChange(highlight, "open");
-  await triggerUITourHighlight("library", tab);
-  await highlightOpenPromise;
-  is(highlight.state, "open", "Should show UITour highlight");
-  is(highlight.getAttribute("targetName"), "library", "UITour should highlight library");
-
-  // Close the overlay by clicking the overlay close button
-  highlightClosePromise = promisePopupChange(highlight, "closed");
-  BrowserTestUtils.synthesizeMouseAtCenter("#onboarding-overlay-close-btn", {}, tab.linkedBrowser);
-  await promiseOnboardingOverlayClosed(tab.linkedBrowser);
-  await highlightClosePromise;
-  is(highlight.state, "closed", "Should close UITour highlight after closing the overlay by clicking the overlay close button");
-
   // Trigger UITour showHighlight again
   highlightOpenPromise = promisePopupChange(highlight, "open");
   await triggerUITourHighlight("library", tab);
@@ -73,7 +59,7 @@ add_task(async function test_clean_up_uitour_after_closing_overlay() {
   await promiseOnboardingOverlayClosed(tab.linkedBrowser);
   await highlightClosePromise;
   is(highlight.state, "closed", "Should close UITour highlight after closing the overlay by clicking the skip-tour button");
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });
 
 add_task(async function test_clean_up_uitour_after_navigating_to_other_tour_by_keyboard() {
@@ -106,7 +92,7 @@ add_task(async function test_clean_up_uitour_after_navigating_to_other_tour_by_k
   await BrowserTestUtils.synthesizeKey("VK_RETURN", {}, tab.linkedBrowser);
   await highlightClosePromise;
   is(highlight.state, "closed", "Should close UITour highlight after navigating to another tour by keyboard");
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });
 
 add_task(async function test_clean_up_uitour_after_navigating_to_other_tour_by_mouse() {
@@ -129,7 +115,7 @@ add_task(async function test_clean_up_uitour_after_navigating_to_other_tour_by_m
   BrowserTestUtils.synthesizeMouseAtCenter("#onboarding-tour-singlesearch", {}, tab.linkedBrowser);
   await highlightClosePromise;
   is(highlight.state, "closed", "Should close UITour highlight after navigating to another tour by mouse");
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });
 
 add_task(async function test_clean_up_uitour_on_page_unload() {
@@ -152,7 +138,7 @@ add_task(async function test_clean_up_uitour_on_page_unload() {
   await BrowserTestUtils.loadURI(tab.linkedBrowser, "http://example.com");
   await highlightClosePromise;
   is(highlight.state, "closed", "Should close UITour highlight after page unloaded");
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });
 
 add_task(async function test_clean_up_uitour_on_window_resize() {
@@ -177,5 +163,5 @@ add_task(async function test_clean_up_uitour_on_window_resize() {
   await highlightClosePromise;
   is(highlight.state, "closed", "Should close UITour highlight after window resized");
   window.innerWidth = originalWidth;
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 });

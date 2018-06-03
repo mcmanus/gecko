@@ -7,7 +7,6 @@
 #include "mozilla/AnimationCollection.h"
 
 #include "mozilla/RestyleManager.h"
-#include "mozilla/RestyleManagerInlines.h"
 #include "nsAnimationManager.h" // For dom::CSSAnimation
 #include "nsPresContext.h"
 #include "nsTransitionManager.h" // For dom::CSSTransition
@@ -116,30 +115,6 @@ AnimationCollection<AnimationType>::GetOrCreateAnimationCollection(
   return collection;
 }
 
-template <class AnimationType>
-/* static */ nsString
-AnimationCollection<AnimationType>::PseudoTypeAsString(
-  CSSPseudoElementType aPseudoType)
-{
-  switch (aPseudoType) {
-    case CSSPseudoElementType::before:
-      return NS_LITERAL_STRING("::before");
-    case CSSPseudoElementType::after:
-      return NS_LITERAL_STRING("::after");
-    default:
-      MOZ_ASSERT(aPseudoType == CSSPseudoElementType::NotPseudo,
-                 "Unexpected pseudo type");
-      return EmptyString();
-  }
-}
-
-template <class AnimationType>
-void
-AnimationCollection<AnimationType>::UpdateCheckGeneration(
-  nsPresContext* aPresContext)
-{
-  mCheckGeneration = aPresContext->RestyleManager()->GetAnimationGeneration();
-}
 
 template<class AnimationType>
 /*static*/ nsAtom*

@@ -177,10 +177,10 @@ URLPreloader::GetCacheFile(const nsAString& suffix)
 
     MOZ_TRY(cacheFile->Append(NS_LITERAL_STRING("urlCache") + suffix));
 
-    return Move(cacheFile);
+    return std::move(cacheFile);
 }
 
-static const uint8_t URL_MAGIC[] = "mozURLcachev001";
+static const uint8_t URL_MAGIC[] = "mozURLcachev002";
 
 Result<nsCOMPtr<nsIFile>, nsresult>
 URLPreloader::FindCacheFile()
@@ -200,7 +200,7 @@ URLPreloader::FindCacheFile()
         }
     }
 
-    return Move(cacheFile);
+    return std::move(cacheFile);
 }
 
 Result<Ok, nsresult>
@@ -344,9 +344,15 @@ URLPreloader::ReadCache(LinkedList<URLEntry>& pendingURLs)
 void
 URLPreloader::BackgroundReadFiles()
 {
+    auto cleanup = MakeScopeExit([&] () {
+        NS_DispatchToMainThread(
+            NewRunnableMethod("nsIThread::Shutdown",
+                              mReaderThread, &nsIThread::Shutdown));
+        mReaderThread = nullptr;
+    });
+
     Vector<nsZipCursor> cursors;
     LinkedList<URLEntry> pendingURLs;
-
     {
         MonitorAutoLock mal(mMonitor);
 
@@ -376,6 +382,11 @@ URLPreloader::BackgroundReadFiles()
             }
 
             RefPtr<nsZipArchive> zip = entry->Archive();
+            if (!zip) {
+                MOZ_CRASH_UNSAFE_PRINTF(
+                    "Failed to get Omnijar %s archive for entry (path: \"%s\")",
+                    entry->TypeString(), entry->mPath.get());
+            }
 
             auto item = zip->GetItem(entry->mPath.get());
             if (!item) {
@@ -433,11 +444,6 @@ URLPreloader::BackgroundReadFiles()
 
     // We're done reading pending entries, so clear the list.
     pendingURLs.clear();
-
-    NS_DispatchToMainThread(
-        NewRunnableMethod("nsIThread::Shutdown",
-                          mReaderThread, &nsIThread::Shutdown));
-    mReaderThread = nullptr;
 }
 
 void
@@ -508,13 +514,6 @@ URLPreloader::ReadURI(nsIURI* uri, ReadType readType)
 URLPreloader::ReadFile(nsIFile* file, ReadType readType)
 {
     return Read(CacheKey(file), readType);
-}
-
-/* static */ Result<const nsCString, nsresult>
-URLPreloader::ReadFile(const nsACString& path, ReadType readType)
-{
-    CacheKey key(CacheKey::TypeFile, path);
-    return Read(key, readType);
 }
 
 /* static */ Result<const nsCString, nsresult>
@@ -599,10 +598,10 @@ URLPreloader::ResolveURI(nsIURI* uri)
         nsCOMPtr<nsIFile> file;
         MOZ_TRY(fileURL->GetFile(getter_AddRefs(file)));
 
-        nsCString path;
-        MOZ_TRY(file->GetNativePath(path));
+        nsString path;
+        MOZ_TRY(file->GetPath(path));
 
-        return CacheKey(CacheKey::TypeFile, path);
+        return CacheKey(CacheKey::TypeFile, NS_ConvertUTF16toUTF8(path));
     }
 
     // Not a file or Omnijar URI, so currently unsupported.
@@ -623,12 +622,13 @@ URLPreloader::CacheKey::ToFileLocation()
 {
     if (mType == TypeFile) {
         nsCOMPtr<nsIFile> file;
-        MOZ_TRY(NS_NewNativeLocalFile(mPath, false, getter_AddRefs(file)));
-        return Move(FileLocation(file));
+        MOZ_TRY(NS_NewLocalFile(NS_ConvertUTF8toUTF16(mPath), false,
+                                getter_AddRefs(file)));
+        return std::move(FileLocation(file));
     }
 
     RefPtr<nsZipArchive> zip = Archive();
-    return Move(FileLocation(zip, mPath.get()));
+    return std::move(FileLocation(zip, mPath.get()));
 }
 
 Result<const nsCString, nsresult>
@@ -654,7 +654,7 @@ URLPreloader::URLEntry::ReadLocation(FileLocation& location)
     result.SetLength(size);
     MOZ_TRY(data.Copy(result.BeginWriting(), size));
 
-    return Move(result);
+    return std::move(result);
 }
 
 Result<const nsCString, nsresult>

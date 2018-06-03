@@ -12,6 +12,7 @@
 #include "nsAutoPtr.h"
 #include "nsCollationCID.h"
 #include "nsEmbedCID.h"
+#include "nsExceptionHandler.h"
 #include "nsThreadUtils.h"
 #include "mozStoragePrivateHelpers.h"
 #include "nsIXPConnect.h"
@@ -26,7 +27,7 @@
 #include "sqlite3.h"
 #include "mozilla/AutoSQLiteLifetime.h"
 
-#ifdef SQLITE_OS_WIN
+#ifdef XP_WIN
 // "windows.h" was included and it can #define lots of things we care about...
 #undef CompareString
 #endif
@@ -189,12 +190,11 @@ NS_IMPL_ISUPPORTS(
 
 Service *Service::gService = nullptr;
 
-Service *
+already_AddRefed<Service>
 Service::getSingleton()
 {
   if (gService) {
-    NS_ADDREF(gService);
-    return gService;
+    return do_AddRef(gService);
   }
 
   // Ensure that we are using the same version of SQLite that we compiled with
@@ -218,34 +218,14 @@ Service::getSingleton()
   // The first reference to the storage service must be obtained on the
   // main thread.
   NS_ENSURE_TRUE(NS_IsMainThread(), nullptr);
-  gService = new Service();
-  if (gService) {
-    NS_ADDREF(gService);
-    if (NS_FAILED(gService->initialize()))
-      NS_RELEASE(gService);
+  RefPtr<Service> service = new Service();
+  if (NS_SUCCEEDED(service->initialize())) {
+    // Note: This is cleared in the Service destructor.
+    gService = service.get();
+    return service.forget();
   }
 
-  return gService;
-}
-
-nsIXPConnect *Service::sXPConnect = nullptr;
-
-// static
-already_AddRefed<nsIXPConnect>
-Service::getXPConnect()
-{
-  NS_PRECONDITION(NS_IsMainThread(),
-                  "Must only get XPConnect on the main thread!");
-  NS_PRECONDITION(gService,
-                  "Can not get XPConnect without an instance of our service!");
-
-  // If we've been shutdown, sXPConnect will be null.  To prevent leaks, we do
-  // not cache the service after this point.
-  nsCOMPtr<nsIXPConnect> xpc(sXPConnect);
-  if (!xpc)
-    xpc = do_GetService(nsIXPConnect::GetCID());
-  NS_ASSERTION(xpc, "Could not get XPConnect!");
-  return xpc.forget();
+  return nullptr;
 }
 
 int32_t Service::sSynchronousPref;
@@ -276,8 +256,6 @@ Service::~Service()
   if (rc != SQLITE_OK)
     NS_WARNING("Failed to unregister sqlite vfs wrapper.");
 
-  shutdown(); // To release sXPConnect.
-
   gService = nullptr;
   delete mSqliteVFS;
   mSqliteVFS = nullptr;
@@ -298,27 +276,33 @@ Service::unregisterConnection(Connection *aConnection)
   // alive.  So ensure that Service is destroyed only after the Connection is
   // cleanly unregistered and destroyed.
   RefPtr<Service> kungFuDeathGrip(this);
+  RefPtr<Connection> forgettingRef;
   {
     mRegistrationMutex.AssertNotCurrentThreadOwns();
     MutexAutoLock mutex(mRegistrationMutex);
 
     for (uint32_t i = 0 ; i < mConnections.Length(); ++i) {
       if (mConnections[i] == aConnection) {
-        nsCOMPtr<nsIThread> thread = mConnections[i]->threadOpenedOn;
-
-        // Ensure the connection is released on its opening thread.  Note, we
-        // must use .forget().take() so that we can manually cast to an
-        // unambiguous nsISupports type.
-        NS_ProxyRelease(
-          "storage::Service::mConnections", thread, mConnections[i].forget());
-
+        // Because dropping the final reference can potentially result in
+        // spinning a nested event loop if the connection was not properly
+        // shutdown, we want to do that outside this loop so that we can finish
+        // mutating the array and drop our mutex.
+        forgettingRef = mConnections[i].forget();
         mConnections.RemoveElementAt(i);
-        return;
+        break;
       }
     }
-
-    MOZ_ASSERT_UNREACHABLE("Attempt to unregister unknown storage connection!");
   }
+
+  MOZ_ASSERT(forgettingRef,
+             "Attempt to unregister unknown storage connection!");
+
+  // Do not proxy the release anywhere, just let this reference drop here.  (We
+  // previously did proxy the release, but that was because we invoked Close()
+  // in the destructor and Close() likes to complain if it's not invoked on the
+  // opener thread, so it was essential that the last reference be dropped on
+  // the opener thread.  We now enqueue Close() inside our caller, Release(), so
+  // it doesn't actually matter what thread our reference drops on.)
 }
 
 void
@@ -381,18 +365,11 @@ Service::minimizeMemory()
   }
 }
 
-void
-Service::shutdown()
-{
-  NS_IF_RELEASE(sXPConnect);
-}
-
 sqlite3_vfs *ConstructTelemetryVFS();
 const char *GetVFSName();
 
 static const char* sObserverTopics[] = {
   "memory-pressure",
-  "xpcom-shutdown",
   "xpcom-shutdown-threads"
 };
 
@@ -414,8 +391,6 @@ Service::initialize()
     NS_WARNING("Failed to register telemetry VFS");
   }
 
-  // Register for xpcom-shutdown so we can cleanup after ourselves.  The
-  // observer service can only be used on the main thread.
   nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
   NS_ENSURE_TRUE(os, NS_ERROR_FAILURE);
 
@@ -425,10 +400,6 @@ Service::initialize()
       return rv;
     }
   }
-
-  // We cache XPConnect for our language helpers.  XPConnect can only be
-  // used on the main thread.
-  (void)CallGetService(nsIXPConnect::GetCID(), &sXPConnect);
 
   // We need to obtain the toolkit.storage.synchronous preferences on the main
   // thread because the preference service can only be accessed there.  This
@@ -790,8 +761,6 @@ Service::Observe(nsISupports *, const char *aTopic, const char16_t *)
 {
   if (strcmp(aTopic, "memory-pressure") == 0) {
     minimizeMemory();
-  } else if (strcmp(aTopic, "xpcom-shutdown") == 0) {
-    shutdown();
   } else if (strcmp(aTopic, "xpcom-shutdown-threads") == 0) {
     // The Service is kept alive by our strong observer references and
     // references held by Connection instances.  Since we're about to remove the
@@ -824,6 +793,15 @@ Service::Observe(nsISupports *, const char *aTopic, const char16_t *)
       getConnections(connections);
       for (uint32_t i = 0, n = connections.Length(); i < n; i++) {
         if (!connections[i]->isClosed()) {
+          // getFilename is only the leaf name for the database file,
+          // so it shouldn't contain privacy-sensitive information.
+          CrashReporter::AnnotateCrashReport(
+            NS_LITERAL_CSTRING("StorageConnectionNotClosed"),
+            connections[i]->getFilename());
+#ifdef DEBUG
+          printf_stderr("Storage connection not closed: %s",
+                        connections[i]->getFilename().get());
+#endif
           MOZ_CRASH();
         }
       }

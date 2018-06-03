@@ -52,10 +52,6 @@ public:
   typedef typename base_string_type::DataFlags DataFlags;
   typedef typename base_string_type::ClassFlags ClassFlags;
 
-  using typename base_string_type::IsChar;
-  using typename base_string_type::IsChar16;
-
-
 public:
 
   /**
@@ -72,7 +68,7 @@ public:
   }
 
 #if defined(MOZ_USE_CHAR16_WRAPPER)
-  template <typename EnableIfChar16 = IsChar16>
+  template <typename Q = T, typename EnableIfChar16 = mozilla::Char16OnlyT<Q>>
   nsTDependentString(char16ptr_t aData, uint32_t aLength)
     : nsTDependentString(static_cast<const char16_t*>(aData), aLength)
   {
@@ -89,7 +85,7 @@ public:
   }
 
 #if defined(MOZ_USE_CHAR16_WRAPPER)
-  template <typename EnableIfChar16 = IsChar16>
+  template <typename Q = T, typename EnableIfChar16 = mozilla::Char16OnlyT<Q>>
   explicit
   nsTDependentString(char16ptr_t aData)
     : nsTDependentString(static_cast<const char16_t*>(aData))
@@ -109,11 +105,21 @@ public:
   {
   }
 
-  // XXX are you sure??
-  // auto-generated copy-constructor OK
-  // auto-generated copy-assignment operator OK
   // auto-generated destructor OK
 
+  nsTDependentString(self_type&& aStr)
+    : string_type()
+  {
+    Rebind(aStr, /* aStartPos = */ 0);
+    aStr.SetToEmptyBuffer();
+  }
+
+  explicit
+  nsTDependentString(const self_type& aStr)
+    : string_type()
+  {
+    Rebind(aStr, /* aStartPos = */ 0);
+  }
 
   /**
    * allow this class to be bound to a different string...
@@ -132,6 +138,7 @@ private:
 
   // NOT USED
   nsTDependentString(const substring_tuple_type&) = delete;
+  self_type& operator=(const self_type& aStr) = delete;
 };
 
 extern template class nsTDependentString<char>;

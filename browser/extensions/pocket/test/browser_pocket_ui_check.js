@@ -28,8 +28,7 @@ add_task(async function() {
   await promisePocketEnabled();
 
   checkWindowProperties(true, ["Pocket", "pktUI", "pktUIMessaging"]);
-  checkElements(true, ["pocket-button", "panelMenu_pocket",
-                       "panelMenu_pocketSeparator"]);
+  checkElements(true, ["pocket-button", "appMenu-library-pocket-button"]);
 
   // check context menu exists
   info("checking content context menu");
@@ -48,12 +47,12 @@ add_task(async function() {
 
   contextMenu.hidePopup();
   await popupHidden;
-  await BrowserTestUtils.removeTab(tab);
+  BrowserTestUtils.removeTab(tab);
 
   await promisePocketDisabled();
 
   checkWindowProperties(false, ["Pocket", "pktUI", "pktUIMessaging"]);
-  checkElements(false, ["pocket-button", "panelMenu_pocket", "panelMenu_pocketSeparator",
+  checkElements(false, ["pocket-button", "appMenu-library-pocket-button",
                         "context-pocket", "context-savelinktopocket"]);
 
   await promisePocketReset();

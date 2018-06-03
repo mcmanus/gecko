@@ -5,7 +5,7 @@
 "use strict";
 
 /* exported initPromise, shutdownPromise, waitForEvent, setE10sPrefs,
-            unsetE10sPrefs, forceGC */
+            unsetE10sPrefs, a11yConsumersChangedPromise */
 
 /**
  * Set e10s related preferences in the test environment.
@@ -16,8 +16,7 @@ function setE10sPrefs() {
     SpecialPowers.pushPrefEnv({
       set: [
         ["browser.tabs.remote.autostart", true],
-        ["browser.tabs.remote.force-enable", true],
-        ["extensions.e10sBlocksEnabling", false]
+        ["browser.tabs.remote.force-enable", true]
       ]
     }, resolve));
 }
@@ -37,6 +36,20 @@ function unsetE10sPrefs() {
 Services.scriptloader.loadSubScript(
   "chrome://mochitests/content/browser/accessible/tests/browser/shared-head.js",
   this);
+
+/**
+ * Returns a promise that resolves when 'a11y-consumers-changed' event is fired.
+ * @return {Promise} event promise evaluating to event's data
+ */
+function a11yConsumersChangedPromise() {
+  return new Promise(resolve => {
+    let observe = (subject, topic, data) => {
+      Services.obs.removeObserver(observe, "a11y-consumers-changed");
+      resolve(JSON.parse(data));
+    };
+    Services.obs.addObserver(observe, "a11y-consumers-changed");
+  });
+}
 
 /**
  * Returns a promise that resolves when 'a11y-init-or-shutdown' event is fired.
@@ -117,8 +130,14 @@ function waitForEvent(eventType, expectedId) {
     let eventObserver = {
       observe(subject) {
         let event = subject.QueryInterface(Ci.nsIAccessibleEvent);
+        let id;
+        try {
+          id = event.accessible.id;
+        } catch (e) {
+          // This can throw NS_ERROR_FAILURE.
+        }
         if (event.eventType === eventType &&
-            event.accessible.id === expectedId) {
+            id === expectedId) {
           Services.obs.removeObserver(this, "accessible-event");
           resolve(event);
         }
@@ -126,16 +145,4 @@ function waitForEvent(eventType, expectedId) {
     };
     Services.obs.addObserver(eventObserver, "accessible-event");
   });
-}
-
-/**
- * Force garbage collection.
- */
-function forceGC() {
-  SpecialPowers.gc();
-  SpecialPowers.forceShrinkingGC();
-  SpecialPowers.forceCC();
-  SpecialPowers.gc();
-  SpecialPowers.forceShrinkingGC();
-  SpecialPowers.forceCC();
 }

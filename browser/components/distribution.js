@@ -2,12 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-this.EXPORTED_SYMBOLS = [ "DistributionCustomizer" ];
-
-var Ci = Components.interfaces;
-var Cc = Components.classes;
-var Cr = Components.results;
-var Cu = Components.utils;
+var EXPORTED_SYMBOLS = [ "DistributionCustomizer" ];
 
 const DISTRIBUTION_CUSTOMIZATION_COMPLETE_TOPIC =
   "distribution-customization-complete";
@@ -15,15 +10,15 @@ const DISTRIBUTION_CUSTOMIZATION_COMPLETE_TOPIC =
 const PREF_CACHED_FILE_EXISTENCE  = "distribution.iniFile.exists.value";
 const PREF_CACHED_FILE_APPVERSION = "distribution.iniFile.exists.appversion";
 
-Cu.import("resource://gre/modules/AppConstants.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
-                                  "resource://gre/modules/Preferences.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
-                                  "resource://gre/modules/PlacesUtils.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.defineModuleGetter(this, "Preferences",
+                               "resource://gre/modules/Preferences.jsm");
+ChromeUtils.defineModuleGetter(this, "PlacesUtils",
+                               "resource://gre/modules/PlacesUtils.jsm");
 
-this.DistributionCustomizer = function DistributionCustomizer() {
+function DistributionCustomizer() {
 }
 
 DistributionCustomizer.prototype = {
@@ -31,13 +26,11 @@ DistributionCustomizer.prototype = {
     // For parallel xpcshell testing purposes allow loading the distribution.ini
     // file from the profile folder through an hidden pref.
     let loadFromProfile = Services.prefs.getBoolPref("distribution.testing.loadFromProfile", false);
-    let dirSvc = Cc["@mozilla.org/file/directory_service;1"].
-                 getService(Ci.nsIProperties);
 
     let iniFile;
     try {
-      iniFile = loadFromProfile ? dirSvc.get("ProfD", Ci.nsIFile)
-                                : dirSvc.get("XREAppDist", Ci.nsIFile);
+      iniFile = loadFromProfile ? Services.dirsvc.get("ProfD", Ci.nsIFile)
+                                : Services.dirsvc.get("XREAppDist", Ci.nsIFile);
       if (loadFromProfile) {
         iniFile.leafName = "distribution";
       }
@@ -100,30 +93,6 @@ DistributionCustomizer.prototype = {
     return this._language;
   },
 
-  get _prefSvc() {
-    let svc = Cc["@mozilla.org/preferences-service;1"].
-              getService(Ci.nsIPrefService);
-    this.__defineGetter__("_prefSvc", () => svc);
-    return this._prefSvc;
-  },
-
-  get _prefs() {
-    let branch = this._prefSvc.getBranch(null);
-    this.__defineGetter__("_prefs", () => branch);
-    return this._prefs;
-  },
-
-  get _ioSvc() {
-    let svc = Cc["@mozilla.org/network/io-service;1"].
-              getService(Ci.nsIIOService);
-    this.__defineGetter__("_ioSvc", () => svc);
-    return this._ioSvc;
-  },
-
-  _makeURI: function DIST__makeURI(spec) {
-    return this._ioSvc.newURI(spec);
-  },
-
   async _parseBookmarksSection(parentGuid, section) {
     let keys = Array.from(enumerate(this._ini.getKeys(section))).sort();
     let re = /^item\.(\d+)\.(\w+)\.?(\w*)/;
@@ -140,9 +109,9 @@ DistributionCustomizer.prototype = {
         if (ilocale)
           continue;
 
-        if (keys.indexOf(key + "." + this._locale) >= 0) {
+        if (keys.includes(key + "." + this._locale)) {
           key += "." + this._locale;
-        } else if (keys.indexOf(key + "." + this._language) >= 0) {
+        } else if (keys.includes(key + "." + this._language)) {
           key += "." + this._language;
         }
 
@@ -211,8 +180,8 @@ DistributionCustomizer.prototype = {
         // Don't bother updating the livemark contents on creation.
         let parentId = await PlacesUtils.promiseItemId(parentGuid);
         await PlacesUtils.livemarks.addLivemark({
-          feedURI: this._makeURI(item.feedLink),
-          siteURI: this._makeURI(item.siteLink),
+          feedURI: Services.io.newURI(item.feedLink),
+          siteURI: Services.io.newURI(item.siteLink),
           parentId, index, title: item.title
         });
         break;
@@ -236,13 +205,13 @@ DistributionCustomizer.prototype = {
 
         if (item.icon && item.iconData) {
           try {
-            let faviconURI = this._makeURI(item.icon);
+            let faviconURI = Services.io.newURI(item.icon);
             PlacesUtils.favicons.replaceFaviconDataFromDataURL(
               faviconURI, item.iconData, 0,
               Services.scriptSecurityManager.getSystemPrincipal());
 
             PlacesUtils.favicons.setAndFetchFaviconForPage(
-              this._makeURI(item.link), faviconURI, false,
+              Services.io.newURI(item.link), faviconURI, false,
               PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE, null,
               Services.scriptSecurityManager.getSystemPrincipal());
           } catch (e) {
@@ -278,8 +247,8 @@ DistributionCustomizer.prototype = {
     // nsPrefService loads very early.  Reload prefs so we can set
     // distribution defaults during the prefservice:after-app-defaults
     // notification (see applyPrefDefaults below)
-    this._prefSvc.QueryInterface(Ci.nsIObserver);
-    this._prefSvc.observe(null, "reload-default-prefs", null);
+    Services.prefs.QueryInterface(Ci.nsIObserver)
+      .observe(null, "reload-default-prefs", null);
   },
 
   _bookmarksApplied: false,
@@ -313,7 +282,7 @@ DistributionCustomizer.prototype = {
         this._ini.getString("Global", "id") + ".bookmarksProcessed";
     }
 
-    let bmProcessed = this._prefs.getBoolPref(bmProcessedPref, false);
+    let bmProcessed = Services.prefs.getBoolPref(bmProcessedPref, false);
 
     if (!bmProcessed) {
       if (sections.BookmarksMenu)
@@ -322,7 +291,7 @@ DistributionCustomizer.prototype = {
       if (sections.BookmarksToolbar)
         await this._parseBookmarksSection(PlacesUtils.bookmarks.toolbarGuid,
                                           "BookmarksToolbar");
-      this._prefs.setBoolPref(bmProcessedPref, true);
+      Services.prefs.setBoolPref(bmProcessedPref, true);
     }
   },
 
@@ -403,7 +372,11 @@ DistributionCustomizer.prototype = {
           if (value) {
             value = value.replace(/%LOCALE%/g, this._locale);
             value = value.replace(/%LANGUAGE%/g, this._language);
-            defaults.set(key, parseValue(value));
+            if (key == "general.useragent.locale") {
+              defaults.set("intl.locale.requested", parseValue(value));
+            } else {
+              defaults.set(key, parseValue(value));
+            }
           }
         } catch (e) { /* ignore bad prefs and move on */ }
       }
@@ -489,9 +462,7 @@ DistributionCustomizer.prototype = {
     let prefDefaultsApplied = this._prefDefaultsApplied || !this._ini;
     if (this._customizationsApplied && this._bookmarksApplied &&
         prefDefaultsApplied) {
-      let os = Cc["@mozilla.org/observer-service;1"].
-               getService(Ci.nsIObserverService);
-      os.notifyObservers(null, DISTRIBUTION_CUSTOMIZATION_COMPLETE_TOPIC);
+      Services.obs.notifyObservers(null, DISTRIBUTION_CUSTOMIZATION_COMPLETE_TOPIC);
     }
   }
 };

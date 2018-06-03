@@ -4,40 +4,40 @@
 
 "use strict";
 
-const {utils: Cu} = Components;
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Preferences.jsm");
+ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+ChromeUtils.import("resource://gre/modules/Preferences.jsm");
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "aboutNewTabService",
                                    "@mozilla.org/browser/aboutnewtab-service;1",
                                    "nsIAboutNewTabService");
 
-const ACTIVITY_STREAM_PRERENDER_URL = "resource://activity-stream/data/content/activity-stream-prerendered.html";
-const ACTIVITY_STREAM_PRERENDER_DEBUG_URL = "resource://activity-stream/data/content/activity-stream-prerendered-debug.html";
-const ACTIVITY_STREAM_URL = "resource://activity-stream/data/content/activity-stream.html";
-const ACTIVITY_STREAM_DEBUG_URL = "resource://activity-stream/data/content/activity-stream-debug.html";
+const IS_RELEASE_OR_BETA = AppConstants.RELEASE_OR_BETA;
 
-const DEFAULT_CHROME_URL = "chrome://browser/content/newtab/newTab.xhtml";
+const ACTIVITY_STREAM_PRERENDER_URL = "resource://activity-stream/prerendered/en-US/activity-stream-prerendered.html";
+const ACTIVITY_STREAM_PRERENDER_DEBUG_URL = "resource://activity-stream/prerendered/static/activity-stream-prerendered-debug.html";
+const ACTIVITY_STREAM_URL = "resource://activity-stream/prerendered/en-US/activity-stream.html";
+const ACTIVITY_STREAM_DEBUG_URL = "resource://activity-stream/prerendered/static/activity-stream-debug.html";
+
 const DOWNLOADS_URL = "chrome://browser/content/downloads/contentAreaDownloadsView.xul";
-const ACTIVITY_STREAM_PREF = "browser.newtabpage.activity-stream.enabled";
 const ACTIVITY_STREAM_PRERENDER_PREF = "browser.newtabpage.activity-stream.prerender";
 const ACTIVITY_STREAM_DEBUG_PREF = "browser.newtabpage.activity-stream.debug";
 
 function cleanup() {
-  Services.prefs.clearUserPref(ACTIVITY_STREAM_PREF);
   Services.prefs.clearUserPref(ACTIVITY_STREAM_PRERENDER_PREF);
   Services.prefs.clearUserPref(ACTIVITY_STREAM_DEBUG_PREF);
   aboutNewTabService.resetNewTabURL();
 }
 
-do_register_cleanup(cleanup);
+registerCleanupFunction(cleanup);
 
 add_task(async function test_as_and_prerender_initialized() {
-  Assert.equal(aboutNewTabService.activityStreamEnabled, Services.prefs.getBoolPref(ACTIVITY_STREAM_PREF),
+  Assert.ok(aboutNewTabService.activityStreamEnabled,
     ".activityStreamEnabled should be set to the correct initial value");
   Assert.equal(aboutNewTabService.activityStreamPrerender, Services.prefs.getBoolPref(ACTIVITY_STREAM_PRERENDER_PREF),
     ".activityStreamPrerender should be set to the correct initial value");
-  Assert.equal(aboutNewTabService.activityStreamDebug, Services.prefs.getBoolPref(ACTIVITY_STREAM_DEBUG_PREF),
+  // This pref isn't defined on release or beta, so we fall back to false
+  Assert.equal(aboutNewTabService.activityStreamDebug, Services.prefs.getBoolPref(ACTIVITY_STREAM_DEBUG_PREF, false),
     ".activityStreamDebug should be set to the correct initial value");
 });
 
@@ -46,11 +46,6 @@ add_task(async function test_as_and_prerender_initialized() {
  */
 add_task(async function test_override_activity_stream_disabled() {
   let notificationPromise;
-  Services.prefs.setBoolPref(ACTIVITY_STREAM_PREF, false);
-
-  // tests default is the local newtab resource
-  Assert.equal(aboutNewTabService.defaultURL, DEFAULT_CHROME_URL,
-               `Default newtab URL should be ${DEFAULT_CHROME_URL}`);
 
   // override with some remote URL
   let url = "http://example.com/";
@@ -86,14 +81,14 @@ add_task(async function test_override_activity_stream_enabled() {
   Assert.ok(aboutNewTabService.activityStreamEnabled, "Activity Stream should be enabled");
   Assert.ok(aboutNewTabService.activityStreamPrerender, "Activity Stream should be prerendered");
 
-  // change to local newtab page while activity stream is enabled
-  notificationPromise = nextChangeNotificationPromise(DEFAULT_CHROME_URL);
-  aboutNewTabService.newTabURL = DEFAULT_CHROME_URL;
+  // change to a chrome URL while activity stream is enabled
+  notificationPromise = nextChangeNotificationPromise(DOWNLOADS_URL);
+  aboutNewTabService.newTabURL = DOWNLOADS_URL;
   await notificationPromise;
-  Assert.equal(aboutNewTabService.newTabURL, DEFAULT_CHROME_URL,
+  Assert.equal(aboutNewTabService.newTabURL, DOWNLOADS_URL,
                "Newtab URL set to chrome url");
-  Assert.equal(aboutNewTabService.defaultURL, DEFAULT_CHROME_URL,
-               "Newtab URL defaultURL set to the default chrome URL");
+  Assert.equal(aboutNewTabService.defaultURL, ACTIVITY_STREAM_PRERENDER_URL,
+               "Newtab URL defaultURL still set to the default activity stream prerendered URL");
   Assert.ok(aboutNewTabService.overridden, "Newtab URL should be overridden");
   Assert.ok(!aboutNewTabService.activityStreamEnabled, "Activity Stream should not be enabled");
 
@@ -105,25 +100,38 @@ add_task(async function test_default_url() {
   Assert.equal(aboutNewTabService.defaultURL, ACTIVITY_STREAM_PRERENDER_URL,
     "Newtab defaultURL initially set to prerendered AS url");
 
-  await setBoolPrefAndWaitForChange(ACTIVITY_STREAM_DEBUG_PREF, true,
-    "A notification occurs after changing the debug pref to true");
+  // Only debug variants aren't available on release/beta
+  if (!IS_RELEASE_OR_BETA) {
+    await setBoolPrefAndWaitForChange(ACTIVITY_STREAM_DEBUG_PREF, true,
+      "A notification occurs after changing the debug pref to true");
+    Assert.equal(aboutNewTabService.activityStreamDebug, true,
+      "the .activityStreamDebug property is set to true");
+    Assert.equal(aboutNewTabService.defaultURL, ACTIVITY_STREAM_PRERENDER_DEBUG_URL,
+      "Newtab defaultURL set to debug prerendered AS url after the pref has been changed");
+    await setBoolPrefAndWaitForChange(ACTIVITY_STREAM_PRERENDER_PREF, false,
+      "A notification occurs after changing the prerender pref to false");
+    Assert.equal(aboutNewTabService.defaultURL, ACTIVITY_STREAM_DEBUG_URL,
+      "Newtab defaultURL set to un-prerendered AS with debug if prerender is false and debug is true");
+    await setBoolPrefAndWaitForChange(ACTIVITY_STREAM_DEBUG_PREF, false,
+      "A notification occurs after changing the debug pref to false");
+  } else {
+    Services.prefs.setBoolPref(ACTIVITY_STREAM_DEBUG_PREF, true);
 
-  Assert.equal(aboutNewTabService.defaultURL, ACTIVITY_STREAM_PRERENDER_DEBUG_URL,
-    "Newtab defaultURL set to debug prerendered AS url after the pref has been changed");
-
-  await setBoolPrefAndWaitForChange(ACTIVITY_STREAM_PRERENDER_PREF, false,
-    "A notification occurs after changing the prerender pref to false");
-
-  Assert.equal(aboutNewTabService.defaultURL, ACTIVITY_STREAM_DEBUG_URL,
-    "Newtab defaultURL set to un-prerendered AS with debug if prerender is false and debug is true");
-
-  await setBoolPrefAndWaitForChange(ACTIVITY_STREAM_DEBUG_PREF, false,
-    "A notification occurs after changing the debug pref to false");
+    Assert.equal(aboutNewTabService.activityStreamDebug, false,
+      "the .activityStreamDebug property is remains false");
+    await setBoolPrefAndWaitForChange(ACTIVITY_STREAM_PRERENDER_PREF, false,
+      "A notification occurs after changing the prerender pref to false");
+  }
 
   Assert.equal(aboutNewTabService.defaultURL, ACTIVITY_STREAM_URL,
     "Newtab defaultURL set to un-prerendered AS if prerender is false and debug is false");
 
   cleanup();
+});
+
+add_task(function test_locale() {
+  Assert.equal(aboutNewTabService.activityStreamLocale, "en-US",
+    "The locale for testing should be en-US");
 });
 
 /**
@@ -165,7 +173,7 @@ add_task(async function test_updates() {
 
 function nextChangeNotificationPromise(aNewURL, testMessage) {
   return new Promise(resolve => {
-    Services.obs.addObserver(function observer(aSubject, aTopic, aData) {  // jshint unused:false
+    Services.obs.addObserver(function observer(aSubject, aTopic, aData) { // jshint unused:false
       Services.obs.removeObserver(observer, aTopic);
       Assert.equal(aData, aNewURL, testMessage);
       resolve();
@@ -175,7 +183,7 @@ function nextChangeNotificationPromise(aNewURL, testMessage) {
 
 function setBoolPrefAndWaitForChange(pref, value, testMessage) {
   return new Promise(resolve => {
-    Services.obs.addObserver(function observer(aSubject, aTopic, aData) {  // jshint unused:false
+    Services.obs.addObserver(function observer(aSubject, aTopic, aData) { // jshint unused:false
       Services.obs.removeObserver(observer, aTopic);
       Assert.equal(aData, aboutNewTabService.newTabURL, testMessage);
       resolve();
@@ -187,15 +195,11 @@ function setBoolPrefAndWaitForChange(pref, value, testMessage) {
 
 
 function setupASPrerendered() {
-  if (Services.prefs.getBoolPref(ACTIVITY_STREAM_PREF) &&
-    Services.prefs.getBoolPref(ACTIVITY_STREAM_PRERENDER_PREF)) {
+  if (Services.prefs.getBoolPref(ACTIVITY_STREAM_PRERENDER_PREF)) {
     return Promise.resolve();
   }
 
-  let notificationPromise;
-  // change newtab page to activity stream
-  notificationPromise = nextChangeNotificationPromise("about:newtab");
-  Services.prefs.setBoolPref(ACTIVITY_STREAM_PREF, true);
+  let notificationPromise = nextChangeNotificationPromise("about:newtab");
   Services.prefs.setBoolPref(ACTIVITY_STREAM_PRERENDER_PREF, true);
   return notificationPromise;
 }

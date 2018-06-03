@@ -275,6 +275,61 @@ nsTArray_base<Alloc, Copy>::ShiftData(index_type aStart,
 
 template<class Alloc, class Copy>
 template<typename ActualAlloc>
+void
+nsTArray_base<Alloc, Copy>::SwapFromEnd(index_type aStart,
+                                        size_type aCount,
+                                        size_type aElemSize,
+                                        size_t aElemAlign)
+{
+  // This method is part of the implementation of
+  // nsTArray::SwapRemoveElement{s,}At. For more information, read the
+  // documentation on that method.
+  if (aCount == 0) {
+    return;
+  }
+
+  // We are going to be removing aCount elements. Update our length to point to
+  // the new end of the array.
+  size_type oldLength = mHdr->mLength;
+  mHdr->mLength -= aCount;
+
+  if (mHdr->mLength == 0) {
+    // If we have no elements remaining in the array, we can free our buffer.
+    ShrinkCapacity(aElemSize, aElemAlign);
+    return;
+  }
+
+  // Determine how many elements we need to move from the end of the array into
+  // the now-removed section. This will either be the number of elements which
+  // were removed (if there are more elements in the tail of the array), or the
+  // entire tail of the array, whichever is smaller.
+  size_type relocCount = std::min(aCount, mHdr->mLength - aStart);
+  if (relocCount == 0) {
+    return;
+  }
+
+  // Move the elements which are now stranded after the end of the array back
+  // into the now-vacated memory.
+  index_type sourceBytes = (oldLength - relocCount) * aElemSize;
+  index_type destBytes = aStart * aElemSize;
+
+  // Perform the final copy. This is guaranteed to be a non-overlapping copy
+  // as our source contains only still-valid entries, and the destination
+  // contains only invalid entries which need to be overwritten.
+  MOZ_ASSERT(sourceBytes >= destBytes,
+             "The source should be after the destination.");
+  MOZ_ASSERT(sourceBytes - destBytes >= relocCount * aElemSize,
+             "The range should be nonoverlapping");
+
+  char* baseAddr = reinterpret_cast<char*>(mHdr + 1);
+  Copy::MoveNonOverlappingRegion(baseAddr + destBytes,
+                                 baseAddr + sourceBytes,
+                                 relocCount,
+                                 aElemSize);
+}
+
+template<class Alloc, class Copy>
+template<typename ActualAlloc>
 bool
 nsTArray_base<Alloc, Copy>::InsertSlotsAt(index_type aIndex, size_type aCount,
                                           size_type aElemSize,
@@ -305,8 +360,8 @@ nsTArray_base<Alloc, Copy>::InsertSlotsAt(index_type aIndex, size_type aCount,
 // that
 //
 //   * array.mIsAutoArray has the same value as it did when we started, and
-//   * if array has an auto buffer and mHdr would otherwise point to sEmptyHdr,
-//     array.mHdr points to array's auto buffer.
+//   * if array has an auto buffer and mHdr would otherwise point to
+//     sEmptyTArrayHeader, array.mHdr points to array's auto buffer.
 
 template<class Alloc, class Copy>
 nsTArray_base<Alloc, Copy>::IsAutoArrayRestorer::IsAutoArrayRestorer(
@@ -321,7 +376,7 @@ nsTArray_base<Alloc, Copy>::IsAutoArrayRestorer::IsAutoArrayRestorer(
 template<class Alloc, class Copy>
 nsTArray_base<Alloc, Copy>::IsAutoArrayRestorer::~IsAutoArrayRestorer()
 {
-  // Careful: We don't want to set mIsAutoArray = 1 on sEmptyHdr.
+  // Careful: We don't want to set mIsAutoArray = 1 on sEmptyTArrayHeader.
   if (mIsAuto && mArray.mHdr == mArray.EmptyHdr()) {
     // Call GetAutoArrayBufferUnsafe() because GetAutoArrayBuffer() asserts
     // that mHdr->mIsAutoArray is true, which surely isn't the case here.
@@ -341,9 +396,9 @@ nsTArray_base<Alloc, Copy>::SwapArrayElements(nsTArray_base<Allocator,
                                               size_t aElemAlign)
 {
 
-  // EnsureNotUsingAutoArrayBuffer will set mHdr = sEmptyHdr even if we have an
-  // auto buffer.  We need to point mHdr back to our auto buffer before we
-  // return, otherwise we'll forget that we have an auto buffer at all!
+  // EnsureNotUsingAutoArrayBuffer will set mHdr = sEmptyTArrayHeader even if we
+  // have an auto buffer.  We need to point mHdr back to our auto buffer before
+  // we return, otherwise we'll forget that we have an auto buffer at all!
   // IsAutoArrayRestorer takes care of this for us.
 
   IsAutoArrayRestorer ourAutoRestorer(*this, aElemAlign);
@@ -419,7 +474,7 @@ nsTArray_base<Alloc, Copy>::SwapArrayElements(nsTArray_base<Allocator,
   // Swap the arrays' lengths.
   MOZ_ASSERT((aOther.Length() == 0 || mHdr != EmptyHdr()) &&
              (Length() == 0 || aOther.mHdr != EmptyHdr()),
-             "Don't set sEmptyHdr's length.");
+             "Don't set sEmptyTArrayHeader's length.");
   size_type tempLength = Length();
 
   // Avoid writing to EmptyHdr, since it can trigger false
@@ -442,9 +497,9 @@ nsTArray_base<Alloc, Copy>::EnsureNotUsingAutoArrayBuffer(size_type aElemSize)
   if (UsesAutoArrayBuffer()) {
 
     // If you call this on a 0-length array, we'll set that array's mHdr to
-    // sEmptyHdr, in flagrant violation of the AutoTArray invariants.  It's
-    // up to you to set it back!  (If you don't, the AutoTArray will forget
-    // that it has an auto buffer.)
+    // sEmptyTArrayHeader, in flagrant violation of the AutoTArray invariants.
+    // It's up to you to set it back!  (If you don't, the AutoTArray will
+    // forget that it has an auto buffer.)
     if (Length() == 0) {
       mHdr = EmptyHdr();
       return true;

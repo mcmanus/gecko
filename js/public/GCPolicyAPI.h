@@ -13,9 +13,6 @@
 //
 // The GCPolicy provides at a minimum:
 //
-//   static T initial()
-//       - Construct and return an empty T.
-//
 //   static void trace(JSTracer, T* tp, const char* name)
 //       - Trace the edge |*tp|, calling the edge |name|. Containers like
 //         GCHashMap and GCHashSet use this method to trace their children.
@@ -45,10 +42,12 @@
 
 #include "js/TraceKind.h"
 #include "js/TracingAPI.h"
+#include "js/TypeDecls.h"
 
 // Expand the given macro D for each public GC pointer.
 #define FOR_EACH_PUBLIC_GC_POINTER_TYPE(D) \
     D(JS::Symbol*) \
+    IF_BIGINT(D(JS::BigInt*),) \
     D(JSAtom*) \
     D(JSFunction*) \
     D(JSObject*) \
@@ -63,15 +62,6 @@
 #define FOR_EACH_PUBLIC_AGGREGATE_GC_POINTER_TYPE(D) \
     D(JSPropertyDescriptor)
 
-class JSAtom;
-class JSFunction;
-class JSObject;
-class JSScript;
-class JSString;
-namespace JS {
-class Symbol;
-}
-
 namespace JS {
 
 // Defines a policy for container types with non-GC, i.e. C storage. This
@@ -79,9 +69,8 @@ namespace JS {
 template <typename T>
 struct StructGCPolicy
 {
-    static T initial() {
-        return T();
-    }
+    static_assert(!mozilla::IsPointer<T>::value,
+                  "Pointer type not allowed for StructGCPolicy");
 
     static void trace(JSTracer* trc, T* tp, const char* name) {
         tp->trace(trc);
@@ -109,7 +98,6 @@ template <typename T> struct GCPolicy : public StructGCPolicy<T> {};
 // This policy ignores any GC interaction, e.g. for non-GC types.
 template <typename T>
 struct IgnoreGCPolicy {
-    static T initial() { return T(); }
     static void trace(JSTracer* trc, T* t, const char* name) {}
     static bool needsSweep(T* v) { return false; }
     static bool isValid(const T& v) { return true; }
@@ -120,7 +108,9 @@ template <> struct GCPolicy<uint64_t> : public IgnoreGCPolicy<uint64_t> {};
 template <typename T>
 struct GCPointerPolicy
 {
-    static T initial() { return nullptr; }
+    static_assert(mozilla::IsPointer<T>::value,
+                  "Non-pointer type not allowed for GCPointerPolicy");
+
     static void trace(JSTracer* trc, T* vp, const char* name) {
         if (*vp)
             js::UnsafeTraceManuallyBarrieredEdge(trc, vp, name);
@@ -134,17 +124,15 @@ struct GCPointerPolicy
         return js::gc::IsCellPointerValidOrNull(v);
     }
 };
-template <> struct GCPolicy<JS::Symbol*> : public GCPointerPolicy<JS::Symbol*> {};
-template <> struct GCPolicy<JSAtom*> : public GCPointerPolicy<JSAtom*> {};
-template <> struct GCPolicy<JSFunction*> : public GCPointerPolicy<JSFunction*> {};
-template <> struct GCPolicy<JSObject*> : public GCPointerPolicy<JSObject*> {};
-template <> struct GCPolicy<JSScript*> : public GCPointerPolicy<JSScript*> {};
-template <> struct GCPolicy<JSString*> : public GCPointerPolicy<JSString*> {};
+#define EXPAND_SPECIALIZE_GCPOLICY(Type) \
+    template <> struct GCPolicy<Type> : public GCPointerPolicy<Type> {}; \
+    template <> struct GCPolicy<Type const> : public GCPointerPolicy<Type const> {};
+FOR_EACH_PUBLIC_GC_POINTER_TYPE(EXPAND_SPECIALIZE_GCPOLICY)
+#undef EXPAND_SPECIALIZE_GCPOLICY
 
 template <typename T>
 struct NonGCPointerPolicy
 {
-    static T initial() { return nullptr; }
     static void trace(JSTracer* trc, T* vp, const char* name) {
         if (*vp)
             (*vp)->trace(trc);
@@ -174,7 +162,6 @@ struct GCPolicy<JS::Heap<T>>
 template <typename T, typename D>
 struct GCPolicy<mozilla::UniquePtr<T, D>>
 {
-    static mozilla::UniquePtr<T,D> initial() { return mozilla::UniquePtr<T,D>(); }
     static void trace(JSTracer* trc, mozilla::UniquePtr<T,D>* tp, const char* name) {
         if (tp->get())
             GCPolicy<T>::trace(trc, tp->get(), name);
@@ -196,7 +183,6 @@ struct GCPolicy<mozilla::UniquePtr<T, D>>
 template <typename T>
 struct GCPolicy<mozilla::Maybe<T>>
 {
-    static mozilla::Maybe<T> initial() { return mozilla::Maybe<T>(); }
     static void trace(JSTracer* trc, mozilla::Maybe<T>* tp, const char* name) {
         if (tp->isSome())
             GCPolicy<T>::trace(trc, tp->ptr(), name);

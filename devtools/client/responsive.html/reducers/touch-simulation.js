@@ -12,7 +12,7 @@ const INITIAL_TOUCH_SIMULATION = {
   enabled: false,
 };
 
-let reducers = {
+const reducers = {
 
   [CHANGE_TOUCH_SIMULATION](touchSimulation, { enabled }) {
     return Object.assign({}, touchSimulation, {
@@ -22,8 +22,8 @@ let reducers = {
 
 };
 
-module.exports = function (touchSimulation = INITIAL_TOUCH_SIMULATION, action) {
-  let reducer = reducers[action.type];
+module.exports = function(touchSimulation = INITIAL_TOUCH_SIMULATION, action) {
+  const reducer = reducers[action.type];
   if (!reducer) {
     return touchSimulation;
   }

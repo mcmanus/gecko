@@ -8,11 +8,13 @@
 #define mozilla_dom_PerformanceMainThread_h
 
 #include "Performance.h"
+#include "PerformanceStorage.h"
 
 namespace mozilla {
 namespace dom {
 
 class PerformanceMainThread final : public Performance
+                                  , public PerformanceStorage
 {
 public:
   PerformanceMainThread(nsPIDOMWindowInner* aWindow,
@@ -23,12 +25,19 @@ public:
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(PerformanceMainThread,
                                                          Performance)
 
+  PerformanceStorage* AsPerformanceStorage() override
+  {
+    return this;
+  }
+
   virtual PerformanceTiming* Timing() override;
 
   virtual PerformanceNavigation* Navigation() override;
 
   virtual void AddEntry(nsIHttpChannel* channel,
                         nsITimedChannel* timedChannel) override;
+
+  void CreateDocumentEntry(nsITimedChannel* aChannel) override;
 
   TimeStamp CreationTimeStamp() const override;
 
@@ -40,6 +49,11 @@ public:
   virtual nsDOMNavigationTiming* GetDOMTiming() const override
   {
     return mDOMTiming;
+  }
+
+  virtual uint64_t GetRandomTimelineSeed() override
+  {
+    return GetDOMTiming()->GetRandomTimelineSeed();
   }
 
   virtual nsITimedChannel* GetChannel() const override

@@ -27,9 +27,6 @@ import os
 import re
 import sys
 
-from mozversioncontrol import get_repository_from_env
-
-
 architecture_independent = set(['generic'])
 all_unsupported_architectures_names = set(['mips32', 'mips64', 'mips_shared'])
 all_architecture_names = set(['x86', 'x64', 'arm', 'arm64'])
@@ -40,7 +37,8 @@ reArgType = "(?P<type>[\w\s:*&]+)"
 reArgName = "(?P<name>\s\w+)"
 reArgDefault = "(?P<default>(?:\s=[^,)]+)?)"
 reAfterArg = "(?=[,)])"
-reMatchArg = re.compile(reBeforeArg + reArgType + reArgName + reArgDefault + reAfterArg)
+reMatchArg = re.compile(reBeforeArg + reArgType +
+                        reArgName + reArgDefault + reAfterArg)
 
 
 def get_normalized_signatures(signature, fileAnnot=None):
@@ -61,7 +59,8 @@ def get_normalized_signatures(signature, fileAnnot=None):
         archs = [fileAnnot['arch']]
 
     if 'DEFINED_ON(' in signature:
-        archs = re.sub(r'.*DEFINED_ON\((?P<archs>[^()]*)\).*', '\g<archs>', signature).split(',')
+        archs = re.sub(
+            r'.*DEFINED_ON\((?P<archs>[^()]*)\).*', '\g<archs>', signature).split(',')
         archs = [a.strip() for a in archs]
         signature = re.sub(r'\s+DEFINED_ON\([^()]*\)', '', signature)
 
@@ -72,6 +71,10 @@ def get_normalized_signatures(signature, fileAnnot=None):
     elif 'PER_SHARED_ARCH' in signature:
         archs = all_shared_architecture_names
         signature = re.sub(r'\s+PER_SHARED_ARCH', '', signature)
+
+    elif 'OOL_IN_HEADER' in signature:
+        assert archs == ['generic']
+        signature = re.sub(r'\s+OOL_IN_HEADER', '', signature)
 
     else:
         # No signature annotation, the list of architectures remains unchanged.
@@ -114,6 +117,11 @@ def get_file_annotation(filename):
     elif filename.endswith('-inl.h'):
         inline = True
         filename = filename[:-len('-inl.h')]
+    elif filename.endswith('.h'):
+        # This allows the definitions block in MacroAssembler.h to be
+        # style-checked.
+        inline = True
+        filename = filename[:-len('.h')]
     else:
         raise Exception('unknown file name', origFilename)
 
@@ -132,7 +140,7 @@ def get_file_annotation(filename):
 def get_macroassembler_definitions(filename):
     try:
         fileAnnot = get_file_annotation(filename)
-    except:
+    except Exception:
         return []
 
     style_section = False
@@ -151,7 +159,8 @@ def get_macroassembler_definitions(filename):
             line = re.sub(r'//.*', '', line)
             if line.startswith('{') or line.strip() == "{}":
                 if 'MacroAssembler::' in lines:
-                    signatures.extend(get_normalized_signatures(lines, fileAnnot))
+                    signatures.extend(
+                        get_normalized_signatures(lines, fileAnnot))
                 if line.strip() != "{}":  # Empty declaration, no need to declare
                     # a new code section
                     code_section = True
@@ -184,9 +193,9 @@ def get_macroassembler_declaration(filename):
     signatures = []
     with open(filename) as f:
         for line in f:
-            if '//{{{ check_macroassembler_style' in line:
+            if '//{{{ check_macroassembler_decl_style' in line:
                 style_section = True
-            elif '//}}} check_macroassembler_style' in line:
+            elif '//}}} check_macroassembler_decl_style' in line:
                 style_section = False
             if not style_section:
                 continue
@@ -226,6 +235,9 @@ def generate_file_content(signatures):
         if len(archs.symmetric_difference(architecture_independent)) == 0:
             output.append(s + ';\n')
             if s.startswith('inline'):
+                # TODO, bug 1432600: This is mistaken for OOL_IN_HEADER
+                # functions.  (Such annotation is already removed by the time
+                # this function sees the signature here.)
                 output.append('    is defined in MacroAssembler-inl.h\n')
             else:
                 output.append('    is defined in MacroAssembler.cpp\n')
@@ -235,7 +247,8 @@ def generate_file_content(signatures):
             elif len(archs.symmetric_difference(all_shared_architecture_names)) == 0:
                 output.append(s + ' PER_SHARED_ARCH;\n')
             else:
-                output.append(s + ' DEFINED_ON(' + ', '.join(sorted(archs)) + ');\n')
+                output.append(
+                    s + ' DEFINED_ON(' + ', '.join(sorted(archs)) + ');\n')
             for a in sorted(archs):
                 a = a.replace('_', '-')
                 masm = '%s/MacroAssembler-%s' % (a, a)
@@ -253,20 +266,22 @@ def check_style():
     # We infer from each file the signature of each MacroAssembler function.
     defs = dict()       # type: dict(signature => ['x86', 'x64'])
 
-    with get_repository_from_env() as repo:
-        # Select the appropriate files.
-        for filename in repo.get_files_in_working_directory():
-            if not filename.startswith('js/src/jit/'):
-                continue
+    root_dir = os.path.join('js', 'src', 'jit')
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        for filename in filenames:
             if 'MacroAssembler' not in filename:
                 continue
 
-            filename = os.path.join(repo.path, filename)
+            filepath = os.path.join(dirpath, filename).replace('\\', '/')
 
-            if filename.endswith('MacroAssembler.h'):
-                decls = append_signatures(decls, get_macroassembler_declaration(filename))
-            else:
-                defs = append_signatures(defs, get_macroassembler_definitions(filename))
+            if filepath.endswith('MacroAssembler.h'):
+                decls = append_signatures(
+                    decls, get_macroassembler_declaration(filepath))
+            defs = append_signatures(
+                defs, get_macroassembler_definitions(filepath))
+
+    if not decls or not defs:
+        raise Exception("Did not find any definitions or declarations")
 
     # Compare declarations and definitions output.
     difflines = difflib.unified_diff(generate_file_content(decls),

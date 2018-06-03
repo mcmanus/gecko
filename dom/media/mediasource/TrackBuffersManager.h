@@ -9,7 +9,8 @@
 
 #include "mozilla/Atomics.h"
 #include "mozilla/Maybe.h"
-#include "mozilla/Monitor.h"
+#include "mozilla/Mutex.h"
+#include "mozilla/NotNull.h"
 #include "AutoTaskQueue.h"
 
 #include "MediaContainerType.h"
@@ -34,9 +35,8 @@ class SourceBufferResource;
 class SourceBufferTaskQueue
 {
 public:
-  SourceBufferTaskQueue()
-  : mMonitor("SourceBufferTaskQueue")
-  {}
+  SourceBufferTaskQueue() { }
+
   ~SourceBufferTaskQueue()
   {
     MOZ_ASSERT(mQueue.IsEmpty(), "All tasks must have been processed");
@@ -44,33 +44,30 @@ public:
 
   void Push(SourceBufferTask* aTask)
   {
-    MonitorAutoLock mon(mMonitor);
     mQueue.AppendElement(aTask);
   }
 
   already_AddRefed<SourceBufferTask> Pop()
   {
-    MonitorAutoLock mon(mMonitor);
     if (!mQueue.Length()) {
       return nullptr;
     }
-    RefPtr<SourceBufferTask> task = Move(mQueue[0]);
+    RefPtr<SourceBufferTask> task = std::move(mQueue[0]);
     mQueue.RemoveElementAt(0);
     return task.forget();
   }
 
-  nsTArray<SourceBufferTask>::size_type Length() const
+  nsTArray<RefPtr<SourceBufferTask>>::size_type Length() const
   {
-    MonitorAutoLock mon(mMonitor);
     return mQueue.Length();
   }
-
 private:
-  mutable Monitor mMonitor;
   nsTArray<RefPtr<SourceBufferTask>> mQueue;
 };
 
-class TrackBuffersManager
+DDLoggedTypeDeclName(TrackBuffersManager);
+
+class TrackBuffersManager : public DecoderDoctorLifeLogger<TrackBuffersManager>
 {
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(TrackBuffersManager);
@@ -117,6 +114,9 @@ public:
   // Eviction is done in two steps, first remove data up to aPlaybackTime
   // and if still more space is needed remove from the end.
   EvictDataResult EvictData(const media::TimeUnit& aPlaybackTime, int64_t aSize);
+
+  // Queue a task to run ChangeType
+  void ChangeType(const MediaContainerType& aType);
 
   // Returns the buffered range currently managed.
   // This may be called on any thread.
@@ -208,10 +208,11 @@ private:
   // Accessed on both the main thread and the task queue.
   Atomic<bool> mBufferFull;
   bool mFirstInitializationSegmentReceived;
+  bool mChangeTypeReceived;
   // Set to true once a new segment is started.
   bool mNewMediaSegmentStarted;
   bool mActiveTrack;
-  const MediaContainerType mType;
+  MediaContainerType mType;
 
   // ContainerParser objects and methods.
   // Those are used to parse the incoming input buffer.
@@ -455,15 +456,29 @@ private:
   TrackData mAudioTracks;
 
   // TaskQueue methods and objects.
-  AbstractThread* GetTaskQueue() const
+  RefPtr<AutoTaskQueue> GetTaskQueueSafe() const
   {
+    MutexAutoLock mut(mMutex);
     return mTaskQueue;
+  }
+  NotNull<AbstractThread*> TaskQueueFromTaskQueue() const
+  {
+#ifdef DEBUG
+    RefPtr<AutoTaskQueue> taskQueue = GetTaskQueueSafe();
+    MOZ_ASSERT(taskQueue && taskQueue->IsCurrentThreadIn());
+#endif
+    return WrapNotNull(mTaskQueue.get());
   }
   bool OnTaskQueue() const
   {
-    return !GetTaskQueue() || GetTaskQueue()->IsCurrentThreadIn();
+    auto taskQueue = TaskQueueFromTaskQueue();
+    return taskQueue->IsCurrentThreadIn();
   }
-  RefPtr<AutoTaskQueue> mTaskQueue;
+  void ResetTaskQueue()
+  {
+    MutexAutoLock mut(mMutex);
+    mTaskQueue = nullptr;
+  }
 
   // SourceBuffer Queues and running context.
   SourceBufferTaskQueue mQueue;
@@ -505,7 +520,11 @@ private:
   Atomic<EvictionState> mEvictionState;
 
   // Monitor to protect following objects accessed across multiple threads.
-  mutable Monitor mMonitor;
+  mutable Mutex mMutex;
+  // mTaskQueue is only ever written after construction on the task queue.
+  // As such, it can be accessed while on task queue without the need for the
+  // mutex.
+  RefPtr<AutoTaskQueue> mTaskQueue;
   // Stable audio and video track time ranges.
   media::TimeIntervals mVideoBufferedRanges;
   media::TimeIntervals mAudioBufferedRanges;

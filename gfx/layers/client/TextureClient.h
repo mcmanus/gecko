@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-//  * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -224,6 +225,7 @@ public:
 
 #ifdef XP_WIN
 class D3D11TextureData;
+class DXGIYCbCrTextureData;
 #endif
 
 class TextureData {
@@ -235,6 +237,7 @@ public:
     bool hasSynchronization;
     bool supportsMoz2D;
     bool canExposeMappedData;
+    bool canConcurrentlyReadLock;
 
     Info()
     : format(gfx::SurfaceFormat::UNKNOWN)
@@ -242,6 +245,7 @@ public:
     , hasSynchronization(false)
     , supportsMoz2D(false)
     , canExposeMappedData(false)
+    , canConcurrentlyReadLock(true)
     {}
   };
 
@@ -269,6 +273,8 @@ public:
   virtual bool Serialize(SurfaceDescriptor& aDescriptor) = 0;
   virtual void GetSubDescriptor(GPUVideoSubDescriptor* aOutDesc) { }
 
+  virtual void OnForwardedToHost() {}
+
   virtual TextureData*
   CreateSimilar(LayersIPCChannel* aAllocator,
                 LayersBackend aLayersBackend,
@@ -285,6 +291,9 @@ public:
 
 #ifdef XP_WIN
   virtual D3D11TextureData* AsD3D11TextureData() {
+    return nullptr;
+  }
+  virtual DXGIYCbCrTextureData* AsDXGIYCbCrTextureData() {
     return nullptr;
   }
 #endif
@@ -626,9 +635,6 @@ public:
 
   uint64_t GetLastFwdTransactionId() { return mFwdTransactionId; }
 
-  void EnableReadLock();
-  void EnableBlockingReadLock();
-
   TextureReadLock* GetReadLock() { return mReadLock; }
 
   bool IsReadLocked() const;
@@ -636,7 +642,7 @@ public:
   bool TryReadLock();
   void ReadUnlock();
 
-  bool SerializeReadLock(ReadLockDescriptor& aDescriptor);
+  bool OnForwardedToHost();
 
   // Mark that the TextureClient will be used by the paint thread, and should not
   // free its underlying texture data. This must only be called from the main
@@ -673,6 +679,9 @@ private:
                            LayersBackend aLayersBackend,
                            TextureFlags aTextureFlags,
                            TextureAllocationFlags flags = ALLOC_DEFAULT);
+
+  void EnableReadLock();
+  void EnableBlockingReadLock();
 
   /**
    * Called once, during the destruction of the Texture, on the thread in which
@@ -752,7 +761,7 @@ protected:
   friend void TestTextureClientSurface(TextureClient*, gfxImageSurface*);
   friend void TestTextureClientYCbCr(TextureClient*, PlanarYCbCrData&);
   friend already_AddRefed<TextureHost> CreateTextureHostWithBackend(
-    TextureClient*, LayersBackend&);
+    TextureClient*, ISurfaceAllocator*, LayersBackend&);
 
 #ifdef GFX_DEBUG_TRACK_CLIENTS_IN_POOL
 public:

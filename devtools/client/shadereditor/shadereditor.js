@@ -3,24 +3,25 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-var { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
+/* exported startupShaderEditor, shutdownShaderEditor */
 
-const {require} = Cu.import("resource://devtools/shared/Loader.jsm", {});
+const {require} = ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
 const {XPCOMUtils} = require("resource://gre/modules/XPCOMUtils.jsm");
 const {SideMenuWidget} = require("resource://devtools/client/shared/widgets/SideMenuWidget.jsm");
 const promise = require("promise");
 const defer = require("devtools/shared/defer");
-const Services = require("Services");
-const EventEmitter = require("devtools/shared/old-event-emitter");
+const {Task} = require("devtools/shared/task");
+const EventEmitter = require("devtools/shared/event-emitter");
 const Tooltip = require("devtools/client/shared/widgets/tooltip/Tooltip");
 const Editor = require("devtools/client/sourceeditor/editor");
 const {LocalizationHelper} = require("devtools/shared/l10n");
-const {Heritage, WidgetMethods, setNamedTimeout} =
+const {extend} = require("devtools/shared/extend");
+const {WidgetMethods, setNamedTimeout} =
   require("devtools/client/shared/widgets/view-helpers");
-const {Task} = require("devtools/shared/task");
 
 // Use privileged promise in panel documents to prevent having them to freeze
 // during toolbox destruction. See bug 1402779.
+// eslint-disable-next-line no-unused-vars
 const Promise = require("Promise");
 
 // The panel's window global is an EventEmitter firing the following events:
@@ -89,13 +90,14 @@ var EventsHandler = {
   /**
    * Listen for events emitted by the current tab target.
    */
-  initialize: function () {
+  initialize: function() {
     this._onHostChanged = this._onHostChanged.bind(this);
     this._onTabNavigated = this._onTabNavigated.bind(this);
+    this._onTabWillNavigate = this._onTabWillNavigate.bind(this);
     this._onProgramLinked = this._onProgramLinked.bind(this);
     this._onProgramsAdded = this._onProgramsAdded.bind(this);
     gToolbox.on("host-changed", this._onHostChanged);
-    gTarget.on("will-navigate", this._onTabNavigated);
+    gTarget.on("will-navigate", this._onTabWillNavigate);
     gTarget.on("navigate", this._onTabNavigated);
     gFront.on("program-linked", this._onProgramLinked);
     this.reloadButton = $("#requests-menu-reload-notice-button");
@@ -105,9 +107,9 @@ var EventsHandler = {
   /**
    * Remove events emitted by the current tab target.
    */
-  destroy: function () {
+  destroy: function() {
     gToolbox.off("host-changed", this._onHostChanged);
-    gTarget.off("will-navigate", this._onTabNavigated);
+    gTarget.off("will-navigate", this._onTabWillNavigate);
     gTarget.off("navigate", this._onTabNavigated);
     gFront.off("program-linked", this._onProgramLinked);
     this.reloadButton.removeEventListener("command", this._onReloadCommand);
@@ -123,55 +125,49 @@ var EventsHandler = {
   /**
    * Handles a host change event on the parent toolbox.
    */
-  _onHostChanged: function () {
+  _onHostChanged: function() {
     if (gToolbox.hostType == "side") {
       $("#shaders-pane").removeAttribute("height");
     }
   },
 
+  _onTabWillNavigate: function({isFrameSwitching}) {
+    // Make sure the backend is prepared to handle WebGL contexts.
+    if (!isFrameSwitching) {
+      gFront.setup({ reload: false });
+    }
+
+    // Reset UI.
+    ShadersListView.empty();
+    // When switching to an iframe, ensure displaying the reload button.
+    // As the document has already been loaded without being hooked.
+    if (isFrameSwitching) {
+      $("#reload-notice").hidden = false;
+      $("#waiting-notice").hidden = true;
+    } else {
+      $("#reload-notice").hidden = true;
+      $("#waiting-notice").hidden = false;
+    }
+
+    $("#content").hidden = true;
+    window.emit(EVENTS.UI_RESET);
+  },
+
   /**
    * Called for each location change in the debugged tab.
    */
-  _onTabNavigated: function (event, {isFrameSwitching}) {
-    switch (event) {
-      case "will-navigate": {
-        // Make sure the backend is prepared to handle WebGL contexts.
-        if (!isFrameSwitching) {
-          gFront.setup({ reload: false });
-        }
-
-        // Reset UI.
-        ShadersListView.empty();
-        // When switching to an iframe, ensure displaying the reload button.
-        // As the document has already been loaded without being hooked.
-        if (isFrameSwitching) {
-          $("#reload-notice").hidden = false;
-          $("#waiting-notice").hidden = true;
-        } else {
-          $("#reload-notice").hidden = true;
-          $("#waiting-notice").hidden = false;
-        }
-
-        $("#content").hidden = true;
-        window.emit(EVENTS.UI_RESET);
-
-        break;
-      }
-      case "navigate": {
-        // Manually retrieve the list of program actors known to the server,
-        // because the backend won't emit "program-linked" notifications
-        // in the case of a bfcache navigation (since no new programs are
-        // actually linked).
-        gFront.getPrograms().then(this._onProgramsAdded);
-        break;
-      }
-    }
+  _onTabNavigated: function() {
+    // Manually retrieve the list of program actors known to the server,
+    // because the backend won't emit "program-linked" notifications
+    // in the case of a bfcache navigation (since no new programs are
+    // actually linked).
+    gFront.getPrograms().then(this._onProgramsAdded);
   },
 
   /**
    * Called every time a program was linked in the debugged tab.
    */
-  _onProgramLinked: function (programActor) {
+  _onProgramLinked: function(programActor) {
     this._addProgram(programActor);
     window.emit(EVENTS.NEW_PROGRAM);
   },
@@ -179,7 +175,7 @@ var EventsHandler = {
   /**
    * Callback for the front's getPrograms() method.
    */
-  _onProgramsAdded: function (programActors) {
+  _onProgramsAdded: function(programActors) {
     programActors.forEach(this._addProgram);
     window.emit(EVENTS.PROGRAMS_ADDED);
   },
@@ -187,7 +183,7 @@ var EventsHandler = {
   /**
    * Adds a program to the shaders list and unhides any modal notices.
    */
-  _addProgram: function (programActor) {
+  _addProgram: function(programActor) {
     $("#waiting-notice").hidden = true;
     $("#reload-notice").hidden = true;
     $("#content").hidden = false;
@@ -198,11 +194,11 @@ var EventsHandler = {
 /**
  * Functions handling the sources UI.
  */
-var ShadersListView = Heritage.extend(WidgetMethods, {
+var ShadersListView = extend(WidgetMethods, {
   /**
    * Initialization function, called when the tool is started.
    */
-  initialize: function () {
+  initialize: function() {
     this.widget = new SideMenuWidget(this._pane = $("#shaders-pane"), {
       showArrows: true,
       showItemCheckboxes: true
@@ -222,7 +218,7 @@ var ShadersListView = Heritage.extend(WidgetMethods, {
   /**
    * Destruction function, called when the tool is closed.
    */
-  destroy: function () {
+  destroy: function() {
     this.widget.removeEventListener("select", this._onProgramSelect);
     this.widget.removeEventListener("check", this._onProgramCheck);
     this.widget.removeEventListener("mouseover", this._onProgramMouseOver, true);
@@ -235,7 +231,7 @@ var ShadersListView = Heritage.extend(WidgetMethods, {
    * @param object programActor
    *        The program actor coming from the active thread.
    */
-  addProgram: function (programActor) {
+  addProgram: function(programActor) {
     if (this.hasProgram(programActor)) {
       return;
     }
@@ -244,8 +240,8 @@ var ShadersListView = Heritage.extend(WidgetMethods, {
     // in a way that helps humans. It will be a good idea to implement a
     // standard of allowing debuggees to add some identifiable metadata to their
     // program sources or instances.
-    let label = L10N.getFormatStr("shadersList.programLabel", this.itemCount);
-    let contents = document.createElement("label");
+    const label = L10N.getFormatStr("shadersList.programLabel", this.itemCount);
+    const contents = document.createElement("label");
     contents.className = "plain program-item";
     contents.setAttribute("value", label);
     contents.setAttribute("crop", "start");
@@ -282,19 +278,19 @@ var ShadersListView = Heritage.extend(WidgetMethods, {
    * @param boolean
    *        True if the program was added, false otherwise.
    */
-  hasProgram: function (programActor) {
+  hasProgram: function(programActor) {
     return !!this.attachments.filter(e => e.programActor == programActor).length;
   },
 
   /**
    * The select listener for the programs container.
    */
-  _onProgramSelect: function ({ detail: sourceItem }) {
+  _onProgramSelect: function({ detail: sourceItem }) {
     if (!sourceItem) {
       return;
     }
     // The container is not empty and an actual item was selected.
-    let attachment = sourceItem.attachment;
+    const attachment = sourceItem.attachment;
 
     function getShaders() {
       return promise.all([
@@ -324,9 +320,9 @@ var ShadersListView = Heritage.extend(WidgetMethods, {
   /**
    * The check listener for the programs container.
    */
-  _onProgramCheck: function ({ detail: { checked }, target }) {
-    let sourceItem = this.getItemForElement(target);
-    let attachment = sourceItem.attachment;
+  _onProgramCheck: function({ detail: { checked }, target }) {
+    const sourceItem = this.getItemForElement(target);
+    const attachment = sourceItem.attachment;
     attachment.isBlackBoxed = !checked;
     attachment.programActor[checked ? "unblackbox" : "blackbox"]();
   },
@@ -334,8 +330,8 @@ var ShadersListView = Heritage.extend(WidgetMethods, {
   /**
    * The mouseover listener for the programs container.
    */
-  _onProgramMouseOver: function (e) {
-    let sourceItem = this.getItemForElement(e.target, { noSiblings: true });
+  _onProgramMouseOver: function(e) {
+    const sourceItem = this.getItemForElement(e.target, { noSiblings: true });
     if (sourceItem && !sourceItem.attachment.isBlackBoxed) {
       sourceItem.attachment.programActor.highlight(HIGHLIGHT_TINT);
 
@@ -349,8 +345,8 @@ var ShadersListView = Heritage.extend(WidgetMethods, {
   /**
    * The mouseout listener for the programs container.
    */
-  _onProgramMouseOut: function (e) {
-    let sourceItem = this.getItemForElement(e.target, { noSiblings: true });
+  _onProgramMouseOut: function(e) {
+    const sourceItem = this.getItemForElement(e.target, { noSiblings: true });
     if (sourceItem && !sourceItem.attachment.isBlackBoxed) {
       sourceItem.attachment.programActor.unhighlight();
 
@@ -369,7 +365,7 @@ var ShadersEditorsView = {
   /**
    * Initialization function, called when the tool is started.
    */
-  initialize: function () {
+  initialize: function() {
     XPCOMUtils.defineLazyGetter(this, "_editorPromises", () => new Map());
     this._vsFocused = this._onFocused.bind(this, "vs", "fs");
     this._fsFocused = this._onFocused.bind(this, "fs", "vs");
@@ -383,8 +379,8 @@ var ShadersEditorsView = {
   destroy: Task.async(function* () {
     this._destroyed = true;
     yield this._toggleListeners("off");
-    for (let p of this._editorPromises.values()) {
-      let editor = yield p;
+    for (const p of this._editorPromises.values()) {
+      const editor = yield p;
       editor.destroy();
     }
   }),
@@ -399,21 +395,21 @@ var ShadersEditorsView = {
    * @return object
    *        A promise resolving upon completion of text setting.
    */
-  setText: function (sources) {
-    let view = this;
+  setText: function(sources) {
+    const view = this;
     function setTextAndClearHistory(editor, text) {
       editor.setText(text);
       editor.clearHistory();
     }
 
-    return Task.spawn(function* () {
-      yield view._toggleListeners("off");
-      yield promise.all([
+    return (async function() {
+      await view._toggleListeners("off");
+      await promise.all([
         view._getEditor("vs").then(e => setTextAndClearHistory(e, sources.vs)),
         view._getEditor("fs").then(e => setTextAndClearHistory(e, sources.fs))
       ]);
-      yield view._toggleListeners("on");
-    }).then(() => window.emit(EVENTS.SOURCES_SHOWN, sources));
+      await view._toggleListeners("on");
+    })().then(() => window.emit(EVENTS.SOURCES_SHOWN, sources));
   },
 
   /**
@@ -425,18 +421,18 @@ var ShadersEditorsView = {
    * @return object
    *        Returns a promise that resolves to an editor instance
    */
-  _getEditor: function (type) {
+  _getEditor: function(type) {
     if (this._editorPromises.has(type)) {
       return this._editorPromises.get(type);
     }
 
-    let deferred = defer();
+    const deferred = defer();
     this._editorPromises.set(type, deferred.promise);
 
     // Initialize the source editor and store the newly created instance
     // in the ether of a resolved promise's value.
-    let parent = $("#" + type + "-editor");
-    let editor = new Editor(DEFAULT_EDITOR_CONFIG);
+    const parent = $("#" + type + "-editor");
+    const editor = new Editor(DEFAULT_EDITOR_CONFIG);
     editor.config.mode = Editor.modes[type];
 
     if (this._destroyed) {
@@ -456,7 +452,7 @@ var ShadersEditorsView = {
    * @return object
    *        A promise resolving upon completion of toggling the listeners.
    */
-  _toggleListeners: function (flag) {
+  _toggleListeners: function(flag) {
     return promise.all(["vs", "fs"].map(type => {
       return this._getEditor(type).then(editor => {
         editor[flag]("focus", this["_" + type + "Focused"]);
@@ -473,7 +469,7 @@ var ShadersEditorsView = {
    * @param string focused
    *        The corresponding shader type for the other editor (e.g. "fs").
    */
-  _onFocused: function (focused, unfocused) {
+  _onFocused: function(focused, unfocused) {
     $("#" + focused + "-editor-label").setAttribute("selected", "");
     $("#" + unfocused + "-editor-label").removeAttribute("selected");
   },
@@ -484,7 +480,7 @@ var ShadersEditorsView = {
    * @param string type
    *        The corresponding shader type for the focused editor (e.g. "vs").
    */
-  _onChanged: function (type) {
+  _onChanged: function(type) {
     setNamedTimeout("gl-typed", TYPING_MAX_DELAY, () => this._doCompile(type));
 
     // Remove all the gutter markers and line classes from the editor.
@@ -498,24 +494,24 @@ var ShadersEditorsView = {
    * @param string type
    *        The corresponding shader type for the focused editor (e.g. "vs").
    */
-  _doCompile: function (type) {
-    Task.spawn(function* () {
-      let editor = yield this._getEditor(type);
-      let shaderActor = yield ShadersListView.selectedAttachment[type];
+  _doCompile: function(type) {
+    (async function() {
+      const editor = await this._getEditor(type);
+      const shaderActor = await ShadersListView.selectedAttachment[type];
 
       try {
-        yield shaderActor.compile(editor.getText());
+        await shaderActor.compile(editor.getText());
         this._onSuccessfulCompilation();
       } catch (e) {
         this._onFailedCompilation(type, editor, e);
       }
-    }.bind(this));
+    }.bind(this))();
   },
 
   /**
    * Called uppon a successful shader compilation.
    */
-  _onSuccessfulCompilation: function () {
+  _onSuccessfulCompilation: function() {
     // Signal that the shader was compiled successfully.
     window.emit(EVENTS.SHADER_COMPILED, null);
   },
@@ -523,10 +519,10 @@ var ShadersEditorsView = {
   /**
    * Called uppon an unsuccessful shader compilation.
    */
-  _onFailedCompilation: function (type, editor, errors) {
-    let lineCount = editor.lineCount();
-    let currentLine = editor.getCursor().line;
-    let listeners = { mouseover: this._onMarkerMouseOver };
+  _onFailedCompilation: function(type, editor, errors) {
+    const lineCount = editor.lineCount();
+    const currentLine = editor.getCursor().line;
+    const listeners = { mouseover: this._onMarkerMouseOver };
 
     function matchLinesAndMessages(string) {
       return {
@@ -557,16 +553,15 @@ var ShadersEditorsView = {
     }
     function groupSameLineMessages(accumulator, current) {
       // Group errors corresponding to the same line number to a single object.
-      let previous = accumulator[accumulator.length - 1];
+      const previous = accumulator[accumulator.length - 1];
       if (!previous || previous.line != current.line) {
         return [...accumulator, {
           line: current.line,
           messages: [current.text]
         }];
-      } else {
-        previous.messages.push(current.text);
-        return accumulator;
       }
+      previous.messages.push(current.text);
+      return accumulator;
     }
     function displayErrors({ line, messages }) {
       // Add gutter markers and line classes for every error in the source.
@@ -591,12 +586,12 @@ var ShadersEditorsView = {
   /**
    * Event listener for the 'mouseover' event on a marker in the editor gutter.
    */
-  _onMarkerMouseOver: function (line, node, messages) {
+  _onMarkerMouseOver: function(line, node, messages) {
     if (node._markerErrorsTooltip) {
       return;
     }
 
-    let tooltip = node._markerErrorsTooltip = new Tooltip(document);
+    const tooltip = node._markerErrorsTooltip = new Tooltip(document);
     tooltip.defaultOffsetX = GUTTER_ERROR_PANEL_OFFSET_X;
     tooltip.setTextContent({ messages: messages });
     tooltip.startTogglingOnHover(node, () => true, {
@@ -607,7 +602,7 @@ var ShadersEditorsView = {
   /**
    * Removes all the gutter markers and line classes from the editor.
    */
-  _cleanEditor: function (type) {
+  _cleanEditor: function(type) {
     this._getEditor(type).then(editor => {
       editor.removeAllMarkers("errors");
       this._errors[type].forEach(e => editor.removeLineClass(e.line));

@@ -37,7 +37,7 @@ void *testGetClosure7()
 void testConfig7(struct mozquic_config_t *_c)
 {
   test_assert(mozquic_unstable_api1(_c, "streamWindow", 3750, 0) == MOZQUIC_OK);
-  test_assert(mozquic_unstable_api1(_c, "connWindowKB", 8, 0) == MOZQUIC_OK);
+  test_assert(mozquic_unstable_api1(_c, "connWindow", 8192, 0) == MOZQUIC_OK);
   memset(&state, 0, sizeof(state));
 }
 
@@ -52,7 +52,7 @@ int testEvent7(void *closure, uint32_t event, void *param)
     state.state++;
     state.time0 = Timestamp();
   }
-  
+
   if (event == MOZQUIC_EVENT_CONNECTED) {
     test_assert(state.state == 1);
     state.state++;
@@ -61,7 +61,7 @@ int testEvent7(void *closure, uint32_t event, void *param)
 
   if (state.state == 2) {
     unsigned char buf = 1;
-    mozquic_start_new_stream(&state.stream1, param, &buf, 1, 0);
+    mozquic_start_new_stream(&state.stream1, param, 0, 0, &buf, 1, 0);
     state.state++;
     return MOZQUIC_OK;
   }
@@ -92,7 +92,7 @@ int testEvent7(void *closure, uint32_t event, void *param)
     }
     return MOZQUIC_OK;
   }
-  
+
   if (state.state == 4) {
     test_assert(state.ctr == 16000);
     test_assert(state.time1 > state.time0);
@@ -100,7 +100,7 @@ int testEvent7(void *closure, uint32_t event, void *param)
     state.ctr = 0;
     state.bpOn = 1;
     mozquic_start_backpressure(parentConnection);
-    mozquic_start_new_stream(&state.stream2, param, &buf, 1, 0);
+    mozquic_start_new_stream(&state.stream2, param, 0, 0, &buf, 1, 0);
     state.state++;
     return MOZQUIC_OK;
   }
@@ -124,12 +124,12 @@ int testEvent7(void *closure, uint32_t event, void *param)
 
   if (state.state == 7) {
     test_assert(1);
-    fprintf(stderr,"test7 client timing1 %ld timing2 %ld\n",
+    fprintf(stderr,"test7 client timing1 %lld timing2 %lld\n",
             state.time1 - state.time0, state.time2 - state.time1);
     // assert that the backpressure version was at least 500ms slower
     // than the non backpressure version
     test_assert((state.time2 - state.time1) - (state.time1 - state.time0) > 500);
-    
+
     mozquic_destroy_connection(parentConnection);
     fprintf(stderr,"exit ok\n");
     exit(0);

@@ -10,13 +10,12 @@
 
 #include <stdarg.h>
 
-#include "jscntxt.h"
 #include "jsexn.h"
 #include "jsfriendapi.h"
 
-#include "jscntxtinlines.h"
+#include "vm/JSContext.h"
 
-using mozilla::Move;
+#include "vm/JSContext-inl.h"
 
 using JS::HandleObject;
 using JS::HandleValue;
@@ -58,7 +57,7 @@ bool
 js::ReportCompileWarning(JSContext* cx, ErrorMetadata&& metadata, UniquePtr<JSErrorNotes> notes,
                          unsigned flags, unsigned errorNumber, va_list args)
 {
-    // On the active thread, report the error immediately. When compiling off
+    // On the main thread, report the error immediately. When compiling off
     // thread, save the error so that the thread finishing the parse can report
     // it later.
     CompileError tempErr;
@@ -66,7 +65,7 @@ js::ReportCompileWarning(JSContext* cx, ErrorMetadata&& metadata, UniquePtr<JSEr
     if (cx->helperThread() && !cx->addPendingCompileError(&err))
         return false;
 
-    err->notes = Move(notes);
+    err->notes = std::move(notes);
     err->flags = flags;
     err->errorNumber = errorNumber;
 
@@ -75,7 +74,7 @@ js::ReportCompileWarning(JSContext* cx, ErrorMetadata&& metadata, UniquePtr<JSEr
     err->column = metadata.columnNumber;
     err->isMuted = metadata.isMuted;
 
-    if (UniqueTwoByteChars lineOfContext = Move(metadata.lineOfContext))
+    if (UniqueTwoByteChars lineOfContext = std::move(metadata.lineOfContext))
         err->initOwnedLinebuf(lineOfContext.release(), metadata.lineLength, metadata.tokenOffset);
 
     if (!ExpandErrorArgumentsVA(cx, GetErrorMessage, nullptr, errorNumber,
@@ -94,7 +93,7 @@ void
 js::ReportCompileError(JSContext* cx, ErrorMetadata&& metadata, UniquePtr<JSErrorNotes> notes,
                        unsigned flags, unsigned errorNumber, va_list args)
 {
-    // On the active thread, report the error immediately. When compiling off
+    // On the main thread, report the error immediately. When compiling off
     // thread, save the error so that the thread finishing the parse can report
     // it later.
     CompileError tempErr;
@@ -102,7 +101,7 @@ js::ReportCompileError(JSContext* cx, ErrorMetadata&& metadata, UniquePtr<JSErro
     if (cx->helperThread() && !cx->addPendingCompileError(&err))
         return;
 
-    err->notes = Move(notes);
+    err->notes = std::move(notes);
     err->flags = flags;
     err->errorNumber = errorNumber;
 
@@ -111,7 +110,7 @@ js::ReportCompileError(JSContext* cx, ErrorMetadata&& metadata, UniquePtr<JSErro
     err->column = metadata.columnNumber;
     err->isMuted = metadata.isMuted;
 
-    if (UniqueTwoByteChars lineOfContext = Move(metadata.lineOfContext))
+    if (UniqueTwoByteChars lineOfContext = std::move(metadata.lineOfContext))
         err->initOwnedLinebuf(lineOfContext.release(), metadata.lineLength, metadata.tokenOffset);
 
     if (!ExpandErrorArgumentsVA(cx, GetErrorMessage, nullptr, errorNumber,

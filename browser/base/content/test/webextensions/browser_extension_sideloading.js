@@ -1,7 +1,7 @@
 /* eslint-disable mozilla/no-arbitrary-setTimeout */
-const {AddonManagerPrivate} = Cu.import("resource://gre/modules/AddonManager.jsm", {});
+const {AddonManagerPrivate} = ChromeUtils.import("resource://gre/modules/AddonManager.jsm", {});
 
-const {AddonTestUtils} = Cu.import("resource://testing-common/AddonTestUtils.jsm", {});
+const {AddonTestUtils} = ChromeUtils.import("resource://testing-common/AddonTestUtils.jsm", {});
 
 AddonTestUtils.initMochitest(this);
 
@@ -31,6 +31,7 @@ async function createXULExtension(details) {
       id: details.id,
       name: details.name,
       version: "0.1",
+      bootstrap: true,
       targetApplications: [{
         id: "toolkit@mozilla.org",
         minVersion: "0",
@@ -40,6 +41,12 @@ async function createXULExtension(details) {
   });
 
   await AddonTestUtils.manuallyInstall(xpi);
+}
+
+function promiseEvent(eventEmitter, event) {
+  return new Promise(resolve => {
+    eventEmitter.once(event, resolve);
+  });
 }
 
 let cleanup;
@@ -118,7 +125,7 @@ add_task(async function() {
   is(menuButton.getAttribute("badge-status"), "addon-alert", "Should have addon alert badge");
 
   // Find the menu entries for sideloaded extensions
-  await PanelUI.show();
+  await gCUITestUtils.openMainMenu();
 
   let addons = PanelUI.addonNotificationContainer;
   is(addons.children.length, 4, "Have 4 menu entries for sideloaded extensions");
@@ -126,6 +133,9 @@ add_task(async function() {
   // Click the first sideloaded extension
   let popupPromise = promisePopupNotificationShown("addon-webext-permissions");
   addons.children[0].click();
+
+  // The click should hide the main menu. This is currently synchronous.
+  ok(PanelUI.panel.state != "open", "Main menu is closed or closing.");
 
   // When we get the permissions prompt, we should be at the extensions
   // list in about:addons
@@ -152,10 +162,10 @@ add_task(async function() {
   is(addon3.userDisabled, true, "Addon 3 should still be disabled");
   is(addon4.userDisabled, true, "Addon 4 should still be disabled");
 
-  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
+  BrowserTestUtils.removeTab(gBrowser.selectedTab);
 
   // Should still have 3 entries in the hamburger menu
-  await PanelUI.show();
+  await gCUITestUtils.openMainMenu();
 
   addons = PanelUI.addonNotificationContainer;
   is(addons.children.length, 3, "Have 3 menu entries for sideloaded extensions");
@@ -177,6 +187,7 @@ add_task(async function() {
 
   // This time accept the install.
   panel.button.click();
+  await promiseEvent(ExtensionsUI, "sideload-response");
 
   [addon1, addon2, addon3, addon4] = await AddonManager.getAddonsByIDs([ID1, ID2, ID3, ID4]);
   is(addon1.userDisabled, true, "Addon 1 should still be disabled");
@@ -185,13 +196,13 @@ add_task(async function() {
   is(addon4.userDisabled, true, "Addon 4 should still be disabled");
 
   // Should still have 2 entries in the hamburger menu
-  await PanelUI.show();
+  await gCUITestUtils.openMainMenu();
 
   addons = PanelUI.addonNotificationContainer;
   is(addons.children.length, 2, "Have 2 menu entries for sideloaded extensions");
 
   // Close the hamburger menu and go directly to the addons manager
-  await PanelUI.hide();
+  await gCUITestUtils.hideMainMenu();
 
   win = await BrowserOpenAddonsMgr(VIEW);
 
@@ -216,18 +227,19 @@ add_task(async function() {
 
   // Accept the permissions
   panel.button.click();
+  await promiseEvent(ExtensionsUI, "change");
 
   addon3 = await AddonManager.getAddonByID(ID3);
   is(addon3.userDisabled, false, "Addon 3 should be enabled");
 
   // Should still have 1 entry in the hamburger menu
-  await PanelUI.show();
+  await gCUITestUtils.openMainMenu();
 
   addons = PanelUI.addonNotificationContainer;
   is(addons.children.length, 1, "Have 1 menu entry for sideloaded extensions");
 
   // Close the hamburger menu and go to the detail page for this addon
-  await PanelUI.hide();
+  await gCUITestUtils.hideMainMenu();
 
   win = await BrowserOpenAddonsMgr(`addons://detail/${encodeURIComponent(ID4)}`);
   let button = win.document.getElementById("detail-enable-btn");
@@ -241,6 +253,7 @@ add_task(async function() {
 
   // Accept the permissions
   panel.button.click();
+  await promiseEvent(ExtensionsUI, "change");
 
   addon4 = await AddonManager.getAddonByID(ID4);
   is(addon4.userDisabled, false, "Addon 4 should be enabled");
@@ -253,8 +266,8 @@ add_task(async function() {
   await new Promise(resolve => setTimeout(resolve, 100));
 
   for (let addon of [addon1, addon2, addon3, addon4]) {
-    addon.uninstall();
+    await addon.uninstall();
   }
 
-  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
+  BrowserTestUtils.removeTab(gBrowser.selectedTab);
 });

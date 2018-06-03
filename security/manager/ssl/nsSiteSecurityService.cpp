@@ -129,7 +129,6 @@ public:
       case SourceUnknown:
       case SourcePreload:
       case SourceOrganic:
-      case SourceHSTSPriming:
         break;
       default:
         return false;
@@ -495,6 +494,7 @@ nsSiteSecurityService::nsSiteSecurityService()
   : mMaxMaxAge(kSixtyDaysInSeconds)
   , mUsePreloadList(true)
   , mPreloadListTimeOffset(0)
+  , mProcessPKPHeadersFromNonBuiltInRoots(false)
   , mDafsa(kDafsa)
 {
 }
@@ -674,21 +674,6 @@ nsSiteSecurityService::SetHSTSState(uint32_t aType,
   return NS_OK;
 }
 
-NS_IMETHODIMP
-nsSiteSecurityService::CacheNegativeHSTSResult(
-  nsIURI* aSourceURI,
-  uint64_t aMaxAge,
-  const OriginAttributes& aOriginAttributes)
-{
-  nsAutoCString hostname;
-  nsresult rv = GetHost(aSourceURI, hostname);
-  NS_ENSURE_SUCCESS(rv, rv);
-  // SecurityPropertyNegative results only come from HSTS priming
-  return SetHSTSState(nsISiteSecurityService::HEADER_HSTS, hostname.get(),
-                      aMaxAge, false, 0, SecurityPropertyNegative,
-                      SourceHSTSPriming, aOriginAttributes);
-}
-
 nsresult
 nsSiteSecurityService::RemoveStateInternal(
   uint32_t aType, nsIURI* aURI, uint32_t aFlags,
@@ -840,7 +825,6 @@ nsSiteSecurityService::ProcessHeader(uint32_t aType,
     case SourceUnknown:
     case SourcePreload:
     case SourceOrganic:
-    case SourceHSTSPriming:
       break;
     default:
       return NS_ERROR_INVALID_ARG;
@@ -1125,6 +1109,7 @@ nsSiteSecurityService::ProcessPKPHeader(
   UniqueCERTCertificate nssCert(cert->GetCert());
   NS_ENSURE_TRUE(nssCert, NS_ERROR_FAILURE);
 
+  // This use of VerifySSLServerCert should be able to be removed in Bug #1406854
   mozilla::pkix::Time now(mozilla::pkix::Now());
   UniqueCERTCertList certList;
   RefPtr<SharedCertVerifier> certVerifier(GetDefaultCertVerifier());
@@ -1150,13 +1135,22 @@ nsSiteSecurityService::ProcessPKPHeader(
     return NS_ERROR_FAILURE;
   }
 
-  CERTCertListNode* rootNode = CERT_LIST_TAIL(certList);
-  if (CERT_LIST_END(rootNode, certList)) {
-    return NS_ERROR_FAILURE;
+  // This copy to produce an nsNSSCertList should also be removed in Bug #1406854
+  nsCOMPtr<nsIX509CertList> x509CertList = new nsNSSCertList(std::move(certList));
+  if (!x509CertList) {
+    return rv;
   }
+
+  RefPtr<nsNSSCertList> nssCertList = x509CertList->GetCertList();
+  nsCOMPtr<nsIX509Cert> rootCert;
+  rv = nssCertList->GetRootCertificate(rootCert);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
   bool isBuiltIn = false;
-  mozilla::pkix::Result result = IsCertBuiltInRoot(rootNode->cert, isBuiltIn);
-  if (result != mozilla::pkix::Success) {
+  rv = rootCert->GetIsBuiltInRoot(&isBuiltIn);
+  if (NS_FAILED(rv)) {
     return NS_ERROR_FAILURE;
   }
 
@@ -1178,7 +1172,7 @@ nsSiteSecurityService::ProcessPKPHeader(
   }
 
   bool chainMatchesPinset;
-  rv = PublicKeyPinningService::ChainMatchesPinset(certList, sha256keys,
+  rv = PublicKeyPinningService::ChainMatchesPinset(nssCertList, sha256keys,
                                                    chainMatchesPinset);
   if (NS_FAILED(rv)) {
     return rv;
@@ -1199,7 +1193,7 @@ nsSiteSecurityService::ProcessPKPHeader(
   for (uint32_t i = 0; i < sha256keys.Length(); i++) {
     nsTArray<nsCString> singlePin;
     singlePin.AppendElement(sha256keys[i]);
-    rv = PublicKeyPinningService::ChainMatchesPinset(certList, singlePin,
+    rv = PublicKeyPinningService::ChainMatchesPinset(nssCertList, singlePin,
                                                      chainMatchesPinset);
     if (NS_FAILED(rv)) {
       return rv;

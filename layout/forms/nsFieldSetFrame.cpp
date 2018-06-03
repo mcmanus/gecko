@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -24,15 +25,15 @@ using namespace mozilla::gfx;
 using namespace mozilla::layout;
 
 nsContainerFrame*
-NS_NewFieldSetFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+NS_NewFieldSetFrame(nsIPresShell* aPresShell, ComputedStyle* aStyle)
 {
-  return new (aPresShell) nsFieldSetFrame(aContext);
+  return new (aPresShell) nsFieldSetFrame(aStyle);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsFieldSetFrame)
 
-nsFieldSetFrame::nsFieldSetFrame(nsStyleContext* aContext)
-  : nsContainerFrame(aContext, kClassID)
+nsFieldSetFrame::nsFieldSetFrame(ComputedStyle* aStyle)
+  : nsContainerFrame(aStyle, kClassID)
   , mLegendRect(GetWritingMode())
 {
   mLegendSpace  = 0;
@@ -59,7 +60,7 @@ nsFieldSetFrame::GetInner() const
 {
   nsIFrame* last = mFrames.LastChild();
   if (last &&
-      last->StyleContext()->GetPseudo() == nsCSSAnonBoxes::fieldsetContent) {
+      last->Style()->GetPseudo() == nsCSSAnonBoxes::fieldsetContent) {
     return last;
   }
   MOZ_ASSERT(mFrames.LastChild() == mFrames.FirstChild());
@@ -96,6 +97,11 @@ public:
   virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
                                          const nsDisplayItemGeometry* aGeometry,
                                          nsRegion *aInvalidRegion) const override;
+  bool CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
+                               mozilla::wr::IpcResourceUpdateQueue& aResources,
+                               const StackingContextHelper& aSc,
+                               mozilla::layers::WebRenderLayerManager* aManager,
+                               nsDisplayListBuilder* aDisplayListBuilder) override;
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
                            bool* aSnap) const override;
   NS_DISPLAY_DECL_NAME("FieldSetBorder", TYPE_FIELDSET_BORDER_BACKGROUND)
@@ -105,8 +111,8 @@ void
 nsDisplayFieldSetBorder::Paint(nsDisplayListBuilder* aBuilder,
                                gfxContext* aCtx)
 {
-  image::DrawResult result = static_cast<nsFieldSetFrame*>(mFrame)->
-    PaintBorder(aBuilder, *aCtx, ToReferenceFrame(), mVisibleRect);
+  image::ImgDrawResult result = static_cast<nsFieldSetFrame*>(mFrame)->
+    PaintBorder(aBuilder, *aCtx, ToReferenceFrame(), GetPaintRect());
 
   nsDisplayItemGenericImageGeometry::UpdateDrawResult(this, result);
 }
@@ -147,6 +153,39 @@ nsDisplayFieldSetBorder::GetBounds(nsDisplayListBuilder* aBuilder,
   return Frame()->GetVisualOverflowRectRelativeToSelf() + ToReferenceFrame();
 }
 
+bool
+nsDisplayFieldSetBorder::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
+                                                 mozilla::wr::IpcResourceUpdateQueue& aResources,
+                                                 const StackingContextHelper& aSc,
+                                                 mozilla::layers::WebRenderLayerManager* aManager,
+                                                 nsDisplayListBuilder* aDisplayListBuilder)
+{
+  auto frame = static_cast<nsFieldSetFrame*>(mFrame);
+  auto offset = ToReferenceFrame();
+  nsRect rect;
+
+  if (nsIFrame* legend = frame->GetLegend()) {
+    rect = frame->VisualBorderRectRelativeToSelf() + offset;
+
+    // Legends require a "negative" clip around the text, which WR doesn't support yet.
+    nsRect legendRect = legend->GetNormalRect() + offset;
+    if (!legendRect.IsEmpty()) {
+      return false;
+    }
+  } else {
+    rect = nsRect(offset, frame->GetRect().Size());
+  }
+
+  return nsCSSRendering::CreateWebRenderCommandsForBorder(this,
+                                                          mFrame,
+                                                          rect,
+                                                          aBuilder,
+                                                          aResources,
+                                                          aSc,
+                                                          aManager,
+                                                          aDisplayListBuilder);
+};
+
 void
 nsFieldSetFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                   const nsDisplayListSet& aLists) {
@@ -157,8 +196,8 @@ nsFieldSetFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   if (!(GetStateBits() & NS_FRAME_IS_OVERFLOW_CONTAINER) &&
       IsVisibleForPainting(aBuilder)) {
     if (StyleEffects()->mBoxShadow) {
-      aLists.BorderBackground()->AppendNewToTop(new (aBuilder)
-        nsDisplayBoxShadowOuter(aBuilder, this));
+      aLists.BorderBackground()->AppendToTop(
+        MakeDisplayItem<nsDisplayBoxShadowOuter>(aBuilder, this));
     }
 
     nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
@@ -166,8 +205,8 @@ nsFieldSetFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       aLists.BorderBackground(),
       /* aAllowWillPaintBorderOptimization = */ false);
 
-    aLists.BorderBackground()->AppendNewToTop(new (aBuilder)
-      nsDisplayFieldSetBorder(aBuilder, this));
+    aLists.BorderBackground()->AppendToTop(
+      MakeDisplayItem<nsDisplayFieldSetBorder>(aBuilder, this));
 
     DisplayOutlineUnconditional(aBuilder, aLists);
 
@@ -178,7 +217,7 @@ nsFieldSetFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     DisplayOverflowContainers(aBuilder, aLists);
   }
 
-  nsDisplayListCollection contentDisplayItems;
+  nsDisplayListCollection contentDisplayItems(aBuilder);
   if (nsIFrame* inner = GetInner()) {
     // Collect the inner frame's display items into their own collection.
     // We need to be calling BuildDisplayList on it before the legend in
@@ -201,7 +240,7 @@ nsFieldSetFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   contentDisplayItems.MoveTo(aLists);
 }
 
-image::DrawResult
+image::ImgDrawResult
 nsFieldSetFrame::PaintBorder(
   nsDisplayListBuilder* aBuilder,
   gfxContext& aRenderingContext,
@@ -220,7 +259,7 @@ nsFieldSetFrame::PaintBorder(
                                ? PaintBorderFlags::SYNC_DECODE_IMAGES
                                : PaintBorderFlags();
 
-  DrawResult result = DrawResult::SUCCESS;
+  ImgDrawResult result = ImgDrawResult::SUCCESS;
 
   nsCSSRendering::PaintBoxShadowInner(presContext, aRenderingContext,
                                       this, rect);
@@ -259,13 +298,13 @@ nsFieldSetFrame::PaintBorder(
     aRenderingContext.Clip(clipPath);
     result &=
       nsCSSRendering::PaintBorder(presContext, aRenderingContext, this,
-                                  aDirtyRect, rect, mStyleContext, borderFlags);
+                                  aDirtyRect, rect, mComputedStyle, borderFlags);
     aRenderingContext.Restore();
   } else {
     result &=
       nsCSSRendering::PaintBorder(presContext, aRenderingContext, this,
                                   aDirtyRect, nsRect(aPt, mRect.Size()),
-                                  mStyleContext, borderFlags);
+                                  mComputedStyle, borderFlags);
   }
 
   return result;
@@ -326,8 +365,8 @@ nsFieldSetFrame::Reflow(nsPresContext*           aPresContext,
   DO_GLOBAL_REFLOW_COUNT("nsFieldSetFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
   MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
-  NS_PRECONDITION(aReflowInput.ComputedISize() != NS_INTRINSICSIZE,
-                  "Should have a precomputed inline-size!");
+  NS_WARNING_ASSERTION(aReflowInput.ComputedISize() != NS_INTRINSICSIZE,
+                       "Should have a precomputed inline-size!");
 
   nsOverflowAreas ocBounds;
   nsReflowStatus ocStatus;
@@ -667,4 +706,3 @@ nsFieldSetFrame::AppendDirectlyOwnedAnonBoxes(nsTArray<OwnedAnonBox>& aResult)
     aResult.AppendElement(OwnedAnonBox(kid));
   }
 }
-

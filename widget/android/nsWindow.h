@@ -11,7 +11,6 @@
 #include "gfxPoint.h"
 #include "nsIIdleServiceInternal.h"
 #include "nsTArray.h"
-#include "AndroidJavaWrappers.h"
 #include "EventDispatcher.h"
 #include "GeneratedJNIWrappers.h"
 #include "mozilla/EventForwards.h"
@@ -51,11 +50,11 @@ public:
 
     nsWindow();
 
-    NS_DECL_ISUPPORTS_INHERITED
+    NS_INLINE_DECL_REFCOUNTING_INHERITED(nsWindow, nsBaseWidget)
 
     static void InitNatives();
     void SetScreenId(uint32_t aScreenId) { mScreenId = aScreenId; }
-    void EnableEventDispatcher();
+    void OnGeckoViewReady();
 
 private:
     uint32_t mScreenId;
@@ -121,7 +120,7 @@ public:
             nsWindow* const mWindow;
 
         public:
-            Locked(WindowPtr<Impl>& aPtr)
+            explicit Locked(WindowPtr<Impl>& aPtr)
                 : mozilla::MutexAutoLock(aPtr.mWindowLock)
                 , mWindow(aPtr.mWindow)
             {}
@@ -167,7 +166,7 @@ private:
 
         NS_FORWARD_NSIANDROIDEVENTDISPATCHER(mEventDispatcher->)
 
-        mozilla::java::GeckoBundle::GlobalRef mSettings;
+        mozilla::java::GeckoBundle::GlobalRef mInitData;
     };
 
     RefPtr<AndroidView> mAndroidView;
@@ -185,7 +184,7 @@ private:
     // Object that implements native GeckoEditable calls.
     // Strong referenced by the Java instance.
     NativePtr<mozilla::widget::GeckoEditableSupport> mEditableSupport;
-    mozilla::java::GeckoEditable::GlobalRef mEditable;
+    mozilla::jni::Object::GlobalRef mEditableParent;
 
     class GeckoViewSupport;
     // Object that implements native GeckoView calls and associated states.
@@ -194,8 +193,7 @@ private:
     // keep it last in the list, so its destructor is called first.
     mozilla::UniquePtr<GeckoViewSupport> mGeckoViewSupport;
 
-    // Class that implements native PresentationMediaPlayerManager calls.
-    class PMPMSupport;
+    mozilla::Atomic<bool, mozilla::ReleaseAcquire> mContentDocumentDisplayed;
 
 public:
     static nsWindow* TopWindow();
@@ -231,8 +229,7 @@ public:
     virtual void ConstrainPosition(bool aAllowSlop,
                                    int32_t *aX,
                                    int32_t *aY) override;
-    virtual void Move(double aX,
-                      double aY) override;
+    virtual void Move(double aX, double aY) override;
     virtual void Resize(double aWidth,
                         double aHeight,
                         bool   aRepaint) override;
@@ -301,13 +298,14 @@ public:
 
     mozilla::layers::CompositorBridgeChild* GetCompositorBridgeChild() const;
 
-    mozilla::jni::DependentRef<mozilla::java::GeckoLayerClient> GetLayerClient();
+    void SetContentDocumentDisplayed(bool aDisplayed);
+    bool IsContentDocumentDisplayed();
 
     // Call this function when the users activity is the direct cause of an
     // event (like a keypress or mouse click).
     void UserActivity();
 
-    mozilla::java::GeckoEditable::Ref& GetEditableParent() { return mEditable; }
+    mozilla::jni::Object::Ref& GetEditableParent() { return mEditableParent; }
 
     void RecvToolbarAnimatorMessageFromCompositor(int32_t aMessage) override;
     void UpdateRootFrameMetrics(const ScreenPoint& aScrollOffset, const CSSToScreenScale& aZoom) override;
@@ -342,10 +340,10 @@ protected:
     static void LogWindow(nsWindow *win, int index, int indent);
 
 private:
-    void CreateLayerManager(int aCompositorWidth, int aCompositorHeight);
+    void CreateLayerManager();
     void RedrawAll();
 
-    int64_t GetRootLayerId() const;
+    mozilla::layers::LayersId GetRootLayerId() const;
     RefPtr<mozilla::layers::UiCompositorControllerChild> GetUiCompositorControllerChild();
 };
 

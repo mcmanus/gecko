@@ -12,8 +12,10 @@
 #include "mozilla/Alignment.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/MemoryChecking.h"
 #include "mozilla/Move.h"
 #include "mozilla/OperatorNewExtensions.h"
+#include "mozilla/Poison.h"
 #include "mozilla/TypeTraits.h"
 
 #include <new>  // for placement new
@@ -23,6 +25,85 @@
 namespace mozilla {
 
 struct Nothing { };
+
+namespace detail {
+
+// You would think that poisoning Maybe instances could just be a call
+// to mozWritePoison.  Unfortunately, using a simple call to
+// mozWritePoison generates poor code on MSVC for small structures.  The
+// generated code contains (always not-taken) branches and does a bunch
+// of setup for `rep stos{l,q}`, even though we know at compile time
+// exactly how many words we're poisoning.  Instead, we're going to
+// force MSVC to generate the code we want via recursive templates.
+
+// Write the given poisonValue into p at offset*sizeof(uintptr_t).
+template<size_t offset>
+inline void
+WritePoisonAtOffset(void* p, const uintptr_t poisonValue)
+{
+    memcpy(static_cast<char*>(p) + offset*sizeof(poisonValue),
+           &poisonValue, sizeof(poisonValue));
+}
+
+
+template<size_t Offset, size_t NOffsets>
+struct InlinePoisoner
+{
+    static void poison(void* p, const uintptr_t poisonValue)
+    {
+        WritePoisonAtOffset<Offset>(p, poisonValue);
+        InlinePoisoner<Offset+1, NOffsets>::poison(p, poisonValue);
+    }
+};
+
+template<size_t N>
+struct InlinePoisoner<N, N>
+{
+    static void poison(void*, const uintptr_t)
+    {
+        // All done!
+    }
+};
+
+// We can't generate inline code for large structures, though, because we'll
+// blow out recursive template instantiation limits, and the code would be
+// bloated to boot.  So provide a fallback to the out-of-line poisoner.
+template<size_t ObjectSize>
+struct OutOfLinePoisoner
+{
+  static void poison(void* p, const uintptr_t)
+  {
+    mozWritePoison(p, ObjectSize);
+  }
+};
+
+template<typename T>
+inline void
+PoisonObject(T* p)
+{
+  const uintptr_t POISON = mozPoisonValue();
+  Conditional<(sizeof(T) <= 8*sizeof(POISON)),
+    InlinePoisoner<0, sizeof(T) / sizeof(POISON)>,
+    OutOfLinePoisoner<sizeof(T)>>::Type::poison(p, POISON);
+}
+
+template<typename T>
+struct MaybePoisoner
+{
+  static const size_t N = sizeof(T);
+
+  static void poison(void* aPtr)
+  {
+#ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
+    if (N >= sizeof(uintptr_t)) {
+      PoisonObject(static_cast<typename RemoveCV<T>::Type*>(aPtr));
+    }
+#endif
+    MOZ_MAKE_MEM_UNDEFINED(aPtr, N);
+  }
+};
+
+} // namespace detail
 
 /*
  * Maybe is a container class which contains either zero or one elements. It
@@ -93,13 +174,22 @@ class MOZ_NON_PARAM MOZ_INHERIT_TYPE_ANNOTATIONS_FROM_TEMPLATE_ARGS Maybe
   void* data() { return mStorage; }
   const void* data() const { return mStorage; }
 
+  void poisonData()
+  {
+    detail::MaybePoisoner<T>::poison(data());
+  }
+
 public:
   using ValueType = T;
 
-  Maybe() : mIsSome(false) { }
+  Maybe() : mIsSome(false)
+  {
+  }
   ~Maybe() { reset(); }
 
-  MOZ_IMPLICIT Maybe(Nothing) : mIsSome(false) { }
+  MOZ_IMPLICIT Maybe(Nothing) : mIsSome(false)
+  {
+  }
 
   Maybe(const Maybe& aOther)
     : mIsSome(false)
@@ -128,7 +218,7 @@ public:
     : mIsSome(false)
   {
     if (aOther.mIsSome) {
-      emplace(Move(*aOther));
+      emplace(std::move(*aOther));
       aOther.reset();
     }
   }
@@ -144,7 +234,7 @@ public:
     : mIsSome(false)
   {
     if (aOther.isSome()) {
-      emplace(Move(*aOther));
+      emplace(std::move(*aOther));
       aOther.reset();
     }
   }
@@ -188,9 +278,9 @@ public:
 
     if (aOther.mIsSome) {
       if (mIsSome) {
-        ref() = Move(aOther.ref());
+        ref() = std::move(aOther.ref());
       } else {
-        emplace(Move(*aOther));
+        emplace(std::move(*aOther));
       }
       aOther.reset();
     } else {
@@ -207,9 +297,9 @@ public:
   {
     if (aOther.isSome()) {
       if (mIsSome) {
-        ref() = Move(aOther.ref());
+        ref() = std::move(aOther.ref());
       } else {
-        emplace(Move(*aOther));
+        emplace(std::move(*aOther));
       }
       aOther.reset();
     } else {
@@ -225,11 +315,7 @@ public:
   bool isNothing() const { return !mIsSome; }
 
   /* Returns the contents of this Maybe<T> by value. Unsafe unless |isSome()|. */
-  T value() const
-  {
-    MOZ_ASSERT(mIsSome);
-    return ref();
-  }
+  T value() const;
 
   /*
    * Returns the contents of this Maybe<T> by value. If |isNothing()|, returns
@@ -258,17 +344,8 @@ public:
   }
 
   /* Returns the contents of this Maybe<T> by pointer. Unsafe unless |isSome()|. */
-  T* ptr()
-  {
-    MOZ_ASSERT(mIsSome);
-    return &ref();
-  }
-
-  const T* ptr() const
-  {
-    MOZ_ASSERT(mIsSome);
-    return &ref();
-  }
+  T* ptr();
+  const T* ptr() const;
 
   /*
    * Returns the contents of this Maybe<T> by pointer. If |isNothing()|,
@@ -312,30 +389,12 @@ public:
     return aFunc();
   }
 
-  T* operator->()
-  {
-    MOZ_ASSERT(mIsSome);
-    return ptr();
-  }
-
-  const T* operator->() const
-  {
-    MOZ_ASSERT(mIsSome);
-    return ptr();
-  }
+  T* operator->();
+  const T* operator->() const;
 
   /* Returns the contents of this Maybe<T> by ref. Unsafe unless |isSome()|. */
-  T& ref()
-  {
-    MOZ_ASSERT(mIsSome);
-    return *static_cast<T*>(data());
-  }
-
-  const T& ref() const
-  {
-    MOZ_ASSERT(mIsSome);
-    return *static_cast<const T*>(data());
-  }
+  T& ref();
+  const T& ref() const;
 
   /*
    * Returns the contents of this Maybe<T> by ref. If |isNothing()|, returns
@@ -379,17 +438,8 @@ public:
     return aFunc();
   }
 
-  T& operator*()
-  {
-    MOZ_ASSERT(mIsSome);
-    return ref();
-  }
-
-  const T& operator*() const
-  {
-    MOZ_ASSERT(mIsSome);
-    return ref();
-  }
+  T& operator*();
+  const T& operator*() const;
 
   /* If |isSome()|, runs the provided function or functor on the contents of
    * this Maybe. */
@@ -445,6 +495,7 @@ public:
     if (isSome()) {
       ref().T::~T();
       mIsSome = false;
+      poisonData();
     }
   }
 
@@ -453,12 +504,7 @@ public:
    * arguments to |emplace()| are the parameters to T's constructor.
    */
   template<typename... Args>
-  void emplace(Args&&... aArgs)
-  {
-    MOZ_ASSERT(!mIsSome);
-    ::new (KnownNotNull, data()) T(Forward<Args>(aArgs)...);
-    mIsSome = true;
-  }
+  void emplace(Args&&... aArgs);
 
   friend std::ostream&
   operator<<(std::ostream& aStream, const Maybe<T>& aMaybe)
@@ -471,6 +517,88 @@ public:
     return aStream;
   }
 };
+
+template<typename T>
+T
+Maybe<T>::value() const
+{
+  MOZ_DIAGNOSTIC_ASSERT(mIsSome);
+  return ref();
+}
+
+template<typename T>
+T*
+Maybe<T>::ptr()
+{
+  MOZ_DIAGNOSTIC_ASSERT(mIsSome);
+  return &ref();
+}
+
+template<typename T>
+const T*
+Maybe<T>::ptr() const
+{
+  MOZ_DIAGNOSTIC_ASSERT(mIsSome);
+  return &ref();
+}
+
+template<typename T>
+T*
+Maybe<T>::operator->()
+{
+  MOZ_DIAGNOSTIC_ASSERT(mIsSome);
+  return ptr();
+}
+
+template<typename T>
+const T*
+Maybe<T>::operator->() const
+{
+  MOZ_DIAGNOSTIC_ASSERT(mIsSome);
+  return ptr();
+}
+
+template<typename T>
+T&
+Maybe<T>::ref()
+{
+  MOZ_DIAGNOSTIC_ASSERT(mIsSome);
+  return *static_cast<T*>(data());
+}
+
+template<typename T>
+const T&
+Maybe<T>::ref() const
+{
+  MOZ_DIAGNOSTIC_ASSERT(mIsSome);
+  return *static_cast<const T*>(data());
+}
+
+template<typename T>
+T&
+Maybe<T>::operator*()
+{
+  MOZ_DIAGNOSTIC_ASSERT(mIsSome);
+  return ref();
+}
+
+template<typename T>
+const T&
+Maybe<T>::operator*() const
+{
+  MOZ_DIAGNOSTIC_ASSERT(mIsSome);
+  return ref();
+}
+
+template<typename T>
+template<typename... Args>
+void
+Maybe<T>::emplace(Args&&... aArgs)
+{
+  MOZ_DIAGNOSTIC_ASSERT(!mIsSome);
+  ::new (KnownNotNull, data()) T(Forward<Args>(aArgs)...);
+  mIsSome = true;
+}
 
 /*
  * Some() creates a Maybe<T> value containing the provided T value. If T has a

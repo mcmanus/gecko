@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -22,10 +23,10 @@ public:
   NS_DECL_QUERYFRAME
   NS_DECL_FRAMEARENA_HELPERS(nsMeterFrame)
 
-  explicit nsMeterFrame(nsStyleContext* aContext);
+  explicit nsMeterFrame(ComputedStyle* aStyle);
   virtual ~nsMeterFrame();
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
   virtual void Reflow(nsPresContext*           aCX,
                       ReflowOutput&     aDesiredSize,
@@ -70,8 +71,6 @@ public:
    * Returns whether the frame and its child should use the native style.
    */
   bool ShouldUseNativeStyle() const;
-
-  virtual Element* GetPseudoElement(mozilla::CSSPseudoElementType aType) override;
 
 protected:
   // Helper function which reflow the anonymous div frame.

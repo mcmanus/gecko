@@ -46,21 +46,22 @@
 #include "xpcpublic.h"
 
 #include "jsapi.h"
-#include "jswrapper.h"
+#include "js/Wrapper.h"
 #include "js/SliceBudget.h"
 #include "nsIArray.h"
 #include "nsIObjectInputStream.h"
 #include "nsIObjectOutputStream.h"
 #include "WrapperFactory.h"
 #include "nsGlobalWindow.h"
-#include "nsScriptNameSpaceManager.h"
 #include "mozilla/AutoRestore.h"
 #include "mozilla/MainThreadIdlePeriod.h"
+#include "mozilla/StaticPrefs.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/dom/DOMException.h"
 #include "mozilla/dom/DOMExceptionBinding.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/ErrorEvent.h"
+#include "mozilla/dom/FetchUtil.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/CycleCollectedJSRuntime.h"
 #include "mozilla/SystemGroup.h"
@@ -109,10 +110,6 @@ const size_t gStackSize = 8192;
 #define NS_FIRST_GC_DELAY           10000 // ms
 
 #define NS_FULL_GC_DELAY            60000 // ms
-
-// The default amount of time to wait from the user being idle to starting a
-// shrinking GC.
-#define NS_DEAULT_INACTIVE_GC_DELAY 300000 // ms
 
 // Maximum amount of time that should elapse between incremental GC slices
 #define NS_INTERSLICE_GC_DELAY      100 // ms
@@ -183,8 +180,6 @@ static bool sLoadingInProgress;
 static uint32_t sCCollectedWaitingForGC;
 static uint32_t sCCollectedZonesWaitingForGC;
 static uint32_t sLikelyShortLivingObjectsNeedingGC;
-static bool sPostGCEventsToConsole;
-static bool sPostGCEventsToObserver;
 static int32_t sCCRunnerFireCount = 0;
 static uint32_t sMinForgetSkippableTime = UINT32_MAX;
 static uint32_t sMaxForgetSkippableTime = 0;
@@ -198,7 +193,6 @@ static bool sNeedsFullGC = false;
 static bool sNeedsGCAfterCC = false;
 static bool sIncrementalCC = false;
 static int32_t sActiveIntersliceGCBudget = 5; // ms;
-static nsScriptNameSpaceManager *gNameSpaceManager;
 
 static PRTime sFirstCollectionTime;
 
@@ -206,18 +200,10 @@ static bool sIsInitialized;
 static bool sDidShutdown;
 static bool sShuttingDown;
 
-// nsJSEnvironmentObserver observes the memory-pressure notifications
-// and forces a garbage collection and cycle collection when it happens, if
-// the appropriate pref is set.
-
-static bool sGCOnMemoryPressure;
-
 // nsJSEnvironmentObserver observes the user-interaction-inactive notifications
 // and triggers a shrinking a garbage collection if the user is still inactive
 // after NS_SHRINKING_GC_DELAY ms later, if the appropriate pref is set.
 
-static bool sCompactOnUserInactive;
-static uint32_t sCompactOnUserInactiveDelay = NS_DEAULT_INACTIVE_GC_DELAY;
 static bool sIsCompactingOnUserInactive = false;
 
 static TimeDuration sGCUnnotifiedTotalTime;
@@ -244,7 +230,7 @@ FindExceptionStackForConsoleReport(nsPIDOMWindowInner* win,
     return nullptr;
   }
 
-  if (win && win->InnerObjectsFreed()) {
+  if (win && win->AsGlobal()->IsDying()) {
     // Pretend like we have no stack, so we don't end up keeping the global
     // alive via the stack.
     return nullptr;
@@ -252,7 +238,7 @@ FindExceptionStackForConsoleReport(nsPIDOMWindowInner* win,
 
   JS::RootingContext* rcx = RootingCx();
   JS::RootedObject exceptionObject(rcx, &exceptionValue.toObject());
-  JSObject* stackObject = ExceptionStackOrNull(exceptionObject);
+  JSObject* stackObject = JS::ExceptionStackOrNull(exceptionObject);
   if (stackObject) {
     return stackObject;
   }
@@ -330,9 +316,9 @@ nsJSEnvironmentObserver::Observe(nsISupports* aSubject, const char* aTopic,
                                  const char16_t* aData)
 {
   if (!nsCRT::strcmp(aTopic, "memory-pressure")) {
-    if (sGCOnMemoryPressure) {
-      if(StringBeginsWith(nsDependentString(aData),
-                          NS_LITERAL_STRING("low-memory-ongoing"))) {
+    if (StaticPrefs::javascript_options_gc_on_memory_pressure()) {
+      if (StringBeginsWith(nsDependentString(aData),
+                           NS_LITERAL_STRING("low-memory-ongoing"))) {
         // Don't GC/CC if we are in an ongoing low-memory state since its very
         // slow and it likely won't help us anyway.
         return NS_OK;
@@ -348,7 +334,7 @@ nsJSEnvironmentObserver::Observe(nsISupports* aSubject, const char* aTopic,
       }
     }
   } else if (!nsCRT::strcmp(aTopic, "user-interaction-inactive")) {
-    if (sCompactOnUserInactive) {
+    if (StaticPrefs::javascript_options_compact_on_user_inactive()) {
       nsJSContext::PokeShrinkingGC();
     }
   } else if (!nsCRT::strcmp(aTopic, "user-interaction-active")) {
@@ -410,7 +396,7 @@ NS_HandleScriptError(nsIScriptGlobalObject *aScriptGlobal,
       // Dispatch() must be synchronous for the recursion block
       // (errorDepth) to work.
       RefPtr<ErrorEvent> event =
-        ErrorEvent::Constructor(nsGlobalWindow::Cast(win),
+        ErrorEvent::Constructor(nsGlobalWindowInner::Cast(win),
                                 NS_LITERAL_STRING("error"),
                                 aErrorEventInit);
       event->SetTrusted(true);
@@ -471,7 +457,7 @@ public:
       }
 
       RefPtr<ErrorEvent> event =
-        ErrorEvent::Constructor(nsGlobalWindow::Cast(win),
+        ErrorEvent::Constructor(nsGlobalWindowInner::Cast(win),
                                 NS_LITERAL_STRING("error"), init);
       event->SetTrusted(true);
 
@@ -513,14 +499,15 @@ DispatchScriptErrorEvent(nsPIDOMWindowInner *win, JS::RootingContext* rootingCx,
 
 #ifdef DEBUG
 // A couple of useful functions to call when you're debugging.
-nsGlobalWindow *
+nsGlobalWindowInner *
 JSObject2Win(JSObject *obj)
 {
   return xpc::WindowOrNull(obj);
 }
 
+template<typename T>
 void
-PrintWinURI(nsGlobalWindow *win)
+PrintWinURI(T *win)
 {
   if (!win) {
     printf("No window passed in.\n");
@@ -543,7 +530,20 @@ PrintWinURI(nsGlobalWindow *win)
 }
 
 void
-PrintWinCodebase(nsGlobalWindow *win)
+PrintWinURIInner(nsGlobalWindowInner* aWin)
+{
+  return PrintWinURI(aWin);
+}
+
+void
+PrintWinURIOuter(nsGlobalWindowOuter* aWin)
+{
+  return PrintWinURI(aWin);
+}
+
+template<typename T>
+void
+PrintWinCodebase(T *win)
 {
   if (!win) {
     printf("No window passed in.\n");
@@ -567,15 +567,23 @@ PrintWinCodebase(nsGlobalWindow *win)
 }
 
 void
+PrintWinCodebaseInner(nsGlobalWindowInner* aWin)
+{
+  return PrintWinCodebase(aWin);
+}
+
+void
+PrintWinCodebaseOuter(nsGlobalWindowOuter* aWin)
+{
+  return PrintWinCodebase(aWin);
+}
+
+void
 DumpString(const nsAString &str)
 {
   printf("%s\n", NS_ConvertUTF16toUTF8(str).get());
 }
 #endif
-
-#define JS_OPTIONS_DOT_STR "javascript.options."
-
-static const char js_options_dot_str[]   = JS_OPTIONS_DOT_STR;
 
 nsJSContext::nsJSContext(bool aGCOnDestruction,
                          nsIScriptGlobalObject* aGlobalObject)
@@ -785,7 +793,7 @@ nsJSContext::ConvertSupportsTojsvals(nsISupports* aArgs,
           NS_ASSERTION(prim == nullptr,
                        "Don't pass nsISupportsPrimitives - use nsIVariant!");
 #endif
-          JSAutoCompartment ac(cx, aScope);
+          JSAutoRealm ar(cx, aScope);
           rv = nsContentUtils::WrapNative(cx, arg, thisVal);
         }
       }
@@ -806,7 +814,7 @@ nsJSContext::ConvertSupportsTojsvals(nsISupports* aArgs,
 nsresult
 nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
 {
-  NS_PRECONDITION(aArg, "Empty arg");
+  MOZ_ASSERT(aArg, "Empty arg");
 
   nsCOMPtr<nsISupportsPrimitive> argPrimitive(do_QueryInterface(aArg));
   if (!argPrimitive)
@@ -976,7 +984,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
 
       JS::Rooted<JSObject*> scope(cx, GetWindowProxy());
       JS::Rooted<JS::Value> v(cx);
-      JSAutoCompartment ac(cx, scope);
+      JSAutoRealm ar(cx, scope);
       nsresult rv = nsContentUtils::WrapNative(cx, data, iid, &v);
       NS_ENSURE_SUCCESS(rv, rv);
 
@@ -1111,7 +1119,7 @@ nsJSContext::InitClasses(JS::Handle<JSObject*> aGlobalObj)
   AutoJSAPI jsapi;
   jsapi.Init();
   JSContext* cx = jsapi.cx();
-  JSAutoCompartment ac(cx, aGlobalObj);
+  JSAutoRealm ar(cx, aGlobalObj);
 
   // Attempt to initialize profiling functions
   ::JS_DefineProfilingFunctions(cx, aGlobalObj);
@@ -1170,8 +1178,8 @@ nsJSContext::GarbageCollectNow(JS::gcreason::Reason aReason,
                                IsShrinking aShrinking,
                                int64_t aSliceMillis)
 {
-  AUTO_PROFILER_LABEL_DYNAMIC("nsJSContext::GarbageCollectNow", GC,
-                              JS::gcreason::ExplainReason(aReason));
+  AUTO_PROFILER_LABEL_DYNAMIC_CSTR("nsJSContext::GarbageCollectNow", GC,
+                                   JS::gcreason::ExplainReason(aReason));
 
   MOZ_ASSERT_IF(aSliceMillis, aIncremental == IncrementalGC);
 
@@ -1216,7 +1224,7 @@ nsJSContext::GarbageCollectNow(JS::gcreason::Reason aReason,
   if (aIncremental == IncrementalGC) {
     JS::StartIncrementalGC(cx, gckind, aReason, aSliceMillis);
   } else {
-    JS::GCForReason(cx, gckind, aReason);
+    JS::NonIncrementalGC(cx, gckind, aReason);
   }
 }
 
@@ -1611,6 +1619,10 @@ nsJSContext::BeginCycleCollectionCallback()
 
   MOZ_ASSERT(!sICCRunner, "Tried to create a new ICC timer when one already existed.");
 
+  if (sShuttingDown) {
+    return;
+  }
+
   // Create an ICC timer even if ICC is globally disabled, because we could be manually triggering
   // an incremental collection, and we want to be sure to finish it.
   sICCRunner = IdleTaskRunner::Create(ICCRunnerFired,
@@ -1670,7 +1682,7 @@ nsJSContext::EndCycleCollectionCallback(CycleCollectorResults &aResults)
   uint32_t minForgetSkippableTime = (sMinForgetSkippableTime == UINT32_MAX)
     ? 0 : sMinForgetSkippableTime;
 
-  if (sPostGCEventsToConsole || gCCStats.mFile) {
+  if (StaticPrefs::javascript_options_mem_log() || gCCStats.mFile) {
     nsCString mergeMsg;
     if (aResults.mMergedZones) {
       mergeMsg.AssignLiteral(" merged");
@@ -1700,7 +1712,7 @@ nsJSContext::EndCycleCollectionCallback(CycleCollectorResults &aResults)
                               PR_USEC_PER_MSEC,
                               sTotalForgetSkippableTime / PR_USEC_PER_MSEC,
                               gCCStats.mMaxSkippableDuration, sRemovedPurples);
-    if (sPostGCEventsToConsole) {
+    if (StaticPrefs::javascript_options_mem_log()) {
       nsCOMPtr<nsIConsoleService> cs =
         do_GetService(NS_CONSOLESERVICE_CONTRACTID);
       if (cs) {
@@ -1712,7 +1724,7 @@ nsJSContext::EndCycleCollectionCallback(CycleCollectorResults &aResults)
     }
   }
 
-  if (sPostGCEventsToObserver) {
+  if (StaticPrefs::javascript_options_mem_notify()) {
     const char16_t* kJSONFmt =
        u"{ \"timestamp\": %llu, "
          u"\"duration\": %lu, "
@@ -1838,6 +1850,11 @@ void
 GCTimerFired(nsITimer *aTimer, void *aClosure)
 {
   nsJSContext::KillGCTimer();
+  nsJSContext::KillInterSliceGCRunner();
+  if (sShuttingDown) {
+    return;
+  }
+
   // Now start the actual GC after initial timer has fired.
   sInterSliceGCRunner = IdleTaskRunner::Create([aClosure](TimeStamp aDeadline) {
     return InterSliceGCRunnerFired(aDeadline, aClosure);
@@ -2116,25 +2133,19 @@ nsJSContext::PokeGC(JS::gcreason::Reason aReason,
     return;
   }
 
-  CallCreateInstance("@mozilla.org/timer;1", &sGCTimer);
-
-  if (!sGCTimer) {
-    // Failed to create timer (probably because we're in XPCOM shutdown)
-    return;
-  }
-
   static bool first = true;
 
-  sGCTimer->SetTarget(SystemGroup::EventTargetFor(TaskCategory::GarbageCollection));
-  sGCTimer->InitWithNamedFuncCallback(GCTimerFired,
-                                      reinterpret_cast<void *>(aReason),
-                                      aDelay
-                                      ? aDelay
-                                      : (first
-                                         ? NS_FIRST_GC_DELAY
-                                         : NS_GC_DELAY),
-                                      nsITimer::TYPE_ONE_SHOT_LOW_PRIORITY,
-                                      "GCTimerFired");
+  NS_NewTimerWithFuncCallback(&sGCTimer,
+                              GCTimerFired,
+                              reinterpret_cast<void *>(aReason),
+                              aDelay
+                              ? aDelay
+                              : (first
+                                 ? NS_FIRST_GC_DELAY
+                                 : NS_GC_DELAY),
+                              nsITimer::TYPE_ONE_SHOT_LOW_PRIORITY,
+                              "GCTimerFired",
+                              SystemGroup::EventTargetFor(TaskCategory::GarbageCollection));
 
   first = false;
 }
@@ -2147,18 +2158,12 @@ nsJSContext::PokeShrinkingGC()
     return;
   }
 
-  CallCreateInstance("@mozilla.org/timer;1", &sShrinkingGCTimer);
-
-  if (!sShrinkingGCTimer) {
-    // Failed to create timer (probably because we're in XPCOM shutdown)
-    return;
-  }
-
-  sShrinkingGCTimer->SetTarget(SystemGroup::EventTargetFor(TaskCategory::GarbageCollection));
-  sShrinkingGCTimer->InitWithNamedFuncCallback(ShrinkingGCTimerFired, nullptr,
-                                               sCompactOnUserInactiveDelay,
-                                               nsITimer::TYPE_ONE_SHOT_LOW_PRIORITY,
-                                               "ShrinkingGCTimerFired");
+  NS_NewTimerWithFuncCallback(&sShrinkingGCTimer,
+                              ShrinkingGCTimerFired, nullptr,
+                              StaticPrefs::javascript_options_compact_on_user_inactive_delay(),
+                              nsITimer::TYPE_ONE_SHOT_LOW_PRIORITY,
+                              "ShrinkingGCTimerFired",
+                              SystemGroup::EventTargetFor(TaskCategory::GarbageCollection));
 }
 
 // static
@@ -2297,7 +2302,7 @@ DOMGCSliceCallback(JSContext* aCx, JS::GCProgress aProgress, const JS::GCDescrip
     case JS::GC_CYCLE_END: {
       PRTime delta = GetCollectionTimeDelta();
 
-      if (sPostGCEventsToConsole) {
+      if (StaticPrefs::javascript_options_mem_log()) {
         nsString gcstats;
         gcstats.Adopt(aDesc.formatSummaryMessage(aCx));
         nsAutoString prefix;
@@ -2312,7 +2317,8 @@ DOMGCSliceCallback(JSContext* aCx, JS::GCProgress aProgress, const JS::GCDescrip
       }
 
       if (!sShuttingDown) {
-        if (sPostGCEventsToObserver || Telemetry::CanRecordExtended()) {
+        if (StaticPrefs::javascript_options_mem_notify() ||
+            Telemetry::CanRecordExtended()) {
           nsString json;
           json.Adopt(aDesc.formatJSON(aCx, PR_Now()));
           RefPtr<NotifyGCEndRunnable> notify = new NotifyGCEndRunnable(json);
@@ -2336,13 +2342,13 @@ DOMGCSliceCallback(JSContext* aCx, JS::GCProgress aProgress, const JS::GCDescrip
 
       if (aDesc.isZone_) {
         if (!sFullGCTimer && !sShuttingDown) {
-          CallCreateInstance("@mozilla.org/timer;1", &sFullGCTimer);
-          sFullGCTimer->SetTarget(SystemGroup::EventTargetFor(TaskCategory::GarbageCollection));
-          sFullGCTimer->InitWithNamedFuncCallback(FullGCTimerFired,
-                                                  nullptr,
-                                                  NS_FULL_GC_DELAY,
-                                                  nsITimer::TYPE_ONE_SHOT_LOW_PRIORITY,
-                                                  "FullGCTimerFired");
+          NS_NewTimerWithFuncCallback(&sFullGCTimer,
+                                      FullGCTimerFired,
+                                      nullptr,
+                                      NS_FULL_GC_DELAY,
+                                      nsITimer::TYPE_ONE_SHOT_LOW_PRIORITY,
+                                      "FullGCTimerFired",
+                                      SystemGroup::EventTargetFor(TaskCategory::GarbageCollection));
         }
       } else {
         nsJSContext::KillFullGCTimer();
@@ -2384,7 +2390,7 @@ DOMGCSliceCallback(JSContext* aCx, JS::GCProgress aProgress, const JS::GCDescrip
         nsCycleCollector_dispatchDeferredDeletion();
       }
 
-      if (sPostGCEventsToConsole) {
+      if (StaticPrefs::javascript_options_mem_log()) {
         nsString gcstats;
         gcstats.Adopt(aDesc.formatSliceMessage(aCx));
         nsAutoString prefix;
@@ -2441,11 +2447,9 @@ mozilla::dom::StartupJSEnvironment()
   sCCollectedWaitingForGC = 0;
   sCCollectedZonesWaitingForGC = 0;
   sLikelyShortLivingObjectsNeedingGC = 0;
-  sPostGCEventsToConsole = false;
   sNeedsFullCC = false;
   sNeedsFullGC = true;
   sNeedsGCAfterCC = false;
-  gNameSpaceManager = nullptr;
   sIsInitialized = false;
   sDidShutdown = false;
   sShuttingDown = false;
@@ -2559,7 +2563,7 @@ AsmJSCacheOpenEntryForRead(JS::Handle<JSObject*> aGlobal,
                            intptr_t *aHandle)
 {
   nsIPrincipal* principal =
-    nsJSPrincipals::get(JS_GetCompartmentPrincipals(js::GetObjectCompartment(aGlobal)));
+    nsJSPrincipals::get(JS::GetRealmPrincipals(js::GetNonCCWObjectRealm(aGlobal)));
   return asmjscache::OpenEntryForRead(principal, aBegin, aLimit, aSize, aMemory,
                                       aHandle);
 }
@@ -2573,7 +2577,7 @@ AsmJSCacheOpenEntryForWrite(JS::Handle<JSObject*> aGlobal,
                             intptr_t* aHandle)
 {
   nsIPrincipal* principal =
-    nsJSPrincipals::get(JS_GetCompartmentPrincipals(js::GetObjectCompartment(aGlobal)));
+    nsJSPrincipals::get(JS::GetRealmPrincipals(js::GetNonCCWObjectRealm(aGlobal)));
   return asmjscache::OpenEntryForWrite(principal, aBegin, aEnd, aSize, aMemory,
                                        aHandle);
 }
@@ -2634,6 +2638,15 @@ DispatchToEventLoop(void* closure, JS::Dispatchable* aDispatchable)
   return true;
 }
 
+static bool
+ConsumeStream(JSContext* aCx,
+              JS::HandleObject aObj,
+              JS::MimeType aMimeType,
+              JS::StreamConsumer* aConsumer)
+{
+  return FetchUtil::StreamResponseToJS(aCx, aObj, aMimeType, aConsumer, nullptr);
+}
+
 void
 nsJSContext::EnsureStatics()
 {
@@ -2662,6 +2675,7 @@ nsJSContext::EnsureStatics()
   JS::SetAsmJSCacheOps(jsapi.cx(), &asmJSCacheOps);
 
   JS::InitDispatchToEventLoop(jsapi.cx(), DispatchToEventLoop, nullptr);
+  JS::InitConsumeStreamCallback(jsapi.cx(), ConsumeStream);
 
   // Set these global xpconnect options...
   Preferences::RegisterCallbackAndCall(SetMemoryPrefChangedCallbackMB,
@@ -2695,10 +2709,6 @@ nsJSContext::EnsureStatics()
   Preferences::RegisterCallbackAndCall(SetMemoryPrefChangedCallbackBool,
                                        "javascript.options.mem.gc_dynamic_mark_slice",
                                        (void *)JSGC_DYNAMIC_MARK_SLICE);
-
-  Preferences::RegisterCallbackAndCall(SetMemoryPrefChangedCallbackBool,
-                                       "javascript.options.mem.gc_refresh_frame_slices_enabled",
-                                       (void *)JSGC_REFRESH_FRAME_SLICES_ENABLED);
 
   Preferences::RegisterCallbackAndCall(SetMemoryPrefChangedCallbackBool,
                                        "javascript.options.mem.gc_dynamic_heap_growth",
@@ -2750,23 +2760,6 @@ nsJSContext::EnsureStatics()
     MOZ_CRASH();
   }
 
-  Preferences::AddBoolVarCache(&sGCOnMemoryPressure,
-                               "javascript.options.gc_on_memory_pressure",
-                               true);
-
-  Preferences::AddBoolVarCache(&sCompactOnUserInactive,
-                               "javascript.options.compact_on_user_inactive",
-                               true);
-
-  Preferences::AddUintVarCache(&sCompactOnUserInactiveDelay,
-                               "javascript.options.compact_on_user_inactive_delay",
-                               NS_DEAULT_INACTIVE_GC_DELAY);
-
-  Preferences::AddBoolVarCache(&sPostGCEventsToConsole,
-                               JS_OPTIONS_DOT_STR "mem.log");
-  Preferences::AddBoolVarCache(&sPostGCEventsToObserver,
-                               JS_OPTIONS_DOT_STR "mem.notify");
-
   nsIObserver* observer = new nsJSEnvironmentObserver();
   obs->AddObserver(observer, "memory-pressure", false);
   obs->AddObserver(observer, "user-interaction-inactive", false);
@@ -2777,35 +2770,10 @@ nsJSContext::EnsureStatics()
   sIsInitialized = true;
 }
 
-nsScriptNameSpaceManager*
-mozilla::dom::GetNameSpaceManager()
-{
-  if (sDidShutdown)
-    return nullptr;
-
-  if (!gNameSpaceManager) {
-    gNameSpaceManager = new nsScriptNameSpaceManager;
-    NS_ADDREF(gNameSpaceManager);
-
-    nsresult rv = gNameSpaceManager->Init();
-    NS_ENSURE_SUCCESS(rv, nullptr);
-  }
-
-  return gNameSpaceManager;
-}
-
-nsScriptNameSpaceManager*
-mozilla::dom::PeekNameSpaceManager()
-{
-  return gNameSpaceManager;
-}
-
 void
 mozilla::dom::ShutdownJSEnvironment()
 {
   KillTimers();
-
-  NS_IF_RELEASE(gNameSpaceManager);
 
   sShuttingDown = true;
   sDidShutdown = true;

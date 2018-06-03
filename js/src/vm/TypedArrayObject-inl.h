@@ -12,21 +12,22 @@
 #include "vm/TypedArrayObject.h"
 
 #include "mozilla/Assertions.h"
+#include "mozilla/Compiler.h"
 #include "mozilla/FloatingPoint.h"
-#include "mozilla/PodOperations.h"
 
-#include "jsarray.h"
-#include "jscntxt.h"
+#include <algorithm>
+
 #include "jsnum.h"
 
+#include "builtin/Array.h"
 #include "gc/Zone.h"
-
 #include "jit/AtomicOperations.h"
-
 #include "js/Conversions.h"
 #include "js/Value.h"
-
+#include "vm/JSContext.h"
 #include "vm/NativeObject.h"
+
+#include "gc/ObjectKind-inl.h"
 
 namespace js {
 
@@ -216,12 +217,24 @@ class UnsharedOps
 
     template<typename T>
     static void podCopy(SharedMem<T*> dest, SharedMem<T*> src, size_t nelem) {
-        mozilla::PodCopy(dest.unwrapUnshared(), src.unwrapUnshared(), nelem);
+        // std::copy_n better matches the argument values/types of this
+        // function, but as noted below it allows the input/output ranges to
+        // overlap.  std::copy does not, so use it so the compiler has extra
+        // ability to optimize.
+        const auto* first = src.unwrapUnshared();
+        const auto* last = first + nelem;
+        auto* result = dest.unwrapUnshared();
+        std::copy(first, last, result);
     }
 
     template<typename T>
-    static void podMove(SharedMem<T*> dest, SharedMem<T*> src, size_t nelem) {
-        mozilla::PodMove(dest.unwrapUnshared(), src.unwrapUnshared(), nelem);
+    static void podMove(SharedMem<T*> dest, SharedMem<T*> src, size_t n) {
+        // std::copy_n copies from |src| to |dest| starting from |src|, so
+        // input/output ranges *may* permissibly overlap, as this function
+        // allows.
+        const auto* start = src.unwrapUnshared();
+        auto* result = dest.unwrapUnshared();
+        std::copy_n(start, n, result);
     }
 
     static SharedMem<void*> extract(TypedArrayObject* obj) {
@@ -265,7 +278,7 @@ class ElementSpecific
         }
 
         // Inhibit unaligned accesses on ARM (bug 1097253, a compiler bug).
-#ifdef __arm__
+#if defined(__arm__) && MOZ_IS_GCC
 #  define JS_VOLATILE_ARM volatile
 #else
 #  define JS_VOLATILE_ARM
@@ -607,6 +620,18 @@ class ElementSpecific
         return T(JS::ToInt32(d));
     }
 };
+
+
+/* static */ gc::AllocKind
+js::TypedArrayObject::AllocKindForLazyBuffer(size_t nbytes)
+{
+    MOZ_ASSERT(nbytes <= INLINE_BUFFER_LIMIT);
+    if (nbytes == 0)
+        nbytes += sizeof(uint8_t);
+    size_t dataSlots = AlignBytes(nbytes, sizeof(Value)) / sizeof(Value);
+    MOZ_ASSERT(nbytes <= dataSlots * sizeof(Value));
+    return gc::GetGCObjectKind(FIXED_DATA_START + dataSlots);
+}
 
 } // namespace js
 

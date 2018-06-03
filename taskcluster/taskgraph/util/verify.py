@@ -11,7 +11,6 @@ import os
 import sys
 
 from .. import GECKO
-from taskgraph.util.bbb_validation import valid_bbb_builders
 
 logger = logging.getLogger(__name__)
 base_path = os.path.join(GECKO, 'taskcluster', 'docs')
@@ -130,6 +129,32 @@ def verify_gecko_v2_routes(task, taskgraph, scratch_pad):
 
 
 @verifications.add('full_task_graph')
+def verify_routes_notification_filters(task, taskgraph, scratch_pad):
+    """
+        This function ensures that only understood filters for notifications are
+        specified.
+
+        See: https://docs.taskcluster.net/reference/core/taskcluster-notify/docs/usage
+    """
+    if task is None:
+        return
+    route_prefix = "notify."
+    valid_filters = ('on-any', 'on-completed', 'on-failed', 'on-exception')
+    task_dict = task.task
+    routes = task_dict.get('routes', [])
+
+    for route in routes:
+        if route.startswith(route_prefix):
+            # Get the filter of the route
+            route_filter = route.split('.')[-1]
+            if route_filter not in valid_filters:
+                raise Exception(
+                    '{} has invalid notification filter ({})'
+                    .format(task.label, route_filter)
+                )
+
+
+@verifications.add('full_task_graph')
 def verify_dependency_tiers(task, taskgraph, scratch_pad):
     tiers = scratch_pad
     if task is not None:
@@ -145,6 +170,10 @@ def verify_dependency_tiers(task, taskgraph, scratch_pad):
         for task in taskgraph.tasks.itervalues():
             tier = tiers[task.label]
             for d in task.dependencies.itervalues():
+                if taskgraph[d].task.get("workerType") == "always-optimized":
+                    continue
+                if "dummy" in taskgraph[d].kind:
+                    continue
                 if tier < tiers[d]:
                     raise Exception(
                         '{} (tier {}) cannot depend on {} (tier {})'
@@ -153,23 +182,11 @@ def verify_dependency_tiers(task, taskgraph, scratch_pad):
 
 
 @verifications.add('optimized_task_graph')
-def verify_bbb_builders_valid(task, taskgraph, scratch_pad):
+def verify_always_optimized(task, taskgraph, scratch_pad):
     """
-        This function ensures that any task which is run
-        in buildbot (via buildbot-bridge) is using a recognized buildername.
-
-        If you see an unexpected failure with a task due to this check, please
-        see the IRC Channel, #releng.
+        This function ensures that always-optimized tasks have been optimized.
     """
     if task is None:
         return
-    valid_builders = valid_bbb_builders()
-    if valid_builders is None:
-        return
-    if task.task.get('workerType') == 'buildbot-bridge':
-        buildername = task.task['payload']['buildername']
-        if buildername not in valid_builders:
-            logger.warning(
-                '{} uses an invalid buildbot buildername ("{}") '
-                ' - contact #releng for help'
-                .format(task.label, buildername))
+    if task.task.get('workerType') == 'always-optimized':
+        raise Exception('Could not optimize the task {!r}'.format(task.label))

@@ -915,8 +915,7 @@ IDBDatabase::GetOrCreateFileActorForBlob(Blob* aBlob)
   // a) it is unique per blob, b) it is reference-counted so that we can
   // guarantee that it stays alive, and c) it doesn't hold the actual File
   // alive.
-  nsCOMPtr<nsIDOMBlob> blob = aBlob;
-  nsCOMPtr<nsIWeakReference> weakRef = do_GetWeakReference(blob);
+  nsCOMPtr<nsIWeakReference> weakRef = do_GetWeakReference(aBlob);
   MOZ_ASSERT(weakRef);
 
   PBackgroundIDBDatabaseFileChild* actor = nullptr;
@@ -1196,6 +1195,13 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(IDBDatabase, IDBWrapperCache)
   // transactions from starting and unblock any other SetVersion callers.
   tmp->CloseInternal();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+void
+IDBDatabase::DisconnectFromOwner()
+{
+  InvalidateInternal();
+  IDBWrapperCache::DisconnectFromOwner();
+}
 
 void
 IDBDatabase::LastRelease()

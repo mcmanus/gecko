@@ -53,6 +53,12 @@ public:
   /// @return true if DrawableRef() will return a completely decoded surface.
   virtual bool IsFinished() const = 0;
 
+  /// @return true if the underlying decoder is currently fully decoded. For
+  /// animated images, this means that at least every frame has been decoded
+  /// at least once. It does not guarantee that all of the frames are present,
+  /// as the surface provider has the option to discard as it deems necessary.
+  virtual bool IsFullyDecoded() const { return IsFinished(); }
+
   /// @return the number of bytes of memory this ISurfaceProvider is expected to
   /// require. Optimizations may result in lower real memory usage. Trivial
   /// overhead is ignored. Because this value is used in bookkeeping, it's
@@ -65,7 +71,7 @@ public:
   virtual void AddSizeOfExcludingThis(MallocSizeOf aMallocSizeOf,
                                       size_t& aHeapSizeOut,
                                       size_t& aNonHeapSizeOut,
-                                      size_t& aSharedHandlesOut)
+                                      size_t& aExtHandlesOut)
   {
     DrawableFrameRef ref = DrawableRef(/* aFrame = */ 0);
     if (!ref) {
@@ -73,8 +79,11 @@ public:
     }
 
     ref->AddSizeOfExcludingThis(aMallocSizeOf, aHeapSizeOut,
-                                aNonHeapSizeOut, aSharedHandlesOut);
+                                aNonHeapSizeOut, aExtHandlesOut);
   }
+
+  virtual void Reset() { }
+  virtual void Advance(size_t aFrame) { }
 
   /// @return the availability state of this ISurfaceProvider, which indicates
   /// whether DrawableRef() could successfully return a surface. Should only be
@@ -100,6 +109,15 @@ protected:
   /// dynamically generated animation surfaces, @aFrame specifies the 0-based
   /// index of the desired frame.
   virtual DrawableFrameRef DrawableRef(size_t aFrame) = 0;
+
+  /// @return an eagerly computed raw access reference to a surface. For
+  /// dynamically generated animation surfaces, @aFrame specifies the 0-based
+  /// index of the desired frame.
+  virtual RawAccessFrameRef RawAccessRef(size_t aFrame)
+  {
+    MOZ_ASSERT_UNREACHABLE("Surface provider does not support raw access!");
+    return RawAccessFrameRef();
+  }
 
   /// @return true if this ISurfaceProvider is locked. (@see SetLocked())
   /// Should only be called from SurfaceCache code as it relies on SurfaceCache
@@ -137,7 +155,7 @@ public:
   DrawableSurface() : mHaveSurface(false) { }
 
   explicit DrawableSurface(DrawableFrameRef&& aDrawableRef)
-    : mDrawableRef(Move(aDrawableRef))
+    : mDrawableRef(std::move(aDrawableRef))
     , mHaveSurface(bool(mDrawableRef))
   { }
 
@@ -147,8 +165,8 @@ public:
   { }
 
   DrawableSurface(DrawableSurface&& aOther)
-    : mDrawableRef(Move(aOther.mDrawableRef))
-    , mProvider(Move(aOther.mProvider))
+    : mDrawableRef(std::move(aOther.mDrawableRef))
+    , mProvider(std::move(aOther.mProvider))
     , mHaveSurface(aOther.mHaveSurface)
   {
     aOther.mHaveSurface = false;
@@ -157,8 +175,8 @@ public:
   DrawableSurface& operator=(DrawableSurface&& aOther)
   {
     MOZ_ASSERT(this != &aOther, "Self-moves are prohibited");
-    mDrawableRef = Move(aOther.mDrawableRef);
-    mProvider = Move(aOther.mProvider);
+    mDrawableRef = std::move(aOther.mDrawableRef);
+    mProvider = std::move(aOther.mProvider);
     mHaveSurface = aOther.mHaveSurface;
     aOther.mHaveSurface = false;
     return *this;
@@ -188,6 +206,48 @@ public:
     mDrawableRef = mProvider->DrawableRef(aFrame);
 
     return mDrawableRef ? NS_OK : NS_ERROR_FAILURE;
+  }
+
+  RawAccessFrameRef RawAccessRef(size_t aFrame)
+  {
+    MOZ_ASSERT(mHaveSurface, "Trying to get on an empty DrawableSurface?");
+
+    if (!mProvider) {
+      MOZ_ASSERT_UNREACHABLE("Trying to get on a static DrawableSurface?");
+      return RawAccessFrameRef();
+    }
+
+    return mProvider->RawAccessRef(aFrame);
+  }
+
+  void Reset()
+  {
+    if (!mProvider) {
+      MOZ_ASSERT_UNREACHABLE("Trying to reset a static DrawableSurface?");
+      return;
+    }
+
+    mProvider->Reset();
+  }
+
+  void Advance(size_t aFrame)
+  {
+    if (!mProvider) {
+      MOZ_ASSERT_UNREACHABLE("Trying to advance a static DrawableSurface?");
+      return;
+    }
+
+    mProvider->Advance(aFrame);
+  }
+
+  bool IsFullyDecoded() const
+  {
+    if (!mProvider) {
+      MOZ_ASSERT_UNREACHABLE("Trying to check decoding state of a static DrawableSurface?");
+      return false;
+    }
+
+    return mProvider->IsFullyDecoded();
   }
 
   explicit operator bool() const { return mHaveSurface; }

@@ -1,23 +1,25 @@
 add_task(async function test_enabled() {
   // Test for bug 471903 to make sure searching in autocomplete can be turned on
   // and off. Also test bug 463535 for pref changing search.
+  Services.prefs.setBoolPref("browser.urlbar.autoFill", false);
+
   let uri = NetUtil.newURI("http://url/0");
   await PlacesTestUtils.addVisits([ { uri, title: "title" } ]);
 
-  do_print("plain search");
+  info("plain search");
   await check_autocomplete({
     search: "url",
     matches: [ { uri, title: "title" } ]
   });
 
-  do_print("search disabled");
+  info("search disabled");
   Services.prefs.setBoolPref("browser.urlbar.autocomplete.enabled", false);
   await check_autocomplete({
     search: "url",
     matches: [ ]
   });
 
-  do_print("resume normal search");
+  info("resume normal search");
   Services.prefs.setBoolPref("browser.urlbar.autocomplete.enabled", true);
   await check_autocomplete({
     search: "url",
