@@ -1832,7 +1832,7 @@ var AddonManagerInternal = {
         if (install.addon.type == "theme" &&
             !!install.addon.userDisabled &&
             !install.addon.appDisabled) {
-              install.addon.userDisabled = false;
+          install.addon.enable();
         }
 
         let needsRestart = (install.addon.pendingOperations != AddonManager.PENDING_NONE);
@@ -3024,26 +3024,6 @@ var AddonManagerPrivate = {
   isDBLoaded() {
     let provider = AddonManagerInternal._getProviderByName("XPIProvider");
     return provider ? provider.isDBLoaded : false;
-  },
-
-  /**
-   * Sets startupData for the given addon.  The provided data will be stored
-   * in addonsStartup.json so it is available early during browser startup.
-   * Note that this file is read synchronously at startup, so startupData
-   * should be used with care.
-   *
-   * @param {string} aID
-   *         The id of the addon to save startup data for.
-   * @param {any} aData
-   *        The data to store.  Must be JSON serializable.
-   */
-  setStartupData(aID, aData) {
-    if (!gStarted)
-      throw Components.Exception("AddonManager is not initialized",
-                                 Cr.NS_ERROR_NOT_INITIALIZED);
-
-    AddonManagerInternal._getProviderByName("XPIProvider")
-                        .setStartupData(aID, aData);
   },
 };
 

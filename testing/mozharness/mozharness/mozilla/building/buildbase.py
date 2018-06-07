@@ -416,6 +416,8 @@ class BuildOptionParser(object):
         'fuzzing-debug': 'builds/releng_sub_%s_configs/%s_fuzzing_debug.py',
         'asan-and-debug': 'builds/releng_sub_%s_configs/%s_asan_and_debug.py',
         'asan-tc-and-debug': 'builds/releng_sub_%s_configs/%s_asan_tc_and_debug.py',
+        'lto-tc': 'builds/releng_sub_%s_configs/%s_lto_tc.py',
+        'lto-tc-and-debug': 'builds/releng_sub_%s_configs/%s_lto_tc_and_debug.py',
         'stat-and-debug': 'builds/releng_sub_%s_configs/%s_stat_and_debug.py',
         'code-coverage-debug': 'builds/releng_sub_%s_configs/%s_code_coverage_debug.py',
         'code-coverage-opt': 'builds/releng_sub_%s_configs/%s_code_coverage_opt.py',
@@ -840,7 +842,7 @@ or run without that action (ie: --no-{action})"
             buildid = generate_build_ID()
 
         if c.get('is_automation') or os.environ.get("TASK_ID"):
-            self.set_property('buildid', buildid, write_to_file=True)
+            self.set_property('buildid', buildid)
 
         self.buildid = buildid
         return self.buildid
@@ -1104,7 +1106,7 @@ or run without that action (ie: --no-{action})"
                     self.info(pprint.pformat(build_props))
             for key, prop in build_props.iteritems():
                 if prop != 'UNKNOWN':
-                    self.set_property(key, prop, write_to_file=True)
+                    self.set_property(key, prop)
         else:
             self.info("No mach_build_properties.json found - not importing properties.")
 
@@ -1155,9 +1157,7 @@ or run without that action (ie: --no-{action})"
                 base_cmd + [prop['ini_name']], cwd=dirs['abs_obj_dir'],
                 halt_on_failure=halt_on_failure, env=env
             )
-            self.set_property(prop['prop_name'],
-                                       prop_val,
-                                       write_to_file=True)
+            self.set_property(prop['prop_name'], prop_val)
 
         if self.config.get('is_automation'):
             self.info("Verifying buildid from application.ini matches buildid "
@@ -1321,7 +1321,7 @@ or run without that action (ie: --no-{action})"
                          cwd=objdir, halt_on_failure=True,
                          output_parser=parser)
         for prop in parser.matches:
-            self.set_property(prop, parser.matches[prop], write_to_file=True)
+            self.set_property(prop, parser.matches[prop])
         upload_files_cmd = [
             'make',
             'echo-variable-UPLOAD_FILES',

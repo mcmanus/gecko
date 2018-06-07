@@ -107,7 +107,6 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     allowRelazificationForTesting(false),
     destroyCompartmentCallback(nullptr),
     sizeOfIncludingThisCompartmentCallback(nullptr),
-    compartmentNameCallback(nullptr),
     destroyRealmCallback(nullptr),
     realmNameCallback(nullptr),
     externalStringSizeofCallback(nullptr),
@@ -133,7 +132,7 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     activeThreadHasScriptDataAccess(false),
 #endif
     numActiveHelperThreadZones(0),
-    numCompartments(0),
+    numRealms(0),
     localeCallbacks(nullptr),
     defaultLocale(nullptr),
     profilingScripts(false),
@@ -214,12 +213,11 @@ JSRuntime::init(JSContext* cx, uint32_t maxbytes, uint32_t maxNurseryBytes)
     if (!gc.init(maxbytes, maxNurseryBytes))
         return false;
 
-    ScopedJSDeletePtr<Zone> atomsZone(js_new<Zone>(this));
+    UniquePtr<Zone> atomsZone = MakeUnique<Zone>(this);
     if (!atomsZone || !atomsZone->init(true))
         return false;
 
-    gc.atomsZone = atomsZone.get();
-    atomsZone.forget();
+    gc.atomsZone = atomsZone.release();
 
     if (!symbolRegistry_.ref().init())
         return false;
@@ -528,9 +526,14 @@ JSRuntime::setDefaultLocale(const char* locale)
 {
     if (!locale)
         return false;
+
+    char* newLocale = DuplicateString(mainContextFromOwnThread(), locale).release();
+    if (!newLocale)
+        return false;
+
     resetDefaultLocale();
-    defaultLocale = JS_strdup(mainContextFromOwnThread(), locale);
-    return defaultLocale != nullptr;
+    defaultLocale = newLocale;
+    return true;
 }
 
 void
@@ -552,7 +555,7 @@ JSRuntime::getDefaultLocale()
     if (!locale || !strcmp(locale, "C"))
         locale = "und";
 
-    char* lang = JS_strdup(mainContextFromOwnThread(), locale);
+    char* lang = DuplicateString(mainContextFromOwnThread(), locale).release();
     if (!lang)
         return nullptr;
 

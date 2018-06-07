@@ -9455,8 +9455,6 @@ nsTextFrame::ReflowText(nsLineLayout& aLineLayout, nscoord aAvailableWidth,
     IsFloatingFirstLetterChild() || IsInitialLetterChild()
     ? gfxFont::TIGHT_HINTED_OUTLINE_EXTENTS
     : gfxFont::LOOSE_INK_EXTENTS;
-  NS_ASSERTION(!(NS_REFLOW_CALC_BOUNDING_METRICS & aMetrics.mFlags),
-               "We shouldn't be passed NS_REFLOW_CALC_BOUNDING_METRICS anymore");
 
   int32_t limitLength = length;
   int32_t forceBreak = aLineLayout.GetForcedBreakPosition(this);
@@ -10420,7 +10418,11 @@ nsTextFrame::CountGraphemeClusters() const
 bool
 nsTextFrame::HasNonSuppressedText()
 {
-  if (HasAnyStateBits(TEXT_ISNOT_ONLY_WHITESPACE)) {
+  if (HasAnyStateBits(TEXT_ISNOT_ONLY_WHITESPACE |
+                      // If we haven't reflowed yet, or are currently doing so,
+                      // just return true because we can't be sure.
+                      NS_FRAME_FIRST_REFLOW |
+                      NS_FRAME_IN_REFLOW)) {
     return true;
   }
 

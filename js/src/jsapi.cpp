@@ -622,12 +622,6 @@ JS_SetSizeOfIncludingThisCompartmentCallback(JSContext* cx,
     cx->runtime()->sizeOfIncludingThisCompartmentCallback = callback;
 }
 
-JS_PUBLIC_API(void)
-JS_SetCompartmentNameCallback(JSContext* cx, JSCompartmentNameCallback callback)
-{
-    cx->runtime()->compartmentNameCallback = callback;
-}
-
 #if defined(NIGHTLY_BUILD)
 JS_PUBLIC_API(void)
 JS_SetErrorInterceptorCallback(JSRuntime* rt, JSErrorInterceptor* callback)
@@ -1382,13 +1376,6 @@ JS_updateMallocCounter(JSContext* cx, size_t nbytes)
     return cx->updateMallocCounter(nbytes);
 }
 
-JS_PUBLIC_API(char*)
-JS_strdup(JSContext* cx, const char* s)
-{
-    AssertHeapIsIdle();
-    return DuplicateString(cx, s).release();
-}
-
 #undef JS_AddRoot
 
 JS_PUBLIC_API(bool)
@@ -1867,15 +1854,9 @@ JS::RealmCreationOptions::setNewZone()
 }
 
 const JS::RealmCreationOptions&
-JS::RealmCreationOptionsRef(JSCompartment* compartment)
+JS::RealmCreationOptionsRef(Realm* realm)
 {
-    return JS::GetRealmForCompartment(compartment)->creationOptions();
-}
-
-const JS::RealmCreationOptions&
-JS::RealmCreationOptionsRef(JSObject* obj)
-{
-    return obj->realm()->creationOptions();
+    return realm->creationOptions();
 }
 
 const JS::RealmCreationOptions&
@@ -1904,15 +1885,9 @@ JS::RealmCreationOptions::setSharedMemoryAndAtomicsEnabled(bool flag)
 }
 
 JS::RealmBehaviors&
-JS::RealmBehaviorsRef(JSCompartment* compartment)
+JS::RealmBehaviorsRef(JS::Realm* realm)
 {
-    return JS::GetRealmForCompartment(compartment)->behaviors();
-}
-
-JS::RealmBehaviors&
-JS::RealmBehaviorsRef(JSObject* obj)
-{
-    return obj->realm()->behaviors();
+    return realm->behaviors();
 }
 
 JS::RealmBehaviors&
@@ -3467,8 +3442,10 @@ JS_PUBLIC_API(void)
 JS_DropPrincipals(JSContext* cx, JSPrincipals* principals)
 {
     int rc = --principals->refcount;
-    if (rc == 0)
+    if (rc == 0) {
+        JS::AutoSuppressGCAnalysis nogc;
         cx->runtime()->destroyPrincipals(principals);
+    }
 }
 
 JS_PUBLIC_API(void)
@@ -4003,7 +3980,7 @@ JS::OwningCompileOptions::setFile(JSContext* cx, const char* f)
 {
     char* copy = nullptr;
     if (f) {
-        copy = JS_strdup(cx, f);
+        copy = DuplicateString(cx, f).release();
         if (!copy)
             return false;
     }
@@ -4047,7 +4024,7 @@ JS::OwningCompileOptions::setIntroducerFilename(JSContext* cx, const char* s)
 {
     char* copy = nullptr;
     if (s) {
-        copy = JS_strdup(cx, s);
+        copy = DuplicateString(cx, s).release();
         if (!copy)
             return false;
     }
@@ -6861,7 +6838,7 @@ JS_GetDefaultLocale(JSContext* cx)
 {
     AssertHeapIsIdle();
     if (const char* locale = cx->runtime()->getDefaultLocale())
-        return UniqueChars(JS_strdup(cx, locale));
+        return DuplicateString(cx, locale);
 
     return nullptr;
 }
@@ -7574,19 +7551,26 @@ GetScriptedCallerActivationRealmFast(JSContext* cx, Activation** activation, Rea
     }
 
     if (activationIter->isJit()) {
-        for (OnlyJSJitFrameIter iter(activationIter); !iter.done(); ++iter) {
-            if (!iter.frame().isScripted())
-                continue;
-            if (!iter.frame().script()->selfHosted()) {
-                *activation = activationIter.activation();
-                *realm = iter.frame().script()->realm();
+        jit::JitActivation* act = activationIter->asJit();
+        JitFrameIter iter(act);
+        while (true) {
+            iter.skipNonScriptedJSFrames();
+            if (iter.done())
+                break;
+
+            if (!iter.isSelfHostedIgnoringInlining()) {
+                *activation = act;
+                *realm = iter.realm();
                 return true;
             }
-            if (iter.frame().isIonScripted()) {
+
+            if (iter.isJSJit() && iter.asJSJit().isIonScripted()) {
                 // Ion might have inlined non-self-hosted scripts in this
                 // self-hosted script.
                 return false;
             }
+
+            ++iter;
         }
     } else if (activationIter->isInterpreter()) {
         InterpreterActivation* act = activationIter->asInterpreter();

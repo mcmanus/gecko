@@ -497,16 +497,22 @@ CompositorBridgeParent::StopAndClearResources()
   }
 
   if (mWrBridge) {
+    // Ensure we are not holding the sIndirectLayerTreesLock when destroying
+    // the WebRenderBridgeParent instances because it may block on WR.
+    std::vector<RefPtr<WebRenderBridgeParent>> indirectBridgeParents;
     { // scope lock
       MonitorAutoLock lock(*sIndirectLayerTreesLock);
-      ForEachIndirectLayerTree([] (LayerTreeState* lts, LayersId) -> void {
+      ForEachIndirectLayerTree([&] (LayerTreeState* lts, LayersId) -> void {
         if (lts->mWrBridge) {
-          lts->mWrBridge->Destroy();
-          lts->mWrBridge = nullptr;
+          indirectBridgeParents.emplace_back(lts->mWrBridge.forget());
         }
         lts->mParent = nullptr;
       });
     }
+    for (const RefPtr<WebRenderBridgeParent>& bridge : indirectBridgeParents) {
+      bridge->Destroy();
+    }
+    indirectBridgeParents.clear();
 
     // Ensure we are not holding the sIndirectLayerTreesLock here because we
     // are going to block on WR threads in order to shut it down properly.
@@ -1386,7 +1392,8 @@ CompositorBridgeParent::LeaveTestMode(const LayersId& aId)
 }
 
 void
-CompositorBridgeParent::ApplyAsyncProperties(LayerTransactionParent* aLayerTree)
+CompositorBridgeParent::ApplyAsyncProperties(LayerTransactionParent* aLayerTree,
+                                             TransformsToSkip aSkip)
 {
   // NOTE: This should only be used for testing. For example, when mTestTime is
   // non-empty, or when called from test-only methods like
@@ -1399,8 +1406,7 @@ CompositorBridgeParent::ApplyAsyncProperties(LayerTransactionParent* aLayerTree)
 
     TimeStamp time = mTestTime.valueOr(mCompositorScheduler->GetLastComposeTime());
     bool requestNextFrame =
-      mCompositionManager->TransformShadowTree(time, mVsyncRate,
-        AsyncCompositionManager::TransformsToSkip::APZ);
+      mCompositionManager->TransformShadowTree(time, mVsyncRate, aSkip);
     if (!requestNextFrame) {
       CancelCurrentCompositeTask();
       // Pretend we composited in case someone is waiting for this event.
@@ -2045,7 +2051,7 @@ CompositorBridgeParent::AllocPCompositorWidgetParent(const CompositorWidgetInitD
   widget->AddRef();
 
 #ifdef XP_WIN
-  if (DeviceManagerDx::Get()->CanUseDComp()) {
+  if (mOptions.UseWebRender() && DeviceManagerDx::Get()->CanUseDComp()) {
     widget->AsWindows()->EnsureCompositorWindow();
   }
 #endif

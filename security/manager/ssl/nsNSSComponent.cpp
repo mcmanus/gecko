@@ -225,19 +225,6 @@ nsNSSComponent::~nsNSSComponent()
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("nsNSSComponent::dtor finished\n"));
 }
 
-NS_IMETHODIMP
-nsNSSComponent::GetPIPNSSBundleString(const char* name, nsAString& outString)
-{
-  MutexAutoLock lock(mMutex);
-
-  outString.Truncate();
-  if (mPIPNSSBundle && name) {
-    return mPIPNSSBundle->GetStringFromName(name, outString);
-  }
-
-  return NS_ERROR_FAILURE;
-}
-
 #ifdef XP_WIN
 static bool
 GetUserSid(nsAString& sidString)
@@ -1242,69 +1229,6 @@ LoadLoadableRootsTask::LoadLoadableRoots()
   return NS_ERROR_FAILURE;
 }
 
-nsresult
-nsNSSComponent::ConfigureInternalPKCS11Token()
-{
-  nsAutoString manufacturerID;
-  nsAutoString libraryDescription;
-  nsAutoString tokenDescription;
-  nsAutoString privateTokenDescription;
-  nsAutoString slotDescription;
-  nsAutoString privateSlotDescription;
-  nsAutoString fips140SlotDescription;
-  nsAutoString fips140TokenDescription;
-
-  nsresult rv;
-  rv = GetPIPNSSBundleString("ManufacturerID", manufacturerID);
-  if (NS_FAILED(rv)) return rv;
-
-  rv = GetPIPNSSBundleString("LibraryDescription", libraryDescription);
-  if (NS_FAILED(rv)) return rv;
-
-  rv = GetPIPNSSBundleString("TokenDescription", tokenDescription);
-  if (NS_FAILED(rv)) return rv;
-
-  rv = GetPIPNSSBundleString("PrivateTokenDescription", privateTokenDescription);
-  if (NS_FAILED(rv)) return rv;
-
-  rv = GetPIPNSSBundleString("SlotDescription", slotDescription);
-  if (NS_FAILED(rv)) return rv;
-
-  rv = GetPIPNSSBundleString("PrivateSlotDescription", privateSlotDescription);
-  if (NS_FAILED(rv)) return rv;
-
-  rv = GetPIPNSSBundleString("Fips140SlotDescription", fips140SlotDescription);
-  if (NS_FAILED(rv)) return rv;
-
-  rv = GetPIPNSSBundleString("Fips140TokenDescription", fips140TokenDescription);
-  if (NS_FAILED(rv)) return rv;
-
-  PK11_ConfigurePKCS11(NS_ConvertUTF16toUTF8(manufacturerID).get(),
-                       NS_ConvertUTF16toUTF8(libraryDescription).get(),
-                       NS_ConvertUTF16toUTF8(tokenDescription).get(),
-                       NS_ConvertUTF16toUTF8(privateTokenDescription).get(),
-                       NS_ConvertUTF16toUTF8(slotDescription).get(),
-                       NS_ConvertUTF16toUTF8(privateSlotDescription).get(),
-                       NS_ConvertUTF16toUTF8(fips140SlotDescription).get(),
-                       NS_ConvertUTF16toUTF8(fips140TokenDescription).get(),
-                       0, 0);
-  return NS_OK;
-}
-
-nsresult
-nsNSSComponent::InitializePIPNSSBundle()
-{
-  MutexAutoLock lock(mMutex);
-  nsCOMPtr<nsIStringBundleService> bundleService(
-    do_GetService(NS_STRINGBUNDLE_CONTRACTID));
-  if (!bundleService) {
-    return NS_ERROR_FAILURE;
-  }
-
-  return bundleService->CreateBundle("chrome://pipnss/locale/pipnss.properties",
-                                     getter_AddRefs(mPIPNSSBundle));
-}
-
 // Table of pref names and SSL cipher ID
 typedef struct {
   const char* pref;
@@ -1961,14 +1885,6 @@ nsNSSComponent::InitializeNSS()
 
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("NSS Initialization beginning\n"));
 
-  // The call to ConfigureInternalPKCS11Token needs to be done before NSS is initialized,
-  // but affects only static data.
-  // If we could assume i18n will not change between profiles, one call per application
-  // run were sufficient. As I can't predict what happens in the future, let's repeat
-  // this call for every re-init of NSS.
-
-  ConfigureInternalPKCS11Token();
-
   nsAutoCString profileStr;
   nsresult rv = GetNSSProfilePath(profileStr);
   if (NS_FAILED(rv)) {
@@ -2203,13 +2119,7 @@ nsNSSComponent::Init()
 
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("Beginning NSS initialization\n"));
 
-  nsresult rv = InitializePIPNSSBundle();
-  if (NS_FAILED(rv)) {
-    MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("Unable to create pipnss bundle.\n"));
-    return rv;
-  }
-
-  rv = InitializeNSS();
+  nsresult rv = InitializeNSS();
   if (NS_FAILED(rv)) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Error,
             ("nsNSSComponent::InitializeNSS() failed\n"));
@@ -2558,8 +2468,8 @@ setPassword(PK11SlotInfo* slot, nsIInterfaceRequestor* ctx)
     }
 
     bool canceled;
-    NS_ConvertUTF8toUTF16 tokenName(PK11_GetTokenName(slot));
-    rv = dialogs->SetPassword(ctx, tokenName, &canceled);
+    nsCOMPtr<nsIPK11Token> token = new nsPK11Token(slot);
+    rv = dialogs->SetPassword(ctx, token, &canceled);
     if (NS_FAILED(rv)) {
       return rv;
     }

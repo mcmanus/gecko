@@ -964,9 +964,6 @@ JS_SetSizeOfIncludingThisCompartmentCallback(JSContext* cx,
                                              JSSizeOfIncludingThisCompartmentCallback callback);
 
 extern JS_PUBLIC_API(void)
-JS_SetCompartmentNameCallback(JSContext* cx, JSCompartmentNameCallback callback);
-
-extern JS_PUBLIC_API(void)
 JS_SetWrapObjectCallbacks(JSContext* cx, const JSWrapObjectCallbacks* callbacks);
 
 extern JS_PUBLIC_API(void)
@@ -1107,6 +1104,13 @@ using IterateRealmCallback = void (*)(JSContext* cx, void* data, Handle<Realm*> 
  */
 extern JS_PUBLIC_API(void)
 IterateRealms(JSContext* cx, void* data, IterateRealmCallback realmCallback);
+
+/**
+ * Like IterateRealms, but only iterates realms in |compartment|.
+ */
+extern JS_PUBLIC_API(void)
+IterateRealmsInCompartment(JSContext* cx, JSCompartment* compartment, void* data,
+                           IterateRealmCallback realmCallback);
 
 } // namespace JS
 
@@ -1356,9 +1360,6 @@ JS_freeop(JSFreeOp* fop, void* p);
 
 extern JS_PUBLIC_API(void)
 JS_updateMallocCounter(JSContext* cx, size_t nbytes);
-
-extern JS_PUBLIC_API(char*)
-JS_strdup(JSContext* cx, const char* s);
 
 /**
  * Set the size of the native stack that should not be exceed. To disable
@@ -1955,19 +1956,13 @@ class JS_PUBLIC_API(RealmOptions)
 };
 
 JS_PUBLIC_API(const RealmCreationOptions&)
-RealmCreationOptionsRef(JSCompartment* compartment);
-
-JS_PUBLIC_API(const RealmCreationOptions&)
-RealmCreationOptionsRef(JSObject* obj);
+RealmCreationOptionsRef(JS::Realm* realm);
 
 JS_PUBLIC_API(const RealmCreationOptions&)
 RealmCreationOptionsRef(JSContext* cx);
 
 JS_PUBLIC_API(RealmBehaviors&)
-RealmBehaviorsRef(JSCompartment* compartment);
-
-JS_PUBLIC_API(RealmBehaviors&)
-RealmBehaviorsRef(JSObject* obj);
+RealmBehaviorsRef(JS::Realm* realm);
 
 JS_PUBLIC_API(RealmBehaviors&)
 RealmBehaviorsRef(JSContext* cx);

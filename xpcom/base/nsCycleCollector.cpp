@@ -2647,7 +2647,8 @@ public:
 
   void Destroy()
   {
-    mReferenceToThis = nullptr;
+    RefPtr<JSPurpleBuffer> referenceToThis;
+    mReferenceToThis.swap(referenceToThis);
     mValues.Clear();
     mObjects.Clear();
     mozilla::DropJSObjects(this);
@@ -3489,6 +3490,8 @@ nsCycleCollector::nsCycleCollector() :
 
 nsCycleCollector::~nsCycleCollector()
 {
+  MOZ_ASSERT(!mJSPurpleBuffer, "Didn't call JSPurpleBuffer::Destroy?");
+
   UnregisterWeakMemoryReporter(this);
 }
 
@@ -3989,6 +3992,10 @@ nsCycleCollector::Shutdown(bool aDoCollect)
   if (aDoCollect) {
     ShutdownCollect();
   }
+
+  if (mJSPurpleBuffer) {
+    mJSPurpleBuffer->Destroy();
+  }
 }
 
 void
@@ -4262,7 +4269,7 @@ nsCycleCollector_forgetSkippable(js::SliceBudget& aBudget,
   MOZ_ASSERT(data);
   MOZ_ASSERT(data->mCollector);
 
-  AUTO_PROFILER_LABEL("nsCycleCollector_forgetSkippable", CC);
+  AUTO_PROFILER_LABEL("nsCycleCollector_forgetSkippable", GCCC);
 
   TimeLog timeLog;
   data->mCollector->ForgetSkippable(aBudget,
@@ -4309,7 +4316,7 @@ nsCycleCollector_collect(nsICycleCollectorListener* aManualListener)
   MOZ_ASSERT(data);
   MOZ_ASSERT(data->mCollector);
 
-  AUTO_PROFILER_LABEL("nsCycleCollector_collect", CC);
+  AUTO_PROFILER_LABEL("nsCycleCollector_collect", GCCC);
 
   SliceBudget unlimitedBudget = SliceBudget::unlimited();
   data->mCollector->Collect(ManualCC, unlimitedBudget, aManualListener);
@@ -4325,7 +4332,7 @@ nsCycleCollector_collectSlice(SliceBudget& budget,
   MOZ_ASSERT(data);
   MOZ_ASSERT(data->mCollector);
 
-  AUTO_PROFILER_LABEL("nsCycleCollector_collectSlice", CC);
+  AUTO_PROFILER_LABEL("nsCycleCollector_collectSlice", GCCC);
 
   data->mCollector->Collect(SliceCC, budget, nullptr, aPreferShorterSlices);
 }
@@ -4365,7 +4372,7 @@ nsCycleCollector_shutdown(bool aDoCollect)
 
   if (data) {
     MOZ_ASSERT(data->mCollector);
-    AUTO_PROFILER_LABEL("nsCycleCollector_shutdown", CC);
+    AUTO_PROFILER_LABEL("nsCycleCollector_shutdown", OTHER);
 
     if (gMainThreadCollector == data->mCollector) {
       gMainThreadCollector = nullptr;

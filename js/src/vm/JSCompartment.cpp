@@ -44,9 +44,7 @@ using mozilla::PodArrayZero;
 JSCompartment::JSCompartment(Zone* zone)
   : zone_(zone),
     runtime_(zone->runtimeFromAnyThread())
-{
-    runtime_->numCompartments++;
-}
+{}
 
 ObjectRealm::ObjectRealm(JS::Zone* zone)
   : innerViews(zone)
@@ -57,18 +55,22 @@ ObjectRealm::~ObjectRealm()
     MOZ_ASSERT(enumerators == iteratorSentinel_.get());
 }
 
-Realm::Realm(JS::Zone* zone, const JS::RealmOptions& options)
-  : JSCompartment(zone),
+Realm::Realm(JSCompartment* comp, const JS::RealmOptions& options)
+  : JS::shadow::Realm(comp),
+    zone_(comp->zone()),
+    runtime_(comp->runtimeFromMainThread()),
     creationOptions_(options.creationOptions()),
     behaviors_(options.behaviors()),
     global_(nullptr),
-    objects_(zone),
+    objects_(zone_),
     randomKeyGenerator_(runtime_->forkRandomKeyGenerator()),
-    wasm(zone->runtimeFromMainThread()),
+    wasm(runtime_),
     performanceMonitoring(runtime_)
 {
     MOZ_ASSERT_IF(creationOptions_.mergeable(),
                   creationOptions_.invisibleToDebugger());
+
+    runtime_->numRealms++;
 }
 
 Realm::~Realm()
@@ -84,11 +86,9 @@ Realm::~Realm()
     if (!runtime_->gc.shutdownCollectedEverything())
         objectGroups_.unboxedLayouts.clear();
 #endif
-}
 
-JSCompartment::~JSCompartment()
-{
-    runtime_->numCompartments--;
+    MOZ_ASSERT(runtime_->numRealms > 0);
+    runtime_->numRealms--;
 }
 
 bool
@@ -122,11 +122,6 @@ ObjectRealm::init(JSContext* cx)
 bool
 Realm::init(JSContext* cx)
 {
-    // Initialize JSCompartment. This is temporary until Realm and
-    // JSCompartment are completely separated.
-    if (!JSCompartment::init(cx))
-        return false;
-
     /*
      * As a hack, we clear our timezone cache every time we create a new realm.
      * This ensures that the cache is always relatively fresh, but shouldn't
@@ -1039,7 +1034,7 @@ Realm::clearTables()
 
     // No scripts should have run in this realm. This is used when merging
     // a realm that has been used off thread into another realm and zone.
-    JS::GetCompartmentForRealm(this)->assertNoCrossCompartmentWrappers();
+    compartment()->assertNoCrossCompartmentWrappers();
     MOZ_ASSERT(!jitRealm_);
     MOZ_ASSERT(!debugEnvs_);
     MOZ_ASSERT(objects_.enumerators->next() == objects_.enumerators);
@@ -1078,7 +1073,7 @@ void
 Realm::setNewObjectMetadata(JSContext* cx, HandleObject obj)
 {
     MOZ_ASSERT(obj->realm() == this);
-    assertSameCompartment(cx, JS::GetCompartmentForRealm(this), obj);
+    assertSameCompartment(cx, compartment(), obj);
 
     AutoEnterOOMUnsafeRegion oomUnsafe;
     if (JSObject* metadata = allocationMetadataBuilder_->build(cx, obj, oomUnsafe)) {
@@ -1313,13 +1308,16 @@ Realm::clearBreakpointsIn(FreeOp* fop, js::Debugger* dbg, HandleObject handler)
 }
 
 void
-JSCompartment::addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf,
-                                      size_t* crossCompartmentWrappersArg)
+JSCompartment::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
+                                      size_t* compartmentObjects,
+                                      size_t* crossCompartmentWrappersTables,
+                                      size_t* compartmentsPrivateData)
 {
-    // Note that Realm inherits from JSCompartment (for now) so sizeof(*this) is
-    // included in that.
+    *compartmentObjects += mallocSizeOf(this);
+    *crossCompartmentWrappersTables += crossCompartmentWrappers.sizeOfExcludingThis(mallocSizeOf);
 
-    *crossCompartmentWrappersArg += crossCompartmentWrappers.sizeOfExcludingThis(mallocSizeOf);
+    if (auto callback = runtime_->sizeOfIncludingThisCompartmentCallback)
+        *compartmentsPrivateData += callback(mallocSizeOf, this);
 }
 
 void
@@ -1351,17 +1349,12 @@ Realm::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
                               size_t* innerViewsArg,
                               size_t* lazyArrayBuffersArg,
                               size_t* objectMetadataTablesArg,
-                              size_t* crossCompartmentWrappersArg,
                               size_t* savedStacksSet,
                               size_t* varNamesSet,
                               size_t* nonSyntacticLexicalEnvironmentsArg,
                               size_t* jitRealm,
-                              size_t* privateData,
                               size_t* scriptCountsMapArg)
 {
-    // This is temporary until Realm and JSCompartment are completely separated.
-    JSCompartment::addSizeOfExcludingThis(mallocSizeOf, crossCompartmentWrappersArg);
-
     *realmObject += mallocSizeOf(this);
     objectGroups_.addSizeOfExcludingThis(mallocSizeOf, tiAllocationSiteTables,
                                          tiArrayTypeTables, tiObjectTypeTables,
@@ -1380,15 +1373,10 @@ Realm::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
     if (jitRealm_)
         *jitRealm += jitRealm_->sizeOfIncludingThis(mallocSizeOf);
 
-    auto callback = runtime_->sizeOfIncludingThisCompartmentCallback;
-    if (callback)
-        *privateData += callback(mallocSizeOf, this);
-
     if (scriptCountsMap) {
         *scriptCountsMapArg += scriptCountsMap->sizeOfIncludingThis(mallocSizeOf);
-        for (auto r = scriptCountsMap->all(); !r.empty(); r.popFront()) {
+        for (auto r = scriptCountsMap->all(); !r.empty(); r.popFront())
             *scriptCountsMapArg += r.front().value()->sizeOfIncludingThis(mallocSizeOf);
-        }
     }
 }
 

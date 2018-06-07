@@ -1207,10 +1207,9 @@ public:
     xpc::RealmStatsExtras* extras = new xpc::RealmStatsExtras;
 
     // This is the |jsPathPrefix|.  Each worker has exactly one realm.
-    JSCompartment* compartment = JS::GetCompartmentForRealm(aRealm);
     extras->jsPathPrefix.Assign(mRtPath);
     extras->jsPathPrefix += nsPrintfCString("zone(0x%p)/",
-                                            (void *)js::GetCompartmentZone(compartment));
+                                            (void *)js::GetRealmZone(aRealm));
     extras->jsPathPrefix += NS_LITERAL_CSTRING("realm(web-worker)/");
 
     // This should never be used when reporting with workers (hence the "?!").
@@ -3497,10 +3496,10 @@ WorkerPrivate::GetClientInfo() const
   Maybe<ClientInfo> clientInfo;
   if (!mClientSource) {
     MOZ_DIAGNOSTIC_ASSERT(mStatus >= Terminating);
-    return std::move(clientInfo);
+    return clientInfo;
   }
   clientInfo.emplace(mClientSource->Info());
-  return std::move(clientInfo);
+  return clientInfo;
 }
 
 const ClientState
@@ -3510,7 +3509,7 @@ WorkerPrivate::GetClientState() const
   MOZ_DIAGNOSTIC_ASSERT(mClientSource);
   ClientState state;
   mClientSource->SnapshotState(&state);
-  return std::move(state);
+  return state;
 }
 
 const Maybe<ServiceWorkerDescriptor>
@@ -3820,6 +3819,8 @@ WorkerPrivate::DisableMemoryReporter()
 void
 WorkerPrivate::WaitForWorkerEvents()
 {
+  AUTO_PROFILER_LABEL("WorkerPrivate::WaitForWorkerEvents", IDLE);
+
   AssertIsOnWorkerThread();
   mMutex.AssertCurrentThreadOwns();
 

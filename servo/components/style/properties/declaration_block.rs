@@ -1116,9 +1116,7 @@ where
     let mut parser = Parser::new(&mut input);
     let start_position = parser.position();
     parser.parse_entirely(|parser| {
-        let name = id.name().into();
-        PropertyDeclaration::parse_into(declarations, id, name, &context, parser)
-            .map_err(|e| e.into())
+        PropertyDeclaration::parse_into(declarations, id, &context, parser)
     }).map_err(|err| {
         let location = err.location;
         let error = ContextualParseError::UnsupportedPropertyDeclaration(
@@ -1158,7 +1156,7 @@ impl<'a, 'b, 'i> DeclarationParser<'i> for PropertyDeclarationParser<'a, 'b> {
         name: CowRcStr<'i>,
         input: &mut Parser<'i, 't>,
     ) -> Result<Importance, ParseError<'i>> {
-        let id = match PropertyId::parse(&name) {
+        let id = match PropertyId::parse(&name, self.context) {
             Ok(id) => id,
             Err(..) => {
                 return Err(input.new_custom_error(if is_non_mozilla_vendor_identifier(&name) {
@@ -1169,7 +1167,7 @@ impl<'a, 'b, 'i> DeclarationParser<'i> for PropertyDeclarationParser<'a, 'b> {
             }
         };
         input.parse_until_before(Delimiter::Bang, |input| {
-            PropertyDeclaration::parse_into(self.declarations, id, name, self.context, input)
+            PropertyDeclaration::parse_into(self.declarations, id, self.context, input)
         })?;
         let importance = match input.try(parse_important) {
             Ok(()) => Importance::Important,

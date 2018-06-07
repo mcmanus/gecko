@@ -23,7 +23,7 @@ use std::fmt::{self, Write};
 use std::mem::{self, ManuallyDrop};
 
 #[cfg(feature = "servo")] use cssparser::RGBA;
-use cssparser::{CowRcStr, Parser, TokenSerializationType, serialize_identifier};
+use cssparser::{Parser, TokenSerializationType};
 use cssparser::ParserInput;
 #[cfg(feature = "servo")] use euclid::SideOffsets2D;
 use context::QuirksMode;
@@ -49,6 +49,7 @@ use stylesheets::{CssRuleType, Origin, UrlExtraData};
 use values::generics::text::LineHeight;
 use values::computed;
 use values::computed::NonNegativeLength;
+use values::serialize_atom_name;
 use rule_tree::{CascadeLevel, StrongRuleNode};
 use self::computed_value_flags::*;
 use str::{CssString, CssStringBorrow, CssStringWriter};
@@ -427,6 +428,17 @@ impl NonCustomPropertyId {
         MAP[self.0]
     }
 
+    /// Get the property name.
+    #[inline]
+    fn name(self) -> &'static str {
+        static MAP: [&'static str; ${len(data.longhands) + len(data.shorthands) + len(data.all_aliases())}] = [
+            % for property in data.longhands + data.shorthands + data.all_aliases():
+                "${property.name}",
+            % endfor
+        ];
+        MAP[self.0]
+    }
+
     #[inline]
     fn enabled_for_all_content(self) -> bool {
         ${static_non_custom_property_id_set(
@@ -499,6 +511,11 @@ impl NonCustomPropertyId {
             _ => {}
         }
 
+        self.allowed_in_ignoring_rule_type(context)
+    }
+
+
+    fn allowed_in_ignoring_rule_type(self, context: &ParserContext) -> bool {
         // The semantics of these are kinda hard to reason about, what follows
         // is a description of the different combinations that can happen with
         // these three sets.
@@ -854,12 +871,9 @@ impl fmt::Debug for LonghandId {
 
 impl LonghandId {
     /// Get the name of this longhand property.
+    #[inline]
     pub fn name(&self) -> &'static str {
-        match *self {
-            % for property in data.longhands:
-                LonghandId::${property.camel_case} => "${property.name}",
-            % endfor
-        }
+        NonCustomPropertyId::from(*self).name()
     }
 
     /// Returns whether the longhand property is inherited by default.
@@ -1197,12 +1211,9 @@ impl ToCss for ShorthandId {
 
 impl ShorthandId {
     /// Get the name for this shorthand property.
+    #[inline]
     pub fn name(&self) -> &'static str {
-        match *self {
-            % for property in data.shorthands:
-                ShorthandId::${property.camel_case} => "${property.name}",
-            % endfor
-        }
+        NonCustomPropertyId::from(*self).name()
     }
 
     /// Converts from a ShorthandId to an adequate nsCSSPropertyID.
@@ -1422,6 +1433,14 @@ impl UnparsedValue {
         .and_then(|css| {
             // As of this writing, only the base URL is used for property
             // values.
+            //
+            // NOTE(emilio): we intentionally pase `None` as the rule type here.
+            // If something starts depending on it, it's probably a bug, since
+            // it'd change how values are parsed depending on whether we're in a
+            // @keyframes rule or not, for example... So think twice about
+            // whether you want to do this!
+            //
+            // FIXME(emilio): ParsingMode is slightly fishy...
             let context = ParserContext::new(
                 Origin::Author,
                 &self.url_data,
@@ -1493,8 +1512,9 @@ impl<'a> ToCss for PropertyDeclarationId<'a> {
     {
         match *self {
             PropertyDeclarationId::Longhand(id) => dest.write_str(id.name()),
-            PropertyDeclarationId::Custom(_) => {
-                serialize_identifier(&self.name(), dest)
+            PropertyDeclarationId::Custom(ref name) => {
+                dest.write_str("--")?;
+                serialize_atom_name(name, dest)
             }
         }
     }
@@ -1574,8 +1594,9 @@ impl ToCss for PropertyId {
             PropertyId::Shorthand(id) => dest.write_str(id.name()),
             PropertyId::LonghandAlias(id, _) => dest.write_str(id.name()),
             PropertyId::ShorthandAlias(id, _) => dest.write_str(id.name()),
-            PropertyId::Custom(_) => {
-                serialize_identifier(&self.name(), dest)
+            PropertyId::Custom(ref name) => {
+                dest.write_str("--")?;
+                serialize_atom_name(name, dest)
             }
         }
     }
@@ -1595,7 +1616,7 @@ impl PropertyId {
     /// Returns a given property from the string `s`.
     ///
     /// Returns Err(()) for unknown non-custom properties.
-    pub fn parse(property_name: &str) -> Result<Self, ()> {
+    fn parse_unchecked(property_name: &str) -> Result<Self, ()> {
         // FIXME(https://github.com/rust-lang/rust/issues/33156): remove this
         // enum and use PropertyId when stable Rust allows destructors in
         // statics.
@@ -1639,11 +1660,55 @@ impl PropertyId {
                 PropertyId::ShorthandAlias(id, alias)
             },
             None => {
-                return ::custom_properties::parse_name(property_name).map(|name| {
-                    PropertyId::Custom(::custom_properties::Name::from(name))
-                })
+                let name = ::custom_properties::parse_name(property_name)?;
+                PropertyId::Custom(::custom_properties::Name::from(name))
             },
         })
+    }
+
+    /// Parses a property name, and returns an error if it's unknown or isn't
+    /// enabled for all content.
+    #[inline]
+    pub fn parse_enabled_for_all_content(name: &str) -> Result<Self, ()> {
+        let id = Self::parse_unchecked(name)?;
+
+        if !id.enabled_for_all_content() {
+            return Err(());
+        }
+
+        Ok(id)
+    }
+
+
+    /// Parses a property name, and returns an error if it's unknown or isn't
+    /// allowed in this context.
+    #[inline]
+    pub fn parse(name: &str, context: &ParserContext) -> Result<Self, ()> {
+        let id = Self::parse_unchecked(name)?;
+
+        if !id.allowed_in(context) {
+            return Err(());
+        }
+
+        Ok(id)
+    }
+
+    /// Parses a property name, and returns an error if it's unknown or isn't
+    /// allowed in this context, ignoring the rule_type checks.
+    ///
+    /// This is useful for parsing stuff from CSS values, for example.
+    #[inline]
+    pub fn parse_ignoring_rule_type(
+        name: &str,
+        context: &ParserContext,
+    ) -> Result<Self, ()> {
+        let id = Self::parse_unchecked(name)?;
+
+        if !id.allowed_in_ignoring_rule_type(context) {
+            return Err(());
+        }
+
+        Ok(id)
     }
 
     /// Returns a property id from Gecko's nsCSSPropertyID.
@@ -1700,21 +1765,6 @@ impl PropertyId {
         }
     }
 
-    /// Returns the name of the property without CSS escaping.
-    pub fn name(&self) -> Cow<'static, str> {
-        match *self {
-            PropertyId::ShorthandAlias(id, _) |
-            PropertyId::Shorthand(id) => id.name().into(),
-            PropertyId::LonghandAlias(id, _) |
-            PropertyId::Longhand(id) => id.name().into(),
-            PropertyId::Custom(ref name) => {
-                let mut s = String::new();
-                write!(&mut s, "--{}", name).unwrap();
-                s.into()
-            }
-        }
-    }
-
     fn non_custom_id(&self) -> Option<NonCustomPropertyId> {
         Some(match *self {
             PropertyId::Custom(_) => return None,
@@ -1757,6 +1807,16 @@ impl PropertyId {
             Some(id) => id,
         };
         id.allowed_in(context)
+    }
+
+    #[inline]
+    fn allowed_in_ignoring_rule_type(&self, context: &ParserContext) -> bool {
+        let id = match self.non_custom_id() {
+            // Custom properties are allowed everywhere
+            None => return true,
+            Some(id) => id,
+        };
+        id.allowed_in_ignoring_rule_type(context)
     }
 
     /// Whether the property supports the given CSS type.
@@ -1967,18 +2027,13 @@ impl PropertyDeclaration {
     pub fn parse_into<'i, 't>(
         declarations: &mut SourcePropertyDeclaration,
         id: PropertyId,
-        name: CowRcStr<'i>,
         context: &ParserContext,
         input: &mut Parser<'i, 't>,
     ) -> Result<(), ParseError<'i>> {
         assert!(declarations.is_empty());
+        debug_assert!(id.allowed_in(context), "{:?}", id);
 
-        if !id.allowed_in(context) {
-            return Err(input.new_custom_error(
-                StyleParseErrorKind::UnknownProperty(name)
-            ));
-        }
-
+        let non_custom_id = id.non_custom_id();
         let start = input.state();
         match id {
             PropertyId::Custom(property_name) => {
@@ -1989,7 +2044,10 @@ impl PropertyDeclaration {
                     Ok(keyword) => DeclaredValueOwned::CSSWideKeyword(keyword),
                     Err(()) => match ::custom_properties::SpecifiedValue::parse(input) {
                         Ok(value) => DeclaredValueOwned::Value(value),
-                        Err(e) => return Err(StyleParseErrorKind::new_invalid(name, e)),
+                        Err(e) => return Err(StyleParseErrorKind::new_invalid(
+                            format!("--{}", property_name),
+                            e,
+                        )),
                     }
                 };
                 declarations.push(PropertyDeclaration::Custom(CustomDeclaration {
@@ -2014,7 +2072,10 @@ impl PropertyDeclaration {
                             input.reset(&start);
                             let (first_token_type, css) =
                                 ::custom_properties::parse_non_custom_with_var(input).map_err(|e| {
-                                    StyleParseErrorKind::new_invalid(name, e)
+                                    StyleParseErrorKind::new_invalid(
+                                        non_custom_id.unwrap().name(),
+                                        e,
+                                    )
                                 })?;
                             Ok(PropertyDeclaration::WithVariables(VariableDeclaration {
                                 id,
@@ -2026,7 +2087,10 @@ impl PropertyDeclaration {
                                 }),
                             }))
                         } else {
-                            Err(StyleParseErrorKind::new_invalid(name, err))
+                            Err(StyleParseErrorKind::new_invalid(
+                                non_custom_id.unwrap().name(),
+                                err,
+                            ))
                         }
                     })
                 }).map(|declaration| {
@@ -2060,7 +2124,10 @@ impl PropertyDeclaration {
                             input.reset(&start);
                             let (first_token_type, css) =
                                 ::custom_properties::parse_non_custom_with_var(input).map_err(|e| {
-                                    StyleParseErrorKind::new_invalid(name, e)
+                                    StyleParseErrorKind::new_invalid(
+                                        non_custom_id.unwrap().name(),
+                                        e,
+                                    )
                                 })?;
                             let unparsed = Arc::new(UnparsedValue {
                                 css: css.into_owned(),
@@ -2082,7 +2149,10 @@ impl PropertyDeclaration {
                             }
                             Ok(())
                         } else {
-                            Err(StyleParseErrorKind::new_invalid(name, err))
+                            Err(StyleParseErrorKind::new_invalid(
+                                non_custom_id.unwrap().name(),
+                                err,
+                            ))
                         }
                     })
                 }

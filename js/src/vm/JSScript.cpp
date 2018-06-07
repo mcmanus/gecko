@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <new>
 #include <string.h>
+#include <utility>
 
 #include "jsapi.h"
 #include "jstypes.h"
@@ -2701,7 +2702,7 @@ JSScript::initScriptName(JSContext* cx)
         realm()->scriptNameMap = std::move(map);
     }
 
-    UniqueChars name(js_strdup(filename()));
+    UniqueChars name = DuplicateString(filename());
     if (!name) {
         ReportOutOfMemory(cx);
         return false;

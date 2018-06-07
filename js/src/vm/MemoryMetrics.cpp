@@ -327,7 +327,10 @@ StatsZoneCallback(JSRuntime* rt, void* data, Zone* zone)
                                  &zStats.cachedCFG,
                                  &zStats.uniqueIdMap,
                                  &zStats.shapeTables,
-                                 &rtStats->runtime.atomsMarkBitmaps);
+                                 &rtStats->runtime.atomsMarkBitmaps,
+                                 &zStats.compartmentObjects,
+                                 &zStats.crossCompartmentWrappersTables,
+                                 &zStats.compartmentsPrivateData);
 }
 
 static void
@@ -355,12 +358,10 @@ StatsRealmCallback(JSContext* cx, void* data, Handle<Realm*> realm)
                                   &realmStats.innerViewsTable,
                                   &realmStats.lazyArrayBuffersTable,
                                   &realmStats.objectMetadataTable,
-                                  &realmStats.crossCompartmentWrappersTable,
                                   &realmStats.savedStacksSet,
                                   &realmStats.varNamesSet,
                                   &realmStats.nonSyntacticLexicalScopesTable,
                                   &realmStats.jitRealm,
-                                  &realmStats.privateData,
                                   &realmStats.scriptCountsMap);
 }
 
@@ -762,7 +763,7 @@ CollectRuntimeStatsHelper(JSContext* cx, RuntimeStats* rtStats, ObjectPrivateVis
                           bool anonymize, IterateCellCallback statsCellCallback)
 {
     JSRuntime* rt = cx->runtime();
-    if (!rtStats->realmStatsVector.reserve(rt->numCompartments))
+    if (!rtStats->realmStatsVector.reserve(rt->numRealms))
         return false;
 
     size_t totalZones = rt->gc.zones().length() + 1; // + 1 for the atoms zone.

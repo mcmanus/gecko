@@ -58,6 +58,7 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/dom/AudioTrack.h"
 #include "mozilla/dom/AudioTrackList.h"
+#include "mozilla/dom/BlobURLProtocolHandler.h"
 #include "mozilla/dom/ElementInlines.h"
 #include "mozilla/dom/HTMLAudioElement.h"
 #include "mozilla/dom/HTMLInputElement.h"
@@ -84,7 +85,6 @@
 #include "nsError.h"
 #include "nsGenericHTMLElement.h"
 #include "nsGkAtoms.h"
-#include "nsHostObjectProtocolHandler.h"
 #include "nsIAsyncVerifyRedirectCallback.h"
 #include "nsICachingChannel.h"
 #include "nsICategoryManager.h"
@@ -1478,6 +1478,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(HTMLMediaElement,
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mErrorSink->mError)
   for (uint32_t i = 0; i < tmp->mOutputStreams.Length(); ++i) {
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOutputStreams[i].mStream)
+    NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOutputStreams[i].mPreCreatedTracks)
   }
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPlayed);
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTextTrackManager)
@@ -1725,6 +1726,14 @@ HTMLMediaElement::ShutdownDecoder()
   if (mMediaSource) {
     mMediaSource->CompletePendingTransactions();
   }
+  for (OutputMediaStream& out : mOutputStreams) {
+    if (!out.mCapturingDecoder) {
+      continue;
+    }
+    out.mNextAvailableTrackID = std::max<TrackID>(
+      mDecoder->NextAvailableTrackIDFor(out.mStream->GetInputStream()),
+      out.mNextAvailableTrackID);
+  }
   mDecoder->Shutdown();
   DDUNLINKCHILD(mDecoder.get());
   mDecoder = nullptr;
@@ -1803,7 +1812,6 @@ HTMLMediaElement::AbortExistingLoads()
   mPendingEncryptedInitData.Reset();
   mWaitingForKey = NOT_WAITING_FOR_KEY;
   mSourcePointer = nullptr;
-  mAttemptPlayUponLoadedMetadata = false;
 
   mTags = nullptr;
 
@@ -3538,6 +3546,7 @@ HTMLMediaElement::CaptureStreamInternal(StreamCaptureBehavior aFinishBehavior,
     out->mCapturingDecoder = true;
     mDecoder->AddOutputStream(
       out->mStream->GetInputStream()->AsProcessedStream(),
+      out->mNextAvailableTrackID,
       aFinishBehavior == StreamCaptureBehavior::FINISH_WHEN_ENDED);
   } else if (mSrcStream) {
     out->mCapturingMediaStream = true;
@@ -3551,21 +3560,23 @@ HTMLMediaElement::CaptureStreamInternal(StreamCaptureBehavior aFinishBehavior,
 
   if (mDecoder) {
     if (HasAudio()) {
-      TrackID audioTrackId = mMediaInfo.mAudio.mTrackId;
+      TrackID audioTrackId = out->mNextAvailableTrackID++;
       RefPtr<MediaStreamTrackSource> trackSource =
         getter->GetMediaStreamTrackSource(audioTrackId);
       RefPtr<MediaStreamTrack> track = out->mStream->CreateDOMTrack(
         audioTrackId, MediaSegment::AUDIO, trackSource);
+      out->mPreCreatedTracks.AppendElement(track);
       out->mStream->AddTrackInternal(track);
       LOG(LogLevel::Debug,
           ("Created audio track %d for captured decoder", audioTrackId));
     }
     if (IsVideo() && HasVideo() && !out->mCapturingAudioOnly) {
-      TrackID videoTrackId = mMediaInfo.mVideo.mTrackId;
+      TrackID videoTrackId = out->mNextAvailableTrackID++;
       RefPtr<MediaStreamTrackSource> trackSource =
         getter->GetMediaStreamTrackSource(videoTrackId);
       RefPtr<MediaStreamTrack> track = out->mStream->CreateDOMTrack(
         videoTrackId, MediaSegment::VIDEO, trackSource);
+      out->mPreCreatedTracks.AppendElement(track);
       out->mStream->AddTrackInternal(track);
       LOG(LogLevel::Debug,
           ("Created video track %d for captured decoder", videoTrackId));
@@ -4032,12 +4043,7 @@ HTMLMediaElement::PlayInternal(ErrorResult& aRv)
   // 4.8.12.8 - Step 1:
   // If the media element is not allowed to play, return a promise rejected
   // with a "NotAllowedError" DOMException and abort these steps.
-  // Note: IsAllowedToPlay() needs to know whether there is an audio track
-  // in the resource, and for that we need to be at readyState HAVE_METADATA
-  // or above. So only reject here if we're at readyState HAVE_METADATA. If
-  // we're below that, we'll we delay fulfilling the play promise until we've
-  // reached readyState >= HAVE_METADATA below.
-  if (mReadyState >= HAVE_METADATA && !IsAllowedToPlay()) {
+  if (!IsAllowedToPlay()) {
     // NOTE: for promise-based-play, will return a rejected promise here.
     LOG(LogLevel::Debug,
         ("%p Play() promise rejected because not allowed to play.", this));
@@ -4091,17 +4097,8 @@ HTMLMediaElement::PlayInternal(ErrorResult& aRv)
       SetCurrentTime(0);
     }
     if (!mPausedForInactiveDocumentOrChannel) {
-      if (mReadyState < HAVE_METADATA) {
-        // We don't know whether the autoplay policy will allow us to play yet,
-        // as we don't yet know whether the media has audio tracks. So delay
-        // starting playback until we've loaded metadata.
-        mAttemptPlayUponLoadedMetadata = true;
-      } else {
-        mDecoder->Play();
-      }
+      mDecoder->Play();
     }
-  } else if (mReadyState < HAVE_METADATA) {
-    mAttemptPlayUponLoadedMetadata = true;
   }
 
   if (mCurrentPlayRangeStart == -1.0) {
@@ -4162,8 +4159,7 @@ HTMLMediaElement::PlayInternal(ErrorResult& aRv)
         NotifyAboutPlaying();
         break;
     }
-  } else if (mReadyState >= HAVE_FUTURE_DATA &&
-             !mAttemptPlayUponLoadedMetadata) {
+  } else if (mReadyState >= HAVE_FUTURE_DATA) {
     // 7. Otherwise, if the media element's readyState attribute has the value
     //    HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA, take pending play promises and
     //    queue a task to resolve pending play promises with the result.
@@ -4238,11 +4234,11 @@ HTMLMediaElement::WakeLockRelease()
 }
 
 HTMLMediaElement::OutputMediaStream::OutputMediaStream()
-  : mFinishWhenEnded(false)
+  : mNextAvailableTrackID(1)
+  , mFinishWhenEnded(false)
   , mCapturingAudioOnly(false)
   , mCapturingDecoder(false)
   , mCapturingMediaStream(false)
-  , mNextAvailableTrackID(1)
 {
 }
 
@@ -4855,7 +4851,7 @@ HTMLMediaElement::SetupDecoder(DecoderType* aDecoder, LoadArgs&&... aArgs)
        aDecoder,
        aDecoder->ContainerType().OriginalString().Data()));
 
-  nsresult rv = aDecoder->Load(Forward<LoadArgs>(aArgs)...);
+  nsresult rv = aDecoder->Load(std::forward<LoadArgs>(aArgs)...);
   if (NS_FAILED(rv)) {
     aDecoder->Shutdown();
     LOG(LogLevel::Debug, ("%p Failed to load for decoder %p", this, aDecoder));
@@ -4968,6 +4964,7 @@ HTMLMediaElement::FinishDecoderSetup(MediaDecoder* aDecoder)
 
     ms.mCapturingDecoder = true;
     aDecoder->AddOutputStream(ms.mStream->GetInputStream()->AsProcessedStream(),
+                              ms.mNextAvailableTrackID,
                               ms.mFinishWhenEnded);
   }
 
@@ -4994,7 +4991,7 @@ HTMLMediaElement::FinishDecoderSetup(MediaDecoder* aDecoder)
     mDecoder->Suspend();
   }
 
-  if (!mPaused && !mAttemptPlayUponLoadedMetadata) {
+  if (!mPaused) {
     SetPlayedOrSeeked(true);
     if (!mPausedForInactiveDocumentOrChannel) {
       mDecoder->Play();
@@ -6041,16 +6038,6 @@ HTMLMediaElement::ChangeReadyState(nsMediaReadyState aState)
 
   UpdateAudioChannelPlayingState();
 
-  if (oldState < HAVE_METADATA && mReadyState >= HAVE_METADATA &&
-      mAttemptPlayUponLoadedMetadata) {
-    mAttemptPlayUponLoadedMetadata = false;
-    if (!mPaused && !IsAllowedToPlay()) {
-      mPaused = true;
-      DispatchAsyncEvent(NS_LITERAL_STRING("pause"));
-      AsyncRejectPendingPlayPromises(NS_ERROR_DOM_MEDIA_NOT_ALLOWED_ERR);
-    }
-  }
-
   // Handle raising of "waiting" event during seek (see 4.8.10.9)
   // or
   // 4.8.12.7 Ready states:
@@ -6205,7 +6192,6 @@ HTMLMediaElement::CheckAutoplayDataReady()
     if (mCurrentPlayRangeStart == -1.0) {
       mCurrentPlayRangeStart = CurrentTime();
     }
-    MOZ_ASSERT(!mAttemptPlayUponLoadedMetadata);
     mDecoder->Play();
   } else if (mSrcStream) {
     SetPlayedOrSeeked(true);
@@ -6569,7 +6555,6 @@ HTMLMediaElement::SuspendOrResumeElement(bool aPauseElement,
       if (mDecoder) {
         mDecoder->Resume();
         if (!mPaused && !mDecoder->IsEnded()) {
-          MOZ_ASSERT(!mAttemptPlayUponLoadedMetadata);
           mDecoder->Play();
         }
       }
@@ -7944,6 +7929,21 @@ HTMLMediaElement::RemoveMediaTracks()
   }
 
   mMediaTracksConstructed = false;
+
+  for (OutputMediaStream& ms : mOutputStreams) {
+    if (!ms.mCapturingDecoder) {
+      continue;
+    }
+    for (RefPtr<MediaStreamTrack>& t : ms.mPreCreatedTracks) {
+      if (t->Ended()) {
+        continue;
+      }
+      mAbstractMainThread->Dispatch(NewRunnableMethod(
+        "dom::HTMLMediaElement::RemoveMediaTracks",
+        t, &MediaStreamTrack::OverrideEnded));
+    }
+    ms.mPreCreatedTracks.Clear();
+  }
 }
 
 class MediaElementGMPCrashHelper : public GMPCrashHelper

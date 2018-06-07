@@ -1338,8 +1338,12 @@ GCRuntime::finish()
     if (rt->gcInitialized) {
         AutoSetThreadIsSweeping threadIsSweeping;
         for (ZonesIter zone(rt, WithAtoms); !zone.done(); zone.next()) {
-            for (CompartmentsInZoneIter comp(zone); !comp.done(); comp.next())
-                js_delete(JS::GetRealmForCompartment(comp.get()));
+            for (CompartmentsInZoneIter comp(zone); !comp.done(); comp.next()) {
+                for (RealmsInCompartmentIter realm(comp); !realm.done(); realm.next())
+                    js_delete(realm.get());
+                comp->realms().clear();
+                js_delete(comp.get());
+            }
             zone->compartments().clear();
             js_delete(zone.get());
         }
@@ -2859,12 +2863,17 @@ GCRuntime::updateCellPointers(Zone* zone, AllocKinds kinds, size_t bgTaskCount)
 //  2) typed object type descriptor objects
 //  3) all other objects
 //
-// Since we want to minimize the number of phases, we put everything else into
-// the first phase and label it the 'misc' phase.
+// Also, JSScripts and LazyScripts can have pointers to each other. Each can be
+// updated safely without requiring the referent to be up-to-date, but TSAN can
+// warn about data races when calling IsForwarded() on the new location of a
+// cell that is being updated in parallel. To avoid this, we update these in
+// separate phases.
+//
+// Since we want to minimize the number of phases, arrange kinds into three
+// arbitrary phases.
 
-static const AllocKinds UpdatePhaseMisc {
+static const AllocKinds UpdatePhaseOne {
     AllocKind::SCRIPT,
-    AllocKind::LAZY_SCRIPT,
     AllocKind::BASE_SHAPE,
     AllocKind::SHAPE,
     AllocKind::ACCESSOR_SHAPE,
@@ -2874,7 +2883,10 @@ static const AllocKinds UpdatePhaseMisc {
     AllocKind::SCOPE
 };
 
-static const AllocKinds UpdatePhaseObjects {
+// UpdatePhaseTwo is typed object descriptor objects.
+
+static const AllocKinds UpdatePhaseThree {
+    AllocKind::LAZY_SCRIPT,
     AllocKind::FUNCTION,
     AllocKind::FUNCTION_EXTENDED,
     AllocKind::OBJECT0,
@@ -2896,13 +2908,13 @@ GCRuntime::updateAllCellPointers(MovingTracer* trc, Zone* zone)
 {
     size_t bgTaskCount = CellUpdateBackgroundTaskCount();
 
-    updateCellPointers(zone, UpdatePhaseMisc, bgTaskCount);
+    updateCellPointers(zone, UpdatePhaseOne, bgTaskCount);
 
-    // Update TypeDescrs before all other objects as typed objects access these
-    // objects when we trace them.
+    // UpdatePhaseTwo: Update TypeDescrs before all other objects as typed
+    // objects access these objects when we trace them.
     updateTypeDescrObjects(trc, zone);
 
-    updateCellPointers(zone, UpdatePhaseObjects, bgTaskCount);
+    updateCellPointers(zone, UpdatePhaseThree, bgTaskCount);
 }
 
 /*
@@ -3393,10 +3405,9 @@ GCRuntime::triggerZoneGC(Zone* zone, JS::gcreason::Reason reason, size_t used, s
 #endif
 
     if (zone->isAtomsZone()) {
-        /* We can't do a zone GC of the atoms zone. */
-        if (rt->mainContextFromOwnThread()->keepAtoms || rt->hasHelperThreadZones()) {
-            /* Skip GC and retrigger later, since atoms zone won't be collected
-             * if keepAtoms is true. */
+        /* We can't do a zone GC of just the atoms zone. */
+        if (rt->hasHelperThreadZones()) {
+            /* We can't collect atoms while off-thread parsing is allocating. */
             fullGCForAtomsRequested_ = true;
             return false;
         }
@@ -3813,10 +3824,17 @@ Realm::destroy(FreeOp* fop)
     JSRuntime* rt = fop->runtime();
     if (auto callback = rt->destroyRealmCallback)
         callback(fop, this);
-    if (auto callback = rt->destroyCompartmentCallback)
-        callback(fop, this);
     if (principals())
         JS_DropPrincipals(rt->mainContextFromOwnThread(), principals());
+    fop->delete_(this);
+}
+
+void
+JSCompartment::destroy(FreeOp* fop)
+{
+    JSRuntime* rt = fop->runtime();
+    if (auto callback = rt->destroyCompartmentCallback)
+        callback(fop, this);
     fop->delete_(this);
     rt->gc.stats().sweptCompartment();
 }
@@ -3830,42 +3848,72 @@ Zone::destroy(FreeOp* fop)
 }
 
 /*
- * It's simpler if we preserve the invariant that every zone has at least one
- * compartment. If we know we're deleting the entire zone, then
- * SweepCompartments is allowed to delete all compartments. In this case,
- * |keepAtleastOne| is false. If any cells remain alive in the zone, set
- * |keepAtleastOne| true to prohibit sweepCompartments from deleting every
- * compartment. Instead, it preserves an arbitrary compartment in the zone.
+ * It's simpler if we preserve the invariant that every zone (except the atoms
+ * zone) has at least one compartment, and every compartment has at least one
+ * realm. If we know we're deleting the entire zone, then sweepCompartments is
+ * allowed to delete all compartments. In this case, |keepAtleastOne| is false.
+ * If any cells remain alive in the zone, set |keepAtleastOne| true to prohibit
+ * sweepCompartments from deleting every compartment. Instead, it preserves an
+ * arbitrary compartment in the zone.
  */
 void
 Zone::sweepCompartments(FreeOp* fop, bool keepAtleastOne, bool destroyingRuntime)
 {
     MOZ_ASSERT(!compartments().empty());
-
-    mozilla::DebugOnly<JSRuntime*> rt = runtimeFromMainThread();
+    MOZ_ASSERT_IF(destroyingRuntime, !keepAtleastOne);
 
     JSCompartment** read = compartments().begin();
     JSCompartment** end = compartments().end();
     JSCompartment** write = read;
-    bool foundOne = false;
     while (read < end) {
         JSCompartment* comp = *read++;
-        Realm* realm = JS::GetRealmForCompartment(comp);
 
         /*
-         * Don't delete the last compartment and realm if all the ones before
-         * it were deleted and keepAtleastOne is true.
+         * Don't delete the last compartment and realm if keepAtleastOne is
+         * still true, meaning all the other compartments were deleted.
          */
-        bool dontDelete = read == end && !foundOne && keepAtleastOne;
-        if ((!realm->marked() && !dontDelete) || destroyingRuntime) {
-            realm->destroy(fop);
-        } else {
+        bool keepAtleastOneRealm = read == end && keepAtleastOne;
+        comp->sweepRealms(fop, keepAtleastOneRealm, destroyingRuntime);
+
+        if (!comp->realms().empty()) {
             *write++ = comp;
-            foundOne = true;
+            keepAtleastOne = false;
+        } else {
+            comp->destroy(fop);
         }
     }
     compartments().shrinkTo(write - compartments().begin());
     MOZ_ASSERT_IF(keepAtleastOne, !compartments().empty());
+    MOZ_ASSERT_IF(destroyingRuntime, compartments().empty());
+}
+
+void
+JSCompartment::sweepRealms(FreeOp* fop, bool keepAtleastOne, bool destroyingRuntime)
+{
+    MOZ_ASSERT(!realms().empty());
+    MOZ_ASSERT_IF(destroyingRuntime, !keepAtleastOne);
+
+    Realm** read = realms().begin();
+    Realm** end = realms().end();
+    Realm** write = read;
+    while (read < end) {
+        Realm* realm = *read++;
+
+        /*
+         * Don't delete the last realm if keepAtleastOne is still true, meaning
+         * all the other realms were deleted.
+         */
+        bool dontDelete = read == end && keepAtleastOne;
+        if ((realm->marked() || dontDelete) && !destroyingRuntime) {
+            *write++ = realm;
+            keepAtleastOne = false;
+        } else {
+            realm->destroy(fop);
+        }
+    }
+    realms().shrinkTo(write - realms().begin());
+    MOZ_ASSERT_IF(keepAtleastOne, !realms().empty());
+    MOZ_ASSERT_IF(destroyingRuntime, realms().empty());
 }
 
 void
@@ -4022,7 +4070,7 @@ GCRuntime::purgeRuntime()
         realm->purge();
 
     for (GCZonesIter zone(rt); !zone.done(); zone.next()) {
-        zone->atomCache().clearAndShrink();
+        zone->purgeAtomCacheOrDefer();
         zone->externalStringCache().purge();
         zone->functionToStringCache().purge();
     }
@@ -4659,6 +4707,9 @@ js::gc::MarkingValidator::nonIncrementalMark(AutoTraceSession& session)
     GCMarker* gcmarker = &gc->marker;
 
     gc->waitBackgroundSweepEnd();
+
+    /* Wait for off-thread parsing which can allocate. */
+    HelperThreadState().waitForAllThreads();
 
     /* Save existing mark bits. */
     {
@@ -5391,21 +5442,19 @@ class ImmediateSweepWeakCacheTask : public GCParallelTaskHelper<ImmediateSweepWe
 };
 
 static void
-UpdateAtomsBitmap(GCParallelTask* task)
+UpdateAtomsBitmap(JSRuntime* runtime)
 {
-    JSRuntime* runtime = task->runtime();
-
     DenseBitmap marked;
     if (runtime->gc.atomMarking.computeBitmapFromChunkMarkBits(runtime, marked)) {
         for (GCZonesIter zone(runtime); !zone.done(); zone.next())
-            runtime->gc.atomMarking.updateZoneBitmap(zone, marked);
+            runtime->gc.atomMarking.refineZoneBitmapForCollectedZone(zone, marked);
     } else {
-        // Ignore OOM in computeBitmapFromChunkMarkBits. The updateZoneBitmap
-        // call can only remove atoms from the zone bitmap, so it is
-        // conservative to just not call it.
+        // Ignore OOM in computeBitmapFromChunkMarkBits. The
+        // refineZoneBitmapForCollectedZone call can only remove atoms from the
+        // zone bitmap, so it is conservative to just not call it.
     }
 
-    runtime->gc.atomMarking.updateChunkMarkBits(runtime);
+    runtime->gc.atomMarking.markAtomsUsedByUncollectedZones(runtime);
 
     // For convenience sweep these tables non-incrementally as part of bitmap
     // sweeping; they are likely to be much smaller than the main atoms table.
@@ -5708,14 +5757,18 @@ GCRuntime::beginSweepingSweepGroup(FreeOp* fop, SliceBudget& budget)
         callFinalizeCallbacks(fop, JSFINALIZE_GROUP_START);
     }
 
+    // Updating the atom marking bitmaps. This marks atoms referenced by
+    // uncollected zones so cannot be done in parallel with the other sweeping
+    // work below.
+    if (sweepingAtoms) {
+        AutoPhase ap(stats(), PhaseKind::UPDATE_ATOMS_BITMAP);
+        UpdateAtomsBitmap(rt);
+    }
+
     sweepDebuggerOnMainThread(fop);
 
     {
         AutoLockHelperThreadState lock;
-
-        Maybe<AutoRunParallelTask> updateAtomsBitmap;
-        if (sweepingAtoms)
-            updateAtomsBitmap.emplace(rt, UpdateAtomsBitmap, PhaseKind::UPDATE_ATOMS_BITMAP, lock);
 
         AutoPhase ap(stats(), PhaseKind::SWEEP_COMPARTMENTS);
 
@@ -6252,7 +6305,7 @@ struct IncrementalIter
       : maybeIter(maybeIter)
     {
         if (maybeIter.isNothing())
-            maybeIter.emplace(mozilla::Forward<Args>(args)...);
+            maybeIter.emplace(std::forward<Args>(args)...);
     }
 
     ~IncrementalIter() {
@@ -6822,7 +6875,7 @@ AutoTraceSession::AutoTraceSession(JSRuntime* rt, JS::HeapState heapState)
   : runtime(rt),
     prevState(rt->mainContextFromOwnThread()->heapState),
     profilingStackFrame(rt->mainContextFromOwnThread(), HeapStateToLabel(heapState),
-                        ProfilingStackFrame::Category::GC)
+                        ProfilingStackFrame::Category::GCCC)
 {
     MOZ_ASSERT(prevState == JS::HeapState::Idle);
     MOZ_ASSERT(heapState != JS::HeapState::Idle);
@@ -7940,7 +7993,8 @@ js::NewRealm(JSContext* cx, JSPrincipals* principals, const JS::RealmOptions& op
     JSRuntime* rt = cx->runtime();
     JS_AbortIfWrongThread(cx);
 
-    ScopedJSDeletePtr<Zone> zoneHolder;
+    UniquePtr<Zone> zoneHolder;
+    UniquePtr<JSCompartment> compHolder;
 
     Zone* zone = nullptr;
     JS::ZoneSpecifier zoneSpec = options.creationOptions().zoneSpecifier();
@@ -7959,29 +8013,33 @@ js::NewRealm(JSContext* cx, JSPrincipals* principals, const JS::RealmOptions& op
     }
 
     if (!zone) {
-        zone = cx->new_<Zone>(cx->runtime());
-        if (!zone)
+        zoneHolder = cx->make_unique<Zone>(cx->runtime());
+        if (!zoneHolder)
             return nullptr;
-
-        zoneHolder.reset(zone);
 
         const JSPrincipals* trusted = rt->trustedPrincipals();
         bool isSystem = principals && principals == trusted;
-        if (!zone->init(isSystem)) {
+        if (!zoneHolder->init(isSystem)) {
             ReportOutOfMemory(cx);
             return nullptr;
         }
+
+        zone = zoneHolder.get();
     }
 
-    ScopedJSDeletePtr<Realm> realm(cx->new_<Realm>(zone, options));
+    compHolder = cx->make_unique<JSCompartment>(zone);
+    if (!compHolder || !compHolder->init(cx))
+        return nullptr;
+
+    JSCompartment* comp = compHolder.get();
+    UniquePtr<Realm> realm(cx->new_<Realm>(comp, options));
     if (!realm || !realm->init(cx))
         return nullptr;
 
     // Set up the principals.
-    JS::SetRealmPrincipals(realm, principals);
+    JS::SetRealmPrincipals(realm.get(), principals);
 
-    JSCompartment* comp = realm->compartment();
-    if (!comp->realms().append(realm)) {
+    if (!comp->realms().append(realm.get())) {
         ReportOutOfMemory(cx);
         return nullptr;
     }
@@ -8007,8 +8065,9 @@ js::NewRealm(JSContext* cx, JSPrincipals* principals, const JS::RealmOptions& op
         }
     }
 
-    zoneHolder.forget();
-    return realm.forget();
+    mozilla::Unused << compHolder.release();
+    mozilla::Unused << zoneHolder.release();
+    return realm.release();
 }
 
 void

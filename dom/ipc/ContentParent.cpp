@@ -51,6 +51,7 @@
 #include "mozilla/dom/PContentBridgeParent.h"
 #include "mozilla/dom/PContentPermissionRequestParent.h"
 #include "mozilla/dom/PCycleCollectWithLogsParent.h"
+#include "mozilla/dom/PositionError.h"
 #include "mozilla/dom/ServiceWorkerRegistrar.h"
 #include "mozilla/dom/power/PowerManagerService.h"
 #include "mozilla/dom/Permissions.h"
@@ -122,8 +123,7 @@
 #include "nsICycleCollectorListener.h"
 #include "nsIDocShellTreeOwner.h"
 #include "nsIDocument.h"
-#include "nsIDOMGeoGeolocation.h"
-#include "nsIDOMGeoPositionError.h"
+#include "nsGeolocation.h"
 #include "nsIDragService.h"
 #include "mozilla/dom/WakeLock.h"
 #include "nsIDOMWindow.h"
@@ -157,7 +157,8 @@
 #include "nsThread.h"
 #include "nsWindowWatcher.h"
 #include "nsIXULRuntime.h"
-#include "mozilla/dom/ChromeMessageBroadcaster.h"
+#include "mozilla/dom/ParentProcessMessageManager.h"
+#include "mozilla/dom/ProcessMessageManager.h"
 #include "mozilla/dom/nsMixedContentBlocker.h"
 #include "nsMemoryInfoDumper.h"
 #include "nsMemoryReporterManager.h"
@@ -183,6 +184,7 @@
 #include "prio.h"
 #include "private/pprio.h"
 #include "ContentProcessManager.h"
+#include "mozilla/dom/BlobURLProtocolHandler.h"
 #include "mozilla/dom/ipc/StructuredCloneData.h"
 #include "mozilla/PerformanceUtils.h"
 #include "mozilla/psm/PSMContentListener.h"
@@ -191,7 +193,6 @@
 #include "nsIBlocklistService.h"
 #include "mozilla/StyleSheet.h"
 #include "mozilla/StyleSheetInlines.h"
-#include "nsHostObjectProtocolHandler.h"
 #include "nsICaptivePortalService.h"
 #include "nsIObjectLoadingContent.h"
 #include "nsIBidiKeyboard.h"
@@ -534,7 +535,7 @@ ScriptableCPInfo::GetMessageManager(nsISupports** aMessenger)
     return NS_ERROR_NOT_INITIALIZED;
   }
 
-  RefPtr<ChromeMessageSender> manager = mContentParent->GetMessageManager();
+  RefPtr<ProcessMessageManager> manager = mContentParent->GetMessageManager();
   manager.forget(aMessenger);
   return NS_OK;
 }
@@ -1801,7 +1802,7 @@ ContentParent::ActorDestroy(ActorDestroyReason why)
 
   // Unregister all the BlobURLs registered by the ContentChild.
   for (uint32_t i = 0; i < mBlobURLs.Length(); ++i) {
-    nsHostObjectProtocolHandler::RemoveDataEntry(mBlobURLs[i]);
+    BlobURLProtocolHandler::RemoveDataEntry(mBlobURLs[i]);
   }
 
   mBlobURLs.Clear();
@@ -2239,7 +2240,7 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority)
   if (ssm) {
     ssm->CloneDomainPolicy(&xpcomInit.domainPolicy());
 
-    if (ChromeMessageBroadcaster* mm = nsFrameMessageManager::sParentProcessManager) {
+    if (ParentProcessMessageManager* mm = nsFrameMessageManager::sParentProcessManager) {
       AutoJSAPI jsapi;
       if (NS_WARN_IF(!jsapi.Init(xpc::PrivilegedJunkScope()))) {
         MOZ_CRASH();
@@ -2467,8 +2468,7 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority)
 
   {
     nsTArray<BlobURLRegistrationData> registrations;
-    if (nsHostObjectProtocolHandler::GetAllBlobURLEntries(registrations,
-                                                          this)) {
+    if (BlobURLProtocolHandler::GetAllBlobURLEntries(registrations, this)) {
       for (const BlobURLRegistrationData& registration : registrations) {
         nsresult rv = TransmitPermissionsForPrincipal(registration.principal());
         Unused << NS_WARN_IF(NS_FAILED(rv));
@@ -3836,18 +3836,13 @@ AddGeolocationListener(nsIDOMGeoPositionCallback* watcher,
                        nsIDOMGeoPositionErrorCallback* errorCallBack,
                        bool highAccuracy)
 {
-  nsCOMPtr<nsIDOMGeoGeolocation> geo = do_GetService("@mozilla.org/geolocation;1");
-  if (!geo) {
-    return -1;
-  }
+  RefPtr<Geolocation> geo = Geolocation::NonWindowSingleton();
 
   UniquePtr<PositionOptions> options = MakeUnique<PositionOptions>();
   options->mTimeout = 0;
   options->mMaximumAge = 0;
   options->mEnableHighAccuracy = highAccuracy;
-  int32_t retval = 1;
-  geo->WatchPosition(watcher, errorCallBack, std::move(options), &retval);
-  return retval;
+  return geo->WatchPosition(watcher, errorCallBack, std::move(options));
 }
 
 mozilla::ipc::IPCResult
@@ -3865,10 +3860,7 @@ mozilla::ipc::IPCResult
 ContentParent::RecvRemoveGeolocationListener()
 {
   if (mGeolocationWatchID != -1) {
-    nsCOMPtr<nsIDOMGeoGeolocation> geo = do_GetService("@mozilla.org/geolocation;1");
-    if (!geo) {
-      return IPC_OK();
-    }
+    RefPtr<Geolocation> geo = Geolocation::NonWindowSingleton();
     geo->ClearWatch(mGeolocationWatchID);
     mGeolocationWatchID = -1;
   }
@@ -3895,13 +3887,9 @@ ContentParent::HandleEvent(nsIDOMGeoPosition* postion)
 }
 
 NS_IMETHODIMP
-ContentParent::HandleEvent(nsIDOMGeoPositionError* postionError)
+ContentParent::HandleEvent(PositionError* positionError)
 {
-  int16_t errorCode;
-  nsresult rv;
-  rv = postionError->GetCode(&errorCode);
-  NS_ENSURE_SUCCESS(rv,rv);
-  Unused << SendGeolocationError(errorCode);
+  Unused << SendGeolocationError(positionError->Code());
   return NS_OK;
 }
 
@@ -4473,8 +4461,8 @@ ContentParent::RecvNotifyTabDestroying(const TabId& aTabId,
 nsTArray<TabContext>
 ContentParent::GetManagedTabContext()
 {
-  return std::move(ContentProcessManager::GetSingleton()->
-          GetTabContextByContentProcess(this->ChildID()));
+  return ContentProcessManager::GetSingleton()->
+    GetTabContextByContentProcess(this->ChildID());
 }
 
 mozilla::docshell::POfflineCacheUpdateParent*
@@ -5195,8 +5183,8 @@ ContentParent::RecvStoreAndBroadcastBlobURLRegistration(const nsCString& aURI,
     return IPC_FAIL_NO_REASON(this);
   }
 
-  if (NS_SUCCEEDED(nsHostObjectProtocolHandler::AddDataEntry(aURI, aPrincipal,
-                                                             blobImpl))) {
+  if (NS_SUCCEEDED(BlobURLProtocolHandler::AddDataEntry(aURI, aPrincipal,
+                                                        blobImpl))) {
     BroadcastBlobURLRegistration(aURI, blobImpl, aPrincipal, this);
 
     // We want to store this blobURL, so we can unregister it if the child
@@ -5211,8 +5199,7 @@ ContentParent::RecvStoreAndBroadcastBlobURLRegistration(const nsCString& aURI,
 mozilla::ipc::IPCResult
 ContentParent::RecvUnstoreAndBroadcastBlobURLUnregistration(const nsCString& aURI)
 {
-  nsHostObjectProtocolHandler::RemoveDataEntry(aURI,
-                                               false /* Don't broadcast */);
+  BlobURLProtocolHandler::RemoveDataEntry(aURI, false /* Don't broadcast */);
   BroadcastBlobURLUnregistration(aURI, this);
   mBlobURLs.RemoveElement(aURI);
 

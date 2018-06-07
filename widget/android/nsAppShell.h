@@ -152,7 +152,7 @@ public:
     typename mozilla::EnableIf<!mozilla::IsBaseOf<Event, T>::value, void>::Type
     SyncRunEvent(T&& lambda)
     {
-        SyncRunEvent(LambdaEvent<T>(mozilla::Forward<T>(lambda)));
+        SyncRunEvent(LambdaEvent<T>(std::forward<T>(lambda)));
     }
 
     static already_AddRefed<nsIURI> ResolveURI(const nsCString& aUriStr);
@@ -244,7 +244,7 @@ protected:
             // Ownership of event object transfers to the return value.
             mozilla::UniquePtr<Event> event(mQueue.popFirst());
             if (!event || !event->mPostTime) {
-                return std::move(event);
+                return event;
             }
 
 #ifdef EARLY_BETA_OR_EARLIER
@@ -255,7 +255,7 @@ protected:
             sLatencyCount[latencyType]++;
             sLatencyTime[latencyType] += latency;
 #endif
-            return std::move(event);
+            return event;
         }
 
     } mEventQueue;

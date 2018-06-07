@@ -145,7 +145,7 @@ struct JSContext : public JS::RootingContext,
 
     template <typename T>
     inline bool isInsideCurrentCompartment(T thing) const {
-        return thing->compartment() == GetCompartmentForRealm(realm_);
+        return thing->compartment() == compartment();
     }
 
     void* onOutOfMemory(js::AllocFunction allocFunc, size_t nbytes, void* reallocPtr = nullptr) {
@@ -242,10 +242,11 @@ struct JSContext : public JS::RootingContext,
         return nurserySuppressions_;
     }
 
-    // Threads may freely access any data in their compartment and zone.
+    // Threads may freely access any data in their realm, compartment and zone.
     JSCompartment* compartment() const {
-        return JS::GetCompartmentForRealm(realm_);
+        return realm_ ? JS::GetCompartmentForRealm(realm_) : nullptr;
     }
+
     JS::Realm* realm() const {
         return realm_;
     }
@@ -256,7 +257,7 @@ struct JSContext : public JS::RootingContext,
 
     JS::Zone* zone() const {
         MOZ_ASSERT_IF(!realm() && zone_, inAtomsZone());
-        MOZ_ASSERT_IF(realm(), js::GetCompartmentZone(GetCompartmentForRealm(realm())) == zone_);
+        MOZ_ASSERT_IF(realm(), js::GetRealmZone(realm()) == zone_);
         return zoneRaw();
     }
 
@@ -557,19 +558,8 @@ struct JSContext : public JS::RootingContext,
     // with AutoDisableCompactingGC which uses this counter.
     js::ThreadData<unsigned> compactingDisabledCount;
 
-    // Count of AutoKeepAtoms instances on the current thread's stack. When any
-    // instances exist, atoms in the runtime will not be collected. Threads
-    // parsing off the main thread do not increment this value, but the presence
-    // of any such threads also inhibits collection of atoms. We don't scan the
-    // stacks of exclusive threads, so we need to avoid collecting their
-    // objects in another way. The only GC thing pointers they have are to
-    // their exclusive compartment (which is not collected) or to the atoms
-    // compartment. Therefore, we avoid collecting the atoms zone when
-    // exclusive threads are running.
-    js::ThreadData<unsigned> keepAtoms;
-
     bool canCollectAtoms() const {
-        return !keepAtoms && !runtime()->hasHelperThreadZones();
+        return !runtime()->hasHelperThreadZones();
     }
 
   private:
@@ -1210,23 +1200,9 @@ class MOZ_RAII AutoKeepAtoms
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 
   public:
-    explicit AutoKeepAtoms(JSContext* cx
-                           MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-      : cx(cx)
-    {
-        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-        cx->keepAtoms++;
-    }
-    ~AutoKeepAtoms() {
-        MOZ_ASSERT(cx->keepAtoms);
-        cx->keepAtoms--;
-
-        JSRuntime* rt = cx->runtime();
-        if (!cx->helperThread()) {
-            if (rt->gc.fullGCForAtomsRequested() && cx->canCollectAtoms())
-                rt->gc.triggerFullGCForAtoms(cx);
-        }
-    }
+    explicit inline AutoKeepAtoms(JSContext* cx
+                           MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
+    inline ~AutoKeepAtoms();
 };
 
 // Debugging RAII class which marks the current thread as performing an Ion

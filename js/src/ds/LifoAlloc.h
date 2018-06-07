@@ -606,7 +606,7 @@ class LifoAlloc
         if (!ptr)
             return nullptr;
 
-        return new (ptr) T(mozilla::Forward<Args>(args)...);
+        return new (ptr) T(std::forward<Args>(args)...);
     }
 
     MOZ_ALWAYS_INLINE
@@ -711,7 +711,7 @@ class LifoAlloc
         if (!mark.markedChunk())
             released = std::move(chunks_);
         else
-            released = std::move(chunks_.splitAfter(mark.markedChunk()));
+            released = chunks_.splitAfter(mark.markedChunk());
 
         // Release the content of all the blocks which are after the marks.
         for (detail::BumpChunk& bc : released)

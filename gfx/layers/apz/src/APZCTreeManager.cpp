@@ -2519,12 +2519,9 @@ APZCTreeManager::GetAPZCAtPointWR(const ScreenPoint& aHitTestPoint,
   result = GetTargetAPZC(layersId, scrollId);
   if (!result) {
     // It falls back to the root
-    // Re-enable these assertions once bug 1391318 is fixed. For now there are
-    // race conditions with the WR hit-testing code that make these assertions
-    // fail.
-    //MOZ_ASSERT(scrollId == FrameMetrics::NULL_SCROLL_ID);
+    MOZ_ASSERT(scrollId == FrameMetrics::NULL_SCROLL_ID);
     result = FindRootApzcForLayersId(layersId);
-    //MOZ_ASSERT(result);
+    MOZ_ASSERT(result);
   }
 
   bool isScrollbar = bool(hitInfo & gfx::CompositorHitTestInfo::eScrollbar);
@@ -2609,21 +2606,26 @@ APZCTreeManager::SetLongTapEnabled(bool aLongTapEnabled)
   GestureEventListener::SetLongTapEnabled(aLongTapEnabled);
 }
 
-RefPtr<HitTestingTreeNode>
-APZCTreeManager::FindScrollThumbNode(const AsyncDragMetrics& aDragMetrics)
+void
+APZCTreeManager::FindScrollThumbNode(const AsyncDragMetrics& aDragMetrics,
+                                     HitTestingTreeNodeAutoLock& aOutThumbNode)
 {
   if (!aDragMetrics.mDirection) {
     // The AsyncDragMetrics has not been initialized yet - there will be
     // no matching node, so don't bother searching the tree.
-    return RefPtr<HitTestingTreeNode>();
+    return;
   }
 
   RecursiveMutexAutoLock lock(mTreeLock);
 
-  return DepthFirstSearch<ReverseIterator>(mRootNode.get(),
+  RefPtr<HitTestingTreeNode> result = DepthFirstSearch<ReverseIterator>(
+      mRootNode.get(),
       [&aDragMetrics](HitTestingTreeNode* aNode) {
         return aNode->MatchesScrollDragMetrics(aDragMetrics);
       });
+  if (result) {
+    aOutThumbNode.Initialize(lock, result.forget(), mTreeLock);
+  }
 }
 
 AsyncPanZoomController*

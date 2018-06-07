@@ -18,6 +18,7 @@
 #include "mozilla/ServoStyleRuleMap.h"
 #include "mozilla/StyleSheet.h"
 #include "mozilla/StyleSheetInlines.h"
+#include "mozilla/dom/StyleSheetList.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -234,8 +235,10 @@ ShadowRoot::RemoveSlot(HTMLSlotElement* aSlot)
                         "Slot to deregister wasn't found?");
   if (currentSlots->Length() == 1) {
     MOZ_ASSERT(currentSlots->ElementAt(0) == aSlot);
-    mSlotMap.Remove(name);
 
+    InvalidateStyleAndLayoutOnSubtree(aSlot);
+
+    mSlotMap.Remove(name);
     if (!aSlot->AssignedNodes().IsEmpty()) {
       aSlot->ClearAssignedNodes();
       aSlot->EnqueueSlotChangeEvent();
@@ -253,6 +256,7 @@ ShadowRoot::RemoveSlot(HTMLSlotElement* aSlot)
     return;
   }
 
+  InvalidateStyleAndLayoutOnSubtree(aSlot);
   HTMLSlotElement* replacementSlot = currentSlots->ElementAt(0);
   const nsTArray<RefPtr<nsINode>>& assignedNodes = aSlot->AssignedNodes();
   bool slottedNodesChanged = !assignedNodes.IsEmpty();

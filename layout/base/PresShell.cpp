@@ -139,7 +139,7 @@
 #include "nsIBoxObject.h"
 #include "nsITreeBoxObject.h"
 #include "nsMenuPopupFrame.h"
-#include "nsITreeColumns.h"
+#include "nsTreeColumns.h"
 #include "nsIDOMXULMultSelectCntrlEl.h"
 #include "nsIDOMXULSelectCntrlItemEl.h"
 #include "nsIDOMXULMenuListElement.h"
@@ -4188,7 +4188,7 @@ PresShell::DoFlushPendingNotifications(mozilla::ChangesToFlush aFlush)
     "Display"
   };
   AUTO_PROFILER_LABEL_DYNAMIC_CSTR("PresShell::DoFlushPendingNotifications",
-                                   GRAPHICS, flushTypeNames[flushType]);
+                                   LAYOUT, flushTypeNames[flushType]);
 #endif
 
 
@@ -6253,7 +6253,7 @@ PresShell::Paint(nsView*         aViewToPaint,
       // calling ComputeDifferences in that case because it assumes non-null
       // and crashes.
       if (computeInvalidRect && layerManager->GetRoot()) {
-        props = std::move(LayerProperties::CloneFrom(layerManager->GetRoot()));
+        props = LayerProperties::CloneFrom(layerManager->GetRoot());
       }
 
       MaybeSetupTransactionIdAllocator(layerManager, presContext);
@@ -8364,19 +8364,15 @@ PresShell::GetCurrentItemAndPositionForElement(Element* aFocusedElement,
                           (currentIndex - firstVisibleRow + 1) * rowHeight);
           istree = true;
 
-          nsCOMPtr<nsITreeColumns> cols;
+          RefPtr<nsTreeColumns> cols;
           treeBox->GetColumns(getter_AddRefs(cols));
           if (cols) {
-            nsCOMPtr<nsITreeColumn> col;
-            cols->GetFirstColumn(getter_AddRefs(col));
+            nsTreeColumn* col = cols->GetFirstColumn();
             if (col) {
-              RefPtr<Element> colElement;
-              col->GetElement(getter_AddRefs(colElement));
-              if (colElement) {
-                nsIFrame* frame = colElement->GetPrimaryFrame();
-                if (frame) {
-                  extraTreeY += frame->GetSize().height;
-                }
+              RefPtr<Element> colElement = col->Element();
+              nsIFrame* frame = colElement->GetPrimaryFrame();
+              if (frame) {
+                extraTreeY += frame->GetSize().height;
               }
             }
           }
@@ -8849,7 +8845,7 @@ PresShell::DoReflow(nsIFrame* target, bool aInterruptible)
 #ifdef MOZ_GECKO_PROFILER
   nsIURI* uri = mDocument->GetDocumentURI();
   AUTO_PROFILER_LABEL_DYNAMIC_NSCSTRING(
-    "PresShell::DoReflow", GRAPHICS,
+    "PresShell::DoReflow", LAYOUT,
     uri ? uri->GetSpecOrDefault() : NS_LITERAL_CSTRING("N/A"));
 #endif
 

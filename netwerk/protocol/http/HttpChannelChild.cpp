@@ -72,10 +72,6 @@ using namespace mozilla::ipc;
 namespace mozilla {
 namespace net {
 
-#if defined(NIGHTLY_BUILD) || defined(MOZ_DEV_EDITION) || defined(DEBUG)
-static bool gIPCSecurityDisabled = false;
-#endif
-
 NS_IMPL_ISUPPORTS(InterceptStreamListener,
                   nsIStreamListener,
                   nsIRequestObserver,
@@ -197,15 +193,6 @@ HttpChannelChild::HttpChannelChild()
   mLastStatusReported = mChannelCreationTimestamp; // in case we enable the profiler after Init()
   mAsyncOpenTime = TimeStamp::Now();
   mEventQ = new ChannelEventQueue(static_cast<nsIHttpChannel*>(this));
-
-#if defined(NIGHTLY_BUILD) || defined(MOZ_DEV_EDITION) || defined(DEBUG)
-  static bool sSecurityPrefChecked = false;
-  if (!sSecurityPrefChecked) {
-    Preferences::AddBoolVarCache(&gIPCSecurityDisabled,
-                                 "network.disable.ipc.security");
-    sSecurityPrefChecked = true;
-  }
-#endif
 
   // Ensure that the cookie service is initialized before the first
   // IPC HTTP channel is created.
@@ -441,7 +428,6 @@ class StartRequestEvent : public NeckoTargetChannelEvent<HttpChannelChild>
                     const uint32_t& aCacheKey,
                     const nsCString& altDataType,
                     const int64_t& altDataLen,
-                    Maybe<ServiceWorkerDescriptor>&& aController,
                     const bool& aApplyConversion)
   : NeckoTargetChannelEvent<HttpChannelChild>(aChild)
   , mChannelStatus(aChannelStatus)
@@ -461,7 +447,6 @@ class StartRequestEvent : public NeckoTargetChannelEvent<HttpChannelChild>
   , mCacheKey(aCacheKey)
   , mAltDataType(altDataType)
   , mAltDataLen(altDataLen)
-  , mController(std::move(aController))
   , mLoadInfoForwarder(loadInfoForwarder)
   {}
 
@@ -475,7 +460,7 @@ class StartRequestEvent : public NeckoTargetChannelEvent<HttpChannelChild>
                            mCacheExpirationTime, mCachedCharset,
                            mSecurityInfoSerialization, mSelfAddr, mPeerAddr,
                            mCacheKey, mAltDataType, mAltDataLen,
-                           mController, mApplyConversion);
+                           mApplyConversion);
   }
 
  private:
@@ -496,7 +481,6 @@ class StartRequestEvent : public NeckoTargetChannelEvent<HttpChannelChild>
   uint32_t mCacheKey;
   nsCString mAltDataType;
   int64_t mAltDataLen;
-  Maybe<ServiceWorkerDescriptor> mController;
   ParentLoadInfoForwarderArgs mLoadInfoForwarder;
 };
 
@@ -519,7 +503,6 @@ HttpChannelChild::RecvOnStartRequest(const nsresult& channelStatus,
                                      const uint32_t& cacheKey,
                                      const nsCString& altDataType,
                                      const int64_t& altDataLen,
-                                     const OptionalIPCServiceWorkerDescriptor& aController,
                                      const bool& aApplyConversion)
 {
   LOG(("HttpChannelChild::RecvOnStartRequest [this=%p]\n", this));
@@ -532,11 +515,6 @@ HttpChannelChild::RecvOnStartRequest(const nsresult& channelStatus,
 
 
   mRedirectCount = redirectCount;
-  Maybe<ServiceWorkerDescriptor> controller;
-  if (aController.type() != OptionalIPCServiceWorkerDescriptor::Tvoid_t) {
-    controller.emplace(ServiceWorkerDescriptor(
-      aController.get_IPCServiceWorkerDescriptor()));
-  }
 
   mEventQ->RunOrEnqueue(new StartRequestEvent(this, channelStatus, responseHead,
                                               useResponseHead, requestHeaders,
@@ -547,7 +525,6 @@ HttpChannelChild::RecvOnStartRequest(const nsresult& channelStatus,
                                               securityInfoSerialization,
                                               selfAddr, peerAddr, cacheKey,
                                               altDataType, altDataLen,
-                                              std::move(controller),
                                               aApplyConversion));
 
   {
@@ -590,7 +567,6 @@ HttpChannelChild::OnStartRequest(const nsresult& channelStatus,
                                  const uint32_t& cacheKey,
                                  const nsCString& altDataType,
                                  const int64_t& altDataLen,
-                                 const Maybe<ServiceWorkerDescriptor>& aController,
                                  const bool& aApplyConversion)
 {
   LOG(("HttpChannelChild::OnStartRequest [this=%p]\n", this));
@@ -629,28 +605,6 @@ HttpChannelChild::OnStartRequest(const nsresult& channelStatus,
   mAltDataLength = altDataLen;
 
   SetApplyConversion(aApplyConversion);
-
-  if (ServiceWorkerParentInterceptEnabled()) {
-    const Maybe<ServiceWorkerDescriptor>& prevController =
-      mLoadInfo->GetController();
-
-    // If we got a service worker controller from the parent, then note
-    // it on the LoadInfo.  This may indicate that a non-subresource request
-    // was intercepted and the resulting window/worker should be controlled.
-    if (aController.isSome() && prevController.isNothing()) {
-      mLoadInfo->SetController(aController.ref());
-    }
-
-    // If we did not set a controller, then verify it was either because:
-    //  1. Neither the parent or child know about a controlling service worker.
-    //  2. The parent and child both have the same controlling service worker.
-    else {
-      MOZ_DIAGNOSTIC_ASSERT((prevController.isNothing() && aController.isNothing()) ||
-                            (prevController.ref().Id() == aController.ref().Id() &&
-                             prevController.ref().Scope() == aController.ref().Scope() &&
-                             prevController.ref().PrincipalInfo() == aController.ref().PrincipalInfo()));
-    }
-  }
 
   mAfterOnStartRequestBegun = true;
 
@@ -2124,12 +2078,9 @@ HttpChannelChild::ConnectParent(uint32_t registrarId)
   HttpChannelConnectArgs connectArgs(registrarId, mShouldParentIntercept);
   PBrowserOrId browser = static_cast<ContentChild*>(gNeckoChild->Manager())
                          ->GetBrowserOrId(tabChild);
-  IPC::SerializedLoadContext slc(this);
-  MOZ_DIAGNOSTIC_ASSERT(gIPCSecurityDisabled || slc.IsNotNull(),
-                        "SerializedLoadContext should not be null");
   if (!gNeckoChild->
         SendPHttpChannelConstructor(this, browser,
-                                    slc,
+                                    IPC::SerializedLoadContext(this),
                                     connectArgs)) {
     return NS_ERROR_FAILURE;
   }
@@ -2348,10 +2299,19 @@ HttpChannelChild::OnRedirectVerifyCallback(nsresult result)
     appCacheChannel->GetChooseApplicationCache(&chooseAppcache);
   }
 
+  nsCOMPtr<nsILoadInfo> newChannelLoadInfo;
+  nsCOMPtr<nsIChannel> newChannel = do_QueryInterface(mRedirectChannelChild);
+  if (newChannel) {
+    Unused << newChannel->GetLoadInfo(getter_AddRefs(newChannelLoadInfo));
+  }
+
+  ChildLoadInfoForwarderArgs loadInfoForwarder;
+  LoadInfoToChildLoadInfoForwarder(newChannelLoadInfo, &loadInfoForwarder);
+
   if (mIPCOpen)
-    SendRedirect2Verify(result, *headerTuples, loadFlags, referrerPolicy,
-                        referrerURI, redirectURI, corsPreflightArgs,
-                        chooseAppcache);
+    SendRedirect2Verify(result, *headerTuples, loadInfoForwarder, loadFlags,
+                        referrerPolicy, referrerURI, redirectURI,
+                        corsPreflightArgs, chooseAppcache);
 
   return NS_OK;
 }
@@ -2813,11 +2773,8 @@ HttpChannelChild::ContinueAsyncOpen()
   AddIPDLReference();
 
   PBrowserOrId browser = cc->GetBrowserOrId(tabChild);
-  IPC::SerializedLoadContext slc(this);
-  MOZ_DIAGNOSTIC_ASSERT(gIPCSecurityDisabled || slc.IsNotNull(),
-                        "SerializedLoadContext should not be null");
   if (!gNeckoChild->SendPHttpChannelConstructor(this, browser,
-                                                slc,
+                                                IPC::SerializedLoadContext(this),
                                                 openArgs)) {
     return NS_ERROR_FAILURE;
   }

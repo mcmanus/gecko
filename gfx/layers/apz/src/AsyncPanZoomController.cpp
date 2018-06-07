@@ -1000,8 +1000,8 @@ nsEventStatus AsyncPanZoomController::HandleDragEvent(const MouseInput& aEvent,
     return nsEventStatus_eConsumeNoDefault;
   }
 
-  RefPtr<HitTestingTreeNode> node =
-    GetApzcTreeManager()->FindScrollThumbNode(aDragMetrics);
+  HitTestingTreeNodeAutoLock node;
+  GetApzcTreeManager()->FindScrollThumbNode(aDragMetrics, node);
   if (!node) {
     return nsEventStatus_eConsumeNoDefault;
   }
@@ -3731,6 +3731,17 @@ bool AsyncPanZoomController::AdvanceAnimations(const TimeStamp& aSampleTime)
   return requestAnimationFrame;
 }
 
+CSSRect
+AsyncPanZoomController::GetCurrentAsyncLayoutViewport(AsyncTransformConsumer aMode) const {
+  RecursiveMutexAutoLock lock(mRecursiveMutex);
+  MOZ_ASSERT(mFrameMetrics.IsRootContent(),
+      "Only the root content APZC has a layout viewport");
+  if (aMode == eForCompositing && mScrollMetadata.IsApzForceDisabled()) {
+    return mLastContentPaintMetrics.GetViewport();
+  }
+  return GetEffectiveLayoutViewport(aMode);
+}
+
 ParentLayerPoint
 AsyncPanZoomController::GetCurrentAsyncScrollOffset(AsyncTransformConsumer aMode) const
 {
@@ -3802,6 +3813,15 @@ AsyncPanZoomController::GetCurrentAsyncTransform(AsyncTransformConsumer aMode) c
     -translation);
 }
 
+CSSRect
+AsyncPanZoomController::GetEffectiveLayoutViewport(AsyncTransformConsumer aMode) const
+{
+  if (gfxPrefs::APZFrameDelayEnabled() && aMode == eForCompositing) {
+    return mCompositedLayoutViewport;
+  }
+  return mFrameMetrics.GetViewport();
+}
+
 CSSPoint
 AsyncPanZoomController::GetEffectiveScrollOffset(AsyncTransformConsumer aMode) const
 {
@@ -3826,6 +3846,7 @@ AsyncPanZoomController::SampleCompositedAsyncTransform()
   RecursiveMutexAutoLock lock(mRecursiveMutex);
   if (mCompositedScrollOffset != mFrameMetrics.GetScrollOffset() ||
       mCompositedZoom != mFrameMetrics.GetZoom()) {
+    mCompositedLayoutViewport = mFrameMetrics.GetViewport();
     mCompositedScrollOffset = mFrameMetrics.GetScrollOffset();
     mCompositedZoom = mFrameMetrics.GetZoom();
     return true;
@@ -4084,6 +4105,7 @@ void AsyncPanZoomController::NotifyLayersUpdated(const ScrollMetadata& aScrollMe
     mExpectedGeckoMetrics = aLayerMetrics;
     ShareCompositorFrameMetrics();
 
+    mCompositedLayoutViewport = mFrameMetrics.GetViewport();
     mCompositedScrollOffset = mFrameMetrics.GetScrollOffset();
     mCompositedZoom = mFrameMetrics.GetZoom();
 
@@ -4168,6 +4190,7 @@ void AsyncPanZoomController::NotifyLayersUpdated(const ScrollMetadata& aScrollMe
       // correct this we need to update mExpectedGeckoMetrics to be the
       // last thing we know was painted by Gecko.
       mFrameMetrics.CopyScrollInfoFrom(aLayerMetrics);
+      mCompositedLayoutViewport = mFrameMetrics.GetViewport();
       mCompositedScrollOffset = mFrameMetrics.GetScrollOffset();
       mExpectedGeckoMetrics = aLayerMetrics;
 

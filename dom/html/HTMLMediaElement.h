@@ -867,13 +867,18 @@ protected:
     ~OutputMediaStream();
 
     RefPtr<DOMMediaStream> mStream;
+    TrackID mNextAvailableTrackID;
     bool mFinishWhenEnded;
     bool mCapturingAudioOnly;
     bool mCapturingDecoder;
     bool mCapturingMediaStream;
 
+    // The following members are keeping state for a captured MediaDecoder.
+    // Tracks that were created on main thread before MediaDecoder fed them
+    // to the MediaStreamGraph.
+    nsTArray<RefPtr<MediaStreamTrack>> mPreCreatedTracks;
+
     // The following members are keeping state for a captured MediaStream.
-    TrackID mNextAvailableTrackID;
     nsTArray<Pair<nsString, RefPtr<MediaInputPort>>> mTrackPorts;
   };
 
@@ -1820,13 +1825,6 @@ private:
   // True if media element has been forced into being considered 'hidden'.
   // For use by mochitests. Enabling pref "media.test.video-suspend"
   bool mForcedHidden = false;
-
-  // True if we attempted to play before the media element had loaded
-  // metadata, and we need to attempt the play once we reach loaded metadata.
-  // If autoplay is disabled, we can't decide whether to allow a play()
-  // until we've loaded metadata, as we need to know whether the resource
-  // has an audio track.
-  bool mAttemptPlayUponLoadedMetadata = false;
 
   // True if audio tracks and video tracks are constructed and added into the
   // track list, false if all tracks are removed from the track list.

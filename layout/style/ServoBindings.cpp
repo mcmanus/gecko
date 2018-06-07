@@ -67,6 +67,7 @@
 #include "mozilla/dom/ElementInlines.h"
 #include "mozilla/dom/HTMLTableCellElement.h"
 #include "mozilla/dom/HTMLBodyElement.h"
+#include "mozilla/dom/HTMLSlotElement.h"
 #include "mozilla/dom/MediaList.h"
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/URLExtraData.h"
@@ -180,6 +181,13 @@ Gecko_DestroyAnonymousContentList(nsTArray<nsIContent*>* aAnonContent)
 {
   MOZ_ASSERT(aAnonContent);
   delete aAnonContent;
+}
+
+const nsTArray<RefPtr<nsINode>>*
+Gecko_GetAssignedNodes(RawGeckoElementBorrowed aElement)
+{
+  MOZ_ASSERT(HTMLSlotElement::FromNode(aElement));
+  return &static_cast<const HTMLSlotElement*>(aElement)->AssignedNodes();
 }
 
 void
@@ -771,20 +779,6 @@ Gecko_AnimationGetBaseStyle(void* aBaseStyles, nsCSSPropertyID aProperty)
     static_cast<nsRefPtrHashtable<nsUint32HashKey, RawServoAnimationValue>*>
       (aBaseStyles);
   return base->GetWeak(aProperty);
-}
-
-void
-Gecko_StyleTransition_SetUnsupportedProperty(StyleTransition* aTransition,
-                                             nsAtom* aAtom)
-{
-  nsCSSPropertyID id =
-    nsCSSProps::LookupProperty(nsDependentAtomString(aAtom),
-                               CSSEnabledState::eForAllContent);
-  if (id == eCSSProperty_UNKNOWN || id == eCSSPropertyExtra_variable) {
-    aTransition->SetUnknownProperty(id, aAtom);
-  } else {
-    aTransition->SetProperty(id);
-  }
 }
 
 void
@@ -2791,24 +2785,16 @@ Gecko_SetJemallocThreadLocalArena(bool enabled)
 
 #undef STYLE_STRUCT
 
-
-ErrorReporter*
-Gecko_CreateCSSErrorReporter(StyleSheet* aSheet,
-                             Loader* aLoader,
-                             nsIURI* aURI)
+bool
+Gecko_ErrorReportingEnabled(const StyleSheet* aSheet, const Loader* aLoader)
 {
-  MOZ_ASSERT(NS_IsMainThread());
-  return new ErrorReporter(aSheet, aLoader, aURI);
+  return ErrorReporter::ShouldReportErrors(aSheet, aLoader);
 }
 
 void
-Gecko_DestroyCSSErrorReporter(ErrorReporter* reporter)
-{
-  delete reporter;
-}
-
-void
-Gecko_ReportUnexpectedCSSError(ErrorReporter* reporter,
+Gecko_ReportUnexpectedCSSError(const StyleSheet* aSheet,
+                               const Loader* aLoader,
+                               nsIURI* aURI,
                                const char* message,
                                const char* param,
                                uint32_t paramLen,
@@ -2821,35 +2807,33 @@ Gecko_ReportUnexpectedCSSError(ErrorReporter* reporter,
                                uint32_t lineNumber,
                                uint32_t colNumber)
 {
-  if (!reporter->ShouldReportErrors()) {
-    return;
-  }
-
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
+
+  ErrorReporter reporter(aSheet, aLoader, aURI);
 
   if (prefix) {
     if (prefixParam) {
       nsDependentCSubstring paramValue(prefixParam, prefixParamLen);
       nsAutoString wideParam = NS_ConvertUTF8toUTF16(paramValue);
-      reporter->ReportUnexpectedUnescaped(prefix, wideParam);
+      reporter.ReportUnexpectedUnescaped(prefix, wideParam);
     } else {
-      reporter->ReportUnexpected(prefix);
+      reporter.ReportUnexpected(prefix);
     }
   }
 
   if (param) {
     nsDependentCSubstring paramValue(param, paramLen);
     nsAutoString wideParam = NS_ConvertUTF8toUTF16(paramValue);
-    reporter->ReportUnexpectedUnescaped(message, wideParam);
+    reporter.ReportUnexpectedUnescaped(message, wideParam);
   } else {
-    reporter->ReportUnexpected(message);
+    reporter.ReportUnexpected(message);
   }
 
   if (suffix) {
-    reporter->ReportUnexpected(suffix);
+    reporter.ReportUnexpected(suffix);
   }
   nsDependentCSubstring sourceValue(source, sourceLen);
-  reporter->OutputError(lineNumber, colNumber, sourceValue);
+  reporter.OutputError(lineNumber, colNumber, sourceValue);
 }
 
 void

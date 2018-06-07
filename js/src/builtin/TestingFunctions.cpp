@@ -572,19 +572,6 @@ WasmThreadsSupported(JSContext* cx, unsigned argc, Value* vp)
 }
 
 static bool
-WasmSignExtensionSupported(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-#ifdef ENABLE_WASM_SIGNEXTEND_OPS
-    bool isSupported = true;
-#else
-    bool isSupported = false;
-#endif
-    args.rval().setBoolean(isSupported);
-    return true;
-}
-
-static bool
 WasmSaturatingTruncationSupported(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -2400,8 +2387,8 @@ ReadGeckoProfilingStack(JSContext* cx, unsigned argc, Value* vp)
 
     struct InlineFrameInfo
     {
-        InlineFrameInfo(const char* kind, char* label)
-          : kind(kind), label(label) {}
+        InlineFrameInfo(const char* kind, UniqueChars label)
+          : kind(kind), label(std::move(label)) {}
         const char* kind;
         UniqueChars label;
     };
@@ -2435,11 +2422,11 @@ ReadGeckoProfilingStack(JSContext* cx, unsigned argc, Value* vp)
                 frameKindStr = "unknown";
             }
 
-            char* label = JS_strdup(cx, frames[i].label);
+            UniqueChars label = DuplicateString(cx, frames[i].label);
             if (!label)
                 return false;
 
-            if (!frameInfo.back().emplaceBack(frameKindStr, label))
+            if (!frameInfo.back().emplaceBack(frameKindStr, std::move(label)))
                 return false;
         }
     }
@@ -3527,7 +3514,7 @@ struct FindPathHandler {
         EdgeName edgeName = DuplicateString(cx, edge.name.get());
         if (!edgeName)
             return false;
-        *backEdge = std::move(BackEdge(origin, std::move(edgeName)));
+        *backEdge = BackEdge(origin, std::move(edgeName));
 
         // Have we reached our final target node?
         if (edge.referent == target) {
@@ -4393,7 +4380,7 @@ GetLcovInfo(JSContext* cx, unsigned argc, Value* vp)
         return false;
 
     JSString* str = JS_NewStringCopyN(cx, content, length);
-    free(content);
+    js_free(content);
 
     if (!str)
         return false;
@@ -5561,11 +5548,6 @@ gc::ZealModeHelpText),
     JS_FN_HELP("wasmThreadsSupported", WasmThreadsSupported, 0, 0,
 "wasmThreadsSupported()",
 "  Returns a boolean indicating whether the WebAssembly threads proposal is\n"
-"  supported on the current device."),
-
-    JS_FN_HELP("wasmSignExtensionSupported", WasmSignExtensionSupported, 0, 0,
-"wasmSignExtensionSupported()",
-"  Returns a boolean indicating whether the WebAssembly sign extension opcodes are\n"
 "  supported on the current device."),
 
     JS_FN_HELP("wasmSaturatingTruncationSupported", WasmSaturatingTruncationSupported, 0, 0,
