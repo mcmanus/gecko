@@ -5,7 +5,6 @@
 #ifndef mozilla_net_DashboardTypes_h_
 #define mozilla_net_DashboardTypes_h_
 
-#include "nsHttp.h"
 #include "nsString.h"
 #include "nsTArray.h"
 
@@ -43,8 +42,8 @@ struct HttpConnInfo
     uint32_t rtt;
     nsString protocolVersion;
 
-    void SetHTTP1ProtocolVersion(HttpVersion pv);
-    void SetHTTP2ProtocolVersion(SpdyVersion pv);
+    void SetHTTP1ProtocolVersion(uint8_t pv);
+    void SetHTTP2ProtocolVersion(uint8_t pv);
 };
 
 struct HttpRetParams

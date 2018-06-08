@@ -2331,7 +2331,7 @@ HttpBaseChannel::GetProtocolVersion(nsACString& aProtocolVersion)
   }
 
   if (mResponseHead) {
-    HttpVersion version = mResponseHead->Version();
+    uint32_t version = mResponseHead->Version();
     aProtocolVersion.Assign(nsHttp::GetProtocolVersion(version));
     return NS_OK;
   }
@@ -2423,10 +2423,10 @@ HttpBaseChannel::SetDocumentURI(nsIURI *aDocumentURI)
 NS_IMETHODIMP
 HttpBaseChannel::GetRequestVersion(uint32_t *major, uint32_t *minor)
 {
-  HttpVersion version = mRequestHead.Version();
+  nsHttpVersion version = mRequestHead.Version();
 
-  if (major) { *major = static_cast<uint32_t>(version) / 10; }
-  if (minor) { *minor = static_cast<uint32_t>(version) % 10; }
+  if (major) { *major = version / 10; }
+  if (minor) { *minor = version % 10; }
 
   return NS_OK;
 }
@@ -2440,10 +2440,10 @@ HttpBaseChannel::GetResponseVersion(uint32_t *major, uint32_t *minor)
     return NS_ERROR_NOT_AVAILABLE;
   }
 
-  HttpVersion version = mResponseHead->Version();
+  nsHttpVersion version = mResponseHead->Version();
 
-  if (major) { *major = static_cast<uint32_t>(version) / 10; }
-  if (minor) { *minor = static_cast<uint32_t>(version) % 10; }
+  if (major) { *major = version / 10; }
+  if (minor) { *minor = version % 10; }
 
   return NS_OK;
 }

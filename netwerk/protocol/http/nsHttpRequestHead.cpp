@@ -18,7 +18,7 @@ namespace net {
 
 nsHttpRequestHead::nsHttpRequestHead()
     : mMethod(NS_LITERAL_CSTRING("GET"))
-    , mVersion(HttpVersion::v1_1)
+    , mVersion(NS_HTTP_VERSION_1_1)
     , mParsedMethod(kMethod_Get)
     , mHTTPS(false)
     , mRecursiveMutex("nsHttpRequestHead.mRecursiveMutex")
@@ -50,7 +50,7 @@ nsHttpRequestHead::SetHeaders(const nsHttpHeaderArray& aHeaders)
 }
 
 void
-nsHttpRequestHead::SetVersion(HttpVersion version)
+nsHttpRequestHead::SetVersion(nsHttpVersion version)
 {
     RecursiveMutexAutoLock mon(mRecursiveMutex);
     mVersion = version;
@@ -95,7 +95,7 @@ nsHttpRequestHead::Method(nsACString &aMethod)
     aMethod = mMethod;
 }
 
-HttpVersion
+nsHttpVersion
 nsHttpRequestHead::Version()
 {
     RecursiveMutexAutoLock mon(mRecursiveMutex);
@@ -370,10 +370,10 @@ nsHttpRequestHead::Flatten(nsACString &buf, bool pruneProxyHeaders)
     buf.AppendLiteral(" HTTP/");
 
     switch (mVersion) {
-    case HttpVersion::v1_1:
+    case NS_HTTP_VERSION_1_1:
         buf.AppendLiteral("1.1");
         break;
-    case HttpVersion::v0_9:
+    case NS_HTTP_VERSION_0_9:
         buf.AppendLiteral("0.9");
         break;
     default:

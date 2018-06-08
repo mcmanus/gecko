@@ -143,7 +143,7 @@ public:
     virtual void SetSecurityCallbacks(nsIInterfaceRequestor* aCallbacks) = 0;
 
     // nsHttp.h version
-    virtual HttpVersion Version() = 0;
+    virtual uint32_t Version() = 0;
 
     // A notification of the current active tab id change.
     virtual void TopLevelOuterContentWindowIdChanged(uint64_t windowId) = 0;
@@ -219,11 +219,11 @@ NS_DEFINE_STATIC_IID_ACCESSOR(nsAHttpConnection, NS_AHTTPCONNECTION_IID)
             return nullptr;                 \
         return (fwdObject)->Transport();   \
     }                                      \
-    HttpVersion Version() override        \
+    uint32_t Version() override        \
     {                                      \
         return (fwdObject) ?               \
             (fwdObject)->Version() :       \
-            mozilla::net::HttpVersion::UNKNOWN;       \
+            NS_HTTP_VERSION_UNKNOWN;       \
     }                                      \
     bool IsProxyConnectInProgress() override                \
     {                                                       \

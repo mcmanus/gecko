@@ -98,7 +98,7 @@ public:
 
     bool IsKeepAlive()
     {
-        return (mUsingSpdyVersion != SpdyVersion::NONE) || (mKeepAliveMask && mKeepAlive);
+        return mUsingSpdyVersion || (mKeepAliveMask && mKeepAlive);
     }
     bool CanReuse();   // can this connection be reused?
     bool CanDirectlyActivate();
@@ -160,7 +160,7 @@ public:
     MOZ_MUST_USE nsresult ResumeSend();
     MOZ_MUST_USE nsresult ResumeRecv();
     int64_t  MaxBytesRead() {return mMaxBytesRead;}
-    HttpVersion GetLastHttpResponseVersion() { return mLastHttpResponseVersion; }
+    uint8_t GetLastHttpResponseVersion() { return mLastHttpResponseVersion; }
 
     friend class HttpConnectionForceIO;
     MOZ_MUST_USE nsresult ForceSend();
@@ -177,8 +177,8 @@ public:
     void BeginIdleMonitoring();
     void EndIdleMonitoring();
 
-    bool UsingSpdy() { return (mUsingSpdyVersion != SpdyVersion::NONE); }
-    SpdyVersion GetSpdyVersion() { return mUsingSpdyVersion; }
+    bool UsingSpdy() { return !!mUsingSpdyVersion; }
+    uint8_t GetSpdyVersion() { return mUsingSpdyVersion; }
     bool EverUsedSpdy() { return mEverUsedSpdy; }
     PRIntervalTime Rtt() { return mRtt; }
 
@@ -231,7 +231,7 @@ public:
             !mFastOpen;
     }
     // override of nsAHttpConnection
-    virtual HttpVersion Version();
+    virtual uint32_t Version();
 
     bool TestJoinConnection(const nsACString &hostname, int32_t port);
     bool JoinConnection(const nsACString &hostname, int32_t port);
@@ -277,10 +277,10 @@ private:
     void     SetupSSL();
 
     // Start the Spdy transaction handler when NPN indicates spdy/*
-    void     StartSpdy(nsISSLSocketControl *ssl, SpdyVersion versionLevel);
+    void     StartSpdy(nsISSLSocketControl *ssl, uint8_t versionLevel);
     // Like the above, but do the bare minimum to do 0RTT data, so we can back
     // it out, if necessary
-    void     Start0RTTSpdy(SpdyVersion versionLevel);
+    void     Start0RTTSpdy(uint8_t versionLevel);
 
     // Helpers for Start*Spdy
     nsresult TryTakeSubTransactions(nsTArray<RefPtr<nsAHttpTransaction> > &list);
@@ -370,7 +370,7 @@ private:
     bool                            mSetupSSLCalled;
 
     // version level in use, 0 if unused
-    SpdyVersion                     mUsingSpdyVersion;
+    uint8_t                         mUsingSpdyVersion;
 
     RefPtr<ASpdySession>            mSpdySession;
     int32_t                         mPriority;
@@ -380,7 +380,7 @@ private:
     bool                            mEverUsedSpdy;
 
     // mLastHttpResponseVersion stores the last response's http version seen.
-    HttpVersion                     mLastHttpResponseVersion;
+    uint8_t                         mLastHttpResponseVersion;
 
     // The capabailities associated with the most recent transaction
     uint32_t                        mTransactionCaps;

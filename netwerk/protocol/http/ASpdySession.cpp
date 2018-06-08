@@ -25,13 +25,13 @@ namespace mozilla {
 namespace net {
 
 ASpdySession *
-ASpdySession::NewSpdySession(net::SpdyVersion version,
+ASpdySession::NewSpdySession(uint32_t version,
                              nsISocketTransport *aTransport,
                              bool attemptingEarlyData)
 {
   // This is a necko only interface, so we can enforce version
   // requests as a precondition
-  MOZ_ASSERT(version == SpdyVersion::HTTP_2,
+  MOZ_ASSERT(version == HTTP_VERSION_2,
              "Unsupported spdy version");
 
   // Don't do a runtime check of IsSpdyV?Enabled() here because pref value
@@ -39,7 +39,7 @@ ASpdySession::NewSpdySession(net::SpdyVersion version,
   // from a list provided in the SERVER HELLO filtered by our acceptable
   // versions, so there is no risk of the server ignoring our prefs.
 
-  Telemetry::Accumulate(Telemetry::SPDY_VERSION2, static_cast<uint32_t>(version));
+  Telemetry::Accumulate(Telemetry::SPDY_VERSION2, version);
 
   return new Http2Session(aTransport, version, attemptingEarlyData);
 }
@@ -48,7 +48,7 @@ SpdyInformation::SpdyInformation()
 {
   // highest index of enabled protocols is the
   // most preferred for ALPN negotiaton
-  Version[0] = SpdyVersion::HTTP_2;
+  Version[0] = HTTP_VERSION_2;
   VersionString[0] = NS_LITERAL_CSTRING("h2");
   ALPNCallbacks[0] = Http2Session::ALPNCallback;
 }
