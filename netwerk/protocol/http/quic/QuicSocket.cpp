@@ -30,8 +30,67 @@ static bool quicInit = false;
 static PRDescIdentity quicIdentity, psmHelperIdentity;
 static PRIOMethods quicMethods, psmHelperMethods;
 
+#if 0
 NS_IMPL_ISUPPORTS(QuicSocket, nsISSLSocketControl, nsISSLStatusProvider)
+NS_IMPL_RELEASE(QuicSocket)
+#endif
+  
+NS_IMPL_ADDREF(QuicSocket)
 
+class DeleteQuicSocket : public Runnable
+{
+public:
+  DeleteQuicSocket(QuicSocket *quicSocket)
+    : Runnable("net::QuicSocket::DeleteQuicSocket")
+    , mQuicSocket(quicSocket)
+  {
+  }
+
+  NS_IMETHOD Run() override
+  {
+    MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+    delete mQuicSocket;
+    return NS_OK;
+  }
+
+private:
+  QuicSocket *mQuicSocket;
+};
+
+void
+QuicSocket::DeleteSelfOnSocketThread()
+{
+  nsCOMPtr<nsIRunnable> event = new DeleteQuicSocket(this);
+  nsCOMPtr<nsIEventTarget> target;
+  Unused << gHttpHandler->GetSocketThreadTarget(getter_AddRefs(target));
+  if (target) {
+    target->Dispatch(event, NS_DISPATCH_NORMAL);
+  }
+}
+
+NS_IMETHODIMP_(MozExternalRefCountType)
+QuicSocket::Release()
+{
+    nsrefcnt count;
+    MOZ_ASSERT(0 != mRefCnt, "dup release");
+    count = --mRefCnt;
+    NS_LOG_RELEASE(this, count, "QuicSocket");
+    if (0 == count) {
+        mRefCnt = 1; /* stablize */
+        if (OnSocketThread()) {
+          delete this;
+        } else {
+          DeleteSelfOnSocketThread();
+        }
+        return 0;
+    }
+    return count;
+}
+
+NS_IMPL_QUERY_INTERFACE(QuicSocket,
+                        nsISSLSocketControl, nsISSLStatusProvider)
+
+  
 QuicSocket::QuicSocket(const char *host, int32_t port, bool v4)
   : mClosed(false)
   , mDestroyOnClose(false)
@@ -111,6 +170,7 @@ QuicSocket::IO()
 {
   if (mSession) {
     mozquic_IO(mSession);
+    fprintf(stderr,"MOZQUIC FD %d\n", mozquic_osfd(mSession));
   }
 }
 
@@ -131,7 +191,7 @@ QuicSocket::GetFromFD(PRFileDesc *fd)
 
   return nullptr;
 }
-  
+
 QuicSocket::~QuicSocket()
 {
   fprintf(stderr,"QuicSocket::~QuicSocket %p\n", this);
@@ -308,6 +368,9 @@ QuicSocket::MozQuicEventCallback(void *closure, uint32_t event, void *param)
       return MOZQUIC_ERR_IO;
     }
     break;
+
+  case MOZQUIC_EVENT_ERROR:
+    return MOZQUIC_ERR_IO;
 
   default:
     MOZ_ASSERT(false);
@@ -665,13 +728,16 @@ QuicSocket::GetDenyClientCert(bool* aDenyClientCert)
 NS_IMETHODIMP
 QuicSocket::SetDenyClientCert(bool aDenyClientCert)
 {
-  /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
+  /* TODO PRM */
+  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 NS_IMETHODIMP
 QuicSocket::GetClientCertSent(bool* arg)
 {
-  /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
+  *arg = false;
+  /* TODO PRM */
+  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 /* [infallible] readonly attribute short SSLVersionOffered; */

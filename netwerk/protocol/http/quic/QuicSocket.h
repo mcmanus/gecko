@@ -46,6 +46,8 @@ public:
   void SetConnection(nsAHttpConnection *c) { mConnection = c; }
 
 private:
+  friend class DeleteQuicSocket;
+  void DeleteSelfOnSocketThread();
   ~QuicSocket();
 
   static PRStatus NSPRGetPeerName(PRFileDesc *aFD, PRNetAddr*addr);
