@@ -106,3 +106,11 @@ nsDNSPrefetch::OnLookupComplete(nsICancelable *request,
     }
     return NS_OK;
 }
+
+NS_IMETHODIMP
+nsDNSPrefetch::OnLookupByTypeComplete(nsICancelable *request,
+                                      nsIDNSByTypeRecord *res,
+                                      nsresult       status)
+{
+    return NS_OK;
+}

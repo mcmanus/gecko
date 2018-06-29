@@ -1006,6 +1006,12 @@ nsNSSSocketInfo::CloseSocketAndDestroy()
   return PR_SUCCESS;
 }
 
+NS_IMETHODIMP
+nsNSSSocketInfo::SetEsniTxt(const nsTArray<nsCString>& aEsniTxt)
+{
+  return NS_OK;
+}
+
 #if defined(DEBUG_SSL_VERBOSE) && defined(DUMP_BUFFER)
 // Dumps a (potentially binary) buffer using SSM_DEBUG.  (We could have used
 // the version in ssltrace.c, but that's specifically tailored to SSLTRACE.)

@@ -55,6 +55,7 @@ static Atomic<PRThread*, Relaxed> gSocketThread;
 #define TELEMETRY_PREF "toolkit.telemetry.enabled"
 #define MAX_TIME_FOR_PR_CLOSE_DURING_SHUTDOWN "network.sts.max_time_for_pr_close_during_shutdown"
 #define POLLABLE_EVENT_TIMEOUT "network.sts.pollable_event_timeout"
+#define ESNI_ENABLED "network.sts.esni_enabled"
 
 #define REPAIR_POLLABLE_EVENT_TIME 10
 
@@ -150,6 +151,7 @@ nsSocketTransportService::nsSocketTransportService()
 #if defined(XP_WIN)
     , mPolling(false)
 #endif
+    , mEsniEnabled(false)
 {
     NS_ASSERTION(NS_IsMainThread(), "wrong thread");
 
@@ -623,6 +625,7 @@ nsSocketTransportService::Init()
         tmpPrefService->AddObserver(TELEMETRY_PREF, this, false);
         tmpPrefService->AddObserver(MAX_TIME_FOR_PR_CLOSE_DURING_SHUTDOWN, this, false);
         tmpPrefService->AddObserver(POLLABLE_EVENT_TIMEOUT, this, false);
+        tmpPrefService->AddObserver(ESNI_ENABLED, this, false);
     }
     UpdatePrefs();
 
@@ -1384,6 +1387,12 @@ nsSocketTransportService::UpdatePrefs()
         if (NS_SUCCEEDED(rv) && pollableEventTimeout >= 0) {
             MutexAutoLock lock(mLock);
             mPollableEventTimeout = TimeDuration::FromSeconds(pollableEventTimeout);
+        }
+
+        bool esniPref = false;
+        rv = tmpPrefService->GetBoolPref(ESNI_ENABLED, &esniPref);
+        if (NS_SUCCEEDED(rv)) {
+            mEsniEnabled = esniPref;
         }
     }
 

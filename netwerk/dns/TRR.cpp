@@ -134,7 +134,8 @@ TRR::SendHTTPRequest()
   // This is essentially the "run" method - created from nsHostResolver
   MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
 
-  if ((mType != TRRTYPE_A) && (mType != TRRTYPE_AAAA) && (mType != TRRTYPE_NS)) {
+  if ((mType != TRRTYPE_A) && (mType != TRRTYPE_AAAA) && (mType != TRRTYPE_NS) &&
+      (mType != TRRTYPE_TXT)) {
     // limit the calling interface because nsHostResolver has explicit slots for
     // these types
     return NS_ERROR_FAILURE;
@@ -727,6 +728,18 @@ TRR::DohDecode(nsCString &aHost)
           LOG(("TRR::DohDecode CNAME - ignoring another entry\n"));
         }
         break;
+      case TRRTYPE_TXT:
+      {
+        nsAutoCString txt;
+        txt.Append((const char *)(&mResponse[index]), RDLENGTH);
+        mTxt.AppendElement(txt);
+        if (mTxtTtl > TTL) {
+          mTxtTtl = TTL;
+        }
+        LOG(("TRR::DohDecode TXT host %s => %s\n",
+             host.get(), txt.get()));
+        break;
+      }
       default:
         // skip unknown record types
         LOG(("TRR unsupported TYPE (%u) RDLENGTH %u\n", TYPE, RDLENGTH));
@@ -812,7 +825,8 @@ TRR::DohDecode(nsCString &aHost)
   }
 
   if ((mType != TRRTYPE_NS) && mCname.IsEmpty() &&
-      !mDNS.mAddresses.getFirst()) {
+      !mDNS.mAddresses.getFirst() &&
+      mTxt.IsEmpty()) {
     // no entries were stored!
     LOG(("TRR: No entries were stored!\n"));
     return NS_ERROR_FAILURE;
@@ -823,29 +837,33 @@ TRR::DohDecode(nsCString &aHost)
 nsresult
 TRR::ReturnData()
 {
-  // create and populate an AddrInfo instance to pass on
-  nsAutoPtr<AddrInfo> ai(new AddrInfo(mHost, mType));
-  DOHaddr *item;
-  uint32_t ttl = AddrInfo::NO_TTL_DATA;
-  while ((item = static_cast<DOHaddr*>(mDNS.mAddresses.popFirst()))) {
-    PRNetAddr prAddr;
-    NetAddrToPRNetAddr(&item->mNet, &prAddr);
-    auto *addrElement = new NetAddrElement(&prAddr);
-    ai->AddAddress(addrElement);
-    if (item->mTtl < ttl) {
-      // While the DNS packet might return individual TTLs for each address,
-      // we can only return one value in the AddrInfo class so pick the
-      // lowest number.
-      ttl = item->mTtl;
+  if (mType != TRRTYPE_TXT) {
+    // create and populate an AddrInfo instance to pass on
+    nsAutoPtr<AddrInfo> ai(new AddrInfo(mHost, mType));
+    DOHaddr *item;
+    uint32_t ttl = AddrInfo::NO_TTL_DATA;
+    while ((item = static_cast<DOHaddr*>(mDNS.mAddresses.popFirst()))) {
+      PRNetAddr prAddr;
+      NetAddrToPRNetAddr(&item->mNet, &prAddr);
+      auto *addrElement = new NetAddrElement(&prAddr);
+      ai->AddAddress(addrElement);
+      if (item->mTtl < ttl) {
+        // While the DNS packet might return individual TTLs for each address,
+        // we can only return one value in the AddrInfo class so pick the
+        // lowest number.
+        ttl = item->mTtl;
+      }
     }
+    ai->ttl = ttl;
+    if (!mHostResolver) {
+      return NS_ERROR_FAILURE;
+    }
+    (void)mHostResolver->CompleteLookup(mRec, NS_OK, ai.forget(), mPB);
+    mHostResolver = nullptr;
+    mRec = nullptr;
+  } else {
+    (void)mHostResolver->CompleteLookupByType(mRec, NS_OK, &mTxt, mTxtTtl, mPB);
   }
-  ai->ttl = ttl;
-  if (!mHostResolver) {
-    return NS_ERROR_FAILURE;
-  }
-  (void)mHostResolver->CompleteLookup(mRec, NS_OK, ai.forget(), mPB);
-  mHostResolver = nullptr;
-  mRec = nullptr;
   return NS_OK;
 }
 
@@ -855,11 +873,18 @@ TRR::FailData(nsresult error)
   if (!mHostResolver) {
     return NS_ERROR_FAILURE;
   }
-  // create and populate an TRR AddrInfo instance to pass on to signal that
-  // this comes from TRR
-  AddrInfo *ai = new AddrInfo(mHost, mType);
 
-  (void)mHostResolver->CompleteLookup(mRec, error, ai, mPB);
+  if (mType == TRRTYPE_TXT) {
+    (void)mHostResolver->CompleteLookupByType(mRec, error,
+                                              nullptr, 0, mPB);
+  } else {
+    // create and populate an TRR AddrInfo instance to pass on to signal that
+    // this comes from TRR
+    AddrInfo *ai = new AddrInfo(mHost, mType);
+
+    (void)mHostResolver->CompleteLookup(mRec, error, ai, mPB);
+  }
+
   mHostResolver = nullptr;
   mRec = nullptr;
   return NS_OK;
@@ -872,7 +897,8 @@ TRR::On200Response()
   nsresult rv = DohDecode(mHost);
 
   if (NS_SUCCEEDED(rv)) {
-    if (!mDNS.mAddresses.getFirst() && !mCname.IsEmpty()) {
+    if (!mDNS.mAddresses.getFirst() && !mCname.IsEmpty() &&
+        mType != TRRTYPE_TXT) {
       nsCString cname = mCname;
       LOG(("TRR: check for CNAME record for %s within previous response\n",
            cname.get()));
