@@ -335,8 +335,8 @@ private:
     nsCOMPtr<nsICancelable> mDNSRequest;
     nsCOMPtr<nsIDNSRecord>  mDNSRecord;
 
-    nsCOMPtr<nsICancelable> mDNSRequestByType;
-    nsTArray<nsCString>     mDNSRecordTxt;
+    nsCOMPtr<nsICancelable> mDNSTxtRequest;
+    nsCString               mDNSRecordTxt;
 
     // mNetAddr/mSelfAddr is valid from GetPeerAddr()/GetSelfAddr() once we have
     // reached STATE_TRANSFERRING. It must not change after that.

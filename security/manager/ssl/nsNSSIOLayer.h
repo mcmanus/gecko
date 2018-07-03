@@ -182,6 +182,7 @@ private:
   nsresult ActivateSSL();
 
   nsCString mNegotiatedNPN;
+  nsCString mEsniTxt;
   bool      mNPNCompleted;
   bool      mEarlyDataAccepted;
   bool      mDenyClientCert;

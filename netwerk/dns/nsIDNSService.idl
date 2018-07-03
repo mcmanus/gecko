@@ -277,5 +277,9 @@ interface nsIDNSService : nsISupports
      */
     const unsigned long RESOLVE_REFRESH_CACHE = (1 << 10);
 
+    /* TODO - comments here that these types map to wireformat types */
+    /* TODO it would be good to let this be an arbitrary type - file a bug? */
+    /* todo - does cname fetching work here? */
+    const unsigned long RESOLVE_TYPE_DEFAULT = 0;
     const unsigned long RESOLVE_TYPE_TXT = 16;
 };

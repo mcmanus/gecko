@@ -327,6 +327,7 @@ NS_IMPL_ISUPPORTS(nsDNSByTypeRecord, nsIDNSByTypeRecord)
 NS_IMETHODIMP
 nsDNSByTypeRecord::GetRecords(nsTArray<nsCString> &aRecords)
 {
+   // deep copy
    MutexAutoLock lock(mHostRecord->mRequestByTypeResultLock);
    aRecords = mHostRecord->mRequestByTypeResult;
    return NS_OK;
@@ -383,7 +384,6 @@ nsDNSAsyncRequest::OnResolveHostComplete(nsHostResolver *resolver,
                                          nsHostRecord   *hostRecord,
                                          nsresult        status)
 {
-  fprintf(stderr, "DDDDD %d %" PRIx32 ".", hostRecord->type, static_cast<uint32_t>(status));
     if (hostRecord->type) {
         nsCOMPtr<nsIDNSByTypeRecord> rec;
         if (NS_SUCCEEDED(status)) {
@@ -873,6 +873,10 @@ nsDNSService::AsyncResolveInternal(const nsACString        &aHostname,
     if (!res)
         return NS_ERROR_OFFLINE;
 
+    if (type && type != RESOLVE_TYPE_TXT) {
+        return NS_ERROR_INVALID_ARG;
+    }
+
     nsCString hostname;
     nsresult rv = PreprocessHostname(localDomain, aHostname, idn, hostname);
     if (NS_FAILED(rv)) {
@@ -894,7 +898,7 @@ nsDNSService::AsyncResolveInternal(const nsACString        &aHostname,
         listener = new DNSListenerProxy(listener, target);
     }
 
-    uint16_t af = type? 0 : GetAFForLookup(hostname, flags);
+    uint16_t af = type ? 0 : GetAFForLookup(hostname, flags);
 
     MOZ_ASSERT(listener);
     RefPtr<nsDNSAsyncRequest> req =
@@ -966,7 +970,7 @@ nsDNSService::AsyncResolve(const nsACString  &aHostname,
         }
     }
 
-    return AsyncResolveInternal(aHostname, 0, flags, listener,
+    return AsyncResolveInternal(aHostname, RESOLVE_TYPE_DEFAULT, flags, listener,
                                 target_, attrs, result);
 }
 
@@ -978,7 +982,7 @@ nsDNSService::AsyncResolveNative(const nsACString        &aHostname,
                                  const OriginAttributes  &aOriginAttributes,
                                  nsICancelable          **result)
 {
-    return AsyncResolveInternal(aHostname, 0, flags, aListener, target_,
+    return AsyncResolveInternal(aHostname, RESOLVE_TYPE_DEFAULT, flags, aListener, target_,
                                 aOriginAttributes, result);
 }
 
@@ -1037,7 +1041,7 @@ nsDNSService::CancelAsyncResolve(const nsACString &aHostname,
         }
     }
 
-    return CancelAsyncResolveInternal(aHostname, 0, aFlags,
+    return CancelAsyncResolveInternal(aHostname, RESOLVE_TYPE_DEFAULT, aFlags,
                                       aListener, aReason, attrs);
 }
 
@@ -1048,7 +1052,7 @@ nsDNSService::CancelAsyncResolveNative(const nsACString       &aHostname,
                                        nsresult                aReason,
                                        const OriginAttributes &aOriginAttributes)
 {
-    return CancelAsyncResolveInternal(aHostname, 0, aFlags, aListener, aReason,
+    return CancelAsyncResolveInternal(aHostname, RESOLVE_TYPE_DEFAULT, aFlags, aListener, aReason,
                                       aOriginAttributes);
 }
 
@@ -1182,7 +1186,7 @@ nsDNSService::ResolveInternal(const nsACString        &aHostname,
 
     uint16_t af = GetAFForLookup(hostname, flags);
 
-    rv = res->ResolveHost(hostname, 0, aOriginAttributes, flags, af, syncReq);
+    rv = res->ResolveHost(hostname, RESOLVE_TYPE_DEFAULT, aOriginAttributes, flags, af, syncReq);
     if (NS_SUCCEEDED(rv)) {
         // wait for result
         while (!syncReq->mDone) {

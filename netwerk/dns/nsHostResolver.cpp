@@ -1233,7 +1233,7 @@ nsresult
 nsHostResolver::NativeLookup(nsHostRecord *aRec)
 {
     mLock.AssertCurrentThreadOwns();
-    if (aRec->type) {
+    if (aRec->type != nsIDNSService::RESOLVE_TYPE_DEFAULT) {
         return NS_ERROR_UNKNOWN_HOST;
     }
     RefPtr<nsHostRecord> rec(aRec);

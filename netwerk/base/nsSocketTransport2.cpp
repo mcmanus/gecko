@@ -1140,22 +1140,24 @@ nsSocketTransport::ResolveHost()
                 SOCKET_LOG((" look for esni txt record"));
                 nsAutoCString esniHost;
                 esniHost.Append("_esni.");
-                esniHost.Append(SocketHost());
+                // This might end up being the SocketHost
+                // see https://github.com/ekr/draft-rescorla-tls-esni/issues/61
+                esniHost.Append(mOriginHost);
                 rv = dns->AsyncResolveByTypeNative(esniHost,
                                                    nsIDNSService::RESOLVE_TYPE_TXT,
                                                    dnsFlags,
                                                    this,
                                                    mSocketTransportService,
                                                    mOriginAttributes,
-                                                   getter_AddRefs(mDNSRequestByType));
+                                                   getter_AddRefs(mDNSTxtRequest));
                 if (NS_FAILED(rv) && (rv != NS_ERROR_UNKNOWN_HOST)) {
                     SOCKET_LOG(("  dns request by type failed, canceling the "
                                 "main dns request."));
                     mDNSRequest->Cancel(NS_ERROR_ABORT);
                     mDNSRequest = nullptr;
-                    mDNSRequestByType = nullptr;
+                    mDNSTxtRequest = nullptr;
                 } else if (rv == NS_ERROR_UNKNOWN_HOST) {
-                    mDNSRequestByType = nullptr;
+                    mDNSTxtRequest = nullptr;
                     rv = NS_OK;
                 }
             }
@@ -1567,7 +1569,7 @@ nsSocketTransport::InitiateSocket()
         nsCOMPtr<nsISSLSocketControl> secCtrl =
             do_QueryInterface(mSecInfo);
         if (secCtrl) {
-          secCtrl->SetEsniTxt(mDNSRecordTxt);
+            secCtrl->SetEsniTxt(mDNSRecordTxt);
         }
     }
 
@@ -2157,12 +2159,12 @@ nsSocketTransport::OnSocketEvent(uint32_t type, nsresult status, nsISupports *pa
         break;
 
     case MSG_DNS_LOOKUP_COMPLETE:
-        if (mDNSRequest || mDNSRequestByType)  // only send this if we actually resolved anything
+        if (mDNSRequest || mDNSTxtRequest)  // only send this if we actually resolved anything
             SendStatus(NS_NET_STATUS_RESOLVED_HOST);
 
         SOCKET_LOG(("  MSG_DNS_LOOKUP_COMPLETE\n"));
         mDNSRequest = nullptr;
-        mDNSRequestByType = nullptr;
+        mDNSTxtRequest = nullptr;
         if (mDNSRecord) {
             mDNSRecord->GetNextAddr(SocketPort(), &mNetAddr);
         }
@@ -2434,9 +2436,9 @@ nsSocketTransport::OnSocketDetached(PRFileDesc *fd)
             mDNSRequest = nullptr;
         }
 
-        if (mDNSRequestByType) {
-            mDNSRequestByType->Cancel(NS_ERROR_ABORT);
-            mDNSRequestByType = nullptr;
+        if (mDNSTxtRequest) {
+            mDNSTxtRequest->Cancel(NS_ERROR_ABORT);
+            mDNSTxtRequest = nullptr;
         }
 
         //
@@ -2998,15 +3000,15 @@ nsSocketTransport::OnLookupComplete(nsICancelable *request,
 {
     SOCKET_LOG(("nsSocketTransport::OnLookupComplete: this=%p status %" PRIx32
                 ".", this, static_cast<uint32_t>(status)));
-    if (NS_FAILED(status) && mDNSRequestByType) {
-      mDNSRequestByType->Cancel(NS_ERROR_ABORT);
-      mDNSRequestByType = nullptr;
+    if (NS_FAILED(status) && mDNSTxtRequest) {
+      mDNSTxtRequest->Cancel(NS_ERROR_ABORT);
+      mDNSTxtRequest = nullptr;
     } else {
       mDNSRecord = static_cast<nsIDNSRecord *>(rec);
     }
 
     // flag host lookup complete for the benefit of the ResolveHost method.
-    if (!mDNSRequestByType) {
+    if (!mDNSTxtRequest) {
         mResolving = false;
         nsresult rv = PostEvent(MSG_DNS_LOOKUP_COMPLETE, status, nullptr);
 
@@ -3023,21 +3025,73 @@ nsSocketTransport::OnLookupComplete(nsICancelable *request,
     return NS_OK;
 }
 
+const nsDependentCSubstring
+TrimWhitespace(const nsACString& aStr)
+{
+  nsACString::const_iterator start, end;
+
+  aStr.BeginReading(start);
+  aStr.EndReading(end);
+
+  // Skip whitespace characters in the beginning
+  while (start != end && *start == ' ') {
+    ++start;
+  }
+
+  // Skip whitespace characters in the end.
+  while (end != start) {
+      --end;
+
+      if (*end != ' ') {
+          // Step back to the last non-whitespace character.
+          ++end;
+
+          break;
+      }
+  }
+
+  // Return a substring for the string w/o leading and/or trailing
+  // whitespace
+
+  return Substring(start, end);
+}
+
+
 NS_IMETHODIMP
 nsSocketTransport::OnLookupByTypeComplete(nsICancelable      *request,
-                                          nsIDNSByTypeRecord *res,
+                                          nsIDNSByTypeRecord *txtResponse,
                                           nsresult            status)
 {
     SOCKET_LOG(("nsSocketTransport::OnLookupByTypeComplete: "
                 "this=%p status %" PRIx32 ".",
                 this, static_cast<uint32_t>(status)));
+    MOZ_ASSERT(mDNSTxtRequest == request);
+    mDNSTxtRequest = nullptr;
 
+    // todo .. why are we canceling the A lookup because the TXT lookup failed?
     if (NS_FAILED(status) && (status != NS_ERROR_UNKNOWN_HOST) &&
         mDNSRequest) {
         mDNSRequest->Cancel(NS_ERROR_ABORT);
         mDNSRequest = nullptr;
     } else if (NS_SUCCEEDED(status)) {
-        res->GetRecords(mDNSRecordTxt);
+        nsTArray<nsCString> txtRecordSet;
+        txtResponse->GetRecords(txtRecordSet);
+        uint32_t setLen = txtRecordSet.Length();
+        if (setLen == 1) {
+            if (NS_FAILED(Base64Decode(TrimWhitespace(txtRecordSet[0]), mDNSRecordTxt))) {
+                SOCKET_LOG(("nsSocketTransport ESNI decode failure\n"));
+                mDNSRecordTxt.Truncate(0);
+            }
+        } else {
+            nsAutoCString longRecord;
+            for (uint32_t i = 0; i < setLen; ++i) {
+                longRecord.Append(txtRecordSet[i]);
+            }
+            if (NS_FAILED(Base64Decode(longRecord, mDNSRecordTxt))) {
+                SOCKET_LOG(("nsSocketTransport ESNI decode failure\n"));
+                mDNSRecordTxt.Truncate(0);
+            }
+        }
     }
     // flag host lookup complete for the benefit of the ResolveHost method.
     if (!mDNSRequest) {
@@ -3053,8 +3107,6 @@ nsSocketTransport::OnLookupByTypeComplete(nsICancelable      *request,
         // DNS service.
         if (NS_FAILED(rv))
             NS_WARNING("unable to post DNS lookup complete message");
-    } else {
-        mDNSRequestByType = nullptr;
     }
 
     return NS_OK;

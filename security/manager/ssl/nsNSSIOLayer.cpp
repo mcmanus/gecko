@@ -1007,8 +1007,30 @@ nsNSSSocketInfo::CloseSocketAndDestroy()
 }
 
 NS_IMETHODIMP
-nsNSSSocketInfo::SetEsniTxt(const nsTArray<nsCString>& aEsniTxt)
+nsNSSSocketInfo::GetEsniTxt(nsACString & aEsniTxt)
 {
+  aEsniTxt = mEsniTxt;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsNSSSocketInfo::SetEsniTxt(const nsACString & aEsniTxt)
+{
+  mEsniTxt = aEsniTxt;
+
+  if (mEsniTxt.Length()) {
+    fprintf(stderr,"\n\nTODO - SSL_SetESNIKey() [%s] (%d bytes)\n",
+            mEsniTxt.get(), mEsniTxt.Length());
+
+#if 0
+    if (SECSuccess != SSL_SetESNIKey(mEsniTxt.get(),
+                                     mEsniTxt.Length())) {
+      MOZ_ASSERT_UNREACHABLE("SSL_SetURL failed");
+      goto loser;
+    }
+#endif
+  }
+
   return NS_OK;
 }
 

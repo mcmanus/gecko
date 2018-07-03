@@ -163,6 +163,8 @@ interface nsISSLSocketControl : nsISupports {
      */
     [infallible] readonly attribute boolean failedVerification;
 
-    void setEsniTxt(in nsCStringTArrayConstRef aEsniTxt);
+    /* todo comment */
+    attribute ACString esniTxt;
+/*    void setEsniTxt(in ACString aEsniTxt); */
 };
 
