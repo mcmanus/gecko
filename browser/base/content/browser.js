@@ -1956,13 +1956,21 @@ if (AppConstants.platform == "macosx") {
                          "viewToolbarsMenu", "viewSidebarMenuMenu", "Browser:Reload",
                          "viewFullZoomMenu", "pageStyleMenu", "charsetMenu", "View:PageSource", "View:FullScreen",
                          "viewHistorySidebar", "Browser:AddBookmarkAs", "Browser:BookmarkAllTabs",
-                         "View:PageInfo"];
+                         "View:PageInfo", "History:UndoCloseTab"];
     var element;
 
     for (let disabledItem of disabledItems) {
       element = document.getElementById(disabledItem);
       if (element)
         element.setAttribute("disabled", "true");
+    }
+
+    // Show menus that are only visible in non-browser windows
+    let shownItems = ["menu_openLocation"];
+    for (let shownItem of shownItems) {
+      element = document.getElementById(shownItem);
+      if (element)
+        element.removeAttribute("hidden");
     }
 
     // If no windows are active (i.e. we're the hidden window), disable the close, minimize
@@ -7863,6 +7871,10 @@ var TabContextMenu = {
     // Session store
     document.getElementById("context_undoCloseTab").disabled =
       SessionStore.getClosedTabCount(window) == 0;
+
+    // Only one of Reload_Tab/Reload_Selected_Tabs should be visible.
+    document.getElementById("context_reloadTab").hidden = multiselectionContext;
+    document.getElementById("context_reloadSelectedTabs").hidden = !multiselectionContext;
 
     // Only one of pin/unpin/multiselect-pin/multiselect-unpin should be visible
     let contextPinTab = document.getElementById("context_pinTab");

@@ -84,6 +84,7 @@ class FaviconLoad {
     // Sometimes node is a document and sometimes it is an element. This is
     // the easiest single way to get to the load group in both those cases.
     this.channel.loadGroup = iconInfo.node.ownerGlobal.document.documentLoadGroup;
+    this.channel.notificationCallbacks = this;
 
     if (Services.prefs.getBoolPref("network.http.tailing.enabled", true) &&
         this.channel instanceof Ci.nsIClassOfService) {
@@ -116,7 +117,21 @@ class FaviconLoad {
     this.buffers.push(Uint8Array.from(data, c => c.charCodeAt(0)));
   }
 
+  asyncOnChannelRedirect(oldChannel, newChannel, flags, callback) {
+    if (oldChannel == this.channel) {
+      this.channel = newChannel;
+    }
+
+    callback.onRedirectVerifyCallback(Cr.NS_OK);
+  }
+
   async onStopRequest(request, context, statusCode) {
+    if (request != this.channel) {
+      // Indicates that a redirect has occurred. We don't care about the result
+      // of the original channel.
+      return;
+    }
+
     if (!Components.isSuccessCode(statusCode)) {
       // If the load was cancelled the promise will have been rejected then.
       if (statusCode != Cr.NS_BINDING_ABORTED) {
@@ -139,37 +154,46 @@ class FaviconLoad {
     // This stuff isn't available after onStopRequest returns (so don't start
     // any async operations before this!).
     if (this.channel instanceof Ci.nsICacheInfoChannel) {
-      expiration = Math.min(this.channel.cacheTokenExpirationTime * 1000, expiration);
-    }
-
-    let type = this.channel.contentType;
-    let blob = new Blob(this.buffers, { type });
-
-    if (type != "image/svg+xml") {
-      let octets = await promiseBlobAsOctets(blob);
-      let sniffer = Cc["@mozilla.org/image/loader;1"].
-                    createInstance(Ci.nsIContentSniffer);
       try {
-        type = sniffer.getMIMETypeFromContent(this.channel, octets, octets.length);
+        expiration = Math.min(this.channel.cacheTokenExpirationTime * 1000, expiration);
       } catch (e) {
-        this._deferred.reject(e);
-        return;
+        // Ignore failures to get the expiration time.
       }
-
-      if (!type) {
-        this._deferred.reject(Components.Exception(`Favicon at "${this.icon.iconUri.spec}" did not match a known mimetype.`, Cr.NS_ERROR_FAILURE));
-        return;
-      }
-
-      blob = blob.slice(0, blob.size, type);
     }
 
-    let dataURL = await promiseBlobAsDataURL(blob);
+    try {
+      let type = this.channel.contentType;
+      let blob = new Blob(this.buffers, { type });
 
-    this._deferred.resolve({
-      expiration,
-      dataURL,
-    });
+      if (type != "image/svg+xml") {
+        let octets = await promiseBlobAsOctets(blob);
+        let sniffer = Cc["@mozilla.org/image/loader;1"].
+                      createInstance(Ci.nsIContentSniffer);
+        type = sniffer.getMIMETypeFromContent(this.channel, octets, octets.length);
+
+        if (!type) {
+          throw Components.Exception(`Favicon at "${this.icon.iconUri.spec}" did not match a known mimetype.`, Cr.NS_ERROR_FAILURE);
+        }
+
+        blob = blob.slice(0, blob.size, type);
+      }
+
+      let dataURL = await promiseBlobAsDataURL(blob);
+
+      this._deferred.resolve({
+        expiration,
+        dataURL,
+      });
+    } catch (e) {
+      this._deferred.reject(e);
+    }
+  }
+
+  getInterface(iid) {
+    if (iid.equals(Ci.nsIChannelEventSink)) {
+      return this;
+    }
+    throw Cr.NS_ERROR_NO_INTERFACE;
   }
 }
 

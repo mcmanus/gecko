@@ -2952,6 +2952,8 @@ nsIFrame::BuildDisplayListForStackingContext(nsDisplayListBuilder* aBuilder,
     aBuilder->EnterSVGEffectsContents(&hoistedScrollInfoItemsStorage);
   }
 
+
+  bool needsActiveOpacityLayer = false;
   // We build an opacity item if it's not going to be drawn by SVG content, or
   // SVG effects. SVG effects won't handle the opacity if we want an active
   // layer (for async animations), see
@@ -2959,7 +2961,7 @@ nsIFrame::BuildDisplayListForStackingContext(nsDisplayListBuilder* aBuilder,
   // nsSVGIntegrationsUtils::PaintFilter.
   bool useOpacity = HasVisualOpacity(effectSet) &&
                     !nsSVGUtils::CanOptimizeOpacity(this) &&
-                    (!usingSVGEffects || nsDisplayOpacity::NeedsActiveLayer(aBuilder, this));
+                    ((needsActiveOpacityLayer = nsDisplayOpacity::NeedsActiveLayer(aBuilder, this)) || !usingSVGEffects);
   bool useBlendMode = effects->mMixBlendMode != NS_STYLE_BLEND_NORMAL;
   bool useStickyPosition = disp->mPosition == NS_STYLE_POSITION_STICKY &&
     IsScrollFrameActive(aBuilder,
@@ -3259,9 +3261,10 @@ nsIFrame::BuildDisplayListForStackingContext(nsDisplayListBuilder* aBuilder,
     // all descendant content, but some should not be clipped.
     DisplayListClipState::AutoSaveRestore opacityClipState(aBuilder);
     resultList.AppendToTop(
-        MakeDisplayItem<nsDisplayOpacity>(aBuilder, this, &resultList,
+      MakeDisplayItem<nsDisplayOpacity>(aBuilder, this, &resultList,
                                         containerItemASR,
-                                        opacityItemForEventsAndPluginsOnly));
+                                        opacityItemForEventsAndPluginsOnly,
+                                        needsActiveOpacityLayer));
     if (aCreatedContainerItem) {
       *aCreatedContainerItem = true;
     }
@@ -11922,13 +11925,38 @@ void DR_State::AddRule(nsTArray<DR_Rule*>& aRules,
   aRules.AppendElement(&aRule);
 }
 
+static Maybe<bool> ShouldLogReflow(const char* processes)
+{
+  switch (processes[0]) {
+  case 'A': case 'a': return Some(true);
+  case 'P': case 'p': return Some(XRE_IsParentProcess());
+  case 'C': case 'c': return Some(XRE_IsContentProcess());
+  default: return Nothing{};
+  }
+}
+
 void DR_State::ParseRulesFile()
 {
+  char* processes = PR_GetEnv("GECKO_DISPLAY_REFLOW_PROCESSES");
+  if (processes) {
+    Maybe<bool> enableLog = ShouldLogReflow(processes);
+    if (enableLog.isNothing()) {
+      MOZ_CRASH("GECKO_DISPLAY_REFLOW_PROCESSES: [a]ll [p]arent [c]ontent");
+    } else if (enableLog.value()) {
+      DR_Rule* rule = new DR_Rule;
+      rule->AddPart(LayoutFrameType::None);
+      rule->mDisplay = true;
+      AddRule(mWildRules, *rule);
+      mActive = true;
+    }
+    return;
+  }
+
   char* path = PR_GetEnv("GECKO_DISPLAY_REFLOW_RULES_FILE");
   if (path) {
     FILE* inFile = fopen(path, "r");
     if (!inFile) {
-      MOZ_CRASH("Failed to open the specified rules file");
+      MOZ_CRASH("Failed to open the specified rules file; Try `--setpref security.sandbox.content.level=2` if the sandbox is at cause");
     }
     for (DR_Rule* rule = ParseRule(inFile); rule; rule = ParseRule(inFile)) {
       if (rule->mTarget) {

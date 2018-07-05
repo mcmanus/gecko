@@ -590,13 +590,13 @@ nsNavHistory::DispatchFrecencyChangedNotification(const nsACString& aSpec,
 }
 
 NS_IMETHODIMP
-nsNavHistory::RecalculateFrecencyStats(nsIObserver *aCallback)
+nsNavHistory::RecalculateOriginFrecencyStats(nsIObserver *aCallback)
 {
   RefPtr<nsNavHistory> self(this);
   nsMainThreadPtrHandle<nsIObserver> callback(
     !aCallback ? nullptr :
     new nsMainThreadPtrHolder<nsIObserver>(
-      "nsNavHistory::RecalculateFrecencyStats callback",
+      "nsNavHistory::RecalculateOriginFrecencyStats callback",
       aCallback
     )
   );
@@ -605,11 +605,11 @@ nsNavHistory::RecalculateFrecencyStats(nsIObserver *aCallback)
   nsCOMPtr<nsIEventTarget> target = do_GetInterface(conn);
   MOZ_ASSERT(target);
   nsresult rv = target->Dispatch(NS_NewRunnableFunction(
-    "nsNavHistory::RecalculateFrecencyStats",
+    "nsNavHistory::RecalculateOriginFrecencyStats",
     [self, callback] {
-      Unused << self->RecalculateFrecencyStatsInternal();
+      Unused << self->RecalculateOriginFrecencyStatsInternal();
       Unused << NS_DispatchToMainThread(NS_NewRunnableFunction(
-        "nsNavHistory::RecalculateFrecencyStats callback",
+        "nsNavHistory::RecalculateOriginFrecencyStats callback",
         [callback] {
           if (callback) {
             Unused << callback->Observe(nullptr, "", nullptr);
@@ -624,27 +624,25 @@ nsNavHistory::RecalculateFrecencyStats(nsIObserver *aCallback)
 }
 
 nsresult
-nsNavHistory::RecalculateFrecencyStatsInternal()
+nsNavHistory::RecalculateOriginFrecencyStatsInternal()
 {
   nsCOMPtr<mozIStorageConnection> conn(mDB->MainConn());
   NS_ENSURE_STATE(conn);
 
   nsresult rv = conn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
-    "INSERT OR REPLACE INTO moz_meta (key, value) " \
-    "SELECT '" MOZ_META_KEY_FRECENCY_COUNT "' AS key, COUNT(*) AS value " \
-    "FROM moz_places " \
-    "WHERE id >= 0 AND frecency > 0 " \
-    "UNION "\
-    "SELECT '" MOZ_META_KEY_FRECENCY_SUM "' AS key, IFNULL(SUM(frecency), 0) AS value " \
-    "FROM moz_places " \
-    "WHERE id >= 0 AND frecency > 0 " \
-    "UNION " \
-    "SELECT '" MOZ_META_KEY_FRECENCY_SUM_OF_SQUARES "' AS key, IFNULL(SUM(frecency_squared), 0) AS value " \
-    "FROM ( " \
-      "SELECT frecency * frecency AS frecency_squared " \
-      "FROM moz_places " \
-      "WHERE id >= 0 AND frecency > 0 " \
-    "); "
+    "INSERT OR REPLACE INTO moz_meta(key, value) VALUES "
+    "( "
+      "'" MOZ_META_KEY_ORIGIN_FRECENCY_COUNT "' , "
+      "(SELECT COUNT(*) FROM moz_origins WHERE frecency > 0) "
+    "), "
+    "( "
+      "'" MOZ_META_KEY_ORIGIN_FRECENCY_SUM "', "
+      "(SELECT TOTAL(frecency) FROM moz_origins WHERE frecency > 0) "
+    "), "
+    "( "
+      "'" MOZ_META_KEY_ORIGIN_FRECENCY_SUM_OF_SQUARES "' , "
+      "(SELECT TOTAL(frecency * frecency) FROM moz_origins WHERE frecency > 0) "
+    ") "
   ));
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -882,6 +880,13 @@ nsNavHistory::invalidateFrecencies(const nsCString& aPlaceIdsQueryString)
   nsresult rv = stmt->ExecuteAsync(cb, getter_AddRefs(ps));
   NS_ENSURE_SUCCESS(rv, rv);
 
+  // Trigger frecency updates for affected origins.
+  nsCOMPtr<mozIStorageAsyncStatement> updateOriginFrecenciesStmt =
+    mDB->GetAsyncStatement("DELETE FROM moz_updateoriginsupdate_temp");
+  NS_ENSURE_STATE(updateOriginFrecenciesStmt);
+  rv = updateOriginFrecenciesStmt->ExecuteAsync(nullptr, getter_AddRefs(ps));
+  NS_ENSURE_SUCCESS(rv, rv);
+
   return NS_OK;
 }
 
@@ -1075,8 +1080,8 @@ nsNavHistory::ExecuteQuery(nsINavHistoryQuery *aQuery,
 // from browser-menubar.inc, our history menu query is:
 // place:sort=4&maxResults=10
 // note, any maxResult > 0 will still be considered a history menu query
-// or if this is the place query from the "Most Visited" item in the
-// "Smart Bookmarks" folder: place:sort=8&maxResults=10
+// or if this is the place query from the old "Most Visited" item in some profiles:
+// folder: place:sort=8&maxResults=10
 // note, any maxResult > 0 will still be considered a Most Visited menu query
 static
 bool IsOptimizableHistoryQuery(const RefPtr<nsNavHistoryQuery>& aQuery,
@@ -1958,8 +1963,8 @@ nsNavHistory::ConstructQueryString(
         nsINavHistoryQueryOptions::SORT_BY_DATE_DESCENDING) ||
       IsOptimizableHistoryQuery(aQuery, aOptions,
         nsINavHistoryQueryOptions::SORT_BY_VISITCOUNT_DESCENDING)) {
-    // Generate an optimized query for the history menu and most visited
-    // smart bookmark.
+    // Generate an optimized query for the history menu and the old most visited
+    // bookmark that was inserted into profiles.
     queryString = NS_LITERAL_CSTRING(
       "SELECT h.id, h.url, h.title AS page_title, h.rev_host, h.visit_count, h.last_visit_date, "
           "null, null, null, null, null, ") +
@@ -3755,6 +3760,13 @@ nsNavHistory::UpdateFrecency(int64_t aPlaceId)
                                      getter_AddRefs(ps));
   NS_ENSURE_SUCCESS(rv, rv);
 
+  // Trigger frecency updates for all affected origins.
+  nsCOMPtr<mozIStorageAsyncStatement> updateOriginFrecenciesStmt =
+    mDB->GetAsyncStatement("DELETE FROM moz_updateoriginsupdate_temp");
+  NS_ENSURE_STATE(updateOriginFrecenciesStmt);
+  rv = updateOriginFrecenciesStmt->ExecuteAsync(nullptr, getter_AddRefs(ps));
+  NS_ENSURE_SUCCESS(rv, rv);
+
   return NS_OK;
 }
 
@@ -3798,6 +3810,14 @@ nsNavHistory::FixInvalidFrecencies()
     new FixInvalidFrecenciesCallback();
   nsCOMPtr<mozIStoragePendingStatement> ps;
   (void)stmt->ExecuteAsync(callback, getter_AddRefs(ps));
+
+  // Trigger frecency updates for affected origins.
+  nsCOMPtr<mozIStorageAsyncStatement> updateOriginFrecenciesStmt =
+    mDB->GetAsyncStatement("DELETE FROM moz_updateoriginsupdate_temp");
+  NS_ENSURE_STATE(updateOriginFrecenciesStmt);
+  nsresult rv =
+    updateOriginFrecenciesStmt->ExecuteAsync(nullptr, getter_AddRefs(ps));
+  NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
 }

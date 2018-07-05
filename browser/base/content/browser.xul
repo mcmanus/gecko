@@ -6,18 +6,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-<?xml-stylesheet href="chrome://browser/content/browser.css" type="text/css"?>
-<?xml-stylesheet href="chrome://browser/content/downloads/downloads.css"?>
-<?xml-stylesheet href="chrome://browser/content/places/places.css" type="text/css"?>
-<?xml-stylesheet href="chrome://browser/content/usercontext/usercontext.css" type="text/css"?>
-<?xml-stylesheet href="chrome://browser/skin/controlcenter/panel.css" type="text/css"?>
-<?xml-stylesheet href="chrome://browser/skin/customizableui/panelUI.css" type="text/css"?>
-<?xml-stylesheet href="chrome://browser/skin/downloads/downloads.css"?>
-<?xml-stylesheet href="chrome://browser/skin/searchbar.css"?>
-<?xml-stylesheet href="chrome://browser/skin/places/places.css"?>
-<?xml-stylesheet href="chrome://browser/skin/places/editBookmark.css"?>
-<?xml-stylesheet href="chrome://browser/skin/" type="text/css"?>
-<?xml-stylesheet href="chrome://browser/content/tabbrowser.css" type="text/css"?>
+<?xml-stylesheet href="chrome://browser/content/browser-window.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/skin/compacttheme.css" type="text/css" alternate="yes" title="Light/Dark"?>
 
 # All DTD information is stored in a separate file so that it can be shared by
@@ -89,9 +78,7 @@
 # All sets except for popupsets (commands, keys, stringbundles and broadcasters)
 # *must* go into the browser-sets.inc file so that they can be shared with other
 # top level windows in macWindow.inc.xul.
-#define FULL_BROWSER_WINDOW
 #include browser-sets.inc
-#undef FULL_BROWSER_WINDOW
 
   <popupset id="mainPopupSet">
     <menupopup id="tabContextMenu"
@@ -99,6 +86,9 @@
                onpopuphidden="if (event.target == this) TabContextMenu.contextTab = null;">
       <menuitem id="context_reloadTab" label="&reloadTab.label;" accesskey="&reloadTab.accesskey;"
                 oncommand="gBrowser.reloadTab(TabContextMenu.contextTab);"/>
+      <menuitem id="context_reloadSelectedTabs" label="&reloadSelectedTabs.label;" hidden="true"
+                accesskey="&reloadSelectedTabs.accesskey;"
+                oncommand="gBrowser.reloadMultiSelectedTabs();"/>
       <menuitem id="context_toggleMuteTab" oncommand="TabContextMenu.contextTab.toggleMuteAudio();"/>
       <menuitem id="context_toggleMuteSelectedTabs" hidden="true"
                 oncommand="gBrowser.toggleMuteAudioOnMultiSelectedTabs(TabContextMenu.contextTab);"/>

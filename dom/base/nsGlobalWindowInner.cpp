@@ -17,6 +17,7 @@
 #include "nsHistory.h"
 #include "nsDOMNavigationTiming.h"
 #include "nsIDOMStorageManager.h"
+#include "mozilla/dom/AutoplayRequest.h"
 #include "mozilla/dom/DOMJSProxyHandler.h"
 #include "mozilla/dom/DOMPrefs.h"
 #include "mozilla/dom/EventTarget.h"
@@ -885,6 +886,7 @@ public:
 
 nsGlobalWindowInner::nsGlobalWindowInner(nsGlobalWindowOuter *aOuterWindow)
   : nsPIDOMWindowInner(aOuterWindow->AsOuter()),
+    mozilla::webgpu::InstanceProvider(this),
     mIdleFuzzFactor(0),
     mIdleCallbackIndex(-1),
     mCurrentlyIdle(false),
@@ -1304,7 +1306,6 @@ nsGlobalWindowInner::FreeInnerObjects()
 
   mConsole = nullptr;
 
-  mAudioWorklet = nullptr;
   mPaintWorklet = nullptr;
 
   mExternal = nullptr;
@@ -1460,7 +1461,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsGlobalWindowInner)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCrypto)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mU2F)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mConsole)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAudioWorklet)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPaintWorklet)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mExternal)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mInstallTrigger)
@@ -1477,6 +1477,8 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsGlobalWindowInner)
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocumentFlushedResolvers[i]->mPromise);
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocumentFlushedResolvers[i]->mCallback);
   }
+
+  static_cast<mozilla::webgpu::InstanceProvider*>(tmp)->CcTraverse(cb);
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
@@ -1548,7 +1550,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsGlobalWindowInner)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mCrypto)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mU2F)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mConsole)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mAudioWorklet)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mPaintWorklet)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mExternal)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mInstallTrigger)
@@ -1580,6 +1581,8 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsGlobalWindowInner)
     NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocumentFlushedResolvers[i]->mCallback);
   }
   tmp->mDocumentFlushedResolvers.Clear();
+
+  static_cast<mozilla::webgpu::InstanceProvider*>(tmp)->CcUnlink();
 
   NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
@@ -6411,8 +6414,8 @@ nsGlobalWindowInner::GetOrCreateServiceWorker(const ServiceWorkerDescriptor& aDe
   return ref.forget();
 }
 
-RefPtr<ServiceWorkerRegistration>
-nsGlobalWindowInner::GetOrCreateServiceWorkerRegistration(const ServiceWorkerRegistrationDescriptor& aDescriptor)
+RefPtr<mozilla::dom::ServiceWorkerRegistration>
+nsGlobalWindowInner::GetServiceWorkerRegistration(const mozilla::dom::ServiceWorkerRegistrationDescriptor& aDescriptor) const
 {
   MOZ_ASSERT(NS_IsMainThread());
   RefPtr<ServiceWorkerRegistration> ref;
@@ -6425,11 +6428,17 @@ nsGlobalWindowInner::GetOrCreateServiceWorkerRegistration(const ServiceWorkerReg
     ref = swr.forget();
     *aDoneOut = true;
   });
+  return ref.forget();
+}
 
+RefPtr<ServiceWorkerRegistration>
+nsGlobalWindowInner::GetOrCreateServiceWorkerRegistration(const ServiceWorkerRegistrationDescriptor& aDescriptor)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  RefPtr<ServiceWorkerRegistration> ref = GetServiceWorkerRegistration(aDescriptor);
   if (!ref) {
     ref = ServiceWorkerRegistration::CreateForMainThread(this, aDescriptor);
   }
-
   return ref.forget();
 }
 
@@ -7988,22 +7997,6 @@ nsGlobalWindowInner::AbstractMainThreadFor(TaskCategory aCategory)
 }
 
 Worklet*
-nsGlobalWindowInner::GetAudioWorklet(ErrorResult& aRv)
-{
-  if (!mAudioWorklet) {
-    nsIPrincipal* principal = GetPrincipal();
-    if (!principal) {
-      aRv.Throw(NS_ERROR_FAILURE);
-      return nullptr;
-    }
-
-    mAudioWorklet = new Worklet(this, principal, Worklet::eAudioWorklet);
-  }
-
-  return mAudioWorklet;
-}
-
-Worklet*
 nsGlobalWindowInner::GetPaintWorklet(ErrorResult& aRv)
 {
   if (!mPaintWorklet) {
@@ -8138,6 +8131,39 @@ const nsIGlobalObject*
 nsPIDOMWindowInner::AsGlobal() const
 {
   return nsGlobalWindowInner::Cast(this);
+}
+
+static nsPIDOMWindowInner*
+GetTopLevelInnerWindow(nsPIDOMWindowInner* aWindow)
+{
+  if (!aWindow) {
+    return nullptr;
+  }
+  nsIDocShell* docShell = aWindow->GetDocShell();
+  if (!docShell) {
+    return nullptr;
+  }
+  nsCOMPtr<nsIDocShellTreeItem> rootTreeItem;
+  docShell->GetSameTypeRootTreeItem(getter_AddRefs(rootTreeItem));
+  if (!rootTreeItem || !rootTreeItem->GetDocument()) {
+    return nullptr;
+  }
+  return rootTreeItem->GetDocument()->GetInnerWindow();
+}
+
+already_AddRefed<mozilla::AutoplayRequest>
+nsPIDOMWindowInner::GetAutoplayRequest()
+{
+  // The AutoplayRequest is stored on the top level window.
+  nsPIDOMWindowInner* window = GetTopLevelInnerWindow(this);
+  if (!window) {
+    return nullptr;
+  }
+  if (!window->mAutoplayRequest) {
+    window->mAutoplayRequest = AutoplayRequest::Create(nsGlobalWindowInner::Cast(window));
+  }
+  RefPtr<mozilla::AutoplayRequest> request = window->mAutoplayRequest;
+  return request.forget();
 }
 
 // XXX: Can we define this in a header instead of here?

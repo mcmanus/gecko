@@ -5,6 +5,17 @@
 
 /* eslint-env mozilla/browser-window */
 
+/**
+ * A set of known icons to use for internal pages. These are hardcoded so we can
+ * start loading them faster than ContentLinkHandler would normally find them.
+ */
+const FAVICON_DEFAULTS = {
+  "about:newtab": "chrome://branding/content/icon32.png",
+  "about:home": "chrome://branding/content/icon32.png",
+  "about:welcome": "chrome://branding/content/icon32.png",
+  "about:privatebrowsing": "chrome://browser/skin/privatebrowsing/favicon.svg",
+};
+
 window._gBrowser = {
   init() {
     ChromeUtils.defineModuleGetter(this, "AsyncTabSwitcher",
@@ -2399,10 +2410,8 @@ window._gBrowser = {
 
     // Hack to ensure that the about:newtab, and about:welcome favicon is loaded
     // instantaneously, to avoid flickering and improve perceived performance.
-    if (aURI == "about:newtab" || aURI == "about:home" || aURI == "about:welcome") {
-      this.setIcon(t, "chrome://branding/content/icon32.png");
-    } else if (aURI == "about:privatebrowsing") {
-      this.setIcon(t, "chrome://browser/skin/privatebrowsing/favicon.svg");
+    if (aURI in FAVICON_DEFAULTS) {
+      this.setIcon(t, FAVICON_DEFAULTS[aURI]);
     }
 
     // Dispatch a new tab notification.  We do this once we're
@@ -3259,11 +3268,17 @@ window._gBrowser = {
   },
 
   reloadAllTabs() {
-    let tabs = this.visibleTabs;
-    let l = tabs.length;
-    for (var i = 0; i < l; i++) {
+    this.reloadTabs(this.visibleTabs);
+  },
+
+  reloadMultiSelectedTabs() {
+    this.reloadTabs(this.selectedTabs);
+  },
+
+  reloadTabs(tabs) {
+    for (let tab of tabs) {
       try {
-        this.getBrowserForTab(tabs[i]).reload();
+        this.getBrowserForTab(tab).reload();
       } catch (e) {
         // ignore failure to reload so others will be reloaded
       }
@@ -3634,6 +3649,17 @@ window._gBrowser = {
     if (updatePositionalAttributes) {
       this.tabContainer._setPositionalAttributes();
     }
+  },
+
+  set selectedTabs(tabs) {
+    this.clearMultiSelectedTabs(false);
+    this.selectedTab = tabs[0];
+    if (tabs.length > 1) {
+      for (let tab of tabs) {
+        this.addToMultiSelectedTabs(tab, true);
+      }
+    }
+    this.tabContainer._setPositionalAttributes();
   },
 
   get selectedTabs() {
@@ -4554,6 +4580,16 @@ class TabProgressListener {
         }
       }
 
+      // If we don't already have an icon for this tab then clear the tab's
+      // icon. Don't do this on the initial about:blank load to prevent
+      // flickering. Don't clear the icon if we already set it from one of the
+      // known defaults. Note we use the original URL since about:newtab
+      // redirects to a prerendered page.
+      if (!this.mBrowser.mIconURL && !ignoreBlank &&
+          !(originalLocation.spec in FAVICON_DEFAULTS)) {
+        this.mTab.removeAttribute("image");
+      }
+
       // For keyword URIs clear the user typed value since they will be changed into real URIs
       if (location.scheme == "keyword")
         this.mBrowser.userTypedValue = null;
@@ -4653,6 +4689,8 @@ class TabProgressListener {
       if (!this.mTab.hasAttribute("pending") &&
           aWebProgress.isLoadingDocument &&
           !isSameDocument) {
+        // Removing the tab's image here causes flickering, wait until the load
+        // is complete.
         this.mBrowser.mIconURL = null;
       }
 

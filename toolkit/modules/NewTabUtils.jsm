@@ -1297,8 +1297,6 @@ var ActivityStreamLinks = {
   addBookmark(aData, aBrowser) {
       const {url, title} = aData;
       return aBrowser.ownerGlobal.PlacesCommandHook.bookmarkPage(
-              aBrowser,
-              true,
               url,
               title);
   },

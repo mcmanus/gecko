@@ -308,6 +308,16 @@ nsHostRecord::ResolveComplete()
                               ((mNativeSuccess ? Telemetry::LABELS_DNS_TRR_COMPARE::NativeWorked :
                                 (mTRRSuccess ? Telemetry::LABELS_DNS_TRR_COMPARE::TRRWorked:
                                  Telemetry::LABELS_DNS_TRR_COMPARE::BothFailed))));
+    } else if (mResolverMode == MODE_TRRFIRST) {
+        if(flags & nsIDNSService::RESOLVE_DISABLE_TRR) {
+            // TRR is disabled on request, which is a next-level back-off method.
+            Telemetry::Accumulate(Telemetry::DNS_TRR_DISABLED, mNativeSuccess);
+        } else {
+            AccumulateCategorical(mTRRSuccess?
+                                  Telemetry::LABELS_DNS_TRR_FIRST::TRRWorked :
+                                  ((mNativeSuccess ? Telemetry::LABELS_DNS_TRR_FIRST::NativeFallback :
+                                    Telemetry::LABELS_DNS_TRR_FIRST::BothFailed)));
+        }
     }
 
     switch(mResolverMode) {
@@ -1930,6 +1940,9 @@ nsHostResolver::ThreadFunc()
 
         TimeStamp startTime = TimeStamp::Now();
         bool getTtl = rec->mGetTtl;
+        TimeDuration inQueue = startTime - rec->mNativeStart;
+        uint32_t ms = static_cast<uint32_t>(inQueue.ToMilliseconds());
+        Telemetry::Accumulate(Telemetry::DNS_NATIVE_QUEUING, ms);
         nsresult status = GetAddrInfo(rec->host, rec->af,
                                       rec->flags, &ai,
                                       getTtl);
@@ -2003,16 +2016,17 @@ nsHostResolver::Create(uint32_t maxCacheEntries,
                        uint32_t defaultGracePeriod,
                        nsHostResolver **result)
 {
-    auto *res = new nsHostResolver(maxCacheEntries, defaultCacheEntryLifetime,
-                                   defaultGracePeriod);
-    NS_ADDREF(res);
+    RefPtr<nsHostResolver> res =
+        new nsHostResolver(maxCacheEntries, defaultCacheEntryLifetime,
+                           defaultGracePeriod);
 
     nsresult rv = res->Init();
-    if (NS_FAILED(rv))
-        NS_RELEASE(res);
+    if (NS_FAILED(rv)) {
+        return rv;
+    }
 
-    *result = res;
-    return rv;
+    res.forget(result);
+    return NS_OK;
 }
 
 void

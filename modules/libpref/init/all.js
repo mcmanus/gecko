@@ -227,7 +227,7 @@ pref("dom.keyboardevent.keypress.dispatch_non_printable_keys_only_system_group_i
 // if you need to limit under a directory, the path should end with "/" like
 // "example.com/foo/".  Note that this cannot limit port number for now.
 pref("dom.keyboardevent.keypress.hack.dispatch_non_printable_keys",
-     "docs.google.com,mail.google.com,hangouts.google.com,keep.google.com,inbox.google.com,*.etherpad.org/p/,etherpad.wikimedia.org/p/,board.net/p/,pad.riseup.net/p/,*.sandstorm.io,factor.cc/pad/,*.etherpad.fr/p/,piratenpad.de/p/,notes.typo3.org/p/,etherpad.net/p/,*.framapad.org/p/,pad.ouvaton.coop/,pad.systemli.org/p/,pad.lqdn.fr/p/,public.etherpad-mozilla.org/p/,*.cloudron.me/p/,pad.aquilenet.fr/p/,free.primarypad.com/p/,pad.ondesk.work/p/,demo.maadix.org/etherpad/pads/,paper.dropbox.com/doc");
+     "docs.google.com,mail.google.com,hangouts.google.com,keep.google.com,inbox.google.com,*.etherpad.org/p/,etherpad.wikimedia.org/p/,board.net/p/,pad.riseup.net/p/,*.sandstorm.io,factor.cc/pad/,*.etherpad.fr/p/,piratenpad.de/p/,notes.typo3.org/p/,etherpad.net/p/,*.framapad.org/p/,pad.ouvaton.coop/,pad.systemli.org/p/,pad.lqdn.fr/p/,public.etherpad-mozilla.org/p/,*.cloudron.me/p/,pad.aquilenet.fr/p/,free.primarypad.com/p/,pad.ondesk.work/p/,demo.maadix.org/etherpad/pads/");
 #else
 pref("dom.keyboardevent.keypress.dispatch_non_printable_keys_only_system_group_in_content", false);
 #endif
@@ -546,6 +546,8 @@ pref("media.mediasource.experimental.enabled", false);
 pref("media.benchmark.vp9.threshold", 150);
 pref("media.benchmark.frames", 300);
 pref("media.benchmark.timeout", 1000);
+
+pref("media.media-capabilities.enabled", false);
 
 #ifdef MOZ_WEBSPEECH
 pref("media.webspeech.synth.enabled", false);
@@ -2513,7 +2515,7 @@ pref("security.csp.enableStrictDynamic", true);
 
 #if defined(DEBUG) && !defined(ANDROID)
 // about:welcome has been added until Bug 1448359 is fixed at which time home, newtab, and welcome will all be removed.
-pref("csp.content_privileged_about_uris_without_csp", "blank,blocked,home,newtab,printpreview,srcdoc,welcome");
+pref("csp.content_privileged_about_uris_without_csp", "blank,home,newtab,printpreview,srcdoc,welcome");
 #endif
 
 #ifdef NIGHTLY_BUILD
@@ -2953,9 +2955,6 @@ pref("layout.css.osx-font-smoothing.enabled", true);
 #else
 pref("layout.css.osx-font-smoothing.enabled", false);
 #endif
-
-// Is support for the CSS-wide "unset" value enabled?
-pref("layout.css.unset-value.enabled", true);
 
 // Is support for CSS overflow-clip-box enabled for non-UA sheets?
 pref("layout.css.overflow-clip-box.enabled", false);
@@ -4720,6 +4719,8 @@ pref("webgl.dxgl.enabled", true);
 pref("webgl.dxgl.needs-finish", false);
 #endif
 
+pref("dom.webgpu.enable", false);
+
 pref("gfx.offscreencanvas.enabled", false);
 
 // sendbuffer of 0 means use OS default, sendbuffer unset means use
@@ -5784,6 +5785,7 @@ pref("fuzzing.enabled", false);
 #ifdef MOZ_ASAN_REPORTER
 pref("asanreporter.apiurl", "https://anf1.fuzzing.mozilla.org/crashproxy/submit/");
 pref("asanreporter.clientid", "unknown");
+pref("toolkit.telemetry.overrideUpdateChannel", "nightly-asan");
 #endif
 
 #if defined(XP_WIN)
@@ -5815,7 +5817,7 @@ pref("toolkit.crashreporter.include_context_heap", true);
 // Open noopener links in a new process
 pref("dom.noopener.newprocess.enabled", true);
 
-#if defined(XP_WIN) || defined(XP_MACOSX)
+#if defined(XP_WIN) || defined(XP_MACOSX) || defined(MOZ_WIDGET_GTK)
 pref("layers.omtp.enabled", true);
 #else
 pref("layers.omtp.enabled", false);
