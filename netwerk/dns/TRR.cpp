@@ -731,7 +731,12 @@ TRR::DohDecode(nsCString &aHost)
       case TRRTYPE_TXT:
       {
         nsAutoCString txt;
-        txt.Append((const char *)(&mResponse[index]), RDLENGTH);
+        uint8_t characterStringLen = mResponse[index];
+        if (characterStringLen > (RDLENGTH - 1)) {
+          LOG(("TRR::DohDecode MALFORMED TXT RECORD\n"));
+          break;
+        }
+        txt.Append((const char *)(&mResponse[index + 1]), characterStringLen);
         mTxt.AppendElement(txt);
         if (mTxtTtl > TTL) {
           mTxtTtl = TTL;
