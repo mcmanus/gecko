@@ -6,6 +6,8 @@ TODO
 * change pref to network.security.esni.enabled
 * test cname cases from todo https://github.com/ekr/draft-rescorla-tls-esni/issues/35
 * why are we canceling A lookup when TXT fails? nsSocketTransport::OnLookupByTypeComplete()
+* file a bug for generic type support
+* comment setEsniTxt API wrt concat and b64
 
 
 
