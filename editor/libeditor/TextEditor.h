@@ -105,8 +105,6 @@ public:
 
   virtual dom::EventTarget* GetDOMEventTarget() override;
 
-  virtual already_AddRefed<nsIContent> GetInputEventTargetContent() override;
-
   /**
    * InsertTextAsAction() inserts aStringToInsert at selection.
    * Although this method is implementation of nsIPlaintextEditor.insertText(),
@@ -119,7 +117,8 @@ public:
   /**
    * DeleteSelectionAsAction() removes selection content or content around
    * caret with transactions.  This should be used for handling it as an
-   * edit action.
+   * edit action.  If you'd like to remove selection for preparing to insert
+   * something, you probably should use DeleteSelectionAsSubAction().
    *
    * @param aDirection          How much range should be removed.
    * @param aStripWrappers      Whether the parent blocks should be removed
@@ -172,6 +171,12 @@ public:
    */
   void OnCompositionEnd(WidgetCompositionEvent& aCompositionEndEvent);
 
+  /**
+   * OnDrop() is called from EditorEventListener::Drop that is handler of drop
+   * event.
+   */
+  nsresult OnDrop(dom::DragEvent* aDropEvent);
+
 protected: // May be called by friends.
   /****************************************************************************
    * Some classes like TextEditRules, HTMLEditRules, WSRunObject which are
@@ -194,7 +199,17 @@ protected: // May be called by friends.
   using EditorBase::RemoveAttributeOrEquivalent;
   using EditorBase::SetAttributeOrEquivalent;
 
-  virtual nsresult InsertFromDrop(dom::DragEvent* aDropEvent) override;
+  /**
+   * DeleteSelectionAsSubAction() removes selection content or content around
+   * caret with transactions.  This should be used for handling it as an
+   * edit sub-action.
+   *
+   * @param aDirection          How much range should be removed.
+   * @param aStripWrappers      Whether the parent blocks should be removed
+   *                            when they become empty.
+   */
+  nsresult DeleteSelectionAsSubAction(EDirection aDirection,
+                                      EStripWrappers aStripWrappers);
 
   /**
    * DeleteSelectionWithTransaction() removes selected content or content
@@ -359,6 +374,8 @@ protected: // Shouldn't be used by friend classes
    *                    for committing the composition, returns false.
    */
   bool EnsureComposition(WidgetCompositionEvent& aCompositionEvent);
+
+  virtual already_AddRefed<nsIContent> GetInputEventTargetContent() override;
 
 protected:
   nsCOMPtr<nsIDocumentEncoder> mCachedDocumentEncoder;

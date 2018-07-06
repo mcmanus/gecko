@@ -680,14 +680,18 @@ NS_IMETHODIMP
 DocAccessible::OnPivotChanged(nsIAccessiblePivot* aPivot,
                               nsIAccessible* aOldAccessible,
                               int32_t aOldStart, int32_t aOldEnd,
+                              nsIAccessible* aNewAccessible,
+                              int32_t aNewStart, int32_t aNewEnd,
                               PivotMoveReason aReason,
                               bool aIsFromUserInput)
 {
   RefPtr<AccEvent> event =
     new AccVCChangeEvent(
       this, (aOldAccessible ? aOldAccessible->ToInternalAccessible() : nullptr),
-      aOldStart, aOldEnd, aReason,
-      aIsFromUserInput ? eFromUserInput : eNoUserInput);
+      aOldStart, aOldEnd,
+      (aNewAccessible ? aNewAccessible->ToInternalAccessible() : nullptr),
+      aNewStart, aNewEnd,
+      aReason, aIsFromUserInput ? eFromUserInput : eNoUserInput);
   nsEventShell::FireEvent(event);
 
   return NS_OK;
@@ -717,7 +721,7 @@ DocAccessible::AttributeWillChange(dom::Element* aElement,
   // Update dependent IDs cache. Take care of elements that are accessible
   // because dependent IDs cache doesn't contain IDs from non accessible
   // elements.
-  if (aModType != dom::MutationEventBinding::ADDITION)
+  if (aModType != dom::MutationEvent_Binding::ADDITION)
     RemoveDependentIDsFor(accessible, aAttribute);
 
   if (aAttribute == nsGkAtoms::id) {
@@ -735,7 +739,7 @@ DocAccessible::AttributeWillChange(dom::Element* aElement,
   // need to newly expose it as a toggle button) etc.
   if (aAttribute == nsGkAtoms::aria_checked ||
       aAttribute == nsGkAtoms::aria_pressed) {
-    mARIAAttrOldValue = (aModType != dom::MutationEventBinding::ADDITION) ?
+    mARIAAttrOldValue = (aModType != dom::MutationEvent_Binding::ADDITION) ?
       nsAccUtils::GetARIAToken(aElement, aAttribute) : nullptr;
     return;
   }
@@ -765,6 +769,19 @@ DocAccessible::AttributeChanged(dom::Element* aElement,
   if (UpdateAccessibleOnAttrChange(aElement, aAttribute))
     return;
 
+  // Update the accessible tree on aria-hidden change. Make sure to not create
+  // a tree under aria-hidden='true'.
+  if (aAttribute == nsGkAtoms::aria_hidden) {
+    if (aria::HasDefinedARIAHidden(aElement)) {
+      ContentRemoved(aElement);
+    }
+    else {
+      ContentInserted(aElement->GetFlattenedTreeParent(),
+                      aElement, aElement->GetNextSibling());
+    }
+    return;
+  }
+
   // Ignore attribute change if the element doesn't have an accessible (at all
   // or still) iff the element is not a root content of this document accessible
   // (which is treated as attribute change on this document accessible).
@@ -790,8 +807,8 @@ DocAccessible::AttributeChanged(dom::Element* aElement,
   // its accessible will be created later. It doesn't make sense to keep
   // dependent IDs for non accessible elements. For the second case we'll update
   // dependent IDs cache when its accessible is created.
-  if (aModType == dom::MutationEventBinding::MODIFICATION ||
-      aModType == dom::MutationEventBinding::ADDITION) {
+  if (aModType == dom::MutationEvent_Binding::MODIFICATION ||
+      aModType == dom::MutationEvent_Binding::ADDITION) {
     AddDependentIDsFor(accessible, aAttribute);
   }
 }
@@ -959,11 +976,13 @@ DocAccessible::ARIAAttributeChanged(Accessible* aAccessible, nsAtom* aAttribute)
 
   // The activedescendant universal property redirects accessible focus events
   // to the element with the id that activedescendant points to. Make sure
-  // the tree up to date before processing.
+  // the tree up to date before processing. In other words, when a node has just
+  // been inserted, the tree won't be up to date yet, so we must always schedule
+  // an async notification so that a newly inserted node will be present in
+  // the tree.
   if (aAttribute == nsGkAtoms::aria_activedescendant) {
-    mNotificationController->HandleNotification<DocAccessible, Accessible>
+    mNotificationController->ScheduleNotification<DocAccessible, Accessible>
       (this, &DocAccessible::ARIAActiveDescendantChanged, aAccessible);
-
     return;
   }
 
@@ -985,22 +1004,6 @@ DocAccessible::ARIAAttributeChanged(Accessible* aAccessible, nsAtom* aAttribute)
   }
 
   dom::Element* elm = aAccessible->GetContent()->AsElement();
-
-  // Update aria-hidden flag for the whole subtree iff aria-hidden is changed
-  // on the root, i.e. ignore any affiliated aria-hidden changes in the subtree
-  // of top aria-hidden.
-  if (aAttribute == nsGkAtoms::aria_hidden) {
-    bool isDefined = aria::HasDefinedARIAHidden(elm);
-    if (isDefined != aAccessible->IsARIAHidden() &&
-        (!aAccessible->Parent() || !aAccessible->Parent()->IsARIAHidden())) {
-      aAccessible->SetARIAHidden(isDefined);
-
-      RefPtr<AccEvent> event =
-        new AccObjectAttrChangedEvent(aAccessible, aAttribute);
-      FireDelayedEvent(event);
-    }
-    return;
-  }
 
   if (aAttribute == nsGkAtoms::aria_checked ||
       (aAccessible->IsButton() &&
@@ -1227,13 +1230,21 @@ DocAccessible::GetAccessibleByUniqueIDInSubtree(void* aUniqueID)
 }
 
 Accessible*
-DocAccessible::GetAccessibleOrContainer(nsINode* aNode) const
+DocAccessible::GetAccessibleOrContainer(nsINode* aNode,
+                                        int aARIAHiddenFlag) const
 {
   if (!aNode || !aNode->GetComposedDoc())
     return nullptr;
 
   for (nsINode* currNode = aNode; currNode;
        currNode = currNode->GetFlattenedTreeParentNode()) {
+
+    // No container if is inside of aria-hidden subtree.
+    if (aARIAHiddenFlag == eNoContainerIfARIAHidden && currNode->IsElement() &&
+        aria::HasDefinedARIAHidden(currNode->AsElement())) {
+      return nullptr;
+    }
+
     if (Accessible* accessible = GetAccessible(currNode)) {
       return accessible;
     }
@@ -1791,7 +1802,8 @@ InsertIterator::Next()
     // what means there's no container. Ignore the insertion too.
     nsIContent* prevNode = mNodes->SafeElementAt(mNodesIdx - 1);
     nsIContent* node = mNodes->ElementAt(mNodesIdx++);
-    Accessible* container = Document()->AccessibleOrTrueContainer(node);
+    Accessible* container = Document()->
+      AccessibleOrTrueContainer(node, DocAccessible::eNoContainerIfARIAHidden);
     if (container != Context()) {
       continue;
     }

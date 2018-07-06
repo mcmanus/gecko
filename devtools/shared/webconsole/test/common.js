@@ -52,14 +52,14 @@ function attachConsoleToWorker(listeners, callback) {
 var _attachConsole = async function(
   listeners, callback, attachToTab, attachToWorker
 ) {
-  function _onAttachConsole(state, response, webConsoleClient) {
-    if (response.error) {
-      console.error("attachConsole failed: " + response.error + " " +
-                    response.message);
-    }
-
+  function _onAttachConsole(state, [response, webConsoleClient]) {
     state.client = webConsoleClient;
 
+    callback(state, response);
+  }
+  function _onAttachError(state, response) {
+    console.error("attachConsole failed: " + response.error + " " +
+                  response.message);
     callback(state, response);
   }
 
@@ -82,8 +82,8 @@ var _attachConsole = async function(
     await state.dbgClient.attachTab(response.form.actor);
     const consoleActor = response.form.consoleActor;
     state.actor = consoleActor;
-    state.dbgClient.attachConsole(consoleActor, listeners,
-                                  _onAttachConsole.bind(null, state));
+    state.dbgClient.attachConsole(consoleActor, listeners)
+      .then(_onAttachConsole.bind(null, state), _onAttachError.bind(null, state));
     return;
   }
   response = await state.dbgClient.listTabs();
@@ -105,13 +105,14 @@ var _attachConsole = async function(
     await waitForMessage(worker);
 
     const { workers } = await tabClient.listWorkers();
-    const workerActor = workers.filter(w => w.url == workerName)[0].actor;
-    if (!workerActor) {
+    const workerTargetActor = workers.filter(w => w.url == workerName)[0].actor;
+    if (!workerTargetActor) {
       console.error("listWorkers failed. Unable to find the " +
                     "worker actor\n");
       return;
     }
-    const [workerResponse, workerClient] = await tabClient.attachWorker(workerActor);
+    const [workerResponse, workerClient] =
+      await tabClient.attachWorker(workerTargetActor);
     if (!workerClient || workerResponse.error) {
       console.error("attachWorker failed. No worker client or " +
                     " error: " + workerResponse.error);
@@ -119,12 +120,12 @@ var _attachConsole = async function(
     }
     await workerClient.attachThread({});
     state.actor = workerClient.consoleActor;
-    state.dbgClient.attachConsole(workerClient.consoleActor, listeners,
-                                  _onAttachConsole.bind(null, state));
+    state.dbgClient.attachConsole(workerClient.consoleActor, listeners)
+      .then(_onAttachConsole.bind(null, state), _onAttachError.bind(null, state));
   } else {
     state.actor = tab.consoleActor;
-    state.dbgClient.attachConsole(tab.consoleActor, listeners,
-                                   _onAttachConsole.bind(null, state));
+    state.dbgClient.attachConsole(tab.consoleActor, listeners)
+      .then(_onAttachConsole.bind(null, state), _onAttachError.bind(null, state));
   }
 };
 

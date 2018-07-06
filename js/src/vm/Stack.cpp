@@ -17,6 +17,7 @@
 #include "vm/Opcodes.h"
 
 #include "jit/JSJitFrameIter-inl.h"
+#include "vm/Compartment-inl.h"
 #include "vm/EnvironmentObject-inl.h"
 #include "vm/Interpreter-inl.h"
 #include "vm/Probes-inl.h"
@@ -202,6 +203,7 @@ InterpreterFrame::prologue(JSContext* cx)
     RootedScript script(cx, this->script());
 
     MOZ_ASSERT(cx->interpreterRegs().pc == script->code());
+    MOZ_ASSERT(cx->realm() == script->realm());
 
     if (isEvalFrame()) {
         if (!script->bodyScope()->hasEnvironment()) {
@@ -251,6 +253,7 @@ void
 InterpreterFrame::epilogue(JSContext* cx, jsbytecode* pc)
 {
     RootedScript script(cx, this->script());
+    MOZ_ASSERT(cx->realm() == script->realm());
     probes::ExitScript(cx, script, script->functionNonDelazifying(), hasPushedGeckoProfilerFrame());
 
     // Check that the scope matches the environment at the point of leaving
@@ -1287,7 +1290,7 @@ FrameIter::matchCallee(JSContext* cx, HandleFunction fun) const
     // expect both functions to have the same JSScript. If so, and if they are
     // different, then they cannot be equal.
     RootedObject global(cx, &fun->global());
-    bool useSameScript = CanReuseScriptForClone(fun->compartment(), currentCallee, global);
+    bool useSameScript = CanReuseScriptForClone(fun->realm(), currentCallee, global);
     if (useSameScript &&
         (currentCallee->hasScript() != fun->hasScript() ||
          currentCallee->nonLazyScript() != fun->nonLazyScript()))

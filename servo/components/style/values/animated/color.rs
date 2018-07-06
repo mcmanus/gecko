@@ -92,16 +92,6 @@ impl ComputeSquaredDistance for RGBA {
     }
 }
 
-impl Animate for ComplexColorRatios {
-    #[inline]
-    fn animate(&self, other: &Self, procedure: Procedure) -> Result<Self, ()> {
-        let bg = self.bg.animate(&other.bg, procedure)?;
-        let fg = self.fg.animate(&other.fg, procedure)?;
-
-        Ok(ComplexColorRatios { bg, fg })
-    }
-}
-
 /// An animated value for `<color>`.
 pub type Color = GenericColor<RGBA>;
 
@@ -196,7 +186,7 @@ impl ComputeSquaredDistance for Color {
             (Foreground, Foreground) => SquaredDistance::from_sqrt(0.),
             (Numeric(c1), Numeric(c2)) => c1.compute_squared_distance(&c2)?,
             (Foreground, Numeric(color)) | (Numeric(color), Foreground) => {
-                // `computed_squared_distance` is symmetic.
+                // `computed_squared_distance` is symmetric.
                 color.compute_squared_distance(&RGBA::transparent())?
                     + SquaredDistance::from_sqrt(1.)
             }
@@ -217,7 +207,6 @@ impl ComputeSquaredDistance for Color {
 impl ToAnimatedZero for Color {
     #[inline]
     fn to_animated_zero(&self) -> Result<Self, ()> {
-        // FIXME(nox): This does not look correct to me.
-        Err(())
+        Ok(RGBA::transparent().into())
     }
 }

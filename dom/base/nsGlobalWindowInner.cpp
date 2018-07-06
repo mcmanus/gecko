@@ -17,6 +17,7 @@
 #include "nsHistory.h"
 #include "nsDOMNavigationTiming.h"
 #include "nsIDOMStorageManager.h"
+#include "mozilla/dom/AutoplayRequest.h"
 #include "mozilla/dom/DOMJSProxyHandler.h"
 #include "mozilla/dom/DOMPrefs.h"
 #include "mozilla/dom/EventTarget.h"
@@ -885,6 +886,7 @@ public:
 
 nsGlobalWindowInner::nsGlobalWindowInner(nsGlobalWindowOuter *aOuterWindow)
   : nsPIDOMWindowInner(aOuterWindow->AsOuter()),
+    mozilla::webgpu::InstanceProvider(this),
     mIdleFuzzFactor(0),
     mIdleCallbackIndex(-1),
     mCurrentlyIdle(false),
@@ -916,8 +918,9 @@ nsGlobalWindowInner::nsGlobalWindowInner(nsGlobalWindowOuter *aOuterWindow)
     mCanSkipCCGeneration(0),
     mBeforeUnloadListenerCount(0)
 {
-  AssertIsOnMainThread();
+  mIsInnerWindow = true;
 
+  AssertIsOnMainThread();
   nsLayoutStatics::AddRef();
 
   // Initialize the PRCList (this).
@@ -941,6 +944,10 @@ nsGlobalWindowInner::nsGlobalWindowInner(nsGlobalWindowOuter *aOuterWindow)
                         false);
 
         os->AddObserver(mObserver, MEMORY_PRESSURE_OBSERVER_TOPIC, false);
+
+        if (aOuterWindow->IsTopLevelWindow()) {
+          os->AddObserver(mObserver, "clear-site-data-reload-needed", false);
+        }
       }
 
       Preferences::AddStrongObserver(mObserver, "intl.accept_languages");
@@ -1182,7 +1189,6 @@ nsGlobalWindowInner::FreeInnerObjects()
   }
 
   mHistory = nullptr;
-  mCustomElements = nullptr;
 
   if (mNavigator) {
     mNavigator->OnNavigation();
@@ -1269,6 +1275,11 @@ nsGlobalWindowInner::FreeInnerObjects()
     if (os) {
       os->RemoveObserver(mObserver, NS_IOSERVICE_OFFLINE_STATUS_TOPIC);
       os->RemoveObserver(mObserver, MEMORY_PRESSURE_OBSERVER_TOPIC);
+
+      if (GetOuterWindowInternal() &&
+          GetOuterWindowInternal()->IsTopLevelWindow()) {
+        os->RemoveObserver(mObserver, "clear-site-data-reload-needed");
+      }
     }
 
     RefPtr<StorageNotifierService> sns = StorageNotifierService::GetOrCreate();
@@ -1296,7 +1307,6 @@ nsGlobalWindowInner::FreeInnerObjects()
 
   mConsole = nullptr;
 
-  mAudioWorklet = nullptr;
   mPaintWorklet = nullptr;
 
   mExternal = nullptr;
@@ -1452,7 +1462,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsGlobalWindowInner)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCrypto)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mU2F)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mConsole)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAudioWorklet)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPaintWorklet)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mExternal)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mInstallTrigger)
@@ -1469,6 +1478,8 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsGlobalWindowInner)
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocumentFlushedResolvers[i]->mPromise);
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocumentFlushedResolvers[i]->mCallback);
   }
+
+  static_cast<mozilla::webgpu::InstanceProvider*>(tmp)->CcTraverse(cb);
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
@@ -1540,7 +1551,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsGlobalWindowInner)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mCrypto)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mU2F)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mConsole)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mAudioWorklet)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mPaintWorklet)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mExternal)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mInstallTrigger)
@@ -1572,6 +1582,8 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsGlobalWindowInner)
     NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocumentFlushedResolvers[i]->mCallback);
   }
   tmp->mDocumentFlushedResolvers.Clear();
+
+  static_cast<mozilla::webgpu::InstanceProvider*>(tmp)->CcUnlink();
 
   NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
@@ -2347,6 +2359,12 @@ nsPIDOMWindowInner::NoteCalledRegisterForServiceWorkerScope(const nsACString& aS
   nsGlobalWindowInner::Cast(this)->NoteCalledRegisterForServiceWorkerScope(aScope);
 }
 
+void
+nsPIDOMWindowInner::NoteDOMContentLoaded()
+{
+  nsGlobalWindowInner::Cast(this)->NoteDOMContentLoaded();
+}
+
 bool
 nsGlobalWindowInner::ShouldReportForServiceWorkerScope(const nsAString& aScope)
 {
@@ -2461,6 +2479,16 @@ nsGlobalWindowInner::NoteCalledRegisterForServiceWorkerScope(const nsACString& a
   }
 
   mClientSource->NoteCalledRegisterForServiceWorkerScope(aScope);
+}
+
+void
+nsGlobalWindowInner::NoteDOMContentLoaded()
+{
+  if (!mClientSource) {
+    return;
+  }
+
+  mClientSource->NoteDOMContentLoaded();
 }
 
 void
@@ -3255,6 +3283,16 @@ nsGlobalWindowInner::SetOpener(JSContext* aCx, JS::Handle<JS::Value> aOpener,
   }
 
   SetOpenerWindow(outer, false);
+}
+
+void
+nsGlobalWindowInner::GetEvent(JSContext* aCx, JS::MutableHandle<JS::Value> aRetval)
+{
+  if (mEvent) {
+    Unused << nsContentUtils::WrapNative(aCx, mEvent, aRetval);
+  } else {
+    aRetval.setUndefined();
+  }
 }
 
 void
@@ -5196,8 +5234,8 @@ nsGlobalWindowInner::FireOfflineStatusEventIfChanged()
   nsContentUtils::DispatchTrustedEvent(mDoc,
                                        static_cast<EventTarget*>(this),
                                        name,
-                                       false,
-                                       false);
+                                       CanBubble::eNo,
+                                       Cancelable::eNo);
 }
 
 class NotifyIdleObserverRunnable : public Runnable
@@ -5819,6 +5857,13 @@ nsGlobalWindowInner::Observe(nsISupports* aSubject, const char* aTopic,
     return NS_OK;
   }
 
+  if (!nsCRT::strcmp(aTopic, "clear-site-data-reload-needed")) {
+    // The reload is propagated from the top-level window only.
+    NS_ConvertUTF16toUTF8 otherOrigin(aData);
+    PropagateClearSiteDataReload(otherOrigin);
+    return NS_OK;
+  }
+
   if (!nsCRT::strcmp(aTopic, OBSERVER_TOPIC_IDLE)) {
     mCurrentlyIdle = true;
     if (IsFrozen()) {
@@ -5868,8 +5913,8 @@ nsGlobalWindowInner::Observe(nsISupports* aSubject, const char* aTopic,
     // very likely situation where an event handler will try to read its value.
 
     if (mNavigator) {
-      NavigatorBinding::ClearCachedLanguageValue(mNavigator);
-      NavigatorBinding::ClearCachedLanguagesValue(mNavigator);
+      Navigator_Binding::ClearCachedLanguageValue(mNavigator);
+      Navigator_Binding::ClearCachedLanguagesValue(mNavigator);
     }
 
     // The event has to be dispatched only to the current inner window.
@@ -6380,8 +6425,8 @@ nsGlobalWindowInner::GetOrCreateServiceWorker(const ServiceWorkerDescriptor& aDe
   return ref.forget();
 }
 
-RefPtr<ServiceWorkerRegistration>
-nsGlobalWindowInner::GetOrCreateServiceWorkerRegistration(const ServiceWorkerRegistrationDescriptor& aDescriptor)
+RefPtr<mozilla::dom::ServiceWorkerRegistration>
+nsGlobalWindowInner::GetServiceWorkerRegistration(const mozilla::dom::ServiceWorkerRegistrationDescriptor& aDescriptor) const
 {
   MOZ_ASSERT(NS_IsMainThread());
   RefPtr<ServiceWorkerRegistration> ref;
@@ -6394,11 +6439,17 @@ nsGlobalWindowInner::GetOrCreateServiceWorkerRegistration(const ServiceWorkerReg
     ref = swr.forget();
     *aDoneOut = true;
   });
+  return ref.forget();
+}
 
+RefPtr<ServiceWorkerRegistration>
+nsGlobalWindowInner::GetOrCreateServiceWorkerRegistration(const ServiceWorkerRegistrationDescriptor& aDescriptor)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  RefPtr<ServiceWorkerRegistration> ref = GetServiceWorkerRegistration(aDescriptor);
   if (!ref) {
     ref = ServiceWorkerRegistration::CreateForMainThread(this, aDescriptor);
   }
-
   return ref.forget();
 }
 
@@ -7667,8 +7718,8 @@ void
 nsGlobalWindowInner::ClearDocumentDependentSlots(JSContext* aCx)
 {
   // If JSAPI OOMs here, there is basically nothing we can do to recover safely.
-  if (!WindowBinding::ClearCachedDocumentValue(aCx, this) ||
-      !WindowBinding::ClearCachedPerformanceValue(aCx, this)) {
+  if (!Window_Binding::ClearCachedDocumentValue(aCx, this) ||
+      !Window_Binding::ClearCachedPerformanceValue(aCx, this)) {
     MOZ_CRASH("Unhandlable OOM while clearing document dependent slots.");
   }
 }
@@ -7957,22 +8008,6 @@ nsGlobalWindowInner::AbstractMainThreadFor(TaskCategory aCategory)
 }
 
 Worklet*
-nsGlobalWindowInner::GetAudioWorklet(ErrorResult& aRv)
-{
-  if (!mAudioWorklet) {
-    nsIPrincipal* principal = GetPrincipal();
-    if (!principal) {
-      aRv.Throw(NS_ERROR_FAILURE);
-      return nullptr;
-    }
-
-    mAudioWorklet = new Worklet(this, principal, Worklet::eAudioWorklet);
-  }
-
-  return mAudioWorklet;
-}
-
-Worklet*
 nsGlobalWindowInner::GetPaintWorklet(ErrorResult& aRv)
 {
   if (!mPaintWorklet) {
@@ -8054,6 +8089,39 @@ nsPIDOMWindowInner::MaybeCreateDoc()
   }
 }
 
+void
+nsGlobalWindowInner::PropagateClearSiteDataReload(const nsACString& aOrigin)
+{
+  nsIPrincipal* principal = GetPrincipal();
+  if (!principal) {
+    return;
+  }
+
+  nsAutoCString origin;
+  nsresult rv = principal->GetOrigin(origin);
+  NS_ENSURE_SUCCESS_VOID(rv);
+
+  // If the URL of this window matches, let's refresh this window only.
+  // We don't need to traverse the DOM tree.
+  if (origin.Equals(aOrigin)) {
+    nsCOMPtr<nsIDocShell> docShell = GetDocShell();
+    nsCOMPtr<nsIWebNavigation> webNav(do_QueryInterface(docShell));
+    if (NS_WARN_IF(!webNav)) {
+      return;
+    }
+
+    // We don't need any special reload flags, because this notification is
+    // dispatched by Clear-Site-Data header, which should have already cleaned
+    // up all the needed data.
+    rv = webNav->Reload(nsIWebNavigation::LOAD_FLAGS_NONE);
+    NS_ENSURE_SUCCESS_VOID(rv);
+
+    return;
+  }
+
+  CallOnChildren(&nsGlobalWindowInner::PropagateClearSiteDataReload, aOrigin);
+}
+
 mozilla::dom::DocGroup*
 nsPIDOMWindowInner::GetDocGroup() const
 {
@@ -8074,6 +8142,39 @@ const nsIGlobalObject*
 nsPIDOMWindowInner::AsGlobal() const
 {
   return nsGlobalWindowInner::Cast(this);
+}
+
+static nsPIDOMWindowInner*
+GetTopLevelInnerWindow(nsPIDOMWindowInner* aWindow)
+{
+  if (!aWindow) {
+    return nullptr;
+  }
+  nsIDocShell* docShell = aWindow->GetDocShell();
+  if (!docShell) {
+    return nullptr;
+  }
+  nsCOMPtr<nsIDocShellTreeItem> rootTreeItem;
+  docShell->GetSameTypeRootTreeItem(getter_AddRefs(rootTreeItem));
+  if (!rootTreeItem || !rootTreeItem->GetDocument()) {
+    return nullptr;
+  }
+  return rootTreeItem->GetDocument()->GetInnerWindow();
+}
+
+already_AddRefed<mozilla::AutoplayRequest>
+nsPIDOMWindowInner::GetAutoplayRequest()
+{
+  // The AutoplayRequest is stored on the top level window.
+  nsPIDOMWindowInner* window = GetTopLevelInnerWindow(this);
+  if (!window) {
+    return nullptr;
+  }
+  if (!window->mAutoplayRequest) {
+    window->mAutoplayRequest = AutoplayRequest::Create(nsGlobalWindowInner::Cast(window));
+  }
+  RefPtr<mozilla::AutoplayRequest> request = window->mAutoplayRequest;
+  return request.forget();
 }
 
 // XXX: Can we define this in a header instead of here?
@@ -8098,7 +8199,8 @@ nsPIDOMWindowInner::nsPIDOMWindowInner(nsPIDOMWindowOuter *aOuterWindow)
   mMarkedCCGeneration(0),
   mHasTriedToCacheTopInnerWindow(false),
   mNumOfIndexedDBDatabases(0),
-  mNumOfOpenWebSockets(0)
+  mNumOfOpenWebSockets(0),
+  mEvent(nullptr)
 {
   MOZ_ASSERT(aOuterWindow);
 }

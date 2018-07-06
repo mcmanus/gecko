@@ -17,6 +17,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/ChaosMode.h"
 #include "mozilla/LoadInfo.h"
+#include "mozilla/Telemetry.h"
 
 #include "nsImageModule.h"
 #include "imgRequestProxy.h"
@@ -1358,6 +1359,9 @@ void imgLoader::GlobalInit()
   RegisterStrongMemoryReporter(sMemReporter);
   RegisterImagesContentUsedUncompressedDistinguishedAmount(
     imgMemoryReporter::ImagesContentUsedUncompressedDistinguishedAmount);
+
+  Telemetry::ScalarSet(Telemetry::ScalarID::IMAGES_WEBP_PROBE_OBSERVED, false);
+  Telemetry::ScalarSet(Telemetry::ScalarID::IMAGES_WEBP_CONTENT_OBSERVED, false);
 }
 
 void imgLoader::ShutdownMemoryReporter()
@@ -1467,6 +1471,45 @@ imgLoader::ClearCache(bool chrome)
   }
   return ClearImageCache();
 
+}
+
+NS_IMETHODIMP
+imgLoader::RemoveEntriesFromPrincipal(nsIPrincipal* aPrincipal)
+{
+  nsAutoString origin;
+  nsresult rv = nsContentUtils::GetUTFOrigin(aPrincipal, origin);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  AutoTArray<RefPtr<imgCacheEntry>, 128> entriesToBeRemoved;
+
+  imgCacheTable& cache = GetCache(nsContentUtils::IsSystemPrincipal(aPrincipal));
+  for (auto iter = cache.Iter(); !iter.Done(); iter.Next()) {
+    auto& key = iter.Key();
+
+    if (key.OriginAttributesRef() != BasePrincipal::Cast(aPrincipal)->OriginAttributesRef()) {
+       continue;
+    }
+
+    nsAutoString imageOrigin;
+    nsresult rv = nsContentUtils::GetUTFOrigin(key.URI(), imageOrigin);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      continue;
+    }
+
+    if (imageOrigin == origin) {
+      entriesToBeRemoved.AppendElement(iter.Data());
+    }
+  }
+
+  for (auto& entry : entriesToBeRemoved) {
+    if (!RemoveFromCache(entry)) {
+      NS_WARNING("Couldn't remove an entry from the cache in RemoveEntriesFromPrincipal()\n");
+    }
+  }
+
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -2776,6 +2819,11 @@ imgLoader::GetMimeTypeFromContent(const char* aContents,
   } else if (aLength >= 4 && (!memcmp(aContents, "\000\000\001\000", 4) ||
                               !memcmp(aContents, "\000\000\002\000", 4))) {
     aContentType.AssignLiteral(IMAGE_ICO);
+
+  // WebPs always begin with RIFF, a 32-bit length, and WEBP.
+  } else if (aLength >= 12 && !memcmp(aContents, "RIFF", 4) &&
+                              !memcmp(aContents + 8, "WEBP", 4)) {
+    aContentType.AssignLiteral(IMAGE_WEBP);
 
   } else {
     /* none of the above?  I give up */

@@ -610,8 +610,13 @@ public:
 
   // Allow NodePool::NodeBlock's constructor to compile.
   PtrInfo()
+    : mPointer{ nullptr }
+    , mParticipant{ nullptr }
+    , mColor{ 0 }
+    , mInternalRefs{ 0 }
+    , mRefCount{ 0 }
   {
-    NS_NOTREACHED("should never be called");
+    MOZ_ASSERT_UNREACHABLE("should never be called");
   }
 
   bool IsGrayJS() const
@@ -691,8 +696,9 @@ private:
     // We create and destroy NodeBlock using moz_xmalloc/free rather than new
     // and delete to avoid calling its constructor and destructor.
     NodeBlock()
+      : mNext{ nullptr }
     {
-      NS_NOTREACHED("should never be called");
+      MOZ_ASSERT_UNREACHABLE("should never be called");
 
       // Ensure NodeBlock is the right size (see the comment on NodeBlockSize
       // above).
@@ -704,7 +710,7 @@ private:
     }
     ~NodeBlock()
     {
-      NS_NOTREACHED("should never be called");
+      MOZ_ASSERT_UNREACHABLE("should never be called");
     }
 
     NodeBlock* mNext;
@@ -2034,7 +2040,7 @@ public:
           aHandler->DescribeGarbage(d->mAddress);
           break;
         case CCGraphDescriber::eUnknown:
-          NS_NOTREACHED("CCGraphDescriber::eUnknown");
+          MOZ_ASSERT_UNREACHABLE("CCGraphDescriber::eUnknown");
           break;
       }
       delete d;

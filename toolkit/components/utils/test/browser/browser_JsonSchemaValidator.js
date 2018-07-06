@@ -90,9 +90,9 @@ add_task(async function test_URL_values() {
   let valid, parsed;
   [valid, parsed] = JsonSchemaValidator.validateAndParseParameters("https://www.example.com/foo#bar", schema);
   ok(valid, "URL is valid");
-  ok(parsed instanceof Ci.nsIURI, "parsed is a nsIURI");
-  is(parsed.prePath, "https://www.example.com", "prePath is correct");
-  is(parsed.pathQueryRef, "/foo#bar", "pathQueryRef is correct");
+  ok(parsed instanceof URL, "parsed is a URL");
+  is(parsed.origin, "https://www.example.com", "origin is correct");
+  is(parsed.pathname + parsed.hash, "/foo#bar", "pathname is correct");
 
   // Invalid values:
   ok(!JsonSchemaValidator.validateAndParseParameters("", schema)[0], "Empty string is not accepted for URL");
@@ -109,9 +109,9 @@ add_task(async function test_URLorEmpty_values() {
   let valid, parsed;
   [valid, parsed] = JsonSchemaValidator.validateAndParseParameters("https://www.example.com/foo#bar", schema);
   ok(valid, "URL is valid");
-  ok(parsed instanceof Ci.nsIURI, "parsed is a nsIURI");
-  is(parsed.prePath, "https://www.example.com", "prePath is correct");
-  is(parsed.pathQueryRef, "/foo#bar", "pathQueryRef is correct");
+  ok(parsed instanceof URL, "parsed is a nsIURI");
+  is(parsed.origin, "https://www.example.com", "origin is correct");
+  is(parsed.pathname + parsed.hash, "/foo#bar", "pathname is correct");
 
   // Test that this type also accept empty strings
   [valid, parsed] = JsonSchemaValidator.validateAndParseParameters("", schema);
@@ -137,9 +137,9 @@ add_task(async function test_origin_values() {
   let valid, parsed;
   [valid, parsed] = JsonSchemaValidator.validateAndParseParameters("https://www.example.com", schema);
   ok(valid, "Origin is valid");
-  ok(parsed instanceof Ci.nsIURI, "parsed is a nsIURI");
-  is(parsed.prePath, "https://www.example.com", "prePath is correct");
-  is(parsed.pathQueryRef, "/", "pathQueryRef is corect");
+  ok(parsed instanceof URL, "parsed is a nsIURI");
+  is(parsed.origin, "https://www.example.com", "origin is correct");
+  is(parsed.pathname + parsed.hash, "/", "pathname is corect");
 
   // Invalid values:
   ok(!JsonSchemaValidator.validateAndParseParameters("https://www.example.com/foobar", schema)[0], "Origin cannot contain a path part");
@@ -174,6 +174,33 @@ add_task(async function test_array_values() {
   ok(!JsonSchemaValidator.validateAndParseParameters({}, schema)[0], "Object is not an array");
 });
 
+add_task(async function test_non_strict_arrays() {
+  // Non-srict arrays ignores invalid values (don't include
+  // them in the parsed output), instead of failing the validation.
+  // Note: invalid values might still report errors to the console.
+  let schema = {
+    type: "array",
+    strict: false,
+    items: {
+      type: "string"
+    }
+  };
+
+  let valid, parsed;
+  [valid, parsed] = JsonSchemaValidator.validateAndParseParameters(
+    ["valid1", "valid2", false, 3, "valid3"], schema);
+  ok(valid, "Array is valid");
+  ok(Array.isArray(parsed, "parsed is an array"));
+  is(parsed.length, 3, "Only valid values were included in the parsed array");
+  Assert.deepEqual(parsed, ["valid1", "valid2", "valid3"], "Results were expected");
+
+  // Checks that strict defaults to true;
+  delete schema.strict;
+  [valid, parsed] = JsonSchemaValidator.validateAndParseParameters(
+    ["valid1", "valid2", false, 3, "valid3"], schema);
+  ok(!valid, "Same verification was invalid without strict=false");
+});
+
 add_task(async function test_object_values() {
   let schema = {
     type: "object",
@@ -198,8 +225,8 @@ add_task(async function test_object_values() {
 
   ok(valid, "Object is valid");
   ok(typeof(parsed) == "object", "parsed in an object");
-  ok(parsed.url instanceof Ci.nsIURI, "types inside the object are also parsed");
-  is(parsed.url.spec, "https://www.example.com/foo#bar", "URL was correctly parsed");
+  ok(parsed.url instanceof URL, "types inside the object are also parsed");
+  is(parsed.url.href, "https://www.example.com/foo#bar", "URL was correctly parsed");
   is(parsed.title, "Foo", "title was correctly parsed");
   is(parsed.alias, undefined, "property not described in the schema is not present in the parsed object");
 
@@ -253,8 +280,8 @@ add_task(async function test_array_of_objects() {
 
   ok(typeof(parsed[0]) == "object" && typeof(parsed[1]) == "object", "Correct objects inside array");
 
-  is(parsed[0].url.spec, "https://www.example.com/bookmark1", "Correct URL for bookmark 1");
-  is(parsed[1].url.spec, "https://www.example.com/bookmark2", "Correct URL for bookmark 2");
+  is(parsed[0].url.href, "https://www.example.com/bookmark1", "Correct URL for bookmark 1");
+  is(parsed[1].url.href, "https://www.example.com/bookmark2", "Correct URL for bookmark 2");
 
   is(parsed[0].title, "Foo", "Correct title for bookmark 1");
   is(parsed[1].title, "Bar", "Correct title for bookmark 2");

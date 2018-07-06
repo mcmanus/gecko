@@ -20,6 +20,7 @@ browser.jar:
         content/browser/illustrations/under-construction.svg (content/illustrations/under-construction.svg)
         content/browser/aboutNetError.xhtml            (content/aboutNetError.xhtml)
         content/browser/aboutNetError.js               (content/aboutNetError.js)
+        content/browser/aboutNetError-new.xhtml        (content/aboutNetError-new.xhtml)
         content/browser/aboutRobots-icon.png          (content/aboutRobots-icon.png)
         content/browser/aboutRobots-widget-left.png   (content/aboutRobots-widget-left.png)
         content/browser/aboutTabCrashed.css           (content/aboutTabCrashed.css)
@@ -29,6 +30,7 @@ browser.jar:
         content/browser/browser.js                    (content/browser.js)
 *       content/browser/browser.xul                   (content/browser.xul)
         content/browser/browser-addons.js             (content/browser-addons.js)
+        content/browser/browser-allTabsMenu.js        (content/browser-allTabsMenu.js)
         content/browser/browser-captivePortal.js      (content/browser-captivePortal.js)
         content/browser/browser-ctrlTab.js            (content/browser-ctrlTab.js)
         content/browser/browser-customization.js      (content/browser-customization.js)
@@ -53,6 +55,7 @@ browser.jar:
         content/browser/browser-thumbnails.js         (content/browser-thumbnails.js)
         content/browser/browser-trackingprotection.js (content/browser-trackingprotection.js)
         content/browser/browser-webrender.js          (content/browser-webrender.js)
+        content/browser/browser-window.css            (content/browser-window.css)
         content/browser/tab-content.js                (content/tab-content.js)
         content/browser/content.js                    (content/content.js)
         content/browser/defaultthemes/1.header.jpg    (content/defaultthemes/1.header.jpg)
@@ -95,13 +98,14 @@ browser.jar:
         content/browser/tabbrowser.xml                (content/tabbrowser.xml)
 *       content/browser/urlbarBindings.xml            (content/urlbarBindings.xml)
         content/browser/utilityOverlay.js             (content/utilityOverlay.js)
-        content/browser/web-panels.js                 (content/web-panels.js)
-*       content/browser/web-panels.xul                (content/web-panels.xul)
         content/browser/webext-panels.js              (content/webext-panels.js)
 *       content/browser/webext-panels.xul             (content/webext-panels.xul)
         content/browser/nsContextMenu.js              (content/nsContextMenu.js)
+        content/browser/contentTheme.js               (content/contentTheme.js)
+#ifdef XP_MACOSX
 # XXX: We should exclude this one as well (bug 71895)
 *       content/browser/hiddenWindow.xul              (content/hiddenWindow.xul)
+#endif
 #ifndef XP_MACOSX
 *       content/browser/webrtcIndicator.xul           (content/webrtcIndicator.xul)
         content/browser/webrtcIndicator.js            (content/webrtcIndicator.js)
@@ -110,6 +114,7 @@ browser.jar:
 *       content/browser/license.html                  (/toolkit/content/license.html)
 % override chrome://global/content/license.html chrome://browser/content/license.html
         content/browser/blockedSite.xhtml               (content/blockedSite.xhtml)
+        content/browser/blockedSite.js                  (content/blockedSite.js)
 
 % override chrome://global/content/netError.xhtml chrome://browser/content/aboutNetError.xhtml
 
@@ -117,4 +122,3 @@ browser.jar:
 % override chrome://global/locale/appstrings.properties chrome://browser/locale/appstrings.properties
 % override chrome://global/locale/netError.dtd chrome://browser/locale/netError.dtd
 % override chrome://mozapps/locale/downloads/settingsChange.dtd chrome://browser/locale/downloads/settingsChange.dtd
-% resource search-plugins chrome://browser/locale/searchplugins/

@@ -7,7 +7,7 @@
 #include "gc/AtomMarking-inl.h"
 
 #include "gc/PublicIterators.h"
-#include "vm/JSCompartment.h"
+#include "vm/Realm.h"
 
 #include "gc/GC-inl.h"
 #include "gc/Heap-inl.h"
@@ -15,7 +15,7 @@
 namespace js {
 namespace gc {
 
-// Atom Marking Overview
+// [SMDOC] GC Atom Marking
 //
 // Things in the atoms zone (which includes atomized strings and other things,
 // all of which we will refer to as 'atoms' here) may be pointed to freely by

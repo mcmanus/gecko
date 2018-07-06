@@ -5,6 +5,17 @@
 
 /* eslint-env mozilla/browser-window */
 
+/**
+ * A set of known icons to use for internal pages. These are hardcoded so we can
+ * start loading them faster than ContentLinkHandler would normally find them.
+ */
+const FAVICON_DEFAULTS = {
+  "about:newtab": "chrome://branding/content/icon32.png",
+  "about:home": "chrome://branding/content/icon32.png",
+  "about:welcome": "chrome://branding/content/icon32.png",
+  "about:privatebrowsing": "chrome://browser/skin/privatebrowsing/favicon.svg",
+};
+
 window._gBrowser = {
   init() {
     ChromeUtils.defineModuleGetter(this, "AsyncTabSwitcher",
@@ -762,43 +773,38 @@ window._gBrowser = {
     }
   },
 
-  storeIcon(aBrowser, aURI, aLoadingPrincipal, aRequestContextID) {
-    try {
-      if (!(aURI instanceof Ci.nsIURI)) {
-        aURI = makeURI(aURI);
-      }
-      PlacesUIUtils.loadFavicon(aBrowser, aLoadingPrincipal, aURI, aRequestContextID);
-    } catch (ex) {
-      Cu.reportError(ex);
-    }
-  },
+  setIcon(aTab, aIconURL = "", aOriginalURL = aIconURL) {
+    let makeString = (url) => url instanceof Ci.nsIURI ? url.spec : url;
 
-  setIcon(aTab, aURI, aLoadingPrincipal, aRequestContextID) {
+    aIconURL = makeString(aIconURL);
+    aOriginalURL = makeString(aOriginalURL);
+
+    let LOCAL_PROTOCOLS = [
+      "chrome:",
+      "about:",
+      "resource:",
+      "data:",
+    ];
+
+    if (aIconURL && !LOCAL_PROTOCOLS.some(protocol => aIconURL.startsWith(protocol))) {
+      console.error(`Attempt to set a remote URL ${aIconURL} as a tab icon.`);
+      return;
+    }
+
     let browser = this.getBrowserForTab(aTab);
-    browser.mIconURL = aURI instanceof Ci.nsIURI ? aURI.spec : aURI;
-    let loadingPrincipal = aLoadingPrincipal ||
-      Services.scriptSecurityManager.getSystemPrincipal();
-    let requestContextID = aRequestContextID || 0;
-    let sizedIconUrl = browser.mIconURL || "";
-    if (sizedIconUrl != aTab.getAttribute("image")) {
-      if (sizedIconUrl) {
-        if (!browser.mIconLoadingPrincipal ||
-          !browser.mIconLoadingPrincipal.equals(loadingPrincipal)) {
-          aTab.setAttribute("iconloadingprincipal",
-            this.serializationHelper.serializeToString(loadingPrincipal));
-          aTab.setAttribute("requestcontextid", requestContextID);
-          browser.mIconLoadingPrincipal = loadingPrincipal;
-        }
-        aTab.setAttribute("image", sizedIconUrl);
+    browser.mIconURL = aIconURL;
+
+    if (aIconURL != aTab.getAttribute("image")) {
+      if (aIconURL) {
+        aTab.setAttribute("image", aIconURL);
       } else {
-        aTab.removeAttribute("iconloadingprincipal");
-        delete browser.mIconLoadingPrincipal;
         aTab.removeAttribute("image");
       }
       this._tabAttrModified(aTab, ["image"]);
     }
 
-    this._callProgressListeners(browser, "onLinkIconAvailable", [browser.mIconURL]);
+    // The aOriginalURL argument is currently only used by tests.
+    this._callProgressListeners(browser, "onLinkIconAvailable", [aIconURL, aOriginalURL]);
   },
 
   getIcon(aTab) {
@@ -811,51 +817,6 @@ window._gBrowser = {
       let pageInfo = { url: aURL, description: aDescription, previewImageURL: aPreviewImage };
       PlacesUtils.history.update(pageInfo).catch(Cu.reportError);
     }
-  },
-
-  shouldLoadFavIcon(aURI) {
-    return (aURI &&
-            Services.prefs.getBoolPref("browser.chrome.site_icons") &&
-            Services.prefs.getBoolPref("browser.chrome.favicons") &&
-            ("schemeIs" in aURI) && (aURI.schemeIs("http") || aURI.schemeIs("https")));
-  },
-
-  useDefaultIcon(aTab) {
-    let browser = this.getBrowserForTab(aTab);
-    let documentURI = browser.documentURI;
-    let requestContextID = browser.contentRequestContextID;
-    let loadingPrincipal = browser.contentPrincipal;
-    let icon = null;
-
-    if (browser.imageDocument) {
-      if (Services.prefs.getBoolPref("browser.chrome.site_icons")) {
-        let sz = Services.prefs.getIntPref("browser.chrome.image_icons.max_size");
-        if (browser.imageDocument.width <= sz &&
-            browser.imageDocument.height <= sz) {
-          // Don't try to store the icon in Places, regardless it would
-          // be skipped (see Bug 403651).
-          icon = browser.currentURI;
-        }
-      }
-    }
-
-    // Use documentURIObject in the check for shouldLoadFavIcon so that we
-    // do the right thing with about:-style error pages.  Bug 453442
-    if (!icon && this.shouldLoadFavIcon(documentURI)) {
-      let url = documentURI.prePath + "/favicon.ico";
-      if (!this.isFailedIcon(url)) {
-        icon = url;
-        this.storeIcon(browser, icon, loadingPrincipal, requestContextID);
-      }
-    }
-
-    this.setIcon(aTab, icon, loadingPrincipal, requestContextID);
-  },
-
-  isFailedIcon(aURI) {
-    if (!(aURI instanceof Ci.nsIURI))
-      aURI = makeURI(aURI);
-    return PlacesUtils.favicons.isFailedFavicon(aURI);
   },
 
   getWindowTitleForBrowser(aBrowser) {
@@ -1040,6 +1001,7 @@ window._gBrowser = {
         }
       });
       newTab.dispatchEvent(event);
+      Services.telemetry.recordEvent("savant", "tab", "select", null, { subcategory: "frame" });
 
       this._tabAttrModified(oldTab, ["selected"]);
       this._tabAttrModified(newTab, ["selected"]);
@@ -2448,10 +2410,8 @@ window._gBrowser = {
 
     // Hack to ensure that the about:newtab, and about:welcome favicon is loaded
     // instantaneously, to avoid flickering and improve perceived performance.
-    if (aURI == "about:newtab" || aURI == "about:home" || aURI == "about:welcome") {
-      this.setIcon(t, "chrome://branding/content/icon32.png");
-    } else if (aURI == "about:privatebrowsing") {
-      this.setIcon(t, "chrome://browser/skin/privatebrowsing/favicon.svg");
+    if (aURI in FAVICON_DEFAULTS) {
+      this.setIcon(t, FAVICON_DEFAULTS[aURI]);
     }
 
     // Dispatch a new tab notification.  We do this once we're
@@ -2460,6 +2420,7 @@ window._gBrowser = {
     var detail = aEventDetail || {};
     var evt = new CustomEvent("TabOpen", { bubbles: true, detail });
     t.dispatchEvent(evt);
+    Services.telemetry.recordEvent("savant", "tab", "open", null, { subcategory: "frame" });
 
     if (!usingPreloadedContent && aOriginPrincipal && aURI) {
       let { URI_INHERITS_SECURITY_CONTEXT } = Ci.nsIProtocolHandler;
@@ -2523,7 +2484,7 @@ window._gBrowser = {
     return t;
   },
 
-  warnAboutClosingTabs(aCloseTabs, aTab) {
+  warnAboutClosingTabs(aCloseTabs, aTab, aOptionalMessage) {
     var tabsToClose;
     switch (aCloseTabs) {
       case this.closingTabsEnum.ALL:
@@ -2566,9 +2527,14 @@ window._gBrowser = {
     // solve the problem of windows "obscuring" the prompt.
     // see bug #350299 for more details
     window.focus();
-    var warningMessage =
-      PluralForm.get(tabsToClose, gTabBrowserBundle.GetStringFromName("tabs.closeWarningMultiple"))
-      .replace("#1", tabsToClose);
+    var warningMessage;
+    if (aOptionalMessage) {
+      warningMessage = aOptionalMessage;
+    } else {
+      warningMessage =
+        PluralForm.get(tabsToClose, gTabBrowserBundle.GetStringFromName("tabs.closeWarningMultiple"))
+          .replace("#1", tabsToClose);
+    }
     var buttonPressed =
       ps.confirmEx(window,
         gTabBrowserBundle.GetStringFromName("tabs.closeWarningTitle"),
@@ -2606,7 +2572,7 @@ window._gBrowser = {
       return;
 
     let tabs = this.getTabsToTheEndFrom(aTab);
-    this.removeCollectionOfTabs(tabs);
+    this.removeTabs(tabs);
   },
 
   removeAllTabsBut(aTab) {
@@ -2616,7 +2582,7 @@ window._gBrowser = {
 
     let tabs = this.visibleTabs.filter(tab => tab != aTab && !tab.pinned);
     this.selectedTab = aTab;
-    this.removeCollectionOfTabs(tabs);
+    this.removeTabs(tabs);
   },
 
   removeMultiSelectedTabs() {
@@ -2624,12 +2590,10 @@ window._gBrowser = {
       return;
     }
 
-    let selectedTabs = ChromeUtils.nondeterministicGetWeakSetKeys(this._multiSelectedTabsSet)
-                                  .filter(tab => tab.isConnected);
-    this.removeCollectionOfTabs(selectedTabs);
+    this.removeTabs(this.selectedTabs);
   },
 
-  removeCollectionOfTabs(tabs) {
+  removeTabs(tabs) {
     let tabsWithBeforeUnload = [];
     let lastToClose;
     let aParams = {animation: true};
@@ -2847,6 +2811,7 @@ window._gBrowser = {
     // inspect the tab that's about to close.
     var evt = new CustomEvent("TabClose", { bubbles: true, detail: { adoptedBy: aAdoptedByTab } });
     aTab.dispatchEvent(evt);
+    Services.telemetry.recordEvent("savant", "tab", "close", null, { subcategory: "frame" });
 
     if (aTab.linkedPanel) {
       if (!aAdoptedByTab && !gMultiProcessBrowser) {
@@ -3146,7 +3111,7 @@ window._gBrowser = {
       // Workarounds for bug 458697
       // Icon might have been set on DOMLinkAdded, don't override that.
       if (!ourBrowser.mIconURL && otherBrowser.mIconURL)
-        this.setIcon(aOurTab, otherBrowser.mIconURL, otherBrowser.contentPrincipal, otherBrowser.contentRequestContextID);
+        this.setIcon(aOurTab, otherBrowser.mIconURL);
       var isBusy = aOtherTab.hasAttribute("busy");
       if (isBusy) {
         aOurTab.setAttribute("busy", "true");
@@ -3303,11 +3268,17 @@ window._gBrowser = {
   },
 
   reloadAllTabs() {
-    let tabs = this.visibleTabs;
-    let l = tabs.length;
-    for (var i = 0; i < l; i++) {
+    this.reloadTabs(this.visibleTabs);
+  },
+
+  reloadMultiSelectedTabs() {
+    this.reloadTabs(this.selectedTabs);
+  },
+
+  reloadTabs(tabs) {
+    for (let tab of tabs) {
       try {
-        this.getBrowserForTab(tabs[i]).reload();
+        this.getBrowserForTab(tab).reload();
       } catch (e) {
         // ignore failure to reload so others will be reloaded
       }
@@ -3641,10 +3612,7 @@ window._gBrowser = {
    * Adds two given tabs and all tabs between them into the (multi) selected tabs collection
    */
   addRangeToMultiSelectedTabs(aTab1, aTab2) {
-    // Let's avoid going through all the heavy process below when the same
-    // tab is given as params.
     if (aTab1 == aTab2) {
-      this.addToMultiSelectedTabs(aTab1);
       return;
     }
 
@@ -3671,16 +3639,56 @@ window._gBrowser = {
   },
 
   clearMultiSelectedTabs(updatePositionalAttributes) {
-    const selectedTabs = ChromeUtils.nondeterministicGetWeakSetKeys(this._multiSelectedTabsSet);
-    for (let tab of selectedTabs) {
-      if (tab.isConnected && tab.multiselected) {
-        tab.removeAttribute("multiselected");
-      }
+    for (let tab of this.selectedTabs) {
+      tab.removeAttribute("multiselected");
     }
     this._multiSelectedTabsSet = new WeakSet();
+    this._lastMultiSelectedTabRef = null;
     if (updatePositionalAttributes) {
       this.tabContainer._setPositionalAttributes();
     }
+  },
+
+  /**
+   * Remove the active tab from the multiselection if it's the only one left there.
+   */
+  updateActiveTabMultiSelectState() {
+    if (this.selectedTabs.length == 1) {
+      this.clearMultiSelectedTabs();
+    }
+  },
+
+  switchToNextMultiSelectedTab() {
+    let lastMultiSelectedTab = gBrowser.lastMultiSelectedTab;
+    if (lastMultiSelectedTab != gBrowser.selectedTab) {
+      gBrowser.selectedTab = lastMultiSelectedTab;
+      return;
+    }
+    let selectedTabs = ChromeUtils.nondeterministicGetWeakSetKeys(this._multiSelectedTabsSet)
+                                  .filter(tab => tab.isConnected && !tab.closing);
+    let length = selectedTabs.length;
+    gBrowser.selectedTab = selectedTabs[length - 1];
+  },
+
+  set selectedTabs(tabs) {
+    this.clearMultiSelectedTabs(false);
+    this.selectedTab = tabs[0];
+    if (tabs.length > 1) {
+      for (let tab of tabs) {
+        this.addToMultiSelectedTabs(tab, true);
+      }
+    }
+    this.tabContainer._setPositionalAttributes();
+  },
+
+  get selectedTabs() {
+    let {selectedTab, _multiSelectedTabsSet} = this;
+    let tabs = ChromeUtils.nondeterministicGetWeakSetKeys(_multiSelectedTabsSet)
+      .filter(tab => tab.isConnected && !tab.closing);
+    if (!_multiSelectedTabsSet.has(selectedTab)) {
+      tabs.push(selectedTab);
+    }
+    return tabs;
   },
 
   get multiSelectedTabsCount() {
@@ -3694,11 +3702,46 @@ window._gBrowser = {
     if (tab && tab.isConnected && this._multiSelectedTabsSet.has(tab)) {
       return tab;
     }
-    return gBrowser.selectedTab;
+    let selectedTab = gBrowser.selectedTab;
+    this.lastMultiSelectedTab = selectedTab;
+    return selectedTab;
   },
 
   set lastMultiSelectedTab(aTab) {
     this._lastMultiSelectedTabRef = Cu.getWeakReference(aTab);
+  },
+
+  toggleMuteAudioOnMultiSelectedTabs(aTab) {
+    let tabsToToggle;
+    if (aTab.activeMediaBlocked) {
+      tabsToToggle = this.selectedTabs.filter(tab =>
+        tab.activeMediaBlocked || tab.linkedBrowser.audioMuted
+      );
+    } else {
+      let tabMuted = aTab.linkedBrowser.audioMuted;
+      tabsToToggle = this.selectedTabs.filter(tab =>
+        // When a user is looking to mute selected tabs, then media-blocked tabs
+        // should not be toggled. Otherwise those media-blocked tabs are going into a
+        // playing and unmuted state.
+        tab.linkedBrowser.audioMuted == tabMuted && !tab.activeMediaBlocked ||
+        tab.activeMediaBlocked && tabMuted
+      );
+    }
+    for (let tab of tabsToToggle) {
+      tab.toggleMuteAudio();
+    }
+  },
+
+  pinMultiSelectedTabs() {
+    for (let tab of this.selectedTabs) {
+        this.pinTab(tab);
+    }
+  },
+
+  unpinMultiSelectedTabs() {
+    for (let tab of this.selectedTabs) {
+        this.unpinTab(tab);
+    }
   },
 
   activateBrowserForPrintPreview(aBrowser) {
@@ -3770,9 +3813,12 @@ window._gBrowser = {
 
     if (AppConstants.platform != "macosx") {
       if (aEvent.ctrlKey && !aEvent.shiftKey && !aEvent.metaKey &&
-          aEvent.keyCode == KeyEvent.DOM_VK_F4 &&
-          !this.selectedTab.pinned) {
-        this.removeCurrentTab({ animate: true });
+          aEvent.keyCode == KeyEvent.DOM_VK_F4) {
+        if (gBrowser.multiSelectedTabsCount) {
+          gBrowser.removeMultiSelectedTabs();
+        } else if (!this.selectedTab.pinned) {
+          this.removeCurrentTab({ animate: true });
+        }
         aEvent.preventDefault();
       }
     }
@@ -4214,7 +4260,7 @@ window._gBrowser = {
       }
 
       tab.removeAttribute("soundplaying");
-      this.setIcon(tab, icon, browser.contentPrincipal, browser.contentRequestContextID);
+      this.setIcon(tab, icon);
     });
 
     this.addEventListener("oop-browser-buildid-mismatch", (event) => {
@@ -4553,21 +4599,16 @@ class TabProgressListener {
         } else if (isSuccessful) {
           this.mBrowser.urlbarChangeTracker.finishedLoad();
         }
+      }
 
-        // Ignore initial about:blank to prevent flickering.
-        if (!this.mBrowser.mIconURL && !ignoreBlank) {
-          // Don't switch to the default icon on about:home, about:newtab,
-          // about:privatebrowsing, or about:welcome since these pages get
-          // their favicon set in browser code to improve perceived performance.
-          let isNewTab = originalLocation &&
-             (originalLocation.spec == "about:newtab" ||
-              originalLocation.spec == "about:privatebrowsing" ||
-              originalLocation.spec == "about:home" ||
-              originalLocation.spec == "about:welcome");
-          if (!isNewTab) {
-            gBrowser.useDefaultIcon(this.mTab);
-          }
-        }
+      // If we don't already have an icon for this tab then clear the tab's
+      // icon. Don't do this on the initial about:blank load to prevent
+      // flickering. Don't clear the icon if we already set it from one of the
+      // known defaults. Note we use the original URL since about:newtab
+      // redirects to a prerendered page.
+      if (!this.mBrowser.mIconURL && !ignoreBlank &&
+          !(originalLocation.spec in FAVICON_DEFAULTS)) {
+        this.mTab.removeAttribute("image");
       }
 
       // For keyword URIs clear the user typed value since they will be changed into real URIs
@@ -4669,6 +4710,8 @@ class TabProgressListener {
       if (!this.mTab.hasAttribute("pending") &&
           aWebProgress.isLoadingDocument &&
           !isSameDocument) {
+        // Removing the tab's image here causes flickering, wait until the load
+        // is complete.
         this.mBrowser.mIconURL = null;
       }
 

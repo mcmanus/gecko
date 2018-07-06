@@ -247,10 +247,6 @@ body {
   border-radius: 8px;
   background: rgba(113, 113, 113, 0.5);
 }
-
-:root.theme-dark .CodeMirror-scrollbar-filler {
-  background: transparent;
-}
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
@@ -1045,11 +1041,12 @@ html .toggle-button.end.vertical svg {
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
 .search-shadow {
-  margin: 1px;
+  border: 1px solid transparent;
 }
 
 .search-shadow.focused {
-  box-shadow: var(--theme-focus-box-shadow-textbox);
+  border: 1px solid var(--blue-50);
+  transition: border-color 0.2s ease-in-out;
 }
 
 .search-field {
@@ -2661,7 +2658,7 @@ button.jump-definition {
 }
 
 .theme-dark .editor-wrapper {
-  --debug-expression-background: #54617e;
+  --debug-expression-background: rgba(202, 227, 255, 0.3);
   --debug-line-border: #7786a2;
 }
 
@@ -3860,8 +3857,6 @@ html[dir="rtl"] .object-node {
   flex-direction: column;
   flex: 1;
   white-space: nowrap;
-  -moz-user-select: none;
-  user-select: none;
   --breakpoint-expression-right-clear-space: 36px;
   --breakpoint-expression-height: 2.4em;
 }

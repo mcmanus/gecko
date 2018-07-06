@@ -167,12 +167,13 @@ public:
   explicit AutoDisableUndo(TextEditor* aTextEditor
                            MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
     : mTextEditor(aTextEditor)
-    , mPreviousEnabled(true)
+    , mNumberOfMaximumTransactions(0)
   {
     MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     MOZ_ASSERT(mTextEditor);
 
-    mPreviousEnabled = mTextEditor->IsUndoRedoEnabled();
+    mNumberOfMaximumTransactions =
+      mTextEditor ? mTextEditor->NumberOfMaximumTransactions() : 0;
     DebugOnly<bool> disabledUndoRedo = mTextEditor->DisableUndoRedo();
     NS_WARNING_ASSERTION(disabledUndoRedo,
       "Failed to disable undo/redo transactions");
@@ -180,8 +181,17 @@ public:
 
   ~AutoDisableUndo()
   {
-    if (mPreviousEnabled) {
-      DebugOnly<bool> enabledUndoRedo = mTextEditor->EnableUndoRedo();
+    // Don't change enable/disable of undo/redo if it's enabled after
+    // it's disabled by the constructor because we shouldn't change
+    // the maximum undo/redo count to the old value.
+    if (mTextEditor->IsUndoRedoEnabled()) {
+      return;
+    }
+    // If undo/redo was enabled, mNumberOfMaximumTransactions is -1 or lager
+    // than 0.  Only when it's 0, it was disabled.
+    if (mNumberOfMaximumTransactions) {
+      DebugOnly<bool> enabledUndoRedo =
+        mTextEditor->EnableUndoRedo(mNumberOfMaximumTransactions);
       NS_WARNING_ASSERTION(enabledUndoRedo,
         "Failed to enable undo/redo transactions");
     } else {
@@ -193,7 +203,7 @@ public:
 
 private:
   TextEditor* mTextEditor;
-  bool mPreviousEnabled;
+  int32_t mNumberOfMaximumTransactions;
   MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
@@ -1724,7 +1734,10 @@ nsTextEditorState::SetSelectionRange(uint32_t aStart, uint32_t aEnd,
     // It sure would be nice if we had an existing Element* or so to work with.
     nsCOMPtr<nsINode> node = do_QueryInterface(mTextCtrlElement);
     RefPtr<AsyncEventDispatcher> asyncDispatcher =
-      new AsyncEventDispatcher(node, NS_LITERAL_STRING("select"), true, false);
+      new AsyncEventDispatcher(node,
+                               NS_LITERAL_STRING("select"),
+                               CanBubble::eYes,
+                               ChromeOnlyDispatch::eNo);
     asyncDispatcher->PostDOMEvent();
   }
 
@@ -1794,7 +1807,7 @@ DirectionToName(nsITextControlFrame::SelectionDirection dir, nsAString& aDirecti
   } else if (dir == nsITextControlFrame::eBackward) {
     aDirection.AssignLiteral("backward");
   } else {
-    NS_NOTREACHED("Invalid SelectionDirection value");
+    MOZ_ASSERT_UNREACHABLE("Invalid SelectionDirection value");
   }
 }
 

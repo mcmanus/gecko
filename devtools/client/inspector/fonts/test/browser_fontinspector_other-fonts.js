@@ -11,14 +11,15 @@
 const TEST_URI = URL_ROOT + "browser_fontinspector.html";
 
 add_task(async function() {
+  await pushPref("devtools.inspector.fonteditor.enabled", true);
   const { inspector, view } = await openFontInspectorForURL(TEST_URI);
   const viewDoc = view.document;
 
-  const otherFontsAccordion = viewDoc.querySelector("#font-container .accordion");
+  const otherFontsAccordion = getOtherFontsAccordion(viewDoc);
   ok(otherFontsAccordion, "There's an accordion in the panel");
   is(otherFontsAccordion.textContent, "Other fonts in page", "It has the right title");
 
-  await expandOtherFontsAccordion(viewDoc);
+  await expandAccordion(otherFontsAccordion);
   let otherFontsEls = getOtherFontsEls(viewDoc);
 
   is(otherFontsEls.length, 1, "There is one font listed in the other fonts section");

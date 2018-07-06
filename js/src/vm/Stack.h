@@ -69,7 +69,7 @@ class DebugFrame;
 class Instance;
 }
 
-// VM stack layout
+// [SMDOC] VM stack layout
 //
 // A JSRuntime's stack consists of a linked list of activations. Every activation
 // contains a number of scripted frames that are either running in the interpreter
@@ -302,7 +302,7 @@ class InterpreterFrame
         PREV_UP_TO_DATE        =       0x20,  /* see DebugScopes::updateLiveScopes */
 
         /*
-         * See comment above 'isDebuggee' in JSCompartment.h for explanation of
+         * See comment above 'isDebuggee' in Realm.h for explanation of
          * invariants of debuggee compartments, scripts, and frames.
          */
         DEBUGGEE               =       0x40,  /* Execution is being observed by Debugger */
@@ -1671,7 +1671,7 @@ class JitActivation : public Activation
   protected:
     // Used to verify that live registers don't change between a VM call and
     // the OsiPoint that follows it. Protected to silence Clang warning.
-    uint32_t checkRegs_;
+    uint32_t checkRegs_ = 0;
     RegisterDump regs_;
 #endif
 

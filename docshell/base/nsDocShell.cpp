@@ -48,7 +48,6 @@
 #include "mozilla/dom/ScreenOrientation.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/ServiceWorkerInterceptController.h"
-#include "mozilla/dom/ServiceWorkerManager.h"
 #include "mozilla/dom/ServiceWorkerUtils.h"
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/TabGroup.h"
@@ -87,7 +86,6 @@
 #include "nsIExternalProtocolService.h"
 #include "nsIFormPOSTActionChannel.h"
 #include "nsIFrame.h"
-#include "nsIGlobalHistory2.h"
 #include "nsIGlobalObject.h"
 #include "nsIHttpChannel.h"
 #include "nsIHttpChannelInternal.h"
@@ -190,7 +188,6 @@
 #include "nsRect.h"
 #include "nsRefreshTimer.h"
 #include "nsSandboxFlags.h"
-#include "nsIServiceWorkerManager.h"
 #include "nsSHistory.h"
 #include "nsStructuredCloneContainer.h"
 #include "nsSubDocumentFrame.h"
@@ -387,6 +384,9 @@ nsDocShell::nsDocShell()
   , mHasLoadedNonBlankURI(false)
   , mBlankTiming(false)
 {
+  mHistoryID.m0 = 0;
+  mHistoryID.m1 = 0;
+  mHistoryID.m2 = 0;
   AssertOriginAttributesMatchPrivateBrowsing();
 
   nsContentUtils::GenerateUUIDInPlace(mHistoryID);
@@ -1022,72 +1022,6 @@ nsDocShell::LoadURI(nsIURI* aURI,
                       baseURI,
                       nullptr,  // No nsIDocShell
                       nullptr); // No nsIRequest
-}
-
-NS_IMETHODIMP
-nsDocShell::LoadStream(nsIInputStream* aStream, nsIURI* aURI,
-                       const nsACString& aContentType,
-                       const nsACString& aContentCharset,
-                       nsIDocShellLoadInfo* aLoadInfo)
-{
-  NS_ENSURE_ARG(aStream);
-
-  mAllowKeywordFixup = false;
-
-  // if the caller doesn't pass in a URI we need to create a dummy URI. necko
-  // currently requires a URI in various places during the load. Some consumers
-  // do as well.
-  nsCOMPtr<nsIURI> uri = aURI;
-  if (!uri) {
-    // HACK ALERT
-    nsresult rv = NS_OK;
-    // Make sure that the URI spec "looks" like a protocol and path...
-    // For now, just use a bogus protocol called "internal"
-    rv = NS_MutateURI(NS_SIMPLEURIMUTATOR_CONTRACTID)
-           .SetSpec(NS_LITERAL_CSTRING("internal:load-stream"))
-           .Finalize(uri);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-  }
-
-  uint32_t loadType = LOAD_NORMAL;
-  nsCOMPtr<nsIPrincipal> triggeringPrincipal;
-  if (aLoadInfo) {
-    nsDocShellInfoLoadType lt = nsIDocShellLoadInfo::loadNormal;
-    (void)aLoadInfo->GetLoadType(&lt);
-    // Get the appropriate LoadType from nsIDocShellLoadInfo type
-    loadType = ConvertDocShellInfoLoadTypeToLoadType(lt);
-    aLoadInfo->GetTriggeringPrincipal(getter_AddRefs(triggeringPrincipal));
-  }
-
-  NS_ENSURE_SUCCESS(Stop(nsIWebNavigation::STOP_NETWORK), NS_ERROR_FAILURE);
-
-  mLoadType = loadType;
-
-  if (!triggeringPrincipal) {
-    triggeringPrincipal = nsContentUtils::GetSystemPrincipal();
-  }
-
-  // build up a channel for this stream.
-  nsCOMPtr<nsIChannel> channel;
-  nsCOMPtr<nsIInputStream> stream = aStream;
-  nsresult rv = NS_NewInputStreamChannel(getter_AddRefs(channel),
-                                         uri,
-                                         stream.forget(),
-                                         triggeringPrincipal,
-                                         nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
-                                         nsIContentPolicy::TYPE_OTHER,
-                                         aContentType,
-                                         aContentCharset);
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
-
-  nsCOMPtr<nsIURILoader> uriLoader(do_GetService(NS_URI_LOADER_CONTRACTID));
-  NS_ENSURE_TRUE(uriLoader, NS_ERROR_FAILURE);
-
-  NS_ENSURE_SUCCESS(DoChannelLoad(channel, uriLoader, false),
-                    NS_ERROR_FAILURE);
-  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -2832,31 +2766,7 @@ nsDocShell::MaybeCreateInitialClientSource(nsIPrincipal* aPrincipal)
     return;
   }
 
-  nsCOMPtr<nsIServiceWorkerManager> swm = mozilla::services::GetServiceWorkerManager();
-  if (!swm) {
-    return;
-  }
-
-  // If the parent is controlled then propagate that controller to the
-  // initial about:blank client as well.  This will set the controller
-  // in the ClientManagerService in the parent.
-  //
-  // Note: If the registration is missing from the SWM we avoid setting
-  //       the controller on the client.  We can do this synchronously
-  //       for now since SWM is in the child process.  In the future
-  //       when SWM is in the parent process we will probably have to
-  //       always set the initial client source and then somehow clear
-  //       it if we find the registration is acutally gone.  Its also
-  //       possible this race only occurs in cases where the resulting
-  //       window is no longer exposed.  For example, in theory the SW
-  //       should not go away if our parent window is controlled.
-  if (!swm->StartControlling(mInitialClientSource->Info(), controller.ref())) {
-    return;
-  }
-
-  // Also mark the ClientSource as controlled directly in case script
-  // immediately accesses navigator.serviceWorker.controller.
-  mInitialClientSource->SetController(controller.ref());
+  mInitialClientSource->InheritController(controller.ref());
 }
 
 Maybe<ClientInfo>
@@ -3967,27 +3877,13 @@ nsDocShell::AddChildSHEntryToParent(nsISHEntry* aNewEntry, int32_t aChildOffset,
 NS_IMETHODIMP
 nsDocShell::SetUseGlobalHistory(bool aUseGlobalHistory)
 {
-  nsresult rv;
-
   mUseGlobalHistory = aUseGlobalHistory;
-
   if (!aUseGlobalHistory) {
-    mGlobalHistory = nullptr;
     return NS_OK;
   }
 
-  // No need to initialize mGlobalHistory if IHistory is available.
   nsCOMPtr<IHistory> history = services::GetHistoryService();
-  if (history) {
-    return NS_OK;
-  }
-
-  if (mGlobalHistory) {
-    return NS_OK;
-  }
-
-  mGlobalHistory = do_GetService(NS_GLOBALHISTORY2_CONTRACTID, &rv);
-  return rv;
+  return history ? NS_OK : NS_ERROR_FAILURE;
 }
 
 NS_IMETHODIMP
@@ -5674,7 +5570,7 @@ nsDocShell::GetVisibility(bool* aVisibility)
 
     // Null-check for crash in bug 267804
     if (!pPresShell) {
-      NS_NOTREACHED("parent docshell has null pres shell");
+      MOZ_ASSERT_UNREACHABLE("parent docshell has null pres shell");
       return NS_OK;
     }
 
@@ -6964,7 +6860,7 @@ NS_IMETHODIMP
 nsDocShell::OnLocationChange(nsIWebProgress* aProgress, nsIRequest* aRequest,
                              nsIURI* aURI, uint32_t aFlags)
 {
-  NS_NOTREACHED("notification excluded in AddProgressListener(...)");
+  MOZ_ASSERT_UNREACHABLE("notification excluded in AddProgressListener(...)");
   return NS_OK;
 }
 
@@ -7074,7 +6970,7 @@ nsDocShell::OnStatusChange(nsIWebProgress* aWebProgress,
                            nsIRequest* aRequest,
                            nsresult aStatus, const char16_t* aMessage)
 {
-  NS_NOTREACHED("notification excluded in AddProgressListener(...)");
+  MOZ_ASSERT_UNREACHABLE("notification excluded in AddProgressListener(...)");
   return NS_OK;
 }
 
@@ -7082,7 +6978,7 @@ NS_IMETHODIMP
 nsDocShell::OnSecurityChange(nsIWebProgress* aWebProgress,
                              nsIRequest* aRequest, uint32_t aState)
 {
-  NS_NOTREACHED("notification excluded in AddProgressListener(...)");
+  MOZ_ASSERT_UNREACHABLE("notification excluded in AddProgressListener(...)");
   return NS_OK;
 }
 
@@ -10973,7 +10869,7 @@ nsDocShell::AddHeadersToChannel(nsIInputStream* aHeadersData,
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
-  NS_NOTREACHED("oops");
+  MOZ_ASSERT_UNREACHABLE("oops");
   return NS_ERROR_UNEXPECTED;
 }
 
@@ -12623,12 +12519,6 @@ nsDocShell::AddURIVisit(nsIURI* aURI,
     }
 
     (void)history->VisitURI(aURI, aPreviousURI, visitURIFlags);
-  } else if (mGlobalHistory) {
-    // Falls back to sync global history interface.
-    (void)mGlobalHistory->AddURI(aURI,
-                                 !!aChannelRedirectFlags,
-                                 !IsFrame(),
-                                 aReferrerURI);
   }
 }
 
@@ -13539,15 +13429,6 @@ nsDocShell::OnLinkClickSync(nsIContent* aContent,
     CopyUTF8toUTF16(type, typeHint);
   }
 
-  // Clone the URI now, in case a content policy or something messes
-  // with it under InternalLoad; we do _not_ want to change the URI
-  // our caller passed in.
-  nsCOMPtr<nsIURI> clonedURI;
-  aURI->Clone(getter_AddRefs(clonedURI));
-  if (!clonedURI) {
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
-
   // if the triggeringPrincipal is not passed explicitly, then we
   // fall back to using doc->NodePrincipal() as the triggeringPrincipal.
   nsCOMPtr<nsIPrincipal> triggeringPrincipal =
@@ -13564,7 +13445,7 @@ nsDocShell::OnLinkClickSync(nsIContent* aContent,
     flags |= INTERNAL_LOAD_FLAGS_IS_USER_TRIGGERED;
   }
 
-  nsresult rv = InternalLoad(clonedURI,                 // New URI
+  nsresult rv = InternalLoad(aURI,                      // New URI
                              nullptr,                   // Original URI
                              Nothing(),                 // Let the protocol handler assign it
                              false,                     // LoadReplace
@@ -14023,8 +13904,6 @@ nsDocShell::UpdateGlobalHistoryTitle(nsIURI* aURI)
     nsCOMPtr<IHistory> history = services::GetHistoryService();
     if (history) {
       history->SetURITitle(aURI, mTitle);
-    } else if (mGlobalHistory) {
-      mGlobalHistory->SetPageTitle(aURI, nsString(mTitle));
     }
   }
 }

@@ -16,7 +16,7 @@ namespace jit {
 
 static constexpr Register StackPointer { Registers::invalid_reg };
 static constexpr Register FramePointer { Registers::invalid_reg };
-static constexpr Register ReturnReg { Registers::invalid_reg };
+static constexpr Register ReturnReg { Registers::invalid_reg2 };
 static constexpr FloatRegister ReturnFloat32Reg = { FloatRegisters::invalid_reg };
 static constexpr FloatRegister ReturnDoubleReg = { FloatRegisters::invalid_reg };
 static constexpr FloatRegister ReturnSimd128Reg = { FloatRegisters::invalid_reg };
@@ -68,6 +68,7 @@ static constexpr Register64 ReturnReg64(InvalidReg);
 static constexpr Register ABINonArgReg0 { Registers::invalid_reg };
 static constexpr Register ABINonArgReg1 { Registers::invalid_reg };
 static constexpr Register ABINonArgReg2 { Registers::invalid_reg };
+static constexpr Register ABINonArgReg3 { Registers::invalid_reg };
 static constexpr Register ABINonArgReturnReg0 { Registers::invalid_reg };
 static constexpr Register ABINonArgReturnReg1 { Registers::invalid_reg };
 static constexpr Register ABINonVolatileReg { Registers::invalid_reg };
@@ -75,7 +76,8 @@ static constexpr Register ABINonArgReturnVolatileReg { Registers::invalid_reg };
 
 static constexpr FloatRegister ABINonArgDoubleReg = { FloatRegisters::invalid_reg };
 
-static constexpr Register WasmTableCallScratchReg { Registers::invalid_reg };
+static constexpr Register WasmTableCallScratchReg0 { Registers::invalid_reg };
+static constexpr Register WasmTableCallScratchReg1 { Registers::invalid_reg };
 static constexpr Register WasmTableCallSigReg { Registers::invalid_reg };
 static constexpr Register WasmTableCallIndexReg { Registers::invalid_reg };
 static constexpr Register WasmTlsReg { Registers::invalid_reg };
@@ -332,12 +334,12 @@ class MacroAssemblerNone : public Assembler
     void unboxNonDouble(const Address&, Register, JSValueType) { MOZ_CRASH();}
     void unboxGCThingForPreBarrierTrampoline(const Address&, Register) { MOZ_CRASH(); }
     void notBoolean(ValueOperand) { MOZ_CRASH(); }
-    Register extractObject(Address, Register) { MOZ_CRASH(); }
-    Register extractObject(ValueOperand, Register) { MOZ_CRASH(); }
-    Register extractSymbol(ValueOperand, Register) { MOZ_CRASH(); }
-    Register extractInt32(ValueOperand, Register) { MOZ_CRASH(); }
-    Register extractBoolean(ValueOperand, Register) { MOZ_CRASH(); }
-    template <typename T> Register extractTag(T, Register) { MOZ_CRASH(); }
+    MOZ_MUST_USE Register extractObject(Address, Register) { MOZ_CRASH(); }
+    MOZ_MUST_USE Register extractObject(ValueOperand, Register) { MOZ_CRASH(); }
+    MOZ_MUST_USE Register extractSymbol(ValueOperand, Register) { MOZ_CRASH(); }
+    MOZ_MUST_USE Register extractInt32(ValueOperand, Register) { MOZ_CRASH(); }
+    MOZ_MUST_USE Register extractBoolean(ValueOperand, Register) { MOZ_CRASH(); }
+    template <typename T> MOZ_MUST_USE Register extractTag(T, Register) { MOZ_CRASH(); }
 
     void convertFloat32ToInt32(FloatRegister, Register, Label*, bool v = true) { MOZ_CRASH(); }
     void convertDoubleToInt32(FloatRegister, Register, Label*, bool v = true) { MOZ_CRASH(); }

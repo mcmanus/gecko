@@ -212,6 +212,7 @@ moz_container_init (MozContainer *container)
       container->surface = nullptr;
       container->subsurface = nullptr;
       container->eglwindow = nullptr;
+      container->parent_surface_committed = false;
 
       GdkDisplay *gdk_display = gtk_widget_get_display(GTK_WIDGET(container));
       if (GDK_IS_WAYLAND_DISPLAY (gdk_display)) {
@@ -231,12 +232,21 @@ moz_container_init (MozContainer *container)
 }
 
 #if defined(MOZ_WAYLAND)
+static void
+moz_container_commited_handler(GdkFrameClock *clock, MozContainer *container)
+{
+    container->parent_surface_committed = true;
+    g_signal_handler_disconnect(clock,
+                                container->parent_surface_committed_handler);
+    container->parent_surface_committed_handler = 0;
+}
+
 /* We want to draw to GdkWindow owned by mContainer from Compositor thread but
  * Gtk+ can be used in main thread only. So we create wayland wl_surface
  * and attach it as an overlay to GdkWindow.
  *
  * see gtk_clutter_embed_ensure_subsurface() at gtk-clutter-embed.c
-*  for reference.
+ * for reference.
  */
 static gboolean
 moz_container_map_surface(MozContainer *container)
@@ -248,6 +258,9 @@ moz_container_map_surface(MozContainer *container)
     static auto sGdkWaylandWindowGetWlSurface =
         (wl_surface *(*)(GdkWindow *))
         dlsym(RTLD_DEFAULT, "gdk_wayland_window_get_wl_surface");
+    static auto sGdkWindowGetFrameClock =
+        (GdkFrameClock *(*)(GdkWindow *))
+        dlsym(RTLD_DEFAULT, "gdk_window_get_frame_clock");
 
     GdkDisplay *display = gtk_widget_get_display(GTK_WIDGET(container));
     if (GDK_IS_X11_DISPLAY(display))
@@ -255,6 +268,18 @@ moz_container_map_surface(MozContainer *container)
 
     if (container->subsurface && container->surface)
         return true;
+
+    if (!container->parent_surface_committed) {
+        if (!container->parent_surface_committed_handler) {
+            GdkWindow* window = gtk_widget_get_window(GTK_WIDGET(container));
+            GdkFrameClock *clock = sGdkWindowGetFrameClock(window);
+            container->parent_surface_committed_handler =
+                g_signal_connect_after(clock, "after-paint",
+                                       G_CALLBACK(moz_container_commited_handler),
+                                       container);
+        }
+        return false;
+    }
 
     if (!container->surface) {
         struct wl_compositor *compositor;
@@ -298,6 +323,19 @@ moz_container_unmap_surface(MozContainer *container)
     g_clear_pointer(&container->eglwindow, wl_egl_window_destroy);
     g_clear_pointer(&container->subsurface, wl_subsurface_destroy);
     g_clear_pointer(&container->surface, wl_surface_destroy);
+
+    if (container->parent_surface_committed_handler) {
+        static auto sGdkWindowGetFrameClock =
+            (GdkFrameClock *(*)(GdkWindow *))
+            dlsym(RTLD_DEFAULT, "gdk_window_get_frame_clock");
+        GdkWindow* window = gtk_widget_get_window(GTK_WIDGET(container));
+        GdkFrameClock *clock = sGdkWindowGetFrameClock(window);
+
+        g_signal_handler_disconnect(clock,
+                                    container->parent_surface_committed_handler);
+        container->parent_surface_committed_handler = 0;
+    }
+    container->parent_surface_committed = false;
 }
 
 #endif

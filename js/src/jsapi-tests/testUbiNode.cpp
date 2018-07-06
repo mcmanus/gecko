@@ -9,8 +9,10 @@
 #include "js/UbiNodeShortestPaths.h"
 #include "jsapi-tests/tests.h"
 #include "util/Text.h"
-#include "vm/JSCompartment.h"
+#include "vm/Realm.h"
 #include "vm/SavedFrame.h"
+
+#include "vm/JSObject-inl.h"
 
 using JS::RootedObject;
 using JS::RootedScript;
@@ -128,8 +130,8 @@ BEGIN_TEST(test_ubiNodeCompartment)
     CHECK(global1->compartment() != global2->compartment());
     CHECK(JS::ubi::Node(global2).compartment() == global2->compartment());
     CHECK(JS::ubi::Node(global2).compartment() != global1->compartment());
-    CHECK(JS::ubi::Node(global2).realm() == global2->realm());
-    CHECK(JS::ubi::Node(global2).realm() != global1->realm());
+    CHECK(JS::ubi::Node(global2).realm() == global2->nonCCWRealm());
+    CHECK(JS::ubi::Node(global2).realm() != global1->nonCCWRealm());
 
     JS::CompileOptions options(cx);
 
@@ -147,8 +149,8 @@ BEGIN_TEST(test_ubiNodeCompartment)
 
         CHECK(JS::ubi::Node(script1).compartment() == global1->compartment());
         CHECK(JS::ubi::Node(script2).compartment() == global2->compartment());
-        CHECK(JS::ubi::Node(script1).realm() == global1->realm());
-        CHECK(JS::ubi::Node(script2).realm() == global2->realm());
+        CHECK(JS::ubi::Node(script1).realm() == global1->nonCCWRealm());
+        CHECK(JS::ubi::Node(script2).realm() == global2->nonCCWRealm());
 
         // Now create a wrapper for global1 in global2's compartment.
         RootedObject wrappedGlobal1(cx, global1);

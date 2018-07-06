@@ -2049,7 +2049,7 @@ class JSScript : public js::gc::TenuredCell
     bool hasBreakpointsAt(jsbytecode* pc);
     bool hasAnyBreakpointsOrStepMode() { return bitFields_.hasDebugScript_; }
 
-    // See comment above 'debugMode' in JSCompartment.h for explanation of
+    // See comment above 'debugMode' in Realm.h for explanation of
     // invariants of debuggee compartments, scripts, and frames.
     inline bool isDebuggee() const;
 
@@ -2099,6 +2099,7 @@ class JSScript : public js::gc::TenuredCell
         explicit AutoDelazify(JSContext* cx, JS::HandleFunction fun = nullptr)
             : script_(cx)
             , cx_(cx)
+            , oldDoNotRelazify_(false)
         {
             holdScript(fun);
         }
@@ -2526,21 +2527,21 @@ PCToLineNumber(unsigned startLine, jssrcnote* notes, jsbytecode* code, jsbytecod
  * This function returns the file and line number of the script currently
  * executing on cx. If there is no current script executing on cx (e.g., a
  * native called directly through JSAPI (e.g., by setTimeout)), nullptr and 0
- * are returned as the file and line. Additionally, this function avoids the
- * full linear scan to compute line number when the caller guarantees that the
- * script compilation occurs at a JSOP_EVAL/JSOP_SPREADEVAL.
+ * are returned as the file and line.
  */
-
-enum LineOption {
-    CALLED_FROM_JSOP_EVAL,
-    NOT_CALLED_FROM_JSOP_EVAL
-};
-
 extern void
 DescribeScriptedCallerForCompilation(JSContext* cx, MutableHandleScript maybeScript,
-                                     const char** file, unsigned* linenop,
-                                     uint32_t* pcOffset, bool* mutedErrors,
-                                     LineOption opt = NOT_CALLED_FROM_JSOP_EVAL);
+                                     const char** file, unsigned* linenop, uint32_t* pcOffset,
+                                     bool* mutedErrors);
+
+/*
+ * Like DescribeScriptedCallerForCompilation, but this function avoids looking
+ * up the script/pc and the full linear scan to compute line number.
+ */
+extern void
+DescribeScriptedCallerForDirectEval(JSContext* cx, HandleScript script, jsbytecode* pc,
+                                    const char** file, unsigned* linenop, uint32_t* pcOffset,
+                                    bool* mutedErrors);
 
 JSScript*
 CloneScriptIntoFunction(JSContext* cx, HandleScope enclosingScope, HandleFunction fun,

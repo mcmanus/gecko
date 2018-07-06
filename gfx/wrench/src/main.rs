@@ -257,7 +257,7 @@ fn make_window(
                 })
                 .with_vsync(vsync);
             let window_builder = winit::WindowBuilder::new()
-                .with_title("WRech")
+                .with_title("WRench")
                 .with_multitouch()
                 .with_dimensions(size.width, size.height);
 
@@ -351,7 +351,11 @@ impl RenderNotifier for Notifier {
         self.tx.send(NotifierEvent::ShutDown).unwrap();
     }
 
-    fn new_frame_ready(&self, _: DocumentId, _scrolled: bool, composite_needed: bool) {
+    fn new_frame_ready(&self,
+                       _: DocumentId,
+                       _scrolled: bool,
+                       composite_needed: bool,
+                       _render_time: Option<u64>) {
         if composite_needed {
             self.wake_up();
         }
@@ -361,6 +365,31 @@ impl RenderNotifier for Notifier {
 fn create_notifier() -> (Box<RenderNotifier>, Receiver<NotifierEvent>) {
     let (tx, rx) = channel();
     (Box::new(Notifier { tx: tx }), rx)
+}
+
+fn rawtest(mut wrench: Wrench, window: &mut WindowWrapper, rx: Receiver<NotifierEvent>) {
+    RawtestHarness::new(&mut wrench, window, &rx).run();
+    wrench.shut_down(rx);
+}
+
+fn reftest<'a>(
+    mut wrench: Wrench,
+    window: &mut WindowWrapper,
+    subargs: &clap::ArgMatches<'a>,
+    rx: Receiver<NotifierEvent>
+) -> usize {
+    let dim = window.get_inner_size();
+    let base_manifest = Path::new("reftests/reftest.list");
+    let specific_reftest = subargs.value_of("REFTEST").map(|x| Path::new(x));
+    let mut reftest_options = ReftestOptions::default();
+    if let Some(allow_max_diff) = subargs.value_of("fuzz_tolerance") {
+        reftest_options.allow_max_difference = allow_max_diff.parse().unwrap_or(1);
+        reftest_options.allow_num_differences = dim.width as usize * dim.height as usize;
+    }
+    let num_failures = ReftestHarness::new(&mut wrench, window, &rx)
+        .run(base_manifest, specific_reftest, &reftest_options);
+    wrench.shut_down(rx);
+    num_failures
 }
 
 fn main() {
@@ -399,6 +428,20 @@ fn main() {
         })
         .unwrap_or(DeviceUintSize::new(1920, 1080));
     let zoom_factor = args.value_of("zoom").map(|z| z.parse::<f32>().unwrap());
+    let chase_primitive = match args.value_of("chase") {
+        Some(s) => {
+            let mut items = s
+                .split(',')
+                .map(|s| s.parse::<f32>().unwrap())
+                .collect::<Vec<_>>();
+            let rect = LayoutRect::new(
+                LayoutPoint::new(items[0], items[1]),
+                LayoutSize::new(items[2], items[3]),
+            );
+            webrender::ChasePrimitive::LocalRect(rect)
+        },
+        None => webrender::ChasePrimitive::Nothing,
+    };
 
     let mut events_loop = if args.is_present("headless") {
         None
@@ -437,13 +480,12 @@ fn main() {
         args.is_present("precache"),
         args.is_present("slow_subpixel"),
         zoom_factor.unwrap_or(1.0),
+        chase_primitive,
         notifier,
     );
 
-    let mut thing = if let Some(subargs) = args.subcommand_matches("show") {
-        Box::new(YamlFrameReader::new_from_args(subargs)) as Box<WrenchThing>
-    } else if let Some(subargs) = args.subcommand_matches("replay") {
-        Box::new(BinaryFrameReader::new_from_args(subargs)) as Box<WrenchThing>
+    if let Some(subargs) = args.subcommand_matches("show") {
+        render(&mut wrench, &mut window, size, &mut events_loop, subargs);
     } else if let Some(subargs) = args.subcommand_matches("png") {
         let surface = match subargs.value_of("surface") {
             Some("screen") | None => png::ReadSurface::Screen,
@@ -452,30 +494,11 @@ fn main() {
         };
         let reader = YamlFrameReader::new_from_args(subargs);
         png::png(&mut wrench, surface, &mut window, reader, rx.unwrap());
-        wrench.renderer.deinit();
-        return;
     } else if let Some(subargs) = args.subcommand_matches("reftest") {
-        let dim = window.get_inner_size();
-        let base_manifest = Path::new("reftests/reftest.list");
-        let specific_reftest = subargs.value_of("REFTEST").map(|x| Path::new(x));
-        let mut reftest_options = ReftestOptions::default();
-        if let Some(allow_max_diff) = subargs.value_of("fuzz_tolerance") {
-            reftest_options.allow_max_difference = allow_max_diff.parse().unwrap_or(1);
-            reftest_options.allow_num_differences = dim.width as usize * dim.height as usize;
-        }
-        let rx = rx.unwrap();
-        let num_failures = ReftestHarness::new(&mut wrench, &mut window, &rx)
-            .run(base_manifest, specific_reftest, &reftest_options);
-        wrench.shut_down(rx);
-        // exit with an error code to fail on CI
-        process::exit(num_failures as _);
+        // Exit with an error code in order to ensure the CI job fails.
+        process::exit(reftest(wrench, &mut window, subargs, rx.unwrap()) as _);
     } else if let Some(_) = args.subcommand_matches("rawtest") {
-        let rx = rx.unwrap();
-        {
-            let harness = RawtestHarness::new(&mut wrench, &mut window, &rx);
-            harness.run();
-        }
-        wrench.shut_down(rx);
+        rawtest(wrench, &mut window, rx.unwrap());
         return;
     } else if let Some(subargs) = args.subcommand_matches("perf") {
         // Perf mode wants to benchmark the total cost of drawing
@@ -491,16 +514,42 @@ fn main() {
         let second_filename = subargs.value_of("second_filename").unwrap();
         perf::compare(first_filename, second_filename);
         return;
-    } else if let Some(subargs) = args.subcommand_matches("load") {
-        let path = PathBuf::from(subargs.value_of("path").unwrap());
-        let mut documents = wrench.api.load_capture(path);
+    } else {
+        panic!("Should never have gotten here! {:?}", args);
+    };
+
+    wrench.renderer.deinit();
+}
+
+fn render<'a>(
+    wrench: &mut Wrench,
+    window: &mut WindowWrapper,
+    size: DeviceUintSize,
+    events_loop: &mut Option<winit::EventsLoop>,
+    subargs: &clap::ArgMatches<'a>,
+) {
+    let input_path = subargs.value_of("INPUT").map(PathBuf::from).unwrap();
+
+    // If the input is a directory, we are looking at a capture.
+    let mut thing = if input_path.as_path().is_dir() {
+        let mut documents = wrench.api.load_capture(input_path);
         println!("loaded {:?}", documents.iter().map(|cd| cd.document_id).collect::<Vec<_>>());
         let captured = documents.swap_remove(0);
         window.resize(captured.window_size);
         wrench.document_id = captured.document_id;
         Box::new(captured) as Box<WrenchThing>
     } else {
-        panic!("Should never have gotten here! {:?}", args);
+        let extension = input_path
+            .extension()
+            .expect("Tried to render with an unknown file type.")
+            .to_str()
+            .expect("Tried to render with an unknown file type.");
+
+        match extension {
+            "yaml" => Box::new(YamlFrameReader::new_from_args(subargs)) as Box<WrenchThing>,
+            "bin" => Box::new(BinaryFrameReader::new_from_args(subargs)) as Box<WrenchThing>,
+            _ => panic!("Tried to render with an unknown file type."),
+        }
     };
 
     let mut show_help = false;
@@ -510,7 +559,7 @@ fn main() {
 
     let dim = window.get_inner_size();
     wrench.update(dim);
-    thing.do_frame(&mut wrench);
+    thing.do_frame(wrench);
 
     let mut body = |wrench: &mut Wrench, global_event: winit::Event| {
         if let Some(window_title) = wrench.take_title() {
@@ -604,17 +653,30 @@ fn main() {
                         let path = PathBuf::from("../captures/wrench");
                         wrench.api.save_capture(path, CaptureBits::all());
                     }
-                    VirtualKeyCode::Up => {
+                    VirtualKeyCode::Up | VirtualKeyCode::Down => {
+                        let mut txn = Transaction::new();
+
+                        let offset = match vk {
+                            winit::VirtualKeyCode::Up => LayoutVector2D::new(0.0, 10.0),
+                            winit::VirtualKeyCode::Down => LayoutVector2D::new(0.0, -10.0),
+                            _ => unreachable!("Should not see non directional keys here.")
+                        };
+
+                        txn.scroll(ScrollLocation::Delta(offset), cursor_position);
+                        txn.generate_frame();
+                        wrench.api.send_transaction(wrench.document_id, txn);
+
+                        do_frame = true;
+                    }
+                    VirtualKeyCode::Add => {
                         let current_zoom = wrench.get_page_zoom();
                         let new_zoom_factor = ZoomFactor::new(current_zoom.get() + 0.1);
-
                         wrench.set_page_zoom(new_zoom_factor);
                         do_frame = true;
                     }
-                    VirtualKeyCode::Down => {
+                    VirtualKeyCode::Subtract => {
                         let current_zoom = wrench.get_page_zoom();
                         let new_zoom_factor = ZoomFactor::new((current_zoom.get() - 0.1).max(0.1));
-
                         wrench.set_page_zoom(new_zoom_factor);
                         do_frame = true;
                     }
@@ -665,17 +727,13 @@ fn main() {
         winit::ControlFlow::Continue
     };
 
-    match events_loop {
+    match *events_loop {
         None => {
-            while body(&mut wrench, winit::Event::Awakened) == winit::ControlFlow::Continue {}
+            while body(wrench, winit::Event::Awakened) == winit::ControlFlow::Continue {}
             let rect = DeviceUintRect::new(DeviceUintPoint::zero(), size);
             let pixels = wrench.renderer.read_pixels_rgba8(rect);
             save_flipped("screenshot.png", pixels, size);
         }
-        Some(ref mut events_loop) => {
-            events_loop.run_forever(|event| body(&mut wrench, event));
-        }
+        Some(ref mut events_loop) => events_loop.run_forever(|event| body(wrench, event)),
     }
-
-    wrench.renderer.deinit();
 }

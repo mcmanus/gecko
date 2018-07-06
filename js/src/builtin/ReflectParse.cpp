@@ -282,8 +282,7 @@ class NodeBuilder
             }
 
             if (!funv.isObject() || !funv.toObject().is<JSFunction>()) {
-                ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_NOT_FUNCTION,
-                                      JSDVG_SEARCH_STACK, funv, nullptr, nullptr, nullptr);
+                ReportValueError(cx, JSMSG_NOT_FUNCTION, JSDVG_SEARCH_STACK, funv, nullptr);
                 return false;
             }
 
@@ -3352,7 +3351,7 @@ reflect_parse(JSContext* cx, uint32_t argc, Value* vp)
     if (!src)
         return false;
 
-    ScopedJSFreePtr<char> filename;
+    UniqueChars filename;
     uint32_t lineno = 1;
     bool loc = true;
     RootedObject builder(cx);
@@ -3362,9 +3361,8 @@ reflect_parse(JSContext* cx, uint32_t argc, Value* vp)
 
     if (!arg.isNullOrUndefined()) {
         if (!arg.isObject()) {
-            ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
-                                  JSDVG_SEARCH_STACK, arg, nullptr,
-                                  "not an object", nullptr);
+            ReportValueError(cx, JSMSG_UNEXPECTED_TYPE, JSDVG_SEARCH_STACK, arg, nullptr,
+                             "not an object");
             return false;
         }
 
@@ -3392,7 +3390,7 @@ reflect_parse(JSContext* cx, uint32_t argc, Value* vp)
                 if (!str)
                     return false;
 
-                filename = JS_EncodeString(cx, str);
+                filename.reset(JS_EncodeString(cx, str));
                 if (!filename)
                     return false;
             }
@@ -3414,9 +3412,8 @@ reflect_parse(JSContext* cx, uint32_t argc, Value* vp)
 
         if (!prop.isNullOrUndefined()) {
             if (!prop.isObject()) {
-                ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
-                                      JSDVG_SEARCH_STACK, prop, nullptr,
-                                      "not an object", nullptr);
+                ReportValueError(cx, JSMSG_UNEXPECTED_TYPE, JSDVG_SEARCH_STACK, prop, nullptr,
+                                 "not an object");
                 return false;
             }
             builder = &prop.toObject();
@@ -3429,8 +3426,8 @@ reflect_parse(JSContext* cx, uint32_t argc, Value* vp)
             return false;
 
         if (!prop.isString()) {
-            ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE, JSDVG_SEARCH_STACK,
-                                  prop, nullptr, "not 'script' or 'module'", nullptr);
+            ReportValueError(cx, JSMSG_UNEXPECTED_TYPE, JSDVG_SEARCH_STACK, prop, nullptr,
+                             "not 'script' or 'module'");
             return false;
         }
 
@@ -3454,7 +3451,7 @@ reflect_parse(JSContext* cx, uint32_t argc, Value* vp)
     }
 
     /* Extract the builder methods first to report errors before parsing. */
-    ASTSerializer serialize(cx, loc, filename, lineno);
+    ASTSerializer serialize(cx, loc, filename.get(), lineno);
     if (!serialize.init(builder))
         return false;
 
@@ -3467,7 +3464,7 @@ reflect_parse(JSContext* cx, uint32_t argc, Value* vp)
         return false;
 
     CompileOptions options(cx);
-    options.setFileAndLine(filename, lineno);
+    options.setFileAndLine(filename.get(), lineno);
     options.setCanLazilyParse(false);
     options.allowHTMLComments = target == ParseGoal::Script;
     mozilla::Range<const char16_t> chars = linearChars.twoByteRange();

@@ -32,8 +32,16 @@ class FrameSizeClass;
 struct EnterJitData
 {
     explicit EnterJitData(JSContext* cx)
-      : envChain(cx),
-        result(cx)
+      : jitcode(nullptr),
+        osrFrame(nullptr),
+        calleeToken(nullptr),
+        maxArgv(nullptr),
+        maxArgc(0),
+        numActualArgs(0),
+        osrNumStackValues(0),
+        envChain(cx),
+        result(cx),
+        constructing(false)
     {}
 
     uint8_t* jitcode;
@@ -193,7 +201,7 @@ class JitRuntime
     ~JitRuntime();
     MOZ_MUST_USE bool initialize(JSContext* cx, js::AutoLockForExclusiveAccess& lock);
 
-    static void Trace(JSTracer* trc, js::AutoLockForExclusiveAccess& lock);
+    static void Trace(JSTracer* trc, const js::AutoAccessAtomsZone& access);
     static void TraceJitcodeGlobalTableForMinorGC(JSTracer* trc);
     static MOZ_MUST_USE bool MarkJitcodeGlobalTableIteratively(GCMarker* marker);
     static void SweepJitcodeGlobalTable(JSRuntime* rt);

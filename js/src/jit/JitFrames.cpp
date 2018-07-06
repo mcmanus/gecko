@@ -661,13 +661,21 @@ HandleException(ResumeFromException* rfe)
     // iterating, we need a variant here that is automatically updated should
     // on-stack recompilation occur.
     DebugModeOSRVolatileJitFrameIter iter(cx);
-    while (!iter.done()) {
+    while (true) {
+        iter.skipNonScriptedJSFrames();
+        if (iter.done())
+            break;
+
         if (iter.isWasm()) {
             HandleExceptionWasm(cx, &iter.asWasm(), rfe);
             if (!iter.done())
                 ++iter;
             continue;
         }
+
+        // JIT code can enter same-compartment realms, so reset cx->realm to
+        // this frame's realm.
+        cx->setRealmForJitExceptionHandler(iter.realm());
 
         const JSJitFrameIter& frame = iter.asJSJit();
 
@@ -1340,7 +1348,7 @@ TraceJitActivations(JSContext* cx, JSTracer* trc)
 void
 UpdateJitActivationsForMinorGC(JSRuntime* rt)
 {
-    MOZ_ASSERT(JS::CurrentThreadIsHeapMinorCollecting());
+    MOZ_ASSERT(JS::RuntimeHeapIsMinorCollecting());
     JSContext* cx = rt->mainContextFromOwnThread();
     for (JitActivationIterator activations(cx); !activations.done(); ++activations) {
         for (OnlyJSJitFrameIter iter(activations); !iter.done(); ++iter) {
@@ -1405,7 +1413,7 @@ GetPcScript(JSContext* cx, JSScript** scriptRes, jsbytecode** pcRes)
 
         // Lazily initialize the cache. The allocation may safely fail and will not GC.
         if (MOZ_UNLIKELY(cx->ionPcScriptCache == nullptr)) {
-            cx->ionPcScriptCache = (PcScriptCache*)js_malloc(sizeof(struct PcScriptCache));
+            cx->ionPcScriptCache = js_pod_malloc<PcScriptCache>();
             if (cx->ionPcScriptCache)
                 cx->ionPcScriptCache->clear(cx->runtime()->gc.gcNumber());
         }
@@ -1541,6 +1549,7 @@ SnapshotIterator::SnapshotIterator()
   : snapshot_(nullptr, 0, 0, 0),
     recover_(snapshot_, nullptr, 0),
     fp_(nullptr),
+    machine_(nullptr),
     ionScript_(nullptr),
     instructionResults_(nullptr)
 {
@@ -2054,7 +2063,9 @@ SnapshotIterator::maybeReadAllocByIndex(size_t index)
 InlineFrameIterator::InlineFrameIterator(JSContext* cx, const JSJitFrameIter* iter)
   : calleeTemplate_(cx),
     calleeRVA_(),
-    script_(cx)
+    script_(cx),
+    pc_(nullptr),
+    numActualArgs_(0)
 {
     resetOn(iter);
 }
@@ -2065,7 +2076,9 @@ InlineFrameIterator::InlineFrameIterator(JSContext* cx, const InlineFrameIterato
     frameCount_(iter ? iter->frameCount_ : UINT32_MAX),
     calleeTemplate_(cx),
     calleeRVA_(),
-    script_(cx)
+    script_(cx),
+    pc_(nullptr),
+    numActualArgs_(0)
 {
     if (frame_) {
         machine_ = iter->machine_;
@@ -2320,7 +2333,7 @@ struct DumpOp {
     unsigned int i_;
     void operator()(const Value& v) {
         fprintf(stderr, "  actual (arg %d): ", i_);
-#ifdef DEBUG
+#if defined(DEBUG) || defined(JS_JITSPEW)
         DumpValue(v);
 #else
         fprintf(stderr, "?\n");
@@ -2343,7 +2356,7 @@ InlineFrameIterator::dump() const
     if (isFunctionFrame()) {
         isFunction = true;
         fprintf(stderr, "  callee fun: ");
-#ifdef DEBUG
+#if defined(DEBUG) || defined(JS_JITSPEW)
         DumpObject(callee(fallback));
 #else
         fprintf(stderr, "?\n");
@@ -2382,7 +2395,7 @@ InlineFrameIterator::dump() const
             }
         } else
             fprintf(stderr, "  slot %u: ", i);
-#ifdef DEBUG
+#if defined(DEBUG) || defined(JS_JITSPEW)
         DumpValue(si.maybeRead(fallback));
 #else
         fprintf(stderr, "?\n");

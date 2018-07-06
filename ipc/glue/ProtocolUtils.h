@@ -29,6 +29,7 @@
 #include "mozilla/MozPromise.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/NotNull.h"
+#include "mozilla/Scoped.h"
 #include "mozilla/UniquePtr.h"
 #include "MainThreadUtils.h"
 #include "nsILabelableRunnable.h"
@@ -805,7 +806,11 @@ public:
 
     Endpoint()
       : mValid(false)
-    {}
+      , mMode(static_cast<mozilla::ipc::Transport::Mode>(0))
+      , mMyPid(0)
+      , mOtherPid(0)
+    {
+    }
 
     Endpoint(const PrivateIPDLInterface&,
              mozilla::ipc::Transport::Mode aMode,

@@ -657,7 +657,8 @@ StructuredCloneWriteCallback(JSContext* aCx,
     } else {
       nsCOMPtr<nsIInputStream> stream(new WasmCompiledModuleStream(module));
 
-      blobImpl = StreamBlobImpl::Create(stream, EmptyString(), UINT64_MAX);
+      blobImpl = StreamBlobImpl::Create(stream.forget(), EmptyString(),
+                                        UINT64_MAX);
     }
 
     RefPtr<Blob> compiledBlob = Blob::Create(nullptr, blobImpl);
@@ -2187,7 +2188,7 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(IDBObjectStore)
 JSObject*
 IDBObjectStore::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return IDBObjectStoreBinding::Wrap(aCx, this, aGivenProto);
+  return IDBObjectStore_Binding::Wrap(aCx, this, aGivenProto);
 }
 
 nsPIDOMWindowInner*

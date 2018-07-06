@@ -63,6 +63,7 @@ add_task(async function setup_to_default_browserish_state() {
 
   await t1.disable();
   await t2.disable();
+  await new Promise(executeSoon);
   Assert.ok(!t1.isActive, "Theme should be disabled");
   Assert.ok(!t2.isActive, "Theme should be disabled");
   Assert.ok(d.isActive, "Default theme should be active");
@@ -234,11 +235,6 @@ add_task(async function uninstall_offers_undo() {
 add_task(async function default_locale_themes() {
   let addon = await promiseInstallWebExtension({
     manifest: {
-      applications: {
-        gecko: {
-          id: "locale-theme@tests.mozilla.org",
-        }
-      },
       default_locale: "en",
       name: "__MSG_name__",
       description: "__MSG_description__",

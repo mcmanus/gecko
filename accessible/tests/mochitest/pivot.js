@@ -4,7 +4,6 @@ ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 // Constants
 
 const PREFILTER_INVISIBLE = nsIAccessibleTraversalRule.PREFILTER_INVISIBLE;
-const PREFILTER_ARIA_HIDDEN = nsIAccessibleTraversalRule.PREFILTER_ARIA_HIDDEN;
 const PREFILTER_TRANSPARENT = nsIAccessibleTraversalRule.PREFILTER_TRANSPARENT;
 const FILTER_MATCH = nsIAccessibleTraversalRule.FILTER_MATCH;
 const FILTER_IGNORE = nsIAccessibleTraversalRule.FILTER_IGNORE;
@@ -47,7 +46,7 @@ var ObjectTraversalRule =
     return 0;
   },
 
-  preFilter: PREFILTER_INVISIBLE | PREFILTER_ARIA_HIDDEN | PREFILTER_TRANSPARENT,
+  preFilter: PREFILTER_INVISIBLE | PREFILTER_TRANSPARENT,
 
   match(aAccessible) {
     var rv = FILTER_IGNORE;
@@ -111,11 +110,18 @@ function VCChangedChecker(aDocAcc, aIdOrNameOrAcc, aTextOffsets, aPivotMoveMetho
     SimpleTest.is(aEvent.isFromUserInput, aIsFromUserInput,
                   "Expected user input is " + aIsFromUserInput + "\n");
 
+    SimpleTest.is(event.newAccessible, position,
+                  "new position in event is incorrect");
+
     if (aTextOffsets) {
       SimpleTest.is(aDocAcc.virtualCursor.startOffset, aTextOffsets[0],
                     "wrong start offset");
       SimpleTest.is(aDocAcc.virtualCursor.endOffset, aTextOffsets[1],
                     "wrong end offset");
+      SimpleTest.is(event.newStartOffset, aTextOffsets[0],
+                    "wrong start offset in event");
+      SimpleTest.is(event.newEndOffset, aTextOffsets[1],
+                    "wrong end offset in event");
     }
 
     var prevPosAndOffset = VCChangedChecker.

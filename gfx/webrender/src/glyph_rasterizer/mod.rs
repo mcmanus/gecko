@@ -5,7 +5,7 @@
 use api::{ColorF, ColorU, DevicePoint};
 use api::{FontInstanceFlags, FontInstancePlatformOptions};
 use api::{FontKey, FontRenderMode, FontTemplate, FontVariation};
-use api::{GlyphIndex, GlyphDimensions};
+use api::{GlyphIndex, GlyphDimensions, SyntheticItalics};
 use api::{LayoutPoint, LayoutToWorldTransform, WorldPoint};
 use app_units::Au;
 use euclid::approxeq::ApproxEq;
@@ -111,7 +111,8 @@ impl FontTransform {
         self.pre_scale(x_scale.recip() as f32, y_scale.recip() as f32)
     }
 
-    pub fn synthesize_italics(&self, skew_factor: f32) -> Self {
+    pub fn synthesize_italics(&self, angle: SyntheticItalics) -> Self {
+        let skew_factor = angle.to_skew();
         FontTransform::new(
             self.scale_x,
             self.skew_x - self.scale_x * skew_factor,
@@ -159,6 +160,8 @@ impl<'a> From<&'a LayoutToWorldTransform> for FontTransform {
     }
 }
 
+pub const FONT_SIZE_LIMIT: f64 = 1024.0;
+
 #[derive(Clone, Hash, PartialEq, Eq, Debug, Ord, PartialOrd)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
@@ -174,6 +177,7 @@ pub struct FontInstance {
     pub bg_color: ColorU,
     pub render_mode: FontRenderMode,
     pub flags: FontInstanceFlags,
+    pub synthetic_italics: SyntheticItalics,
     pub platform_options: Option<FontInstancePlatformOptions>,
     pub variations: Vec<FontVariation>,
     pub transform: FontTransform,
@@ -187,6 +191,7 @@ impl FontInstance {
         bg_color: ColorU,
         render_mode: FontRenderMode,
         flags: FontInstanceFlags,
+        synthetic_italics: SyntheticItalics,
         platform_options: Option<FontInstancePlatformOptions>,
         variations: Vec<FontVariation>,
     ) -> Self {
@@ -201,6 +206,7 @@ impl FontInstance {
             bg_color,
             render_mode,
             flags,
+            synthetic_italics,
             platform_options,
             variations,
             transform: FontTransform::identity(),
@@ -268,6 +274,23 @@ impl FontInstance {
             (bold_offset * x_scale).max(1.0).round() as usize
         } else {
             0
+        }
+    }
+
+    pub fn oversized_scale_factor(&self, x_scale: f64, y_scale: f64) -> f64 {
+        // If the scaled size is over the limit, then it will need to
+        // be scaled up from the size limit to the scaled size.
+        // However, this should only occur when the font isn't using any
+        // features that would tie it to device space, like transforms,
+        // subpixel AA, or subpixel positioning.
+        let max_size = self.size.to_f64_px() * x_scale.max(y_scale);
+        if max_size > FONT_SIZE_LIMIT &&
+           self.transform.is_identity() &&
+           self.render_mode != FontRenderMode::Subpixel &&
+           !self.use_subpixel_position() {
+            max_size / FONT_SIZE_LIMIT
+        } else {
+            1.0
         }
     }
 }
@@ -689,6 +712,7 @@ mod test_glyph_rasterizer {
             ColorF::new(0.0, 0.0, 0.0, 1.0),
             ColorU::new(0, 0, 0, 0),
             FontRenderMode::Subpixel,
+            Default::default(),
             Default::default(),
             None,
             Vec::new(),

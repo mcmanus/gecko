@@ -6,7 +6,6 @@
 
 #include "ScriptPreloader-inl.h"
 #include "mozilla/ScriptPreloader.h"
-#include "mozJSComponentLoader.h"
 #include "mozilla/loader/ScriptCacheActors.h"
 
 #include "mozilla/URLPreloader.h"
@@ -27,16 +26,22 @@
 #include "nsIFile.h"
 #include "nsIObserverService.h"
 #include "nsJSUtils.h"
+#include "nsNetUtil.h"
 #include "nsProxyRelease.h"
 #include "nsThreadUtils.h"
 #include "nsXULAppAPI.h"
 #include "xpcpublic.h"
 
-#define DELAYED_STARTUP_TOPIC "browser-delayed-startup-finished"
+#define STARTUP_COMPLETE_TOPIC "browser-delayed-startup-finished"
 #define DOC_ELEM_INSERTED_TOPIC "document-element-inserted"
+#define CACHE_WRITE_TOPIC "browser-idle-startup-tasks-finished"
 #define CLEANUP_TOPIC "xpcom-shutdown"
 #define SHUTDOWN_TOPIC "quit-application-granted"
 #define CACHE_INVALIDATE_TOPIC "startupcache-invalidate"
+
+// The maximum time we'll wait for a child process to finish starting up before
+// we send its script data back to the parent.
+constexpr uint32_t CHILD_STARTUP_TIMEOUT_MS = 8000;
 
 namespace mozilla {
 namespace {
@@ -191,6 +196,9 @@ ScriptPreloader::GetChildProcessType(const nsAString& remoteType)
     if (remoteType.EqualsLiteral(EXTENSION_REMOTE_TYPE)) {
         return ProcessType::Extension;
     }
+    if (remoteType.EqualsLiteral(PRIVILEGED_REMOTE_TYPE)) {
+        return ProcessType::Privileged;
+    }
     return ProcessType::Web;
 }
 
@@ -231,8 +239,9 @@ ScriptPreloader::ScriptPreloader()
 
     if (XRE_IsParentProcess()) {
         // In the parent process, we want to freeze the script cache as soon
-        // as delayed startup for the first browser window has completed.
-        obs->AddObserver(this, DELAYED_STARTUP_TOPIC, false);
+        // as idle tasks for the first browser window have completed.
+        obs->AddObserver(this, STARTUP_COMPLETE_TOPIC, false);
+        obs->AddObserver(this, CACHE_WRITE_TOPIC, false);
     } else {
         // In the child process, we need to freeze the script cache before any
         // untrusted code has been executed. The insertion of the first DOM
@@ -338,27 +347,38 @@ nsresult
 ScriptPreloader::Observe(nsISupports* subject, const char* topic, const char16_t* data)
 {
     nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
-    if (!strcmp(topic, DELAYED_STARTUP_TOPIC)) {
-        obs->RemoveObserver(this, DELAYED_STARTUP_TOPIC);
+    if (!strcmp(topic, STARTUP_COMPLETE_TOPIC)) {
+        obs->RemoveObserver(this, STARTUP_COMPLETE_TOPIC);
 
         MOZ_ASSERT(XRE_IsParentProcess());
 
         mStartupFinished = true;
+    } else if (!strcmp(topic, CACHE_WRITE_TOPIC)) {
+        obs->RemoveObserver(this, CACHE_WRITE_TOPIC);
+        MOZ_ASSERT(mStartupFinished);
+        MOZ_ASSERT(XRE_IsParentProcess());
 
         if (mChildCache) {
             Unused << NS_NewNamedThread("SaveScripts",
                                         getter_AddRefs(mSaveThread), this);
         }
     } else if (!strcmp(topic, DOC_ELEM_INSERTED_TOPIC)) {
-        obs->RemoveObserver(this, DOC_ELEM_INSERTED_TOPIC);
+        // If this is an uninitialized about:blank viewer or a chrome: document
+        // (which should always be an XBL binding document), ignore it. We don't
+        // have to worry about it loading malicious content.
+        if (nsCOMPtr<nsIDocument> doc = do_QueryInterface(subject)) {
+            nsCOMPtr<nsIURI> uri = doc->GetDocumentURI();
 
-        MOZ_ASSERT(XRE_IsContentProcess());
-
-        mStartupFinished = true;
-
-        if (mChildActor) {
-            mChildActor->SendScriptsAndFinalize(mScripts);
+            bool schemeIs;
+            if ((NS_IsAboutBlank(uri) &&
+                 doc->GetReadyStateEnum() == doc->READYSTATE_UNINITIALIZED) ||
+                (NS_SUCCEEDED(uri->SchemeIs("chrome", &schemeIs)) && schemeIs)) {
+                return NS_OK;
+            }
         }
+        FinishContentStartup();
+    } else if (!strcmp(topic, "timer-callback")) {
+        FinishContentStartup();
     } else if (!strcmp(topic, SHUTDOWN_TOPIC)) {
         ForceWriteCacheFile();
     } else if (!strcmp(topic, CLEANUP_TOPIC)) {
@@ -370,6 +390,22 @@ ScriptPreloader::Observe(nsISupports* subject, const char* topic, const char16_t
     return NS_OK;
 }
 
+void
+ScriptPreloader::FinishContentStartup()
+{
+    MOZ_ASSERT(XRE_IsContentProcess());
+
+    nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
+    obs->RemoveObserver(this, DOC_ELEM_INSERTED_TOPIC);
+
+    mSaveTimer = nullptr;
+
+    mStartupFinished = true;
+
+    if (mChildActor) {
+        mChildActor->SendScriptsAndFinalize(mScripts);
+    }
+}
 
 Result<nsCOMPtr<nsIFile>, nsresult>
 ScriptPreloader::GetCacheFile(const nsAString& suffix)
@@ -431,7 +467,7 @@ ScriptPreloader::InitCache(const nsAString& basePath)
     // Grab the compilation scope before initializing the URLPreloader, since
     // it's not safe to run component loader code during its critical section.
     AutoSafeJSAPI jsapi;
-    JS::RootedObject scope(jsapi.cx(), CompilationScope(jsapi.cx()));
+    JS::RootedObject scope(jsapi.cx(), xpc::CompilationScope());
 
     // Note: Code on the main thread *must not access Omnijar in any way* until
     // this AutoBeginReading guard is destroyed.
@@ -451,6 +487,19 @@ ScriptPreloader::InitCache(const Maybe<ipc::FileDescriptor>& cacheFile, ScriptCa
     mChildActor = cacheChild;
 
     RegisterWeakMemoryReporter(this);
+
+    auto cleanup = MakeScopeExit([&] {
+        // If the parent is expecting cache data from us, make sure we send it
+        // before it writes out its cache file. For normal proceses, this isn't
+        // a concern, since they begin loading documents quite early. For the
+        // preloaded process, we may end up waiting a long time (or, indeed,
+        // never loading a document), so we need an additional timeout.
+        if (cacheChild) {
+            NS_NewTimerWithObserver(getter_AddRefs(mSaveTimer),
+                                    this, CHILD_STARTUP_TIMEOUT_MS,
+                                    nsITimer::TYPE_ONE_SHOT);
+        }
+    });
 
     if (cacheFile.isNothing()){
         return Ok();
@@ -770,21 +819,6 @@ ScriptPreloader::NoteScript(const nsCString& url, const nsCString& cachePath,
         script->mReadyToExecute = true;
     }
 
-    // If we don't already have bytecode for this script, and it doesn't already
-    // exist in the child cache, encode it now, before it's ever executed.
-    //
-    // Ideally, we would like to do the encoding lazily, during idle slices.
-    // There are subtle issues with encoding scripts which have already been
-    // executed, though, which makes that somewhat risky. So until that
-    // situation is improved, and thoroughly tested, we need to encode eagerly.
-    //
-    // (See also the TranscodeResult_Failure_RunOnceNotSupported failure case in
-    // js::XDRScript)
-    if (!script->mSize && !(mChildCache && mChildCache->mScripts.Get(cachePath))) {
-        AutoSafeJSAPI jsapi;
-        Unused << script->XDREncode(jsapi.cx());
-    }
-
     script->UpdateLoadTime(TimeStamp::Now());
     script->mProcessTypes += CurrentProcessType();
 }
@@ -945,12 +979,6 @@ ScriptPreloader::DoFinishOffThreadDecode()
     MaybeFinishOffThreadDecode();
 }
 
-JSObject*
-ScriptPreloader::CompilationScope(JSContext* cx)
-{
-    return mozJSComponentLoader::Get()->CompilationScope(cx);
-}
-
 void
 ScriptPreloader::MaybeFinishOffThreadDecode()
 {
@@ -969,7 +997,7 @@ ScriptPreloader::MaybeFinishOffThreadDecode()
     AutoSafeJSAPI jsapi;
     JSContext* cx = jsapi.cx();
 
-    JSAutoRealm ar(cx, CompilationScope(cx));
+    JSAutoRealm ar(cx, xpc::CompilationScope());
     JS::Rooted<JS::ScriptVector> jsScripts(cx, JS::ScriptVector(cx));
 
     // If this fails, we still need to mark the scripts as finished. Any that
@@ -1039,7 +1067,7 @@ ScriptPreloader::DecodeNextBatch(size_t chunkSize, JS::HandleObject scope)
 
     AutoSafeJSAPI jsapi;
     JSContext* cx = jsapi.cx();
-    JSAutoRealm ar(cx, scope ? scope : CompilationScope(cx));
+    JSAutoRealm ar(cx, scope ? scope : xpc::CompilationScope());
 
     JS::CompileOptions options(cx);
     options.setNoScriptRval(true)

@@ -339,7 +339,9 @@ nsCacheProfilePrefObserver::Install()
     if (!branch) return NS_ERROR_FAILURE;
 
     for (auto& pref : prefList) {
-        rv = branch->AddObserver(pref, this, false);
+        nsCString prefStr;
+        prefStr.AssignLiteral(pref, strlen(pref));
+        rv = branch->AddObserver(prefStr, this, false);
         if (NS_FAILED(rv))
             rv2 = rv;
     }
@@ -382,7 +384,7 @@ nsCacheProfilePrefObserver::Remove()
     if (!prefs)
         return;
     for (auto& pref : prefList)
-        prefs->RemoveObserver(pref, this); // remove cache pref observers
+        prefs->RemoveObserver(nsDependentCString(pref), this); // remove cache pref observers
 }
 
 void
@@ -1103,9 +1105,11 @@ nsCacheService::nsCacheService()
       mClearingEntries(false),
       mEnableMemoryDevice(true),
       mEnableDiskDevice(true),
+      mEnableOfflineDevice(false),
       mMemoryDevice(nullptr),
       mDiskDevice(nullptr),
       mOfflineDevice(nullptr),
+      mDoomedEntries{},
       mTotalEntries(0),
       mCacheHits(0),
       mCacheMisses(0),

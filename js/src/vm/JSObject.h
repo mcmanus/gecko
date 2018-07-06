@@ -49,6 +49,8 @@ bool SetImmutablePrototype(JSContext* cx, JS::HandleObject obj, bool* succeeded)
 }  /* namespace js */
 
 /*
+ * [SMDOC] JSObject layout
+ *
  * A JavaScript object.
  *
  * This is the base class for all objects exposed to JS script (as well as some
@@ -162,7 +164,6 @@ class JSObject : public js::gc::Cell
 
     JS::Compartment* compartment() const { return group_->compartment(); }
     JS::Compartment* maybeCompartment() const { return compartment(); }
-    JS::Realm* realm() const { return group_->realm(); }
 
     inline js::Shape* maybeShape() const;
     inline js::Shape* ensureShape(JSContext* cx);
@@ -429,21 +430,30 @@ class JSObject : public js::gc::Cell
      */
     inline JSObject* enclosingEnvironment() const;
 
-    inline js::GlobalObject& global() const;
+    // Deprecated: call nonCCWGlobal or NativeObject::global() instead!
+    inline js::GlobalObject& deprecatedGlobal() const;
 
-    // In some rare cases the global object's compartment's global may not be
-    // the same global object. For this reason, we need to take extra care when
-    // tracing.
-    //
-    // These cases are:
-    //  1) The off-thread parsing task uses a dummy global since it cannot
-    //     share with the actual global being used concurrently on the active
-    //     thread.
-    //  2) A GC may occur when creating the GlobalObject, in which case the
-    //     compartment global pointer may not yet be set. In this case there is
-    //     nothing interesting to trace in the compartment.
-    inline bool isOwnGlobal(JSTracer*) const;
-    inline js::GlobalObject* globalForTracing(JSTracer*) const;
+    // Cross-compartment wrappers are not associated with a single realm/global,
+    // so these methods assert the object is not a CCW.
+    inline js::GlobalObject& nonCCWGlobal() const;
+
+    JS::Realm* nonCCWRealm() const {
+        MOZ_ASSERT(!js::IsCrossCompartmentWrapper(this));
+        return group_->realm();
+    }
+
+    // Returns the object's realm even if the object is a CCW (be careful, in
+    // this case the realm is not very meaningful because wrappers are shared by
+    // all realms in the compartment).
+    JS::Realm* maybeCCWRealm() const {
+        return group_->realm();
+    }
+
+    // Deprecated: call nonCCWRealm(), maybeCCWRealm(), or NativeObject::realm()
+    // instead!
+    JS::Realm* deprecatedRealm() const {
+        return group_->realm();
+    }
 
     /*
      * ES5 meta-object properties and operations.
@@ -475,11 +485,6 @@ class JSObject : public js::gc::Cell
     MOZ_ALWAYS_INLINE void finalize(js::FreeOp* fop);
 
   public:
-    static bool reportReadOnly(JSContext* cx, jsid id, unsigned report = JSREPORT_ERROR);
-    static bool reportNotConfigurable(JSContext* cx, jsid id, unsigned report = JSREPORT_ERROR);
-    static bool reportNotExtensible(JSContext* cx, js::HandleObject obj,
-                                    unsigned report = JSREPORT_ERROR);
-
     static bool nonNativeSetProperty(JSContext* cx, js::HandleObject obj, js::HandleId id,
                                      js::HandleValue v, js::HandleValue receiver,
                                      JS::ObjectOpResult& result);
@@ -533,7 +538,7 @@ class JSObject : public js::gc::Cell
         return *static_cast<const T*>(this);
     }
 
-#ifdef DEBUG
+#if defined(DEBUG) || defined(JS_JITSPEW)
     void dump(js::GenericPrinter& fp) const;
     void dump() const;
 #endif
@@ -713,7 +718,7 @@ DefineProperty(JSContext* cx, HandleObject obj, HandleId id,
 
 extern bool
 DefineAccessorProperty(JSContext* cx, HandleObject obj, HandleId id,
-                       JSGetterOp getter, JSSetterOp setter, unsigned attrs,
+                       HandleObject getter, HandleObject setter, unsigned attrs,
                        ObjectOpResult& result);
 
 extern bool
@@ -721,18 +726,8 @@ DefineDataProperty(JSContext* cx, HandleObject obj, HandleId id, HandleValue val
                    unsigned attrs, ObjectOpResult& result);
 
 extern bool
-DefineAccessorProperty(JSContext* cx, HandleObject obj, PropertyName* name,
-                       JSGetterOp getter, JSSetterOp setter, unsigned attrs,
-                       ObjectOpResult& result);
-
-extern bool
 DefineDataProperty(JSContext* cx, HandleObject obj, PropertyName* name, HandleValue value,
                    unsigned attrs, ObjectOpResult& result);
-
-extern bool
-DefineAccessorElement(JSContext* cx, HandleObject obj, uint32_t index,
-                      JSGetterOp getter, JSSetterOp setter, unsigned attrs,
-                      ObjectOpResult& result);
 
 extern bool
 DefineDataElement(JSContext* cx, HandleObject obj, uint32_t index, HandleValue value,
@@ -747,23 +742,16 @@ DefineProperty(JSContext* cx, HandleObject obj, HandleId id, Handle<JS::Property
 
 extern bool
 DefineAccessorProperty(JSContext* cx, HandleObject obj, HandleId id,
-                       JSGetterOp getter, JSSetterOp setter, unsigned attrs = JSPROP_ENUMERATE);
+                       HandleObject getter, HandleObject setter,
+                       unsigned attrs = JSPROP_ENUMERATE);
 
 extern bool
 DefineDataProperty(JSContext* cx, HandleObject obj, HandleId id, HandleValue value,
                    unsigned attrs = JSPROP_ENUMERATE);
 
 extern bool
-DefineAccessorProperty(JSContext* cx, HandleObject obj, PropertyName* name,
-                       JSGetterOp getter, JSSetterOp setter, unsigned attrs = JSPROP_ENUMERATE);
-
-extern bool
 DefineDataProperty(JSContext* cx, HandleObject obj, PropertyName* name, HandleValue value,
                    unsigned attrs = JSPROP_ENUMERATE);
-
-extern bool
-DefineAccessorElement(JSContext* cx, HandleObject obj, uint32_t index,
-                      JSGetterOp getter, JSSetterOp setter, unsigned attrs = JSPROP_ENUMERATE);
 
 extern bool
 DefineDataElement(JSContext* cx, HandleObject obj, uint32_t index, HandleValue value,
@@ -1090,18 +1078,6 @@ CloneObject(JSContext* cx, HandleObject obj, Handle<js::TaggedProto> proto);
 
 extern JSObject*
 DeepCloneObjectLiteral(JSContext* cx, HandleObject obj, NewObjectKind newKind = GenericObject);
-
-inline JSGetterOp
-CastAsGetterOp(JSObject* object)
-{
-    return JS_DATA_TO_FUNC_PTR(JSGetterOp, object);
-}
-
-inline JSSetterOp
-CastAsSetterOp(JSObject* object)
-{
-    return JS_DATA_TO_FUNC_PTR(JSSetterOp, object);
-}
 
 /* ES6 draft rev 32 (2015 Feb 2) 6.2.4.5 ToPropertyDescriptor(Obj) */
 bool

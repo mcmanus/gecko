@@ -24,8 +24,23 @@ const Types = exports.__TypesForTests = [
   },
   {
     types: ["addons"],
-    spec: "devtools/shared/specs/addons",
-    front: "devtools/shared/fronts/addons",
+    spec: "devtools/shared/specs/addon/addons",
+    front: "devtools/shared/fronts/addon/addons",
+  },
+  {
+    types: ["addonConsole"],
+    spec: "devtools/shared/specs/addon/console",
+    front: null,
+  },
+  {
+    types: ["webExtension"],
+    spec: "devtools/shared/specs/addon/webextension",
+    front: null,
+  },
+  {
+    types: ["webExtensionInspectedWindow"],
+    spec: "devtools/shared/specs/addon/webextension-inspected-window",
+    front: "devtools/shared/fronts/addon/webextension-inspected-window",
   },
   {
     types: ["animationplayer", "animations"],
@@ -133,6 +148,11 @@ const Types = exports.__TypesForTests = [
     front: "devtools/shared/fronts/node",
   },
   {
+    types: ["obj", "object.descriptor"],
+    spec: "devtools/shared/specs/object",
+    front: null,
+  },
+  {
     types: ["perf"],
     spec: "devtools/shared/specs/perf",
     front: "devtools/shared/fronts/perf",
@@ -215,8 +235,33 @@ const Types = exports.__TypesForTests = [
     front: null,
   },
   {
-    types: ["tab"],
-    spec: "devtools/shared/specs/tab",
+    types: ["browsingContextTarget"],
+    spec: "devtools/shared/specs/targets/browsing-context",
+    front: null,
+  },
+  {
+    types: ["chromeWindowTarget"],
+    spec: "devtools/shared/specs/targets/chrome-window",
+    front: null,
+  },
+  {
+    types: ["frameTarget"],
+    spec: "devtools/shared/specs/targets/frame",
+    front: null,
+  },
+  {
+    types: ["parentProcessTarget"],
+    spec: "devtools/shared/specs/targets/parent-process",
+    front: null,
+  },
+  {
+    types: ["webExtensionTarget"],
+    spec: "devtools/shared/specs/targets/webextension",
+    front: null,
+  },
+  {
+    types: ["workerTarget"],
+    spec: "devtools/shared/specs/targets/worker",
     front: null,
   },
   {
@@ -235,23 +280,13 @@ const Types = exports.__TypesForTests = [
     front: null,
   },
   {
-    types: ["webExtensionInspectedWindow"],
-    spec: "devtools/shared/specs/webextension-inspected-window",
-    front: "devtools/shared/fronts/webextension-inspected-window",
-  },
-  {
-    types: ["webExtensionAddon"],
-    spec: "devtools/shared/specs/webextension-parent",
-    front: null,
-  },
-  {
     types: ["gl-shader", "gl-program", "webgl"],
     spec: "devtools/shared/specs/webgl",
     front: "devtools/shared/fronts/webgl",
   },
   {
-    types: ["worker", "pushSubscription", "serviceWorkerRegistration", "serviceWorker"],
-    spec: "devtools/shared/specs/worker",
+    types: ["pushSubscription", "serviceWorkerRegistration", "serviceWorker"],
+    spec: "devtools/shared/specs/worker/service-worker",
     front: null,
   },
 ];

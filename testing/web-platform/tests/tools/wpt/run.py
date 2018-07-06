@@ -49,8 +49,6 @@ def create_parser():
                         help="Browser to run tests in")
     parser.add_argument("--yes", "-y", dest="prompt", action="store_false", default=True,
                         help="Don't prompt before installing components")
-    parser.add_argument("--stability", action="store_true",
-                        help="Stability check tests")
     parser.add_argument("--install-browser", action="store_true",
                         help="Install the latest development version of the browser")
     parser._add_container_actions(wptcommandline.create_parser())
@@ -207,6 +205,14 @@ Consider installing certutil via your OS package manager or directly.""")
         if kwargs["prefs_root"] is None:
             prefs_root = self.browser.install_prefs(kwargs["binary"], self.venv.path)
             kwargs["prefs_root"] = prefs_root
+
+
+class Fennec(BrowserSetup):
+    name = "fennec"
+    browser_cls = browser.Fennec
+
+    def setup_kwargs(self, kwargs):
+        pass
 
 
 class Chrome(BrowserSetup):
@@ -379,6 +385,7 @@ class WebKit(BrowserSetup):
 
 
 product_setup = {
+    "fennec": Fennec,
     "firefox": Firefox,
     "chrome": Chrome,
     "chrome_android": ChromeAndroid,
@@ -434,7 +441,6 @@ def setup_wptrunner(venv, prompt=True, install=False, **kwargs):
 def run(venv, **kwargs):
     #Remove arguments that aren't passed to wptrunner
     prompt = kwargs.pop("prompt", True)
-    stability = kwargs.pop("stability", True)
     install_browser = kwargs.pop("install_browser", False)
 
     kwargs = setup_wptrunner(venv,
@@ -442,20 +448,7 @@ def run(venv, **kwargs):
                              install=install_browser,
                              **kwargs)
 
-    if stability:
-        import stability
-        iterations, results, inconsistent = stability.run(venv, logger, **kwargs)
-
-        def log(x):
-            print(x)
-
-        if inconsistent:
-            stability.write_inconsistent(log, inconsistent, iterations)
-        else:
-            log("All tests stable")
-        rv = len(inconsistent) > 0
-    else:
-        rv = run_single(venv, **kwargs) > 0
+    rv = run_single(venv, **kwargs) > 0
 
     return rv
 

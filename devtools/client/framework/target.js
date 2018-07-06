@@ -5,7 +5,6 @@
 "use strict";
 
 const { Ci } = require("chrome");
-const defer = require("devtools/shared/defer");
 const EventEmitter = require("devtools/shared/event-emitter");
 const Services = require("Services");
 
@@ -133,11 +132,11 @@ function TabTarget(tab) {
     this._client = tab.client;
     this._chrome = tab.chrome;
   }
-  // Default isTabActor to true if not explicitly specified
-  if (typeof tab.isTabActor == "boolean") {
-    this._isTabActor = tab.isTabActor;
+  // Default isBrowsingContext to true if not explicitly specified
+  if (typeof tab.isBrowsingContext == "boolean") {
+    this._isBrowsingContext = tab.isBrowsingContext;
   } else {
-    this._isTabActor = true;
+    this._isBrowsingContext = true;
   }
 }
 
@@ -188,19 +187,17 @@ TabTarget.prototype = {
                       "remote tabs.");
     }
 
-    const deferred = defer();
-
-    if (this._protocolDescription &&
-        this._protocolDescription.types[actorName]) {
-      deferred.resolve(this._protocolDescription.types[actorName]);
-    } else {
-      this.client.mainRoot.protocolDescription(description => {
-        this._protocolDescription = description;
-        deferred.resolve(description.types[actorName]);
-      });
-    }
-
-    return deferred.promise;
+    return new Promise(resolve => {
+      if (this._protocolDescription &&
+          this._protocolDescription.types[actorName]) {
+        resolve(this._protocolDescription.types[actorName]);
+      } else {
+        this.client.mainRoot.protocolDescription(description => {
+          this._protocolDescription = description;
+          resolve(description.types[actorName]);
+        });
+      }
+    });
   },
 
   /**
@@ -308,11 +305,13 @@ TabTarget.prototype = {
     return this._chrome;
   },
 
-  // Tells us if the related actor implements TabActor interface
-  // and requires to call `attach` request before being used
-  // and `detach` during cleanup
-  get isTabActor() {
-    return this._isTabActor;
+  // Tells us if the related actor implements BrowsingContextTargetActor
+  // interface and requires to call `attach` request before being used and
+  // `detach` during cleanup.
+  // TODO: This flag is quite confusing, try to find a better way.
+  // Bug 1465635 hopes to blow up these classes entirely.
+  get isBrowsingContext() {
+    return this._isBrowsingContext;
   },
 
   get window() {
@@ -348,14 +347,15 @@ TabTarget.prototype = {
   },
 
   get isAddon() {
-    return !!(this._form && this._form.actor &&
-              this._form.actor.match(/conn\d+\.addon\d+/)) || this.isWebExtension;
+    const isLegacyAddon = !!(this._form && this._form.actor &&
+      this._form.actor.match(/conn\d+\.addon(Target)?\d+/));
+    return isLegacyAddon || this.isWebExtension;
   },
 
   get isWebExtension() {
     return !!(this._form && this._form.actor && (
-      this._form.actor.match(/conn\d+\.webExtension\d+/) ||
-      this._form.actor.match(/child\d+\/webExtension\d+/)
+      this._form.actor.match(/conn\d+\.webExtension(Target)?\d+/) ||
+      this._form.actor.match(/child\d+\/webExtension(Target)?\d+/)
     ));
   },
 
@@ -387,16 +387,27 @@ TabTarget.prototype = {
   },
 
   /**
+   * For local tabs, returns the tab's contentPrincipal, which can be used as a
+   * `triggeringPrincipal` when opening links.  However, this is a hack as it is not
+   * correct for subdocuments and it won't work for remote debugging.  Bug 1467945 hopes
+   * to devise a better approach.
+   */
+  get contentPrincipal() {
+    if (!this.isLocalTab) {
+      return null;
+    }
+    return this.tab.linkedBrowser.contentPrincipal;
+  },
+
+  /**
    * Adds remote protocol capabilities to the target, so that it can be used
    * for tools that support the Remote Debugging Protocol even for local
    * connections.
    */
   makeRemote: async function() {
     if (this._remote) {
-      return this._remote.promise;
+      return this._remote;
     }
-
-    this._remote = defer();
 
     if (this.isLocalTab) {
       // Since a remote protocol connection will be made, let's start the
@@ -418,13 +429,13 @@ TabTarget.prototype = {
       this._chrome = false;
     } else if (this._form.isWebExtension &&
           this.client.mainRoot.traits.webExtensionAddonConnect) {
-      // The addonActor form is related to a WebExtensionParentActor instance,
-      // which isn't a tab actor on its own, it is an actor living in the parent process
-      // with access to the addon metadata, it can control the addon (e.g. reloading it)
-      // and listen to the AddonManager events related to the lifecycle of the addon
-      // (e.g. when the addon is disabled or uninstalled ).
-      // To retrieve the TabActor instance, we call its "connect" method,
-      // (which fetches the TabActor form from a WebExtensionChildActor instance).
+      // The addonTargetActor form is related to a WebExtensionActor instance,
+      // which isn't a target actor on its own, it is an actor living in the parent
+      // process with access to the addon metadata, it can control the addon (e.g.
+      // reloading it) and listen to the AddonManager events related to the lifecycle of
+      // the addon (e.g. when the addon is disabled or uninstalled).
+      // To retrieve the target actor instance, we call its "connect" method, (which
+      // fetches the target actor form from a WebExtensionTargetActor instance).
       const {form} = await this._client.request({
         to: this._form.actor, type: "connect",
       });
@@ -436,57 +447,58 @@ TabTarget.prototype = {
 
     this._setupRemoteListeners();
 
-    const attachTab = () => {
-      this._client.attachTab(this._form.actor, (response, tabClient) => {
-        if (!tabClient) {
-          this._remote.reject("Unable to attach to the tab");
+    this._remote = new Promise((resolve, reject) => {
+      const attachTab = async () => {
+        try {
+          const [response, tabClient] = await this._client.attachTab(this._form.actor);
+          this.activeTab = tabClient;
+          this.threadActor = response.threadActor;
+        } catch (e) {
+          reject("Unable to attach to the tab: " + e);
           return;
         }
-        this.activeTab = tabClient;
-        this.threadActor = response.threadActor;
-
         attachConsole();
-      });
-    };
+      };
 
-    const onConsoleAttached = (response, consoleClient) => {
-      if (!consoleClient) {
-        this._remote.reject("Unable to attach to the console");
-        return;
+      const onConsoleAttached = ([response, consoleClient]) => {
+        this.activeConsole = consoleClient;
+
+        this._onInspectObject = packet => this.emit("inspect-object", packet);
+        this.activeConsole.on("inspectObject", this._onInspectObject);
+
+        resolve(null);
+      };
+
+      const attachConsole = () => {
+        this._client.attachConsole(this._form.consoleActor, [])
+          .then(onConsoleAttached, response => {
+            reject(
+              `Unable to attach to the console [${response.error}]: ${response.message}`);
+          });
+      };
+
+      if (this.isLocalTab) {
+        this._client.connect()
+          .then(() => this._client.getTab({tab: this.tab}))
+          .then(response => {
+            this._form = response.tab;
+            this._url = this._form.url;
+            this._title = this._form.title;
+
+            attachTab();
+          }, e => reject(e));
+      } else if (this.isBrowsingContext) {
+        // In the remote debugging case, the protocol connection will have been
+        // already initialized in the connection screen code.
+        attachTab();
+      } else {
+        // AddonActor and chrome debugging on RootActor doesn't inherit from
+        // BrowsingContextTargetActor and doesn't need to be attached.
+        attachConsole();
       }
-      this.activeConsole = consoleClient;
+    });
 
-      this._onInspectObject = packet => this.emit("inspect-object", packet);
-      this.activeConsole.on("inspectObject", this._onInspectObject);
-
-      this._remote.resolve(null);
-    };
-
-    const attachConsole = () => {
-      this._client.attachConsole(this._form.consoleActor, [], onConsoleAttached);
-    };
-
-    if (this.isLocalTab) {
-      this._client.connect()
-        .then(() => this._client.getTab({ tab: this.tab }))
-        .then(response => {
-          this._form = response.tab;
-          this._url = this._form.url;
-          this._title = this._form.title;
-
-          attachTab();
-        }, e => this._remote.reject(e));
-    } else if (this.isTabActor) {
-      // In the remote debugging case, the protocol connection will have been
-      // already initialized in the connection screen code.
-      attachTab();
-    } else {
-      // AddonActor and chrome debugging on RootActor doesn't inherits from
-      // TabActor and doesn't need to be attached.
-      attachConsole();
-    }
-
-    return this._remote.promise;
+    return this._remote;
   },
 
   /**
@@ -635,48 +647,48 @@ TabTarget.prototype = {
     // If several things call destroy then we give them all the same
     // destruction promise so we're sure to destroy only once
     if (this._destroyer) {
-      return this._destroyer.promise;
+      return this._destroyer;
     }
 
-    this._destroyer = defer();
+    this._destroyer = new Promise(resolve => {
+      // Before taking any action, notify listeners that destruction is imminent.
+      this.emit("close");
 
-    // Before taking any action, notify listeners that destruction is imminent.
-    this.emit("close");
-
-    if (this._tab) {
-      this._teardownListeners();
-    }
-
-    const cleanupAndResolve = () => {
-      this._cleanup();
-      this._destroyer.resolve(null);
-    };
-    // If this target was not remoted, the promise will be resolved before the
-    // function returns.
-    if (this._tab && !this._client) {
-      cleanupAndResolve();
-    } else if (this._client) {
-      // If, on the other hand, this target was remoted, the promise will be
-      // resolved after the remote connection is closed.
-      this._teardownRemoteListeners();
-
-      if (this.isLocalTab) {
-        // We started with a local tab and created the client ourselves, so we
-        // should close it.
-        this._client.close().then(cleanupAndResolve);
-      } else if (this.activeTab) {
-        // The client was handed to us, so we are not responsible for closing
-        // it. We just need to detach from the tab, if already attached.
-        // |detach| may fail if the connection is already dead, so proceed with
-        // cleanup directly after this.
-        this.activeTab.detach();
-        cleanupAndResolve();
-      } else {
-        cleanupAndResolve();
+      if (this._tab) {
+        this._teardownListeners();
       }
-    }
 
-    return this._destroyer.promise;
+      const cleanupAndResolve = () => {
+        this._cleanup();
+        resolve(null);
+      };
+      // If this target was not remoted, the promise will be resolved before the
+      // function returns.
+      if (this._tab && !this._client) {
+        cleanupAndResolve();
+      } else if (this._client) {
+        // If, on the other hand, this target was remoted, the promise will be
+        // resolved after the remote connection is closed.
+        this._teardownRemoteListeners();
+
+        if (this.isLocalTab) {
+          // We started with a local tab and created the client ourselves, so we
+          // should close it.
+          this._client.close().then(cleanupAndResolve);
+        } else if (this.activeTab) {
+          // The client was handed to us, so we are not responsible for closing
+          // it. We just need to detach from the tab, if already attached.
+          // |detach| may fail if the connection is already dead, so proceed with
+          // cleanup directly after this.
+          this.activeTab.detach();
+          cleanupAndResolve();
+        } else {
+          cleanupAndResolve();
+        }
+      }
+    });
+
+    return this._destroyer;
   },
 
   /**
@@ -772,7 +784,7 @@ WorkerTarget.prototype = {
     return true;
   },
 
-  get isTabActor() {
+  get isBrowsingContext() {
     return true;
   },
 
@@ -811,7 +823,7 @@ WorkerTarget.prototype = {
   },
 
   hasActor: function(name) {
-    // console is the only one actor implemented by WorkerActor
+    // console is the only one actor implemented by WorkerTargetActor
     if (name == "console") {
       return true;
     }

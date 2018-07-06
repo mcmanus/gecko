@@ -14,14 +14,15 @@
 #include "jit/MacroAssembler.h"
 #include "jit/SharedICList.h"
 #include "jit/SharedICRegisters.h"
-#include "vm/JSCompartment.h"
 #include "vm/JSContext.h"
+#include "vm/Realm.h"
 #include "vm/ReceiverGuard.h"
 #include "vm/TypedArrayObject.h"
 
 namespace js {
 namespace jit {
 
+// [SMDOC] JIT Inline Caches (ICs)
 //
 // Baseline Inline Caches are polymorphic caches that aggressively
 // share their stub code.
@@ -2308,11 +2309,11 @@ ScalarTypeFromSimpleTypeDescrKey(uint32_t key)
     return ScalarTypeDescr::Type(key >> 1);
 }
 
-inline ReferenceTypeDescr::Type
+inline ReferenceType
 ReferenceTypeFromSimpleTypeDescrKey(uint32_t key)
 {
     MOZ_ASSERT(!SimpleTypeDescrKeyIsScalar(key));
-    return ReferenceTypeDescr::Type(key >> 1);
+    return ReferenceType(key >> 1);
 }
 
 // JSOP_NEWARRAY

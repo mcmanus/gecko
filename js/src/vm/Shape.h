@@ -34,6 +34,8 @@
 #include "vm/SymbolType.h"
 
 /*
+ * [SMDOC] Shapes
+ *
  * In isolation, a Shape represents a property that exists in one or more
  * objects; it has an id, flags, etc. (But it doesn't represent the property's
  * value.)  However, Shapes are always stored in linked linear sequence of
@@ -386,11 +388,6 @@ class MOZ_RAII AutoKeepShapeTables
     explicit inline AutoKeepShapeTables(JSContext* cx);
     inline ~AutoKeepShapeTables();
 };
-
-/*
- * Use the reserved attribute bit to mean shadowability.
- */
-#define JSPROP_SHADOWABLE       JSPROP_INTERNAL_USE_BIT
 
 /*
  * Shapes encode information about both a property lineage *and* a particular
@@ -1078,8 +1075,6 @@ class Shape : public gc::TenuredCell
         return (attrs & (JSPROP_SETTER | JSPROP_GETTER)) != 0;
     }
 
-    bool hasShadowable() const { return attrs & JSPROP_SHADOWABLE; }
-
     uint32_t entryCount() {
         JS::AutoCheckCannotGC nogc;
         if (ShapeTable* table = maybeTable(nogc))
@@ -1215,9 +1210,6 @@ class MOZ_RAII AutoRooterGetterSetter
   public:
     inline AutoRooterGetterSetter(JSContext* cx, uint8_t attrs,
                                   GetterOp* pgetter, SetterOp* psetter
-                                  MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
-    inline AutoRooterGetterSetter(JSContext* cx, uint8_t attrs,
-                                  JSNative* pgetter, JSNative* psetter
                                   MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
 
   private:
@@ -1534,7 +1526,8 @@ Shape::Shape(const StackShape& other, uint32_t nfixed)
     immutableFlags(other.immutableFlags),
     attrs(other.attrs),
     mutableFlags(other.mutableFlags),
-    parent(nullptr)
+    parent(nullptr),
+    listp(nullptr)
 {
     setNumFixedSlots(nfixed);
 
@@ -1568,7 +1561,8 @@ Shape::Shape(UnownedBaseShape* base, uint32_t nfixed)
     immutableFlags(SHAPE_INVALID_SLOT | (nfixed << FIXED_SLOTS_SHIFT)),
     attrs(0),
     mutableFlags(0),
-    parent(nullptr)
+    parent(nullptr),
+    listp(nullptr)
 {
     MOZ_ASSERT(base);
     kids.setNull();

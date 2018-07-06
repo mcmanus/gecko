@@ -424,6 +424,13 @@ public:
   {
     mNotification->ReleaseObject();
   }
+
+  nsresult
+  Cancel() override
+  {
+    mNotification->ReleaseObject();
+    return NS_OK;
+  }
 };
 
 // Create one whenever you require ownership of the notification. Use with
@@ -2198,7 +2205,7 @@ Notification::WorkerGet(WorkerPrivate* aWorkerPrivate,
 JSObject*
 Notification::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return mozilla::dom::NotificationBinding::Wrap(aCx, this, aGivenProto);
+  return mozilla::dom::Notification_Binding::Wrap(aCx, this, aGivenProto);
 }
 
 void

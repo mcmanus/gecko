@@ -17,9 +17,9 @@
 #include "vm/BigIntType.h"
 #endif
 #include "vm/HelperThreads.h"
-#include "vm/JSCompartment.h"
 #include "vm/JSObject.h"
 #include "vm/JSScript.h"
+#include "vm/Realm.h"
 #include "vm/Runtime.h"
 #include "vm/Shape.h"
 #include "vm/StringType.h"
@@ -81,24 +81,26 @@ EqualStringsPure(JSString* s1, JSString* s2)
         return false;
 
     const Char1* c1;
-    ScopedJSFreePtr<Char1> ownedChars1;
+    UniquePtr<Char1[], JS::FreePolicy> ownedChars1;
     JS::AutoCheckCannotGC nogc;
     if (s1->isLinear()) {
         c1 = s1->asLinear().chars<Char1>(nogc);
     } else {
-        if (!s1->asRope().copyChars<Char1>(/* tcx */ nullptr, ownedChars1))
+        ownedChars1 = s1->asRope().copyChars<Char1>(/* tcx */ nullptr);
+        if (!ownedChars1)
             MOZ_CRASH("oom");
-        c1 = ownedChars1;
+        c1 = ownedChars1.get();
     }
 
     const Char2* c2;
-    ScopedJSFreePtr<Char2> ownedChars2;
+    UniquePtr<Char2[], JS::FreePolicy> ownedChars2;
     if (s2->isLinear()) {
         c2 = s2->asLinear().chars<Char2>(nogc);
     } else {
-        if (!s2->asRope().copyChars<Char2>(/* tcx */ nullptr, ownedChars2))
+        ownedChars2 = s2->asRope().copyChars<Char2>(/* tcx */ nullptr);
+        if (!ownedChars2)
             MOZ_CRASH("oom");
-        c2 = ownedChars2;
+        c2 = ownedChars2.get();
     }
 
     return EqualChars(c1, c2, s1->length());
@@ -148,14 +150,15 @@ static void
 StoreStringChars(char* buffer, size_t bufferSize, JSString* str)
 {
     const CharT* chars;
-    ScopedJSFreePtr<CharT> ownedChars;
+    UniquePtr<CharT[], JS::FreePolicy> ownedChars;
     JS::AutoCheckCannotGC nogc;
     if (str->isLinear()) {
         chars = str->asLinear().chars<CharT>(nogc);
     } else {
-        if (!str->asRope().copyChars<CharT>(/* tcx */ nullptr, ownedChars))
+        ownedChars = str->asRope().copyChars<CharT>(/* tcx */ nullptr);
+        if (!ownedChars)
             MOZ_CRASH("oom");
-        chars = ownedChars;
+        chars = ownedChars.get();
     }
 
     // We might truncate |str| even if it's much shorter than 1024 chars, if
@@ -461,7 +464,7 @@ StatsCellCallback(JSRuntime* rt, void* data, void* thing, JS::TraceKind traceKin
     switch (traceKind) {
       case JS::TraceKind::Object: {
         JSObject* obj = static_cast<JSObject*>(thing);
-        RealmStats& realmStats = obj->realm()->realmStats();
+        RealmStats& realmStats = obj->maybeCCWRealm()->realmStats();
         JS::ClassInfo info;        // This zeroes all the sizes.
         info.objectsGCHeap += thingSize;
 

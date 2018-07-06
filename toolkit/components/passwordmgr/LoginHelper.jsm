@@ -34,20 +34,25 @@ var LoginHelper = {
   formlessCaptureEnabled: Services.prefs.getBoolPref("signon.formlessCapture.enabled"),
   schemeUpgrades: Services.prefs.getBoolPref("signon.schemeUpgrades"),
   insecureAutofill: Services.prefs.getBoolPref("signon.autofillForms.http"),
-  showInsecureFieldWarning: Services.prefs.getBoolPref("security.insecure_field_warning.contextual.enabled"),
 
   createLogger(aLogPrefix) {
     let getMaxLogLevel = () => {
       return this.debug ? "debug" : "warn";
     };
 
-    // Create a new instance of the ConsoleAPI so we can control the maxLogLevel with a pref.
-    let ConsoleAPI = ChromeUtils.import("resource://gre/modules/Console.jsm", {}).ConsoleAPI;
-    let consoleOptions = {
-      maxLogLevel: getMaxLogLevel(),
-      prefix: aLogPrefix,
-    };
-    let logger = new ConsoleAPI(consoleOptions);
+    let logger;
+    function getConsole() {
+      if (!logger) {
+        // Create a new instance of the ConsoleAPI so we can control the maxLogLevel with a pref.
+        let ConsoleAPI = ChromeUtils.import("resource://gre/modules/Console.jsm", {}).ConsoleAPI;
+        let consoleOptions = {
+          maxLogLevel: getMaxLogLevel(),
+          prefix: aLogPrefix,
+        };
+        logger = new ConsoleAPI(consoleOptions);
+      }
+      return logger;
+    }
 
     // Watch for pref changes and update this.debug and the maxLogLevel for created loggers
     Services.prefs.addObserver("signon.", () => {
@@ -55,14 +60,31 @@ var LoginHelper = {
       this.formlessCaptureEnabled = Services.prefs.getBoolPref("signon.formlessCapture.enabled");
       this.schemeUpgrades = Services.prefs.getBoolPref("signon.schemeUpgrades");
       this.insecureAutofill = Services.prefs.getBoolPref("signon.autofillForms.http");
-      logger.maxLogLevel = getMaxLogLevel();
+      if (logger) {
+        logger.maxLogLevel = getMaxLogLevel();
+      }
     });
 
-    Services.prefs.addObserver("security.insecure_field_warning.", () => {
-      this.showInsecureFieldWarning = Services.prefs.getBoolPref("security.insecure_field_warning.contextual.enabled");
-    });
-
-    return logger;
+    return {
+      log: (...args) => {
+        if (this.debug) {
+          getConsole().log(...args);
+        }
+      },
+      error: (...args) => {
+        getConsole().error(...args);
+      },
+      debug: (...args) => {
+        if (this.debug) {
+          getConsole().debug(...args);
+        }
+      },
+      warn: (...args) => {
+        if (this.debug) {
+          getConsole().warn(...args);
+        }
+      },
+    };
   },
 
   /**
@@ -776,6 +798,9 @@ var LoginHelper = {
     Services.obs.notifyObservers(dataObject, "passwordmgr-storage-changed", changeType);
   }
 };
+
+XPCOMUtils.defineLazyPreferenceGetter(LoginHelper, "showInsecureFieldWarning",
+                                      "security.insecure_field_warning.contextual.enabled");
 
 XPCOMUtils.defineLazyGetter(this, "log", () => {
   let logger = LoginHelper.createLogger("LoginHelper");

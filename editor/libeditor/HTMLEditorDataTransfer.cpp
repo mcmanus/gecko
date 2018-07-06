@@ -117,7 +117,7 @@ HTMLEditor::LoadHTML(const nsAString& aInputString)
   if (!handled) {
     // Delete Selection, but only if it isn't collapsed, see bug #106269
     if (!selection->IsCollapsed()) {
-      rv = DeleteSelectionAsAction(eNone, eStrip);
+      rv = DeleteSelectionAsSubAction(eNone, eStrip);
       if (NS_WARN_IF(NS_FAILED(rv))) {
         return rv;
       }
@@ -174,23 +174,6 @@ HTMLEditor::InsertHTML(const nsAString& aInString)
 
   return DoInsertHTMLWithContext(aInString, empty, empty, empty,
                                  nullptr,  nullptr, 0, true, true, false);
-}
-
-NS_IMETHODIMP
-HTMLEditor::InsertHTMLWithContext(const nsAString& aInputString,
-                                  const nsAString& aContextStr,
-                                  const nsAString& aInfoStr,
-                                  const nsAString& aFlavor,
-                                  nsIDocument* aSourceDoc,
-                                  nsINode* aDestNode,
-                                  int32_t aDestOffset,
-                                  bool aDeleteSelection)
-{
-  return DoInsertHTMLWithContext(aInputString, aContextStr, aInfoStr,
-                                 aFlavor, aSourceDoc, aDestNode, aDestOffset,
-                                 aDeleteSelection,
-                                 /* trusted input */ true,
-                                 /* clear style */ false);
 }
 
 nsresult
@@ -258,7 +241,7 @@ HTMLEditor::DoInsertHTMLWithContext(const nsAString& aInputString,
       // Use an auto tracker so that our drop point is correctly
       // positioned after the delete.
       AutoTrackDOMPoint tracker(mRangeUpdater, &targetPoint);
-      rv = DeleteSelectionAsAction(eNone, eStrip);
+      rv = DeleteSelectionAsSubAction(eNone, eStrip);
       if (NS_WARN_IF(NS_FAILED(rv))) {
         return rv;
       }
@@ -287,7 +270,7 @@ HTMLEditor::DoInsertHTMLWithContext(const nsAString& aInputString,
     // We aren't inserting anything, but if aDeleteSelection is set, we do want
     // to delete everything.
     if (aDeleteSelection) {
-      nsresult rv = DeleteSelectionAsAction(eNone, eStrip);
+      nsresult rv = DeleteSelectionAsSubAction(eNone, eStrip);
       if (NS_WARN_IF(NS_FAILED(rv))) {
         return rv;
       }

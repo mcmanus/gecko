@@ -22,6 +22,8 @@ import org.mozilla.gecko.util.EventCallback;
 import org.mozilla.gecko.util.GeckoBundle;
 import org.mozilla.gecko.util.ThreadUtils;
 
+import java.io.File;
+
 public final class GeckoRuntime implements Parcelable {
     private static final String LOGTAG = "GeckoRuntime";
     private static final boolean DEBUG = false;
@@ -212,8 +214,13 @@ public final class GeckoRuntime implements Parcelable {
         return mSettings;
     }
 
-    /* package */ void setPref(final String name, final Object value) {
-        PrefsHelper.setPref(name, value, /* flush */ false);
+    /* package */ void setPref(final String name, final Object value,
+                               boolean override) {
+        if (override || !GeckoAppShell.isFennec()) {
+            // Override pref on Fennec only when requested to prevent
+            // overriding of persistent prefs.
+            PrefsHelper.setPref(name, value, /* flush */ false);
+        }
     }
 
     /**
@@ -229,6 +236,14 @@ public final class GeckoRuntime implements Parcelable {
         }
         return mTelemetry;
 
+    }
+
+    /**
+     * Get the profile directory for this runtime. This is where Gecko stores
+     * internal data.
+     */
+    public File getProfileDir() {
+        return GeckoThread.getActiveProfile().getDir();
     }
 
     @Override // Parcelable

@@ -117,6 +117,7 @@ using mozilla::ipc::CrashReporterClient;
 // From toolkit/library/rust/shared/lib.rs
 extern "C" {
   void install_rust_panic_hook();
+  void install_rust_oom_hook();
   bool get_rust_panic_reason(char** reason, size_t* length);
 }
 
@@ -337,7 +338,8 @@ nsTArray<nsAutoPtr<DelayedNote> >* gDelayedAnnotations;
 // reporter is loaded instead (in case it became unloaded somehow)
 typedef LPTOP_LEVEL_EXCEPTION_FILTER (WINAPI *SetUnhandledExceptionFilter_func)
   (LPTOP_LEVEL_EXCEPTION_FILTER lpTopLevelExceptionFilter);
-static SetUnhandledExceptionFilter_func stub_SetUnhandledExceptionFilter = 0;
+static WindowsDllInterceptor::FuncHookType<SetUnhandledExceptionFilter_func>
+  stub_SetUnhandledExceptionFilter;
 static LPTOP_LEVEL_EXCEPTION_FILTER previousUnhandledExceptionFilter = nullptr;
 static WindowsDllInterceptor gKernel32Intercept;
 static bool gBlockUnhandledExceptionFilter = true;
@@ -1638,9 +1640,9 @@ nsresult SetExceptionHandler(nsIFile* aXREDirectory,
   // protect the crash reporter from being unloaded
   gBlockUnhandledExceptionFilter = true;
   gKernel32Intercept.Init("kernel32.dll");
-  bool ok = gKernel32Intercept.AddHook("SetUnhandledExceptionFilter",
-          reinterpret_cast<intptr_t>(patched_SetUnhandledExceptionFilter),
-          (void**) &stub_SetUnhandledExceptionFilter);
+  bool ok = stub_SetUnhandledExceptionFilter.Set(gKernel32Intercept,
+                                                 "SetUnhandledExceptionFilter",
+                                                 &patched_SetUnhandledExceptionFilter);
 
 #ifdef DEBUG
   if (!ok)
@@ -1686,6 +1688,8 @@ nsresult SetExceptionHandler(nsIFile* aXREDirectory,
   oldTerminateHandler = std::set_terminate(&TerminateHandler);
 
   install_rust_panic_hook();
+
+  install_rust_oom_hook();
 
   InitThreadAnnotation();
 
@@ -2231,6 +2235,7 @@ GetAnnotation(const nsACString& key, nsACString& data)
   if (!gExceptionHandler)
     return false;
 
+  MutexAutoLock lock(*crashReporterAPILock);
   nsAutoCString entry;
   if (!crashReporterAPIData_Hash->Get(key, &entry))
     return false;
@@ -2943,6 +2948,10 @@ WriteLiteral(PRFileDesc* fd, const char (&str)[N])
   PR_Write(fd, str, N - 1);
 }
 
+/*
+ * If accessing the AnnotationTable |data| argument requires locks, the
+ * caller should ensure the required locks are already held.
+ */
 static bool
 WriteExtraData(nsIFile* extraFile,
                const AnnotationTable& data,
@@ -3067,11 +3076,14 @@ WriteExtraForMinidump(nsIFile* minidump,
     return false;
   }
 
-  if (!WriteExtraData(extra, *crashReporterAPIData_Hash,
-                      blacklist,
-                      true /*write crash time*/,
-                      true /*truncate*/)) {
-    return false;
+  {
+    MutexAutoLock lock(*crashReporterAPILock);
+    if (!WriteExtraData(extra, *crashReporterAPIData_Hash,
+                        blacklist,
+                        true /*write crash time*/,
+                        true /*truncate*/)) {
+      return false;
+    }
   }
 
   if (pid && processToCrashFd.count(pid)) {

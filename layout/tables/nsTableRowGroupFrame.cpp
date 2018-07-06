@@ -376,7 +376,7 @@ nsTableRowGroupFrame::ReflowChildren(nsPresContext*         aPresContext,
     nsTableRowFrame *rowFrame = do_QueryFrame(kidFrame);
     if (!rowFrame) {
       // XXXldb nsCSSFrameConstructor needs to enforce this!
-      NS_NOTREACHED("yikes, a non-row child");
+      MOZ_ASSERT_UNREACHABLE("yikes, a non-row child");
       continue;
     }
     nscoord cellSpacingB = tableFrame->GetRowSpacing(rowFrame->GetRowIndex());
@@ -1989,7 +1989,7 @@ void
 nsTableRowGroupFrame::InvalidateFrame(uint32_t aDisplayItemKey, bool aRebuildDisplayItems)
 {
   nsIFrame::InvalidateFrame(aDisplayItemKey, aRebuildDisplayItems);
-  if (GetTableFrame()->IsBorderCollapse() && StyleBorder()->HasBorder()) {
+  if (GetTableFrame()->IsBorderCollapse()) {
     GetParent()->InvalidateFrameWithRect(GetVisualOverflowRect() + GetPosition(), aDisplayItemKey, false);
   }
 }

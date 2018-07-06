@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include rect,clip_scroll,render_task,resource_cache,snap,transform
+#include rect,render_task,resource_cache,snap,transform
 
 #define EXTEND_MODE_CLAMP  0
 #define EXTEND_MODE_REPEAT 1
@@ -32,11 +32,6 @@ varying vec3 vClipMaskUv;
 
 #ifdef WR_VERTEX_SHADER
 
-#define VECS_PER_LOCAL_CLIP_RECT    1
-#define VECS_PER_PRIM_HEADER        2
-#define VECS_PER_TEXT_RUN           3
-#define VECS_PER_GRADIENT_STOP      2
-
 #define COLOR_MODE_FROM_PASS          0
 #define COLOR_MODE_ALPHA              1
 #define COLOR_MODE_SUBPX_CONST_COLOR  2
@@ -47,142 +42,47 @@ varying vec3 vClipMaskUv;
 #define COLOR_MODE_BITMAP             7
 #define COLOR_MODE_COLOR_BITMAP       8
 
-uniform HIGHP_SAMPLER_FLOAT sampler2D sLocalClipRects;
+uniform HIGHP_SAMPLER_FLOAT sampler2D sPrimitiveHeadersF;
+uniform HIGHP_SAMPLER_FLOAT isampler2D sPrimitiveHeadersI;
 
 // Instanced attributes
-in ivec4 aData0;
-in ivec4 aData1;
+in ivec4 aData;
 
-RectWithSize fetch_clip_chain_rect(int index) {
-    ivec2 uv = get_fetch_uv(index, VECS_PER_LOCAL_CLIP_RECT);
-    vec4 rect = TEXEL_FETCH(sLocalClipRects, uv, 0, ivec2(0, 0));
-    return RectWithSize(rect.xy, rect.zw);
-}
+#define VECS_PER_PRIM_HEADER_F 2
+#define VECS_PER_PRIM_HEADER_I 2
 
-struct Glyph {
-    vec2 offset;
-};
-
-Glyph fetch_glyph(int specific_prim_address,
-                  int glyph_index) {
-    // Two glyphs are packed in each texel in the GPU cache.
-    int glyph_address = specific_prim_address +
-                        VECS_PER_TEXT_RUN +
-                        glyph_index / 2;
-    vec4 data = fetch_from_resource_cache_1(glyph_address);
-    // Select XY or ZW based on glyph index.
-    // We use "!= 0" instead of "== 1" here in order to work around a driver
-    // bug with equality comparisons on integers.
-    vec2 glyph = mix(data.xy, data.zw, bvec2(glyph_index % 2 != 0));
-
-    return Glyph(glyph);
-}
-
-struct PrimitiveInstance {
-    int prim_address;
+struct PrimitiveHeader {
+    RectWithSize local_rect;
+    RectWithSize local_clip_rect;
+    float z;
     int specific_prim_address;
     int render_task_index;
     int clip_task_index;
-    int scroll_node_id;
-    int clip_chain_rect_index;
-    int z;
-    int user_data0;
-    int user_data1;
-    int user_data2;
+    int transform_id;
+    ivec3 user_data;
 };
 
-PrimitiveInstance fetch_prim_instance() {
-    PrimitiveInstance pi;
+PrimitiveHeader fetch_prim_header(int index) {
+    PrimitiveHeader ph;
 
-    pi.prim_address = aData0.x;
-    pi.specific_prim_address = pi.prim_address + VECS_PER_PRIM_HEADER;
-    pi.render_task_index = aData0.y % 0x10000;
-    pi.clip_task_index = aData0.y / 0x10000;
-    pi.clip_chain_rect_index = aData0.z;
-    pi.scroll_node_id = aData0.w;
-    pi.z = aData1.x;
-    pi.user_data0 = aData1.y;
-    pi.user_data1 = aData1.z;
-    pi.user_data2 = aData1.w;
+    ivec2 uv_f = get_fetch_uv(index, VECS_PER_PRIM_HEADER_F);
+    vec4 local_rect = TEXEL_FETCH(sPrimitiveHeadersF, uv_f, 0, ivec2(0, 0));
+    vec4 local_clip_rect = TEXEL_FETCH(sPrimitiveHeadersF, uv_f, 0, ivec2(1, 0));
+    ph.local_rect = RectWithSize(local_rect.xy, local_rect.zw);
+    ph.local_clip_rect = RectWithSize(local_clip_rect.xy, local_clip_rect.zw);
 
-    return pi;
+    ivec2 uv_i = get_fetch_uv(index, VECS_PER_PRIM_HEADER_I);
+    ivec4 data0 = TEXEL_FETCH(sPrimitiveHeadersI, uv_i, 0, ivec2(0, 0));
+    ivec4 data1 = TEXEL_FETCH(sPrimitiveHeadersI, uv_i, 0, ivec2(1, 0));
+    ph.z = float(data0.x);
+    ph.render_task_index = data0.y;
+    ph.specific_prim_address = data0.z;
+    ph.clip_task_index = data0.w;
+    ph.transform_id = data1.x;
+    ph.user_data = data1.yzw;
+
+    return ph;
 }
-
-struct CompositeInstance {
-    int render_task_index;
-    int src_task_index;
-    int backdrop_task_index;
-    int user_data0;
-    int user_data1;
-    float z;
-    int user_data2;
-    int user_data3;
-};
-
-CompositeInstance fetch_composite_instance() {
-    CompositeInstance ci;
-
-    ci.render_task_index = aData0.x;
-    ci.src_task_index = aData0.y;
-    ci.backdrop_task_index = aData0.z;
-    ci.z = float(aData0.w);
-
-    ci.user_data0 = aData1.x;
-    ci.user_data1 = aData1.y;
-    ci.user_data2 = aData1.z;
-    ci.user_data3 = aData1.w;
-
-    return ci;
-}
-
-struct Primitive {
-    ClipScrollNode scroll_node;
-    ClipArea clip_area;
-    PictureTask task;
-    RectWithSize local_rect;
-    RectWithSize local_clip_rect;
-    int specific_prim_address;
-    int user_data0;
-    int user_data1;
-    int user_data2;
-    float z;
-};
-
-struct PrimitiveGeometry {
-    RectWithSize local_rect;
-    RectWithSize local_clip_rect;
-};
-
-PrimitiveGeometry fetch_primitive_geometry(int address) {
-    vec4 geom[2] = fetch_from_resource_cache_2(address);
-    return PrimitiveGeometry(RectWithSize(geom[0].xy, geom[0].zw),
-                             RectWithSize(geom[1].xy, geom[1].zw));
-}
-
-Primitive load_primitive() {
-    PrimitiveInstance pi = fetch_prim_instance();
-
-    Primitive prim;
-
-    prim.scroll_node = fetch_clip_scroll_node(pi.scroll_node_id);
-    prim.clip_area = fetch_clip_area(pi.clip_task_index);
-    prim.task = fetch_picture_task(pi.render_task_index);
-
-    RectWithSize clip_chain_rect = fetch_clip_chain_rect(pi.clip_chain_rect_index);
-
-    PrimitiveGeometry geom = fetch_primitive_geometry(pi.prim_address);
-    prim.local_rect = geom.local_rect;
-    prim.local_clip_rect = intersect_rects(clip_chain_rect, geom.local_clip_rect);
-
-    prim.specific_prim_address = pi.specific_prim_address;
-    prim.user_data0 = pi.user_data0;
-    prim.user_data1 = pi.user_data1;
-    prim.user_data2 = pi.user_data2;
-    prim.z = float(pi.z);
-
-    return prim;
-}
-
 
 struct VertexInfo {
     vec2 local_pos;
@@ -194,7 +94,7 @@ struct VertexInfo {
 VertexInfo write_vertex(RectWithSize instance_rect,
                         RectWithSize local_clip_rect,
                         float z,
-                        ClipScrollNode scroll_node,
+                        Transform transform,
                         PictureTask task,
                         RectWithSize snap_rect) {
 
@@ -207,13 +107,13 @@ VertexInfo write_vertex(RectWithSize instance_rect,
     /// Compute the snapping offset.
     vec2 snap_offset = compute_snap_offset(
         clamped_local_pos,
-        scroll_node.transform,
+        transform.m,
         snap_rect,
         vec2(0.5)
     );
 
     // Transform the current vertex to world space.
-    vec4 world_pos = scroll_node.transform * vec4(clamped_local_pos, 0.0, 1.0);
+    vec4 world_pos = transform.m * vec4(clamped_local_pos, 0.0, 1.0);
 
     // Convert the world positions to device pixel space.
     vec2 device_pos = world_pos.xy / world_pos.w * uDevicePixelRatio;
@@ -260,7 +160,7 @@ VertexInfo write_transform_vertex(RectWithSize local_segment_rect,
                                   RectWithSize local_clip_rect,
                                   vec4 clip_edge_mask,
                                   float z,
-                                  ClipScrollNode scroll_node,
+                                  Transform transform,
                                   PictureTask task,
                                   bool do_perspective_interpolation) {
     // Calculate a clip rect from local_rect + local clip
@@ -293,7 +193,7 @@ VertexInfo write_transform_vertex(RectWithSize local_segment_rect,
     vec2 local_pos = local_segment_rect.p0 + local_segment_rect.size * aPosition.xy;
 
     // Transform the current vertex to the world cpace.
-    vec4 world_pos = scroll_node.transform * vec4(local_pos, 0.0, 1.0);
+    vec4 world_pos = transform.m * vec4(local_pos, 0.0, 1.0);
 
     // Convert the world positions to device pixel space.
     vec2 device_pos = world_pos.xy / world_pos.w * uDevicePixelRatio;
@@ -325,52 +225,6 @@ VertexInfo write_transform_vertex(RectWithSize local_segment_rect,
     );
 
     return vi;
-}
-
-VertexInfo write_transform_vertex_primitive(Primitive prim) {
-    return write_transform_vertex(
-        prim.local_rect,
-        prim.local_rect,
-        prim.local_clip_rect,
-        vec4(1.0),
-        prim.z,
-        prim.scroll_node,
-        prim.task,
-        true
-    );
-}
-
-struct GlyphResource {
-    vec4 uv_rect;
-    float layer;
-    vec2 offset;
-    float scale;
-};
-
-GlyphResource fetch_glyph_resource(int address) {
-    vec4 data[2] = fetch_from_resource_cache_2(address);
-    return GlyphResource(data[0], data[1].x, data[1].yz, data[1].w);
-}
-
-struct TextRun {
-    vec4 color;
-    vec4 bg_color;
-    vec2 offset;
-};
-
-TextRun fetch_text_run(int address) {
-    vec4 data[3] = fetch_from_resource_cache_3(address);
-    return TextRun(data[0], data[1], data[2].xy);
-}
-
-struct Image {
-    vec4 stretch_size_and_tile_spacing;  // Size of the actual image and amount of space between
-                                         //     tiled instances of this image.
-};
-
-Image fetch_image(int address) {
-    vec4 data = fetch_from_resource_cache_1(address);
-    return Image(data);
 }
 
 void write_clip(vec2 global_pos, ClipArea area) {

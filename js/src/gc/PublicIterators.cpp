@@ -8,7 +8,7 @@
 
 #include "gc/GCInternals.h"
 #include "js/HashTable.h"
-#include "vm/JSCompartment.h"
+#include "vm/Realm.h"
 #include "vm/Runtime.h"
 
 #include "gc/PrivateIterators-inl.h"
@@ -51,7 +51,7 @@ js::IterateHeapUnbarriered(JSContext* cx, void* data,
                            IterateArenaCallback arenaCallback,
                            IterateCellCallback cellCallback)
 {
-    AutoPrepareForTracing prop(cx);
+    AutoPrepareForTracing prep(cx);
 
     for (ZonesIter zone(cx->runtime(), WithAtoms); !zone.done(); zone.next()) {
         (*zoneCallback)(cx->runtime(), data, zone);
@@ -67,7 +67,7 @@ js::IterateHeapUnbarrieredForZone(JSContext* cx, Zone* zone, void* data,
                                   IterateArenaCallback arenaCallback,
                                   IterateCellCallback cellCallback)
 {
-    AutoPrepareForTracing prop(cx);
+    AutoPrepareForTracing prep(cx);
 
     (*zoneCallback)(cx->runtime(), data, zone);
     IterateRealmsArenasCellsUnbarriered(cx, zone, data,
@@ -120,7 +120,7 @@ IterateGrayObjects(Zone* zone, GCThingCallback cellCallback, void* data)
 void
 js::IterateGrayObjects(Zone* zone, GCThingCallback cellCallback, void* data)
 {
-    MOZ_ASSERT(!JS::CurrentThreadIsHeapBusy());
+    MOZ_ASSERT(!JS::RuntimeHeapIsBusy());
     AutoPrepareForTracing prep(TlsContext.get());
     ::IterateGrayObjects(zone, cellCallback, data);
 }
@@ -129,7 +129,7 @@ void
 js::IterateGrayObjectsUnderCC(Zone* zone, GCThingCallback cellCallback, void* data)
 {
     mozilla::DebugOnly<JSRuntime*> rt = zone->runtimeFromMainThread();
-    MOZ_ASSERT(JS::CurrentThreadIsHeapCycleCollecting());
+    MOZ_ASSERT(JS::RuntimeHeapIsCycleCollecting());
     MOZ_ASSERT(!rt->gc.isIncrementalGCInProgress());
     ::IterateGrayObjects(zone, cellCallback, data);
 }

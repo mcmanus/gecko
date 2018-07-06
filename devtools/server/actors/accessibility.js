@@ -37,7 +37,6 @@ const {
   EVENT_DEFACTION_CHANGE,
   EVENT_DESCRIPTION_CHANGE,
   EVENT_DOCUMENT_ATTRIBUTES_CHANGED,
-  EVENT_HELP_CHANGE,
   EVENT_HIDE,
   EVENT_NAME_CHANGE,
   EVENT_OBJECT_ATTRIBUTE_CHANGED,
@@ -234,18 +233,16 @@ const AccessibleActor = ActorClassWithSpec(accessibleSpec, {
     return this.rawAccessible.description;
   },
 
-  get help() {
-    if (this.isDefunct) {
-      return null;
-    }
-    return this.rawAccessible.help;
-  },
-
   get keyboardShortcut() {
     if (this.isDefunct) {
       return null;
     }
-    return this.rawAccessible.keyboardShortcut;
+    // Gecko accessibility exposes two key bindings: Accessible::AccessKey and
+    // Accessible::KeyboardShortcut. The former is used for accesskey, where the latter
+    // is used for global shortcuts defined by XUL menu items, etc. Here - do what the
+    // Windows implementation does: try AccessKey first, and if that's empty, use
+    // KeyboardShortcut.
+    return this.rawAccessible.accessKey || this.rawAccessible.keyboardShortcut;
   },
 
   get childCount() {
@@ -361,7 +358,6 @@ const AccessibleActor = ActorClassWithSpec(accessibleSpec, {
       name: this.name,
       value: this.value,
       description: this.description,
-      help: this.help,
       keyboardShortcut: this.keyboardShortcut,
       childCount: this.childCount,
       domNodeType: this.domNodeType,
@@ -382,9 +378,9 @@ const AccessibleActor = ActorClassWithSpec(accessibleSpec, {
  * service.
  */
 const AccessibleWalkerActor = ActorClassWithSpec(accessibleWalkerSpec, {
-  initialize(conn, tabActor) {
+  initialize(conn, targetActor) {
     Actor.prototype.initialize.call(this, conn);
-    this.tabActor = tabActor;
+    this.targetActor = targetActor;
     this.refMap = new Map();
     this.setA11yServiceGetter();
     this.onPick = this.onPick.bind(this);
@@ -404,11 +400,11 @@ const AccessibleWalkerActor = ActorClassWithSpec(accessibleWalkerSpec, {
   },
 
   get rootWin() {
-    return this.tabActor && this.tabActor.window;
+    return this.targetActor && this.targetActor.window;
   },
 
   get rootDoc() {
-    return this.tabActor && this.tabActor.window.document;
+    return this.targetActor && this.targetActor.window.document;
   },
 
   reset() {
@@ -435,6 +431,7 @@ const AccessibleWalkerActor = ActorClassWithSpec(accessibleWalkerSpec, {
       }
     }
 
+    this._childrenPromise = null;
     delete this.a11yService;
     this.setA11yServiceGetter();
   },
@@ -447,7 +444,7 @@ const AccessibleWalkerActor = ActorClassWithSpec(accessibleWalkerSpec, {
     this.highlighter.destroy();
     this.highlighter = null;
 
-    this.tabActor = null;
+    this.targetActor = null;
     this.refMap = null;
   },
 
@@ -643,11 +640,6 @@ const AccessibleWalkerActor = ActorClassWithSpec(accessibleWalkerSpec, {
           events.emit(accessible, "description-change", rawAccessible.description);
         }
         break;
-      case EVENT_HELP_CHANGE:
-        if (accessible) {
-          events.emit(accessible, "help-change", rawAccessible.help);
-        }
-        break;
       case EVENT_REORDER:
         if (accessible) {
           accessible.children().forEach(child =>
@@ -683,9 +675,10 @@ const AccessibleWalkerActor = ActorClassWithSpec(accessibleWalkerSpec, {
           events.emit(accessible, "attributes-change", accessible.attributes);
         }
         break;
+      // EVENT_ACCELERATOR_CHANGE is currently not fired by gecko accessibility.
       case EVENT_ACCELERATOR_CHANGE:
         if (accessible) {
-          events.emit(accessible, "shortcut-change", rawAccessible.keyboardShortcut);
+          events.emit(accessible, "shortcut-change", accessible.keyboardShortcut);
         }
         break;
       default:
@@ -918,7 +911,7 @@ const AccessibleWalkerActor = ActorClassWithSpec(accessibleWalkerSpec, {
    * Start picker content listeners.
    */
   _startPickerListeners: function() {
-    const target = this.tabActor.chromeEventHandler;
+    const target = this.targetActor.chromeEventHandler;
     target.addEventListener("mousemove", this.onHovered, true);
     target.addEventListener("click", this.onPick, true);
     target.addEventListener("mousedown", this._preventContentEvent, true);
@@ -932,7 +925,7 @@ const AccessibleWalkerActor = ActorClassWithSpec(accessibleWalkerSpec, {
    * If content is still alive, stop picker content listeners.
    */
   _stopPickerListeners: function() {
-    const target = this.tabActor.chromeEventHandler;
+    const target = this.targetActor.chromeEventHandler;
 
     if (!target) {
       return;
@@ -967,7 +960,7 @@ const AccessibleWalkerActor = ActorClassWithSpec(accessibleWalkerSpec, {
  * tools UI.
  */
 const AccessibilityActor = ActorClassWithSpec(accessibilitySpec, {
-  initialize(conn, tabActor) {
+  initialize(conn, targetActor) {
     Actor.prototype.initialize.call(this, conn);
 
     this.initializedDeferred = defer();
@@ -989,7 +982,7 @@ const AccessibilityActor = ActorClassWithSpec(accessibilitySpec, {
     }
 
     Services.obs.addObserver(this, "a11y-init-or-shutdown");
-    this.tabActor = tabActor;
+    this.targetActor = targetActor;
   },
 
   bootstrap() {
@@ -1181,7 +1174,7 @@ const AccessibilityActor = ActorClassWithSpec(accessibilitySpec, {
    */
   getWalker() {
     if (!this.walker) {
-      this.walker = new AccessibleWalkerActor(this.conn, this.tabActor);
+      this.walker = new AccessibleWalkerActor(this.conn, this.targetActor);
     }
     return this.walker;
   },
@@ -1216,7 +1209,7 @@ const AccessibilityActor = ActorClassWithSpec(accessibilitySpec, {
 
     Actor.prototype.destroy.call(this);
     this.walker = null;
-    this.tabActor = null;
+    this.targetActor = null;
     resolver();
   }
 });

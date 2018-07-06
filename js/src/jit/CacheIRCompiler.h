@@ -80,6 +80,7 @@ namespace jit {
     _(Breakpoint)                         \
     _(MegamorphicLoadSlotResult)          \
     _(MegamorphicLoadSlotByValueResult)   \
+    _(MegamorphicStoreSlot)               \
     _(MegamorphicHasPropResult)           \
     _(CallObjectHasSparseElementResult)   \
     _(WrapResult)
@@ -655,7 +656,7 @@ class MOZ_RAII CacheIRCompiler
                                          uint32_t typeDescr,
                                          const AutoOutputRegister& output);
 
-    void emitStoreTypedObjectReferenceProp(ValueOperand val, ReferenceTypeDescr::Type type,
+    void emitStoreTypedObjectReferenceProp(ValueOperand val, ReferenceType type,
                                            const Address& dest, Register scratch);
 
     void emitRegisterEnumerator(Register enumeratorsList, Register iter, Register scratch);

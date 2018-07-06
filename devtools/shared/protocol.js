@@ -324,7 +324,7 @@ types.addActorType = function(name) {
       const actorID = typeof (v) === "string" ? v : v.actor;
       let front = ctx.conn.getActor(actorID);
       if (!front) {
-        // If front isn't instanciated yet, create one.
+        // If front isn't instantiated yet, create one.
 
         // Try lazy loading front if not already loaded.
         // The front module will synchronously call `FrontClassWithSpec` and
@@ -1029,6 +1029,20 @@ Actor.prototype = extend(Pool.prototype, {
     const pending = this._pendingResponse || Promise.resolve(null);
     const response = create(pending);
     this._pendingResponse = response;
+  },
+
+  /**
+   * Throw an error with the passed message and attach an `error` property to the Error
+   * object so it can be consumed by the writeError function.
+   * @param {String} error: A string (usually a single word serving as an id) that will
+   *                        be assign to error.error.
+   * @param {String} message: The string that will be passed to the Error constructor.
+   * @throws This always throw.
+   */
+  throwError: function(error, message) {
+    const err = new Error(message);
+    err.error = error;
+    throw err;
   }
 });
 exports.Actor = Actor;
@@ -1249,7 +1263,7 @@ var Front = function(conn = null, form = null, detail = null, context = null) {
 
   // protocol.js no longer uses this data in the constructor, only external
   // uses do.  External usage of manually-constructed fronts will be
-  // drastically reduced if we convert the root and tab actors to
+  // drastically reduced if we convert the root and target actors to
   // protocol.js, in which case this can probably go away.
   if (form) {
     this.actorID = form.actor;

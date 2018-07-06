@@ -94,6 +94,7 @@ class WasmToken
 #ifdef ENABLE_WASM_SATURATING_TRUNC_OPS
         ExtraConversionOpcode,
 #endif
+        Field,
         Float,
         Func,
         GetGlobal,
@@ -119,6 +120,7 @@ class WasmToken
         Offset,
         OpenParen,
         Param,
+        Ref,
         RefNull,
         Result,
         Return,
@@ -127,6 +129,7 @@ class WasmToken
         Shared,
         SignedInteger,
         Start,
+        Struct,
         Store,
         Table,
         TeeLocal,
@@ -167,7 +170,8 @@ class WasmToken
     WasmToken(Kind kind, const char16_t* begin, const char16_t* end)
       : kind_(kind),
         begin_(begin),
-        end_(end)
+        end_(end),
+        u{}
     {
         MOZ_ASSERT(kind_ != Error);
         MOZ_ASSERT(kind_ != Invalid);
@@ -250,7 +254,8 @@ class WasmToken
     explicit WasmToken(const char16_t* begin)
       : kind_(Error),
         begin_(begin),
-        end_(begin)
+        end_(begin),
+        u{}
     {}
     Kind kind() const {
         MOZ_ASSERT(kind_ != Kind::Invalid);
@@ -364,6 +369,7 @@ class WasmToken
           case End:
           case Error:
           case Export:
+          case Field:
           case Float:
           case Func:
           case Global:
@@ -378,10 +384,12 @@ class WasmToken
           case Offset:
           case OpenParen:
           case Param:
+          case Ref:
           case Result:
           case Shared:
           case SignedInteger:
           case Start:
+          case Struct:
           case Table:
           case Text:
           case Then:
@@ -951,6 +959,9 @@ WasmTokenStream::next()
         break;
 
       case 'f':
+        if (consume(u"field"))
+            return WasmToken(WasmToken::Field, begin, cur_);
+
         if (consume(u"func"))
             return WasmToken(WasmToken::Func, begin, cur_);
 
@@ -1647,15 +1658,19 @@ WasmTokenStream::next()
         break;
 
       case 'm':
-#ifdef ENABLE_WASM_BULKMEM_OPS
         if (consume(u"memory.")) {
+#ifdef ENABLE_WASM_BULKMEM_OPS
             if (consume(u"copy"))
                 return WasmToken(WasmToken::MemCopy, begin, cur_);
             if (consume(u"fill"))
                 return WasmToken(WasmToken::MemFill, begin, cur_);
+#endif
+            if (consume(u"grow"))
+                return WasmToken(WasmToken::GrowMemory, begin, cur_);
+            if (consume(u"size"))
+                return WasmToken(WasmToken::CurrentMemory, begin, cur_);
             break;
         }
-#endif
         if (consume(u"module"))
             return WasmToken(WasmToken::Module, begin, cur_);
         if (consume(u"memory"))
@@ -1686,12 +1701,12 @@ WasmTokenStream::next()
             return WasmToken(WasmToken::Result, begin, cur_);
         if (consume(u"return"))
             return WasmToken(WasmToken::Return, begin, cur_);
-        if (consume(u"ref.")) {
-            if (consume(u"null"))
+        if (consume(u"ref")) {
+            if (consume(u".null"))
                 return WasmToken(WasmToken::RefNull, begin, cur_);
-            if (consume(u"is_null"))
+            if (consume(u".is_null"))
                 return WasmToken(WasmToken::UnaryOpcode, Op::RefIsNull, begin, cur_);
-            break;
+            return WasmToken(WasmToken::Ref, begin, cur_);
         }
         break;
 
@@ -1708,6 +1723,8 @@ WasmTokenStream::next()
 #endif
         if (consume(u"start"))
             return WasmToken(WasmToken::Start, begin, cur_);
+        if (consume(u"struct"))
+            return WasmToken(WasmToken::Struct, begin, cur_);
         break;
 
       case 't':
@@ -1821,13 +1838,55 @@ ParseExprList(WasmParseContext& c, AstExprVector* exprs)
 }
 
 static bool
-ParseBlockSignature(WasmParseContext& c, ExprType* type)
+MaybeParseValType(WasmParseContext& c, AstValType* type)
 {
     WasmToken token;
-    if (c.ts.getIf(WasmToken::ValueType, &token))
-        *type = ToExprType(token.valueType());
+
+    if (c.ts.getIf(WasmToken::ValueType, &token)) {
+        *type = AstValType(token.valueType());
+    } else if (c.ts.getIf(WasmToken::OpenParen, &token)) {
+        if (c.ts.getIf(WasmToken::Ref)) {
+            AstRef target;
+            if (!c.ts.matchRef(&target, c.error) ||
+                !c.ts.match(WasmToken::CloseParen, c.error))
+            {
+                return false;
+            }
+            *type = AstValType(target);
+        } else {
+            c.ts.unget(token);
+        }
+    }
+    return true;
+}
+
+static bool
+ParseValType(WasmParseContext& c, AstValType* type)
+{
+    if (!MaybeParseValType(c, type))
+        return false;
+
+    if (!type->isValid()) {
+        c.ts.generateError(c.ts.peek(), "expected value type", c.error);
+        return false;
+    }
+
+    return true;
+}
+
+static bool
+ParseBlockSignature(WasmParseContext& c, AstExprType* type)
+{
+    WasmToken token;
+    AstValType vt;
+
+    if (!MaybeParseValType(c, &vt))
+        return false;
+
+    if (vt.isValid())
+        *type = AstExprType(vt);
     else
-        *type = ExprType::Void;
+        *type = AstExprType(ExprType::Void);
 
     return true;
 }
@@ -1872,7 +1931,7 @@ ParseBlock(WasmParseContext& c, Op op, bool inParens)
         }
     }
 
-    ExprType type;
+    AstExprType type(ExprType::Limit);
     if (!ParseBlockSignature(c, &type))
         return nullptr;
 
@@ -1970,8 +2029,8 @@ ParseCall(WasmParseContext& c, bool inParens)
 static AstCallIndirect*
 ParseCallIndirect(WasmParseContext& c, bool inParens)
 {
-    AstRef sig;
-    if (!c.ts.matchRef(&sig, c.error))
+    AstRef funcType;
+    if (!c.ts.matchRef(&funcType, c.error))
         return nullptr;
 
     AstExprVector args(c.lifo);
@@ -1991,7 +2050,7 @@ ParseCallIndirect(WasmParseContext& c, bool inParens)
     if (!index)
         return nullptr;
 
-    return new(c.lifo) AstCallIndirect(sig, ExprType::Void, std::move(args), index);
+    return new(c.lifo) AstCallIndirect(funcType, ExprType::Void, std::move(args), index);
 }
 
 static uint_fast8_t
@@ -2056,7 +2115,7 @@ ParseNaNLiteral(WasmParseContext& c, WasmToken token, const char16_t* cur, bool 
 
     Float flt;
     BitwiseCast(value, &flt);
-    return new (c.lifo) AstConst(Val(flt));
+    return new (c.lifo) AstConst(LitVal(flt));
 
   error:
     c.ts.generateError(token, c.error);
@@ -2208,7 +2267,7 @@ ParseFloatLiteral(WasmParseContext& c, WasmToken token)
     }
 
     if (token.kind() != WasmToken::Float)
-        return new (c.lifo) AstConst(Val(Float(result)));
+        return new (c.lifo) AstConst(LitVal(Float(result)));
 
     const char16_t* begin = token.begin();
     const char16_t* end = token.end();
@@ -2258,7 +2317,7 @@ ParseFloatLiteral(WasmParseContext& c, WasmToken token)
     if (isNegated)
         result = -result;
 
-    return new (c.lifo) AstConst(Val(Float(result)));
+    return new (c.lifo) AstConst(LitVal(Float(result)));
 }
 
 static AstConst*
@@ -2269,15 +2328,15 @@ ParseConst(WasmParseContext& c, WasmToken constToken)
       case ValType::I32: {
         switch (val.kind()) {
           case WasmToken::Index:
-            return new(c.lifo) AstConst(Val(val.index()));
+            return new(c.lifo) AstConst(LitVal(val.index()));
           case WasmToken::SignedInteger: {
             CheckedInt<int32_t> sint = val.sint();
             if (!sint.isValid())
                 break;
-            return new(c.lifo) AstConst(Val(uint32_t(sint.value())));
+            return new(c.lifo) AstConst(LitVal(uint32_t(sint.value())));
           }
           case WasmToken::NegativeZero:
-            return new(c.lifo) AstConst(Val(uint32_t(0)));
+            return new(c.lifo) AstConst(LitVal(uint32_t(0)));
           default:
             break;
         }
@@ -2286,13 +2345,13 @@ ParseConst(WasmParseContext& c, WasmToken constToken)
       case ValType::I64: {
         switch (val.kind()) {
           case WasmToken::Index:
-            return new(c.lifo) AstConst(Val(uint64_t(val.index())));
+            return new(c.lifo) AstConst(LitVal(uint64_t(val.index())));
           case WasmToken::UnsignedInteger:
-            return new(c.lifo) AstConst(Val(val.uint()));
+            return new(c.lifo) AstConst(LitVal(val.uint()));
           case WasmToken::SignedInteger:
-            return new(c.lifo) AstConst(Val(uint64_t(val.sint())));
+            return new(c.lifo) AstConst(LitVal(uint64_t(val.sint())));
           case WasmToken::NegativeZero:
-            return new(c.lifo) AstConst(Val(uint64_t(0)));
+            return new(c.lifo) AstConst(LitVal(uint64_t(0)));
           default:
             break;
         }
@@ -2479,7 +2538,7 @@ ParseIf(WasmParseContext& c, bool inParens)
 {
     AstName name = c.ts.getIfName();
 
-    ExprType type;
+    AstExprType type(ExprType::Limit);
     if (!ParseBlockSignature(c, &type))
         return nullptr;
 
@@ -3005,13 +3064,17 @@ static AstExpr*
 ParseRefNull(WasmParseContext& c)
 {
     WasmToken token;
-    if (!c.ts.match(WasmToken::ValueType, &token, c.error))
+    AstValType vt;
+
+    if (!ParseValType(c, &vt))
         return nullptr;
-    if (token.valueType() != ValType::AnyRef) {
-        c.ts.generateError(token, "only anyref is supported for nullref", c.error);
+
+    if (!vt.isRefType()) {
+        c.ts.generateError(token, "ref.null requires ref type", c.error);
         return nullptr;
     }
-    return new(c.lifo) AstRefNull(ValType::AnyRef);
+
+    return new(c.lifo) AstRefNull(vt);
 }
 
 static AstExpr*
@@ -3115,28 +3178,31 @@ ParseExprInsideParens(WasmParseContext& c)
 static bool
 ParseValueTypeList(WasmParseContext& c, AstValTypeVector* vec)
 {
-    WasmToken token;
-    while (c.ts.getIf(WasmToken::ValueType, &token)) {
-        if (!vec->append(token.valueType()))
+    for (;;) {
+        AstValType vt;
+        if (!MaybeParseValType(c, &vt))
+            return false;
+        if (!vt.isValid())
+            break;
+        if (!vec->append(vt))
             return false;
     }
-
     return true;
 }
 
 static bool
-ParseResult(WasmParseContext& c, ExprType* result)
+ParseResult(WasmParseContext& c, AstExprType* result)
 {
-    if (*result != ExprType::Void) {
+    if (!result->isVoid()) {
         c.ts.generateError(c.ts.peek(), c.error);
         return false;
     }
 
-    WasmToken token;
-    if (!c.ts.match(WasmToken::ValueType, &token, c.error))
+    AstValType type;
+    if (!ParseValType(c, &type))
         return false;
 
-    *result = ToExprType(token.valueType());
+    *result = AstExprType(type);
     return true;
 }
 
@@ -3146,10 +3212,10 @@ ParseLocalOrParam(WasmParseContext& c, AstNameVector* locals, AstValTypeVector* 
     if (c.ts.peek().kind() != WasmToken::Name)
         return locals->append(AstName()) && ParseValueTypeList(c, localTypes);
 
-    WasmToken token;
+    AstValType type;
     return locals->append(c.ts.get().name()) &&
-           c.ts.match(WasmToken::ValueType, &token, c.error) &&
-           localTypes->append(token.valueType());
+           ParseValType(c, &type) &&
+           localTypes->append(type);
 }
 
 static bool
@@ -3171,12 +3237,12 @@ ParseInlineExport(WasmParseContext& c, DefinitionKind kind, AstModule* module, A
 }
 
 static bool
-MaybeParseTypeUse(WasmParseContext& c, AstRef* sig)
+MaybeParseTypeUse(WasmParseContext& c, AstRef* funcType)
 {
     WasmToken openParen;
     if (c.ts.getIf(WasmToken::OpenParen, &openParen)) {
         if (c.ts.getIf(WasmToken::Type)) {
-            if (!c.ts.matchRef(sig, c.error))
+            if (!c.ts.matchRef(funcType, c.error))
                 return false;
             if (!c.ts.match(WasmToken::CloseParen, c.error))
                 return false;
@@ -3188,10 +3254,10 @@ MaybeParseTypeUse(WasmParseContext& c, AstRef* sig)
 }
 
 static bool
-ParseFuncSig(WasmParseContext& c, AstSig* sig)
+ParseFuncSig(WasmParseContext& c, AstFuncType* funcType)
 {
     AstValTypeVector args(c.lifo);
-    ExprType result = ExprType::Void;
+    AstExprType result = AstExprType(ExprType::Void);
 
     while (c.ts.getIf(WasmToken::OpenParen)) {
         WasmToken token = c.ts.get();
@@ -3212,7 +3278,7 @@ ParseFuncSig(WasmParseContext& c, AstSig* sig)
             return false;
     }
 
-    *sig = AstSig(std::move(args), result);
+    *funcType = AstFuncType(std::move(args), result);
     return true;
 }
 
@@ -3223,13 +3289,13 @@ ParseFuncType(WasmParseContext& c, AstRef* ref, AstModule* module)
         return false;
 
     if (ref->isInvalid()) {
-        AstSig sig(c.lifo);
-        if (!ParseFuncSig(c, &sig))
+        AstFuncType funcType(c.lifo);
+        if (!ParseFuncSig(c, &funcType))
             return false;
-        uint32_t sigIndex;
-        if (!module->declare(std::move(sig), &sigIndex))
+        uint32_t funcTypeIndex;
+        if (!module->declare(std::move(funcType), &funcTypeIndex))
             return false;
-        ref->setIndex(sigIndex);
+        ref->setIndex(funcTypeIndex);
     }
 
     return true;
@@ -3259,11 +3325,11 @@ ParseFunc(WasmParseContext& c, AstModule* module)
             if (!c.ts.match(WasmToken::CloseParen, c.error))
                 return false;
 
-            AstRef sig;
-            if (!ParseFuncType(c, &sig, module))
+            AstRef funcType;
+            if (!ParseFuncType(c, &funcType, module))
                 return false;
 
-            auto* imp = new(c.lifo) AstImport(funcName, names.module.text(), names.field.text(), sig);
+            auto* imp = new(c.lifo) AstImport(funcName, names.module.text(), names.field.text(), funcType);
             return imp && module->append(imp);
         }
 
@@ -3280,13 +3346,13 @@ ParseFunc(WasmParseContext& c, AstModule* module)
         }
     }
 
-    AstRef sigRef;
-    if (!MaybeParseTypeUse(c, &sigRef))
+    AstRef funcTypeRef;
+    if (!MaybeParseTypeUse(c, &funcTypeRef))
         return false;
 
     AstExprVector body(c.lifo);
 
-    ExprType result = ExprType::Void;
+    AstExprType result = AstExprType(ExprType::Void);
     while (c.ts.getIf(WasmToken::OpenParen)) {
         WasmToken token = c.ts.get();
         switch (token.kind()) {
@@ -3320,35 +3386,85 @@ ParseFunc(WasmParseContext& c, AstModule* module)
     if (!ParseExprList(c, &body))
         return false;
 
-    if (sigRef.isInvalid()) {
-        uint32_t sigIndex;
-        if (!module->declare(AstSig(std::move(args), result), &sigIndex))
+    if (funcTypeRef.isInvalid()) {
+        uint32_t funcTypeIndex;
+        if (!module->declare(AstFuncType(std::move(args), result), &funcTypeIndex))
             return false;
-        sigRef.setIndex(sigIndex);
+        funcTypeRef.setIndex(funcTypeIndex);
     }
 
-    auto* func = new(c.lifo) AstFunc(funcName, sigRef, std::move(vars), std::move(locals), std::move(body));
+    auto* func = new(c.lifo) AstFunc(funcName, funcTypeRef, std::move(vars), std::move(locals), std::move(body));
     return func && module->append(func);
 }
 
-static AstSig*
+static bool
+ParseGlobalType(WasmParseContext& c, AstValType* type, bool* isMutable);
+
+static bool
+ParseStructFields(WasmParseContext& c, AstStructType* st)
+{
+    AstNameVector    names(c.lifo);
+    AstBoolVector    mutability(c.lifo);
+    AstValTypeVector types(c.lifo);
+
+    while (true) {
+        if (!c.ts.getIf(WasmToken::OpenParen))
+            break;
+
+        if (!c.ts.match(WasmToken::Field, c.error))
+            return false;
+
+        AstName name = c.ts.getIfName();
+
+        AstValType type;
+        bool isMutable;
+        if (!ParseGlobalType(c, &type, &isMutable))
+            return false;
+        if (!c.ts.match(WasmToken::CloseParen, c.error))
+            return false;
+
+        if (!names.append(name))
+            return false;
+        if (!mutability.append(isMutable))
+            return false;
+        if (!types.append(type))
+            return false;
+    }
+
+    *st = AstStructType(std::move(names), std::move(mutability), std::move(types));
+    return true;
+}
+
+static AstTypeDef*
 ParseTypeDef(WasmParseContext& c)
 {
     AstName name = c.ts.getIfName();
 
     if (!c.ts.match(WasmToken::OpenParen, c.error))
         return nullptr;
-    if (!c.ts.match(WasmToken::Func, c.error))
-        return nullptr;
 
-    AstSig sig(c.lifo);
-    if (!ParseFuncSig(c, &sig))
+    AstTypeDef* type = nullptr;
+    if (c.ts.getIf(WasmToken::Func)) {
+        AstFuncType funcType(c.lifo);
+        if (!ParseFuncSig(c, &funcType))
+            return nullptr;
+
+        type = new(c.lifo) AstFuncType(name, std::move(funcType));
+    } else if (c.ts.getIf(WasmToken::Struct)) {
+        AstStructType st(c.lifo);
+        if (!ParseStructFields(c, &st))
+            return nullptr;
+
+        type = new(c.lifo) AstStructType(name, std::move(st));
+    } else {
+        c.ts.generateError(c.ts.peek(), "bad type definition", c.error);
         return nullptr;
+    }
 
     if (!c.ts.match(WasmToken::CloseParen, c.error))
         return nullptr;
 
-    return new(c.lifo) AstSig(name, std::move(sig));
+    return type;
 }
 
 static bool
@@ -3478,7 +3594,7 @@ ParseMemory(WasmParseContext& c, AstModule* module)
         }
 
         if (fragments.length()) {
-            AstExpr* offset = new(c.lifo) AstConst(Val(uint32_t(0)));
+            AstExpr* offset = new(c.lifo) AstConst(LitVal(uint32_t(0)));
             if (!offset)
                 return false;
 
@@ -3523,22 +3639,28 @@ ParseStartFunc(WasmParseContext& c, WasmToken token, AstModule* module)
 }
 
 static bool
-ParseGlobalType(WasmParseContext& c, WasmToken* typeToken, bool* isMutable)
+ParseGlobalType(WasmParseContext& c, AstValType* type, bool* isMutable)
 {
+    WasmToken openParen;
     *isMutable = false;
 
-    // Either (mut i32) or i32.
-    if (c.ts.getIf(WasmToken::OpenParen)) {
-        // Immutable by default.
-        *isMutable = c.ts.getIf(WasmToken::Mutable);
-        if (!c.ts.match(WasmToken::ValueType, typeToken, c.error))
-            return false;
-        if (!c.ts.match(WasmToken::CloseParen, c.error))
-            return false;
-        return true;
+    // Either (mut T) or T, where T can be (ref U).
+    if (c.ts.getIf(WasmToken::OpenParen, &openParen)) {
+        if (c.ts.getIf(WasmToken::Mutable)) {
+            *isMutable = true;
+            if (!ParseValType(c, type))
+                return false;
+            if (!c.ts.match(WasmToken::CloseParen, c.error))
+                return false;
+            return true;
+        }
+        c.ts.unget(openParen);
     }
 
-    return c.ts.match(WasmToken::ValueType, typeToken, c.error);
+    if (!ParseValType(c, type))
+        return false;
+
+    return true;
 }
 
 static bool
@@ -3568,7 +3690,7 @@ ParseImport(WasmParseContext& c, AstModule* module)
     if (!c.ts.match(WasmToken::Text, &fieldName, c.error))
         return nullptr;
 
-    AstRef sigRef;
+    AstRef funcTypeRef;
     WasmToken openParen;
     if (c.ts.getIf(WasmToken::OpenParen, &openParen)) {
         if (c.ts.getIf(WasmToken::Memory)) {
@@ -3599,31 +3721,31 @@ ParseImport(WasmParseContext& c, AstModule* module)
             if (name.empty())
                 name = c.ts.getIfName();
 
-            WasmToken typeToken;
+            AstValType type;
             bool isMutable;
-            if (!ParseGlobalType(c, &typeToken, &isMutable))
+            if (!ParseGlobalType(c, &type, &isMutable))
                 return nullptr;
             if (!c.ts.match(WasmToken::CloseParen, c.error))
                 return nullptr;
 
             return new(c.lifo) AstImport(name, moduleName.text(), fieldName.text(),
-                                         AstGlobal(AstName(), typeToken.valueType(), isMutable));
+                                         AstGlobal(AstName(), type, isMutable));
         }
         if (c.ts.getIf(WasmToken::Func)) {
             if (name.empty())
                 name = c.ts.getIfName();
 
-            AstRef sigRef;
-            if (!ParseFuncType(c, &sigRef, module))
+            AstRef funcTypeRef;
+            if (!ParseFuncType(c, &funcTypeRef, module))
                 return nullptr;
             if (!c.ts.match(WasmToken::CloseParen, c.error))
                 return nullptr;
 
-            return new(c.lifo) AstImport(name, moduleName.text(), fieldName.text(), sigRef);
+            return new(c.lifo) AstImport(name, moduleName.text(), fieldName.text(), funcTypeRef);
         }
 
         if (c.ts.getIf(WasmToken::Type)) {
-            if (!c.ts.matchRef(&sigRef, c.error))
+            if (!c.ts.matchRef(&funcTypeRef, c.error))
                 return nullptr;
             if (!c.ts.match(WasmToken::CloseParen, c.error))
                 return nullptr;
@@ -3632,18 +3754,18 @@ ParseImport(WasmParseContext& c, AstModule* module)
         }
     }
 
-    if (sigRef.isInvalid()) {
-        AstSig sig(c.lifo);
-        if (!ParseFuncSig(c, &sig))
+    if (funcTypeRef.isInvalid()) {
+        AstFuncType funcType(c.lifo);
+        if (!ParseFuncSig(c, &funcType))
             return nullptr;
 
-        uint32_t sigIndex;
-        if (!module->declare(std::move(sig), &sigIndex))
+        uint32_t funcTypeIndex;
+        if (!module->declare(std::move(funcType), &funcTypeIndex))
             return nullptr;
-        sigRef.setIndex(sigIndex);
+        funcTypeRef.setIndex(funcTypeIndex);
     }
 
-    return new(c.lifo) AstImport(name, moduleName.text(), fieldName.text(), sigRef);
+    return new(c.lifo) AstImport(name, moduleName.text(), fieldName.text(), funcTypeRef);
 }
 
 static AstExport*
@@ -3792,7 +3914,7 @@ ParseTable(WasmParseContext& c, WasmToken token, AstModule* module)
     if (!module->addTable(name, Limits(numElements, Some(numElements), Shareable::False)))
         return false;
 
-    auto* zero = new(c.lifo) AstConst(Val(uint32_t(0)));
+    auto* zero = new(c.lifo) AstConst(LitVal(uint32_t(0)));
     if (!zero)
         return false;
 
@@ -3826,7 +3948,7 @@ ParseGlobal(WasmParseContext& c, AstModule* module)
 {
     AstName name = c.ts.getIfName();
 
-    WasmToken typeToken;
+    AstValType type;
     bool isMutable;
 
     WasmToken openParen;
@@ -3843,12 +3965,11 @@ ParseGlobal(WasmParseContext& c, AstModule* module)
             if (!c.ts.match(WasmToken::CloseParen, c.error))
                 return false;
 
-            if (!ParseGlobalType(c, &typeToken, &isMutable))
+            if (!ParseGlobalType(c, &type, &isMutable))
                 return false;
 
             auto* imp = new(c.lifo) AstImport(name, names.module.text(), names.field.text(),
-                                              AstGlobal(AstName(), typeToken.valueType(),
-                                                        isMutable));
+                                              AstGlobal(AstName(), type, isMutable));
             return imp && module->append(imp);
         }
 
@@ -3864,14 +3985,14 @@ ParseGlobal(WasmParseContext& c, AstModule* module)
         }
     }
 
-    if (!ParseGlobalType(c, &typeToken, &isMutable))
+    if (!ParseGlobalType(c, &type, &isMutable))
         return false;
 
     AstExpr* init = ParseInitializerExpression(c);
     if (!init)
         return false;
 
-    auto* glob = new(c.lifo) AstGlobal(name, typeToken.valueType(), isMutable, Some(init));
+    auto* glob = new(c.lifo) AstGlobal(name, type, isMutable, Some(init));
     return glob && module->append(glob);
 }
 
@@ -3922,8 +4043,10 @@ ParseModule(const char16_t* text, uintptr_t stackLimit, LifoAlloc& lifo, UniqueC
 
         switch (section.kind()) {
           case WasmToken::Type: {
-            AstSig* sig = ParseTypeDef(c);
-            if (!sig || !module->append(sig))
+            AstTypeDef* typeDef = ParseTypeDef(c);
+            if (!typeDef)
+                return nullptr;
+            if (!module->append(static_cast<AstFuncType*>(typeDef)))
                 return nullptr;
             break;
           }
@@ -4003,11 +4126,12 @@ class Resolver
     UniqueChars* error_;
     AstNameMap varMap_;
     AstNameMap globalMap_;
-    AstNameMap sigMap_;
+    AstNameMap funcTypeMap_;
     AstNameMap funcMap_;
     AstNameMap importMap_;
     AstNameMap tableMap_;
     AstNameMap memoryMap_;
+    AstNameMap typeMap_;
     AstNameVector targetStack_;
 
     bool registerName(AstNameMap& map, AstName name, size_t index) {
@@ -4040,19 +4164,21 @@ class Resolver
       : error_(error),
         varMap_(lifo),
         globalMap_(lifo),
-        sigMap_(lifo),
+        funcTypeMap_(lifo),
         funcMap_(lifo),
         importMap_(lifo),
         tableMap_(lifo),
         memoryMap_(lifo),
+        typeMap_(lifo),
         targetStack_(lifo)
     {}
     bool init() {
-        return sigMap_.init() &&
+        return funcTypeMap_.init() &&
                funcMap_.init() &&
                importMap_.init() &&
                tableMap_.init() &&
                memoryMap_.init() &&
+               typeMap_.init() &&
                varMap_.init() &&
                globalMap_.init();
     }
@@ -4066,12 +4192,13 @@ class Resolver
         return name.empty() || registerName(map, name, index); \
     }
 
-    REGISTER(Sig, sigMap_)
+    REGISTER(FuncType, funcTypeMap_)
     REGISTER(Func, funcMap_)
     REGISTER(Var, varMap_)
     REGISTER(Global, globalMap_)
     REGISTER(Table, tableMap_)
     REGISTER(Memory, memoryMap_)
+    REGISTER(Type, typeMap_)
 
 #undef REGISTER
 
@@ -4091,12 +4218,13 @@ class Resolver
         return true;                                      \
     }
 
-    RESOLVE(sigMap_, Signature)
+    RESOLVE(funcTypeMap_, Signature)
     RESOLVE(funcMap_, Function)
     RESOLVE(varMap_, Local)
     RESOLVE(globalMap_, Global)
     RESOLVE(tableMap_, Table)
     RESOLVE(memoryMap_, Memory)
+    RESOLVE(typeMap_, Type)
 
 #undef RESOLVE
 
@@ -4121,6 +4249,28 @@ class Resolver
 } // end anonymous namespace
 
 static bool
+ResolveType(Resolver& r, AstValType& vt)
+{
+    if (vt.isResolved())
+        return true;
+    if (!r.resolveType(vt.asRef()))
+        return false;
+    vt.resolve();
+    return true;
+}
+
+static bool
+ResolveType(Resolver& r, AstExprType& et)
+{
+    if (et.isResolved())
+        return true;
+    if (!ResolveType(r, et.asAstValType()))
+        return false;
+    et.resolve();
+    return true;
+}
+
+static bool
 ResolveExpr(Resolver& r, AstExpr& expr);
 
 static bool
@@ -4137,6 +4287,9 @@ static bool
 ResolveBlock(Resolver& r, AstBlock& b)
 {
     if (!r.pushTarget(b.name()))
+        return false;
+
+    if (!ResolveType(r, b.type()))
         return false;
 
     if (!ResolveExprList(r, b.exprs()))
@@ -4203,7 +4356,7 @@ ResolveCallIndirect(Resolver& r, AstCallIndirect& c)
     if (!ResolveExpr(r, *c.index()))
         return false;
 
-    if (!r.resolveSignature(c.sig()))
+    if (!r.resolveSignature(c.funcType()))
         return false;
 
     return true;
@@ -4314,6 +4467,8 @@ ResolveExtraConversionOperator(Resolver& r, AstExtraConversionOperator& b)
 static bool
 ResolveIfElse(Resolver& r, AstIf& i)
 {
+    if (!ResolveType(r, i.type()))
+        return false;
     if (!ResolveExpr(r, i.cond()))
         return false;
     if (!r.pushTarget(i.name()))
@@ -4432,6 +4587,12 @@ ResolveMemFill(Resolver& r, AstMemFill& s)
 #endif
 
 static bool
+ResolveRefNull(Resolver& r, AstRefNull& s)
+{
+    return ResolveType(r, s.baseType());
+}
+
+static bool
 ResolveExpr(Resolver& r, AstExpr& expr)
 {
     switch (expr.kind()) {
@@ -4439,8 +4600,9 @@ ResolveExpr(Resolver& r, AstExpr& expr)
       case AstExprKind::Pop:
       case AstExprKind::Unreachable:
       case AstExprKind::CurrentMemory:
-      case AstExprKind::RefNull:
         return true;
+      case AstExprKind::RefNull:
+        return ResolveRefNull(r, expr.as<AstRefNull>());
       case AstExprKind::Drop:
         return ResolveDropOperator(r, expr.as<AstDrop>());
       case AstExprKind::BinaryOperator:
@@ -4518,6 +4680,11 @@ ResolveFunc(Resolver& r, AstFunc& func)
 {
     r.beginFunc();
 
+    for (AstValType& vt : func.vars()) {
+        if (!ResolveType(r, vt))
+            return false;
+    }
+
     for (size_t i = 0; i < func.locals().length(); i++) {
         if (!r.registerVarName(func.locals()[i], i))
             return r.fail("duplicate var");
@@ -4531,6 +4698,26 @@ ResolveFunc(Resolver& r, AstFunc& func)
 }
 
 static bool
+ResolveSignature(Resolver& r, AstFuncType& ft)
+{
+    for (AstValType& vt : ft.args()) {
+        if (!ResolveType(r, vt))
+            return false;
+    }
+    return ResolveType(r, ft.ret());
+}
+
+static bool
+ResolveStruct(Resolver& r, AstStructType& s)
+{
+    for (AstValType& vt : s.fieldTypes()) {
+        if (!ResolveType(r, vt))
+            return false;
+    }
+    return true;
+}
+
+static bool
 ResolveModule(LifoAlloc& lifo, AstModule* module, UniqueChars* error)
 {
     Resolver r(lifo, error);
@@ -4538,11 +4725,31 @@ ResolveModule(LifoAlloc& lifo, AstModule* module, UniqueChars* error)
     if (!r.init())
         return false;
 
-    size_t numSigs = module->sigs().length();
-    for (size_t i = 0; i < numSigs; i++) {
-        AstSig* sig = module->sigs()[i];
-        if (!r.registerSigName(sig->name(), i))
-            return r.fail("duplicate signature");
+    size_t numTypes = module->types().length();
+    for (size_t i = 0; i < numTypes; i++) {
+        AstTypeDef* td = module->types()[i];
+        if (td->isFuncType()) {
+            AstFuncType* funcType = static_cast<AstFuncType*>(td);
+            if (!r.registerFuncTypeName(funcType->name(), i))
+                return r.fail("duplicate signature");
+        } else if (td->isStructType()) {
+            AstStructType* structType = static_cast<AstStructType*>(td);
+            if (!r.registerTypeName(structType->name(), i))
+                return r.fail("duplicate type name");
+        }
+    }
+
+    for (size_t i = 0; i < numTypes; i++) {
+        AstTypeDef* td = module->types()[i];
+        if (td->isFuncType()) {
+            AstFuncType* funcType = static_cast<AstFuncType*>(td);
+            if (!ResolveSignature(r, *funcType))
+                return false;
+        } else if (td->isStructType()) {
+            AstStructType* structType = static_cast<AstStructType*>(td);
+            if (!ResolveStruct(r, *structType))
+                return false;
+        }
     }
 
     size_t lastFuncIndex = 0;
@@ -4554,12 +4761,14 @@ ResolveModule(LifoAlloc& lifo, AstModule* module, UniqueChars* error)
           case DefinitionKind::Function:
             if (!r.registerFuncName(imp->name(), lastFuncIndex++))
                 return r.fail("duplicate import");
-            if (!r.resolveSignature(imp->funcSig()))
+            if (!r.resolveSignature(imp->funcType()))
                 return false;
             break;
           case DefinitionKind::Global:
             if (!r.registerGlobalName(imp->name(), lastGlobalIndex++))
                 return r.fail("duplicate import");
+            if (!ResolveType(r, imp->global().type()))
+                return false;
             break;
           case DefinitionKind::Memory:
             if (!r.registerMemoryName(imp->name(), lastMemoryIndex++))
@@ -4573,15 +4782,17 @@ ResolveModule(LifoAlloc& lifo, AstModule* module, UniqueChars* error)
     }
 
     for (AstFunc* func : module->funcs()) {
-        if (!r.resolveSignature(func->sig()))
+        if (!r.resolveSignature(func->funcType()))
             return false;
         if (!r.registerFuncName(func->name(), lastFuncIndex++))
             return r.fail("duplicate function");
     }
 
-    for (const AstGlobal* global : module->globals()) {
+    for (AstGlobal* global : module->globals()) {
         if (!r.registerGlobalName(global->name(), lastGlobalIndex++))
             return r.fail("duplicate import");
+        if (!ResolveType(r, global->type()))
+            return false;
         if (global->hasInit() && !ResolveExpr(r, global->init()))
             return false;
     }
@@ -4670,7 +4881,7 @@ EncodeBlock(Encoder& e, AstBlock& b)
     if (!e.writeOp(b.op()))
         return false;
 
-    if (!e.writeBlockType(b.type()))
+    if (!e.writeBlockType(b.type().type()))
         return false;
 
     if (!EncodeExprList(e, b.exprs()))
@@ -4750,7 +4961,7 @@ EncodeCallIndirect(Encoder& e, AstCallIndirect& c)
     if (!e.writeOp(Op::CallIndirect))
         return false;
 
-    if (!e.writeVarU32(c.sig().index()))
+    if (!e.writeVarU32(c.funcType().index()))
         return false;
 
     if (!e.writeVarU32(uint32_t(MemoryTableFlags::Default)))
@@ -4880,7 +5091,7 @@ EncodeIf(Encoder& e, AstIf& i)
     if (!EncodeExpr(e, i.cond()) || !e.writeOp(Op::If))
         return false;
 
-    if (!e.writeBlockType(i.type()))
+    if (!e.writeBlockType(i.type().type()))
         return false;
 
     if (!EncodeExprList(e, i.thenExprs()))
@@ -5074,7 +5285,7 @@ static bool
 EncodeRefNull(Encoder& e, AstRefNull& s)
 {
     return e.writeOp(Op::RefNull) &&
-           e.writeValType(s.refType());
+           e.writeValType(s.baseType().type());
 }
 
 static bool
@@ -5169,34 +5380,55 @@ EncodeExpr(Encoder& e, AstExpr& expr)
 static bool
 EncodeTypeSection(Encoder& e, AstModule& module)
 {
-    if (module.sigs().empty())
+    if (module.types().empty())
         return true;
 
     size_t offset;
     if (!e.startSection(SectionId::Type, &offset))
         return false;
 
-    if (!e.writeVarU32(module.sigs().length()))
+    if (!e.writeVarU32(module.types().length()))
         return false;
 
-    for (AstSig* sig : module.sigs()) {
-        if (!e.writeVarU32(uint32_t(TypeCode::Func)))
-            return false;
-
-        if (!e.writeVarU32(sig->args().length()))
-            return false;
-
-        for (ValType t : sig->args()) {
-            if (!e.writeValType(t))
+    for (AstTypeDef* td : module.types()) {
+        if (td->isFuncType()) {
+            AstFuncType* funcType = static_cast<AstFuncType*>(td);
+            if (!e.writeVarU32(uint32_t(TypeCode::Func)))
                 return false;
-        }
 
-        if (!e.writeVarU32(!IsVoid(sig->ret())))
-            return false;
-
-        if (!IsVoid(sig->ret())) {
-            if (!e.writeValType(NonVoidToValType(sig->ret())))
+            if (!e.writeVarU32(funcType->args().length()))
                 return false;
+
+            for (AstValType vt : funcType->args()) {
+                if (!e.writeValType(vt.type()))
+                    return false;
+            }
+
+            if (!e.writeVarU32(!IsVoid(funcType->ret().type())))
+                return false;
+
+            if (!IsVoid(funcType->ret().type())) {
+                if (!e.writeValType(NonVoidToValType(funcType->ret().type())))
+                    return false;
+            }
+        } else if (td->isStructType()) {
+            AstStructType* st = static_cast<AstStructType*>(td);
+            if (!e.writeVarU32(uint32_t(TypeCode::Struct)))
+                return false;
+
+            if (!e.writeVarU32(st->fieldTypes().length()))
+                return false;
+
+            const AstValTypeVector& fieldTypes = st->fieldTypes();
+            const AstBoolVector& fieldMutables = st->fieldMutability();
+            for (uint32_t i = 0; i < fieldTypes.length(); i++) {
+                if (!e.writeFixedU8(fieldMutables[i] ? uint8_t(FieldFlags::Mutable) : 0))
+                    return false;
+                if (!e.writeValType(fieldTypes[i].type()))
+                    return false;
+            }
+        } else {
+            MOZ_CRASH();
         }
     }
 
@@ -5218,7 +5450,7 @@ EncodeFunctionSection(Encoder& e, AstModule& module)
         return false;
 
     for (AstFunc* func : module.funcs()) {
-        if (!e.writeVarU32(func->sig().index()))
+        if (!e.writeVarU32(func->funcType().index()))
             return false;
     }
 
@@ -5287,7 +5519,7 @@ EncodeImport(Encoder& e, AstImport& imp)
 
     switch (imp.kind()) {
       case DefinitionKind::Function:
-        if (!e.writeVarU32(imp.funcSig().index()))
+        if (!e.writeVarU32(imp.funcType().index()))
             return false;
         break;
       case DefinitionKind::Global:
@@ -5455,7 +5687,7 @@ EncodeTableSection(Encoder& e, AstModule& module)
 }
 
 static bool
-EncodeFunctionBody(Encoder& e, AstFunc& func)
+EncodeFunctionBody(Encoder& e, Uint32Vector* offsets, AstFunc& func)
 {
     size_t bodySizeAt;
     if (!e.writePatchableVarU32(&bodySizeAt))
@@ -5464,16 +5696,22 @@ EncodeFunctionBody(Encoder& e, AstFunc& func)
     size_t beforeBody = e.currentOffset();
 
     ValTypeVector varTypes;
-    if (!varTypes.appendAll(func.vars()))
-        return false;
+    for (const AstValType& vt : func.vars()) {
+        if (!varTypes.append(vt.type()))
+            return false;
+    }
     if (!EncodeLocalEntries(e, varTypes))
         return false;
 
     for (AstExpr* expr : func.body()) {
+        if (!offsets->append(e.currentOffset()))
+            return false;
         if (!EncodeExpr(e, *expr))
             return false;
     }
 
+    if (!offsets->append(e.currentOffset()))
+        return false;
     if (!e.writeOp(Op::End))
         return false;
 
@@ -5499,7 +5737,7 @@ EncodeStartSection(Encoder& e, AstModule& module)
 }
 
 static bool
-EncodeCodeSection(Encoder& e, AstModule& module)
+EncodeCodeSection(Encoder& e, Uint32Vector* offsets, AstModule& module)
 {
     if (module.funcs().empty())
         return true;
@@ -5512,7 +5750,7 @@ EncodeCodeSection(Encoder& e, AstModule& module)
         return false;
 
     for (AstFunc* func : module.funcs()) {
-        if (!EncodeFunctionBody(e, *func))
+        if (!EncodeFunctionBody(e, offsets, *func))
             return false;
     }
 
@@ -5619,7 +5857,7 @@ EncodeElemSection(Encoder& e, AstModule& module)
 }
 
 static bool
-EncodeModule(AstModule& module, Bytes* bytes)
+EncodeModule(AstModule& module, Uint32Vector* offsets, Bytes* bytes)
 {
     Encoder e(*bytes);
 
@@ -5656,7 +5894,7 @@ EncodeModule(AstModule& module, Bytes* bytes)
     if (!EncodeElemSection(e, module))
         return false;
 
-    if (!EncodeCodeSection(e, module))
+    if (!EncodeCodeSection(e, offsets, module))
         return false;
 
     if (!EncodeDataSection(e, module))
@@ -5690,7 +5928,8 @@ EncodeBinaryModule(const AstModule& module, Bytes* bytes)
 /*****************************************************************************/
 
 bool
-wasm::TextToBinary(const char16_t* text, uintptr_t stackLimit, Bytes* bytes, UniqueChars* error)
+wasm::TextToBinary(const char16_t* text, uintptr_t stackLimit, Bytes* bytes, Uint32Vector* offsets,
+                   UniqueChars* error)
 {
     LifoAlloc lifo(AST_LIFO_DEFAULT_CHUNK_SIZE);
 
@@ -5705,5 +5944,5 @@ wasm::TextToBinary(const char16_t* text, uintptr_t stackLimit, Bytes* bytes, Uni
     if (!ResolveModule(lifo, module, error))
         return false;
 
-    return EncodeModule(*module, bytes);
+    return EncodeModule(*module, offsets, bytes);
 }

@@ -820,7 +820,10 @@ class MediaDecoderStateMachine::SeekingState
   : public MediaDecoderStateMachine::StateObject
 {
 public:
-  explicit SeekingState(Master* aPtr) : StateObject(aPtr) { }
+  explicit SeekingState(Master* aPtr)
+    : StateObject(aPtr)
+    , mVisibility(static_cast<EventVisibility>(0))
+  { }
 
   RefPtr<MediaDecoder::SeekPromise> Enter(SeekJob&& aSeekJob,
                                           EventVisibility aVisibility)
@@ -871,6 +874,21 @@ public:
   void HandleResumeVideoDecoding(const TimeUnit&) override
   {
     // Do nothing. We will resume video decoding in the decoding state.
+  }
+
+  // We specially handle next frame seeks by ignoring them if we're already
+  // seeking.
+  RefPtr<MediaDecoder::SeekPromise> HandleSeek(SeekTarget aTarget) override
+  {
+    if (aTarget.IsNextFrame()) {
+      // We ignore next frame seeks if we already have a seek pending
+      SLOG("Already SEEKING, ignoring seekToNextFrame");
+      MOZ_ASSERT(!mSeekJob.mPromise.IsEmpty(), "Seek shouldn't be finished");
+      return MediaDecoder::SeekPromise::CreateAndReject(/* aIgnored = */ true,
+                                                        __func__);
+    }
+
+    return StateObject::HandleSeek(aTarget);
   }
 
 protected:

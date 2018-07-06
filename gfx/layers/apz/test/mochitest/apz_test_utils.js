@@ -194,6 +194,10 @@ function runSubtestsSeriallyInFreshWindows(aSubtests) {
     var testIndex = -1;
     var w = null;
 
+    // If the "apz.subtest" pref has been set, only a single subtest whose name matches
+    // the pref's value (if any) will be run.
+    var onlyOneSubtest = SpecialPowers.getCharPref("apz.subtest", /* default = */ "");
+
     function advanceSubtestExecution() {
       var test = aSubtests[testIndex];
       if (w) {
@@ -226,6 +230,13 @@ function runSubtestsSeriallyInFreshWindows(aSubtests) {
       }
 
       test = aSubtests[testIndex];
+
+      if (onlyOneSubtest && onlyOneSubtest != test.file) {
+        SimpleTest.ok(true, "Skipping " + test.file + " because only " + onlyOneSubtest + " is being run");
+        setTimeout(function() { advanceSubtestExecution(); }, 0);
+        return;
+      }
+
       if (typeof test.dp_suppression != 'undefined') {
         // Normally during a test, the displayport will get suppressed during page
         // load, and unsuppressed at a non-deterministic time during the test. The
@@ -273,6 +284,8 @@ function runSubtestsSeriallyInFreshWindows(aSubtests) {
     }
 
     advanceSubtestExecution();
+  }).catch(function(e) {
+    SimpleTest.ok(false, "Error occurred while running subtests: " + e);
   });
 }
 
@@ -294,7 +307,10 @@ async function waitUntilApzStable() {
     function parentProcessFlush() {
       addMessageListener("apz-flush", function() {
         ChromeUtils.import("resource://gre/modules/Services.jsm");
-        var topWin = Services.wm.getMostRecentWindow("navigator:browser");
+        var topWin = Services.wm.getMostRecentWindow('navigator:browser');
+        if (!topWin) {
+          topWin = Services.wm.getMostRecentWindow('navigator:geckoview');
+        }
         var topUtils = topWin.QueryInterface(Ci.nsIInterfaceRequestor)
                              .getInterface(Ci.nsIDOMWindowUtils);
 
@@ -432,6 +448,9 @@ function getSnapshot(rect) {
     addMessageListener('snapshot', function(rect) {
       ChromeUtils.import('resource://gre/modules/Services.jsm');
       var topWin = Services.wm.getMostRecentWindow('navigator:browser');
+      if (!topWin) {
+        topWin = Services.wm.getMostRecentWindow('navigator:geckoview');
+      }
 
       // reposition the rect relative to the top-level browser window
       rect = JSON.parse(rect);
@@ -522,8 +541,13 @@ function getHitTestConfig() {
   return window.hitTestConfig;
 }
 
-// Compute the coordinates of the center of the given element.
+// Compute the coordinates of the center of the given element. The argument
+// can either be a string (the id of the element desired) or the element
+// itself.
 function centerOf(element) {
+  if (typeof element === "string") {
+    element = document.getElementById(element);
+  }
   var bounds = element.getBoundingClientRect();
   return { x: bounds.x + (bounds.width / 2), y: bounds.y + (bounds.height / 2) };
 }
@@ -658,6 +682,36 @@ function hitTestScrollbar(params) {
                    expectedHitInfo,
                    params.expectedScrollId,
                    scrollframeMsg + " - horizontal scrollbar");
+  }
+}
+
+// Return a list of prefs for the given test identifier.
+function getPrefs(ident) {
+  switch (ident) {
+    case "TOUCH_EVENTS:PAN":
+      return [
+        // Dropping the touch slop to 0 makes the tests easier to write because
+        // we can just do a one-pixel drag to get over the pan threshold rather
+        // than having to hard-code some larger value.
+        ["apz.touch_start_tolerance", "0.0"],
+        // The touchstart from the drag can turn into a long-tap if the touch-move
+        // events get held up. Try to prevent that by making long-taps require
+        // a 10 second hold. Note that we also cannot enable chaos mode on this
+        // test for this reason, since chaos mode can cause the long-press timer
+        // to fire sooner than the pref dictates.
+        ["ui.click_hold_context_menus.delay", 10000],
+        // The subtests in this test do touch-drags to pan the page, but we don't
+        // want those pans to turn into fling animations, so we increase the
+        // fling min velocity requirement absurdly high.
+        ["apz.fling_min_velocity_threshold", "10000"],
+        // The helper_div_pan's div gets a displayport on scroll, but if the
+        // test takes too long the displayport can expire before the new scroll
+        // position is synced back to the main thread. So we disable displayport
+        // expiry for these tests.
+        ["apz.displayport_expiry_ms", 0],
+      ];
+    default:
+      return [];
   }
 }
 

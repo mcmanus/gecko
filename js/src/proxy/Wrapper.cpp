@@ -10,9 +10,9 @@
 
 #include "js/Proxy.h"
 #include "vm/ErrorObject.h"
-#include "vm/JSCompartment.h"
 #include "vm/JSContext.h"
 #include "vm/ProxyObject.h"
+#include "vm/Realm.h"
 #include "vm/RegExpObject.h"
 #include "vm/WrapperObject.h"
 
@@ -330,7 +330,7 @@ Wrapper::Renew(JSObject* existing, JSObject* obj, const Wrapper* handler)
 }
 
 const Wrapper*
-Wrapper::wrapperHandler(JSObject* wrapper)
+Wrapper::wrapperHandler(const JSObject* wrapper)
 {
     MOZ_ASSERT(wrapper->is<WrapperObject>());
     return static_cast<const Wrapper*>(wrapper->as<ProxyObject>().handler());
@@ -375,7 +375,7 @@ js::UncheckedUnwrapWithoutExpose(JSObject* wrapped)
 JS_FRIEND_API(JSObject*)
 js::UncheckedUnwrap(JSObject* wrapped, bool stopAtWindowProxy, unsigned* flagsp)
 {
-    MOZ_ASSERT(!JS::CurrentThreadIsHeapCollecting());
+    MOZ_ASSERT(!JS::RuntimeHeapIsCollecting());
     MOZ_ASSERT(CurrentThreadCanAccessRuntime(wrapped->runtimeFromAnyThread()));
 
     unsigned flags = 0;
@@ -407,7 +407,7 @@ js::CheckedUnwrap(JSObject* obj, bool stopAtWindowProxy)
 JS_FRIEND_API(JSObject*)
 js::UnwrapOneChecked(JSObject* obj, bool stopAtWindowProxy)
 {
-    MOZ_ASSERT(!JS::CurrentThreadIsHeapCollecting());
+    MOZ_ASSERT(!JS::RuntimeHeapIsCollecting());
     MOZ_ASSERT(CurrentThreadCanAccessRuntime(obj->runtimeFromAnyThread()));
 
     if (!obj->is<WrapperObject>() ||
@@ -456,9 +456,10 @@ ErrorCopier::~ErrorCopier()
             cx->clearPendingException();
             ar.reset();
             Rooted<ErrorObject*> errObj(cx, &exc.toObject().as<ErrorObject>());
-            JSObject* copyobj = CopyErrorObject(cx, errObj);
-            if (copyobj)
-                cx->setPendingException(ObjectValue(*copyobj));
+            if (JSObject* copyobj = CopyErrorObject(cx, errObj)) {
+                RootedValue rootedCopy(cx, ObjectValue(*copyobj));
+                cx->setPendingException(rootedCopy);
+            }
         }
     }
 }

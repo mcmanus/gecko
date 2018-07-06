@@ -65,6 +65,7 @@ function MarkupView(inspector, frame, controllerWindow) {
   EventEmitter.decorate(this);
 
   this.inspector = inspector;
+  this.highlighters = inspector.highlighters;
   this.walker = this.inspector.walker;
   this._frame = frame;
   this.win = this._frame.contentWindow;
@@ -1093,7 +1094,7 @@ MarkupView.prototype = {
         || type === "events" || type === "pseudoClassLock") {
         container.update();
       } else if (type === "childList" || type === "nativeAnonymousChildList"
-        || type === "slotchange") {
+        || type === "slotchange" || type === "shadowRootAttached") {
         container.childrenDirty = true;
         // Update the children to take care of changes in the markup view DOM
         // and update container (and its subtree) DOM tree depth level for
@@ -1541,7 +1542,8 @@ MarkupView.prototype = {
         const end = this.telemetry.msSystemNow();
         this.telemetry.recordEvent("devtools.main", "edit_html", "inspector", null, {
           "made_changes": commit,
-          "time_open": end - start
+          "time_open": end - start,
+          "session_id": this.toolbox.sessionId
         });
       });
 
@@ -1914,6 +1916,7 @@ MarkupView.prototype = {
     this.imagePreviewTooltip = null;
 
     this.doc = null;
+    this.highlighters = null;
     this.win = null;
 
     this._lastDropTarget = null;

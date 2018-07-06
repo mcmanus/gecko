@@ -24,8 +24,8 @@
 #include "js/Utility.h"
 #include "js/Wrapper.h"
 #include "vm/GlobalObject.h"
-#include "vm/JSCompartment.h"
 #include "vm/JSContext.h"
+#include "vm/Realm.h"
 #include "vm/SavedStacks.h"
 #include "vm/Stack.h"
 #include "wasm/WasmJS.h"
@@ -88,6 +88,14 @@ class WasmInstanceObject;
 typedef HashSet<ReadBarrieredGlobalObject,
                 MovableCellHasher<ReadBarrieredGlobalObject>,
                 ZoneAllocPolicy> WeakGlobalObjectSet;
+
+#ifdef DEBUG
+extern void
+CheckDebuggeeThing(JSScript* script, bool invisibleOk);
+
+extern void
+CheckDebuggeeThing(JSObject* obj, bool invisibleOk);
+#endif
 
 /*
  * A weakmap from GC thing keys to JSObject values that supports the keys being
@@ -161,9 +169,9 @@ class DebuggerWeakMap : private WeakMap<HeapPtr<UnbarrieredKey>, HeapPtr<JSObjec
     template<typename KeyInput, typename ValueInput>
     bool relookupOrAdd(AddPtr& p, const KeyInput& k, const ValueInput& v) {
         MOZ_ASSERT(v->compartment() == this->compartment);
-        MOZ_ASSERT(!k->realm()->creationOptions().mergeable());
-        MOZ_ASSERT_IF(!InvisibleKeysOk,
-                      !k->realm()->creationOptions().invisibleToDebugger());
+#ifdef DEBUG
+        CheckDebuggeeThing(k, InvisibleKeysOk);
+#endif
         MOZ_ASSERT(!Base::has(k));
         if (!incZoneCount(k->zone()))
             return false;

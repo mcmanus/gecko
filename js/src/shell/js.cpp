@@ -114,10 +114,11 @@
 #include "vm/WrapperObject.h"
 #include "wasm/WasmJS.h"
 
+#include "vm/Compartment-inl.h"
 #include "vm/ErrorObject-inl.h"
 #include "vm/Interpreter-inl.h"
-#include "vm/JSCompartment-inl.h"
 #include "vm/JSObject-inl.h"
+#include "vm/Realm-inl.h"
 #include "vm/Stack-inl.h"
 
 using namespace js;
@@ -499,7 +500,6 @@ static bool enableWasmGc = false;
 static bool enableTestWasmAwaitTier2 = false;
 static bool enableAsyncStacks = false;
 static bool enableStreams = false;
-static bool enableArrayProtoValues = true;
 #ifdef JS_GC_ZEAL
 static uint32_t gZealBits = 0;
 static uint32_t gZealFrequency = 0;
@@ -884,7 +884,7 @@ InitModuleLoader(JSContext* cx)
     // the module loader for the current compartment.
 
     uint32_t srcLen = moduleloader::GetRawScriptsSize();
-    ScopedJSFreePtr<char> src(cx->pod_malloc<char>(srcLen));
+    auto src = cx->make_pod_array<char>(srcLen);
     if (!src || !DecompressString(moduleloader::compressedSources, moduleloader::GetCompressedSize(),
                                   reinterpret_cast<unsigned char*>(src.get()), srcLen))
     {
@@ -900,7 +900,7 @@ InitModuleLoader(JSContext* cx)
     options.strictOption = true;
 
     RootedValue rv(cx);
-    return Evaluate(cx, options, src, srcLen, &rv);
+    return Evaluate(cx, options, src.get(), srcLen, &rv);
 }
 
 static bool
@@ -1481,15 +1481,22 @@ Options(JSContext* cx, unsigned argc, Value* vp)
         if (!opt.encodeUtf8(cx, str))
             return false;
 
-        if (strcmp(opt.ptr(), "strict") == 0)
+        if (strcmp(opt.ptr(), "strict") == 0) {
             JS::ContextOptionsRef(cx).toggleExtraWarnings();
-        else if (strcmp(opt.ptr(), "werror") == 0)
+        } else if (strcmp(opt.ptr(), "werror") == 0) {
+            // Disallow toggling werror when there are off-thread jobs, to avoid
+            // confusing CompileError::throwError.
+            ShellContext* sc = GetShellContext(cx);
+            if (!sc->offThreadJobs.empty()) {
+                JS_ReportErrorASCII(cx, "can't toggle werror when there are off-thread jobs");
+                return false;
+            }
             JS::ContextOptionsRef(cx).toggleWerror();
-        else if (strcmp(opt.ptr(), "throw_on_asmjs_validation_failure") == 0)
+        } else if (strcmp(opt.ptr(), "throw_on_asmjs_validation_failure") == 0) {
             JS::ContextOptionsRef(cx).toggleThrowOnAsmJSValidationFailure();
-        else if (strcmp(opt.ptr(), "strict_mode") == 0)
+        } else if (strcmp(opt.ptr(), "strict_mode") == 0) {
             JS::ContextOptionsRef(cx).toggleStrictMode();
-        else {
+        } else {
             JS_ReportErrorUTF8(cx,
                                "unknown option name '%s'."
                                " The valid names are strict,"
@@ -1662,7 +1669,7 @@ my_LargeAllocFailCallback()
     if (!cx || cx->helperThread())
         return;
 
-    MOZ_ASSERT(!JS::CurrentThreadIsHeapBusy());
+    MOZ_ASSERT(!JS::RuntimeHeapIsBusy());
 
     JS::PrepareForFullGC(cx);
     cx->runtime()->gc.gc(GC_NORMAL, JS::gcreason::SHARED_MEMORY_LIMIT);
@@ -2121,7 +2128,7 @@ js::shell::FileAsString(JSContext* cx, JS::HandleString pathnameStr)
         return nullptr;
     }
 
-    UniqueChars buf(static_cast<char*>(js_malloc(len + 1)));
+    UniqueChars buf(js_pod_malloc<char>(len + 1));
     if (!buf)
         return nullptr;
 
@@ -2641,7 +2648,7 @@ PCToLine(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
-#ifdef DEBUG
+#if defined(DEBUG) || defined(JS_JITSPEW)
 
 static void
 UpdateSwitchTableBounds(JSContext* cx, HandleScript script, unsigned offset,
@@ -2754,7 +2761,7 @@ SrcNotes(JSContext* cx, HandleScript script, Sprinter* sp)
             break;
 
           case SRC_TABLESWITCH: {
-            JSOp op = JSOp(script->code()[offset]);
+            mozilla::DebugOnly<JSOp> op = JSOp(script->code()[offset]);
             MOZ_ASSERT(op == JSOP_TABLESWITCH);
             if (!sp->jsprintf(" length %u", unsigned(GetSrcNoteOffset(sn, 0))))
                 return false;
@@ -2763,7 +2770,7 @@ SrcNotes(JSContext* cx, HandleScript script, Sprinter* sp)
             break;
           }
           case SRC_CONDSWITCH: {
-            JSOp op = JSOp(script->code()[offset]);
+            mozilla::DebugOnly<JSOp> op = JSOp(script->code()[offset]);
             MOZ_ASSERT(op == JSOP_CONDSWITCH);
             if (!sp->jsprintf(" length %u", unsigned(GetSrcNoteOffset(sn, 0))))
                 return false;
@@ -3245,7 +3252,7 @@ DisassWithSrc(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
-#endif /* DEBUG */
+#endif /* defined(DEBUG) || defined(JS_JITSPEW) */
 
 /* Pretend we can always preserve wrappers for dummy DOM objects. */
 static bool
@@ -3441,7 +3448,7 @@ NewSandbox(JSContext* cx, bool lazy)
 
     {
         JSAutoRealm ar(cx, obj);
-        if (!lazy && !JS_InitStandardClasses(cx, obj))
+        if (!lazy && !JS::InitRealmStandardClasses(cx))
             return nullptr;
 
         RootedValue value(cx, BooleanValue(lazy));
@@ -3555,25 +3562,22 @@ EnsureGeckoProfilingStackInstalled(JSContext* cx, ShellContext* sc)
 struct WorkerInput
 {
     JSRuntime* parentRuntime;
-    char16_t* chars;
+    UniqueTwoByteChars chars;
     size_t length;
 
-    WorkerInput(JSRuntime* parentRuntime, char16_t* chars, size_t length)
-      : parentRuntime(parentRuntime), chars(chars), length(length)
+    WorkerInput(JSRuntime* parentRuntime, UniqueTwoByteChars chars, size_t length)
+      : parentRuntime(parentRuntime), chars(std::move(chars)), length(length)
     {}
 
-    ~WorkerInput() {
-        js_free(chars);
-    }
+    ~WorkerInput() = default;
 };
 
 static void SetWorkerContextOptions(JSContext* cx);
 static bool ShellBuildId(JS::BuildIdCharVector* buildId);
 
 static void
-WorkerMain(void* arg)
+WorkerMain(WorkerInput* input)
 {
-    WorkerInput* input = (WorkerInput*) arg;
     MOZ_ASSERT(input->parentRuntime);
 
     JSContext* cx = JS_NewContext(8L * 1024L * 1024L, 2L * 1024L * 1024L, input->parentRuntime);
@@ -3594,6 +3598,7 @@ WorkerMain(void* arg)
 
     sc->isWorker = true;
     JS_SetContextPrivate(cx, sc);
+    JS_SetGrayGCRootsTracer(cx, TraceGrayRoots, nullptr);
     SetWorkerContextOptions(cx);
     JS::SetBuildIdOp(cx, ShellBuildId);
 
@@ -3627,7 +3632,7 @@ WorkerMain(void* arg)
 
         AutoReportException are(cx);
         RootedScript script(cx);
-        if (!JS::Compile(cx, options, input->chars, input->length, &script))
+        if (!JS::Compile(cx, options, input->chars.get(), input->length, &script))
             break;
         RootedValue result(cx);
         JS_ExecuteScript(cx, script, &result);
@@ -3686,15 +3691,16 @@ EvalInWorker(JSContext* cx, unsigned argc, Value* vp)
 
     JSLinearString* str = &args[0].toString()->asLinear();
 
-    char16_t* chars = (char16_t*) js_malloc(str->length() * sizeof(char16_t));
+    UniqueTwoByteChars chars(js_pod_malloc<char16_t>(str->length()));
     if (!chars) {
         ReportOutOfMemory(cx);
         return false;
     }
 
-    CopyChars(chars, *str);
+    CopyChars(chars.get(), *str);
 
-    WorkerInput* input = js_new<WorkerInput>(JS_GetParentRuntime(cx), chars, str->length());
+    WorkerInput* input = js_new<WorkerInput>(JS_GetParentRuntime(cx), std::move(chars),
+                                             str->length());
     if (!input) {
         ReportOutOfMemory(cx);
         return false;
@@ -4129,7 +4135,7 @@ ClearLastWarning(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
-#ifdef DEBUG
+#if defined(DEBUG) || defined(JS_JITSPEW)
 static bool
 StackDump(JSContext* cx, unsigned argc, Value* vp)
 {
@@ -5021,7 +5027,7 @@ EscapeForShell(JSContext* cx, AutoCStringVector& argv)
                 newLen++;
         }
 
-        UniqueChars escaped(cx->pod_malloc<char>(newLen));
+        auto escaped = cx->make_pod_array<char>(newLen);
         if (!escaped)
             return false;
 
@@ -5259,7 +5265,7 @@ NewGlobal(JSContext* cx, unsigned argc, Value* vp)
 
         if (!JS_GetProperty(cx, opts, "sameCompartmentAs", &v))
             return false;
-        if (v.isObject() && !fuzzingSafe)
+        if (v.isObject())
             creationOptions.setExistingCompartment(UncheckedUnwrap(&v.toObject()));
 
         if (!JS_GetProperty(cx, opts, "disableLazyParsing", &v))
@@ -5958,8 +5964,13 @@ ConsumeBufferSource(JSContext* cx, JS::HandleObject obj, JS::MimeType, JS::Strea
     }
 
     auto job = cx->make_unique<BufferStreamJob>(consumer);
-    if (!job || !job->bytes.resize(byteLength))
+    if (!job)
         return false;
+
+    if (!job->bytes.resize(byteLength)) {
+        JS_ReportOutOfMemory(cx);
+        return false;
+    }
 
     memcpy(job->bytes.begin(), dataPointer.unwrap(), byteLength);
 
@@ -5968,11 +5979,19 @@ ConsumeBufferSource(JSContext* cx, JS::HandleObject obj, JS::MimeType, JS::Strea
     {
         auto state = bufferStreamState->lock();
         MOZ_ASSERT(!state->shutdown);
-        if (!state->jobs.append(std::move(job)))
+        if (!state->jobs.append(std::move(job))) {
+            JS_ReportOutOfMemory(cx);
             return false;
+        }
     }
 
-    return jobPtr->thread.init(BufferStreamMain, jobPtr);
+    {
+        AutoEnterOOMUnsafeRegion oomUnsafe;
+        if (!jobPtr->thread.init(BufferStreamMain, jobPtr))
+            oomUnsafe.crash("ConsumeBufferSource");
+    }
+
+    return true;
 }
 
 static bool
@@ -6858,7 +6877,7 @@ static const JSFunctionSpecWithHelp shell_functions[] = {
 "throwError()",
 "  Throw an error from JS_ReportError."),
 
-#ifdef DEBUG
+#if defined(DEBUG) || defined(JS_JITSPEW)
     JS_FN_HELP("disassemble", DisassembleToString, 1, 0,
 "disassemble([fun/code])",
 "  Return the disassembly for the given function or code.\n"
@@ -7819,10 +7838,42 @@ dom_set_x(JSContext* cx, HandleObject obj, void* self, JSJitSetterCallArgs args)
 }
 
 static bool
+dom_get_global(JSContext* cx, HandleObject obj, void* self, JSJitGetterCallArgs args)
+{
+    MOZ_ASSERT(JS_GetClass(obj) == GetDomClass());
+    MOZ_ASSERT(self == (void*)0x1234);
+
+    // Return the current global (instead of obj->global()) to test cx->realm
+    // switching in the JIT.
+    args.rval().setObject(*ToWindowProxyIfWindow(cx->global()));
+
+    return true;
+}
+
+static bool
+dom_set_global(JSContext* cx, HandleObject obj, void* self, JSJitSetterCallArgs args)
+{
+    MOZ_ASSERT(JS_GetClass(obj) == GetDomClass());
+    MOZ_ASSERT(self == (void*)0x1234);
+
+    // Throw an exception if our argument is not the current global. This lets
+    // us test cx->realm switching.
+    if (!args[0].isObject() ||
+        ToWindowIfWindowProxy(&args[0].toObject()) != cx->global())
+    {
+        JS_ReportErrorASCII(cx, "Setter not called with matching global argument");
+        return false;
+    }
+
+    return true;
+}
+
+static bool
 dom_doFoo(JSContext* cx, HandleObject obj, void* self, const JSJitMethodCallArgs& args)
 {
     MOZ_ASSERT(JS_GetClass(obj) == GetDomClass());
     MOZ_ASSERT(self == (void*)0x1234);
+    MOZ_ASSERT(cx->realm() == args.callee().as<JSFunction>().realm());
 
     /* Just return args.length(). */
     args.rval().setInt32(args.length());
@@ -7833,8 +7884,8 @@ static const JSJitInfo dom_x_getterinfo = {
     { (JSJitGetterOp)dom_get_x },
     { 0 },    /* protoID */
     { 0 },    /* depth */
-    JSJitInfo::AliasNone, /* aliasSet */
     JSJitInfo::Getter,
+    JSJitInfo::AliasNone, /* aliasSet */
     JSVAL_TYPE_UNKNOWN, /* returnType */
     true,     /* isInfallible. False in setters. */
     true,     /* isMovable */
@@ -7847,6 +7898,41 @@ static const JSJitInfo dom_x_getterinfo = {
 
 static const JSJitInfo dom_x_setterinfo = {
     { (JSJitGetterOp)dom_set_x },
+    { 0 },    /* protoID */
+    { 0 },    /* depth */
+    JSJitInfo::Setter,
+    JSJitInfo::AliasEverything, /* aliasSet */
+    JSVAL_TYPE_UNKNOWN, /* returnType */
+    false,    /* isInfallible. False in setters. */
+    false,    /* isMovable. */
+    false,    /* isEliminatable. */
+    false,    /* isAlwaysInSlot */
+    false,    /* isLazilyCachedInSlot */
+    false,    /* isTypedMethod */
+    0         /* slotIndex */
+};
+
+// Note: this getter uses AliasEverything and is marked as fallible and
+// non-movable (1) to prevent Ion from getting too clever optimizing it and
+// (2) it's nice to have a few different kinds of getters in the shell.
+static const JSJitInfo dom_global_getterinfo = {
+    { (JSJitGetterOp)dom_get_global },
+    { 0 },    /* protoID */
+    { 0 },    /* depth */
+    JSJitInfo::Getter,
+    JSJitInfo::AliasEverything, /* aliasSet */
+    JSVAL_TYPE_OBJECT, /* returnType */
+    false,    /* isInfallible. False in setters. */
+    false,    /* isMovable */
+    false,    /* isEliminatable */
+    false,    /* isAlwaysInSlot */
+    false,    /* isLazilyCachedInSlot */
+    false,    /* isTypedMethod */
+    0         /* slotIndex */
+};
+
+static const JSJitInfo dom_global_setterinfo = {
+    { (JSJitGetterOp)dom_set_global },
     { 0 },    /* protoID */
     { 0 },    /* depth */
     JSJitInfo::Setter,
@@ -7883,6 +7969,13 @@ static const JSPropertySpec dom_props[] = {
      { {
         { { dom_genericGetter, &dom_x_getterinfo } },
         { { dom_genericSetter, &dom_x_setterinfo } }
+     } },
+    },
+    {"global",
+     JSPROP_ENUMERATE,
+     { {
+        { { dom_genericGetter, &dom_global_getterinfo } },
+        { { dom_genericSetter, &dom_global_setterinfo } }
      } },
     },
     JS_PS_END
@@ -8281,7 +8374,7 @@ NewGlobalObject(JSContext* cx, JS::RealmOptions& options,
         JSAutoRealm ar(cx, glob);
 
 #ifndef LAZY_STANDARD_CLASSES
-        if (!JS_InitStandardClasses(cx, glob))
+        if (!JS::InitRealmStandardClasses(cx))
             return nullptr;
 #endif
 
@@ -8525,7 +8618,6 @@ SetContextOptions(JSContext* cx, const OptionParser& op)
     enableTestWasmAwaitTier2 = op.getBoolOption("test-wasm-await-tier2");
     enableAsyncStacks = !op.getBoolOption("no-async-stacks");
     enableStreams = op.getBoolOption("enable-streams");
-    enableArrayProtoValues = !op.getBoolOption("no-array-proto-values");
 
     JS::ContextOptionsRef(cx).setBaseline(enableBaseline)
                              .setIon(enableIon)
@@ -8539,8 +8631,7 @@ SetContextOptions(JSContext* cx, const OptionParser& op)
                              .setTestWasmAwaitTier2(enableTestWasmAwaitTier2)
                              .setNativeRegExp(enableNativeRegExp)
                              .setAsyncStack(enableAsyncStacks)
-                             .setStreams(enableStreams)
-                             .setArrayProtoValues(enableArrayProtoValues);
+                             .setStreams(enableStreams);
 
     if (op.getBoolOption("no-unboxed-objects"))
         jit::JitOptions.disableUnboxedObjects = true;
@@ -8835,8 +8926,8 @@ SetWorkerContextOptions(JSContext* cx)
 #endif
                              .setTestWasmAwaitTier2(enableTestWasmAwaitTier2)
                              .setNativeRegExp(enableNativeRegExp)
-                             .setStreams(enableStreams)
-                             .setArrayProtoValues(enableArrayProtoValues);
+                             .setStreams(enableStreams);
+
     cx->runtime()->setOffthreadIonCompilationEnabled(offthreadCompilation);
     cx->runtime()->profilingScripts = enableCodeCoverage || enableDisassemblyDumps;
 
@@ -8906,7 +8997,7 @@ Shell(JSContext* cx, OptionParser* op, char** envp)
 
     if (enableDisassemblyDumps) {
         AutoReportException are(cx);
-        if (!js::DumpCompartmentPCCounts(cx))
+        if (!js::DumpRealmPCCounts(cx))
             result = EXITCODE_OUT_OF_MEMORY;
     }
 
@@ -9092,7 +9183,6 @@ main(int argc, char** argv, char** envp)
         || !op.addBoolOption('\0', "no-native-regexp", "Disable native regexp compilation")
         || !op.addBoolOption('\0', "no-unboxed-objects", "Disable creating unboxed plain objects")
         || !op.addBoolOption('\0', "enable-streams", "Enable WHATWG Streams")
-        || !op.addBoolOption('\0', "no-array-proto-values", "Remove Array.prototype.values")
 #ifdef ENABLE_SHARED_ARRAY_BUFFER
         || !op.addStringOption('\0', "shared-memory", "on/off",
                                "SharedArrayBuffer and Atomics "

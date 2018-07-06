@@ -9,7 +9,6 @@
 #include "nsINavHistoryService.h"
 #include "nsINavBookmarksService.h"
 #include "nsIFaviconService.h"
-#include "nsIGlobalHistory2.h"
 
 #include "nsIObserverService.h"
 #include "nsICollation.h"
@@ -435,9 +434,10 @@ public:
   }
 
   /**
-   * Fires onVisits event to nsINavHistoryService observers
+   * Updates and invalidates the mDaysOfHistory cache. Should be
+   * called whenever a visit is added.
    */
-  void NotifyOnVisits(nsIVisitData** aVisits, uint32_t aVisitsCount);
+  void UpdateDaysOfHistory(PRTime visitTime);
 
   /**
    * Fires onTitleChanged event to nsINavHistoryService observers
@@ -589,7 +589,7 @@ protected:
     VisitHashKey(const VisitHashKey& aOther)
     : nsURIHashKey(aOther)
     {
-      NS_NOTREACHED("Do not call me!");
+      MOZ_ASSERT_UNREACHABLE("Do not call me!");
     }
     PRTime visitTime;
   };
@@ -637,7 +637,7 @@ protected:
   void DecayFrecencyCompleted(uint16_t reason);
   uint32_t mDecayFrecencyPendingCount;
 
-  nsresult RecalculateFrecencyStatsInternal();
+  nsresult RecalculateOriginFrecencyStatsInternal();
 
   // in nsNavHistoryQuery.cpp
   nsresult TokensToQuery(const nsTArray<mozilla::places::QueryKeyValuePair>& aTokens,

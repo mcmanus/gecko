@@ -45,6 +45,7 @@ typedef uint32_t SuspendTypes;
 
 namespace mozilla {
 class ThrottledEventQueue;
+class AutoplayRequest;
 namespace dom {
 class AudioContext;
 class ClientInfo;
@@ -250,6 +251,17 @@ public:
     mMayHavePointerEnterLeaveEventListener = true;
   }
 
+  // Sets the event for window.event. Does NOT take ownership, so
+  // the caller is responsible for clearing the event before the
+  // event gets deallocated. Pass nullptr to set window.event to
+  // undefined. Returns the previous value.
+  mozilla::dom::Event* SetEvent(mozilla::dom::Event* aEvent)
+  {
+    mozilla::dom::Event* old = mEvent;
+    mEvent = aEvent;
+    return old;
+  }
+
   /**
    * Check whether this window is a secure context.
    */
@@ -331,6 +343,8 @@ public:
   GetOrCreateServiceWorker(const mozilla::dom::ServiceWorkerDescriptor& aDescriptor);
 
   void NoteCalledRegisterForServiceWorkerScope(const nsACString& aScope);
+
+  void NoteDOMContentLoaded();
 
   mozilla::dom::TabGroup* TabGroup();
 
@@ -611,6 +625,10 @@ public:
   virtual nsISerialEventTarget*
   EventTargetFor(mozilla::TaskCategory aCategory) const = 0;
 
+  // Returns the AutoplayRequest that documents in this window should use
+  // to request permission to autoplay.
+  already_AddRefed<mozilla::AutoplayRequest> GetAutoplayRequest();
+
 protected:
   void CreatePerformanceObjectIfNeeded();
 
@@ -693,6 +711,15 @@ protected:
 
   // The number of open WebSockets.
   uint32_t mNumOfOpenWebSockets;
+
+  // If we're in the process of requesting permission for this window to
+  // play audible media, or we've already been granted permission by the
+  // user, this is non-null, and encapsulates the request.
+  RefPtr<mozilla::AutoplayRequest> mAutoplayRequest;
+
+  // The event dispatch code sets and unsets this while keeping
+  // the event object alive.
+  mozilla::dom::Event* mEvent;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsPIDOMWindowInner, NS_PIDOMWINDOWINNER_IID)

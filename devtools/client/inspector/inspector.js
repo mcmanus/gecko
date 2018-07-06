@@ -35,6 +35,9 @@ loader.lazyRequireGetter(this, "MenuItem", "devtools/client/framework/menu-item"
 loader.lazyRequireGetter(this, "ExtensionSidebar", "devtools/client/inspector/extensions/extension-sidebar");
 loader.lazyRequireGetter(this, "CommandUtils", "devtools/client/shared/developer-toolbar", true);
 loader.lazyRequireGetter(this, "clipboardHelper", "devtools/shared/platform/clipboard");
+loader.lazyRequireGetter(this, "openContentLink", "devtools/client/shared/link", true);
+
+loader.lazyImporter(this, "DeferredTask", "resource://gre/modules/DeferredTask.jsm");
 
 const {LocalizationHelper, localizeMarkup} = require("devtools/shared/l10n");
 const INSPECTOR_L10N =
@@ -46,6 +49,9 @@ loader.lazyGetter(this, "TOOLBOX_L10N", function() {
 // Sidebar dimensions
 const INITIAL_SIDEBAR_SIZE = 350;
 
+// How long we wait to debounce resize events
+const LAZY_RESIZE_INTERVAL_MS = 200;
+
 // If the toolbox's width is smaller than the given amount of pixels, the sidebar
 // automatically switches from 'landscape/horizontal' to 'portrait/vertical' mode.
 const PORTRAIT_MODE_WIDTH_THRESHOLD = 700;
@@ -54,10 +60,11 @@ const PORTRAIT_MODE_WIDTH_THRESHOLD = 700;
 // mode.
 const SIDE_PORTAIT_MODE_WIDTH_THRESHOLD = 1000;
 
+const THREE_PANE_FIRST_RUN_PREF = "devtools.inspector.three-pane-first-run";
 const SHOW_THREE_PANE_ONBOARDING_PREF = "devtools.inspector.show-three-pane-tooltip";
 const THREE_PANE_ENABLED_PREF = "devtools.inspector.three-pane-enabled";
 const THREE_PANE_ENABLED_SCALAR = "devtools.inspector.three_pane_enabled";
-
+const THREE_PANE_CHROME_ENABLED_PREF = "devtools.inspector.chrome.three-pane-enabled";
 const TELEMETRY_EYEDROPPER_OPENED = "devtools.toolbar.eyedropper.opened";
 
 /**
@@ -119,7 +126,7 @@ function Inspector(toolbox) {
   // telemetry counts in the Grid Inspector are not double counted on reload.
   this.previousURL = this.target.url;
 
-  this.is3PaneModeEnabled = Services.prefs.getBoolPref(THREE_PANE_ENABLED_PREF);
+  this.is3PaneModeFirstRun = Services.prefs.getBoolPref(THREE_PANE_FIRST_RUN_PREF);
   this.show3PaneTooltip = Services.prefs.getBoolPref(SHOW_THREE_PANE_ONBOARDING_PREF);
 
   this.nodeMenuTriggerInfo = null;
@@ -197,6 +204,34 @@ Inspector.prototype = {
     return this._highlighters;
   },
 
+  get is3PaneModeEnabled() {
+    if (this.target.chrome) {
+      if (!this._is3PaneModeChromeEnabled) {
+        this._is3PaneModeChromeEnabled = Services.prefs.getBoolPref(
+          THREE_PANE_CHROME_ENABLED_PREF);
+      }
+
+      return this._is3PaneModeChromeEnabled;
+    }
+
+    if (!this._is3PaneModeEnabled) {
+      this._is3PaneModeEnabled = Services.prefs.getBoolPref(THREE_PANE_ENABLED_PREF);
+    }
+
+    return this._is3PaneModeEnabled;
+  },
+
+  set is3PaneModeEnabled(value) {
+    if (this.target.chrome) {
+      this._is3PaneModeChromeEnabled = value;
+      Services.prefs.setBoolPref(THREE_PANE_CHROME_ENABLED_PREF,
+        this._is3PaneModeChromeEnabled);
+    } else {
+      this._is3PaneModeEnabled = value;
+      Services.prefs.setBoolPref(THREE_PANE_ENABLED_PREF, this._is3PaneModeEnabled);
+    }
+  },
+
   // Added in 53.
   get canGetCssPath() {
     return this._target.client.traits.getCssPath;
@@ -248,6 +283,14 @@ Inspector.prototype = {
       this.target.on("thread-resumed", this._updateDebuggerPausedWarning);
       this.toolbox.on("select", this._updateDebuggerPausedWarning);
       this._updateDebuggerPausedWarning();
+    }
+
+    // Resets the inspector sidebar widths if this is the first run of the 3 pane mode.
+    if (this.is3PaneModeFirstRun) {
+      Services.prefs.clearUserPref("devtools.toolsidebar-width.inspector");
+      Services.prefs.clearUserPref("devtools.toolsidebar-height.inspector");
+      Services.prefs.clearUserPref("devtools.toolsidebar-width.inspector.splitsidebar");
+      Services.prefs.setBoolPref(THREE_PANE_FIRST_RUN_PREF, false);
     }
 
     this._initMarkup();
@@ -571,18 +614,33 @@ Inspector.prototype = {
     this.sidebar.off("destroy", this.onSidebarHidden);
   },
 
+  _onLazyPanelResize: async function() {
+    // We can be called on a closed window because of the deferred task.
+    if (window.closed) {
+      return;
+    }
+    // Use window.top because promiseDocumentFlushed() in a subframe doesn't
+    // work, see https://bugzilla.mozilla.org/show_bug.cgi?id=1441173
+    const useLandscapeMode = await window.top.promiseDocumentFlushed(() => {
+      return this.useLandscapeMode();
+    });
+    if (window.closed) {
+      return;
+    }
+    this.splitBox.setState({ vert: useLandscapeMode });
+    this.emit("inspector-resize");
+  },
+
   /**
    * If Toolbox width is less than 600 px, the splitter changes its mode
    * to `horizontal` to support portrait view.
    */
   onPanelWindowResize: function() {
-    window.cancelIdleCallback(this._resizeTimerId);
-    this._resizeTimerId = window.requestIdleCallback(() => {
-      this.splitBox.setState({
-        vert: this.useLandscapeMode(),
-      });
-      this.emit("inspector-resize");
-    });
+    if (!this._lazyResizeHandler) {
+      this._lazyResizeHandler = new DeferredTask(this._onLazyPanelResize.bind(this),
+                                                 LAZY_RESIZE_INTERVAL_MS, 0);
+    }
+    this._lazyResizeHandler.arm();
   },
 
   getSidebarSize: function() {
@@ -642,8 +700,6 @@ Inspector.prototype = {
 
   async onSidebarToggle() {
     this.is3PaneModeEnabled = !this.is3PaneModeEnabled;
-    Services.prefs.setBoolPref(THREE_PANE_ENABLED_PREF, this.is3PaneModeEnabled);
-
     await this.setupToolbar();
     await this.addRuleView({ skipQueue: true });
   },
@@ -1391,11 +1447,13 @@ Inspector.prototype = {
     this.reflowTracker.destroy();
     this.styleChangeTracker.destroy();
 
+    this._is3PaneModeChromeEnabled = null;
+    this._is3PaneModeEnabled = null;
     this._notificationBox = null;
     this._target = null;
     this._toolbox = null;
     this.breadcrumbs = null;
-    this.is3PaneModeEnabled = null;
+    this.is3PaneModeFirstRun = null;
     this.panelDoc = null;
     this.panelWin.inspector = null;
     this.panelWin = null;
@@ -2358,8 +2416,7 @@ Inspector.prototype = {
       this.inspector.resolveRelativeURL(
         link, this.selection.nodeFront).then(url => {
           if (type === "uri") {
-            const browserWin = this.target.tab.ownerDocument.defaultView;
-            browserWin.openWebLinkIn(url, "tab");
+            openContentLink(url);
           } else if (type === "cssresource") {
             return this.toolbox.viewSourceInStyleEditor(url);
           } else if (type === "jsresource") {

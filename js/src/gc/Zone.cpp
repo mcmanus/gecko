@@ -17,7 +17,7 @@
 
 #include "gc/GC-inl.h"
 #include "gc/Marking-inl.h"
-#include "vm/JSCompartment-inl.h"
+#include "vm/Realm-inl.h"
 
 using namespace js;
 using namespace js::gc;
@@ -61,12 +61,12 @@ JS::Zone::Zone(JSRuntime* rt)
     data(this, nullptr),
     isSystem(this, false),
 #ifdef DEBUG
-    gcLastSweepGroupIndex(this, 0),
+    gcLastSweepGroupIndex(0),
 #endif
     jitZone_(this, nullptr),
     gcScheduled_(false),
     gcScheduledSaved_(false),
-    gcPreserveCode_(this, false),
+    gcPreserveCode_(false),
     keepShapeTables_(this, false),
     listNext_(NotOnList)
 {
@@ -431,8 +431,8 @@ void Zone::releaseAtoms()
     keepAtomsCount--;
 
     if (!hasKeptAtoms() && purgeAtomsDeferred) {
-        atomCache().clearAndShrink();
         purgeAtomsDeferred = false;
+        purgeAtomCache();
     }
 }
 
@@ -444,7 +444,21 @@ Zone::purgeAtomCacheOrDefer()
         return;
     }
 
+    purgeAtomCache();
+}
+
+void
+Zone::purgeAtomCache()
+{
+    MOZ_ASSERT(!hasKeptAtoms());
+    MOZ_ASSERT(!purgeAtomsDeferred);
+
     atomCache().clearAndShrink();
+
+    // Also purge the dtoa caches so that subsequent lookups populate atom
+    // cache too.
+    for (RealmsInZoneIter r(this); !r.done(); r.next())
+        r->dtoaCache.purge();
 }
 
 void

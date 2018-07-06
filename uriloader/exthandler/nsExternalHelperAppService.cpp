@@ -480,6 +480,7 @@ static const nsDefaultMimeTypeEntry defaultMimeEntries[] =
   { IMAGE_ICO, "ico" },
   { TEXT_PLAIN, "properties" },
   { TEXT_PLAIN, "locale" },
+  { TEXT_PLAIN, "ftl" },
 #if defined(MOZ_WMF)
   { VIDEO_MP4, "mp4" },
   { AUDIO_MP4, "m4a" },
@@ -541,6 +542,7 @@ static const nsExtraMimeTypeEntry extraMimeEntries[] =
   { IMAGE_TIFF, "tiff,tif", "TIFF Image" },
   { IMAGE_XBM, "xbm", "XBM Image" },
   { IMAGE_SVG_XML, "svg", "Scalable Vector Graphics" },
+  { IMAGE_WEBP, "webp", "WebP Image" },
   { MESSAGE_RFC822, "eml", "RFC-822 data" },
   { TEXT_PLAIN, "txt,text", "Text File" },
   { APPLICATION_JSON, "json", "JavaScript Object Notation" },
@@ -1212,7 +1214,10 @@ nsExternalAppHandler::nsExternalAppHandler(nsIMIMEInfo * aMIMEInfo,
 , mForceSave(aForceSave)
 , mCanceled(false)
 , mStopRequestIssued(false)
+, mIsFileChannel(false)
 , mReason(aReason)
+, mTempFileIsExecutable(false)
+, mTimeDownloadStarted(0)
 , mContentLength(-1)
 , mProgress(0)
 , mSaver(nullptr)

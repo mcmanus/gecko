@@ -590,7 +590,9 @@ LoadInfoToParentLoadInfoForwarder(nsILoadInfo* aLoadInfo,
                                   ParentLoadInfoForwarderArgs* aForwarderArgsOut)
 {
   if (!aLoadInfo) {
-    *aForwarderArgsOut = ParentLoadInfoForwarderArgs(false, void_t());
+    *aForwarderArgsOut = ParentLoadInfoForwarderArgs(false, void_t(),
+                                                     nsILoadInfo::TAINTING_BASIC,
+                                                     false);
     return;
   }
 
@@ -600,9 +602,14 @@ LoadInfoToParentLoadInfoForwarder(nsILoadInfo* aLoadInfo,
     ipcController = controller.ref().ToIPC();
   }
 
+  uint32_t tainting = nsILoadInfo::TAINTING_BASIC;
+  Unused << aLoadInfo->GetTainting(&tainting);
+
   *aForwarderArgsOut = ParentLoadInfoForwarderArgs(
     aLoadInfo->GetAllowInsecureRedirectToDataURI(),
-    ipcController
+    ipcController,
+    tainting,
+    aLoadInfo->GetServiceWorkerTaintingSynthesized()
   );
 }
 
@@ -625,6 +632,13 @@ MergeParentLoadInfoForwarder(ParentLoadInfoForwarderArgs const& aForwarderArgs,
   if (controller.type() != OptionalIPCServiceWorkerDescriptor::Tvoid_t) {
     aLoadInfo->SetController(
       ServiceWorkerDescriptor(controller.get_IPCServiceWorkerDescriptor()));
+  }
+
+  if (aForwarderArgs.serviceWorkerTaintingSynthesized()) {
+    aLoadInfo->SynthesizeServiceWorkerTainting(
+      static_cast<LoadTainting>(aForwarderArgs.tainting()));
+  } else {
+    aLoadInfo->MaybeIncreaseTainting(aForwarderArgs.tainting());
   }
 
   return NS_OK;
@@ -701,7 +715,11 @@ MergeChildLoadInfoForwarder(const ChildLoadInfoForwarderArgs& aForwarderArgs,
   }
 
   if (reservedClientInfo.isSome()) {
-    aLoadInfo->SetReservedClientInfo(reservedClientInfo.ref());
+    // We need to override here instead of simply set the value.  This
+    // allows us to change the reserved client.  This is necessary when
+    // the ClientChannelHelper created a new reserved client in the
+    // child-side of the redirect.
+    aLoadInfo->OverrideReservedClientInfoInParent(reservedClientInfo.ref());
   } else if (initialClientInfo.isSome()) {
     aLoadInfo->SetInitialClientInfo(initialClientInfo.ref());
   }

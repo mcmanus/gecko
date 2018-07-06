@@ -5,7 +5,6 @@
 "use strict";
 /* global XPCNativeWrapper */
 
-ChromeUtils.import("resource://gre/modules/Log.jsm");
 ChromeUtils.import("resource://gre/modules/Services.jsm");
 ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
@@ -18,6 +17,10 @@ const {
   Context,
   WindowState,
 } = ChromeUtils.import("chrome://marionette/content/browser.js", {});
+const {
+  Capabilities,
+  Timeouts,
+} = ChromeUtils.import("chrome://marionette/content/capabilities.js", {});
 ChromeUtils.import("chrome://marionette/content/capture.js");
 const {
   CertificateOverrideManager,
@@ -47,17 +50,18 @@ const {pprint} = ChromeUtils.import("chrome://marionette/content/format.js", {})
 ChromeUtils.import("chrome://marionette/content/interaction.js");
 ChromeUtils.import("chrome://marionette/content/l10n.js");
 ChromeUtils.import("chrome://marionette/content/legacyaction.js");
+const {Log} = ChromeUtils.import("chrome://marionette/content/log.js", {});
 ChromeUtils.import("chrome://marionette/content/modal.js");
 const {MarionettePrefs} = ChromeUtils.import("chrome://marionette/content/prefs.js", {});
 ChromeUtils.import("chrome://marionette/content/proxy.js");
 ChromeUtils.import("chrome://marionette/content/reftest.js");
-ChromeUtils.import("chrome://marionette/content/session.js");
 const {
   PollPromise,
   TimedPromise,
 } = ChromeUtils.import("chrome://marionette/content/sync.js", {});
 
-Cu.importGlobalProperties(["URL"]);
+XPCOMUtils.defineLazyGetter(this, "logger", Log.get);
+XPCOMUtils.defineLazyGlobalGetters(this, ["URL"]);
 
 this.EXPORTED_SYMBOLS = ["GeckoDriver"];
 
@@ -76,7 +80,6 @@ const SUPPORTED_STRATEGIES = new Set([
   element.Strategy.AnonAttribute,
 ]);
 
-const logger = Log.repository.getLogger("Marionette");
 const globalMessageManager = Services.mm;
 
 /**
@@ -144,7 +147,7 @@ this.GeckoDriver = function(appId, server) {
   this.sandboxes = new Sandboxes(() => this.getCurrentWindow());
   this.legacyactions = new legacyaction.Chain();
 
-  this.capabilities = new session.Capabilities();
+  this.capabilities = new Capabilities();
 
   this.mm = globalMessageManager;
   this.listener = proxy.toListener(
@@ -703,7 +706,7 @@ GeckoDriver.prototype.newSession = async function(cmd) {
   this.sessionID = WebElement.generateUUID();
 
   try {
-    this.capabilities = session.Capabilities.fromJSON(cmd.parameters);
+    this.capabilities = Capabilities.fromJSON(cmd.parameters);
 
     if (!this.secureTLS) {
       logger.warn("TLS certificate errors will be ignored for this session");
@@ -1872,7 +1875,7 @@ GeckoDriver.prototype.getTimeouts = function() {
 GeckoDriver.prototype.setTimeouts = function(cmd) {
   // merge with existing timeouts
   let merged = Object.assign(this.timeouts.toJSON(), cmd.parameters);
-  this.timeouts = session.Timeouts.fromJSON(merged);
+  this.timeouts = Timeouts.fromJSON(merged);
 };
 
 /** Single tap. */
@@ -2855,7 +2858,7 @@ GeckoDriver.prototype.deleteSession = function() {
   CertificateOverrideManager.uninstall();
 
   this.sessionID = null;
-  this.capabilities = new session.Capabilities();
+  this.capabilities = new Capabilities();
 };
 
 /**

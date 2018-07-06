@@ -8,7 +8,7 @@ use mozprofile::preferences::Pref;
 // a Testing :: Marionette peer before you make any changes to this file.
 
 lazy_static! {
-    pub static ref DEFAULT: [(&'static str, Pref); 52] = [
+    pub static ref DEFAULT: Vec<(&'static str, Pref)> = vec![
         // Make sure Shield doesn't hit the network.
         ("app.normandy.api_url", Pref::new("")),
 
@@ -34,10 +34,6 @@ lazy_static! {
 
         // Skip check for default browser on startup
         ("browser.shell.checkDefaultBrowser", Pref::new(false)),
-
-        // Do not warn when quitting with multiple tabs
-        // TODO: Remove once minimum supported Firefox release is 61.
-        ("browser.showQuitWarning", Pref::new(false)),
 
         // Disable Android snippets
         ("browser.snippets.enabled", Pref::new(false)),
@@ -93,6 +89,10 @@ lazy_static! {
         // TODO: Remove once minimum supported Firefox release is 60.
         ("extensions.shield-recipe-client.api_url", Pref::new("")),
 
+        // Disable extensions compatibility dialogue.
+        // TODO: Remove once minimum supported Firefox release is 61.
+        ("extensions.showMismatchUI", Pref::new(false)),
+
         // Turn off extension updates so they do not bother tests
         ("extensions.update.enabled", Pref::new(false)),
         ("extensions.update.notifyUser", Pref::new(false)),
@@ -116,6 +116,9 @@ lazy_static! {
 
         // Show chrome errors and warnings in the error console
         ("javascript.options.showInConsole", Pref::new(true)),
+
+        // Disable download and usage of OpenH264, and Widevine plugins
+        ("media.gmp-manager.updateEnabled", Pref::new(false)),
 
         // Do not prompt with long usernames or passwords in URLs
         // TODO: Remove once minimum supported Firefox release is 61.

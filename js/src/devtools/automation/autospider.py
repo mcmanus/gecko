@@ -242,7 +242,10 @@ info("looking for compiler under {}/".format(compiler_dir))
 if os.path.exists(os.path.join(compiler_dir, 'bin', compiler)):
     env.setdefault('CC', os.path.join(compiler_dir, 'bin', compiler))
     env.setdefault('CXX', os.path.join(compiler_dir, 'bin', cxx))
-    platlib = 'lib64' if word_bits == 64 else 'lib'
+    if compiler == 'clang':
+        platlib = 'lib'
+    else:
+        platlib = 'lib64' if word_bits == 64 else 'lib'
     env.setdefault('LD_LIBRARY_PATH', os.path.join(compiler_dir, platlib))
 else:
     env.setdefault('CC', compiler)
@@ -297,7 +300,7 @@ else:
         CONFIGURE_ARGS += ' --target=x86_64-pc-mingw32 --host=x86_64-pc-mingw32'
 
 if platform.system() == 'Linux' and AUTOMATION:
-    CONFIGURE_ARGS = '--enable-stdcxx-compat ' + CONFIGURE_ARGS
+    CONFIGURE_ARGS = '--enable-stdcxx-compat --disable-gold ' + CONFIGURE_ARGS
 
 # Timeouts.
 ACTIVE_PROCESSES = set()

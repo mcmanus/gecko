@@ -38,8 +38,8 @@
 #include "gc/GC-inl.h"
 #include "gc/Nursery-inl.h"
 #include "gc/PrivateIterators-inl.h"
-#include "vm/JSCompartment-inl.h"
 #include "vm/NativeObject-inl.h"
+#include "vm/Realm-inl.h"
 #include "vm/StringType-inl.h"
 #include "vm/UnboxedObject-inl.h"
 
@@ -54,6 +54,8 @@ using mozilla::IsBaseOf;
 using mozilla::IsSame;
 using mozilla::PodCopy;
 
+// [SMDOC] GC Tracing
+//
 // Tracing Overview
 // ================
 //
@@ -268,9 +270,8 @@ js::CheckTracedThing(JSTracer* trc, T* thing)
      * thread during compacting GC and reading the contents of the thing by
      * IsThingPoisoned would be racy in this case.
      */
-    MOZ_ASSERT_IF(JS::CurrentThreadIsHeapBusy() &&
-                  !zone->isGCCompacting() &&
-                  !rt->gc.isBackgroundSweeping(),
+    MOZ_ASSERT_IF(JS::RuntimeHeapIsBusy() &&
+                  !zone->isGCSweeping() && !zone->isGCFinished() && !zone->isGCCompacting(),
                   !IsThingPoisoned(thing) || !InFreeList(thing->asTenured().arena(), thing));
 #endif
 }
@@ -905,9 +906,10 @@ template <typename T>
 bool
 js::GCMarker::mark(T* thing)
 {
+    if (IsInsideNursery(thing))
+        return false;
     AssertShouldMarkInZone(thing);
     TenuredCell* cell = TenuredCell::fromPointer(thing);
-    MOZ_ASSERT(!IsInsideNursery(cell));
 
     if (!TypeParticipatesInCC<T>::value)
         return cell->markIfUnmarked(MarkColor::Black);
@@ -2563,7 +2565,7 @@ GCMarker::checkZone(void* p)
 
 size_t
 GCMarker::sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf,
-                              const AutoLockForExclusiveAccess& lock) const
+                              const AutoAccessAtomsZone& access) const
 {
     size_t size = stack.sizeOfExcludingThis(mallocSizeOf);
     for (ZonesIter zone(runtime(), WithAtoms); !zone.done(); zone.next())
@@ -2575,7 +2577,7 @@ GCMarker::sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf,
 Zone*
 GCMarker::stackContainsCrossZonePointerTo(const Cell* target) const
 {
-    MOZ_ASSERT(!JS::CurrentThreadIsHeapCollecting());
+    MOZ_ASSERT(!JS::RuntimeHeapIsCollecting());
 
     Zone* targetZone = target->asTenured().zone();
 
@@ -3214,7 +3216,7 @@ CheckIsMarkedThing(T* thingp)
     MOZ_ASSERT_IF(!ThingIsPermanentAtomOrWellKnownSymbol(*thingp),
                   CurrentThreadCanAccessRuntime(rt) ||
                   CurrentThreadCanAccessZone((*thingp)->zoneFromAnyThread()) ||
-                  (JS::CurrentThreadIsHeapCollecting() && rt->gc.state() == State::Sweep));
+                  (JS::RuntimeHeapIsCollecting() && rt->gc.state() == State::Sweep));
 #endif
 }
 
@@ -3299,7 +3301,7 @@ js::gc::IsAboutToBeFinalizedInternal(T** thingp)
         return false;
 
     if (IsInsideNursery(thing)) {
-        return JS::CurrentThreadIsHeapMinorCollecting() &&
+        return JS::RuntimeHeapIsMinorCollecting() &&
                !Nursery::getForwardedPointer(reinterpret_cast<Cell**>(thingp));
     }
 
@@ -3514,8 +3516,8 @@ UnmarkGrayGCThing(JSRuntime* rt, JS::GCCellPtr thing)
 JS_FRIEND_API(bool)
 JS::UnmarkGrayGCThingRecursively(JS::GCCellPtr thing)
 {
-    MOZ_ASSERT(!JS::CurrentThreadIsHeapCollecting());
-    MOZ_ASSERT(!JS::CurrentThreadIsHeapCycleCollecting());
+    MOZ_ASSERT(!JS::RuntimeHeapIsCollecting());
+    MOZ_ASSERT(!JS::RuntimeHeapIsCycleCollecting());
 
     JSRuntime* rt = thing.asCell()->runtimeFromMainThread();
     gcstats::AutoPhase outerPhase(rt->gc.stats(), gcstats::PhaseKind::BARRIER);

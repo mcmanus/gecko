@@ -232,7 +232,7 @@ function isUSTimezone() {
 
 const kDefaultenginenamePref = "browser.search.defaultenginename";
 const kTestEngineName = "Test search engine";
-const REQ_LOCALES_CHANGED_TOPIC = "intl:requested-locales-changed";
+const TOPIC_LOCALES_CHANGE = "intl:app-locales-changed";
 
 function getDefaultEngineName(isUS) {
   // The list of visibleDefaultEngines needs to match or the cache will be ignored.
@@ -251,6 +251,40 @@ function getDefaultEngineName(isUS) {
     defaultEngineName = searchSettings.US.searchDefault;
   }
   return defaultEngineName;
+}
+
+function getDefaultEngineList(isUS) {
+  // The list of visibleDefaultEngines needs to match or the cache will be ignored.
+  let chan = NetUtil.newChannel({
+    uri: "resource://search-plugins/list.json",
+    loadUsingSystemPrincipal: true
+  });
+  let json = parseJsonFromStream(chan.open2());
+  let visibleDefaultEngines = json.default.visibleDefaultEngines;
+
+  if (isUS === undefined)
+    isUS = Services.locale.getRequestedLocale() == "en-US" && isUSTimezone();
+
+  if (isUS) {
+    let searchSettings = json.locales["en-US"];
+    if ("US" in searchSettings &&
+        "visibleDefaultEngines" in searchSettings.US) {
+      visibleDefaultEngines = searchSettings.US.visibleDefaultEngines;
+    }
+    // From nsSearchService.js
+    let searchRegion = "US";
+    if ("regionOverrides" in json &&
+        searchRegion in json.regionOverrides) {
+      for (let engine in json.regionOverrides[searchRegion]) {
+        let index = visibleDefaultEngines.indexOf(engine);
+        if (index > -1) {
+          visibleDefaultEngines[index] = json.regionOverrides[searchRegion][engine];
+        }
+      }
+    }
+  }
+
+  return visibleDefaultEngines;
 }
 
 /**
@@ -463,7 +497,7 @@ function asyncReInit() {
   let promise = waitForSearchNotification("reinit-complete");
 
   Services.search.QueryInterface(Ci.nsIObserver)
-          .observe(null, REQ_LOCALES_CHANGED_TOPIC, null);
+          .observe(null, TOPIC_LOCALES_CHANGE, null);
 
   return promise;
 }

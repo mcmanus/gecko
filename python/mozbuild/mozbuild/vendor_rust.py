@@ -148,6 +148,7 @@ Please commit or stash these changes before vendoring, or re-run with `--ignore-
             'Apache-2.0 / MIT',
             'Apache-2.0/MIT',
             'Apache-2 / MIT',
+            'BSD-2-Clause',
             'CC0-1.0',
             'ISC',
             'ISC/Apache-2.0',
@@ -162,9 +163,6 @@ Please commit or stash these changes before vendoring, or re-run with `--ignore-
         # Licenses for code used at build time (e.g. code generators). Please see the above
         # comments before adding anything to this list.
         BUILDTIME_LICENSE_WHITELIST = {
-            'BSD-2-Clause': [
-                'Inflector',
-            ],
             'BSD-3-Clause': [
                 'adler32',
                 'bindgen',
@@ -274,7 +272,7 @@ license file's hash.
         # Force all of the packages to be checked for license information
         # before reducing via `all`, so all license issues are found in a
         # single `mach vendor rust` invocation.
-        results = [check_package(p) for p in os.listdir(vendor_dir)]
+        results = [check_package(p) for p in os.listdir(vendor_dir) if os.path.isdir(os.path.join(vendor_dir, p))]
         return all(results)
 
     def vendor(self, ignore_modified=False,

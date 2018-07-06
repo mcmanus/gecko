@@ -19,7 +19,7 @@ namespace dom {
 JSObject*
 SVGScriptElement::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return SVGScriptElementBinding::Wrap(aCx, this, aGivenProto);
+  return SVGScriptElement_Binding::Wrap(aCx, this, aGivenProto);
 }
 
 nsSVGElement::StringInfo SVGScriptElement::sStringInfo[2] =
@@ -168,7 +168,7 @@ SVGScriptElement::FreezeExecutionAttrs(nsIDocument* aOwnerDoc)
           NS_LITERAL_CSTRING("SVG"), OwnerDoc(),
           nsContentUtils::eDOM_PROPERTIES, "ScriptSourceInvalidUri",
           params, ArrayLength(params), nullptr,
-          EmptyString(), GetScriptLineNumber());
+          EmptyString(), GetScriptLineNumber(), GetScriptColumnNumber());
       }
     } else {
       const char16_t* params[] = { isHref ? u"href" : u"xlink:href" };
@@ -177,7 +177,7 @@ SVGScriptElement::FreezeExecutionAttrs(nsIDocument* aOwnerDoc)
         NS_LITERAL_CSTRING("SVG"), OwnerDoc(),
         nsContentUtils::eDOM_PROPERTIES, "ScriptSourceEmpty",
         params, ArrayLength(params), nullptr,
-        EmptyString(), GetScriptLineNumber());
+        EmptyString(), GetScriptLineNumber(), GetScriptColumnNumber());
     }
 
     // At this point mUri will be null for invalid URLs.

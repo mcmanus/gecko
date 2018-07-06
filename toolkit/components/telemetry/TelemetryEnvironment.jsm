@@ -30,8 +30,6 @@ ChromeUtils.defineModuleGetter(this, "LightweightThemeManager",
                                "resource://gre/modules/LightweightThemeManager.jsm");
 ChromeUtils.defineModuleGetter(this, "ProfileAge",
                                "resource://gre/modules/ProfileAge.jsm");
-ChromeUtils.defineModuleGetter(this, "UpdateUtils",
-                               "resource://gre/modules/UpdateUtils.jsm");
 ChromeUtils.defineModuleGetter(this, "WindowsRegistry",
                                "resource://gre/modules/WindowsRegistry.jsm");
 
@@ -233,6 +231,7 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
   ["general.smoothScroll", {what: RECORD_PREF_VALUE}],
   ["gfx.direct2d.disabled", {what: RECORD_PREF_VALUE}],
   ["gfx.direct2d.force-enabled", {what: RECORD_PREF_VALUE}],
+  ["gfx.webrender.force-disabled", {what: RECORD_PREF_VALUE}],
   ["layers.acceleration.disabled", {what: RECORD_PREF_VALUE}],
   ["layers.acceleration.force-enabled", {what: RECORD_PREF_VALUE}],
   ["layers.async-pan-zoom.enabled", {what: RECORD_PREF_VALUE}],
@@ -1410,7 +1409,7 @@ EnvironmentCache.prototype = {
   _updateSettings() {
     let updateChannel = null;
     try {
-      updateChannel = UpdateUtils.getUpdateChannel(false);
+      updateChannel = Utils.getUpdateChannel();
     } catch (e) {}
 
     this._currentEnvironment.settings = {

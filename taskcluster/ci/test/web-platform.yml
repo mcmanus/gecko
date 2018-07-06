@@ -19,6 +19,7 @@ web-platform-tests:
     treeherder-symbol: W(wpt)
     chunks:
         by-test-platform:
+            linux.*/debug: 18
             macosx64/opt: 5
             macosx64/debug: 10
             windows10-64-ccov/debug: 15
@@ -31,7 +32,10 @@ web-platform-tests:
         by-test-platform:
             linux32/debug: both
             default: true
-    run-on-projects: built-projects
+    run-on-projects:
+        by-test-platform:
+            linux64-qr/.*: ['release', 'try']
+            default: built-projects
     mozharness:
         chunked: true
         extra-options:
@@ -78,7 +82,10 @@ web-platform-tests-reftests:
         by-test-platform:
             linux32/debug: both
             default: true
-    run-on-projects: built-projects
+    run-on-projects:
+        by-test-platform:
+            linux64-qr/.*: ['release', 'try']
+            default: built-projects
     mozharness:
         extra-options:
             - --test-type=reftest
@@ -115,7 +122,10 @@ web-platform-tests-wdspec:
     mozharness:
         extra-options:
             - --test-type=wdspec
-    run-on-projects: built-projects
+    run-on-projects:
+        by-test-platform:
+            linux64-qr/.*: ['release', 'try']
+            default: built-projects
 
 web-platform-tests-wdspec-headless:
     description: "Web platform webdriver-spec headless run"

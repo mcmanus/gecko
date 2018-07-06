@@ -8,6 +8,7 @@ const Services = require("Services");
 const {LocalizationHelper} = require("devtools/shared/l10n");
 const L10N = new LocalizationHelper("devtools/client/locales/toolbox.properties");
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
+const Telemetry = require("devtools/client/shared/telemetry");
 
 loader.lazyRequireGetter(this, "Toolbox", "devtools/client/framework/toolbox", true);
 loader.lazyRequireGetter(this, "Hosts", "devtools/client/framework/toolbox-hosts", true);
@@ -44,9 +45,15 @@ function ToolboxHostManager(target, hostType, hostOptions) {
 
   if (!hostType) {
     hostType = Services.prefs.getCharPref(LAST_HOST);
+    if (!Hosts[hostType]) {
+      // If the preference value is unexpected, restore to the default value.
+      Services.prefs.clearUserPref(LAST_HOST);
+      hostType = Services.prefs.getCharPref(LAST_HOST);
+    }
   }
   this.host = this.createHost(hostType, hostOptions);
   this.hostType = hostType;
+  this.telemetry = new Telemetry();
 }
 
 ToolboxHostManager.prototype = {
@@ -58,8 +65,10 @@ ToolboxHostManager.prototype = {
     // We have to listen on capture as no event fires on bubble
     this.host.frame.addEventListener("unload", this, true);
 
+    const msSinceProcessStart = parseInt(this.telemetry.msSinceProcessStart(), 10);
     const toolbox = new Toolbox(this.target, toolId, this.host.type,
-                              this.host.frame.contentWindow, this.frameId);
+                                this.host.frame.contentWindow, this.frameId,
+                                msSinceProcessStart);
 
     // Prevent reloading the toolbox when loading the tools in a tab
     // (e.g. from about:debugging)
@@ -67,6 +76,10 @@ ToolboxHostManager.prototype = {
     if (!location.href.startsWith("about:devtools-toolbox")) {
       this.host.frame.setAttribute("src", "about:devtools-toolbox");
     }
+
+    // We set an attribute on the toolbox iframe so that apps do not need
+    // access to the toolbox internals in order to get the session ID.
+    this.host.frame.setAttribute("session_id", msSinceProcessStart);
 
     return toolbox;
   },
@@ -99,20 +112,21 @@ ToolboxHostManager.prototype = {
     if (!event.data) {
       return;
     }
+    const msg = event.data;
     // Toolbox document is still chrome and disallow identifying message
     // origin via event.source as it is null. So use a custom id.
-    if (event.data.frameId != this.frameId) {
+    if (msg.frameId != this.frameId) {
       return;
     }
-    switch (event.data.name) {
+    switch (msg.name) {
       case "switch-host":
-        this.switchHost(event.data.hostType);
+        this.switchHost(msg.hostType);
         break;
       case "raise-host":
         this.host.raise();
         break;
       case "set-host-title":
-        this.host.setTitle(event.data.title);
+        this.host.setTitle(msg.title);
         break;
     }
   },

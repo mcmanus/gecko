@@ -18,6 +18,9 @@ XPCOMUtils.defineLazyModuleGetters(this, {
 XPCOMUtils.defineLazyServiceGetter(this, "sas",
                                    "@mozilla.org/storage/activity-service;1",
                                    "nsIStorageActivityService");
+XPCOMUtils.defineLazyServiceGetter(this, "eTLDService",
+                                   "@mozilla.org/network/effective-tld-service;1",
+                                   "nsIEffectiveTLDService");
 
 // A Cleaner is an object with 3 methods. These methods must return a Promise
 // object. Here a description of these methods:
@@ -92,6 +95,16 @@ const NetworkCacheCleaner = {
 };
 
 const ImageCacheCleaner = {
+  deleteByPrincipal(aPrincipal) {
+    return new Promise(aResolve => {
+      let imageCache = Cc["@mozilla.org/image/tools;1"]
+                         .getService(Ci.imgITools)
+                         .getImgCacheForDocument(null);
+      imageCache.removeEntriesFromPrincipal(aPrincipal);
+      aResolve();
+    });
+  },
+
   deleteAll() {
     return new Promise(aResolve => {
       let imageCache = Cc["@mozilla.org/image/tools;1"]
@@ -188,7 +201,7 @@ const PluginDataCleaner = {
 const DownloadsCleaner = {
   deleteByHost(aHost, aOriginAttributes) {
     return Downloads.getList(Downloads.ALL).then(aList => {
-      aList.removeFinished(aDownload => hasRootDomain(
+      aList.removeFinished(aDownload => eTLDService.hasRootDomain(
         Services.io.newURI(aDownload.source.url).host, aHost));
     });
   },
@@ -213,7 +226,7 @@ const DownloadsCleaner = {
 
 const PasswordsCleaner = {
   deleteByHost(aHost, aOriginAttributes) {
-    return this._deleteInternal(aLogin => hasRootDomain(aLogin.hostname, aHost));
+    return this._deleteInternal(aLogin => eTLDService.hasRootDomain(aLogin.hostname, aHost));
   },
 
   deleteAll() {
@@ -402,6 +415,10 @@ const PredictorNetworkCleaner = {
 
 const PushNotificationsCleaner = {
   deleteByHost(aHost, aOriginAttributes) {
+    if (!Services.prefs.getBoolPref("dom.push.enabled", false)) {
+      return Promise.resolve();
+    }
+
     return new Promise((aResolve, aReject) => {
       let push = Cc["@mozilla.org/push/Service;1"]
                    .getService(Ci.nsIPushService);
@@ -416,6 +433,10 @@ const PushNotificationsCleaner = {
   },
 
   deleteAll() {
+    if (!Services.prefs.getBoolPref("dom.push.enabled", false)) {
+      return Promise.resolve();
+    }
+
     return new Promise((aResolve, aReject) => {
       let push = Cc["@mozilla.org/push/Service;1"]
                    .getService(Ci.nsIPushService);
@@ -490,7 +511,7 @@ const PermissionsCleaner = {
       while (enumerator.hasMoreElements()) {
         let perm = enumerator.getNext().QueryInterface(Ci.nsIPermission);
         try {
-          if (hasRootDomain(perm.principal.URI.host, aHost)) {
+          if (eTLDService.hasRootDomain(perm.principal.URI.host, aHost)) {
             Services.perms.removePermission(perm);
           }
         } catch (ex) {
@@ -566,7 +587,7 @@ const SecuritySettingsCleaner = {
         while (enumerator.hasMoreElements()) {
           let entry = enumerator.getNext();
           let hostname = entry.QueryInterface(Ci.nsISiteSecurityState).hostname;
-          if (hasRootDomain(hostname, aHost)) {
+          if (eTLDService.hasRootDomain(hostname, aHost)) {
             // This uri is used as a key to remove the state.
             let uri = Services.io.newURI("https://" + hostname);
             sss.removeState(type, uri, 0, entry.originAttributes);
@@ -700,7 +721,7 @@ ClearDataService.prototype = Object.freeze({
     }
 
     return this._deleteInternal(aFlags, aCallback, aCleaner => {
-      if ("deleteByPrincipal" in aCleaner && aCleaner.deleteByPrincipal) {
+      if (aCleaner.deleteByPrincipal) {
         return aCleaner.deleteByPrincipal(aPrincipal);
       }
       // Some of the 'Cleaners' do not support to delete by principal. Fallback
@@ -764,27 +785,3 @@ ClearDataService.prototype = Object.freeze({
 });
 
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory([ClearDataService]);
-
-/**
- * Returns true if the string passed in is part of the root domain of the
- * current string.  For example, if this is "www.mozilla.org", and we pass in
- * "mozilla.org", this will return true.  It would return false the other way
- * around.
- */
-function hasRootDomain(str, aDomain) {
-  let index = str.indexOf(aDomain);
-  // If aDomain is not found, we know we do not have it as a root domain.
-  if (index == -1)
-    return false;
-
-  // If the strings are the same, we obviously have a match.
-  if (str == aDomain)
-    return true;
-
-  // Otherwise, we have aDomain as our root domain iff the index of aDomain is
-  // aDomain.length subtracted from our length and (since we do not have an
-  // exact match) the character before the index is a dot or slash.
-  let prevChar = str[index - 1];
-  return (index == (str.length - aDomain.length)) &&
-         (prevChar == "." || prevChar == "/");
-}

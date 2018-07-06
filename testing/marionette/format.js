@@ -4,20 +4,22 @@
 
 "use strict";
 
-ChromeUtils.import("resource://gre/modules/Log.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+
+const {Log} = ChromeUtils.import("chrome://marionette/content/log.js", {});
+
+XPCOMUtils.defineLazyGetter(this, "log", Log.get);
 
 this.EXPORTED_SYMBOLS = ["pprint", "truncate"];
 
-const log = Log.repository.getLogger("Marionette");
-
+const ELEMENT_NODE = 1;
 const MAX_STRING_LENGTH = 250;
 
 /**
  * Pretty-print values passed to template strings.
  *
- * Usage:
+ * Usage::
  *
- * <pre><code>
  *     const {pprint} = Cu.import("chrome://marionette/content/error.js", {});
  *     let bool = {value: true};
  *     pprint`Expected boolean, got ${bool}`;
@@ -29,16 +31,17 @@ const MAX_STRING_LENGTH = 250;
  *
  *     pprint`Current window: ${window}`;
  *     => '[object Window https://www.mozilla.org/]'
- * </code></pre>
  */
 function pprint(ss, ...values) {
   function pretty(val) {
     let proto = Object.prototype.toString.call(val);
-
-    if (val && val.nodeType === 1) {
+    if (typeof val == "object" && val !== null &&
+        "nodeType" in val && val.nodeType === ELEMENT_NODE) {
       return prettyElement(val);
     } else if (["[object Window]", "[object ChromeWindow]"].includes(proto)) {
       return prettyWindowGlobal(val);
+    } else if (proto == "[object Attr]") {
+      return prettyAttr(val);
     }
     return prettyObject(val);
   }
@@ -59,6 +62,10 @@ function pprint(ss, ...values) {
   function prettyWindowGlobal(win) {
     let proto = Object.prototype.toString.call(win);
     return `[${proto.substring(1, proto.length - 1)} ${win.location}]`;
+  }
+
+  function prettyAttr(obj) {
+    return `[object Attr ${obj.name}="${obj.value}"]`;
   }
 
   function prettyObject(obj) {

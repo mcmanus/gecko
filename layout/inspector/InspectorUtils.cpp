@@ -30,7 +30,7 @@
 #include "mozilla/StyleSheetInlines.h"
 #include "mozilla/dom/CharacterData.h"
 #include "mozilla/dom/Element.h"
-#include "mozilla/dom/CSSLexer.h"
+#include "mozilla/dom/CSSStyleRule.h"
 #include "mozilla/dom/InspectorUtilsBinding.h"
 #include "mozilla/dom/ToJSValue.h"
 #include "nsCSSProps.h"
@@ -40,7 +40,6 @@
 #include "nsStyleUtil.h"
 #include "nsQueryObject.h"
 #include "mozilla/ServoBindings.h"
-#include "mozilla/ServoStyleRule.h"
 #include "mozilla/ServoStyleRuleMap.h"
 #include "mozilla/ServoCSSParser.h"
 #include "mozilla/dom/InspectorUtils.h"
@@ -223,7 +222,7 @@ InspectorUtils::GetCSSStyleRules(GlobalObject& aGlobalObject,
 
   // Find matching rules in the table.
   for (const RawServoStyleRule* rawRule : Reversed(rawRuleList)) {
-    ServoStyleRule* rule = nullptr;
+    CSSStyleRule* rule = nullptr;
     for (ServoStyleRuleMap* map : maps) {
       rule = map->Lookup(rawRule);
       if (rule) {
@@ -302,12 +301,6 @@ InspectorUtils::GetRelativeRuleLine(GlobalObject& aGlobal, css::Rule& aRule)
 InspectorUtils::HasRulesModifiedByCSSOM(GlobalObject& aGlobal, StyleSheet& aSheet)
 {
   return aSheet.HasModifiedRules();
-}
-
-/* static */ CSSLexer*
-InspectorUtils::GetCSSLexer(GlobalObject& aGlobal, const nsAString& aText)
-{
-  return new CSSLexer(aText);
 }
 
 /* static */ uint32_t

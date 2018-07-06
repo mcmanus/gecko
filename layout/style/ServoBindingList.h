@@ -264,15 +264,16 @@ SERVO_BINDING_FUNC(Servo_CssRules_DeleteRule, nsresult,
   BASIC_RULE_FUNCS(type_) \
   SERVO_BINDING_FUNC(Servo_##type_##Rule_GetRules, ServoCssRulesStrong, \
                      RawServo##type_##RuleBorrowed rule)
+
 BASIC_RULE_FUNCS(Style)
 BASIC_RULE_FUNCS(Import)
 BASIC_RULE_FUNCS_WITHOUT_GETTER(Keyframe)
 BASIC_RULE_FUNCS(Keyframes)
 GROUP_RULE_FUNCS(Media)
+GROUP_RULE_FUNCS(MozDocument)
 BASIC_RULE_FUNCS(Namespace)
 BASIC_RULE_FUNCS(Page)
 GROUP_RULE_FUNCS(Supports)
-GROUP_RULE_FUNCS(Document)
 BASIC_RULE_FUNCS(FontFeatureValues)
 BASIC_RULE_FUNCS(FontFace)
 BASIC_RULE_FUNCS(CounterStyle)
@@ -352,8 +353,8 @@ SERVO_BINDING_FUNC(Servo_PageRule_SetStyle, void,
                    RawServoDeclarationBlockBorrowed declarations)
 SERVO_BINDING_FUNC(Servo_SupportsRule_GetConditionText, void,
                    RawServoSupportsRuleBorrowed rule, nsAString* result)
-SERVO_BINDING_FUNC(Servo_DocumentRule_GetConditionText, void,
-                   RawServoDocumentRuleBorrowed rule, nsAString* result)
+SERVO_BINDING_FUNC(Servo_MozDocumentRule_GetConditionText, void,
+                   RawServoMozDocumentRuleBorrowed rule, nsAString* result)
 SERVO_BINDING_FUNC(Servo_FontFeatureValuesRule_GetFontFamily, void,
                    RawServoFontFeatureValuesRuleBorrowed rule,
                    nsAString* result)
@@ -509,12 +510,6 @@ SERVO_BINDING_FUNC(Servo_AnimationValue_Compute,
                    RawServoDeclarationBlockBorrowed declarations,
                    ComputedStyleBorrowed style,
                    RawServoStyleSetBorrowed raw_data)
-
-// There's no reason we couldn't expose more stuff here, but GetCssText is
-// pretty much all we'd ever want.
-SERVO_BINDING_FUNC(Servo_UnlockedDeclarationBlock_GetCssText, void,
-                   const RawServoUnlockedDeclarationBlock* declarations,
-                   nsAString* result)
 
 // Style attribute
 SERVO_BINDING_FUNC(Servo_ParseStyleAttribute, RawServoDeclarationBlockStrong,
@@ -825,7 +820,7 @@ SERVO_BINDING_FUNC(Servo_SerializeFontValueForCanvas, void,
                    RawServoDeclarationBlockBorrowed declarations,
                    nsAString* buffer)
 
-// Get custom property value.
+// GetComputedStyle APIs.
 SERVO_BINDING_FUNC(Servo_GetCustomPropertyValue, bool,
                    ComputedStyleBorrowed computed_values,
                    const nsAString* name, nsAString* value)
@@ -837,6 +832,9 @@ SERVO_BINDING_FUNC(Servo_GetCustomPropertyNameAt, bool,
                    ComputedStyleBorrowed, uint32_t index,
                    nsAString* name)
 
+SERVO_BINDING_FUNC(Servo_GetPropertyValue, void,
+                   ComputedStyleBorrowed computed_values,
+                   nsCSSPropertyID property, nsAString* value)
 
 SERVO_BINDING_FUNC(Servo_ProcessInvalidations, void,
                    RawServoStyleSetBorrowed set,
@@ -882,6 +880,10 @@ SERVO_BINDING_FUNC(Servo_ParseFontShorthandForMatching, bool,
                    nsCSSValueBorrowedMut stretch,
                    nsCSSValueBorrowedMut weight);
 
+SERVO_BINDING_FUNC(Servo_ResolveLogicalProperty,
+                   nsCSSPropertyID,
+                   nsCSSPropertyID,
+                   ComputedStyleBorrowed);
 SERVO_BINDING_FUNC(Servo_Property_IsShorthand, bool,
                    const nsACString* name, bool* found);
 SERVO_BINDING_FUNC(Servo_Property_IsInherited, bool,

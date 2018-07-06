@@ -396,7 +396,8 @@ LoadInfo::LoadInfo(const LoadInfo& rhs)
   , mForcePreflight(rhs.mForcePreflight)
   , mIsPreflight(rhs.mIsPreflight)
   , mLoadTriggeredFromExternal(rhs.mLoadTriggeredFromExternal)
-  , mServiceWorkerTaintingSynthesized(rhs.mServiceWorkerTaintingSynthesized)
+  // mServiceWorkerTaintingSynthesized must be handled specially during redirect
+  , mServiceWorkerTaintingSynthesized(false)
 {
 }
 
@@ -1322,6 +1323,17 @@ LoadInfo::SetReservedClientInfo(const ClientInfo& aClientInfo)
   if (mReservedClientInfo.isSome() && mReservedClientInfo.ref() == aClientInfo) {
     return;
   }
+  mReservedClientInfo.emplace(aClientInfo);
+}
+
+void
+LoadInfo::OverrideReservedClientInfoInParent(const ClientInfo& aClientInfo)
+{
+  // This should only be called to handle redirects in the parent process.
+  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
+
+  mInitialClientInfo.reset();
+  mReservedClientInfo.reset();
   mReservedClientInfo.emplace(aClientInfo);
 }
 

@@ -8,7 +8,6 @@
 
 const EventEmitter = require("devtools/shared/event-emitter");
 const promise = require("promise");
-const defer = require("devtools/shared/defer");
 const Services = require("Services");
 const {DOMHelpers} = require("resource://devtools/client/shared/DOMHelpers.jsm");
 
@@ -124,9 +123,9 @@ BottomHost.prototype = {
  * Base Host object for the in-browser sidebar
  */
 class SidebarHost {
-  constructor(hostTab, hostType) {
+  constructor(hostTab, type) {
     this.hostTab = hostTab;
-    this.type = hostType;
+    this.type = type;
     this.widthPref = "devtools.toolbox.sidebar.width";
 
     EventEmitter.decorate(this);
@@ -154,7 +153,7 @@ class SidebarHost {
       this._sidebar.clientWidth - MIN_PAGE_SIZE
     );
 
-    if (this.hostType == "right") {
+    if (this.type == "right") {
       this._sidebar.appendChild(this._splitter);
       this._sidebar.appendChild(this.frame);
     } else {
@@ -243,36 +242,33 @@ WindowHost.prototype = {
    * Create a new xul window to contain the toolbox.
    */
   create: function() {
-    const deferred = defer();
+    return new Promise(resolve => {
+      const flags = "chrome,centerscreen,resizable,dialog=no";
+      const win = Services.ww.openWindow(null, this.WINDOW_URL, "_blank",
+                                      flags, null);
 
-    const flags = "chrome,centerscreen,resizable,dialog=no";
-    const win = Services.ww.openWindow(null, this.WINDOW_URL, "_blank",
-                                     flags, null);
+      const frameLoad = () => {
+        win.removeEventListener("load", frameLoad, true);
+        win.focus();
 
-    const frameLoad = () => {
-      win.removeEventListener("load", frameLoad, true);
-      win.focus();
+        let key;
+        if (AppConstants.platform === "macosx") {
+          key = win.document.getElementById("toolbox-key-toggle-osx");
+        } else {
+          key = win.document.getElementById("toolbox-key-toggle");
+        }
+        key.removeAttribute("disabled");
 
-      let key;
-      if (AppConstants.platform === "macosx") {
-        key = win.document.getElementById("toolbox-key-toggle-osx");
-      } else {
-        key = win.document.getElementById("toolbox-key-toggle");
-      }
-      key.removeAttribute("disabled");
+        this.frame = win.document.getElementById("toolbox-iframe");
+        this.emit("ready", this.frame);
+        resolve(this.frame);
+      };
 
-      this.frame = win.document.getElementById("toolbox-iframe");
-      this.emit("ready", this.frame);
+      win.addEventListener("load", frameLoad, true);
+      win.addEventListener("unload", this._boundUnload);
 
-      deferred.resolve(this.frame);
-    };
-
-    win.addEventListener("load", frameLoad, true);
-    win.addEventListener("unload", this._boundUnload);
-
-    this._window = win;
-
-    return deferred.promise;
+      this._window = win;
+    });
   },
 
   /**
@@ -335,11 +331,12 @@ CustomHost.prototype = {
     if (!topWindow) {
       return;
     }
-    const json = {name: "toolbox-" + msg, uid: this.uid};
-    if (data) {
-      json.data = data;
-    }
-    topWindow.postMessage(JSON.stringify(json), "*");
+    const message = {
+      name: "toolbox-" + msg,
+      uid: this.uid,
+      data,
+    };
+    topWindow.postMessage(message, "*");
   },
 
   /**

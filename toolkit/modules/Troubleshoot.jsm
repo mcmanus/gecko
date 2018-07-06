@@ -9,7 +9,8 @@ var EXPORTED_SYMBOLS = [
 ChromeUtils.import("resource://gre/modules/AddonManager.jsm");
 ChromeUtils.import("resource://gre/modules/Services.jsm");
 ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
-Cu.importGlobalProperties(["DOMParser"]);
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+XPCOMUtils.defineLazyGlobalGetters(this, ["DOMParser"]);
 
 // We use a preferences whitelist to make sure we only show preferences that
 // are useful for support and won't compromise the user's privacy.  Note that
@@ -24,9 +25,9 @@ const PREFS_WHITELIST = [
   "browser.download.hide_plugins_without_extensions",
   "browser.download.lastDir.savePerSite",
   "browser.download.manager.addToRecentDocs",
-  "browser.download.manager.alertOnEXEOpen",
   "browser.download.manager.resumeOnWakeDelay",
   "browser.download.preferred.",
+  "browser.download.skipConfirmLaunchExecutable",
   "browser.download.useDownloadDir",
   "browser.fixup.",
   "browser.history_expire_",

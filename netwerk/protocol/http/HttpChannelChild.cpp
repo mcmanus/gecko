@@ -428,7 +428,8 @@ class StartRequestEvent : public NeckoTargetChannelEvent<HttpChannelChild>
                     const uint32_t& aCacheKey,
                     const nsCString& altDataType,
                     const int64_t& altDataLen,
-                    const bool& aApplyConversion)
+                    const bool& aApplyConversion,
+                    const ResourceTimingStruct& aTiming)
   : NeckoTargetChannelEvent<HttpChannelChild>(aChild)
   , mChannelStatus(aChannelStatus)
   , mResponseHead(aResponseHead)
@@ -448,6 +449,7 @@ class StartRequestEvent : public NeckoTargetChannelEvent<HttpChannelChild>
   , mAltDataType(altDataType)
   , mAltDataLen(altDataLen)
   , mLoadInfoForwarder(loadInfoForwarder)
+  , mTiming(aTiming)
   {}
 
   void Run() override
@@ -460,7 +462,7 @@ class StartRequestEvent : public NeckoTargetChannelEvent<HttpChannelChild>
                            mCacheExpirationTime, mCachedCharset,
                            mSecurityInfoSerialization, mSelfAddr, mPeerAddr,
                            mCacheKey, mAltDataType, mAltDataLen,
-                           mApplyConversion);
+                           mApplyConversion, mTiming);
   }
 
  private:
@@ -482,6 +484,7 @@ class StartRequestEvent : public NeckoTargetChannelEvent<HttpChannelChild>
   nsCString mAltDataType;
   int64_t mAltDataLen;
   ParentLoadInfoForwarderArgs mLoadInfoForwarder;
+  ResourceTimingStruct mTiming;
 };
 
 mozilla::ipc::IPCResult
@@ -503,7 +506,8 @@ HttpChannelChild::RecvOnStartRequest(const nsresult& channelStatus,
                                      const uint32_t& cacheKey,
                                      const nsCString& altDataType,
                                      const int64_t& altDataLen,
-                                     const bool& aApplyConversion)
+                                     const bool& aApplyConversion,
+                                     const ResourceTimingStruct& aTiming)
 {
   LOG(("HttpChannelChild::RecvOnStartRequest [this=%p]\n", this));
   // mFlushedForDiversion and mDivertingToParent should NEVER be set at this
@@ -525,7 +529,8 @@ HttpChannelChild::RecvOnStartRequest(const nsresult& channelStatus,
                                               securityInfoSerialization,
                                               selfAddr, peerAddr, cacheKey,
                                               altDataType, altDataLen,
-                                              aApplyConversion));
+                                              aApplyConversion,
+                                              aTiming));
 
   {
     // Child's mEventQ is to control the execution order of the IPC messages
@@ -567,7 +572,8 @@ HttpChannelChild::OnStartRequest(const nsresult& channelStatus,
                                  const uint32_t& cacheKey,
                                  const nsCString& altDataType,
                                  const int64_t& altDataLen,
-                                 const bool& aApplyConversion)
+                                 const bool& aApplyConversion,
+                                 const ResourceTimingStruct& aTiming)
 {
   LOG(("HttpChannelChild::OnStartRequest [this=%p]\n", this));
 
@@ -625,6 +631,8 @@ HttpChannelChild::OnStartRequest(const nsresult& channelStatus,
   // gHttpHandler->OnExamineResponse(this);
 
   mTracingEnabled = false;
+
+  mTransactionTimings = aTiming;
 
   DoOnStartRequest(this, mListenerContext);
 }
@@ -1622,6 +1630,7 @@ class Redirect1Event : public NeckoTargetChannelEvent<HttpChannelChild>
   Redirect1Event(HttpChannelChild* child,
                  const uint32_t& registrarId,
                  const URIParams& newURI,
+                 const uint32_t& newLoadFlags,
                  const uint32_t& redirectFlags,
                  const ParentLoadInfoForwarderArgs& loadInfoForwarder,
                  const nsHttpResponseHead& responseHead,
@@ -1630,6 +1639,7 @@ class Redirect1Event : public NeckoTargetChannelEvent<HttpChannelChild>
   : NeckoTargetChannelEvent<HttpChannelChild>(child)
   , mRegistrarId(registrarId)
   , mNewURI(newURI)
+  , mNewLoadFlags(newLoadFlags)
   , mRedirectFlags(redirectFlags)
   , mResponseHead(responseHead)
   , mSecurityInfoSerialization(securityInfoSerialization)
@@ -1640,13 +1650,15 @@ class Redirect1Event : public NeckoTargetChannelEvent<HttpChannelChild>
 
   void Run() override
   {
-    mChild->Redirect1Begin(mRegistrarId, mNewURI, mRedirectFlags, mLoadInfoForwarder,
-                           mResponseHead, mSecurityInfoSerialization, mChannelId);
+    mChild->Redirect1Begin(mRegistrarId, mNewURI, mNewLoadFlags, mRedirectFlags,
+                           mLoadInfoForwarder, mResponseHead,
+                           mSecurityInfoSerialization, mChannelId);
   }
 
  private:
   uint32_t            mRegistrarId;
   URIParams           mNewURI;
+  uint32_t            mNewLoadFlags;
   uint32_t            mRedirectFlags;
   nsHttpResponseHead  mResponseHead;
   nsCString           mSecurityInfoSerialization;
@@ -1657,6 +1669,7 @@ class Redirect1Event : public NeckoTargetChannelEvent<HttpChannelChild>
 mozilla::ipc::IPCResult
 HttpChannelChild::RecvRedirect1Begin(const uint32_t& registrarId,
                                      const URIParams& newUri,
+                                     const uint32_t& newLoadFlags,
                                      const uint32_t& redirectFlags,
                                      const ParentLoadInfoForwarderArgs& loadInfoForwarder,
                                      const nsHttpResponseHead& responseHead,
@@ -1673,7 +1686,7 @@ HttpChannelChild::RecvRedirect1Begin(const uint32_t& registrarId,
   // Cookies headers should not be visible to the child process
   MOZ_ASSERT(!nsHttpResponseHead(responseHead).HasHeader(nsHttp::Set_Cookie));
 
-  mEventQ->RunOrEnqueue(new Redirect1Event(this, registrarId, newUri,
+  mEventQ->RunOrEnqueue(new Redirect1Event(this, registrarId, newUri, newLoadFlags,
                                            redirectFlags, loadInfoForwarder,
                                            responseHead, securityInfoSerialization,
                                            channelId));
@@ -1746,6 +1759,7 @@ HttpChannelChild::SetupRedirect(nsIURI* uri,
 void
 HttpChannelChild::Redirect1Begin(const uint32_t& registrarId,
                                  const URIParams& newOriginalURI,
+                                 const uint32_t& newLoadFlags,
                                  const uint32_t& redirectFlags,
                                  const ParentLoadInfoForwarderArgs& loadInfoForwarder,
                                  const nsHttpResponseHead& responseHead,
@@ -1772,12 +1786,12 @@ HttpChannelChild::Redirect1Begin(const uint32_t& registrarId,
   }
 
   nsCOMPtr<nsIChannel> newChannel;
-  rv = SetupRedirect(uri,
-                      &responseHead,
-                      redirectFlags,
-                      getter_AddRefs(newChannel));
+  rv = SetupRedirect(uri, &responseHead, redirectFlags,
+                     getter_AddRefs(newChannel));
 
   if (NS_SUCCEEDED(rv)) {
+    MOZ_ALWAYS_SUCCEEDS(newChannel->SetLoadFlags(newLoadFlags));
+
     if (mRedirectChannelChild) {
       // Set the channelId allocated in parent to the child instance
       nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(mRedirectChannelChild);
@@ -1808,6 +1822,10 @@ HttpChannelChild::BeginNonIPCRedirect(nsIURI* responseURI,
 {
   LOG(("HttpChannelChild::BeginNonIPCRedirect [this=%p]\n", this));
 
+  // This method is only used by child-side service workers.  It should not be
+  // used by new code.  We want to remove it in the future.
+  MOZ_DIAGNOSTIC_ASSERT(mSynthesizedResponse);
+
   // If the response has been redirected, propagate all the URLs to content.
   // Thus, the exact value of the redirect flag does not matter as long as it's
   // not REDIRECT_INTERNAL.
@@ -1831,6 +1849,20 @@ HttpChannelChild::BeginNonIPCRedirect(nsIURI* responseURI,
     if (mSecurityInfo && channelChild) {
       HttpChannelChild* httpChannelChild = static_cast<HttpChannelChild*>(channelChild.get());
       httpChannelChild->OverrideSecurityInfoForNonIPCRedirect(mSecurityInfo);
+    }
+
+    // Normally we don't propagate the LoadInfo's service worker tainting
+    // synthesis flag on redirect.  A real redirect normally will want to allow
+    // normal tainting to proceed from its starting taint.  For this particular
+    // redirect, though, we are performing a redirect to communicate the URL of
+    // the service worker synthetic response itself.  This redirect still represents
+    // the synthetic response, so we must preserve the flag.
+    if (mLoadInfo && mLoadInfo->GetServiceWorkerTaintingSynthesized()) {
+      nsCOMPtr<nsILoadInfo> newChannelLoadInfo;
+      Unused << newChannel->GetLoadInfo(getter_AddRefs(newChannelLoadInfo));
+      if (newChannelLoadInfo) {
+        newChannelLoadInfo->SynthesizeServiceWorkerTainting(mLoadInfo->GetTainting());
+      }
     }
 
     nsCOMPtr<nsIEventTarget> target = GetNeckoTarget();
@@ -2470,7 +2502,10 @@ HttpChannelChild::AsyncOpen(nsIStreamListener *listener, nsISupports *aContext)
     return NS_OK;
   }
 
-  mAsyncOpenTime = TimeStamp::Now();
+  if (!mAsyncOpenTimeOverriden) {
+    mAsyncOpenTime = TimeStamp::Now();
+  }
+
 #ifdef MOZ_TASK_TRACER
   if (tasktracer::IsStartLogging()) {
     nsCOMPtr<nsIURI> uri;
@@ -2745,6 +2780,8 @@ HttpChannelChild::ContinueAsyncOpen()
   openArgs.redirectMode() = mRedirectMode;
 
   openArgs.channelId() = mChannelId;
+
+  openArgs.integrityMetadata() = mIntegrityMetadata;
 
   openArgs.contentWindowId() = contentWindowId;
   openArgs.topLevelOuterContentWindowId() = mTopLevelOuterContentWindowId;
@@ -3618,14 +3655,6 @@ HttpChannelChild::ResetInterception()
   if (NS_WARN_IF(NS_FAILED(rv))) {
     Unused << Cancel(rv);
   }
-}
-
-NS_IMETHODIMP
-HttpChannelChild::GetResponseSynthesized(bool* aSynthesized)
-{
-  NS_ENSURE_ARG_POINTER(aSynthesized);
-  *aSynthesized = mSynthesizedResponse;
-  return NS_OK;
 }
 
 void

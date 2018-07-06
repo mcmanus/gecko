@@ -44,6 +44,7 @@ android-api-16/debug:
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
+        - linux64-rust-size
         - linux64-sccache
 
 android-x86/opt:
@@ -61,11 +62,6 @@ android-x86/opt:
         env:
             GRADLE_USER_HOME: "/builds/worker/workspace/build/src/mobile/android/gradle/dotgradle-offline"
             TOOLTOOL_MANIFEST: "mobile/android/config/tooltool-manifests/android-x86/releng.manifest"
-            # Increase the timeout because nsContentUtils.o takes a ridiculously
-            # long time to compile for x86 when using the current NDKs.  This
-            # will eventually get fixed, but for now we have to live with this.
-            # See https://github.com/android-ndk/ndk/issues/522 for more context.
-            SCCACHE_IDLE_TIMEOUT: "1500"
         artifacts:
             - name: public/android/R
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/app/R
@@ -97,6 +93,7 @@ android-x86/opt:
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
+        - linux64-rust-size
         - linux64-sccache
 
 android-x86-nightly/opt:
@@ -119,11 +116,6 @@ android-x86-nightly/opt:
         env:
             GRADLE_USER_HOME: "/builds/worker/workspace/build/src/mobile/android/gradle/dotgradle-offline"
             TOOLTOOL_MANIFEST: "mobile/android/config/tooltool-manifests/android-x86/releng.manifest"
-            # Increase the timeout because nsContentUtils.o takes a ridiculously
-            # long time to compile for x86 when using the current NDKs.  This
-            # will eventually get fixed, but for now we have to live with this.
-            # See https://github.com/android-ndk/ndk/issues/522 for more context.
-            SCCACHE_IDLE_TIMEOUT: "1500"
         artifacts:
             - name: public/android/R
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/app/R
@@ -156,6 +148,7 @@ android-x86-nightly/opt:
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
+        - linux64-rust-size
         - linux64-sccache
 
 android-api-16/opt:
@@ -204,6 +197,7 @@ android-api-16/opt:
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
+        - linux64-rust-size
         - linux64-sccache
 
 android-api-16-without-google-play-services/opt:
@@ -251,6 +245,7 @@ android-api-16-without-google-play-services/opt:
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
+        - linux64-rust-size
         - linux64-sccache
 
 android-api-16-nightly/opt:
@@ -305,6 +300,7 @@ android-api-16-nightly/opt:
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
+        - linux64-rust-size
         - linux64-sccache
 
 android-aarch64/opt:
@@ -353,6 +349,7 @@ android-aarch64/opt:
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
+        - linux64-rust-size
         - linux64-sccache
 
 android-aarch64-nightly/opt:
@@ -407,4 +404,5 @@ android-aarch64-nightly/opt:
         - android-sdk-linux
         - linux64-clang
         - linux64-rust-android
+        - linux64-rust-size
         - linux64-sccache

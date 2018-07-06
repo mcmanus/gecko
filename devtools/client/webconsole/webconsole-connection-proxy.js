@@ -145,7 +145,7 @@ WebConsoleConnectionProxy.prototype = {
     this.target.on("navigate", this._onTabNavigated);
 
     this._consoleActor = this.target.form.consoleActor;
-    if (this.target.isTabActor) {
+    if (this.target.isBrowsingContext) {
       const tab = this.target.form;
       this.webConsoleFrame.onLocationChange(tab.url, tab.title);
     }
@@ -179,8 +179,14 @@ WebConsoleConnectionProxy.prototype = {
     if (this.target.chrome && !this.target.isAddon) {
       listeners.push("ContentProcessMessages");
     }
-    this.client.attachConsole(this._consoleActor, listeners,
-                              this._onAttachConsole);
+    this.client.attachConsole(this._consoleActor, listeners)
+      .then(this._onAttachConsole, response => {
+        if (response.error) {
+          console.error("attachConsole failed: " + response.error + " " +
+                        response.message);
+          this._connectDefer.reject(response);
+        }
+      });
   },
 
   /**
@@ -193,14 +199,7 @@ WebConsoleConnectionProxy.prototype = {
    *        The WebConsoleClient instance for the attached console, for the
    *        specific tab we work with.
    */
-  _onAttachConsole: function(response, webConsoleClient) {
-    if (response.error) {
-      console.error("attachConsole failed: " + response.error + " " +
-                    response.message);
-      this._connectDefer.reject(response);
-      return;
-    }
-
+  _onAttachConsole: function([response, webConsoleClient]) {
     this.webConsoleClient = webConsoleClient;
     this._hasNativeConsoleAPI = response.nativeConsoleAPI;
 

@@ -7,6 +7,7 @@
 
 #include "mozilla/EventStates.h"
 #include "mozilla/Logging.h"
+#include "mozilla/RelativeLuminanceUtils.h"
 #include "mozilla/WindowsVersion.h"
 #include "nsColor.h"
 #include "nsDeviceContext.h"
@@ -763,6 +764,7 @@ mozilla::Maybe<nsUXThemeClass> nsNativeThemeWin::GetThemeClass(uint8_t aWidgetTy
     case NS_THEME_SCROLLBARBUTTON_RIGHT:
     case NS_THEME_SCROLLBARTHUMB_VERTICAL:
     case NS_THEME_SCROLLBARTHUMB_HORIZONTAL:
+    case NS_THEME_SCROLLCORNER:
       return Some(eUXScrollbar);
     case NS_THEME_RANGE:
     case NS_THEME_RANGE_THUMB:
@@ -1169,7 +1171,8 @@ nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame, uint8_t aWidgetType,
     case NS_THEME_WIN_BROWSERTABBAR_TOOLBOX:
     case NS_THEME_STATUSBAR:
     case NS_THEME_SCROLLBAR:
-    case NS_THEME_SCROLLBAR_SMALL: {
+    case NS_THEME_SCROLLBAR_SMALL:
+    case NS_THEME_SCROLLCORNER: {
       aState = 0;
       aPart = RP_BACKGROUND;
       return NS_OK;
@@ -1522,26 +1525,6 @@ GetThemeDpiScaleFactor(nsIFrame* aFrame)
     }
   }
   return 1.0;
-}
-
-static bool
-IsWidgetScrollbarPart(uint8_t aWidgetType)
-{
-  switch (aWidgetType) {
-    case NS_THEME_SCROLLBAR:
-    case NS_THEME_SCROLLBAR_SMALL:
-    case NS_THEME_SCROLLBAR_VERTICAL:
-    case NS_THEME_SCROLLBAR_HORIZONTAL:
-    case NS_THEME_SCROLLBARBUTTON_UP:
-    case NS_THEME_SCROLLBARBUTTON_DOWN:
-    case NS_THEME_SCROLLBARBUTTON_LEFT:
-    case NS_THEME_SCROLLBARBUTTON_RIGHT:
-    case NS_THEME_SCROLLBARTHUMB_VERTICAL:
-    case NS_THEME_SCROLLBARTHUMB_HORIZONTAL:
-      return true;
-    default:
-      return false;
-  }
 }
 
 NS_IMETHODIMP
@@ -1956,7 +1939,7 @@ RENDER_AGAIN:
 }
 
 static nscolor
-GetScrollbarFaceColorForAuto()
+GetScrollbarFaceColorForAuto(ComputedStyle* aStyle)
 {
   // Do we want to derive from scrollbar-track-color when possible?
   DWORD sysColor = ::GetSysColor(COLOR_SCROLLBAR);
@@ -1989,7 +1972,7 @@ nsNativeThemeWin::GetWidgetAutoColor(ComputedStyle* aStyle, uint8_t aWidgetType)
 
     case NS_THEME_SCROLLBARTHUMB_VERTICAL:
     case NS_THEME_SCROLLBARTHUMB_HORIZONTAL:
-      return GetScrollbarFaceColorForAuto();
+      return GetScrollbarFaceColorForAuto(aStyle);
 
     default:
       return nsITheme::GetWidgetAutoColor(aStyle, aWidgetType);
@@ -2056,6 +2039,7 @@ nsNativeThemeWin::GetWidgetBorder(nsDeviceContext* aContext,
       aWidgetType == NS_THEME_RESIZER || aWidgetType == NS_THEME_TABPANEL ||
       aWidgetType == NS_THEME_SCROLLBAR_HORIZONTAL ||
       aWidgetType == NS_THEME_SCROLLBAR_VERTICAL ||
+      aWidgetType == NS_THEME_SCROLLCORNER ||
       aWidgetType == NS_THEME_MENUITEM || aWidgetType == NS_THEME_CHECKMENUITEM ||
       aWidgetType == NS_THEME_RADIOMENUITEM || aWidgetType == NS_THEME_MENUPOPUP ||
       aWidgetType == NS_THEME_MENUIMAGE || aWidgetType == NS_THEME_MENUITEMTEXT ||
@@ -2424,6 +2408,7 @@ nsNativeThemeWin::GetMinimumWidgetSize(nsPresContext* aPresContext, nsIFrame* aF
     }
 
     case NS_THEME_SCROLLBAR:
+    case NS_THEME_SCROLLCORNER:
     {
       if (nsLookAndFeel::GetInt(
             nsLookAndFeel::eIntID_UseOverlayScrollbars) != 0) {
@@ -2706,6 +2691,7 @@ nsNativeThemeWin::GetWidgetTransparency(nsIFrame* aFrame, uint8_t aWidgetType)
   switch (aWidgetType) {
   case NS_THEME_SCROLLBAR_SMALL:
   case NS_THEME_SCROLLBAR:
+  case NS_THEME_SCROLLCORNER:
   case NS_THEME_STATUSBAR:
     // Knowing that scrollbars and statusbars are opaque improves
     // performance, because we create layers for them. This better be
@@ -2788,6 +2774,7 @@ nsNativeThemeWin::ClassicThemeSupportsWidget(nsIFrame* aFrame,
     case NS_THEME_SCROLLBAR_VERTICAL:
     case NS_THEME_SCROLLBAR_HORIZONTAL:
     case NS_THEME_SCROLLBAR_NON_DISAPPEARING:
+    case NS_THEME_SCROLLCORNER:
     case NS_THEME_SCALE_HORIZONTAL:
     case NS_THEME_SCALE_VERTICAL:
     case NS_THEME_SCALETHUMB_HORIZONTAL:
@@ -3261,6 +3248,7 @@ nsresult nsNativeThemeWin::ClassicGetThemePartAndState(nsIFrame* aFrame, uint8_t
     case NS_THEME_SCROLLBARTHUMB_HORIZONTAL:     
     case NS_THEME_SCROLLBAR_VERTICAL:
     case NS_THEME_SCROLLBAR_HORIZONTAL:      
+    case NS_THEME_SCROLLCORNER:
     case NS_THEME_SCALE_HORIZONTAL:
     case NS_THEME_SCALE_VERTICAL:
     case NS_THEME_SCALETHUMB_HORIZONTAL:
@@ -3782,6 +3770,9 @@ RENDER_AGAIN:
 
       break;
     }
+    case NS_THEME_SCROLLCORNER: {
+      ::FillRect(hdc, &widgetRect, (HBRUSH) (COLOR_SCROLLBAR + 1));
+    }
     // Draw scale track background
     case NS_THEME_RANGE:
     case NS_THEME_SCALE_VERTICAL:
@@ -4063,6 +4054,7 @@ nsNativeThemeWin::GetWidgetNativeDrawingFlags(uint8_t aWidgetType)
     case NS_THEME_SCROLLBARTHUMB_HORIZONTAL:
     case NS_THEME_SCROLLBAR_VERTICAL:
     case NS_THEME_SCROLLBAR_HORIZONTAL:
+    case NS_THEME_SCROLLCORNER:
     case NS_THEME_SCALE_HORIZONTAL:
     case NS_THEME_SCALE_VERTICAL:
     case NS_THEME_SCALETHUMB_HORIZONTAL:
@@ -4121,105 +4113,6 @@ ToColorRef(nscolor aColor)
 }
 
 static nscolor
-GetOpaqueBackgroundColor(ComputedStyle* aStyle)
-{
-  nscolor color = aStyle->StyleBackground()->BackgroundColor(aStyle);
-  if (NS_GET_A(color) == 255) {
-    return color;
-  }
-  // Compose white background with the background color.
-  return NS_ComposeColors(NS_RGB(255, 255, 255), color);
-}
-
-static nscolor
-GetScrollbarFaceColor(ComputedStyle* aStyle)
-{
-  StyleComplexColor complexColor =
-    aStyle->StyleUserInterface()->mScrollbarFaceColor;
-  if (complexColor.IsAuto()) {
-    return GetScrollbarFaceColorForAuto();
-  }
-  nscolor color = complexColor.CalcColor(aStyle);
-  if (NS_GET_A(color) == 255) {
-    return color;
-  }
-  nscolor bgColor = GetOpaqueBackgroundColor(aStyle);
-  return NS_ComposeColors(bgColor, color);
-}
-
-static nscolor
-GetScrollbarTrackColor(ComputedStyle* aStyle)
-{
-  StyleComplexColor complexColor =
-    aStyle->StyleUserInterface()->mScrollbarTrackColor;
-  nscolor color;
-  if (complexColor.IsAuto()) {
-    color = GetScrollbarTrackColorForAuto(aStyle);
-  } else {
-    color = complexColor.CalcColor(aStyle);
-  }
-  if (NS_GET_A(color) == 255) {
-    return color;
-  }
-  nscolor bgColor = GetOpaqueBackgroundColor(aStyle);
-  return NS_ComposeColors(bgColor, color);
-}
-
-static float
-ComputeColorComponentLuminance(uint8_t aComponent)
-{
-  float v = float(aComponent) / 255.0f;
-  if (v <= 0.03928f) {
-    return v / 12.92f;
-  }
-  return std::pow((v + 0.055f) / 1.055f, 2.4f);
-}
-
-static constexpr float
-ComputeRelativeLuminanceFromComponents(float aR, float aG, float aB)
-{
-  return 0.2126f * aR + 0.7152f * aG + 0.0722f * aB;
-}
-
-// This function is written according to the algorithm defined in
-// https://www.w3.org/TR/WCAG20/#relativeluminancedef
-static float
-ComputeRelativeLuminance(nscolor aColor)
-{
-  float r = ComputeColorComponentLuminance(NS_GET_R(aColor));
-  float g = ComputeColorComponentLuminance(NS_GET_G(aColor));
-  float b = ComputeColorComponentLuminance(NS_GET_B(aColor));
-  return ComputeRelativeLuminanceFromComponents(r, g, b);
-}
-
-// Inverse function of ComputeColorComponentLuminance.
-static uint8_t
-DecomputeColorComponentLuminance(float aComponent)
-{
-  if (aComponent <= 0.03928f / 12.92f) {
-    aComponent *= 12.92f;
-  } else {
-    aComponent = std::pow(aComponent, 1.0f / 2.4f) * 1.055f - 0.055f;
-  }
-  return ClampColor(aComponent * 255.0f);
-}
-
-// Adjust the luminance of the color to the given value.
-static nscolor
-AdjustColorLuminance(nscolor aColor, float aLuminance)
-{
-  float r = ComputeColorComponentLuminance(NS_GET_R(aColor));
-  float g = ComputeColorComponentLuminance(NS_GET_G(aColor));
-  float b = ComputeColorComponentLuminance(NS_GET_B(aColor));
-  float luminance = ComputeRelativeLuminanceFromComponents(r, g, b);
-  float factor = aLuminance / luminance;
-  uint8_t r1 = DecomputeColorComponentLuminance(r * factor);
-  uint8_t g1 = DecomputeColorComponentLuminance(g * factor);
-  uint8_t b1 = DecomputeColorComponentLuminance(b * factor);
-  return NS_RGB(r1, g1, b1);
-}
-
-static nscolor
 GetScrollbarArrowColor(nscolor aTrackColor)
 {
   // In Windows 10 scrollbar, there are several gray colors used:
@@ -4235,7 +4128,7 @@ GetScrollbarArrowColor(nscolor aTrackColor)
   //
   // This function is written based on these values.
 
-  float luminance = ComputeRelativeLuminance(aTrackColor);
+  float luminance = RelativeLuminanceUtils::Compute(aTrackColor);
   // Color with luminance larger than 0.72 has contrast ratio over 4.6
   // to color with luminance of gray 96, so this value is chosen for
   // this range. It is the luminance of gray 221.
@@ -4243,7 +4136,7 @@ GetScrollbarArrowColor(nscolor aTrackColor)
     // ComputeRelativeLuminanceFromComponents(96). That function cannot
     // be constexpr because of std::pow.
     const float GRAY96_LUMINANCE = 0.117f;
-    return AdjustColorLuminance(aTrackColor, GRAY96_LUMINANCE);
+    return RelativeLuminanceUtils::Adjust(aTrackColor, GRAY96_LUMINANCE);
   }
   // The contrast ratio of a color to black equals that to white when its
   // luminance is around 0.18, with a contrast ratio ~4.6 to both sides,
@@ -4270,7 +4163,8 @@ nsNativeThemeWin::DrawCustomScrollbarPart(gfxContext* aContext,
           dr(aClipRect.X(), aClipRect.Y(),
              aClipRect.Width(), aClipRect.Height());
 
-  nscolor trackColor = GetScrollbarTrackColor(aStyle);
+  nscolor trackColor =
+    GetScrollbarTrackColor(aStyle, &GetScrollbarTrackColorForAuto);
   HBRUSH dcBrush = (HBRUSH) GetStockObject(DC_BRUSH);
 
   gfxFloat p2a = gfxFloat(aFrame->PresContext()->AppUnitsPerDevPixel());
@@ -4306,7 +4200,8 @@ nsNativeThemeWin::DrawCustomScrollbarPart(gfxContext* aContext,
           tr2.Deflate(0, dev2css);
         }
         nativeDrawing.TransformToNativeRect(tr2, widgetRect);
-        nscolor faceColor = GetScrollbarFaceColor(aStyle);
+        nscolor faceColor =
+          GetScrollbarFaceColor(aStyle, &GetScrollbarFaceColorForAuto);
         ::SetDCBrushColor(hdc, ToColorRef(faceColor));
         ::FillRect(hdc, &widgetRect, dcBrush);
         break;

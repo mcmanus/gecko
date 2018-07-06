@@ -521,25 +521,15 @@ nsNavHistory::LoadPrefs()
 }
 
 void
-nsNavHistory::NotifyOnVisits(nsIVisitData** aVisits, uint32_t aVisitsCount)
+nsNavHistory::UpdateDaysOfHistory(PRTime visitTime)
 {
-  MOZ_ASSERT(aVisits, "Can't call NotifyOnVisits with a NULL aVisits");
-  MOZ_ASSERT(aVisitsCount, "Should have at least 1 visit when notifying");
-
   if (mDaysOfHistory == 0) {
     mDaysOfHistory = 1;
   }
 
-  for (uint32_t i = 0; i < aVisitsCount; ++i) {
-    PRTime time;
-    MOZ_ALWAYS_SUCCEEDS(aVisits[i]->GetTime(&time));
-    if (time > mLastCachedEndOfDay || time < mLastCachedStartOfDay) {
-      mDaysOfHistory = -1;
-    }
+  if (visitTime > mLastCachedEndOfDay || visitTime < mLastCachedStartOfDay) {
+    mDaysOfHistory = -1;
   }
-
-  NOTIFY_OBSERVERS(mCanNotify, mObservers, nsINavHistoryObserver,
-                   OnVisits(aVisits, aVisitsCount));
 }
 
 void
@@ -600,13 +590,13 @@ nsNavHistory::DispatchFrecencyChangedNotification(const nsACString& aSpec,
 }
 
 NS_IMETHODIMP
-nsNavHistory::RecalculateFrecencyStats(nsIObserver *aCallback)
+nsNavHistory::RecalculateOriginFrecencyStats(nsIObserver *aCallback)
 {
   RefPtr<nsNavHistory> self(this);
   nsMainThreadPtrHandle<nsIObserver> callback(
     !aCallback ? nullptr :
     new nsMainThreadPtrHolder<nsIObserver>(
-      "nsNavHistory::RecalculateFrecencyStats callback",
+      "nsNavHistory::RecalculateOriginFrecencyStats callback",
       aCallback
     )
   );
@@ -615,11 +605,11 @@ nsNavHistory::RecalculateFrecencyStats(nsIObserver *aCallback)
   nsCOMPtr<nsIEventTarget> target = do_GetInterface(conn);
   MOZ_ASSERT(target);
   nsresult rv = target->Dispatch(NS_NewRunnableFunction(
-    "nsNavHistory::RecalculateFrecencyStats",
+    "nsNavHistory::RecalculateOriginFrecencyStats",
     [self, callback] {
-      Unused << self->RecalculateFrecencyStatsInternal();
+      Unused << self->RecalculateOriginFrecencyStatsInternal();
       Unused << NS_DispatchToMainThread(NS_NewRunnableFunction(
-        "nsNavHistory::RecalculateFrecencyStats callback",
+        "nsNavHistory::RecalculateOriginFrecencyStats callback",
         [callback] {
           if (callback) {
             Unused << callback->Observe(nullptr, "", nullptr);
@@ -634,27 +624,25 @@ nsNavHistory::RecalculateFrecencyStats(nsIObserver *aCallback)
 }
 
 nsresult
-nsNavHistory::RecalculateFrecencyStatsInternal()
+nsNavHistory::RecalculateOriginFrecencyStatsInternal()
 {
   nsCOMPtr<mozIStorageConnection> conn(mDB->MainConn());
   NS_ENSURE_STATE(conn);
 
   nsresult rv = conn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
-    "INSERT OR REPLACE INTO moz_meta (key, value) " \
-    "SELECT '" MOZ_META_KEY_FRECENCY_COUNT "' AS key, COUNT(*) AS value " \
-    "FROM moz_places " \
-    "WHERE id >= 0 AND frecency > 0 " \
-    "UNION "\
-    "SELECT '" MOZ_META_KEY_FRECENCY_SUM "' AS key, IFNULL(SUM(frecency), 0) AS value " \
-    "FROM moz_places " \
-    "WHERE id >= 0 AND frecency > 0 " \
-    "UNION " \
-    "SELECT '" MOZ_META_KEY_FRECENCY_SUM_OF_SQUARES "' AS key, IFNULL(SUM(frecency_squared), 0) AS value " \
-    "FROM ( " \
-      "SELECT frecency * frecency AS frecency_squared " \
-      "FROM moz_places " \
-      "WHERE id >= 0 AND frecency > 0 " \
-    "); "
+    "INSERT OR REPLACE INTO moz_meta(key, value) VALUES "
+    "( "
+      "'" MOZ_META_KEY_ORIGIN_FRECENCY_COUNT "' , "
+      "(SELECT COUNT(*) FROM moz_origins WHERE frecency > 0) "
+    "), "
+    "( "
+      "'" MOZ_META_KEY_ORIGIN_FRECENCY_SUM "', "
+      "(SELECT TOTAL(frecency) FROM moz_origins WHERE frecency > 0) "
+    "), "
+    "( "
+      "'" MOZ_META_KEY_ORIGIN_FRECENCY_SUM_OF_SQUARES "' , "
+      "(SELECT TOTAL(frecency * frecency) FROM moz_origins WHERE frecency > 0) "
+    ") "
   ));
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -788,7 +776,7 @@ nsNavHistory::NormalizeTime(uint32_t aRelative, PRTime aOffset)
       ref = PR_Now();
       break;
     default:
-      NS_NOTREACHED("Invalid relative time");
+      MOZ_ASSERT_UNREACHABLE("Invalid relative time");
       return 0;
   }
   return ref + aOffset;
@@ -890,6 +878,13 @@ nsNavHistory::invalidateFrecencies(const nsCString& aPlaceIdsQueryString)
 
   nsCOMPtr<mozIStoragePendingStatement> ps;
   nsresult rv = stmt->ExecuteAsync(cb, getter_AddRefs(ps));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // Trigger frecency updates for affected origins.
+  nsCOMPtr<mozIStorageAsyncStatement> updateOriginFrecenciesStmt =
+    mDB->GetAsyncStatement("DELETE FROM moz_updateoriginsupdate_temp");
+  NS_ENSURE_STATE(updateOriginFrecenciesStmt);
+  rv = updateOriginFrecenciesStmt->ExecuteAsync(nullptr, getter_AddRefs(ps));
   NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
@@ -1085,8 +1080,8 @@ nsNavHistory::ExecuteQuery(nsINavHistoryQuery *aQuery,
 // from browser-menubar.inc, our history menu query is:
 // place:sort=4&maxResults=10
 // note, any maxResult > 0 will still be considered a history menu query
-// or if this is the place query from the "Most Visited" item in the
-// "Smart Bookmarks" folder: place:sort=8&maxResults=10
+// or if this is the place query from the old "Most Visited" item in some profiles:
+// folder: place:sort=8&maxResults=10
 // note, any maxResult > 0 will still be considered a Most Visited menu query
 static
 bool IsOptimizableHistoryQuery(const RefPtr<nsNavHistoryQuery>& aQuery,
@@ -1293,7 +1288,7 @@ PlacesSQLQueryBuilder::Select()
       break;
 
     default:
-      NS_NOTREACHED("Invalid result type");
+      MOZ_ASSERT_UNREACHABLE("Invalid result type");
   }
   return NS_OK;
 }
@@ -1466,7 +1461,7 @@ PlacesSQLQueryBuilder::SelectAsDay()
         // visits older than yesterday.
         sqlFragmentSearchBeginTime = sqlFragmentContainerBeginTime;
         sqlFragmentSearchEndTime = NS_LITERAL_CSTRING(
-          "(strftime('%s','now','localtime','start of day','-2 days','utc')*1000000)");
+          "(strftime('%s','now','localtime','start of day','-1 day','utc')*1000000)");
         break;
       case 3:
         // This month
@@ -1889,8 +1884,6 @@ PlacesSQLQueryBuilder::OrderBy()
       break;
     case nsINavHistoryQueryOptions::SORT_BY_TAGS_ASCENDING:
     case nsINavHistoryQueryOptions::SORT_BY_TAGS_DESCENDING:
-    case nsINavHistoryQueryOptions::SORT_BY_ANNOTATION_ASCENDING:
-    case nsINavHistoryQueryOptions::SORT_BY_ANNOTATION_DESCENDING:
       break; // Sort later in nsNavHistoryQueryResultNode::FillChildren()
     case nsINavHistoryQueryOptions::SORT_BY_FRECENCY_ASCENDING:
         OrderByColumnIndexAsc(nsNavHistory::kGetInfoIndex_Frecency);
@@ -1899,7 +1892,7 @@ PlacesSQLQueryBuilder::OrderBy()
         OrderByColumnIndexDesc(nsNavHistory::kGetInfoIndex_Frecency);
       break;
     default:
-      NS_NOTREACHED("Invalid sorting mode");
+      MOZ_ASSERT_UNREACHABLE("Invalid sorting mode");
   }
   return NS_OK;
 }
@@ -1970,8 +1963,8 @@ nsNavHistory::ConstructQueryString(
         nsINavHistoryQueryOptions::SORT_BY_DATE_DESCENDING) ||
       IsOptimizableHistoryQuery(aQuery, aOptions,
         nsINavHistoryQueryOptions::SORT_BY_VISITCOUNT_DESCENDING)) {
-    // Generate an optimized query for the history menu and most visited
-    // smart bookmark.
+    // Generate an optimized query for the history menu and the old most visited
+    // bookmark that was inserted into profiles.
     queryString = NS_LITERAL_CSTRING(
       "SELECT h.id, h.url, h.title AS page_title, h.rev_host, h.visit_count, h.last_visit_date, "
           "null, null, null, null, null, ") +
@@ -3473,7 +3466,7 @@ nsNavHistory::VisitIdToResultNode(int64_t visitId,
   rv = statement->ExecuteStep(&hasMore);
   NS_ENSURE_SUCCESS(rv, rv);
   if (! hasMore) {
-    NS_NOTREACHED("Trying to get a result node for an invalid visit");
+    MOZ_ASSERT_UNREACHABLE("Trying to get a result node for an invalid visit");
     return NS_ERROR_INVALID_ARG;
   }
 
@@ -3512,7 +3505,8 @@ nsNavHistory::BookmarkIdToResultNode(int64_t aBookmarkId, nsNavHistoryQueryOptio
   rv = stmt->ExecuteStep(&hasMore);
   NS_ENSURE_SUCCESS(rv, rv);
   if (!hasMore) {
-    NS_NOTREACHED("Trying to get a result node for an invalid bookmark identifier");
+    MOZ_ASSERT_UNREACHABLE("Trying to get a result node for an invalid "
+                           "bookmark identifier");
     return NS_ERROR_INVALID_ARG;
   }
 
@@ -3551,7 +3545,7 @@ nsNavHistory::URIToResultNode(nsIURI* aURI,
   rv = stmt->ExecuteStep(&hasMore);
   NS_ENSURE_SUCCESS(rv, rv);
   if (!hasMore) {
-    NS_NOTREACHED("Trying to get a result node for an invalid url");
+    MOZ_ASSERT_UNREACHABLE("Trying to get a result node for an invalid url");
     return NS_ERROR_INVALID_ARG;
   }
 
@@ -3766,6 +3760,13 @@ nsNavHistory::UpdateFrecency(int64_t aPlaceId)
                                      getter_AddRefs(ps));
   NS_ENSURE_SUCCESS(rv, rv);
 
+  // Trigger frecency updates for all affected origins.
+  nsCOMPtr<mozIStorageAsyncStatement> updateOriginFrecenciesStmt =
+    mDB->GetAsyncStatement("DELETE FROM moz_updateoriginsupdate_temp");
+  NS_ENSURE_STATE(updateOriginFrecenciesStmt);
+  rv = updateOriginFrecenciesStmt->ExecuteAsync(nullptr, getter_AddRefs(ps));
+  NS_ENSURE_SUCCESS(rv, rv);
+
   return NS_OK;
 }
 
@@ -3809,6 +3810,14 @@ nsNavHistory::FixInvalidFrecencies()
     new FixInvalidFrecenciesCallback();
   nsCOMPtr<mozIStoragePendingStatement> ps;
   (void)stmt->ExecuteAsync(callback, getter_AddRefs(ps));
+
+  // Trigger frecency updates for affected origins.
+  nsCOMPtr<mozIStorageAsyncStatement> updateOriginFrecenciesStmt =
+    mDB->GetAsyncStatement("DELETE FROM moz_updateoriginsupdate_temp");
+  NS_ENSURE_STATE(updateOriginFrecenciesStmt);
+  nsresult rv =
+    updateOriginFrecenciesStmt->ExecuteAsync(nullptr, getter_AddRefs(ps));
+  NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
 }

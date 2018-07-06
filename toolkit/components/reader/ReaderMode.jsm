@@ -20,6 +20,7 @@ const PARSE_ERROR_NO_ARTICLE = 3;
 // names so that rules in aboutReader.css can match them.
 const CLASSES_TO_PRESERVE = [
   "caption",
+  "emoji",
   "hidden",
   "invisble",
   "sr-only",
@@ -27,12 +28,13 @@ const CLASSES_TO_PRESERVE = [
   "visuallyhidden",
   "wp-caption",
   "wp-caption-text",
+  "wp-smiley",
 ];
 
 ChromeUtils.import("resource://gre/modules/Services.jsm");
 ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-Cu.importGlobalProperties(["XMLHttpRequest", "XMLSerializer"]);
+XPCOMUtils.defineLazyGlobalGetters(this, ["XMLHttpRequest", "XMLSerializer"]);
 
 ChromeUtils.defineModuleGetter(this, "CommonUtils", "resource://services-common/utils.js");
 ChromeUtils.defineModuleGetter(this, "EventDispatcher", "resource://gre/modules/Messaging.jsm");
@@ -222,7 +224,7 @@ var ReaderMode = {
     // We pass in a helper function to determine if a node is visible, because
     // it uses gecko APIs that the engine-agnostic readability code can't rely
     // upon.
-    return new Readability(uri, doc).isProbablyReaderable(this.isNodeVisible.bind(this, utils));
+    return new Readability(doc).isProbablyReaderable(this.isNodeVisible.bind(this, utils));
   },
 
   isNodeVisible(utils, node) {

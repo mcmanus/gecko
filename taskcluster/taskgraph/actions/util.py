@@ -111,14 +111,25 @@ def update_parent(task, graph):
 
 
 def create_tasks(to_run, full_task_graph, label_to_taskid,
-                 params, decision_task_id=None, suffix=''):
+                 params, decision_task_id=None, suffix='', modifier=lambda t: t):
     """Create new tasks.  The task definition will have {relative-datestamp':
     '..'} rendered just like in a decision task.  Action callbacks should use
     this function to create new tasks,
     allowing easy debugging with `mach taskgraph action-callback --test`.
     This builds up all required tasks to run in order to run the tasks requested.
 
-    If you wish to create the tasks in a new group, leave out decision_task_id."""
+    Optionally this function takes a `modifier` function that is passed in each
+    task before it is put into a new graph. It should return a valid task. Note
+    that this is passed _all_ tasks in the graph, not just the set in to_run. You
+    may want to skip modifying tasks not in your to_run list.
+
+    If `suffix` is given, then it is used to give unique names to the resulting
+    artifacts.  If you call this function multiple times in the same action,
+    pass a different suffix each time to avoid overwriting artifacts.
+
+    If you wish to create the tasks in a new group, leave out decision_task_id.
+
+    Returns an updated label_to_taskid containing the new tasks"""
     if suffix != '':
         suffix = '-{}'.format(suffix)
     to_run = set(to_run)
@@ -129,7 +140,7 @@ def create_tasks(to_run, full_task_graph, label_to_taskid,
 
     target_graph = full_task_graph.graph.transitive_closure(to_run)
     target_task_graph = TaskGraph(
-        {l: full_task_graph[l] for l in target_graph.nodes},
+        {l: modifier(full_task_graph[l]) for l in target_graph.nodes},
         target_graph)
     target_task_graph.for_each_task(update_parent)
     optimized_task_graph, label_to_taskid = optimize_task_graph(target_task_graph,
@@ -140,3 +151,4 @@ def create_tasks(to_run, full_task_graph, label_to_taskid,
     write_artifact('label-to-taskid{}.json'.format(suffix), label_to_taskid)
     write_artifact('to-run{}.json'.format(suffix), list(to_run))
     create.create_tasks(optimized_task_graph, label_to_taskid, params, decision_task_id)
+    return label_to_taskid

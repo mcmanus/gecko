@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-var EXPORTED_SYMBOLS = ["ThemeVariableMap"];
+var EXPORTED_SYMBOLS = ["ThemeVariableMap", "ThemeContentPropertyList"];
 
 const ThemeVariableMap = [
   ["--lwt-accent-color-inactive", {
@@ -35,18 +35,6 @@ const ThemeVariableMap = [
   }],
   ["--toolbar-color", {
     lwtProperty: "toolbar_text"
-  }],
-  ["--lwt-toolbar-field-border-color", {
-    lwtProperty: "toolbar_field_border"
-  }],
-  ["--lwt-toolbar-field-focus", {
-    lwtProperty: "toolbar_field_focus"
-  }],
-  ["--lwt-toolbar-field-focus-color", {
-    lwtProperty: "toolbar_field_text_focus"
-  }],
-  ["--toolbar-field-focus-border-color", {
-    lwtProperty: "toolbar_field_border_focus"
   }],
   ["--urlbar-separator-color", {
     lwtProperty: "toolbar_field_separator"
@@ -91,4 +79,9 @@ const ThemeVariableMap = [
   ["--autocomplete-popup-highlight-color", {
     lwtProperty: "popup_highlight_text"
   }],
+];
+
+const ThemeContentPropertyList = [
+  "ntp_background",
+  "ntp_text",
 ];

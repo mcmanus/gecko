@@ -77,13 +77,13 @@ has the additional benefit of also working on macOS and Windows.
 
 Prerequisites:
 
-*   You have [built Fennec](https://developer.mozilla.org/en-US/docs/Mozilla/Developer_guide/Build_Instructions/Simple_Firefox_for_Android_build) with 
+*   You have [built Fennec](https://developer.mozilla.org/en-US/docs/Mozilla/Developer_guide/Build_Instructions/Simple_Firefox_for_Android_build) with
     `ac_add_options --enable-marionette` in your mozconfig.
-*   You can run an Android [emulator](https://wiki.mozilla.org/Mobile/Fennec/Android/Testing#Running_tests_on_the_Android_emulator), 
+*   You can run an Android [emulator](https://wiki.mozilla.org/Mobile/Fennec/Android/Testing#Running_tests_on_the_Android_emulator),
     which means you have the AVD you need.
 
 When running tests on Fennec, you can have Marionette runner take care of
-starting Fennec on the emulator, as shown below.
+starting Fennec and an emulator, as shown below.
 
 	% ./mach marionette test --emulator --app fennec
     --avd-home /path/to/.mozbuild/android-device/avd
@@ -93,7 +93,12 @@ starting Fennec on the emulator, as shown below.
 For Fennec tests, if the appropriate `emulator` command is in your `PATH`, you may omit the `--emulator-binary` argument.  See `./mach marionette test -h`
 for additional options.
 
-To connect to Fennec in an already running emulator or on a device, you will need to enable Marionette manually by setting the browser preference 
+Alternately, you can start an emulator yourself and have the Marionette runner
+start Fennec for you:
+
+    % ./mach marionette test --emulator --app='fennec' --address=127.0.0.1:2828 --disable-e10s
+
+To connect to an already-running Fennec in an already running emulator or on a device, you will need to enable Marionette manually by setting the browser preference
 `marionette.enabled` set to true in the Fennec profile.
 
 Make sure port 2828 is forwarded:
@@ -102,14 +107,14 @@ Make sure port 2828 is forwarded:
 
 If Fennec is already started:
 
-    % ./mach marionette test --app='fennec' --address=localhost:2828 --disable-e10s
+    % ./mach marionette test --app='fennec' --address=127.0.0.1:2828 --disable-e10s
 
 If Fennec is not already started on the emulator/device, add the `--emulator`
 option. Marionette Test Runner will take care of forwarding the port and
 starting Fennec with the correct prefs. (You may need to run
 `adb forward --remove-all` to allow the runner to start.)
 
-    % ./mach marionette test --emulator --app='fennec' --address=localhost:2828 --disable-e10s
+    % ./mach marionette test --emulator --app='fennec' --address=127.0.0.1:2828 --disable-e10s
     --startup-timeout=300
 
 If you need to troubleshoot the Marionette connection, the most basic check is
@@ -117,7 +122,7 @@ to start Fennec, make sure the `marionette.enabled` browser preference is
 true and port 2828 is forwarded, then see if you get any response from
 Marionette when you connect manually:
 
-    % telnet localhost:2828
+    % telnet 127.0.0.1:2828
 
 You should see output like `{"applicationType":"gecko","marionetteProtocol":3}`
 

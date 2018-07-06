@@ -5,14 +5,26 @@
 
 /* import-globals-from editBookmark.js */
 /* import-globals-from ../../../../toolkit/content/contentAreaUtils.js */
-/* import-globals-from ../PlacesUIUtils.jsm */
-/* import-globals-from ../../../../toolkit/components/places/PlacesUtils.jsm */
 /* import-globals-from ../../downloads/content/allDownloadsView.js */
 
-ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
-ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
-ChromeUtils.import("resource://gre/modules/TelemetryStopwatch.jsm");
+/* Shared Places Import - change other consumers if you change this: */
 ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  PlacesUtils: "resource://gre/modules/PlacesUtils.jsm",
+  PlacesUIUtils: "resource:///modules/PlacesUIUtils.jsm",
+  PlacesTransactions: "resource://gre/modules/PlacesTransactions.jsm",
+  PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
+});
+XPCOMUtils.defineLazyScriptGetter(this, "PlacesTreeView",
+                                  "chrome://browser/content/places/treeView.js");
+XPCOMUtils.defineLazyScriptGetter(this, ["PlacesInsertionPoint", "PlacesController",
+                                         "PlacesControllerDragHelper"],
+                                  "chrome://browser/content/places/controller.js");
+/* End Shared Places Import */
+
+ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+ChromeUtils.import("resource://gre/modules/TelemetryStopwatch.jsm");
 ChromeUtils.defineModuleGetter(this, "MigrationUtils",
                                "resource:///modules/MigrationUtils.jsm");
 ChromeUtils.defineModuleGetter(this, "BookmarkJSONUtils",
@@ -27,14 +39,6 @@ const HISTORY_LIBRARY_SEARCH_TELEMETRY = "PLACES_HISTORY_LIBRARY_SEARCH_TIME_MS"
 
 var PlacesOrganizer = {
   _places: null,
-
-  // IDs of fields from editBookmark that should be hidden when infoBox
-  // is minimal. IDs should be kept in sync with the IDs of the elements
-  // observing additionalInfoBroadcaster.
-  _additionalInfoFields: [
-    "editBMPanel_loadInSidebarCheckbox",
-    "editBMPanel_keywordRow",
-  ],
 
   _initFolderTree() {
     this._places.place = `place:type=${Ci.nsINavHistoryQueryOptions.RESULTS_AS_LEFT_PANE_QUERY}&excludeItems=1&expandQueries=0`;
@@ -105,24 +109,19 @@ var PlacesOrganizer = {
       this._places.view.selection.selectEventsSuppressed = true;
     try {
       for (let container of hierarchy) {
-        switch (typeof container) {
-          case "number":
+        if (typeof container != "string") {
+          throw new Error("Invalid container type found: " + container);
+        }
+
+        try {
+          this.selectLeftPaneBuiltIn(container);
+        } catch (ex) {
+          if (container.substr(0, 6) == "place:") {
+            this._places.selectPlaceURI(container);
+          } else {
+            // Must be a guid.
             this._places.selectItems([container], false);
-            break;
-          case "string":
-            try {
-              this.selectLeftPaneBuiltIn(container);
-            } catch (ex) {
-              if (container.substr(0, 6) == "place:") {
-                this._places.selectPlaceURI(container);
-              } else {
-                // May be a guid.
-                this._places.selectItems([container], false);
-              }
-            }
-            break;
-          default:
-            throw new Error("Invalid container type found: " + container);
+          }
         }
         PlacesUtils.asContainer(this._places.selectedNode).containerOpen = true;
       }
@@ -374,10 +373,10 @@ var PlacesOrganizer = {
     }
   },
 
-  openFlatContainer: function PO_openFlatContainerFlatContainer(aContainer) {
-    if (aContainer.itemId != -1) {
+  openFlatContainer(aContainer) {
+    if (aContainer.bookmarkGuid) {
       PlacesUtils.asContainer(this._places.selectedNode).containerOpen = true;
-      this._places.selectItems([aContainer.itemId], false);
+      this._places.selectItems([aContainer.bookmarkGuid], false);
     } else if (PlacesUtils.nodeIsQuery(aContainer)) {
       this._places.selectPlaceURI(aContainer.uri);
     }
@@ -590,41 +589,6 @@ var PlacesOrganizer = {
     fp.open(fpCallback);
   },
 
-  _detectAndSetDetailsPaneMinimalState:
-  function PO__detectAndSetDetailsPaneMinimalState(aNode) {
-    /**
-     * The details of simple folder-items (as opposed to livemarks) or the
-     * of livemark-children are not likely to fill the infoBox anyway,
-     * thus we remove the "More/Less" button and show all details.
-     *
-     * the wasminimal attribute here is used to persist the "more/less"
-     * state in a bookmark->folder->bookmark scenario.
-     */
-    var infoBox = document.getElementById("infoBox");
-    var infoBoxExpanderWrapper = document.getElementById("infoBoxExpanderWrapper");
-    var additionalInfoBroadcaster = document.getElementById("additionalInfoBroadcaster");
-
-    if (!aNode) {
-      infoBoxExpanderWrapper.hidden = true;
-      return;
-    }
-    if (aNode.itemId != -1 &&
-        PlacesUtils.nodeIsFolder(aNode) && !aNode._feedURI) {
-      if (infoBox.getAttribute("minimal") == "true")
-        infoBox.setAttribute("wasminimal", "true");
-      infoBox.removeAttribute("minimal");
-      infoBoxExpanderWrapper.hidden = true;
-    } else {
-      if (infoBox.getAttribute("wasminimal") == "true")
-        infoBox.setAttribute("minimal", "true");
-      infoBox.removeAttribute("wasminimal");
-      infoBoxExpanderWrapper.hidden =
-        this._additionalInfoFields.every(id =>
-          document.getElementById(id).collapsed);
-    }
-    additionalInfoBroadcaster.hidden = infoBox.getAttribute("minimal") == "true";
-  },
-
   _fillDetailsPane: function PO__fillDetailsPane(aNodeList) {
     var infoBox = document.getElementById("infoBox");
     var detailsDeck = document.getElementById("detailsDeck");
@@ -665,19 +629,15 @@ var PlacesOrganizer = {
 
       gEditItemOverlay.initPanel({ node: selectedNode,
                                    hiddenRows: ["folderPicker"] });
-
-      this._detectAndSetDetailsPaneMinimalState(selectedNode);
     } else if (!selectedNode && aNodeList[0]) {
       if (aNodeList.every(PlacesUtils.nodeIsURI)) {
         let uris = aNodeList.map(node => Services.io.newURI(node.uri));
         detailsDeck.selectedIndex = 1;
         gEditItemOverlay.initPanel({ uris,
                                      hiddenRows: ["folderPicker",
-                                                  "loadInSidebar",
                                                   "location",
                                                   "keyword",
                                                   "name"]});
-        this._detectAndSetDetailsPaneMinimalState(selectedNode);
       } else {
         detailsDeck.selectedIndex = 0;
         let selectItemDesc = document.getElementById("selectItemDescription");
@@ -708,27 +668,6 @@ var PlacesOrganizer = {
           PlacesUIUtils.getPluralString("detailsPane.itemsCountLabel",
                                         itemsCount, [itemsCount]);
       }
-    }
-  },
-
-  toggleAdditionalInfoFields: function PO_toggleAdditionalInfoFields() {
-    var infoBox = document.getElementById("infoBox");
-    var infoBoxExpander = document.getElementById("infoBoxExpander");
-    var infoBoxExpanderLabel = document.getElementById("infoBoxExpanderLabel");
-    var additionalInfoBroadcaster = document.getElementById("additionalInfoBroadcaster");
-
-    if (infoBox.getAttribute("minimal") == "true") {
-      infoBox.removeAttribute("minimal");
-      infoBoxExpanderLabel.value = infoBoxExpanderLabel.getAttribute("lesslabel");
-      infoBoxExpanderLabel.accessKey = infoBoxExpanderLabel.getAttribute("lessaccesskey");
-      infoBoxExpander.className = "expander-up";
-      additionalInfoBroadcaster.removeAttribute("hidden");
-    } else {
-      infoBox.setAttribute("minimal", "true");
-      infoBoxExpanderLabel.value = infoBoxExpanderLabel.getAttribute("morelabel");
-      infoBoxExpanderLabel.accessKey = infoBoxExpanderLabel.getAttribute("moreaccesskey");
-      infoBoxExpander.className = "expander-down";
-      additionalInfoBroadcaster.setAttribute("hidden", "true");
     }
   },
 };
@@ -1161,13 +1100,11 @@ var ViewMenu = {
     }
 
     // This maps the possible values of columnId (i.e., anonid's of treecols in
-    // placeContent) to the default sortingMode and sortingAnnotation values for
-    // each column.
+    // placeContent) to the default sortingMode for each column.
     //   key:  Sort key in the name of one of the
     //         nsINavHistoryQueryOptions.SORT_BY_* constants
     //   dir:  Default sort direction to use if none has been specified
-    //   anno: The annotation to sort by, if key is "ANNOTATION"
-    var colLookupTable = {
+    const colLookupTable = {
       title:        { key: "TITLE",        dir: "ascending"  },
       tags:         { key: "TAGS",         dir: "ascending"  },
       url:          { key: "URI",          dir: "ascending"  },
@@ -1187,7 +1124,6 @@ var ViewMenu = {
     aDirection = (aDirection || colLookupTable[columnId].dir).toUpperCase();
 
     var sortConst = "SORT_BY_" + colLookupTable[columnId].key + "_" + aDirection;
-    result.sortingAnnotation = colLookupTable[columnId].anno || "";
     result.sortingMode = Ci.nsINavHistoryQueryOptions[sortConst];
   }
 };

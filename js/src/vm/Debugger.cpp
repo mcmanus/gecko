@@ -37,15 +37,16 @@
 #include "vm/DebuggerMemory.h"
 #include "vm/GeckoProfiler.h"
 #include "vm/GeneratorObject.h"
-#include "vm/JSCompartment.h"
 #include "vm/JSContext.h"
 #include "vm/JSObject.h"
+#include "vm/Realm.h"
 #include "vm/TraceLogging.h"
 #include "vm/WrapperObject.h"
 #include "wasm/WasmInstance.h"
 
 #include "gc/GC-inl.h"
 #include "vm/BytecodeUtil-inl.h"
+#include "vm/Compartment-inl.h"
 #include "vm/GeckoProfiler-inl.h"
 #include "vm/JSObject-inl.h"
 #include "vm/JSScript-inl.h"
@@ -273,9 +274,8 @@ ValueToIdentifier(JSContext* cx, HandleValue v, MutableHandleId id)
         return false;
     if (!JSID_IS_ATOM(id) || !IsIdentifier(JSID_TO_ATOM(id))) {
         RootedValue val(cx, v);
-        ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
-                              JSDVG_SEARCH_STACK, val, nullptr, "not an identifier",
-                              nullptr);
+        ReportValueError(cx, JSMSG_UNEXPECTED_TYPE, JSDVG_SEARCH_STACK, val, nullptr,
+                         "not an identifier");
         return false;
     }
     return true;
@@ -521,13 +521,11 @@ RequireGlobalObject(JSContext* cx, HandleValue dbgobj, HandleObject referent)
         }
 
         if (obj->is<GlobalObject>()) {
-            ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_DEBUG_WRAPPER_IN_WAY,
-                                  JSDVG_SEARCH_STACK, dbgobj, nullptr,
-                                  isWrapper, isWindowProxy);
+            ReportValueError(cx, JSMSG_DEBUG_WRAPPER_IN_WAY, JSDVG_SEARCH_STACK, dbgobj, nullptr,
+                             isWrapper, isWindowProxy);
         } else {
-            ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_DEBUG_BAD_REFERENT,
-                                  JSDVG_SEARCH_STACK, dbgobj, nullptr,
-                                  "a global object", nullptr);
+            ReportValueError(cx, JSMSG_DEBUG_BAD_REFERENT, JSDVG_SEARCH_STACK, dbgobj, nullptr,
+                             "a global object");
         }
         return false;
     }
@@ -2413,9 +2411,9 @@ class MOZ_RAII ExecutionObservableFrame : public Debugger::ExecutionObservableSe
     }
 
     Zone* singleZone() const override {
-        // We never inline across compartments, let alone across zones, so
+        // We never inline across realms, let alone across zones, so
         // frames_'s script's zone is the only one of interest.
-        return frame_.script()->compartment()->zone();
+        return frame_.script()->zone();
     }
 
     JSScript* singleScriptForZoneInvalidation() const override {
@@ -2474,7 +2472,7 @@ class MOZ_RAII ExecutionObservableScript : public Debugger::ExecutionObservableS
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     }
 
-    Zone* singleZone() const override { return script_->compartment()->zone(); }
+    Zone* singleZone() const override { return script_->zone(); }
     JSScript* singleScriptForZoneInvalidation() const override { return script_; }
     bool shouldRecompileOrInvalidate(JSScript* script) const override {
         return script->hasBaselineScript() && script == script_;
@@ -2557,10 +2555,10 @@ MarkBaselineScriptActiveIfObservable(JSScript* script, const Debugger::Execution
 static bool
 AppendAndInvalidateScript(JSContext* cx, Zone* zone, JSScript* script, Vector<JSScript*>& scripts)
 {
-    // Enter the script's compartment as addPendingRecompile attempts to
+    // Enter the script's realm as addPendingRecompile attempts to
     // cancel off-thread compilations, whose books are kept on the
-    // script's compartment.
-    MOZ_ASSERT(script->compartment()->zone() == zone);
+    // script's realm.
+    MOZ_ASSERT(script->zone() == zone);
     AutoRealm ar(cx, script);
     zone->types.addPendingRecompile(cx, script);
     return scripts.append(script);
@@ -3950,8 +3948,8 @@ Debugger::construct(JSContext* cx, unsigned argc, Value* vp)
 
     /* Add the initial debuggees, if any. */
     for (unsigned i = 0; i < args.length(); i++) {
-        Rooted<GlobalObject*>
-            debuggee(cx, &args[i].toObject().as<ProxyObject>().private_().toObject().global());
+        JSObject& wrappedObj = args[i].toObject().as<ProxyObject>().private_().toObject();
+        Rooted<GlobalObject*> debuggee(cx, &wrappedObj.deprecatedGlobal());
         if (!debugger->addDebuggeeGlobal(cx, debuggee))
             return false;
     }
@@ -4232,9 +4230,13 @@ class MOZ_STACK_CLASS Debugger::ScriptQuery
         displayURLString(cx),
         hasSource(false),
         source(cx, AsVariant(static_cast<ScriptSourceObject*>(nullptr))),
+        hasLine(false),
+        line(0),
+        innermost(false),
         innermostForRealm(cx->zone()),
         vector(cx, ScriptVector(cx)),
-        wasmInstanceVector(cx, WasmInstanceObjectVector(cx))
+        wasmInstanceVector(cx, WasmInstanceObjectVector(cx)),
+        oom(false)
     {}
 
     /*
@@ -5360,9 +5362,8 @@ DebuggerScript_checkThis(JSContext* cx, const CallArgs& args, const char* fnname
         return nullptr;
 
     if (!GetScriptReferent(thisobj).is<ReferentT>()) {
-        ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_DEBUG_BAD_REFERENT,
-                              JSDVG_SEARCH_STACK, args.thisv(), nullptr,
-                              refname, nullptr);
+        ReportValueError(cx, JSMSG_DEBUG_BAD_REFERENT, JSDVG_SEARCH_STACK, args.thisv(), nullptr,
+                         refname);
         return nullptr;
     }
 
@@ -5466,7 +5467,10 @@ struct DebuggerScriptGetLineCountMatcher
     JSContext* cx_;
     double totalLines;
 
-    explicit DebuggerScriptGetLineCountMatcher(JSContext* cx) : cx_(cx) {}
+    explicit DebuggerScriptGetLineCountMatcher(JSContext* cx)
+      : cx_(cx),
+        totalLines(0.0)
+    {}
     using ReturnType = bool;
 
     ReturnType match(HandleScript script) {
@@ -6690,7 +6694,11 @@ class DebuggerScriptIsInCatchScopeMatcher
     bool isInCatch_;
 
   public:
-    explicit DebuggerScriptIsInCatchScopeMatcher(JSContext* cx, size_t offset) : cx_(cx), offset_(offset) { }
+    explicit DebuggerScriptIsInCatchScopeMatcher(JSContext* cx, size_t offset)
+      : cx_(cx),
+        offset_(offset),
+        isInCatch_(false)
+    { }
     using ReturnType = bool;
 
     inline bool isInCatch() const { return isInCatch_; }
@@ -7006,9 +7014,8 @@ DebuggerSource_checkThis(JSContext* cx, const CallArgs& args, const char* fnname
         return nullptr;
 
     if (!GetSourceReferent(thisobj).is<ReferentT>()) {
-        ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_DEBUG_BAD_REFERENT,
-                              JSDVG_SEARCH_STACK, args.thisv(), nullptr,
-                              refname, nullptr);
+        ReportValueError(cx, JSMSG_DEBUG_BAD_REFERENT, JSDVG_SEARCH_STACK, args.thisv(), nullptr,
+                         refname);
         return nullptr;
     }
 
@@ -7091,9 +7098,8 @@ DebuggerSource_getBinary(JSContext* cx, unsigned argc, Value* vp)
     THIS_DEBUGSOURCE_REFERENT(cx, argc, vp, "(get binary)", args, obj, referent);
 
     if (!referent.is<WasmInstanceObject*>()) {
-        ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_DEBUG_BAD_REFERENT,
-                              JSDVG_SEARCH_STACK, args.thisv(), nullptr,
-                              "a wasm source", nullptr);
+        ReportValueError(cx, JSMSG_DEBUG_BAD_REFERENT, JSDVG_SEARCH_STACK, args.thisv(), nullptr,
+                         "a wasm source");
         return false;
     }
 
@@ -8096,9 +8102,8 @@ DebuggerFrame::requireScriptReferent(JSContext* cx, HandleDebuggerFrame frame)
     AbstractFramePtr referent = DebuggerFrame::getReferent(frame);
     if (!referent.hasScript()) {
         RootedValue frameobj(cx, ObjectValue(*frame));
-        ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_DEBUG_BAD_REFERENT,
-                              JSDVG_SEARCH_STACK, frameobj, nullptr,
-                              "a script frame", nullptr);
+        ReportValueError(cx, JSMSG_DEBUG_BAD_REFERENT, JSDVG_SEARCH_STACK, frameobj, nullptr,
+                         "a script frame");
         return false;
     }
     return true;
@@ -8437,8 +8442,7 @@ DebuggerArguments::create(JSContext* cx, HandleObject proto, HandleDebuggerFrame
             return nullptr;
         id = INT_TO_JSID(i);
         if (!getobj ||
-            !NativeDefineAccessorProperty(cx, obj, id,
-                                          JS_DATA_TO_FUNC_PTR(GetterOp, getobj.get()), nullptr,
+            !NativeDefineAccessorProperty(cx, obj, id, getobj, nullptr,
                                           JSPROP_ENUMERATE | JSPROP_GETTER))
         {
             return nullptr;
@@ -9959,7 +9963,7 @@ DebuggerObject::getGlobal(JSContext* cx, HandleDebuggerObject object,
     RootedObject referent(cx, object->referent());
     Debugger* dbg = object->owner();
 
-    RootedObject global(cx, &referent->global());
+    RootedObject global(cx, &referent->deprecatedGlobal());
     return dbg->wrapDebuggeeObject(cx, global, result);
 }
 
@@ -10675,7 +10679,7 @@ DebuggerObject::unwrap(JSContext* cx, HandleDebuggerObject object,
     // Don't allow unwrapping to create a D.O whose referent is in an
     // invisible-to-Debugger global. (If our referent is a *wrapper* to such,
     // and the wrapper is in a visible realm, that's fine.)
-    if (unwrapped->realm()->creationOptions().invisibleToDebugger()) {
+    if (unwrapped->deprecatedRealm()->creationOptions().invisibleToDebugger()) {
         JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_DEBUG_INVISIBLE_COMPARTMENT);
         return false;
     }
@@ -10706,13 +10710,11 @@ DebuggerObject::requireGlobal(JSContext* cx, HandleDebuggerObject object)
 
         RootedValue dbgobj(cx, ObjectValue(*object));
         if (referent->is<GlobalObject>()) {
-            ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_DEBUG_WRAPPER_IN_WAY,
-                                  JSDVG_SEARCH_STACK, dbgobj, nullptr,
-                                  isWrapper, isWindowProxy);
+            ReportValueError(cx, JSMSG_DEBUG_WRAPPER_IN_WAY, JSDVG_SEARCH_STACK, dbgobj, nullptr,
+                             isWrapper, isWindowProxy);
         } else {
-            ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_DEBUG_BAD_REFERENT,
-                                  JSDVG_SEARCH_STACK, dbgobj, nullptr,
-                                  "a global object", nullptr);
+            ReportValueError(cx, JSMSG_DEBUG_BAD_REFERENT, JSDVG_SEARCH_STACK, dbgobj, nullptr,
+                             "a global object");
         }
         return false;
     }
@@ -10820,7 +10822,7 @@ DebuggerEnvironment_checkThis(JSContext* cx, const CallArgs& args, const char* f
      */
     if (requireDebuggee) {
         Rooted<Env*> env(cx, static_cast<Env*>(nthisobj->getPrivate()));
-        if (!Debugger::fromChildJSObject(nthisobj)->observesGlobal(&env->global())) {
+        if (!Debugger::fromChildJSObject(nthisobj)->observesGlobal(&env->nonCCWGlobal())) {
             JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_DEBUG_NOT_DEBUGGEE,
                                       "Debugger.Environment", "environment");
             return nullptr;
@@ -11170,7 +11172,7 @@ DebuggerEnvironment::isDebuggee() const
     MOZ_ASSERT(referent());
     MOZ_ASSERT(!referent()->is<EnvironmentObject>());
 
-    return owner()->observesGlobal(&referent()->global());
+    return owner()->observesGlobal(&referent()->nonCCWGlobal());
 }
 
 bool
@@ -11553,7 +11555,27 @@ Debugger::isDebuggerCrossCompartmentEdge(JSObject* obj, const gc::Cell* target)
 
     return referent == target;
 }
-#endif
+
+static void
+CheckDebuggeeThingRealm(Realm* realm, bool invisibleOk)
+{
+    MOZ_ASSERT(!realm->creationOptions().mergeable());
+    MOZ_ASSERT_IF(!invisibleOk, !realm->creationOptions().invisibleToDebugger());
+}
+
+void
+js::CheckDebuggeeThing(JSScript* script, bool invisibleOk)
+{
+    CheckDebuggeeThingRealm(script->realm(), invisibleOk);
+}
+
+void
+js::CheckDebuggeeThing(JSObject* obj, bool invisibleOk)
+{
+    if (Realm* realm = JS::GetObjectRealmOrNull(obj))
+        CheckDebuggeeThingRealm(realm, invisibleOk);
+}
+#endif // DEBUG
 
 
 /*** JS::dbg::GarbageCollectionEvent **************************************************************/

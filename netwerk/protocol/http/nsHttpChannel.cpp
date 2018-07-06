@@ -45,6 +45,7 @@
 #include "nsDNSPrefetch.h"
 #include "nsChannelClassifier.h"
 #include "nsIRedirectResultListener.h"
+#include "mozIThirdPartyUtil.h"
 #include "mozilla/dom/ContentVerifier.h"
 #include "mozilla/TimeStamp.h"
 #include "nsError.h"
@@ -57,6 +58,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/Services.h"
 #include "nsISSLSocketControl.h"
 #include "sslt.h"
 #include "nsContentUtils.h"
@@ -102,6 +104,7 @@
 #include "mozilla/extensions/StreamFilterParent.h"
 #include "mozilla/net/Predictor.h"
 #include "mozilla/MathAlgorithms.h"
+#include "mozilla/StaticPrefs.h"
 #include "CacheControlParser.h"
 #include "nsMixedContentBlocker.h"
 #include "CacheStorageService.h"
@@ -304,6 +307,7 @@ nsHttpChannel::nsHttpChannel()
     , mRequestTime(0)
     , mOfflineCacheLastModifiedTime(0)
     , mSuspendTotalTime(0)
+    , mRedirectType(0)
     , mCacheOpenWithPriority(false)
     , mCacheQueueSizeWhenOpen(0)
     , mCachedContentIsValid(false)
@@ -333,6 +337,7 @@ nsHttpChannel::nsHttpChannel()
     , mUsedNetwork(0)
     , mAuthConnectionRestartable(0)
     , mPushedStream(nullptr)
+    , mLocalBlocklist(false)
     , mOnTailUnblock(nullptr)
     , mWarningReporter(nullptr)
     , mIsReadingFromCache(false)
@@ -990,7 +995,7 @@ nsHttpChannel::SetupTransaction()
     }
 
     // path may contain UTF-8 characters, so ensure that they're escaped.
-    if (NS_EscapeURL(path.get(), path.Length(), esc_OnlyNonASCII, buf)) {
+    if (NS_EscapeURL(path.get(), path.Length(), esc_OnlyNonASCII | esc_Spaces, buf)) {
         requestURI = &buf;
     } else {
         requestURI = &path;
@@ -1763,7 +1768,7 @@ nsHttpChannel::ProcessSingleSecurityHeader(uint32_t aType,
             atom = nsHttp::ResolveAtom("Public-Key-Pins");
             break;
         default:
-            NS_NOTREACHED("Invalid security header type");
+            MOZ_ASSERT_UNREACHABLE("Invalid security header type");
             return NS_ERROR_FAILURE;
     }
 
@@ -3138,7 +3143,7 @@ nsHttpChannel::SetupByteRangeRequest(int64_t partialLen)
     if (val.IsEmpty()) {
         // if we hit this code it means mCachedResponseHead->IsResumable() is
         // either broken or not being called.
-        NS_NOTREACHED("no cache validator");
+        MOZ_ASSERT_UNREACHABLE("no cache validator");
         mIsPartialRequest = false;
         return NS_ERROR_FAILURE;
     }
@@ -3320,7 +3325,7 @@ nsHttpChannel::OnDoneReadingPartialCacheEntry(bool *streamDone)
             *streamDone = false;
     }
     else
-        NS_NOTREACHED("no transaction");
+        MOZ_ASSERT_UNREACHABLE("no transaction");
     return rv;
 }
 
@@ -3733,6 +3738,30 @@ nsHttpChannel::OpenCacheEntryInternal(bool isHttps,
     }
     if (mTRR) {
         extension.Append("TRR");
+    }
+
+    if (StaticPrefs::privacy_restrict3rdpartystorage_enabled() &&
+        mIsTrackingResource) {
+        nsCOMPtr<mozIThirdPartyUtil> thirdPartyUtil =
+            services::GetThirdPartyUtil();
+        if (thirdPartyUtil) {
+            bool thirdParty = false;
+            Unused << thirdPartyUtil->IsThirdPartyChannel(this,
+                                                          nullptr,
+                                                          &thirdParty);
+            if (thirdParty) {
+                nsCOMPtr<nsIURI> topWindowURI;
+                rv = GetTopWindowURI(getter_AddRefs(topWindowURI));
+                NS_ENSURE_SUCCESS(rv, rv);
+
+                nsAutoString topWindowOrigin;
+                rv = nsContentUtils::GetUTFOrigin(topWindowURI, topWindowOrigin);
+                NS_ENSURE_SUCCESS(rv, rv);
+
+                extension.Append("-trackerFor:");
+                extension.Append(NS_ConvertUTF16toUTF8(topWindowOrigin));
+            }
+        }
     }
 
     mCacheOpenWithPriority = cacheEntryOpenFlags & nsICacheStorage::OPEN_PRIORITY;
@@ -5501,7 +5530,7 @@ nsHttpChannel::AsyncProcessRedirection(uint32_t redirectType)
 
     // make sure non-ASCII characters in the location header are escaped.
     nsAutoCString locationBuf;
-    if (NS_EscapeURL(location.get(), -1, esc_OnlyNonASCII, locationBuf))
+    if (NS_EscapeURL(location.get(), -1, esc_OnlyNonASCII | esc_Spaces, locationBuf))
         location = locationBuf;
 
     mRedirectType = redirectType;
@@ -6021,7 +6050,9 @@ nsHttpChannel::AsyncOpen(nsIStreamListener *listener, nsISupports *context)
     // don't want it after OnModifyRequest() weighs in. But waiting for
     // that to complete would mean we don't include proxy resolution in the
     // timing.
-    mAsyncOpenTime = TimeStamp::Now();
+    if (!mAsyncOpenTimeOverriden) {
+      mAsyncOpenTime = TimeStamp::Now();
+    }
 
     // Remember we have Authorization header set here.  We need to check on it
     // just once and early, AsyncOpen is the best place.
@@ -6920,7 +6951,7 @@ nsHttpChannel::OnStartRequest(nsIRequest *request, nsISupports *ctxt)
 
     // avoid crashing if mListener happens to be null...
     if (!mListener) {
-        NS_NOTREACHED("mListener is null");
+        MOZ_ASSERT_UNREACHABLE("mListener is null");
         return NS_OK;
     }
 
@@ -7071,7 +7102,7 @@ nsHttpChannel::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult st
                 MOZ_ASSERT(mConcurrentCacheAccess);
             }
             else
-                NS_NOTREACHED("unexpected request");
+                MOZ_ASSERT_UNREACHABLE("unexpected request");
         }
         // Do not to leave the transaction in a suspended state in error cases.
         if (NS_FAILED(status) && mTransaction) {
@@ -8472,14 +8503,6 @@ nsHttpChannel::SetNotificationCallbacks(nsIInterfaceRequestor *aCallbacks)
     return rv;
 }
 
-NS_IMETHODIMP
-nsHttpChannel::GetResponseSynthesized(bool* aSynthesized)
-{
-    NS_ENSURE_ARG_POINTER(aSynthesized);
-    *aSynthesized = false;
-    return NS_OK;
-}
-
 bool
 nsHttpChannel::AwaitingCacheCallbacks()
 {
@@ -9314,6 +9337,38 @@ nsHttpChannel::GetWarningReporter()
     return mWarningReporter.get();
 }
 
+namespace {
+
+class CopyNonDefaultHeaderVisitor final : public nsIHttpHeaderVisitor
+{
+  nsCOMPtr<nsIHttpChannel> mTarget;
+
+  ~CopyNonDefaultHeaderVisitor() = default;
+
+  NS_IMETHOD
+  VisitHeader(const nsACString& aHeader, const nsACString& aValue) override
+  {
+    if (aValue.IsEmpty()) {
+      return mTarget->SetEmptyRequestHeader(aHeader);
+    } else {
+      return mTarget->SetRequestHeader(aHeader, aValue, false /* merge */);
+    }
+  }
+
+public:
+  explicit CopyNonDefaultHeaderVisitor(nsIHttpChannel* aTarget)
+    : mTarget(aTarget)
+  {
+    MOZ_DIAGNOSTIC_ASSERT(mTarget);
+  }
+
+  NS_DECL_ISUPPORTS
+};
+
+NS_IMPL_ISUPPORTS(CopyNonDefaultHeaderVisitor, nsIHttpHeaderVisitor)
+
+} // anonymous namespace
+
 nsresult
 nsHttpChannel::RedirectToInterceptedChannel()
 {
@@ -9336,6 +9391,23 @@ nsHttpChannel::RedirectToInterceptedChannel()
     rv = SetupReplacementChannel(mURI, intercepted, true,
                                  nsIChannelEventSink::REDIRECT_INTERNAL);
     NS_ENSURE_SUCCESS(rv, rv);
+
+    // Some APIs, like fetch(), allow content to set non-standard headers.
+    // Normally these APIs are responsible for copying these headers across
+    // redirects.  In the e10s parent-side intercept case, though, we currently
+    // "hide" the internal redirect to the InterceptedHttpChannel.  So the
+    // fetch() API does not have the opportunity to move headers over.
+    // Therefore, we do it automatically here.
+    //
+    // Once child-side interception is removed and the internal redirect no
+    // longer needs to be "hidden", then this header copying code can be
+    // removed.
+    if (ServiceWorkerParentInterceptEnabled()) {
+      nsCOMPtr<nsIHttpHeaderVisitor> visitor =
+        new CopyNonDefaultHeaderVisitor(intercepted);
+      rv = VisitNonDefaultRequestHeaders(visitor);
+      NS_ENSURE_SUCCESS(rv, rv);
+    }
 
     mRedirectChannel = intercepted;
 

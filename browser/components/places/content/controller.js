@@ -3,8 +3,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* import-globals-from ../../../base/content/utilityOverlay.js */
 /* import-globals-from ../PlacesUIUtils.jsm */
-/* import-globals-from ../../../../toolkit/content/globalOverlay.js */
 /* import-globals-from ../../../../toolkit/components/places/PlacesUtils.jsm */
 /* import-globals-from ../../../../toolkit/components/places/PlacesTransactions.jsm */
 
@@ -273,9 +273,7 @@ PlacesController.prototype = {
       let node = this._view.selectedNode;
       PlacesUIUtils.showBookmarkDialog({ action: "add",
                                          type: "bookmark",
-                                         hiddenRows: [ "keyword",
-                                                       "location",
-                                                       "loadInSidebar" ],
+                                         hiddenRows: [ "keyword", "location" ],
                                          uri: Services.io.newURI(node.uri),
                                          title: node.title
                                        }, window.top);

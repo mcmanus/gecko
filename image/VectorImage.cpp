@@ -44,7 +44,7 @@
 namespace mozilla {
 
 using namespace dom;
-using namespace dom::SVGPreserveAspectRatioBinding;
+using namespace dom::SVGPreserveAspectRatio_Binding;
 using namespace gfx;
 using namespace layers;
 
@@ -375,6 +375,7 @@ VectorImage::VectorImage(nsIURI* aURI /* = nullptr */) :
   ImageResource(aURI), // invoke superclass's constructor
   mLockCount(0),
   mIsInitialized(false),
+  mDiscardable(false),
   mIsFullyLoaded(false),
   mIsDrawing(false),
   mHaveAnimations(false),
@@ -1213,7 +1214,7 @@ VectorImage::Show(gfxDrawable* aDrawable, const SVGDrawingParameters& aParams)
                              aParams.region,
                              SurfaceFormat::B8G8R8A8,
                              aParams.samplingFilter,
-                             aParams.flags, aParams.opacity);
+                             aParams.flags, aParams.opacity, false);
 
 #ifdef DEBUG
   NotifyDrawingObservers();

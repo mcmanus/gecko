@@ -73,6 +73,12 @@
 #include "prdtoa.h"
 #include "prtime.h"
 
+#if defined(XP_WIN)
+#include <processthreadsapi.h>  // for GetCurrentProcessId()
+#else
+#include <unistd.h> // for getpid()
+#endif // defined(XP_WIN)
+
 #ifdef MOZ_TASK_TRACER
 #include "GeckoTaskTracer.h"
 #endif
@@ -427,6 +433,20 @@ private:
       // Crude, non UTF-8 compatible, case insensitive substring search
       if (name.find(filter) != std::string::npos) {
         return true;
+      }
+
+      // If the filter starts with pid:, check for a pid match
+      if (filter.find("pid:") == 0) {
+        std::string mypid = std::to_string(
+#ifdef XP_WIN
+          GetCurrentProcessId()
+#else
+          getpid()
+#endif
+        );
+        if (filter.compare(4, std::string::npos, mypid) == 0) {
+          return true;
+        }
       }
     }
 
@@ -2637,29 +2657,57 @@ profiler_shutdown()
   }
 }
 
+static bool
+WriteProfileToJSONWriter(SpliceableChunkedJSONWriter& aWriter,
+                         double aSinceTime,
+                         bool aIsShuttingDown)
+{
+  LOG("WriteProfileToJSONWriter");
+
+  MOZ_RELEASE_ASSERT(CorePS::Exists());
+
+  aWriter.Start();
+  {
+    if (!profiler_stream_json_for_this_process(
+          aWriter, aSinceTime, aIsShuttingDown)) {
+      return false;
+    }
+
+    // Don't include profiles from other processes because this is a
+    // synchronous function.
+    aWriter.StartArrayProperty("processes");
+    aWriter.EndArray();
+  }
+  aWriter.End();
+  return true;
+}
+
 UniquePtr<char[]>
 profiler_get_profile(double aSinceTime, bool aIsShuttingDown)
 {
   LOG("profiler_get_profile");
 
-  MOZ_RELEASE_ASSERT(CorePS::Exists());
+  SpliceableChunkedJSONWriter b;
+  if (!WriteProfileToJSONWriter(b, aSinceTime, aIsShuttingDown)) {
+    return nullptr;
+  }
+  return b.WriteFunc()->CopyData();
+}
+
+void
+profiler_get_profile_json_into_lazily_allocated_buffer(
+  const std::function<char*(size_t)>& aAllocator,
+  double aSinceTime,
+  bool aIsShuttingDown)
+{
+  LOG("profiler_get_profile_json_into_lazily_allocated_buffer");
 
   SpliceableChunkedJSONWriter b;
-  b.Start();
-  {
-    if (!profiler_stream_json_for_this_process(b, aSinceTime,
-                                               aIsShuttingDown)) {
-      return nullptr;
-    }
-
-    // Don't include profiles from other processes because this is a
-    // synchronous function.
-    b.StartArrayProperty("processes");
-    b.EndArray();
+  if (!WriteProfileToJSONWriter(b, aSinceTime, aIsShuttingDown)) {
+    return;
   }
-  b.End();
 
-  return b.WriteFunc()->CopyData();
+  b.WriteFunc()->CopyDataIntoLazilyAllocatedBuffer(aAllocator);
 }
 
 void

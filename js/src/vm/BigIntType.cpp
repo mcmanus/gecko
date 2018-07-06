@@ -102,6 +102,29 @@ BigInt::createFromBoolean(JSContext* cx, bool b)
     return x;
 }
 
+BigInt*
+BigInt::createFromBytes(JSContext* cx, int sign, void* bytes, size_t nbytes)
+{
+    BigInt* x = Allocate<BigInt>(cx);
+    if (!x)
+        return nullptr;
+    // Initialize num_ to zero before calling mpz_import.
+    mpz_init(x->num_);
+
+    if (nbytes == 0)
+        return x;
+
+    mpz_import(x->num_, nbytes,
+               -1, // order: least significant word first
+               1, // size: one byte per "word"
+               0, // endianness: native
+               0, // nail bits: none; use full words
+               bytes);
+    if (sign < 0)
+        mpz_neg(x->num_, x->num_);
+    return x;
+}
+
 // BigInt proposal section 5.1.1
 static bool
 IsInteger(double d)
@@ -175,13 +198,25 @@ js::ToBigInt(JSContext* cx, HandleValue val)
     return nullptr;
 }
 
+// ES 2019 draft 6.1.6
+double
+BigInt::numberValue(BigInt* x)
+{
+    // mpz_get_d may cause a hardware overflow trap, so use
+    // mpz_get_d_2exp to get the fractional part and exponent
+    // separately.
+    signed long int exp;
+    double d = mpz_get_d_2exp(&exp, x->num_);
+    return ldexp(d, exp);
+}
+
 JSLinearString*
 BigInt::toString(JSContext* cx, BigInt* x, uint8_t radix)
 {
     MOZ_ASSERT(2 <= radix && radix <= 36);
     // We need two extra chars for '\0' and potentially '-'.
     size_t strSize = mpz_sizeinbase(x->num_, 10) + 2;
-    UniqueChars str(static_cast<char*>(js_malloc(strSize)));
+    UniqueChars str(js_pod_malloc<char>(strSize));
     if (!str) {
         ReportOutOfMemory(cx);
         return nullptr;
@@ -282,6 +317,31 @@ js::StringToBigInt(JSContext* cx, HandleString str, uint8_t radix)
     return nullptr;
 }
 
+size_t
+BigInt::byteLength(BigInt* x)
+{
+    if (mpz_sgn(x->num_) == 0)
+        return 0;
+    return JS_HOWMANY(mpz_sizeinbase(x->num_, 2), 8);
+}
+
+void
+BigInt::writeBytes(BigInt* x, RangedPtr<uint8_t> buffer)
+{
+#ifdef DEBUG
+    // Check that the buffer being filled is large enough to hold the
+    // integer we're writing. The result of the RangedPtr addition is
+    // restricted to the buffer's range.
+    size_t reprSize = byteLength(x);
+    MOZ_ASSERT(buffer + reprSize, "out of bounds access to buffer");
+#endif
+
+    size_t count;
+    // cf. mpz_import parameters in createFromBytes, above.
+    mpz_export(buffer.get(), &count, -1, 1, 0, 0, x->num_);
+    MOZ_ASSERT(count == reprSize);
+}
+
 void
 BigInt::finalize(js::FreeOp* fop)
 {
@@ -301,6 +361,12 @@ bool
 BigInt::toBoolean()
 {
     return mpz_sgn(num_) != 0;
+}
+
+int8_t
+BigInt::sign()
+{
+    return mpz_sgn(num_);
 }
 
 js::HashNumber

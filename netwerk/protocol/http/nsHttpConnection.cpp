@@ -46,9 +46,14 @@ namespace net {
 //-----------------------------------------------------------------------------
 
 nsHttpConnection::nsHttpConnection()
-    : mTransaction(nullptr)
+    : mSocketInCondition(NS_ERROR_NOT_INITIALIZED)
+    , mSocketOutCondition(NS_ERROR_NOT_INITIALIZED)
+    , mTransaction(nullptr)
     , mHttpHandler(gHttpHandler)
     , mCallbacksLock("nsHttpConnection::mCallbacksLock")
+    , mLastReadTime(0)
+    , mLastWriteTime(0)
+    , mMaxHangTime(0)
     , mConsiderReusedAfterInterval(0)
     , mConsiderReusedAfterEpoch(0)
     , mCurrentBytesRead(0)
@@ -56,6 +61,7 @@ nsHttpConnection::nsHttpConnection()
     , mTotalBytesRead(0)
     , mTotalBytesWritten(0)
     , mContentBytesWritten(0)
+    , mRtt(0)
     , mUrgentStartPreferred(false)
     , mUrgentStartPreferredKnown(false)
     , mConnectedTransport(false)
@@ -70,6 +76,7 @@ nsHttpConnection::nsHttpConnection()
     , mExperienced(false)
     , mInSpdyTunnel(false)
     , mForcePlainText(false)
+    , mTrafficCount(0)
     , mTrafficStamp(false)
     , mHttp1xTransactionCount(0)
     , mRemainingConnectionUses(0xffffffff)
@@ -1424,7 +1431,7 @@ nsHttpConnection::ReadTimeoutTick(PRIntervalTime now)
       // succesfullu write to the socket and this can only happen after
       // the TLS handshake is done.
       PRIntervalTime initialTLSDelta = now - mLastWriteTime;
-      if (initialTLSDelta > gHttpHandler->TLSHandshakeTimeout()) {
+      if (initialTLSDelta > PR_MillisecondsToInterval(gHttpHandler->TLSHandshakeTimeout())) {
         LOG(("canceling transaction: tls handshake takes too long: tls handshake "
              "last %ums, timeout is %dms.",
              PR_IntervalToMilliseconds(initialTLSDelta),
@@ -1587,7 +1594,7 @@ nsHttpConnection::ResumeSend()
         return rv;
     }
 
-    NS_NOTREACHED("no socket output stream");
+    MOZ_ASSERT_UNREACHABLE("no socket output stream");
     return NS_ERROR_UNEXPECTED;
 }
 
@@ -1615,7 +1622,7 @@ nsHttpConnection::ResumeRecv()
     if (mSocketIn)
         return mSocketIn->AsyncWait(this, 0, 0, nullptr);
 
-    NS_NOTREACHED("no socket input stream");
+    MOZ_ASSERT_UNREACHABLE("no socket input stream");
     return NS_ERROR_UNEXPECTED;
 }
 

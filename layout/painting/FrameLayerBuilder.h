@@ -665,7 +665,7 @@ protected:
    * PaintedLayer.
    */
 
-  static void RecomputeVisibilityForItems(nsTArray<AssignedDisplayItem>& aItems,
+  static void RecomputeVisibilityForItems(std::vector<AssignedDisplayItem>& aItems,
                                           nsDisplayListBuilder* aBuilder,
                                           const nsIntRegion& aRegionToDraw,
                                           nsRect& aPreviousRectToDraw,
@@ -674,7 +674,7 @@ protected:
                                           float aXScale,
                                           float aYScale);
 
-  void PaintItems(nsTArray<AssignedDisplayItem>& aItems,
+  void PaintItems(std::vector<AssignedDisplayItem>& aItems,
                   const nsIntRect& aRect,
                   gfxContext* aContext,
                   nsDisplayListBuilder* aBuilder,
@@ -701,6 +701,17 @@ public:
   const DisplayItemClip* GetInactiveLayerClip() const
   {
     return mInactiveLayerClip;
+  }
+
+  /*
+   * If we're building layers for an item with an inactive layer tree,
+   * this function saves the item's clip, which will later be applied
+   * to the event regions. The clip should be relative to
+   * mContainingPaintedLayer->mReferenceFrame.
+   */
+  void SetInactiveLayerClip(const DisplayItemClip* aClip)
+  {
+    mInactiveLayerClip = aClip;
   }
 
   bool IsBuildingRetainedLayers()

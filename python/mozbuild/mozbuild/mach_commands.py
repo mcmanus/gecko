@@ -1374,7 +1374,9 @@ class PackageFrontend(MachCommandBase):
             from taskgraph.parameters import Parameters
             params = Parameters(
                 level=os.environ.get('MOZ_SCM_LEVEL', '3'),
-                strict=False)
+                strict=False,
+                ignore_fetches=True,
+            )
 
             # TODO: move to the taskcluster package
             def tasks(kind_name):
@@ -1673,7 +1675,7 @@ class StaticAnalysis(MachCommandBase):
         # When no value is specified the default value is considered to be the source
         # in order to limit the dianostic message to the source files or folders.
         common_args.append('-header-filter=%s' %
-                           (header_filter if len(header_filter) else ''.join(source)))
+                           (header_filter if len(header_filter) else '|'.join(source)))
 
         if fix:
             common_args.append('-fix')
@@ -1690,7 +1692,7 @@ class StaticAnalysis(MachCommandBase):
             return 0
 
         args = [python, self._run_clang_tidy_path, '-p', self.topobjdir]
-        args += ['-j', str(jobs)] + source + common_args
+        args += ['-j', str(jobs)] + common_args + source
         cwd = self.topobjdir
 
         monitor = StaticAnalysisMonitor(self.topsrcdir, self.topobjdir, total)
@@ -1733,6 +1735,7 @@ class StaticAnalysis(MachCommandBase):
         self.TOOLS_CHECKER_RETURNED_NO_ISSUES = 4
         self.TOOLS_CHECKER_RESULT_FILE_NOT_FOUND = 5
         self.TOOLS_CHECKER_DIFF_FAILED = 6
+        self.TOOLS_CHECKER_NOT_FOUND = 7
 
         # Configure the tree or download clang-tidy package, depending on the option that we choose
         if intree_tool:
@@ -1766,7 +1769,7 @@ class StaticAnalysis(MachCommandBase):
         # For each checker run it
         f = open(mozpath.join(self._clang_tidy_base_path, "config.yaml"))
         import yaml
-        config = yaml.load(f)
+        config = yaml.safe_load(f)
         platform, _ = self.platform
 
         if platform not in config['platforms']:
@@ -1781,6 +1784,13 @@ class StaticAnalysis(MachCommandBase):
         self.log(logging.INFO, 'static-analysis', {},
                  "RUNNING: clang-tidy autotest for platform {0} with {1} workers.".format(
                      platform, max_workers))
+
+        # List all available checkers
+        cmd = [self._clang_tidy_path, '-list-checks', '-checks=*']
+        clang_output = subprocess.check_output(
+            cmd, stderr=subprocess.STDOUT).decode('utf-8')
+        available_checks = clang_output.split('\n')[1:]
+        self._clang_tidy_checks = [c.strip() for c in available_checks if c]
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
@@ -1824,7 +1834,7 @@ class StaticAnalysis(MachCommandBase):
                               'Delete local helpers and reset static analysis helper tool cache')
     def clear_cache(self, verbose=False):
         self._set_log_level(verbose)
-        rc = self._get_clang_tools(force=True, download_if_needed=False,
+        rc = self._get_clang_tools(force=True, download_if_needed=True, skip_cache=True,
                                    verbose=verbose)
         if rc != 0:
             return rc
@@ -1872,7 +1882,12 @@ class StaticAnalysis(MachCommandBase):
 
         self.log(logging.INFO, 'static-analysis', {},"RUNNING: clang-tidy checker {}.".format(check))
 
-        # Verify is test file exists for checker
+        # Verify if this checker actually exists
+        if not check in self._clang_tidy_checks:
+            self.log(logging.ERROR, 'static-analysis', {}, "ERROR: clang-tidy checker {} doesn't exist in this clang-tidy version.".format(check))
+            return self.TOOLS_CHECKER_NOT_FOUND
+
+        # Verify if the test file exists for this checker
         if not os.path.exists(test_file_path_cpp):
             self.log(logging.ERROR, 'static-analysis', {}, "ERROR: clang-tidy checker {} doesn't have a test file.".format(check))
             return self.TOOLS_CHECKER_NO_TEST_FILE
@@ -1955,7 +1970,7 @@ class StaticAnalysis(MachCommandBase):
         import yaml
         with open(mozpath.join(self.topsrcdir, "tools", "clang-tidy", "config.yaml")) as f:
             try:
-                config = yaml.load(f)
+                config = yaml.safe_load(f)
                 for item in config['clang_checkers']:
                     if item['publish']:
                         checks += ',' + item['name']

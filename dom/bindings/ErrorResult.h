@@ -566,7 +566,7 @@ private:
   // reference, not by value.
   TErrorResult(const TErrorResult&) = delete;
   void operator=(const TErrorResult&) = delete;
-};
+} JS_HAZ_ROOTED;
 
 struct JustAssertCleanupPolicy {
   static const bool assertHandled = true;
@@ -644,32 +644,6 @@ binding_danger::TErrorResult<CleanupPolicy>::operator const ErrorResult&() const
 {
   return *static_cast<const ErrorResult*>(
      reinterpret_cast<const TErrorResult<AssertAndSuppressCleanupPolicy>*>(this));
-}
-
-template<typename CleanupPolicy>
-bool
-binding_danger::TErrorResult<CleanupPolicy>::operator==(const ErrorResult& aRight) const
-{
-  auto right = reinterpret_cast<const TErrorResult<CleanupPolicy>*>(&aRight);
-
-  if (mResult != right->mResult) {
-    return false;
-  }
-
-  if (IsJSException()) {
-    // js exceptions are always non-equal
-    return false;
-  }
-
-  if (IsErrorWithMessage()) {
-    return *mExtra.mMessage == *right->mExtra.mMessage;
-  }
-
-  if (IsDOMException()) {
-    return *mExtra.mDOMExceptionInfo == *right->mExtra.mDOMExceptionInfo;
-  }
-
-  return true;
 }
 
 // A class for use when an ErrorResult should just automatically be ignored.
@@ -838,7 +812,7 @@ private:
   // to SuppressException (one from us, one from the ErrorResult destructor
   // after asserting).
   binding_danger::TErrorResult<binding_danger::JustSuppressCleanupPolicy> mInner;
-};
+} JS_HAZ_ROOTED;
 
 /******************************************************************************
  ** Macros for checking results

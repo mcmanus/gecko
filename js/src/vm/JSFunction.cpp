@@ -116,8 +116,7 @@ AdvanceToActiveCallLinear(JSContext* cx, NonBuiltinScriptFrameIter& iter, Handle
 void
 js::ThrowTypeErrorBehavior(JSContext* cx)
 {
-    JS_ReportErrorFlagsAndNumberASCII(cx, JSREPORT_ERROR, GetErrorMessage, nullptr,
-                                     JSMSG_THROW_TYPE_ERROR);
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_THROW_TYPE_ERROR);
 }
 
 static bool
@@ -311,8 +310,7 @@ CallerGetterImpl(JSContext* cx, const CallArgs& args)
         MOZ_ASSERT(!callerFun->isBuiltin(), "non-builtin iterator returned a builtin?");
 
         if (callerFun->strict()) {
-            JS_ReportErrorFlagsAndNumberASCII(cx, JSREPORT_ERROR, GetErrorMessage, nullptr,
-                                              JSMSG_CALLER_IS_STRICT);
+            JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_CALLER_IS_STRICT);
             return false;
         }
     }
@@ -380,8 +378,7 @@ CallerSetterImpl(JSContext* cx, const CallArgs& args)
     MOZ_ASSERT(!callerFun->isBuiltin(), "non-builtin iterator returned a builtin?");
 
     if (callerFun->strict()) {
-        JS_ReportErrorFlagsAndNumberASCII(cx, JSREPORT_ERROR, GetErrorMessage, nullptr,
-                                          JSMSG_CALLER_IS_STRICT);
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_CALLER_IS_STRICT);
         return false;
     }
 
@@ -1578,6 +1575,8 @@ JSFunction::createScriptForLazilyInterpretedFunction(JSContext* cx, HandleFuncti
 {
     MOZ_ASSERT(fun->isInterpretedLazy());
 
+    AutoRealm ar(cx, fun);
+
     Rooted<LazyScript*> lazy(cx, fun->lazyScriptOrNull());
     if (lazy) {
         RootedScript script(cx, lazy->maybeScript());
@@ -1750,7 +1749,7 @@ CreateDynamicFunction(JSContext* cx, const CallArgs& args, GeneratorKind generat
 {
     // Steps 1-5.
     // Block this call if security callbacks forbid it.
-    Rooted<GlobalObject*> global(cx, &args.callee().global());
+    Handle<GlobalObject*> global = cx->global();
     if (!GlobalObject::isRuntimeCodeGenEnabled(cx, global)) {
         JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_CSP_BLOCKED_FUNCTION);
         return false;
@@ -2102,12 +2101,12 @@ js::NewFunctionWithProto(JSContext* cx, Native native,
 }
 
 bool
-js::CanReuseScriptForClone(JS::Compartment* compartment, HandleFunction fun,
+js::CanReuseScriptForClone(JS::Realm* realm, HandleFunction fun,
                            HandleObject newParent)
 {
     MOZ_ASSERT(fun->isInterpreted());
 
-    if (compartment != fun->compartment() ||
+    if (realm != fun->realm() ||
         fun->isSingleton() ||
         ObjectGroup::useSingletonForClone(fun))
     {
@@ -2191,7 +2190,7 @@ js::CloneFunctionReuseScript(JSContext* cx, HandleFunction fun, HandleObject enc
     MOZ_ASSERT(NewFunctionEnvironmentIsWellFormed(cx, enclosingEnv));
     MOZ_ASSERT(fun->isInterpreted());
     MOZ_ASSERT(!fun->isBoundFunction());
-    MOZ_ASSERT(CanReuseScriptForClone(cx->compartment(), fun, enclosingEnv));
+    MOZ_ASSERT(CanReuseScriptForClone(cx->realm(), fun, enclosingEnv));
 
     RootedFunction clone(cx, NewFunctionClone(cx, fun, newKind, allocKind, proto));
     if (!clone)
@@ -2253,7 +2252,7 @@ js::CloneFunctionAndScript(JSContext* cx, HandleFunction fun, HandleObject enclo
 #endif
 
     RootedScript script(cx, fun->nonLazyScript());
-    MOZ_ASSERT(script->compartment() == fun->compartment());
+    MOZ_ASSERT(script->realm() == fun->realm());
     MOZ_ASSERT(cx->compartment() == clone->compartment(),
                "Otherwise we could relazify clone below!");
 
@@ -2509,11 +2508,7 @@ namespace detail {
 JS_PUBLIC_API(void)
 CheckIsValidConstructible(const Value& calleev)
 {
-    JSObject* callee = &calleev.toObject();
-    if (callee->is<JSFunction>())
-        MOZ_ASSERT(callee->as<JSFunction>().isConstructor());
-    else
-        MOZ_ASSERT(callee->constructHook() != nullptr);
+    MOZ_ASSERT(calleev.toObject().isConstructor());
 }
 
 } // namespace detail

@@ -236,11 +236,13 @@ public:
     MOZ_ASSERT(aTouchEvent,
                "mRetargetedTouchTargets should be empty when dispatching non-touch events.");
 
-    WidgetTouchEvent::TouchArray& touches = aTouchEvent->mTouches;
-    MOZ_ASSERT(!touches.Length() ||
-               touches.Length() == mRetargetedTouchTargets->Length());
-    for (uint32_t i = 0; i < touches.Length(); ++i) {
-      touches[i]->mTarget = mRetargetedTouchTargets->ElementAt(i);
+    if (mRetargetedTouchTargets.isSome()) {
+      WidgetTouchEvent::TouchArray& touches = aTouchEvent->mTouches;
+      MOZ_ASSERT(!touches.Length() ||
+                 touches.Length() == mRetargetedTouchTargets->Length());
+      for (uint32_t i = 0; i < touches.Length(); ++i) {
+        touches[i]->mTarget = mRetargetedTouchTargets->ElementAt(i);
+      }
     }
 
     if (aDOMEvent) {
@@ -317,6 +319,16 @@ public:
   bool IsRootOfClosedTree()
   {
     return mFlags.mRootOfClosedTree;
+  }
+
+  void SetItemInShadowTree(bool aSet)
+  {
+    mFlags.mItemInShadowTree = aSet;
+  }
+
+  bool IsItemInShadowTree()
+  {
+    return mFlags.mItemInShadowTree;
   }
 
   void SetIsSlotInClosedTree(bool aSet)
@@ -406,7 +418,8 @@ public:
       mManager->HandleEvent(aVisitor.mPresContext, aVisitor.mEvent,
                             &aVisitor.mDOMEvent,
                             CurrentTarget(),
-                            &aVisitor.mEventStatus);
+                            &aVisitor.mEventStatus,
+                            IsItemInShadowTree());
       NS_ASSERTION(aVisitor.mEvent->mCurrentTarget == nullptr,
                    "CurrentTarget should be null!");
     }
@@ -441,6 +454,7 @@ private:
     bool mWantsPreHandleEvent : 1;
     bool mPreHandleEventOnly : 1;
     bool mRootOfClosedTree : 1;
+    bool mItemInShadowTree : 1;
     bool mIsSlotInClosedTree : 1;
     bool mIsChromeHandler : 1;
   private:
@@ -483,6 +497,7 @@ EventTargetChainItem::GetEventTargetParent(EventChainPreVisitor& aVisitor)
   SetWantsPreHandleEvent(aVisitor.mWantsPreHandleEvent);
   SetPreHandleEventOnly(aVisitor.mWantsPreHandleEvent && !aVisitor.mCanHandle);
   SetRootOfClosedTree(aVisitor.mRootOfClosedTree);
+  SetItemInShadowTree(aVisitor.mItemInShadowTree);
   SetRetargetedRelatedTarget(aVisitor.mRetargetedRelatedTarget);
   SetRetargetedTouchTarget(std::move(aVisitor.mRetargetedTouchTargets));
   mItemFlags = aVisitor.mItemFlags;

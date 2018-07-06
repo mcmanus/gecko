@@ -25,7 +25,7 @@
 #include "vm/StringType.h"
 
 namespace js {
-class AutoLockForExclusiveAccess;
+class AutoAccessAtomsZone;
 } // namespace js
 
 namespace JS {
@@ -60,7 +60,7 @@ class Symbol : public js::gc::TenuredCell
 
     static Symbol*
     newInternal(JSContext* cx, SymbolCode code, js::HashNumber hash,
-                JSAtom* description, js::AutoLockForExclusiveAccess& lock);
+                JSAtom* description, const js::AutoAccessAtomsZone& access);
 
   public:
     static Symbol* new_(JSContext* cx, SymbolCode code, JSString* description);
@@ -97,7 +97,7 @@ class Symbol : public js::gc::TenuredCell
         return mallocSizeOf(this);
     }
 
-#ifdef DEBUG
+#if defined(DEBUG) || defined(JS_JITSPEW)
     void dump(); // Debugger-friendly stderr dump.
     void dump(js::GenericPrinter& out);
 #endif
@@ -122,6 +122,8 @@ struct HashSymbolsByDescription
 };
 
 /*
+ * [SMDOC] Symbol.for() registry (ES6 GlobalSymbolRegistry)
+ *
  * The runtime-wide symbol registry, used to implement Symbol.for().
  *
  * ES6 draft rev 25 (2014 May 22) calls this the GlobalSymbolRegistry List. In

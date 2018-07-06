@@ -7,6 +7,8 @@
     "url": "https://github.com/mozilla/activity-stream/issues"
   },
   "dependencies": {
+    "fluent": "0.6.4",
+    "fluent-react": "0.7.0",
     "prop-types": "15.6.1",
     "react": "16.2.0",
     "react-dom": "16.2.0",
@@ -20,6 +22,8 @@
     "babel-loader": "7.1.4",
     "babel-plugin-jsm-to-commonjs": "0.4.0",
     "babel-plugin-jsm-to-esmodules": "0.4.0",
+    "babel-plugin-transform-async-generator-functions": "6.24.1",
+    "babel-plugin-transform-async-to-generator": "6.24.1",
     "babel-plugin-transform-async-to-module-method": "6.24.1",
     "babel-plugin-transform-es2015-modules-commonjs": "6.26.2",
     "babel-plugin-transform-object-rest-spread": "6.26.0",
@@ -33,7 +37,7 @@
     "eslint": "4.19.1",
     "eslint-plugin-import": "2.11.0",
     "eslint-plugin-json": "1.2.0",
-    "eslint-plugin-mozilla": "0.11.0",
+    "eslint-plugin-mozilla": "0.14.0",
     "eslint-plugin-no-unsanitized": "3.0.0",
     "eslint-plugin-promise": "3.7.0",
     "eslint-plugin-react": "7.7.0",

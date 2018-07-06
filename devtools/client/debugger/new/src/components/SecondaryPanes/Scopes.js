@@ -66,7 +66,8 @@ class Scopes extends _react.PureComponent {
   render() {
     const {
       isPaused,
-      isLoading
+      isLoading,
+      openLink
     } = this.props;
     const {
       originalScopes,
@@ -85,6 +86,7 @@ class Scopes extends _react.PureComponent {
         disableWrap: true,
         focusable: false,
         dimTopLevelWindow: true,
+        openLink: openLink,
         createObjectClient: grip => (0, _firefox.createObjectClient)(grip)
       }), originalScopes ? _react2.default.createElement("div", {
         className: "scope-type-toggle"
@@ -124,7 +126,7 @@ const mapStateToProps = state => {
   const {
     scope: originalFrameScopes,
     pending: originalPending
-  } = (0, _selectors.getOriginalFrameScope)(state, selectedSource && selectedSource.get("id"), selectedFrame && selectedFrame.id) || {
+  } = (0, _selectors.getOriginalFrameScope)(state, selectedSource && selectedSource.id, selectedFrame && selectedFrame.id) || {
     scope: null,
     pending: false
   };
@@ -145,4 +147,6 @@ const mapStateToProps = state => {
   };
 };
 
-exports.default = (0, _reactRedux.connect)(mapStateToProps, _actions2.default)(Scopes);
+exports.default = (0, _reactRedux.connect)(mapStateToProps, {
+  openLink: _actions2.default.openLink
+})(Scopes);

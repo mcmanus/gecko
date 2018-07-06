@@ -99,6 +99,8 @@ class MOZ_NON_TEMPORARY_CLASS FunctionToStringCache
 
 namespace JS {
 
+// [SMDOC] GC Zones
+//
 // A zone is a collection of compartments. Every compartment belongs to exactly
 // one zone. In Firefox, there is roughly one zone per tab along with a system
 // zone for everything else. Zones mainly serve as boundaries for garbage
@@ -226,7 +228,7 @@ class Zone : public JS::shadow::Zone,
 
     bool hasMarkedRealms();
 
-    void scheduleGC() { MOZ_ASSERT(!CurrentThreadIsHeapBusy()); gcScheduled_ = true; }
+    void scheduleGC() { MOZ_ASSERT(!RuntimeHeapIsBusy()); gcScheduled_ = true; }
     void unscheduleGC() { gcScheduled_ = false; }
     bool isGCScheduled() { return gcScheduled_; }
 
@@ -238,7 +240,7 @@ class Zone : public JS::shadow::Zone,
     bool canCollect();
 
     void changeGCState(GCState prev, GCState next) {
-        MOZ_ASSERT(CurrentThreadIsHeapBusy());
+        MOZ_ASSERT(RuntimeHeapIsBusy());
         MOZ_ASSERT(gcState() == prev);
         MOZ_ASSERT_IF(next != NoGC, canCollect());
         gcState_ = next;
@@ -250,7 +252,7 @@ class Zone : public JS::shadow::Zone,
     }
 
     bool isCollectingFromAnyThread() const {
-        if (CurrentThreadIsHeapCollecting())
+        if (RuntimeHeapIsCollecting())
             return gcState_ != NoGC;
         else
             return needsIncrementalBarrier();
@@ -260,7 +262,7 @@ class Zone : public JS::shadow::Zone,
     // tracer.
     bool requireGCTracer() const {
         JSRuntime* rt = runtimeFromAnyThread();
-        return CurrentThreadIsHeapMajorCollecting() && !rt->gc.isHeapCompacting() && gcState_ != NoGC;
+        return RuntimeHeapIsMajorCollecting() && !rt->gc.isHeapCompacting() && gcState_ != NoGC;
     }
 
     bool shouldMarkInZone() const {
@@ -524,6 +526,7 @@ class Zone : public JS::shadow::Zone,
 
     void traceAtomCache(JSTracer* trc);
     void purgeAtomCacheOrDefer();
+    void purgeAtomCache();
 
     js::ExternalStringCache& externalStringCache() { return externalStringCache_.ref(); };
 
@@ -583,7 +586,7 @@ class Zone : public JS::shadow::Zone,
     js::ZoneData<bool> isSystem;
 
 #ifdef DEBUG
-    js::ZoneData<unsigned> gcLastSweepGroupIndex;
+    js::MainThreadData<unsigned> gcLastSweepGroupIndex;
 #endif
 
     static js::HashNumber UniqueIdToHash(uint64_t uid) {
@@ -737,11 +740,11 @@ class Zone : public JS::shadow::Zone,
     uint32_t detachedTypedObjects = 0;
 
   private:
-    js::ZoneData<js::jit::JitZone*> jitZone_;
+    js::ZoneOrGCTaskData<js::jit::JitZone*> jitZone_;
 
     js::MainThreadData<bool> gcScheduled_;
     js::MainThreadData<bool> gcScheduledSaved_;
-    js::ZoneData<bool> gcPreserveCode_;
+    js::MainThreadData<bool> gcPreserveCode_;
     js::ZoneData<bool> keepShapeTables_;
 
     // Allow zones to be linked into a list

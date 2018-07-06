@@ -14,10 +14,10 @@
 
 var EXPORTED_SYMBOLS = ["ExtensionTestCommon", "MockExtension"];
 
-Cu.importGlobalProperties(["TextEncoder"]);
-
 ChromeUtils.import("resource://gre/modules/Services.jsm");
 ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+
+XPCOMUtils.defineLazyGlobalGetters(this, ["TextEncoder"]);
 
 ChromeUtils.defineModuleGetter(this, "AddonManager",
                                "resource://gre/modules/AddonManager.jsm");
@@ -33,6 +33,7 @@ ChromeUtils.defineModuleGetter(this, "OS",
 XPCOMUtils.defineLazyGetter(this, "apiManager",
                             () => ExtensionParent.apiManager);
 
+ChromeUtils.import("resource://gre/modules/ExtensionCommon.jsm");
 ChromeUtils.import("resource://gre/modules/ExtensionUtils.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "uuidGen",
@@ -41,10 +42,13 @@ XPCOMUtils.defineLazyServiceGetter(this, "uuidGen",
 
 const {
   flushJarCache,
-  instanceOf,
 } = ExtensionUtils;
 
-XPCOMUtils.defineLazyGetter(this, "console", ExtensionUtils.getConsole);
+const {
+  instanceOf,
+} = ExtensionCommon;
+
+XPCOMUtils.defineLazyGetter(this, "console", () => ExtensionCommon.getConsole());
 
 
 /**
@@ -157,7 +161,27 @@ class MockExtension {
   }
 }
 
+function provide(obj, keys, value, override = false) {
+  if (keys.length == 1) {
+    if (!(keys[0] in obj) || override) {
+      obj[keys[0]] = value;
+    }
+  } else {
+    if (!(keys[0] in obj)) {
+      obj[keys[0]] = {};
+    }
+    provide(obj[keys[0]], keys.slice(1), value, override);
+  }
+}
+
 var ExtensionTestCommon = class ExtensionTestCommon {
+  static generateManifest(manifest) {
+    provide(manifest, ["name"], "Generated extension");
+    provide(manifest, ["manifest_version"], 2);
+    provide(manifest, ["version"], "1.0");
+    return manifest;
+  }
+
   /**
    * This code is designed to make it easy to test a WebExtension
    * without creating a bunch of files. Everything is contained in a
@@ -193,19 +217,6 @@ var ExtensionTestCommon = class ExtensionTestCommon {
     }
 
     let files = Object.assign({}, data.files);
-
-    function provide(obj, keys, value, override = false) {
-      if (keys.length == 1) {
-        if (!(keys[0] in obj) || override) {
-          obj[keys[0]] = value;
-        }
-      } else {
-        if (!(keys[0] in obj)) {
-          obj[keys[0]] = {};
-        }
-        provide(obj[keys[0]], keys.slice(1), value, override);
-      }
-    }
 
     provide(manifest, ["name"], "Generated extension");
     provide(manifest, ["manifest_version"], 2);

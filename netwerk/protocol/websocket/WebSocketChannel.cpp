@@ -59,6 +59,7 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/TimeStamp.h"
 #include "nsSocketTransportService2.h"
+#include "nsINSSErrorsService.h"
 
 #include "plbase64.h"
 #include "prmem.h"
@@ -787,6 +788,28 @@ public:
     , mResetDeflater(false)
     , mMessageDeflated(false)
   {
+    this->mDeflater.next_in = nullptr;
+    this->mDeflater.avail_in = 0;
+    this->mDeflater.total_in = 0;
+    this->mDeflater.next_out = nullptr;
+    this->mDeflater.avail_out = 0;
+    this->mDeflater.total_out = 0;
+    this->mDeflater.msg = nullptr;
+    this->mDeflater.state = nullptr;
+    this->mDeflater.data_type = 0;
+    this->mDeflater.adler = 0;
+    this->mDeflater.reserved = 0;
+    this->mInflater.next_in = nullptr;
+    this->mInflater.avail_in = 0;
+    this->mInflater.total_in = 0;
+    this->mInflater.next_out = nullptr;
+    this->mInflater.avail_out = 0;
+    this->mInflater.total_out = 0;
+    this->mInflater.msg = nullptr;
+    this->mInflater.state = nullptr;
+    this->mInflater.data_type = 0;
+    this->mInflater.adler = 0;
+    this->mInflater.reserved = 0;
     MOZ_COUNT_CTOR(PMCECompression);
 
     mDeflater.zalloc = mInflater.zalloc = Z_NULL;
@@ -1158,6 +1181,7 @@ WebSocketChannel::WebSocketChannel() :
   mOpenTimeout(20000),
   mConnecting(NOT_CONNECTING),
   mMaxConcurrentConnections(200),
+  mInnerWindowID(0),
   mGotUpgradeOK(0),
   mRecvdHttpUpgradeTransport(0),
   mAutoFollowRedirects(0),
@@ -1184,6 +1208,8 @@ WebSocketChannel::WebSocketChannel() :
   mBufferSize(kIncomingBufferInitialSize),
   mCurrentOut(nullptr),
   mCurrentOutSent(0),
+  mHdrOutToSend(0),
+  mHdrOut(nullptr),
   mDynamicOutputSize(0),
   mDynamicOutput(nullptr),
   mPrivateBrowsing(false),
@@ -3792,9 +3818,25 @@ WebSocketChannel::OnStartRequest(nsIRequest *aRequest,
 
   rv = mHttpChannel->GetResponseStatus(&status);
   if (NS_FAILED(rv)) {
+    nsresult httpStatus;
+    rv = NS_ERROR_CONNECTION_REFUSED;
+
+    // If we failed to connect due to unsuccessful TLS handshake, we must
+    // propagate a specific error to mozilla::dom::WebSocketImpl so it can set
+    // status code to 1015. Otherwise return NS_ERROR_CONNECTION_REFUSED.
+    if (NS_SUCCEEDED(mHttpChannel->GetStatus(&httpStatus))) {
+      uint32_t errorClass;
+      nsCOMPtr<nsINSSErrorsService> errSvc =
+        do_GetService("@mozilla.org/nss_errors_service;1");
+      // If GetErrorClass succeeds httpStatus is TLS related failure.
+      if (errSvc && NS_SUCCEEDED(errSvc->GetErrorClass(httpStatus, &errorClass))) {
+        rv = NS_ERROR_NET_INADEQUATE_SECURITY;
+      }
+    }
+
     LOG(("WebSocketChannel::OnStartRequest: No HTTP Response\n"));
-    AbortSession(NS_ERROR_CONNECTION_REFUSED);
-    return NS_ERROR_CONNECTION_REFUSED;
+    AbortSession(rv);
+    return rv;
   }
 
   LOG(("WebSocketChannel::OnStartRequest: HTTP status %d\n", status));

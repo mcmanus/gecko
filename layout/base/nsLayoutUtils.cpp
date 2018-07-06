@@ -69,6 +69,7 @@
 #include <algorithm>
 #include <limits>
 #include "mozilla/dom/AnonymousContent.h"
+#include "mozilla/dom/HTMLBodyElement.h"
 #include "mozilla/dom/HTMLMediaElementBinding.h"
 #include "mozilla/dom/HTMLVideoElement.h"
 #include "mozilla/dom/HTMLImageElement.h"
@@ -155,8 +156,8 @@ using namespace mozilla::image;
 using namespace mozilla::layers;
 using namespace mozilla::layout;
 using namespace mozilla::gfx;
-using mozilla::dom::HTMLMediaElementBinding::HAVE_NOTHING;
-using mozilla::dom::HTMLMediaElementBinding::HAVE_METADATA;
+using mozilla::dom::HTMLMediaElement_Binding::HAVE_NOTHING;
+using mozilla::dom::HTMLMediaElement_Binding::HAVE_METADATA;
 
 #define INTERCHARACTER_RUBY_ENABLED_PREF_NAME "layout.css.ruby.intercharacter.enabled"
 #define CONTENT_SELECT_ENABLED_PREF_NAME "dom.select_popup_in_content.enabled"
@@ -258,9 +259,8 @@ MayHaveAnimationOfProperty(EffectSet* effects, nsCSSPropertyID aProperty)
   return true;
 }
 
-bool
-nsLayoutUtils::MayHaveAnimationOfProperty(const nsIFrame* aFrame,
-                                          nsCSSPropertyID aProperty)
+static bool
+MayHaveAnimationOfProperty(const nsIFrame* aFrame, nsCSSPropertyID aProperty)
 {
   switch (aProperty) {
     case eCSSProperty_transform:
@@ -277,7 +277,7 @@ bool
 nsLayoutUtils::HasAnimationOfProperty(EffectSet* aEffectSet,
                                       nsCSSPropertyID aProperty)
 {
-  if (!aEffectSet || !::MayHaveAnimationOfProperty(aEffectSet, aProperty)) {
+  if (!aEffectSet || !MayHaveAnimationOfProperty(aEffectSet, aProperty)) {
     return false;
   }
 
@@ -313,7 +313,7 @@ nsLayoutUtils::HasEffectiveAnimation(const nsIFrame* aFrame,
                                      nsCSSPropertyID aProperty)
 {
   EffectSet* effects = EffectSet::GetEffectSet(aFrame);
-  if (!effects || !::MayHaveAnimationOfProperty(effects, aProperty)) {
+  if (!effects || !MayHaveAnimationOfProperty(effects, aProperty)) {
     return false;
   }
 
@@ -325,17 +325,6 @@ nsLayoutUtils::HasEffectiveAnimation(const nsIFrame* aFrame,
              aEffect.HasEffectiveAnimationOfProperty(aProperty);
     }
   );
-}
-
-bool
-nsLayoutUtils::MayHaveEffectiveAnimation(const nsIFrame* aFrame,
-                                         nsCSSPropertyID aProperty)
-{
-  EffectSet* effects = EffectSet::GetEffectSet(aFrame);
-  if (!effects || !::MayHaveAnimationOfProperty(effects, aProperty)) {
-    return false;
-  }
-  return true;
 }
 
 static float
@@ -529,22 +518,6 @@ nsLayoutUtils::CSSFiltersEnabled()
   }
 
   return sCSSFiltersEnabled;
-}
-
-bool
-nsLayoutUtils::UnsetValueEnabled()
-{
-  static bool sUnsetValueEnabled;
-  static bool sUnsetValuePrefCached = false;
-
-  if (!sUnsetValuePrefCached) {
-    sUnsetValuePrefCached = true;
-    Preferences::AddBoolVarCache(&sUnsetValueEnabled,
-                                 "layout.css.unset-value.enabled",
-                                 false);
-  }
-
-  return sUnsetValueEnabled;
 }
 
 bool
@@ -888,7 +861,10 @@ GetDisplayPortFromMarginsData(nsIContent* aContent,
   //   the choosing of the resolution to display-list building time.
   ScreenSize alignment;
 
-  if (APZCCallbackHelper::IsDisplayportSuppressed()) {
+  nsIPresShell* presShell = presContext->PresShell();
+  MOZ_ASSERT(presShell);
+
+  if (presShell->IsDisplayportSuppressed()) {
     alignment = ScreenSize(1, 1);
   } else if (gfxPrefs::LayersTilesEnabled()) {
     // Don't align to tiles if they are too large, because we could expand
@@ -1109,10 +1085,21 @@ GetDisplayPortImpl(nsIContent* aContent, nsRect* aResult, float aMultiplier,
     return true;
   }
 
+  bool isDisplayportSuppressed = false;
+
+  nsIFrame* frame = aContent->GetPrimaryFrame();
+  if (frame) {
+    nsPresContext* presContext = frame->PresContext();
+    MOZ_ASSERT(presContext);
+    nsIPresShell* presShell = presContext->PresShell();
+    MOZ_ASSERT(presShell);
+    isDisplayportSuppressed = presShell->IsDisplayportSuppressed();
+  }
+
   nsRect result;
   if (rectData) {
     result = GetDisplayPortFromRectData(aContent, rectData, aMultiplier);
-  } else if (APZCCallbackHelper::IsDisplayportSuppressed() ||
+  } else if (isDisplayportSuppressed ||
       nsLayoutUtils::ShouldDisableApzForElement(aContent)) {
     DisplayPortMarginsPropertyData noMargins(ScreenMargin(), 1);
     result = GetDisplayPortFromMarginsData(aContent, &noMargins, aMultiplier);
@@ -2536,7 +2523,7 @@ nsLayoutUtils::PostTranslate(Matrix4x4& aTransform, const nsPoint& aOrigin, floa
 // We want to this return true for the scroll frame, but not the
 // scrolled frame (which has the same content).
 bool
-nsLayoutUtils::FrameHasDisplayPort(nsIFrame* aFrame, nsIFrame* aScrolledFrame)
+nsLayoutUtils::FrameHasDisplayPort(nsIFrame* aFrame, const nsIFrame* aScrolledFrame)
 {
   if (!aFrame->GetContent() || !HasDisplayPort(aFrame->GetContent())) {
     return false;
@@ -2552,7 +2539,7 @@ nsLayoutUtils::FrameHasDisplayPort(nsIFrame* aFrame, nsIFrame* aScrolledFrame)
 }
 
 Matrix4x4Flagged
-nsLayoutUtils::GetTransformToAncestor(nsIFrame *aFrame,
+nsLayoutUtils::GetTransformToAncestor(const nsIFrame *aFrame,
                                       const nsIFrame *aAncestor,
                                       uint32_t aFlags,
                                       nsIFrame** aOutAncestor)
@@ -2875,7 +2862,7 @@ TransformGfxPointFromAncestor(nsIFrame *aFrame,
 }
 
 static Rect
-TransformGfxRectToAncestor(nsIFrame *aFrame,
+TransformGfxRectToAncestor(const nsIFrame *aFrame,
                            const Rect &aRect,
                            const nsIFrame *aAncestor,
                            bool* aPreservesAxisAlignedRectangles = nullptr,
@@ -2915,7 +2902,7 @@ TransformGfxRectToAncestor(nsIFrame *aFrame,
 }
 
 static SVGTextFrame*
-GetContainingSVGTextFrame(nsIFrame* aFrame)
+GetContainingSVGTextFrame(const nsIFrame* aFrame)
 {
   if (!nsSVGUtils::IsInSVGTextSubtree(aFrame)) {
     return nullptr;
@@ -2952,7 +2939,7 @@ nsLayoutUtils::TransformAncestorPointToFrame(nsIFrame* aFrame,
 }
 
 nsRect
-nsLayoutUtils::TransformFrameRectToAncestor(nsIFrame* aFrame,
+nsLayoutUtils::TransformFrameRectToAncestor(const nsIFrame* aFrame,
                                             const nsRect& aRect,
                                             const nsIFrame* aAncestor,
                                             bool* aPreservesAxisAlignedRectangles /* = nullptr */,
@@ -3599,6 +3586,10 @@ nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
       !(aFlags & PaintFrameFlags::PAINT_DOCUMENT_RELATIVE) &&
       rootPresContext->NeedToComputePluginGeometryUpdates()) {
     builder.SetWillComputePluginGeometry(true);
+
+    // Disable partial updates for this paint as the list we're about to
+    // build has plugin-specific differences that won't trigger invalidations.
+    builder.SetDisablePartialUpdates(true);
   }
 
   nsRect canvasArea(nsPoint(0, 0), aFrame->GetSize());
@@ -3678,7 +3669,7 @@ nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
       builder.SetVisibleRect(visibleRect);
       builder.SetIsBuilding(true);
       builder.SetAncestorHasApzAwareEventHandler(
-          nsDisplayListBuilder::LayerEventRegionsEnabled() &&
+          gfxPlatform::AsyncPanZoomEnabled() &&
           nsLayoutUtils::HasDocumentLevelListenersForApzAwareEvents(presShell));
 
       DisplayListChecker beforeMergeChecker;
@@ -3834,7 +3825,8 @@ nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
   if (aFlags & PaintFrameFlags::PAINT_COMPRESSED) {
     flags |= nsDisplayList::PAINT_COMPRESSED;
   }
-  if (updateState == PartialUpdateResult::NoChange) {
+  if (updateState == PartialUpdateResult::NoChange &&
+      !aRenderingContext) {
     flags |= nsDisplayList::PAINT_IDENTICAL_DISPLAY_LIST;
   }
 
@@ -3949,6 +3941,10 @@ nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
     if (layerManager) {
       layerManager->ScheduleComposite();
     }
+
+    // Disable partial updates for the following paint as well, as we now have
+    // a plugin-specific display list.
+    builder.SetDisablePartialUpdates(true);
   }
 
   builder.Check();
@@ -4767,7 +4763,7 @@ GetPercentBSize(const nsStyleCoord& aStyle,
   // behavior as layout when computing percentage heights.
   nsIFrame *f = aFrame->GetContainingBlock(nsIFrame::SKIP_SCROLLED_FRAME);
   if (!f) {
-    NS_NOTREACHED("top of frame tree not a containing block");
+    MOZ_ASSERT_UNREACHABLE("top of frame tree not a containing block");
     return false;
   }
 
@@ -6123,11 +6119,7 @@ nsLayoutUtils::PaintTextShadow(const nsIFrame* aFrame,
     nsPresContext* presCtx = aFrame->PresContext();
     nsContextBoxBlur contextBoxBlur;
 
-    nscolor shadowColor;
-    if (shadowDetails->mHasColor)
-      shadowColor = shadowDetails->mColor;
-    else
-      shadowColor = aForegroundColor;
+    nscolor shadowColor = shadowDetails->mColor.CalcColor(aForegroundColor);
 
     // Webrender just needs the shadow details
     if (auto* textDrawer = aContext->GetTextDrawer()) {
@@ -6196,6 +6188,9 @@ nsLayoutUtils::GetFirstLinePosition(WritingMode aWM,
                                     const nsIFrame* aFrame,
                                     LinePosition* aResult)
 {
+  if (aFrame->StyleDisplay()->IsContainSize()) {
+    return false;
+  }
   const nsBlockFrame* block = nsLayoutUtils::GetAsBlock(const_cast<nsIFrame*>(aFrame));
   if (!block) {
     // For the first-line baseline we also have to check for a table, and if
@@ -6229,7 +6224,7 @@ nsLayoutUtils::GetFirstLinePosition(WritingMode aWM,
     if (fType == LayoutFrameType::Scroll) {
       nsIScrollableFrame *sFrame = do_QueryFrame(const_cast<nsIFrame*>(aFrame));
       if (!sFrame) {
-        NS_NOTREACHED("not scroll frame");
+        MOZ_ASSERT_UNREACHABLE("not scroll frame");
       }
       LinePosition kidPosition;
       if (GetFirstLinePosition(aWM,
@@ -6294,6 +6289,10 @@ nsLayoutUtils::GetFirstLinePosition(WritingMode aWM,
 nsLayoutUtils::GetLastLineBaseline(WritingMode aWM,
                                    const nsIFrame* aFrame, nscoord* aResult)
 {
+  if (aFrame->StyleDisplay()->IsContainSize()) {
+    return false;
+  }
+
   const nsBlockFrame* block = nsLayoutUtils::GetAsBlock(const_cast<nsIFrame*>(aFrame));
   if (!block)
     // No baseline.  (We intentionally don't descend into scroll frames.)
@@ -7281,13 +7280,13 @@ nsLayoutUtils::GetFrameTransparency(nsIFrame* aBackgroundFrame,
   return eTransparencyOpaque;
 }
 
-static bool IsPopupFrame(nsIFrame* aFrame)
+static bool IsPopupFrame(const nsIFrame* aFrame)
 {
   // aFrame is a popup it's the list control frame dropdown for a combobox.
   LayoutFrameType frameType = aFrame->Type();
   if (!nsLayoutUtils::IsContentSelectEnabled() &&
       frameType == LayoutFrameType::ListControl) {
-    nsListControlFrame* lcf = static_cast<nsListControlFrame*>(aFrame);
+    const nsListControlFrame* lcf = static_cast<const nsListControlFrame*>(aFrame);
     return lcf->IsInDropDownMode();
   }
 
@@ -7296,7 +7295,7 @@ static bool IsPopupFrame(nsIFrame* aFrame)
 }
 
 /* static */ bool
-nsLayoutUtils::IsPopup(nsIFrame* aFrame)
+nsLayoutUtils::IsPopup(const nsIFrame* aFrame)
 {
   // Optimization: the frame can't possibly be a popup if it has no view.
   if (!aFrame->HasView()) {
@@ -7393,7 +7392,7 @@ nsLayoutUtils::GetTextRunOrientFlagsForStyle(ComputedStyle* aComputedStyle)
     case NS_STYLE_TEXT_ORIENTATION_SIDEWAYS:
       return gfx::ShapedTextFlags::TEXT_ORIENT_VERTICAL_SIDEWAYS_RIGHT;
     default:
-      NS_NOTREACHED("unknown text-orientation");
+      MOZ_ASSERT_UNREACHABLE("unknown text-orientation");
       return gfx::ShapedTextFlags();
     }
 
@@ -7404,7 +7403,7 @@ nsLayoutUtils::GetTextRunOrientFlagsForStyle(ComputedStyle* aComputedStyle)
     return gfx::ShapedTextFlags::TEXT_ORIENT_VERTICAL_SIDEWAYS_RIGHT;
 
   default:
-    NS_NOTREACHED("unknown writing-mode");
+    MOZ_ASSERT_UNREACHABLE("unknown writing-mode");
     return gfx::ShapedTextFlags();
   }
 }

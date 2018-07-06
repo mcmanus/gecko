@@ -460,8 +460,10 @@ private:
   uint32_t mGlyphID;
 
   explicit nsOpenTypeTable(gfxFont* aFont)
-    : mFont(aFont),
-    mFontFamilyName(aFont->GetFontEntry()->FamilyName(), eUnquotedName) {
+    : mFont(aFont)
+    , mFontFamilyName(aFont->GetFontEntry()->FamilyName(), eUnquotedName)
+    , mGlyphID(0)
+  {
     MOZ_COUNT_CTOR(nsOpenTypeTable);
   }
 
@@ -2093,7 +2095,7 @@ nsMathMLChar::PaintForeground(nsIFrame* aForFrame,
       break;
     }
     default:
-      NS_NOTREACHED("Unknown drawing method");
+      MOZ_ASSERT_UNREACHABLE("Unknown drawing method");
       break;
   }
 

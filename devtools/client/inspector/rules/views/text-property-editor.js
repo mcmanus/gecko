@@ -4,7 +4,9 @@
 
 "use strict";
 
-const {l10n} = require("devtools/shared/inspector/css-logic");
+const Services = require("Services");
+
+const { l10n } = require("devtools/shared/inspector/css-logic");
 const {getCssProperties} = require("devtools/shared/fronts/css-properties");
 const {InplaceEditor, editableField} =
       require("devtools/client/shared/inplace-editor");
@@ -18,7 +20,8 @@ const {
   parseDeclarations,
   parseSingleValue,
 } = require("devtools/shared/css/parsing-utils");
-const Services = require("Services");
+
+loader.lazyRequireGetter(this, "openContentLink", "devtools/client/shared/link", true);
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 
@@ -81,9 +84,9 @@ function TextPropertyEditor(ruleEditor, property) {
   this._hasPendingClick = false;
   this._clickedElementOptions = null;
 
-  const toolbox = this.ruleView.inspector.toolbox;
-  this.telemetry = toolbox.telemetry;
-  this.cssProperties = getCssProperties(toolbox);
+  this.toolbox = this.ruleView.inspector.toolbox;
+  this.telemetry = this.toolbox.telemetry;
+  this.cssProperties = getCssProperties(this.toolbox);
 
   this.getGridlineNames = this.getGridlineNames.bind(this);
   this.update = this.update.bind(this);
@@ -174,20 +177,6 @@ TextPropertyEditor.prototype = {
     // (for instance by the tooltip)
     this.valueSpan.textProperty = this.prop;
     this.nameSpan.textProperty = this.prop;
-
-    // If the value is a color property we need to put it through the parser
-    // so that colors can be coerced into the default color type. This prevents
-    // us from thinking that when colors are coerced they have been changed by
-    // the user.
-    const outputParser = this.ruleView._outputParser;
-    const frag = outputParser.parseCssProperty(this.prop.name, this.prop.value);
-    const parsedValue = frag.textContent;
-
-    // Save the initial value as the last committed value,
-    // for restoring after pressing escape.
-    this.committed = { name: this.prop.name,
-                       value: parsedValue,
-                       priority: this.prop.priority };
 
     appendText(this.valueContainer, ";");
 
@@ -298,8 +287,7 @@ TextPropertyEditor.prototype = {
         if (target.nodeName === "a") {
           event.stopPropagation();
           event.preventDefault();
-          const browserWin = this.ruleView.inspector.target.tab.ownerDocument.defaultView;
-          browserWin.openWebLinkIn(target.href, "tab");
+          openContentLink(target.href);
         }
       });
 
@@ -384,13 +372,13 @@ TextPropertyEditor.prototype = {
     // Combine the property's value and priority into one string for
     // the value.
     const store = this.rule.elementStyle.store;
-    let val = store.userProperties.getProperty(this.rule.style, name,
+    let val = store.userProperties.getProperty(this.rule.domRule, name,
                                                this.prop.value);
     if (this.prop.priority) {
       val += " !" + this.prop.priority;
     }
 
-    const propDirty = store.userProperties.contains(this.rule.style, name);
+    const propDirty = store.userProperties.contains(this.rule.domRule, name);
 
     if (propDirty) {
       this.element.setAttribute("dirty", "");
@@ -421,10 +409,21 @@ TextPropertyEditor.prototype = {
       isVariableInUse: varName => this.rule.elementStyle.getVariable(varName),
     };
     const frag = outputParser.parseCssProperty(name, val, parserOptions);
+
+    // Save the initial value as the last committed value,
+    // for restoring after pressing escape.
+    if (!this.committed) {
+      this.committed = {
+        name,
+        value: frag.textContent,
+        priority: this.prop.priority,
+      };
+    }
+
     this.valueSpan.innerHTML = "";
     this.valueSpan.appendChild(frag);
 
-    this.ruleView.emit("property-value-updated", this.valueSpan);
+    this.ruleView.emit("property-value-updated", { property: name, value: val });
 
     // Highlight the currently used font in font-family properties.
     // If we cannot find a match, highlight the first generic family instead.
@@ -742,7 +741,9 @@ TextPropertyEditor.prototype = {
     }
     this.prop.setEnabled(!checked);
     event.stopPropagation();
-    this.telemetry.recordEvent("devtools.main", "edit_rule", "ruleview");
+    this.telemetry.recordEvent("devtools.main", "edit_rule", "ruleview", null, {
+      "session_id": this.toolbox.sessionId
+    });
   },
 
   /**
@@ -813,7 +814,9 @@ TextPropertyEditor.prototype = {
       return;
     }
 
-    this.telemetry.recordEvent("devtools.main", "edit_rule", "ruleview");
+    this.telemetry.recordEvent("devtools.main", "edit_rule", "ruleview", null, {
+      "session_id": this.toolbox.sessionId
+    });
 
     // Remove a property if the name is empty
     if (!value.trim()) {
@@ -906,7 +909,9 @@ TextPropertyEditor.prototype = {
       return;
     }
 
-    this.telemetry.recordEvent("devtools.main", "edit_rule", "ruleview");
+    this.telemetry.recordEvent("devtools.main", "edit_rule", "ruleview", null, {
+      "session_id": this.toolbox.sessionId
+    });
 
     // Since the value was changed, check if the original propertywas a flex or grid
     // display declaration and hide their respective highlighters.

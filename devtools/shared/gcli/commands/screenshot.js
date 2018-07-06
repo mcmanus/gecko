@@ -13,6 +13,8 @@ const { getRect } = require("devtools/shared/layout/utils");
 const defer = require("devtools/shared/defer");
 const { Task } = require("devtools/shared/task");
 
+loader.lazyRequireGetter(this, "openContentLink", "devtools/client/shared/link", true);
+
 loader.lazyImporter(this, "Downloads", "resource://gre/modules/Downloads.jsm");
 loader.lazyImporter(this, "OS", "resource://gre/modules/osfile.jsm");
 loader.lazyImporter(this, "FileUtils", "resource://gre/modules/FileUtils.jsm");
@@ -160,10 +162,7 @@ exports.items = [
         root.style.cursor = "pointer";
         root.addEventListener("click", () => {
           if (imageSummary.href) {
-            const mainWindow = context.environment.chromeWindow;
-            mainWindow.openWebLinkIn(imageSummary.href, "tab", {
-              triggeringPrincipal: document.nodePrincipal,
-            });
+            openContentLink(imageSummary.href);
           } else if (imageSummary.filename) {
             const file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
             file.initWithPath(imageSummary.filename);
@@ -555,7 +554,6 @@ var saveToFile = Task.async(function* (context, reply) {
   // the downloads toolbar button when the save is done.
   const nsIWBP = Ci.nsIWebBrowserPersist;
   const flags = nsIWBP.PERSIST_FLAGS_REPLACE_EXISTING_FILES |
-                nsIWBP.PERSIST_FLAGS_FORCE_ALLOW_COOKIES |
                 nsIWBP.PERSIST_FLAGS_BYPASS_CACHE |
                 nsIWBP.PERSIST_FLAGS_AUTODETECT_APPLY_CONVERSION;
   const isPrivate =
@@ -574,7 +572,9 @@ var saveToFile = Task.async(function* (context, reply) {
           isPrivate);
   const listener = new DownloadListener(window, tr);
   persist.progressListener = listener;
+  const principal = Services.scriptSecurityManager.getSystemPrincipal();
   persist.savePrivacyAwareURI(sourceURI,
+                              principal,
                               0,
                               document.documentURIObject,
                               Ci.nsIHttpChannel.REFERRER_POLICY_UNSET,

@@ -7,12 +7,15 @@
 const { createFactory, PureComponent } = require("devtools/client/shared/vendor/react");
 const dom = require("devtools/client/shared/vendor/react-dom-factories");
 const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
+const Services = require("Services");
 
 const Accordion = createFactory(require("devtools/client/inspector/layout/components/Accordion"));
 const FontList = createFactory(require("./FontList"));
 
 const { getStr } = require("../utils/l10n");
 const Types = require("../types");
+
+const PREF_FONT_EDITOR = "devtools.inspector.fonteditor.enabled";
 
 class FontOverview extends PureComponent {
   static get propTypes() {
@@ -39,6 +42,29 @@ class FontOverview extends PureComponent {
       onToggleFontHighlight,
     } = this.props;
     const { fonts } = fontData;
+
+    // If the font editor is enabled, show the fonts in a collapsed accordion.
+    // The editor already displays fonts, in another way, rendering twice is not desired.
+    if (Services.prefs.getBoolPref(PREF_FONT_EDITOR)) {
+      return fonts.length ?
+        Accordion({
+          items: [
+            {
+              header: getStr("fontinspector.renderedFontsInPageHeader"),
+              component: FontList,
+              componentProps: {
+                fonts,
+                fontOptions,
+                onPreviewFonts,
+                onToggleFontHighlight,
+              },
+              opened: false
+            }
+          ]
+        })
+        :
+        null;
+    }
 
     return fonts.length ?
       FontList({

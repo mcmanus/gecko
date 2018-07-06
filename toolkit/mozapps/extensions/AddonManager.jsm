@@ -18,7 +18,6 @@ if ("@mozilla.org/xre/app-info;1" in Cc) {
 }
 
 ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
-Cu.importGlobalProperties(["DOMParser", "Element"]);
 
 const MOZ_COMPATIBILITY_NIGHTLY = !["aurora", "beta", "release", "esr"].includes(AppConstants.MOZ_UPDATE_CHANNEL);
 
@@ -65,6 +64,8 @@ const URI_XPINSTALL_DIALOG = "chrome://mozapps/content/xpinstall/xpinstallConfir
 ChromeUtils.import("resource://gre/modules/Services.jsm");
 ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 ChromeUtils.import("resource://gre/modules/AsyncShutdown.jsm");
+
+XPCOMUtils.defineLazyGlobalGetters(this, ["DOMParser", "Element"]);
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   AddonRepository: "resource://gre/modules/addons/AddonRepository.jsm",
@@ -1274,18 +1275,16 @@ var AddonManagerInternal = {
       Services.obs.notifyObservers(null, "addons-background-update-start");
 
       if (this.updateEnabled) {
-        let scope = {};
-        ChromeUtils.import("resource://gre/modules/LightweightThemeManager.jsm", scope);
-        scope.LightweightThemeManager.updateCurrentTheme();
+        // Keep track of all the async add-on updates happening in parallel
+        let updates = [];
+
+        updates.push(LightweightThemeManager.updateThemes());
 
         let allAddons = await this.getAllAddons();
 
         // Repopulate repository cache first, to ensure compatibility overrides
         // are up to date before checking for addon updates.
         await AddonRepository.backgroundUpdateCheck();
-
-        // Keep track of all the async add-on updates happening in parallel
-        let updates = [];
 
         for (let addon of allAddons) {
           // Check all add-ons for updates so that any compatibility updates will
@@ -1503,7 +1502,7 @@ var AddonManagerInternal = {
    *         A boolean indicating if the change will only take place the next
    *         time the application is restarted
    */
-  notifyAddonChanged(aID, aType, aPendingRestart) {
+  async notifyAddonChanged(aID, aType, aPendingRestart) {
     if (!gStarted)
       throw Components.Exception("AddonManager is not initialized",
                                  Cr.NS_ERROR_NOT_INITIALIZED);
@@ -1531,7 +1530,10 @@ var AddonManagerInternal = {
     // removed by bug 520124, so this is a temporary quick'n'dirty hack.
     let providers = [...this.providers, ...this.pendingProviders];
     for (let provider of providers) {
-      callProvider(provider, "addonChanged", null, aID, aType, aPendingRestart);
+      let result = callProvider(provider, "addonChanged", null, aID, aType, aPendingRestart);
+      if (result) {
+        await result;
+      }
     }
   },
 
@@ -2053,33 +2055,6 @@ var AddonManagerInternal = {
     return AddonManagerInternal._getProviderByName("XPIProvider")
                                .installTemporaryAddon(aFile);
   },
-
-  /**
-   * Returns an Addon corresponding to an instance ID.
-   * @param aInstanceID
-   *        An Addon Instance ID symbol
-   * @return {Promise}
-   * @resolves The found Addon or null if no such add-on exists.
-   * @rejects  Never
-   * @throws if the aInstanceID argument is not specified
-   *         or the AddonManager is not initialized
-   */
-   async getAddonByInstanceID(aInstanceID) {
-     return this.syncGetAddonByInstanceID(aInstanceID);
-   },
-
-   syncGetAddonByInstanceID(aInstanceID) {
-     if (!gStarted)
-       throw Components.Exception("AddonManager is not initialized",
-                                  Cr.NS_ERROR_NOT_INITIALIZED);
-
-     if (!aInstanceID || typeof aInstanceID != "symbol")
-       throw Components.Exception("aInstanceID must be a Symbol()",
-                                  Cr.NS_ERROR_INVALID_ARG);
-
-     return AddonManagerInternal._getProviderByName("XPIProvider")
-                                .getAddonByInstanceID(aInstanceID);
-   },
 
    syncGetAddonIDByInstanceID(aInstanceID) {
      if (!gStarted)
@@ -3370,10 +3345,6 @@ var AddonManager = {
 
   installTemporaryAddon(aDirectory) {
     return AddonManagerInternal.installTemporaryAddon(aDirectory);
-  },
-
-  getAddonByInstanceID(aInstanceID) {
-    return AddonManagerInternal.getAddonByInstanceID(aInstanceID);
   },
 
   addManagerListener(aListener) {

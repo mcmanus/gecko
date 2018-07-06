@@ -233,8 +233,10 @@ class MachCommands(MachCommandBase):
         try:
             self.setup_logging()
 
-            task_group_id = os.environ.get('ACTION_TASK_GROUP_ID', None)
+            # the target task for this action (or null if it's a group action)
             task_id = json.loads(os.environ.get('ACTION_TASK_ID', 'null'))
+            # the target task group for this action
+            task_group_id = os.environ.get('ACTION_TASK_GROUP_ID', None)
             input = json.loads(os.environ.get('ACTION_INPUT', 'null'))
             callback = os.environ.get('ACTION_CALLBACK', None)
             parameters = json.loads(os.environ.get('ACTION_PARAMETERS', '{}'))
@@ -265,14 +267,10 @@ class MachCommands(MachCommandBase):
                      help='TaskGroupId to which the action applies')
     @CommandArgument('--input', default=None,
                      help='Action input (.yml or .json)')
-    @CommandArgument('--task', default=None,
-                     help='Task definition (.yml or .json; if omitted, the task will be'
-                          'fetched from the queue)')
     @CommandArgument('callback', default=None,
                      help='Action callback name (Python function name)')
     def test_action_callback(self, **options):
         import taskgraph.parameters
-        from taskgraph.util.taskcluster import get_task_definition
         import taskgraph.actions
         import yaml
 
@@ -288,12 +286,6 @@ class MachCommands(MachCommandBase):
         try:
             self.setup_logging()
             task_id = options['task_id']
-            if options['task']:
-                task = load_data(options['task'])
-            elif task_id:
-                task = get_task_definition(task_id)
-            else:
-                task = None
 
             if options['input']:
                 input = load_data(options['input'])
@@ -308,7 +300,6 @@ class MachCommands(MachCommandBase):
             return taskgraph.actions.trigger_action_callback(
                     task_group_id=options['task_group_id'],
                     task_id=task_id,
-                    task=task,
                     input=input,
                     callback=options['callback'],
                     parameters=parameters,

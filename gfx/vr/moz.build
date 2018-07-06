@@ -47,12 +47,14 @@ SOURCES += [
     'gfxVRExternal.cpp',
     'gfxVRPuppet.cpp',
     'VRDisplayHost.cpp',
+    'VRDisplayLocal.cpp',
 ]
 
 # Build OpenVR on Windows, Linux, and macOS desktop targets
 if CONFIG['OS_TARGET'] in ('WINNT', 'Linux', 'Darwin'):
     DIRS += [
         'openvr',
+        'service',
     ]
     SOURCES += [
         'gfxVROpenVR.cpp',

@@ -309,30 +309,29 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     const transport = DebuggerServer.connectPipe();
     const client = new DebuggerClient(transport);
 
-    const deferred = defer();
-    client.connect().then(() => {
-      client.getProcess(processId)
-            .then(response => {
-              const options = {
-                form: response.form,
-                client: client,
-                chrome: true,
-                isTabActor: false
-              };
-              return TargetFactory.forRemoteTab(options);
-            })
-            .then(target => {
-              // Ensure closing the connection in order to cleanup
-              // the debugger client and also the server created in the
-              // content process
-              target.on("close", () => {
-                client.close();
+    return new Promise(resolve => {
+      client.connect().then(() => {
+        client.getProcess(processId)
+              .then(response => {
+                const options = {
+                  form: response.form,
+                  client: client,
+                  chrome: true,
+                  isBrowsingContext: false
+                };
+                return TargetFactory.forRemoteTab(options);
+              })
+              .then(target => {
+                // Ensure closing the connection in order to cleanup
+                // the debugger client and also the server created in the
+                // content process
+                target.on("close", () => {
+                  client.close();
+                });
+                resolve(target);
               });
-              deferred.resolve(target);
-            });
+      });
     });
-
-    return deferred.promise;
   },
 
   /**
@@ -372,17 +371,14 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
    * worker actor.
    *
    * @param  {DebuggerClient} client
-   * @param  {Object} workerActor
+   * @param  {Object} workerTargetActor
    *         worker actor form to debug
    */
-  openWorkerToolbox(client, workerActor) {
-    client.attachWorker(workerActor, (response, workerClient) => {
-      const workerTarget = TargetFactory.forWorker(workerClient);
-      gDevTools.showToolbox(workerTarget, null, Toolbox.HostType.WINDOW)
-        .then(toolbox => {
-          toolbox.once("destroy", () => workerClient.detach());
-        });
-    });
+  async openWorkerToolbox(client, workerTargetActor) {
+    const [, workerClient] = await client.attachWorker(workerTargetActor);
+    const workerTarget = TargetFactory.forWorker(workerClient);
+    const toolbox = await gDevTools.showToolbox(workerTarget, null, Toolbox.HostType.WINDOW);
+    toolbox.once("destroy", () => workerClient.detach());
   },
 
   /**

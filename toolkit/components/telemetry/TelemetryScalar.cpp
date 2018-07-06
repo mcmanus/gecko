@@ -1120,11 +1120,13 @@ internal_CanRecordForScalarID(const StaticMutexAutoLock& lock,
  * @param lock Instance of a lock locking gTelemetryHistogramMutex
  * @param aId The scalar identifier.
  * @param aKeyed Are we attempting to write a keyed scalar?
+ * @param aForce Whether to allow recording even if the probe is not allowed on the current process.
+ *        This must only be true for GeckoView persistence and recorded actions.
  * @return ScalarResult::Ok if we can record, an error code otherwise.
  */
 ScalarResult
 internal_CanRecordScalar(const StaticMutexAutoLock& lock, const ScalarKey& aId,
-                         bool aKeyed)
+                         bool aKeyed, bool aForce = false)
 {
   // Make sure that we have a keyed scalar if we are trying to change one.
   if (internal_IsKeyedScalar(lock, aId) != aKeyed) {
@@ -1138,7 +1140,7 @@ internal_CanRecordScalar(const StaticMutexAutoLock& lock, const ScalarKey& aId,
   }
 
   // Can we record in this process?
-  if (!internal_CanRecordProcess(lock, aId)) {
+  if (!aForce && !internal_CanRecordProcess(lock, aId)) {
     return ScalarResult::CannotRecordInProcess;
   }
 
@@ -1427,7 +1429,7 @@ internal_UpdateScalar(const StaticMutexAutoLock& lock, const nsACString& aName,
            ScalarResult::NotInitialized : ScalarResult::UnknownScalar;
   }
 
-  ScalarResult sr = internal_CanRecordScalar(lock, uniqueId, false);
+  ScalarResult sr = internal_CanRecordScalar(lock, uniqueId, false, aForce);
   if (sr != ScalarResult::Ok) {
     if (sr == ScalarResult::CannotRecordDataset) {
       return ScalarResult::Ok;
@@ -1605,7 +1607,7 @@ internal_UpdateKeyedScalar(const StaticMutexAutoLock& lock,
            ScalarResult::NotInitialized : ScalarResult::UnknownScalar;
   }
 
-  ScalarResult sr = internal_CanRecordScalar(lock, uniqueId, true);
+  ScalarResult sr = internal_CanRecordScalar(lock, uniqueId, true, aForce);
   if (sr != ScalarResult::Ok) {
     if (sr == ScalarResult::CannotRecordDataset) {
       return ScalarResult::Ok;
@@ -1987,12 +1989,24 @@ internal_ApplyScalarActions(const StaticMutexAutoLock& lock,
           switch (scalarType)
           {
             case nsITelemetry::SCALAR_TYPE_COUNT:
+              if (!upd.mData->is<uint32_t>()) {
+                NS_WARNING("Attempting to set a count scalar to a non-integer.");
+                continue;
+              }
               scalar->SetValue(upd.mData->as<uint32_t>());
               break;
             case nsITelemetry::SCALAR_TYPE_BOOLEAN:
+              if (!upd.mData->is<bool>()) {
+                NS_WARNING("Attempting to set a boolean scalar to a non-boolean.");
+                continue;
+              }
               scalar->SetValue(upd.mData->as<bool>());
               break;
             case nsITelemetry::SCALAR_TYPE_STRING:
+              if (!upd.mData->is<nsString>()) {
+                NS_WARNING("Attempting to set a string scalar to a non-string.");
+                continue;
+              }
               scalar->SetValue(upd.mData->as<nsString>());
               break;
           }
@@ -2005,16 +2019,24 @@ internal_ApplyScalarActions(const StaticMutexAutoLock& lock,
             continue;
           }
           // We only support adding uint32_t.
+          if (!upd.mData->is<uint32_t>()) {
+            NS_WARNING("Attempting to add to a count scalar with a non-integer.");
+            continue;
+          }
           scalar->AddValue(upd.mData->as<uint32_t>());
           break;
         }
       case ScalarActionType::eSetMaximum:
         {
           if (scalarType != nsITelemetry::SCALAR_TYPE_COUNT) {
-            NS_WARNING("Attempting to add on a non count scalar.");
+            NS_WARNING("Attempting to setMaximum on a non count scalar.");
             continue;
           }
           // We only support SetMaximum on uint32_t.
+          if (!upd.mData->is<uint32_t>()) {
+            NS_WARNING("Attempting to setMaximum a count scalar to a non-integer.");
+            continue;
+          }
           scalar->SetMaximum(upd.mData->as<uint32_t>());
           break;
         }
@@ -2083,9 +2105,17 @@ internal_ApplyKeyedScalarActions(const StaticMutexAutoLock& lock,
           switch (scalarType)
           {
             case nsITelemetry::SCALAR_TYPE_COUNT:
+              if (!upd.mData->is<uint32_t>()) {
+                NS_WARNING("Attempting to set a count scalar to a non-integer.");
+                continue;
+              }
               scalar->SetValue(NS_ConvertUTF8toUTF16(upd.mKey), upd.mData->as<uint32_t>());
               break;
             case nsITelemetry::SCALAR_TYPE_BOOLEAN:
+              if (!upd.mData->is<bool>()) {
+                NS_WARNING("Attempting to set a boolean scalar to a non-boolean.");
+                continue;
+              }
               scalar->SetValue(NS_ConvertUTF8toUTF16(upd.mKey), upd.mData->as<bool>());
               break;
             default:
@@ -2100,16 +2130,24 @@ internal_ApplyKeyedScalarActions(const StaticMutexAutoLock& lock,
             continue;
           }
           // We only support adding on uint32_t.
+          if (!upd.mData->is<uint32_t>()) {
+            NS_WARNING("Attempting to add to a count scalar with a non-integer.");
+            continue;
+          }
           scalar->AddValue(NS_ConvertUTF8toUTF16(upd.mKey), upd.mData->as<uint32_t>());
           break;
         }
       case ScalarActionType::eSetMaximum:
         {
           if (scalarType != nsITelemetry::SCALAR_TYPE_COUNT) {
-            NS_WARNING("Attempting to add on a non count scalar.");
+            NS_WARNING("Attempting to setMaximum on a non count scalar.");
             continue;
           }
           // We only support SetMaximum on uint32_t.
+          if (!upd.mData->is<uint32_t>()) {
+            NS_WARNING("Attempting to setMaximum a count scalar to a non-integer.");
+            continue;
+          }
           scalar->SetMaximum(NS_ConvertUTF8toUTF16(upd.mKey), upd.mData->as<uint32_t>());
           break;
         }

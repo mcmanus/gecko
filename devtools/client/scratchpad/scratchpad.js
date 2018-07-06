@@ -12,7 +12,7 @@
  * https://bugzilla.mozilla.org/show_bug.cgi?id=653934
  */
 
-// Via scratchpad.xul
+// Via index.xul
 /* import-globals-from ../../../toolkit/content/globalOverlay.js */
 // Via editMenuCommands.inc.xul
 /* import-globals-from ../../../toolkit/content/editMenuOverlay.js */
@@ -88,6 +88,7 @@ loader.lazyRequireGetter(this, "DebuggerClient", "devtools/shared/client/debugge
 loader.lazyRequireGetter(this, "EnvironmentClient", "devtools/shared/client/environment-client");
 loader.lazyRequireGetter(this, "ObjectClient", "devtools/shared/client/object-client");
 loader.lazyRequireGetter(this, "HUDService", "devtools/client/webconsole/hudservice", true);
+loader.lazyRequireGetter(this, "openDocLink", "devtools/client/shared/link", true);
 
 XPCOMUtils.defineLazyGetter(this, "REMOTE_TIMEOUT", () =>
   Services.prefs.getIntPref("devtools.debugger.remote-timeout"));
@@ -1987,8 +1988,7 @@ var Scratchpad = {
    * Opens the MDN documentation page for Scratchpad.
    */
   openDocumentationPage: function SP_openDocumentationPage() {
-    const url = this.strings.GetStringFromName("help.openDocumentationPage");
-    this.browserWindow.openWebLinkIn(url, "tab");
+    openDocLink(this.strings.GetStringFromName("help.openDocumentationPage"));
     this.browserWindow.focus();
   },
 };
@@ -2056,17 +2056,16 @@ ScratchpadTab.prototype = {
     this._attach(aSubject).then(aTarget => {
       const consoleActor = aTarget.form.consoleActor;
       const client = aTarget.client;
-      client.attachConsole(consoleActor, [], (aResponse, aWebConsoleClient) => {
-        if (aResponse.error) {
-          reportError("attachConsole", aResponse);
-          deferred.reject(aResponse);
-        } else {
+      client.attachConsole(consoleActor, [])
+        .then(([aResponse, aWebConsoleClient]) => {
           deferred.resolve({
             webConsoleClient: aWebConsoleClient,
             debuggerClient: client
           });
-        }
-      });
+        }, error => {
+          reportError("attachConsole", error);
+          deferred.reject(error);
+        });
     });
 
     return deferred.promise;

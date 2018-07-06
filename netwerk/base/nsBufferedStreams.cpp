@@ -46,7 +46,8 @@ using mozilla::Some;
 // nsBufferedStream
 
 nsBufferedStream::nsBufferedStream()
-    : mBuffer(nullptr),
+    : mBufferSize(0),
+      mBuffer(nullptr),
       mBufferStartOffset(0),
       mCursor(0),
       mFillPoint(0),
@@ -159,7 +160,7 @@ nsBufferedStream::Seek(int32_t whence, int64_t offset)
         absPos = -1;
         break;
       default:
-        NS_NOTREACHED("bogus seek whence parameter");
+        MOZ_ASSERT_UNREACHABLE("bogus seek whence parameter");
         return NS_ERROR_UNEXPECTED;
     }
 

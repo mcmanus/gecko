@@ -1224,6 +1224,16 @@ Element::AttachShadow(const ShadowRootInit& aInit, ErrorResult& aError)
     return nullptr;
   }
 
+  if (StaticPrefs::dom_webcomponents_shadowdom_report_usage()) {
+    OwnerDoc()->ReportShadowDOMUsage();
+  }
+
+  return AttachShadowWithoutNameChecks(aInit.mMode);
+}
+
+already_AddRefed<ShadowRoot>
+Element::AttachShadowWithoutNameChecks(ShadowRootMode aMode)
+{
   nsAutoScriptBlocker scriptBlocker;
 
   RefPtr<mozilla::dom::NodeInfo> nodeInfo =
@@ -1244,23 +1254,51 @@ Element::AttachShadow(const ShadowRootInit& aInit, ErrorResult& aError)
    *    and mode is init’s mode.
    */
   RefPtr<ShadowRoot> shadowRoot =
-    new ShadowRoot(this, aInit.mMode, nodeInfo.forget());
+    new ShadowRoot(this, aMode, nodeInfo.forget());
 
   shadowRoot->SetIsComposedDocParticipant(IsInComposedDoc());
-
-  if (StaticPrefs::dom_webcomponents_shadowdom_report_usage()) {
-    OwnerDoc()->ReportShadowDOMUsage();
-  }
 
   /**
    * 5. Set context object’s shadow root to shadow.
    */
   SetShadowRoot(shadowRoot);
 
+  // Dispatch a "shadowrootattached" event for devtools.
+  {
+    AsyncEventDispatcher* dispatcher =
+      new AsyncEventDispatcher(this,
+                               NS_LITERAL_STRING("shadowrootattached"),
+                               CanBubble::eYes,
+                               ChromeOnlyDispatch::eYes,
+                               Composed::eYes);
+    dispatcher->PostDOMEvent();
+  }
+
   /**
    * 6. Return shadow.
    */
   return shadowRoot.forget();
+}
+
+void
+Element::UnattachShadow()
+{
+  if (!GetShadowRoot()) {
+    return;
+  }
+
+  nsAutoScriptBlocker scriptBlocker;
+
+  if (nsIDocument* doc = GetComposedDoc()) {
+    if (nsIPresShell* shell = doc->GetShell()) {
+      shell->DestroyFramesForAndRestyle(this);
+    }
+  }
+  MOZ_ASSERT(!GetPrimaryFrame());
+
+  // Simply unhook the shadow root from the element.
+  MOZ_ASSERT(!GetShadowRoot()->HasSlots(), "Won't work when shadow root has slots!");
+  SetShadowRoot(nullptr);
 }
 
 void
@@ -1281,6 +1319,43 @@ Element::GetAttribute(const nsAString& aName, DOMString& aReturn)
       aReturn.SetNull();
     }
   }
+}
+
+bool
+Element::ToggleAttribute(const nsAString& aName,
+                         const Optional<bool>& aForce,
+                         nsIPrincipal* aTriggeringPrincipal,
+                         ErrorResult& aError)
+{
+  aError = nsContentUtils::CheckQName(aName, false);
+  if (aError.Failed()) {
+    return false;
+  }
+
+  nsAutoString nameToUse;
+  const nsAttrName* name = InternalGetAttrNameFromQName(aName, &nameToUse);
+  if (!name) {
+    if (aForce.WasPassed() && !aForce.Value()) {
+      return false;
+    }
+    RefPtr<nsAtom> nameAtom = NS_AtomizeMainThread(nameToUse);
+    if (!nameAtom) {
+      aError.Throw(NS_ERROR_OUT_OF_MEMORY);
+      return false;
+    }
+    aError = SetAttr(kNameSpaceID_None, nameAtom, EmptyString(), aTriggeringPrincipal, true);
+    return true;
+  }
+  if (aForce.WasPassed() && aForce.Value()) {
+    return true;
+  }
+  // Hold a strong reference here so that the atom or nodeinfo doesn't go
+  // away during UnsetAttr. If it did UnsetAttr would be left with a
+  // dangling pointer as argument without knowing it.
+  nsAttrName tmp(*name);
+
+  aError = UnsetAttr(name->NamespaceID(), name->LocalName(), true);
+  return false;
 }
 
 void
@@ -1994,16 +2069,12 @@ Element::UnbindFromTree(bool aDeep, bool aNullParent)
   }
 
   if (aDeep) {
-    // Do the kids. Don't call GetChildCount() here since that'll force
-    // XUL to generate template children, which there is no need for since
-    // all we're going to do is unbind them anyway.
-    uint32_t i, n = mAttrsAndChildren.ChildCount();
-
-    for (i = 0; i < n; ++i) {
+    for (nsIContent* child = GetFirstChild(); child;
+         child = child->GetNextSibling()) {
       // Note that we pass false for aNullParent here, since we don't want
       // the kids to forget us.  We _do_ want them to forget their binding
       // parent, though, since this only walks non-anonymous kids.
-      mAttrsAndChildren.ChildAt(i)->UnbindFromTree(true, false);
+      child->UnbindFromTree(true, false);
     }
   }
 
@@ -2099,10 +2170,15 @@ Element::GetMappedAttributes() const
   return mAttrsAndChildren.GetMapped();
 }
 
+void
+Element::InlineStyleDeclarationWillChange(MutationClosureData& aData)
+{
+  MOZ_ASSERT_UNREACHABLE("Element::InlineStyleDeclarationWillChange");
+}
+
 nsresult
-Element::SetInlineStyleDeclaration(DeclarationBlock* aDeclaration,
-                                   const nsAString* aSerialized,
-                                   bool aNotify)
+Element::SetInlineStyleDeclaration(DeclarationBlock& aDeclaration,
+                                   MutationClosureData& aData)
 {
   MOZ_ASSERT_UNREACHABLE("Element::SetInlineStyleDeclaration");
   return NS_ERROR_NOT_IMPLEMENTED;
@@ -2247,7 +2323,7 @@ Element::DispatchClickEvent(nsPresContext* aPresContext,
     inputSource = sourceMouseEvent->inputSource;
   } else if (aSourceEvent->mClass == eKeyboardEventClass) {
     event.mFlags.mIsPositionless = true;
-    inputSource = MouseEventBinding::MOZ_SOURCE_KEYBOARD;
+    inputSource = MouseEvent_Binding::MOZ_SOURCE_KEYBOARD;
   }
   event.pressure = pressure;
   event.mClickCount = clickCount;
@@ -2396,8 +2472,8 @@ Element::MaybeCheckSameAttrVal(int32_t aNamespaceID,
     }
   }
   *aModType = modification ?
-    static_cast<uint8_t>(MutationEventBinding::MODIFICATION) :
-    static_cast<uint8_t>(MutationEventBinding::ADDITION);
+    static_cast<uint8_t>(MutationEvent_Binding::MODIFICATION) :
+    static_cast<uint8_t>(MutationEvent_Binding::ADDITION);
   return false;
 }
 
@@ -2445,7 +2521,7 @@ Element::SetSingleClassFromParser(nsAtom* aSingleClassName)
                           nullptr, // old value
                           value,
                           nullptr,
-                          static_cast<uint8_t>(MutationEventBinding::ADDITION),
+                          static_cast<uint8_t>(MutationEvent_Binding::ADDITION),
                           false, // hasListeners
                           false, // notify
                           kCallAfterSetAttr,
@@ -2661,7 +2737,7 @@ Element::SetAttrAndNotify(int32_t aNamespaceID,
 
       LifecycleCallbackArgs args = {
         nsDependentAtomString(aName),
-        aModType == MutationEventBinding::ADDITION ?
+        aModType == MutationEvent_Binding::ADDITION ?
           VoidString() : nsDependentAtomString(oldValueAtom),
         nsDependentAtomString(newValueAtom),
         (ns.IsEmpty() ? VoidString() : ns)
@@ -2896,7 +2972,7 @@ Element::UnsetAttr(int32_t aNameSpaceID, nsAtom* aName,
 
   if (aNotify) {
     nsNodeUtils::AttributeWillChange(this, aNameSpaceID, aName,
-                                     MutationEventBinding::REMOVAL,
+                                     MutationEvent_Binding::REMOVAL,
                                      nullptr);
   }
 
@@ -2979,7 +3055,7 @@ Element::UnsetAttr(int32_t aNameSpaceID, nsAtom* aName,
     // We can always pass oldValue here since there is no new value which could
     // have corrupted it.
     nsNodeUtils::AttributeChanged(this, aNameSpaceID, aName,
-                                  MutationEventBinding::REMOVAL, &oldValue);
+                                  MutationEvent_Binding::REMOVAL, &oldValue);
   }
 
   if (aNameSpaceID == kNameSpaceID_None && aName == nsGkAtoms::dir) {
@@ -2996,7 +3072,7 @@ Element::UnsetAttr(int32_t aNameSpaceID, nsAtom* aName,
     oldValue.ToString(value);
     if (!value.IsEmpty())
       mutation.mPrevAttrValue = NS_Atomize(value);
-    mutation.mAttrChange = MutationEventBinding::REMOVAL;
+    mutation.mAttrChange = MutationEvent_Binding::REMOVAL;
 
     mozAutoSubtreeModified subtree(OwnerDoc(), this);
     (new AsyncEventDispatcher(this, mutation))->RunDOMEventWhenSafe();
@@ -3247,7 +3323,7 @@ Element::GetEventTargetParentForLinks(EventChainPreVisitor& aVisitor)
 
   default:
     // switch not in sync with the optimization switch earlier in this function
-    NS_NOTREACHED("switch statements not in sync");
+    MOZ_ASSERT_UNREACHABLE("switch statements not in sync");
   }
 }
 
@@ -3361,7 +3437,7 @@ Element::PostHandleEventForLinks(EventChainPostVisitor& aVisitor)
 
   default:
     // switch not in sync with the optimization switch earlier in this function
-    NS_NOTREACHED("switch statements not in sync");
+    MOZ_ASSERT_UNREACHABLE("switch statements not in sync");
     return NS_ERROR_UNEXPECTED;
   }
 
@@ -4244,18 +4320,19 @@ Element::ClearServoData(nsIDocument* aDoc) {
 void
 Element::SetCustomElementData(CustomElementData* aData)
 {
+  SetHasCustomElementData();
+
+  if (aData->mState != CustomElementData::State::eCustom) {
+    SetDefined(false);
+  }
+
   nsExtendedDOMSlots *slots = ExtendedDOMSlots();
   MOZ_ASSERT(!slots->mCustomElementData, "Custom element data may not be changed once set.");
   #if DEBUG
-    nsAtom* name = NodeInfo()->NameAtom();
-    nsAtom* type = aData->GetCustomElementType();
-    if (NodeInfo()->NamespaceID() == kNameSpaceID_XHTML) {
-      if (nsContentUtils::IsCustomElementName(name, kNameSpaceID_XHTML)) {
-        MOZ_ASSERT(type == name);
-      } else {
-        MOZ_ASSERT(type != name);
-      }
-    } else { // kNameSpaceID_XUL
+    // We assert only XUL usage, since web may pass whatever as 'is' value
+    if (NodeInfo()->NamespaceID() == kNameSpaceID_XUL) {
+      nsAtom* name = NodeInfo()->NameAtom();
+      nsAtom* type = aData->GetCustomElementType();
       // Check to see if the tag name is a dashed name.
       if (nsContentUtils::IsNameWithDash(name)) {
         // Assert that a tag name with dashes is always an autonomous custom

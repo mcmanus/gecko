@@ -120,7 +120,7 @@ function makeFullRuntimeMemoryActorTest(testGeneratorFunction) {
         type: { global: true }
       });
 
-      getChromeActors(client).then(function(form) {
+      getParentProcessActors(client).then(function(form) {
         if (!form) {
           ok(false, "Could not attach to chrome actors");
           return;
@@ -357,7 +357,9 @@ function getTestTab(client, title, callback) {
 // response packet and a TabClient instance referring to that tab.
 function attachTestTab(client, title, callback) {
   getTestTab(client, title, function(tab) {
-    client.attachTab(tab.actor, callback);
+    client.attachTab(tab.actor).then(([response, tabClient]) => {
+      callback(response, tabClient);
+    });
   });
 }
 
@@ -367,13 +369,13 @@ function attachTestTab(client, title, callback) {
 // thread.
 function attachTestThread(client, title, callback) {
   attachTestTab(client, title, function(tabResponse, tabClient) {
-    function onAttach(response, threadClient) {
+    function onAttach([response, threadClient]) {
       callback(response, tabClient, threadClient, tabResponse);
     }
     tabClient.attachThread({
       useSourceMaps: true,
       autoBlackBox: true
-    }, onAttach);
+    }).then(onAttach);
   });
 }
 
@@ -396,7 +398,14 @@ function attachTestTabAndResume(client, title, callback = () => {}) {
  * Initialize the testing debugger server.
  */
 function initTestDebuggerServer(server = DebuggerServer) {
-  server.registerModule("xpcshell-test/testactors");
+  if (server === WorkerDebuggerServer) {
+    const { createRootActor } = worker.require("xpcshell-test/testactors");
+    server.setRootActor(createRootActor);
+  } else {
+    const { createRootActor } = require("xpcshell-test/testactors");
+    server.setRootActor(createRootActor);
+  }
+
   // Allow incoming connections.
   server.init(function() {
     return true;
@@ -409,7 +418,7 @@ function initTestDebuggerServer(server = DebuggerServer) {
 function startTestDebuggerServer(title, server = DebuggerServer) {
   initTestDebuggerServer(server);
   addTestGlobal(title);
-  DebuggerServer.registerActors({ tab: true });
+  DebuggerServer.registerActors({ target: true });
 
   const transport = DebuggerServer.connectPipe();
   const client = new DebuggerClient(transport);
@@ -424,9 +433,9 @@ function finishClient(client) {
   });
 }
 
-// Create a server, connect to it and fetch tab actors for the parent process;
-// pass |callback| the debugger client and tab actor form with all actor IDs.
-function get_chrome_actors(callback) {
+// Create a server, connect to it and fetch actors targeting the parent process;
+// pass |callback| the debugger client and target actor form with all actor IDs.
+function get_parent_process_actors(callback) {
   DebuggerServer.init();
   DebuggerServer.registerAllActors();
   DebuggerServer.allowChromeProcess = true;
@@ -439,7 +448,7 @@ function get_chrome_actors(callback) {
     });
 }
 
-function getChromeActors(client, server = DebuggerServer) {
+function getParentProcessActors(client, server = DebuggerServer) {
   server.allowChromeProcess = true;
   return client.getProcess().then(response => response.form);
 }

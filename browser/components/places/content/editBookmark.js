@@ -158,15 +158,6 @@ var gEditItemOverlay = {
     }
   },
 
-  _initLoadInSidebar() {
-    if (!this._paneInfo.isBookmark)
-      throw new Error("_initLoadInSidebar called unexpectedly");
-
-    this._loadInSidebarCheckbox.checked =
-      PlacesUtils.annotations.itemHasAnnotation(
-        this._paneInfo.itemId, PlacesUIUtils.LOAD_IN_SIDEBAR_ANNO);
-  },
-
   /**
    * Initialize the panel.
    *
@@ -182,8 +173,7 @@ var gEditItemOverlay = {
    *        2. any of the following optional properties:
    *          - hiddenRows (Strings array): list of rows to be hidden regardless
    *            of the item edited. Possible values: "title", "location",
-   *            "keyword", "loadInSidebar", "feedLocation",
-   *            "siteLocation", folderPicker"
+   *            "keyword", "feedLocation", "siteLocation", folderPicker"
    */
   initPanel(aInfo) {
     if (typeof(aInfo) != "object" || aInfo === null)
@@ -244,11 +234,6 @@ var gEditItemOverlay = {
       this._initTagsField();
     else if (!this._element("tagsSelectorRow").collapsed)
       this.toggleTagsSelector();
-
-    // Load in sidebar.
-    if (showOrCollapse("loadInSidebarCheckbox", isBookmark, "loadInSidebar")) {
-      this._initLoadInSidebar();
-    }
 
     // Folder picker.
     // Technically we should check that the item is not moveable, but that's
@@ -634,19 +619,6 @@ var gEditItemOverlay = {
                       .transact().catch(Cu.reportError);
   },
 
-  onLoadInSidebarCheckboxCommand() {
-    if (!this.initialized || !this._paneInfo.isBookmark)
-      return;
-
-    let annotation = { name: PlacesUIUtils.LOAD_IN_SIDEBAR_ANNO };
-    if (this._loadInSidebarCheckbox.checked)
-      annotation.value = true;
-
-    let guid = this._paneInfo.itemGuid;
-    PlacesTransactions.Annotate({ guid, annotation })
-                      .transact().catch(Cu.reportError);
-  },
-
   toggleFolderTreeVisibility() {
     var expander = this._element("foldersExpander");
     var folderTreeRow = this._element("folderTreeRow");
@@ -858,14 +830,16 @@ var gEditItemOverlay = {
 
     // XXXmano: add a separate "New Folder" string at some point...
     let title = this._element("newFolderButton").label;
-    await PlacesTransactions.NewFolder({ parentGuid: ip.guid, title,
-                                         index: await ip.getIndex() })
-                            .transact().catch(Cu.reportError);
+    let guid = await PlacesTransactions.NewFolder({
+      parentGuid: ip.guid,
+      title,
+      index: await ip.getIndex()
+    }).transact().catch(Cu.reportError);
 
     this._folderTree.focus();
-    this._folderTree.selectItems([ip.itemId]);
+    this._folderTree.selectItems([ip.guid]);
     PlacesUtils.asContainer(this._folderTree.selectedNode).containerOpen = true;
-    this._folderTree.selectItems([this._lastNewItem]);
+    this._folderTree.selectItems([guid]);
     this._folderTree.startEditing(this._folderTree.view.selection.currentIndex,
                                   this._folderTree.columns.getFirstColumn());
   },
@@ -954,7 +928,7 @@ var gEditItemOverlay = {
       // representing element.
       let menupopup = this._folderMenuList.menupopup;
       for (let menuitem of menupopup.childNodes) {
-        if ("folderId" in menuitem && menuitem.folderId == aItemId) {
+        if ("folderGuid" in menuitem && menuitem.folderGuid == aGuid) {
           menuitem.label = aNewTitle;
           break;
         }
@@ -963,7 +937,7 @@ var gEditItemOverlay = {
     // We need to also update title of recent folders.
     if (this._recentFolders) {
       for (let folder of this._recentFolders) {
-        if (folder.folderId == aItemId) {
+        if (folder.folderGuid == aGuid) {
           folder.title = aNewTitle;
           break;
         }
@@ -1006,10 +980,6 @@ var gEditItemOverlay = {
       if (this._paneInfo.visibleRows.has("keywordRow"))
         this._initKeywordField(aValue).catch(Cu.reportError);
       break;
-    case PlacesUIUtils.LOAD_IN_SIDEBAR_ANNO:
-      if (this._paneInfo.visibleRows.has("loadInSidebarCheckbox"))
-        this._initLoadInSidebar();
-      break;
     }
   },
 
@@ -1034,10 +1004,7 @@ var gEditItemOverlay = {
     });
   },
 
-  onItemAdded(aItemId, aParentId, aIndex, aItemType, aURI) {
-    this._lastNewItem = aItemId;
-  },
-
+  onItemAdded() {},
   onItemRemoved() { },
   onBeginUpdateBatch() { },
   onEndUpdateBatch() { },
@@ -1046,7 +1013,7 @@ var gEditItemOverlay = {
 
 for (let elt of ["folderMenuList", "folderTree", "namePicker",
                  "locationField", "keywordField",
-                 "tagsField", "loadInSidebarCheckbox"]) {
+                 "tagsField" ]) {
   let eltScoped = elt;
   XPCOMUtils.defineLazyGetter(gEditItemOverlay, `_${eltScoped}`,
                               () => gEditItemOverlay._element(eltScoped));

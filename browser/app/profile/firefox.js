@@ -250,8 +250,9 @@ pref("browser.startup.homepage",            "chrome://branding/locale/browsercon
 pref("browser.startup.firstrunSkipsHomepage", true);
 
 // Show an about:blank window as early as possible for quick startup feedback.
+// Held to nightly on Linux due to bug 1450626.
 // Disabled on Mac because the bouncing dock icon already provides feedback.
-#if !defined(XP_MACOSX) && defined(NIGHTLY_BUILD)
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK) && defined(NIGHTLY_BUILD)
 pref("browser.startup.blankWindow", true);
 #else
 pref("browser.startup.blankWindow", false);
@@ -268,12 +269,8 @@ pref("browser.aboutHomeSnippets.updateUrl", "https://snippets.cdn.mozilla.net/%S
 
 pref("browser.enable_automatic_image_resizing", true);
 pref("browser.chrome.site_icons", true);
-pref("browser.chrome.favicons", true);
 // browser.warnOnQuit == false will override all other possible prompts when quitting or restarting
 pref("browser.warnOnQuit", true);
-// browser.showQuitWarning specifically controls the quit warning dialog. We
-// might still show the window closing dialog with showQuitWarning == false.
-pref("browser.showQuitWarning", false);
 pref("browser.fullscreen.autohide", true);
 pref("browser.overlink-delay", 80);
 
@@ -983,8 +980,14 @@ pref("app.productInfo.baseURL", "https://www.mozilla.org/firefox/features/");
 // Name of alternate about: page for certificate errors (when undefined, defaults to about:neterror)
 pref("security.alternate_certificate_error_page", "certerror");
 
+// Indicates if new certificate error page (enabled) or not
+pref("browser.security.newcerterrorpage.enabled", false);
+
 // Whether to start the private browsing mode at application startup
 pref("browser.privatebrowsing.autostart", false);
+
+// Whether the bookmark panel should be shown when bookmarking a page.
+pref("browser.bookmarks.editDialog.showForNewBookmarks", true);
 
 // Don't try to alter this pref, it'll be reset the next time you use the
 // bookmarking dialog
@@ -1412,8 +1415,8 @@ pref("identity.fxaccounts.migrateToDevEdition", true);
 pref("identity.fxaccounts.migrateToDevEdition", false);
 #endif
 
-// If activated, send tab will use the new FxA messages backend.
-pref("identity.fxaccounts.messages.enabled", false);
+// If activated, send tab will use the new FxA commands backend.
+pref("identity.fxaccounts.commands.enabled", false);
 
 // On GTK, we now default to showing the menubar only when alt is pressed:
 #ifdef MOZ_WIDGET_GTK
@@ -1444,6 +1447,8 @@ pref("media.gmp.trial-create.enabled", true);
 pref("media.gmp-widevinecdm.visible", true);
 pref("media.gmp-widevinecdm.enabled", true);
 #endif
+
+pref("media.autoplay.ask-permission", false);
 
 // Play with different values of the decay time and get telemetry,
 // 0 means to randomize (and persist) the experiment value in users' profiles,

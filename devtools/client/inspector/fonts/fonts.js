@@ -10,8 +10,8 @@ const Services = require("Services");
 const { gDevTools } = require("devtools/client/framework/devtools");
 const { getColor } = require("devtools/client/shared/theme");
 const { createFactory, createElement } = require("devtools/client/shared/vendor/react");
+const { getCssProperties } = require("devtools/shared/fronts/css-properties");
 const { Provider } = require("devtools/client/shared/vendor/react-redux");
-const { throttle } = require("devtools/shared/throttle");
 const { debounce } = require("devtools/shared/debounce");
 const { ELEMENT_STYLE } = require("devtools/shared/specs/styles");
 
@@ -56,15 +56,17 @@ const REGISTERED_AXES = Object.keys(REGISTERED_AXES_TO_FONT_PROPERTIES);
 
 class FontInspector {
   constructor(inspector, window) {
+    this.cssProperties = getCssProperties(inspector.toolbox);
     this.document = window.document;
     this.inspector = inspector;
+    // Set of unique keyword values supported by designated font properties.
+    this.keywordValues = new Set(this.getFontPropertyValueKeywords());
     this.nodeComputedStyle = {};
     this.pageStyle = this.inspector.pageStyle;
-    this.ruleView = this.inspector.getPanel("ruleview").view;
+    this.ruleViewTool = this.inspector.getPanel("ruleview");
+    this.ruleView = this.ruleViewTool.view;
     this.selectedRule = null;
     this.store = this.inspector.store;
-    // Map CSS property names to corresponding TextProperty instances from the Rule view.
-    this.textProperties = new Map();
     // Map CSS property names and variable font axis names to methods that write their
     // corresponding values to the appropriate TextProperty from the Rule view.
     // Values of variable font registered axes may be written to CSS font properties under
@@ -72,13 +74,13 @@ class FontInspector {
     this.writers = new Map();
 
     this.snapshotChanges = debounce(this.snapshotChanges, 100, this);
-    this.syncChanges = throttle(this.syncChanges, 100, this);
+    this.syncChanges = debounce(this.syncChanges, 100, this);
     this.onInstanceChange = this.onInstanceChange.bind(this);
     this.onNewNode = this.onNewNode.bind(this);
     this.onPreviewFonts = this.onPreviewFonts.bind(this);
     this.onPropertyChange = this.onPropertyChange.bind(this);
+    this.onRulePropertyUpdated = debounce(this.onRulePropertyUpdated, 100, this);
     this.onToggleFontHighlight = this.onToggleFontHighlight.bind(this);
-    this.onRuleUpdated = this.onRuleUpdated.bind(this);
     this.onThemeChanged = this.onThemeChanged.bind(this);
     this.update = this.update.bind(this);
     this.updateFontVariationSettings = this.updateFontVariationSettings.bind(this);
@@ -92,6 +94,7 @@ class FontInspector {
     }
 
     const fontsApp = FontsApp({
+      fontEditorEnabled: Services.prefs.getBoolPref(PREF_FONT_EDITOR),
       onInstanceChange: this.onInstanceChange,
       onToggleFontHighlight: this.onToggleFontHighlight,
       onPreviewFonts: this.onPreviewFonts,
@@ -111,7 +114,6 @@ class FontInspector {
     this.inspector.selection.on("new-node-front", this.onNewNode);
     // @see ToolSidebar.onSidebarTabSelected()
     this.inspector.sidebar.on("fontinspector-selected", this.onNewNode);
-    this.ruleView.on("property-value-updated", this.onRuleUpdated);
 
     // Listen for theme changes as the color of the previews depend on the theme
     gDevTools.on("theme-switched", this.onThemeChanged);
@@ -141,7 +143,7 @@ class FontInspector {
   destroy() {
     this.inspector.selection.off("new-node-front", this.onNewNode);
     this.inspector.sidebar.off("fontinspector-selected", this.onNewNode);
-    this.ruleView.off("property-value-updated", this.onRuleUpdated);
+    this.ruleView.off("property-value-updated", this.onRulePropertyUpdated);
     gDevTools.off("theme-switched", this.onThemeChanged);
 
     this.document = null;
@@ -151,32 +153,81 @@ class FontInspector {
     this.ruleView = null;
     this.selectedRule = null;
     this.store = null;
-    this.textProperties.clear();
-    this.textProperties = null;
     this.writers.clear();
     this.writers = null;
   }
 
   /**
+   * Get a subset of fonts used on a node whose font family names are found in the
+   * node's CSS font-family property value. The fonts will be sorted in the order their
+   * family names are declared in CSS font-family.
+   *
+   * Fonts returned by this.getFontsForNode() contain, among others, these attributes:
+   * - CSSFamilyName: a string of the font's family name (ex: "Times");
+   * - CSSGeneric: a string of the generic font family (ex: "serif", "sans-serif") if
+   * the font was resolved from a generic font family keyword, like serif, instead of
+   * an explicit font famly, like "Times". If the font is resolved from an
+   * explicit font family, CSSGeneric is null.
+   *
+   * For example:
+   * font-family: "Avenir", serif;
+   *
+   * If fonts from both families are used, it will yield:
+   * { CSSFamilyName: "Avenir", CSSGeneric: null, ... },
+   * { CSSFamilyName: "Times", CSSGeneric: "serif", ... },
+   *
+   * @param {Array} fonts
+   *        Fonts used on a node got from a call to this.getFontsForNode().
+   * @param {Array} fontFamilies
+   *        Strings of font families from a node's CSS font-family property value.
+   * @return {Array}
+   *         Subset of `fonts` whose font family names appear in `fontFamilies`.
+   */
+  filterFontsUsed(fonts = [], fontFamilies = []) {
+    return fontFamilies.reduce((acc, family) => {
+      const match = fonts.find(font => {
+        const generic = typeof font.CSSGeneric === "string"
+          ? font.CSSGeneric.toLowerCase()
+          : font.CSSGeneric;
+
+        return generic === family.toLowerCase()
+          || font.CSSFamilyName.toLowerCase() === family.toLowerCase();
+      });
+
+      if (match) {
+        acc.push(match);
+      }
+
+      return acc;
+    }, []);
+  }
+
+  /**
    * Get all expected CSS font properties and values from the node's matching rules and
-   * fallback to computed style.
+   * fallback to computed style. Skip CSS Custom Properties, `calc()` and keyword values.
    *
    * @return {Object}
    */
   getFontProperties() {
-    const KEYWORD_VALUES = ["initial", "inherit", "unset", "none"];
     const properties = {};
 
-    // First, get all expected font properties from computed styles.
+    // First, get all expected font properties from computed styles, if available.
     for (const prop of FONT_PROPERTIES) {
-      properties[prop] = this.nodeComputedStyle[prop].value;
+      properties[prop] =
+        (this.nodeComputedStyle[prop] && this.nodeComputedStyle[prop].value)
+          ? this.nodeComputedStyle[prop].value
+          : "";
     }
 
     // Then, replace with enabled font properties found on any of the rules that apply.
     for (const rule of this.ruleView.rules) {
+      if (rule.inherited) {
+        continue;
+      }
+
       for (const textProp of rule.textProps) {
         if (FONT_PROPERTIES.includes(textProp.name) &&
-            !KEYWORD_VALUES.includes(textProp.value) &&
+            !this.keywordValues.has(textProp.value) &&
             !textProp.value.includes("calc(") &&
             !textProp.value.includes("var(") &&
             !textProp.overridden &&
@@ -187,6 +238,23 @@ class FontInspector {
     }
 
     return properties;
+  }
+
+  /**
+   * Get an array of keyword values supported by the following CSS properties:
+   * - font-size
+   * - font-weight
+   * - font-stretch
+   *
+   * This list is used to filter out values when reading CSS font properties from rules.
+   * Computed styles will be used instead of any of these values.
+   *
+   * @return {Array}
+   */
+  getFontPropertyValueKeywords() {
+    return ["font-size", "font-weight", "font-stretch"].reduce((acc, property) => {
+      return acc.concat(this.cssProperties.getValues(property));
+    }, []);
   }
 
   async getFontsForNode(node, options) {
@@ -229,17 +297,13 @@ class FontInspector {
    * @return {TextProperty}
    */
   getTextProperty(name, value) {
-    if (!this.textProperties.has(name)) {
-      let textProperty =
-        this.selectedRule.textProps.find(prop => prop.name === name);
-      if (!textProperty) {
-        textProperty = this.selectedRule.editor.addProperty(name, value, "", true);
-      }
-
-      this.textProperties.set(name, textProperty);
+    let textProperty =
+      this.selectedRule.textProps.find(prop => prop.name === name);
+    if (!textProperty) {
+      textProperty = this.selectedRule.editor.addProperty(name, value, "", true);
     }
 
-    return this.textProperties.get(name);
+    return textProperty;
   }
 
   /**
@@ -352,12 +416,40 @@ class FontInspector {
   }
 
   /**
+   * Given a list of font families, return an object that groups them into sets of used
+   * and not used if they match families of fonts from the given list of fonts used on a
+   * node.
+   *
+   * @See this.filterFontsUsed() for an explanation of CSSFamilyName and CSSGeneric.
+   *
+   * @param {Array} fontsUsed
+   *        Fonts used on a node.
+   * @param {Array} fontFamilies
+   *        Strings of font families
+   * @return {Object}
+   */
+  groupFontFamilies(fontsUsed = [], fontFamilies = []) {
+    const families = {};
+    // Font family names declared and used.
+    families.used = fontsUsed.map(font =>
+      font.CSSGeneric ? font.CSSGeneric : font.CSSFamilyName
+    );
+    const familiesUsedLowercase = families.used.map(family => family.toLowerCase());
+    // Font family names declared but not used.
+    families.notUsed = fontFamilies
+      .filter(family => !familiesUsedLowercase.includes(family.toLowerCase()));
+
+    return families;
+  }
+
+  /**
    * Check if the font inspector panel is visible.
    *
    * @return {Boolean}
    */
   isPanelVisible() {
-    return this.inspector.sidebar &&
+    return this.inspector &&
+           this.inspector.sidebar &&
            this.inspector.sidebar.getCurrentTabID() === "fontinspector";
   }
   /**
@@ -366,25 +458,30 @@ class FontInspector {
    * @return {Boolean}
    */
   isSelectedNodeValid() {
-    return this.inspector.selection.nodeFront &&
+    return this.inspector &&
+           this.inspector.selection.nodeFront &&
            this.inspector.selection.isConnected() &&
            this.inspector.selection.isElementNode();
   }
 
-    /**
-   * Sync the Rule view with the styles from the page. Called in a throttled way
+  /**
+   * Sync the Rule view with the latest styles from the page. Called in a debounced way
    * (see constructor) after property changes are applied directly to the CSS style rule
-   * on the page circumventing TextProperty.setValue() which triggers expensive DOM
+   * on the page circumventing direct TextProperty.setValue() which triggers expensive DOM
    * operations in TextPropertyEditor.update().
    *
-   * @param  {TextProperty} textProperty
-   *         Model of CSS declaration for a property in used in the rule view.
+   * @param  {String} name
+   *         CSS property name
    * @param  {String} value
-   *         Value of the CSS property that should be reflected in the rule view.
+   *         CSS property value
    */
-  syncChanges(textProperty, value) {
-    textProperty.updateValue(value);
-    this.ruleView.on("property-value-updated", this.onRuleUpdated);
+  syncChanges(name, value) {
+    const textProperty = this.getTextProperty(name, value);
+    if (textProperty) {
+      textProperty.setValue(value);
+    }
+
+    this.ruleView.on("property-value-updated", this.onRulePropertyUpdated);
   }
 
   /**
@@ -443,6 +540,7 @@ class FontInspector {
    * Selection 'new-node' event handler.
    */
   onNewNode() {
+    this.ruleView.off("property-value-updated", this.onRulePropertyUpdated);
     if (this.isPanelVisible()) {
       this.update();
       this.refreshFontEditor();
@@ -482,9 +580,17 @@ class FontInspector {
 
   /**
    * Handler for "property-value-updated" event emitted from the rule view whenever a
-   * property value changes.
+   * property value changes. Ignore changes to properties unrelated to the font editor.
+   *
+   * @param {Object} eventData
+   *        Object with the property name and value.
+   *        Example: { name: "font-size", value: "1em" }
    */
-  async onRuleUpdated() {
+  async onRulePropertyUpdated(eventData) {
+    if (!FONT_PROPERTIES.includes(eventData.property)) {
+      return;
+    }
+
     if (this.isPanelVisible()) {
       await this.refreshFontEditor();
     }
@@ -573,45 +679,62 @@ class FontInspector {
 
     const node = this.inspector.selection.nodeFront;
     const fonts = await this.getFontsForNode(node, options);
-    if (!fonts.length) {
-      this.store.dispatch(resetFontEditor());
-      return;
-    }
 
     // Get computed styles for the selected node, but filter by CSS font properties.
     this.nodeComputedStyle = await this.pageStyle.getComputed(node, {
       filterProperties: FONT_PROPERTIES
     });
+
+    if (!this.nodeComputedStyle || !fonts.length) {
+      this.store.dispatch(resetFontEditor());
+      this.inspector.emit("fonteditor-updated");
+      return;
+    }
+
     // Clear any references to writer methods and CSS declarations because the node's
     // styles may have changed since the last font editor refresh.
     this.writers.clear();
-    this.textProperties.clear();
-    // Select the node's inline style as the rule where to write property value changes.
-    this.selectedRule =
-      this.ruleView.rules.find(rule => rule.style.type === ELEMENT_STYLE);
-    const fontEditor = this.store.getState().fontEditor;
-    const properties = this.getFontProperties();
-    // Names of fonts declared in font-family property without quotes and space trimmed.
-    const declaredFontNames =
-      properties["font-family"].split(",").map(font => font.replace(/\"+/g, "").trim());
 
-    // Mark available fonts as used if their names appears in the font-family declaration.
-    // TODO: sort used fonts in order of font-family declaration.
-    for (const font of fonts) {
-      font.used = declaredFontNames.includes(font.CSSFamilyName);
+    // If the Rule panel is not visible, the selected element's rule models may not have
+    // been created yet. For example, in 2-pane mode when Fonts is opened as the default
+    // panel. Select the current node to force the Rule view to create the rule models.
+    if (!this.ruleViewTool.isSidebarActive()) {
+      await this.ruleView.selectElement(node, false);
     }
 
+    // Select the node's inline style as the rule where to write property value changes.
+    this.selectedRule =
+      this.ruleView.rules.find(rule => rule.domRule.type === ELEMENT_STYLE);
+
+    const properties = this.getFontProperties();
+    const familiesDeclared =
+      properties["font-family"].split(",")
+      .map(font => font.replace(/["']+/g, "").trim());
+    // Subset of fonts used on the node whose family names exist in CSS font-family.
+    let fontsUsed = this.filterFontsUsed(fonts, familiesDeclared);
+    // Object with font families groupped by used and not used.
+    const families = this.groupFontFamilies(fontsUsed, familiesDeclared);
     // Assign writer methods to each axis defined in font-variation-settings.
     const axes = parseFontVariationAxes(properties["font-variation-settings"]);
     Object.keys(axes).map(axis => {
       this.writers.set(axis, this.getWriterForAxis(axis));
     });
 
-    // Update the font editor state only if property values differ from the ones in store.
-    // This can happen when a user makes manual changes in the Rule view.
-    if (JSON.stringify(properties) !== JSON.stringify(fontEditor.properties)) {
-      this.store.dispatch(updateFontEditor(fonts, properties));
+    // Pick fonts from descendants if no declared fonts were used on this node.
+    if (!fontsUsed.length && fonts.length) {
+      const otherVarFonts = fonts.filter(font => {
+        return (font.variationAxes && font.variationAxes.length);
+      });
+
+      // Prefer picking variable fonts if any were found on descendants of this node.
+      // The FontEditor component will render UI for the first font in the list.
+      fontsUsed = otherVarFonts.length ? otherVarFonts : fonts;
     }
+
+    this.store.dispatch(updateFontEditor(fontsUsed, families, properties));
+    this.inspector.emit("fonteditor-updated");
+    // Listen to manual changes in the Rule view that could update the Font Editor state
+    this.ruleView.on("property-value-updated", this.onRulePropertyUpdated);
   }
 
   /**
@@ -696,7 +819,15 @@ class FontInspector {
   }
 
   /**
-   * Preview a property value (live) then sync the changes (throttled) to the Rule view.
+   * Preview a property value (live) then sync the changes (debounced) to the Rule view.
+   *
+   * NOTE: Until Bug 1462591 is addressed, all changes are written to the element's inline
+   * style attribute. In this current scenario, Rule.previewPropertyValue()
+   * causes the whole inline style representation in the Rule view to update instead of
+   * just previewing the change on the element.
+   * We keep the debounced call to syncChanges() because it explicitly calls
+   * TextProperty.setValue() which performs other actions, including marking the property
+   * as "changed" in the Rule view with a green indicator.
    *
    * @param {String} name
    *        CSS property name
@@ -710,11 +841,11 @@ class FontInspector {
     }
 
     // Prevent reacting to changes we caused.
-    this.ruleView.off("property-value-updated", this.onRuleUpdated);
+    this.ruleView.off("property-value-updated", this.onRulePropertyUpdated);
     // Live preview font property changes on the page.
     textProperty.rule.previewPropertyValue(textProperty, value, "");
-    // Sync Rule view with changes reflected on the page (throttled).
-    this.syncChanges(textProperty, value);
+    // Sync Rule view with changes reflected on the page (debounced).
+    this.syncChanges(name, value);
   }
 }
 

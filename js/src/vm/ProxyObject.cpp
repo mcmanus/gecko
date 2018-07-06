@@ -9,7 +9,7 @@
 #include "gc/Allocator.h"
 #include "gc/GCTrace.h"
 #include "proxy/DeadObjectProxy.h"
-#include "vm/JSCompartment.h"
+#include "vm/Realm.h"
 
 #include "gc/ObjectKind-inl.h"
 #include "vm/JSObject-inl.h"
@@ -112,7 +112,7 @@ gc::AllocKind
 ProxyObject::allocKindForTenure() const
 {
     MOZ_ASSERT(usingInlineValueArray());
-    Value priv = const_cast<ProxyObject*>(this)->private_();
+    Value priv = private_();
     return GetProxyGCObjectKind(getClass(), data.handler, priv);
 }
 

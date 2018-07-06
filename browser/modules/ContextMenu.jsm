@@ -8,10 +8,10 @@
 
 var EXPORTED_SYMBOLS = ["ContextMenu"];
 
-Cu.importGlobalProperties(["URL"]);
-
 ChromeUtils.import("resource://gre/modules/Services.jsm");
 ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+
+XPCOMUtils.defineLazyGlobalGetters(this, ["URL"]);
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   E10SUtils: "resource://gre/modules/E10SUtils.jsm",
@@ -752,7 +752,6 @@ class ContextMenu {
     context.onLink              = false;
     context.onLoadedImage       = false;
     context.onMailtoLink        = false;
-    context.onMathML            = false;
     context.onMozExtLink        = false;
     context.onNumeric           = false;
     context.onPassword          = false;
@@ -805,7 +804,7 @@ class ContextMenu {
     // nsDocumentViewer::GetInImage. Make sure to update both if this is
     // changed.
     if (context.target instanceof Ci.nsIImageLoadingContent &&
-        context.target.currentRequestFinalURI) {
+        (context.target.currentRequestFinalURI || context.target.currentURI)) {
       context.onImage = true;
 
       context.imageInfo = {
@@ -829,8 +828,9 @@ class ContextMenu {
 
       // The actual URL the image was loaded from (after redirects) is the
       // currentRequestFinalURI.  We should use that as the URL for purposes of
-      // deciding on the filename.
-      context.mediaURL = context.target.currentRequestFinalURI.spec;
+      // deciding on the filename, if it is present. It might not be present
+      // if images are blocked.
+      context.mediaURL = (context.target.currentRequestFinalURI || context.target.currentURI).spec;
 
       const descURL = context.target.getAttribute("longdesc");
 
@@ -991,15 +991,6 @@ class ContextMenu {
       elem = elem.parentNode;
     }
 
-    // See if the user clicked on MathML
-    const MathML_NS = "http://www.w3.org/1998/Math/MathML";
-
-    if ((context.target.nodeType == context.target.TEXT_NODE &&
-         context.target.parentNode.namespaceURI == MathML_NS) ||
-         (context.target.namespaceURI == MathML_NS)) {
-      context.onMathML = true;
-    }
-
     // See if the user clicked in a frame.
     const docDefaultView = context.target.ownerGlobal;
 
@@ -1021,7 +1012,6 @@ class ContextMenu {
         context.onImage           = false;
         context.onLoadedImage     = false;
         context.onCompletedImage  = false;
-        context.onMathML          = false;
         context.inFrame           = false;
         context.inSrcdocFrame     = false;
         context.hasBGImage        = false;

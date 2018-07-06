@@ -26,10 +26,7 @@ function addLocaleDataForReactIntl(locale) {
 
 export class _Base extends React.PureComponent {
   componentWillMount() {
-    const {App, locale, Theme} = this.props;
-    if (Theme.className) {
-      this.updateTheme(Theme);
-    }
+    const {App, locale} = this.props;
     this.sendNewTabRehydrated(App);
     addLocaleDataForReactIntl(locale);
   }
@@ -45,18 +42,17 @@ export class _Base extends React.PureComponent {
   }
 
   componentWillUnmount() {
-    this.updateTheme({className: ""});
+    this.updateTheme();
   }
 
-  componentWillUpdate({App, Theme}) {
-    this.updateTheme(Theme);
+  componentWillUpdate({App}) {
+    this.updateTheme();
     this.sendNewTabRehydrated(App);
   }
 
-  updateTheme(Theme) {
+  updateTheme() {
     const bodyClassName = [
       "activity-stream",
-      Theme.className,
       this.props.isFirstrun ? "welcome" : ""
     ].filter(v => v).join(" ");
     global.document.body.className = bodyClassName;
@@ -77,12 +73,19 @@ export class _Base extends React.PureComponent {
     const {App, locale, strings} = props;
     const {initialized} = App;
 
-    if (props.Prefs.values.asrouterExperimentEnabled && window.location.hash === "#asrouter") {
+    const prefs = props.Prefs.values;
+    if ((prefs.asrouterExperimentEnabled || prefs.asrouterOnboardingCohort > 0) && window.location.hash === "#asrouter") {
       return (<ASRouterAdmin />);
     }
 
     if (!props.isPrerendered && !initialized) {
       return null;
+    }
+
+    // Until we can delete the existing onboarding tour, just hide the onboarding button when users are in
+    // the new simplified onboarding experiment. CSS hacks ftw
+    if (prefs.asrouterOnboardingCohort > 0) {
+      global.document.body.classList.add("hide-onboarding");
     }
 
     return (<IntlProvider locale={locale} messages={strings}>
@@ -145,4 +148,4 @@ export class BaseContent extends React.PureComponent {
   }
 }
 
-export const Base = connect(state => ({App: state.App, Prefs: state.Prefs, Theme: state.Theme}))(_Base);
+export const Base = connect(state => ({App: state.App, Prefs: state.Prefs}))(_Base);

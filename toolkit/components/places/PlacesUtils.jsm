@@ -5,10 +5,10 @@
 
 var EXPORTED_SYMBOLS = ["PlacesUtils"];
 
-Cu.importGlobalProperties(["URL"]);
-
 ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
+
+XPCOMUtils.defineLazyGlobalGetters(this, ["URL"]);
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   Services: "resource://gre/modules/Services.jsm",
@@ -261,8 +261,8 @@ const SYNC_BOOKMARK_VALIDATORS = Object.freeze({
   recordId: simpleValidateFunc(v => typeof v == "string" && (
                                 (PlacesSyncUtils.bookmarks.ROOTS.includes(v) || PlacesUtils.isValidGuid(v)))),
   parentRecordId: v => SYNC_BOOKMARK_VALIDATORS.recordId(v),
-  // Sync uses kinds instead of types, which distinguish between livemarks,
-  // queries, and smart bookmarks.
+  // Sync uses kinds instead of types, which distinguish between livemarks and
+  // queries.
   kind: simpleValidateFunc(v => typeof v == "string" &&
                                 Object.values(PlacesSyncUtils.bookmarks.KINDS).includes(v)),
   query: simpleValidateFunc(v => v === null || (typeof v == "string" && v)),
@@ -284,8 +284,6 @@ const SYNC_BOOKMARK_VALIDATORS = Object.freeze({
     return v;
   },
   keyword: simpleValidateFunc(v => v === null || typeof v == "string"),
-  description: simpleValidateFunc(v => v === null || typeof v == "string"),
-  loadInSidebar: simpleValidateFunc(v => v === true || v === false),
   dateAdded: simpleValidateFunc(v => typeof v === "number"
     && v > PlacesSyncUtils.bookmarks.EARLIEST_BOOKMARK_TIMESTAMP),
   feed: v => v === null ? v : BOOKMARK_VALIDATORS.url(v),
@@ -340,6 +338,7 @@ var PlacesUtils = {
   TOPIC_BOOKMARKS_RESTORE_FAILED: "bookmarks-restore-failed",
 
   ACTION_SCHEME: "moz-action:",
+  observers: PlacesObservers,
 
   /**
     * GUIDs associated with virtual queries that are used for displaying the
@@ -2493,7 +2492,12 @@ PlacesUtils.keywords = {
           FROM moz_places h
           JOIN moz_keywords k ON k.place_id = h.id
           GROUP BY h.id
-          HAVING h.foreign_count = COUNT(*)`);
+          HAVING h.foreign_count = count(*) +
+            (SELECT count(*)
+             FROM moz_bookmarks b
+             JOIN moz_bookmarks p ON b.parent = p.id
+             WHERE p.parent = :tags_root AND b.fk = h.id)
+          `, { tags_root: PlacesUtils.tagsFolderId });
         for (let row of rows) {
           placeInfosToRemove.push({
             placeId: row.getResultByName("id"),

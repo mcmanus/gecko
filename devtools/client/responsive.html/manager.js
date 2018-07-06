@@ -88,11 +88,6 @@ const ResponsiveUIManager = exports.ResponsiveUIManager = {
       this.showRemoteOnlyNotification(window, tab, options);
       return promise.reject(new Error("RDM only available for remote tabs."));
     }
-    // Remove this once we support this case in bug 1306975.
-    if (tab.linkedBrowser.hasAttribute("usercontextid")) {
-      this.showNoContainerTabsNotification(window, tab, options);
-      return promise.reject(new Error("RDM not available for container tabs."));
-    }
     if (!this.isActiveForTab(tab)) {
       this.initMenuCheckListenerFor(window);
 
@@ -107,7 +102,8 @@ const ResponsiveUIManager = exports.ResponsiveUIManager = {
 
       tel.recordEvent("devtools.main", "activate", "responsive_design", null, {
         "host": hostType,
-        "width": Math.ceil(window.outerWidth / 50) * 50
+        "width": Math.ceil(window.outerWidth / 50) * 50,
+        "session_id": toolbox ? toolbox.sessionId : -1
       });
 
       // Track opens keyed by the UI entry point used.
@@ -146,6 +142,15 @@ const ResponsiveUIManager = exports.ResponsiveUIManager = {
    */
   async closeIfNeeded(window, tab, options = {}) {
     if (this.isActiveForTab(tab)) {
+      const isKnownTab = TargetFactory.isKnownTab(tab);
+      const target = TargetFactory.forTab(tab);
+      const toolbox = gDevTools.getToolbox(target);
+
+      if (!toolbox && !isKnownTab) {
+        // Destroy the tabTarget to avoid a memory leak.
+        target.destroy();
+      }
+
       const ui = this.activeTabs.get(tab);
       const destroyed = await ui.destroy(options);
       if (!destroyed) {
@@ -153,11 +158,12 @@ const ResponsiveUIManager = exports.ResponsiveUIManager = {
         return;
       }
 
-      const hostType = Services.prefs.getStringPref("devtools.toolbox.host");
+      const hostType = toolbox ? toolbox.hostType : "none";
       const t = this._telemetry;
       t.recordEvent("devtools.main", "deactivate", "responsive_design", null, {
         "host": hostType,
-        "width": Math.ceil(window.outerWidth / 50) * 50
+        "width": Math.ceil(window.outerWidth / 50) * 50,
+        "session_id": toolbox ? toolbox.sessionId : -1
       });
 
       this.activeTabs.delete(tab);
@@ -269,14 +275,6 @@ const ResponsiveUIManager = exports.ResponsiveUIManager = {
       priority: PriorityLevels.PRIORITY_CRITICAL_MEDIUM,
     });
   },
-
-  showNoContainerTabsNotification(window, tab, { trigger } = {}) {
-    showNotification(window, tab, {
-      command: trigger == "command",
-      msg: l10n.getStr("responsive.noContainerTabs"),
-      priority: PriorityLevels.PRIORITY_CRITICAL_MEDIUM,
-    });
-  },
 };
 
 // GCLI commands in ./commands.js listen for events from this object to know
@@ -357,7 +355,10 @@ ResponsiveUI.prototype = {
         toolWindow.addEventListener("message", ui);
         debug("Wait until init from inner");
         await message.request(toolWindow, "init");
-        toolWindow.addInitialViewport("about:blank");
+        toolWindow.addInitialViewport({
+          uri: "about:blank",
+          userContextId: ui.tab.userContextId,
+        });
         debug("Wait until browser mounted");
         await message.wait(toolWindow, "browser-mounted");
         return ui.getViewportBrowser();

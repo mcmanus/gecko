@@ -239,7 +239,7 @@ RemoveRawValueRoot(JSContext* cx, JS::Value* vp);
 JS_FRIEND_API(JSAtom*)
 GetPropertyNameFromPC(JSScript* script, jsbytecode* pc);
 
-#ifdef JS_DEBUG
+#if defined(DEBUG) || defined(JS_JITSPEW)
 
 /*
  * Routines to print out values during debugging. These are FRIEND_API to help
@@ -675,7 +675,7 @@ JS_FRIEND_API(bool)
 IsFunctionObject(JSObject* obj);
 
 JS_FRIEND_API(bool)
-IsCrossCompartmentWrapper(JSObject* obj);
+IsCrossCompartmentWrapper(const JSObject* obj);
 
 static MOZ_ALWAYS_INLINE JS::Compartment*
 GetObjectCompartment(JSObject* obj)
@@ -743,8 +743,7 @@ extern JS_FRIEND_API(JSObject*)
 GetStaticPrototype(JSObject* obj);
 
 JS_FRIEND_API(bool)
-GetOriginalEval(JSContext* cx, JS::HandleObject scope,
-                JS::MutableHandleObject eval);
+GetRealmOriginalEval(JSContext* cx, JS::MutableHandleObject eval);
 
 inline void*
 GetObjectPrivate(JSObject* obj)
@@ -1425,7 +1424,7 @@ class MOZ_STACK_CLASS JS_FRIEND_API(AutoStableStringChars)
 
     /* Ensure the string is kept alive while we're using its chars. */
     JS::RootedString s_;
-    union {
+    MOZ_INIT_OUTSIDE_CTOR union {
         const char16_t* twoByteChars_;
         const JS::Latin1Char* latin1Chars_;
     };

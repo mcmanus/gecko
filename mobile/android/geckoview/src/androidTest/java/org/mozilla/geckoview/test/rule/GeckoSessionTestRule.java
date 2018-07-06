@@ -42,6 +42,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.os.MessageQueue;
+import android.os.Process;
 import android.os.SystemClock;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
@@ -52,6 +53,7 @@ import android.util.Pair;
 import android.view.MotionEvent;
 import android.view.Surface;
 
+import java.io.File;
 import java.lang.annotation.Annotation;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -95,17 +97,23 @@ public class GeckoSessionTestRule extends UiThreadTestRule {
     public static final String APK_URI_PREFIX = "resource://android/";
 
     private static final Method sGetNextMessage;
+    private static final Method sOnPageStart;
     private static final Method sOnPageStop;
     private static final Method sOnNewSession;
+    private static final Method sOnCrash;
 
     static {
         try {
             sGetNextMessage = MessageQueue.class.getDeclaredMethod("next");
             sGetNextMessage.setAccessible(true);
+            sOnPageStart = GeckoSession.ProgressDelegate.class.getMethod(
+                    "onPageStart", GeckoSession.class, String.class);
             sOnPageStop = GeckoSession.ProgressDelegate.class.getMethod(
                     "onPageStop", GeckoSession.class, boolean.class);
             sOnNewSession = GeckoSession.NavigationDelegate.class.getMethod(
                     "onNewSession", GeckoSession.class, String.class, GeckoResponse.class);
+            sOnCrash = GeckoSession.ContentDelegate.class.getMethod(
+                    "onCrash", GeckoSession.class);
         } catch (final NoSuchMethodException e) {
             throw new RuntimeException(e);
         }
@@ -315,8 +323,28 @@ public class GeckoSessionTestRule extends UiThreadTestRule {
         void invoke(T delegate) throws Throwable;
     }
 
+    /*
+     * If the value here is true, content crashes will be ignored. If false, the test will
+     * be failed immediately if a content crash occurs. This is also the case when
+     * {@link IgnoreCrash} is not present.
+     */
+    @Target(ElementType.METHOD)
+    @Retention(RetentionPolicy.RUNTIME)
+    public @interface IgnoreCrash {
+        /**
+         * @return True if content crashes should be ignored, false otherwise. Default is true.
+         */
+        boolean value() default true;
+    }
+
     public static class TimeoutException extends RuntimeException {
         public TimeoutException(final String detailMessage) {
+            super(detailMessage);
+        }
+    }
+
+    public static class ChildCrashedException extends RuntimeException {
+        public ChildCrashedException(final String detailMessage) {
             super(detailMessage);
         }
     }
@@ -543,6 +571,10 @@ public class GeckoSessionTestRule extends UiThreadTestRule {
 
         public boolean isAutomation() {
             return !getEnvVar("MOZ_IN_AUTOMATION").isEmpty();
+        }
+
+        public boolean shouldShutdownOnCrash() {
+            return !getEnvVar("MOZ_CRASHREPORTER_SHUTDOWN").isEmpty();
         }
 
         public boolean isMultiprocess() {
@@ -904,6 +936,7 @@ public class GeckoSessionTestRule extends UiThreadTestRule {
     protected Map<GeckoSession, Tab> mRDPTabs;
     protected Tab mRDPChromeProcess;
     protected boolean mReuseSession;
+    protected boolean mIgnoreCrash;
 
     public GeckoSessionTestRule() {
         mDefaultSettings = new GeckoSessionSettings();
@@ -1076,6 +1109,8 @@ public class GeckoSessionTestRule extends UiThreadTestRule {
                 mWithDevTools = ((WithDevToolsAPI) annotation).value();
             } else if (ReuseSession.class.equals(annotation.annotationType())) {
                 mReuseSession = ((ReuseSession) annotation).value();
+            } else if (IgnoreCrash.class.equals(annotation.annotationType())) {
+                mIgnoreCrash = ((IgnoreCrash) annotation).value();
             }
         }
     }
@@ -1112,6 +1147,7 @@ public class GeckoSessionTestRule extends UiThreadTestRule {
         mClosedSession = false;
         mWithDevTools = false;
         mReuseSession = true;
+        mIgnoreCrash = false;
 
         applyAnnotations(Arrays.asList(description.getTestClass().getAnnotations()), settings);
         applyAnnotations(description.getAnnotations(), settings);
@@ -1146,6 +1182,7 @@ public class GeckoSessionTestRule extends UiThreadTestRule {
 
                 final boolean isExternalDelegate =
                         !DEFAULT_DELEGATES.contains(method.getDeclaringClass());
+
                 if (!ignore) {
                     assertThat("Callbacks must be on UI thread",
                                Looper.myLooper(), equalTo(Looper.getMainLooper()));
@@ -1160,6 +1197,15 @@ public class GeckoSessionTestRule extends UiThreadTestRule {
                                    args[0], instanceOf(GeckoSession.class));
                         session = (GeckoSession) args[0];
                     }
+
+                    if (sOnCrash.equals(method) && !mIgnoreCrash && isUsingSession(session)) {
+                        if (env.shouldShutdownOnCrash()) {
+                            sRuntime.shutdown();
+                        }
+
+                        throw new ChildCrashedException("Child process crashed");
+                    }
+
                     records.add(new CallRecord(session, method, args));
 
                     call = waitDelegates.prepareMethodCall(session, method);
@@ -1215,13 +1261,29 @@ public class GeckoSessionTestRule extends UiThreadTestRule {
                 new GeckoRuntimeSettings.Builder();
             runtimeSettingsBuilder.arguments(new String[] { "-purgecaches" })
                     .extras(InstrumentationRegistry.getArguments())
-                    .nativeCrashReportingEnabled(true)
-                    .javaCrashReportingEnabled(true)
-                    .remoteDebuggingEnabled(true);
+                    .remoteDebuggingEnabled(true)
+                    .consoleOutput(true);
+
+            if (env.isAutomation()) {
+                runtimeSettingsBuilder
+                        .nativeCrashReportingEnabled(true)
+                        .javaCrashReportingEnabled(true);
+            }
 
             sRuntime = GeckoRuntime.create(
                 InstrumentationRegistry.getTargetContext(),
                 runtimeSettingsBuilder.build());
+
+            sRuntime.setDelegate(new GeckoRuntime.Delegate() {
+                @Override
+                public void onShutdown() {
+                    Process.killProcess(Process.myPid());
+                }
+            });
+        }
+
+        if (sCachedSession != null && !sCachedSession.isOpen()) {
+            sCachedSession = null;
         }
 
         final boolean useDefaultSession = !mClosedSession && mDefaultSettings.equals(settings);
@@ -1302,17 +1364,25 @@ public class GeckoSessionTestRule extends UiThreadTestRule {
         // load ends with the first onPageStop call, so ignore everything from the session
         // until the first onPageStop call.
 
+        // For the cached session, we may get multiple initial loads. We should specifically look
+        // for an about:blank load, and wait until that has stopped.
+        final boolean lookForAboutBlank = session.equals(sCachedSession);
+
         try {
             // We cannot detect initial page load without progress delegate.
             assertThat("ProgressDelegate cannot be null-delegate when opening session",
                        GeckoSession.ProgressDelegate.class, not(isIn(mNullDelegates)));
 
             mCallRecordHandler = new CallRecordHandler() {
+                private boolean mIsAboutBlank = !lookForAboutBlank;
+
                 @Override
                 public boolean handleCall(final Method method, final Object[] args) {
                     final boolean matching = DEFAULT_DELEGATES.contains(
                             method.getDeclaringClass()) && session.equals(args[0]);
-                    if (matching && sOnPageStop.equals(method)) {
+                    if (matching && sOnPageStart.equals(method)) {
+                        mIsAboutBlank = "about:blank".equals(args[1]);
+                    } else if (matching && mIsAboutBlank && sOnPageStop.equals(method)) {
                         mCallRecordHandler = null;
                     }
                     return matching;
@@ -1332,19 +1402,45 @@ public class GeckoSessionTestRule extends UiThreadTestRule {
      * Internal method to perform callback checks at the end of a test.
      */
     public void performTestEndCheck() {
+        if (sCachedSession != null && mIgnoreCrash) {
+            // Make sure the cached session has been closed by crashes.
+            while (sCachedSession.isOpen()) {
+                loopUntilIdle(mTimeoutMillis);
+            }
+        }
+
         mWaitScopeDelegates.clearAndAssert();
         mTestScopeDelegates.clearAndAssert();
+
+        if (sCachedSession != null && mReuseSession) {
+            assertThat("Cached session should be open",
+                       sCachedSession.isOpen(), equalTo(true));
+        }
     }
 
     protected void cleanupSession(final GeckoSession session) {
         final Tab tab = (mRDPTabs != null) ? mRDPTabs.get(session) : null;
         if (tab != null) {
-            tab.getPromises().detach();
-            tab.detach();
+            if (session.isOpen()) {
+                tab.getPromises().detach();
+                tab.detach();
+            }
+
             mRDPTabs.remove(session);
         }
         if (session.isOpen()) {
             session.close();
+        }
+    }
+
+    protected boolean isUsingSession(final GeckoSession session) {
+        return session.equals(mMainSession) || mSubSessions.contains(session);
+    }
+
+    protected static void deleteCrashDumps() {
+        File dumpDir = new File(sRuntime.getProfileDir(), "minidumps");
+        for (final File dump : dumpDir.listFiles()) {
+            dump.delete();
         }
     }
 
@@ -1355,11 +1451,16 @@ public class GeckoSessionTestRule extends UiThreadTestRule {
         for (final GeckoSession session : mSubSessions) {
             cleanupSession(session);
         }
-        if (mMainSession.equals(sCachedSession)) {
+
+        if (mMainSession.isOpen() && mMainSession.equals(sCachedSession)) {
             // We have to detach the Promises object, but keep the Tab itself.
             sCachedRDPTab.getPromises().detach();
         } else {
             cleanupSession(mMainSession);
+        }
+
+        if (mIgnoreCrash) {
+            deleteCrashDumps();
         }
 
         if (mDisplay != null) {
@@ -1631,7 +1732,7 @@ public class GeckoSessionTestRule extends UiThreadTestRule {
                     throw new RuntimeException(e);
                 }
                 final AssertCalled ac = getAssertCalled(callbackMethod, callback);
-                if (ac != null && ac.value()) {
+                if (ac != null && ac.value() && ac.count() != 0) {
                     methodCalls.add(new MethodCall(session, method,
                                                    ac, /* target */ null));
                 }

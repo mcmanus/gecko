@@ -118,6 +118,7 @@ nsXBLPrototypeBinding::nsXBLPrototypeBinding()
   mBindToUntrustedContent(false),
   mSimpleScopeChain(false),
   mResources(nullptr),
+  mXBLDocInfoWeak(nullptr),
   mBaseNameSpaceID(kNameSpaceID_None)
 {
   MOZ_COUNT_CTOR(nsXBLPrototypeBinding);
@@ -135,15 +136,14 @@ nsXBLPrototypeBinding::Init(const nsACString& aID,
   // The binding URI might be an immutable URI (e.g. for about: URIs). In that case,
   // we'll fail in SetRef below, but that doesn't matter much for now.
   if (aFirstBinding) {
-    rv = bindingURI->Clone(getter_AddRefs(mAlternateBindingURI));
-    NS_ENSURE_SUCCESS(rv, rv);
+    mAlternateBindingURI = bindingURI;
   }
   rv = NS_MutateURI(bindingURI)
         .SetRef(aID)
         .Finalize(mBindingURI);
   if (NS_FAILED(rv)) {
     // If SetRef failed, mBindingURI should be a clone.
-    bindingURI->Clone(getter_AddRefs(mBindingURI));
+    mBindingURI = bindingURI;
   }
 
   mXBLDocInfoWeak = aInfo;

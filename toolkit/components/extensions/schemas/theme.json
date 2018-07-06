@@ -196,6 +196,14 @@
               "popup_highlight_text": {
                 "$ref": "ThemeColor",
                 "optional": true
+              },
+              "ntp_background": {
+                "$ref": "ThemeColor",
+                "optional": true
+              },
+              "ntp_text": {
+                "$ref": "ThemeColor",
+                "optional": true
               }
             },
             "additionalProperties": { "$ref": "UnrecognizedProperty" }
@@ -585,7 +593,6 @@
   {
     "namespace": "theme",
     "description": "The theme API allows customizing of visual elements of the browser.",
-    "permissions": ["theme"],
     "types": [
       {
         "id": "ThemeUpdateInfo",
@@ -638,6 +645,7 @@
         "type": "function",
         "async": true,
         "description": "Make complete updates to the theme. Resolves when the update has completed.",
+        "permissions": ["theme"],
         "parameters": [
           {
             "type": "integer",
@@ -657,6 +665,7 @@
         "type": "function",
         "async": true,
         "description": "Removes the updates made to the theme.",
+        "permissions": ["theme"],
         "parameters": [
           {
             "type": "integer",

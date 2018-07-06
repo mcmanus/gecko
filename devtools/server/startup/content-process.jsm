@@ -39,7 +39,7 @@ function setupServer(mm) {
   // For browser content toolbox, we do need a regular root actor and all tab
   // actors, but don't need all the "browser actors" that are only useful when
   // debugging the parent process via the browser toolbox.
-  DebuggerServer.registerActors({ root: true, tab: true });
+  DebuggerServer.registerActors({ root: true, target: true });
 
   // Clean up things when the client disconnects
   mm.addMessageListener("debug:content-process-destroy", function onDestroy() {
@@ -76,10 +76,10 @@ function init(msg) {
     const conn = DebuggerServer.connectToParent(prefix, mm);
     conn.parentMessageManager = mm;
 
-    const { ChildProcessActor } =
-        loader.require("devtools/server/actors/child-process");
+    const { ContentProcessTargetActor } =
+        loader.require("devtools/server/actors/targets/content-process");
     const { ActorPool } = loader.require("devtools/server/main");
-    const actor = new ChildProcessActor(conn);
+    const actor = new ContentProcessTargetActor(conn);
     const actorPool = new ActorPool(conn);
     actorPool.addActor(actor);
     conn.addActorPool(actorPool);

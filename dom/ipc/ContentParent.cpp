@@ -96,6 +96,7 @@
 #include "mozilla/ScriptPreloader.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPtr.h"
+#include "mozilla/StaticPrefs.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/TelemetryIPC.h"
 #include "mozilla/WebBrowserPersistDocumentParent.h"
@@ -145,6 +146,7 @@
 #include "nsISiteSecurityService.h"
 #include "nsISound.h"
 #include "nsISpellChecker.h"
+#include "nsIStringBundle.h"
 #include "nsISupportsPrimitives.h"
 #include "nsITimer.h"
 #include "nsIURIFixup.h"
@@ -593,6 +595,7 @@ static const char* sObserverTopics[] = {
   "intl:requested-locales-changed",
   "cookie-changed",
   "private-cookie-changed",
+  "clear-site-data-reload-needed",
 };
 
 // PreallocateProcess is called by the PreallocatedProcessManager.
@@ -1275,6 +1278,17 @@ ContentParent::GetAllEvenIfDead(nsTArray<ContentParent*>& aArray)
   }
 }
 
+void
+ContentParent::BroadcastStringBundle(const StringBundleDescriptor& aBundle)
+{
+  AutoTArray<StringBundleDescriptor, 1> array;
+  array.AppendElement(aBundle);
+
+  for (auto* cp : AllProcesses(eLive)) {
+    Unused << cp->SendRegisterStringBundles(array);
+  }
+}
+
 const nsAString&
 ContentParent::GetRemoteType() const
 {
@@ -1855,8 +1869,8 @@ ContentParent::ShouldKeepProcessAlive() const
     return false;
   }
 
-  // We might want to keep alive some content processes alive during test runs,
-  // for performance reasons. This should never be used in production.
+  // We might want to keep some content processes alive for performance reasons.
+  // e.g. test runs and privileged content process for some about: pages.
   // We don't want to alter behavior if the pref is not set, so default to 0.
   int32_t processesToKeepAlive = 0;
 
@@ -2315,6 +2329,10 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority)
     static_cast<nsChromeRegistryChrome*>(registrySvc.get());
   chromeRegistry->SendRegisteredChrome(this);
 
+  nsCOMPtr<nsIStringBundleService> stringBundleService =
+    services::GetStringBundleService();
+  stringBundleService->SendContentBundles(this);
+
   if (gAppData) {
     nsCString version(gAppData->version);
     nsCString buildID(gAppData->buildID);
@@ -2705,6 +2723,16 @@ ContentParent::RecvClipboardHasType(nsTArray<nsCString>&& aTypes,
 }
 
 mozilla::ipc::IPCResult
+ContentParent::RecvGetExternalClipboardFormats(const int32_t& aWhichClipboard,
+                                     const bool& aPlainTextOnly,
+                                     nsTArray<nsCString>* aTypes)
+{
+  MOZ_ASSERT(aTypes);
+  DataTransfer::GetExternalClipboardFormats(aWhichClipboard, aPlainTextOnly, aTypes);
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
 ContentParent::RecvPlaySound(const URIParams& aURI)
 {
   nsCOMPtr<nsIURI> soundURI = DeserializeURI(aURI);
@@ -3011,6 +3039,9 @@ ContentParent::Observe(nsISupports* aSubject,
                (!nsCRT::strcmp(aData, u"changed"))) {
       cs->AddCookie(xpcCookie);
     }
+  } else if (!strcmp(aTopic, "clear-site-data-reload-needed")) {
+    // Rebroadcast "clear-site-data-reload-needed".
+    Unused << SendClearSiteDataReloadNeeded(nsString(aData));
   }
   return NS_OK;
 }
@@ -3310,7 +3341,7 @@ ContentParent::RecvFinishMemoryReport(const uint32_t& aGeneration)
 mozilla::ipc::IPCResult
 ContentParent::RecvAddPerformanceMetrics(nsTArray<PerformanceInfo>&& aMetrics)
 {
-  if (!mozilla::dom::DOMPrefs::SchedulerLoggingEnabled()) {
+  if (!mozilla::StaticPrefs::dom_performance_enable_scheduler_timing()) {
     // The pref is off, we should not get a performance metrics from the content
     // child
     return IPC_OK();
@@ -3505,14 +3536,16 @@ ContentParent::AllocPExternalHelperAppParent(const OptionalURIParams& uri,
                                              const OptionalURIParams& aReferrer,
                                              PBrowserParent* aBrowser)
 {
-  ExternalHelperAppParent *parent =
-    new ExternalHelperAppParent(uri, aContentLength, aWasFileChannel);
+  ExternalHelperAppParent* parent =
+    new ExternalHelperAppParent(uri,
+                                aContentLength,
+                                aWasFileChannel,
+                                aContentDisposition,
+                                aContentDispositionHint,
+                                aContentDispositionFilename);
   parent->AddRef();
   parent->Init(this,
                aMimeContentType,
-               aContentDisposition,
-               aContentDispositionHint,
-               aContentDispositionFilename,
                aForceSave,
                aReferrer,
                aBrowser);

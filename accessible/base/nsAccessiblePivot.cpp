@@ -859,8 +859,10 @@ nsAccessiblePivot::NotifyOfPivotChange(Accessible* aOldPosition,
   nsTObserverArray<nsCOMPtr<nsIAccessiblePivotObserver> >::ForwardIterator iter(mObservers);
   while (iter.HasMore()) {
     nsIAccessiblePivotObserver* obs = iter.GetNext();
-    obs->OnPivotChanged(this, xpcOldPos, aOldStart, aOldEnd, aReason,
-                        aIsFromUserInput);
+    obs->OnPivotChanged(this,
+                        xpcOldPos, aOldStart, aOldEnd,
+                        ToXPC(mPosition), mStartOffset, mEndOffset,
+                        aReason, aIsFromUserInput);
   }
 
   return true;
@@ -892,13 +894,6 @@ RuleCache::ApplyFilter(Accessible* aAccessible, uint16_t* aResult)
     if ((nsIAccessibleTraversalRule::PREFILTER_NOT_FOCUSABLE & mPreFilter) &&
         !(state & states::FOCUSABLE))
       return NS_OK;
-
-    if (nsIAccessibleTraversalRule::PREFILTER_ARIA_HIDDEN & mPreFilter) {
-      if (aAccessible->IsARIAHidden()) {
-        *aResult |= nsIAccessibleTraversalRule::FILTER_IGNORE_SUBTREE;
-        return NS_OK;
-      }
-    }
 
     if ((nsIAccessibleTraversalRule::PREFILTER_TRANSPARENT & mPreFilter) &&
         !(state & states::OPAQUE1)) {

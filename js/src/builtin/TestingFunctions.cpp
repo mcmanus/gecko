@@ -13,9 +13,16 @@
 #include "mozilla/Sprintf.h"
 #include "mozilla/Unused.h"
 
+#include <cfloat>
 #include <cmath>
 #include <cstdlib>
 #include <ctime>
+
+#if defined(XP_UNIX) && !defined(XP_DARWIN)
+#include <time.h>
+#else
+#include <chrono>
+#endif
 
 #include "jsapi.h"
 #include "jsfriendapi.h"
@@ -56,13 +63,13 @@
 #include "vm/StringType.h"
 #include "vm/TraceLogging.h"
 #include "wasm/AsmJS.h"
-#include "wasm/WasmBinaryToText.h"
 #include "wasm/WasmJS.h"
 #include "wasm/WasmModule.h"
 #include "wasm/WasmSignalHandlers.h"
 #include "wasm/WasmTextToBinary.h"
 #include "wasm/WasmTypes.h"
 
+#include "vm/Compartment-inl.h"
 #include "vm/Debugger-inl.h"
 #include "vm/EnvironmentObject-inl.h"
 #include "vm/JSContext-inl.h"
@@ -651,87 +658,58 @@ WasmTextToBinary(JSContext* cx, unsigned argc, Value* vp)
     if (!twoByteChars.initTwoByte(cx, args[0].toString()))
         return false;
 
+    bool withOffsets = false;
     if (args.hasDefined(1)) {
-        if (!args[1].isString()) {
-            ReportUsageErrorASCII(cx, callee, "Second argument, if present, must be a String");
+        if (!args[1].isBoolean()) {
+            ReportUsageErrorASCII(cx, callee, "Second argument, if present, must be a boolean");
             return false;
         }
+        withOffsets = ToBoolean(args[1]);
     }
 
     uintptr_t stackLimit = GetNativeStackLimit(cx);
 
     wasm::Bytes bytes;
     UniqueChars error;
-    if (!wasm::TextToBinary(twoByteChars.twoByteChars(), stackLimit, &bytes, &error)) {
+    wasm::Uint32Vector offsets;
+    if (!wasm::TextToBinary(twoByteChars.twoByteChars(), stackLimit, &bytes, &offsets, &error)) {
         JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WASM_TEXT_FAIL,
                                   error.get() ? error.get() : "out of memory");
         return false;
     }
 
-    RootedObject obj(cx, JS_NewUint8Array(cx, bytes.length()));
+    RootedObject binary(cx, JS_NewUint8Array(cx, bytes.length()));
+    if (!binary)
+        return false;
+
+    memcpy(binary->as<TypedArrayObject>().viewDataUnshared(), bytes.begin(), bytes.length());
+
+    if (!withOffsets) {
+        args.rval().setObject(*binary);
+        return true;
+    }
+
+    RootedObject obj(cx, JS_NewPlainObject(cx));
     if (!obj)
         return false;
 
-    memcpy(obj->as<TypedArrayObject>().viewDataUnshared(), bytes.begin(), bytes.length());
+    constexpr unsigned propAttrs = JSPROP_ENUMERATE;
+    if (!JS_DefineProperty(cx, obj, "binary", binary, propAttrs))
+        return false;
+
+    RootedObject jsOffsets(cx, JS_NewArrayObject(cx, offsets.length()));
+    if (!jsOffsets)
+        return false;
+    for (size_t i = 0; i < offsets.length(); i++) {
+        uint32_t offset = offsets[i];
+        RootedValue offsetVal(cx, NumberValue(offset));
+        if (!JS_SetElement(cx, jsOffsets, i, offsetVal))
+            return false;
+    }
+    if (!JS_DefineProperty(cx, obj, "offsets", jsOffsets, propAttrs))
+        return false;
 
     args.rval().setObject(*obj);
-    return true;
-}
-
-static bool
-WasmBinaryToText(JSContext* cx, unsigned argc, Value* vp)
-{
-    if (!cx->options().wasm()) {
-        JS_ReportErrorASCII(cx, "wasm support unavailable");
-        return false;
-    }
-
-    CallArgs args = CallArgsFromVp(argc, vp);
-
-    if (!args.get(0).isObject() || !args.get(0).toObject().is<TypedArrayObject>()) {
-        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WASM_BAD_BUF_ARG);
-        return false;
-    }
-
-    Rooted<TypedArrayObject*> code(cx, &args[0].toObject().as<TypedArrayObject>());
-
-    if (!TypedArrayObject::ensureHasBuffer(cx, code))
-        return false;
-
-    if (code->isSharedMemory()) {
-        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WASM_BAD_BUF_ARG);
-        return false;
-    }
-
-    const uint8_t* bufferStart = code->bufferUnshared()->dataPointer();
-    const uint8_t* bytes = bufferStart + code->byteOffset();
-    uint32_t length = code->byteLength();
-
-    Vector<uint8_t> copy(cx);
-    if (code->bufferUnshared()->hasInlineData()) {
-        if (!copy.append(bytes, length))
-            return false;
-        bytes = copy.begin();
-    }
-
-    if (args.length() > 1) {
-        JS_ReportErrorASCII(cx, "wasm text format selection is not supported");
-        return false;
-    }
-
-    StringBuffer buffer(cx);
-    bool ok = wasm::BinaryToText(cx, bytes, length, buffer);
-    if (!ok) {
-        if (!cx->isExceptionPending())
-            JS_ReportErrorASCII(cx, "wasm binary to text print error");
-        return false;
-    }
-
-    JSString* result = buffer.finishString();
-    if (!result)
-        return false;
-
-    args.rval().setString(result);
     return true;
 }
 
@@ -1296,9 +1274,8 @@ SaveStack(JSContext* cx, unsigned argc, Value* vp)
         if (!ToNumber(cx, args[0], &maxDouble))
             return false;
         if (mozilla::IsNaN(maxDouble) || maxDouble < 0 || maxDouble > UINT32_MAX) {
-            ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
-                                  JSDVG_SEARCH_STACK, args[0], nullptr,
-                                  "not a valid maximum frame count", NULL);
+            ReportValueError(cx, JSMSG_UNEXPECTED_TYPE, JSDVG_SEARCH_STACK, args[0], nullptr,
+                             "not a valid maximum frame count");
             return false;
         }
         uint32_t max = uint32_t(maxDouble);
@@ -1309,9 +1286,8 @@ SaveStack(JSContext* cx, unsigned argc, Value* vp)
     RootedObject compartmentObject(cx);
     if (args.length() >= 2) {
         if (!args[1].isObject()) {
-            ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
-                                  JSDVG_SEARCH_STACK, args[0], nullptr,
-                                  "not an object", NULL);
+            ReportValueError(cx, JSMSG_UNEXPECTED_TYPE, JSDVG_SEARCH_STACK, args[0], nullptr,
+                             "not an object");
             return false;
         }
         compartmentObject = UncheckedUnwrap(&args[1].toObject());
@@ -1354,7 +1330,7 @@ CaptureFirstSubsumedFrame(JSContext* cx, unsigned argc, JS::Value* vp)
         return false;
     }
 
-    JS::StackCapture capture(JS::FirstSubsumedFrame(cx, obj->realm()->principals()));
+    JS::StackCapture capture(JS::FirstSubsumedFrame(cx, obj->nonCCWRealm()->principals()));
     if (args.length() > 1)
         capture.as<JS::FirstSubsumedFrame>().ignoreSelfHosted = JS::ToBoolean(args[1]);
 
@@ -1462,7 +1438,7 @@ NewExternalString(JSContext* cx, unsigned argc, Value* vp)
     RootedString str(cx, args[0].toString());
     size_t len = str->length();
 
-    UniqueTwoByteChars buf(cx->pod_malloc<char16_t>(len));
+    auto buf = cx->make_pod_array<char16_t>(len);
     if (!buf)
         return false;
 
@@ -1491,7 +1467,7 @@ NewMaybeExternalString(JSContext* cx, unsigned argc, Value* vp)
     RootedString str(cx, args[0].toString());
     size_t len = str->length();
 
-    UniqueTwoByteChars buf(cx->pod_malloc<char16_t>(len));
+    auto buf = cx->make_pod_array<char16_t>(len);
     if (!buf)
         return false;
 
@@ -2459,9 +2435,7 @@ ReadGeckoProfilingStack(JSContext* cx, unsigned argc, Value* vp)
             if (!JS_DefineProperty(cx, inlineFrameInfo, "kind", frameKind, propAttrs))
                 return false;
 
-            size_t length = strlen(inlineFrame.label.get());
-            auto label = reinterpret_cast<Latin1Char*>(inlineFrame.label.release());
-            frameLabel = NewString<CanGC>(cx, label, length);
+            frameLabel = NewLatin1StringZ(cx, std::move(inlineFrame.label));
             if (!frameLabel)
                 return false;
 
@@ -2949,7 +2923,7 @@ class CloneBufferObject : public NativeObject {
             return false;
 
         size_t size = data->Size();
-        UniqueChars buffer(static_cast<char*>(js_malloc(size)));
+        UniqueChars buffer(js_pod_malloc<char>(size));
         if (!buffer) {
             ReportOutOfMemory(cx);
             return false;
@@ -2979,16 +2953,21 @@ class CloneBufferObject : public NativeObject {
             return false;
 
         size_t size = data->Size();
-        UniqueChars buffer(static_cast<char*>(js_malloc(size)));
+        UniqueChars buffer(js_pod_malloc<char>(size));
         if (!buffer) {
             ReportOutOfMemory(cx);
             return false;
         }
         auto iter = data->Start();
         data->ReadBytes(iter, buffer.get(), size);
-        JSObject* arrayBuffer = JS_NewArrayBufferWithContents(cx, size, buffer.release());
-        if (!arrayBuffer)
+
+        auto* rawBuffer = buffer.release();
+        JSObject* arrayBuffer = JS_NewArrayBufferWithContents(cx, size, rawBuffer);
+        if (!arrayBuffer) {
+            js_free(rawBuffer);
             return false;
+        }
+
         args.rval().setObject(*arrayBuffer);
         return true;
     }
@@ -3259,7 +3238,7 @@ DisableTraceLogger(JSContext* cx, unsigned argc, Value* vp)
 }
 #endif
 
-#ifdef DEBUG
+#if defined(DEBUG) || defined(JS_JITSPEW)
 static bool
 DumpObject(JSContext* cx, unsigned argc, Value* vp)
 {
@@ -3585,16 +3564,14 @@ FindPath(JSContext* cx, unsigned argc, Value* vp)
     // test is all about object identity, and ToString doesn't preserve that.
     // Non-GCThing endpoints don't make much sense.
     if (!args[0].isObject() && !args[0].isString() && !args[0].isSymbol()) {
-        ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
-                              JSDVG_SEARCH_STACK, args[0], nullptr,
-                              "not an object, string, or symbol", NULL);
+        ReportValueError(cx, JSMSG_UNEXPECTED_TYPE, JSDVG_SEARCH_STACK, args[0], nullptr,
+                         "not an object, string, or symbol");
         return false;
     }
 
     if (!args[1].isObject() && !args[1].isString() && !args[1].isSymbol()) {
-        ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
-                              JSDVG_SEARCH_STACK, args[0], nullptr,
-                              "not an object, string, or symbol", NULL);
+        ReportValueError(cx, JSMSG_UNEXPECTED_TYPE, JSDVG_SEARCH_STACK, args[0], nullptr,
+                         "not an object, string, or symbol");
         return false;
     }
 
@@ -3664,10 +3641,10 @@ FindPath(JSContext* cx, unsigned argc, Value* vp)
 
         heaptools::EdgeName edgeName = std::move(edges[i]);
 
-        RootedString edgeStr(cx, NewString<CanGC>(cx, edgeName.get(), js_strlen(edgeName.get())));
+        size_t edgeNameLength = js_strlen(edgeName.get());
+        RootedString edgeStr(cx, NewString<CanGC>(cx, std::move(edgeName), edgeNameLength));
         if (!edgeStr)
             return false;
-        mozilla::Unused << edgeName.release(); // edgeStr acquired ownership
 
         if (!JS_DefineProperty(cx, obj, "edge", edgeStr, JSPROP_ENUMERATE))
             return false;
@@ -3690,25 +3667,22 @@ ShortestPaths(JSContext* cx, unsigned argc, Value* vp)
     // test is all about object identity, and ToString doesn't preserve that.
     // Non-GCThing endpoints don't make much sense.
     if (!args[0].isObject() && !args[0].isString() && !args[0].isSymbol()) {
-        ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
-                              JSDVG_SEARCH_STACK, args[0], nullptr,
-                              "not an object, string, or symbol", nullptr);
+        ReportValueError(cx, JSMSG_UNEXPECTED_TYPE, JSDVG_SEARCH_STACK, args[0], nullptr,
+                         "not an object, string, or symbol");
         return false;
     }
 
     if (!args[1].isObject() || !args[1].toObject().is<ArrayObject>()) {
-        ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
-                              JSDVG_SEARCH_STACK, args[1], nullptr,
-                              "not an array object", nullptr);
+        ReportValueError(cx, JSMSG_UNEXPECTED_TYPE, JSDVG_SEARCH_STACK, args[1], nullptr,
+                         "not an array object");
         return false;
     }
 
     RootedArrayObject objs(cx, &args[1].toObject().as<ArrayObject>());
     size_t length = objs->getDenseInitializedLength();
     if (length == 0) {
-        ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
-                              JSDVG_SEARCH_STACK, args[1], nullptr,
-                              "not a dense array object with one or more elements", nullptr);
+        ReportValueError(cx, JSMSG_UNEXPECTED_TYPE, JSDVG_SEARCH_STACK, args[1], nullptr,
+                         "not a dense array object with one or more elements");
         return false;
     }
 
@@ -3724,9 +3698,8 @@ ShortestPaths(JSContext* cx, unsigned argc, Value* vp)
     if (!JS::ToInt32(cx, args[2], &maxNumPaths))
         return false;
     if (maxNumPaths <= 0) {
-        ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
-                              JSDVG_SEARCH_STACK, args[2], nullptr,
-                              "not greater than 0", nullptr);
+        ReportValueError(cx, JSMSG_UNEXPECTED_TYPE, JSDVG_SEARCH_STACK, args[2], nullptr,
+                         "not greater than 0");
         return false;
     }
 
@@ -4370,18 +4343,16 @@ GetLcovInfo(JSContext* cx, unsigned argc, Value* vp)
     }
 
     size_t length = 0;
-    char* content = nullptr;
+    UniqueChars content;
     {
         AutoRealm ar(cx, global);
-        content = js::GetCodeCoverageSummary(cx, &length);
+        content.reset(js::GetCodeCoverageSummary(cx, &length));
     }
 
     if (!content)
         return false;
 
-    JSString* str = JS_NewStringCopyN(cx, content, length);
-    js_free(content);
-
+    JSString* str = JS_NewStringCopyN(cx, content.get(), length);
     if (!str)
         return false;
 
@@ -4999,6 +4970,56 @@ AflLoop(JSContext* cx, unsigned argc, Value* vp)
 #endif
 
 static bool
+MonotonicNow(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    double now;
+
+// The std::chrono symbols are too new to be present in STL on all platforms we
+// care about, so use raw POSIX clock APIs when it might be necessary.
+#if defined(XP_UNIX) && !defined(XP_DARWIN)
+    auto ComputeNow = [](const timespec& ts) {
+        return ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    };
+
+    timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+        // Use a monotonic clock if available.
+        now = ComputeNow(ts);
+    } else {
+        // Use a realtime clock as fallback.
+        if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+            // Fail if no clock is available.
+            JS_ReportErrorASCII(cx, "can't retrieve system clock");
+            return false;
+        }
+
+        now = ComputeNow(ts);
+
+        // Manually enforce atomicity on a non-monotonic clock.
+        {
+            static mozilla::Atomic<bool, mozilla::ReleaseAcquire> spinLock;
+            while (!spinLock.compareExchange(false, true))
+                continue;
+
+            static double lastNow = -FLT_MAX;
+            now = lastNow = std::max(now, lastNow);
+
+            spinLock = false;
+        }
+    }
+#else
+    using std::chrono::duration_cast;
+    using std::chrono::milliseconds;
+    using std::chrono::steady_clock;
+    now = duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+#endif // XP_UNIX && !XP_DARWIN
+
+    args.rval().setNumber(now);
+    return true;
+}
+
+static bool
 TimeSinceCreation(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -5120,9 +5141,18 @@ ObjectGlobal(JSContext* cx, unsigned argc, Value* vp)
         return true;
     }
 
-    obj = ToWindowProxyIfWindow(&obj->global());
+    obj = ToWindowProxyIfWindow(&obj->nonCCWGlobal());
 
     args.rval().setObject(*obj);
+    return true;
+}
+
+static bool
+AssertCorrectRealm(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_RELEASE_ASSERT(cx->realm() == args.callee().as<JSFunction>().realm());
+    args.rval().setUndefined();
     return true;
 }
 
@@ -5612,10 +5642,6 @@ gc::ZealModeHelpText),
 "wasmTextToBinary(str)",
 "  Translates the given text wasm module into its binary encoding."),
 
-    JS_FN_HELP("wasmBinaryToText", WasmBinaryToText, 1, 0,
-"wasmBinaryToText(bin)",
-"  Translates binary encoding to text format"),
-
     JS_FN_HELP("wasmExtractCode", WasmExtractCode, 1, 0,
 "wasmExtractCode(module[, tier])",
 "  Extracts generated machine code from WebAssembly.Module.  The tier is a string,\n"
@@ -5766,7 +5792,7 @@ gc::ZealModeHelpText),
 "  paths in each of those arrays is bounded by |maxNumPaths|. Each element in a\n"
 "  path is of the form |{ predecessor, edge }|."),
 
-#ifdef DEBUG
+#if defined(DEBUG) || defined(JS_JITSPEW)
     JS_FN_HELP("dumpObject", DumpObject, 1, 0,
 "dumpObject()",
 "  Dump an internal representation of an object."),
@@ -5895,6 +5921,11 @@ gc::ZealModeHelpText),
 "  Call the __AFL_LOOP() runtime function (see AFL docs)\n"),
 #endif
 
+    JS_FN_HELP("monotonicNow", MonotonicNow, 0, 0,
+"monotonicNow()",
+"  Return a timestamp reflecting the current elapsed system time.\n"
+"  This is monotonically increasing.\n"),
+
     JS_FN_HELP("timeSinceCreation", TimeSinceCreation, 0, 0,
 "TimeSinceCreation()",
 "  Returns the time in milliseconds since process creation.\n"
@@ -5924,6 +5955,10 @@ gc::ZealModeHelpText),
     JS_FN_HELP("objectGlobal", ObjectGlobal, 1, 0,
 "objectGlobal(obj)",
 "  Returns the object's global object or null if the object is a wrapper.\n"),
+
+    JS_FN_HELP("assertCorrectRealm", AssertCorrectRealm, 0, 0,
+"assertCorrectRealm()",
+"  Asserts cx->realm matches callee->raelm.\n"),
 
     JS_FN_HELP("baselineCompile", BaselineCompile, 2, 0,
 "baselineCompile([fun/code], forceDebugInstrumentation=false)",

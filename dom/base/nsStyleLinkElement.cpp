@@ -76,6 +76,7 @@ nsStyleLinkElement::nsStyleLinkElement()
   : mDontLoadStyle(false)
   , mUpdatesEnabled(true)
   , mLineNumber(1)
+  , mColumnNumber(1)
 {
 }
 
@@ -176,8 +177,8 @@ nsStyleLinkElement::GetCharset(nsAString& aCharset)
 /* virtual */ void
 nsStyleLinkElement::OverrideBaseURI(nsIURI* aNewBaseURI)
 {
-  NS_NOTREACHED("Base URI can't be overriden in this implementation "
-                "of nsIStyleSheetLinkingElement.");
+  MOZ_ASSERT_UNREACHABLE("Base URI can't be overriden in this implementation "
+                         "of nsIStyleSheetLinkingElement.");
 }
 
 /* virtual */ void
@@ -190,6 +191,18 @@ nsStyleLinkElement::SetLineNumber(uint32_t aLineNumber)
 nsStyleLinkElement::GetLineNumber()
 {
   return mLineNumber;
+}
+
+/* virtual */ void
+nsStyleLinkElement::SetColumnNumber(uint32_t aColumnNumber)
+{
+  mColumnNumber = aColumnNumber;
+}
+
+/* virtual */ uint32_t
+nsStyleLinkElement::GetColumnNumber()
+{
+  return mColumnNumber;
 }
 
 static uint32_t ToLinkMask(const nsAString& aLink)
@@ -292,14 +305,6 @@ nsStyleLinkElement::DoUpdateStyleSheet(nsIDocument* aOldDocument,
     return Update { };
   }
 
-  // Check for a ShadowRoot because link elements are inert in a
-  // ShadowRoot.
-  ShadowRoot* containingShadow = thisContent->GetContainingShadow();
-  if (thisContent->IsHTMLElement(nsGkAtoms::link) &&
-      (aOldShadowRoot || containingShadow)) {
-    return Update { };
-  }
-
   if (mStyleSheet && (aOldDocument || aOldShadowRoot)) {
     MOZ_ASSERT(!(aOldDocument && aOldShadowRoot),
                "ShadowRoot content is never in document, thus "
@@ -310,25 +315,30 @@ nsStyleLinkElement::DoUpdateStyleSheet(nsIDocument* aOldDocument,
     // unload the stylesheet.  We want to do this even if updates are
     // disabled, since otherwise a sheet with a stale linking element pointer
     // will be hanging around -- not good!
+    //
+    // TODO(emilio): We can reach this code with aOldShadowRoot ==
+    // thisContent->GetContainingShadowRoot(), when moving the shadow host
+    // around. We probably could optimize some of this stuff out, is it worth
+    // it?
     if (aOldShadowRoot) {
       aOldShadowRoot->RemoveSheet(mStyleSheet);
     } else {
       aOldDocument->RemoveStyleSheet(mStyleSheet);
     }
 
-    nsStyleLinkElement::SetStyleSheet(nullptr);
+    SetStyleSheet(nullptr);
   }
 
-  // When static documents are created, stylesheets are cloned manually.
-  if (mDontLoadStyle || !mUpdatesEnabled ||
-      thisContent->OwnerDoc()->IsStaticDocument()) {
+  nsIDocument* doc = thisContent->IsInShadowTree()
+    ? thisContent->OwnerDoc() : thisContent->GetUncomposedDoc();
+
+  // Loader could be null during unlink, see bug 1425866.
+  if (!doc || !doc->CSSLoader() || !doc->CSSLoader()->GetEnabled()) {
     return Update { };
   }
 
-  nsCOMPtr<nsIDocument> doc = thisContent->IsInShadowTree() ?
-    thisContent->OwnerDoc() : thisContent->GetUncomposedDoc();
-  // Loader could be null during unlink, see bug 1425866.
-  if (!doc || !doc->CSSLoader() || !doc->CSSLoader()->GetEnabled()) {
+  // When static documents are created, stylesheets are cloned manually.
+  if (mDontLoadStyle || !mUpdatesEnabled || doc->IsStaticDocument()) {
     return Update { };
   }
 
@@ -384,7 +394,8 @@ nsStyleLinkElement::DoUpdateStyleSheet(nsIDocument* aOldDocument,
                                            thisContent->NodePrincipal(),
                                            info->mTriggeringPrincipal,
                                            doc->GetDocumentURI(),
-                                           mLineNumber, text, &rv)) {
+                                           mLineNumber, mColumnNumber, text,
+                                           &rv)) {
       if (NS_FAILED(rv)) {
         return Err(rv);
       }
@@ -394,15 +405,15 @@ nsStyleLinkElement::DoUpdateStyleSheet(nsIDocument* aOldDocument,
     // Parse the style sheet.
     return doc->CSSLoader()->LoadInlineStyle(*info, text, mLineNumber, aObserver);
   }
-  nsAutoString integrity;
   if (thisContent->IsElement()) {
+    nsAutoString integrity;
     thisContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::integrity,
                                       integrity);
-  }
-  if (!integrity.IsEmpty()) {
-    MOZ_LOG(SRILogHelper::GetSriLog(), mozilla::LogLevel::Debug,
-            ("nsStyleLinkElement::DoUpdateStyleSheet, integrity=%s",
-             NS_ConvertUTF16toUTF8(integrity).get()));
+    if (!integrity.IsEmpty()) {
+      MOZ_LOG(SRILogHelper::GetSriLog(), mozilla::LogLevel::Debug,
+              ("nsStyleLinkElement::DoUpdateStyleSheet, integrity=%s",
+               NS_ConvertUTF16toUTF8(integrity).get()));
+    }
   }
   auto resultOrError = doc->CSSLoader()->LoadStyleLink(*info, aObserver);
   if (resultOrError.isErr()) {

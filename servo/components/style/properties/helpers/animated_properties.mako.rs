@@ -25,16 +25,17 @@ use servo_arc::Arc;
 use smallvec::SmallVec;
 use std::{cmp, ptr};
 use std::mem::{self, ManuallyDrop};
-#[cfg(feature = "gecko")] use hash::FnvHashMap;
+use hash::FnvHashMap;
 use super::ComputedValues;
 use values::CSSFloat;
 use values::animated::{Animate, Procedure, ToAnimatedValue, ToAnimatedZero};
 use values::animated::color::RGBA as AnimatedRGBA;
 use values::animated::effects::Filter as AnimatedFilter;
+#[cfg(feature = "gecko")] use values::computed::TransitionProperty;
 use values::computed::{Angle, CalcLengthOrPercentage};
 use values::computed::{ClipRect, Context};
 use values::computed::{Length, LengthOrPercentage, LengthOrPercentageOrAuto};
-use values::computed::{LengthOrPercentageOrNone, MaxLength, TransitionProperty};
+use values::computed::{LengthOrPercentageOrNone, MaxLength};
 use values::computed::{NonNegativeNumber, Number, NumberOrPercentage, Percentage};
 use values::computed::length::NonNegativeLengthOrPercentage;
 use values::computed::ToComputedValue;
@@ -228,8 +229,8 @@ impl AnimatedProperty {
 /// A collection of AnimationValue that were composed on an element.
 /// This HashMap stores the values that are the last AnimationValue to be
 /// composed for each TransitionProperty.
-#[cfg(feature = "gecko")]
 pub type AnimationValueMap = FnvHashMap<LonghandId, AnimationValue>;
+
 #[cfg(feature = "gecko")]
 unsafe impl HasFFI for AnimationValueMap {
     type FFIType = RawServoAnimationValueMap;
@@ -1738,7 +1739,9 @@ impl Animate for Quaternion {
 
         let (this_weight, other_weight) = procedure.weights();
         debug_assert!(
-            (this_weight + other_weight - 1.0f64).abs() <= f64::EPSILON ||
+            // Doule EPSILON since both this_weight and other_weght have calculation errors
+            // which are approximately equal to EPSILON.
+            (this_weight + other_weight - 1.0f64).abs() <= f64::EPSILON * 2.0 ||
             other_weight == 1.0f64 || other_weight == 0.0f64,
             "animate should only be used for interpolating or accumulating transforms"
         );

@@ -293,12 +293,10 @@ public:
 class XPCRootSetElem
 {
 public:
-    XPCRootSetElem()
+    XPCRootSetElem() :
+        mNext(nullptr),
+        mSelfp(nullptr)
     {
-#ifdef DEBUG
-        mNext = nullptr;
-        mSelfp = nullptr;
-#endif
     }
 
     ~XPCRootSetElem()
@@ -577,8 +575,7 @@ public:
     size_t SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf);
 
     JSObject* UnprivilegedJunkScope() { return mUnprivilegedJunkScope; }
-    JSObject* PrivilegedJunkScope() { return mPrivilegedJunkScope; }
-    JSObject* CompilationScope() { return mCompilationScope; }
+    JSObject* LoaderGlobal();
 
     void InitSingletonScopes();
     void DeleteSingletonScopes();
@@ -613,8 +610,7 @@ private:
     JS::GCSliceCallback mPrevGCSliceCallback;
     JS::DoCycleCollectionCallback mPrevDoCycleCollectionCallback;
     JS::PersistentRootedObject mUnprivilegedJunkScope;
-    JS::PersistentRootedObject mPrivilegedJunkScope;
-    JS::PersistentRootedObject mCompilationScope;
+    JS::PersistentRootedObject mLoaderGlobal;
     RefPtr<AsyncFreeSnowWhite> mAsyncSnowWhiteFreer;
 
     friend class XPCJSContext;

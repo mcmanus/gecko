@@ -8,6 +8,7 @@ from __future__ import absolute_import
 import json
 import os
 import sys
+import time
 
 import mozinfo
 
@@ -44,6 +45,7 @@ class Raptor(object):
         self.config['app'] = app
         self.config['binary'] = binary
         self.config['platform'] = mozinfo.os
+        self.config['processor'] = mozinfo.processor
         self.config['run_local'] = run_local
         self.config['obj_path'] = obj_path
         self.raptor_venv = os.path.join(os.getcwd(), 'raptor-venv')
@@ -76,6 +78,8 @@ class Raptor(object):
         self.runner = runner_cls(
             binary, profile=self.profile, process_args=process_args)
 
+        self.log.info("raptor config: %s" % str(self.config))
+
     @property
     def profile_data_dir(self):
         if 'MOZ_DEVELOPER_REPO_DIR' in os.environ:
@@ -98,6 +102,7 @@ class Raptor(object):
         _key = 'playback_pageset_zip_%s' % self.config['platform']
         self.config['playback_pageset_zip'] = test.get(_key, None)
         self.config['playback_recordings'] = test.get('playback_recordings', None)
+        self.config['python3_win_manifest'] = test.get('python3_win_manifest', None)
 
     def run_test(self, test, timeout=None):
         self.log.info("starting raptor test: %s" % test['name'])
@@ -120,7 +125,9 @@ class Raptor(object):
         raptor_webext = os.path.join(webext_dir, 'raptor')
         self.log.info("installing webext %s" % raptor_webext)
         self.profile.addons.install(raptor_webext)
-        webext_id = self.profile.addons.addon_details(raptor_webext)['id']
+        # on firefox we can get an addon id; chrome addon actually is just cmd line arg
+        if self.config['app'] == "firefox":
+            webext_id = self.profile.addons.addon_details(raptor_webext)['id']
 
         # some tests require tools to playback the test pages
         if test.get('playback', None) is not None:
@@ -133,9 +140,18 @@ class Raptor(object):
         proc = self.runner.process_handler
         self.output_handler.proc = proc
         self.control_server.browser_proc = proc
+        self.control_server._finished = False
 
+        # convert to seconds and account for page cycles
+        timeout = int(timeout / 1000) * int(test['page_cycles'])
         try:
-            self.runner.wait(timeout)
+            elapsed_time = 0
+            while not self.control_server._finished:
+                time.sleep(1)
+                elapsed_time += 1
+                if elapsed_time > (timeout) - 5:  # stop 5 seconds early
+                    self.control_server.wait_for_quit()
+                    break
         finally:
             try:
                 self.runner.check_for_crashes()
@@ -146,11 +162,13 @@ class Raptor(object):
             self.playback.stop()
 
         # remove the raptor webext; as it must be reloaded with each subtest anyway
-        self.log.info("removing webext %s" % raptor_webext)
-        self.profile.addons.remove_addon(webext_id)
+        # applies to firefox only; chrome the addon is actually just cmd line arg
+        if self.config['app'] == "firefox":
+            self.log.info("removing webext %s" % raptor_webext)
+            self.profile.addons.remove_addon(webext_id)
 
         if self.runner.is_running():
-            self.log("Application timed out after {} seconds".format(timeout))
+            self.log.info("Application timed out after {} seconds".format(timeout))
             self.runner.stop()
 
     def process_results(self):
@@ -179,9 +197,12 @@ def main(args=sys.argv[1:]):
     commandline.setup_logging('raptor', args, {'tbpl': sys.stdout})
     LOG = get_default_logger(component='raptor-main')
 
+    LOG.info("raptor-start")
+    LOG.info("received command line arguments: %s" % str(args))
+
     # if a test name specified on command line, and it exists, just run that one
     # otherwise run all available raptor tests that are found for this browser
-    raptor_test_list = get_raptor_test_list(args)
+    raptor_test_list = get_raptor_test_list(args, mozinfo.os)
 
     # ensure we have at least one valid test to run
     if len(raptor_test_list) == 0:
@@ -197,7 +218,11 @@ def main(args=sys.argv[1:]):
     raptor.start_control_server()
 
     for next_test in raptor_test_list:
-        raptor.run_test(next_test)
+        if 'page_timeout' not in next_test.keys():
+            next_test['page_timeout'] = 120000
+        if 'page_cycles' not in next_test.keys():
+            next_test['page_cycles'] = 1
+        raptor.run_test(next_test, timeout=int(next_test['page_timeout']))
 
     success = raptor.process_results()
     raptor.clean_up()

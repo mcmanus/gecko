@@ -1746,7 +1746,7 @@ APZCTreeManager::ProcessTouchInputForScrollbarDrag(MultiTouchInput& aTouchInput,
   // reuse code in InputQueue and APZC for handling scrollbar mouse-drags.
   MouseInput mouseInput{MultiTouchTypeToMouseType(aTouchInput.mType),
                         MouseInput::LEFT_BUTTON,
-                        dom::MouseEventBinding::MOZ_SOURCE_TOUCH,
+                        dom::MouseEvent_Binding::MOZ_SOURCE_TOUCH,
                         WidgetMouseEvent::eLeftButtonFlag,
                         aTouchInput.mTouches[0].mScreenPoint,
                         aTouchInput.mTime,
@@ -2040,15 +2040,6 @@ APZCTreeManager::SetTargetAPZC(uint64_t aInputBlockId,
     target = GetMultitouchTarget(target, apzc);
   }
   mInputQueue->SetConfirmedTargetApzc(aInputBlockId, target);
-}
-
-void
-APZCTreeManager::SetTargetAPZC(uint64_t aInputBlockId, const ScrollableLayerGuid& aTarget)
-{
-  APZThreadUtils::AssertOnControllerThread();
-
-  RefPtr<AsyncPanZoomController> apzc = GetTargetAPZC(aTarget);
-  mInputQueue->SetConfirmedTargetApzc(aInputBlockId, apzc);
 }
 
 void
@@ -2469,7 +2460,7 @@ APZCTreeManager::GetTargetAPZC(const ScreenPoint& aPoint,
   CompositorHitTestInfo hitResult = CompositorHitTestInfo::eInvisibleToHitTest;
   HitTestingTreeNode* scrollbarNode = nullptr;
   RefPtr<AsyncPanZoomController> target;
-  if (gfx::gfxVars::UseWebRender() && gfxPrefs::WebRenderHitTest()) {
+  if (gfx::gfxVars::UseWebRender()) {
     target = GetAPZCAtPointWR(aPoint, &hitResult, &scrollbarNode);
   } else {
     target = GetAPZCAtPoint(mRootNode, aPoint, &hitResult, &scrollbarNode);

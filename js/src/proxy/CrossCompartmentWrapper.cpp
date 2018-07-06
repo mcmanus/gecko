@@ -11,8 +11,9 @@
 #include "vm/WrapperObject.h"
 
 #include "gc/Nursery-inl.h"
-#include "vm/JSCompartment-inl.h"
+#include "vm/Compartment-inl.h"
 #include "vm/JSObject-inl.h"
+#include "vm/Realm-inl.h"
 
 using namespace js;
 
@@ -491,7 +492,7 @@ CrossCompartmentWrapper::boxedValue_unbox(JSContext* cx, HandleObject wrapper, M
 const CrossCompartmentWrapper CrossCompartmentWrapper::singleton(0u);
 
 bool
-js::IsCrossCompartmentWrapper(JSObject* obj)
+js::IsCrossCompartmentWrapper(const JSObject* obj)
 {
     return IsWrapper(obj) &&
            !!(Wrapper::wrapperHandler(obj)->flags() & Wrapper::CROSS_COMPARTMENT);
@@ -613,7 +614,7 @@ js::RemapWrapper(JSContext* cx, JSObject* wobjArg, JSObject* newTargetArg)
     MOZ_ASSERT(!JS_IsDeadWrapper(origTarget),
                "We don't want a dead proxy in the wrapper map");
     Value origv = ObjectValue(*origTarget);
-    Realm* wrealm = wobj->realm();
+    Realm* wrealm = wobj->deprecatedRealm();
     JS::Compartment* wcompartment = wobj->compartment();
 
     AutoDisableProxyCheck adpc;

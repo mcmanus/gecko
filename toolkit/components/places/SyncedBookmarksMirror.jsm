@@ -51,10 +51,10 @@
 
 var EXPORTED_SYMBOLS = ["SyncedBookmarksMirror"];
 
-Cu.importGlobalProperties(["URL"]);
-
 ChromeUtils.import("resource://gre/modules/Services.jsm");
 ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
+
+XPCOMUtils.defineLazyGlobalGetters(this, ["URL"]);
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   Async: "resource://services-common/async.js",
@@ -105,6 +105,7 @@ XPCOMUtils.defineLazyGetter(this, "LocalItemsSQLFragment", () => `
            s.isSyncable, s.level + 1
     FROM moz_bookmarks b
     JOIN localItems s ON s.id = b.parent
+    WHERE b.guid <> '${PlacesUtils.bookmarks.rootGuid}'
   )
 `);
 
@@ -112,7 +113,6 @@ XPCOMUtils.defineLazyGetter(this, "LocalItemsSQLFragment", () => `
 // 1375896).
 const DB_URL_LENGTH_MAX = 65536;
 const DB_TITLE_LENGTH_MAX = 4096;
-const DB_DESCRIPTION_LENGTH_MAX = 256;
 
 const SQLITE_MAX_VARIABLE_NUMBER = 999;
 
@@ -131,9 +131,9 @@ function yieldingIterator(collection) {
  * It is persistent.
  *
  * The mirror schema is a hybrid of how Sync and Places represent bookmarks.
- * The `items` table contains item attributes (title, kind, description,
- * URL, etc.), while the `structure` table stores parent-child relationships and
- * position. This is similar to how iOS encodes "value" and "structure" state,
+ * The `items` table contains item attributes (title, kind, URL, etc.), while
+ * the `structure` table stores parent-child relationships and position.
+ * This is similar to how iOS encodes "value" and "structure" state,
  * though we handle these differently when merging. See `BookmarkMerger` for
  * details.
  *
@@ -424,6 +424,11 @@ class SyncedBookmarksMirror {
       return {};
     }
 
+    if (!(await this.validLocalRoots())) {
+      throw new SyncedBookmarksMirror.ConsistencyError(
+        "Local tree has misparented root");
+    }
+
     // The flow ID is used to correlate telemetry events for each sync.
     let flowID = PlacesUtils.history.makeGuid();
 
@@ -671,22 +676,19 @@ class SyncedBookmarksMirror {
     let dateAdded = determineDateAdded(record);
     let title = validateTitle(record.title);
     let keyword = validateKeyword(record.keyword);
-    let description = validateDescription(record.description);
-    let loadInSidebar = record.loadInSidebar === true ? "1" : null;
 
     await this.db.executeCached(`
       REPLACE INTO items(guid, serverModified, needsMerge, kind,
                          dateAdded, title, keyword,
-                         urlId, description, loadInSidebar)
+                         urlId)
       VALUES(:guid, :serverModified, :needsMerge, :kind,
              :dateAdded, NULLIF(:title, ""), :keyword,
              (SELECT id FROM urls
               WHERE hash = hash(:url) AND
-                    url = :url),
-             :description, :loadInSidebar)`,
+                    url = :url))`,
       { guid, serverModified, needsMerge,
         kind: SyncedBookmarksMirror.KIND.BOOKMARK, dateAdded, title, keyword,
-        url: url.href, description, loadInSidebar });
+        url: url.href });
 
     let tags = record.tags;
     if (tags && Array.isArray(tags)) {
@@ -746,23 +748,18 @@ class SyncedBookmarksMirror {
     let serverModified = determineServerModified(record);
     let dateAdded = determineDateAdded(record);
     let title = validateTitle(record.title);
-    let description = validateDescription(record.description);
-    let smartBookmarkName = typeof record.queryId == "string" ?
-                            record.queryId : null;
 
     await this.db.executeCached(`
       REPLACE INTO items(guid, serverModified, needsMerge, kind,
-                         dateAdded, title, urlId, description,
-                         smartBookmarkName)
+                         dateAdded, title, urlId)
       VALUES(:guid, :serverModified, :needsMerge, :kind,
              :dateAdded, NULLIF(:title, ""),
              (SELECT id FROM urls
               WHERE hash = hash(:url) AND
-                    url = :url),
-             :description, :smartBookmarkName)`,
+                    url = :url))`,
       { guid, serverModified, needsMerge,
         kind: SyncedBookmarksMirror.KIND.QUERY, dateAdded, title,
-        url: url.href, description, smartBookmarkName });
+        url: url.href });
   }
 
   async storeRemoteFolder(record, { needsMerge }) {
@@ -779,16 +776,14 @@ class SyncedBookmarksMirror {
     let serverModified = determineServerModified(record);
     let dateAdded = determineDateAdded(record);
     let title = validateTitle(record.title);
-    let description = validateDescription(record.description);
 
     await this.db.executeCached(`
       REPLACE INTO items(guid, serverModified, needsMerge, kind,
-                         dateAdded, title, description)
+                         dateAdded, title)
       VALUES(:guid, :serverModified, :needsMerge, :kind,
-             :dateAdded, NULLIF(:title, ""),
-             :description)`,
+             :dateAdded, NULLIF(:title, ""))`,
       { guid, serverModified, needsMerge, kind: SyncedBookmarksMirror.KIND.FOLDER,
-        dateAdded, title, description });
+        dateAdded, title });
 
     let children = record.children;
     if (children && Array.isArray(children)) {
@@ -802,8 +797,7 @@ class SyncedBookmarksMirror {
                                                           childRecordId });
           continue;
         }
-        if (childGuid == PlacesUtils.bookmarks.rootGuid ||
-            PlacesUtils.bookmarks.userContentRoots.includes(childGuid)) {
+        if (childGuid == PlacesUtils.bookmarks.rootGuid) {
           MirrorLog.warn("Ignoring move for root", childGuid);
           continue;
         }
@@ -820,8 +814,7 @@ class SyncedBookmarksMirror {
     // treatment. We ignore the four syncable roots, since they're already in
     // the mirror.
     let parentGuid = validateGuid(record.parentid);
-    if (parentGuid == PlacesUtils.bookmarks.rootGuid &&
-        !PlacesUtils.bookmarks.userContentRoots.includes(guid)) {
+    if (parentGuid == PlacesUtils.bookmarks.rootGuid) {
         await this.db.executeCached(`
           INSERT OR IGNORE INTO structure(guid, parentGuid, position)
           VALUES(:guid, :parentGuid, -1)`,
@@ -846,17 +839,16 @@ class SyncedBookmarksMirror {
     let serverModified = determineServerModified(record);
     let dateAdded = determineDateAdded(record);
     let title = validateTitle(record.title);
-    let description = validateDescription(record.description);
     let siteURL = validateURL(record.siteUri);
 
     await this.db.executeCached(`
       REPLACE INTO items(guid, serverModified, needsMerge, kind, dateAdded,
-                         title, description, feedURL, siteURL)
+                         title, feedURL, siteURL)
       VALUES(:guid, :serverModified, :needsMerge, :kind, :dateAdded,
-             NULLIF(:title, ""), :description, :feedURL, :siteURL)`,
+             NULLIF(:title, ""), :feedURL, :siteURL)`,
       { guid, serverModified, needsMerge,
         kind: SyncedBookmarksMirror.KIND.LIVEMARK,
-        dateAdded, title, description, feedURL: feedURL.href,
+        dateAdded, title, feedURL: feedURL.href,
         siteURL: siteURL ? siteURL.href : null });
   }
 
@@ -886,8 +878,7 @@ class SyncedBookmarksMirror {
       return;
     }
 
-    if (guid == PlacesUtils.bookmarks.rootGuid ||
-        PlacesUtils.bookmarks.userContentRoots.includes(guid)) {
+    if (guid == PlacesUtils.bookmarks.rootGuid) {
       MirrorLog.warn("Ignoring tombstone for root", guid);
       return;
     }
@@ -932,9 +923,11 @@ class SyncedBookmarksMirror {
       SELECT s.parentGuid AS guid, 0 AS missingParent, 0 AS missingChild,
              1 AS parentWithGaps
       FROM structure s
+      WHERE s.guid <> :rootGuid
       GROUP BY s.parentGuid
       HAVING (sum(DISTINCT position + 1) -
-                  (count(*) * (count(*) + 1) / 2)) <> 0`);
+                  (count(*) * (count(*) + 1) / 2)) <> 0`,
+      { rootGuid: PlacesUtils.bookmarks.rootGuid });
 
     for await (let row of yieldingIterator(orphanRows)) {
       let guid = row.getResultByName("guid");
@@ -1066,6 +1059,30 @@ class SyncedBookmarksMirror {
   }
 
   /**
+   * Ensures that all local roots are parented correctly. Misparented roots
+   * (bug 1453994, bug 1472127) might produce an invalid tree, so we check
+   * before merging, and rely on Places to reparent any invalid roots after
+   * the next restart or maintenance run.
+   *
+   * @return {Boolean}
+   *         `true` if the Places root, and four syncable roots, are parented
+   *         correctly.
+   */
+  async validLocalRoots() {
+    let rows = await this.db.execute(`
+      SELECT EXISTS(SELECT 1 FROM moz_bookmarks
+                    WHERE guid = '${PlacesUtils.bookmarks.rootGuid}' AND
+                          parent = 0) AND
+             (SELECT COUNT(*) FROM moz_bookmarks b
+              JOIN moz_bookmarks p ON p.id = b.parent
+              WHERE b.guid IN (${PlacesUtils.bookmarks.userContentRoots.map(
+                v => `'${v}'`)}) AND
+                    p.guid = '${PlacesUtils.bookmarks.rootGuid}') =
+             ${PlacesUtils.bookmarks.userContentRoots.length} AS areValid`);
+    return !!rows[0].getResultByName("areValid");
+  }
+
+  /**
    * Builds a fully rooted, consistent tree from the items and tombstones in the
    * mirror.
    *
@@ -1148,7 +1165,7 @@ class SyncedBookmarksMirror {
     let newRemoteContents = new Map();
 
     let rows = await this.db.execute(`
-      SELECT v.guid, IFNULL(v.title, "") AS title, u.url, v.smartBookmarkName,
+      SELECT v.guid, IFNULL(v.title, "") AS title, u.url,
              IFNULL(s.position, -1) AS position
       FROM items v
       LEFT JOIN urls u ON u.id = v.urlId
@@ -1249,10 +1266,6 @@ class SyncedBookmarksMirror {
 
     let rows = await this.db.execute(`
       SELECT b.guid, IFNULL(b.title, "") AS title, h.url,
-             (SELECT a.content FROM moz_items_annos a
-              JOIN moz_anno_attributes n ON n.id = a.anno_attribute_id
-              WHERE a.item_id = b.id AND
-                    n.name = :smartBookmarkAnno) AS smartBookmarkName,
              b.position
       FROM moz_bookmarks b
       JOIN moz_bookmarks p ON p.id = b.parent
@@ -1261,8 +1274,7 @@ class SyncedBookmarksMirror {
       WHERE v.guid IS NULL AND
             p.guid <> :rootGuid AND
             b.syncStatus <> :syncStatus`,
-      { smartBookmarkAnno: PlacesSyncUtils.bookmarks.SMART_BOOKMARKS_ANNO,
-        rootGuid: PlacesUtils.bookmarks.rootGuid,
+      { rootGuid: PlacesUtils.bookmarks.rootGuid,
         syncStatus: PlacesUtils.bookmarks.SYNC_STATUS.NORMAL });
 
     for await (let row of yieldingIterator(rows)) {
@@ -1497,16 +1509,24 @@ class SyncedBookmarksMirror {
 
     MirrorLog.trace("Recording observer notifications for changed annos");
     let annoRows = await this.db.execute(`
-      SELECT itemId, annoName, wasRemoved FROM annosChanged
-      ORDER BY itemId`);
+      SELECT b.id, b.guid, b.lastModified, b.type, p.id AS parentId,
+             p.guid AS parentGuid, c.annoName, c.wasRemoved
+      FROM annosChanged c
+      JOIN moz_bookmarks b ON b.id = c.itemId
+      JOIN moz_bookmarks p ON p.id = b.parent
+      LEFT JOIN moz_places h ON h.id = b.fk
+      ORDER BY p.id, b.position, c.wasRemoved <> 1`);
     for await (let row of yieldingIterator(annoRows)) {
-      let id = row.getResultByName("itemId");
-      let name = row.getResultByName("annoName");
-      if (row.getResultByName("wasRemoved")) {
-        observersToNotify.noteAnnoRemoved(id, name);
-      } else {
-        observersToNotify.noteAnnoSet(id, name);
-      }
+      observersToNotify.noteAnnoChanged({
+        id: row.getResultByName("id"),
+        name: row.getResultByName("annoName"),
+        wasRemoved: !!row.getResultByName("wasRemoved"),
+        guid: row.getResultByName("guid"),
+        lastModified: row.getResultByName("lastModified"),
+        type: row.getResultByName("type"),
+        parentId: row.getResultByName("parentId"),
+        parentGuid: row.getResultByName("parentGuid"),
+      });
     }
 
     MirrorLog.trace("Recording notifications for changed keywords");
@@ -1573,8 +1593,7 @@ class SyncedBookmarksMirror {
       ${LocalItemsSQLFragment}
       INSERT INTO itemsToUpload(id, guid, syncChangeCounter, parentGuid,
                                 parentTitle, dateAdded, type, title, isQuery,
-                                url, tags, description, loadInSidebar,
-                                smartBookmarkName, keyword, feedURL, siteURL,
+                                url, tags, keyword, feedURL, siteURL,
                                 position, tagFolderName)
       SELECT s.id, s.guid, s.syncChangeCounter, s.parentGuid, s.parentTitle,
              s.dateAdded / 1000, s.type, s.title,
@@ -1586,19 +1605,6 @@ class SyncedBookmarksMirror {
               WHERE s.type = :bookmarkType AND
                     r.guid = :tagsGuid AND
                     e.fk = h.id),
-             (SELECT a.content FROM moz_items_annos a
-              JOIN moz_anno_attributes n ON n.id = a.anno_attribute_id
-              WHERE s.type IN (:bookmarkType, :folderType) AND
-                    a.item_id = s.id AND
-                    n.name = :descriptionAnno),
-             IFNULL((SELECT a.content FROM moz_items_annos a
-                     JOIN moz_anno_attributes n ON n.id = a.anno_attribute_id
-                     WHERE a.item_id = s.id AND
-                           n.name = :sidebarAnno), 0),
-             (SELECT a.content FROM moz_items_annos a
-              JOIN moz_anno_attributes n ON n.id = a.anno_attribute_id
-              WHERE a.item_id = s.id AND
-                    n.name = :smartBookmarkAnno),
              (SELECT keyword FROM moz_keywords WHERE place_id = h.id),
              (SELECT a.content FROM moz_items_annos a
               JOIN moz_anno_attributes n ON n.id = a.anno_attribute_id
@@ -1620,9 +1626,6 @@ class SyncedBookmarksMirror {
             w.id NOT NULL`,
       { bookmarkType: PlacesUtils.bookmarks.TYPE_BOOKMARK,
         tagsGuid: PlacesUtils.bookmarks.tagsGuid,
-        descriptionAnno: PlacesSyncUtils.bookmarks.DESCRIPTION_ANNO,
-        sidebarAnno: PlacesSyncUtils.bookmarks.SIDEBAR_ANNO,
-        smartBookmarkAnno: PlacesSyncUtils.bookmarks.SMART_BOOKMARKS_ANNO,
         folderType: PlacesUtils.bookmarks.TYPE_FOLDER,
         feedURLAnno: PlacesUtils.LMANNO_FEEDURI,
         siteURLAnno: PlacesUtils.LMANNO_SITEURI });
@@ -1670,9 +1673,8 @@ class SyncedBookmarksMirror {
 
     let itemRows = await this.db.execute(`
       SELECT id, syncChangeCounter, guid, isDeleted, type, isQuery,
-             smartBookmarkName, tagFolderName,
-             loadInSidebar, keyword, tags, url, IFNULL(title, "") AS title,
-             description, feedURL, siteURL, position, parentGuid,
+             tagFolderName, keyword, tags, url, IFNULL(title, "") AS title,
+             feedURL, siteURL, position, parentGuid,
              IFNULL(parentTitle, "") AS parentTitle, dateAdded
       FROM itemsToUpload`);
 
@@ -1719,14 +1721,9 @@ class SyncedBookmarksMirror {
               dateAdded: row.getResultByName("dateAdded") || undefined,
               bmkUri: row.getResultByName("url"),
               title: row.getResultByName("title"),
-              queryId: row.getResultByName("smartBookmarkName"),
               // folderName should never be an empty string or null
               folderName: row.getResultByName("tagFolderName") || undefined,
             };
-            let description = row.getResultByName("description");
-            if (description) {
-              queryCleartext.description = description;
-            }
             changeRecords[recordId] = new BookmarkChangeRecord(
               syncChangeCounter, queryCleartext);
             continue;
@@ -1742,14 +1739,6 @@ class SyncedBookmarksMirror {
             bmkUri: row.getResultByName("url"),
             title: row.getResultByName("title"),
           };
-          let description = row.getResultByName("description");
-          if (description) {
-            bookmarkCleartext.description = description;
-          }
-          let loadInSidebar = row.getResultByName("loadInSidebar");
-          if (loadInSidebar) {
-            bookmarkCleartext.loadInSidebar = true;
-          }
           let keyword = row.getResultByName("keyword");
           if (keyword) {
             bookmarkCleartext.keyword = keyword;
@@ -1778,10 +1767,6 @@ class SyncedBookmarksMirror {
               title: row.getResultByName("title"),
               feedUri: feedURLHref,
             };
-            let description = row.getResultByName("description");
-            if (description) {
-              livemarkCleartext.description = description;
-            }
             let siteURLHref = row.getResultByName("siteURL");
             if (siteURLHref) {
               livemarkCleartext.siteUri = siteURLHref;
@@ -1800,10 +1785,6 @@ class SyncedBookmarksMirror {
             dateAdded: row.getResultByName("dateAdded") || undefined,
             title: row.getResultByName("title"),
           };
-          let description = row.getResultByName("description");
-          if (description) {
-            folderCleartext.description = description;
-          }
           let localId = row.getResultByName("id");
           let childRecordIds = childRecordIdsByLocalParentId.get(localId);
           folderCleartext.children = childRecordIds || [];
@@ -1971,6 +1952,8 @@ async function initializeMirrorDatabase(db) {
     value NOT NULL
   )`);
 
+  // Note: description and loadInSidebar are not used as of Firefox 63, but
+  // remain to avoid rebuilding the database if the user happens to downgrade.
   await db.execute(`CREATE TABLE mirror.items(
     id INTEGER PRIMARY KEY,
     guid TEXT UNIQUE NOT NULL,
@@ -2085,18 +2068,6 @@ async function initializeTempMirrorEntities(db) {
   // We use this table to build SQL fragments for the `insertNewLocalItems` and
   // `updateExistingLocalItems` triggers below.
   const syncedAnnoTriggers = [{
-    annoName: PlacesSyncUtils.bookmarks.DESCRIPTION_ANNO,
-    columnName: "newDescription",
-    type: PlacesUtils.annotations.TYPE_STRING,
-  }, {
-    annoName: PlacesSyncUtils.bookmarks.SIDEBAR_ANNO,
-    columnName: "newLoadInSidebar",
-    type: PlacesUtils.annotations.TYPE_INT32,
-  }, {
-    annoName: PlacesSyncUtils.bookmarks.SMART_BOOKMARKS_ANNO,
-    columnName: "newSmartBookmarkName",
-    type: PlacesUtils.annotations.TYPE_STRING,
-  }, {
     annoName: PlacesUtils.LMANNO_FEEDURI,
     columnName: "newFeedURL",
     type: PlacesUtils.annotations.TYPE_STRING,
@@ -2157,6 +2128,9 @@ async function initializeTempMirrorEntities(db) {
       WHERE id = (SELECT fk FROM moz_bookmarks
                   WHERE guid = OLD.guid);
 
+      /* Trigger frecency updates for all affected origins. */
+      DELETE FROM moz_updateoriginsupdate_temp;
+
       /* Remove annos for the deleted items. */
       DELETE FROM moz_items_annos
       WHERE item_id = (SELECT id FROM moz_bookmarks
@@ -2199,9 +2173,7 @@ async function initializeTempMirrorEntities(db) {
                                   oldGuid, newGuid, newType,
                                   newDateAddedMicroseconds, newTitle,
                                   oldPlaceId, newPlaceId, newKeyword,
-                                  newDescription, newLoadInSidebar,
-                                  newSmartBookmarkName, newFeedURL,
-                                  newSiteURL) AS
+                                  newFeedURL, newSiteURL) AS
     SELECT b.id, v.id, r.valueState = ${BookmarkMergeState.TYPE.REMOTE},
            r.level, r.localGuid, r.mergedGuid,
            (CASE WHEN v.kind IN (${[
@@ -2217,8 +2189,8 @@ async function initializeTempMirrorEntities(db) {
               "v.dateAdded" is in milliseconds. */
            (CASE WHEN b.dateAdded / 1000 < v.dateAdded THEN b.dateAdded
                  ELSE v.dateAdded * 1000 END),
-           v.title, h.id, u.newPlaceId, v.keyword, v.description,
-           v.loadInSidebar, v.smartBookmarkName, v.feedURL, v.siteURL
+           v.title, h.id, u.newPlaceId, v.keyword,
+           v.feedURL, v.siteURL
     FROM items v
     JOIN mergeStates r ON r.mergedGuid = v.guid
     LEFT JOIN moz_bookmarks b ON b.guid = r.localGuid
@@ -2695,9 +2667,6 @@ async function initializeTempMirrorEntities(db) {
     isQuery BOOLEAN NOT NULL DEFAULT 0,
     url TEXT,
     tags TEXT,
-    description TEXT,
-    loadInSidebar BOOLEAN,
-    smartBookmarkName TEXT,
     tagFolderName TEXT,
     keyword TEXT,
     feedURL TEXT,
@@ -2759,13 +2728,6 @@ function validateURL(rawURL) {
     url = new URL(rawURL);
   } catch (ex) {}
   return url;
-}
-
-function validateDescription(rawDescription) {
-  if (typeof rawDescription != "string" || !rawDescription) {
-    return null;
-  }
-  return rawDescription.slice(0, DB_DESCRIPTION_LENGTH_MAX);
 }
 
 function validateKeyword(rawKeyword) {
@@ -2843,19 +2805,17 @@ async function withTiming(name, func, recordTiming) {
  * for how we determine if two items are dupes.
  */
 class BookmarkContent {
-  constructor(title, urlHref, smartBookmarkName, position) {
+  constructor(title, urlHref, position) {
     this.title = title;
     this.urlHref = urlHref;
-    this.smartBookmarkName = smartBookmarkName;
     this.position = position;
   }
 
   static fromRow(row) {
     let title = row.getResultByName("title");
     let urlHref = row.getResultByName("url");
-    let smartBookmarkName = row.getResultByName("smartBookmarkName");
     let position = row.getResultByName("position");
-    return new BookmarkContent(title, urlHref, smartBookmarkName, position);
+    return new BookmarkContent(title, urlHref, position);
   }
 }
 
@@ -2864,8 +2824,7 @@ class BookmarkContent {
  * with different GUIDs and similar content.
  *
  * - Bookmarks must have the same title and URL.
- * - Smart bookmarks must have the same smart bookmark name. Other queries
- *   must have the same title and query URL.
+ * - Queries must have the same title and query URL.
  * - Folders and livemarks must have the same title.
  * - Separators must have the same position within their parents.
  *
@@ -2878,15 +2837,11 @@ class BookmarkContent {
  */
 function makeDupeKey(node, content) {
   switch (node.kind) {
+    case SyncedBookmarksMirror.KIND.QUERY:
+      // Fallthrough, treat the same as a bookmark.
     case SyncedBookmarksMirror.KIND.BOOKMARK:
       // We use `JSON.stringify([...])` instead of `[...].join(",")` to avoid
       // escaping the `,` in titles and URLs.
-      return JSON.stringify([node.kind, content.title, content.urlHref]);
-
-    case SyncedBookmarksMirror.KIND.QUERY:
-      if (content.smartBookmarkName) {
-        return JSON.stringify([node.kind, content.smartBookmarkName]);
-      }
       return JSON.stringify([node.kind, content.title, content.urlHref]);
 
     case SyncedBookmarksMirror.KIND.FOLDER:
@@ -3557,6 +3512,7 @@ class BookmarkMerger {
    */
   resolveTwoWayValueConflict(mergedGuid, localNode, remoteNode) {
     if (PlacesUtils.bookmarks.userContentRoots.includes(mergedGuid)) {
+      // Don't update root titles or other properties.
       return BookmarkMergeState.local;
     }
     if (!remoteNode.needsMerge) {
@@ -3618,6 +3574,18 @@ class BookmarkMerger {
                     "${remoteParentNode} into ${mergedNode}",
                     { remoteChildNode, remoteParentNode, mergedNode });
 
+    if (PlacesUtils.bookmarks.userContentRoots.includes(remoteChildNode.guid)) {
+      // Remote child is a root. We always prefer local roots, since remote
+      // roots might be misparented, and we checked that the local roots were
+      // correct before merging. We can just bail here: if the root is parented
+      // correctly, we won't reupload anything, since we never upload the Places
+      // root; if not, we'll flag the wrong parent for reupload.
+      MirrorLog.trace("Ignoring remote root ${remoteChildNode} in " +
+                      "${remoteParentNode}", { remoteChildNode,
+                                               remoteParentNode });
+      return true;
+    }
+
     // Make sure the remote child isn't locally deleted.
     let structureChange = await this.checkForLocalStructureChangeOfRemoteNode(
       mergedNode, remoteParentNode, remoteChildNode);
@@ -3634,8 +3602,9 @@ class BookmarkMerger {
     // The remote child isn't locally deleted. Does it exist in the local tree?
     let localChildNode = this.localTree.nodeForGuid(remoteChildNode.guid);
     if (!localChildNode) {
-      // Remote child doesn't exist locally, either. Try to find a content
-      // match in the containing folder, and dedupe the local item if we can.
+      // Remote child is not a root, and doesn't exist locally. Try to find a
+      // content match in the containing folder, and dedupe the local item if
+      // we can.
       MirrorLog.trace("Remote child ${remoteChildNode} doesn't exist " +
                       "locally; looking for local content match",
                       { remoteChildNode });
@@ -3762,6 +3731,18 @@ class BookmarkMerger {
                     "${localParentNode} into ${mergedNode}",
                     { localChildNode, localParentNode, mergedNode });
 
+    if (PlacesUtils.bookmarks.userContentRoots.includes(localChildNode.guid)) {
+      // Local child is a root, which may or may not exist remotely. We know
+      // local roots are parented correctly, so we merge them unconditionally.
+      // Places maintenance also bumps the change counter when fixing incorrect
+      // parents, so we'll flag the merged root node for reupload.
+      let remoteRootNode = this.remoteTree.nodeForGuid(localChildNode.guid);
+      let mergedRootNode = await this.mergeNode(localChildNode.guid,
+                                                localChildNode, remoteRootNode);
+      mergedNode.mergedChildren.push(mergedRootNode);
+      return true;
+    }
+
     // Now, we know we haven't seen the local child before, and it's not in
     // this folder on the server. Check if the child is remotely deleted.
     let structureChange = await this.checkForRemoteStructureChangeOfLocalNode(
@@ -3777,8 +3758,9 @@ class BookmarkMerger {
     // exists in the remote tree.
     let remoteChildNode = this.remoteTree.nodeForGuid(localChildNode.guid);
     if (!remoteChildNode) {
-      // Local child doesn't exist remotely, either. Try to find a content
-      // match in the containing folder, and dedupe the local item if we can.
+      // Local child is not a root, and doesn't exist remotely. Try to find a
+      // content match in the containing folder, and dedupe the local item if
+      // we can.
       MirrorLog.trace("Local child ${localChildNode} doesn't exist " +
                       "remotely; looking for remote content match",
                       { localChildNode });
@@ -4027,6 +4009,12 @@ class BookmarkMerger {
    */
   async checkForLocalStructureChangeOfRemoteNode(mergedNode, remoteParentNode,
                                                  remoteNode) {
+    if (PlacesUtils.bookmarks.userContentRoots.includes(remoteNode.guid)) {
+      // Should never happen. We should have seen and ignored remote roots.
+      throw new TypeError(
+        "Shouldn't check remote syncable root for structure changes");
+    }
+
     if (!remoteNode.isSyncable) {
       // If the remote node is known to be non-syncable, we unconditionally
       // delete it from the server, even if it's syncable locally.
@@ -4121,6 +4109,12 @@ class BookmarkMerger {
    */
   async checkForRemoteStructureChangeOfLocalNode(mergedNode, localParentNode,
                                                  localNode) {
+    if (PlacesUtils.bookmarks.userContentRoots.includes(localNode.guid)) {
+      // Should never happen. We should have merged local roots unconditionally.
+      throw new TypeError(
+        "Shouldn't check local syncable root for structure changes");
+    }
+
     if (!localNode.isSyncable) {
       // If the local node is known to be non-syncable, we unconditionally
       // delete it from Places, even if it's syncable remotely. This is
@@ -4515,7 +4509,6 @@ class BookmarkObserverRecorder {
     this.bookmarkObserverNotifications = [];
     this.annoObserverNotifications = [];
     this.shouldInvalidateKeywords = false;
-    this.shouldInvalidateLivemarks = false;
   }
 
   /**
@@ -4529,9 +4522,7 @@ class BookmarkObserverRecorder {
     }
     await this.notifyBookmarkObservers();
     await this.notifyAnnoObservers();
-    if (this.shouldInvalidateLivemarks) {
-      await PlacesUtils.livemarks.invalidateCachedLivemarks();
-    }
+    await PlacesUtils.livemarks.invalidateCachedLivemarks();
     await this.updateFrecencies();
   }
 
@@ -4608,23 +4599,30 @@ class BookmarkObserverRecorder {
     });
   }
 
-  noteAnnoSet(id, name) {
-    if (isLivemarkAnno(name)) {
-      this.shouldInvalidateLivemarks = true;
+  noteAnnoChanged(info) {
+    if (info.name != PlacesUtils.LMANNO_FEEDURI &&
+        info.name != PlacesUtils.LMANNO_SITEURI) {
+      throw new TypeError("Can't record change for unsupported anno");
     }
-    this.annoObserverNotifications.push({
-      name: "onItemAnnotationSet",
-      args: [id, name, PlacesUtils.bookmarks.SOURCES.SYNC],
-    });
-  }
-
-  noteAnnoRemoved(id, name) {
-    if (isLivemarkAnno(name)) {
-      this.shouldInvalidateLivemarks = true;
+    if (info.wasRemoved) {
+      this.annoObserverNotifications.push({
+        name: "onItemAnnotationRemoved",
+        args: [info.id, info.name, PlacesUtils.bookmarks.SOURCES.SYNC],
+      });
+    } else {
+      this.annoObserverNotifications.push({
+        name: "onItemAnnotationSet",
+        args: [info.id, info.name, PlacesUtils.bookmarks.SOURCES.SYNC,
+               /* dontUpdateLastModified */ true],
+      });
     }
-    this.annoObserverNotifications.push({
-      name: "onItemAnnotationRemoved",
-      args: [id, name, PlacesUtils.bookmarks.SOURCES.SYNC],
+    this.bookmarkObserverNotifications.push({
+      name: "onItemChanged",
+      isTagging: false,
+      args: [info.id, info.name, /* isAnnotationProperty */ true,
+             /* newValue */ "", info.lastModified, info.type, info.parentId,
+             info.guid, info.parentGuid, /* oldValue */ "",
+             PlacesUtils.bookmarks.SOURCES.SYNC],
     });
   }
 
@@ -4661,11 +4659,6 @@ class BookmarkObserverRecorder {
       MirrorLog.warn("Error notifying observer", ex);
     }
   }
-}
-
-function isLivemarkAnno(name) {
-  return name == PlacesUtils.LMANNO_FEEDURI ||
-         name == PlacesUtils.LMANNO_SITEURI;
 }
 
 /**

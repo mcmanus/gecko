@@ -105,6 +105,41 @@ VARCACHE_PREF(
   bool, true
 )
 
+VARCACHE_PREF(
+  "dom.performance.enable_scheduler_timing",
+  dom_performance_enable_scheduler_timing,
+  RelaxedAtomicBool, false
+)
+
+// If true. then the service worker interception and the ServiceWorkerManager
+// will live in the parent process.  This only takes effect on browser start.
+// Note, this is not currently safe to use for normal browsing yet.
+PREF("dom.serviceWorkers.parent_intercept", bool, false)
+
+// Time in milliseconds for PaymentResponse to wait for
+// the Web page to call complete().
+VARCACHE_PREF(
+  "dom.payments.response.timeout",
+   dom_payments_response_timeout,
+  uint32_t, 5000
+)
+
+//---------------------------------------------------------------------------
+// Clear-Site-Data prefs
+//---------------------------------------------------------------------------
+
+#ifdef NIGHTLY
+# define PREF_VALUE true
+#else
+# define PREF_VALUE false
+#endif
+VARCACHE_PREF(
+  "dom.clearSiteData.enabled",
+   dom_clearSiteData_enabled,
+  bool, PREF_VALUE
+)
+#undef PREF_VALUE
+
 //---------------------------------------------------------------------------
 // Full-screen prefs
 //---------------------------------------------------------------------------
@@ -204,6 +239,13 @@ VARCACHE_PREF(
 VARCACHE_PREF(
   "layout.css.prefixes.gradients",
    layout_css_prefixes_gradients,
+  bool, true
+)
+
+// Whether the offset-* logical property aliases are enabled.
+VARCACHE_PREF(
+  "layout.css.offset-logical-properties.enabled",
+   layout_css_offset_logical_properties_enabled,
   bool, true
 )
 
@@ -767,14 +809,6 @@ VARCACHE_PREF(
   RelaxedAtomicBool, true
 )
 
-// Flac
-// Use new MediaFormatReader architecture for plain ogg.
-VARCACHE_PREF(
-  "media.ogg.flac.enabled",
-   MediaOggFlacEnabled,
-  RelaxedAtomicBool, true
-)
-
 VARCACHE_PREF(
   "media.flac.enabled",
    MediaFlacEnabled,
@@ -840,6 +874,48 @@ VARCACHE_PREF(
   "media.seamless-looping",
    MediaSeamlessLooping,
   RelaxedAtomicBool, true
+)
+
+VARCACHE_PREF(
+  "media.autoplay.block-event.enabled",
+   MediaBlockEventEnabled,
+  bool, false
+)
+
+VARCACHE_PREF(
+  "media.media-capabilities.enabled",
+   MediaCapabilitiesEnabled,
+  RelaxedAtomicBool, false
+)
+
+VARCACHE_PREF(
+  "media.benchmark.vp9.fps",
+   MediaBenchmarkVp9Fps,
+  RelaxedAtomicUint32, 0
+)
+
+VARCACHE_PREF(
+  "media.benchmark.vp9.threshold",
+   MediaBenchmarkVp9Threshold,
+  RelaxedAtomicUint32, 150
+)
+
+VARCACHE_PREF(
+  "media.benchmark.vp9.versioncheck",
+   MediaBenchmarkVp9Versioncheck,
+  RelaxedAtomicUint32, 0
+)
+
+VARCACHE_PREF(
+  "media.benchmark.frames",
+   MediaBenchmarkFrames,
+  RelaxedAtomicUint32, 300
+)
+
+VARCACHE_PREF(
+  "media.benchmark.timeout",
+   MediaBenchmarkTimeout,
+  RelaxedAtomicUint32, 1000
 )
 
 //---------------------------------------------------------------------------
@@ -1014,6 +1090,16 @@ VARCACHE_PREF(
   "view_source.editor.external",
    view_source_editor_external,
   bool, false
+)
+
+//---------------------------------------------------------------------------
+// Anti-Tracking prefs
+//---------------------------------------------------------------------------
+
+VARCACHE_PREF(
+  "privacy.restrict3rdpartystorage.enabled",
+   privacy_restrict3rdpartystorage_enabled,
+  RelaxedAtomicBool, false
 )
 
 //---------------------------------------------------------------------------

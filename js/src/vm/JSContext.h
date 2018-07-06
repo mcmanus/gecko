@@ -34,6 +34,7 @@ class DebugModeOSRVolatileJitFrameIter;
 } // namespace jit
 
 namespace gc {
+class AutoCheckCanAccessAtomsDuringGC;
 class AutoSuppressNurseryCellAlloc;
 }
 
@@ -211,9 +212,12 @@ struct JSContext : public JS::RootingContext,
     friend class js::AutoRealm;
 
   public:
-    template <typename T>
-    inline void enterRealmOf(const T& target);
+    inline void enterRealmOf(JSObject* target);
+    inline void enterRealmOf(JSScript* target);
+    inline void enterRealmOf(js::ObjectGroup* target);
     inline void enterNullRealm();
+
+    inline void setRealmForJitExceptionHandler(JS::Realm* realm);
 
     inline void leaveRealm(JS::Realm* oldRealm);
     inline void leaveAtomsZone(JS::Realm* oldRealm,
@@ -264,14 +268,14 @@ struct JSContext : public JS::RootingContext,
     inline js::Handle<js::GlobalObject*> global() const;
 
     // Methods to access runtime data that must be protected by locks.
-    js::AtomSet& atoms(js::AutoLockForExclusiveAccess& lock) {
-        return runtime_->atoms(lock);
+    js::AtomSet& atoms(const js::AutoAccessAtomsZone& access) {
+        return runtime_->atoms(access);
     }
-    const JS::Zone* atomsZone(js::AutoLockForExclusiveAccess& lock) {
-        return runtime_->atomsZone(lock);
+    const JS::Zone* atomsZone(const js::AutoAccessAtomsZone& access) {
+        return runtime_->atomsZone(access);
     }
-    js::SymbolRegistry& symbolRegistry(js::AutoLockForExclusiveAccess& lock) {
-        return runtime_->symbolRegistry(lock);
+    js::SymbolRegistry& symbolRegistry(const js::AutoAccessAtomsZone& access) {
+        return runtime_->symbolRegistry(access);
     }
     js::ScriptDataTable& scriptDataTable(js::AutoLockScriptData& lock) {
         return runtime_->scriptDataTable(lock);
@@ -444,9 +448,6 @@ struct JSContext : public JS::RootingContext,
     // State used by util/DoubleToString.cpp.
     js::ThreadData<DtoaState*> dtoaState;
 
-    // Any GC activity occurring on this thread.
-    js::ThreadData<JS::HeapState> heapState;
-
     /*
      * When this flag is non-zero, any attempt to GC will be skipped. It is used
      * to suppress GC when reporting an OOM (see ReportOutOfMemory) and in
@@ -543,6 +544,8 @@ struct JSContext : public JS::RootingContext,
     js::ThreadData<unsigned> compactingDisabledCount;
 
     bool canCollectAtoms() const {
+        // TODO: We may be able to improve this by collecting if
+        // !isOffThreadParseRunning() (bug 1468422).
         return !runtime()->hasHelperThreadZones();
     }
 
@@ -709,16 +712,17 @@ struct JSContext : public JS::RootingContext,
 
     /*
      * Get the topmost script and optional pc on the stack. By default, this
-     * function only returns a JSScript in the current compartment, returning
-     * nullptr if the current script is in a different compartment. This
-     * behavior can be overridden by passing ALLOW_CROSS_COMPARTMENT.
+     * function only returns a JSScript in the current realm, returning nullptr
+     * if the current script is in a different realm. This behavior can be
+     * overridden by passing AllowCrossRealm::Allow.
      */
-    enum MaybeAllowCrossCompartment {
-        DONT_ALLOW_CROSS_COMPARTMENT = false,
-        ALLOW_CROSS_COMPARTMENT = true
+    enum class AllowCrossRealm {
+        DontAllow = false,
+        Allow = true
     };
-    inline JSScript* currentScript(jsbytecode** pc = nullptr,
-                                   MaybeAllowCrossCompartment = DONT_ALLOW_CROSS_COMPARTMENT) const;
+    inline JSScript*
+    currentScript(jsbytecode** pc = nullptr,
+                  AllowCrossRealm allowCrossRealm = AllowCrossRealm::DontAllow) const;
 
     inline js::Nursery& nursery();
     inline void minorGC(JS::gcreason::Reason reason);
@@ -735,7 +739,7 @@ struct JSContext : public JS::RootingContext,
     bool isThrowingDebuggeeWouldRun();
     bool isClosingGenerator();
 
-    void setPendingException(const js::Value& v);
+    void setPendingException(JS::HandleValue v);
 
     void clearPendingException() {
         throwing = false;
@@ -1018,8 +1022,8 @@ ReportIsNotDefined(JSContext* cx, HandleId id);
 /*
  * Report an attempt to access the property of a null or undefined value (v).
  */
-extern bool
-ReportIsNullOrUndefined(JSContext* cx, int spindex, HandleValue v, HandleString fallback);
+extern void
+ReportIsNullOrUndefined(JSContext* cx, int spindex, HandleValue v);
 
 extern void
 ReportMissingArg(JSContext* cx, js::HandleValue v, unsigned arg);
@@ -1034,17 +1038,12 @@ ReportValueErrorFlags(JSContext* cx, unsigned flags, const unsigned errorNumber,
                       int spindex, HandleValue v, HandleString fallback,
                       const char* arg1, const char* arg2);
 
-#define ReportValueError(cx,errorNumber,spindex,v,fallback)                   \
-    ((void)ReportValueErrorFlags(cx, JSREPORT_ERROR, errorNumber,             \
-                                    spindex, v, fallback, nullptr, nullptr))
-
-#define ReportValueError2(cx,errorNumber,spindex,v,fallback,arg1)             \
-    ((void)ReportValueErrorFlags(cx, JSREPORT_ERROR, errorNumber,             \
-                                    spindex, v, fallback, arg1, nullptr))
-
-#define ReportValueError3(cx,errorNumber,spindex,v,fallback,arg1,arg2)        \
-    ((void)ReportValueErrorFlags(cx, JSREPORT_ERROR, errorNumber,             \
-                                    spindex, v, fallback, arg1, arg2))
+inline void
+ReportValueError(JSContext* cx, const unsigned errorNumber, int spindex, HandleValue v,
+                 HandleString fallback, const char* arg1 = nullptr, const char* arg2 = nullptr)
+{
+    ReportValueErrorFlags(cx, JSREPORT_ERROR, errorNumber, spindex, v, fallback, arg1, arg2);
+}
 
 JSObject*
 CreateErrorNotesArray(JSContext* cx, JSErrorReport* report);
@@ -1178,6 +1177,22 @@ class MOZ_RAII AutoLockScriptData
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
+// A token used to prove you can safely access the atoms zone. This zone is
+// accessed by the main thread and by off-thread parsing. There are two
+// situations in which it is safe:
+//
+//  - the current thread holds the exclusive access lock (off-thread parsing may
+//    be running and this must also take the lock for access)
+//
+//  - the GC is running and is collecting the atoms zone (this cannot be started
+//    while off-thread parsing is happening)
+class MOZ_STACK_CLASS AutoAccessAtomsZone
+{
+  public:
+    MOZ_IMPLICIT AutoAccessAtomsZone(const AutoLockForExclusiveAccess& lock) {}
+    MOZ_IMPLICIT AutoAccessAtomsZone(const gc::AutoCheckCanAccessAtomsDuringGC& canAccess) {}
+};
+
 class MOZ_RAII AutoKeepAtoms
 {
     JSContext* cx;
@@ -1261,24 +1276,24 @@ struct MOZ_RAII AutoSetThreadIsPerformingGC
 #endif
 };
 
-// In debug builds, set/unset the GC sweeping flag for the current thread.
+// In debug builds, set/reset the GC sweeping flag for the current thread.
 struct MOZ_RAII AutoSetThreadIsSweeping
 {
 #ifdef DEBUG
     AutoSetThreadIsSweeping()
-      : cx(TlsContext.get())
+      : cx(TlsContext.get()),
+        prevState(cx->gcSweeping)
     {
-        MOZ_ASSERT(!cx->gcSweeping);
         cx->gcSweeping = true;
     }
 
     ~AutoSetThreadIsSweeping() {
-        MOZ_ASSERT(cx->gcSweeping);
-        cx->gcSweeping = false;
+        cx->gcSweeping = prevState;
     }
 
   private:
     JSContext* cx;
+    bool prevState;
 #else
     AutoSetThreadIsSweeping() {}
 #endif

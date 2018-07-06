@@ -25,7 +25,6 @@
 #include "mozilla/dom/MessageManagerBinding.h"
 #include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/dom/PaymentRequestChild.h"
-#include "mozilla/dom/TelemetryScrollProbe.h"
 #include "mozilla/IMEStateManager.h"
 #include "mozilla/ipc/URIUtils.h"
 #include "mozilla/layers/APZChild.h"
@@ -402,7 +401,6 @@ TabChild::TabChild(nsIContentChild* aManager,
   , mManager(aManager)
   , mChromeFlags(aChromeFlags)
   , mMaxTouchPoints(0)
-  , mActiveSuppressDisplayport(0)
   , mLayersId{0}
   , mBeforeUnloadListeners(0)
   , mDidFakeShow(false)
@@ -1343,14 +1341,9 @@ TabChild::UpdateFrame(const FrameMetrics& aFrameMetrics)
 mozilla::ipc::IPCResult
 TabChild::RecvSuppressDisplayport(const bool& aEnabled)
 {
-  if (aEnabled) {
-    mActiveSuppressDisplayport++;
-  } else {
-    mActiveSuppressDisplayport--;
+  if (nsCOMPtr<nsIPresShell> shell = GetPresShell()) {
+    shell->SuppressDisplayport(aEnabled);
   }
-
-  MOZ_ASSERT(mActiveSuppressDisplayport >= 0);
-  APZCCallbackHelper::SuppressDisplayport(aEnabled, GetPresShell());
   return IPC_OK();
 }
 
@@ -1546,7 +1539,7 @@ TabChild::RecvMouseEvent(const nsString& aType,
   APZCCallbackHelper::DispatchMouseEvent(GetPresShell(), aType,
                                          CSSPoint(aX, aY), aButton, aClickCount,
                                          aModifiers, aIgnoreRootScrollFrame,
-                                         MouseEventBinding::MOZ_SOURCE_UNKNOWN,
+                                         MouseEvent_Binding::MOZ_SOURCE_UNKNOWN,
                                          0 /* Use the default value here. */);
   return IPC_OK();
 }
@@ -1718,19 +1711,14 @@ TabChild::HandleRealMouseButtonEvent(const WidgetMouseEvent& aEvent,
   // actually go through the APZ code and so their mHandledByAPZ flag is false.
   // Since thos events didn't go through APZ, we don't need to send
   // notifications for them.
-  bool pendingLayerization = false;
+  UniquePtr<DisplayportSetListener> postLayerization;
   if (aInputBlockId && aEvent.mFlags.mHandledByAPZ) {
     nsCOMPtr<nsIDocument> document(GetDocument());
-    pendingLayerization =
-      APZCCallbackHelper::SendSetTargetAPZCNotification(mPuppetWidget, document,
-                                                        aEvent, aGuid,
-                                                        aInputBlockId);
+    postLayerization = APZCCallbackHelper::SendSetTargetAPZCNotification(
+        mPuppetWidget, document, aEvent, aGuid, aInputBlockId);
   }
 
-  InputAPZContext context(aGuid, aInputBlockId, nsEventStatus_eIgnore);
-  if (pendingLayerization) {
-    InputAPZContext::SetPendingLayerization();
-  }
+  InputAPZContext context(aGuid, aInputBlockId, nsEventStatus_eIgnore, postLayerization != nullptr);
 
   WidgetMouseEvent localEvent(aEvent);
   localEvent.mWidget = mPuppetWidget;
@@ -1740,6 +1728,15 @@ TabChild::HandleRealMouseButtonEvent(const WidgetMouseEvent& aEvent,
 
   if (aInputBlockId && aEvent.mFlags.mHandledByAPZ) {
     mAPZEventState->ProcessMouseEvent(aEvent, aGuid, aInputBlockId);
+  }
+
+  // Do this after the DispatchWidgetEventViaAPZ call above, so that if the
+  // mouse event triggered a post-refresh AsyncDragMetrics message to be sent
+  // to APZ (from scrollbar dragging in nsSliderFrame), then that will reach
+  // APZ before the SetTargetAPZC message. This ensures the drag input block
+  // gets the drag metrics before handling the input events.
+  if (postLayerization && postLayerization->Register()) {
+    Unused << postLayerization.release();
   }
 }
 
@@ -1821,8 +1818,12 @@ TabChild::DispatchWheelEvent(const WidgetWheelEvent& aEvent,
   WidgetWheelEvent localEvent(aEvent);
   if (aInputBlockId && aEvent.mFlags.mHandledByAPZ) {
     nsCOMPtr<nsIDocument> document(GetDocument());
-    APZCCallbackHelper::SendSetTargetAPZCNotification(
-      mPuppetWidget, document, aEvent, aGuid, aInputBlockId);
+    UniquePtr<DisplayportSetListener> postLayerization =
+        APZCCallbackHelper::SendSetTargetAPZCNotification(
+            mPuppetWidget, document, aEvent, aGuid, aInputBlockId);
+    if (postLayerization && postLayerization->Register()) {
+      Unused << postLayerization.release();
+    }
   }
 
   localEvent.mWidget = mPuppetWidget;
@@ -1897,9 +1898,12 @@ TabChild::RecvRealTouchEvent(const WidgetTouchEvent& aEvent,
         mPuppetWidget, document, localEvent, aInputBlockId,
         mSetAllowedTouchBehaviorCallback);
     }
-    APZCCallbackHelper::SendSetTargetAPZCNotification(mPuppetWidget, document,
-                                                      localEvent, aGuid,
-                                                      aInputBlockId);
+    UniquePtr<DisplayportSetListener> postLayerization =
+        APZCCallbackHelper::SendSetTargetAPZCNotification(
+            mPuppetWidget, document, localEvent, aGuid, aInputBlockId);
+    if (postLayerization && postLayerization->Register()) {
+      Unused << postLayerization.release();
+    }
   }
 
   // Dispatch event to content (potentially a long-running operation)
@@ -2041,7 +2045,7 @@ bool
 TabChild::SkipRepeatedKeyEvent(const WidgetKeyboardEvent& aEvent)
 {
   if (mRepeatedKeyEventTime.IsNull() ||
-      !aEvent.mIsRepeat ||
+      !aEvent.CanSkipInRemoteProcess() ||
       (aEvent.mMessage != eKeyDown && aEvent.mMessage != eKeyPress)) {
     mRepeatedKeyEventTime = TimeStamp();
     mSkipKeyPress = false;
@@ -2121,6 +2125,14 @@ TabChild::RecvRealKeyEvent(const WidgetKeyboardEvent& aEvent)
         status == nsEventStatus_eConsumeNoDefault) {
       localEvent.PreventDefault();
     }
+    // This is an ugly hack, mNoRemoteProcessDispatch is set to true when the
+    // event's PreventDefault() or StopScrollProcessForwarding() is called.
+    // And then, it'll be checked by ParamTraits<mozilla::WidgetEvent>::Write()
+    // whether the event is being sent to remote process unexpectedly.
+    // However, unfortunately, it cannot check the destination.  Therefore,
+    // we need to clear the flag explicitly here because ParamTraits should
+    // keep checking the flag for avoiding regression.
+    localEvent.mFlags.mNoRemoteProcessDispatch = false;
     SendReplyKeyEvent(localEvent);
   }
 
@@ -2492,11 +2504,6 @@ TabChild::RecvDestroy()
       child->Destroy();
   }
 
-  while (mActiveSuppressDisplayport > 0) {
-    APZCCallbackHelper::SuppressDisplayport(false, nullptr);
-    mActiveSuppressDisplayport--;
-  }
-
   if (mTabChildGlobal) {
     // Message handlers are called from the event loop, so it better be safe to
     // run script.
@@ -2654,7 +2661,7 @@ TabChild::RecvRenderLayers(const bool& aEnabled, const bool& aForceRepaint, cons
       // we get back to the event loop again. We suppress the display port so that
       // we only paint what's visible. This ensures that the tab we're switching
       // to paints as quickly as possible.
-      APZCCallbackHelper::SuppressDisplayport(true, presShell);
+      presShell->SuppressDisplayport(true);
       if (nsContentUtils::IsSafeToRunScript()) {
         WebWidget()->PaintNowIfNeeded();
       } else {
@@ -2664,7 +2671,7 @@ TabChild::RecvRenderLayers(const bool& aEnabled, const bool& aForceRepaint, cons
                            nsIPresShell::PAINT_LAYERS);
         }
       }
-      APZCCallbackHelper::SuppressDisplayport(false, presShell);
+      presShell->SuppressDisplayport(false);
     }
   } else {
     if (sVisibleTabs) {
@@ -2750,8 +2757,6 @@ TabChild::InitTabChildGlobal()
         mTabChildGlobal = nullptr;
         return false;
     }
-
-    scope->Init();
 
     nsCOMPtr<nsPIWindowRoot> root = do_QueryInterface(chromeHandler);
     if (NS_WARN_IF(!root)) {
@@ -3217,6 +3222,9 @@ TabChild::ReinitRendering()
   gfx::VRManagerChild::IdentifyTextureHost(mTextureFactoryIdentifier);
 
   InitAPZState();
+  RefPtr<LayerManager> lm = mPuppetWidget->GetLayerManager();
+  MOZ_ASSERT(lm);
+  lm->SetLayerObserverEpoch(mLayerObserverEpoch);
 
   nsCOMPtr<nsIDocument> doc(GetDocument());
   doc->NotifyLayerManagerRecreated();
@@ -3428,6 +3436,7 @@ TabChild::AllocPPaymentRequestChild()
 bool
 TabChild::DeallocPPaymentRequestChild(PPaymentRequestChild* actor)
 {
+  delete actor;
   return true;
 }
 
@@ -3501,12 +3510,6 @@ TabChildGlobal::~TabChildGlobal()
 {
 }
 
-void
-TabChildGlobal::Init()
-{
-  TelemetryScrollProbe::Create(this);
-}
-
 NS_IMPL_CYCLE_COLLECTION_CLASS(TabChildGlobal)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(TabChildGlobal,
@@ -3539,9 +3542,9 @@ TabChildGlobal::WrapGlobalObject(JSContext* aCx,
                                  JS::RealmOptions& aOptions,
                                  JS::MutableHandle<JSObject*> aReflector)
 {
-  bool ok = ContentFrameMessageManagerBinding::Wrap(aCx, this, this, aOptions,
-                                                    nsJSPrincipals::get(mTabChild->GetPrincipal()),
-                                                    true, aReflector);
+  bool ok = ContentFrameMessageManager_Binding::Wrap(aCx, this, this, aOptions,
+                                                       nsJSPrincipals::get(mTabChild->GetPrincipal()),
+                                                       true, aReflector);
   if (ok) {
     // Since we can't rewrap we have to preserve the global's wrapper here.
     PreserveWrapper(ToSupports(this));

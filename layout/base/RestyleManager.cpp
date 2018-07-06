@@ -1025,6 +1025,8 @@ DoApplyRenderingChangeToTree(nsIFrame* aFrame,
         // Need to update our overflow rects:
         nsSVGUtils::ScheduleReflowSVG(aFrame);
       }
+
+      ActiveLayerTracker::NotifyNeedsRepaint(aFrame);
     }
     if (aChange & nsChangeHint_UpdateTextPath) {
       if (nsSVGUtils::IsInSVGTextSubtree(aFrame)) {
@@ -2669,7 +2671,8 @@ RestyleManager::ProcessPostTraversal(
              "display: contents node has a frame, yet we didn't reframe it"
              " above?");
   const bool isDisplayContents =
-    !styleFrame && Servo_Element_IsDisplayContents(aElement);
+    !styleFrame && aElement->HasServoData() &&
+    Servo_Element_IsDisplayContents(aElement);
   if (isDisplayContents) {
     oldOrDisplayContentsStyle =
       aRestyleState.StyleSet().ResolveServoStyle(aElement);
@@ -3470,7 +3473,7 @@ RestyleManager::DoReparentComputedStyleForFirstLine(nsIFrame* aFrame,
     // to be careful to do that with our placeholder, not with us, if we're out of
     // flow.
     if (aFrame->HasAnyStateBits(NS_FRAME_OUT_OF_FLOW)) {
-      aFrame->GetPlaceholderFrame()->GetLayoutParentStyleForOutOfFlow(&providerFrame);
+      aFrame->FirstContinuation()->GetPlaceholderFrame()->GetLayoutParentStyleForOutOfFlow(&providerFrame);
     } else {
       providerFrame = nsFrame::CorrectStyleParentFrame(aFrame->GetParent(),
                                                        oldStyle->GetPseudo());

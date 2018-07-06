@@ -97,9 +97,6 @@ fn is_bitmap_font(font: &FontInstance) -> bool {
         font.flags.contains(FontInstanceFlags::EMBEDDED_BITMAPS)
 }
 
-// Skew factor matching Gecko/DWrite.
-const OBLIQUE_SKEW_FACTOR: f32 = 0.3;
-
 impl FontContext {
     pub fn new() -> Result<FontContext, ResourceCacheError> {
         // These are the default values we use in Gecko.
@@ -257,8 +254,8 @@ impl FontContext {
     ) -> Option<GlyphDimensions> {
         let size = font.size.to_f32_px();
         let bitmaps = is_bitmap_font(font);
-        let transform = if font.flags.intersects(FontInstanceFlags::SYNTHETIC_ITALICS |
-                                                 FontInstanceFlags::TRANSPOSE |
+        let transform = if font.synthetic_italics.is_enabled() ||
+                           font.flags.intersects(FontInstanceFlags::TRANSPOSE |
                                                  FontInstanceFlags::FLIP_X |
                                                  FontInstanceFlags::FLIP_Y) {
             let mut shape = FontTransform::identity();
@@ -271,8 +268,8 @@ impl FontContext {
             if font.flags.contains(FontInstanceFlags::TRANSPOSE) {
                 shape = shape.swap_xy();
             }
-            if font.flags.contains(FontInstanceFlags::SYNTHETIC_ITALICS) {
-                shape = shape.synthesize_italics(OBLIQUE_SKEW_FACTOR);
+            if font.synthetic_italics.is_enabled() {
+                shape = shape.synthesize_italics(font.synthetic_italics);
             }
             Some(dwrote::DWRITE_MATRIX {
                 m11: shape.scale_x,
@@ -385,8 +382,9 @@ impl FontContext {
 
     #[cfg(not(feature = "pathfinder"))]
     pub fn rasterize_glyph(&mut self, font: &FontInstance, key: &GlyphKey) -> GlyphRasterResult {
-        let (.., y_scale) = font.transform.compute_scale().unwrap_or((1.0, 1.0));
-        let size = (font.size.to_f64_px() * y_scale) as f32;
+        let (x_scale, y_scale) = font.transform.compute_scale().unwrap_or((1.0, 1.0));
+        let scale = font.oversized_scale_factor(x_scale, y_scale);
+        let size = (font.size.to_f64_px() * y_scale / scale) as f32;
         let bitmaps = is_bitmap_font(font);
         let (mut shape, (x_offset, y_offset)) = if bitmaps {
             (FontTransform::identity(), (0.0, 0.0))
@@ -402,8 +400,8 @@ impl FontContext {
         if font.flags.contains(FontInstanceFlags::TRANSPOSE) {
             shape = shape.swap_xy();
         }
-        if font.flags.contains(FontInstanceFlags::SYNTHETIC_ITALICS) {
-            shape = shape.synthesize_italics(OBLIQUE_SKEW_FACTOR);
+        if font.synthetic_italics.is_enabled() {
+            shape = shape.synthesize_italics(font.synthetic_italics);
         }
         let transform = if !shape.is_identity() || (x_offset, y_offset) != (0.0, 0.0) {
             Some(dwrote::DWRITE_MATRIX {
@@ -451,7 +449,7 @@ impl FontContext {
             top: -bounds.top as f32,
             width,
             height,
-            scale: if bitmaps { y_scale.recip() as f32 } else { 1.0 },
+            scale: (if bitmaps { scale / y_scale } else { scale }) as f32,
             format: if bitmaps { GlyphFormat::Bitmap } else { font.get_glyph_format() },
             bytes: bgra_pixels,
         })

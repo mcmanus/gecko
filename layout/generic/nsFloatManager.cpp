@@ -15,12 +15,15 @@
 #include "mozilla/ReflowInput.h"
 #include "mozilla/ShapeUtils.h"
 #include "nsBlockFrame.h"
+#include "nsDeviceContext.h"
 #include "nsError.h"
 #include "nsImageRenderer.h"
 #include "nsIPresShell.h"
 #include "nsMemory.h"
 
 using namespace mozilla;
+using namespace mozilla::image;
+using namespace mozilla::gfx;
 
 int32_t nsFloatManager::sCachedFloatManagerCount = 0;
 void* nsFloatManager::sCachedFloatManagers[NS_FLOAT_MANAGER_CACHE_SIZE];
@@ -144,7 +147,8 @@ nsFloatManager::GetFlowArea(WritingMode aWM, nscoord aBCoord, nscoord aBSize,
       (mFloats[floatCount-1].mLeftBEnd <= blockStart &&
        mFloats[floatCount-1].mRightBEnd <= blockStart)) {
     return nsFlowAreaRect(aWM, aContentArea.IStart(aWM), aBCoord,
-                          aContentArea.ISize(aWM), aBSize, false);
+                          aContentArea.ISize(aWM), aBSize,
+                          nsFlowAreaRectFlags::NO_FLAGS);
   }
 
   nscoord blockEnd;
@@ -170,6 +174,7 @@ nsFloatManager::GetFlowArea(WritingMode aWM, nscoord aBCoord, nscoord aBSize,
   // Walk backwards through the floats until we either hit the front of
   // the list or we're above |blockStart|.
   bool haveFloats = false;
+  bool mayWiden = false;
   for (uint32_t i = floatCount; i > 0; --i) {
     const FloatInfo &fi = mFloats[i-1];
     if (fi.mLeftBEnd <= blockStart && fi.mRightBEnd <= blockStart) {
@@ -218,6 +223,10 @@ nsFloatManager::GetFlowArea(WritingMode aWM, nscoord aBCoord, nscoord aBSize,
           // callers want and disagrees for other callers, so we should
           // probably provide better information at some point.
           haveFloats = true;
+
+          // Our area may widen in the block direction if this float may
+          // narrow in the block direction.
+          mayWiden = mayWiden || fi.MayNarrowInBlockDirection(aShapeType);
         }
       } else {
         // A right float
@@ -227,6 +236,7 @@ nsFloatManager::GetFlowArea(WritingMode aWM, nscoord aBCoord, nscoord aBSize,
           lineRight = lineLeftEdge;
           // See above.
           haveFloats = true;
+          mayWiden = mayWiden || fi.MayNarrowInBlockDirection(aShapeType);
         }
       }
 
@@ -245,8 +255,12 @@ nsFloatManager::GetFlowArea(WritingMode aWM, nscoord aBCoord, nscoord aBSize,
                         : mLineLeft - lineRight +
                           LogicalSize(aWM, aContainerSize).ISize(aWM);
 
+  nsFlowAreaRectFlags flags =
+    (haveFloats ? nsFlowAreaRectFlags::HAS_FLOATS : nsFlowAreaRectFlags::NO_FLAGS) |
+    (mayWiden ? nsFlowAreaRectFlags::MAY_WIDEN : nsFlowAreaRectFlags::NO_FLAGS);
+
   return nsFlowAreaRect(aWM, inlineStart, blockStart - mBlockStart,
-                        lineRight - lineLeft, blockSize, haveFloats);
+                        lineRight - lineLeft, blockSize, flags);
 }
 
 void
@@ -532,6 +546,14 @@ public:
   virtual nscoord BEnd() const = 0;
   virtual bool IsEmpty() const = 0;
 
+  // Does this shape possibly get inline narrower in the BStart() to BEnd()
+  // span when proceeding in the block direction? This is false for unrounded
+  // rectangles that span all the way to BEnd(), but could be true for other
+  // shapes. Note that we don't care if the BEnd() falls short of the margin
+  // rect -- the ShapeInfo can only affect float behavior in the span between
+  // BStart() and BEnd().
+  virtual bool MayNarrowInBlockDirection() const = 0;
+
   // Translate the current origin by the specified offsets.
   virtual void Translate(nscoord aLineLeft, nscoord aBlockStart) = 0;
 
@@ -734,6 +756,9 @@ public:
     // a zero radius acts like a point, and an ellipse with one zero radius
     // acts like a line.
     return false;
+  }
+  bool MayNarrowInBlockDirection() const override {
+    return true;
   }
 
   void Translate(nscoord aLineLeft, nscoord aBlockStart) override
@@ -1091,6 +1116,10 @@ public:
     // rect.
     return false;
   }
+  bool MayNarrowInBlockDirection() const override {
+    // Only possible to narrow if there are non-null mRadii.
+    return !!mRadii;
+  }
 
   void Translate(nscoord aLineLeft, nscoord aBlockStart) override
   {
@@ -1284,6 +1313,7 @@ public:
     // acts like a line.
     return false;
   }
+  bool MayNarrowInBlockDirection() const override { return true; }
 
   void Translate(nscoord aLineLeft, nscoord aBlockStart) override;
 
@@ -1809,6 +1839,7 @@ public:
   nscoord BStart() const override { return mBStart; }
   nscoord BEnd() const override { return mBEnd; }
   bool IsEmpty() const override { return mIntervals.IsEmpty(); }
+  bool MayNarrowInBlockDirection() const override { return true; }
 
   void Translate(nscoord aLineLeft, nscoord aBlockStart) override;
 
@@ -2358,12 +2389,13 @@ nsFloatManager::FloatInfo::FloatInfo(nsIFrame* aFrame,
     return;
   }
 
-  const StyleShapeSource& shapeOutside = mFrame->StyleDisplay()->mShapeOutside;
+  const nsStyleDisplay* styleDisplay = mFrame->StyleDisplay();
+  const StyleShapeSource& shapeOutside = styleDisplay->mShapeOutside;
 
   nscoord shapeMargin = (shapeOutside.GetType() == StyleShapeSourceType::None)
    ? 0
    : nsLayoutUtils::ResolveToLength<true>(
-       mFrame->StyleDisplay()->mShapeMargin,
+       styleDisplay->mShapeMargin,
        LogicalSize(aWM, aContainerSize).ISize(aWM));
 
   switch (shapeOutside.GetType()) {
@@ -2376,7 +2408,7 @@ nsFloatManager::FloatInfo::FloatInfo(nsIFrame* aFrame,
       return;
 
     case StyleShapeSourceType::Image: {
-      float shapeImageThreshold = mFrame->StyleDisplay()->mShapeImageThreshold;
+      float shapeImageThreshold = styleDisplay->mShapeImageThreshold;
       mShapeInfo = ShapeInfo::CreateImageShape(shapeOutside.GetShapeImage(),
                                                shapeImageThreshold,
                                                shapeMargin,
@@ -2517,6 +2549,26 @@ nsFloatManager::FloatInfo::IsEmpty(ShapeType aShapeType) const
     return IsEmpty();
   }
   return mShapeInfo->IsEmpty();
+}
+
+bool
+nsFloatManager::FloatInfo::MayNarrowInBlockDirection(ShapeType aShapeType) const
+{
+  // This function mirrors the cases of the three argument versions of
+  // LineLeft() and LineRight(). This function returns true if and only if
+  // either of those functions could possibly return "narrower" values with
+  // increasing aBStart values. "Narrower" means closer to the far end of
+  // the float shape.
+  if (aShapeType == ShapeType::Margin) {
+    return false;
+  }
+
+  MOZ_ASSERT(aShapeType == ShapeType::ShapeOutside);
+  if (!mShapeInfo) {
+    return false;
+  }
+
+  return mShapeInfo->MayNarrowInBlockDirection();
 }
 
 /////////////////////////////////////////////////////////////////////////////

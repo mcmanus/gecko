@@ -13,6 +13,7 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/Sprintf.h"
 
 #include <string.h>
@@ -233,7 +234,7 @@ GetNameOperation(JSContext* cx, InterpreterFrame* fp, jsbytecode* pc, MutableHan
      * before the global object.
      */
     if (IsGlobalOp(JSOp(*pc)) && !fp->script()->hasNonSyntacticScope())
-        envChain = &envChain->global().lexicalEnvironment();
+        envChain = &cx->global()->lexicalEnvironment();
 
     /* Kludge to allow (typeof foo == "undefined") tests. */
     JSOp op2 = JSOp(pc[JSOP_GETNAME_LENGTH]);
@@ -386,6 +387,8 @@ js::RunScript(JSContext* cx, RunState& state)
     // Since any script can conceivably GC, make sure it's safe to do so.
     cx->verifyIsSafeToGC();
 
+    MOZ_ASSERT(cx->realm() == state.script()->realm());
+
     MOZ_DIAGNOSTIC_ASSERT(cx->realm()->isSystem() ||
                           cx->runtime()->allowContentJS());
 
@@ -424,6 +427,55 @@ js::RunScript(JSContext* cx, RunState& state)
 # pragma optimize("", on)
 #endif
 
+STATIC_PRECONDITION_ASSUME(ubound(args.argv_) >= argc)
+MOZ_ALWAYS_INLINE bool
+CallJSNative(JSContext* cx, Native native, const CallArgs& args)
+{
+    if (!CheckRecursionLimit(cx))
+        return false;
+
+#ifdef DEBUG
+    bool alreadyThrowing = cx->isExceptionPending();
+#endif
+    assertSameCompartment(cx, args);
+    MOZ_ASSERT(!args.callee().is<ProxyObject>());
+
+    AutoRealm ar(cx, &args.callee());
+    bool ok = native(cx, args.length(), args.base());
+    if (ok) {
+        assertSameCompartment(cx, args.rval());
+        MOZ_ASSERT_IF(!alreadyThrowing, !cx->isExceptionPending());
+    }
+    return ok;
+}
+
+STATIC_PRECONDITION(ubound(args.argv_) >= argc)
+MOZ_ALWAYS_INLINE bool
+CallJSNativeConstructor(JSContext* cx, Native native, const CallArgs& args)
+{
+#ifdef DEBUG
+    RootedObject callee(cx, &args.callee());
+#endif
+
+    MOZ_ASSERT(args.thisv().isMagic());
+    if (!CallJSNative(cx, native, args))
+        return false;
+
+    /*
+     * Native constructors must return non-primitive values on success.
+     * Although it is legal, if a constructor returns the callee, there is a
+     * 99.9999% chance it is a bug. If any valid code actually wants the
+     * constructor to return the callee, the assertion can be removed or
+     * (another) conjunct can be added to the antecedent.
+     *
+     * Exception: (new Object(Object)) returns the callee.
+     */
+    MOZ_ASSERT_IF((!callee->is<JSFunction>() || callee->as<JSFunction>().native() != obj_construct),
+                  args.rval().isObject() && callee != &args.rval().toObject());
+
+    return true;
+}
+
 /*
  * Find a function reference and its 'this' value implicit first parameter
  * under argc arguments on cx's stack, and call the function.  Push missing
@@ -446,10 +498,19 @@ js::InternalCallOrConstruct(JSContext* cx, const CallArgs& args, MaybeConstruct 
 
     /* Invoke non-functions. */
     if (MOZ_UNLIKELY(!args.callee().is<JSFunction>())) {
-        MOZ_ASSERT_IF(construct, !args.callee().constructHook());
-        JSNative call = args.callee().callHook();
-        if (!call)
+        MOZ_ASSERT_IF(construct, !args.callee().isConstructor());
+
+        if (!args.callee().isCallable())
             return ReportIsNotFunction(cx, args.calleev(), skipForCallee, construct);
+
+        if (args.callee().is<ProxyObject>()) {
+            RootedObject proxy(cx, &args.callee());
+            return Proxy::call(cx, proxy, args);
+        }
+
+        JSNative call = args.callee().callHook();
+        MOZ_ASSERT(call, "isCallable without a callHook?");
+
         return CallJSNative(cx, call, args);
     }
 
@@ -477,7 +538,9 @@ js::InternalCallOrConstruct(JSContext* cx, const CallArgs& args, MaybeConstruct 
     /* Run function until JSOP_RETRVAL, JSOP_RETURN or error. */
     InvokeState state(cx, args, construct);
 
-    // Check to see if createSingleton flag should be set for this frame.
+    // Create |this| if we're constructing. Switch to the callee's realm to
+    // ensure this object has the correct realm.
+    AutoRealm ar(cx, state.script());
     if (construct) {
         bool createSingleton = false;
         jsbytecode* pc;
@@ -570,6 +633,11 @@ InternalConstruct(JSContext* cx, const AnyConstructArgs& args)
 
         MOZ_ASSERT(args.CallArgs::rval().isObject());
         return true;
+    }
+
+    if (callee.is<ProxyObject>()) {
+        RootedObject proxy(cx, &callee);
+        return Proxy::construct(cx, proxy, args);
     }
 
     JSNative construct = callee.constructHook();
@@ -994,7 +1062,7 @@ js::CheckClassHeritageOperation(JSContext* cx, HandleValue heritage)
         return false;
     }
 
-    ReportValueError2(cx, JSMSG_BAD_HERITAGE, -1, heritage, nullptr, "not an object or null");
+    ReportValueError(cx, JSMSG_BAD_HERITAGE, -1, heritage, nullptr, "not an object or null");
     return false;
 }
 
@@ -1355,6 +1423,7 @@ static HandleErrorContinuation
 HandleError(JSContext* cx, InterpreterRegs& regs)
 {
     MOZ_ASSERT(regs.fp()->script()->containsPC(regs.pc));
+    MOZ_ASSERT(cx->realm() == regs.fp()->script()->realm());
 
     if (regs.fp()->script()->hasScriptCounts()) {
         PCCounts* counts = regs.fp()->script()->getThrowCounts(regs.pc);
@@ -1889,6 +1958,7 @@ Interpret(JSContext* cx, RunState& state)
 #define SET_SCRIPT(s)                                                         \
     JS_BEGIN_MACRO                                                            \
         script = (s);                                                         \
+        MOZ_ASSERT(cx->realm() == script->realm());                           \
         if (script->hasAnyBreakpointsOrStepMode() || script->hasScriptCounts()) \
             activation.enableInterruptsUnconditionally();                     \
     JS_END_MACRO
@@ -2179,11 +2249,17 @@ CASE(JSOP_RETRVAL)
   jit_return_pop_frame:
 
         activation.popInlineFrame(REGS.fp());
-        SET_SCRIPT(REGS.fp()->script());
+        {
+            JSScript* callerScript = REGS.fp()->script();
+            if (cx->realm() != callerScript->realm())
+                cx->leaveRealm(callerScript->realm());
+            SET_SCRIPT(callerScript);
+        }
 
   jit_return:
 
         MOZ_ASSERT(CodeSpec[*REGS.pc].format & JOF_INVOKE);
+        MOZ_ASSERT(cx->realm() == script->realm());
 
         /* Resume execution in the calling frame. */
         if (MOZ_LIKELY(interpReturnOK)) {
@@ -3029,7 +3105,7 @@ CASE(JSOP_STRICTEVAL)
                   "eval and stricteval must be the same size");
 
     CallArgs args = CallArgsFromSp(GET_ARGC(REGS.pc), REGS.sp);
-    if (REGS.fp()->environmentChain()->global().valueIsEval(args.calleev())) {
+    if (cx->global()->valueIsEval(args.calleev())) {
         if (!DirectEval(cx, args.get(0), args.rval()))
             goto error;
     } else {
@@ -3135,10 +3211,19 @@ CASE(JSOP_FUNCALL)
         if (!funScript)
             goto error;
 
-        bool createSingleton = false;
-        if (construct) {
-            createSingleton = ObjectGroup::useSingletonForNewObject(cx, script, REGS.pc);
+        // Enter the callee's realm if this is a cross-realm call. Use
+        // MakeScopeExit to leave this realm on all error/JIT-return paths
+        // below.
+        const bool isCrossRealm = cx->realm() != funScript->realm();
+        if (isCrossRealm)
+            cx->enterRealmOf(funScript);
+        auto leaveRealmGuard = mozilla::MakeScopeExit([isCrossRealm, cx, &script] {
+            if (isCrossRealm)
+                cx->leaveRealm(script->realm());
+        });
 
+        if (construct) {
+            bool createSingleton = ObjectGroup::useSingletonForNewObject(cx, script, REGS.pc);
             if (!MaybeCreateThisForConstructor(cx, funScript, args, createSingleton))
                 goto error;
         }
@@ -3166,6 +3251,7 @@ CASE(JSOP_FUNCALL)
 
         if (!activation.pushInlineFrame(args, funScript, construct))
             goto error;
+        leaveRealmGuard.release(); // We leave the callee's realm when we call popInlineFrame.
     }
 
     SET_SCRIPT(REGS.fp()->script());
@@ -3270,7 +3356,7 @@ END_CASE(JSOP_GETIMPORT)
 CASE(JSOP_GETINTRINSIC)
 {
     ReservedRooted<Value> rval(&rootValue0);
-    if (!GetIntrinsicOperation(cx, REGS.pc, &rval))
+    if (!GetIntrinsicOperation(cx, script, REGS.pc, &rval))
         goto error;
 
     PUSH_COPY(rval);
@@ -3920,7 +4006,8 @@ CASE(JSOP_RETSUB)
          * be necessary, but it seems clearer.  And it points out a FIXME:
          * 350509, due to Igor Bukanov.
          */
-        cx->setPendingException(rval);
+        ReservedRooted<Value> v(&rootValue0, rval);
+        cx->setPendingException(v);
         goto error;
     }
     MOZ_ASSERT(rval.isInt32());
@@ -4134,7 +4221,11 @@ CASE(JSOP_RESUME)
 
         GeneratorObject::ResumeKind resumeKind = GeneratorObject::getResumeKind(REGS.pc);
         bool ok = GeneratorObject::resume(cx, activation, gen, val, resumeKind);
-        SET_SCRIPT(REGS.fp()->script());
+
+        JSScript* generatorScript = REGS.fp()->script();
+        if (cx->realm() != generatorScript->realm())
+            cx->enterRealmOf(generatorScript);
+        SET_SCRIPT(generatorScript);
 
         TraceLoggerThread* logger = TraceLoggerForCurrentThread(cx);
         TraceLoggerEvent scriptEvent(TraceLogger_Scripts, script);
@@ -4520,7 +4611,10 @@ js::DefFunOperation(JSContext* cx, HandleScript script, HandleObject envChain,
         if (!DefineDataProperty(cx, parent, name, rval, attrs))
             return false;
 
-        return parent->is<GlobalObject>() ? parent->realm()->addToVarNames(cx, name) : true;
+        if (parent->is<GlobalObject>())
+            return parent->as<GlobalObject>().realm()->addToVarNames(cx, name);
+
+        return true;
     }
 
     /*
@@ -4546,7 +4640,7 @@ js::DefFunOperation(JSContext* cx, HandleScript script, HandleObject envChain,
 
         // Careful: the presence of a shape, even one appearing to derive from
         // a variable declaration, doesn't mean it's in [[VarNames]].
-        if (!parent->realm()->addToVarNames(cx, name))
+        if (!parent->as<GlobalObject>().realm()->addToVarNames(cx, name))
             return false;
     }
 
@@ -4770,7 +4864,7 @@ js::DeleteNameOperation(JSContext* cx, HandlePropertyName name, HandleObject sco
     if (status) {
         // Deleting a name from the global object removes it from [[VarNames]].
         if (pobj == scope && scope->is<GlobalObject>())
-            scope->realm()->removeFromVarNames(name);
+            scope->as<GlobalObject>().realm()->removeFromVarNames(name);
     }
 
     return true;
@@ -4831,8 +4925,6 @@ js::InitGetterSetterOperation(JSContext* cx, jsbytecode* pc, HandleObject obj, H
                               HandleObject val)
 {
     MOZ_ASSERT(val->isCallable());
-    GetterOp getter;
-    SetterOp setter;
 
     JSOp op = JSOp(*pc);
 
@@ -4843,18 +4935,14 @@ js::InitGetterSetterOperation(JSContext* cx, jsbytecode* pc, HandleObject obj, H
     if (op == JSOP_INITPROP_GETTER || op == JSOP_INITELEM_GETTER ||
         op == JSOP_INITHIDDENPROP_GETTER || op == JSOP_INITHIDDENELEM_GETTER)
     {
-        getter = CastAsGetterOp(val);
-        setter = nullptr;
         attrs |= JSPROP_GETTER;
-    } else {
-        MOZ_ASSERT(op == JSOP_INITPROP_SETTER || op == JSOP_INITELEM_SETTER ||
-                   op == JSOP_INITHIDDENPROP_SETTER || op == JSOP_INITHIDDENELEM_SETTER);
-        getter = nullptr;
-        setter = CastAsSetterOp(val);
-        attrs |= JSPROP_SETTER;
+        return DefineAccessorProperty(cx, obj, id, val, nullptr, attrs);
     }
 
-    return DefineAccessorProperty(cx, obj, id, getter, setter, attrs);
+    MOZ_ASSERT(op == JSOP_INITPROP_SETTER || op == JSOP_INITELEM_SETTER ||
+               op == JSOP_INITHIDDENPROP_SETTER || op == JSOP_INITHIDDENELEM_SETTER);
+    attrs |= JSPROP_SETTER;
+    return DefineAccessorProperty(cx, obj, id, nullptr, val, attrs);
 }
 
 bool
@@ -4903,7 +4991,7 @@ js::SpreadCallOperation(JSContext* cx, HandleScript script, jsbytecode* pc, Hand
                                    constructing ? CONSTRUCT : NO_CONSTRUCT);
     }
 
-    if (MOZ_UNLIKELY(!callee.toObject().is<JSFunction>()) && !callee.toObject().callHook()) {
+    if (!callee.toObject().isCallable()) {
         return ReportIsNotFunction(cx, callee, 2 + constructing,
                                    constructing ? CONSTRUCT : NO_CONSTRUCT);
     }

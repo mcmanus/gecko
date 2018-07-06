@@ -22,8 +22,7 @@ use std::cell::RefCell;
 use std::fmt::{self, Write};
 use std::mem::{self, ManuallyDrop};
 
-#[cfg(feature = "servo")] use cssparser::RGBA;
-use cssparser::{Parser, TokenSerializationType};
+use cssparser::{Parser, RGBA, TokenSerializationType};
 use cssparser::ParserInput;
 #[cfg(feature = "servo")] use euclid::SideOffsets2D;
 use context::QuirksMode;
@@ -45,7 +44,6 @@ use shared_lock::StylesheetGuards;
 use style_traits::{CssWriter, KeywordsCollectFn, ParseError, ParsingMode};
 use style_traits::{SpecifiedValueInfo, StyleParseErrorKind, ToCss};
 use stylesheets::{CssRuleType, Origin, UrlExtraData};
-#[cfg(feature = "servo")] use values::Either;
 use values::generics::text::LineHeight;
 use values::computed;
 use values::computed::NonNegativeLength;
@@ -99,29 +97,10 @@ macro_rules! expanded {
 /// A module with all the code for longhand properties.
 #[allow(missing_docs)]
 pub mod longhands {
-    <%include file="/longhand/background.mako.rs" />
-    <%include file="/longhand/border.mako.rs" />
-    <%include file="/longhand/box.mako.rs" />
-    <%include file="/longhand/color.mako.rs" />
-    <%include file="/longhand/column.mako.rs" />
-    <%include file="/longhand/counters.mako.rs" />
-    <%include file="/longhand/effects.mako.rs" />
-    <%include file="/longhand/font.mako.rs" />
-    <%include file="/longhand/inherited_box.mako.rs" />
-    <%include file="/longhand/inherited_table.mako.rs" />
-    <%include file="/longhand/inherited_text.mako.rs" />
-    <%include file="/longhand/inherited_ui.mako.rs" />
-    <%include file="/longhand/list.mako.rs" />
-    <%include file="/longhand/margin.mako.rs" />
-    <%include file="/longhand/outline.mako.rs" />
-    <%include file="/longhand/padding.mako.rs" />
-    <%include file="/longhand/position.mako.rs" />
-    <%include file="/longhand/table.mako.rs" />
-    <%include file="/longhand/text.mako.rs" />
-    <%include file="/longhand/ui.mako.rs" />
-    <%include file="/longhand/inherited_svg.mako.rs" />
-    <%include file="/longhand/svg.mako.rs" />
-    <%include file="/longhand/xul.mako.rs" />
+    % for style_struct in data.style_structs:
+    include!("${repr(os.path.join(OUT_DIR, 'longhands/{}.rs'.format(style_struct.name_lower)))[1:-1]}");
+    % endfor
+    pub const ANIMATABLE_PROPERTY_COUNT: usize = ${sum(1 for prop in data.longhands if prop.animatable)};
 }
 
 macro_rules! unwrap_or_initial {
@@ -139,23 +118,37 @@ pub mod shorthands {
     use style_traits::{ParseError, StyleParseErrorKind};
     use values::specified;
 
-    <%include file="/shorthand/serialize.mako.rs" />
-    <%include file="/shorthand/background.mako.rs" />
-    <%include file="/shorthand/border.mako.rs" />
-    <%include file="/shorthand/box.mako.rs" />
-    <%include file="/shorthand/column.mako.rs" />
-    <%include file="/shorthand/font.mako.rs" />
-    <%include file="/shorthand/inherited_text.mako.rs" />
-    <%include file="/shorthand/list.mako.rs" />
-    <%include file="/shorthand/margin.mako.rs" />
-    <%include file="/shorthand/mask.mako.rs" />
-    <%include file="/shorthand/outline.mako.rs" />
-    <%include file="/shorthand/padding.mako.rs" />
-    <%include file="/shorthand/position.mako.rs" />
-    <%include file="/shorthand/inherited_svg.mako.rs" />
-    <%include file="/shorthand/text.mako.rs" />
+    use style_traits::{CssWriter, ToCss};
+    use values::specified::{BorderStyle, Color};
+    use std::fmt::{self, Write};
 
-    // We don't defined the 'all' shorthand using the regular helpers:shorthand
+    fn serialize_directional_border<W, I,>(
+        dest: &mut CssWriter<W>,
+        width: &I,
+        style: &BorderStyle,
+        color: &Color,
+    ) -> fmt::Result
+    where
+        W: Write,
+        I: ToCss,
+    {
+        width.to_css(dest)?;
+        // FIXME(emilio): Should we really serialize the border style if it's
+        // `solid`?
+        dest.write_str(" ")?;
+        style.to_css(dest)?;
+        if *color != Color::CurrentColor {
+            dest.write_str(" ")?;
+            color.to_css(dest)?;
+        }
+        Ok(())
+    }
+
+    % for style_struct in data.style_structs:
+    include!("${repr(os.path.join(OUT_DIR, 'shorthands/{}.rs'.format(style_struct.name_lower)))[1:-1]}");
+    % endfor
+
+    // We didn't define the 'all' shorthand using the regular helpers:shorthand
     // mechanism, since it causes some very large types to be generated.
     //
     // Also, make sure logical properties appear before its physical
@@ -185,7 +178,6 @@ pub mod shorthands {
         data.declare_shorthand(
             "all",
             logical_longhands + other_longhands,
-            gecko_pref="layout.css.all-shorthand.enabled",
             spec="https://drafts.csswg.org/css-cascade-3/#all-shorthand"
         )
     %>
@@ -418,6 +410,7 @@ pub struct NonCustomPropertyId(usize);
 
 impl NonCustomPropertyId {
     #[cfg(feature = "gecko")]
+    #[inline]
     fn to_nscsspropertyid(self) -> nsCSSPropertyID {
         static MAP: [nsCSSPropertyID; ${len(data.longhands) + len(data.shorthands) + len(data.all_aliases())}] = [
             % for property in data.longhands + data.shorthands + data.all_aliases():
@@ -834,15 +827,17 @@ bitflags! {
         const APPLIES_TO_FIRST_LINE = 1 << 4;
         /// This longhand property applies to ::placeholder.
         const APPLIES_TO_PLACEHOLDER = 1 << 5;
+        /// This property's getComputedStyle implementation requires layout
+        /// to be flushed.
+        const GETCS_NEEDS_LAYOUT_FLUSH = 1 << 6;
 
         /* The following flags are currently not used in Rust code, they
          * only need to be listed in corresponding properties so that
          * they can be checked in the C++ side via ServoCSSPropList.h. */
-        /// This property's getComputedStyle implementation requires layout
-        /// to be flushed.
-        const GETCS_NEEDS_LAYOUT_FLUSH = 0;
         /// This property can be animated on the compositor.
         const CAN_ANIMATE_ON_COMPOSITOR = 0;
+        /// This shorthand property is accessible from getComputedStyle.
+        const SHORTHAND_IN_GETCS = 0;
     }
 }
 
@@ -1450,6 +1445,7 @@ impl UnparsedValue {
                 None,
                 ParsingMode::DEFAULT,
                 quirks_mode,
+                None,
             );
 
             let mut input = ParserInput::new(&css);
@@ -1715,6 +1711,9 @@ impl PropertyId {
     }
 
     /// Returns a property id from Gecko's nsCSSPropertyID.
+    ///
+    /// TODO(emilio): We should be able to make this a single integer cast to
+    /// `NonCustomPropertyId`.
     #[cfg(feature = "gecko")]
     #[allow(non_upper_case_globals)]
     pub fn from_nscsspropertyid(id: nsCSSPropertyID) -> Result<Self, ()> {
@@ -2503,6 +2502,7 @@ pub mod style_structs {
             /// Whether this is a multicol style.
             #[cfg(feature = "servo")]
             pub fn is_multicol(&self) -> bool {
+                use values::Either;
                 match self.column_width {
                     Either::First(_width) => true,
                     Either::Second(_auto) => !self.column_count.is_auto(),
@@ -2614,6 +2614,59 @@ impl ComputedValues {
     pub fn custom_properties(&self) -> Option<<&Arc<::custom_properties::CustomPropertiesMap>> {
         self.custom_properties.as_ref()
     }
+
+    /// Writes the value of the given longhand as a string in `dest`.
+    ///
+    /// Note that the value will usually be the computed value, except for
+    /// colors, where it's resolved.
+    pub fn get_longhand_property_value<W>(
+        &self,
+        property_id: LonghandId,
+        dest: &mut CssWriter<W>
+    ) -> fmt::Result
+    where
+        W: Write,
+    {
+        // TODO(emilio): Is it worth to merge branches here just like
+        // PropertyDeclaration::to_css does?
+        //
+        // We'd need to get a concept of ~resolved value, which may not be worth
+        // it.
+        match property_id {
+            % for prop in data.longhands:
+            LonghandId::${prop.camel_case} => {
+                let style_struct =
+                    self.get_${prop.style_struct.ident.strip("_")}();
+                let value =
+                    style_struct
+                    % if prop.logical:
+                    .clone_${prop.ident}(self.writing_mode);
+                    % else:
+                    .clone_${prop.ident}();
+                    % endif
+
+                % if prop.predefined_type == "Color":
+                let value = self.resolve_color(value);
+                % endif
+
+                value.to_css(dest)
+            }
+            % endfor
+        }
+    }
+
+    /// Resolves the currentColor keyword.
+    ///
+    /// Any color value from computed values (except for the 'color' property
+    /// itself) should go through this method.
+    ///
+    /// Usage example:
+    /// let top_color =
+    ///   style.resolve_color(style.get_border().clone_border_top_color());
+    #[inline]
+    pub fn resolve_color(&self, color: computed::Color) -> RGBA {
+        color.to_rgba(self.get_color().clone_color())
+    }
 }
 
 #[cfg(feature = "servo")]
@@ -2648,6 +2701,26 @@ impl ComputedValues {
 
     /// Get the initial computed values.
     pub fn initial_values() -> &'static Self { &*INITIAL_SERVO_VALUES }
+
+    /// Serializes the computed value of this property as a string.
+    pub fn computed_value_to_string(&self, property: PropertyDeclarationId) -> String {
+        match property {
+            PropertyDeclarationId::Longhand(id) => {
+                let mut s = String::new();
+                self.get_longhand_property_value(
+                    id,
+                    &mut CssWriter::new(&mut s)
+                ).unwrap();
+                s
+            }
+            PropertyDeclarationId::Custom(name) => {
+                self.custom_properties
+                    .as_ref()
+                    .and_then(|map| map.get(name))
+                    .map_or(String::new(), |value| value.to_css_string())
+            }
+        }
+    }
 }
 
 #[cfg(feature = "servo")]
@@ -2724,18 +2797,6 @@ impl ComputedValuesInner {
     #[inline]
     pub fn is_multicol(&self) -> bool {
         self.get_column().is_multicol()
-    }
-
-    /// Resolves the currentColor keyword.
-    ///
-    /// Any color value from computed values (except for the 'color' property
-    /// itself) should go through this method.
-    ///
-    /// Usage example:
-    /// let top_color = style.resolve_color(style.Border.border_top_color);
-    #[inline]
-    pub fn resolve_color(&self, color: computed::Color) -> RGBA {
-        color.to_rgba(self.get_color().color)
     }
 
     /// Get the logical computed inline size.
@@ -2897,26 +2958,6 @@ impl ComputedValuesInner {
 
         // Neither perspective nor transform present
         false
-    }
-
-    /// Serializes the computed value of this property as a string.
-    pub fn computed_value_to_string(&self, property: PropertyDeclarationId) -> String {
-        match property {
-            % for style_struct in data.active_style_structs():
-                % for longhand in style_struct.longhands:
-                    PropertyDeclarationId::Longhand(LonghandId::${longhand.camel_case}) => {
-                        self.${style_struct.ident}.${longhand.ident}.to_css_string()
-                    }
-                % endfor
-            % endfor
-            PropertyDeclarationId::Custom(name) => {
-                self.custom_properties
-                    .as_ref()
-                    .and_then(|map| map.get(name))
-                    .map(|value| value.to_css_string())
-                    .unwrap_or(String::new())
-            }
-        }
     }
 }
 
@@ -3812,7 +3853,7 @@ where
         }
         % if category_to_cascade_now == "early":
             let writing_mode =
-                WritingMode::new(context.builder.get_inheritedbox());
+                WritingMode::new(context.builder.get_inherited_box());
             context.builder.writing_mode = writing_mode;
 
             let mut _skip_font_family = false;

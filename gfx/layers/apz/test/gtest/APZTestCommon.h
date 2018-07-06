@@ -16,6 +16,7 @@
 #include "gmock/gmock.h"
 
 #include "mozilla/Attributes.h"
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/layers/AsyncCompositionManager.h" // for ViewTransform
 #include "mozilla/layers/GeckoContentController.h"
 #include "mozilla/layers/CompositorBridgeParent.h"
@@ -62,30 +63,36 @@ CreateSingleTouchData(int32_t aIdentifier, ScreenIntCoord aX, ScreenIntCoord aY)
   return CreateSingleTouchData(aIdentifier, ScreenIntPoint(aX, aY));
 }
 
-template<class T>
-class ScopedGfxPref {
+template<class SetArg, class Storage>
+class ScopedGfxSetting {
 public:
-  ScopedGfxPref(T (*aGetPrefFunc)(void), void (*aSetPrefFunc)(T), T aVal)
+  ScopedGfxSetting(SetArg (*aGetPrefFunc)(void), void (*aSetPrefFunc)(SetArg), SetArg aVal)
     : mSetPrefFunc(aSetPrefFunc)
   {
     mOldVal = aGetPrefFunc();
     aSetPrefFunc(aVal);
   }
 
-  ~ScopedGfxPref() {
+  ~ScopedGfxSetting() {
     mSetPrefFunc(mOldVal);
   }
 
 private:
-  void (*mSetPrefFunc)(T);
-  T mOldVal;
+  void (*mSetPrefFunc)(SetArg);
+  Storage mOldVal;
 };
 
 #define SCOPED_GFX_PREF(prefBase, prefType, prefValue) \
-  ScopedGfxPref<prefType> pref_##prefBase( \
+  ScopedGfxSetting<prefType, prefType> pref_##prefBase( \
     &(gfxPrefs::prefBase), \
     &(gfxPrefs::Set##prefBase), \
     prefValue)
+
+#define SCOPED_GFX_VAR(varBase, varType, varValue) \
+  ScopedGfxSetting<const varType&, varType> var_##varBase( \
+    &(gfxVars::varBase), \
+    &(gfxVars::Set##varBase), \
+    varValue)
 
 static TimeStamp GetStartupTime() {
   static TimeStamp sStartupTime = TimeStamp::Now();
@@ -202,6 +209,14 @@ public:
 
   void ClearContentController() {
     mcc = nullptr;
+  }
+
+  /**
+   * This function is not currently implemented.
+   * See bug 1468804 for more information.
+   **/
+  void CancelAnimation() {
+    EXPECT_TRUE(false);
   }
 
 protected:
@@ -348,7 +363,8 @@ public:
      * to pass in coordinates that are sufficient to overcome the touch-start
      * tolerance *and* cause the desired amount of scrolling.
      */
-    ExactCoordinates = 0x2
+    ExactCoordinates = 0x2,
+    NoFling = 0x4
   };
 
   enum class PinchOptions {
@@ -405,11 +421,6 @@ public:
                          bool aExpectConsumed,
                          nsTArray<uint32_t>* aAllowedTouchBehaviors,
                          uint64_t* aOutInputBlockId = nullptr);
-
-  void ApzcPanNoFling(const RefPtr<TestAsyncPanZoomController>& aApzc,
-                      int aTouchStartY,
-                      int aTouchEndY,
-                      uint64_t* aOutInputBlockId = nullptr);
 
   template<class InputReceiver>
   void DoubleTap(const RefPtr<InputReceiver>& aTarget,
@@ -582,6 +593,10 @@ APZCTesterBase::Pan(const RefPtr<InputReceiver>& aTarget,
     (*aOutEventStatuses)[3] = status;
   }
 
+  if ((aOptions & PanOptions::NoFling)) {
+    aTarget->CancelAnimation();
+  }
+
   // Don't increment the time here. Animations started on touch-up, such as
   // flings, are affected by elapsed time, and we want to be able to sample
   // them immediately after they start, without time having elapsed.
@@ -621,15 +636,6 @@ APZCTesterBase::PanAndCheckStatus(const RefPtr<InputReceiver>& aTarget,
   }
   EXPECT_EQ(touchMoveStatus, statuses[1]);
   EXPECT_EQ(touchMoveStatus, statuses[2]);
-}
-
-void
-APZCTesterBase::ApzcPanNoFling(const RefPtr<TestAsyncPanZoomController>& aApzc,
-                               int aTouchStartY, int aTouchEndY,
-                               uint64_t* aOutInputBlockId)
-{
-  Pan(aApzc, aTouchStartY, aTouchEndY, PanOptions::None, nullptr, nullptr, aOutInputBlockId);
-  aApzc->CancelAnimation();
 }
 
 template<class InputReceiver>

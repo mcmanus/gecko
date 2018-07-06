@@ -1225,6 +1225,7 @@ CSPAllowsInlineScript(nsIScriptElement* aElement, nsIDocument* aDocument)
   rv = csp->GetAllowsInline(nsIContentPolicy::TYPE_SCRIPT,
                             nonce, parserCreated, aElement,
                             aElement->GetScriptLineNumber(),
+                            aElement->GetScriptColumnNumber(),
                             &allowInlineScript);
   return allowInlineScript;
 }
@@ -1960,7 +1961,7 @@ ScriptLoader::ProcessRequest(ScriptLoadRequest* aRequest)
     nsContentUtils::DispatchTrustedEvent(scriptElem->OwnerDoc(),
                                          scriptElem,
                                          NS_LITERAL_STRING("beforescriptexecute"),
-                                         true, true, &runScript);
+                                         CanBubble::eYes, Cancelable::eYes, &runScript);
   }
 
   // Inner window could have gone away after firing beforescriptexecute
@@ -1982,7 +1983,7 @@ ScriptLoader::ProcessRequest(ScriptLoadRequest* aRequest)
     nsContentUtils::DispatchTrustedEvent(scriptElem->OwnerDoc(),
                                          scriptElem,
                                          NS_LITERAL_STRING("afterscriptexecute"),
-                                         true, false);
+                                         CanBubble::eYes, Cancelable::eNo);
   }
 
   FireScriptEvaluated(rv, aRequest);
@@ -2868,10 +2869,11 @@ ScriptLoader::VerifySRI(ScriptLoadRequest* aRequest,
       nsAutoCString violationURISpec;
       mDocument->GetDocumentURI()->GetAsciiSpec(violationURISpec);
       uint32_t lineNo = aRequest->mElement ? aRequest->mElement->GetScriptLineNumber() : 0;
+      uint32_t columnNo = aRequest->mElement ? aRequest->mElement->GetScriptColumnNumber() : 0;
       csp->LogViolationDetails(
         nsIContentSecurityPolicy::VIOLATION_TYPE_REQUIRE_SRI_FOR_SCRIPT,
         NS_ConvertUTF8toUTF16(violationURISpec),
-        EmptyString(), lineNo, EmptyString(), EmptyString());
+        EmptyString(), lineNo, columnNo, EmptyString(), EmptyString());
       rv = NS_ERROR_SRI_CORRUPT;
     }
   }
@@ -2953,12 +2955,13 @@ ScriptLoader::ReportErrorToConsole(ScriptLoadRequest *aRequest,
   const char16_t* params[] = { url.get() };
 
   uint32_t lineNo = aRequest->mElement->GetScriptLineNumber();
+  uint32_t columnNo = aRequest->mElement->GetScriptColumnNumber();
 
   nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
                                   NS_LITERAL_CSTRING("Script Loader"), mDocument,
                                   nsContentUtils::eDOM_PROPERTIES, message,
                                   params, ArrayLength(params), nullptr,
-                                  EmptyString(), lineNo);
+                                  EmptyString(), lineNo, columnNo);
 }
 
 void

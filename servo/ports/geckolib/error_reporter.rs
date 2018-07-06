@@ -9,7 +9,6 @@
 use cssparser::{CowRcStr, serialize_identifier, ToCss};
 use cssparser::{SourceLocation, ParseError, ParseErrorKind, Token, BasicParseErrorKind};
 use selectors::parser::SelectorParseErrorKind;
-use std::cell::Cell;
 use std::ffi::CStr;
 use std::ptr;
 use style::error_reporting::{ParseErrorReporter, ContextualParseError};
@@ -26,28 +25,31 @@ pub struct ErrorReporter {
     sheet: *const DomStyleSheet,
     loader: *const Loader,
     uri: *mut nsIURI,
-    cached_error_reporting_enabled: Cell<Option<bool>>,
 }
 
 impl ErrorReporter {
-    /// Create a new instance of the Gecko error reporter.
+    /// Create a new instance of the Gecko error reporter, if error reporting is
+    /// enabled.
     pub fn new(
         sheet: *mut DomStyleSheet,
         loader: *mut Loader,
         extra_data: *mut RawUrlExtraData,
-    ) -> Self {
+    ) -> Option<Self> {
+        if !Self::reporting_enabled(sheet, loader) {
+            return None;
+        }
+
         let uri = unsafe {
             extra_data.as_ref()
                 .map(|d| d.mBaseURI.raw::<nsIURI>())
                 .unwrap_or(ptr::null_mut())
         };
 
-        ErrorReporter {
+        Some(ErrorReporter {
             sheet,
             loader,
             uri,
-            cached_error_reporting_enabled: Cell::new(None),
-        }
+        })
     }
 }
 
@@ -143,9 +145,7 @@ fn extract_error_params<'a>(err: ErrorKind<'a>) -> Option<ErrorParams<'a>> {
             (Some(ErrorString::Ident(ident)), None)
         }
 
-        ParseErrorKind::Custom(
-            StyleParseErrorKind::ExpectedIdentifier(token)
-        ) |
+        ParseErrorKind::Basic(BasicParseErrorKind::UnexpectedToken(token)) |
         ParseErrorKind::Custom(
             StyleParseErrorKind::ValueError(ValueParseErrorKind::InvalidColor(token))
         ) => {
@@ -340,20 +340,20 @@ impl<'a> ErrorHelpers<'a> for ContextualParseError<'a> {
             }
             ContextualParseError::InvalidMediaRule(_, ref err) => {
                 let err: &CStr = match err.kind {
-                    ParseErrorKind::Custom(StyleParseErrorKind::ExpectedIdentifier(..)) => {
-                        cstr!("PEGatherMediaNotIdent")
-                    },
                     ParseErrorKind::Custom(StyleParseErrorKind::MediaQueryExpectedFeatureName(..)) => {
                         cstr!("PEMQExpectedFeatureName")
                     },
                     ParseErrorKind::Custom(StyleParseErrorKind::MediaQueryExpectedFeatureValue) => {
                         cstr!("PEMQExpectedFeatureValue")
                     },
+                    ParseErrorKind::Custom(StyleParseErrorKind::MediaQueryUnexpectedOperator) => {
+                        cstr!("PEMQUnexpectedOperator")
+                    },
                     ParseErrorKind::Custom(StyleParseErrorKind::RangedExpressionWithNoValue) => {
                         cstr!("PEMQNoMinMaxWithoutValue")
                     },
                     _ => {
-                        cstr!("PEDeclDropped")
+                        cstr!("PEMQUnexpectedToken")
                     },
                 };
                 (err, Action::Nothing)
@@ -393,21 +393,15 @@ impl<'a> ErrorHelpers<'a> for ContextualParseError<'a> {
 }
 
 impl ErrorReporter {
-    fn reporting_enabled(&self) -> bool {
-        if let Some(enabled) = self.cached_error_reporting_enabled.get() {
-            return enabled;
-        }
-        let enabled = unsafe {
-            bindings::Gecko_ErrorReportingEnabled(self.sheet, self.loader)
-        };
-        self.cached_error_reporting_enabled.set(Some(enabled));
-        enabled
+    fn reporting_enabled(
+        sheet: *const DomStyleSheet,
+        loader: *const Loader,
+    ) -> bool {
+        unsafe { bindings::Gecko_ErrorReportingEnabled(sheet, loader) }
     }
 
     pub fn report(&self, location: SourceLocation, error: ContextualParseError) {
-        if !self.reporting_enabled() {
-            return;
-        }
+        debug_assert!(Self::reporting_enabled(self.sheet, self.loader));
 
         let (pre, name, action) = error.to_gecko_message();
         let suffix = match action {

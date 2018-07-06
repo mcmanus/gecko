@@ -875,6 +875,14 @@ _useragent(NPP aNPP);
 static void*
 _memalloc (uint32_t size);
 
+// Deprecated entry points for the old Java plugin.
+static void* /* OJI type: JRIEnv* */
+_getjavaenv(void);
+
+// Deprecated entry points for the old Java plugin.
+static void* /* OJI type: jref */
+_getjavapeer(NPP aNPP);
+
 static bool
 _invoke(NPP aNPP, NPObject* npobj, NPIdentifier method, const NPVariant *args,
         uint32_t argCount, NPVariant *result);
@@ -979,8 +987,8 @@ const NPNetscapeFuncs PluginModuleChild::sBrowserFuncs = {
     mozilla::plugins::child::_memfree,
     mozilla::plugins::child::_memflush,
     mozilla::plugins::child::_reloadplugins,
-    nullptr, // _getjavaenv, unimplemented
-    nullptr, // _getjavapeer, unimplemented
+    mozilla::plugins::child::_getjavaenv,
+    mozilla::plugins::child::_getjavapeer,
     mozilla::plugins::child::_geturlnotify,
     mozilla::plugins::child::_posturlnotify,
     mozilla::plugins::child::_getvalue,
@@ -1128,7 +1136,7 @@ _getvalue(NPP aNPP,
         }
     }
 
-    NS_NOTREACHED("Shouldn't get here!");
+    MOZ_ASSERT_UNREACHABLE("Shouldn't get here!");
     return NPERR_GENERIC_ERROR;
 }
 
@@ -1294,6 +1302,21 @@ _memalloc(uint32_t aSize)
 {
     PLUGIN_LOG_DEBUG_FUNCTION;
     return moz_xmalloc(aSize);
+}
+
+// Deprecated entry points for the old Java plugin.
+void* /* OJI type: JRIEnv* */
+_getjavaenv(void)
+{
+    PLUGIN_LOG_DEBUG_FUNCTION;
+    return 0;
+}
+
+void* /* OJI type: jref */
+_getjavapeer(NPP aNPP)
+{
+    PLUGIN_LOG_DEBUG_FUNCTION;
+    return 0;
 }
 
 bool
@@ -1819,7 +1842,7 @@ PluginModuleChild::AnswerModuleSupportsAsyncRender(bool* aResult)
     *aResult = gChromeInstance->mAsyncRenderSupport;
     return IPC_OK();
 #else
-    NS_NOTREACHED("Shouldn't get here!");
+    MOZ_ASSERT_UNREACHABLE("Shouldn't get here!");
     return IPC_FAIL_NO_REASON(this);
 #endif
 }
@@ -2212,5 +2235,23 @@ PluginModuleChild::RecvNPP_SetValue_NPNVaudioDeviceChangeDetails(
     return IPC_OK();
 #else
     MOZ_CRASH("NPP_SetValue_NPNVaudioDeviceChangeDetails is a Windows-only message");
+#endif
+}
+
+mozilla::ipc::IPCResult
+PluginModuleChild::RecvNPP_SetValue_NPNVaudioDeviceStateChanged(
+                          const NPAudioDeviceStateChangedIPC& aDeviceStateIPC)
+{
+#if defined(XP_WIN)
+  NPAudioDeviceStateChanged stateChange;
+  stateChange.newState = aDeviceStateIPC.state;
+  stateChange.device = aDeviceStateIPC.device.c_str();
+  for (auto iter = mAudioNotificationSet.ConstIter(); !iter.Done(); iter.Next()) {
+    PluginInstanceChild* pluginInst = iter.Get()->GetKey();
+    pluginInst->AudioDeviceStateChanged(stateChange);
+  }
+  return IPC_OK();
+#else
+  MOZ_CRASH("NPP_SetValue_NPNVaudioDeviceRemoved is a Windows-only message");
 #endif
 }

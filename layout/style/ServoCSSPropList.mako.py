@@ -68,6 +68,64 @@ def method(prop):
         return prop.camel_case[1:]
     return prop.camel_case
 
+# Colors, integers and lengths are easy as well.
+#
+# TODO(emilio): This will go away once the rest of the longhands have been
+# moved or perhaps using a blacklist for the ones with non-layout-dependence
+# but other non-trivial dependence like scrollbar colors.
+SERIALIZED_PREDEFINED_TYPES = [
+    "Color",
+    "Content",
+    "CounterIncrement",
+    "CounterReset",
+    "FontFamily",
+    "FontFeatureSettings",
+    "FontLanguageOverride",
+    "FontSize",
+    "FontSizeAdjust",
+    "FontStretch",
+    "FontStyle",
+    "FontSynthesis",
+    "FontVariant",
+    "FontVariantAlternates",
+    "FontVariantEastAsian",
+    "FontVariantLigatures",
+    "FontVariantNumeric",
+    "FontVariationSettings",
+    "FontWeight",
+    "Integer",
+    "Length",
+    "LengthOrPercentage",
+    "NonNegativeLength",
+    "NonNegativeLengthOrPercentage",
+    "ListStyleType",
+    "Opacity",
+    "url::ImageUrlOrNone",
+]
+
+def serialized_by_servo(prop):
+    # If the property requires layout information, no such luck.
+    if "GETCS_NEEDS_LAYOUT_FLUSH" in prop.flags:
+        return False
+    # No shorthands yet.
+    if prop.type() == "shorthand":
+        return False
+    # Keywords are all fine, except -moz-osx-font-smoothing, which does
+    # resistfingerprinting stuff.
+    if prop.keyword and prop.name != "-moz-osx-font-smoothing":
+        return True
+    if prop.predefined_type in SERIALIZED_PREDEFINED_TYPES:
+        return True
+    # TODO(emilio): Enable the rest of the longhands.
+    return False
+
+def exposed_on_getcs(prop):
+    if prop.type() == "longhand":
+        return not is_internal(prop)
+    # TODO: bug 137688 / https://github.com/w3c/csswg-drafts/issues/2529
+    if prop.type() == "shorthand":
+        return "SHORTHAND_IN_GETCS" in prop.flags
+
 def flags(prop):
     result = []
     if prop.explicitly_enabled_in_chrome():
@@ -82,7 +140,13 @@ def flags(prop):
         result.append("GetCSNeedsLayoutFlush")
     if "CAN_ANIMATE_ON_COMPOSITOR" in prop.flags:
         result.append("CanAnimateOnCompositor")
-    return ", ".join('"CSSPropFlags::{}"'.format(flag) for flag in result)
+    if exposed_on_getcs(prop):
+        result.append("ExposedOnGetCS")
+    if serialized_by_servo(prop):
+        result.append("SerializedByServo")
+    if prop.type() == "longhand" and prop.logical:
+        result.append("IsLogical")
+    return ", ".join('"{}"'.format(flag) for flag in result)
 
 def pref(prop):
     if prop.gecko_pref:

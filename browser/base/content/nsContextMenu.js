@@ -150,9 +150,6 @@ nsContextMenu.prototype = {
 
     // Initialize (disable/remove) menu items.
     this.initItems();
-
-    // Register this opening of the menu with telemetry:
-    this._checkTelemetryForMenu(aXulMenu);
   },
 
   setContext() {
@@ -204,7 +201,6 @@ nsContextMenu.prototype = {
     this.onLink              = context.onLink;
     this.onLoadedImage       = context.onLoadedImage;
     this.onMailtoLink        = context.onMailtoLink;
-    this.onMathML            = context.onMathML;
     this.onMozExtLink        = context.onMozExtLink;
     this.onNumeric           = context.onNumeric;
     this.onPassword          = context.onPassword;
@@ -427,8 +423,6 @@ nsContextMenu.prototype = {
     // View source is always OK, unless in directory listing.
     this.showItem("context-viewpartialsource-selection",
                   this.isContentSelected);
-    this.showItem("context-viewpartialsource-mathml",
-                  this.onMathML && !this.isContentSelected);
 
     var shouldShow = !(this.isContentSelected ||
                        this.onImage || this.onCanvas ||
@@ -879,7 +873,7 @@ nsContextMenu.prototype = {
   },
 
   // View Partial Source
-  viewPartialSource(aContext) {
+  viewPartialSource() {
     let {browser} = this;
     let openSelectionFn = function() {
       let tabBrowser = gBrowser;
@@ -901,8 +895,7 @@ nsContextMenu.prototype = {
       return tabBrowser.getBrowserForTab(tab);
     };
 
-    let target = aContext == "mathml" ? this.target : null;
-    top.gViewSourceUtils.viewPartialSourceInBrowser(browser, target, openSelectionFn);
+    top.gViewSourceUtils.viewPartialSourceInBrowser(browser, openSelectionFn);
   },
 
   // Open new "view source" window with the frame's URL.
@@ -1002,12 +995,22 @@ nsContextMenu.prototype = {
       target: this.target,
     });
 
+    // Cache this because we fetch the data async
+    let {documentURIObject} = gContextMenuContentData;
+
     let onMessage = (message) => {
       mm.removeMessageListener("ContextMenu:SaveVideoFrameAsImage:Result", onMessage);
+      // FIXME can we switch this to a blob URL?
       let dataURL = message.data.dataURL;
-      saveImageURL(dataURL, name, "SaveImageTitle", true, false,
-                   document.documentURIObject, null, null, null,
-                   isPrivate);
+      saveImageURL(dataURL, name, "SaveImageTitle",
+                   true, // bypass cache
+                   false, // don't skip prompt for where to save
+                   documentURIObject, // referrer
+                   null, // document
+                   null, // content type
+                   null, // content disposition
+                   isPrivate,
+                   this.principal);
     };
     mm.addMessageListener("ContextMenu:SaveVideoFrameAsImage:Result", onMessage);
   },
@@ -1245,13 +1248,15 @@ nsContextMenu.prototype = {
       this._canvasToBlobURL(this.target).then(function(blobURL) {
         saveImageURL(blobURL, "canvas.png", "SaveImageTitle",
                      true, false, referrerURI, null, null, null,
-                     isPrivate);
+                     isPrivate,
+                     document.nodePrincipal /* system, because blob: */);
       }, Cu.reportError);
     } else if (this.onImage) {
       urlSecurityCheck(this.mediaURL, this.principal);
       saveImageURL(this.mediaURL, null, "SaveImageTitle", false,
                    false, referrerURI, null, gContextMenuContentData.contentType,
-                   gContextMenuContentData.contentDisposition, isPrivate);
+                   gContextMenuContentData.contentDisposition, isPrivate,
+                   this.principal);
     } else if (this.onVideo || this.onAudio) {
       var dialogTitle = this.onVideo ? "SaveVideoTitle" : "SaveAudioTitle";
       this.saveHelper(this.mediaURL, null, dialogTitle, false, doc, referrerURI,
@@ -1427,7 +1432,7 @@ nsContextMenu.prototype = {
 
   bookmarkThisPage: function CM_bookmarkThisPage() {
     window.top.PlacesCommandHook
-              .bookmarkPage(this.browser, true)
+              .bookmarkPage()
               .catch(Cu.reportError);
   },
 
@@ -1526,64 +1531,6 @@ nsContextMenu.prototype = {
                                                          selectedText]);
     menuItem.label = menuLabel;
     menuItem.accessKey = gNavigatorBundle.getString("contextMenuSearch.accesskey");
-  },
-
-  _getTelemetryClickInfo(aXulMenu) {
-    this._onPopupHiding = () => {
-      aXulMenu.ownerDocument.removeEventListener("command", activationHandler, true);
-      aXulMenu.removeEventListener("popuphiding", this._onPopupHiding, true);
-      delete this._onPopupHiding;
-
-      let eventKey = [
-          this._telemetryPageContext,
-          this._telemetryHadCustomItems ? "withcustom" : "withoutcustom"
-      ];
-      let target = this._telemetryClickID || "close-without-interaction";
-      BrowserUITelemetry.registerContextMenuInteraction(eventKey, target);
-    };
-    let activationHandler = (e) => {
-      // Deal with command events being routed to command elements; figure out
-      // what triggered the event (which will have the right e.target)
-      if (e.sourceEvent) {
-        e = e.sourceEvent;
-      }
-      // Target should be in the menu (this catches using shortcuts for items
-      // not in the menu while the menu is up)
-      if (!aXulMenu.contains(e.target)) {
-        return;
-      }
-
-      // Check if this is a page menu item:
-      if (e.target.hasAttribute(PageMenuParent.GENERATEDITEMID_ATTR)) {
-        this._telemetryClickID = "custom-page-item";
-      } else {
-        this._telemetryClickID = (e.target.id || "unknown").replace(/^context-/i, "");
-      }
-    };
-    aXulMenu.ownerDocument.addEventListener("command", activationHandler, true);
-    aXulMenu.addEventListener("popuphiding", this._onPopupHiding, true);
-  },
-
-  _getTelemetryPageContextInfo() {
-    let rv = [];
-    for (let k of ["isContentSelected", "onLink", "onImage", "onCanvas", "onVideo", "onAudio",
-                   "onTextInput", "inWebExtBrowser", "inTabBrowser"]) {
-      if (this[k]) {
-        rv.push(k.replace(/^(?:is|on)(.)/, (match, firstLetter) => firstLetter.toLowerCase()));
-      }
-    }
-    if (!rv.length) {
-      rv.push("other");
-    }
-
-    return JSON.stringify(rv);
-  },
-
-  _checkTelemetryForMenu(aXulMenu) {
-    this._telemetryClickID = null;
-    this._telemetryPageContext = this._getTelemetryPageContextInfo();
-    this._telemetryHadCustomItems = this.hasPageMenu;
-    this._getTelemetryClickInfo(aXulMenu);
   },
 
   createContainerMenu(aEvent) {

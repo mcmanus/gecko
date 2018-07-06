@@ -182,7 +182,7 @@
 
 #include "nsIContent.h"
 
-#include "mozilla/HangMonitor.h"
+#include "mozilla/BackgroundHangMonitor.h"
 #include "WinIMEHandler.h"
 
 #include "npapi.h"
@@ -352,9 +352,6 @@ static NS_DEFINE_CID(kCClipboardCID, NS_CLIPBOARD_CID);
 // General purpose user32.dll hook object
 static WindowsDllInterceptor sUser32Intercept;
 
-// AddHook success checks
-static mozilla::Maybe<bool> sHookedGetWindowInfo;
-
 // 2 pixel offset for eTransparencyBorderlessGlass which equals the size of
 // the default window border Windows paints. Glass will be extended inward
 // this distance to remove the border.
@@ -461,17 +458,17 @@ private:
     if (!IsWin10OrLater() && GetModuleHandle(L"tiptsf.dll") &&
         !sProcessCaretEventsStub) {
       sTipTsfInterceptor.Init("tiptsf.dll");
-      DebugOnly<bool> ok = sTipTsfInterceptor.AddHook("ProcessCaretEvents",
-          reinterpret_cast<intptr_t>(&ProcessCaretEventsHook),
-          (void**) &sProcessCaretEventsStub);
+      DebugOnly<bool> ok = sProcessCaretEventsStub.Set(sTipTsfInterceptor,
+                                                       "ProcessCaretEvents",
+                                                       &ProcessCaretEventsHook);
       MOZ_ASSERT(ok);
     }
 
     if (!sSendMessageTimeoutWStub) {
       sUser32Intercept.Init("user32.dll");
-      DebugOnly<bool> hooked = sUser32Intercept.AddHook("SendMessageTimeoutW",
-          reinterpret_cast<intptr_t>(&SendMessageTimeoutWHook),
-          (void**) &sSendMessageTimeoutWStub);
+      DebugOnly<bool> hooked = sSendMessageTimeoutWStub.Set(sUser32Intercept,
+                                                            "SendMessageTimeoutW",
+                                                            &SendMessageTimeoutWHook);
       MOZ_ASSERT(hooked);
     }
   }
@@ -556,8 +553,10 @@ private:
   }
 
   static WindowsDllInterceptor sTipTsfInterceptor;
-  static WINEVENTPROC sProcessCaretEventsStub;
-  static decltype(&SendMessageTimeoutW) sSendMessageTimeoutWStub;
+  static WindowsDllInterceptor::FuncHookType<WINEVENTPROC>
+    sProcessCaretEventsStub;
+  static WindowsDllInterceptor::FuncHookType<decltype(&SendMessageTimeoutW)>
+    sSendMessageTimeoutWStub;
   static StaticAutoPtr<TIPMessageHandler> sInstance;
 
   HHOOK                 mHook;
@@ -566,8 +565,10 @@ private:
 };
 
 WindowsDllInterceptor TIPMessageHandler::sTipTsfInterceptor;
-WINEVENTPROC TIPMessageHandler::sProcessCaretEventsStub;
-decltype(&SendMessageTimeoutW) TIPMessageHandler::sSendMessageTimeoutWStub;
+WindowsDllInterceptor::FuncHookType<WINEVENTPROC>
+  TIPMessageHandler::sProcessCaretEventsStub;
+WindowsDllInterceptor::FuncHookType<decltype(&SendMessageTimeoutW)>
+  TIPMessageHandler::sSendMessageTimeoutWStub;
 StaticAutoPtr<TIPMessageHandler> TIPMessageHandler::sInstance;
 
 } // namespace mozilla
@@ -2472,7 +2473,7 @@ nsWindow::ResetLayout()
 // margins are set.
 static const wchar_t kManageWindowInfoProperty[] = L"ManageWindowInfoProperty";
 typedef BOOL (WINAPI *GetWindowInfoPtr)(HWND hwnd, PWINDOWINFO pwi);
-static GetWindowInfoPtr sGetWindowInfoPtrStub = nullptr;
+static WindowsDllInterceptor::FuncHookType<GetWindowInfoPtr> sGetWindowInfoPtrStub;
 
 BOOL WINAPI
 GetWindowInfoHook(HWND hWnd, PWINDOWINFO pwi)
@@ -2500,18 +2501,15 @@ nsWindow::UpdateGetWindowInfoCaptionStatus(bool aActiveCaption)
   if (!mWnd)
     return;
 
-  if (sHookedGetWindowInfo.isNothing()) {
-    sUser32Intercept.Init("user32.dll");
-    sHookedGetWindowInfo =
-      Some(sUser32Intercept.AddHook("GetWindowInfo",
-                                    reinterpret_cast<intptr_t>(GetWindowInfoHook),
-                                    (void**) &sGetWindowInfoPtrStub));
-    if (!sHookedGetWindowInfo.value()) {
-      return;
-    }
+  sUser32Intercept.Init("user32.dll");
+  sGetWindowInfoPtrStub.Set(sUser32Intercept, "GetWindowInfo",
+                            &GetWindowInfoHook);
+  if (!sGetWindowInfoPtrStub) {
+    return;
   }
+
   // Update our internally tracked caption status
-  SetPropW(mWnd, kManageWindowInfoProperty, 
+  SetPropW(mWnd, kManageWindowInfoProperty,
     reinterpret_cast<HANDLE>(static_cast<INT_PTR>(aActiveCaption) + 1));
 }
 
@@ -4333,7 +4331,7 @@ bool nsWindow::TouchEventShouldStartDrag(EventMessage aEventMessage,
                              WidgetMouseEvent::eReal);
     hittest.mRefPoint = aEventPoint;
     hittest.mIgnoreRootScrollFrame = true;
-    hittest.inputSource = MouseEventBinding::MOZ_SOURCE_TOUCH;
+    hittest.inputSource = MouseEvent_Binding::MOZ_SOURCE_TOUCH;
     DispatchInputEvent(&hittest);
 
     EventTarget* target = hittest.GetDOMEventTarget();
@@ -4437,7 +4435,7 @@ nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
 
   // Since it is unclear whether a user will use the digitizer,
   // Postpone initialization until first PEN message will be found.
-  if (MouseEventBinding::MOZ_SOURCE_PEN == aInputSource
+  if (MouseEvent_Binding::MOZ_SOURCE_PEN == aInputSource
       // Messages should be only at topLevel window.
       && nsWindowType::eWindowType_toplevel == mWindowType
       // Currently this scheme is used only when pointer events is enabled.
@@ -4487,8 +4485,8 @@ nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
   // XXX Should we allow to block web page to prevent its default with
   //     Ctrl+Shift+F10 or Alt+Shift+F10 instead?
   if (aEventMessage == eContextMenu && aIsContextMenuKey && event.IsShift() &&
-      NativeKey::LastKeyMSG().message == WM_SYSKEYDOWN &&
-      NativeKey::LastKeyMSG().wParam == VK_F10) {
+      NativeKey::LastKeyOrCharMSG().message == WM_SYSKEYDOWN &&
+      NativeKey::LastKeyOrCharMSG().wParam == VK_F10) {
     event.mModifiers &= ~MODIFIER_SHIFT;
   }
 
@@ -4957,20 +4955,6 @@ DisplaySystemMenu(HWND hWnd, nsSizeMode sizeMode, bool isRtl, int32_t x, int32_t
   return false;
 }
 
-inline static mozilla::HangMonitor::ActivityType ActivityTypeForMessage(UINT msg)
-{
-  if ((msg >= WM_KEYFIRST && msg <= WM_IME_KEYLAST) ||
-      (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) ||
-      (msg >= MOZ_WM_MOUSEWHEEL_FIRST && msg <= MOZ_WM_MOUSEWHEEL_LAST) ||
-      (msg >= NS_WM_IMEFIRST && msg <= NS_WM_IMELAST)) {
-    return mozilla::HangMonitor::kUIActivity;
-  }
-
-  // This may not actually be right, but we don't want to reset the timer if
-  // we're not actually processing a UI message.
-  return mozilla::HangMonitor::kActivityUIAVail;
-}
-
 // The WndProc procedure for all nsWindows in this toolkit. This merely catches
 // exceptions and passes the real work to WindowProcInternal. See bug 587406
 // and http://msdn.microsoft.com/en-us/library/ms633573%28VS.85%29.aspx
@@ -4978,7 +4962,7 @@ LRESULT CALLBACK nsWindow::WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
 {
   mozilla::ipc::CancelCPOWs();
 
-  HangMonitor::NotifyActivity(ActivityTypeForMessage(msg));
+  BackgroundHangMonitor().NotifyActivity();
 
   return mozilla::CallWindowProcCrashProtected(WindowProcInternal, hWnd, msg, wParam, lParam);
 }
@@ -5709,7 +5693,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
         pointerInfo.pointerId = pointerId;
         DispatchMouseEvent(eMouseExitFromWidget, wParam, pos, false,
                            WidgetMouseEvent::eLeftButton,
-                           MouseEventBinding::MOZ_SOURCE_PEN, &pointerInfo);
+                           MouseEvent_Binding::MOZ_SOURCE_PEN, &pointerInfo);
         InkCollector::sInkCollector->ClearTarget();
         InkCollector::sInkCollector->ClearPointerId();
       }
@@ -5721,7 +5705,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
       // If the context menu is brought up by a touch long-press, then
       // the APZ code is responsible for dealing with this, so we don't
       // need to do anything.
-      if (mTouchWindow && MOUSE_INPUT_SOURCE() == MouseEventBinding::MOZ_SOURCE_TOUCH) {
+      if (mTouchWindow && MOUSE_INPUT_SOURCE() == MouseEvent_Binding::MOZ_SOURCE_TOUCH) {
         MOZ_ASSERT(mAPZC); // since mTouchWindow is true, APZ must be enabled
         result = true;
         break;
@@ -7068,7 +7052,7 @@ bool nsWindow::OnGesture(WPARAM wParam, LPARAM lParam)
     wheelEvent.button      = 0;
     wheelEvent.mTime       = ::GetMessageTime();
     wheelEvent.mTimeStamp  = GetMessageTimeStamp(wheelEvent.mTime);
-    wheelEvent.inputSource = MouseEventBinding::MOZ_SOURCE_TOUCH;
+    wheelEvent.inputSource = MouseEvent_Binding::MOZ_SOURCE_TOUCH;
 
     bool endFeedback = true;
 
@@ -7105,7 +7089,7 @@ bool nsWindow::OnGesture(WPARAM wParam, LPARAM lParam)
   event.button    = 0;
   event.mTime     = ::GetMessageTime();
   event.mTimeStamp = GetMessageTimeStamp(event.mTime);
-  event.inputSource = MouseEventBinding::MOZ_SOURCE_TOUCH;
+  event.inputSource = MouseEvent_Binding::MOZ_SOURCE_TOUCH;
 
   nsEventStatus status;
   DispatchEvent(&event, status);
@@ -7989,7 +7973,7 @@ nsWindow::DealWithPopups(HWND aWnd, UINT aMessage,
     case WM_NCMBUTTONDOWN:
       if (nativeMessage != WM_TOUCH &&
           IsTouchSupportEnabled(aWnd) &&
-          MOUSE_INPUT_SOURCE() == MouseEventBinding::MOZ_SOURCE_TOUCH) {
+          MOUSE_INPUT_SOURCE() == MouseEvent_Binding::MOZ_SOURCE_TOUCH) {
         // If any of these mouse events are really compatibility events that
         // Windows is sending for touch inputs, then don't allow them to dismiss
         // popups when APZ is enabled (instead we do the dismissing as part of
@@ -8538,7 +8522,7 @@ bool nsWindow::OnPointerEvents(UINT msg, WPARAM aWParam, LPARAM aLParam)
   // location
   LPARAM newLParam = lParamToClient(aLParam);
   DispatchMouseEvent(message, aWParam, newLParam, false, button,
-                     MouseEventBinding::MOZ_SOURCE_PEN, &pointerInfo);
+                     MouseEvent_Binding::MOZ_SOURCE_PEN, &pointerInfo);
   // Consume WM_POINTER* to stop Windows fires WM_*BUTTONDOWN / WM_*BUTTONUP
   // WM_MOUSEMOVE.
   return true;

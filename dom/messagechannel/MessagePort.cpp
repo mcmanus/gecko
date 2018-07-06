@@ -151,8 +151,7 @@ private:
     }
 
     event->InitMessageEvent(nullptr, NS_LITERAL_STRING("message"),
-                            false /* non-bubbling */,
-                            false /* cancelable */, value, EmptyString(),
+                            CanBubble::eNo, Cancelable::eNo, value, EmptyString(),
                             EmptyString(), nullptr, ports);
     event->SetTrusted(true);
 
@@ -177,9 +176,9 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(MessagePort,
     NS_IMPL_CYCLE_COLLECTION_UNLINK(mPostMessageRunnable->mPort);
   }
 
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mMessages);
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mMessagesForTheOtherPort);
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mUnshippedEntangledPort);
+
+  tmp->CloseForced();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(MessagePort,
@@ -192,7 +191,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(MessagePort,
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(MessagePort)
-  NS_INTERFACE_MAP_ENTRY(nsIObserver)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 NS_IMPL_ADDREF_INHERITED(MessagePort, DOMEventTargetHelper)
@@ -200,7 +198,6 @@ NS_IMPL_RELEASE_INHERITED(MessagePort, DOMEventTargetHelper)
 
 MessagePort::MessagePort(nsIGlobalObject* aGlobal)
   : DOMEventTargetHelper(aGlobal)
-  , mInnerID(0)
   , mMessageQueueEnabled(false)
   , mIsKeptAlive(false)
   , mHasBeenTransferredOrClosed(false)
@@ -304,21 +301,13 @@ MessagePort::Initialize(const nsID& aUUID,
 
     MOZ_ASSERT(!mWorkerRef);
     mWorkerRef = std::move(strongWorkerRef);
-  } else if (GetOwner()) {
-    MOZ_ASSERT(NS_IsMainThread());
-    mInnerID = GetOwner()->WindowID();
-
-    nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
-    if (obs) {
-      obs->AddObserver(this, "inner-window-destroyed", false);
-    }
   }
 }
 
 JSObject*
 MessagePort::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return MessagePortBinding::Wrap(aCx, this, aGivenProto);
+  return MessagePort_Binding::Wrap(aCx, this, aGivenProto);
 }
 
 void
@@ -847,14 +836,6 @@ MessagePort::UpdateMustKeepAlive()
     // The DTOR of this WorkerRef will release the worker for us.
     mWorkerRef = nullptr;
 
-    if (NS_IsMainThread()) {
-      nsCOMPtr<nsIObserverService> obs =
-        do_GetService("@mozilla.org/observer-service;1");
-      if (obs) {
-        obs->RemoveObserver(this, "inner-window-destroyed");
-      }
-    }
-
     Release();
     return;
   }
@@ -865,34 +846,14 @@ MessagePort::UpdateMustKeepAlive()
   }
 }
 
-NS_IMETHODIMP
-MessagePort::Observe(nsISupports* aSubject, const char* aTopic,
-                     const char16_t* aData)
+void
+MessagePort::DisconnectFromOwner()
 {
-  MOZ_ASSERT(NS_IsMainThread());
-
-  if (strcmp(aTopic, "inner-window-destroyed")) {
-    return NS_OK;
-  }
-
-  // If the window id destroyed we have to release the reference that we are
-  // keeping.
-  if (!mIsKeptAlive) {
-    return NS_OK;
-  }
-
-  nsCOMPtr<nsISupportsPRUint64> wrapper = do_QueryInterface(aSubject);
-  NS_ENSURE_TRUE(wrapper, NS_ERROR_FAILURE);
-
-  uint64_t innerID;
-  nsresult rv = wrapper->GetData(&innerID);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  if (innerID == mInnerID) {
+  if (mIsKeptAlive) {
     CloseForced();
   }
 
-  return NS_OK;
+  DOMEventTargetHelper::DisconnectFromOwner();
 }
 
 void

@@ -131,6 +131,12 @@ struct CustomElementData
   void Traverse(nsCycleCollectionTraversalCallback& aCb) const;
   void Unlink();
 
+  nsAtom* GetIs(Element* aElement)
+  {
+    // If mType isn't the same as name atom, this is a customized built-in
+    // element, which has 'is' value set.
+    return aElement->NodeInfo()->NameAtom() == mType ? nullptr : mType.get();
+  }
 private:
   virtual ~CustomElementData() {}
 
@@ -554,6 +560,8 @@ public:
   // Chrome-only method that give JS an opportunity to only load the custom
   // element definition script when needed.
   void SetElementCreationCallback(const nsAString& aName, CustomElementCreationCallback& aCallback, ErrorResult& aRv);
+
+  void Upgrade(nsINode& aRoot);
 };
 
 class MOZ_RAII AutoCEReaction final {

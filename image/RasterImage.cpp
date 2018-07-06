@@ -74,6 +74,7 @@ RasterImage::RasterImage(nsIURI* aURI /* = nullptr */) :
   ImageResource(aURI), // invoke superclass's constructor
   mSize(0,0),
   mLockCount(0),
+  mDecoderType(DecoderType::UNKNOWN),
   mDecodeCount(0),
 #ifdef DEBUG
   mFramesNotified(0),
@@ -1775,7 +1776,7 @@ RasterImage::NotifyDecodeComplete(const DecoderFinalStatus& aStatus,
                               int32_t(aTelemetry.mDecodeTime.ToMicroseconds()));
       }
 
-      if (aTelemetry.mSpeedHistogram) {
+      if (aTelemetry.mSpeedHistogram && aTelemetry.mBytesDecoded) {
         Telemetry::Accumulate(*aTelemetry.mSpeedHistogram, aTelemetry.Speed());
       }
     }

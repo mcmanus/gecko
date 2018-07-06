@@ -37,6 +37,7 @@
 #include "vm/Shape.h"
 #include "vm/TypedArrayObject.h"
 
+#include "vm/Compartment-inl.h"
 #include "vm/JSScript-inl.h"
 #include "vm/NativeObject-inl.h"
 #include "vm/ReceiverGuard-inl.h"
@@ -979,7 +980,8 @@ Realm::getOrCreateIterResultTemplateObject(JSContext* cx)
 
     // Create a new group for the template.
     Rooted<TaggedProto> proto(cx, templateObject->taggedProto());
-    RootedObjectGroup group(cx, ObjectGroupRealm::makeGroup(cx, templateObject->getClass(),
+    RootedObjectGroup group(cx, ObjectGroupRealm::makeGroup(cx, templateObject->realm(),
+                                                            templateObject->getClass(),
                                                             proto));
     if (!group)
         return iterResultTemplate_; // = nullptr

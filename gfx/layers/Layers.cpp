@@ -593,6 +593,17 @@ Layer::HasScrollableFrameMetrics() const
 }
 
 bool
+Layer::HasRootScrollableFrameMetrics() const
+{
+  for (uint32_t i = 0; i < GetScrollMetadataCount(); i++) {
+    if (GetFrameMetrics(i).IsScrollable() && GetFrameMetrics(i).IsRootContent()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool
 Layer::IsScrollableWithoutContent() const
 {
   // A scrollable container layer with no children
@@ -2116,18 +2127,6 @@ ColorLayer::DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent)
   LayersPacket::Layer* layer = aPacket->mutable_layer(aPacket->layer_size()-1);
   layer->set_type(LayersPacket::Layer::ColorLayer);
   layer->set_color(mColor.ToABGR());
-}
-
-void
-BorderLayer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
-{
-  Layer::PrintInfo(aStream, aPrefix);
-}
-
-void
-BorderLayer::DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent)
-{
-  Layer::DumpPacket(aPacket, aParent);
 }
 
 CanvasLayer::CanvasLayer(LayerManager* aManager, void* aImplData)

@@ -3,10 +3,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-Cu.importGlobalProperties(["fetch"]);
 ChromeUtils.import("resource://gre/modules/Services.jsm");
+ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 ChromeUtils.defineModuleGetter(this, "PluralForm", "resource://gre/modules/PluralForm.jsm");
 const {actionTypes: at} = ChromeUtils.import("resource://activity-stream/common/Actions.jsm", {});
+
+XPCOMUtils.defineLazyGlobalGetters(this, ["fetch"]);
 
 const PREFERENCES_LOADED_EVENT = "home-pane-loaded";
 const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
@@ -122,7 +124,7 @@ this.AboutPreferences = class AboutPreferences {
    * Render preferences to an about:preferences content window with the provided
    * strings and preferences structure.
    */
-  renderPreferences({document, Preferences}, strings, prefStructure) {
+  renderPreferences({document, Preferences, gHomePane}, strings, prefStructure) {
     // Helper to create a new element and append it
     const createAppend = (tag, parent) => parent.appendChild(
       document.createElementNS(XUL_NS, tag));
@@ -251,6 +253,9 @@ this.AboutPreferences = class AboutPreferences {
         linkPref(subcheck, nested.name, "bool");
       });
     });
+
+    // Update the visibility of the Restore Defaults btn based on checked prefs
+    gHomePane.toggleRestoreDefaultsBtn();
   }
 };
 

@@ -462,6 +462,13 @@ fn get_proc_address(glcontext_ptr: *mut c_void,
     symbol as *const _
 }
 
+#[repr(C)]
+pub enum TelemetryProbe {
+    SceneBuildTime = 0,
+    SceneSwapTime = 1,
+    RenderTime = 2,
+}
+
 extern "C" {
     fn is_in_compositor_thread() -> bool;
     fn is_in_render_thread() -> bool;
@@ -481,6 +488,7 @@ extern "C" {
     #[allow(dead_code)]
     fn gfx_critical_error(msg: *const c_char);
     fn gfx_critical_note(msg: *const c_char);
+    fn record_telemetry_time(probe: TelemetryProbe, time_ns: u64);
 }
 
 struct CppNotifier {
@@ -514,8 +522,12 @@ impl RenderNotifier for CppNotifier {
     fn new_frame_ready(&self,
                        _: DocumentId,
                        _scrolled: bool,
-                       composite_needed: bool) {
+                       composite_needed: bool,
+                       render_time_ns: Option<u64>) {
         unsafe {
+            if let Some(time) = render_time_ns {
+                record_telemetry_time(TelemetryProbe::RenderTime, time);
+            }
             if composite_needed {
                 wr_notifier_new_frame_ready(self.window_id);
             } else {
@@ -717,13 +729,19 @@ impl SceneBuilderHooks for APZCallbacks {
         unsafe { apz_register_updater(self.window_id) }
     }
 
-    fn pre_scene_swap(&self) {
-        unsafe { apz_pre_scene_swap(self.window_id) }
+    fn pre_scene_swap(&self, scenebuild_time: u64) {
+        unsafe {
+            record_telemetry_time(TelemetryProbe::SceneBuildTime, scenebuild_time);
+            apz_pre_scene_swap(self.window_id);
+        }
     }
 
-    fn post_scene_swap(&self, info: PipelineInfo) {
+    fn post_scene_swap(&self, info: PipelineInfo, sceneswap_time: u64) {
         let info = WrPipelineInfo::new(info);
-        unsafe { apz_post_scene_swap(self.window_id, info) }
+        unsafe {
+            record_telemetry_time(TelemetryProbe::SceneSwapTime, sceneswap_time);
+            apz_post_scene_swap(self.window_id, info);
+        }
 
         // After a scene swap we should schedule a render for the next vsync,
         // otherwise there's no guarantee that the new scene will get rendered
@@ -931,6 +949,7 @@ pub extern "C" fn wr_window_new(window_id: WrWindowId,
         upload_method,
         scene_builder_hooks: Some(Box::new(APZCallbacks::new(window_id))),
         sampler: Some(Box::new(SamplerCallback::new(window_id))),
+        max_texture_size: Some(8192), // Moz2D doesn't like textures bigger than this
         ..Default::default()
     };
 
@@ -2136,11 +2155,8 @@ pub extern "C" fn wr_dp_push_border_image(state: &mut WrState,
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(rect, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
     prim_info.tag = state.current_tag;
-    state.frame_builder
-         .dl_builder
-         .push_border(&prim_info,
-                      widths.into(),
-                      border_details);
+    state.frame_builder .dl_builder
+         .push_border(&prim_info, widths.into(), border_details);
 }
 
 #[no_mangle]
@@ -2149,6 +2165,9 @@ pub extern "C" fn wr_dp_push_border_gradient(state: &mut WrState,
                                              clip: LayoutRect,
                                              is_backface_visible: bool,
                                              widths: BorderWidths,
+                                             width: u32,
+                                             height: u32,
+                                             slice: SideOffsets2D<u32>,
                                              start_point: LayoutPoint,
                                              end_point: LayoutPoint,
                                              stops: *const GradientStop,
@@ -2160,24 +2179,30 @@ pub extern "C" fn wr_dp_push_border_gradient(state: &mut WrState,
     let stops_slice = make_slice(stops, stops_count);
     let stops_vector = stops_slice.to_owned();
 
-    let border_details = BorderDetails::Gradient(GradientBorder {
-                                                     gradient:
-                                                         state.frame_builder
-                                                              .dl_builder
-                                                              .create_gradient(start_point.into(),
-                                                                               end_point.into(),
-                                                                               stops_vector,
-                                                                               extend_mode.into()),
-                                                     outset: outset.into(),
-                                                 });
+    let gradient = state.frame_builder.dl_builder.create_gradient(
+        start_point.into(),
+        end_point.into(),
+        stops_vector,
+        extend_mode.into()
+    );
+
+    let border_details = BorderDetails::NinePatch(NinePatchBorder {
+        source: NinePatchBorderSource::Gradient(gradient),
+        width,
+        height,
+        slice,
+        fill: false,
+        outset: outset.into(),
+        repeat_horizontal: RepeatMode::Stretch,
+        repeat_vertical: RepeatMode::Stretch,
+    });
+
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(rect, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
     prim_info.tag = state.current_tag;
     state.frame_builder
          .dl_builder
-         .push_border(&prim_info,
-                      widths.into(),
-                      border_details);
+         .push_border(&prim_info, widths.into(), border_details);
 }
 
 #[no_mangle]
@@ -2197,25 +2222,36 @@ pub extern "C" fn wr_dp_push_border_radial_gradient(state: &mut WrState,
     let stops_slice = make_slice(stops, stops_count);
     let stops_vector = stops_slice.to_owned();
 
-    let border_details =
-        BorderDetails::RadialGradient(RadialGradientBorder {
-                                          gradient:
-                                              state.frame_builder
-                                                   .dl_builder
-                                                   .create_radial_gradient(center.into(),
-                                                                           radius.into(),
-                                                                           stops_vector,
-                                                                           extend_mode.into()),
-                                          outset: outset.into(),
-                                      });
+    let slice = SideOffsets2D::new(
+        widths.top as u32,
+        widths.right as u32,
+        widths.bottom as u32,
+        widths.left as u32,
+    );
+
+    let gradient = state.frame_builder.dl_builder.create_radial_gradient(
+        center.into(),
+        radius.into(),
+        stops_vector,
+        extend_mode.into()
+    );
+
+    let border_details = BorderDetails::NinePatch(NinePatchBorder {
+        source: NinePatchBorderSource::RadialGradient(gradient),
+        width: rect.size.width as u32,
+        height: rect.size.height as u32,
+        slice,
+        fill: false,
+        outset: outset.into(),
+        repeat_horizontal: RepeatMode::Stretch,
+        repeat_vertical: RepeatMode::Stretch,
+    });
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(rect, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
     prim_info.tag = state.current_tag;
     state.frame_builder
          .dl_builder
-         .push_border(&prim_info,
-                      widths.into(),
-                      border_details);
+         .push_border(&prim_info, widths.into(), border_details);
 }
 
 #[no_mangle]

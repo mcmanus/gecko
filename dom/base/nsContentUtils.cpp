@@ -33,6 +33,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/AutoRestore.h"
 #include "mozilla/AutoTimelineMarker.h"
+#include "mozilla/BackgroundHangMonitor.h"
 #include "mozilla/Base64.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/DebugOnly.h"
@@ -80,6 +81,8 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/ResultExtensions.h"
 #include "mozilla/dom/Selection.h"
+#include "mozilla/Services.h"
+#include "mozilla/StaticPrefs.h"
 #include "mozilla/TextEvents.h"
 #include "nsArrayUtils.h"
 #include "nsAString.h"
@@ -512,6 +515,41 @@ EventListenerManagerHashClearEntry(PLDHashTable *table, PLDHashEntryHdr *entry)
   lm->~EventListenerManagerMapEntry();
 }
 
+static bool
+IsThirdPartyWindowOrChannel(nsPIDOMWindowInner* aWindow,
+                            nsIChannel* aChannel,
+                            nsIURI* aURI)
+{
+  MOZ_ASSERT(!aWindow || !aChannel,
+             "A window and channel should not both be provided.");
+
+  nsCOMPtr<mozIThirdPartyUtil> thirdPartyUtil = services::GetThirdPartyUtil();
+  if (!thirdPartyUtil) {
+    return false;
+  }
+
+  // In the absence of a window or channel, we assume that we are first-party.
+  bool thirdParty = false;
+
+  if (aWindow) {
+    Unused << thirdPartyUtil->IsThirdPartyWindow(aWindow->GetOuterWindow(),
+                                                 aURI,
+                                                 &thirdParty);
+  }
+
+  if (aChannel) {
+    // Note, we must call IsThirdPartyChannel() here and not just try to
+    // use nsILoadInfo.isThirdPartyContext.  That nsILoadInfo property only
+    // indicates if the parent loading window is third party or not.  We
+    // want to check the channel URI against the loading principal as well.
+    Unused << thirdPartyUtil->IsThirdPartyChannel(aChannel,
+                                                  nullptr,
+                                                  &thirdParty);
+  }
+
+  return thirdParty;
+}
+
 class SameOriginCheckerImpl final : public nsIChannelEventSink,
                                     public nsIInterfaceRequestor
 {
@@ -524,35 +562,6 @@ class SameOriginCheckerImpl final : public nsIChannelEventSink,
 
 } // namespace
 
-class nsContentUtils::nsContentUtilsReporter final : public nsIMemoryReporter
-{
-  MOZ_DEFINE_MALLOC_SIZE_OF(MallocSizeOf);
-
-  ~nsContentUtilsReporter() = default;
-
-public:
-  NS_DECL_ISUPPORTS
-
-  NS_IMETHOD
-  CollectReports(nsIHandleReportCallback* aHandleReport,
-                 nsISupports* aData, bool aAnonymize) override
-  {
-    int64_t amt = 0;
-    for (int32_t i = 0; i < PropertiesFile_COUNT; ++i) {
-      if (sStringBundles[i]) {
-        amt += sStringBundles[i]->SizeOfIncludingThisIfUnshared(MallocSizeOf);
-      }
-    }
-
-    MOZ_COLLECT_REPORT("explicit/dom/content-utils-string-bundles", KIND_HEAP, UNITS_BYTES,
-                       amt, "string-bundles in ContentUtils");
-
-    return NS_OK;
-  }
-};
-
-NS_IMPL_ISUPPORTS(nsContentUtils::nsContentUtilsReporter, nsIMemoryReporter)
-
 /**
  * This class is used to determine whether or not the user is currently
  * interacting with the browser. It listens to observer events to toggle the
@@ -563,7 +572,7 @@ NS_IMPL_ISUPPORTS(nsContentUtils::nsContentUtilsReporter, nsIMemoryReporter)
  * user interaction status.
  */
 class nsContentUtils::UserInteractionObserver final : public nsIObserver
-                                                    , public HangMonitor::Annotator
+                                                    , public BackgroundHangAnnotator
 {
 public:
   NS_DECL_ISUPPORTS
@@ -571,7 +580,7 @@ public:
 
   void Init();
   void Shutdown();
-  void AnnotateHang(HangMonitor::HangAnnotations& aAnnotations) override;
+  void AnnotateHang(BackgroundHangAnnotations& aAnnotations) override;
 
   static Atomic<bool> sUserActive;
 
@@ -653,7 +662,6 @@ nsContentUtils::Init()
       new PLDHashTable(&hash_table_ops, sizeof(EventListenerManagerMapEntry));
 
     RegisterStrongMemoryReporter(new DOMEventListenerManagersHashReporter());
-    RegisterStrongMemoryReporter(new nsContentUtilsReporter());
   }
 
   sBlockedScriptRunners = new AutoTArray<nsCOMPtr<nsIRunnable>, 8>;
@@ -2693,9 +2701,9 @@ bool
 nsContentUtils::PositionIsBefore(nsINode* aNode1, nsINode* aNode2)
 {
   return (aNode2->CompareDocumentPosition(*aNode1) &
-    (NodeBinding::DOCUMENT_POSITION_PRECEDING |
-     NodeBinding::DOCUMENT_POSITION_DISCONNECTED)) ==
-    NodeBinding::DOCUMENT_POSITION_PRECEDING;
+    (Node_Binding::DOCUMENT_POSITION_PRECEDING |
+     Node_Binding::DOCUMENT_POSITION_DISCONNECTED)) ==
+    Node_Binding::DOCUMENT_POSITION_PRECEDING;
 }
 
 /* static */
@@ -3882,6 +3890,8 @@ nsContentUtils::GetEventArgNames(int32_t aNameSpaceID,
   }
 }
 
+// Note: The list of content bundles in nsStringBundle.cpp should be updated
+// whenever entries are added or removed from this list.
 static const char gPropertiesFiles[nsContentUtils::PropertiesFile_COUNT][56] = {
   // Must line up with the enum values in |PropertiesFile| enum.
   "chrome://global/locale/css.properties",
@@ -3922,6 +3932,18 @@ nsContentUtils::EnsureStringBundle(PropertiesFile aFile)
 void
 nsContentUtils::AsyncPrecreateStringBundles()
 {
+  // We only ever want to pre-create bundles in the parent process.
+  //
+  // All nsContentUtils bundles are shared between the parent and child
+  // precesses, and the shared memory regions that back them *must* be created
+  // in the parent, and then sent to all children.
+  //
+  // If we attempt to create a bundle in the child before its memory region is
+  // available, we need to create a temporary non-shared bundle, and later
+  // replace that with the shared memory copy. So attempting to pre-load in the
+  // child is wasteful and unnecessary.
+  MOZ_ASSERT(XRE_IsParentProcess());
+
   for (uint32_t bundleIndex = 0; bundleIndex < PropertiesFile_COUNT; ++bundleIndex) {
     nsresult rv = NS_IdleDispatchToCurrentThread(
       NS_NewRunnableFunction("AsyncPrecreateStringBundles",
@@ -4385,8 +4407,10 @@ nsContentUtils::GetEventMessageAndAtomForListener(const nsAString& aName,
 static
 nsresult GetEventAndTarget(nsIDocument* aDoc, nsISupports* aTarget,
                            const nsAString& aEventName,
-                           bool aCanBubble, bool aCancelable,
-                           bool aTrusted, Event** aEvent,
+                           CanBubble aCanBubble,
+                           Cancelable aCancelable,
+                           Trusted aTrusted,
+                           Event** aEvent,
                            EventTarget** aTargetOut)
 {
   nsCOMPtr<EventTarget> target(do_QueryInterface(aTarget));
@@ -4400,7 +4424,7 @@ nsresult GetEventAndTarget(nsIDocument* aDoc, nsISupports* aTarget,
   }
 
   event->InitEvent(aEventName, aCanBubble, aCancelable);
-  event->SetTrusted(aTrusted);
+  event->SetTrusted(aTrusted == Trusted::eYes);
 
   event->SetTarget(target);
 
@@ -4413,31 +4437,35 @@ nsresult GetEventAndTarget(nsIDocument* aDoc, nsISupports* aTarget,
 nsresult
 nsContentUtils::DispatchTrustedEvent(nsIDocument* aDoc, nsISupports* aTarget,
                                      const nsAString& aEventName,
-                                     bool aCanBubble, bool aCancelable,
+                                     CanBubble aCanBubble,
+                                     Cancelable aCancelable,
                                      bool* aDefaultAction)
 {
   return DispatchEvent(aDoc, aTarget, aEventName, aCanBubble, aCancelable,
-                       true, aDefaultAction);
+                       Trusted::eYes, aDefaultAction);
 }
 
 // static
 nsresult
 nsContentUtils::DispatchUntrustedEvent(nsIDocument* aDoc, nsISupports* aTarget,
                                        const nsAString& aEventName,
-                                       bool aCanBubble, bool aCancelable,
+                                       CanBubble aCanBubble,
+                                       Cancelable aCancelable,
                                        bool* aDefaultAction)
 {
   return DispatchEvent(aDoc, aTarget, aEventName, aCanBubble, aCancelable,
-                       false, aDefaultAction);
+                       Trusted::eNo, aDefaultAction);
 }
 
 // static
 nsresult
 nsContentUtils::DispatchEvent(nsIDocument* aDoc, nsISupports* aTarget,
                               const nsAString& aEventName,
-                              bool aCanBubble, bool aCancelable,
-                              bool aTrusted, bool* aDefaultAction,
-                              bool aOnlyChromeDispatch)
+                              CanBubble aCanBubble,
+                              Cancelable aCancelable,
+                              Trusted aTrusted,
+                              bool* aDefaultAction,
+                              ChromeOnlyDispatch aOnlyChromeDispatch)
 {
   RefPtr<Event> event;
   nsCOMPtr<EventTarget> target;
@@ -4445,7 +4473,8 @@ nsContentUtils::DispatchEvent(nsIDocument* aDoc, nsISupports* aTarget,
                                   aCancelable, aTrusted, getter_AddRefs(event),
                                   getter_AddRefs(target));
   NS_ENSURE_SUCCESS(rv, rv);
-  event->WidgetEventPtr()->mFlags.mOnlyChromeDispatch = aOnlyChromeDispatch;
+  event->WidgetEventPtr()->mFlags.mOnlyChromeDispatch =
+    aOnlyChromeDispatch == ChromeOnlyDispatch::eYes;
 
   ErrorResult err;
   bool doDefault = target->DispatchEvent(*event, CallerType::System, err);
@@ -4460,11 +4489,14 @@ nsresult
 nsContentUtils::DispatchEvent(nsIDocument* aDoc, nsISupports* aTarget,
                               WidgetEvent& aEvent,
                               EventMessage aEventMessage,
-                              bool aCanBubble, bool aCancelable,
-                              bool aTrusted, bool *aDefaultAction,
-                              bool aOnlyChromeDispatch)
+                              CanBubble aCanBubble,
+                              Cancelable aCancelable,
+                              Trusted aTrusted,
+                              bool* aDefaultAction,
+                              ChromeOnlyDispatch aOnlyChromeDispatch)
 {
-  MOZ_ASSERT_IF(aOnlyChromeDispatch, aTrusted);
+  MOZ_ASSERT_IF(aOnlyChromeDispatch == ChromeOnlyDispatch::eYes,
+                aTrusted == Trusted::eYes);
 
   nsCOMPtr<EventTarget> target(do_QueryInterface(aTarget));
 
@@ -4474,9 +4506,10 @@ nsContentUtils::DispatchEvent(nsIDocument* aDoc, nsISupports* aTarget,
   aEvent.SetDefaultComposed();
   aEvent.SetDefaultComposedInNativeAnonymousContent();
 
-  aEvent.mFlags.mBubbles = aCanBubble;
-  aEvent.mFlags.mCancelable = aCancelable;
-  aEvent.mFlags.mOnlyChromeDispatch = aOnlyChromeDispatch;
+  aEvent.mFlags.mBubbles = aCanBubble == CanBubble::eYes;
+  aEvent.mFlags.mCancelable = aCancelable == Cancelable::eYes;
+  aEvent.mFlags.mOnlyChromeDispatch =
+    aOnlyChromeDispatch == ChromeOnlyDispatch::eYes;
 
   aEvent.mTarget = target;
 
@@ -4493,14 +4526,16 @@ nsresult
 nsContentUtils::DispatchChromeEvent(nsIDocument *aDoc,
                                     nsISupports *aTarget,
                                     const nsAString& aEventName,
-                                    bool aCanBubble, bool aCancelable,
+                                    CanBubble aCanBubble,
+                                    Cancelable aCancelable,
                                     bool* aDefaultAction)
 {
 
   RefPtr<Event> event;
   nsCOMPtr<EventTarget> target;
   nsresult rv = GetEventAndTarget(aDoc, aTarget, aEventName, aCanBubble,
-                                  aCancelable, true, getter_AddRefs(event),
+                                  aCancelable, Trusted::eYes,
+                                  getter_AddRefs(event),
                                   getter_AddRefs(target));
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -4534,18 +4569,19 @@ nsContentUtils::DispatchFocusChromeEvent(nsPIDOMWindowOuter* aWindow)
 
   return DispatchChromeEvent(doc, aWindow,
                              NS_LITERAL_STRING("DOMWindowFocus"),
-                             true, true);
+                             CanBubble::eYes, Cancelable::eYes);
 }
 
 nsresult
 nsContentUtils::DispatchEventOnlyToChrome(nsIDocument* aDoc,
                                           nsISupports* aTarget,
                                           const nsAString& aEventName,
-                                          bool aCanBubble, bool aCancelable,
+                                          CanBubble aCanBubble,
+                                          Cancelable aCancelable,
                                           bool* aDefaultAction)
 {
   return DispatchEvent(aDoc, aTarget, aEventName, aCanBubble, aCancelable,
-                       true, aDefaultAction, true);
+                       Trusted::eYes, aDefaultAction, ChromeOnlyDispatch::eYes);
 }
 
 /* static */
@@ -4761,7 +4797,7 @@ nsContentUtils::UnmarkGrayJSListenersInCCGenerationDocuments()
   for (auto i = sEventListenerManagersHash->Iter(); !i.Done(); i.Next()) {
     auto entry = static_cast<EventListenerManagerMapEntry*>(i.Get());
     nsINode* n = static_cast<nsINode*>(entry->mListenerManager->GetTarget());
-    if (n && n->IsInUncomposedDoc() &&
+    if (n && n->IsInComposedDoc() &&
         nsCCUncollectableMarker::InGeneration(n->OwnerDoc()->GetMarkedCCGeneration())) {
       entry->mListenerManager->MarkForCC();
     }
@@ -5033,7 +5069,7 @@ nsContentUtils::ParseFragmentHTML(const nsAString& aSourceBuffer,
   AutoTimelineMarker m(aTargetNode->OwnerDoc()->GetDocShell(), "Parse HTML");
 
   if (nsContentUtils::sFragmentParsingActive) {
-    NS_NOTREACHED("Re-entrant fragment parsing attempted.");
+    MOZ_ASSERT_UNREACHABLE("Re-entrant fragment parsing attempted.");
     return NS_ERROR_DOM_INVALID_STATE_ERR;
   }
   mozilla::AutoRestore<bool> guard(nsContentUtils::sFragmentParsingActive);
@@ -5089,7 +5125,7 @@ nsContentUtils::ParseDocumentHTML(const nsAString& aSourceBuffer,
   AutoTimelineMarker m(aTargetDocument->GetDocShell(), "Parse HTML");
 
   if (nsContentUtils::sFragmentParsingActive) {
-    NS_NOTREACHED("Re-entrant fragment parsing attempted.");
+    MOZ_ASSERT_UNREACHABLE("Re-entrant fragment parsing attempted.");
     return NS_ERROR_DOM_INVALID_STATE_ERR;
   }
   mozilla::AutoRestore<bool> guard(nsContentUtils::sFragmentParsingActive);
@@ -5116,7 +5152,7 @@ nsContentUtils::ParseFragmentXML(const nsAString& aSourceBuffer,
   AutoTimelineMarker m(aDocument->GetDocShell(), "Parse XML");
 
   if (nsContentUtils::sFragmentParsingActive) {
-    NS_NOTREACHED("Re-entrant fragment parsing attempted.");
+    MOZ_ASSERT_UNREACHABLE("Re-entrant fragment parsing attempted.");
     return NS_ERROR_DOM_INVALID_STATE_ERR;
   }
   mozilla::AutoRestore<bool> guard(nsContentUtils::sFragmentParsingActive);
@@ -7202,7 +7238,7 @@ nsContentUtils::HasPluginWithUncontrolledEventDispatch(nsIContent* aContent)
   // We control dispatch to all mac plugins.
   return false;
 #else
-  if (!aContent || !aContent->IsInUncomposedDoc()) {
+  if (!aContent || !aContent->IsInComposedDoc()) {
     return false;
   }
 
@@ -8457,8 +8493,8 @@ nsContentUtils::SendMouseEvent(const nsCOMPtr<nsIPresShell>& aPresShell,
     return NS_ERROR_FAILURE;
   }
 
-  if (aInputSourceArg == MouseEventBinding::MOZ_SOURCE_UNKNOWN) {
-    aInputSourceArg = MouseEventBinding::MOZ_SOURCE_MOUSE;
+  if (aInputSourceArg == MouseEvent_Binding::MOZ_SOURCE_UNKNOWN) {
+    aInputSourceArg = MouseEvent_Binding::MOZ_SOURCE_MOUSE;
   }
 
   WidgetMouseEvent event(true, msg, widget,
@@ -8815,6 +8851,36 @@ nsContentUtils::GetCookieBehaviorForPrincipal(nsIPrincipal* aPrincipal,
   }
 }
 
+// static public
+bool
+nsContentUtils::StorageDisabledByAntiTracking(nsPIDOMWindowInner* aWindow,
+                                              nsIChannel* aChannel,
+                                              nsIURI* aURI)
+{
+  if (!StaticPrefs::privacy_restrict3rdpartystorage_enabled()) {
+    return false;
+  }
+
+  // Let's check if this is a 3rd party context.
+  if (!IsThirdPartyWindowOrChannel(aWindow, aChannel, aURI)) {
+    return false;
+  }
+
+  nsCOMPtr<nsIChannel> channel;
+
+  // aChannel and aWindow are mutually exclusive.
+  channel = aChannel;
+  if (aWindow) {
+    nsIDocument* document = aWindow->GetExtantDoc();
+    if (document) {
+      channel = document->GetChannel();
+    }
+  }
+
+  nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(channel);
+  return httpChannel && httpChannel->GetIsTrackingResource();
+}
+
 // static, private
 nsContentUtils::StorageAccess
 nsContentUtils::InternalStorageAllowedForPrincipal(nsIPrincipal* aPrincipal,
@@ -8829,6 +8895,10 @@ nsContentUtils::InternalStorageAllowedForPrincipal(nsIPrincipal* aPrincipal,
   // We don't allow storage on the null principal, in general. Even if the
   // calling context is chrome.
   if (aPrincipal->GetIsNullPrincipal()) {
+    return StorageAccess::eDeny;
+  }
+
+  if (StorageDisabledByAntiTracking(aWindow, aChannel, aURI)) {
     return StorageAccess::eDeny;
   }
 
@@ -8907,47 +8977,15 @@ nsContentUtils::InternalStorageAllowedForPrincipal(nsIPrincipal* aPrincipal,
     return StorageAccess::eDeny;
   }
 
-  if (behavior == nsICookieService::BEHAVIOR_REJECT_FOREIGN ||
-      behavior == nsICookieService::BEHAVIOR_LIMIT_FOREIGN) {
+  if ((behavior == nsICookieService::BEHAVIOR_REJECT_FOREIGN ||
+       behavior == nsICookieService::BEHAVIOR_LIMIT_FOREIGN) &&
+      IsThirdPartyWindowOrChannel(aWindow, aChannel, aURI)) {
+    // XXX For non-cookie forms of storage, we handle BEHAVIOR_LIMIT_FOREIGN by
+    // simply rejecting the request to use the storage. In the future, if we
+    // change the meaning of BEHAVIOR_LIMIT_FOREIGN to be one which makes sense
+    // for non-cookie storage types, this may change.
 
-    // In the absence of a window or channel, we assume that we are first-party.
-    bool thirdParty = false;
-
-    MOZ_ASSERT(!aWindow || !aChannel,
-               "A window and channel should not both be provided.");
-
-    if (aWindow) {
-      nsCOMPtr<mozIThirdPartyUtil> thirdPartyUtil =
-        do_GetService(THIRDPARTYUTIL_CONTRACTID);
-      MOZ_ASSERT(thirdPartyUtil);
-
-      Unused << thirdPartyUtil->IsThirdPartyWindow(aWindow->GetOuterWindow(),
-                                                   aURI,
-                                                   &thirdParty);
-    }
-
-    if (aChannel) {
-      nsCOMPtr<mozIThirdPartyUtil> thirdPartyUtil =
-        do_GetService(THIRDPARTYUTIL_CONTRACTID);
-      MOZ_ASSERT(thirdPartyUtil);
-
-      // Note, we must call IsThirdPartyChannel() here and not just try to
-      // use nsILoadInfo.isThirdPartyContext.  That nsILoadInfo property only
-      // indicates if the parent loading window is third party or not.  We
-      // want to check the channel URI against the loading principal as well.
-      Unused << thirdPartyUtil->IsThirdPartyChannel(aChannel,
-                                                    nullptr,
-                                                    &thirdParty);
-    }
-
-    if (thirdParty) {
-      // XXX For non-cookie forms of storage, we handle BEHAVIOR_LIMIT_FOREIGN by
-      // simply rejecting the request to use the storage. In the future, if we
-      // change the meaning of BEHAVIOR_LIMIT_FOREIGN to be one which makes sense
-      // for non-cookie storage types, this may change.
-
-      return StorageAccess::eDeny;
-    }
+    return StorageAccess::eDeny;
   }
 
   return access;
@@ -9324,6 +9362,16 @@ StartElement(Element* aContent, StringBuilder& aBuilder)
     aBuilder.Append(localName);
   } else {
     aBuilder.Append(aContent->NodeName());
+  }
+
+  CustomElementData* ceData = aContent->GetCustomElementData();
+  if (ceData) {
+    nsAtom* isAttr = ceData->GetIs(aContent);
+    if (isAttr && !aContent->HasAttr(kNameSpaceID_None, nsGkAtoms::is)) {
+      aBuilder.Append(R"( is=")");
+      aBuilder.Append(nsDependentAtomString(isAttr));
+      aBuilder.Append(R"(")");
+    }
   }
 
   int32_t count = aContent->GetAttrCount();
@@ -9860,9 +9908,6 @@ nsContentUtils::NewXULOrHTMLElement(Element** aResult, mozilla::dom::NodeInfo* a
   int32_t tag = eHTMLTag_unknown;
   bool isCustomElementName = false;
   if (nodeInfo->NamespaceEquals(kNameSpaceID_XHTML)) {
-    if (aIsAtom && !nsContentUtils::IsNameWithDash(aIsAtom)) {
-      aIsAtom = nullptr;
-    }
     tag = nsHTMLTags::CaseSensitiveAtomTagToId(name);
     isCustomElementName = (tag == eHTMLTag_userdefined &&
                            nsContentUtils::IsCustomElementName(name, kNameSpaceID_XHTML));
@@ -9884,11 +9929,11 @@ nsContentUtils::NewXULOrHTMLElement(Element** aResult, mozilla::dom::NodeInfo* a
     }
   }
 
-  RefPtr<nsAtom> tagAtom = nodeInfo->NameAtom();
-  RefPtr<nsAtom> typeAtom;
+  nsAtom* tagAtom = nodeInfo->NameAtom();
+  nsAtom* typeAtom = nullptr;
   bool isCustomElement = isCustomElementName || aIsAtom;
   if (isCustomElement) {
-    typeAtom = isCustomElementName ? tagAtom.get() : aIsAtom;
+    typeAtom = isCustomElementName ? tagAtom : aIsAtom;
   }
 
   MOZ_ASSERT_IF(aDefinition, isCustomElement);
@@ -9978,6 +10023,7 @@ nsContentUtils::NewXULOrHTMLElement(Element** aResult, mozilla::dom::NodeInfo* a
         } else {
           NS_IF_ADDREF(*aResult = nsXULElement::Construct(nodeInfo.forget()));
         }
+        (*aResult)->SetDefined(false);
       }
       return NS_OK;
     }
@@ -10376,8 +10422,8 @@ nsContentUtils::QueryTriggeringPrincipal(nsIContent* aLoadingNode,
   nsAutoString loadingStr;
   if (aLoadingNode->IsElement()) {
     aLoadingNode->AsElement()->GetAttr(kNameSpaceID_None,
-				       nsGkAtoms::triggeringprincipal,
-				       loadingStr);
+               nsGkAtoms::triggeringprincipal,
+               loadingStr);
   }
 
   // Fall back if 'triggeringprincipal' isn't specified,
@@ -10741,13 +10787,13 @@ nsContentUtils::UserInteractionObserver::Init()
   obs->AddObserver(this, kUserInteractionInactive, false);
   obs->AddObserver(this, kUserInteractionActive, false);
 
-  // We can't register ourselves as an annotator yet, as the HangMonitor hasn't
-  // started yet. It will have started by the time we have the chance to spin
-  // the event loop.
+  // We can't register ourselves as an annotator yet, as the
+  // BackgroundHangMonitor hasn't started yet. It will have started by the
+  // time we have the chance to spin the event loop.
   RefPtr<UserInteractionObserver> self = this;
   NS_DispatchToMainThread(
     NS_NewRunnableFunction("nsContentUtils::UserInteractionObserver::Init",
-                           [=]() { HangMonitor::RegisterAnnotator(*self); }));
+                           [=]() { BackgroundHangMonitor::RegisterAnnotator(*self); }));
 }
 
 void
@@ -10759,15 +10805,15 @@ nsContentUtils::UserInteractionObserver::Shutdown()
     obs->RemoveObserver(this, kUserInteractionActive);
   }
 
-  HangMonitor::UnregisterAnnotator(*this);
+  BackgroundHangMonitor::UnregisterAnnotator(*this);
 }
 
 /**
- * NB: This function is always called by the HangMonitor thread.
+ * NB: This function is always called by the BackgroundHangMonitor thread.
  *     Plan accordingly
  */
 void
-nsContentUtils::UserInteractionObserver::AnnotateHang(HangMonitor::HangAnnotations& aAnnotations)
+nsContentUtils::UserInteractionObserver::AnnotateHang(BackgroundHangAnnotations& aAnnotations)
 {
   // NOTE: Only annotate the hang report if the user is known to be interacting.
   if (sUserActive) {
@@ -10808,7 +10854,7 @@ nsContentUtils::IsOverridingWindowName(const nsAString& aName)
 // wrapping our templated function in a macro.
 #define EXTRACT_EXN_VALUES(T, ...)                                \
   ExtractExceptionValues<mozilla::dom::prototypes::id::T,         \
-                         T##Binding::NativeType, T>(__VA_ARGS__).isOk()
+                         T##_Binding::NativeType, T>(__VA_ARGS__).isOk()
 
 template <prototypes::ID PrototypeID, class NativeType, typename T>
 static Result<Ok, nsresult>

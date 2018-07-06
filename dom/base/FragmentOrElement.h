@@ -98,9 +98,6 @@ public:
   virtual int32_t ComputeIndexOf(const nsINode* aPossibleChild) const override;
   virtual nsresult InsertChildBefore(nsIContent* aKid, nsIContent* aBeforeThis,
                                      bool aNotify) override;
-  virtual nsresult InsertChildAt_Deprecated(nsIContent* aKid, uint32_t aIndex,
-                                            bool aNotify) override;
-  virtual void RemoveChildAt_Deprecated(uint32_t aIndex, bool aNotify) override;
   virtual void RemoveChildNode(nsIContent* aKid, bool aNotify) override;
   virtual void GetTextContentInternal(nsAString& aTextContent,
                                       mozilla::OOMReporter& aError) override;
@@ -174,14 +171,14 @@ public:
    * accessed through the DOM.
    */
 
-  class nsExtendedDOMSlots final : public nsIContent::nsExtendedContentSlots
+  class nsExtendedDOMSlots : public nsIContent::nsExtendedContentSlots
   {
   public:
     nsExtendedDOMSlots();
-    ~nsExtendedDOMSlots() final;
+    ~nsExtendedDOMSlots();
 
-    void Traverse(nsCycleCollectionTraversalCallback&) final;
-    void Unlink() final;
+    void TraverseExtendedSlots(nsCycleCollectionTraversalCallback&) final;
+    void UnlinkExtendedSlots() final;
 
     /**
      * SMIL Overridde style rules (for SMIL animation of CSS properties)
@@ -192,7 +189,7 @@ public:
     /**
      * Holds any SMIL override style declaration for this element.
      */
-    RefPtr<mozilla::DeclarationBlock> mSMILOverrideStyleDeclaration;
+    RefPtr<DeclarationBlock> mSMILOverrideStyleDeclaration;
 
     /**
     * The controllers of the XUL Element.
@@ -218,19 +215,13 @@ public:
      * Web components custom element data.
      */
     RefPtr<CustomElementData> mCustomElementData;
-
-    /**
-     * For XUL to hold either frameloader or opener.
-     */
-    nsCOMPtr<nsISupports> mFrameLoaderOrOpener;
-
   };
 
-  class nsDOMSlots final : public nsIContent::nsContentSlots
+  class nsDOMSlots : public nsIContent::nsContentSlots
   {
   public:
     nsDOMSlots();
-    ~nsDOMSlots() final;
+    ~nsDOMSlots();
 
     void Traverse(nsCycleCollectionTraversalCallback&) final;
     void Unlink() final;
@@ -266,6 +257,29 @@ public:
     RefPtr<nsDOMTokenList> mClassList;
   };
 
+  /**
+   * In case ExtendedDOMSlots is needed before normal DOMSlots, an instance of
+   * FatSlots class, which combines those two slot types, is created.
+   * This way we can avoid extra allocation for ExtendedDOMSlots.
+   * FatSlots is useful for example when creating Custom Elements.
+   */
+  class FatSlots final : public nsDOMSlots, public nsExtendedDOMSlots
+  {
+  public:
+    FatSlots()
+      : nsDOMSlots()
+      , nsExtendedDOMSlots()
+    {
+      MOZ_COUNT_CTOR(FatSlots);
+      SetExtendedContentSlots(this, false);
+    }
+
+    ~FatSlots() final
+    {
+      MOZ_COUNT_DTOR(FatSlots);
+    }
+  };
+
 protected:
   void GetMarkup(bool aIncludeSelf, nsAString& aMarkup);
   void SetInnerHTMLInternal(const nsAString& aInnerHTML, ErrorResult& aError);
@@ -293,7 +307,18 @@ protected:
 
   nsExtendedDOMSlots* ExtendedDOMSlots()
   {
-    return static_cast<nsExtendedDOMSlots*>(ExtendedContentSlots());
+    nsContentSlots* slots = GetExistingContentSlots();
+    if (!slots) {
+      FatSlots* fatSlots = new FatSlots();
+      mSlots = fatSlots;
+      return fatSlots;
+    }
+
+    if (!slots->GetExtendedContentSlots()) {
+      slots->SetExtendedContentSlots(CreateExtendedSlots(), true);
+    }
+
+    return static_cast<nsExtendedDOMSlots*>(slots->GetExtendedContentSlots());
   }
 
   const nsExtendedDOMSlots* GetExistingExtendedDOMSlots() const

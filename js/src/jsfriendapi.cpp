@@ -8,6 +8,7 @@
 
 #include "mozilla/Atomics.h"
 #include "mozilla/PodOperations.h"
+#include "mozilla/TimeStamp.h"
 
 #include <stdint.h>
 
@@ -24,9 +25,9 @@
 #include "js/Wrapper.h"
 #include "proxy/DeadObjectProxy.h"
 #include "vm/ArgumentsObject.h"
-#include "vm/JSCompartment.h"
 #include "vm/JSContext.h"
 #include "vm/JSObject.h"
+#include "vm/Realm.h"
 #include "vm/Time.h"
 #include "vm/WrapperObject.h"
 
@@ -385,7 +386,7 @@ js::IsFunctionObject(JSObject* obj)
 JS_FRIEND_API(JSObject*)
 js::GetGlobalForObjectCrossCompartment(JSObject* obj)
 {
-    return &obj->global();
+    return &obj->deprecatedGlobal();
 }
 
 JS_FRIEND_API(JSObject*)
@@ -418,8 +419,10 @@ js::AssertSameCompartment(JSObject* objA, JSObject* objB)
 JS_FRIEND_API(void)
 js::NotifyAnimationActivity(JSObject* obj)
 {
-    int64_t timeNow = PRMJ_Now();
-    obj->realm()->lastAnimationTime = timeNow;
+    MOZ_ASSERT(obj->is<GlobalObject>());
+
+    auto timeNow = mozilla::TimeStamp::Now();
+    obj->as<GlobalObject>().realm()->lastAnimationTime = timeNow;
     obj->runtimeFromMainThread()->lastAnimationTime = timeNow;
 }
 
@@ -533,11 +536,9 @@ js::GetStaticPrototype(JSObject* obj)
 }
 
 JS_FRIEND_API(bool)
-js::GetOriginalEval(JSContext* cx, HandleObject scope, MutableHandleObject eval)
+js::GetRealmOriginalEval(JSContext* cx, MutableHandleObject eval)
 {
-    assertSameCompartment(cx, scope);
-    Rooted<GlobalObject*> global(cx, &scope->global());
-    return GlobalObject::getOrCreateEval(cx, global, eval);
+    return GlobalObject::getOrCreateEval(cx, cx->global(), eval);
 }
 
 JS_FRIEND_API(void)
@@ -669,7 +670,7 @@ JS_CloneObject(JSContext* cx, HandleObject obj, HandleObject protoArg)
     return CloneObject(cx, obj, proto);
 }
 
-#ifdef DEBUG
+#if defined(DEBUG) || defined(JS_JITSPEW)
 
 // We don't want jsfriendapi.h to depend on GenericPrinter,
 // so these functions are declared directly in the cpp.
@@ -1252,9 +1253,9 @@ js::DumpHeap(JSContext* cx, FILE* fp, js::DumpHeapNurseryBehaviour nurseryBehavi
     fprintf(dtrc.output, "# Roots.\n");
     {
         JSRuntime* rt = cx->runtime();
-        js::gc::AutoPrepareForTracing prep(cx);
+        js::gc::AutoTraceSession session(rt);
         gcstats::AutoPhase ap(rt->gc.stats(), gcstats::PhaseKind::TRACE_HEAP);
-        rt->gc.traceRuntime(&dtrc, prep.session());
+        rt->gc.traceRuntime(&dtrc, session);
     }
 
     fprintf(dtrc.output, "# Weak maps.\n");
@@ -1505,7 +1506,7 @@ JS_FRIEND_API(JSObject*)
 js::ToWindowIfWindowProxy(JSObject* obj)
 {
     if (IsWindowProxy(obj))
-        return &obj->global();
+        return &obj->nonCCWGlobal();
     return obj;
 }
 
@@ -1554,7 +1555,7 @@ JS_FRIEND_API(void)
 js::SetRealmValidAccessPtr(JSContext* cx, JS::HandleObject global, bool* accessp)
 {
     MOZ_ASSERT(global->is<GlobalObject>());
-    global->realm()->setValidAccessPtr(accessp);
+    global->as<GlobalObject>().realm()->setValidAccessPtr(accessp);
 }
 
 JS_FRIEND_API(bool)

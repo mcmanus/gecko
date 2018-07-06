@@ -384,8 +384,6 @@ class LinkFlags(BaseCompileFlags):
 
         self.flag_variables = (
             ('OS', self._os_ldflags(), ('LDFLAGS',)),
-            ('LINKER', context.config.substs.get('LINKER_LDFLAGS'),
-             ('LDFLAGS',)),
             ('DEFFILE', None, ('LDFLAGS',)),
             ('MOZBUILD', None, ('LDFLAGS',)),
             ('FIX_LINK_PATHS', context.config.substs.get('MOZ_FIX_LINK_PATHS'),
@@ -1857,10 +1855,6 @@ VARIABLES = {
 
     'MARIONETTE_UNIT_MANIFESTS': (ManifestparserManifestList, list,
         """List of manifest files defining marionette-unit tests.
-        """),
-
-    'MARIONETTE_WEBAPI_MANIFESTS': (ManifestparserManifestList, list,
-        """List of manifest files defining marionette-webapi tests.
         """),
 
     'METRO_CHROME_MANIFESTS': (ManifestparserManifestList, list,

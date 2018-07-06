@@ -471,8 +471,8 @@ TextEditRules::WillInsertBreak(bool* aCancel,
 
     // if the selection isn't collapsed, delete it.
     if (!SelectionRef().IsCollapsed()) {
-      rv = TextEditorRef().DeleteSelectionAsAction(nsIEditor::eNone,
-                                                   nsIEditor::eStrip);
+      rv = TextEditorRef().DeleteSelectionAsSubAction(nsIEditor::eNone,
+                                                      nsIEditor::eStrip);
       if (NS_WARN_IF(!CanHandleEditAction())) {
         return NS_ERROR_EDITOR_DESTROYED;
       }
@@ -574,7 +574,7 @@ TextEditRules::GetTextNodeAroundSelectionStartContainer()
   //     It's too expensive if this is called from a hot path.
   nsCOMPtr<nsINode> node = selectionStartPoint.GetContainer();
   RefPtr<NodeIterator> iter =
-    new NodeIterator(node, NodeFilterBinding::SHOW_TEXT, nullptr);
+    new NodeIterator(node, NodeFilter_Binding::SHOW_TEXT, nullptr);
   while (!EditorBase::IsTextNode(node)) {
     node = iter->NextNode(IgnoreErrors());
     if (!node) {
@@ -725,8 +725,8 @@ TextEditRules::WillInsertText(EditSubAction aEditSubAction,
 
   // if the selection isn't collapsed, delete it.
   if (!SelectionRef().IsCollapsed()) {
-    rv = TextEditorRef().DeleteSelectionAsAction(nsIEditor::eNone,
-                                                 nsIEditor::eStrip);
+    rv = TextEditorRef().DeleteSelectionAsSubAction(nsIEditor::eNone,
+                                                    nsIEditor::eStrip);
     if (NS_WARN_IF(!CanHandleEditAction())) {
       return NS_ERROR_EDITOR_DESTROYED;
     }

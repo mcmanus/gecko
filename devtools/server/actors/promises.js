@@ -19,7 +19,7 @@ const EventEmitter = require("devtools/shared/event-emitter");
 var PromisesActor = protocol.ActorClassWithSpec(promisesSpec, {
   /**
    * @param conn DebuggerServerConnection.
-   * @param parentActor TabActor|RootActor
+   * @param parentActor BrowsingContextTargetActor|RootActor
    */
   initialize: function(conn, parentActor) {
     protocol.Actor.prototype.initialize.call(this, conn);
@@ -127,7 +127,7 @@ var PromisesActor = protocol.ActorClassWithSpec(promisesSpec, {
       createEnvironmentActor: () => DevToolsUtils.reportException(
         "PromisesActor", Error("createEnvironmentActor not yet implemented")),
       getGlobalDebugObject: () => null,
-    });
+    }, this.conn);
 
     this._navigationLifetimePool.addActor(actor);
     this._navigationLifetimePool.objectActors.set(promise, actor);
@@ -144,7 +144,7 @@ var PromisesActor = protocol.ActorClassWithSpec(promisesSpec, {
    *        The grip for the given Promise object
    */
   objectGrip: function(value) {
-    return this._createObjectActorForPromise(value).grip();
+    return this._createObjectActorForPromise(value).form();
   },
 
   /**

@@ -23,6 +23,8 @@
 
 namespace mozilla {
 
+struct ActiveScrolledRoot;
+
 namespace widget {
 class CompositorWidget;
 }
@@ -185,7 +187,7 @@ public:
 
   void RunOnRenderThread(UniquePtr<RendererEvent> aEvent);
 
-  void Readback(gfx::IntSize aSize, uint8_t *aBuffer, uint32_t aBufferSize);
+  void Readback(const TimeStamp& aStartTime, gfx::IntSize aSize, uint8_t *aBuffer, uint32_t aBufferSize);
 
   void Pause();
   bool Resume();
@@ -418,6 +420,9 @@ public:
                           const wr::LayoutRect& aClip,
                           bool aIsBackfaceVisible,
                           const wr::BorderWidths& aWidths,
+                          const uint32_t aWidth,
+                          const uint32_t aHeight,
+                          const wr::SideOffsets2D<uint32_t>& aSlice,
                           const wr::LayoutPoint& aStartPoint,
                           const wr::LayoutPoint& aEndPoint,
                           const nsTArray<wr::GradientStop>& aStops,
@@ -466,6 +471,11 @@ public:
                      const wr::BorderRadius& aBorderRadius,
                      const wr::BoxShadowClipMode& aClipMode);
 
+  // Checks to see if the innermost enclosing fixed pos item has the same
+  // ASR. If so, it returns the scroll target for that fixed-pos item.
+  // Otherwise, it returns Nothing().
+  Maybe<layers::FrameMetrics::ViewID> GetContainingFixedPosScrollTarget(const ActiveScrolledRoot* aAsr);
+
   // Set the hit-test info to be used for all display items until the next call
   // to SetHitTestInfo or ClearHitTestInfo.
   void SetHitTestInfo(const layers::FrameMetrics::ViewID& aScrollId,
@@ -476,6 +486,24 @@ public:
   // Try to avoid using this when possible.
   wr::WrState* Raw() { return mWrState; }
 
+  // A chain of RAII objects, each holding a (ASR, ViewID) tuple of data. The
+  // topmost object is pointed to by the mActiveFixedPosTracker pointer in
+  // the wr::DisplayListBuilder.
+  class MOZ_RAII FixedPosScrollTargetTracker {
+  public:
+    FixedPosScrollTargetTracker(DisplayListBuilder& aBuilder,
+                                const ActiveScrolledRoot* aAsr,
+                                layers::FrameMetrics::ViewID aScrollId);
+    ~FixedPosScrollTargetTracker();
+    Maybe<layers::FrameMetrics::ViewID> GetScrollTargetForASR(const ActiveScrolledRoot* aAsr);
+
+  private:
+    FixedPosScrollTargetTracker* mParentTracker;
+    DisplayListBuilder& mBuilder;
+    const ActiveScrolledRoot* mAsr;
+    layers::FrameMetrics::ViewID mScrollId;
+  };
+
 protected:
   wr::WrState* mWrState;
 
@@ -483,6 +511,8 @@ protected:
   // ensure that we don't define a particular scroll layer multiple times,
   // as that results in undefined behaviour in WR.
   std::unordered_map<layers::FrameMetrics::ViewID, wr::WrClipId> mScrollIds;
+
+  FixedPosScrollTargetTracker* mActiveFixedPosTracker;
 
   friend class WebRenderAPI;
 };

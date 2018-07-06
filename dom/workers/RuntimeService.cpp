@@ -308,9 +308,7 @@ LoadContextOptions(const char* aPrefName, void* /* aClosure */)
                 .setFuzzing(GetWorkerPref<bool>(NS_LITERAL_CSTRING("fuzzing.enabled")))
 #endif
                 .setStreams(GetWorkerPref<bool>(NS_LITERAL_CSTRING("streams")))
-                .setExtraWarnings(GetWorkerPref<bool>(NS_LITERAL_CSTRING("strict")))
-                .setArrayProtoValues(GetWorkerPref<bool>(
-                      NS_LITERAL_CSTRING("array_prototype_values")));
+                .setExtraWarnings(GetWorkerPref<bool>(NS_LITERAL_CSTRING("strict")));
 
   nsCOMPtr<nsIXULRuntime> xr = do_GetService("@mozilla.org/xre/runtime;1");
   if (xr) {
@@ -586,14 +584,18 @@ class LogViolationDetailsRunnable final : public WorkerMainThreadRunnable
 {
   nsString mFileName;
   uint32_t mLineNum;
+  uint32_t mColumnNum;
 
 public:
   LogViolationDetailsRunnable(WorkerPrivate* aWorker,
                               const nsString& aFileName,
-                              uint32_t aLineNum)
+                              uint32_t aLineNum,
+                              uint32_t aColumnNum)
     : WorkerMainThreadRunnable(aWorker,
                                NS_LITERAL_CSTRING("RuntimeService :: LogViolationDetails"))
-    , mFileName(aFileName), mLineNum(aLineNum)
+    , mFileName(aFileName)
+    , mLineNum(aLineNum)
+    , mColumnNum(aColumnNum)
   {
     MOZ_ASSERT(aWorker);
   }
@@ -613,16 +615,17 @@ ContentSecurityPolicyAllows(JSContext* aCx)
   if (worker->GetReportCSPViolations()) {
     nsString fileName;
     uint32_t lineNum = 0;
+    uint32_t columnNum = 0;
 
     JS::AutoFilename file;
-    if (JS::DescribeScriptedCaller(aCx, &file, &lineNum) && file.get()) {
+    if (JS::DescribeScriptedCaller(aCx, &file, &lineNum, &columnNum) && file.get()) {
       fileName = NS_ConvertUTF8toUTF16(file.get());
     } else {
       MOZ_ASSERT(!JS_IsExceptionPending(aCx));
     }
 
     RefPtr<LogViolationDetailsRunnable> runnable =
-        new LogViolationDetailsRunnable(worker, fileName, lineNum);
+        new LogViolationDetailsRunnable(worker, fileName, lineNum, columnNum);
 
     ErrorResult rv;
     runnable->Dispatch(Killing, rv);
@@ -2372,7 +2375,9 @@ RuntimeService::CreateSharedWorkerFromLoadInfo(JSContext* aCx,
     // We're done here.  Just queue up our error event and return our
     // dead-on-arrival SharedWorker.
     RefPtr<AsyncEventDispatcher> errorEvent =
-      new AsyncEventDispatcher(sharedWorker, NS_LITERAL_STRING("error"), false);
+      new AsyncEventDispatcher(sharedWorker,
+                               NS_LITERAL_STRING("error"),
+                               CanBubble::eNo);
     errorEvent->PostDOMEvent();
     sharedWorker.forget(aSharedWorker);
     return NS_OK;
@@ -2562,7 +2567,7 @@ RuntimeService::ClampedHardwareConcurrency() const
     }
     uint32_t clampedValue = std::min(uint32_t(numberOfProcessors),
                                      gMaxHardwareConcurrency);
-    clampedHardwareConcurrency.compareExchange(0, clampedValue);
+    Unused << clampedHardwareConcurrency.compareExchange(0, clampedValue);
   }
 
   return clampedHardwareConcurrency;
@@ -2605,7 +2610,7 @@ RuntimeService::Observe(nsISupports* aSubject, const char* aTopic,
     return NS_OK;
   }
 
-  NS_NOTREACHED("Unknown observer topic!");
+  MOZ_ASSERT_UNREACHABLE("Unknown observer topic!");
   return NS_OK;
 }
 
@@ -2620,7 +2625,7 @@ LogViolationDetailsRunnable::MainThreadRun()
         "Call to eval() or related function blocked by CSP.");
     if (mWorkerPrivate->GetReportCSPViolations()) {
       csp->LogViolationDetails(nsIContentSecurityPolicy::VIOLATION_TYPE_EVAL,
-                               mFileName, scriptSample, mLineNum,
+                               mFileName, scriptSample, mLineNum, mColumnNum,
                                EmptyString(), EmptyString());
     }
   }

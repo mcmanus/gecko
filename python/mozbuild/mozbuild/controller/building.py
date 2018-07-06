@@ -757,6 +757,8 @@ class CCacheStats(object):
     STATS_KEYS = [
         # (key, description)
         # Refer to stats.c in ccache project for all the descriptions.
+        ('stats_zero_time', 'stats zero time'),
+        ('stats_updated', 'stats updated'),
         ('cache_hit_direct', 'cache hit (direct)'),
         ('cache_hit_preprocessed', 'cache hit (preprocessed)'),
         ('cache_hit_rate', 'cache hit rate'),
@@ -838,6 +840,13 @@ class CCacheStats(object):
 
     @staticmethod
     def _parse_value(raw_value):
+        try:
+            # ccache calls strftime with '%c' (src/stats.c)
+            ts = time.strptime(raw_value, '%c')
+            return int(time.mktime(ts))
+        except ValueError:
+            pass
+
         value = raw_value.split()
         unit = ''
         if len(value) == 1:
@@ -1020,7 +1029,7 @@ class BuildDriver(MozbuildObject):
                         print('Build configuration changed. Regenerating backend.')
                         args = [config.substs['PYTHON'],
                                 mozpath.join(self.topobjdir, 'config.status')]
-                        self.run_process(args, cwd=self.topobjdir)
+                        self.run_process(args, cwd=self.topobjdir, pass_thru=True)
                     backend_cls = get_backend_class(active_backend)(config)
                     return backend_cls.build(self, output, jobs, verbose, what)
                 return None
