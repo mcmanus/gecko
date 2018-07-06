@@ -3085,7 +3085,7 @@ nsSocketTransport::OnLookupByTypeComplete(nsICancelable      *request,
         } else {
             nsAutoCString longRecord;
             for (uint32_t i = 0; i < setLen; ++i) {
-                longRecord.Append(txtRecordSet[i]);
+                longRecord.Append(TrimWhitespace(txtRecordSet[i]));
             }
             if (NS_FAILED(Base64Decode(longRecord, mDNSRecordTxt))) {
                 SOCKET_LOG(("nsSocketTransport ESNI decode failure\n"));

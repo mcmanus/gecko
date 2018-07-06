@@ -730,13 +730,24 @@ TRR::DohDecode(nsCString &aHost)
         break;
       case TRRTYPE_TXT:
       {
+        // TXT record RRDATA sections are a series of character-strings
+        // each character string is a length byte followed by that many data bytes
         nsAutoCString txt;
-        uint8_t characterStringLen = mResponse[index];
-        if (characterStringLen > (RDLENGTH - 1)) {
-          LOG(("TRR::DohDecode MALFORMED TXT RECORD\n"));
-          break;
+        unsigned int txtIndex = index;
+        uint16_t available = RDLENGTH;
+
+        while (available > 0) {
+          uint8_t characterStringLen = mResponse[txtIndex++];
+          available--;
+          if (characterStringLen > available) {
+            LOG(("TRR::DohDecode MALFORMED TXT RECORD\n"));
+            break;
+          }
+          txt.Append((const char *)(&mResponse[txtIndex]), characterStringLen);
+          txtIndex += characterStringLen;
+          available -= characterStringLen;
         }
-        txt.Append((const char *)(&mResponse[index + 1]), characterStringLen);
+        
         mTxt.AppendElement(txt);
         if (mTxtTtl > TTL) {
           mTxtTtl = TTL;
