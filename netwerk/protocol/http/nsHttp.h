@@ -107,6 +107,8 @@ namespace net {
 // on ERROR_NET_RESET.
 #define NS_HTTP_CONNECTION_RESTARTABLE  (1<<13)
 
+#define NS_HTTP_DISABLE_TRR (1<<14)
+    
 //-----------------------------------------------------------------------------
 // some default values
 //-----------------------------------------------------------------------------
