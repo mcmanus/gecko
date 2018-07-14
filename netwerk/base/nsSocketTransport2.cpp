@@ -1569,7 +1569,10 @@ nsSocketTransport::InitiateSocket()
         nsCOMPtr<nsISSLSocketControl> secCtrl =
             do_QueryInterface(mSecInfo);
         if (secCtrl) {
-            secCtrl->SetEsniTxt(mDNSRecordTxt);
+            rv = secCtrl->SetEsniTxt(mDNSRecordTxt);
+            if (NS_FAILED(rv)) {
+                return rv;
+            }
         }
     }
 
