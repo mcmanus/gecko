@@ -1126,7 +1126,7 @@ nsSocketTransport::ResolveHost()
                                  this, mSocketTransportService,
                                  mOriginAttributes,
                                  getter_AddRefs(mDNSRequest));
-        
+
     if (NS_SUCCEEDED(rv)) {
         if (mSocketTransportService->IsEsniEnabled()) {
             bool isSSL = false;
@@ -3079,21 +3079,8 @@ nsSocketTransport::OnLookupByTypeComplete(nsICancelable      *request,
     } else if (NS_SUCCEEDED(status)) {
         nsTArray<nsCString> txtRecordSet;
         txtResponse->GetRecords(txtRecordSet);
-        uint32_t setLen = txtRecordSet.Length();
-        if (setLen == 1) {
-            if (NS_FAILED(Base64Decode(TrimWhitespace(txtRecordSet[0]), mDNSRecordTxt))) {
-                SOCKET_LOG(("nsSocketTransport ESNI decode failure\n"));
-                mDNSRecordTxt.Truncate(0);
-            }
-        } else {
-            nsAutoCString longRecord;
-            for (uint32_t i = 0; i < setLen; ++i) {
-                longRecord.Append(TrimWhitespace(txtRecordSet[i]));
-            }
-            if (NS_FAILED(Base64Decode(longRecord, mDNSRecordTxt))) {
-                SOCKET_LOG(("nsSocketTransport ESNI decode failure\n"));
-                mDNSRecordTxt.Truncate(0);
-            }
+        for (uint32_t i = 0; i < txtRecordSet.Length(); ++i) {
+            mDNSRecordTxt.Append(TrimWhitespace(txtRecordSet[i]));
         }
     }
     // flag host lookup complete for the benefit of the ResolveHost method.
